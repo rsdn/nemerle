@@ -54,16 +54,16 @@ CP = @echo CP      $1
 ############################################################
 
 all:
-	cp ../boot/Nemerle.dll .
-	$(EXECUTE) ../boot/ncc.exe -out test.exe ../ncc/testsuite/test.n
+	cp ../ncc/out.stage3/Nemerle.dll .
+	$(EXECUTE) ../ncc/out.stage3/ncc.exe -out test.exe ../ncc/testsuite/test.n
 	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -n "../boot/ncc.exe"
 	rm -f out.dll out.exe out.netmodule ext_test.out Nemerle.dll
 
 myPoll.exe: myPoll.n
-	$(EXECUTE) ../boot/ncc.exe -r Npgsql myPoll.n -o myPoll.exe
+	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r Npgsql myPoll.n -o myPoll.exe
 
-sql:
-	$(EXECUTE) ../boot/ncc.exe -r Npgsql -r ../macros/Nemerle.Data.Npgsql.dll sql.n -o sql.exe
+sql: sql.n
+	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r Npgsql -r ../macros/Nemerle.Data.Npgsql.dll sql.n -o sql.exe
 
 dist:
 	$(CP) '*.n'

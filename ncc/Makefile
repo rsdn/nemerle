@@ -316,6 +316,9 @@ t test: tests
 tests:
 	$(Q)cd testsuite && $(MAKE)
 
+profile:
+	../misc/profiler/runprof
+
 install:
 	$(Q)if test ! -d $(DESTDIR)$(LIBDIR); then $(INSTALL) -d $(DESTDIR)$(LIBDIR); fi
 	$(Q)if test ! -d $(DESTDIR)$(BINDIR); then $(INSTALL) -d $(DESTDIR)$(BINDIR); fi
