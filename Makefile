@@ -42,12 +42,8 @@ changelog:
 	$(svn2log) -p /nemerle/trunk/doc -o doc/ChangeLog
 	rm -f changelog.xml
 
-sb: sync-boot
-
 sync-boot:
-	$(MAKE) -C ncc boot
-	mv boot/ncc.exe boot/ncc-old.exe
-	cp ncc/ncc3.exe boot/ncc.exe
+	$(MAKE) -C ncc boot sync
 	
 dist: sync-boot changelog
 	if svn status 2>&1 | grep -qv '^?' ; then \
