@@ -44,12 +44,18 @@ namespace Nemerle.Compiler {
  
   public class GlobalEnv 
   {
+    public variant TyconCache {
+      | No
+      | Cached { tycon : Tycon; }
+      | NotLoaded { e : LibraryReferenceManager.ExternalType; }
+    }
+    
     public class NamespaceND {
       public Name : string;
-      public mutable Value : option<Tycon>;
+      public mutable Value : TyconCache;
       children : Hashtable <string, NamespaceND>;
       
-      public this (n : string, v : option <Tycon>) {
+      public this (n : string, v : TyconCache) {
         Name <- n;
         Value <- v;
         children <- Hashtable (10, 1.0f);
@@ -60,23 +66,23 @@ namespace Nemerle.Compiler {
         mutable last <- 0;
         for (mutable i <- 0; i < n.Length; ++i) {
           when (n[i] == '.') {
-            cur_node <- cur_node.Child (n.Substring (last, i - last), None ());
+            cur_node <- cur_node.Child (n.Substring (last, i - last));
             last <- i + 1;
           }
         };
         when (n.Length > 0 && !n.EndsWith ("."))
-          cur_node <- cur_node.Child (n.Substring (last, n.Length - last), None ());
+          cur_node <- cur_node.Child (n.Substring (last, n.Length - last));
         cur_node
       }
 
       public Path (n : array <string>) : NamespaceND {
         mutable cur_node <- this;
         for (mutable i <- 0; i < n.Length; ++i)
-          cur_node <- cur_node.Child (n[i], None ());
+          cur_node <- cur_node.Child (n[i]);
         cur_node
       }
       
-      public TryPath (n : array <string>) : option <Tycon> {
+      public TryPath (n : array <string>) : TyconCache {
         def loop (i, cur_node : NamespaceND) {
           match (cur_node.children.Get (n[i])) {
             | Some (nd) =>
@@ -86,31 +92,51 @@ namespace Nemerle.Compiler {
               else
                 nd.Value;
             | _ =>
-              None ()
+              No ()
           }
         };
         loop (0, this)
       }
 
-      public LookupType (tname : string, split : array<string>) : option <Tycon>
+      public LookupType (split : array<string>) : option <Tycon>
       {
-//        Nemerle.IO.printf ("looking %s in %s\n", tname, Name);
         match (TryPath (split)) {
-          // FIXME: make three outcomes: None, Some, Never
-          | (Some) as t => t
-          | None =>
-            // this is just a speed cache
-            def full = Name + "." + tname;
-            match (LibraryReferenceManager.LookupType (full)) {
-              | (Some (tc)) as res =>
-                AddType (Path (tname), tc);
-                res
-              | None => None ()
-            }
+          | Cached (tc) => Some (tc)
+          | No => None ()
+          | NotLoaded (e) =>
+            when (e.tycon == null) {
+              when (e.message != null) {
+                Message.warning ("using type `" + e.system_type.FullName + 
+                                 "' that was defined in more then one assembly: " +
+                                 e.message + " (the first version was used)")
+              };
+              ignore (e.library.ConstructTycon (e.system_type))
+            };
+            Path (split).Value <- Cached (e.tycon);
+            Some (e.tycon)
         }
       }
 
-      public SetChild (name : string, v : option <Tycon>) : void {
+      public LookupValue () : option <Tycon>
+      {
+        match (Value) {
+          | Cached (t) => Some (t)
+          | No => None ()
+          | NotLoaded (e) =>
+            when (e.tycon == null) {
+              when (e.message != null) {
+                Message.warning ("using type `" + e.system_type.FullName + 
+                                 "' that was defined in more then one assembly: " +
+                                 e.message + " (the first version was used)")
+              };
+              ignore (e.library.ConstructTycon (e.system_type))
+            };
+            Value <- Cached (e.tycon);
+            Some (e.tycon)
+        }
+      }
+      
+      public SetChild (name : string, v : TyconCache) : void {
         match (children.Get (name)) {
           | None =>
             def nn = if (Name == "") name else Name + "." + name;            
@@ -120,11 +146,11 @@ namespace Nemerle.Compiler {
         }
       }
 
-      public Child (name : string, ifadded : option <Tycon>) : NamespaceND {
+      Child (name : string) : NamespaceND {
         match (children.Get (name)) {
           | None =>
             def nn = if (Name == "") name else Name + "." + name;
-            def result = NamespaceND (nn, ifadded);
+            def result = NamespaceND (nn, No ());
             children.Add (name, result);
             result
 
@@ -142,19 +168,17 @@ namespace Nemerle.Compiler {
       }
     }
     
-    static types : Hashtable <string, Tycon>;
     static mutable macro_context : int;
     static macro_contexts : Hashtable <string, int>;
     static imported_contexts : array <GlobalEnv>;
     static mutable macro_context_class : ITypeModifier;
-    static types_tr : NamespaceND;
+    static internal types_tr : NamespaceND;
 
     static this () {
-      types <- Hashtable (2000);
       macro_context <- 0;
       macro_contexts <- Hashtable (100);
       imported_contexts <- null;
-      types_tr <- NamespaceND ("", None ());
+      types_tr <- NamespaceND ("", No ());
 
       Empty <- GlobalEnv ();
       Core <- Empty.AddOpenNamespace ("Nemerle.Core")
@@ -168,13 +192,12 @@ namespace Nemerle.Compiler {
 
     public static AddType (ns : NamespaceND, t : Tycon) : void {
       match (ns.Value) {
-        | Some (t') when t'.SameAs (t) => ()
-        | Some (t') =>
+        | Cached (t') when t'.SameAs (t) => ()
+        | Cached (t') =>
           Message.error (t.GetLocation (), "redefinition of type `" + ns.Name + "'");
           Message.error (t'.GetLocation (), "first defined here")
-        | None =>
-          ns.Value <- Some (t);
-          types.Add (ns.Name, t)
+        | _ =>
+          ns.Value <- Cached (t);
       }
     }
     
@@ -245,19 +268,35 @@ namespace Nemerle.Compiler {
 
     public static LookupExactType (name : string) : option <Tycon> {
       def split = name.Split (array ['.']);
-      match (types_tr.TryPath (split)) {
+/*      match (types_tr.TryPath (split)) {
         | (Some) as r => r
         | None =>
           // this is just a speed cache
           match (LibraryReferenceManager.LookupType (name)) {
+            | (Some (tc)) as res =>
+              AddType (types_tr.Path (split), tc);
+              res
+            | None => None ()
+          }
+      }
+*/
+      types_tr.LookupType (split)
+    }
+
+    public static LookupExactType (name : array <string>) : option <Tycon> {
+      types_tr.LookupType (name)
+/*      match (types_tr.TryPath (name)) {
+        | (Some) as r => r
+        | None =>
+          // this is just a speed cache
+          match (LibraryReferenceManager.LookupType (System.String.Join (".", name))) {
             | (Some (tc)) as res =>
               AddType (types_tr.Path (name), tc);
               res
             | None => None ()
           }
       }
-    }
-
+*/    }
   
     public GetType (name : string, from : Tycon) : Tycon
     {
@@ -276,7 +315,8 @@ namespace Nemerle.Compiler {
     public LookupType (name : string, from : Tycon) : option <Tycon>
     {
       def name = expand_namespace_aliases (name);
-      match (LookupExactType (name)) {
+      def split = name.Split (array ['.']);      
+      match (LookupExactType (split)) {
         | (Some (t)) as r when from == null || t.CanAccess (from) => r
         | _ =>
           def non_public_external (t : Tycon) {
@@ -292,9 +332,9 @@ namespace Nemerle.Compiler {
             | Some (t) when from == null || (t : Tycon).CanAccess (from) => x
             | _ => None ()
           };
-          def split = name.Split (array ['.']);
+          
           def collect (pref : NamespaceND, res) {
-            match ((res, check_access (pref.LookupType (name, split)))) {  
+            match ((res, check_access (pref.LookupType (split)))) {  
               | (x, None) | (None, x) => x
               | (Some (x), Some (y)) when x.SameAs (y) => res
               | (Some (x), Some (y)) =>
@@ -314,7 +354,7 @@ namespace Nemerle.Compiler {
     public LookupSymbol (name : string) : list <Symbol> {
       def visited = Hashtable (10);
       def lookup_members (pref : NamespaceND, acc) {
-        match (LookupExactType (pref.Name)) {
+        match (pref.LookupValue ()) {
           | Some (t) when ! visited.Contains (t.GetId ()) => 
             def encapsulate (m : IMember, acc) {
               match (m.GetKind ()) {
