@@ -33,7 +33,7 @@ namespace Sioux
 
   using System;
   using System.Net.Sockets;
-  
+  using System.IO;
 
   /**
    * Description of an HTTP request
@@ -42,8 +42,7 @@ namespace Sioux
   {
     | StaticGet { url : string; }
     | DynamicGet { url : string; get_params : list <string * string>; }
-    | Post { url : string; post_params : list <string * string>; }
-//    | Other
+    | Post { url : string; post_params : list <string * string>; posted_files : list <string * string * string * int> ; }
     | Invalid    
   }
   
@@ -218,12 +217,12 @@ namespace Sioux
     {
         match(request_info)
         {
-            | RequestInfo.Post(url,request_params) =>
+            | RequestInfo.Post(url,request_params,files) =>
               when(url.StartsWith("/webapp/"))
               {
                   def url = url.Substring(8);
                   def (_,url,_) = split_unique_at('/',url);
-                  request_info = RequestInfo.Post("/" + url,request_params)
+                  request_info = RequestInfo.Post("/" + url,request_params,files)
               }
             | RequestInfo.DynamicGet(url,request_params) =>
               when(url.StartsWith("/webapp/"))
@@ -353,29 +352,229 @@ namespace Sioux
      *
      * FIXME: what about file uploads?
      */
-    private parse_post_data () : list <string * string> * bool
+    private parse_post_data () : list <string * string> * list <string * string * string * int> * bool
     {
       assert (Option.IsSome (content_length));
-            
+
+      mutable file = false;
+      
       mutable length = Option.UnSome (content_length);
       def sb = System.Text.StringBuilder (length);
-          
-      while (length > 0) {
-        def ch = request_stream.ReadByte ();
 
-        unless (ch == -1)
-          ignore (sb.Append ((ch :> char)));
+      mutable multipart_params = [];
+      mutable files = [];
+      
+      def loop(len)
+      {          
+          mutable l = len;
+          while (l > 0)
+          {
+              def ch = request_stream.ReadByte ();
+              
+              unless (ch == -1)
+                  ignore (sb.Append ((ch :> char)));
+                  
+              l = l - 1
+          };
+          System.Console.WriteLine ("POST -- '{0}'", sb.ToString ());
+      }
+      
+      match(content_type)
+      {
+          | None =>
+            loop(length)
+          | Some(val) =>
+            if (val.StartsWith("multipart/form-data;"))
+            {
+                def readline() : string * list<byte>
+                {
+                    def sb = System.Text.StringBuilder();
 
-        length = length - 1
-      };
+                    mutable byte_list = [];
+                    mutable ich = request_stream.ReadByte ();
+                    byte_list = (ich :> byte) :: byte_list;
+                    mutable ch  = (ich :> char);
+                    
+                    while(ich != -1 && ch != '\n')
+                    {
+                        when(ch != '\r')                            
+                            ignore (sb.Append (ch));
 
-      System.Console.WriteLine ("POST -- '{0}'", sb.ToString ());
+                        ich = request_stream.ReadByte ();
+                        byte_list = (ich :> byte) :: byte_list;
+                        ch  = (ich :> char)
+                    }                    
 
+                    (sb.ToString (),List.Rev(byte_list))
+                }
+                mutable bw = BinaryWriter.Null;
+
+                def boundary = val.Substring(30);
+                def section_start = "--" + boundary;
+                def end = section_start + "--";
+                
+                def (lin,byt) = readline();
+
+                def max_file_size = Int32.Parse(Httpd.GetConfig().Get("server/max_uploaded_file_size"));
+                
+                mutable line = lin;
+                mutable bytes = byt;
+                
+                mutable can_write = true;
+                mutable mode = 1;
+
+                mutable start = true;
+
+                mutable current_param_value = "";
+                mutable current_param_name  = "";
+
+                mutable current_file_filename = "";
+                mutable current_file_name = "";
+                mutable current_file_tempname = "";
+                mutable current_file_size = 0;
+                
+                while(line != end)
+                {
+                    match((line,bytes,mode))
+                    {
+                        | (l,b,1) =>                          
+                          if(l==section_start)
+                          {
+                              if(start)
+                                  start = false
+                              else 
+                              {
+                                  if(!file)
+                                  {
+                                      multipart_params =
+                                        (current_param_name,current_param_value.Substring(0,current_param_value.Length-1))
+                                        :: multipart_params;
+                                      current_param_name = "";
+                                      current_param_value = "";
+                                  }
+                                  else
+                                  {
+                                      if(!can_write)
+                                          files = (current_file_name,current_file_filename,current_file_tempname,-1) :: files;
+                                      else
+                                          files = (current_file_name,
+                                                   current_file_filename,
+                                                   current_file_tempname,
+                                                   current_file_size-2) :: files;
+                                      can_write = true;
+                                      bw.Close();
+                                  }
+                              }
+                                  mode = 2;
+                          }
+                          else
+                          {
+                              match(file)
+                              {
+                                  | true =>
+                                    
+                                    def loop ( bts )
+                                    {
+                                        match(bts : list<byte>)
+                                        {
+                                            | [] => ()
+                                            | b :: rest =>
+                                              when(can_write)
+                                                  bw.Write(b);
+                                              loop(rest)
+                                        }
+                                    }
+                                    when(current_file_size > max_file_size)
+                                    {
+                                        can_write = false;
+                                        File.Delete(Httpd.GetConfig().Get("server/uploads_dir") +"/"+ current_file_tempname);
+                                    }
+                                    current_file_size = current_file_size + b.Length();
+                                    loop(b)
+                                  | false => current_param_value = current_param_value + l + "\n";
+                              }
+                          }
+                          def (lin,byt) = readline();
+                          line = lin;
+                          bytes = byt;
+                        | (l,_,_) =>                          
+                          {
+                              if(l.ToUpper().StartsWith("CONTENT-DISPOSITION"))
+                              {
+                                  def (_,s) = split_at(':',l);
+                                  def delimiter = array[';'];
+                                  def split = s.Split(delimiter);
+                                  if(split.Length == 3
+                                     && split[0].ToUpper().StartsWith(" FORM-DATA")
+                                     && split[1].ToUpper().StartsWith(" NAME=")
+                                     && split[2].ToUpper().StartsWith(" FILENAME"))
+                                  {
+                                      def (_,split1) = split_at('=',split[1]);
+                                      def (_,split2) = split_at('=',split[2]);
+
+                                      current_file_name = split1.Substring(1,split1.Length-2);
+                                      current_file_filename = split2.Substring(1,split2.Length-2);
+                                      current_file_tempname = "file_" +  SessionID.GetSessionID(14);
+                                      current_file_size = 0;
+                                      
+                                      if(current_file_filename != "")
+                                          bw = BinaryWriter(File.Open(
+                                                             Httpd.GetConfig().Get("server/uploads_dir") +"/"+ current_file_tempname,
+                                                             FileMode.Create));
+                                      else
+                                          bw = BinaryWriter.Null;
+
+                                      file = true;
+                                  }
+                                  else
+                                  when(split.Length == 2)
+                                  {
+                                      def (_,split1) = split_at('=',split[1]);
+                                      file = false;
+                                      current_param_name = split1.Substring(1,split1.Length-2);                                      
+                                  }
+                              }
+                              else
+                              if(l.ToUpper().StartsWith("CONTENT-TYPE"))
+                                  ()
+                              else
+                              when(l == "")
+                                  mode = 1;
+                              def (lin,byt) = readline();
+                              line = lin;
+                              bytes = byt;
+                          }
+                    }                    
+                }
+                if(!file)
+                {
+                    multipart_params =
+                      (current_param_name,current_param_value.Substring(0,current_param_value.Length-1))
+                      :: multipart_params;
+                    current_param_name = "";
+                    current_param_value = "";
+                }
+                else
+                {                    
+                    if(!can_write)
+                        files = (current_file_name,current_file_filename,current_file_tempname,-1) :: files;
+                    else
+                        files = (current_file_name,current_file_filename,current_file_tempname,current_file_size-2) :: files;
+                    can_write = true;
+                    bw.Close();
+                }
+            }
+            else
+                loop(length)
+      }         
+      
       def (_, post_params, validity) =
         parse_get_params ("post?" + sb.ToString ());
 
-      (post_params, validity)
+      (List.Append(post_params,multipart_params),files, validity)
     }
+
+
 
 
     /**
@@ -441,15 +640,14 @@ namespace Sioux
             else if (!request_url.StartsWith ("/webapp/") || !request_url.EndsWith(".xml"))
               logger.Log ("POST request to an invalid URL")
             else {
-              def (post_params, post_validity) = parse_post_data ();
+              def (post_params, files, post_validity) = parse_post_data ();
               
               if (!post_validity)
                 logger.Log ("POST params malformed")                
               else
-                request_info = RequestInfo.Post (request_url, post_params)
+                request_info = RequestInfo.Post (request_url, post_params,files)
             }
             construct_session();
-
 
 /*        | "HEAD"
           | "PUT"
@@ -482,7 +680,9 @@ namespace Sioux
             result = (name,val) :: result;
             when (name == "content-length")            
               content_length = Some (System.Int32.Parse (val));
- 
+            when (name == "content-type")
+              content_type = Some (val);  
+              
             loop ();
         }
       };
@@ -533,7 +733,7 @@ namespace Sioux
                   //{
                       match(request_info)
                       {
-                          | RequestInfo.Post (_,_)
+                          | RequestInfo.Post (_,_,_)
                           | RequestInfo.DynamicGet(_,_) =>
                             match(session_id)
                             {
@@ -593,6 +793,7 @@ namespace Sioux
     private mutable request_time : DateTime;
     private mutable headers : list <string * string>;
     private mutable content_length : option <int>;
+    private mutable content_type : option <string>;
     private mutable session_id : option <string>;
     private mutable logger : Logger;
   }

@@ -62,6 +62,7 @@ REQUEST_HEADERS_APPLICATION_SOURCES = docs/request_headers/request_headers.n
 REQUEST_PARAMS_APPLICATION_SOURCES = docs/request_parameters/request_parameters.n
 SESSIONS_APPLICATION_SOURCES = docs/sessions/sessions.n
 DIRGENERATOR_APPLICATION_SOURCES = docs/directory_generator/directory_generator.n
+UPLOAD_APPLICATION_SOURCES = docs/upload/upload.n
 
 DOCS_SOURCES = docs.n
 
@@ -81,7 +82,7 @@ Docs.dll:  Nemerle.Xml.dll Sioux.dll $(DOCS_SOURCES)
 	$(EXECUTE) $(NCC) -tdll -r:System.Web -r:Nemerle.Xml -r:Sioux -out:$@ $(DOCS_SOURCES)
 	cp $@ $(APP_DIR)
 
-examples: Cookies.dll RequestInfo.dll RequestHeaders.dll RequestParameters.dll Sessions.dll Dirgenerator.dll
+examples: Cookies.dll RequestInfo.dll RequestHeaders.dll RequestParameters.dll Sessions.dll Dirgenerator.dll Upload.dll
 
 Csl.dll: Nemerle.Xml.dll Sioux.dll $(CSL_APPLICATION_SOURCES)
 	$(EXECUTE) $(NCC) -tdll -r:System.Web -r:Nemerle.Xml -r:Sioux -out:$@ $(CSL_APPLICATION_SOURCES)
@@ -119,12 +120,15 @@ Dirgenerator.dll: Nemerle.Xml.dll Sioux.dll $(DIRGENERATOR_APPLICATION_SOURCES)
 	$(EXECUTE) $(NCC) -tdll -r:System.Web -r:Nemerle.Xml -r:Sioux -out:$@ $(DIRGENERATOR_APPLICATION_SOURCES)
 	cp $@ $(APP_DIR)
 
+Upload.dll: Nemerle.Xml.dll Sioux.dll $(UPLOAD_APPLICATION_SOURCES)
+	$(EXECUTE) $(NCC) -tdll -r:System.Web -r:Nemerle.Xml -r:Sioux -out:$@ $(UPLOAD_APPLICATION_SOURCES)
+	cp $@ $(APP_DIR)
 
 httpd.exe: $(SOURCES) Sioux.dll 
 	$(EXECUTE) $(NCC) -texe -r:System.Web -r:Sioux -out:$@ $(SIOUX_EXE_SOURCES)
 
 clean:
-	rm -f *.exe *.dll *.pdb *~ webapps/*.dll
+	rm -f *.exe *.dll *.pdb *~ webapps/*.dll upload/*
 
 $(NEMERLE_DLLS): $(NCC_DIR)/$@
 	cp -f $(NCC_DIR)/$@ $@
