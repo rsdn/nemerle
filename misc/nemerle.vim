@@ -103,7 +103,7 @@ syn keyword nemerleTopDecl class interface syntax module namespace type implemen
 syn keyword nemerleTopDecl extends struct using macro enum
 
 syn keyword nemerleKeyword and as catch def finally fun match out params ref throw
-syn keyword nemerleKeyword try typeof variant when where array mutable
+syn keyword nemerleKeyword try typeof variant when where array mutable is
 
 " macros
 syn keyword nemerleKeyword if else while for unless lock do repeat until
