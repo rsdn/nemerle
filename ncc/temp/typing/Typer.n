@@ -384,7 +384,119 @@ namespace Nemerle.Compiler
       })
     }
 
+   
+    [Nemerle.NotImplemented]
+    TypeMatch (m : PT.PExpr.Match, expected : TyVar) : TExpr
+    {
+    }
 
+
+    TypeArray (rank : int, args : list [PT.PExpr], expected : TyVar) : TExpr
+    {
+      def expr_list_length (e) {
+        | <[ [] ]> => 0
+        | <[ $_ :: $rest ]> => 1 + expr_list_length (rest)
+        | _ =>
+          ReportError (messenger, 
+                       "array initializer must be of form "
+                       "`array [rank] [ [..], .., [..] ]'");
+          0
+      }
+
+      def expr_list_flatten_and_count (e, remaining) {
+        | (<[ [] ]>, 0) => []
+        | (<[ [] ]>, _)
+        | (_, 0) =>
+          ReportError (messenger, "incorrectly structured array initializer");
+          []
+        | (<[ $x :: $xs ]>, n) => x :: expr_list_flatten_and_count (xs, n - 1)
+        | _ =>
+          ReportError (messenger,
+                       "array initializer must be of form "
+                       "`array [rank] [ [..], .., [..] ]'");
+          []
+      }
+
+      def dimensions (args, remaining_rank) {
+        | (_, 0) => []
+        | (<[ $head :: $_ ]>, n) =>
+          expr_list_length (args) :: dimensions (head, n - 1)
+        | _ =>
+          ReportError (messenger, 
+                       "array initializer must be of form "
+                       "`array [rank] [ [..], .., [..] ]'");
+          []
+      }
+      
+      /* Flattens the initializers and checks that there are the correct
+         number of them */
+      def flatten (args, dims) {
+        | (elem, []) => [elem]
+        | (l, h::t) => 
+          def flat = expr_list_flatten_and_count (l, h);
+          List.FoldLeft (flat, [], 
+                         fun (i, a) {
+                           List.Concat ([a, flatten (i, t)])
+                         })
+      }
+
+      def dimensions = dimensions (args, rank);
+      def lst = flatten (args, dimensions);
+
+      if (messenger.SeenError)
+        TExpr.Error ()
+      else {
+        def dimensions =
+          List.Map (dimensions,
+                    fun (x) { TExpr.Literal (Literal.Int (x)) });
+        def element_type = FreshTyVar ("array element type");
+
+        def initalizers =
+          List.Map (lst,
+                    fun (expr) {
+                      def tv = AtLeast (element_type);
+                      TypeExpr (expr, tv)
+                    });
+
+        expected.Unify (MType.Array (element_type, rank);
+
+        TExpr.Array (initializers, dimensions)
+      }
+    }
+
+
+    TypeLiteral (l : Literal, expected : TyVar) : TExpr
+    {
+      def mono_type =
+        match (l) {
+          | Literal.Null => null
+          | Literal.Void => MType.Void ()
+          | Literal.Byte => InternalType.Byte
+          | Literal.SByte => InternalType.SByte
+          | Literal.Short => InternalType.Int16
+          | Literal.UShort => InternalType.UInt16
+          | Literal.Int => InternalType.Int32
+          | Literal.UInt => InternalType.UInt32
+          | Literal.Long => InternalType.Int64
+          | Literal.ULong => InternalType.UInt64
+          | Literal.Char => InternalType.Char
+          | Literal.String => InternalType.String
+          | Literal.Float => InternalType.Single
+          | Literal.Double => InternalType.Double
+          | Literal.Decimal => InternalType.Decimal
+          | Literal.Bool => InternalType.Boolean
+          | Literal.Enum (_, tc) => MType.Class (tc, [])
+        }
+
+      if (mono_type == null)
+        expected.IsFromNull = true
+      else
+        expected.Unify (mono_type);
+
+      TExpr.Literal (l)
+    }
+
+    
     DoType (expression : PT.PExpr, expected : TyVar) : TExpr
     {
       match (expression) {
@@ -392,6 +504,14 @@ namespace Nemerle.Compiler
         | PT.PExpr.ParmOut =>
           ReportFatal (messenger, 
                        "ref and out parameters are only allowed in function calls")
+
+        | PT.PExpr.Define =>
+          Message.fatal_error ("let binding not followed by any expression")
+
+        | PT.PExpr.DefPattern =>
+          Message.fatal_error ("def pattern binding not followed by any expression")
+        | PT.PExpr.DefFunctions =>
+          Message.fatal_error ("letfun binding not followed by any expression")
 
 
         // FIXME: this should be a macro
@@ -602,12 +722,24 @@ namespace Nemerle.Compiler
 
 
         | PT.PExpr.Sequence ([]) =>
-          expected.Unify (MType.Void ());
-          TExpr.Literal (Literal.Void ())
+          TypeLiteral (Literal.Void (), expected)
 
 
         | PT.PExpr.Sequence (l) =>
-          TypeSequence (l, expected)
+          def loop (res, lst) {
+            | [e] =>
+              def e' = TypeExpr (e, expected);
+              TExpr.Sequence (List.Rev (e' :: res))
+            | x :: xs =>
+              def x' = TypeExpr (x, FreshTyVar (""));
+              loop (x' :: res, xs)
+            | [] => assert (false)
+          }
+
+          PushLocals ();
+          def res = loop ([], l);
+          PopLocals ();
+          res
 
 
         | PT.PExpr.Tuple (l) =>
@@ -662,7 +794,7 @@ namespace Nemerle.Compiler
           
 
         | PT.PExpr.Wildcard | PT.PExpr.Application | PT.PExpr.As =>
-          ReportFatal (messenger, "pattern expression inside raw expression")
+          ReportFatal (messenger, "found pattern expression inside a raw expression")
           
 
         | PT.PExpr.Ellipsis =>
@@ -1118,233 +1250,57 @@ namespace Nemerle.Compiler
 
 
 #region Old code
-  squash_type_duplicates (lst : list [Symbol]) : list [Symbol]
+  ty_indexer (ctx : CTX, obj : PT.PExpr, args : list [PT.PExpr]) : TExpr * TType
   {
-    def ht = Hashtable ();
-    def unalias (ti : TypeInfo) {
-      match (ti.GetTydecl ()) {
-        | TypeDeclaration.Alias (TType.Class (ti, _)) => unalias (ti)
-        | _ => ti
-      }
-    }
-    List.Filter (lst, fun (_) {
-      | Symbol.Type (ti) =>
-        def ti = unalias (ti);
-        if (ht.Contains (ti.GetId ()))
-          false
-        else {
-          ht [ti.GetId ()] = null;
-          true
-        }
-      | _ => true
-    })
-  }
+    def typed_objs =
+      match (obj) {
+        | <[ base ]> | <[ this ]> => [ty_expr (ctx, obj)]
+        | _ =>  make_value_reference (ctx, obj, fallback = true);
+      };
+    match (typed_objs) {
+      | TExpr.PropertyMember (_, prop) :: _ when is_indexer_property (prop) =>
+        def typed_parms = List.Map (args, fun (x) {
+          Parm (ty_expr (ctx, x))
+        });
+        def ex = resolve_overloaded_call (ctx, false, typed_objs, typed_parms);
+        (ex, type_of (ex))
 
-
-
-  public lookup_member (ctx : CTX, loc : Location, o : TExpr, mem : string)
-  : list [TExpr]
-  {
-    lookup_member (ctx, loc, o, mem, true);
-  }
-
-  // return list of how we can call it
-  public lookup_member (ctx : CTX, loc : Location, o : TExpr, mem : string,
-                        error_when_not_found : bool) : list [TExpr]
-  {
-    mutable problem = "???";
-    def visited = Hashtable (10);
-
-    def collect_from (t, acc) {
-      match (Tyutil.top_expand (t)) {
-        | TType.Class (ti, args) =>
-          if (visited.Contains (ti.GetId ())) acc
-          else {
-            visited.Add (ti.GetId (), null);
-
-            def subst = ti.MakeSubst (args);
-            def can_access (mem : IMember, acc) {
-              if (!mem.IsStatic && mem.CanAccess (ctx.parent_type))
-                mem.GetKind () :: acc
-              else
-                acc
-            };
-            def members = ti.LookupMember (mem);
-            def accessible_members = List.FoldLeft (members, [], can_access);
-            def mems =
-              match (accessible_members) {
-                | [MemberKind.Field (f)] =>
-                  [TExpr.FieldMember (loc, Tyutil.TypeOfMemberIn (f, ti) /- subst, o, f)]
-                | [MemberKind.Event (e)] when
-                    e.DeclaringType.SameAs (ctx.parent_type) &&
-                    (e :> NemerleEvent).storage_field != null =>
-                  def f = (e :> NemerleEvent).storage_field;
-                  [TExpr.FieldMember (loc, Tyutil.TypeOfMemberIn (f, ti) /- subst, o, f)]
-                | [] =>
-                  def is_static (mem : IMember, acc) {
-                    if (mem.IsStatic && mem.CanAccess (ctx.parent_type))
-                      mem.GetKind () :: acc
-                    else
-                      acc
-                  };
-                  def static_members = List.FoldLeft (members, [], is_static);
-                  def (prefix, suffix) =
-                    match ((members, static_members)) {
-                      | ([], _) => ("unbound", "")
-                      | (_, []) => ("inaccessible", "")
-                      | _ => ("can't access static", " through an instance reference")
-                    }
-
-                  problem =
-                    prefix + " member `" + mem + "' in type `" +
-                    ti.FullName + "'" + suffix;
-                  []
-
-                | lst =>
-                  mutable was_prop = false;
-                  mutable was_meth = false;
-                  def make (m) {
-                    match (m) {
-                      | MemberKind.Property (p) when !was_meth =>
-                        was_prop = true;
-                        def ty = Tyutil.TypeOfMemberIn (p, ti) /- subst;
-                        //Message.debug (loc, $ "prop $(p.Name) : $ty");
-                        TExpr.PropertyMember (loc, ty, o, p)
-                      | MemberKind.Method (m) when !was_prop =>
-                        was_meth = true;
-                        TExpr.MethodRef (loc, Tyutil.TypeOfMethodIn (m, ti) /- subst, o, m, false)
-                      | _ =>
-                        Message.fatal_error ("ambiguous member name `" + mem +
-                                             "' in type `" + ti.FullName + "'")
-                    }
-                  };
-                  List.Map (lst, make)
-               };
-            List.Append (mems, acc)
-          }
-
-        | TType.Variable (tv) =>
-          if (visited.Contains (tv.id)) acc
-          else {
-            visited.Add (tv.id, null);
-            def constraints =
-              match (Tyvar.constraints (tv)) {
-                | [] => [InternalType.Object]
-                | lst => lst
-              };
-            match (List.FoldLeft (constraints, acc, collect_from)) {
-              | [] =>
-                problem = $ "no constrain of $t provides member `$(mem)'";
-                []
-              | acc => acc
+       [typed_obj] =>
+        match (Tyutil.top_expand (typed_obj.ty)) {
+          | TType.Array (indexer_over_type, rank) =>
+            /* indexers over arrays */
+            def typed_args = List.Map (args, fun (x) { ty_expr (ctx, x) });
+            
+            mutable args_amount = rank;
+            foreach (index in typed_args) {
+              expect_type ("indexer type", index, InternalType.Int32);
+              --args_amount;
             }
-          }
+            when (args_amount != 0)
+              Message.fatal_error ("wrong number of index parameters");
 
-        | TType.Array =>
-          collect_from (InternalType.Array, acc)
+            def resolved_obj = convert_getter_property (typed_obj);
+            (TExpr.ArrayIndexer (indexer_over_type, resolved_obj, typed_args),
+             indexer_over_type)
 
-        | TType.Product =>
-          collect_from (InternalType.Object, acc)
-
-        | _ =>
-          problem = $ "type $t was expected to be class";
-          acc
-      }
-    };
-
-    match (collect_from (type_of (o), [])) {
-      | [] when error_when_not_found => Message.fatal_error (problem)
-      | x => x
-    }
-  }
-
-  // type given match {} construct
-  ty_match (ctx : Tyexpr.CTX, mtch : PT.PExpr.Match) : TExpr * TType
-  {
-    def itp = ctx.in_tail_position;
-    def ctx = ctx.WithInTailPosition (false);
-    def matched_value = ty_expr (ctx, mtch.expr);
-    mutable disable_warnings = false;
-
-    def do_case (c : PT.MatchCase, acc) {
-      when (c.disable_warnings) disable_warnings = true;
-      def (pat, ctx') = PatternTyping.TypePatterns (ctx, type_of (matched_value), c.patterns);
-      def body = ty_expr (ctx'.WithInTailPosition (itp), c.body);
-      match (acc) {
-        | (Some (t), l) =>
-          match (Tyutil.unify_branches (t, type_of (body))) {
-            | Some (t') => (Some (t'), Match_case (pat, body) :: l)
-            | None =>
-              expect_type ("match case body", body, t);
-              Util.ice () // not reached
-          }
-        | (None, l) =>
-          (Some (type_of (body)), Match_case (pat, body) :: l)
-      }
-    };
-
-    match (List.FoldLeft (mtch.cases, (None (), []), do_case)) {
-      | (Some (t), mcs') =>
-        def mcs = List.Rev (mcs');
-        unless (disable_warnings) PatternTyping.check_matching (mcs);
-        foreach (mc : Match_case in mcs) {
-          mc.patterns =
-            List.Map (mc.patterns,
-                      fun (p, e) {
-                         (PatternTyping.strip_enums (p), e)
-                      })
+          | TType.Class (tc, _) when Option.IsSome (tc.DefaultIndexerName) =>
+            /* user-defined indexers */
+            def member_name = Option.UnSome (tc.DefaultIndexerName);
+            ty_indexer (ctx, <[ $(typed_obj : typed) . $(member_name : dyn) ]>, args)
+            
+          | _ =>
+            def ty = typed_obj.ty;
+            Message.fatal_error ($ "indexer applied to non-indexer type $ty")
         }
-        (TExpr.Match (matched_value, mcs), t)
-      | (None, _) =>
-        Message.fatal_error ("cannot have empty match construct");
+
+      | l =>
+        Message.error ("expression is ambiguous:");
+        foreach (ex in l) Message.error ("  " + describe_expression (ex));
+        throw Recovery ()
     }
   }
 
-  ty_letfun (ctx : CTX, fs : list [PT.Function_decl]) : list [Function_decl] * CTX
-  {
-    def make_fun (d : PT.Function_decl) {
-      def pars = {
-        def h = ctx.current_fun;
-        if (h.decl == null) [h]
-        else
-          match (h.decl.kind) {
-            | LocalValueKind.Function (_, pars) => h :: pars
-            | _ => Util.ice ()
-          }
-      };
 
-      def h = d.header;
-      def name_obj = h.name.GetName ();
-      def (tenv, typarms) = ctx.parent_type.BindTyparms (ctx.tenv, h.typarms);
-      def mkparm (p : PT.Fun_parm) : Fun_parm {
-        def name = p.name.GetName ();
-        Fun_parm (loc = p.loc, name = name.Id, color = name.color,
-                  ty = ctx.parent_type.BindType (tenv, p.ty), decl = null,
-                  modifiers = p.modifiers)
-      };
-      def h' = Fun_header (
-         ret_type = ctx.parent_type.BindType (tenv, h.ret_type),
-         typarms = typarms,
-         name = name_obj.Id,
-         parms = List.Map (h.parms, mkparm),
-         tenv = tenv,
-         loc = h.loc);
-
-      def lv = ctx.DefineLocal (name_obj,
-                                LocalValueKind.Function (h', pars),
-                                Tyutil.fun_type (h'));
-      h'.decl = lv;
-      h'
-    };
-
-    def headers = List.Map (fs, make_fun);
-    def localvals = List.Map (headers, fun (h : Fun_header) { h.decl });
-    def ctx = ctx.WithLocals (localvals);
-    def do_fun (d : PT.Function_decl, h : Fun_header) : Function_decl {
-      Function_decl (h, ty_function (ctx, h, d.body))
-    };
-    (List.Map2 (fs, headers, do_fun), ctx)
-  }
 
   ty_sequence (ctx : CTX, l : list [PT.PExpr]) : TExpr
   {
@@ -1359,7 +1315,7 @@ namespace Nemerle.Compiler
           ty_expr (orig_ctx, MacroRegistry.expand_macro (orig_ctx, ctx, x))
 
         | x :: xs =>
-          def x = ConstantFolder.FoldTopConstants (ctx.IsChecked, ctx.env, x);
+          def x = ConstantFolder.FoldTopConstants (ctx.IsChecked, ctx.env, x);          
           match (MacroRegistry.expand_macro (ctx, ctx, x)) {
             | PT.PExpr.DefFunctions (fs) =>
               def (fs', ctx') = ty_letfun (ctx, fs);
@@ -1388,17 +1344,17 @@ namespace Nemerle.Compiler
                     else
                       None ();
 
-                  match (warn) {
-                    | Some ((was_of_kind, is_of_kind)) =>
+                  match (warn) {                    
+                    | Some ((was_of_kind, is_of_kind)) =>                      
                       Message.warning (x.loc, "redefinition of a local " +
                                        was_of_kind + " value `" + l.name +
                                        "'" + is_of_kind);
                       Message.warning (l.loc, "  <-- previously seen here")
-                    | _ => ()
-                  }
+                    | _ => ()                      
+                  }                      
                 | _ => ()
               }
-
+              
               def decl = ctx.DefineLocal (name, LocalValueKind.LocalVariable(), type_of (val));
               decl.is_ref = x.is_ref;
               def body = ty_sequence (ctx.WithLocal (decl).
@@ -1438,180 +1394,94 @@ namespace Nemerle.Compiler
     Util.locate ((List.Head (l)).loc, go ())
   }
 
-  public ty_literal (_ : CTX, l : Literal) : TType
+
+
+  // type given match {} construct
+  ty_match (ctx : Tyexpr.CTX, mtch : PT.PExpr.Match) : TExpr * TType
   {
-    match (l) {
-      | Literal.Void => TType.Void ()
-      | Literal.Null =>
-        match (Tyvar.free_variable ()) {
-          | (TType.Variable (tv)) as r => tv.value = TvValue.FreeFromNull (); r
-          | _ => Util.ice ()
-        }
-      | Literal.Byte => InternalType.Byte
-      | Literal.SByte => InternalType.SByte
-      | Literal.Short => InternalType.Int16
-      | Literal.UShort => InternalType.UInt16
-      | Literal.Int => InternalType.Int32
-      | Literal.UInt => InternalType.UInt32
-      | Literal.Long => InternalType.Int64
-      | Literal.ULong => InternalType.UInt64
-      | Literal.Char => InternalType.Char
-      | Literal.String => InternalType.String
-      | Literal.Float => InternalType.Single
-      | Literal.Double => InternalType.Double
-      | Literal.Decimal => InternalType.Decimal
-      | Literal.Bool => InternalType.Boolean
-      | Literal.Enum (_, tc) => TType.Class (tc, [])
-    }
-  }
+    def itp = ctx.in_tail_position;
+    def ctx = ctx.WithInTailPosition (false);
+    def matched_value = ty_expr (ctx, mtch.expr);
+    mutable disable_warnings = false;
 
-  make_first_class (ctx : CTX, expr : TExpr) : TExpr
-  {
-    match (expr) {
-      | TExpr.MethodRef (obj_ref, mem, _) =>
-        match (Tyutil.top_expand (type_of (expr))) {
-          | TType.Function (from, _) =>
-            def mkparm (_, acc) {
-               def t = PT.Name (Util.tmpname ("parm"));
-               def (fps, ps) = acc;
-               (PT.Fun_parm (expr.loc, PT.Splicable.Name (t), PT.PType.Infer (),
-                             Modifiers.Empty) :: fps,
-                             PT.PExpr.Ref (expr.loc, t) :: ps)
-            };
-            def (fps, ps) = List.FoldLeft (Tyutil.fun_args (from), ([], []), mkparm);
-            def ptr_name = PT.Name (Util.tmpname ("ptr"));
-            def header =
-              PT.Fun_header (expr.loc, PT.Splicable.Name (PT.Name (Util.tmpname ("ml"))),
-                             PT.PType.Infer (), fps);
-            def body = PT.PExpr.Call (PT.PExpr.Member (PT.PExpr.Ref (ptr_name),
-                                  PT.Splicable.Name (PT.Name (mem.Name))), ps);
-            //def body = <[ $(ptr_name : name) . $mem_name (.. $ps) ]>;
-            def lambda = PT.PExpr.Lambda (expr.loc, PT.Function_decl (header, body));
-            ty_expr (ctx, PT.PExpr.Sequence ([
-                PT.PExpr.Define (false, PT.Splicable.Name (ptr_name),
-                          PT.PExpr.Typed (obj_ref)),
-                lambda
-                ]))
-            //ty_expr (ctx, <[ { def $(ptr_name : name) = $(tye : typed);
-            //                   $lambda
-            //                 } ]>)
-          | _ => Util.ice ()
-        }
-      | TExpr.LocalRef ({kind = LocalValueKind.Function (h, _)}) =>
-        h.usage = FunctionUsage.UsedAsFirstClass;
-        expr
-      | TExpr.PropertyMember (_, prop) when is_indexer_property (prop) =>
-        Message.fatal_error ("indexer property `" + prop.Name +
-                             "' used as first class value")
-      | _ => expr
-    }
-  }
-
-
-  ty_mkarray (ctx : CTX, rank : int, args : PT.PExpr) : TExpr * TType
-  {
-    def expr_list_length (e) {
-      | <[ [] ]> => 0
-      | <[ $_ :: $rest ]> => 1 + expr_list_length (rest)
-      | _ => Message.fatal_error ("array initializer must be of form `array [rank] [ [..], .., [..] ]'")
-    }
-
-    def expr_list_flatten_and_count (e, remaining) {
-      | (<[ [] ]>, 0) => []
-      | (_, 0) => Message.fatal_error ("incorrectly structured array initializer");
-      | (<[ [] ]>, _) => Message.fatal_error ("incorrectly structured array initializer");
-      | (<[ $x :: $xs ]>, n) => x :: expr_list_flatten_and_count (xs, n - 1)
-      | _ => Message.fatal_error ("array initializer must be of form `array [rank] [ [..], .., [..] ]'")
-    }
-
-    def dimensions (args, remaining_rank)
-    {
-      | (_, 0) => []
-      | (<[ $head :: $_ ]>, n) =>
-        expr_list_length (args) :: dimensions (head, n - 1)
-      | _ => Message.fatal_error ("array initializer must be of form `array [rank] [ [..], .., [..] ]'")
-    }
-    /* Flattens the initializers and checks that there are the correct number of them */
-    def flatten (args, dims)
-    {
-        | (elem, []) => [elem]
-        | (l, h::t) =>
-          def flat = expr_list_flatten_and_count (l, h);
-          List.FoldLeft (flat, [], fun (i, a) {List.Concat ([a, flatten (i, t)])})
-    }
-
-    def dimensions = dimensions (args, rank);
-    def lst = flatten (args, dimensions);
-    def dimensions = List.Map (dimensions, fun (x) { TExpr.Literal (Literal.Int (x)) });
-
-    match (lst) {
-      | [] => Util.ice ("empty list of initializers")
-      | head :: _ =>
-        def typed_head = ty_expr (ctx, head);
-        def array_type = type_of (typed_head);
-        def type_array_initializers (initializers) {
-          match (initializers) {
-            | [] => []
-            | initializer :: rest =>
-              def typed_initializer = ty_expr (ctx, initializer);
-              expect_type ("array initializer", typed_initializer, array_type);
-              typed_initializer :: type_array_initializers (rest)
+    def do_case (c : PT.MatchCase, acc) {
+      when (c.disable_warnings) disable_warnings = true;
+      def (pat, ctx') = PatternTyping.TypePatterns (ctx, type_of (matched_value), c.patterns);
+      def body = ty_expr (ctx'.WithInTailPosition (itp), c.body);
+      match (acc) {
+        | (Some (t), l) =>
+          match (Tyutil.unify_branches (t, type_of (body))) {
+            | Some (t') => (Some (t'), Match_case (pat, body) :: l)
+            | None =>
+              expect_type ("match case body", body, t);
+              Util.ice () // not reached
           }
-        };
-        (TExpr.Array (type_array_initializers (lst), dimensions), TType.Array (array_type, rank))
+        | (None, l) =>
+          (Some (type_of (body)), Match_case (pat, body) :: l)
+      }
     };
+
+    match (List.FoldLeft (mtch.cases, (None (), []), do_case)) {
+      | (Some (t), mcs') =>
+        def mcs = List.Rev (mcs');
+        unless (disable_warnings) PatternTyping.check_matching (mcs);
+        foreach (mc : Match_case in mcs) {
+          mc.patterns = 
+            List.Map (mc.patterns, 
+                      fun (p, e) { 
+                         (PatternTyping.strip_enums (p), e) 
+                      });
+          mc.body = TExpr.TypeEnforcement (mc.body, t);
+        }
+        (TExpr.Match (matched_value, mcs), t)
+      | (None, _) =>
+        Message.fatal_error ("cannot have empty match construct");
+    }
   }
 
-  ty_indexer (ctx : CTX, obj : PT.PExpr, args : list [PT.PExpr]) : TExpr * TType
+
+
+  ty_letfun (ctx : CTX, fs : list [PT.Function_decl]) : list [Fun_header] * CTX
   {
-    def typed_objs =
-      match (obj) {
-        | <[ base ]>
-        | <[ this ]> =>
-          [ty_expr (ctx, obj)]
-        | _ =>
-          make_value_reference (ctx, obj, fallback = true);
+    def make_fun (d : PT.Function_decl) {
+      def pars = {
+        def h = ctx.current_fun;
+        h :: h.GetParents ()
       };
 
-    match (typed_objs) {
-      | TExpr.PropertyMember (_, prop) :: _ when is_indexer_property (prop) =>
-        def typed_args = List.Map (args, fun (x) { ty_expr (ctx, x) });
-        def args' = List.Map (typed_args, fun (x) { Parm (x) });
-        def ex = resolve_overloaded_call (ctx, false, typed_objs, args');
-        (ex, type_of (ex))
+      def h = d.header;
+      def name_obj = h.name.GetName ();
+      def (tenv, typarms) = ctx.parent_type.BindTyparms (ctx.tenv, h.typarms);
+      def mkparm (p : PT.Fun_parm) : Fun_parm {
+        def name = p.name.GetName ();
+        Fun_parm (loc = p.loc, name = name.Id, color = name.color,
+                  ty = ctx.parent_type.BindType (tenv, p.ty), decl = null,
+                  modifiers = p.modifiers)
+      };
+      def h' = Fun_header (
+         ret_type = ctx.parent_type.BindType (tenv, h.ret_type),
+         typarms = typarms,
+         name = name_obj.Id,
+         parms = List.Map (h.parms, mkparm),
+         tenv = tenv,
+         loc = h.loc);
 
-      | [typed_obj] =>
-        match (Tyutil.top_expand (typed_obj.ty)) {
-          | TType.Array (indexer_over_type, rank) =>
-            /* indexers over arrays */
-            def typed_args = List.Map (args, fun (x) { ty_expr (ctx, x) });
+      def lv = ctx.DefineLocal (name_obj,
+                                LocalValueKind.Function (h', pars), 
+                                Tyutil.fun_type (h'));
+      h'.decl = lv;
+      h'
+    };
 
-            mutable args_amount = rank;
-            foreach (index in typed_args) {
-              expect_type ("indexer type", index, InternalType.Int32);
-              --args_amount;
-            }
-            when (args_amount != 0)
-              Message.fatal_error ("wrong number of index parameters");
-
-            (TExpr.ArrayIndexer (indexer_over_type, typed_obj, typed_args),
-             indexer_over_type)
-
-          | TType.Class (tc, _) when Option.IsSome (tc.DefaultIndexerName) =>
-            /* user-defined indexers */
-            def member_name = Option.UnSome (tc.DefaultIndexerName);
-            ty_indexer (ctx, <[ $(typed_obj : typed) . $(member_name : dyn) ]>, args)
-
-          | _ =>
-            def ty = typed_obj.ty;
-            Message.fatal_error ($ "indexer applied to non-indexer type $ty")
-        }
-
-      | l =>
-        Message.error ("expression is ambiguous:");
-        foreach (ex in l) Message.error ("  " + describe_expression (ex));
-        throw Recovery ()
-    }
+    def headers = List.Map (fs, make_fun);
+    def localvals = List.Map (headers, fun (h : Fun_header) { h.decl });
+    def ctx = ctx.WithLocals (localvals);
+    def loop (headers : list [Fun_header], parsed : list [PT.Function_decl]) {
+      | (h :: hs, d :: ds) => h.body = ty_function (ctx, h, d.body); loop (hs, ds);
+      | _ => () // both must / will be empty
+    } 
+    loop (headers, fs);
+    (headers, ctx)
   }
 
 #endregion
