@@ -47,7 +47,7 @@ class CSharpParser extends Parser;
 
 options 
 {   
-    k = 3;
+    k = 2;
 }
 
 //--------------------------
@@ -290,7 +290,7 @@ returns [string return_string]
         )?
     ;
 
-expression_as_generic_parameters
+/*expression_as_generic_parameters
 returns [string return_string]
 {
    return_string = "";
@@ -303,10 +303,10 @@ returns [string return_string]
 	al = argument_list2
 	{ return_string += al; }
 
-        (options {greedy=true;}: rb:GTHAN 
+        (rb:GTHAN 
            { return_string += ExtendedToken.getWhitespaces (rb) + ">"; }
         )
-    ;
+    ;*/
 
 argument_list2
 returns [string return_string]
@@ -534,14 +534,16 @@ returns [string return_string]
 }
     :   n:NEW   
         tp = maybe_generic_type [false]
-        (generic_parameters )? 
-        lp:LPAREN   (al = argument_list)?   rp:RPAREN
-        {
-            return_string = ExtendedToken.getWhitespaces (n) + tp[0]+tp[1];
-            //if (parms != null)
-              //return_string += "." + parms;
-            return_string += lp.getText () + al + rp.getText ();
-        }
+        (   
+	    generic_parameters 
+	    {return_string = ExtendedToken.getWhitespaces (n) + tp[0]+tp[1];}
+	|
+	    lp:LPAREN   (al = argument_list)?   rp:RPAREN
+	    {
+		return_string = ExtendedToken.getWhitespaces (n) + tp[0]+tp[1];
+		return_string += lp.getText () + al + rp.getText ();
+	    }
+	)
     ;
 
 simple_name
@@ -601,16 +603,9 @@ returns [string return_string]
     string parms = "";
     string exp = "";
 }
-    :   (generic_parameters LPAREN)=>
-	parms = generic_parameters
-	lp:LPAREN   (al = argument_list)?   rp:RPAREN
-        { return_string = lp.getText () + al + rp.getText ();}
-    |  (LPAREN)=>
+    :  
 	lp2:LPAREN   (al = argument_list)?   rp2:RPAREN
         { return_string = lp2.getText () + al + rp2.getText ();}
-    |	(expression_as_generic_parameters)=>
-	    parms = expression_as_generic_parameters
-	    {return_string = parms;}
     ;
 
 element_access_end
@@ -1351,7 +1346,7 @@ returns [StatementTree t]
     LinkedList a = new LinkedList ();
 }
     :   lb:LBRACE   {a.Add(new StatementTree(lb));}
-	(t = switch_section
+	(options {greedy=true;}: t = switch_section
 	    {a.Add(t);}
 	)*   
 	rb:RBRACE   {a.Add(new StatementTree(rb));}
@@ -1368,12 +1363,15 @@ returns [StatementTree t]
     LinkedList a2 = new LinkedList ();
     LinkedList a = new LinkedList ();
 }
-    :   (options {greedy=true;}: t = switch_label
+    :	( options {greedy=true;}: 
+	    t = switch_label
 	    { a1.Add(t); }
 	)+   	
 
-	(options {greedy=true;}: t = statement
-	    { a2.Add(t);}
+	(   options {greedy=true;}: 
+		{LA(1)!=DEFAULT}? // <----- without this correct switches don't parse
+		t = statement
+		{ a2.Add(t);}
 	)+
 	
 	{ 
@@ -1393,7 +1391,7 @@ returns [StatementTree t]
     LinkedList a = new LinkedList ();
     string ce = "";
 }
-    :   c:CASE                      {a.Add (new StatementTree(c));}
+    :	c:CASE                      {a.Add (new StatementTree(c));}
 	ce = constant_expression    {a.Add (new StatementTree(ce));}
 	cl1:COLON		    {a.Add (new StatementTree(cl1));}
 	{ t = new StatementTree("SWITCH_LABEL",a);}
@@ -1763,7 +1761,13 @@ returns [StatementTree t]
     t = new StatementTree() ;
     string e = "";
 }
-    :   (type)=> e = local_variable_declaration { t = new StatementTree(e);}
+    :   (type)=> e = local_variable_declaration 
+	{   if(e.EndsWith(";"))
+	    {
+		e = e.Substring(0,e.Length - 1 );
+	    }
+	    t = new StatementTree(e);
+	}
     |   e = expression { t = new StatementTree(e);}
     ;
 
@@ -1824,7 +1828,7 @@ namespace_body
     ;
 
 
-using_directive //FIXME: add generic parameters here
+using_directive 
 {
     string [] nn = new string[]{"",""};
 }
@@ -1835,7 +1839,7 @@ using_directive //FIXME: add generic parameters here
             Emit.EmitToken (id);
             Emit.EmitToken (a);
         }
-        nn = namespace_or_type_name s1:SEMI
+        nn = namespace_or_type_name (generic_parameters)? s1:SEMI
         {    
             Emit.EmitString (nn[0]+nn[1]);
             Emit.EmitToken (s1);
