@@ -118,8 +118,12 @@ send-dist:
 	scp boot/ncc.exe lilith:/home/services/httpd/html/download/ncc-boot.exe
 
 install:
-	$(MAKE) -C doc  install
-	$(MAKE) -C boot install
+	$(Q)$(MAKE) -C boot install
+	$(Q)$(MAKE) -C doc  install
+
+uninstall:
+	$(Q)$(MAKE) -C boot uninstall
+	$(Q)$(MAKE) -C doc  uninstall
 
 clean:
 	$(MAKE) -C doc clean
