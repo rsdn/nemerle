@@ -64,10 +64,10 @@ all: ncc.exe
 # Finally run testsuite.
 boot: ncc.exe
 	rm -f out.cs
-	$(EXECUTE) ncc.exe $(n_src)
+	$(EXECUTE) ./ncc.exe $(n_src)
 	$(COMPILE) $(OUTFLAG)ncc2.exe $(all_cs)
 	mv out.cs out2.cs
-	$(EXECUTE) ncc2.exe $(n_src)
+	$(EXECUTE) ./ncc2.exe $(n_src)
 	cmp -s out2.cs out.cs
 	$(COMPILE) $(OUTFLAG)ncc3.exe $(all_cs)
 	mv out.cs out3.cs
