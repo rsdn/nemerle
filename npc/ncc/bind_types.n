@@ -13,7 +13,30 @@ pass 2:
     {
       type CTX = String_map(int);
 
-      fun add_tyvars(ctx : CTX, tp : Typarms) : CTX =
+      fun bind_type(env : Env, ctx : CTX, t : Type) : void =
+        letfun self(t : Type) : void = bind_type(env, ctx, t) in
+        match t with [
+          | T_ref (?t) => self(t)
+          | T_out (?t) => self(t)
+          | T_fun (?ts, ?t) => { List.iter(self, ts); self(t) }
+          | T_void => ()
+          | T_prod (?ts) => List.iter(self, ts)
+          | T_var ?v =>
+            match ctx#find(v#name) with [
+              | Some (?n) => v#ref_to <- n
+              | None =>
+                Message.error("unbound type variable " + v#name)
+            ]
+          | T_app ?a =>
+            {
+              a#ref_to <- (env#lookup_type(a#tycon))#id;
+              List.iter(self, a#args)
+            }
+        ];
+        
+      fun add_tyvars(env : Env, ctx : CTX, tp : Typarms) : CTX =
+        // this mess with two environments is here to detect possible error:
+        // type ('a) foo { type ('b) where 'a :> t }
         letfun add (ctx : CTX * CTX, name : string) : CTX * CTX =
           let id = Tyvars.add(name) in
           let (?local, ?global) = ctx in
@@ -25,7 +48,10 @@ pass 2:
         letfun addc (c : Constraint) : void =
           match local#find(c#tyvar) with [
             | Some (?id) =>
-              Tyvars.add_constraint(id, c#ty)
+              {
+                Tyvars.add_constraint(id, c#ty);
+                bind_type(env, global, c#ty)
+              }
             | None =>
               Message.error("unbound type variable " + c#tyvar + " in constraint")
           ]
@@ -33,12 +59,52 @@ pass 2:
           List.iter(addc, tp#constraints);
           global
         };
-        
+
       fun run(decls : list (Type_decl)) : void =
         letfun do_tydecl(ctx : CTX, decl : Type_decl) : CTX =
-          let ctx' = add_tyvars(ctx, decl#typarms) in
-          ctx'
-        and do_decl(ctx : CTX, decl : Class_member) : void = ()
+          let ctx' = add_tyvars(decl#env, ctx, decl#typarms) in
+          let types =
+            match decl#t_extends with [
+              | Some (?t) => Cons (t, decl#t_implements)
+              | None => decl#t_implements
+            ]
+          in letfun do_type(t : Type) : void = bind_type(decl#env, ctx', t) in {
+            List.iter(do_type, types);
+            match decl with [
+              | TD_alias (?t) => do_type(t)
+              | _ => ()
+            ];
+            ctx'
+          }
+
+        and do_expr(env : Env, ctx : CTX, expr : Expr) : void = ()
+
+        and do_header(env : Env, ctx : CTX, h : Fun_header) : void =
+          let ctx' = add_tyvars(env, ctx, h#typarms) in {
+            bind_type(env, ctx', h#ret_type);
+            letfun doparm(p : Fun_parm) : void = 
+              bind_type(env, ctx', p#ty) 
+            in List.iter(doparm, h#parms)
+          }
+          
+        and do_decl(ctx : CTX, decl : Class_member) : void =
+          match decl with [
+            | M_value (?t, _) => bind_type(decl#env, ctx, t)
+            | M_field (?t, _) => bind_type(decl#env, ctx, t)
+            | M_function (?h, _, ?b) =>
+              {
+                match b with [
+                  | FB_expr (?e) => do_expr(decl#env, ctx, e)
+                  | FB_extern => ()
+                ];
+                do_header(decl#env, ctx, h)
+              }
+            | M_iface_method (_, ?h) =>
+              do_header(decl#env, ctx, h)
+
+            // recursive invocations already done
+            | M_type => ()
+          ]
         in 
         Treeutil.decl_walk(do_tydecl, do_decl, Map.string_map(), decls);
     }
