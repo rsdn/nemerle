@@ -27,6 +27,7 @@
  */
 
 using Nemerle.Collections;
+using Nemerle.Utility;
 using Nemerle.IO;
 using Nemerle.Compiler.Tyexpr;
 
@@ -47,12 +48,95 @@ public interface IMacro {
 } 
 
 public module MacroRegistry {
-  public macros : Hashtable <string, IMacro>;
-  extensions : Hashtable <string, list <string * list<string> * Parser.KeywordCallback>>;
+
+  class MacroNS {
+    public mutable Value : option <IMacro>;
+    mutable children : Hashtable <string, MacroNS>;
+
+    public this (v : option <IMacro>) {
+      Value <- v;
+    }
+
+    /// Walks down the tree begining at current node, spliting given
+    /// name to `.' separated parts. The path is created if at some
+    /// point it doesn't exist in tree.
+    public Path (n : string) : MacroNS {
+      mutable cur_node <- this;
+      mutable last <- 0;
+      for (mutable i <- 0; i < n.Length; ++i) {
+        when (n[i] == '.') {
+          cur_node <- cur_node.Child (n.Substring (last, i - last));
+          last <- i + 1;
+        }
+      };
+      when (n.Length > 0 && !n.EndsWith ("."))
+        cur_node <- cur_node.Child (n.Substring (last, n.Length - last));
+      cur_node
+    }
+
+    public Path (n : list <string>) : MacroNS {
+      mutable cur_node <- this;
+      def loop (l) {
+        | x :: xs =>
+          cur_node <- cur_node.Child (x);
+          loop (xs)
+        | _ => cur_node
+      };
+      loop (n)
+    }
+
+    public TryPath (n : list <string>) : option <IMacro> {
+      def loop (l, cur_node : MacroNS) {
+        match (l) {
+          | [x] =>
+            when (cur_node.children == null)
+              cur_node.children <- Hashtable (10, 1.0f);
+
+            match (cur_node.children.Get (x)) {
+              | Some (nd) => nd.Value
+              | _ => None ()
+            }
+
+          | x :: xs =>
+            when (cur_node.children == null)
+              cur_node.children <- Hashtable (10, 1.0f);
+
+            match (cur_node.children.Get (x)) {
+              | Some (nd) => loop (xs, nd)
+              | _ => None ()
+            }
+          // we are at good namespace, so return our own Value
+          | _ => Value
+        }
+      };
+      loop (n, this)
+    }
+
+
+    /// Performs one step down the tree through given edge (name).
+    /// String in this edge isn't splited to `.' separated parts.
+    /// In case there is no such child in current node, it is created.
+    public Child (name : string) : MacroNS {
+      when (children == null) children <- Hashtable (10, 1.0f);
+      match (children.Get (name)) {
+        | None =>
+          def result = MacroNS (None ());
+          children.Add (name, result);
+          result
+
+        | Some (r) => r
+      }
+    }
+  }
+  
+//  public macros : Hashtable <string, IMacro>;
+  macros : MacroNS;
+  extensions : Hashtable <string, list <string * list<string>
+               * Parser.KeywordCallback>>;
   mutable loaded : list<string>;
 
   this () {
-    macros <- Hashtable (100);
+    macros <- MacroNS (None ());
     extensions <- Hashtable (50);
     loaded <- [];
   }
@@ -101,50 +185,52 @@ public module MacroRegistry {
         "Nemerle.Core" 
       else 
         ns.Substring (0, ns.Length - 1);
+    def nslist = NString.Split (array ['.'], fullname);
 
-    if (macros.Contains (fullname))
-      Message.error ("macro `" + fullname + "' already defined")
-    else {
-      // store syntax extension in MacroRegistry
-      match (m.SyntaxExtension ()) {
-        | ("", [], []) => ()
-        | (key, rules, positions) =>
-          mutable keywords <- [key];
-          List.Iter (rules, fun (x) { 
-            | Parser.GE_keyword (k) => keywords <- k :: keywords;
-            | _ => () 
-          });
+    match (macros.TryPath (nslist)) {
+      | Some =>
+        Message.error ("macro `" + fullname + "' already defined")
+      | None =>
+        // store syntax extension in MacroRegistry
+        match (m.SyntaxExtension ()) {
+          | ("", [], []) => ()
+          | (key, rules, positions) =>
+            mutable keywords <- [key];
+            List.Iter (rules, fun (x) { 
+              | Parser.GE_keyword (k) => keywords <- k :: keywords;
+              | _ => () 
+            });
 
-          def permute = Macros.CreatePermutingFunction (List.Rev (positions));          
-          def callback =
-            Parser.KeywordCallback (key, Parser.make_parsing_function
-                                           (fullname, rules, permute));
-                                                                  
-          // store extensions for this namespace
-          match (extensions.Get (ns)) {
-            | Some (l) =>
-              extensions.Set (ns, (key, keywords, callback) :: l)
-            | None =>
-              extensions.Set (ns, [(key, keywords, callback)])
-          }
-      };
-      macros.Set (fullname, m);
-//      macros.Set (m.GetName (), m);
+            def permute = Macros.CreatePermutingFunction (List.Rev (positions));
+            def callback =
+              Parser.KeywordCallback (key, Parser.make_parsing_function
+                                             (fullname, rules, permute));
+
+            // store extensions for this namespace
+            match (extensions.Get (ns)) {
+              | Some (l) =>
+                extensions.Set (ns, (key, keywords, callback) :: l)
+              | None =>
+                extensions.Set (ns, [(key, keywords, callback)])
+            }
+        };
+        macros.Path (nslist).Value <- Some (m);
     }
   }
 
   public expand_macro (ctx : CTX, expr : PT.Expr) : PT.Expr {
     match (expr) {
       | PT.E_call (name, args) =>
-        match (Util.name_of_expr (name)) {
-          | Some (name) =>
-            def names = name.GetEnv (ctx.env).ExpandName (name.id);
+        match (Util.qidl_name_of_expr (name)) {
+          | Some ((namepath, name)) =>
+            def names = name.GetEnv (ctx.env).ExpandName (namepath);
             def res =
               List.FoldLeft (names, None (), 
                 fun (fullname, acc) {
-                  match ((acc, macros.Get (fullname))) {
+                  match ((acc, macros.TryPath (fullname))) {
                     | (Some (m1), Some (m2)) when m1 != m2 =>
-                      Message.error ("macro name `" + name.id + 
+                      Message.error ("macro name `" +
+                                     NString.Concat (".", namepath) + 
                                      "' is ambiguous (expanded to " +
                                      m1.GetNamespace () + m1.GetName () +
                                      " and " +
@@ -166,7 +252,7 @@ public module MacroRegistry {
         }
         
       | PT.E_macrocall (name, parms) =>
-        match (macros.Get (name.id)) {
+        match (macros.Path (name.id).Value) {
           | Some (m) =>
             TypingContext.PushNewColor (name.color, name.GetEnv (null));
             def expanded = m.Run (ctx, parms);
