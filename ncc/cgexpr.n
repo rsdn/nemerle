@@ -143,11 +143,13 @@ module CGexpr {
   internal class CTX
   {
     public mutable current_fun : Fun_header;
+    public mutable current_fun_or_loop : Fun_header;
     public mutable current_closure : option <CG_val>;
     public mutable closure_fields : SystemMap <int, FieldInfo>;
     public mutable closure_ptrs : SystemMap <int, FieldInfo>;
     public mutable locals : SystemMap <int, CG_val>;
     public mutable current_type : Tyinfo;
+    public mutable current_loop : option <CE_loop>;
   }
 
   copy_ctx (c : CTX) : CTX 
@@ -157,17 +159,21 @@ module CGexpr {
          closure_fields = c.closure_fields,
          closure_ptrs = c.closure_ptrs,
          locals = c.locals,
-         current_type = c.current_type)
+         current_type = c.current_type,
+         current_loop = c.current_loop,
+         current_fun_or_loop = c.current_fun_or_loop)
   }
 
   empty_ctx (ti : Tyinfo) : CTX
   {
     CTX (current_fun = null,
+         current_fun_or_loop = null,
          current_closure = None (),
          closure_fields = SystemMap (),
          closure_ptrs = SystemMap (),
          locals = SystemMap (),
-         current_type = ti)
+         current_type = ti,
+         current_loop = None ())
   }
 
   store_in_closure (ctx : CTX, d : LocalValue, val : CG_expr) : CG_expr
@@ -247,14 +253,18 @@ module CGexpr {
           | CE_call (CE_base_ctor_ref, _) => typeof (System.Void)
 
           | CE_typeof => typeof (System.Type)
+
+          | CE_loop (expr, _) => type_of (expr)
           
           | CE_self_tail_call
           | CE_tail_call
           | CE_call => Util.ice ()
           
+          | CE_multiple_assign
           | CE_assign => typeof (System.Void)
           | CE_let (_, b) => type_of (b)
           | CE_has_type => typeof (System.Boolean)
+          | CE_continue_loop
           | CE_raise => typeof (System.Void)
           | CE_if (_, _, _) => Util.ice ("ought to be cached")
           | CE_try_with (e, _, _) => type_of (e)
@@ -643,6 +653,26 @@ module CGexpr {
              [this_ptr, CE_method_addr (cgm.method_builder)])
   }
 
+  emit_loop (ctx : CTX, h : Fun_header, parms : list <Parm>) : CG_expr
+  {
+    def ctx' = copy_ctx (ctx);
+    def parm_vals = List.Map2 (h.parms, parms, fun (fp : Fun_parm, ap : Parm) {
+      def val = CG_val (loc = fp.decl.loc, 
+                        name = fp.name,
+                        ty = cg_type (ctx, fp.ty),
+                        val = cg_expr (ctx, ap.expr));
+      ctx'.locals <- ctx'.locals.Add (fp.decl.id, val);
+      val
+    });
+    ctx'.current_fun_or_loop <- h;
+    def loop = (CE_loop (null, None ()) :> CE_loop);
+    ctx'.current_loop <- Some (loop);
+    loop.body <- cg_expr (ctx', h.body);
+    h.body <- null;
+    List.FoldLeft (List.Rev (parm_vals), (loop : CG_expr), 
+                   fun (v, expr) { CE_let (v, expr) })
+  }
+
   raw_cg_expr (ctx : CTX, inex : Expr) : CG_expr
   {
     //Message.debug ("emit");
@@ -666,11 +696,21 @@ module CGexpr {
         CE_typeof (cg_type (ctx, t))
 
       | E_self_tail_call (parms) =>
-        def parms = List.Map (parms, fun (p : Parm) { self (p.expr) });
-        def cgm = ctx.current_fun.cg_method;
-        def parms = casted_parms (ctx, cgm.parms, parms);
-        def t = cg_type (ctx, inex.expr_ty);
-        CE_self_tail_call (t, parms)
+        def fn = ctx.current_fun_or_loop;
+        match (fn.usage) {
+          | FU_used_just_once =>
+            def assigns = 
+              List.Map2 (parms, fn.parms, fun (p : Parm, fp : Fun_parm) {
+                (ctx.locals.Get (fp.decl.id), self (p.expr))
+              });
+            CE_sequence ([CE_multiple_assign (assigns), 
+                          CE_continue_loop (Option.UnSome (ctx.current_loop))])
+          | _ =>
+            def parms = List.Map (parms, fun (p : Parm) { self (p.expr) });
+            def parms = casted_parms (ctx, fn.cg_method.parms, parms);
+            def t = cg_type (ctx, inex.expr_ty);
+            CE_self_tail_call (t, parms)
+        }
 
       | E_call (f, ps) 
       | E_tail_call (f, ps) =>
@@ -731,6 +771,8 @@ module CGexpr {
             emit_call (GetCgMethod (m), CE_base_ctor_ref (m.GetConstructorInfo ()))
           | E_local_ref (d) =>
             match (d.kind) {
+              | D_local_fun (({usage = FU_used_just_once}) as h, _) =>
+                emit_loop (ctx, h, ps)
               | D_local_fun (h, _) when h.id == ctx.current_fun.id =>
                 assert (h.cg_method.method_builder != null);
                 emit_call (get_cg_method (ctx, h),
@@ -769,13 +811,25 @@ module CGexpr {
       | E_letfun (fs, body) =>
         mutable vals <- [];
         def store (f : Function_decl, ctx : CTX) : CTX {
-          def ct = make_lambda_ctor_call (ctx, get_fn_header (f.decl));
-          def (ctx, val) = store_local (ctx, f.decl, ct);
-          vals <- val :: vals;
-          ctx
+          def fh = get_fn_header (f.decl);
+          match (fh.usage) {
+            | FU_used_just_once =>
+              ctx
+            | _ =>
+              def ct = make_lambda_ctor_call (ctx, fh);
+              def (ctx, val) = store_local (ctx, f.decl, ct);
+              vals <- val :: vals;
+              ctx
+          }
         };
         def emit (f : Function_decl) {
-          emit_lambda_code (ctx, get_fn_header (f.decl), f.body);
+          def fh = get_fn_header (f.decl);
+          match (fh.usage) {
+            | FU_used_just_once => 
+              // used later in emit_loop
+              fh.body <- f.body
+            | _ => emit_lambda_code (ctx, fh, f.body)
+          }
         };
         def mklet (val, acc) { CE_let (val, acc) };
 
@@ -914,6 +968,7 @@ module CGexpr {
     ctx.closure_ptrs <- cgm.closure_pointers;
     ctx.locals <- SystemMap ();
     ctx.current_fun <- h;
+    ctx.current_fun_or_loop <- h;
     ctx
   }
 
