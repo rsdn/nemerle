@@ -288,7 +288,27 @@ returns [string return_string]
          | rb1 : SR
            { return_string += ExtendedToken.getWhitespaces (rb1) + "]]"; }
         )?
-  ;
+    ;
+
+expression_as_generic_parameters
+returns [string return_string]
+{
+   return_string = "";
+   string [] ty = new string[] {"",""};
+   string al = "";
+}
+    :    lb:LTHAN 
+        { return_string = ExtendedToken.getWhitespaces (lb) + "<"; }
+
+	al = argument_list
+	{ return_string += al; }
+
+        (options {greedy=true;}: rb:GTHAN 
+           { return_string += ExtendedToken.getWhitespaces (rb) + ">"; }
+        )?
+    ;
+
+
 
 non_array_type
 returns [string [] return_strings]
@@ -497,7 +517,7 @@ returns [string return_string]
     string [] tp = new string[]{"",""};
     string al = "";
     return_string = "";
-    string parms = null;
+    string parms = "";
 }
     :   n:NEW   
         tp = maybe_generic_type [false]
@@ -505,8 +525,8 @@ returns [string return_string]
         lp:LPAREN   (al = argument_list)?   rp:RPAREN
         {
             return_string = ExtendedToken.getWhitespaces (n) + tp[0]+tp[1];
-            if (parms != null)
-              return_string += "." + parms;
+            //if (parms != null)
+              //return_string += "." + parms;
             return_string += lp.getText () + al + rp.getText ();
         }
     ;
@@ -536,7 +556,7 @@ returns [string return_string]
 {
     return_string = "";
 }
-    :   DOT   id:IDENTIFIER {return_string = "." + id.getText ();}
+    :	DOT id:IDENTIFIER {return_string = "." + id.getText ();}
     ;
 
 predefined_type
@@ -565,19 +585,20 @@ returns [string return_string]
 {
     string al = "";
     return_string = "";
+    string parms = "";
+    string exp = "";
 }
-    :   lp:LPAREN   (al = argument_list)?   rp:RPAREN
+    :   (generic_parameters LPAREN)=>
+	parms = generic_parameters
+	lp:LPAREN   (al = argument_list)?   rp:RPAREN
         { return_string = lp.getText () + al + rp.getText ();}
+    |  (LPAREN)=>
+	lp2:LPAREN   (al = argument_list)?   rp2:RPAREN
+        { return_string = lp2.getText () + al + rp2.getText ();}
+    |	(expression_as_generic_parameters)=>
+	    parms = expression_as_generic_parameters
+	    {return_string = parms;}
     ;
-
-
-//element_access
-//returns [string return_string]
-//{
-//   return_string = "";
-//}
-//    :   primary_no_array_creation_expression LBRACK   expression_list   RBRACK
-//    ;
 
 element_access_end
 returns [string return_string]
@@ -1079,9 +1100,11 @@ empty_statement
 returns [StatementTree t]
 {
     t = new StatementTree();
+    StatementTree st = new StatementTree();
+    LinkedList a = new LinkedList ();
 }
-    :   s:SEMI
-        {t = new StatementTree (ExtendedToken.getWhitespaces(s) + "();");}
+    :   s:SEMI          {a.Add (new StatementTree(ExtendedToken.getWhitespaces(s) + "();"));}
+	{t = new StatementTree ("EMPTY",a);}
     ;
 
 default_value
@@ -1188,7 +1211,6 @@ local_constant_declaration
 returns [string return_string]
 {
     return_string = "";
-//    string [] t = new string[]{"",""};
     string temp = "";
 }
     :   c:CONST   type   return_string = local_constant_declarator[ExtendedToken.getWhitespaces (c),""]
@@ -2046,7 +2068,7 @@ returns [string return_string]
     |   return_string = expression       
     ;
 
-where_constraints
+where_constraints //FIXME : new ()
 returns [string return_string]
 {
   return_string = "";
@@ -2833,16 +2855,25 @@ interface_modifier
 interface_base
 {
     string [] t1 = new string[]{"",""};
+    string parms = "";
 }
     :   c1:COLON 
         {
             Emit.EmitToken (c1);
         }  
-        t1 = type_name 
+        t1 = type_name (parms = generic_parameters)? 
         {
-            Emit.EmitString (t1[0]+t1[1]);
+            Emit.EmitString (t1[0]+t1[1] + parms);
+	    parms = "";
         }
-            (cm:COMMA  {Emit.EmitToken (cm);}  t1 = type_name {Emit.EmitString (t1[0]+t1[1]);})*
+        (   
+	    cm:COMMA  {Emit.EmitToken (cm);}  
+	    t1 = type_name  (parms = generic_parameters)?
+	    {
+		Emit.EmitString (t1[0]+t1[1] + parms);
+		parms = "";
+	    }
+	)*
     ;
 
 interface_body
