@@ -214,6 +214,14 @@ namespace Nemerle.Compiler
      *)
     private reflect_type (type_name : string, scan_externals : bool, scan_system : bool) : System.Type
     {
+      // FIXME: this is a hack, how can we fix it in earlier stages?
+      def type_name =
+        match (type_name) {
+          | "char" => "System.Char"
+          | "int" => "System.Int32"
+          | other => other
+        };
+                    
       def ty = this._module_builder.GetType (type_name);
       if (ty != null) ty
       else {
@@ -951,6 +959,35 @@ namespace Nemerle.Compiler
     (**
      *
      *)
+    internal get_external_method_info (class_name : string, method_name : string, is_static : bool,
+                                       parm_types_list : list (System.Type)) : MethodInfo
+    {
+      def class_type = reflect_type (class_name);
+
+      if (class_type != null) {
+        def parm_types_array = type_list_to_type_array (parm_types_list);
+
+        def binding_flags =
+          if (is_static) BindingFlags.Static
+          else BindingFlags.Instance;
+ 
+        def method_info =
+          class_type.GetMethod (method_name, binding_flags %| BindingFlags.Public %|
+                                BindingFlags.FlattenHierarchy, null, parm_types_array, null);
+        assert (method_info != null);
+        
+        method_info
+      }
+      else {
+
+        Message.fatal_error ("could not find method " + class_name + "." + method_name)
+      }    
+    }
+
+
+    (**
+     *
+     *)
     internal get_method_info (method : CM_method, parm_types_list : list (System.Type)) : MethodInfo
     {      
       if (Option.is_some (method.method_builder)) {
@@ -965,32 +1002,7 @@ namespace Nemerle.Compiler
 
         def (class_name, method_name) = split_global_ref (method.extern_name);
 
-        def class_type = reflect_type (class_name);
-
-        if (class_type != null) {
-          def parm_types_array = type_list_to_type_array (parm_types_list);
-
-          def binding_flags =
-            if (is_static_method (method)) {
-              Message.debug ("static");
-              BindingFlags.Static
-            }
-            else {
-              Message.debug ("instance");
-              BindingFlags.Instance
-            };
-
-          def method_info =
-            class_type.GetMethod (method_name, binding_flags %| BindingFlags.Public %|
-                                  BindingFlags.FlattenHierarchy, null, parm_types_array, null);
-          assert (method_info != null);
-          
-          method_info
-        }
-        else {
-
-          Message.fatal_error ("could not find method " + method.extern_name)
-        }
+        get_external_method_info (class_name, method_name, is_static_method (method), parm_types_list);
       }
     }
 
@@ -1214,15 +1226,59 @@ namespace Nemerle.Compiler
             false
           }
 
+
         (* assignment to a property *)
-        | CE_assign (CE_property_ref (expr, prop), val) =>
-          Message.debug ("FIXME: CE_assign CE_property_ref");
-          false
+        | CE_assign (CE_property_ref (base_object, prop), val) =>
+          if (emit (base_object)) true
+          else {
+            def base_class_type = 
+              _cgil.reflect_nemerle_type (type_of (base_object));
+            assert (base_class_type != null);
+            
+            def method_info = base_class_type.GetMethod ("set_" + prop.name);
+            assert (method_info != null, "CE_property_ref unable to fetch " + 
+              base_class_type.FullName + ".set_" + prop.name + " method");
+
+            if (emit (val)) true
+            else {
+              _ilg.Emit (OpCodes.Callvirt, method_info);
+              false
+            }
+          }
+
+
+        (* assignment to a parametrized property *)
+        | CE_assign (CE_indexer (element_type, prop, base_object, indexer_parms), val) =>
+          if (emit (base_object)) true
+          else {
+            def base_class_type = 
+              _cgil.reflect_nemerle_type (type_of (base_object));
+            assert (base_class_type != null);
+
+            // FIXME: using indexer_parms here is asking for trouble...
+            def method_parms = List.append (indexer_parms, [val]);
+            
+            def method_info = 
+              _cgil.get_external_method_info (base_class_type.FullName,
+                                              "set_" + prop.name, false, 
+                                              make_expr_call_parms (method_parms));
+                                              
+            assert (method_info != null, "CE_assign CE_indexer unable to fetch " + 
+              base_class_type.FullName + ".set_" + prop.name + " method");
+
+            if (emit_call_parameters (method_parms)) true
+            else {
+              _ilg.Emit (OpCodes.Callvirt, method_info);
+              false
+            }
+          }
+
 
         (* assignment to a tuple element *)
         | CE_assign (CE_tuple_ref (tuple_object, index), val) =>
           Message.debug ("FIXME: CE_assign CE_tuple_ref");
           false
+
 
         (* assignment to an array element *)
         | CE_assign (CE_array_indexer (element_type, array_obj, [index]), val) =>
@@ -1400,11 +1456,40 @@ namespace Nemerle.Compiler
               _cgil.reflect_nemerle_type (type_of (base_object));
             assert (base_class_type != null);
             
-            def method_info = base_class_type.GetMethod ("get_" + prop.name);
-            assert (method_info != null, "CE_property_ref unable to fetch get_" + prop.name + " method");
+            def method_info = 
+              _cgil.get_external_method_info (base_class_type.FullName,
+                                              "get_" + prop.name, false, []);
+                                                          
+            assert (method_info != null, "CE_property_ref unable to fetch " + 
+              base_class_type.FullName + ".get_" + prop.name + " method");
 
             _ilg.Emit (OpCodes.Callvirt, method_info);
             false
+          }
+
+
+        (* load the value of a parametrized property *)
+        | CE_indexer (element_type, prop, base_object, indexer_parms) =>
+          if (emit (base_object)) true
+          else {
+            def base_class_type = 
+              _cgil.reflect_nemerle_type (type_of (base_object));
+            assert (base_class_type != null);
+
+            // FIXME: using indexer_parms here is asking for trouble...            
+            def method_info = 
+              _cgil.get_external_method_info (base_class_type.FullName,
+                                              "get_" + prop.name, false, 
+                                              make_expr_call_parms (indexer_parms));
+                                              
+            assert (method_info != null, "CE_indexer unable to fetch " + 
+              base_class_type.FullName + ".get_" + prop.name + " method");
+
+            if (emit_call_parameters (indexer_parms)) true
+            else {
+              _ilg.Emit (OpCodes.Callvirt, method_info);
+              false
+            }
           }
 
 
@@ -1665,7 +1750,7 @@ namespace Nemerle.Compiler
 
 (*
 
-        | CE_indexer (_, obj, args) =>
+        | CE_indexer (ty, prop, obj, args) =>
           def (obj_pre, obj_val) = make_complex (flat (obj));
           mutable indexers_pre <- ST_leaf ("");
           def serialize (e : CG_expr) : String_tree {
@@ -2053,7 +2138,7 @@ namespace Nemerle.Compiler
         | CE_method_ref => Util.ice ()
         | CE_base => Util.ice ()
         | CE_mkarray (element_type, _) => CT_array (element_type)
-        | CE_indexer (t, obj, args) => t
+        | CE_indexer (t, prop, obj, args) => t
         | CE_array_indexer (t, obj, args) => t
         | CE_block (expr) => type_of (expr)
         | CE_restart => CT_void ()
@@ -2107,7 +2192,7 @@ namespace Nemerle.Compiler
         | CE_tuple_ctor (exprs) => "CE_tuple_ctor; "
         | CE_none => "CE_none"
         | CE_mkarray (_, initializers) => "CE_mkarray { " + pretty_print_list (initializers, "") + " }; "
-        | CE_indexer (_, obj, args) => "CE_indexer " + pretty_print (obj) + "[" + pretty_print_list (args, "") + "]" + "; "
+        | CE_indexer (_, _, obj, args) => "CE_indexer " + pretty_print (obj) + "[" + pretty_print_list (args, "") + "]" + "; "
         | CE_array_indexer (_, obj, args) => "CE_indexer " + pretty_print (obj) + "[" + pretty_print_list (args, "") + "]" + "; "
         | CE_block (expr) => "CE_block { " + pretty_print (expr) + " }; "
         | CE_restart => "CE_restart; "
