@@ -116,6 +116,7 @@ STDMACROS_DLL_SRC = \
         ../macros/io.n \
 	../macros/AssemblyInfo.n \
 	../macros/xml.n \
+	../macros/concurrency.n \
 
 DISTFILES = \
 	Makefile                    \

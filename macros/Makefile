@@ -46,6 +46,7 @@ DISTFILES = \
 	assertions.n	\
 	AssemblyInfo.n	\
 	xml.n		\
+	concurrency.n	\
 
 ############################################################
 # OUTPUT
