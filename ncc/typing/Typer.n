@@ -289,23 +289,27 @@ namespace Nemerle.Compiler
       def obj = TypeExpr (obj, tv);
       if (tv.IsFixed) {
         def mems = Hashtable ();
+        def visited = Hashtable ();
         mutable res = [];
 
         def lookup (t) {
-          | MType.Class (tc, args) =>
+          | MType.Class (tc, args) when (! visited.Contains (tc.GetId ())) =>
+            visited [tc.GetId ()] = null;
             foreach (mem : IMember in tc.LookupMember (mem_name))
               when (!mems.Contains (mem.GetId ())) {
-                def ty =
-                  match (mem) {
-                    | meth : IMethod =>
-                      meth.GetFreshType ()
-                    | mem : IMember =>
-                      mem.GetMemType ()
-                  };
-                def ty = tc.SubtypingSubst (mem.DeclaringType).Apply (ty);
-                def ty = tc.MakeSubst (args).Apply (ty);
                 mems [mem.GetId ()] = null;
-                res = TExpr.Member (ty, obj, mem) :: res;
+                when (!mem.IsStatic && mem.CanAccess (current_type)) {
+                  def ty =
+                    match (mem) {
+                      | meth : IMethod =>
+                        meth.GetFreshType ()
+                      | mem : IMember =>
+                        mem.GetMemType ()
+                    };
+                  def ty = tc.SubtypingSubst (mem.DeclaringType).Apply (ty);
+                  def ty = tc.MakeSubst (args).Apply (ty);
+                  res = TExpr.Member (ty, obj, mem) :: res;
+                }
               }
           | MType.TyVar (tv) =>
             List.Iter (tv.Constraints, lookup)
@@ -329,6 +333,34 @@ namespace Nemerle.Compiler
           TExpr.Error ()
         } else
           Delay (<[ $(obj : typed) . $mem_name ]>)
+      }
+    }
+
+
+    InterpretGlobals (symbols : list [Symbol], expected : TyVar) : TExpr
+    {
+    }
+
+
+    TypeName (name : PT.Name, expected : TyVar) : TExpr
+    {
+      match (name.idl) {
+        | [_] when local_context.FindLocal (name) matches Some =>
+          def local = Option.UnSome (local_context.FindLocal (name));
+          expected.Unify (local.Type);
+          LocalRef (local)
+
+        | _ =>
+          def from_this =
+            match (name.idl) {
+              | [name] when is_method =>
+                TryTyping (fun () { TypeMember (<[ this ]>, name, expected) })
+              | _ => TExpr.Error ()
+            };
+          def globals = name.GetEnv (env).LookupSymbol (name.idl);
+          def from_global =
+            InterpretGlobals (globals, expected);
+          MakeOverloadedNode ([from_this, from_global], expected)
       }
     }
 
@@ -668,20 +700,6 @@ namespace Nemerle.Compiler
   }
 }
 
-
-  fixup (expr : TExpr, loc : Location, t : TType) : TExpr
-  {
-    expr.loc = loc;
-    expr.ty = t;
-    expr
-  }
-
-  fixup (expr : TExpr, t : TType) : TExpr
-  {
-    expr.loc = Location_stack.top ();
-    expr.ty = t;
-    expr
-  }
 
   squash_type_duplicates (lst : list [Symbol]) : list [Symbol]
   {
@@ -1426,93 +1444,6 @@ namespace Nemerle.Compiler
     }
   }
 
-  transform_tail_call (ctx : CTX, ex : TExpr) : TExpr
-  {
-    def is_this (expr) {
-      match ((expr, ctx.this_ptr_decl)) {
-        | (TExpr.This, _) => true
-        | (TExpr.LocalRef (x), Some (y)) => x.id == y.id
-        | _ => false
-      }
-    }
-    if (ctx.in_tail_position) {
-      match (ex) {
-        | TExpr.Call ((TExpr.LocalRef ({kind = LocalValueKind.D_local_fun (h, _)})) as fn, parms) =>
-          if (ctx.current_fun.id == h.id)
-            TExpr.SelfTailCall (ex.loc, ex.ty, parms)
-          else
-            TExpr.TailCall (ex.loc, ex.ty, fn, parms)
-
-        | TExpr.Call ((TExpr.StaticRef (mem)) as fn, parms) =>
-          match (mem.GetKind ()) {
-            | MemberKind.Method (meth) when meth.GetHeader ().id == ctx.current_fun.id =>
-              TExpr.SelfTailCall (ex.loc, ex.ty, parms)
-            | _ =>
-              TExpr.TailCall (ex.loc, ex.ty, fn, parms)
-          }
-
-        | TExpr.Call ((TExpr.MethodRef (expr, meth, _)) as fn, parms) when is_this (expr) =>
-          if (meth.GetHeader ().id == ctx.current_fun.id)
-            TExpr.SelfTailCall (ex.loc, ex.ty, parms)
-          else
-            TExpr.TailCall (ex.loc, ex.ty, fn, parms)
-
-        | TExpr.Call (fn, parms) => TExpr.TailCall (ex.loc, ex.ty, fn, parms)
-        | _ => ex
-      }
-    }
-    else ex
-  }
-
-  mark_as_used (ctx : CTX, expr : TExpr) : TExpr
-  {
-    match (expr) {
-      | TExpr.Call (TExpr.StaticRef (mem : IMember), _)
-      | TExpr.Call (TExpr.MethodRef (_, mem, _), _)
-      | TExpr.TailCall (TExpr.StaticRef (mem : IMember), _)
-      | TExpr.TailCall (TExpr.MethodRef (_, mem, _), _)
-      | TExpr.FieldMember (_, mem)
-      | TExpr.ConstantObjectRef (mem)
-      | TExpr.PropertyMember (_, mem)
-      | TExpr.StaticPropertyRef (mem)
-      | TExpr.MethodRef (_, mem, _)
-      | TExpr.ImplicitValueTypeCtor (mem) =>
-        mem.HasBeenUsed = true
-
-      | TExpr.Call (loca, _) | TExpr.TailCall (loca, _) =>
-        match (loca) {
-          | TExpr.LocalRef (({kind = LocalValueKind.D_local_fun (h, _)}) as decl) =>
-            match (h.usage) {
-              | FunctionUsage.NotUsed =>
-                if (decl.parent_fun.id == ctx.current_fun.id)
-                  h.usage = FunctionUsage.UsedJustOnce
-                else
-                  h.usage = FunctionUsage.Used
-              | FunctionUsage.UsedJustOnce =>
-                h.usage = FunctionUsage.Used
-              | FunctionUsage.Used | FunctionUsage.UsedAsFirstClass => ()
-            };
-          | _ => ()
-        }
-
-      | TExpr.StaticRef (mem) =>
-        // mark the constant variant constructor marked if referencing to its const object
-        when ((mem is NemerleField) && mem.Name == "_N_constant_object")
-        {
-          def declaring_type = (mem.DeclaringType :> TypeBuilder);
-
-          foreach (ctor : IMember in declaring_type.LookupMember (".ctor"))
-            when ((ctor :> IMethod).GetHeader ().parms matches [])
-              ctor.HasBeenUsed = true
-        }
-        mem.HasBeenUsed = true
-
-      | _ => ()
-    }
-    expr
-  }
-
-
   resolve_overloaded_call (ctx : CTX, in_tail_pos : bool, fncs : list [TExpr],
                            parms : list [Parm]) : TExpr
   {
@@ -1629,44 +1560,6 @@ namespace Nemerle.Compiler
             throw Recovery ()
         }
     }
-  }
-
-  public LookupMembers (ctx : CTX, t : TType, mem : string) : list [IMember]
-  {
-    def visited = Hashtable (10);
-    def return = Hashtable (10);
-
-    def collect_from (t) {
-      match (Tyutil.top_expand (t)) {
-        | TType.Class (ti, _) =>
-          unless (visited.Contains (ti.GetId ())) {
-            visited.Add (ti.GetId (), null);
-            def members = ti.LookupMember (mem);
-            foreach (mem : IMember in members)
-              when (!mem.IsStatic && mem.CanAccess (ctx.parent_type))
-                return.Add (mem.GetId (), mem)
-          }
-
-        | TType.Variable (tv) =>
-          unless (visited.Contains (tv.id)) {
-            visited.Add (tv.id, null);
-            def constraints =
-              match (Tyvar.constraints (tv)) {
-                | [] => [InternalType.Object]
-                | lst => lst
-              };
-            List.Iter (constraints, collect_from)
-          }
-
-        | TType.Array =>
-          collect_from (InternalType.Array)
-
-        | _ => ()
-      }
-    };
-
-    collect_from (t);
-    return.Fold ([], fun (_, el, acc) { el :: acc })
   }
 
   public lookup_member (ctx : CTX, loc : Location, o : TExpr, mem : string)
