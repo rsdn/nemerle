@@ -89,6 +89,36 @@
     </p>  
   </xsl:template>
 
+  <xsl:template match="table">
+    <table class="realTable" border="0" cellspacing="0">
+      <xsl:apply-templates />  
+    </table>
+  </xsl:template>
+
+  <xsl:template match="tr">
+    <tr>
+      <xsl:apply-templates />  
+    </tr>
+  </xsl:template>
+
+  <xsl:template match="td">
+    <td>
+      <xsl:apply-templates />  
+    </td>
+  </xsl:template>
+
+  <xsl:template match="form">
+    <form id="@id" action="@action" method="@method">
+      <xsl:apply-templates />  
+    </form>
+  </xsl:template>
+
+  <xsl:template match="input">
+    <input type="@type" name="@name">
+      <xsl:apply-templates />  
+    </input>
+  </xsl:template>
+
   <xsl:template match="br">
     <br />
   </xsl:template>
