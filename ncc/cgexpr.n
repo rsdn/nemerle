@@ -73,6 +73,13 @@ module CGexpr {
     def ctor = InternalType.GetTupleType (len).Ctor.GetConstructorInfo ();
     CE_call (CE_ctor_ref (ctor), vals)
   }
+
+  make_ref_type (t : System.Type) : System.Type
+  {
+    def ty = t.Module.GetType (t.FullName + "&");
+    assert (ty != null);
+    ty
+  }
   
   public cg_type (tybuilder : System.Type, t : Type) : System.Type
   {
@@ -87,12 +94,15 @@ module CGexpr {
           | [] => SystemType.Object
           | t :: _ => cg_type (tybuilder, t)
         }
+
       | T_app (ti, _) => 
         def ret = ti.GetSystemType ();
         assert (ret != null);
         ret
-      | T_ref => Util.ice ("FIXME: cg ref")
-      | T_out => Util.ice ("FIXME: cg out")
+        
+      | T_ref (et) | T_out (et) =>
+        make_ref_type (cg_type (tybuilder, et))
+        
       | T_array (et) =>
         def et = cg_type (tybuilder, et);
         def ty = tybuilder.Module.GetType (et.FullName + "[]");
@@ -229,6 +239,8 @@ module CGexpr {
           | CE_call (CE_base_ctor_ref, _) => SystemType.Void
 
           | CE_typeof => SystemType.Type
+
+          | CE_addr (expr) => make_ref_type (type_of (expr))
 
           | CE_loop (expr, _) => type_of (expr)
           
@@ -707,6 +719,97 @@ module CGexpr {
     }
   }
 
+  cg_call (ctx : CTX, is_tail : bool, ret_type : Type, 
+           f : Expr, ps : list <Parm>) : CG_expr
+  {
+    def compile_parm (p : Parm) {
+      def ex = cg_expr (ctx, p.expr);
+      if (p.kind == ParmKind.Out || p.kind == ParmKind.Ref)
+        CE_addr (ex)
+      else
+        ex
+    };
+
+    def emit_call (cgm : CG_method, callable) {
+      def parms = List.Map (ps, compile_parm);
+      def callable =
+        match (callable) {
+          | CE_method_ref (e, meth) when type_of (e).IsValueType && 
+                                         !meth.DeclaringType.IsValueType =>
+            CE_method_ref (CE_cast (e, meth.DeclaringType), meth)
+          | x => x
+        };
+      if (cgm == null) {
+        def t = cg_type (ctx, ret_type);
+        if (is_tail)
+          CE_tail_call (t, callable, parms)
+        else
+          CE_call (t, callable, parms)
+      } else {
+        def generate_call (parms) {
+          if (is_tail)
+            CE_tail_call (callable, casted_parms (ctx, cgm.parms, parms))
+          else
+            CE_call (callable, casted_parms (ctx, cgm.parms, parms))
+        };
+        
+        def call =
+          match ((parms, cgm.parms)) {
+            | ([parm], _ :: _ :: _) =>
+              // need to cache it, so casted_parms can untuple it
+              with_cached (parm, fun (parm) { generate_call ([parm]) })
+            | _ =>
+              generate_call (parms)
+          };
+        maybe_cast (ctx, cg_type (ctx, ret_type), call)
+      }
+    };
+    def plain_call () {
+      def len = List.Length (ps);
+      def imeth = get_apply_method (len);
+      emit_call (GetCgMethod (imeth), CE_method_ref (cg_expr (ctx, f), imeth.GetMethodInfo ()))
+    };
+    
+    match (f) {
+      | E_static_ref (m) =>
+        match (m.GetKind ()) {
+          | MK_method (m) =>
+            match (m.GetFunKind ()) {
+              | _ when m.GetExternName () != null =>
+                def opname = m.GetExternName ();
+                assert (opname.StartsWith ("%op"));
+                emit_call (null, CE_opcode (opname.Substring (3)))
+              | FK_ctor =>
+                if (m.DeclaringType.IsDelegate ())
+                  Util.locate (f.loc, emit_delegate_ctor (ctx, m, ps))
+                else
+                  emit_call (GetCgMethod (m), CE_ctor_ref (m.GetConstructorInfo ()))
+                  
+              | _ =>
+                emit_call (GetCgMethod (m), CE_global_ref (m.GetMethodInfo ()))
+            }
+          | _ => plain_call ()
+        }
+      | E_opcode (name) =>
+        emit_call (null, CE_opcode (name))
+      | E_method_ref (o, m) => 
+        emit_call (GetCgMethod (m), CE_method_ref (cg_expr (ctx, o), m.GetMethodInfo ()))
+      | E_base (m) =>
+        emit_call (GetCgMethod (m), CE_base_ctor_ref (m.GetConstructorInfo ()))
+      | E_local_ref (d) =>
+        match (d.kind) {
+          | D_local_fun (({usage = FU_used_just_once}) as h, _) =>
+            emit_loop (ctx, h, ps)
+          | D_local_fun (h, _) when h.id == ctx.current_fun.id =>
+            assert (h.cg_method.method_builder != null);
+            emit_call (get_cg_method (ctx, h),
+                       CE_method_ref (CE_this (), h.cg_method.method_builder))
+          | _ => plain_call ()
+        }
+      | _ => plain_call ()
+    }
+  }
+
   raw_cg_expr (ctx : CTX, inex : Expr) : CG_expr
   {
     //Message.debug ("emit");
@@ -746,88 +849,11 @@ module CGexpr {
             CE_self_tail_call (t, parms)
         }
 
-      | E_call (f, ps) 
+      | E_call (f, ps) =>
+        cg_call (ctx, false, inex.expr_ty, f, ps)
+       
       | E_tail_call (f, ps) =>
-        def is_tail = match (inex) { E_tail_call => true | _ => false };
-        def compile_parm (p : Parm) { self (p.expr) };
-        def emit_call (cgm : CG_method, callable) {
-          def parms = List.Map (ps, compile_parm);
-          def callable =
-            match (callable) {
-              | CE_method_ref (e, meth) when type_of (e).IsValueType && 
-                                             !meth.DeclaringType.IsValueType =>
-                CE_method_ref (CE_cast (e, meth.DeclaringType), meth)
-              | x => x
-            };
-          if (cgm == null) {
-            def t = cg_type (ctx, inex.expr_ty);
-            if (is_tail)
-              CE_tail_call (t, callable, parms)
-            else
-              CE_call (t, callable, parms)
-          } else {
-            def generate_call (parms) {
-              if (is_tail)
-                CE_tail_call (callable, casted_parms (ctx, cgm.parms, parms))
-              else
-                CE_call (callable, casted_parms (ctx, cgm.parms, parms))
-            };
-            
-            def call =
-              match ((parms, cgm.parms)) {
-                | ([parm], _ :: _ :: _) =>
-                  // need to cache it, so casted_parms can untuple it
-                  with_cached (parm, fun (parm) { generate_call ([parm]) })
-                | _ =>
-                  generate_call (parms)
-              };
-            maybe_cast (ctx, cg_type (ctx, inex.expr_ty), call)
-          }
-        };
-        def plain_call () {
-          def len = List.Length (ps);
-          def imeth = get_apply_method (len);
-          emit_call (GetCgMethod (imeth), CE_method_ref (self (f), imeth.GetMethodInfo ()))
-        };
-        
-        match (f) {
-          | E_static_ref (m) =>
-            match (m.GetKind ()) {
-              | MK_method (m) =>
-                match (m.GetFunKind ()) {
-                  | _ when m.GetExternName () != null =>
-                    def opname = m.GetExternName ();
-                    assert (opname.StartsWith ("%op"));
-                    emit_call (null, CE_opcode (opname.Substring (3)))
-                  | FK_ctor =>
-                    if (m.DeclaringType.IsDelegate ())
-                      Util.locate (f.loc, emit_delegate_ctor (ctx, m, ps))
-                    else
-                      emit_call (GetCgMethod (m), CE_ctor_ref (m.GetConstructorInfo ()))
-                      
-                  | _ =>
-                    emit_call (GetCgMethod (m), CE_global_ref (m.GetMethodInfo ()))
-                }
-              | _ => plain_call ()
-            }
-          | E_opcode (name) =>
-            emit_call (null, CE_opcode (name))
-          | E_method_ref (o, m) => 
-            emit_call (GetCgMethod (m), CE_method_ref (self (o), m.GetMethodInfo ()))
-          | E_base (m) =>
-            emit_call (GetCgMethod (m), CE_base_ctor_ref (m.GetConstructorInfo ()))
-          | E_local_ref (d) =>
-            match (d.kind) {
-              | D_local_fun (({usage = FU_used_just_once}) as h, _) =>
-                emit_loop (ctx, h, ps)
-              | D_local_fun (h, _) when h.id == ctx.current_fun.id =>
-                assert (h.cg_method.method_builder != null);
-                emit_call (get_cg_method (ctx, h),
-                           CE_method_ref (CE_this (), h.cg_method.method_builder))
-              | _ => plain_call ()
-            }
-          | _ => plain_call ()
-        }
+        cg_call (ctx, true, inex.expr_ty, f, ps)
 
       | E_assign (e1, e2) =>
         def e1 = self (e1);
