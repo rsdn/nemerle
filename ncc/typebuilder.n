@@ -583,12 +583,12 @@ public class TypeBuilder : TypeInfo
   internal ExtendPartialClass (additional : PT.TopDeclaration) : void
   {
     if ((Attributes %& additional.Attributes) %&& NemerleAttributes.Partial) {
-      unless (additional.modifiers.mods %&& NemerleAttributes.AccessModifiers)
+      unless (additional.Attributes %&& NemerleAttributes.AccessModifiers)
         match (enclosing_type) {
-          | Some => additional.modifiers.mods |= NemerleAttributes.Private;
-          | None => additional.modifiers.mods |= NemerleAttributes.Internal;
+          | Some => additional.Attributes |= NemerleAttributes.Private;
+          | None => additional.Attributes |= NemerleAttributes.Internal;
         }
-      when (additional.modifiers.mods != attributes)
+      when (additional.Attributes != attributes)
         Message.error (additional.loc, $"joined partial classes `$(FullName)' "
                        "must have compatible modifiers");
       
@@ -606,7 +606,7 @@ public class TypeBuilder : TypeInfo
         Message.error (additional.loc, "`partial' modifier cannot be used with this type")
     }
     
-    modifiers.custom_attrs += additional.modifiers.custom_attrs;
+    modifiers.custom_attrs += additional.GetCustomAttributes ();
     modifiers.macro_attrs += additional.modifiers.macro_attrs;    
   }
   
@@ -672,7 +672,7 @@ public class TypeBuilder : TypeInfo
         this.typarms = variant_option_parent.typarms;
        
         def make_public (d : PT.ClassMember) : void {
-          d.modifiers.mods |= NemerleAttributes.Public
+          d.Attributes |= NemerleAttributes.Public
         };
         List.Iter (members, make_public)
         
@@ -1235,14 +1235,15 @@ public class TypeBuilder : TypeInfo
   bind_and_add_member (class_member : PT.ClassMember) : IMember
   {
     Util.locate (class_member.loc, {
+      // if current class is static (it's a module) then sign its members to static
       when (IsModule)
-        class_member.modifiers.mods |= NemerleAttributes.Static;      
+        class_member.Attributes |= NemerleAttributes.Static;      
         
       when (is_interface) {
-        when (class_member.modifiers.mods != NemerleAttributes.None)
+        when (class_member.Attributes != NemerleAttributes.None)
           Message.error ("interface members are not allowed"
                          " to have any attributes specified");
-        class_member.modifiers.mods = NemerleAttributes.Virtual %|
+        class_member.Attributes = NemerleAttributes.Virtual %|
           NemerleAttributes.Abstract %| NemerleAttributes.Public;
       }
       
@@ -1251,10 +1252,10 @@ public class TypeBuilder : TypeInfo
         | PT.ClassMember.TypeDeclaration => null
           
         | (PT.ClassMember.Field) as f =>
-          def r = (NemerleField (this, f) : IMember);
-          CheckFieldAttributes ((r :> NemerleField));
+          def r = NemerleField (this, f);
+          CheckFieldAttributes (r);
           AddMember (r);
-          r
+          r : NemerleMember
           
         | (PT.ClassMember.Function) as f =>          
           def r = NemerleMethod (this, f);
@@ -1287,54 +1288,70 @@ public class TypeBuilder : TypeInfo
 
   public AddMember (mem : IMember) : void
   {
-    def replace_method (acc, meth : IMethod, mems) {
+    // traverse existing members [mems] searching one which match signature
+    // with the newly added method [meth]
+    // returns new list of members having this name
+    def replace_method (acc, meth : IMember, mems) {
       match (mems) {
+        // no methods with matching signature found
         | [] =>
           when (mem.Attributes %&& NemerleAttributes.Override)
             Message.error ($"`override' specified on $mem"
                            ", but there is no method with this signature "
                            "in parent to override");
-          mem :: acc
+          // we simply add this method to the existing list
+          meth :: acc
+
+        // process next member 
         | x :: xs =>
           match ((x : IMember).GetKind ()) {
             | MemberKind.Method (m) =>
               def sub = SubtypingSubst (m.DeclaringType);
 
               when (m.DeclaringType.Equals (this))
-                match ((m.GetMemType () /- sub, mem.GetMemType ())) {
+                match ((m.GetMemType () /- sub, meth.GetMemType ())) {
                   | (TType.Function (t1, r1), TType.Function (t2, r2))
                     when Tyutil.types_eq (t1, t2) && ! Tyutil.types_eq (r1, r2) =>
-                    Message.error (mem.Location, 
-                                   $"attemted return type overload on $mem and $m")
+                    Message.error (meth.Location, 
+                                   $"attemted return type overload on $meth and $m")
                   | _ => ()
                 };
-                
+
+              // if signature of existing method matches the new one
               if (Tyutil.types_eq (m.GetMemType () /- sub, mem.GetMemType ())) {
+                // check if new method does not hide or conflict with
+                // existing methods in this and base type
                 match (m.GetFunKind ()) {
                   | _ when m.DeclaringType.Equals (this) =>
-                    Message.error (mem.Location,
-                                   "redefinition of " + mem.ToString ())
+                    Message.error (meth.Location,
+                                   "redefinition of " + meth.ToString ())
 
-                  | FunKind.Constructor | FunKind.StaticConstructor => ()
-                  | _ when mem.Attributes %&& NemerleAttributes.New => ()
-                  | _ when mem.Attributes %&& NemerleAttributes.Override =>
-                    if (x.Attributes %&& NemerleAttributes.Virtual)
-                      if (x.Attributes %&& NemerleAttributes.Sealed)
-                        Message.error ($"`override' specified on $mem, but $x is `sealed'")
+                  // new method has 'new' modifier, so it's ok to hide old one
+                  | _ when meth.Attributes %&& NemerleAttributes.New => ()
+                  | _ when meth.Attributes %&& NemerleAttributes.Override =>
+                    if (m.Attributes %&& NemerleAttributes.Virtual)
+                      if (m.IsFinal)
+                        Message.error ($"`override' specified on $meth, but $x is `sealed'")
                       else {}
                     else
-                      Message.error ($"`override' specified on $mem"
+                      Message.error ($"`override' specified on $meth"
                                      ", but there is no `virtual' modifier on $x");
                                      
                     when ((x.Attributes %& NemerleAttributes.AccessModifiers) !=
-                          (mem.Attributes %& NemerleAttributes.AccessModifiers))
-                      Message.error ($"attempt to change the access modifiers of $mem"
+                          (meth.Attributes %& NemerleAttributes.AccessModifiers))
+                      Message.error ($"attempt to change the access modifiers of $meth"
                                      " during override of $x");
+                  | FunKind.Constructor | FunKind.StaticConstructor => Util.ice ("constructor?")
                   | _ =>
-                    Message.error (mem.Location, $"$mem hides $x but `new' is not specified")
+                    Message.error (meth.Location, $"$meth hides $x but `new' is not specified")
                 };
-                List.RevAppend (xs, mem :: acc)
-              } else replace_method (x :: acc, meth, xs)
+                // return list with the new method inside (and without [x], which is hidden now)
+                List.RevAppend (xs, meth :: acc)
+              }
+              else
+                // signature do not match, just process remaining members
+                replace_method (x :: acc, meth, xs)
+                
             | _ => Util.ice ("expecting method, got " + x.ToString ())
           }
       }
@@ -1352,9 +1369,11 @@ public class TypeBuilder : TypeInfo
             match ((mem.GetKind (), x.GetKind ())) {
               | (MemberKind.Method (m), MemberKind.Method) =>
                 replace_method ([], m, old)
+                
               | (MemberKind.Property (p1), MemberKind.Property (p2)) when p1.IsIndexer && p2.IsIndexer =>
                 // overloading is (hopefully) checked at the get/set method level
                 mem :: old
+                
               | _ =>
                 Message.error (mem.Location, $"$mem redefined in `$(FullName)'");
                 Message.error (x.Location, "  first definition here as " + x.ToString ());
@@ -1363,12 +1382,13 @@ public class TypeBuilder : TypeInfo
           else
             // take a look at current member [mem] and the one found in ancestors [x]
             match ((mem.GetKind (), x.GetKind ())) {
-              | (MemberKind.Method (m), MemberKind.Method) =>
-                replace_method ([], m, old)
+              | (MemberKind.Method (m), MemberKind.Method) => replace_method ([], m, old)
+                
               | (MemberKind.Property (new_prop), MemberKind.Property (old)) 
                   when new_prop.Attributes %&& NemerleAttributes.Override =>
                 (new_prop :> NemerleProperty).UpdateParentProperty (old);
                 [mem]
+                
               | _ when mem.Attributes %&& NemerleAttributes.New => [mem]
               | _ =>
                 Message.error (mem.Location, $"$mem hides $x but `new' is not specified");
@@ -1547,7 +1567,7 @@ public class TypeBuilder : TypeInfo
             Util.ice ("add_enum_members")
         }
       
-      ef.modifiers.mods |= NemerleAttributes.Public %| NemerleAttributes.Static;
+      ef.Attributes |= NemerleAttributes.Public %| NemerleAttributes.Static;
       def field = PT.ClassMember.Field (ef.loc, ef.name, ef.modifiers, field_type);
       def field = bind_and_add_member (field);
       (field :> NemerleField).enum_value = current_value;
@@ -1663,7 +1683,7 @@ public class TypeBuilder : TypeInfo
           public abstract _N_GetVariantCode () : int ;
         ]>;
 
-        gvc.modifiers.mods |= NemerleAttributes.SpecialName;
+        gvc.Attributes |= NemerleAttributes.SpecialName;
 
         Define (gvc)
 
@@ -1680,7 +1700,7 @@ public class TypeBuilder : TypeInfo
           }
         ]>;
         
-        gvc.modifiers.mods |= NemerleAttributes.SpecialName;
+        gvc.Attributes |= NemerleAttributes.SpecialName;
         
         Define (gvc)
 
@@ -2370,7 +2390,7 @@ public class TypeBuilder : TypeInfo
 
     // propagate the SpecialName attribute if needed
     Iter (fun (x : TypeBuilder) { 
-      when (x.modifiers.mods %&& NemerleAttributes.SpecialName)
+      when (x.Attributes %&& NemerleAttributes.SpecialName)
         x.mark_members_with_special_name ()
     });
     
