@@ -83,6 +83,7 @@ pdf: $(ps) $(pdf)
 	$(Q)perl styles/include-sources $@
 
 grokking.html:: src/nem-examples/grokking.n dumper
+tutorial.html:: src/nem-examples/tutorial.n dumper
 
 dumper:
 	$(MAKE) -C ../misc/htmldumper all
