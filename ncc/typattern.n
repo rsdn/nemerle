@@ -36,22 +36,224 @@ namespace PT = Nemerle.Compiler.Parsetree;
 
 namespace Nemerle.Compiler {
 module Typattern {
-(*
-class Pattern_base extends Located
-  {
-    mutable ty : Type;
-  }
   
-variant Pattern extends Pattern_base
-  {
-    | P_underscore
-    | P_variable { decl : Decl; }
-    | P_tuple { args : list (Pattern); }
-    | P_record { args : list (Named_pattern); }
-    | P_cons { name : Tyinfo; arg : Pattern; }
-    | P_literal { lit : Literal; }
+  variant Range {
+    | R_omega        // _, x, everything
+    | R_none         // nothing
+    | R_any_except { lits : list (Literal); }
+    | R_literal { l : Literal; }
+    | R_variant_option { ti : Tyinfo; range : Range; }
+    | R_tuple { ranges : list (Range); }
+    | R_record { ranges : list (M_field * Range); }
+    
+    | R_or { ranges : list (Range); }
   }
-*)
+
+  range_of_pattern (p : Pattern) : Range {
+    match (p) {
+      | P_underscore => R_omega ()
+      | P_variable => R_omega ()
+      | P_tuple (args) => R_tuple (List.map (range_of_pattern, args))
+      | P_record (args) =>
+        def f (n : Named_pattern) : M_field * Range {
+          (n.name, range_of_pattern (n.pat))
+        }
+        R_record (List.map (f, args))
+      | P_cons (ti, pat) =>
+        R_variant_option (ti, range_of_pattern (pat))
+      | P_literal (l) => R_literal (l)
+    }
+  }
+
+  string_of_range (r : Range) : string {
+    match (r) {
+      | R_omega => "_"
+      | R_any_except ([L_bool (true)]) => "false"
+      | R_any_except ([L_bool (false)]) => "true"
+      | R_any_except (_) => "X" // FIXME
+      | R_variant_option (ti, r) =>
+        ti.fullname () + " (" + string_of_range (r) + ")"
+      | R_tuple (ranges) =>
+        def concat (acc : string, r : Range) : string {
+          if (acc == "") string_of_range (r)
+          else
+            acc + ", " + string_of_range (r)
+        }
+        "(" + List.fold_left (concat, "", List.rev (ranges)) + ")"
+        
+      | R_record (ranges) =>
+        def concat (acc : string, x : M_field * Range) : string {
+          def (f, r) = x;
+          def r' = f.name + " = " + string_of_range (r);
+          if (acc == "") r'
+          else
+            acc + "; " + r'
+        }
+        "{ " + List.fold_left (concat, "", List.rev (ranges)) + " }"
+        
+      | R_none => "[[None]]"
+      | R_literal => "[[Literal]]"
+      
+      | R_or (ranges) =>
+        def concat (acc : string, r : Range) : string {
+          if (acc == "") string_of_range (r)
+          else
+            acc + " | " + string_of_range (r)
+        }
+        "[ " + List.fold_left (concat, "", List.rev (ranges)) + " ]"
+    }
+  }
+
+  simplify_range (r : Range) : Range {
+    def aint_none (r : Range) : bool {
+      match (r) {
+        | R_none => false
+        | _ => true
+      }
+    }
+    match (r) {
+      | R_or ([]) => R_none ()
+      | R_or (lst) =>
+        match (List.filter (aint_none, lst)) {
+          | [] => R_none ()
+          | [x] => x
+          | l => R_or (l)
+        }
+      | R_any_except ([L_bool (true); L_bool (false)]) => R_none ()
+      | R_any_except ([L_bool (false); L_bool (true)]) => R_none ()
+      | R_variant_option (_, R_none) => R_none ()
+      | R_tuple (ranges) =>
+        if (List.forall (aint_none, ranges)) 
+          r
+        else
+          R_none ()
+      | R_record (ranges) =>
+        def is_named_none (x : M_field * Range) : bool {
+          match (x) {
+            | (_, R_none) => true
+            | _ => false
+          }
+        }
+        if (List.exists (is_named_none, ranges))
+          R_none ()
+        else
+          r
+      | x => x 
+    }
+  }
+    
+  subtract (r1 : Range, r2 : Range) : bool * Range {
+    mutable did_something <- false;
+
+    // subtract new_r from cur_r
+    def do_sub (cur_r : Range, new_r : Range) : Range {
+    Message.debug ("subx: " + string_of_range (cur_r) + "     " + string_of_range (new_r) );
+      match ((cur_r, new_r)) {
+        | (R_none, _) => R_none ()
+        
+        | (_, R_omega) => 
+          did_something <- true; 
+          R_none ()
+          
+        | (r, R_none) => r
+        
+        | (R_omega, R_literal (l)) =>
+          did_something <- true;
+          R_any_except ([l])
+
+        | (R_or (ranges), _) =>
+          R_or (List.map (fun (r : Range) : Range { sub (r, new_r) }, ranges))
+
+        | (R_any_except (lits), R_literal (l)) =>
+          // FIXME: check if l is in lits
+          did_something <- true;
+          R_any_except (l :: lits)
+          
+        | (R_variant_option (ti1, r1), R_variant_option (ti2, r2)) =>
+          if (ti1.id == ti2.id)
+            R_variant_option (ti1, sub (r1, r2))
+          else
+            cur_r
+          
+        | (cur, R_variant_option (ti, r)) =>
+          def is_variant_option (ti : Tyinfo) : bool {
+            match (ti.tydecl) {
+              | TD_variant_option => true
+              | _ => false
+            }
+          }
+          def make_range (ti : Tyinfo) : Range {
+            R_variant_option (ti, cur)
+          }
+          def types_in_parent = (ti.enclosing_tyinfo ()).contained_types;
+          def variants = List.filter (is_variant_option, types_in_parent);
+          sub (R_or (List.map (make_range, variants)), new_r)
+
+        | (R_omega, R_tuple (ranges)) =>
+          def args = List.map (fun (_ : Range) : Range { R_omega () }, ranges);
+          sub (R_tuple (args), new_r)
+          
+        | (R_tuple (r1), R_tuple (r2)) =>
+          R_tuple (List.map2 (sub, r1, r2))
+        
+        | (R_omega, R_record) =>
+          sub (R_record ([]), new_r)
+
+        | (R_record (r1), R_record (r2)) =>
+          def loop (r1 : list (M_field * Range), r2 : M_field * Range) : list (M_field * Range) {
+            def (name, range) = r2;
+            
+            def loop2 (acc : list (M_field * Range), l : list (M_field * Range)) : list (M_field * Range) {
+              match (l) {
+                | (f, r) :: xs =>
+                  if (name.id == f.id)
+                    List.rev_append (l, (f, sub (r, range)) :: acc)
+                  else
+                    loop2 ((f, r) :: acc, xs)
+                | [] =>
+                  did_something <- true;
+                  (name, sub (R_omega (), range)) :: acc
+              }
+            }
+
+            loop2 ([], r1)
+          }
+
+          def x = R_record (List.fold_left (loop, r1, r2));
+          Message.debug (string_of_range (x));
+          x
+      }
+    }
+
+    and sub (r1 : Range, r2 : Range) : Range {
+      simplify_range (do_sub (r1, r2))
+    }
+
+    def ret = sub (r1, r2);
+    Message.debug ("sub: " + string_of_range (r1) + " - " + string_of_range (r2) + " = " + string_of_range (ret));
+
+    (did_something, ret)
+  }
+
+  (** Give warnings about ``pattern matching not exhaustive'' and 
+      ``unused match clause''. *)
+  public check_matching (cases : list (Match_case)) : void {
+    def loop (acc : Range, m : Match_case) : Range {
+      def (did_something, ret) = subtract (acc, range_of_pattern (m.pattern));
+      if (did_something)
+        ()
+      else
+        Message.warning (m.pattern.loc, "this match clause is unused");
+      ret
+    }
+    def remaining = List.fold_left (loop, R_omega (), cases);
+    match (remaining) {
+      | R_none => ()
+      | r =>
+        Message.warning ("this matching is not exhaustive, example unmatched value:");
+        Message.warning (string_of_range (r))
+    }
+  }
 
   ty_pattern (ctx : Tyexpr.CTX, t : Type, p : PT.Pattern) : Pattern * Env {
     def mkcons (p1 : PT.Pattern, p2 : PT.Pattern) : PT.Pattern {
@@ -200,6 +402,7 @@ variant Pattern extends Pattern_base
     }
     and walk (t : Type, p : PT.Pattern) : Pattern {
       def r = do_walk (t, p);
+      r.loc <- p.loc;
       r.ty <- t; 
       r
     }
