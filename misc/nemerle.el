@@ -144,7 +144,7 @@ buffer created.  This is a good place to put your customizations.")
 	 '("\\<\\(_\\|abstract\\|and\\|as\\|base\\|catch\\|const\\|def\\|enum\\|extends\\|extern\\|finally\\|fun\\|implements\\|interface\\|internal\\|macro\\|match\\|mutable\\|new\\|out\\|override\\|params\\|private\\|protected\\|public\\|ref\\|sealed\\|static\\|struct\\|syntax\\|this\\|throw\\|try\\|tymatch\\|type\\|typeof\\|virtual\\|where\\|with\\)\\>"
 	   0 font-lock-keyword-face)
 	 ;; these aren't really keywords but we set them so
-	 '("\\<\\(do\\|else\\|for\\|if\\|regexp\\|repeat\\|then\\|unless\\|until\\|while\\|when\\)\\>"
+	 '("\\<\\(do\\|else\\|for\\|if\\|regexp\\|unless\\|while\\|when\\|in\\|foreach\\)\\>"
 	   0 font-lock-keyword-face)
 	 '("=>\\||" 0 font-lock-keyword-face)
 
@@ -156,7 +156,7 @@ buffer created.  This is a good place to put your customizations.")
 	 '("\\<option\\s *<[^>]*>+" 0 font-lock-type-face t)
 	 '("\\<array\\s *<[^>]*>+" 0 font-lock-type-face t)
 	 '("->" 0 font-lock-type-face)
-	 '("\\<\\(void\\|int\\|char\\|float\\|bool\\|string\\|object\\)\\>"
+	 '("\\<\\(void\\|int\\|uint\\|char\\|float\\|double\\|decimal\\|byte\\|sbyte\\|short\\|ushort\\|long\\|ulong\\|bool\\|string\\|object\\)\\>"
 	   0 font-lock-type-face)
 	 
 	 ;; constants
