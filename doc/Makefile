@@ -80,6 +80,7 @@ all: $(normal_docs)
 pdf: $(ps) $(pdf)
 
 %.html: src/%.xml mainStyle.xsl
+	$(MAKE) -C src/nem-examples docs
 	$(XSLT_) $@
 	$(Q)$(XSLT) -o $@ mainStyle.xsl $<
 
