@@ -545,6 +545,8 @@ class Lexer : yyParser.yyInput
 		keywords["mutable"] = Token.KW_MUTABLE;
 		keywords["def"] = Token.KW_DEF;
 		keywords["module"] = Token.KW_MODULE;
+		keywords["require"] = Token.KW_REQUIRE;
+		keywords["ensure"] = Token.KW_ENSURE;
 	}
 }
 
