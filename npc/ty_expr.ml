@@ -791,7 +791,7 @@ and check_expr ctx expr =
                   in
                   let flds = fields [] decls in
                   if List.length flds != List.length pats then
-                    error (xf "pattern matches %d values, while type %s had %d
+                    error (xf "pattern matches %d values, while type %s had %d \
                                fields" (List.length pats) (Ty_info.td_qname td)
                                (List.length flds))
                   else ();
