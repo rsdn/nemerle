@@ -39,17 +39,17 @@ all: $(target)
 
 # here we just test if new-built compiler is capable of builing
 # itself, run make t to check testsuite
-test:
+self-test:
 	mono --debug ./$(target) lib/core.n $(n_src)
 
 $(target): $(all_src)
 	../npc/npc.opt $(n_src)
 	mcs -debug+ -o $@ $(all_cs)
 
-t: test
-	set -x ; for f in ../t/*.n ; do \
-		mono --debug ./$(target) ../lib/core.n $$f || true ; \
-	done
+.PHONY: t
+
+t: self-test
+	$(MAKE) -C t
 
 parser.cs: parser.jay
 	jay -v -t -c parser.jay < `jay -p`/skeleton.cs > parser.cs
