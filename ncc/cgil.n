@@ -65,6 +65,7 @@ namespace Nemerle.Compiler
       this._type_builder_queue <- Queue ();
       
       (* create the member builders storage *)
+      _reflected_types <- Hashtable ();
       _classes <- Hashtable ();
             
       (* create a weak assembly name and define a dynamic assembly *)
@@ -216,6 +217,19 @@ namespace Nemerle.Compiler
     }
 
 
+    (**
+     * Encodes a reflected type name. This allows us to store all types
+     * in one hashtable and still have control on where they have been
+     * reflected from. 
+     *)
+    private encode_reflected_type_name (type_name : string, scan_externals : bool, 
+                                        scan_system : bool) : string
+    {
+      type_name + "%%" +
+        (if (scan_externals) "" else "-E") +
+        (if (scan_system) "" else "-S");
+    }
+    
 
     (**
      * A search for a (possibly partial) type of a given name is executed.
@@ -225,44 +239,62 @@ namespace Nemerle.Compiler
      *)
     private reflect_type (type_name : string, scan_externals : bool, scan_system : bool) : System.Type
     {
-      (*
-Michal Moskal (23:13)
-def tc = GlobalEnv.LookupExactType("Foo.bar")
-i GetTyconKind () -- tam bedzie S.Type      
-      *)
-      
-      // FIXME: this is a hack, how can we fix it in earlier stages?
-      def type_name =
-        match (type_name) {
-          | "char" => "System.Char"
-          | "int" => "System.Int32"
-          | other => other
-        };
-                    
-      def ty = this._module_builder.GetType (type_name);
-      if (ty != null) ty
-      else {
-        def ty = null; // FIXME: search in GlobalEnv.externals here!
-        if (ty != null && scan_externals) ty
-        else {
-          def ty = System.Type.GetType (type_name);
-          if (ty != null && scan_system) ty
+      def encoded_name = encode_reflected_type_name (type_name, scan_externals, scan_system);
+
+      match (_reflected_types.Get (encoded_name)) {
+        | Some (reflected_type) => reflected_type
+        | None =>
+          def memoize (ty : System.Type) : System.Type {
+            _reflected_types.Set (encoded_name, ty);
+            ty
+          };
+              
+          // FIXME: this is a hack, how can we fix it in earlier stages?
+          def type_name =
+            match (type_name) {
+              | "char" => "System.Char"
+              | "bool" => "System.Boolean"
+              | "int" => "System.Int32"
+              | "float" => "System.Single"
+              | "string" => "System.String"
+              | other => other
+            };
+                        
+          def ty = this._module_builder.GetType (type_name);
+          if (ty != null) memoize (ty)
           else {
-            // brute, brute, brute hack...
-            def last_dot = type_name.LastIndexOf ('.');
-            
-            if (last_dot != -1) {
-              def dot_to_plus = type_name.Substring (0, last_dot) + 
-                "+" + type_name.Substring (last_dot + 1);
-              reflect_type (dot_to_plus, scan_externals, scan_system);
+            def ty = 
+              match (GlobalEnv.LookupExactType (type_name)) {
+                | Some (tc) =>
+                  match (tc.GetTyconKind ()) {
+                    | TK_ExternalNetType (exact) => exact
+                    | TK_ExternalNemerleType (exact) => exact
+                    | _ => null
+                  }
+                | _ => null
+              };
+                       
+            if (ty != null && scan_externals) memoize (ty)
+            else {        
+              def ty = System.Type.GetType (type_name);
+              if (ty != null && scan_system) memoize (ty)
+              else {
+                // brute, brute, brute hack...
+                def last_dot = type_name.LastIndexOf ('.');
+                
+                if (last_dot != -1) {
+                  def dot_to_plus = type_name.Substring (0, last_dot) + 
+                    "+" + type_name.Substring (last_dot + 1);
+                  reflect_type (dot_to_plus, scan_externals, scan_system)
+                }
+                else {
+                  Message.warning ("CGIL: unable to reflect type: " + type_name);
+                  typeof (System.Object)
+                }
+              }
             }
-            else {
-              Message.warning ("CGIL: unable to reflect type: " + type_name);
-              typeof (System.Object)
-            }
-          }
-        }
-      }    
+          }    
+      }
     }
 
 
@@ -306,6 +338,7 @@ i GetTyconKind () -- tam bedzie S.Type
         | CT_unreached => Util.ice ("nemerle_to_framework_type:CT_unreached")
       }          
     }
+
 
     (**
      *
@@ -1105,6 +1138,8 @@ i GetTyconKind () -- tam bedzie S.Type
     internal get_external_method_info (class_name : string, method_name : string, is_static : bool,
                                        parm_types_list : list (System.Type)) : MethodInfo
     {
+      // Message.debug ("get_external_method_info: " + class_name + "::" + method_name);
+      
       def class_type = reflect_type (class_name);
 
       if (class_type != null) {
@@ -1143,6 +1178,7 @@ i GetTyconKind () -- tam bedzie S.Type
         match ((declared, needed)) {
           | ([], []) => true
           | (declared :: declared_rest, needed :: needed_rest) =>
+
             if (declared.FullName == needed.FullName || needed.IsSubclassOf (declared))
               walk_parms (declared_rest, needed_rest)
             else false
@@ -1163,8 +1199,7 @@ i GetTyconKind () -- tam bedzie S.Type
 
             walk_parms (declared_parms, parm_types_list);
           }
-          else 
-            false
+          else false
         }
       };
 
@@ -1287,6 +1322,7 @@ i GetTyconKind () -- tam bedzie S.Type
     private mutable _type_builder_queue : Queue (TypeBuilder);
     private mutable _emit_nemerle_attributes : bool;
     private mutable _classes : Hashtable (string, CM_class);
+    private mutable _reflected_types : Hashtable (string, System.Type);
     private mutable _need_entry_point : bool;
     private mutable _entry_point : option (MethodInfo);
   }
@@ -1524,8 +1560,8 @@ i GetTyconKind () -- tam bedzie S.Type
                     | (CT_ref (l), CT_ref (r)) when ok_skip (l, r) =>
                       ()
                     | _ =>
-                      Message.debug ("FIXME: CE_cast from " + pretty_print_type (type_of_expr) +
-                                                    " to " + pretty_print_type (cast_to_type));
+                      Message.warning ("cannot CE_cast from " + pretty_print_type (type_of_expr) +
+                                                       " to " + pretty_print_type (cast_to_type));
                   }
                 }
               }
@@ -1725,7 +1761,7 @@ i GetTyconKind () -- tam bedzie S.Type
               false
             }
           } else {
-            Message.debug (expr.loc, "FIXME: assignment to a null slot " + local_var.name);
+            Message.warning (expr.loc, "FIXME: assignment to a null slot " + local_var.name);
             _ilg.Emit (OpCodes.Ldstr, "assignment to a null slot");
             false
           }
@@ -2045,9 +2081,20 @@ i GetTyconKind () -- tam bedzie S.Type
                 } 
                 else _ilg.Emit (OpCodes.Ceq);
               | "%op!=" => 
-                _ilg.Emit (OpCodes.Ceq);
-                _ilg.Emit (OpCodes.Ldc_I4_0);
-                _ilg.Emit (OpCodes.Ceq);
+                if (is_string_comparison_parms (parms)) {
+                  def method_info = 
+                    _cgil.get_external_method_info ("System.String", "Equals", true, 
+                                                    [typeof(System.String); typeof(System.String)]);
+                  
+                  _ilg.Emit (OpCodes.Call, method_info);
+                  _ilg.Emit (OpCodes.Ldc_I4_0);
+                  _ilg.Emit (OpCodes.Ceq)
+                }
+                else {
+                  _ilg.Emit (OpCodes.Ceq);
+                  _ilg.Emit (OpCodes.Ldc_I4_0);
+                  _ilg.Emit (OpCodes.Ceq)
+                }
               | "%op<" => emit_compare (OpCodes.Blt_S)
               | "%op>" => emit_compare (OpCodes.Bgt_S)
               | "%op<=" => emit_compare (OpCodes.Ble_S)
