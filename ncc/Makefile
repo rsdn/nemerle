@@ -59,7 +59,7 @@ all_src = $(n_src) $(cs_src)
 all_cs  = out.cs $(cs_src)
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
-COMPILE = $(CSC) $(CSCFLAGS)
+COMPILE = $(CSC) /debug+ $(CSCFLAGS)
 
 
 all: ncc.exe
