@@ -130,12 +130,6 @@ CP      = @echo CP      $1
 # TARGETS
 ############################################################
 
-xall:
-	out.stage1/ncc.exe -no-stdlib  -target-library -out:out.stage2/stdmacros.dll \
-	        -reference:out.stage2/Nemerle.stage2.dll \
-		        -reference:out.stage2/Nemerle.Compiler.stage2.dll \
-			         stdmacros.n stdoperators.n
-				 
 
 # Default rule is to build a compiler.  It is mainly used by
 # developers as they are the only people invoking make from
