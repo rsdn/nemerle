@@ -322,12 +322,19 @@ module Typattern {
       ``unused match clause''. *)
   public check_matching (cases : list (Match_case)) : void {
     def loop (acc : Range, m : Match_case) : Range {
-      def (did_something, ret) = subtract (acc, range_of_pattern (m.pattern));
-      if (did_something)
-        ()
-      else
-        Message.warning (m.pattern.loc, "this match clause is unused");
-      ret
+      def loop2 (acc : Range, patex : Pattern * Expr) : Range {
+        def (pat, ex) = patex;
+        def (did_something, ret) = subtract (acc, range_of_pattern (pat));
+        if (did_something)
+          ()
+        else
+          Message.warning (pat.loc, "this match clause is unused");
+        match (ex) {
+          | E_literal (L_bool (true)) => ret
+          | _ => acc
+        }
+      };
+      List.fold_left (loop2, acc, m.patterns)
     };
     def remaining = List.fold_left (loop, R_omega (), cases);
     match (remaining) {
@@ -338,7 +345,11 @@ module Typattern {
     }
   }
 
-  public ty_pattern (ctx : Tyexpr.CTX, t : Type, p : PT.Pattern) : Pattern * Env {
+  public ty_patterns (ctx : Tyexpr.CTX, 
+                      matched_value_type : Type, 
+                      patterns : list (PT.Pattern * option (PT.Expr))) 
+                    : list (Pattern * Expr) * Env {
+                    
     def mkcons (p1 : PT.Pattern, p2 : PT.Pattern) : PT.Pattern {
       def tup = PT.P_tuple ([p1; p2]);
       def ret = PT.P_cons (PT.SS_string ("Cons"), tup);
@@ -357,6 +368,7 @@ module Typattern {
 
     mutable pat_env <- ctx.env;
     mutable vars <- Map.string_map ();
+    mutable common_vars <- None ();
     
     def do_walk (t : Type, p : PT.Pattern) : Pattern {
       match (p) {
@@ -381,8 +393,24 @@ module Typattern {
           if (vars.mem (n))
             Message.error ("pattern variable `" + n + "' already seen in this pattern")
           else ();
-          vars <- vars.add (n, 0);
-          def (env', decl) = pat_env.add_local (n, D_pattern_variable (), t');
+          def (env', decl) =
+            match (common_vars) {
+              | None =>
+                pat_env.add_local (n, D_pattern_variable (), t');
+              | Some (cv) =>
+                match ((cv : String_map (Decl)).find (n)) {
+                  | Some (d) => 
+                    if (t' >> d.ty) ()
+                    else {
+                      Message.error ("pattern variable `" + d.name + "' used to have type " +
+                                     d.ty.as_string () + " but now it has type " + t'.as_string ());
+                      Message.hint ("rename variable if they have no connection")
+                    };
+                    (pat_env.add_local (d), d)
+                  | None => pat_env.add_local (n, D_pattern_variable (), t');
+                }
+            };
+          vars <- vars.add (n, decl);
           pat_env <- env';
           P_as (pat', decl)
           
@@ -514,16 +542,63 @@ module Typattern {
       }
     }
     and walk (t : Type, p : PT.Pattern) : Pattern {
-      def r = do_walk (t, p);
+      def r = Util.locate (p.loc, fun () : Pattern { do_walk (t, p) });
       r.loc <- p.loc;
       r.ty <- t; 
       r
     };
 
-    def r = walk (t, p);
-    (r, pat_env)
 
+    def ty_pats (acc : list (Pattern * Expr),
+                 patterns : list (PT.Pattern * option (PT.Expr))) 
+               : list (Pattern * Expr) * Env {
+      match (patterns) {
+        | (pat, expr) :: rest =>
+          pat_env <- ctx.env;
+          vars <- Map.string_map ();
+          def typed_pattern = walk (matched_value_type, pat);
+          
+          def filter (m : String_map (Decl), n : string, d : Decl) : String_map (Decl) {
+            if (vars.mem (n))
+              m.add (n, d)
+            else
+              m
+          };
+          
+          common_vars <-
+            match (common_vars) {
+              | None => Some (vars)
+              | Some (x) => Some (x.fold (filter, Map.string_map ()))
+            };
+
+          def expr =
+            match (expr) {
+              | None => 
+                def ex = E_literal (L_bool (true));
+                ex.loc <- Location_stack.top ();
+                ex
+              | Some (x) => 
+                def ex = Tyexpr.ty_expr (ctx.with_env (pat_env), x);
+                def bool_ty = Tyutil.make_tapp (ctx.env, "Nemerle.Core.Aliases.bool");
+                Tyexpr.expect_type ("when guard", ex, bool_ty);
+                ex
+            };
+
+          ty_pats ((typed_pattern, expr) :: acc, rest)
+          
+        | [] =>
+          def addvar (env : Env, _ : string, d : Decl) : Env { 
+            d.is_pattern_outcome <- true; 
+            env.add_local (d)
+          };
+          (List.rev (acc), (Util.unsome (common_vars)).fold (addvar, ctx.env))
+      }
+      
+    };
+
+    ty_pats ([], patterns)
   }
+  
 
 }
 }
