@@ -4,13 +4,16 @@ MAKE_GRAMMAR = perl scripts/grammar-txt-2-xml.pl $< | xmllint -o $@ --format -
 
 course_docs = index
 
-docs =  index nemerlePlanned \
+root_docs =  index nemerlePlanned \
 	coreNemExamples coreNemGrammar coreNemCompiler coreNemDesc \
 	TRSideas faq \
-	absNem absNemSemantics absNemGrammar \
-	$(addprefix course/, $(course_docs))
+	absNem absNemSemantics absNemGrammar
+
+docs = $(root_docs) $(addprefix course/, $(course_docs))
 
 tex_docs = absNemOperationalSem
+
+normal_docs = $(html) $(addsuffix .ps, $(tex_docs)) $(addsuffix .pdf, $(tex_docs))
 
 html = $(addsuffix .html, $(docs))
 ps = $(addsuffix .ps, $(docs)) $(addsuffix .ps, $(tex_docs))
@@ -20,7 +23,7 @@ docb = $(addsuffix .docb, $(docs))
 .DELETE_ON_ERROR:
 .SECONDARY: mainStyle.xsl latex.xsl xml2tex.xsl docb.xsl $(addsuffix .tex, $(docs))
 
-all: $(html) $(addsuffix .ps, $(tex_docs)) $(addsuffix .pdf, $(tex_docs))
+all: $(normal_docs)
 
 pdf: $(ps) $(pdf)
 
@@ -78,3 +81,25 @@ verify-docb:
 clean:
 	rm -f *.xsl *.html *.ps *.pdf *.aux *.log *.xml *.tex *.docb
 	$(MAKE) -C tex clean
+
+.PHONY: www publish
+
+www: nemerle-web.tar.gz
+
+nemerle-web.tar.gz: $(normal_docs) $(wildcard styles/*.css styles/*.png)
+	$(MAKE) verify-html
+	rm -rf www
+	mkdir -p www/{styles,course}
+	cp styles/*.{css,png} www/styles/
+	cp *.{html,ps,pdf} www/
+	cp course/*.html www/course/
+	for f in www/*.pdf www/*.ps ; do gzip <$$f > $$f.gz ; done
+	tar -C www -zcf $@ .
+	rm -rf www
+
+publish: publish-stamp
+
+publish-stamp: nemerle-web.tar.gz
+	cp nemerle-web.tar.gz /home/services/httpd/html
+	(cd /home/services/httpd/html; tar zxf nemerle-web.tar.gz)
+	touch publish-stamp
