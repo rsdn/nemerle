@@ -247,11 +247,11 @@ compare-one:
 	$(Q)test -f out.stage3/$(CMP_TARGET) 
 	$(DEAS) "[stage2]" $(CMP_TARGET)
 	$(Q)$(DASM) out.stage2/$(CMP_TARGET) | \
-		grep -v -E '(^//|// GUID|MVID)' \
+		grep -v -E '(^//|// GUID|MVID|\.ver)' \
 		| sed -e 's/\.stage2//g' > $(CMP_TARGET)2.il
 	$(DEAS) "[stage3]" $(CMP_TARGET)
 	$(Q)$(DASM) out.stage3/$(CMP_TARGET) | \
-		grep -v -E '(^//|// GUID|MVID)' \
+		grep -v -E '(^//|// GUID|MVID|\.ver)' \
 		| sed -e 's/\.stage2//g' > $(CMP_TARGET)3.il
 	$(COMPARE) "[stage2]" "[stage3]" $(CMP_TARGET)
 	$(Q)diff -u -w $(CMP_TARGET)2.il $(CMP_TARGET)3.il
@@ -262,11 +262,11 @@ compare-one-with-stage:
 	$(Q)test -f out.stage3/$(CMP_TARGET).dll
 	$(DEAS) "[stage2]" $(CMP_TARGET)
 	$(Q)$(DASM) out.stage2/$(CMP_TARGET).stage2.dll | \
-		grep -v -E '(^//|// GUID|MVID)' \
+		grep -v -E '(^//|// GUID|MVID|\.ver)' \
 		| sed -e 's/\.stage2//g' > $(CMP_TARGET)2.il
 	$(DEAS) "[stage3]" $(CMP_TARGET)
 	$(Q)$(DASM) out.stage3/$(CMP_TARGET).dll | \
-		grep -v -E '(^//|// GUID|MVID)' \
+		grep -v -E '(^//|// GUID|MVID|\.ver)' \
 		| sed -e 's/\.stage2//g' > $(CMP_TARGET)3.il
 	$(COMPARE) "[stage2] [stage3]" $(CMP_TARGET)
 	$(Q)diff -u -w $(CMP_TARGET)2.il $(CMP_TARGET)3.il
