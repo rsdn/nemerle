@@ -2,7 +2,7 @@ NCC     = ../../boot/ncc.exe
 SOURCES = httpd.n config.n logger.n
 
 NEMERLE_XML_DLL_SOURCES = xmltemplate.n
-SIOUX_DLL_SOURCES = application.n hello.n
+SIOUX_DLL_SOURCES = application.n fit/fit.n
 
 all: Nemerle.Xml.dll Sioux.dll httpd.exe tester.exe
 
@@ -20,3 +20,7 @@ tester.exe: tester.n
 
 clean:
 	rm -f httpd.exe
+
+v:
+	set -xe; for f in fit/*.xml ; do \
+		xmllint --noout --valid $$f; done
