@@ -3039,24 +3039,16 @@ attribute_name
     ;
 
 attribute_arguments
-    :   (LPAREN   positional_argument_list   COMMA   named_argument_list   RPAREN)=>
-            lp1:LPAREN   {Emit.EmitToken(lp1);} positional_argument_list   
-            c1:COMMA  {Emit.EmitToken(c1);}  named_argument_list   
-            rp1:RPAREN {Emit.EmitToken(rp1);}
-    |   (LPAREN   named_argument_list   RPAREN)=>
-            lp2:LPAREN   {Emit.EmitToken(lp2);} named_argument_list   
-            rp2:RPAREN   {Emit.EmitToken(rp2);}
-    |   lp3:LPAREN   {Emit.EmitToken(lp3);} (positional_argument_list)?   rp3:RPAREN {Emit.EmitToken(rp3);}
+    :   lp : LPAREN {Emit.EmitToken(lp);} (positional_argument_list)?   rp3:RPAREN {Emit.EmitToken(rp3);}
     ;
 
 positional_argument_list
-    :   attribute_argument_expression (options {greedy=true;}: c:COMMA {Emit.EmitToken(c);} attribute_argument_expression)*
+    :   id1:IDENTIFIER  {Emit.EmitToken(id1);} a1:ASSIGN {Emit.EmitToken(a1);}  attribute_argument_expression   
+        (c:COMMA  {Emit.EmitToken(c);} positional_argument_list)?
+
+    |  attribute_argument_expression (c1:COMMA {Emit.EmitToken(c1); } positional_argument_list)?
     ;
 
-named_argument_list
-    :   id1:IDENTIFIER  {Emit.EmitToken(id1);} a1:ASSIGN {Emit.EmitToken(a1);}  attribute_argument_expression   
-        (c:COMMA  {Emit.EmitToken(c);} id2:IDENTIFIER {Emit.EmitToken(id2);}  a2:ASSIGN {Emit.EmitToken(a2);}  attribute_argument_expression)*
-    ;
 
 attribute_argument_expression
 {
