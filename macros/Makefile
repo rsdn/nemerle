@@ -31,49 +31,16 @@ include ../config.mak
 export PATH = $(shell echo $$PATH):$(shell pwd)/../boot/
 export MONO_PATH = $(shell echo $$MONO_PATH):$(shell pwd)/../boot/
 
-
 ############################################################
 # VARIABLES
 ############################################################
 
-DISTFILES = \
-	Makefile \
-	README   \
-	*.n      \
-
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 
-############################################################
-# OUTPUT
-############################################################
-
-CP = @echo CP      $1
 
 ############################################################
 # TARGETS
 ############################################################
 
-all:
-	cp ../boot/Nemerle.dll .
-	$(EXECUTE) ../boot/ncc.exe -out test.exe ../ncc/testsuite/test.n
-	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -n "../boot/ncc.exe"
-	rm -f out.dll out.exe out.netmodule ext_test.out Nemerle.dll
-
-myPoll.exe: myPoll.n
-	$(EXECUTE) ../boot/ncc.exe -r Npgsql myPoll.n -o myPoll.exe
-
 sql:
-	$(EXECUTE) ../boot/ncc.exe -r Npgsql -r ../macros/Nemerle.Data.Npgsql.dll sql.n -o sql.exe
-
-dist:
-	$(CP) '*.n'
-	$(Q)cp $(DISTFILES) $(DIR)
-	$(Q)mkdir -p $(DIR)/sioux
-	$(Q)$(MAKE) -C sioux dist DIR=$(DIR)/sioux
-	$(Q)mkdir -p $(DIR)/ntrace
-	$(Q)$(MAKE) -C ntrace dist DIR=$(DIR)/ntrace
-
-
-clean:
-	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]*
-	rm -f test.err test_error.log a.out
+	$(EXECUTE) ../boot/ncc.exe -r Npgsql -r Nemerle.Compiler -tdll dataNpgsql.n -o Nemerle.Data.Npgsql.dll
