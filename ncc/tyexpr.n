@@ -63,7 +63,7 @@ namespace Nemerle.Compiler {
                                      (type_of (expr))#as_string ())
         in
 
-        letfun make_ref (loc : Location, x : Decl) : TT.Expr =
+        letfun make_ref (env : Env, loc : Location, x : Decl) : TT.Expr =
           let _ =
             match x#kind with [
               | D_class_member (M_value) => ()
@@ -75,6 +75,20 @@ namespace Nemerle.Compiler {
                   raise Recovery ()
                 }
               | _ => ()
+            ]
+          in
+          let _ =
+            match x#parent_fun with [
+              | Some (?d) =>
+                let this_fn = Util.unsome (env#parent_fun) in
+                if d#id == this_fn#id then ()
+                else
+                  if x#in_closure then ()
+                  else {
+                    x#in_closure <- true;
+                    d#has_closure <- true;
+                  }
+              | None => ()
             ]
           in
           if x#ty == null then Util.ice ("null type " + x#name) else
@@ -96,7 +110,7 @@ namespace Nemerle.Compiler {
                 ]
               | D_class_member (M_function {fun_header = ?h}) => 
                 Tyutil.fresh_vars (Tyvars.get_parms (h#id), x#ty) 
-              | D_local_fun (?h) =>
+              | D_local_fun (?h, _) =>
                 Tyutil.fresh_vars (Tyvars.get_parms (h#id), x#ty)
               | _ => x#ty
             ]
@@ -182,7 +196,7 @@ namespace Nemerle.Compiler {
                 List.map (fun (p : Fun_parm) : string => p#name, h#parms)
               in
               match fn with [
-                | TT.E_ref ({kind = D_local_fun (?h)}) => 
+                | TT.E_ref ({kind = D_local_fun (?h, _)}) => 
                   from_header (h)
                 | TT.E_ref ({kind = D_class_member (M_function {fun_header = ?h})}) =>
                   from_header (h)
@@ -248,19 +262,19 @@ namespace Nemerle.Compiler {
                   Message.fatal_error ("unbound symbol `" + n + "'")
 
                 | ?l =>
-                  letfun convert_ctor (acc : list (Decl), d : Decl) : list (Decl) =
+                  letfun convert_ctor (acc : list (Decl), d : Decl) : list (Decl) {
                     match d#kind with [
                       | D_class_member (M_type) =>
                         //let _ = Message.debug ("lookup " + d#name + "..ctor") in
                         List.append (env#bare_lookup (d#name + "..ctor"), acc)
                       | _ => Cons (d, acc)
                     ]
-                  in
+                  } in
                   match List.fold_left (convert_ctor, Nil (), l) with [
                     | Nil => 
                       Message.fatal_error ("type `" + n + "' has no constructors")
                     | ?decls => 
-                      List.map (fun (x : Decl) : TT.Expr => make_ref (fnc#loc, x), decls)
+                      List.map (fun (x : Decl) : TT.Expr => make_ref (env, fnc#loc, x), decls)
                   ]
               ]
                 
@@ -473,18 +487,30 @@ namespace Nemerle.Compiler {
 
             match expr with [
               | PT.E_letfun (?fs, ?b) =>
-                letfun add_fun (env : Env, d : PT.Function_decl) : Env =
-                  let (?env', _) =
-                    env#add_local(d#fun_header#name, D_local_fun(d#fun_header), 
+                letfun add_fun (acc : Env * list (Decl), d : PT.Function_decl) : Env * list (Decl) =
+                  let (?env, ?ds) = acc in
+                  let (?env, ?d) =
+                    let this_fn = Util.unsome (env#parent_fun) in
+                    let pars =
+                      match this_fn with [
+                        | {kind = D_local_fun (_, ?pars)} => Cons (this_fn, pars)
+                        | {kind = D_class_member (M_function)} => List.cons (this_fn)
+                        | _ => Util.ice ()
+                      ]
+                    in
+                    env#add_local(d#fun_header#name, D_local_fun(d#fun_header, pars), 
                                   Tyutil.fun_type (d#fun_header)) 
-                  in env'
+                  in (env, Cons (d, ds))
                 in
-                let env' = List.fold_left(add_fun, env, fs) in
-                letfun do_fun (d : PT.Function_decl) : TT.Function_decl =
-                  let body' = do_function_expr (env', d#fun_header, d#body) in
-                  TT.Function_decl (d#fun_header, body')
+                let (?env', ?decls) = List.fold_left(add_fun, (env, Nil ()), fs) in
+                letfun do_fun (d : PT.Function_decl, dc : Decl) : TT.Function_decl =
+                  let env = env'#copy () in {
+                    env#parent_fun <- Some (dc);
+                    let body' = do_function_expr (env, d#fun_header, d#body) in
+                    TT.Function_decl (dc, body')
+                  }
                 in
-                let fs' = List.map (do_fun, fs) in
+                let fs' = List.map2 (do_fun, fs, List.rev (decls)) in
                 let b' = ty_expr(env', b) in
                 (TT.E_letfun (fs', b'), type_of (b'))
                   
@@ -536,7 +562,7 @@ namespace Nemerle.Compiler {
                     Message.fatal_error ("unbound symbol `" + n + "'")
 
                   | Cons (?x, Nil) =>
-                    let ex = make_ref (expr#loc, x) in
+                    let ex = make_ref (env, expr#loc, x) in
                     (ex, type_of (ex))
 
                   | ?l =>
@@ -674,6 +700,7 @@ namespace Nemerle.Compiler {
         and do_decl(par : Type_decl, decl : Class_member) : void =
           match decl with [
             | M_function ?f =>
+              let env' = decl#env#copy () in
               {
                 in_ctor <- false;
                 let th = (Tyinfo.lookup (par)) # generic_type () in
@@ -683,19 +710,9 @@ namespace Nemerle.Compiler {
                      | FK_ctor => { in_ctor <- true; Some (th) }
                      | _ => None ()
                    ];
-                f#body <- do_function (decl#env, f#fun_header, f#body)
+                env'#parent_fun <- Some (Env.global_by_id (f#id));
+                f#body <- do_function (env', f#fun_header, f#body)
               }
-
-            | M_type (TD_class ?cl) =>
-              letfun is_field (m : Class_member) : bool =
-                match m with [ M_field => true | _ => false ]
-              in
-              if List.forall (is_field, cl#decls) then
-                cl#decls <- Cons (Extensions.implicit_ctor (cl, cl#decls), cl#decls)
-              else ()
-
-            | M_type (TD_variant_option ?vo) =>
-              vo#decls <- Cons (Extensions.implicit_ctor (vo, vo#decls), vo#decls)
 
             | _ => ()
           ]
