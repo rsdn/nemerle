@@ -147,7 +147,7 @@ uninstall:
 	$(Q)rm -f $(MANDIR)/ncc.1
 
 clean:
-	rm -f *.xsl *.html *.ps *.pdf *.aux *.log *.xml *.tex *.docb
+	rm -f *.xsl $(html) *.ps *.pdf *.aux *.log *.xml *.tex *.docb
 	rm -f course/*.html
 	$(MAKE) -C tex clean
 
