@@ -27,8 +27,7 @@
 #
 
 all:
-	echo "no all..."
-	false
+	$(MAKE) -C ncc boot
 
 send: dist send-dist
 
@@ -39,12 +38,18 @@ changelog:
 	svn up
 	svn log -v --xml > changelog.xml
 	$(svn2log) -p /nemerle/trunk -x npc -x doc -x ncc
-	$(svn2log) -p /nemerle/trunk/npc -o npc/ChangeLog -x ncc
 	$(svn2log) -p /nemerle/trunk/ncc -o ncc/ChangeLog -r npc/ncc=ncc
 	$(svn2log) -p /nemerle/trunk/doc -o doc/ChangeLog
 	rm -f changelog.xml
 
-dist: changelog
+sb: sync-boot
+
+sync-boot:
+	$(MAKE) -C ncc boot
+	mv boot/ncc.exe boot/ncc-old.exe
+	cp ncc/ncc3.exe boot/ncc.exe
+	
+dist: sync-boot changelog
 	if svn status 2>&1 | grep -qv '^?' ; then \
 	  echo "Some files modified"; \
 	  false; \
@@ -52,9 +57,10 @@ dist: changelog
 	  ver=`svn info . | awk '/^Revision:/ { print $$2 }'`; \
 	  rm -rf $(name)-$$ver; \
 	  svn export . $(name)-$$ver; \
-	  for f in . npc ncc doc ; do \
+	  for f in . ncc doc ; do \
 	    cp $$f/ChangeLog $(name)-$$ver/$$f; \
 	  done; \
+	  cp boot/ncc.exe $(name)-$$ver/boot/ncc.exe ; \
 	  tar zcf $(name)-$$ver.tar.gz $(name)-$$ver; \
 	  rm -rf $(name)-$$ver; \
 	  ls -l $(name)-$$ver.tar.gz; \
@@ -72,5 +78,4 @@ send-dist:
 
 clean:
 	$(MAKE) -C doc clean
-	$(MAKE) -C npc clean
 	$(MAKE) -C ncc clean

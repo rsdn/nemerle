@@ -29,31 +29,36 @@
 n_src = option.n list.n util.n parsetree.n tree.n scan_globals.n treeutil.n \
 	bind_types.n tyvars.n tyinfo.n tyutil.n check_constraints.n \
 	ast.n tyexpr.n typedtree.n extensions.n cgtree.n cgexpr.n \
-	cgflat.n env.n
+	cgflat.n env.n lib/core.n
 cs_src = lexer.cs main.cs parser.cs
 all_src = $(n_src) $(cs_src)
-all_cs = env.n.cs $(cs_src)
-target = ncc.exe
+all_cs = out.cs $(cs_src)
+MCS = mcs -nowarn:162
 
-all: $(target)
+all: ncc.exe
 
-# here we just test if new-built compiler is capable of builing
-# itself, run make t to check testsuite
-self-test: all
-	mono --debug ./$(target) lib/core.n $(n_src)
-	mcs -debug+ -o ncc2.exe $(cs_src) out.cs 2>&1 | grep -v CS0162
-	mcs -o ncc2nd.exe $(cs_src) out.cs 2>&1 | grep -v CS0162
+# Do compiler bootstrap, compare results from stage2 and stage3,
+# generate ncc3.exe binary to be put in release for bootstrap.
+# Finally run testsuite.
+boot: ncc.exe
+	mono --debug ncc.exe $(n_src)
+	$(MCS) -debug+ -o ncc2.exe $(all_cs)
 	mv out.cs out2.cs
-	mono --debug ./ncc2.exe lib/core.n $(n_src)
-	diff -u out.cs out2.cs
+	mono --debug ncc2.exe $(n_src)
+	cmp -s out2.cs out.cs
+	$(MCS) -o ncc3.exe $(all_cs)
+	mv out.cs out3.cs
+	$(MAKE) testsuite
 
-$(target): $(all_src)
-	../npc/npc.opt $(n_src)
-	mcs -debug+ -o $@ $(all_cs)
+ncc.exe: $(all_src)
+	mono ../boot/ncc.exe $(n_src)
+	$(MCS) -debug+ -o $@ $(all_cs)
 
 .PHONY: t
 
-t: self-test
+t: testsuite
+
+testsuite:
 	$(MAKE) -C t
 
 parser.cs: parser.jay
@@ -61,4 +66,4 @@ parser.cs: parser.jay
 	perl -p -i -e 's/(public void yyerror )/virtual $$1/' parser.cs
 
 clean:
-	rm -f *.n.cs parser.cs $(target) y.output test.exe
+	rm -f out.cs out[0-9].cs parser.cs *.exe y.output
