@@ -94,6 +94,7 @@ NEMERLE_COMPILER_DLL_SRC = \
         codedom/NemerleCodeCompiler.n	 \
         codedom/NemerleCodeProvider.n	 \
         generation/CompileTypedTree.n	 \
+	generation/CompileTypedMethod.n  \
         generation/Postprocessing.n	 \
         generation/Optimizer.n		 \
         generation/CompiledTree.n	 \
