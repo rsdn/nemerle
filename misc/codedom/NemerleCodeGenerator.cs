@@ -136,17 +136,19 @@ namespace Nemerle.Contrib
 		{
 			TextWriter output = Output;
 
-            /// we don't need to explicitly create delegate
-            /// OutputType(expression.DelegateType);
-            /// output.Write( '(' );
-
-            CodeExpression targetObject = expression.TargetObject;
+                        // we need to explicitly create delegate, because sometimes
+                        // one generate code and use delegate object, instead
+                        // our cool functional values
+                        OutputType(expression.DelegateType);
+                        output.Write( '(' );
+                        
+                        CodeExpression targetObject = expression.TargetObject;
 			if ( targetObject != null ) {
 				GenerateExpression( targetObject );
 				Output.Write( '.' );
 			}
 			output.Write( GetSafeName (expression.MethodName) );
-//			output.Write( ')' );
+			output.Write( ')' );
 		}
 
 		protected override void GenerateFieldReferenceExpression (

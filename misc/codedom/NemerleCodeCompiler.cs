@@ -118,8 +118,8 @@ namespace Nemerle.Contrib
 			compiler.StartInfo.CreateNoWindow = true;
 			compiler.StartInfo.UseShellExecute = false;
             compiler.StartInfo.RedirectStandardOutput=true;
-//            Console.WriteLine(envncc);
-//            Console.WriteLine(BuildArgs(options, fileNames));
+            Console.WriteLine(envncc);
+            Console.WriteLine(BuildArgs(options, fileNames));
             try {
                 compiler.Start ();
                 Console.WriteLine("compiler started");
@@ -130,6 +130,7 @@ namespace Nemerle.Contrib
 				results.NativeCompilerReturnValue = compiler.ExitCode;
 				compiler.Close ();
             }
+            Console.WriteLine (compiler_output);
             compiler_output_lines = compiler_output.Split (
 				System.Environment.NewLine.ToCharArray ());
 			bool loadIt = true;
