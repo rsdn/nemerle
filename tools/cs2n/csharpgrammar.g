@@ -2155,14 +2155,14 @@ returns [string [] return_strings]
 }
     :   mn = maybe_generic_type [true]
         {
-            int dot = mn[1].LastIndexOf ('.');
-            if (dot != -1) {
-                return_strings [1] = mn[1].Replace ('.', '_');
-                return_strings [2] = mn[1];
-            }
-            else return_strings [1] = mn[1];
+          int dot = mn[1].LastIndexOf ('.');
+          if (dot != -1) {
+              return_strings [1] = mn[1].Replace ('.', '_');
+              return_strings [2] = mn[1];
+          }
+          else return_strings [1] = mn[1];
 
-            return_strings [0] = mn[0];
+          return_strings [0] = mn[0];
         }
     ;
 
@@ -2201,7 +2201,7 @@ fixed_parameter
 }
     :   (attributes)?   (p = parameter_modifier)?   t = type  id:IDENTIFIER
         {
-            Emit.EmitString ( id.getText () + " : " + p + t[0]+t[1] );
+            Emit.EmitString ( "mutable " + id.getText () + " : " + p + t[0]+t[1] );
         }        
     ;
 
@@ -2393,7 +2393,7 @@ indexer_modifier
 indexer_declarator[bool mod]
 {
     string [] tp = new string[] {"",""};
-    string [] tn = new string[] {"",""};
+    string [] tn = null;
 }
     :   (type   THIS)=> 
         tp = type 
@@ -2401,7 +2401,9 @@ indexer_declarator[bool mod]
             if(!mod)
                 Emit.EmitString(tp[0]);
         }
+
         t1:THIS        {Emit.EmitString (ExtendedToken.getWhitespaces(t1) + "Item");}
+
         lb1:LBRACK     {Emit.EmitToken (lb1);}
         formal_parameter_list   
         rb1:RBRACK     {Emit.EmitToken (rb1);}
@@ -2411,13 +2413,14 @@ indexer_declarator[bool mod]
             else
                 Emit.EmitString (" : " + tp[1]);
         }
+
     |   tp = type   
         {
             if(!mod)
                 Emit.EmitString(tp[0]);
         }
-        tn = type_name   {Emit.EmitString (tn[0] + tn[1]);}
-        d:DOT            {Emit.EmitToken (d);}
+        tn = maybe_generic_type [true]   
+        d:DOT            
         t2:THIS          {Emit.EmitString (ExtendedToken.getWhitespaces(t2) + "Item");}
         lb2:LBRACK       {Emit.EmitToken (lb2);}
         formal_parameter_list   
@@ -2427,6 +2430,11 @@ indexer_declarator[bool mod]
                 Emit.EmitString (" :" + tp[0] + tp[1]);
             else
                 Emit.EmitString (" :" + tp[1]);
+        }
+        { if (tn != null) {
+            Emit.EmitString (" implements ");
+            Emit.EmitString (tn [0] + tn [1] + d.getText () + "Item");
+          }
         }
     ;
 
@@ -2466,14 +2474,14 @@ unary_operator_declarator
     ;
 
 overloadable_unary_operator
-    :   oun1:PLUS    {Emit.EmitToken (oun1);}
-    |   oun2:MINUS   {Emit.EmitToken (oun2);}
-    |   oun3:LNOT    {Emit.EmitToken (oun3);}
-    |   oun4:BNOT    {Emit.EmitToken (oun4);}
-    |   oun5:INC     {Emit.EmitToken (oun5);}
-    |   oun6:DEC     {Emit.EmitToken (oun6);}
-    |   oun7:TRUE    {Emit.EmitToken (oun7);}
-    |   oun8:FALSE   {Emit.EmitToken (oun8);}
+    :   oun1:PLUS    {Emit.EmitString (ExtendedToken.getTextOnly (oun1));}
+    |   oun2:MINUS   {Emit.EmitString (ExtendedToken.getTextOnly (oun2));}
+    |   oun3:LNOT    {Emit.EmitString (ExtendedToken.getTextOnly (oun3));}
+    |   oun4:BNOT    {Emit.EmitString (ExtendedToken.getTextOnly (oun4));}
+    |   oun5:INC     {Emit.EmitString (ExtendedToken.getTextOnly (oun5));}
+    |   oun6:DEC     {Emit.EmitString (ExtendedToken.getTextOnly (oun6));}
+    |   oun7:TRUE    {Emit.EmitString (ExtendedToken.getTextOnly (oun7));}
+    |   oun8:FALSE   {Emit.EmitString (ExtendedToken.getTextOnly (oun8));}
     ;
 
 binary_operator_declarator
@@ -2498,22 +2506,22 @@ binary_operator_declarator
     ;
 
 overloadable_binary_operator
-    :   obn1:PLUS       {Emit.EmitToken (obn1);}
-    |   obn2:MINUS      {Emit.EmitToken (obn2);}
-    |   obn3:STAR       {Emit.EmitToken (obn3);}
-    |   obn4:DIV        {Emit.EmitToken (obn4);}
-    |   obn5:MOD        {Emit.EmitToken (obn5);}
-    |   obn6:BAND       {Emit.EmitToken (obn6);}
-    |   obn7:BOR        {Emit.EmitToken (obn7);}
-    |   obn8:BXOR       {Emit.EmitToken (obn8);}
-    |   obn9:SL         {Emit.EmitToken (obn9);}
-    |   obn10:SR        {Emit.EmitToken (obn10);}
-    |   obn11:EQUAL     {Emit.EmitToken (obn11);}
-    |   obn12:NOT_EQUAL {Emit.EmitToken (obn12);}
-    |   obn13:GTHAN     {Emit.EmitToken (obn13);}
-    |   obn14:LTHAN     {Emit.EmitToken (obn14);}
-    |   obn15:LE        {Emit.EmitToken (obn15);}
-    |   obn16:GE        {Emit.EmitToken (obn16);}
+    :   obn1:PLUS       {Emit.EmitString (ExtendedToken.getTextOnly (obn1));}
+    |   obn2:MINUS      {Emit.EmitString (ExtendedToken.getTextOnly (obn2));}
+    |   obn3:STAR       {Emit.EmitString (ExtendedToken.getTextOnly (obn3));}
+    |   obn4:DIV        {Emit.EmitString (ExtendedToken.getTextOnly (obn4));}
+    |   obn5:MOD        {Emit.EmitString (ExtendedToken.getTextOnly (obn5));}
+    |   obn6:BAND       {Emit.EmitString (ExtendedToken.getTextOnly (obn6));}
+    |   obn7:BOR        {Emit.EmitString (ExtendedToken.getTextOnly (obn7));}
+    |   obn8:BXOR       {Emit.EmitString (ExtendedToken.getTextOnly (obn8));}
+    |   obn9:SL         {Emit.EmitString (ExtendedToken.getTextOnly (obn9));}
+    |   obn10:SR        {Emit.EmitString (ExtendedToken.getTextOnly (obn10));}
+    |   obn11:EQUAL     {Emit.EmitString (ExtendedToken.getTextOnly (obn11));}
+    |   obn12:NOT_EQUAL {Emit.EmitString (ExtendedToken.getTextOnly (obn12));}
+    |   obn13:GTHAN     {Emit.EmitString (ExtendedToken.getTextOnly (obn13));}
+    |   obn14:LTHAN     {Emit.EmitString (ExtendedToken.getTextOnly (obn14));}
+    |   obn15:LE        {Emit.EmitString (ExtendedToken.getTextOnly (obn15));}
+    |   obn16:GE        {Emit.EmitString (ExtendedToken.getTextOnly (obn16));}
     ;
 
 conversion_operator_declarator
