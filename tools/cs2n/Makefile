@@ -82,6 +82,8 @@ config.cs2n.mak: configure
 dist-clean: clean
 	rm -f  config.cs2n.mak
 
+tests-clean:
+	rm -f tests/*.n tests/*.exe tests/*.log
 clean:
 	rm -f *.exe *.dll *.pdb *~ error_log $(GENERATED_SOURCES) $(GENERATED_TOKEN_DESCRIPTION)
 

@@ -841,6 +841,7 @@ returns [string return_string]
     :   return_string = equality_expression   
         ( b:BAND   ee = equality_expression
             {
+	        ExtendedToken.prefix_text("%",b);
                 return_string += (b.getText () + ee);
             }
         )*
@@ -853,8 +854,9 @@ returns [string return_string]
     return_string = "";
 }
     :   return_string = and_expression   
-        (b:BXOR   ae = and_expression
+        (b:BXOR ae = and_expression
             {
+	    	ExtendedToken.prefix_text("%",b);
                 return_string += (b.getText () + ae);
             }
         )*
@@ -869,6 +871,7 @@ returns [string return_string]
     :   return_string = exclusive_or_expression   
         (b:BOR   eoe = exclusive_or_expression
             {
+	        ExtendedToken.prefix_text("%",b);
                 return_string += (b.getText () + eoe);
             }
         )*
@@ -1306,6 +1309,12 @@ returns [string return_string]
     return_string = "";
 }
     :   (type)=> return_string = local_variable_declaration
+    	{
+	   if(return_string.EndsWith(";"))
+	   {
+	       return_string = return_string.Substring(0,return_string.Length - 1 );
+	   }
+	}
     |   return_string = statement_expression_list
     ;
 
@@ -2786,7 +2795,7 @@ global_attributes
 
 global_attribute_section
     :   lb:LBRACK {Emit.EmitToken(lb);}  (global_attribute_target_specifier)?   attribute_list   
-        (c:COMMA {Emit.EmitToken(c);})? rb:RBRACK {Emit.EmitToken(rb);}
+        (c:COMMA {Emit.EmitString(ExtendedToken.getWhitespaces(c));})? rb:RBRACK {Emit.EmitToken(rb);}
     ;
 
 global_attribute_target_specifier
@@ -2807,7 +2816,7 @@ attribute_section
         attribute_list   
 
         (c:COMMA
-        {Emit.EmitToken(c);})? 
+        {Emit.EmitString(ExtendedToken.getWhitespaces(c));})? 
         rb:RBRACK
         {Emit.EmitToken(rb);}
     ;
@@ -2823,8 +2832,8 @@ attribute_target
         ExtendedToken.getTextOnly(idat)=="method"   || //METHOD
         ExtendedToken.getTextOnly(idat)=="param"    || //PARAM
         ExtendedToken.getTextOnly(idat)=="property" || //PROPERTY
-        ExtendedToken.getTextOnly(idat)=="return"   || //RETURN
-        ExtendedToken.getTextOnly(idat)=="type" }?     //TYPE
+        ExtendedToken.getTextOnly(idat)=="return"   || //RETURN FIXME: there is no return target in Nemerle
+	ExtendedToken.getTextOnly(idat)=="type" }?     //TYPE
         {Emit.EmitToken(idat);}
     ;
 
@@ -2979,7 +2988,7 @@ NOT_NEW_LINE
 //--------------
 
 SINGLE_LINE_COMMENT
-    :   "//"  (NOT_NEW_LINE)*  (NEW_LINE) 
+    :   "//"  (NOT_NEW_LINE | '`')*  (NEW_LINE) 
         { 
             _ttype = Token.SKIP;
             ExtendedToken.AddToWhitespaces ($getText);
@@ -2990,6 +2999,7 @@ DELIMITED_COMMENT
     :   "/*"  
         (   { LA(2)!='/' }? '*'
         |   NEW_LINE 
+	|   '`'
         |   ~('*'|'\u000D'|'\u000A'|'\u2028'|'\u2029')
         )*
         "*/" 
@@ -3016,6 +3026,8 @@ IDENTIFIER
     	{
 	if($getText == "list")	
 	   setText("list_");
+	if($getText == "array")	
+	   setText("array_");   
 	}
     |   '@'  IDENTIFIER_START_CHARACTER (IDENTIFIER_PART_CHARACTER)*
     ;
