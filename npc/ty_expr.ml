@@ -457,11 +457,7 @@ and check_expr ctx expr =
       type_of e
       
     | E_fun (fds, e) ->
-      let tcf f =
-        match f.fun_body with
-        | Fb_expr e -> check_expr ctx e
-        | Fb_extern _ -> ()
-      in List.iter tcf fds;
+      List.iter (check_fun ctx) fds;
       check_expr ctx e;
       type_of e
       
@@ -881,7 +877,7 @@ and check_fun ctx f =
     if type_of e >> ret_type then
       ()
     else
-      error (xf "method return type was declared to be %s, but is %s"
+      error (xf "function return type was declared to be %s, but is %s"
                 (string_of_type ret_type)
                 (string_of_type (type_of e)))
   | Fb_extern _ -> 
