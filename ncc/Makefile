@@ -91,7 +91,7 @@ ncc.exe: $(all_src)
 	$(COMPILE) $(OUTFLAG)$@ $(all_cs) out1.cs
 
 stdlib.dll: $(lib_src)
-	$(EXECUTE) ../boot/ncc.exe $(lib_src)
+	$(EXECUTE) ./ncc.exe $(lib_src)
 	mv -f out.cs stdlib.cs
 	$(COMPILE) /target:library $(OUTFLAG)$@ stdlib.cs
 
