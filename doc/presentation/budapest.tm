@@ -201,7 +201,7 @@
 
   <\with|font size|0.84>
     <\code>
-      \ \ \ \ \ \ \ <em|public> <with|color|brown|'a> head (l :
+      \ \ \ \ \ \ \ <em|><with|color|brown|'a> head (l :
       <with|color|brown|list ('a)>) : <with|color|brown|'a> =
 
       \ \ \ \ \ \ \ \ \ \ <em|match> l <em|with> [
@@ -844,7 +844,7 @@
 
       Functional values<value|toc-dots><pageref|toc-10>
 
-      Method call<value|toc-dots><pageref|toc-11>
+      Binary search tree insertion<value|toc-dots><pageref|toc-11>
 
       Language extensions<value|toc-dots><pageref|toc-12>
 
