@@ -1,0 +1,1130 @@
+/*
+ * Copyright (c) 2003, 2004 University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+namespace Nemerle.Compiler
+{
+  using Nemerle.Compiler;
+  using Nemerle.Compiler.Tyops;
+  using Nemerle.Compiler.Typedtree;
+  using Nemerle.Collections;
+  using Nemerle.Utility;
+
+  using System.Reflection;
+  using System.Reflection.Emit;
+  using System.IO;
+  using System.Diagnostics.SymbolStore;
+
+  using NC = Nemerle.Compiler;
+  using SR = System.Reflection;
+
+  /**
+   * Generator of System.Reflection.Emit structures composing program hierarchy.
+   */
+  public class HierarchyEmitter
+  {
+    /* -- PUBLIC CONSTRUCTORS ---------------------------------------------- */
+
+    public this (assem_name : AssemblyName)
+    {
+      _OutputFileName = Options.OutputFileName;
+
+      _assembly_name = assem_name;
+
+      /* define a dynamic assembly */
+      _assembly_name.Name = Path.GetFileNameWithoutExtension (_OutputFileName);
+
+      def assembly_requirements =
+        if (Options.CompileToMemory)
+          AssemblyBuilderAccess.RunAndSave
+        else
+          AssemblyBuilderAccess.RunAndSave;
+      
+      this._assembly_builder =
+        System.AppDomain.CurrentDomain.DefineDynamicAssembly
+          (this._assembly_name,
+           assembly_requirements,
+           Path.GetDirectoryName(Path.GetFullPath (_OutputFileName)));
+
+      def attr = make_string_attribute (SystemType.Reflection_AssemblyConfigurationAttribute,
+                                        "ContainsNemerleTypes");
+      this._assembly_builder.SetCustomAttribute (attr);
+
+      /* create a dynamic module */
+      this._module_builder =
+        this._assembly_builder.DefineDynamicModule (_assembly_name.Name,
+                                                    Path.GetFileName (_OutputFileName),
+                                                    Options.EmitDebug); 
+
+      when (Options.EmitDebug) {
+        _debug_emit = _module_builder.GetSymWriter ();
+      }
+
+      unless (Options.TargetIsLibrary) {
+        _need_entry_point = true;
+        _entry_point = None ();
+      };
+
+      _aux_types = [];
+    }
+
+
+    add_resources_to_assembly () : void 
+    {
+      def escape_resource (x : string) {
+        def cp = x.IndexOf (',');
+        if (cp != -1)
+          (x.Substring (0, cp), x.Substring (cp + 1))
+        else
+          // change name from /bar/bar/file to bar.bar.file namespace  
+          (x, x.Replace ('/','.').Replace ('\\', '.'));
+      }
+
+      def escape_linked_resource (x : string) {
+        def cp = x.IndexOf (',');
+        if (cp != -1)
+          // change name from /bar/bar/file to bar.bar.file namespace          
+          (x.Substring (0, cp), x.Substring (cp + 1))
+        else
+          (x, x);
+      }
+
+      /* we can embed resources only on mono or .NET 2.0 */
+#if _NET_2_0
+      foreach (element in Options.EmbeddedResources) {
+        def (file, name) = escape_resource (element);
+        try {
+          def resource_builder = _module_builder.DefineResource (file, name);        
+          if (File.Exists (file)) {
+            using (fs = File.OpenRead (file)) {
+              def res = array (fs.Length :> int);
+              _ = fs.Read(res, 0, file.Length);
+              resource_builder.AddResource (name, res);
+            }
+          }
+          else
+            Message.error ("Could not find resource " + file);
+        }
+        catch {
+          | e : System.Exception =>
+            Message.error ("Could not embed resource: " + e.Message);
+        }
+      }
+#else      
+      if (SystemType.AssemblyBuilder_EmbedResourceFile != null)
+        foreach (element in Options.EmbeddedResources) {
+          def (file, name) = escape_resource (element);
+          try {
+            def margs = array [name : object, file : object];
+            if (File.Exists (file))
+                _ = SystemType.AssemblyBuilder_EmbedResourceFile
+                        .Invoke (_assembly_builder, margs);
+            else
+              Message.error ("Could not find resource " + file);
+          }
+          catch {
+            | e : System.Exception =>
+              Message.error ("Could not embed resource: " + e.Message);
+          }
+        }
+      else
+        when (Options.EmbeddedResources matches _ :: _)
+          Message.error ("Cannot embed resource on this runtime... use mono or .NET 2.0");
+#endif
+
+      foreach (element in Options.LinkedResources) {
+        def (file, name) = escape_linked_resource (element);
+        try {
+          _assembly_builder.AddResourceFile (name, file);
+        }
+        catch {
+          | _ : FileNotFoundException =>
+            Message.error ("Could not find resource " + file);
+          | e : System.ArgumentException =>
+            Message.error ("Could not link resource: " + e.Message);
+        }
+      }
+    }
+
+    /**
+     *
+     */
+    public EmitAuxDecls () : void
+    {
+      compile_all_tyinfos (true)
+    }
+
+
+    /**
+     *
+     */
+    public EmitDecls () : void
+    {
+      foreach (x in AttributeCompiler.GetCompiledAssemblyAttributes ())
+        _assembly_builder.SetCustomAttribute (x);
+
+      compile_all_tyinfos (false)
+    }
+
+    /**
+     * Returns generated assembly for runtime instantations of its types
+     */
+    public GeneratedAssembly : Assembly
+    {
+      get { _assembly_builder }
+    }
+    
+    
+    /**
+     * Saves the constructed assembly to a file
+     */
+    public SaveAssembly () : void
+    {
+      add_resources_to_assembly ();
+          
+      // set the entry point
+      match ((_need_entry_point, _entry_point)) {
+        | (true, Some (entry_point_method_info)) =>
+          _assembly_builder.SetEntryPoint (entry_point_method_info,
+                                           if (Options.TargetIsWinexe)
+                                             PEFileKinds.WindowApplication
+                                           else
+                                             PEFileKinds.ConsoleApplication)
+        | (true, None) =>
+          Message.error ("no suitable entry point (Main function) found")
+        | _ => ()
+      };
+
+      // save the assembly
+      try {
+        _assembly_builder.Save (Path.GetFileName (_OutputFileName));
+        //when (_debug_emit != null) _debug_emit.Close ();
+      }
+      catch {
+        | e : IOException =>
+          Message.error ($"could not write to output file `$(this._OutputFileName)'"
+                         " -- `$(e.Message)'")  
+      }
+    }
+
+    /**
+     * Tell IL generator that we have created type instance elsewhere, and
+     * it needs to get finalized before saving an assembly.
+     */
+    public RegisterAuxType (tb : Emit.TypeBuilder) : void
+    {
+      _aux_types = tb :: _aux_types;
+    }
+
+
+    /* -- PRIVATE METHODS -------------------------------------------------- */
+
+    /**
+     *
+     */
+    emit_implementation (ti : NC.TypeBuilder) : void
+    {
+      ti.IsFinalized = true;
+      mutable skip_types = false;
+      def emit_member (m : IMember) {
+        def mods = m.GetModifiers ();
+        unless (mods.IsEmpty) {
+          def handle = m.GetHandle ();
+          //Message.debug (handle.ToString () + ": " + handle.GetType ().ToString ());
+          mutable context = m.DeclaringType;
+          def adder =
+            match (m.GetKind ()) {
+              | MemberKind.Method =>
+                // FIXME: we should allow [return:] here, but lame S.R.E. doesn't allow
+                // this, mono has an extension though
+                match (handle) {
+                  | handle : ConstructorBuilder =>
+                    fun (target, attribute) {
+                      if (target != System.AttributeTargets.Method &&
+                          target != System.AttributeTargets.All)
+                        Message.error ("only [method:] target allowed on constructor")
+                      else
+                        handle.SetCustomAttribute (attribute);
+                    }
+                  | handle : MethodBuilder =>
+                    fun (target, a) {
+                      if (target == System.AttributeTargets.ReturnValue)
+                        Message.error ("[return:] attribute target not supported yet")
+                      else if (target != System.AttributeTargets.Method &&
+                               target != System.AttributeTargets.All)
+                        Message.error ("only [method:] and [return:] targets allowed on methods")
+                      else
+                        handle.SetCustomAttribute (a)
+                    }
+
+                  | _ => Util.ice ("not a constructor or method handler in MemberKind.Method")
+                }
+                
+              | MemberKind.Property =>
+                fun (target, a) {
+                  if (target != System.AttributeTargets.Property &&
+                           target != System.AttributeTargets.All)
+                    Message.error ("only [property:] targets allowed on properties")
+                  else
+                   (handle :> PropertyBuilder).SetCustomAttribute (a)
+                }
+              | MemberKind.Event =>
+                fun (target, a) {
+                  if (target != System.AttributeTargets.Event &&
+                      target != System.AttributeTargets.All)
+                    Message.error ("only [event:] target allowed on events")
+                  else
+                    (m :> NemerleEvent).event_builder.SetCustomAttribute (a)
+                }
+              | MemberKind.Field  =>
+                fun (target, a) {
+                  if (target != System.AttributeTargets.Field &&
+                      target != System.AttributeTargets.All)
+                    Message.error ("only [field:] target allowed on fields")
+                  else
+                    (handle :> FieldBuilder).SetCustomAttribute (a)
+                }
+              | MemberKind.Type (tc) =>
+                if (skip_types)
+                  null
+                else {
+                  context = tc;
+                  fun (target, a) {
+                    if (target != System.AttributeTargets.Class &&
+                        target != System.AttributeTargets.All)
+                      Message.error ("only [type:] target allowed on types")
+                    else
+                      (handle :> SR.Emit.TypeBuilder).SetCustomAttribute (a)
+                  }
+                }
+            };
+
+          when (adder != null)
+            mods.SaveCustomAttributes ((context :> NC.TypeBuilder), adder)
+        }
+
+        match (m.GetKind ()) {
+          | MemberKind.Field =>
+            when ((m :> NemerleField).IsVolatile)
+            {
+              def volatile_attr =
+                make_void_attribute (SystemType.VolatileModifier);
+
+              (m.GetHandle () :> FieldBuilder).SetCustomAttribute (volatile_attr)
+            }
+          | MemberKind.Method (m) => CGexpr.CompileMethod ((m :> NemerleMethod))
+          | MemberKind.Property (p) => compile_property (p)
+          | MemberKind.Event (p) => compile_event (p)
+          | _ => ()
+        }
+      };
+
+      emit_member (ti);
+      skip_types = true;
+      List.Iter (ti.GetDirectMembers (), emit_member);
+      //Message.debug ("finalizing " + ti.FullName);
+      unless (Message.seen_error ())
+        ti.FinalizeType ();
+      //Message.debug ("finalized " + ti.FullName);
+    }
+
+
+    compile_property (prop : IProperty) : void
+    {
+      def builder = (prop.GetPropertyInfo () :> PropertyBuilder);
+      when (prop.GetGetter () != null)
+        builder.SetGetMethod ((prop.GetGetter ().GetMethodInfo () :> MethodBuilder));
+      when (prop.GetSetter () != null)
+        builder.SetSetMethod ((prop.GetSetter ().GetMethodInfo () :> MethodBuilder));
+    }
+
+
+    compile_event (prop : IEvent) : void
+    {
+      def builder = (prop :> NemerleEvent).event_builder;
+      builder.SetAddOnMethod ((prop.GetAdder ().GetMethodInfo () :> MethodBuilder));
+      builder.SetRemoveOnMethod ((prop.GetRemover ().GetMethodInfo () :> MethodBuilder));
+    }
+
+
+    finalize_aux_types () : void
+    {
+      unless (Message.seen_error ())
+        foreach (x : Emit.TypeBuilder in _aux_types)
+          _ = x.CreateType ();
+      _aux_types = [];
+    }
+
+
+    /**
+     * - create S.R.E.TypeBuilders for entire hierarchy of program 
+     * - add members to those TypeBuilders (only stubs for methods)
+     * - emit bodies of methods
+     * - finalize value types
+     * - finalize all types
+     */  
+    compile_all_tyinfos (aux_phase : bool) : void
+    {
+      def allow_it (ti : NC.TypeBuilder) {
+        !ti.IsFinalized &&
+        is_aux_decl (ti) == aux_phase
+      };
+      def set_type_builder (ti : NC.TypeBuilder) {
+        when (allow_it (ti)) {
+          //Message.debug ("make type builder for " + ti.FullName);
+          ti.ConstructTypeBuilder ();
+          when (ti.Attributes %&& NemerleAttributes.Macro) {
+            def attr = make_string_attribute (SystemType.ContainsMacroAttribute,
+                                              ti.GetTypeBuilder ().FullName);
+            _assembly_builder.SetCustomAttribute (attr);
+          }
+        }
+      };
+      // create members' declarations in SRE.TypeBuilders
+      def emit_decls (ti : NC.TypeBuilder) {
+        when (allow_it (ti)) {
+          //Message.debug ("generating declarations " + ti.FullName);
+          add_declarations (ti)
+        }
+      };
+      def emit_impl (ti : NC.TypeBuilder) {
+        when (allow_it (ti)) {
+          //Message.debug ("generating code for " + ti.FullName);
+          Passes.MarkTypeBuilderCompiled ();
+          emit_implementation (ti)
+        }
+      };
+
+      this._emit_nemerle_attributes = !aux_phase;
+
+      when (!aux_phase) _cgil_phase = 1;
+      NC.TypeBuilder.Iter (set_type_builder);
+
+      when (!aux_phase) _cgil_phase = 2;
+      NC.TypeBuilder.Iter (emit_decls);
+
+      when (!aux_phase) _cgil_phase = 3;
+
+      // we first finalize value types, because MS.NET runtime requires so
+      // FIXME: MS.NET is limiting to the unbelivible degree - it requires
+      // finalizing value type BEFORE any type in which it is used
+      // cycles are probably unresolvable, but maybe we should try to 
+      // analyze such dependencies
+      NC.TypeBuilder.IterConditionally (emit_impl, fun (x : NC.TypeBuilder) { x.IsValueType });
+
+      // now we can finalize everything else
+      NC.TypeBuilder.Iter (emit_impl);
+
+      Message.maybe_bailout ();
+
+      when (!aux_phase) _cgil_phase = 4;
+      finalize_aux_types ();
+    }
+
+    internal MemberAdded (ti : NC.TypeBuilder, mem : IMember) : void
+    {
+      when (_cgil_phase >= 1)
+        ti.ConstructTypeBuilder ();
+
+      when (_cgil_phase >= 2)
+        add_declaration (ti, mem);
+
+      when (_cgil_phase >= 3)
+        match (mem.GetKind ()) {
+          | MemberKind.Method (m) =>
+            CGexpr.CompileMethod ((m :> NemerleMethod));
+          | _ => ()
+        };
+
+      when (_cgil_phase >= 4)
+        finalize_aux_types ();
+    }
+
+
+    /**
+     * Check if declaration is auxiliary, used internally etc.
+     */
+    private static is_aux_decl (ti : NC.TypeBuilder) : bool
+    {
+      ti.FullName.StartsWith ("Nemerle.Internal.")
+    }
+
+
+    private static make_string_attribute (attr_type : System.Type, value : string) : CustomAttributeBuilder
+    {
+      def constructor_param_types = array [SystemType.String];
+      def constructor_info = attr_type.GetConstructor (constructor_param_types);
+      assert (constructor_info != null);
+      def constructor_params = array [(value : object)];
+      CustomAttributeBuilder (constructor_info, constructor_params)
+    }
+
+
+    private static make_void_attribute (attr_type : System.Type) : CustomAttributeBuilder
+    {
+      def constructor_info = attr_type.GetConstructor (System.Type.EmptyTypes);
+      CustomAttributeBuilder (constructor_info, array [])
+    }
+
+
+    /**
+     * Builds a Nemerle type attribute
+     */
+    private static make_nemerle_type_attr (encoded_type : string) : CustomAttributeBuilder
+    {
+      make_string_attribute (SystemType.TypeAttribute, encoded_type)
+    }
+
+
+    /**
+     * Builds a Nemerle variant attribute
+     */
+    private static make_nemerle_variant_attribute (decls : list [TypeInfo]) : CustomAttributeBuilder
+    {
+      def names = List.Map (decls, Tyutil.FrameworkTypeName);
+      make_string_attribute (SystemType.VariantAttribute,
+                             NString.Concat (",", names))
+    }
+
+
+    /**
+     * Builds a Nemerle type alias
+     */
+    private static make_nemerle_type_alias_attribute (t : TType) : CustomAttributeBuilder
+    {
+      make_string_attribute (SystemType.TypeAliasAttribute, TyCodec.EncodeType (t))
+    }
+
+
+    /**
+     * Builds a Nemerle variant option attribute
+     */
+    private static make_nemerle_variant_option_attribute (is_const : bool) : CustomAttributeBuilder
+    {
+      make_void_attribute (if (is_const)
+                             SystemType.ConstantVariantOptionAttribute
+                           else
+                             SystemType.VariantOptionAttribute)
+    }
+
+
+    /**
+     * Converts Nemerle property modifiers to the CLI property attributes.
+     */
+    private static make_property_attributes (attrs : NemerleAttributes) : PropertyAttributes
+    {
+      mutable result = PropertyAttributes.None;
+
+      when (attrs %&& NemerleAttributes.SpecialName) 
+        result |= PropertyAttributes.SpecialName %| PropertyAttributes.RTSpecialName;
+
+      result
+    }
+
+
+    /**
+     * Converts Nemerle field modifiers to the CLI field attributes.
+     */
+    private static make_field_attributes (attrs : NemerleAttributes) : FieldAttributes
+    {
+      mutable result = FieldAttributes.PrivateScope;
+
+      when (attrs %&& NemerleAttributes.Public) result |= FieldAttributes.Public;
+      when (attrs %&& NemerleAttributes.Private) result |= FieldAttributes.Private;
+      when (attrs %&& NemerleAttributes.Protected) result |= FieldAttributes.Family;
+      when (attrs %&& NemerleAttributes.Internal) result |= FieldAttributes.FamORAssem;
+      when (attrs %&& NemerleAttributes.Static) result |= FieldAttributes.Static;
+      when (attrs %&& NemerleAttributes.SpecialName) result |= FieldAttributes.SpecialName;
+
+      result
+    }
+
+
+    /**
+     * Converts Nemerle method modifiers to the CLI method attributes.
+     */
+    private static make_method_attributes (attrs : NemerleAttributes) : MethodAttributes
+    {
+      mutable result = MethodAttributes.HideBySig;
+
+      when (attrs %&& NemerleAttributes.Public) result |= MethodAttributes.Public;
+      when (attrs %&& NemerleAttributes.Private) result |= MethodAttributes.Private;
+      when (attrs %&& NemerleAttributes.Protected) result |= MethodAttributes.Family;
+      when (attrs %&& NemerleAttributes.Internal) result |= MethodAttributes.FamORAssem;
+      when (attrs %&& NemerleAttributes.Static) result |= MethodAttributes.Static;
+      when (attrs %&& NemerleAttributes.Override)
+        result |= MethodAttributes.Virtual %| MethodAttributes.ReuseSlot;
+      when (attrs %&& NemerleAttributes.New)
+        result |= MethodAttributes.NewSlot %| MethodAttributes.Virtual;
+      when (attrs %&& NemerleAttributes.Abstract)
+        result |= MethodAttributes.Virtual %| MethodAttributes.Abstract;
+      when (attrs %&& NemerleAttributes.Virtual) result |= MethodAttributes.Virtual;
+      when (attrs %&& NemerleAttributes.Sealed)
+        result |= MethodAttributes.Final %| MethodAttributes.Virtual;
+      when (attrs %&& NemerleAttributes.SpecialName) result |= MethodAttributes.SpecialName;
+
+      result
+    }
+
+
+    /**
+     * Converts Nemerle method modifiers to the Framework type attributes.
+     */
+    private static make_type_attributes (attrs : NemerleAttributes, is_nested : bool) : TypeAttributes
+    {
+      mutable result = TypeAttributes.AutoLayout;
+      when (attrs %&& NemerleAttributes.Public)
+        if (is_nested) result |= TypeAttributes.NestedPublic
+        else result |= TypeAttributes.Public;
+      when (attrs %&& NemerleAttributes.Private)
+        if (is_nested) result |= TypeAttributes.NestedPrivate
+        else Message.error ("Private is not allowed for top level types");
+      when (attrs %&& NemerleAttributes.Protected)
+        if (is_nested) result |= TypeAttributes.NestedFamily
+        else Message.error ("Protected is not allowed for top level types");
+      when (attrs %&& NemerleAttributes.Internal && is_nested)
+        result |= TypeAttributes.NestedFamORAssem;
+      when (attrs %&& NemerleAttributes.Abstract) result |= TypeAttributes.Abstract;
+      when (attrs %&& NemerleAttributes.Sealed) result |= TypeAttributes.Sealed;
+      when (attrs %&& NemerleAttributes.SpecialName) result |= TypeAttributes.SpecialName;
+
+      result
+    }
+
+
+    /**
+     * Converts a System.Type list to a System.Type array.
+     * FIXME: array [x] won't work here as the list's length is not know.
+     */
+    internal static type_list_to_type_array (x : list [System.Type]) : array [System.Type]
+    {
+      Nemerle.Utility.NArray.FromList (typeof (System.Type), x)
+    }
+
+
+    /**
+     * Reads the inheritance list of a class and retrieves the base
+     * type and builds the array of interfaces implemented by the class.
+     */
+    private static determine_inheritance (ti : NC.TypeBuilder) : (System.Type * array [System.Type])
+    {
+      match (ti.GetTydecl ()) {
+        | TypeDeclaration.Enum => (SystemType.Enum, array [])
+        | _ =>
+          def base_class_type =
+            match (ti.SuperClass ()) {
+              | Some (x) => x.GetSystemType ()
+              | _ => null
+            };
+
+          def ifaces_types = List.RevMap (ti.InterfacesToImplement (),
+                                          fun (tc : TypeInfo) { tc.GetSystemType () });
+
+          (base_class_type, type_list_to_type_array (ifaces_types))
+      }
+    }
+
+
+    /**
+     * This method makes a skeleton of a class -- the class partial type and
+     * partial types for the nested classes are created. The parent class and
+     * the interfaces being implemented are assumed to have been processed
+     * before constructing a dependant class. All the declarations and method
+     * implementations will be created successively in subsequent passes.
+     */
+    public ConstructTypeBuilder (tyinfo : NC.TypeBuilder) : Emit.TypeBuilder
+    {
+      /* create optional custom attributes for this type */
+      def custom_attribute =
+        match (tyinfo.GetTydecl ()) {
+          | TypeDeclaration.Variant (decls) =>
+            make_nemerle_variant_attribute (decls)
+          | TypeDeclaration.VariantOption =>
+            def has_co_ctor = Option.IsSome (tyinfo.GetConstantObject ());
+            make_nemerle_variant_option_attribute (has_co_ctor)
+          | TypeDeclaration.Alias (t) =>
+            make_nemerle_type_alias_attribute (t)
+          | _ => null
+        };
+
+      /* decide the new type attributes */
+      def is_nested = tyinfo.DeclaringType != null;
+
+      def type_kind_attrs =
+        match (tyinfo.GetTydecl ()) {
+          | TypeDeclaration.Variant 
+          | TypeDeclaration.VariantOption 
+          | TypeDeclaration.Class          => TypeAttributes.Class
+          | TypeDeclaration.Alias // we pretend type alias is an interface
+          | TypeDeclaration.Interface      => TypeAttributes.Interface %| TypeAttributes.Abstract
+          | TypeDeclaration.Enum           => TypeAttributes.Sealed %| TypeAttributes.Class
+        };
+
+      def attrs = make_type_attributes (tyinfo.Attributes, is_nested) %| type_kind_attrs;
+
+      /* determine the inheritance relation for this type */
+      def (extends_class, implements_interfaces) = determine_inheritance (tyinfo);
+
+      /* create the type builder for a top-level or nested class declaration */
+      def new_type_builder =
+        if (!is_nested)
+          this._module_builder.DefineType (tyinfo.FullName, attrs,
+                                           extends_class, implements_interfaces)
+        else {
+          def type_builder = (tyinfo.DeclaringType :> NC.TypeBuilder).GetTypeBuilder ();
+          type_builder.DefineNestedType (tyinfo.Name, attrs, extends_class,
+                                         implements_interfaces)
+        };
+
+      when (custom_attribute != null && _emit_nemerle_attributes) {
+        new_type_builder.SetCustomAttribute (custom_attribute);
+      };
+
+      new_type_builder
+    }
+
+
+    /**
+     * Adds a an implicit parameterless constructor to a type builder
+     */     
+    internal AddImplicitCtor (tb : Emit.TypeBuilder) : ConstructorBuilder
+    {
+      def constructor_builder =
+        tb.DefineDefaultConstructor (MethodAttributes.FamORAssem);
+
+      constructor_builder
+    }
+
+
+    /**
+     * Adds a constructor builder to a type builder
+     */
+    internal AddConstructorBuilder (cgm : CG_method, tb : Emit.TypeBuilder,
+                                    is_delegate_ctor : bool) : void
+    {
+      // Message.debug ("-- AddConstructorBuilder: " + tb.FullName + "." + cgm.name);
+
+      /* build the parameter types array */
+      def mkparm (parm : CG_val) : System.Type {
+        parm.ty
+      };
+
+      def parm_types_list = List.Map (cgm.parms, mkparm);
+      def parm_types_array = type_list_to_type_array (parm_types_list);
+
+      mutable skip_it_altogether = false;
+
+      when (is_delegate_ctor) {
+        if (cgm.modifiers %&& NemerleAttributes.Public)
+          skip_it_altogether = true;
+        else
+          cgm.modifiers = NemerleAttributes.Public;
+      }
+
+      unless (skip_it_altogether) {
+        /* create the constructor builder */
+        def constructor_builder =
+          tb.DefineConstructor (make_method_attributes (cgm.modifiers) %|
+                                MethodAttributes.RTSpecialName %|
+                                MethodAttributes.SpecialName,
+                                CallingConventions.Standard, parm_types_array);
+
+        /* add the runtime modifiers for delegate constructors */
+        when (is_delegate_ctor) {
+          constructor_builder.SetImplementationFlags (
+            MethodImplAttributes.Runtime %| MethodImplAttributes.Managed
+          )
+        }
+
+        def name_parms (pos, parms) {
+          match (parms) {
+            | [] => ()
+            | (p : CG_val) :: ps =>
+              assert (p.parm_info != null, "parm " + p.name);
+              p.parm_info.builder =
+                 constructor_builder.DefineParameter
+                       (pos, parameter_attributes (p.parm_info), p.name);
+              name_parms (pos + 1, ps)
+          }
+        };
+        name_parms (1, cgm.parms);
+
+        cgm.constructor_builder = constructor_builder;
+      }
+    }
+
+
+    /**
+     * Emits a constructor's body
+     */
+    internal EmitConstructor (context : NC.TypeBuilder, cgm : CG_method) : void
+    {
+      unless (context.IsDelegate) {
+        def cb = cgm.constructor_builder;
+        assign_parameter_indexes (cb.IsStatic, cgm);
+
+        emit_parameter_attributes (context, cgm);
+
+        CGpost.Postprocess (cgm);
+        CGopt.Optimize (cgm);
+
+        /* emit the constructor's body */
+        def gen = CodeGenerator (cb, _module_builder, cgm);
+        when (Options.EmitDebug) gen.SetDocument (context.Location);
+        gen.Run ();
+      }
+    }
+
+    parameter_attributes (pi : CG_parm_info) : ParameterAttributes
+    {
+      if (pi.parm_kind == ParmKind.Ref)
+        ParameterAttributes.None
+      else if (pi.parm_kind == ParmKind.Out)
+        ParameterAttributes.Out
+      else
+        ParameterAttributes.None
+    }
+
+
+    /**
+     * Adds a method builder to a type builder
+     */
+    internal AddMethodBuilder (cgm : CG_method, tb : Emit.TypeBuilder, is_delegate_method : bool) : void
+    {
+      // Message.debug ("-- AddMethodBuilder: " + tb.FullName + "." + cgm.name);
+
+      /* build the parameter types array */
+      def mkparm (parm : CG_val) : System.Type {
+        parm.ty
+      };
+
+      def parm_types_list = List.Map (cgm.parms, mkparm);
+      def parm_types_array = type_list_to_type_array (parm_types_list);
+
+      /* update the modifiers list */
+      def modifiers =
+        if (cgm.implemented_methods == null) cgm.modifiers
+        else
+          match (cgm.implemented_methods) {
+            | [] => cgm.modifiers
+            | _ => NemerleAttributes.Virtual %| cgm.modifiers
+          };
+
+      def attrs = make_method_attributes (modifiers);
+      def attrs =
+        if (cgm.name == ".cctor")
+          attrs %| MethodAttributes.RTSpecialName %| MethodAttributes.SpecialName
+        else
+          attrs;
+
+      /* add the method to the type builder */
+      def method_builder =
+        tb.DefineMethod (cgm.name, attrs,
+                         cgm.ret_type, parm_types_array);
+
+      /* add the runtime modifiers for delegate methods */
+      when (is_delegate_method) {
+        method_builder.SetImplementationFlags (
+          MethodImplAttributes.Runtime %| MethodImplAttributes.Managed
+        )
+      }
+
+      def name_parms (pos, parms) {
+        match (parms) {
+          | [] => ()
+          | (p : CG_val) :: ps =>
+            p.parm_info.builder =
+               method_builder.DefineParameter
+                     (pos, parameter_attributes (p.parm_info), (p : CG_val).name);
+            name_parms (pos + 1, ps)
+        }
+      };
+      name_parms (1, cgm.parms);
+
+      cgm.method_builder = method_builder;
+    }
+
+
+    emit_parameter_attributes (context : NC.TypeBuilder, cgm : CG_method) : void
+    {
+      foreach (v : CG_val in cgm.parms) {
+        v.parm_info.modifiers.SaveCustomAttributes (context, fun (target, attr) {
+          if (target != System.AttributeTargets.Parameter &&
+              target != System.AttributeTargets.All)
+            Message.error ("only [param:] custom attribute target is allowed here")
+          else
+            v.parm_info.builder.SetCustomAttribute (attr)
+        })
+      }
+    }
+
+
+    /**
+     * Emits a method's body
+     */
+    internal EmitMethod (context : NC.TypeBuilder, cgm : CG_method) : void
+    {
+      unless (context.IsDelegate) {
+        def mb = cgm.method_builder;
+        assign_parameter_indexes (mb.IsStatic, cgm);
+
+        emit_parameter_attributes (context, cgm);
+
+        CGpost.Postprocess (cgm);
+        CGopt.Optimize (cgm);
+
+        /* update the entry point settings, if necessary */
+        when (_need_entry_point && cgm.name == "Main" && mb.IsStatic) {
+          match (_entry_point) {
+            | Some =>
+              Message.error ($ "more then one entry point (Main function) "
+                               "found in $(mb.DeclaringType)")
+            | None =>
+              when (_debug_emit != null) _debug_emit.SetUserEntryPoint (SymbolToken (1));
+              _entry_point = Some ((mb : MethodInfo))
+          }
+        };
+
+        /* update the overriding relationships */
+        def type_builder = (mb.DeclaringType :> Emit.TypeBuilder);
+        def method_info = (mb :> MethodInfo);
+
+        foreach (overridden : IMethod in cgm.implemented_methods) {
+          def overridden_info = overridden.GetMethodInfo ();
+
+          //Message.debug ("override " + method_info.Name + " " + overridden_info.Name + " in " +
+          //                type_builder.FullName);
+          type_builder.DefineMethodOverride (method_info, overridden_info)
+        };
+
+        /* emit the method body */
+        when (_debug_emit != null) {
+          //_debug_emit.SetMethodSourceRange (_debug_doc, 2, 3, _debug_doc, 7, 8);
+          _debug_emit.OpenMethod (SymbolToken (1));
+        }
+        def gen = CodeGenerator (mb, _module_builder, cgm);
+        when (Options.EmitDebug) gen.SetDocument (context.Location);
+        gen.Run ();
+
+        when (_debug_emit != null) _debug_emit.CloseMethod ();        
+      }
+    }
+
+
+    /**
+     * Adds a method and immediately emits it's body
+     */
+    internal AddMethod (ctx : NC.TypeBuilder, cgm : CG_method, tb : Emit.TypeBuilder) : void
+    {
+      AddMethodBuilder (cgm, tb, is_delegate_method = ctx.IsDelegate);
+      EmitMethod (ctx, cgm);
+    }
+
+
+    /**
+     * Adds a field builder
+     */
+    internal AddFieldBuilder (field : IField, tb : Emit.TypeBuilder) : FieldBuilder
+    {
+      def attrs = make_field_attributes (field.Attributes);
+      def nemerle_field = (field :> NemerleField);
+      def attrs =
+        if (nemerle_field.enum_value != null)
+          attrs %| FieldAttributes.Literal
+        else if (field.Name == "value__" &&
+                 (field.DeclaringType.GetTydecl () matches TypeDeclaration.Enum))
+          attrs %| FieldAttributes.RTSpecialName
+                %| FieldAttributes.SpecialName
+        else
+          attrs;
+      def field_builder =
+        tb.DefineField (field.Name,
+                        CGexpr.cg_type (tb, field.GetMemType ()),
+                        attrs);
+
+      when (_emit_nemerle_attributes) {
+        def attr = make_nemerle_type_attr (TyCodec.EncodeMemberType (field));
+        field_builder.SetCustomAttribute (attr);
+      };
+
+      when (nemerle_field.enum_value != null) {
+        //Message.debug ("setting value to " + nemerle_field.enum_value.ToString ());
+        field_builder.SetConstant (nemerle_field.enum_value);
+      };
+
+      nemerle_field.field_builder = field_builder;
+      field_builder
+    }
+
+    /**
+     * Adds a property builder
+     */
+    internal AddPropertyBuilder (prop : IProperty, tb : Emit.TypeBuilder) : PropertyBuilder
+    {
+      def prop = (prop :> NemerleProperty);
+      def parms = List.Map (prop.parms, fun (t) { CGexpr.cg_type (tb, t) });
+      def parms = type_list_to_type_array (parms);
+      def attrs = make_property_attributes (prop.Attributes);
+      def ty = CGexpr.cg_type (tb, prop.GetMemType ());
+
+      def prop_builder = tb.DefineProperty (prop.Name, attrs, ty, parms);
+
+      when (_emit_nemerle_attributes) {
+        def attr = make_nemerle_type_attr (TyCodec.EncodeMemberType (prop));
+        prop_builder.SetCustomAttribute (attr);
+      };
+
+      prop.property_builder = prop_builder;
+      prop_builder
+    }
+
+    /**
+     * Adds an event builder
+     */
+    internal AddEventBuilder (the_event : IEvent, tb : Emit.TypeBuilder) : EventBuilder
+    {
+      def ty = CGexpr.cg_type (tb, the_event.GetMemType ());
+      def event_builder =
+        tb.DefineEvent (the_event.Name, EventAttributes.None, ty);
+
+      when (_emit_nemerle_attributes) {
+        def attr = make_nemerle_type_attr (TyCodec.EncodeMemberType (the_event));
+        event_builder.SetCustomAttribute (attr);
+      };
+
+      (the_event :> NemerleEvent).event_builder = event_builder;
+      event_builder
+    }
+
+    add_declaration (ti : NC.TypeBuilder, m : IMember) : void
+    {
+      def type_builder = ti.GetTypeBuilder ();
+      match (m.GetKind ()) {
+        | MemberKind.Field (field) =>
+          ignore (AddFieldBuilder (field, type_builder))
+
+        | MemberKind.Event (ev) =>
+          ignore (AddEventBuilder (ev, type_builder))
+
+        | MemberKind.Property (p) =>
+          ignore (AddPropertyBuilder (p, type_builder))
+
+        | MemberKind.Method (m) when Option.IsSome (m.GetExternName ()) => () // skip extern methods
+
+        | MemberKind.Method (m) =>
+          def attr =
+            if (_emit_nemerle_attributes)
+              make_nemerle_type_attr (TyCodec.EncodeMemberType (m))
+            else
+              null;
+          match (m.GetFunKind ()) {
+            | FunKind.Constructor =>
+              def cgm = CGexpr.GetCgMethod (m);
+              AddConstructorBuilder (cgm, type_builder, ti.IsDelegate);
+              def builder = cgm.constructor_builder;
+              // we don't need our atributes on delegate ctors
+              when (!ti.IsDelegate && _emit_nemerle_attributes)
+                builder.SetCustomAttribute (attr);
+              (m :> NemerleMethod).ctor_builder = builder
+            | _ =>
+              def cgm = CGexpr.GetCgMethod (m);
+              AddMethodBuilder (cgm, type_builder, ti.IsDelegate);
+              def builder = cgm.method_builder;
+              when (_emit_nemerle_attributes)
+                builder.SetCustomAttribute (attr);
+              (m :> NemerleMethod).method_builder = builder
+          }
+
+        | MemberKind.Type => () // skip
+      }
+    }
+
+
+    /**
+     * This methods walks the class tree and adds field and method declarations.
+     * The method implementation will be filled in a separate pass.
+     */
+    add_declarations (ti : NC.TypeBuilder) : void
+    {
+      def type_builder = ti.GetTypeBuilder ();
+
+      when (_emit_nemerle_attributes) {
+        def tyattr = make_nemerle_type_attr (TyCodec.EncodeMemberType (ti));
+        type_builder.SetCustomAttribute (tyattr);
+      };
+
+      foreach (m in ti.GetDirectMembers ())
+        add_declaration (ti, m);
+
+      when (ti.IsDelegate) {
+        // a lil' fixup
+        match (ti.LookupMember (".ctor")) {
+          | [c1 : NemerleMethod, c2 : NemerleMethod] =>
+            if (c1.ctor_builder == null)
+              c1.ctor_builder = c2.ctor_builder
+            else
+              c2.ctor_builder = c1.ctor_builder
+          | _ => assert (false)
+        }
+      }
+    }
+
+
+    /**
+     * Assigns an ordinal index to each of a method's parameter
+     */
+    private static assign_parameter_indexes (is_static : bool, cgm : CG_method) : void
+    {
+      def walk_parms (index : int, parms : list [CG_val]) : void {
+        match (parms) {
+          | parm :: rest =>
+            parm.parm_index = Some (index);
+            walk_parms (index + 1, rest)
+          | [] => ()
+        }
+      };
+
+      walk_parms (if (is_static) 0 else 1, cgm.parms)
+    }
+
+
+    /* -- PRIVATE FIELDS --------------------------------------------------- */
+
+    private _assembly_name : System.Reflection.AssemblyName;
+    private _assembly_builder : AssemblyBuilder;
+    private _module_builder : ModuleBuilder;
+    public static mutable _debug_emit : ISymbolWriter;
+    private mutable _emit_nemerle_attributes : bool;
+    private _need_entry_point : bool;
+
+    /** updated when method with static Main signature is met */
+    private mutable _entry_point : option [MethodInfo];
+    private _OutputFileName : string;
+    private mutable _aux_types : list [Emit.TypeBuilder];
+    private mutable _cgil_phase : int;
+  }
+}

@@ -98,7 +98,8 @@ NEMERLE_COMPILER_DLL_SRC = \
         generation/Optimizer.n		 \
         generation/CompiledTree.n	 \
         generation/MatchingCompiler.n	 \
-        generation/ILGeneration.n	 \
+        generation/ILEmitter.n	         \
+        generation/HierarchyEmitter.n	 \
         hierarchy/NamespaceTree.n	 \
         hierarchy/ScanTypeHierarchy.n	 \
         hierarchy/ClassMembers.n	 \
