@@ -122,11 +122,11 @@ buffer created.  This is a good place to put your customizations.")
 	 '("\"[^\"]*\"" 0 font-lock-string-face)
 
 	 ;; keywords
-	 '("\\b\\(_\\|abstract\\|and\\|as\\|base\\|class\\|const\\|def\\|else\\|enum\\|extends\\|extern\\|finally\\|fun\\|if\\|implements\\|in\\|interface\\|internal\\|let\\|letfun\\|match\\|module\\|mutable\\|namespace\\|new\\|null\\|open\\|out\\|private\\|protected\\|public\\|raise\\|ref\\|sealed\\|static\\|struct\\|then\\|this\\|try\\|tymatch\\|type\\|variant\\|void\\|volatile\\|where\\|with\\)\\b"
+	 '("\\b\\(_\\|abstract\\|and\\|as\\|base\\|class\\|const\\|def\\|else\\|enum\\|extends\\|extern\\|finally\\|fun\\|if\\|implements\\|in\\|interface\\|internal\\|let\\|letfun\\|match\\|module\\|mutable\\|namespace\\|new\\|null\\|open\\|out\\|private\\|protected\\|public\\|raise\\|ref\\|sealed\\|static\\|struct\\|then\\|this\\|try\\|tymatch\\|type\\|variant\\|void\\|volatile\\|where\\|when\\|unless\\|while\\|using\\|with\\)\\b"
 	   0 font-lock-keyword-face)
 
 	 ;; types
-	 '("\\b\\(void\\|int\\|char\\|float\\|bool\\|string\\|option\\|list\\|object\\)\\b"
+	 '("\\b\\(void\\|int\\|char\\|float\\|bool\\|string\\|option\\|array\\|list\\|object\\)\\b"
 	   0 font-lock-type-face)
 	 '("\\btype\\s +\\(\\w+\\)" 1 font-lock-type-face)
 	 '("'\\w+" 0 font-lock-type-face)
