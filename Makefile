@@ -60,6 +60,12 @@ INST  = @echo INSTALL $1
 # builds standard library.
 all:
 	$(Q)$(MAKE) -C ncc boot
+	$(Q)if test $(ANTLR); then \
+		$(MAKE) -C tools/cs2n all; \
+	elif find tools/cs2n/CSharpParser.cs -cnewer tools/cs2n/csharpgrammar.g | grep -q "" ; then \
+		$(MAKE) -C tools/cs2n all; \
+	fi
+
 
 # This is necessary to make sure, that configuration file
 # has been generated, and it is up to date.
@@ -109,8 +115,8 @@ install:
 	$(Q)$(MAKE) -C doc install
 	$(Q)if test -f ncc/out.stage3/ncc.exe ; then $(MAKE) -C ncc install; \
             else $(MAKE) -C boot install; fi
-	$(Q)if test $(ANTLR); then \
-	  $(MAKE) NCC_DIR=$(PWD)/boot/ -C tools/cs2n install; fi
+	$(Q)if test -f tools/cs2n/cs2n.exe ; then \
+	  $(MAKE) -C tools/cs2n install; fi
 	$(INST) $(PKGCONFIGDIR)/nemerle.pc
 	$(Q)install -d $(DESTDIR)$(PKGCONFIGDIR)
 	$(Q)install -m 644 nemerle.pc $(DESTDIR)$(PKGCONFIGDIR)/nemerle.pc
