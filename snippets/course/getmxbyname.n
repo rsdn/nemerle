@@ -1,0 +1,304 @@
+using Nemerle.Collections;
+using System.Net;
+using System.Net.Sockets;
+
+module MailRely {
+
+  // rekord MX
+  public class MX : System.IComparable
+  {
+    // priorytet (preferowane sa rekordy z mniejszym)
+    public mutable pref : int;
+    // nazwa serwera obslugujacego wymiane poczty
+    public mutable host : string;
+    // standardowy konstruktor
+    public this(p : int, h : string) {
+      pref = p;
+      host = h;
+    }
+    // metoda porownujaca z interfejsu IComparable
+    public CompareTo(obj : System.Object) : int {
+//      when (this.GetType() != obj.GetType()) {
+//        throw System.InvalidArgumentException;
+//      };
+      def mx = (obj :> MX);
+      // odwracam porzadek, bo preferowane sa serwery o mniejszym numerku
+      -pref.CompareTo(mx.pref)
+    }
+  }
+
+  // klasa resolvera MX
+  class GetMXByName {
+
+    private static mutable ID : int;
+    // w miare unikalny, 16-bitowy identyfikator
+    private mutable id : int = 100;
+    // serwery DNS
+    public mutable servers : array <string> = array ["127.0.0.1"];
+    // czesc po malpce -- domena dla ktorej szukam serwerow pocztowych
+    private mutable domain : string = null;
+    // wynik poszukiwan
+    private mutable answers : Heap <MX> = null;
+
+    // utworz zapytanie DNS o MX dla domeny `domain'
+    private CreateQuery() : array <byte> {
+
+      // wskaznik zainicjalizowany za naglowkiem odpowiedzi DNS
+      mutable offset = 12;
+      // bufor z zapytaniem ktory wysle
+      def buf = (array (521) : array <byte>);
+      def toByte<'a>(x : 'a) {
+        System.Convert.ToByte(x)
+      };
+
+      // zainicjiuj naglowek
+      // jedyne co mnie obchodzi to 16-bitowy idntyfikator (buf[0..1])
+      buf[0]  = toByte(id >> 8);
+      buf[1]  = toByte(id);
+      buf[2]  = toByte(0);
+      buf[3]  = toByte(0);
+      buf[4]  = toByte(0);
+      buf[5]  = toByte(1);
+      buf[6]  = toByte(0);
+      buf[7]  = toByte(0);
+      buf[8]  = toByte(0);
+      buf[9]  = toByte(0);
+      buf[10] = toByte(0);
+      buf[11] = toByte(0);
+
+      // zakoduj domene w podstaci lubianej przez protokol DNS
+      def labels = domain.Split(array ['.']);
+      foreach (label : string in labels) {
+        // pierwszy bajt to dlugosc lancucha do najblizszej kropki
+        buf[offset] = toByte(label.Length);
+        ++offset;
+
+        // kolejne bajty to kody ASCII literek w nazwie
+        def b = System.Text.Encoding.ASCII.GetBytes(label.ToCharArray());
+        b.CopyTo(buf,offset);
+
+        // nastepny kawalek miedzykropkowy
+        offset += b.Length;
+      };
+      // dlogosc lancucha do najbliszej kropki 0 -> koniec domeny
+      buf[offset+0] = toByte(0);
+
+      // 16-bitowy typ zapytania, MX=15
+      buf[offset+1] = toByte(0);
+      buf[offset+2] = toByte(15);
+
+      // klasa zapytania
+      buf[offset+3] = toByte(0);
+      buf[offset+4] = toByte(1);
+
+      // zwroc przygotowane zapytanie
+      buf
+    }
+
+    // parsuj odpowiedz serwera -- wyciagnij serwery pocztowy z priorytetami
+    private ParseAnswer(buf : array <byte>) : array <MX> {
+
+      // offset zainicjalizowany na pierwszy bajt po naglowku
+      mutable offset = 12;
+
+      def toInt<'a>(x : 'a) {
+        System.Convert.ToInt32(x);
+      }
+
+      // z naglowka interesuje mnie ID, i ma byc takie samo jak moje
+      when (id != ((toInt(buf[0]) << 8) + toInt(buf[1]))) {
+        throw System.Exception()
+      }
+
+      // pomijanie nazwy domeny w postaci lubianej przez protokol DNS
+      def skipName() : void {
+        if (toInt(buf[offset]) > 0x3F) {
+          // jeden z najstarszych dwoch bitow jest ustawiony,
+          // co moze oznaczac link, a wiec trzeba pominac ten bajt i nastepny
+          offset += 2;
+        } else if (toInt(buf[offset]) > 0) {
+          // dwa najstarsze bity = 0 i wartosc bajtu jest niezerowa,
+          // wiec pomijam ten bajt i lancuch o dlugosci zapisanej w tym bajcie
+          offset += (toInt(buf[offset]) + 1);
+          skipName()
+        } else {
+          // jest zero, wiec koniec nazwy domeny
+          ++offset
+        }
+      }
+
+      // pomocnicza funkcja podobna po poprzedniej, z tym, ze nazwa DNS
+      // nie jest przez nia pomijana ale zapamietywana do ludzkiej postaci,
+      // tzn. z kropka pomiedzi lancuszkami, tam gdzie kropki byc powinny
+      def getName() : string {
+        // pierwszy bajt to ilosc literek do nastepnej kropki w nazwie
+        // (pod warunkiem, ze jego najstarsze dwa bity sa wyzerowane)
+        def size = toInt(buf[offset]);
+        ++offset;
+        if (size == 0) {
+          // koniec nazwy
+          ""
+        } else if (size >= 0xC0 && size <= 0xFF) {
+          // pierwsze dwa bity od lewej to jedynki, wiec reszta bitow
+          // wraz z nastepnym bajtem to link (kompresja a`la slownikowa)
+          def tmp = offset + 1;
+          offset = (((size - 0xC0) << 8) + toInt(buf[offset]));
+          def name = getName();
+          // po powrocie z linku (wykorzystaniu kawalka lancucha, ktory juz
+          // kiedys wystapil), koncz zabawe
+          offset = tmp;
+          name
+        } else if (size > 0 && size <= 0x3F) {
+          // pierwsze dwa bity od lewej to zera, wiec jest to rozmiar
+          // kawalka nazwy DNS do nastepnej kropki
+          def name = System.Text.Encoding.ASCII.GetString(buf,offset,size);
+          offset += size;
+          name + "." + getName()
+        } else {
+          // jeden z najbardziej znaczacych bitow to 0 a drugi 1
+          throw System.Exception();
+        }
+      }
+
+      // ilosc nazw DNS zapytan do piminiecia jest w naglowku ([4..5])
+      def cnt = ((toInt(buf[4]) << 8) + toInt(buf[5]));
+      // lancuchy z zapytaniami sluza do ich pominiecia ;-)
+      for (mutable i = 0; i < cnt; ++i) {
+        skipName();
+        offset += 4;
+      }
+
+      // ilosc nazw DNS odpowiedzi do zapamietania jest w naglowku ([6..7])
+      def cnt = ((toInt(buf[6]) << 8) + toInt(buf[7]));
+      // w tej tablicy zapisze wyniki (MX'y z serwerami pocztowymi)
+      def answers = array (cnt);
+      // lancuchy z odpowiedziami (to czego szukam)
+      for (mutable i = 0; i < cnt; ++i) {
+        // pomin lancuszek z nazwa pytania
+        skipName();
+        // pomin kilka malo mnie w tej chwili obchodzacych danych
+        offset += 10;
+        // parsujemy wlasciwa odpowiedz
+        // najpierw numerek preferencji dla tego serwera pocztowego...
+        def preference = (toInt(buf[offset+0]) << 8) + toInt(buf[offset+1]);
+        offset += 2;
+        // ...potem nazwe serwera
+        def name = getName();
+        answers[i] = MX(preference, name);
+      }
+
+      // skonczone parsowanie, zrowoc wynik
+      answers;
+    }
+
+    // metoda wysyla zapytanie do (pakiet UDP) do serwera, odbiera odpowiedz
+    // i zwraca zparsowany wynik
+    private QueryServer() : array <MX> {
+      // skrec zapytanie
+      def query = CreateQuery();
+      // wyslij w kilku probach zapytanie do hostow z listy serwerow DNS
+      // serwery sa wyierane cyklicznie (round robin)
+      def aux(i) {
+        // maksymalnie 10 prob
+        if (i >= 10) {
+          array []
+        } else {
+          try {
+            // reprezentacja .NET-owa adresu docelowanego
+            def ip_remote = IPEndPoint(IPAddress.Parse(servers[i%(servers.Length)]), 53);
+            // reprezentacja docelowa adresu zrodlowego
+            def ip_local = IPEndPoint(IPAddress.Any,0);
+            // gniazdko UDP
+            def udp_socket = Socket(AddressFamily.InterNetwork,SocketType.Dgram,ProtocolType.Udp);
+            // przypisz adres zrodlowy
+            udp_socket.Bind(ip_local);
+            // polacz (w przypadku UDP to jakby puste slowo)
+            udp_socket.Connect(ip_remote);
+            // sproboj wyslac zapytanie
+            when (udp_socket.Send(query) == 0) {
+              throw System.Exception()
+            }
+            // czekaj na odpowiedz 5 sekund
+            if (udp_socket.Poll(5*1000000,SelectMode.SelectRead)) {
+              // przyszla odpowiedz
+              // przygotuj bufor z miejscem na nia
+              def result = (array (512) : array <byte>);
+              // sprobuj odebrac odpowiedz
+              when (udp_socket.Receive(result) == 0) {
+                throw System.Exception();
+              }
+              // po odebraniu odpowiedzi, pozbadz sie gniazda
+              // TODO pozbadz sie wszystkich niazd po wszystkich probach
+              //      do tego czasu, sprawdzaj wszystkie poprzednie gniazda,
+              //      zawsze moga sie przydac odpowiedzi, ktore szly wiecej
+              //      niz 5 sekund
+              //      takie podejscie pozwoli zmiejszyc czas miedzy probami
+              //      i podniesz efektywnosc klienta DNS, kosztem troszke
+              //      wiekszej ilosci niepotrzebnie latajacych pakietow
+              udp_socket.Close();
+              // przemiel otrzymane informacje
+              ParseAnswer(result)
+            } else {
+              throw System.Exception()
+            };
+          } catch {
+            // proba sie nie powiodla, jesli nie ostatnia to jeszcze raz
+            _ : System.Exception => aux(i+1)
+          } 
+        }
+      }
+      def result = aux(0);
+      result
+    }
+
+    public GetMXByName() : void {
+    }
+
+    // odzyskaj MX dla tej domeny
+    public Resolv(domain : string) : void {
+      // id powinno byc w miare unikalne w ramach jednego gniazda
+      // (portu zrodlowego), aby nie wracaly rozne odpowiedzi o tym samym
+      // id do tego samego gniezda
+      // w miare, to znaczy, wedlug zdrowego rozsadku, dluzej niz kilka sekund
+      // nie bede na odpowiez czekal, wiec 16 bitow na nawet duze obciezenie
+      // spokojnie wystarczy, zwlaszcza, ze ja przy kazdym odzyskaniu nazwy
+      // tworze nowe gniazdo ;-)
+      when (id > 65534) {
+        id = 100;
+      }
+      ++id;
+      this.domain = domain;
+      answers = Heap(QueryServer(/*id, domain*/));
+      // answers[i] : (preference : int, host : string)
+      // sort by preference
+      // result : { | answers[i] | DnsReplyCode.TempError  }
+    }
+
+    // metoda zwraca nastepny serwer pocztowy dla tej domeny
+    public Next() : MX {
+      try {
+        answers.ExtractFirst()
+      } catch {
+        _ : System.Exception => null
+      }
+    }
+
+    // sprawdzanie czy sa jakies jeszcze serwery (a raczej czy ich nie ma)
+    public IsEmpty() : bool {
+      answers.IsEmpty
+    }
+
+  }
+
+  Main () : void {
+    def mxes = GetMXByName();
+    mxes.servers = array [  "127.0.0.1" ];
+    mxes.Resolv("test.com");
+    while (!mxes.IsEmpty()) {
+      def answer = mxes.Next();
+      System.Console.WriteLine("{0}: {1}", answer.pref, answer.host);
+    };
+    ()
+  }
+
+}
