@@ -44,6 +44,8 @@ DISTFILES = \
 	operators.n	\
 	dataNpgsql.n	\
 	assertions.n	\
+	AssemblyInfo.n	\
+	xml.n		\
 
 ############################################################
 # OUTPUT
