@@ -2,7 +2,7 @@ NPATH   = ../..
 NCC     = $(NPATH)/ncc/ncc.exe
 LIBS    = $(NPATH)/lib/aliases.n $(NPATH)/lib/core.n \
           $(NPATH)/lib/hashtable.n $(NPATH)/lib/option.n
-COMPILE = $(NCC) $(LIBS) -r:/usr/local/lib/System.dll
+COMPILE = $(NCC) $(LIBS) -r:System
 CS      = mcs /nowarn:162 /debug+
 
 ntrace.exe: out.cs
