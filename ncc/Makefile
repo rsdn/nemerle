@@ -96,7 +96,8 @@ NEMERLE_COMPILER_DLL_SRC = \
 
 
 NCC_EXE_SRC       = main.n
-STDMACROS_DLL_SRC = stdmacros.n
+STDMACROS_DLL_SRC = stdmacros.n \
+	stdoperators.n \
 
 DISTFILES = \
 	ChangeLog                   \
