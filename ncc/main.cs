@@ -157,6 +157,7 @@ namespace Nemerle.Compiler
     }
   }
 
+/*
   class XParser : Parser 
   {
     override public void yyerror(string message, string[] expected) 
@@ -176,6 +177,7 @@ namespace Nemerle.Compiler
       //		this.debug = new yydebug.yyDebugSimple();
     }
   }
+*/
 
   class MainClass 
   {
@@ -247,8 +249,8 @@ namespace Nemerle.Compiler
 
             default:
             {
-              Parser p = new XParser();
-              ret = new list.Cons (p.parse (new Lexer (argv[i])), ret);
+              //Parser p = new XParser();
+              ret = new list.Cons (Parser.parse (new Lexer (argv[i])), ret);
               did_file = true;
               break;
             }
@@ -260,11 +262,13 @@ namespace Nemerle.Compiler
           CS_glue.close_file ();
         }
       } 
+	  /*
       catch (yyParser.yyException e) 
       {
         Message.maybe_bailout();
         bomb(e, "got parsing exception, but no error seen");
       } 
+	  */
       catch (System.IO.FileNotFoundException e)
       {
         Message.error (e.Message);

@@ -102,7 +102,7 @@ module Parser {
       | _ => ctx.push_back <- 1
     }
   }
-
+  
   shift (ctx : CTX) : void {
     ignore (get_token (ctx)) 
   }
@@ -116,13 +116,33 @@ module Parser {
     ctx.lexer.get_location ()
   }
 
+  public token_name (t : Token) : string {
+    match (t) {
+      | Tok_keyword (x) => "keyword `" + x + "'"
+      | Tok_identifier (x) => "identifier `" + x + "'"
+      | Tok_operator (x, _) => "operator `" + x + "'"
+      | Tok_tyvar (x) => "type variable `" + x + "'"
+      | Tok_string_literal => "string literal"
+      | Tok_number_literal => "number literal"
+      | Tok_char_literal => "character literal"
+      | Tok_EOF => "end of file"
+    }
+  }
+
+  describe (ctx : CTX) : string {
+    when (ctx.push_back != 2) {
+      push_back (ctx)
+    };
+    def name = token_name (peek_token (ctx));
+    "parse error near " + name + ": "
+  }
+
   'a fatal_error (ctx : CTX, msg : string) : 'a {
-    // FIXME: near symbol...
-    Message.fatal_error (location (ctx), "parse error: " + msg)
+    Message.fatal_error (location (ctx), describe (ctx) + msg)
   }
 
   error (ctx : CTX, msg : string) : void {
-    Message.error (location (ctx), "parse error: " + msg)
+    Message.error (location (ctx), describe (ctx) + msg)
   }
 
   get_qid (ctx : CTX) : string {
@@ -189,16 +209,21 @@ module Parser {
   expect_operator (ctx : CTX, op : string) : void {
     match (get_token (ctx)) {
       | Tok_operator (o, _) when op == o => ()
+      | Tok_operator (o, _) =>
+        match (peek_token (ctx)) {
+          | Tok_operator (o', _) when op == o + o' => shift (ctx); ()
+          | _ => fatal_error (ctx, "expecting operator `" + op + "'");
+        }
       | _ =>
-        fatal_error (ctx, "expecting '" + op + "'");
+        fatal_error (ctx, "expecting operator `" + op + "'");
     }
   }
 
   expect_keyword (ctx : CTX, op : string) : void {
     match (get_token (ctx)) {
       | Tok_keyword (o) when op == o => ()
-      | _ =>
-        fatal_error (ctx, "expecting '" + op + "'");
+      | t =>
+        fatal_error (ctx, "expecting keyword `" + op + "'");
     }
   }
 
@@ -219,9 +244,10 @@ module Parser {
             push_back (ctx); 
             Typarms ([], [])
         };
+      mutable is_ctor <- false;
       def name =
         match (get_token (ctx)) {
-          | Tok_keyword ("this") when allow_ctor => ".ctor"
+          | Tok_keyword ("this") when allow_ctor => is_ctor <- true; ".ctor"
           | Tok_keyword ("fun") when is_lambda => "_N_l" + string_of_int (Util.next_id ())
           | _ when is_lambda => fatal_error (ctx, "expecting `fun'")
           | Tok_identifier (n) => n
@@ -239,10 +265,15 @@ module Parser {
           };
         Fun_parm (loc = loc, name = id, ty = t)
       };
-      def parms = operator_separated_list (ctx, ",", parse_parm);
+      def parms =
+        match (peek_token (ctx)) {
+          | Tok_operator (")", _) => []
+          | _ => operator_separated_list (ctx, ",", parse_parm)
+        };
       expect_operator (ctx, ")");
       def ret_type =
         match (get_token (ctx)) {
+          | _ when is_ctor => push_back (ctx); T_void ()
           | Tok_operator (":", _) => parse_type (ctx)
           | _ when allow_inference => push_back (ctx); T_infer ()
           | _ => fatal_error (ctx, "expecting typing constraint on function return value")
@@ -282,8 +313,7 @@ module Parser {
         };
 
         def problem () {
-          push_back (ctx);
-          Message.fatal_error (loc, "expecting primary expression")
+          Message.fatal_error (loc, describe (ctx) + "expecting primary expression")
         };
         
         match (get_token (ctx)) {
@@ -301,14 +331,18 @@ module Parser {
               | Tok_operator (":", _) =>
                 def t = parse_type (ctx);
                 expect_operator (ctx, ")");
-                E_type_conversion (loc, expr, t)
+                E_type_enforcement (loc, expr, t)
 
               | Tok_operator (",", _) =>
                 def exprs = expr :: operator_separated_list (ctx, ",", parse_expr);
                 expect_operator (ctx, ")");
                 E_tuple (loc, exprs)
                 
-              | Tok_operator (")", _) => expr
+              | Tok_operator (")", _) => 
+                match (expr) {
+                  | E_expr_list => E_tuple (loc, [expr])
+                  | _ => expr
+                }
 
               | _ => Message.fatal_error (loc, "unbalanced `('")
             }
@@ -316,9 +350,11 @@ module Parser {
           | Tok_operator ("$", _) when is_id (peek_token (ctx)) =>
             match (get_token (ctx)) {
               | Tok_identifier (n) =>
+              (* FIXME: fix this in macros.n first
                 if (ctx.in_pattern)
                   E_unquoted_patt (loc, P_variable (location (ctx), n))
                 else
+                *)
                   E_unquoted (loc, E_ref (location (ctx), n))
               | _ => Util.ice ()
             }
@@ -326,7 +362,6 @@ module Parser {
           | Tok_operator (o, _) =>
             def parse_paren (p : ParenCallback) {
               def problem () {
-                push_back (ctx);
                 Message.error (loc, "unbalanced `" + p.opening_paren + "'");
                 fatal_error (ctx, "expecting `" + p.closing_paren + "' here")
               };
@@ -363,18 +398,18 @@ module Parser {
     }
   }
 
-  parse_prim_expr (ctx : CTX) : Expr {
-    def parse_call_parm (_) {
-      def is_ref = flag_keyword (ctx, "ref");
-      def tok = get_token (ctx);
-      def name =
-        match ((tok, get_token (ctx))) {
-          | (Tok_identifier (n), Tok_operator ("=", _)) => n
-          | _ => push_back (ctx); push_back (ctx); ""
-        };
-      Parm (is_ref, parse_expr (ctx), name)
-    };
+  parse_call_parm (ctx : CTX) : Parm {
+    def is_ref = flag_keyword (ctx, "ref");
+    def tok = get_token (ctx);
+    def name =
+      match ((tok, get_token (ctx))) {
+        | (Tok_identifier (n), Tok_operator ("=", _)) => n
+        | _ => push_back (ctx); push_back (ctx); ""
+      };
+    Parm (is_ref, parse_expr (ctx), name)
+  }
     
+  parse_prim_expr (ctx : CTX) : Expr {
     def loop (expr : Expr) {
       match (get_token (ctx)) {
         | Tok_operator ("[", _) =>
@@ -387,9 +422,9 @@ module Parser {
             | Tok_operator ("$", _) =>
               def id = get_id (ctx);
               def loc = location (ctx);
-              E_member (expr.loc, expr, SS_spliced_expr (loc, E_ref (loc, id)))
+              loop (E_member (expr.loc, expr, SS_spliced_expr (loc, E_ref (loc, id))))
             | Tok_identifier (id) =>
-              E_member (expr.loc, expr, SS_string (location (ctx), id))
+              loop (E_member (expr.loc, expr, SS_string (location (ctx), id)))
             | _ =>
               fatal_error (ctx, "expecting field name after dot")
           }
@@ -397,7 +432,7 @@ module Parser {
         | Tok_operator ("(", _) =>
           def parms =
             match (peek_token (ctx)) {
-              | Tok_operator (")", _) => []
+              | Tok_operator (")", _) => shift (ctx); []
               | _ => 
                 def parms = operator_separated_list (ctx, ",", parse_call_parm);
                 expect_operator (ctx, ")");
@@ -405,7 +440,7 @@ module Parser {
             };
           loop (E_call (expr.loc, expr, parms))
 
-        | _ => expr
+        | _ => push_back (ctx); expr
       }
     };
 
@@ -416,9 +451,22 @@ module Parser {
     match (peek_token (ctx)) {
       | Tok_operator ("(", _)
       | Tok_operator ("$", _) => parse_prim_expr (ctx)
-      | Tok_operator (o, _) =>
+
+      | Tok_operator (".", _) =>
+        shift (ctx);
+        match (get_token (ctx)) {
+          | Tok_operator (".", _) => 
+            def loc = location (ctx);
+            E_expr_list (loc, parse_expr (ctx))
+          | _ => fatal_error (ctx, "expecting second dot (in unary expression context)")
+        }
+
+      | Tok_operator (o, pri) =>
         def loc = location (ctx);
         def unary () {
+          when (pri == 0) {
+            fatal_error (ctx, "operator `" + o + "' cannot be used in unary context")
+          };
           shift (ctx);
           E_call (loc, E_ref (loc, o), [Parm (parse_unary_expr (ctx))])
         };
@@ -483,7 +531,9 @@ module Parser {
     def tuple_or_record () {
       match (get_token (ctx)) {
         | Tok_operator ("(", _) =>
-          P_tuple (loc, operator_separated_list (ctx, ",", parse_pattern))
+          def pats = operator_separated_list (ctx, ",", parse_pattern);
+          expect_operator (ctx, ")");
+          P_tuple (loc, pats)
         | Tok_operator ("{", _) => parse_record ()
         | _ => fatal_error (ctx, "expecting tuple or record pattern")
       }
@@ -496,20 +546,40 @@ module Parser {
           | Tok_operator ("$", _) =>
             match (get_token (ctx)) {
               | Tok_identifier (n) =>
-                def pat = tuple_or_record ();
-                P_cons (loc, SS_spliced_expr (loc, E_ref (loc, n)), pat)
+                match (peek_token (ctx)) {
+                  | Tok_operator ("(", _) =>
+                    def pat = tuple_or_record ();
+                    P_cons (loc, SS_spliced_expr (loc, E_ref (loc, n)), pat)
+                  | _ =>
+                    P_unquoted (loc, E_ref (loc, n))
+                }
+                
+              | Tok_operator ("(", _) =>
+                shift (ctx);
+                def expr = parse_expr (ctx);
+                expect_operator (ctx, ")");
+                P_unquoted (loc, expr)
+
               | _ =>
-                fatal_error (ctx, "expecting identifier after `$' in pattern")
+                fatal_error (ctx, "expecting an identifier or `(' after `$' in pattern")
             }
             
           | Tok_operator ("{", _) =>
             parse_record ()
+
+          | Tok_operator (".", _) =>
+            match (get_token (ctx)) {
+              | Tok_operator (".", _) => P_patt_list (loc, parse_pattern (ctx))
+              | _ => fatal_error (ctx, "expecting second dot in pattern context")
+            }
             
           | Tok_operator ("(", _) =>
             def pat = parse_pattern (ctx);
             match (get_token (ctx)) {
               | Tok_operator (",", _) =>
-                P_tuple (loc, pat :: operator_separated_list (ctx, ",", parse_pattern))
+                def pats = pat :: operator_separated_list (ctx, ",", parse_pattern);
+                expect_operator (ctx, ")");
+                P_tuple (loc, pats)
               | Tok_operator (")", _) =>
                 match (peek_token (ctx)) {
                   | Tok_keyword ("as") =>
@@ -527,11 +597,13 @@ module Parser {
           | Tok_identifier (n) =>
             push_back (ctx);
             def id = get_qid (ctx);
-            match (peek_token (ctx)) {
-              | Tok_operator ("{", _)
-              | Tok_operator ("(", _) => tuple_or_record ()
-              | _ => P_cons (loc, SS_string (id), P_underscore (loc))
-            }
+            def subpat =
+              match (peek_token (ctx)) {
+                | Tok_operator ("{", _)
+                | Tok_operator ("(", _) => tuple_or_record ()
+                | _ => P_underscore (loc)
+              };
+            P_cons (loc, SS_string (id), subpat)
 
           | Tok_keyword ("_") =>
             P_underscore (loc)
@@ -585,16 +657,18 @@ module Parser {
   
   parse_semiclosed_expr (ctx : CTX) : Expr {
     def loc = location_here (ctx);
-    match (get_token (ctx)) {
+    def tok = get_token (ctx);
+    //Message.debug ("pse " + token_name (tok));
+    match (tok) {
       | Tok_keyword (k) when ctx.keywords.Contains (k) =>
         def k = Util.unsome (ctx.keywords.Get (k));
         k.parsing_function (ctx)
         
       | Tok_keyword ("match") =>
-        expect_keyword (ctx, "(");
+        expect_operator (ctx, "(");
         def expr = parse_expr (ctx);
-        expect_keyword (ctx, ")");
-        expect_keyword (ctx, "{");
+        expect_operator (ctx, ")");
+        expect_operator (ctx, "{");
         
         def loop (acc : list (Match_case)) {
           def loop2 (acc) {
@@ -676,6 +750,7 @@ module Parser {
       | Tok_keyword ("def") =>
         def parse_val () {
           def id = get_splicable_id (ctx);
+          expect_operator (ctx, "=");
           E_let (loc, false, id, parse_expr (ctx))
         };
 
@@ -688,7 +763,7 @@ module Parser {
             | Tok_keyword ("and") =>
               shift (ctx);
               parse_funs (fd :: acc)
-            | _ => E_letfun (loc, List.rev (acc))
+            | _ => E_letfun (loc, List.rev (fd :: acc))
           }
         };
         
@@ -721,7 +796,7 @@ module Parser {
           | _ => fatal_error (ctx, "expecting binding after `def'")
         }
       
-      | _ => parse_prim_expr (ctx)
+      | _ => push_back (ctx); parse_unary_expr (ctx)
     }
   }
 
@@ -729,15 +804,30 @@ module Parser {
     def is_paren (s) {
       ctx.parens.Contains (s) || ctx.closing_parens.Contains (s)
     };
+
+    def make_bin (loc, op, e1, e2) {
+      match (op) {
+        | "<-" =>
+          E_assign (loc, e1, e2)
+        | "::" =>
+          E_list_cons (loc, e1, e2)
+        | _ =>
+          E_call (loc, E_ref (loc, op), [Parm (e1); Parm (e2)])
+      }
+    };
     
     def parse_pri (pri) : Expr {
+      //Message.debug ("pp " + string_of_int (pri));
       def loop_left (expr) {
         def loc = location_here (ctx);
         match (get_token (ctx)) {
           | Tok_operator (s, p) when p == pri && !is_paren (s) =>
             def expr' = parse_pri (pri - 1);
-            loop_left (E_call (loc, E_ref (loc, s), [Parm (expr); Parm (expr')]))
-          | _ => push_back (ctx); expr
+            loop_left (make_bin (loc, s, expr, expr'))
+          | tok => 
+            //Message.debug ("miss " + string_of_int (pri) + " " + token_name (tok));
+            push_back (ctx); 
+            expr
         }
       };
 
@@ -746,18 +836,16 @@ module Parser {
         def expr = parse_pri (pri - 1);
         match (get_token (ctx)) {
           | Tok_operator (s, p) when p == pri && !is_paren (s) =>
-            E_call (loc, E_ref (loc, s), [Parm (expr); Parm (loop_right ())])
+            make_bin (loc, s, expr, loop_right ())
           | _ => push_back (ctx); expr
         }
       };
-      
-      if (pri < 0)
-        parse_semiclosed_expr (ctx)
-      else
-        match (pri) {
-          | 1 | 8 => loop_right ()
-          | _ => loop_left (parse_pri (pri - 1))
-        }
+     
+      match (pri) {
+        | 0 => parse_semiclosed_expr (ctx)
+        | 1 | 8 => loop_right ()
+        | _ => loop_left (parse_pri (pri - 1))
+      }
     };
 
     parse_pri (9)
@@ -777,7 +865,7 @@ module Parser {
         | Tok_operator ("}", _) 
         | Tok_operator ("|", _) 
         | Tok_operator ("]", _) 
-          => List.rev (acc)
+          => push_back (ctx); List.rev (acc)
         | _ => fatal_error (ctx, "expecting expression in sequence")
       }
     };
@@ -796,7 +884,7 @@ module Parser {
   parse_block (ctx : CTX) : Expr {
     expect_operator (ctx, "{");
     match (peek_token (ctx)) {
-      | Tok_operator ("}", _) => E_sequence (location (ctx), [])
+      | Tok_operator ("}", _) => shift (ctx); E_sequence (location (ctx), [])
       | _ => 
         def loc = location (ctx);
         def r = E_sequence (loc, parse_expr_sequence (ctx));
@@ -825,7 +913,7 @@ module Parser {
     def parse_fun (h : Fun_header) {
       def impl =
         match (get_token (ctx)) {
-          | Tok_keyword ("implements") =>
+          | Tok_keyword ("implements") when h.name != ".ctor" =>
             operator_separated_list (ctx, ",", get_qid)
           | _ => push_back (ctx); []
         };
@@ -844,7 +932,7 @@ module Parser {
                   modifiers = attrs, 
                   loc = loc, 
                   body = body, 
-                  kind = FK_method (impl))
+                  kind = if (h.name == ".ctor") FK_ctor () else FK_method (impl))
     };
     
     def parse_field (is_ref, name) {
@@ -885,18 +973,29 @@ module Parser {
           | Tok_operator ("(", _) => 
             push_back (ctx);
             def h = parse_fun_header (ctx, 
-                                      allow_ctor = true, 
+                                      allow_ctor = false, 
                                       allow_inference = false,
                                       is_lambda = false);
             parse_fun (h)
           | _ => parse_field (false, name)
         }
+        
+      | Tok_keyword ("this") =>
+        push_back (ctx);
+        def h = parse_fun_header (ctx, 
+                                  allow_ctor = true, 
+                                  allow_inference = false,
+                                  is_lambda = false);
+        parse_fun (h)
 
       | _ =>
         push_back (ctx);
         def td = parse_type_decl (ctx);
         td.modifiers <- List.append (td.modifiers, attrs);
-        M_type (td)
+        M_type (loc = loc, 
+                name = td.name, 
+                modifiers = td.modifiers, 
+                td = td)
     }
   }
   
@@ -923,7 +1022,13 @@ module Parser {
             | _ =>
               T_unquoted (E_ref (loc, id))
           }
-          
+
+        | Tok_operator (".", _) =>
+          match (get_token (ctx)) {
+            | Tok_operator (".", _) => T_type_list (prod_type ())
+            | _ => fatal_error (ctx, "expecting second dot")
+          }
+
         | Tok_identifier =>
           push_back (ctx);
           def id = get_qid (ctx);
@@ -948,9 +1053,9 @@ module Parser {
         | _ =>
           fatal_error (ctx, "expecting type expression")
       }
-    };
+    }
 
-    def prod_type () {
+    and prod_type () {
       def loop (acc) {
         match (get_token (ctx)) {
           | Tok_operator ("*", _) =>
@@ -1119,7 +1224,12 @@ module Parser {
       locate (ctx, fun () {
         def is_new = flag_keyword (ctx, "new");
         def h = parse_fun_header (ctx, allow_ctor = false, allow_inference = false, is_lambda = false);
-        M_function (h, FK_iface_method (is_new), FB_abstract ())
+        expect_operator (ctx, ";");
+        M_function (name = h.name, 
+                    modifiers = [], 
+                    header = h, 
+                    kind = FK_iface_method (is_new), 
+                    body = FB_abstract ())
       })
     };
     
@@ -1256,9 +1366,11 @@ module Parser {
   
   parse_unquoted (ctx : CTX) : Expr {
     def loc = location_here (ctx);
+    (* FIXME: in macros.n first
     if (ctx.in_pattern)
       E_unquoted_patt (loc, parse_pattern (ctx))
     else
+    *)
       E_unquoted (loc, parse_expr (ctx))
   }
 
@@ -1286,9 +1398,10 @@ module Parser {
     | GE_expression
     | GE_block
     | GE_expression_list { sep : string; }
+    | GE_parm_list { sep : string; }
   }
 
-  parse_wrt_rule (ctx : CTX, rule : list (GrammarElement)) : list (Expr) {
+  parse_wrt_rule (ctx : CTX, rule : list (GrammarElement)) : list (Parm) {
     def loc = location (ctx);
     
     def loop (acc, lst) {
@@ -1303,14 +1416,18 @@ module Parser {
 
         | GE_expression :: xs =>
           def expr = parse_expr (ctx);
-          loop (expr :: acc, xs)
+          loop (Parm (expr) :: acc, xs)
 
         | GE_block :: xs =>
           def expr = parse_block (ctx);
-          loop (expr :: acc, xs)
+          loop (Parm (expr) :: acc, xs)
 
         | GE_expression_list (sep) :: xs =>
           def exprs = operator_separated_list (ctx, sep, parse_expr);
+          loop (List.rev_append (List.map (fun (e) { Parm (e) }, exprs), acc), xs)
+
+        | GE_parm_list (sep) :: xs =>
+          def exprs = operator_separated_list (ctx, sep, parse_call_parm);
           loop (List.rev_append (exprs, acc), xs)
 
         | [] => List.rev (acc)
@@ -1323,8 +1440,8 @@ module Parser {
   make_parsing_function (macro_name : string, rule : list (GrammarElement)) : CTX -> Expr {
     fun (ctx) {
       def loc = location (ctx);
-      def exprs = parse_wrt_rule (ctx, rule);
-      def parms = List.map (fun (x) { Parm (x) }, exprs);
+      def parms = parse_wrt_rule (ctx, rule);
+//      Message.debug ("calling macro " + macro_name + " with " + string_of_int (List.length (parms)) + " parms");
       E_call (loc, E_ref (loc, macro_name), parms)
     }
   }
@@ -1362,7 +1479,7 @@ module Parser {
     add_macro ("unless", while_rule);
     
     add_macro ("using", [GE_operator ("(");
-                         GE_expression_list (",");
+                           GE_parm_list (",");
                          GE_operator (")");
                          GE_expression ()]);
 
@@ -1374,7 +1491,7 @@ module Parser {
                        
     add_macro ("if", [GE_operator ("("); GE_expression (); GE_operator (")");
                          GE_expression (); 
-                      GE_operator ("else");
+                      GE_keyword ("else");
                          GE_expression ()]);
   }
 

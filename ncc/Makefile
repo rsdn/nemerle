@@ -55,11 +55,13 @@ n_src = \
 	external.n \
 	cgopt.n \
 	macroregistry.n \
-	cgil.n
-#	lexer.n
+	cgil.n \
+	parser.n \
+	lexer.n
 
 
-cs_src  = lexer.cs main.cs parser.cs
+cs_src  = main.cs
+#lexer.cs main.cs parser.cs
 #cs_src  = main.cs parser.cs
 all_src = $(n_src) $(cs_src)
 all_cs  = $(cs_src)
