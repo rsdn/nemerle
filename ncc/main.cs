@@ -162,6 +162,8 @@ class MainClass {
 		} catch (yyParser.yyException e) {
 		    Message.maybe_bailout();
 			bomb(e, "got parsing exception, but no error seen");
+                } catch (System.IO.FileNotFoundException e){
+                        Message.error (e.Message);
 		} catch (Recovery e) {
 			bomb(e, "got Recovery exception");
 		} catch (Nemerle.Core.Invalid_argument e) {
