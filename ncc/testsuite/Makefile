@@ -36,8 +36,9 @@ lib_src = ../../lib/aliases.n ../../lib/core.n ../../lib/option.n ../../lib/list
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 
 all:
-	$(EXECUTE) ../ncc2.exe -texe -out test.exe -reference $(DLL_PATH)System.dll $(lib_src) test.n
-	$(EXECUTE) ./test.exe -p "../../" -n "../ncc2.exe" -r "$(EXECUTE)" -dll "$(DLL_PATH)"
+	cp ../out.stage3/Nemerle.dll .
+	$(EXECUTE) ../out.stage3/ncc.exe -out test.exe test.n
+	$(EXECUTE) ./test.exe -p "../../" -n "../out.stage3/ncc.exe" -r "$(EXECUTE)"
 	rm -f out.dll out.exe out.netmodule ext_test.out
 
 clean:
