@@ -63,10 +63,10 @@ all: $(NEMERLE_DLLS) $(ANTLR_DLL) cs2n.exe
 cs2n.exe: Nemerle.CSharp.CS.dll  $(CS2N_EXE_SOURCES)
 	$(NCC) -texe -r:Nemerle.CSharp.CS.dll -o:$@ $(CS2N_EXE_SOURCES)
 
-Nemerle.CSharp.CS.dll : Nemerle.CSharp.dll $(GENERATED_SOURCES_PARSER)
+Nemerle.CSharp.CS.dll : Nemerle.CSharp.dll $(GENERATED_SOURCES_PARSER) $(ANTLR_DLL)
 	$(MCS) /t:library /r:antlr.runtime.dll /r:Nemerle.CSharp.dll /r:Nemerle.dll -out:$@ $(GENERATED_SOURCES) AssemblyInfo.cs
 
-Nemerle.CSharp.dll : $(NEMERLE_CSHARP_DLL_SOURCES) 
+Nemerle.CSharp.dll : $(NEMERLE_CSHARP_DLL_SOURCES) $(ANTLR_DLL)
 	$(NCC) -tdll -r:antlr.runtime.dll -o:$@ $(NEMERLE_CSHARP_DLL_SOURCES) 
 
 $(GENERATED_SOURCES_PARSER): $(GRAMMAR_FILE)
