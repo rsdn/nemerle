@@ -1,0 +1,246 @@
+using Nemerle.Collections;
+using Nemerle.Utility;
+using Nemerle.IO;
+
+using Npgsql;
+using System.Data;
+
+module CGI_Ank {
+    /**
+     * Splits a string given a separator character. Checks if the split was
+     * unique -- or, if the separator occured exactly once in the original 
+     * string.
+     */
+    split_unique_at (separator : char, str : string) 
+                               : string * string * bool
+    {
+      def pos = str.IndexOf (separator);
+      
+      def (l, r) =
+        if (pos != -1)
+          (str.Substring (0, pos), str.Substring (pos + 1))
+        else
+          (str, "");
+          
+      def validity =
+        l.IndexOf (separator) == -1 && r.IndexOf (separator) == -1;
+        
+      (l, r, validity)
+    }
+    
+    /**
+     * Parses a string of form: 
+     *
+     * param_1=val_1&param_2=val_2&...&param_k=val_k
+     *
+     * Checks the validity of such a request and throws exception in 
+     * case of error.
+     */
+    parse_get_params (get_parms : string) : list <string * string>
+    {
+      def decode (str : string) {
+        System.Web.HttpUtility.UrlDecode (str, System.Text.Encoding.UTF8)
+      };
+      NArray.Fold (get_parms.Split (array ['&']), [], 
+        fun (parm, acc) {
+          def (param, value, split_was_unique) = split_unique_at ('=', parm);
+
+          unless (split_was_unique)
+            throw System.ArgumentException ("invalid query string");
+
+          def param = decode (param);
+          def value = decode (value);
+
+          if (param.Length == 0)
+            acc
+          else
+            (param, value) :: acc
+        })
+    }
+
+
+    /**
+     * Retrieves the post data
+     */
+    parse_post_data () : list <string * string>
+    {
+      def buf = array (50000);
+      def count = System.Console.In.ReadBlock (buf, 0, buf.Length);
+      parse_get_params (System.String (buf, 0, count));
+    }
+
+    
+    hashtable_of_assoc_list (l : list <string * string>) : Hashtable <string, string>
+    {
+      def ht = Hashtable ();
+      List.Iter (l, ht.Set);
+      ht
+    }
+
+    getenv (name : string) : string
+    {
+      def ret = System.Environment.GetEnvironmentVariable (name);
+      if (ret == null) "" else ret
+    }
+
+    get_with_default (ht : Hashtable <string, string>, key : string) : string
+    {
+      match (ht.Get (key)) {
+        | Some (r) => r
+        | None => ""
+      }
+    }
+
+/*
+CREATE TABLE poll (
+  host varchar (50),
+  vote int,
+  remarks text
+);
+*/
+
+
+    mutable post : Hashtable <string, string>;
+    mutable get : Hashtable <string, string>;
+    mutable connection : NpgsqlConnection;
+
+    open_connection () : void
+    {
+      when (connection == null) {
+        def connstr = "Server=127.0.0.1;" +
+                      "Port=5432;" +
+                      "User Id=malekith;" +
+                      "Password=secret;" + 
+                      "Database=malekith;";
+        connection <- NpgsqlConnection (connstr);
+        connection.Open ();
+      }
+    }
+
+    set_parameter (cmd : NpgsqlCommand, name : string, val : string) : void
+    {
+      def parm = NpgsqlParameter (name, DbType.String);
+      parm.Value <- val;
+      ignore (cmd.Parameters.Add (parm));
+    }
+    
+    store_vote () : void
+    {
+      open_connection ();
+      
+      def cmd = NpgsqlCommand ("INSERT INTO poll (host, vote, remarks) " +
+                               "  VALUES (:host, :vote, :remarks)", connection);
+
+      set_parameter (cmd, "host", getenv ("REMOTE_ADDR"));
+      set_parameter (cmd, "vote", get_with_default (post, "vote"));
+      set_parameter (cmd, "remarks", get_with_default (post, "remarks"));
+
+      def rows = cmd.ExecuteNonQuery ();
+      assert (rows == 1);
+    }
+
+    display_headers () : void
+    {
+      printf ("Content-type: text/html; encoding=utf-8\n\n");
+      printf (@"
+        <html>
+          <head>
+            <title>Our great poll</title>
+            <meta http-equiv='Content-Type' content='text/html; charset=UTF-8' />
+          </head>
+        <body>");
+    }
+
+    display_footers () : void
+    {
+      printf ("</body></html>\n");
+    }
+
+    display_results () : void
+    {
+      open_connection ();
+
+      def cmd = NpgsqlCommand ("SELECT count(*) FROM poll WHERE vote = :vote", connection);
+      def parm = cmd.Parameters.Add (NpgsqlParameter ("vote", DbType.Int32));
+      
+      printf ("<table>\n");
+      
+      ignore (List.FoldLeft (possible_votes (), 1, 
+        fun (name, cnt) {
+          parm.Value <- cnt;
+          printf ("<tr><td>%s</td><td>%s</td></tr>", name, cmd.ExecuteScalar ().ToString ());
+          cnt + 1
+        }));    
+
+      printf ("</table>\n");
+    }
+
+    display_comments () : void
+    {
+      open_connection ();
+      def cmd = NpgsqlCommand ("SELECT host, remarks FROM poll WHERE remarks <> ''", 
+                               connection);
+      def rd = cmd.ExecuteReader ();
+      while (rd.Read ()) {
+        printf ("<p><b>%s</b><br/>%s</p>\n", rd[0].ToString (), rd[1].ToString ())
+      };
+    }
+
+    possible_votes () : list <string>
+    {
+      [
+        "Andrew L.",
+        "Rysiu Cz.",
+        "Jola K.",
+        "Ziuta"
+      ]
+    }
+
+    display_form () : void
+    {
+      printf (@"
+        <form method='POST' action='/cgi-bin/myPoll'>
+          Your vote:
+          <select name='vote'>");
+
+      ignore (List.FoldLeft (possible_votes (), 1, 
+        fun (name, cnt) {
+          printf ("<option value='%d'>%s</option>\n", cnt, name);
+          cnt + 1
+        }));    
+        
+      printf (@"
+          </select><br/>
+          Remarks:<br/>
+          <textarea name='remarks'></textarea>
+          <br/>
+          <input type='submit' name='submit_poll' value='Send!' />
+        </form>
+      ");
+      
+      display_footers ();
+    }
+
+    public Main () : void
+    {
+      try {
+        def qs = getenv ("QUERY_STRING");
+        get <- hashtable_of_assoc_list (parse_get_params (qs));
+        post <- hashtable_of_assoc_list (parse_post_data ());
+        
+        display_headers ();
+        if (get_with_default (post, "submit_poll") != "") {
+          store_vote ();
+          display_results ();
+          display_comments ();
+        } else {
+          display_form ();
+        };
+        display_footers ();
+      } catch {
+        e : System.Exception =>
+          printf ("Content-type: text/plain; encoding=iso-8859-1\n\n%s\n%s\n", 
+                  e.ToString (), e.StackTrace)
+      }
+    }
+}
