@@ -39,7 +39,7 @@ if ($cs_compiler eq "mcs") {
     $runtime = "mono --debug ";
 }
 
-$compiler = $runtime . "../ncc/$nem_comp.exe ../lib/core.n ../lib/list.n ../lib/option.n ../lib/aliases.n";
+$compiler = $runtime . "../ncc/$nem_comp.exe ../lib/core.n ../lib/list.n ../lib/option.n ../lib/aliases.n ../lib/hashtable.n";
 
 sub xgrep($$)
 {
