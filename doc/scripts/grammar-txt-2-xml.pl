@@ -44,7 +44,7 @@ print "<rule name=\"$rule\">\n";
 	s/>/&gt;/g;
 	$_ = " $_ ";
 		s/"([^"]+)"/<terminal name="$1" \/>/g;
-		s/(ID|STRING|STRING_LITERAL|NUMBER_LITERAL|TYVAR)/<special-terminal name="$1" \/>/g;
+		s/(IDENTIFIER|STRING_LITERAL|NUMBER_LITERAL|CHARACTER_LITERAL|TYVAR)/<special-terminal name="$1" \/>/g;
 	for($i=0;$i<50;$i++) {
 		s/\s\{\s/ <repeat> /;
 		s/\s\}\s/ <\/repeat> /;
