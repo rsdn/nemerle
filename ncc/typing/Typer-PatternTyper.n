@@ -109,7 +109,8 @@ namespace Nemerle.Compiler
 
 
       TypeTuplePattern (matched_value_type : TyVar,
-                        pats : list [PT.PExpr]) : Pattern
+                        pats : list [PT.PExpr],
+                        expect_tuple : bool) : Pattern
       {
         def is_assignment (expr) {
           expr matches PT.PExpr.Assign (PT.PExpr.Ref, _) 
@@ -117,47 +118,50 @@ namespace Nemerle.Compiler
 
         if (List.Exists (pats, is_assignment)) {
           if (List.ForAll (pats, is_assignment)) {
-              match (matched_value_type.Hint) {
-                | Some (MType.Class (ti, _)) when matched_value_type.IsFixed =>
-                  def is_instance_field (_ : IMember) {
-                    | field is IField => !field.IsStatic
-                    | _ => false
-                  }
-                  def lookup_field (expr) {
-                    | PT.PExpr.Assign (PT.PExpr.Ref (name), pat) =>
-                      def fields = List.Filter (ti.LookupMember (name.Id), 
-                                                is_instance_field);
-                      match (fields) {
-                        | [] =>
-                          ReportError (messenger,
-                                       "the type `$(ti)' has no field named `$(name)'");
-                          (null, Pattern.Error ())
+            when (!expect_tuple)
+              Message.Warning (602, "using ``(x = foo, y = 42)'' to match "
+                                    "fields is deprecated, please use ``SomeClass "
+                                    "where (x = foo, y = 42)'' instead");
+            match (matched_value_type.Hint) {
+              | Some (MType.Class (ti, _)) when matched_value_type.IsFixed =>
+                def is_instance_field (_ : IMember) {
+                  | field is IField => !field.IsStatic
+                  | _ => false
+                }
+                def lookup_field (expr) {
+                  | PT.PExpr.Assign (PT.PExpr.Ref (name), pat) =>
+                    def fields = List.Filter (ti.LookupMember (name.Id), 
+                                              is_instance_field);
+                    match (fields) {
+                      | [] =>
+                        ReportError (messenger,
+                                     "the type `$(ti)' has no field named `$(name)'");
+                        (null, Pattern.Error ())
 
-                        | [field is IField] =>
-                          def ty = matched_value_type.FixedValue.TypeOfMember (field);
-                          (field, TypePattern (ty, pat))
+                      | [field is IField] =>
+                        def ty = matched_value_type.FixedValue.TypeOfMember (field);
+                        (field, TypePattern (ty, pat))
 
-                        | _ =>
-                          // I don't thinks this can happen
-                          ReportError (messenger,
-                                       "overload ambiguity during "
-                                       "selection of `$(ti).$(name)'");
-                          (null, Pattern.Error ())
-                      }
+                      | _ =>
+                        // I don't thinks this can happen
+                        ReportError (messenger,
+                                     "overload ambiguity during "
+                                     "selection of `$(ti).$(name)'");
+                        (null, Pattern.Error ())
+                    }
 
-                    | _ => assert (false)
-                  }
+                  | _ => assert (false)
+                }
 
-                  Pattern.Record (List.Map (pats, lookup_field))
-                  
-                  
-                | _ =>
-                  ReportError (messenger,
-                               "the (fieldname = ...) pattern is not allowed "
-                               "here, try prefixing it with the class name");
-                  Pattern.Error ()
-              }
-
+                Pattern.Record (List.Map (pats, lookup_field))
+                
+                
+              | _ =>
+                ReportError (messenger,
+                             "the (fieldname = ...) pattern is not allowed "
+                             "here, try prefixing it with the class name");
+                Pattern.Error ()
+            }
           } else {
             ReportError (messenger, 
                          "not all, but some patterns in tuple are named");
@@ -177,7 +181,7 @@ namespace Nemerle.Compiler
                   fun (n, p) {
                     PT.PExpr.Assign (PT.PExpr.Ref (PT.Name (n)), p)
                   });
-                TypeTuplePattern (matched_value_type, assigns)
+                TypeTuplePattern (matched_value_type, assigns, expect_tuple)
               } else {
                 ReportError (messenger,
                              $ "pattern matches $(pats.Length) values, "
@@ -212,8 +216,13 @@ namespace Nemerle.Compiler
         
       TypePattern (matched_value_type : TyVar, pattern : PT.PExpr) : Pattern
       {
+        TypePattern (matched_value_type, pattern, expect_tuple = false)
+      }
+      
+      TypePattern (matched_value_type : TyVar, pattern : PT.PExpr, expect_tuple : bool) : Pattern
+      {
         Util.locate (pattern.loc, {
-          def typed = DoTypePattern (matched_value_type, pattern);
+          def typed = DoTypePattern (matched_value_type, pattern, expect_tuple);
           when (typed.ty == null)
             typed.ty = matched_value_type;
           typed
@@ -224,12 +233,20 @@ namespace Nemerle.Compiler
       TypeApplication (matched_value_type : TyVar, 
                        name : PT.PExpr, pattern : PT.PExpr) : Pattern
       {
+        TypeApplication (matched_value_type, name, pattern, is_where = false)
+      }
+
+      
+      TypeApplication (matched_value_type : TyVar, 
+                       name : PT.PExpr, pattern : PT.PExpr,
+                       is_where : bool) : Pattern
+      {
         match (Util.qidl_of_expr (name)) {
           | Some ((idl, name)) =>
-            if (System.Char.IsUpper (List.Last (idl) [0])) {
+            if (is_where || System.Char.IsUpper (List.Last (idl) [0])) {
               def env = name.GetEnv (typer.env);
               def is_proper_symbol (sym : IMember) {
-                | fld is IField =>
+                | fld is IField when !is_where =>
                   fld.CanAccess (typer.current_type) &&
                   fld.IsLiteral && 
                   (fld.DeclaringType.GetTydecl () matches TypeDeclaration.Enum)
@@ -242,7 +259,7 @@ namespace Nemerle.Compiler
 
               match (List.Filter (env.LookupSymbol (idl, typer.current_type), 
                                   is_proper_symbol)) {
-                | [fld is IField]  =>
+                | [fld is IField] =>
                   if (pattern matches PT.PExpr.Wildcard) {
                     if (matched_value_type.Require (fld.GetMemType () : MType)) {
                       def val = Option.UnSome (ConstantFolder.FieldValueAsLiteral (fld));
@@ -263,13 +280,30 @@ namespace Nemerle.Compiler
                 | [ti is TypeInfo] =>
                   def lookup (ti : TypeInfo) {
                     match (ti.GetTydecl ()) {
+                      | TypeDeclaration.Alias (MType.Class (tc, _)) =>
+                        lookup (tc)
+
+                      | _ when is_where =>
+                        def option_type = ti.FreshSubst ().Apply (ti.GetMemType ());
+                        if (matched_value_type.Require (option_type)) {
+                          TypePattern (option_type, pattern, expect_tuple = true)
+                        } else {
+                          ReportError (messenger,
+                                       $ "the matched value type "
+                                         "$matched_value_type was expected "
+                                         "to be compatible with $option_type");
+                          Pattern.Error ()
+                        }
+
+
                       | TypeDeclaration.VariantOption =>
                         // def parent_tycon = Option.UnSome (ti.SuperClass ());
                         def option_type = ti.FreshSubst ().Apply (ti.GetMemType ());
                         // Message.Debug ($ "$matched_value_type Provide $option_type");
-                        if (matched_value_type.Provide (option_type))
-                          Pattern.Application (ti, TypePattern (option_type, pattern));
-                        else {
+                        if (matched_value_type.Provide (option_type)) {
+                          def inpat = TypePattern (option_type, pattern, expect_tuple = true);
+                          Pattern.Application (ti, inpat)
+                        } else {
                           ReportError (messenger,
                                        $ "the matched value type "
                                          "$matched_value_type was expected "
@@ -281,9 +315,6 @@ namespace Nemerle.Compiler
                         //  Message.Warning ($ "matching of $t with $option_type is redundant");
                         //  Message.HintOnce ("refer to fields of this variant option without matching");
 
-                      | TypeDeclaration.Alias (MType.Class (tc, _)) =>
-                        lookup (tc)
-
                       | _ =>
                         ReportError (messenger, $ "`$(ti.FullName)' is not a variant option");
                         Pattern.Wildcard ()
@@ -292,7 +323,7 @@ namespace Nemerle.Compiler
                   lookup (ti)
                   
                 | [] =>
-                  ReportError (messenger, $ "unbound variant $(idl.ToString (\".\"))");
+                  ReportError (messenger, $ "unbound type name $(idl.ToString (\".\"))");
                   Pattern.Error ()
 
                 | x =>
@@ -318,7 +349,7 @@ namespace Nemerle.Compiler
       }
 
 
-      DoTypePattern (matched_value_type : TyVar, pattern : PT.PExpr) : Pattern
+      DoTypePattern (matched_value_type : TyVar, pattern : PT.PExpr, expect_tuple : bool) : Pattern
       {
         match (pattern) {
           | PT.PExpr.ListLiteral (l) =>
@@ -439,11 +470,18 @@ namespace Nemerle.Compiler
 
 
           | PT.PExpr.Tuple (pats) =>
-            TypeTuplePattern (matched_value_type, pats)
+            TypeTuplePattern (matched_value_type, pats, expect_tuple)
 
 
-          | PT.PExpr.Sequence (pats) => 
-            TypeTuplePattern (matched_value_type, pats)
+          | PT.PExpr.Assign as ex when expect_tuple =>
+            TypeTuplePattern (matched_value_type, [ex], expect_tuple)
+
+
+          | PT.PExpr.Sequence (pats) =>
+            Message.Warning (602, "using ``{ x = foo; y = 42 }'' to match "
+                                  "fields is deprecated, please use ``SomeClass "
+                                  "where (x = foo, y = 42)'' instead");
+            TypeTuplePattern (matched_value_type, pats, true)
             
 
           | PT.PExpr.Ref
@@ -467,17 +505,16 @@ namespace Nemerle.Compiler
             TypePattern (matched_value_type, folded)
                          
 
-          // | PT.PExpr.Application (f, PT.PExpr.Wildcard)
           | PT.PExpr.Call (f, []) =>
             TypeApplication (matched_value_type, f, PT.PExpr.Wildcard ())
-
-
-          // | PT.PExpr.Application (f, pa) => 
-          //  TypeApplication (matched_value_type, f, PT.PExpr.Tuple ([pa]))
 
           
           | PT.PExpr.Call (f, args) =>
             TypeApplication (matched_value_type, f, PT.PExpr.Tuple (args))
+            
+
+          | PT.PExpr.Where (e1, e2) =>
+            TypeApplication (matched_value_type, e1, e2, is_where = true)
             
 
           | PT.PExpr.TypedPattern (body) => body
