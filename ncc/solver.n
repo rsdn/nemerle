@@ -208,6 +208,37 @@ namespace Nemerle.Compiler
     public Require (t : MType) : void
     {
     }
+
+    
+    /** Enforce [this] to be equal [t]. */
+    public Unify (t : MType) : void
+    {
+    }
+
+    
+    public IsSeparated : bool
+    {
+      get {
+        match (t) {
+          | Class => false
+          
+          | TyVar
+          | Fun
+          | Tuple
+          | Array
+          | Void => true
+          
+          | Intersection (lst) =>
+            mutable is = false;
+            foreach (x in lst)
+              if (x.IsSeparated)
+                is = true;
+            is
+        }
+      }
+    }
+    
+
   }
 
 
@@ -221,19 +252,6 @@ namespace Nemerle.Compiler
 
 
  
-  /* TODO: 
-  
-    * What about CurrentSolution?
-    
-    * Provide and Require should check after setting bounds if the
-      upper and lower limits are the same, and if so -- change self to 
-      monotype.
-      
-    * Provide and Require should check if the upper and/or lower types
-      are isolated (array, fun, void) and if so -- change self to monotype.
-
-   */
-   
   /** Represents a node in constraint graph. Used during type
       inference. */
   public class TyVar
@@ -250,20 +268,31 @@ namespace Nemerle.Compiler
         | State.Fixed (t) =>
           // delegate to specialized method
           Require (t)
+
         | State.Free =>
           match (state) {
             | State.Fixed (high) =>
               // we prefer working on the Free side
               t.Provide (high)
+
             | State.Free =>
               AddTyvarLink (t, this)
           }
       }
     }
 
+    
     Free (v : TyVar) : State.Free
     {
       v.Self.state :> State.Free
+    }
+
+    
+    MonoCheck () : void
+    {
+      def f = Free (this);
+      when (f.upper_bound.Equals (f.lower_bound))
+        Unify (f.lower_bound)
     }
 
 
@@ -335,7 +364,6 @@ namespace Nemerle.Compiler
       f.upper_bound = solver.Sum (f.upper_bound, t);
       f.lower_tyvars.Iter (fun (tv : TyVar) { tv.Provide (ub) })
     }
-    
 
     [ForwardThis (Self)]
     public Require (t : MType) : void
@@ -343,10 +371,15 @@ namespace Nemerle.Compiler
       match (state) {
         | State.Fixed (this_mt) =>
           this_mt.Require (t)
-        | (State.Free) as f =>
-          // TODO check if t is a tuple, fun, void etc
-          // TODO don't call it if not needed
-          SetLowerBound (Free (solver.Copy (this)), t)
+
+        | State.Free =>
+          if (t.IsSeparated)
+            Unify (t)
+          else {
+            // TODO don't call it if not needed
+            SetLowerBound (Free (solver.Copy (this)), t);
+            MonoCheck ();
+          }
       }
     }
     
@@ -363,11 +396,13 @@ namespace Nemerle.Compiler
         | State.Fixed (t) =>
           // delegate to specialized method
           Provide (t)
+
         | State.Free =>
           match (state) {
             | State.Fixed (low) =>
               // we prefer working on the Free side
               t.Require (low)
+              
             | State.Free =>
               AddTyvarLink (this, t)
           }
@@ -380,29 +415,58 @@ namespace Nemerle.Compiler
       match (state) {
         | State.Fixed (this_mt) =>
           t.Require (this_mt)
-        | (State.Free) as f =>
-          // TODO check if t is a tuple, fun, void etc
-          // TODO don't call it if not needed
-          SetUpperBound (f, t)
+        | State.Free =>
+          if (t.IsSeparated)
+            Unify (t)
+          else {
+            // TODO don't call it if not needed
+            SetUpperBound (Free (solver.Copy (this)), t);
+            MonoCheck ();
+          }
       }
     }
 
     /** Make sure [t] and [this] will from now on always represent the 
         same type. */
-    [ForwardThis (Self)]
     public Unify (t : TyVar) : void
     {
-      Require (t);
-      Provide (t);
+      match (t.Self.state) {
+        | State.Free =>
+          Require (t);
+          Provide (t);
+        | State.MonoType (t) =>
+          Unify (t)
+      }
     }
 
 
-    /** Return type associated with [this] in current solution.
-    
-        Warning: this type may change later! */
-    public CurrentValue : TyVar
+    /** Make sure [t] and [this] will from now on always represent the 
+        same type. */
+    [ForwardThis (Self)]
+    public Unify (t : MType) : void
     {
-      get {
+      match (state) {
+        | State.MonoType (t') =>
+          t'.Unify (t)
+
+        | State.Free =>
+          def self = solver.Copy (this);
+          def f = Free (self);
+          SetLowerBound (f, t);
+          SetUpperBound (f, t);
+          def lower = f.lower_tyvars;
+          def upper = f.upper_tyvars;
+          self.state = State.MonoType (t);
+          lower.Iter (fun (tv) {
+            def f = Free (solver.Copy (tv));
+            assert (f.upper_tyvars [self]);
+            f.upper_tyvars = f.upper_tyvars.Remove (self);
+          })
+          upper.Iter (fun (tv) {
+            def f = Free (solver.Copy (tv));
+            assert (f.lower_tyvars [self]);
+            f.lower_tyvars = f.lower_tyvars.Remove (self);
+          })
       }
     }
 
@@ -410,6 +474,12 @@ namespace Nemerle.Compiler
     public LowerBound : option <MType>
     {
       get {
+        match (Self.state) {
+          | State.MonoType (t) => Some (t)
+          | (State.Free) as f =>
+            if (f.lower_bound == null) None ()
+            else Some (f.lower_bound)
+        }
       }
     }
 
@@ -417,15 +487,45 @@ namespace Nemerle.Compiler
     public UpperBound : option <MType>
     {
       get {
+        match (Self.state) {
+          | State.MonoType (t) => Some (t)
+          | (State.Free) as f =>
+            if (f.upper_bound == null) None ()
+            else Some (f.upper_bound)
+        }
       }
     }
     
 
-    /** Make sure [CurrentValue] won't change anymore. Return [CurrentValue].
+    public IsFixed : bool
+    {
+      get {
+        Self.state matches State.MonoType
+      }
+    }
+
+
+    public IsFree : bool
+    {
+      get {
+        Self.state matches State.Free
+      }
+    }
+
+
+    /** Fix the type to be [LowerBound], so it won't change anymore.
     
         Don't use this function unless absolutely necessary. */
-    public Fixate () : TyVar
+    public Fixate () : void
     {
+      match (Self.state) {
+        | State.MonoType => ()
+        | (State.Free) as f =>
+          if (f.lower_bound == null)
+            Provide (InternalType.Object)
+          else
+            Provide (f.lower_bound)
+      }
     }
 
     variant State {
