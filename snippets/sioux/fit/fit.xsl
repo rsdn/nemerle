@@ -6,7 +6,7 @@
       <head>
         <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
         <title>XVIII Forum Informatyki Teoretycznej - Zgłoszenia</title>
-        <link rel="stylesheet" href="http://www.nemerle.org/styles/style.css" />
+        <link rel="stylesheet" href="/fit/style.css" />
       </head>
       <body>
         <table class="outer-menu">
@@ -49,7 +49,7 @@
                 <div class="copyright">
                   Powered by <a href="http://www.nemerle.org">Nemerle</a>.
                   <br />
-                  <a href="http://www.nemerle.org/license.html">Copyright © 2003, 2004 University of Wrocław</a>
+                  <a href="http://www.nemerle.org/license.html">Copyright © 2004 University of Wrocław</a>
                   <a name="bottom-of-page" id="bottom-of-page"></a>
                 </div>
               </td>
@@ -108,13 +108,13 @@
   </xsl:template>
 
   <xsl:template match="form">
-    <form id="@id" action="@action" method="@method">
+    <form id="{@id}" action="{@action}" method="{@method}">
       <xsl:apply-templates />  
     </form>
   </xsl:template>
 
   <xsl:template match="input">
-    <input type="@type" name="@name">
+    <input type="{@type}" name="{@name}" value="{@value}">
       <xsl:apply-templates />  
     </input>
   </xsl:template>
