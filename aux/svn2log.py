@@ -262,5 +262,8 @@ def process_opts():
 
 if __name__ == "__main__":
   os.environ['TZ'] = 'UTC'
-  time.tzset()
+  try:
+    time.tzset()
+  except AttributeError:
+    pass
   process_opts()
