@@ -80,6 +80,7 @@ namespace Nemerle.Compiler
     mutable current_pos : int;
 
     public this (lex : LexerBase) {
+      register_syntax_keywords (MacroRegistry.GetSyntaxExtensions (["Nemerle", "Core"]));
       lexer = lex;
     }
 
@@ -154,7 +155,8 @@ namespace Nemerle.Compiler
     finish_current (current_begin : int) : void {
       unless (current_begin == current_pos) {
         def loose_group = make_list (current_stream, current_begin, current_pos);
-        store (ref parent_stream, ref parent_pos, Token.LooseGroup (loose_group));
+        def loose = Token.LooseGroup (current_stream [current_begin].Location, loose_group);
+        store (ref parent_stream, ref parent_pos, loose);
         current_pos = current_begin;
       }
     }
@@ -245,21 +247,21 @@ namespace Nemerle.Compiler
           | Token.Comma =>
             match (separator) {
               | TokenSeparator.None => separator = TokenSeparator.Comma;
-              | TokenSeparator.Comma => finish_current (current_begin);
+              | TokenSeparator.Comma => ()
               | TokenSeparator.Semicolon =>
                 Message.error (tok.Location, "inconsistent `,' separator (expected `;')");
-                finish_current (current_begin); 
             }
+            finish_current (current_begin);
             loop ()
 
           | Token.Semicolon =>
             match (separator) {
               | TokenSeparator.None => separator = TokenSeparator.Semicolon;
-              | TokenSeparator.Semicolon => finish_current (current_begin);
+              | TokenSeparator.Semicolon => ()
               | TokenSeparator.Comma =>
                 Message.error (tok.Location, "inconsistent `;' separator (expected `,')");
-                finish_current (current_begin); 
             }
+            finish_current (current_begin); 
             loop ()
 
           | _ => handle_default_token (current_begin, tok); loop ()
@@ -317,11 +319,117 @@ namespace Nemerle.Compiler
         Token.QuoteGroup (loc, group) :> Token.QuoteGroup;
       }
     }
+
+
+    register_syntax_keywords (extensions : list [SyntaxDefinition]) : void {
+      foreach (x in extensions)
+        foreach (key in x.Keywords) LexerBase.AddKeyword (key);
+    }
+
+    remove_syntax_keywords (extensions : list [SyntaxDefinition]) : void {
+      foreach (x in extensions)
+        foreach (key in x.Keywords) LexerBase.RemoveKeyword (key);
+    }
+    
+    ParseTopLevel (parent_begin : int, current_begin : int) : Token
+    {
+      def get_qid () {
+        match (get_token ()) {
+          | Token.Identifier (x) =>
+            match (get_token ()) {
+              | Token.Operator (".", _) => x :: get_qid ()
+              | t => push_back (t); [x]
+            }
+          | t => Message.error (t.Location, "expected qualified identifier"); []
+        }
+      }
+      
+      mutable open_usings = [];
+      
+      def loop () {
+        def tok = get_token ();
+        match (tok) {
+          | Token.Keyword ("using") =>
+            finish_current (current_begin);
+            
+            def id = get_qid ();
+            match (get_token ()) {
+              | Token.Semicolon as st =>
+                def extensions = MacroRegistry.GetSyntaxExtensions (id);
+                register_syntax_keywords (extensions);
+                open_usings = extensions + open_usings;
+
+                def using_tok = Token.Using (tok.Location + st.Location, id, extensions);
+                store (ref current_stream, ref current_pos, using_tok);
+                
+              | Token.Operator ("=", _) =>
+                def id' = get_qid ();
+
+                def st = get_token ();
+                match (st) {
+                  | Token.Semicolon => ()
+                  | _ => Message.error (st.Location, "expecting `;' after using alias")
+                }
+                
+                def using_tok = Token.UsingAlias (tok.Location + st.Location, id, id');
+                store (ref current_stream, ref current_pos, using_tok);
+                
+              | x => Message.error (x.Location, "expecting `;' or `='")
+            }
+            finish_current (current_begin);
+            loop ()
+
+          | Token.Keyword ("namespace") =>
+            finish_current (current_begin);
+            
+            def id = get_qid ();
+            match (get_token ()) {
+              | Token.BeginBrace as br =>
+                def extensions = MacroRegistry.GetSyntaxExtensions (id);
+                register_syntax_keywords (extensions);
+
+                def decls = ParseTopLevel (parent_pos, current_pos);
+
+                remove_syntax_keywords (extensions);
+
+                def namespace_tok = Token.Namespace (tok.Location + br.Location, id, extensions, decls);
+                store (ref current_stream, ref current_pos, namespace_tok);                  
+
+              | x => Message.error (x.Location, "expecting `{' opening namespace scope")
+            }
+            finish_current (current_begin);            
+            loop ()
+          
+          // finish entire brace group
+          | Token.EndBrace =>
+            remove_syntax_keywords (open_usings);
+            finish_parent (parent_begin, current_begin);
+
+          // finish current loose group
+          | Token.Semicolon => finish_current (current_begin); loop ()
+
+          | Token.EndOfFile when parent_begin == 0 =>
+            def brace_group = finish_parent (parent_begin, current_begin);
+            finished = true;
+            brace_group;
+            
+          | _ => handle_default_token (current_begin, tok); loop ()
+        }
+      }
+      try { loop () }
+      catch { _ : PreParserException =>
+        finish_parent (parent_begin, current_begin);
+      }
+    }
+
+    public ParseTopLevel () : Token {
+      Token.BracesGroup (ParseTopLevel (0, 0))
+    }
     
     public PreParse () : Token {
       def top = parse_brace_group (Location.Default, 0, 0);
       unless (finished) Message.error (lexer.Location, "expected end of file, encountered finishing token");
-      top.Child
+      top
     }
   }
 
@@ -337,8 +445,20 @@ namespace Nemerle.Compiler
     | Pipe   = 0x0001 // |
     | Equal = 0x0002 // =
     | Braces = 0x0004 // {}
+    | Arrow = 0x0008 // =>
+    | Colon = 0x0010 // :
     | All = Pipe %| Equal %| Braces
   }
+
+  [Record]
+  public class SyntaxDefinition {
+    public Start : string;
+    public Keywords : list [string];
+    public MacroNamespace : GlobalEnv.NamespaceND;
+    public Rules : list [Parser.GrammarElement];
+    public Permute : list [SyntaxElement] -> list [SyntaxElement];
+  }
+  
   
   /// Reverse Polish Notation token. It is used on the stack created during translation
   /// of infix operator expression into RPN on the way to create appropriate PExpr.
@@ -348,8 +468,8 @@ namespace Nemerle.Compiler
     public LeftPriority : int;
     public RightPriority : int;
 
-    public static RoundInfo : OperatorInfo = OperatorInfo ("(", 300, 301);
-    public static SquareInfo : OperatorInfo = OperatorInfo ("[", 300, 301);
+    public static RoundInfo : OperatorInfo = OperatorInfo ("(", 285,286);
+    public static SquareInfo : OperatorInfo = OperatorInfo ("[", 285, 286);
     public static CommaInfo : OperatorInfo = OperatorInfo (",", 300, 301);
     public static ProductInfo : OperatorInfo = OperatorInfo ("*", 260, 261);    
 
@@ -447,19 +567,16 @@ namespace Nemerle.Compiler
     mutable env : GlobalEnv;
     mutable stream : Token;
     mutable last_tok : Token;
-    syntax_keywords : Hashtable [string, void -> PExpr];
+    mutable syntax_keywords : SystemMap [string, void -> PExpr];
 
     mutable streams_stack : array [Token] = array (200);
     mutable stack_pos : int = 0;
 
     public this (env : GlobalEnv) {
       this.env = env;
-      syntax_keywords = Hashtable ();
-    }
-   
-    public Parse (_toptokens : list [Token]) : void
-    {
-      MacroRegistry.RemoveSyntaxExtensions ();
+      syntax_keywords = SystemMap ();
+      def core_extensions = MacroRegistry.GetSyntaxExtensions (["Nemerle", "Core"]);
+      syntax_keywords = load_syntax (core_extensions);
     }
 
     public ParseExpr (expr : string) : PExpr
@@ -471,6 +588,19 @@ namespace Nemerle.Compiler
       null
     }
 
+    public static Parse (lex : LexerBase) : list [TopDeclaration]
+    {
+      def preparser = PreParser (lex);
+      def parser = MainParser (GlobalEnv.Core);
+      
+      mutable result = [];
+      foreach (tok : Token in preparser.ParseTopLevel ()) 
+        result = parser.ParseTopLevel (tok, result);
+        
+      List.Rev (result);
+    }
+    
+    #region Utility functions operating on current token stream
     push_stream (newstream : Token) : void {
       streams_stack [stack_pos] = stream;
       ++stack_pos;
@@ -480,7 +610,8 @@ namespace Nemerle.Compiler
     pop_stream () : void {
       --stack_pos;
       if (stack_pos > 0)
-        stream = streams_stack [stack_pos - 1];
+        // previous stack was stored before incrementing pointer
+        stream = streams_stack [stack_pos];
       else
         stream = null;
     }
@@ -489,9 +620,7 @@ namespace Nemerle.Compiler
       expect_empty (finish_entity);
       pop_stream ();
     }
-    
 
-    #region Utility functions operating on current token stream
     get_token () : Token {
       if (stream != null) {
         last_tok = stream;
@@ -519,12 +648,21 @@ namespace Nemerle.Compiler
     peek_sibling_token () : Token {
       if (stream != null) stream
       else {
-        def next_group = streams_stack [stack_pos - 2].Next;
+        def next_group = streams_stack [stack_pos - 1].Next;
         if (next_group != null)
           (next_group :> Token.LooseGroup).Child
         else
           Token.EndOfFile (last_tok.Location)
       }
+    }
+
+    shift_sibling () : void {
+      if (stream == null) {
+        streams_stack [stack_pos - 1] = streams_stack [stack_pos - 1].Next;
+        stream = (streams_stack [stack_pos - 1] :> Token.LooseGroup).Child;
+      }
+      else
+        shift ();
     }
     
     push_back () : void {
@@ -633,89 +771,94 @@ namespace Nemerle.Compiler
           Splicable.Name (Name (["error"]))
       }
     }
-    
-    GetQid () : list [string]
+
+    make_parsing_function (macro_ns : GlobalEnv.NamespaceND,
+                           rule : list [Parser.GrammarElement], 
+                           perm : list [SyntaxElement] -> list [SyntaxElement]) 
+                           : void -> PExpr 
     {
-      match (get_token ()) {
-        | Token.Identifier (x) =>
-          match (peek_token ()) {
-            | Token.Operator (".", _) => shift ();  x :: GetQid ()
-            | _ => [x]
-          }
-        | t => Error (t, "expected qualified identifier"); []
+      fun () {
+        def loc = last_tok.Location;
+        def parms = parse_wrt_rule (rule);
+        PExpr.MacroCall (loc, Name ([]), macro_ns, perm (parms))
       }
     }
     
+    load_syntax (extensions : list [SyntaxDefinition]) : SystemMap [string, void -> PExpr]
+    {
+      mutable keywords = syntax_keywords;
+      foreach (definition in extensions) {
+        def callback = make_parsing_function (definition.MacroNamespace,
+                                              definition.Rules,
+                                              definition.Permute);
+        keywords = keywords.Replace (definition.Start, callback);
+      }
+      keywords
+    }
+    
+   
     /** This function parses top level group updating global environment
         when entering into new namespace, using directive, class, etc.
      */
-    ParseTopLevel (tok : Token) : void
+    ParseTopLevel (tok : Token, mutable acc : list [TopDeclaration]) : list [TopDeclaration]
     {
-      | Token.LooseGroup (tokens) =>
-        push_stream (tokens);
-        match (get_token ()) {
-          | Token.Keyword ("namespace") =>
-            // get name of namespace
-            def name = GetQid ();
+      match (tok) {
+        | Token.LooseGroup (tokens) =>
+          match (tokens) {
+            | Token.Namespace (name, extensions, body) =>
+              def begin_syntax = syntax_keywords;
+              def begin_env = env;
 
-            // body of namespace must be { ... } 
-            match (get_token ()) {
-              | Token.BracesGroup as group =>
-                def begin_env = env;
-                // update current environment
-                env = env.EnterIntoNamespace (name);
-                // parse elements of namespace with new environment enabled
-                foreach (child : Token in group)
-                  ParseTopLevel (child);
+              // update current environment
+              env = env.EnterIntoNamespace (name);
+              syntax_keywords = load_syntax (extensions);
 
-                // bring env from outside of namespace
-                env = begin_env;
+              // parse elements of namespace with new environment enabled
+              acc = ParseTopLevel (body, acc);
 
-              | x => Error (x, "expected `{ }' as body of namespace")
-            }
+              // bring env from outside of namespace
+              env = begin_env;
+              syntax_keywords = begin_syntax;
+              acc
 
-          | Token.Keyword ("using") =>
-            def name = GetQid ();
+            | Token.Using (name, extensions) =>
+              syntax_keywords = load_syntax (extensions);          
+              env = env.AddOpenNamespace (name, tok.Location);
+              acc
 
-            match (peek_token ()) {
-              // using ID = Q.ID; 
-              | Token.Operator ("=", _) =>
-                def fullname = GetQid ();
-                match (name) {
-                  | [name] => env = env.AddNamespaceAlias (name, fullname, tok.Location);
-                  | _ => Error (tok, "using alias must be simple name without dots")
-                }
-                
-              // using Q.ID;
-              | Token.EndOfFile => env = env.AddOpenNamespace (name, tok.Location);
-              | _ => expect_empty ("using specification")
-            }
+            | Token.UsingAlias (name, fullname) =>
+              match (name) {
+                | [name] => env = env.AddNamespaceAlias (name, fullname, tok.Location);
+                | _ => Error (tok, "using alias must be simple name without dots")
+              }
+              acc
 
-          | Token.SquareGroup (null) => Error (tok, "empty custom attribute")
-            
-          // assembly attribute
-          | Token.SquareGroup as square =>
-            mutable assembly_custom = [square];
-            def customs = take_attributes_out (ref assembly_custom,
-                                               System.AttributeTargets.Assembly, true);
-                                               
-            foreach (cust in customs)
-              AttributeCompiler.AddAssemblyAttribute (env, cust);
+            | Token.SquareGroup (null) => Error (tok, "empty custom attribute"); acc
 
-          | _ =>
-            def _tydecl = ParseTypeDeclaration (tokens);
-            ()
-//            handle_type (None (), None (), env, d);            
-        }
-        def continuation = stream;
-        pop_stream ();
-        
-        // executed only in case of [assembly: .. ] [ .. ]
-        when (continuation != null)
-          ParseTopLevel (Token.LooseGroup (continuation.Location, continuation))        
+            // assembly attribute
+            | Token.SquareGroup (inner) as square =>
+              match (inner) {
+                | Token.LooseGroup (Token.Identifier ("assembly")) =>
+                  mutable assembly_custom = [square];
+                  def customs = take_attributes_out (ref assembly_custom,
+                                                     System.AttributeTargets.Assembly, true);
 
-      | Token.EndOfFile => ()
-      | _ => Util.ice ("wrong token group at toplevel")
+                  foreach (cust in customs)
+                    AttributeCompiler.AddAssemblyAttribute (env, cust);
+
+                  // executed only in case of [assembly: .. ] [ .. ]
+                  if (square.Next != null)
+                    ParseTopLevel (Token.LooseGroup (square.Next.Location, square.Next), acc)
+                  else
+                    acc
+
+                | _ => ParseTypeDeclaration (tokens) :: acc
+              }
+            | _ => ParseTypeDeclaration (tokens) :: acc
+          }
+
+        | x => Error (x, "expecting group of tokens"); acc
+      }
     }
 
     /** Parses toplevel type (like class, interface, etc.).
@@ -870,7 +1013,6 @@ namespace Nemerle.Compiler
                       ((null, null), parse_parameters ());                        
 
                     | (Token.RoundGroup, _) =>
-                      shift ();
                       ((null, null), parse_parameters ());
 
                     | _ =>
@@ -935,8 +1077,9 @@ namespace Nemerle.Compiler
                     typarms : Typarms) : ClassMember
     {
      // FIXME:       | Token.Keyword ("implements") => null      
-      match (get_token ()) {
+      match (peek_token ()) {
         | Token.BracesGroup as group =>
+          shift ();
           mutable pcustoms = take_attributes_out (ref customs, System.AttributeTargets.Property, true);
           mutable setter = None ();
           mutable getter = None ();
@@ -1261,6 +1404,7 @@ namespace Nemerle.Compiler
     {
       match (peek_token ()) {
         | Token.SquareGroup (null) as t =>
+          shift ();
           Error (t, "expecting type variables"); (null, null)
           
         | Token.SquareGroup (children) as group =>
@@ -1268,11 +1412,11 @@ namespace Nemerle.Compiler
           match (maybe_parse_ellipsis ()) {
             | Some (e) =>
               pop_stream ("type variables");
-              expect_empty ("type variables");
+              shift ();              
               ([], e)
 
             | _ =>
-              pop_stream ("type variables");
+              pop_stream ();
               shift (); // now we are after whole '[..]' group
               (TokenMap (group, get_tyvar), PExpr.Void ())
           }
@@ -1320,7 +1464,7 @@ namespace Nemerle.Compiler
       when (name == null) name = get_splicable_id ();
       def tyvars = parse_tyvars ();      
       def parms = parse_parameters ();
-      def ret_type = parse_return_type (false);
+      def ret_type = parse_return_type (true);
       def typarms = parse_where_constraints (tyvars);
 
       Fun_header (name.Location + ret_type.Location,
@@ -1368,10 +1512,11 @@ namespace Nemerle.Compiler
     parse_parameters () : list [Fun_parm] {
       def group = get_token ();
       match (group) {
-        | Token.RoundGroup (TokenSeparator.Comma, null)
+        | Token.RoundGroup (_, null)
         | Token.SquareGroup (null) => []
         
         | Token.RoundGroup (TokenSeparator.Comma, child)
+        | Token.RoundGroup (TokenSeparator.None, child)          
         | Token.SquareGroup (child) =>
           match (child) {
             | Token.LooseGroup (Token.Operator (".", _) as dot) =>
@@ -1430,6 +1575,7 @@ namespace Nemerle.Compiler
               removed = true;
               // parse body of first element in this [ , , ]
               result = parse_expr () :: result;
+
               // parse all remaining in current bracket group [ , , , ]
               when (x.Child.Next != null) {
                 x.Child = x.Child.Next;
@@ -1442,7 +1588,6 @@ namespace Nemerle.Compiler
                 Error (first, $"unexpected attribute target `$(first)'");
             pop_stream ("custom attribute body");
               
-          | Token.EndOfFile => Error (x, "empty cutom attribute")
           | _ => Util.ice ("broken brackets in attribute")
         }
         removed;
@@ -1507,12 +1652,10 @@ namespace Nemerle.Compiler
       match (name) {
         | "." =>
           match (e2) {
-            | PExpr.Ref (n) =>
-              PExpr.Member (e1.Location + e2.Location, e1, Splicable.Name (n));
-            | PExpr.Spliced (s) =>
-              PExpr.Member (e1.Location + e2.Location, e1, Splicable.Expression (s));
+            | PExpr.Ref (n) => PExpr.Member (loc, e1, Splicable.Name (n));
+            | PExpr.Spliced (s) => PExpr.Member (loc, e1, Splicable.Expression (s));
             | _ =>
-              Message.error (e1.Location, "expecting member name after `.'");
+              Message.error (e2.Location, "expecting member name after `.'");
               e1
           }
         
@@ -1520,13 +1663,13 @@ namespace Nemerle.Compiler
         | ":" => PExpr.TypeEnforcement (loc, e1, e2)
         | ":>" => PExpr.TypeConversion (loc, e1, e2)
         | "::" => PExpr.Call (loc, PExpr.Ref (loc, Name (["Cons"])), [e1, e2])
-        | _ => PExpr.Call (PExpr.Ref (Name (name)), [e1, e2])
+        | _ => PExpr.Call (loc, PExpr.Ref (loc, Name (name)), [e1, e2])
       }
     }
 
     make_operator_call (name : string, e : PExpr) : PExpr
     {
-      PExpr.Call (PExpr.Ref (Name (name)), [e])
+      PExpr.Call (e.Location, PExpr.Ref (e.Location, Name (name)), [e])
     }
     
     make_operator_call (name : string, parms : list [PExpr]) : PExpr
@@ -1608,6 +1751,7 @@ namespace Nemerle.Compiler
         if (_op_context == OpContext.Prefix)
           match (peek_token ()) {
             | Token.Operator (str, _) =>
+              shift ();
               rpn_op_stack = OperatorInfo.PrefixInfos [str] :: rpn_op_stack;
               // we leave prefix context here (for things like `!!expr'
               loop ();
@@ -1627,10 +1771,13 @@ namespace Nemerle.Compiler
                 NaryOperatorInfo (OperatorInfo.ProductInfo);
 
               | Token.Operator (str, _) =>
-                if (str == "|" && stop %&& TokenStoppers.Pipe ||
-                    str == "=" && stop %&& TokenStoppers.Equal) null
-                else
-                  OperatorInfo.GetOrCreate (str)
+                match (str) {
+                  | "|" when stop %&& TokenStoppers.Pipe 
+                  | "=" when stop %&& TokenStoppers.Equal 
+                  | "=>" when stop %&& TokenStoppers.Arrow 
+                  | ":" when stop %&& TokenStoppers.Colon => null
+                  | _ => OperatorInfo.GetOrCreate (str)
+                }
                   
               | Token.Keyword (k) => OperatorInfo.Infos [k]
               | Token.SquareGroup as g  =>
@@ -1653,6 +1800,7 @@ namespace Nemerle.Compiler
             }
           }
           else {
+            shift ();
             roll_operators (ref _expr_stack, ref rpn_op_stack, info.LeftPriority);
 
             match (info) {
@@ -1661,19 +1809,23 @@ namespace Nemerle.Compiler
             }
             
             // special case for x * y * z
-            if (info.Name == "*")
+            if (info.Name == "*") {
+              _op_context = OpContext.Prefix;
               match (rpn_op_stack) {
                 | x :: _ when x.Name == "*" => ()
                 | _ => rpn_op_stack = info :: rpn_op_stack;
               }
+            }
             else
               rpn_op_stack = info :: rpn_op_stack;
 
             when (group != null)
               foreach (el : Token in group)
                 _expr_stack = parse_expr (el) :: _expr_stack;
-              
-            _op_context = OpContext.Prefix;
+
+            when (info is BinaryOperatorInfo)
+              _op_context = OpContext.Prefix;
+            
             loop ();
           }
         }
@@ -1736,7 +1888,7 @@ namespace Nemerle.Compiler
     }
 
     parse_case_guard () : PExpr * option [PExpr] {
-      match (parse_expr (TokenStoppers.Pipe)) {
+      match (parse_expr (TokenStoppers.Pipe %| TokenStoppers.Arrow)) {
         | <[ @when ($pat, $guard) ]> => (pat, Some (guard))
         | pat                        => (pat, None ())
       }
@@ -1752,7 +1904,7 @@ namespace Nemerle.Compiler
         }
       };
 
-      def case_group = (stream :> Token.LooseGroup);
+      def case_group = (get_token () :> Token.LooseGroup);
       push_stream (case_group.Child);
       
       // eat pattern part and '=>'
@@ -1849,6 +2001,13 @@ namespace Nemerle.Compiler
               | [e] => e
               | _ => PExpr.Tuple (loc, exprs)
             }
+
+          | Token.SquareGroup =>
+            def exprs = TokenMap (tok, fun (x : Token) { parse_expr (x) });
+            def nil = PExpr.Call (loc, PExpr.Ref (loc, Name ("Nil")), []);
+            List.FoldRight (exprs, nil, fun (x : PExpr, acc) {
+              PExpr.Call (x.Location, PExpr.Ref (x.Location, Name ("Cons")), [x, acc])
+            });
 
           | Token.BracesGroup (group) when !(stop %&& TokenStoppers.Braces) =>
             push_stream (group);
@@ -2003,8 +2162,8 @@ namespace Nemerle.Compiler
                   | Token.Identifier =>
                     def id = get_splicable_id ();
                     match (peek_token ()) {
-                      | Token.Operator ("[", _) 
-                      | Token.Operator ("(", _) => parse_funs ([], id)
+                      | Token.SquareGroup 
+                      | Token.RoundGroup => parse_funs ([], id)
                       | Token.Operator ("=", _) => parse_val (id)
                       | x => Error (x, "expecting `def x = expr' or `def f () { .. }'"); <[ () ]>
                     }
@@ -2012,16 +2171,12 @@ namespace Nemerle.Compiler
                 }
             }
 
-          | Token.Identifier (k) =>
-            match (syntax_keywords [k]) {
-              | null => PExpr.Ref (loc, Name (k))
-              | parsing_function => parsing_function ()                
-            }
-
+          | Token.Identifier (i) => PExpr.Ref (loc, Name (i))
+            
           | Token.Keyword (k) =>
-            match (syntax_keywords [k]) {
-              | null => Error (tok, "unexpected keyword in expression context"); <[ () ]>
-              | parsing_function => parsing_function ()
+            match (syntax_keywords.Find (k)) {
+              | None => Error (tok, "unexpected keyword in expression context"); <[ () ]>
+              | Some (parsing_function) => parsing_function ()                
             }
 
           | _ => Error (tok, "expecting expression"); <[ () ]>
@@ -2054,6 +2209,139 @@ namespace Nemerle.Compiler
       }
       loop ();
       List.Rev (result)
+    }
+
+    //------------- PARSING OF MACRO SYNTAX EXTENSIONS ---------------------
+    
+    parse_wrt_rule (rule : list [Parser.GrammarElement]) : list [SyntaxElement] {
+      def find_closing (li) {
+        def loop (ac, l) {
+          match (l) {
+            | [] => Message.fatal_error ("syntax definition do not have `)' after '(");
+            | Parser.GrammarElement.GE_operator (")") :: xs =>
+              (List.Rev (ac), xs)
+            | x :: xs => loop (x :: ac, xs)
+          }
+        }
+        loop ([], li)
+      }
+
+      def expect_semicolon () {
+        if (stream == null)
+          shift_sibling ();
+        else
+          Error (stream, "expected `;'");
+      }
+      
+      def loop (acc, lst) {
+        match (lst) {
+          | Parser.GrammarElement.GE_operator ("(") :: xs =>
+            def (g_elements, rest) = find_closing (xs);
+            match (get_token ()) {
+              | Token.RoundGroup (_, Token.LooseGroup (first) as loose) =>
+                push_stream (loose);
+                push_stream (first);
+                def res = parse_wrt_rule (g_elements);
+                pop_stream ("inside `()'");
+                shift (); // shift the loose group, which just ended
+                pop_stream ("end of `()'");
+                loop (List.Rev (res) + acc, rest)
+
+              | x => Error (x, "expecting `(..)'"); loop (acc, rest);
+            }
+
+          | Parser.GrammarElement.GE_operator (";") :: xs =>
+            expect_semicolon ();
+            loop (acc, xs)
+            
+          | Parser.GrammarElement.GE_operator (n) :: xs =>
+            expect_operator (n);
+            loop (acc, xs)
+
+          | Parser.GrammarElement.GE_keyword (n) :: xs =>
+            match (peek_sibling_token ()) {
+              | Token.Keyword (k) when n == k => shift_sibling ();
+              | x => Error (x, $"expected `$(n)' keyword")
+            }
+            loop (acc, xs)
+
+          | Parser.GrammarElement.GE_expression :: xs =>
+            def expr = parse_expr ();
+            loop (SyntaxElement.Expression (expr) :: acc, xs)
+
+          | Parser.GrammarElement.GE_expression_list (_) :: _ =>
+            Util.ice ("expr list?")
+
+          | Parser.GrammarElement.GE_funparm :: _ =>
+            Util.ice ("funparm?");
+//            def p = parse_parameter (true);
+//          loop (SyntaxElement.Parameter (p) :: acc, xs)
+
+          | Parser.GrammarElement.GE_optional (Parser.GrammarElement.GE_operator (n)) :: xs =>
+            match (peek_token ()) {
+              | Token.Operator (o, _) when n.StartsWith (o) || o.StartsWith (n) =>
+                expect_operator (n)
+              | _ => ()
+            };
+            loop (acc, xs)
+
+          | Parser.GrammarElement.GE_optional (Parser.GrammarElement.GE_keyword (n)) :: xs =>
+            match (peek_token ()) {
+              | Token.Keyword (o) when o == n => shift ();
+              | _ => ()
+            };
+            loop (acc, xs)
+
+          | Parser.GrammarElement.GE_optional (Parser.GrammarElement.GE_expression)
+            :: Parser.GrammarElement.GE_keyword (n) :: xs =>
+            match (peek_token ()) {
+              | Token.Keyword (o) when o == n =>
+                shift ();
+                loop (SyntaxElement.Expression (null) :: acc, xs)
+              | _ =>
+                def expr = parse_expr ();
+                expect_keyword (n);
+                loop (SyntaxElement.Expression (expr) :: acc, xs)
+            };
+
+          | Parser.GrammarElement.GE_optional (Parser.GrammarElement.GE_expression)
+            :: Parser.GrammarElement.GE_operator (";") :: xs =>
+            if (stream == null) {
+              shift_sibling ();
+              loop (SyntaxElement.Expression (null) :: acc, xs)
+            }
+            else {
+              def expr = parse_expr ();
+              expect_semicolon ();
+              loop (SyntaxElement.Expression (expr) :: acc, xs)
+            }
+
+          | [Parser.GrammarElement.GE_optional (Parser.GrammarElement.GE_expression)] =>
+            if (stream == null)
+              List.Rev (acc)
+            else
+              List.Rev (SyntaxElement.Expression (parse_expr ()) :: acc)
+            
+          | Parser.GrammarElement.GE_optional (Parser.GrammarElement.GE_expression)
+            :: Parser.GrammarElement.GE_operator (n) :: xs =>
+            match (peek_token ()) {
+              | Token.Operator (o, _) when n.StartsWith (o) || o.StartsWith (n) =>
+                shift ();
+                loop (SyntaxElement.Expression (null) :: acc, xs)
+              | _ =>
+                def expr = parse_expr ();
+                expect_operator (n);
+                loop (SyntaxElement.Expression (expr) :: acc, xs)
+            };
+
+          | x :: _ =>
+            Message.fatal_error (last_tok.Location, "syntax definition of macro is ambiguous: " + x.ToString ())
+
+          | [] => List.Rev (acc)
+        }
+      };
+
+      loop ([], rule)
     }
   } // end MainParser
 } // end namespace
