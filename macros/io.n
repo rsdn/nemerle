@@ -40,7 +40,7 @@ module IO {
   variant FormatToken {
     | Text { body : string; }
     | Number { unsigned : bool; longformat : bool; }
-    | NumberFloat
+    | NumberFloat { longformat : bool; }
     | Str
     | Chr
   }
@@ -87,7 +87,7 @@ module IO {
               match (form[i]) {
                 | 'd' | 'i' => result = Number (false, longform) :: result
                 | 'u' => result = Number (true, longform) :: result
-                | 'f' => result = NumberFloat () :: result
+                | 'f' => result = NumberFloat (longform) :: result
                 | 's' => result = Str () :: result
                 | 'c' => result = Chr () :: result
                 | '%' => ignore (buf.Append ('%'))
@@ -139,10 +139,12 @@ module IO {
         | Number (false, false) :: xs => continue (<[ $(parms[i - 1]) : int ]>, xs)
         | Number (true, false) :: xs => continue (<[ $(parms[i - 1]) : uint ]>, xs)
         | Number (false, true) :: xs => continue (<[ $(parms[i - 1]) : long ]>, xs)
-         /// FIXME: bug in pattern exhaustiveness
-        | Number :: xs => continue (<[ $(parms[i - 1]) : ulong ]>, xs)
+        | Number (true, true) :: xs => continue (<[ $(parms[i - 1]) : ulong ]>, xs)
 
-        | NumberFloat :: xs =>
+        | NumberFloat (false) :: xs =>
+          continue (<[ Convert.ToString (($(parms[i - 1]) : float),
+                         Globalization.NumberFormatInfo.InvariantInfo) ]>, xs)
+        | NumberFloat (true) :: xs =>
           continue (<[ Convert.ToString (($(parms[i - 1]) : double),
                          Globalization.NumberFormatInfo.InvariantInfo) ]>, xs)
 
@@ -194,43 +196,81 @@ module IO {
     ]>
   }
 
-  macro scanf (format : string, params parms : array <expr>) 
-  {
-    def make_expressions (toks, i, acc) {
+  make_scan_expressions (format : string, parms : array <PT.Expr>, 
+                         stream : PT.Expr) : list <PT.Expr> {
+    def iter_through (toks, i, acc) {                        
       match ((toks, i)) {
         | ([], 0) => acc
         | (Text (t) :: xs, _) => 
-          make_expressions (xs, i, 
-            <[ Nemerle.IO.CheckInput ($(t : string)) ]> :: acc)
+          iter_through (xs, i, <[ 
+            Nemerle.IO.CheckInput ($(t : string), $stream)
+          ]> :: acc)
 
         | (_, 0) =>
-          Message.error ("not enough arguments for scanf macro");
+          Message.error ("not enough arguments for scanf-style macro");
           acc
             
-        | (Number :: xs, _) =>
-          make_expressions (xs, i - 1, 
-            <[ $(parms[i - 1]) = Nemerle.IO.ReadInt () ]> :: acc)
+        | (Number (false, false) :: xs, _) =>
+          iter_through (xs, i - 1, 
+            <[ $(parms[i - 1]) = Convert.ToInt32 (Nemerle.IO.ReadIntDigits ($stream)) ]> :: acc)
+
+        | (Number (true, false) :: xs, _) =>
+          iter_through (xs, i - 1, 
+            <[ $(parms[i - 1]) = Convert.ToUInt32 (Nemerle.IO.ReadIntDigits ($stream)) ]> :: acc)
+
+        | (Number (false, true) :: xs, _) =>
+          iter_through (xs, i - 1, 
+            <[ $(parms[i - 1]) = Convert.ToInt64 (Nemerle.IO.ReadIntDigits ($stream)) ]> :: acc)
+
+        | (Number (true, true) :: xs, _) =>
+          iter_through (xs, i - 1, 
+            <[ $(parms[i - 1]) = Convert.ToUInt64 (Nemerle.IO.ReadIntDigits ($stream)) ]> :: acc)
 
         | (NumberFloat :: _, _) =>
           Message.fatal_error ("scaning floats not supported")
 
         | (Str :: xs, _) =>
-          make_expressions (xs, i - 1, 
-            <[ $(parms[i - 1]) = Nemerle.IO.ReadString () ]> :: acc)
+          iter_through (xs, i - 1, 
+            <[ $(parms[i - 1]) = Nemerle.IO.ReadString ($stream) ]> :: acc)
 
         | (Chr :: xs, _) =>
-          make_expressions (xs, i - 1, 
-            <[ $(parms[i - 1]) = Char.ToChar (Console.Read ()) ]> :: acc)
+          iter_through (xs, i - 1, 
+            <[ $(parms[i - 1]) = Convert.ToChar ($stream.Read ()) ]> :: acc)
 
         | ([], _) =>
           Message.error ("too many arguments for scanf macro");
           acc
       }
     };
+    iter_through (parse_format (format), parms.Length, []);
+  }
 
-    def seq = make_expressions (parse_format (format), parms.Length, []);
-    <[ 
-      Nemerle.IO.ConsumeWhiteSpace ();
+  macro scanf (format : string, params parms : array <expr>) 
+  {
+    def seq = make_scan_expressions (format, parms, <[ stdin ]>);
+    <[
+      def stdin = System.Console.In; 
+      Nemerle.IO.ConsumeWhiteSpace (stdin);
+      {.. $seq } 
+    ]>
+  }
+
+  macro fscanf (stream, format : string, params parms : array <expr>) 
+  {
+    def seq = make_scan_expressions (format, parms, <[ stream_cached ]>);
+    <[
+      def stream_cached = $stream; 
+      Nemerle.IO.ConsumeWhiteSpace (stream_cached);
+      {.. $seq } 
+    ]>
+  }
+
+  macro sscanf (str, format : string, params parms : array <expr>) 
+  {
+    def seq = make_scan_expressions (format, parms, <[ stream_cached ]>);
+    <[
+      def stream_cached = StringReader ($str); 
+      Nemerle.IO.ConsumeWhiteSpace (stream_cached);
       {.. $seq } 
     ]>
   }
@@ -251,7 +291,8 @@ module IO {
       if (m.Groups[1].Success) {
         def variable_name = m.Groups[3].ToString ();
         res = <[ $(variable_name : usesite).ToString () ]> ::
-              <[ $(m.Groups[2].ToString () : string) ]> :: res;
+              (if (m.Groups[2].Success) <[ $(m.Groups[2].ToString () : string) ]> :: res
+              else res);
       }
       else
         res = <[ $(m.Groups[4].ToString () : string) ]> :: res;
@@ -295,60 +336,6 @@ module IO {
     });
     <[ def writer_v = $writer : IO.TextWriter; {.. $seq }; ]>
   }
-
-/*
-    macro sscanf (..)
-    {
-      match (get_params (args)) {
-        | valstr :: <[ $(format : string) ]> :: parms =>
-          def make_expressions (toks, parms, acc) {
-            match ((toks, parms)) {
-              | ([], []) => acc
-              | (Text (t) :: xs, _) => 
-                make_expressions (xs, parms, 
-                  <[ Nemerle.Input.CheckInput ($(t : string)) ]> :: acc)
-
-              | (TextNewline (t) :: xs, _) => 
-                make_expressions (xs, parms, 
-                  <[ Nemerle.Input.CheckInput ($(t : string)) ]> :: acc)
-
-              | (Number :: xs, p :: ps) =>
-                make_expressions (xs, ps, 
-                  <[ $p = Nemerle.Input.ReadInt () ]> :: acc)
-
-              | (NumberFloat :: _, _) =>
-                Util.ice ("scanning floats not supported")
-
-              | (Str :: xs, p :: ps) =>
-                make_expressions (xs, ps, 
-                  <[ $p = Nemerle.Input.ReadString () ]> :: acc)
-
-              | (Chr :: xs, p :: ps) =>
-                make_expressions (xs, ps, 
-                  <[ $p = Char.ToChar (Console.Read ()) ]> :: acc)
-
-              | (_, _ :: _) =>
-                Message.error ("too many arguments for sscanf macro");
-                acc
-              | (_ :: _, _) =>
-                Message.error ("not enough arguments for sscanf macro");
-                acc
-            }
-          };
-          
-          def seq = <[ def _N_sscanf_str = $valstr ]> ::
-                    <[ mutable _N_sscanf_pos = 0 ]> ::
-                    <[ def _N_sscanf_len = _N_sscanf_str.Length ]> ::
-                    <[ Nemerle.Input.ConsumeWhiteSpace () ]> ::
-            make_expressions (parse_format (format), List.Rev (parms), []);
-          <[ {.. $seq } ]>
-        | _ => 
-          Message.fatal_error ("sscanf macro expects string and formating " +
-                               "string as first arguments")
-      }
-    }
-  }
-*/
 }
 }
 
