@@ -66,7 +66,7 @@ src = \
 
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
-NEMFLAG = -self
+NEMFLAG = -self -r System.dll
 
 all: ncc.exe
 
