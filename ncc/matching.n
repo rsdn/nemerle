@@ -1,0 +1,322 @@
+/*
+ * Copyright (c) 2004 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+/*
+ * Matching
+ */
+namespace Nemerle.Compiler.Matching
+{
+  using Nemerle.Collections;
+  
+  using Nemerle.Compiler.CGexpr;
+  using Nemerle.Compiler.Tyops;
+  using Nemerle.Compiler.Typedtree;
+
+  using System.Reflection;
+  using System.Reflection.Emit;
+
+  using System.Collections;
+
+  using NC = Nemerle.Compiler;
+  
+
+  /*
+  private example () : void
+  {
+    match ([1, 2, 3]) {
+      | [] => 0
+      | 1 :: rest => 1
+      | 2 :: rest => 2
+      | [1, 2, 3] => 3
+    }
+  }
+  */
+
+
+  /**
+   * Special operations on matched objects. The assumption is that
+   * a base object will be loaded from the stack and the result of
+   * the match operation applied to that object will be matched
+   * against a superposition tree.
+   *
+   * NOTE: add properties support here.
+   */
+  type MO = MatchOp;
+  
+  public variant MatchOp
+  {
+    // push the value of a field on the stack and match it against a tree
+    | LoadAndMatchField { fld : NC.IField; tree : SuperpositionTree; }
+
+    // push `true' if the object on the stack is of type `tycon'
+    | HasType { tycon : NC.TypeInfo; }
+  }
+
+  
+  /**
+   * A superposition tree
+   */
+  type ST = SuperpositionTree;
+  
+  public variant SuperpositionTree
+  {
+    | Wildcard
+    | Literal { literal : Literal; }
+    | Constructor { cons : NC.TypeInfo; arg : SuperpositionTree; }
+    | Conjunction { args : list <MatchOp>; }
+    | Alternative { args : list <SuperpositionTree>; }
+
+      
+    /* -- PUBLIC METHODS ---------------------------------------------------- */
+
+    /**
+     * Converts a typed tree pattern into a superposition tree.
+     *
+     * Initial origin masks are assigned accordingly to the values
+     * of the `patterns_count' and `origin' parameters.
+     */
+    public static FromPattern (pattern : Pattern, patterns_count : int,
+                               origin : int) : SuperpositionTree
+    {
+      def tree = create_from_pattern (pattern);
+
+      tree.create_default_origin_mask (patterns_count, origin);
+
+      tree
+    }
+
+
+    /**
+     * Combines two superposition trees.
+     */
+    public static Combine (l : SuperpositionTree, r : SuperpositionTree)
+      : SuperpositionTree
+    {
+      def combine_literal_alternatives (l_args, r_args)
+      {
+        // FIXME
+        ST.Wildcard ()
+      }
+
+      def combine_constructor_alternatives (l_args, r_args)
+      {
+        // FIXME
+        ST.Wildcard ()
+      }
+      
+      // INVARIANT: the alternatives shall always be sorted
+      def combine_alternatives (l_args, r_args)
+      {
+        match (l_args) {
+          | ST.Literal :: _ =>
+            combine_literal_alternatives (l_args, r_args)
+            
+          | ST.Constructor :: _ =>
+            combine_constructor_alternatives (l_args, r_args)
+            
+          | _ =>
+            Util.ice ("SuperpositionTree::Combine::combine_alternatives")
+        }
+      }
+
+      // combines two conjunctions
+      // FIXME: ouch! :)
+      def combine_conjunctions (l_args, r_args, acc)
+      {
+        | ([], [], _) =>
+          List.Rev (acc)
+
+        | (l_arg :: l_rest, r_arg :: r_rest, acc) =>
+          combine_conjunctions (l_rest, r_rest, Combine (l_arg, r_arg) :: acc)
+
+        | _ =>
+          Util.ice ("SuperpositionTree::Combine::combine_tuples")
+      }
+
+      // merge the origin markers for this node
+      l.m_origin = l.m_origin.Or (r.m_origin);
+      r.m_origin = l.m_origin.Clone () :> BitArray;
+      
+      match ((l, r)) {
+        // the four trivial cases for tree combination:
+        | (ST.Wildcard, _) => r
+        | (_, ST.Wildcard) => l
+
+        | (ST.Alternative ([]), ST.Alternative) => r
+        | (ST.Alternative, ST.Alternative ([])) => l
+
+        // non-empty alternatives combination
+        | (ST.Alternative (l_args), ST.Alternative (r_args)) =>
+          combine_alternatives (l_args, r_args)
+
+        // tuples combination
+        | (ST.Tuple (l_args), ST.Tuple (r_args)) =>
+          def combined_args =            
+            combine_tuple_args (l_args, r_args);
+
+          def combined_tuple =
+            ST.Tuple (combined_args);
+
+          combined_tuple.m_origin = l.m_origin.Clone () :> BitArray
+            
+        | _ =>
+          Util.ice ("SuperpositionTree::Combine")
+      }
+    }
+    
+      
+    /* -- PUBLIC PROPERTIES ------------------------------------------------- */
+
+    /**
+     * Returns the origin mask of this node.
+     */
+    public Origin : BitArray
+    {
+      get { m_origin }
+    }
+
+
+    /* -- PRIVATE METHODS --------------------------------------------------- */
+
+    /**
+     * Converts a typed tree pattern into a superposition tree.
+     */
+    private static create_from_pattern (pattern : Pattern) : SuperpositionTree
+    {
+      // reduce tuple elements to a record node, so that we can
+      // unify code emission with other constructors...
+      def tuple_to_record (index : int, tuple_size : int, args, acc)
+      {
+        match (args) {
+          | [] =>
+            List.Rev (acc)
+            
+          | arg :: rest =>
+            def converted = create_from_pattern (arg);
+            
+            def tuple_field = 
+              NC.InternalType.GetTupleType (tuple_size).GetField (index);
+              
+            tuple_to_record (index + 1, tuple_size, rest,
+                             (tuple_field, convert (arg)) :: acc)
+        }
+      }
+
+      // NOTE: handle P_as using the explicit/implicit local variables schema
+      
+      match (pattern) {
+        | Pattern.Wildcard =>
+          ST.Wildcard ()
+          
+        | Pattern.Literal (literal) =>
+          ST.Alternative ([ST.Literal (literal)])
+          
+        | Pattern.Tuple (args) =>
+          ST.Tuple (ST.Record (tuple_to_record (0, List.Length (args), args)))
+          
+        | Pattern.Cons (tycon, arg) =>
+          ST.Alternative ([ST.Constructor (tycon, convert (arg))])
+
+        | Pattern.Record (args) =>
+          ST.Record (List.Map (args, fun (fld, arg) { (fld, convert (arg)) }))
+
+        | Pattern.Enum (_, val) =>
+          ST.Alternative ([ST.Literal (val)])
+
+        | Pattern.HasType (tycon) =>
+          ST.Conjunction ([(MO.HasType (tycon), ST.Literal (L_bool (true)))])
+
+        // NOTE: trzeba zrobic Pattern.HasType inaczej, bo nie bardzo widze
+        //       laczenie tego z Pattern.As -- Conjunction raczej wyliczy boola
+        //       niz to, co jest sprawdzane w HasType -- jednoczesnie przypisania
+        //       mozemy dokonac tylko dopiero kiedy typ zostal sprawdzony, inaczej
+        //       kod nie przejdzie weryfikacji
+        //
+        // NOTE: albo zrobic tak, ze to kod MatchOp zawsze generuje boola, czy
+        //       jakos tak, to by trzeba jakos optymalizowac, bo LoadField raczej
+        //       zawsze sie wykona i check jest zupelnie niepotrzebny. Chyba, ze
+        //       Conjunction bralo by tylko MatchOpy, a drzewo do podmeczowania
+        //       byloby w MatchOpach odpowiednich, tak chyba to jest najlepsze...
+          
+        /*
+        | P_as { pat : Pattern; decl : LocalValue; }
+        */
+        
+        | _ =>
+          Util.ice ("SuperpositionTree::create_from_pattern")
+      }
+    }
+
+    
+    /**
+     * Creates a default origin mask for a pattern.
+     */
+    private create_default_origin_mask (patterns_count : int, origin : int) : void
+    {
+      def iter_creation (arg : SuperpositionTree) : void
+      {
+        arg.create_default_origin_mask (patterns_count, origin)
+      }
+      
+      match (this) {
+        | ST.Conjunction (args) =>
+          List.Iter (args, fun (_, arg) { iter_creation (arg) })
+
+        | ST.Alternative (args) =>
+          List.Iter (args, iter_creation)
+          
+        | ST.Constructor (_, arg) =>
+          iter_creation (arg)
+
+        | _ => ()
+      }
+
+      m_origin = BitArray (patterns_count);
+      m_origin [origin] = true
+    }
+    
+    
+    /* -- PRIVATE FIELDS ---------------------------------------------------- */
+
+    /**
+     * The origin mask for this node.
+     */
+    private mutable m_origin : BitArray;
+  }
+
+
+  class MatchingCompiler
+  {
+
+
+    /* -- PRIVATE FIELDS ---------------------------------------------------- */
+    
+    private m_tree : SuperpositionTree;
+    private m_patterns : list <Pattern>;
+  }
+}
