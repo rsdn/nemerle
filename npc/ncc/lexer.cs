@@ -168,7 +168,7 @@ class Lexer : yyParser.yyInput
 		if (first_ch != '\'')
 			buf.Append((char)first_ch);
 		for (;;) {
-			if (is_id_beg(peek()) || is_digit(peek()))
+			if (is_id_beg(peek()) || is_digit(peek()) || peek() == '\'')
 				buf.Append((char)read());
 			else
 				break;
