@@ -98,13 +98,13 @@ all: stage1
 
 stage1:
 	$(MAKE) STAGE=$@ COMPILER_PATH=../boot/ aux-stage
-	
+
 stage2:
 	$(MAKE) STAGE=$@ COMPILER_PATH=out.stage1/ aux-stage
-	
+
 stage3:
 	$(MAKE) STAGE=$@ COMPILER_PATH=out.stage2/ last-stage
-	
+
 aux-stage:
 	mkdir -p out.$(STAGE)
 	$(MAKE) aux-stage-files
@@ -144,7 +144,7 @@ compare-one:
 	$(DASM) out.stage3/$(CMP_TARGET) | \
 		grep -v -E '(^//|// GUID|MVID)' \
 		| sed -e 's/\.stage2//g' > $(CMP_TARGET)3.il
-	diff -u $(CMP_TARGET)2.il $(CMP_TARGET)3.il
+	diff -u -w $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 	rm -f $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 
 compare-one-with-stage:
@@ -156,7 +156,7 @@ compare-one-with-stage:
 	$(DASM) out.stage3/$(CMP_TARGET).dll | \
 		grep -v -E '(^//|// GUID|MVID)' \
 		| sed -e 's/\.stage2//g' > $(CMP_TARGET)3.il
-	diff -u $(CMP_TARGET)2.il $(CMP_TARGET)3.il
+	diff -u -w $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 	rm -f $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 
 out.$(STAGE)/Nemerle.dll out.$(STAGE)/Nemerle.$(STAGE).dll: $(COMPILER) $(NEMERLE_DLL_SRC)
@@ -177,7 +177,7 @@ out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll: \
 out.stage1/stdmacros.dll: $(COMPILER) out.stage1/Nemerle.stage1.dll \
 		out.stage1/Nemerle.Compiler.stage1.dll $(STDMACROS_DLL_SRC)
 	$(RUN_COMPILER) -target-library -out:$@ \
-		-reference:$(DLL_PATH)System \
+		-reference:$(DLL_PATH)System.dll \
 		-reference:out.stage1/Nemerle.stage1.dll \
 		-reference:out.stage1/Nemerle.Compiler.stage1.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
@@ -185,7 +185,7 @@ out.stage1/stdmacros.dll: $(COMPILER) out.stage1/Nemerle.stage1.dll \
 out.stage2/stdmacros.dll: $(COMPILER) out.stage2/Nemerle.stage2.dll \
 		out.stage2/Nemerle.Compiler.stage2.dll $(STDMACROS_DLL_SRC)
 	$(RUN_COMPILER) -target-library -out:$@ \
-		-reference:$(DLL_PATH)System \
+		-reference:$(DLL_PATH)System.dll \
 		-reference:out.stage2/Nemerle.stage2.dll \
 		-reference:out.stage2/Nemerle.Compiler.stage2.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
@@ -193,7 +193,7 @@ out.stage2/stdmacros.dll: $(COMPILER) out.stage2/Nemerle.stage2.dll \
 out.stage3/stdmacros.dll: $(COMPILER) out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll $(STDMACROS_DLL_SRC)
 	$(RUN_COMPILER) -target-library -out:$@ \
-		-reference:$(DLL_PATH)System \
+		-reference:$(DLL_PATH)System.dll \
 		-reference:out.$(STAGE)/Nemerle.dll \
 		-reference:out.$(STAGE)/Nemerle.Compiler.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
