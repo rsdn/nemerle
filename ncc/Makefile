@@ -80,8 +80,8 @@ boot: ncc.exe
 	time $(EXECUTE) ./ncc.exe $(NEMFLAG) -texe -out ncc2.exe $(src)
 	$(NGEN) ncc2.exe
 	time $(EXECUTE) ./ncc2.exe $(NEMFLAG) -texe -out ncc3.exe $(src)
-	$(DASM) ncc2.exe | grep -v -E '(^//|// GUID|^\.assembly ncc|MVID)' > ncc2.il
-	$(DASM) ncc3.exe | grep -v -E '(^//|// GUID|^\.assembly ncc|MVID)' > ncc3.il  
+	$(DASM) ncc2.exe | grep -v -E '(^//|// GUID|^\.assembly ncc|^\.module |MVID)' > ncc2.il
+	$(DASM) ncc3.exe | grep -v -E '(^//|// GUID|^\.assembly ncc|^\.module |MVID)' > ncc3.il  
 	diff -u ncc2.il ncc3.il
 	rm -f ncc2.il ncc3.il ncc3.exe
 	$(MAKE) tests
