@@ -595,6 +595,7 @@ class Lexer : yyParser.yyInput
                 keywords["while"] = Token.KW_WHILE;
                 keywords["unless"] = Token.KW_UNLESS;
                 keywords["using"] = Token.KW_USING;
+                keywords["for"] = Token.KW_FOR;
   }
 }
 
