@@ -43,6 +43,7 @@ DISTFILES = \
 	io.n		\
 	operators.n	\
 	dataNpgsql.n	\
+	assertions.n	\
 
 ############################################################
 # OUTPUT
