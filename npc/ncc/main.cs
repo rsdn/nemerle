@@ -1,5 +1,13 @@
 namespace Nemerle.Compiler {
 
+class CS_glue {
+	public static string strip_last_part(string s)
+	{
+		int idx = s.LastIndexOf('.', s.Length - 2);
+		return s.Substring(0, idx + 1);
+	}
+}
+
 class XParser : Parser {
 	override public void yyerror(string message, string[] expected) {
 		string s = message;
