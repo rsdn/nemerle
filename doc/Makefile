@@ -34,7 +34,7 @@ MAKE_GRAMMAR = perl scripts/grammar-txt-2-xml.pl $< | xmllint -o $@ --format -
 
 course_docs = index
 
-root_docs =  index nemerlePlanned \
+root_docs = index \
 	coreNemExamples coreNemGrammar coreNemCompiler coreNemDesc \
 	TRSideas faq license hacking nemerleMacros ncc
 
