@@ -46,6 +46,12 @@ namespace Nemerle.Contrib
 	public class NemerleCodeGenerator : CodeGenerator
 	{
         bool dont_write_semicolon = false;
+        int id = 0;
+
+        private string new_name () {
+            ++id;
+            return "_N" + id.ToString() + "_";
+        }
 
         public NemerleCodeGenerator ()
 		{
@@ -624,9 +630,18 @@ namespace Nemerle.Contrib
 			if (!declaration.IsInterface)
 				OutputMemberScopeModifier (attributes);
 
-			output.Write (GetSafeName (method.Name));
+            // we have to generate fresh name for method explicitly implementing
+            // interface, so there will be no collisions with other such methods
+            CodeTypeReference privateType = method.PrivateImplementationType;
+            if (privateType != null)
+            {
+                output.Write(new_name());
+                output.Write(GetSafeName(method.Name));
+            }
+            else
+                output.Write(GetSafeName(method.Name));
 
-			output.Write (' ');
+            output.Write (' ');
 
 			output.Write ('(');
 			OutputParameters (method.Parameters);
@@ -638,8 +653,6 @@ namespace Nemerle.Contrib
 			if ( (attributes & MemberAttributes.ScopeMask) == MemberAttributes.Abstract || declaration.IsInterface)
 				output.WriteLine ( ';' );
 			else {
-                CodeTypeReference privateType =
-                    method.PrivateImplementationType;
                 if (privateType != null)
                 {
                     output.Write(" implements ");
