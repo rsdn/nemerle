@@ -96,7 +96,8 @@ namespace Nemerle.Contrib
 
 		public CompilerResults CompileAssemblyFromFileBatch (CompilerParameters options, string [] fileNames)
 		{
-			if (null == options)
+            Console.WriteLine("entering batch");
+            if (null == options)
 				throw new ArgumentNullException("options");
 			if (null == fileNames)
 				throw new ArgumentNullException("fileNames");
@@ -116,16 +117,20 @@ namespace Nemerle.Contrib
 			compiler.StartInfo.Arguments = BuildArgs (options,fileNames);
 			compiler.StartInfo.CreateNoWindow = true;
 			compiler.StartInfo.UseShellExecute = false;
-			compiler.StartInfo.RedirectStandardOutput=true;
-			try {
-				compiler.Start ();
-				compiler_output = compiler.StandardOutput.ReadToEnd ();
+            compiler.StartInfo.RedirectStandardOutput=true;
+//            Console.WriteLine(envncc);
+//            Console.WriteLine(BuildArgs(options, fileNames));
+            try {
+                compiler.Start ();
+                Console.WriteLine("compiler started");
+                compiler_output = compiler.StandardOutput.ReadToEnd ();
 				compiler.WaitForExit ();
-			} finally {
+                Console.WriteLine("compiler ended");
+            } finally {
 				results.NativeCompilerReturnValue = compiler.ExitCode;
 				compiler.Close ();
-			}
-			compiler_output_lines = compiler_output.Split (
+            }
+            compiler_output_lines = compiler_output.Split (
 				System.Environment.NewLine.ToCharArray ());
 			bool loadIt = true;
 			foreach (string error_line in compiler_output_lines)
@@ -196,7 +201,7 @@ namespace Nemerle.Contrib
 					args.AppendFormat ("-r:\"{0}\" ",import);
 			}
 
-			args.Append (" -- ");
+//			args.Append (" -- ");
 			foreach (string source in fileNames)
 				args.AppendFormat ("\"{0}\" ",source);
 			return args.ToString ();

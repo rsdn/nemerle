@@ -45,7 +45,9 @@ namespace Nemerle.Contrib
 {
 	public class NemerleCodeGenerator : CodeGenerator
 	{
-		public NemerleCodeGenerator ()
+        bool dont_write_semicolon = false;
+
+        public NemerleCodeGenerator ()
 		{
 		}
 
@@ -107,11 +109,11 @@ namespace Nemerle.Contrib
 		protected override void GenerateCastExpression ( CodeCastExpression expression)
 		{
 			TextWriter output = Output;
-			output.Write( "((" );
+			output.Write( "(" );
 			GenerateExpression( expression.Expression );
-			output.Write( ") :> (" );
+			output.Write( " :> " );
 			OutputType( expression.TargetType );
-			output.Write( "))" );
+			output.Write( ")" );
 		}
 
 
@@ -134,21 +136,17 @@ namespace Nemerle.Contrib
 		{
 			TextWriter output = Output;
 
-//			output.Write( "new " );
+            /// we don't need to explicitly create delegate
+            /// OutputType(expression.DelegateType);
+            /// output.Write( '(' );
 
-			OutputType( expression.DelegateType );
-
-			output.Write( '(' );
-
-			// FIXME: It is still C#-ism
-			CodeExpression targetObject = expression.TargetObject;
+            CodeExpression targetObject = expression.TargetObject;
 			if ( targetObject != null ) {
 				GenerateExpression( targetObject );
 				Output.Write( '.' );
 			}
 			output.Write( GetSafeName (expression.MethodName) );
-
-			output.Write( ')' );
+//			output.Write( ')' );
 		}
 
 		protected override void GenerateFieldReferenceExpression (
@@ -280,6 +278,8 @@ namespace Nemerle.Contrib
 			CodeExpressionStatement statement)
 		{
 			GenerateExpression (statement.Expression);
+            if (dont_write_semicolon)
+				return;
 			Output.WriteLine (';');
 		}
 
@@ -288,13 +288,19 @@ namespace Nemerle.Contrib
 			TextWriter output = Output;
 
 			output.Write( "for (" );
-			GenerateStatement( statement.InitStatement );
+            dont_write_semicolon = true;
+            GenerateStatement( statement.InitStatement );
 			output.Write( "; " );
 			GenerateExpression( statement.TestExpression );
 			output.Write( "; " );
 			GenerateStatement( statement.IncrementStatement );
 			output.Write( ") " );
-			GenerateStatements( statement.Statements );
+            dont_write_semicolon = false;
+            output.WriteLine('{');
+            ++Indent;
+            GenerateStatements(statement.Statements);
+            --Indent;
+            output.WriteLine('}');
 		}
 
 		protected override void GenerateThrowExceptionStatement ( CodeThrowExceptionStatement statement)
@@ -304,6 +310,8 @@ namespace Nemerle.Contrib
 				Output.Write (' ');
 				GenerateExpression (statement.ToThrow);
 			}
+            if (dont_write_semicolon)
+				return;
 			Output.WriteLine (";");
 		}
 
@@ -333,6 +341,8 @@ namespace Nemerle.Contrib
 
 			if (statement.Expression != null)
 				GenerateExpression (statement.Expression);
+            if (dont_write_semicolon)
+				return;
 			output.WriteLine (";");
 		}
 
@@ -382,17 +392,19 @@ namespace Nemerle.Contrib
 			output.Write ('}');
 
 			if (statement.CatchClauses.Count > 0) {
-				output.Write ( "catch {" );
-				output.WriteLine ();
+				output.WriteLine ( " catch {" );
+                ++Indent;
 				foreach (CodeCatchClause clause in statement.CatchClauses) {
 					output.Write ("| ");
 					OutputTypeNamePair (clause.CatchExceptionType, GetSafeName (clause.LocalName));
-					output.WriteLine ("==>");
+					output.WriteLine (" =>");
 					++Indent;
 					GenerateStatements (clause.Statements);
 					--Indent;
 				}
-			}
+                --Indent;
+                output.Write("}");
+            }
 
 			CodeStatementCollection finallies = statement.FinallyStatements;
 			if ( finallies.Count > 0 ) {
@@ -417,8 +429,10 @@ namespace Nemerle.Contrib
 			GenerateExpression (statement.Left);
 			output.Write (" = ");
 			GenerateExpression (statement.Right);
-			output.WriteLine ( ';' );
-		}
+            if (dont_write_semicolon)
+                return;
+            output.WriteLine(';');
+        }
 
 		protected override void GenerateAttachEventStatement (
 			CodeAttachEventStatement statement)
@@ -428,7 +442,9 @@ namespace Nemerle.Contrib
 			GenerateEventReferenceExpression (statement.Event);
 			output.Write (" += ");
 			GenerateExpression (statement.Listener);
-			output.WriteLine (';');
+            if (dont_write_semicolon)
+                return;
+            output.WriteLine (';');
 		}
 
 		protected override void GenerateRemoveEventStatement (
@@ -438,7 +454,9 @@ namespace Nemerle.Contrib
 			GenerateEventReferenceExpression (statement.Event);
 			Output.Write (" -= ");
 			GenerateExpression (statement.Listener);
-			output.WriteLine (';');
+            if (dont_write_semicolon)
+                return;
+            output.WriteLine (';');
 		}
 
 		// FIXME: do something after it gets supported.
@@ -463,12 +481,31 @@ namespace Nemerle.Contrib
 			output.Write (GetSafeName (statement.Name));
 
 			CodeExpression initExpression = statement.InitExpression;
-			if (initExpression != null) {
-				output.Write ( " = " );
+            output.Write(" = ");
+            if (initExpression != null) {
 				GenerateExpression( initExpression );
-			}
-
-			output.WriteLine( ';' );
+                CodePrimitiveExpression x = initExpression as CodePrimitiveExpression;
+                if (x != null && x.Value == null)
+                {
+                    Output.Write(" : ");
+                    OutputType(statement.Type);
+                }
+            }
+            else {
+                /// FIXME: we should check if it is value type and emit null or () ctor
+                if (statement.Type.ArrayElementType != null) {
+                    output.Write(NullToken);
+                    output.Write(" : ");
+                    OutputType (statement.Type);
+                }
+                else {
+                    output.Write (statement.Type.BaseType);
+                    output.Write (" ()");
+                }
+            }
+            if (dont_write_semicolon)
+                return;
+            output.WriteLine( ';' );
 		}
 
 		protected override void GenerateLinePragmaStart (CodeLinePragma linePragma)
@@ -491,7 +528,10 @@ namespace Nemerle.Contrib
 		protected override void GenerateEvent (CodeMemberEvent eventRef,
 			CodeTypeDeclaration declaration )
 		{
-			OutputMemberAccessModifier (eventRef.Attributes);
+            if (eventRef.CustomAttributes.Count > 0)
+                OutputAttributeDeclarations(eventRef.CustomAttributes);
+
+            OutputMemberAccessModifier (eventRef.Attributes);
 			OutputMemberScopeModifier (eventRef.Attributes | MemberAttributes.Final); // Don't output "virtual"
 			Output.Write ("event ");
 			OutputTypeNamePair (eventRef.Type, GetSafeName (eventRef.Name));
@@ -502,34 +542,45 @@ namespace Nemerle.Contrib
 		{
 			TextWriter output = Output;
 
-			if (field.CustomAttributes.Count > 0)
-				OutputAttributeDeclarations (field.CustomAttributes);
-			// LAMESPEC: Since CodeAttributeDeclaration has only 
-			// Name and not full type, we cannot check if this
-			// field has ReadOnlyAttribute.Yes, thus all variables
-			// will be regarded as mutable (no "def" here).
-			Output.Write ("mutable ");
+            MemberAttributes attributes = field.Attributes;
+            if (IsCurrentEnum) {
+                output.Write("| ");
+                Output.Write(field.Name);
+            }
+            else
+            {
+                if (field.CustomAttributes.Count > 0)
+                    OutputAttributeDeclarations(field.CustomAttributes);
 
-			MemberAttributes attributes = field.Attributes;
-			OutputMemberAccessModifier (attributes);
-			OutputFieldScopeModifier (attributes);
+                OutputMemberAccessModifier(attributes);
+                OutputFieldScopeModifier(attributes);
+                OutputTypeNamePair(field.Type, GetSafeName(field.Name));
+            }
 
-			if (IsCurrentEnum)
-				Output.Write (field.Name);
-			else
-				OutputTypeNamePair (field.Type, GetSafeName (field.Name));
-
-			CodeExpression initExpression = field.InitExpression;
+            CodeExpression initExpression = field.InitExpression;
 			if ( initExpression != null ) {
 				output.Write ( " = " );
 				GenerateExpression ( initExpression );
 			}
 
-			if (!IsCurrentEnum)
-				output.WriteLine( ';' );
-		}
-		
-		protected override void GenerateSnippetMember (
+            if (!IsCurrentEnum)
+                output.WriteLine(';');
+            else
+                output.WriteLine("");
+        }
+
+        protected override void OutputFieldScopeModifier(MemberAttributes attributes)
+        {
+            if ((attributes & MemberAttributes.VTableMask) == MemberAttributes.New)
+                Output.Write("new ");
+            if ((attributes & MemberAttributes.Static) == MemberAttributes.Static ||
+                (attributes & MemberAttributes.Const) == MemberAttributes.Const)
+                Output.Write("static ");
+            if ((attributes & MemberAttributes.Const) != MemberAttributes.Const)
+                Output.Write("mutable ");
+        }
+
+        protected override void GenerateSnippetMember (
 			CodeSnippetTypeMember member)
 		{
 			Output.Write (member.Text);
@@ -562,12 +613,6 @@ namespace Nemerle.Contrib
 			if (!declaration.IsInterface)
 				OutputMemberScopeModifier (attributes);
 
-			CodeTypeReference privateType =
-				method.PrivateImplementationType;
-			if (privateType != null) {
-				OutputType (privateType);
-				output.Write ('.');
-			}
 			output.Write (GetSafeName (method.Name));
 
 			output.Write (' ');
@@ -582,7 +627,17 @@ namespace Nemerle.Contrib
 			if ( (attributes & MemberAttributes.ScopeMask) == MemberAttributes.Abstract || declaration.IsInterface)
 				output.WriteLine ( ';' );
 			else {
-				output.WriteLine ( " {" );
+                CodeTypeReference privateType =
+                    method.PrivateImplementationType;
+                if (privateType != null)
+                {
+                    output.Write(" implements ");
+                    OutputType(privateType);
+                    output.Write (".");
+        			output.Write (GetSafeName (method.Name));
+                }
+
+                output.WriteLine ( " {" );
 				++Indent;
 				GenerateStatements (method.Statements);
 				--Indent;
@@ -590,7 +645,6 @@ namespace Nemerle.Contrib
 			}
 		}
 
-		// FIXME: It is still C#-ism
 		protected override void GenerateProperty (
 			CodeMemberProperty property,
 			CodeTypeDeclaration declaration)
@@ -660,7 +714,10 @@ namespace Nemerle.Contrib
 		protected override void GenerateConstructor( CodeConstructor constructor,
 							     CodeTypeDeclaration declaration )
 		{
-			OutputMemberAccessModifier (constructor.Attributes);
+            if (constructor.CustomAttributes.Count > 0)
+                OutputAttributeDeclarations(constructor.CustomAttributes);
+
+            OutputMemberAccessModifier (constructor.Attributes);
 			Output.Write ("this (");
 			OutputParameters (constructor.Parameters);
 			Output.Write (") ");
@@ -803,8 +860,20 @@ namespace Nemerle.Contrib
 			CodeMemberMethod met = CurrentMember as CodeMemberMethod;
 			if (met != null && met.ReturnTypeCustomAttributes == attributes)
 				Output.Write ("return: ");
-		}
-		
+
+            IEnumerator enumerator = attributes.GetEnumerator();
+            while (enumerator.MoveNext())
+            {
+                CodeAttributeDeclaration attribute = (CodeAttributeDeclaration)enumerator.Current;
+                attribute.Name = attribute.Name.Replace('+', '.');
+            }
+        }
+/*		
+        protected override void GenerateAttributeDeclaration ( CodeAttributeDeclarationCollection attributes )
+        {
+            attribute.Name = attribute.Name.Replace ('+', '.'));
+        }
+*/
 		protected override void GenerateAttributeDeclarationsEnd( CodeAttributeDeclarationCollection attributes )
 		{
 			Output.WriteLine( ']' );
@@ -842,12 +911,13 @@ namespace Nemerle.Contrib
 
 			OutputTypeNamePair (type, GetSafeName (name));
 
-			if ( initExpression != null ) {
-				output.Write( " = " );
-				GenerateExpression( initExpression );
-			}
+            if (initExpression != null)
+            {
+                output.Write(" = ");
+                GenerateExpression(initExpression);
+            }
 
-			output.WriteLine( ';' );
+            output.WriteLine( ';' );
 		}
 		
 		private void GenerateMemberReferenceExpression( CodeExpression targetObject, string memberName )
@@ -864,10 +934,10 @@ namespace Nemerle.Contrib
 		{
 			if (e.CustomAttributes != null && e.CustomAttributes.Count > 0)
 				OutputAttributeDeclarations (e.CustomAttributes);
-			OutputDirection (e.Direction);
 			Output.Write (GetSafeName (e.Name));
 			Output.Write (" : ");
-			OutputType (e.Type);
+            OutputDirection(e.Direction);
+            OutputType (e.Type);
 		}
 
 		protected override void GenerateTypeOfExpression (
@@ -878,7 +948,23 @@ namespace Nemerle.Contrib
 			Output.Write (")");
 		}
 
-		/* 
+        protected override void OutputOperator(CodeBinaryOperatorType op)
+        {
+            switch (op)
+            {
+                case CodeBinaryOperatorType.BitwiseAnd:
+                    Output.Write(" %& ");
+                    break;
+                case CodeBinaryOperatorType.BitwiseOr:
+                    Output.Write(" %| ");
+                    break;
+                default:
+                    base.OutputOperator(op);
+                    break;
+            }
+        }
+
+        /* 
 		 * ICodeGenerator
 		 */
 
@@ -914,59 +1000,60 @@ namespace Nemerle.Contrib
 
 				return "array <" + GetTypeOutput (arrayType) + ">";
 			}
-			else { 
-				switch ( type.BaseType ) {
-				case "System.Decimal":
+			else {
+                switch (type.BaseType.ToLower(System.Globalization.CultureInfo.InvariantCulture))
+                {
+                    case "system.decimal":
 					output = "decimal";
 					break;
-				case "System.Double":
+				case "system.double":
 					output = "double";
 					break;
-				case "System.Single":
+				case "system.single":
 					output = "float";
 					break;
 					
-				case "System.Byte":
+				case "system.byte":
 					output = "byte";
 					break;
-				case "System.SByte":
+				case "system.sbyte":
 					output = "sbyte";
 					break;
-				case "System.Int32":
+				case "system.int32":
 					output = "int";
 					break;
-				case "System.UInt32":
+				case "system.uint32":
 					output = "uint";
 					break;
-				case "System.Int64":
+				case "system.int64":
 					output = "long";
 					break;
-				case "System.UInt64":
+				case "system.uint64":
 					output = "ulong";
 					break;
-				case "System.Int16":
+				case "system.int16":
 					output = "short";
 					break;
-				case "System.UInt16":
+				case "system.uint16":
 					output = "ushort";
 					break;
 
-				case "System.Boolean":
+				case "system.boolean":
 					output = "bool";
 					break;
 					
-				case "System.Char":
+				case "system.char":
 					output = "char";
 					break;
 
-				case "System.String":
+				case "system.string":
 					output = "string";
 					break;
-				case "System.Object":
+				case "system.object":
 					output = "object";
 					break;
 
-				case "System.Void":
+				case "system.void":
 					output = "void";
 					break;
 
@@ -997,10 +1084,16 @@ namespace Nemerle.Contrib
 
 		protected override bool Supports( GeneratorSupport supports )
 		{
-			if ( (supports & GeneratorSupport.Win32Resources) != 0 )
-				return false;
-			return true;
-		}
+            switch (supports)
+            {
+                case GeneratorSupport.Win32Resources:
+                    return false;
+                case GeneratorSupport.GotoStatements:
+                    return false;
+                default:
+                    return true;
+            }
+        }
 
 		string GetSafeName (string id)
 		{
