@@ -49,7 +49,7 @@ GENERATED_TOKEN_DESCRIPTION = CSharpParserTokenTypes.txt
 
 GENERATED_SOURCES = $(GENERATED_SOURCES_LEXER) $(GENERATED_SOURCES_PARSER) $(GENERATED_SOURCES_TOKEN_TYPES) 
 
-NEMERLE_CSHARP_DLL_SOURCES = ExtendedToken.n Emit.n StatementTree.n
+NEMERLE_CSHARP_DLL_SOURCES = ExtendedToken.n Emit.n StatementTree.n #AssemblyInfo.n
 CS2N_EXE_SOURCES = cs2n.n
 
 ######################################################
@@ -92,6 +92,31 @@ log:
 
 etest:
 	./test errors | tee log
+
+install: cs2n.exe
+	$(Q)$(GACUTIL_COMMAND) Nemerle.CSharp.dll
+	$(Q)$(GACUTIL_COMMAND) Nemerle.CSharp.CS.dll
+	$(Q)$(GACUTIL_COMMAND) antlr.runtime.dll
+	$(INST) "[$(BINDIR)]" cs2n.exe
+	$(Q)$(INSTALL) -m 755 cs2n.exe $(DESTDIR)$(BINDIR)/cs2n.exe
+	$(Q)if [ "$(NET_ENGINE)" != "" ] ; then \
+		echo "#!/bin/sh" > $(DESTDIR)$(BINDIR)/cs2n && \
+		echo '$(NET_ENGINE) $(BINDIR)/cs2n.exe "$$@"' >> $(DESTDIR)$(BINDIR)/cs2n ; \
+		chmod 755 $(DESTDIR)$(BINDIR)/cs2n ; \
+	fi
+
+uninstall:
+	$(RM) Nemerle.CSharp
+	$(GACUTIL_UNINSTALL_COMMAND) Nemerle.CSharp
+	$(RM) Nemerle.CSharp.CS
+	$(GACUTIL_UNINSTALL_COMMAND) Nemerle.CSharp.CS
+	$(RM) antlr.runtime
+	$(GACUTIL_UNINSTALL_COMMAND) antlr.runtime
+	$(RM) $(BINDIR)/cs2n
+	$(Q)rm -f $(BINDIR)/cs2n
+	$(RM) $(BINDIR)/cs2n.exe
+	$(Q)rm -f $(BINDIR)/cs2n.exe
+	
 
 clean:
 	rm -f *.exe *.dll *.pdb *~ error_log $(GENERATED_SOURCES) $(GENERATED_TOKEN_DESCRIPTION)
