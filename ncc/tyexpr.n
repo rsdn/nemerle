@@ -79,13 +79,12 @@ public module Tyexpr {
                                (type_of (expr)).as_string ())
   }
 
-  closurise (env : Env, x : Decl) : bool
+  closurise (ctx : CTX, x : Decl) : bool
   {
     //Message.debug ("tryclo " + x.name + " = " + string_of_int (x.id));
     match (x.parent_fun) {
       | Some (d) =>
-        def this_fn = Option.unsome (env.parent_fun);
-        if (d.id == this_fn.id) false
+        if (d.id == ctx.current_fun.id) false
         else
           if (x.in_closure) true
           else {
@@ -172,7 +171,7 @@ public module Tyexpr {
         | Sym_type_member => acc
         | Sym_type (t) => handle_type (t)
         | Sym_local (d) =>
-          ignore (closurise (ctx.env, d));
+          ignore (closurise (ctx, d));
           E_local_ref (loc = expr.loc, ty = d.ty, decl = d) :: acc
       }
     };
@@ -189,7 +188,7 @@ public module Tyexpr {
         | PT.E_ref (n) =>
           match (ctx.env.LookupSymbol (n)) {
             | [Sym_local (d)] =>
-              ignore (closurise (ctx.env, d));
+              ignore (closurise (ctx, d));
               def ty =
                 match (d.kind) {
                   | D_local_fun (h, _) =>
@@ -523,24 +522,32 @@ public module Tyexpr {
     public in_ctor : bool;
     public env : Env;
     public tenv : Tyvar.TEnv;
+    public current_fun : Fun_header;
 
     public this (this_ptr_decl : option (Decl),
-                 in_ctor : bool, env : Env, tenv : Tyvar.TEnv)
+                 in_ctor : bool, env : Env, tenv : Tyvar.TEnv,
+                 current_fun : Fun_header)
     {
       this.this_ptr_decl <- this_ptr_decl;
       this.in_ctor <- in_ctor;
       this.env <- env;
       this.tenv <- tenv;
+      this.current_fun <- current_fun;
     }
 
     public with_env (e : Env) : CTX
     {
-      CTX (this.this_ptr_decl, this.in_ctor, e, this.tenv)
+      CTX (this_ptr_decl, in_ctor, e, tenv, current_fun)
     }
 
     public with_tenv (e : Tyvar.TEnv) : CTX
     {
-      CTX (this.this_ptr_decl, this.in_ctor, this.env, e)
+      CTX (this_ptr_decl, in_ctor, env, e, current_fun)
+    }
+    
+    public with_current_fun (h : Fun_header) : CTX
+    {
+      CTX (this_ptr_decl, in_ctor, env, tenv, h)
     }
   }
 
@@ -581,17 +588,15 @@ public module Tyexpr {
     def add_fun (acc : Env * list (Fun_header), d : PT.Function_decl) {
       def (env, hs) = acc;
 
-      def pars =
-        match (env.parent_fun) {
-          | Some (h) =>
-            if (h.decl == null) [h]
-            else
-              match (h.decl.kind) {
-                | D_local_fun (_, pars) => h :: pars
-                | _ => Util.ice ()
-              }
-          | None => Util.ice ()
-        };
+      def pars = {
+        def h = ctx.current_fun;
+        if (h.decl == null) [h]
+        else
+          match (h.decl.kind) {
+            | D_local_fun (_, pars) => h :: pars
+            | _ => Util.ice ()
+          }
+      };
 
       def h = d.header;
       def (tenv, typarms) = ctx.tenv.add_typarms (env, h.typarms);
@@ -610,16 +615,16 @@ public module Tyexpr {
          decl = null);
 
       def (env, d) =
-        env.add_local (d.header.name, D_local_fun (h', pars), Tyutil.fun_type (h'));
+        env.add_local (d.header.name, D_local_fun (h', pars), Tyutil.fun_type (h'), 
+                       ctx.current_fun);
       h'.decl <- d;
       (env, h' :: hs)
     };
 
     def (env', decls) = List.fold_left (add_fun, (ctx.env, []), fs);
     def do_fun (d : PT.Function_decl, h : Fun_header) : Function_decl {
-      def env = env'.copy ();
-      env.parent_fun <- Some (h);
-      Function_decl (h.decl, ty_function (ctx.with_env (env), h, d.body))
+      def ctx' = ctx.with_env (env').with_current_fun (h);
+      Function_decl (h.decl, ty_function (ctx', h, d.body))
     };
     (List.map2 (do_fun, fs, List.rev (decls)), env')
   }
@@ -642,7 +647,8 @@ public module Tyexpr {
             | _ =>
               Message.fatal_error ("$ operator used outside quotation <[ ... ]> context")
           };
-          def (env', decl) = ctx.env.add_local (name, D_local_value(), type_of (val));
+          def (env', decl) = ctx.env.add_local (name, D_local_value(), type_of (val), 
+                                                ctx.current_fun);
           decl.is_ref <- x.is_ref;
           def body = ty_sequence (ctx.with_env (env'), xs);
           fixup (E_let (decl, val, body), type_of (body))
@@ -665,7 +671,7 @@ public module Tyexpr {
             Message.hint ("use def _ = ... ; to avoid the warning");
 
             def tmp = Util.tmpname ("ign");
-            def (env', decl) = ctx.env.add_local (tmp, D_local_value (), type_of (ex));
+            def (env', decl) = ctx.env.add_local (tmp, D_local_value (), type_of (ex), ctx.current_fun);
             def body = ty_sequence (ctx.with_env (env'), xs);
             fixup (E_let (decl, ex, body), type_of (body))
           }
@@ -822,7 +828,7 @@ public module Tyexpr {
               (E_mkarray (type_array_initializers (lst)), T_array (array_type))
           };
           def fresh_name = Util.tmpname ("array_initializer");
-          def (env', decl) = ctx.env.add_local (fresh_name, D_local_value (), array_type);
+          def (env', decl) = ctx.env.add_local (fresh_name, D_local_value (), array_type, ctx.current_fun);
           decl.is_ref <- false;
           def array_as_let = E_let (decl, typed_initializers, E_local_ref (decl));
           array_as_let.loc <- expr.loc;
@@ -888,7 +894,7 @@ public module Tyexpr {
             | _ =>
             Message.fatal_error ("$ operator used outside quotation <[ ... ]> context")
           };
-          def (env', decl) = ctx.env.add_local (exn, D_exn (), bind_ty (x.exn_ty));
+          def (env', decl) = ctx.env.add_local (exn, D_exn (), bind_ty (x.exn_ty), ctx.current_fun);
           def h = ty_expr (ctx.with_env (env'), x.handler);
           match (Tyutil.unify_branches (type_of (h), type_of (b))) {
             | Some (t) =>
@@ -1019,7 +1025,7 @@ public module Tyexpr {
           match (ctx.this_ptr_decl) {
               | Some (d) =>
               def e =
-                if (closurise (ctx.env, d)) E_local_ref (d)
+                if (closurise (ctx, d)) E_local_ref (d)
                 else E_this ();
               (e, d.ty)
             | None =>
@@ -1079,7 +1085,7 @@ public module Tyexpr {
   {
     def add_parm (env : Env, p : Fun_parm) : Env {
       Util.locate (p.loc, fun () : Env {
-                            def (env, d) = env.add_local (p.name, D_fun_parm (), p.ty);
+                            def (env, d) = env.add_local (p.name, D_fun_parm (), p.ty, h);
                             p.decl <- d;
                             env
                          })
@@ -1098,7 +1104,7 @@ public module Tyexpr {
               mutable parms <- [];
               def mkparm (env : Env, t : Type) : Env {
                 def name = Util.tmpname ("tuple_arg");
-                def (env, d) = env.add_local (name, D_fun_parm (), t);
+                def (env, d) = env.add_local (name, D_fun_parm (), t, h);
                 def fp = Fun_parm (loc = single_parm.loc,
                                    name = name,
                                    ty = t,
@@ -1107,7 +1113,7 @@ public module Tyexpr {
                 env
               };
               def env = List.fold_left (mkparm, ctx.env, types);
-              def (env, decl) = env.add_local (single_parm.name, D_local_value (), single_parm.ty);
+              def (env, decl) = env.add_local (single_parm.name, D_local_value (), single_parm.ty, h);
               h.parms <- List.rev (parms);
               def mkref (p : Fun_parm) : Expr {
                 fixup (E_local_ref (p.decl), p.loc, p.ty)
@@ -1333,7 +1339,8 @@ public module Tyexpr {
                                          ti.GetMemType (), m.GetHeader ()))
                            else None (),
                          env = ti.env.copy (),
-                         tenv = m.GetHeader ().tenv);
+                         tenv = m.GetHeader ().tenv,
+                         current_fun = m.GetHeader ());
 
           def m' = (m :> NemerleMethod);
           match (m.GetFunKind ()) {
@@ -1341,7 +1348,6 @@ public module Tyexpr {
               methods <- m' :: methods
             | _ => ()
           };
-          ctx.env.parent_fun <- Some (m.GetHeader ());
           try
             m'.fun_body <- ty_function (ctx, m.GetHeader (), m'.fun_body)
           with { x : Recovery => () }
