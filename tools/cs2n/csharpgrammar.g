@@ -1598,9 +1598,7 @@ returns [StatementTree t]
         temp = block {a.Add (temp);}  
         ( temp = catch_clauses 
             {
-               a.Add (new StatementTree ( ExtendedToken.getWhitespaces (tr) + "catch {"));
                a.Add (temp);
-               a.Add (new StatementTree ( ExtendedToken.getWhitespaces (tr) + "}"));
             }    
             (temp = finally_clause { a.Add (temp); }  )? 
             
@@ -1629,22 +1627,24 @@ specific_catch_clause
 returns [StatementTree t]
 {
     t = new StatementTree();
-    string ids = "_";
     string [] tp = new string[]{"",""};
     string catched_type = "";
     LinkedList a = new LinkedList ();
 }
-    :       c:CATCH         
-            lp:LPAREN       
+    :       c:CATCH         {a.Add (new StatementTree(c));}
+            lp:LPAREN       {a.Add (new StatementTree(lp));}
+
             (     s:STRING {catched_type = s.getText ();}
                 | o:OBJECT {catched_type = o.getText ();} 
                 | tp = type_name {catched_type = tp[0] + tp[1];}
-            )          
-            (id:IDENTIFIER {ids = id.getText ();})?   
-            rp:RPAREN   {a.Add (new StatementTree(ExtendedToken.getWhitespaces(c) + "| " 
-                                                    + ExtendedToken.getWhitespaces(lp) + ids + " : " 
-                                                    + catched_type
-                                                    + ExtendedToken.getWhitespaces(rp) + " => " ));}
+            )          {a.Add (new StatementTree(catched_type));}
+
+            (id:IDENTIFIER 
+		{
+		    a.Add (new StatementTree(id));
+		}
+	    )?   
+            rp:RPAREN   {a.Add (new StatementTree(rp));}
             t = block    {a.Add (t);}        
             { t = new StatementTree("SPECIFIC_CATCH",a); }
     ;   
@@ -1655,8 +1655,8 @@ returns [StatementTree t]
     t = new StatementTree();
     LinkedList a = new LinkedList ();
 }
-    :   c:CATCH   {a.Add (new StatementTree(ExtendedToken.getWhitespaces(c) + "| _ : System.Exception => " ));}
-        t = block {a.Add (t);}
+    :   c:CATCH	    {a.Add (new StatementTree(c));}
+        t = block   {a.Add (t);}
         { t = new StatementTree("GENERAL_CATCH",a); }
     ;
 
