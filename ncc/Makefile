@@ -376,5 +376,5 @@ install:
 
 clean:
 	cd testsuite && $(MAKE) clean
-	rm -f *.exe.so *.dll.so *.pdb core.[0-9]* core
-	rm -rf out.stage*
+	rm -f *.exe.so *.dll.so *.pdb *.xml core.[0-9]* core
+	rm -rf out.stage* doc
