@@ -18,6 +18,7 @@ public class Application
 
   protected GetVars : Hashtable (string, string);
   protected PostVars : Hashtable (string, string);
+  protected PostVarsBytes : Hashtable (string, array (System.Byte));
   protected mutable PageName : string;
   protected mutable Client : Socket;
   protected mutable SockStream : NetworkStream;
@@ -27,6 +28,7 @@ public class Application
   {
     GetVars <- Hashtable (10);
     PostVars <- Hashtable (10);
+    PostVarsBytes <- Hashtable (10);
     PageName <- "";
   }
 
@@ -39,26 +41,19 @@ public class Application
       (s, "")
   }
 
-  parse_into (h : Hashtable (string, string), qs : string) : void
-  {
-    def ql = List.FromArray (qs.Split (array ['&']));
-    List.Iter (fun (s : string) {
-      def (n, v) = split_at ('=', s);
-      def decode (s : string) { 
-        System.Web.HttpUtility.UrlDecode (s, System.Text.Encoding.UTF8)
-      };
-      h.Set (decode (n), decode (v))
-    }, ql)
-  }
-
   set_get_vars (fname : string) : void
   {
-    def idx = fname.IndexOf ('?');
-    if (idx != -1) {
-      PageName <- fname.Substring (0, idx);
-      parse_into (GetVars, fname.Substring (idx + 1));
-    } else
-      PageName <- fname;
+    def (p, qs) = split_at ('?', fname);
+    PageName <- p;
+    when (qs != "") {
+      List.Iter (fun (s : string) {
+        def (n, v) = split_at ('=', s);
+        def decode (s : string) { 
+          System.Web.HttpUtility.UrlDecode (s, System.Text.Encoding.UTF8)
+        };
+        GetVars.Set (decode (n), decode (v));
+      }, List.FromArray (qs.Split (array ['&'])))
+    }
   }
 
   read_line () : string
@@ -93,7 +88,9 @@ public class Application
           //printf ("%s : %s\n", name, val);
           match (name.ToLower ().Trim ()) {
             | "content-length" =>
-              post_length <- int.Parse (val)
+              post_length <- int.Parse (val);
+              when (post_length > 500000)
+                ReportInternalError ("Posted content length exceeded 500000 bytes.")
             | _ => ()
           };
           loop ();
@@ -105,23 +102,46 @@ public class Application
 
   set_post_vars () : void
   {
-    def sb = System.Text.StringBuilder ();
-    def loop () {
-      if (post_length == 0) ()
-      else {
-        post_length <- post_length - 1;
-        def ch = SockStream.ReadByte ();
-        if (ch == -1) ()
-        else {
-          ignore (sb.Append ((ch :> char)));
-          loop ()
+    when (post_length > 0) {
+      def buf = array (post_length);
+      def read_exactly (pos) {
+        when (post_length > pos) {
+          def res = SockStream.Read (buf, pos, post_length - pos);
+          read_exactly (pos + res)
         }
-      }
-    };
-    loop ();
-    parse_into (PostVars, sb.ToString ())
+      };
+      read_exactly (0);
+      def get_field (name, start, pos) {
+        if (pos >= buf.Length ||
+            buf[pos] == ('&' :> System.Byte) || 
+            (name && buf[pos] == ('=' :> System.Byte))) {
+          // System.Web.HttpUtility.UrlDecodeToBytes is br0ken in mono
+          def enc = System.Text.Encoding.GetEncoding ("iso_8859_1");
+          def str = enc.GetString (buf, start, pos - start);
+          def bytes = enc.GetBytes (System.Web.HttpUtility.UrlDecode (str));
+          (pos + 1, bytes)
+        } else
+          get_field (name, start, pos + 1)
+      };
+      def loop (start) {
+        when (start < buf.Length) {
+          def (start, name) = get_field (true, start, start);
+          def (start, val) = 
+            if (start >= buf.Length)
+              (start, array (0))
+            else
+              get_field (false, start, start);
+          def name = System.Text.Encoding.UTF8.GetString (name);
+          PostVarsBytes.Set (name, val);
+          def val = System.Text.Encoding.UTF8.GetString (val);
+          PostVars.Set (name, val);
+          loop (start)
+        }
+      };
+      loop (0)
+    }
   }
-
+    
   public HandleRequest (fname : string, client : Socket, 
                         stream : NetworkStream, was_post : bool) : void
   {
