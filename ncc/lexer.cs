@@ -545,6 +545,7 @@ class Lexer : yyParser.yyInput
 		keywords["static"] = Token.KW_STATIC;
 		keywords["mutable"] = Token.KW_MUTABLE;
 		keywords["def"] = Token.KW_DEF;
+		keywords["module"] = Token.KW_MODULE;
 	}
 }
 
