@@ -38,7 +38,7 @@ nemroot = /nemerle/(trunk|(branches|tags)/[^/]+)
 
 # files that contain System.Reflection.AssemblyVersion attribute
 version_files = \
-	ncc/AssemblyInfo.n \
+	ncc/misc/AssemblyInfo.n \
 	macros/AssemblyInfo.n \
 	lib/AssemblyInfo.n \
 	ncc/main.n
