@@ -72,12 +72,10 @@ install:
 	$(Q)$(GACUTIL_COMMAND) Nemerle.dll
 	$(Q)$(GACUTIL_COMMAND) Nemerle.Compiler.dll
 	$(Q)$(GACUTIL_COMMAND) Nemerle.Macros.dll
-	export MONO_PATH=$$MONO_PATH:$$PWD ; $(NGEN_GAC)
-	$(INST) [$(BINDIR)] ncc
-	$(Q)if [ "$(NET_ENGINE)" = "" ] ; then \
-		$(INSTALL) -m 755 ncc.exe $(DESTDIR)$(BINDIR)/ncc ; \
-	else \
-		$(INSTALL) -m 755 ncc.exe $(DESTDIR)$(BINDIR)/ncc.exe && \
+	MONO_PATH=$$MONO_PATH:$$PWD $(NGEN_GAC)
+	$(INST) [$(BINDIR)] ncc.exe
+	$(Q)$(INSTALL) -m 755 ncc.exe $(DESTDIR)$(BINDIR)/ncc.exe
+	$(Q)if test "X$(NET_ENGINE)" != "X"; then \
 		echo "#!/bin/sh" > $(DESTDIR)$(BINDIR)/ncc && \
 		echo '$(NET_ENGINE) $(BINDIR)/ncc.exe "$$@"' >> $(DESTDIR)$(BINDIR)/ncc ; \
 		chmod 755 $(DESTDIR)$(BINDIR)/ncc ; \
@@ -90,6 +88,8 @@ uninstall:
 	$(Q)rm -f $(LIBDIR)/Nemerle.dll
 	$(RM) $(BINDIR)/ncc
 	$(Q)rm -f $(BINDIR)/ncc
+	$(RM) $(BINDIR)/ncc.exe
+	$(Q)rm -f $(BINDIR)/ncc.exe
 	$(RM) $(LIBDIR)/Nemerle.Macros.dll
 	$(Q)rm -f $(LIBDIR)/Nemerle.Macros.dll
 
