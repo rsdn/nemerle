@@ -27,7 +27,7 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-$compiler = "mono --debug ../ncc.exe ../../npc/lib/core.n";
+$compiler = "mono --debug ../ncc.exe ../lib/core.n";
 $cs_compiler = shift;
 defined $cs_compiler or $cs_compiler = "cscc";
 $cs_compiler =~ /^(cscc|mcs)$/ or die "bad cs_compiler";
@@ -90,7 +90,9 @@ while (<*.n>) {
   if ($res && scalar (keys %err) == 0) {
     err("unxepected error exit status");
   }
-  
+
+  system("grep -v '\\.\\.\\.\$' test.err > test.tmp; mv test.tmp test.err");
+
   foreach (keys %err) {
     $line = $_;
     err("expected error: \"$err{$line}\" at line $line")
@@ -108,7 +110,7 @@ while (<*.n>) {
     err("unexpected error at line $line")
       if (xgrep("^$fn:$line:", "test.err"));
   }
-
+ 
   err("unexpected compiler output")
     if (!$any_errors && -s "test.err");
 
