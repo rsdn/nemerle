@@ -67,18 +67,17 @@ namespace Nemerle.Compiler
 
     internal CloneWithNext (other : GrammarElement) : GrammarElement
     {
-      if (other == null) this
-      else
-        match (this) {
-          | Operator (name) => Operator (other, other.Target, name)
-          | Keyword (name)  => Keyword (other, other.Target, name)
-          | Expression      => Expression (other, other.Target)
-          | Parameter       => Parameter (other, other.Target)
-          | ExpressionList  => ExpressionList (other, other.Target)
-          | RawToken        => RawToken (other, other.Target)         
-          | Optional (body) => Optional (other, other.Target, body)
-          | Branch | End    => Util.ice ("tree like elements are not allowed to be cloned")
-        }
+      assert (other != null);
+      match (this) {
+        | Operator (name) => Operator (other, other.Target, name)
+        | Keyword (name)  => Keyword (other, other.Target, name)
+        | Expression      => Expression (other, other.Target)
+        | Parameter       => Parameter (other, other.Target)
+        | ExpressionList  => ExpressionList (other, other.Target)
+        | RawToken        => RawToken (other, other.Target)         
+        | Optional (body) => Optional (other, other.Target, body)
+        | Branch | End    => Util.ice ("tree like elements are not allowed to be cloned")
+      }
     }
 
     internal AddBranch (next : GrammarElement) : GrammarElement {
@@ -148,7 +147,6 @@ namespace Nemerle.Compiler
      */
     load_syntax (extensions : list [SyntaxDefinition]) : SystemMap [string, GrammarElement]
     {
-      
       mutable keywords = syntax_keywords;
       foreach (definition in extensions) {
         def start = definition.Start;
@@ -164,27 +162,33 @@ namespace Nemerle.Compiler
       keywords
     }
 
+    [Nemerle.Assertions.Requires (ext != null)]
     internal MergeSyntax (s1 : GrammarElement, s2 : GrammarElement,
                           ext : SyntaxDefinition) : GrammarElement
     {
       if (s1 == null)
-        if (ext != null)
-          match (ext.MacroNamespace.Value) {
-            | GlobalEnv.TypeInfoCache.MacroCall (m) =>
-              def target =
-                if (m.Usage == null) (1 << 15) :> MacroTargets
-                else m.Usage.ValidOn;
+        match (ext.MacroNamespace.Value) {
+          | GlobalEnv.TypeInfoCache.MacroCall (m) =>
+            def target =
+              if (m.Usage == null) (1 << 15) :> MacroTargets
+              else m.Usage.ValidOn;
 
-              def end = GrammarElement.End (null, target, ext);
-              if (s2 != null) s2.AddBranch (end)
-              else end
+            def end = GrammarElement.End (null, target, ext);
+            if (s2 != null) s2.AddBranch (end)
+            else end
 
-            | _ => Util.ice ("no macro")
-          }
-        else
-          s2
-      else if (s2 == null)
-        s1.CloneWithNext (MergeSyntax (s1.Next, null, ext))
+          | _ => Util.ice ("no macro")
+        }
+      else if (s2 == null) {
+        def end = MergeSyntax (s1.Next, null, ext);
+        match (s1) {
+          | GrammarElement.Optional (e) =>
+            def subnode = MergeSyntax (e, null, ext);
+            GrammarElement.Optional (subnode).CloneWithNext (end)
+
+          | _ => s1.CloneWithNext (end)
+        }
+      }
       else {
         match ((s1, s2)) {
           | (GrammarElement.Operator (n1), GrammarElement.Operator (n2)) when n1 == n2
@@ -193,13 +197,14 @@ namespace Nemerle.Compiler
           | (GrammarElement.Parameter, GrammarElement.Parameter)
           | (GrammarElement.RawToken, GrammarElement.RawToken)          
           | (GrammarElement.Expression, GrammarElement.Expression) =>
-            assert (s1.Equals (s2));
             def end = MergeSyntax (s1.Next, s2.Next, ext);
             s1.CloneWithNext (end)
             
           | (GrammarElement.Optional (e1), GrammarElement.Optional (e2)) when e1.Equals (e2) =>
             def end = MergeSyntax (s1.Next, s2.Next, ext);
-            def newsubnode = MergeSyntax (e1, e2, null);            
+            // FIXME: the last element in nested optional chain won't be used for now
+            //        but in general it should hold current next 
+            def newsubnode = MergeSyntax (e1, e2, ext); 
             GrammarElement.Optional (newsubnode).CloneWithNext (end)
 
           | _ =>
@@ -304,20 +309,6 @@ namespace Nemerle.Compiler
       }
     }
 
-    shift_rule (rule : GrammarElement) : void {
-      | GrammarElement.Keyword (k) => assert (flag_sibling_keyword (k));
-      | GrammarElement.Operator ("]")      
-      | GrammarElement.Operator (")") => ()
-      | GrammarElement.Operator (";") =>
-        if (stream == null)
-          jump_to_sibling ();
-        else
-          shift ();
-
-      | GrammarElement.Operator (n) => expect_operator (n);
-      | _ => ()
-    } 
-    
     parse_grammar_rule (tree : GrammarElement, stop : TokenStoppers, target : MacroTargets)
       : GrammarElement * list [SyntaxElement]
     {
@@ -331,6 +322,7 @@ namespace Nemerle.Compiler
       }
       
       def loop (acc, x : GrammarElement) {
+        assert (x != null);
         def next = x.Next;
         match (x) {
           | GrammarElement.Operator ("[" as brace)
@@ -419,25 +411,14 @@ namespace Nemerle.Compiler
                 SyntaxElement.Expression (null);
               else
                 SyntaxElement.Expression (parse_expr (stop));
-            shift_rule (next);
-                
-            match (next) {
-              | GrammarElement.Operator (")") | GrammarElement.End =>
-                (next, List.Rev (expr :: acc))
-
-              | GrammarElement.Operator (";") 
-              | GrammarElement.Keyword | GrammarElement.Operator =>
-                loop (expr :: acc, next.Next)                
-
-              | x =>
-                Message.fatal_error (last_tok.Location, "syntax definition of macro is ambiguous: " + 
-                                     x.ToString ())
-            }
+            loop (expr :: acc, next)
 
           | GrammarElement.Optional (opt) =>
-            when (matches_stream (opt))
-              shift_rule (opt);
-            loop (acc, next)
+            if (matches_stream (opt)) {
+              def (_, res) = parse_grammar_rule (opt, stop, target);
+              loop (List.RevAppend (res, acc), next)
+            }
+            else loop (acc, next)
            
           | GrammarElement.Branch (opts) =>
             mutable end = null;
