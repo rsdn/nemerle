@@ -66,7 +66,7 @@ NEMERLE_DLL_SRC = \
 	../lib/icomparable.n		\
 	../lib/narray.n			\
 	../lib/nstring.n                \
-    ../lib/AssemblyInfo.n \
+	../lib/AssemblyInfo.n
 
 NEMERLE_COMPILER_DLL_SRC = \
 	internaltypes.n \
@@ -103,9 +103,9 @@ NEMERLE_COMPILER_DLL_SRC = \
 	tyutil.n \
 	itypemodifier.n \
 	attribute.n \
-    AssemblyInfo.n \
-	pretty-print.n
-
+	AssemblyInfo.n \
+	pretty-print.n \
+	delegates.n
 
 
 NCC_EXE_SRC       = main.n
