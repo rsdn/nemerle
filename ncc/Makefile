@@ -66,6 +66,7 @@ NEMERLE_DLL_SRC = \
 	../lib/icomparable.n		\
 	../lib/narray.n			\
 	../lib/nstring.n                \
+	../lib/pair.n			\
 	../lib/AssemblyInfo.n
 
 NEMERLE_COMPILER_DLL_SRC = \
