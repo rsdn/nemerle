@@ -66,6 +66,7 @@ all:
 	elif find tools/cs2n/CSharpParser.cs -cnewer tools/cs2n/csharpgrammar.g | grep -q "" ; then \
 		$(MAKE) -C tools/cs2n all; \
 	fi
+	$(Q)$(MAKE) -C tools/nant-task all
 
 
 # This is necessary to make sure, that configuration file
@@ -117,6 +118,7 @@ install: all
 	$(Q)$(MAKE) -C ncc install
 	$(Q)if test -f tools/cs2n/cs2n.exe ; then \
 	  $(MAKE) -C tools/cs2n install; fi
+	$(Q)$(MAKE) -C tools/nant-task all install
 	$(INST) $(PKGCONFIGDIR)/nemerle.pc
 	$(Q)install -d $(DESTDIR)$(PKGCONFIGDIR)
 	$(Q)install -m 644 nemerle.pc $(DESTDIR)$(PKGCONFIGDIR)/nemerle.pc
@@ -138,6 +140,9 @@ clean:
 	$(MAKE) -C doc clean
 	$(MAKE) -C ncc clean
 	$(MAKE) -C snippets clean
+	$(MAKE) -C tools/cs2n clean
+	$(MAKE) -C tools/nant-task clean
+	$(MAKE) -C tools/htmldumper clean
 	rm -f config.mak configure.log
 
 set-version: config.mak
