@@ -811,9 +811,18 @@ namespace Nemerle.Compiler
             class_type.BaseType;
 
         Message.debug ("add_constructor_body " + class_name + ", base class: " + base_type.FullName);
+
+        def internal_base_class = get_class_by_name (base_type.FullName);
         
-        def default_ctor_info = base_type.GetConstructor (BindingFlags.NonPublic %| BindingFlags.Public %| 
-                                                          BindingFlags.Instance, null, System.Type.EmptyTypes, null);
+        def default_ctor_info =
+          match (internal_base_class) {
+            | Some (internal_base_class) =>
+              def default_ctor = Option.unsome (internal_base_class.default_ctor);
+              (Option.unsome (default_ctor.ctor_builder) :> ConstructorInfo)
+            | None =>
+              base_type.GetConstructor (BindingFlags.NonPublic %| BindingFlags.Public %| 
+                                        BindingFlags.Instance, null, System.Type.EmptyTypes, null)
+          };
         assert (default_ctor_info != null);
 
         il_generator.Emit (OpCodes.Ldarg_0);
@@ -1005,6 +1014,35 @@ namespace Nemerle.Compiler
 
 
     (**
+     * Returns an internal (built in the current assembly) method info.
+     * This is a fail-sale for the 'extern' renames.
+     *
+     * FIXME: this will fail for overloaded methods.
+     *)
+    internal get_internal_method_info (class_name : string, method_name : string) : option (MethodInfo)
+    {
+      def incomplete_type = get_class_by_name (class_name);
+
+      match (incomplete_type) {
+        | Some (incomplete_type) =>          
+          def walk_decls (decls : list (CG_member)) : option (MethodInfo) {
+            match (decls) {
+              | [] => None ()
+              | (CM_method) as decl :: rest when decl.name == method_name =>
+                assert (Option.is_some (decl.method_builder), "could not find method builder for " + 
+                                                               class_name + "." + method_name);
+                Some ((Option.unsome (decl.method_builder) :> MethodInfo))
+              | _ :: rest => walk_decls (rest)
+            }
+          };          
+          walk_decls (incomplete_type.decls)    
+        
+        | None => None ()
+      }      
+    }
+
+
+    (**
      *
      *)
     internal get_method_info (method : CM_method, parm_types_list : list (System.Type)) : MethodInfo
@@ -1017,11 +1055,19 @@ namespace Nemerle.Compiler
         (method_builder :> MethodInfo)
       }
       else {
-        Message.debug ("EXTERNAL method.name: " + method.name + ", method.extern_name: " + method.extern_name);
-
         def (class_name, method_name) = split_global_ref (method.extern_name);
 
-        get_external_method_info (class_name, method_name, is_static_method (method), parm_types_list);
+        def internal_method_info = get_internal_method_info (class_name, method_name);
+        
+        match (internal_method_info) {
+          | Some (internal_method_info) => 
+            Message.debug ("INTERNAL (RETRY) method.name: " + method.name + ", method.extern_name: " + method.extern_name);
+            internal_method_info
+          | None =>
+            Message.debug ("EXTERNAL method.name: " + method.name + ", method.extern_name: " + method.extern_name);
+
+            get_external_method_info (class_name, method_name, is_static_method (method), parm_types_list)
+        }
       }
     }
 
@@ -1656,6 +1702,8 @@ namespace Nemerle.Compiler
               | "%op*" => _ilg.Emit (OpCodes.Mul_Ovf);
               | "%op/" => _ilg.Emit (OpCodes.Div);
               | "%op%" => _ilg.Emit (OpCodes.Rem);
+              | "%op|" => _ilg.Emit (OpCodes.Or);
+              | "%op&" => _ilg.Emit (OpCodes.And);
               | "%op!" =>
                 _ilg.Emit (OpCodes.Ldc_I4_0);
                 _ilg.Emit (OpCodes.Ceq);                
@@ -1713,12 +1761,17 @@ namespace Nemerle.Compiler
 
 
         (* emit the try/with construction *)
-        | CE_try_with (try_expr, catch_type, catch_expr) =>
+        | CE_try_with (try_expr, catch_val, catch_expr) =>
           def exception_block = _ilg.BeginExceptionBlock ();
           
           def cutoff = emit (try_expr);
           
-          _ilg.BeginCatchBlock (_cgil.reflect_nemerle_type (catch_type.ty));
+          _ilg.BeginCatchBlock (_cgil.reflect_nemerle_type (catch_val.ty));
+
+          catch_val.local_slot <- _ilg.DeclareLocal (_cgil.reflect_nemerle_type (catch_val.ty));
+          catch_val.local_slot.SetLocalSymInfo (catch_val.name);
+
+          _ilg.Emit (OpCodes.Stloc_S, catch_val.local_slot);
           
           def _ = emit (catch_expr);
           
