@@ -33,6 +33,8 @@ include ../config.mak
 # VARIABLES
 ############################################################
 
+EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
+
 ############################################################
 # OUTPUT
 ############################################################
@@ -45,8 +47,7 @@ CP    = @echo CP    $1
 # TARGETS
 ############################################################
 
-# Default rule is to do nothing at all.
-all:
+all: Nemerle.NAnt.Task.dll
 
 # This is necessary to make sure, that configuration file
 # has been generated, and it is up to date.
@@ -56,3 +57,11 @@ all:
 
 nemerle-fortunes.dat: nemerle-fortunes
 	strfile nemerle-fortunes
+
+Nemerle.NAnt.Task.dll: NantTask.n
+	$(EXECUTE) ../ncc/out.stage3/ncc.exe -q -greedy+ -r NAnt.DotNetTasks.dll -r NAnt.Core.dll -out $@ -t:library NantTask.n
+
+clean:
+	rm -f *.exe *.dll core core.[0-9]*
+
+
