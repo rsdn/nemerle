@@ -11,7 +11,7 @@ all: $(target)
 	mono --debug ./$(target) ../lib/core.n $(n_src)
 
 $(target): $(all_src)
-	../npc $(n_src)
+	../npc.opt $(n_src)
 	mcs -debug+ -o $@ $(all_cs)
 
 t:

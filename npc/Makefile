@@ -27,7 +27,7 @@ OFLAGS = -g -warn-error A
 
 include make.config
 
-all: npc
+all: npc npc.opt
 
 opt: npc.opt
 
