@@ -163,6 +163,21 @@ module Parser {
     }
   }
   
+  get_splicable_id (ctx : CTX) : Splicable_string {
+    def loc = location_here (ctx);
+    match (get_token (ctx)) {
+      | Tok_identifier (n) => SS_string (loc, n)
+      | Tok_operator ("$", _) =>
+        match (get_token (ctx)) {
+          | Tok_identifier (n) => SS_spliced_expr (loc, E_ref (location (ctx), n))
+          | _ => fatal_error (ctx, "expecting identifier after `$' in spliced string")
+        }
+      | Tok_keyword ("_") => 
+        SS_string (loc, "_N_d" + string_of_int (Util.next_id ()))
+      | _ => fatal_error (ctx, "expecting identifier")
+    }
+  }
+
   get_tyvar (ctx : CTX) : string {
     match (get_token (ctx)) {
       | Tok_tyvar (tv) => tv
@@ -188,7 +203,8 @@ module Parser {
 
   parse_fun_header (ctx : CTX, 
                     allow_inference : bool, 
-                    allow_ctor : bool) : Fun_header 
+                    allow_ctor : bool,
+                    is_lambda : bool) : Fun_header 
   {
     def tok = get_token (ctx);
     locate (ctx, fun () {
@@ -205,6 +221,8 @@ module Parser {
       def name =
         match (get_token (ctx)) {
           | Tok_keyword ("this") when allow_ctor => ".ctor"
+          | Tok_keyword ("fun") when is_lambda => "_N_l" + string_of_int (Util.next_id ())
+          | _ when is_lambda => fatal_error (ctx, "expecting `fun'")
           | Tok_identifier (n) => n
           | _ => fatal_error (ctx, "expecting function name")
         };
@@ -422,19 +440,6 @@ module Parser {
     }
   }
 
-  get_splicable_id (ctx : CTX) : Splicable_string {
-    def loc = location_here (ctx);
-    match (get_token (ctx)) {
-      | Tok_identifier (n) => SS_string (loc, n)
-      | Tok_operator ("$", _) =>
-        match (get_token (ctx)) {
-          | Tok_identifier (n) => SS_spliced_expr (loc, E_ref (location (ctx), n))
-          | _ => fatal_error (ctx, "expecting identifier after `$' in spliced string")
-        }
-      | _ => fatal_error (ctx, "expecting identifier")
-    }
-  }
-
   parse_pattern (ctx : CTX) : Pattern {
     def loop () {
       def loc = location_here (ctx);
@@ -577,8 +582,149 @@ module Parser {
     }
   }
   
-  parse_expr (ctx : CTX) : Expr {
-    null // FIXME
+  parse_semiclosed_expr (ctx : CTX) : Expr {
+    def loc = location_here (ctx);
+    match (get_token (ctx)) {
+      | Tok_keyword (k) when ctx.keywords.Contains (k) =>
+        def k = Util.unsome (ctx.keywords.Get (k));
+        k.parsing_function (ctx)
+        
+      | Tok_keyword ("match") =>
+        expect_keyword (ctx, "(");
+        def expr = parse_expr (ctx);
+        expect_keyword (ctx, ")");
+        expect_keyword (ctx, "{");
+        
+        def loop (acc : list (Match_case)) {
+          def loop2 (acc) {
+            def pat = parse_pattern (ctx);
+            def res =
+              if (flag_keyword (ctx, "when"))
+                (pat, Some (parse_expr (ctx)))
+              else (pat, None ());
+              
+            match (get_token (ctx)) {
+              | Tok_operator ("=>", _) => List.rev (res :: acc)
+              | Tok_operator ("|", _) => loop2 (res :: acc)
+              | _ => fatal_error (ctx, "found junk after pattern")
+            }
+          };
+
+          def parse_it () {
+            def pats = loop2 ([]);
+            def loc' = location_here (ctx);
+            def expr =
+              match (parse_expr_sequence (ctx)) {
+                | [x] => x
+                | l => E_sequence (loc', l)
+              };
+
+            loop (Match_case (pats, expr) :: acc)
+          };
+          
+          match (get_token (ctx)) {
+            | Tok_operator ("}", _) => List.rev (acc)
+            | Tok_operator ("|", _) => parse_it ()
+            | _ => push_back (ctx); parse_it ()
+          }
+        };
+        
+        E_match (loc, expr, loop ([]))
+
+      | Tok_keyword ("raise") =>
+        E_raise (loc, parse_expr (ctx))
+
+      | Tok_keyword ("try") =>
+        def body = parse_expr (ctx);
+        match (get_token (ctx)) {
+          | Tok_keyword ("with") =>
+            def id = get_splicable_id (ctx);
+            expect_operator (ctx, ":");
+            def t = parse_type (ctx);
+            expect_operator (ctx, "=>");
+            def handler = parse_expr (ctx);
+            E_try_with (body, id, t, handler)
+
+          | Tok_keyword ("finally") =>
+            def handler = parse_expr (ctx);
+            E_try_finally (loc, body, handler)
+
+          | _ => fatal_error (ctx, "expecting `with' or `finally'")
+        }
+
+      | Tok_keyword ("mkarray") =>
+        match (parse_prim_expr (ctx)) {
+          | E_list (exprs) => E_mkarray (loc, exprs)
+          | _ => fatal_error (ctx, "expected [ ... ] after `mkarray'")
+        }
+
+      | Tok_keyword ("fun") 
+      | Tok_tyvar (_) =>
+        push_back (ctx);
+        def h = parse_fun_header (ctx, allow_ctor = false,
+                                       allow_inference = true, 
+                                       is_lambda = true);
+        def expr = parse_block (ctx);
+        E_lambda (loc, Function_decl (h, expr))
+
+      | Tok_keyword ("mutable") =>
+        def id = get_splicable_id (ctx);
+        expect_operator (ctx, "<-");
+        E_let (loc, true, id, parse_expr (ctx))
+
+      | Tok_keyword ("def") =>
+        def parse_val () {
+          def id = get_splicable_id (ctx);
+          E_let (loc, false, id, parse_expr (ctx))
+        };
+
+        def parse_funs (acc) {
+          def h = parse_fun_header (ctx, allow_ctor = false, 
+                                         allow_inference = true, 
+                                         is_lambda = false);
+          def fd = Function_decl (h, parse_block (ctx));
+          match (peek_token (ctx)) {
+            | Tok_keyword ("and") =>
+              shift (ctx);
+              parse_funs (fd :: acc)
+            | _ => E_letfun (loc, List.rev (acc))
+          }
+        };
+        
+        match (peek_token (ctx)) {
+          | Tok_operator ("(", _) =>
+            def pat = parse_pattern (ctx);
+            expect_operator (ctx, "=");
+            def expr = parse_expr (ctx);
+            E_letpat (loc, pat, expr)
+
+          | Tok_tyvar => parse_funs ([])
+          
+          | Tok_identifier (n) =>
+            shift (ctx);
+            match (peek_token (ctx)) {
+              | Tok_operator ("(", _) => 
+                push_back (ctx);
+                parse_funs ([])
+                
+              | Tok_operator ("=", _) =>
+                push_back (ctx);
+                parse_val ()
+              
+              | _ => fatal_error (ctx, "expecting binding after `def'")
+            }
+
+          | Tok_operator ("$", _) 
+          | Tok_keyword ("_") => parse_val ()
+
+          | _ => fatal_error (ctx, "expecting binding after `def'")
+        }
+      
+      | _ => parse_prim_expr (ctx)
+    }
+  }
+
+  parse_expr (ctx : CTX) : Expr { null
   }
 
   parse_expr_sequence (ctx : CTX) : list (Expr) {
@@ -688,7 +834,8 @@ module Parser {
         push_back (ctx);
         def h = parse_fun_header (ctx, 
                                   allow_ctor = true, 
-                                  allow_inference = false);
+                                  allow_inference = false,
+                                  is_lambda = false);
         parse_fun (h)
         
       | Tok_keyword ("mutable") =>
@@ -703,7 +850,8 @@ module Parser {
             push_back (ctx);
             def h = parse_fun_header (ctx, 
                                       allow_ctor = true, 
-                                      allow_inference = false);
+                                      allow_inference = false,
+                                      is_lambda = false);
             parse_fun (h)
           | _ => parse_field (false, name)
         }
@@ -934,7 +1082,7 @@ module Parser {
       ignore (peek_token (ctx));
       locate (ctx, fun () {
         def is_new = flag_keyword (ctx, "new");
-        def h = parse_fun_header (ctx, allow_ctor = false, allow_inference = false);
+        def h = parse_fun_header (ctx, allow_ctor = false, allow_inference = false, is_lambda = false);
         M_function (h, FK_iface_method (is_new), FB_abstract ())
       })
     };
@@ -1185,7 +1333,12 @@ module Parser {
                          GE_expression (); GE_operator (";");
                          GE_expression (); GE_operator (";");
                          GE_expression (); GE_operator (")");
-                       GE_expression ()])
+                       GE_expression ()]);
+                       
+    add_macro ("if", [GE_operator ("("); GE_expression (); GE_operator (")");
+                         GE_expression (); 
+                      GE_operator ("else");
+                         GE_expression ()]);
   }
 
   public parse (lexer : ILexer) : list (Top_decl) {
