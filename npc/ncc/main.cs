@@ -40,6 +40,13 @@ class XParser : Parser {
 }
 
 class MainClass {
+	static void bomb(System.Exception e, string msg)
+	{
+		    Message.maybe_bailout(true);
+			System.Console.WriteLine("internal compiler error: " + msg + "\n" + e.StackTrace);
+			System.Environment.Exit(1);
+	}
+
 	public static void Main()
 	{
 		string[] argv = System.Environment.GetCommandLineArgs();
@@ -54,17 +61,13 @@ class MainClass {
 			Passes.run(ret);
 		} catch (yyParser.yyException e) {
 		    Message.maybe_bailout();
-			throw new ICE("got parsing exception, but no error seen");
+			bomb(e, "got parsing exception, but no error seen");
 		} catch (Recovery e) {
-		    Message.maybe_bailout(true);
-			throw new ICE("got Recovery exception");
+			bomb(e, "got Recovery exception");
 		} catch (Nemerle.Core.Match_failure e) {
-		    Message.maybe_bailout(true);
-			throw new ICE("got Match_failure exception");
+			bomb(e, "got Match_failure exception");
 		} catch (ICE i) {
-		    Message.maybe_bailout(true);
-			System.Console.WriteLine("internal compiler error: " + i.msg + "\n" + i.StackTrace);
-			System.Environment.Exit(1);
+			bomb(i, i.msg);
 		}
 
 		Message.maybe_bailout();
