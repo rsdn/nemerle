@@ -13,7 +13,8 @@ test -f $x || {
 }
 rm -rf dist
 mkdir -p dist/bin
-cp $top/boot/*.{exe,dll} dist/bin
+cp $top/boot/*.exe dist/bin
+cp $top/boot/*.dll dist/bin
 tar -C dist -zxf $tar
 mv dist/nemerle-*/doc/html dist/
 rm -rf dist/nemerle-*
