@@ -28,6 +28,7 @@
 TOP_LEVEL = ../..
 
 include $(TOP_LEVEL)/config.mak
+include config.cs2n.mak
 
 ######################################################
 #VARIABLES
@@ -38,15 +39,12 @@ NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
 NCC = $(NCC_DIR)/ncc.exe -q
 MCS = mcs
 
-ANTLR_LIB_DIR = ~/antlr-2.7.4/lib/csharp/src
-
 NEMERLE_DLLS = Nemerle.dll Nemerle.Macros.dll Nemerle.Compiler.dll
 ANTLR_DLL = antlr.runtime.dll
 
 GRAMMAR_FILE = csharpgrammar.g
 GENERATED_SOURCES_LEXER = CSharpLexer.cs
 GENERATED_SOURCES_PARSER = CSharpParser.cs  
-GENERATED_SOURCES_TREE_PARSER = CSharpTreeWalker.cs  
 GENERATED_SOURCES_TOKEN_TYPES = CSharpParserTokenTypes.cs
 GENERATED_TOKEN_DESCRIPTION = CSharpParserTokenTypes.txt
 
@@ -70,15 +68,33 @@ Nemerle.CSharp.CS.dll : Nemerle.CSharp.dll $(GENERATED_SOURCES_PARSER)
 Nemerle.CSharp.dll : $(NEMERLE_CSHARP_DLL_SOURCES) 
 	$(NCC) -tdll -r:antlr.runtime.dll -o:$@ $(NEMERLE_CSHARP_DLL_SOURCES) 
 
+ifneq "$(classpath)" ""
+
 $(GENERATED_SOURCES_PARSER): $(GRAMMAR_FILE)
-	java antlr.Tool $(GRAMMAR_FILE) 2> error_log
-	perl -p -i -e 's/block\(\)/Block\(\)/g' $(GENERATED_SOURCES_PARSER)
+	java -classpath $(classpath) antlr.Tool $(GRAMMAR_FILE) 2> error_log
+
+endif
 
 $(NEMERLE_DLLS): $(NCC_DIR)/$@
 	cp -f $(NCC_DIR)/$@ $@
 
-$(ANTLR_DLL): $(ANTLR_LIB_DIR)/$@
-	cp -f $(ANTLR_LIB_DIR)/$@ $@
+$(ANTLR_DLL): $(antlrhome)/lib/csharp/src/$@
+	cp -f $(antlrhome)/lib/csharp/src/$@ $@
+
+config.cs2n.mak: configure
+	./configure
+
+dist-clean: clean
+	rm -f  config.cs2n.mak
+
+ifeq "$(classpath)" ""
 
 clean:
-	rm -f *.exe *.dll *.pdb *~ $(GENERATED_SOURCES) $(GENERATED_TOKEN_DESCRIPTION) error_log
+	rm -f *.exe *.dll *.pdb *~ error_log
+
+else
+
+clean:
+	rm -f *.exe *.dll *.pdb *~ error_log $(GENERATED_SOURCES) $(GENERATED_TOKEN_DESCRIPTION)
+
+endif

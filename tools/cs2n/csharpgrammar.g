@@ -24,7 +24,7 @@
 // NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
-
+ 
 header{
     using System.Collections;
     using Nemerle.Collections;
@@ -91,28 +91,33 @@ returns [string return_string]
 //--------------------
 
 namespace_name
-returns [string return_string]
+returns [string [] return_strings]
 {
-    return_string = "";
+    return_strings = new string[]{"",""};
 }
-    :   return_string = namespace_or_type_name
+    :   return_strings = namespace_or_type_name
     ;
 
 type_name
-returns [string return_string]
+returns [string [] return_strings]
 {
-    return_string = "";
+    return_strings = new string[]{"",""};;
 }
-    :   return_string = namespace_or_type_name
+    :   return_strings = namespace_or_type_name
     ;
 
 namespace_or_type_name
-returns [string return_string]
+returns [string [] return_strings]
 {
-    return_string = "";
+    return_strings = new string[]{"",""};;
 }
-    :   id1:IDENTIFIER  {return_string = id1.getText();}
-        (options {greedy=true;}: DOT  id2:IDENTIFIER {return_string += ("." + id2.getText());})*
+    :   id1:IDENTIFIER  
+        {return_strings[0] = ExtendedToken.getWhitespaces (id1);
+         return_strings[1] = ExtendedToken.getTextOnly (id1);}
+        (options {greedy=true;}: DOT  id2:IDENTIFIER 
+            {return_strings[0] += ExtendedToken.getWhitespaces (id2);
+             return_strings[1] += ("." + ExtendedToken.getTextOnly (id2));}
+        )*
     ;      
 
 //-----------  
@@ -120,59 +125,89 @@ returns [string return_string]
 //-----------
 
 type
-returns [string return_string]
+returns [string [] return_strings]
 {
-    return_string = "";
+    return_strings = new string[]{"",""};
 }
-    :   (array_type)=> return_string = array_type
-    |   o:OBJECT {return_string = o.getText();}
-    |   s:STRING {return_string = s.getText();}
-    |   return_string = type_name
-    |   return_string = simple_type
+    :   (array_type)=> array_type
+    |   o:OBJECT 
+        {return_strings[0] = ExtendedToken.getWhitespaces (o);
+         return_strings[1] = ExtendedToken.getTextOnly (o);}
+    |   s:STRING 
+        {return_strings[0] = ExtendedToken.getWhitespaces (s);
+         return_strings[1] = ExtendedToken.getTextOnly (s);}
+    |   return_strings = type_name
+    |   return_strings = simple_type
     ;
 
 simple_type
-returns [string return_string]
+returns [string [] return_strings]
 {
-    return_string = "";
+    return_strings = new string[]{"",""};
 }
-    :   return_string = numeric_type
-    |   b:BOOL  {return_string = b.getText();}
+    :   return_strings = numeric_type
+    |   b:BOOL  
+        {return_strings[0] = ExtendedToken.getWhitespaces (b);
+         return_strings[1] = ExtendedToken.getTextOnly (b);}
     ;
 
 numeric_type
-returns [string return_string]
+returns [string [] return_strings]
 {
-    return_string = "";
+    return_strings = new string[]{"",""};
 }
-    :   return_string = integral_type
-    |   return_string = floating_point_type
-    |   d:DECIMAL  {return_string = d.getText();}
+    :   return_strings = integral_type
+    |   return_strings = floating_point_type
+    |   d:DECIMAL  
+        {return_strings[0] = ExtendedToken.getWhitespaces (d);
+         return_strings[1] = ExtendedToken.getTextOnly (d);}
     ;
 
 integral_type
-returns [string return_string]
+returns [string [] return_strings]
 {
-    return_string = "";
+    return_strings = new string []{"",""};
 }
-    :   i1:CHAR   {return_string = i1.getText();}
-    |   i2:INT    {return_string = i2.getText();}
-    |   i3:LONG   {return_string = i3.getText();}
-    |   i4:SBYTE  {return_string = i4.getText();}
-    |   i5:BYTE   {return_string = i5.getText();}
-    |   i6:SHORT  {return_string = i6.getText();}
-    |   i7:UINT   {return_string = i7.getText();}
-    |   i8:ULONG  {return_string = i8.getText();}
-    |   i9:USHORT {return_string = i9.getText();}
+    :   i1:CHAR   
+        {return_strings[0] = ExtendedToken.getWhitespaces (i1);
+         return_strings[1] = ExtendedToken.getTextOnly (i1);}
+    |   i2:INT    
+        {return_strings[0] = ExtendedToken.getWhitespaces (i2);
+         return_strings[1] = ExtendedToken.getTextOnly (i2);}
+    |   i3:LONG   
+        {return_strings[0] = ExtendedToken.getWhitespaces (i3);
+         return_strings[1] = ExtendedToken.getTextOnly (i3);}
+    |   i4:SBYTE  
+        {return_strings[0] = ExtendedToken.getWhitespaces (i4);
+         return_strings[1] = ExtendedToken.getTextOnly (i4);}
+    |   i5:BYTE   
+        {return_strings[0] = ExtendedToken.getWhitespaces (i5);
+         return_strings[1] = ExtendedToken.getTextOnly (i5);}
+    |   i6:SHORT  
+        {return_strings[0] = ExtendedToken.getWhitespaces (i6);
+         return_strings[1] = ExtendedToken.getTextOnly (i6);}
+    |   i7:UINT   
+        {return_strings[0] = ExtendedToken.getWhitespaces (i7);
+         return_strings[1] = ExtendedToken.getTextOnly (i7);}
+    |   i8:ULONG  
+        {return_strings[0] = ExtendedToken.getWhitespaces (i8);
+         return_strings[1] = ExtendedToken.getTextOnly (i8);}
+    |   i9:USHORT 
+        {return_strings[0] = ExtendedToken.getWhitespaces (i9);
+         return_strings[1] = ExtendedToken.getTextOnly (i9);}
     ;
 
 floating_point_type
-returns [string return_string]
+returns [string [] return_strings]
 {
-    return_string = "";
+    return_strings = new string[]{"",""};
 }
-    :   f:FLOAT   {return_string = f.getText();}
-    |   d:DOUBLE  {return_string = d.getText();}
+    :   f:FLOAT   
+        {return_strings[0] = ExtendedToken.getWhitespaces (f);
+         return_strings[1] = ExtendedToken.getTextOnly (f);}
+    |   d:DOUBLE  
+        {return_strings[0] = ExtendedToken.getWhitespaces (d);
+         return_strings[1] = ExtendedToken.getTextOnly (d);}
     ;
 
 array_type
@@ -300,26 +335,26 @@ returns [string return_string]
 delegate_creation_expression
 returns [string return_string]
 {
-    string tp = "";
+    string [] tp = new string[]{"",""};
     string exp = "";
     return_string = "";
 }
     :   n:NEW   tp = type   lp:LPAREN   exp = expression rp:RPAREN
         {
-            return_string = ((ExtendedToken)n).GetWhitespaces ()  + tp + lp.getText () + exp + rp.getText ();
+            return_string = ((ExtendedToken)n).GetWhitespaces ()  + tp[0]+tp[1] + lp.getText () + exp + rp.getText ();
         }
     ;
 
 object_creation_expression
 returns [string return_string]
 {
-    string tp = "";
+    string [] tp = new string[]{"",""};
     string al = "";
     return_string = "";
 }
     :   n:NEW   tp = type  lp:LPAREN   (al = argument_list)?   rp:RPAREN
         {
-            return_string = ((ExtendedToken)n).GetWhitespaces () + tp + lp.getText () + al + rp.getText ();
+            return_string = ((ExtendedToken)n).GetWhitespaces () + tp[0]+tp[1] + lp.getText () + al + rp.getText ();
         }
     ;
 
@@ -472,12 +507,12 @@ returns [string return_string]
 typeof_expression
 returns [string return_string]
 {
-    string tp = "";
+    string [] tp = new string[]{"",""};
     return_string = "";
 }
-    :   t:TYPEOF   lp:LPAREN   ( v:VOID {tp = v.getText ();} | tp = type )   rp:RPAREN
+    :   t:TYPEOF   lp:LPAREN   ( v:VOID {tp[0] = v.getText ();} | tp = type )   rp:RPAREN
         {
-            return_string = t.getText () + lp.getText () + tp + rp.getText ();
+            return_string = t.getText () + lp.getText () + tp[0]+tp[1] + rp.getText ();
         }
     ;
 
@@ -525,11 +560,11 @@ returns [string return_string]
 cast_expression
 returns [string return_string]
 {
-    string t = "";
+    string [] t = new string[]{"",""};
     return_string = "";
 }
     :   lp:LPAREN   t = type  rp:RPAREN   return_string = unary_expression
-        { return_string = lp.getText () + return_string + " :> " + t + rp.getText ()  ;  }
+        { return_string = lp.getText () + return_string + " :> " + t[0]+t[1] + rp.getText ()  ;  }
     ;
 
 pre_increment_expression
@@ -625,28 +660,29 @@ relational_expression
 returns [string return_string]
 {
     string rop = "";
-    string se = "";
+    string [] se = new string[]{"",""};
+    string s = "";
     return_string = "";
 }
     :   (shift_expression   relational_op)=> 
             return_string = shift_expression   
-            (rop = relational_op   se = shift_expression
+            (rop = relational_op   s = shift_expression
                 {
-                    return_string += (rop + se);
+                    return_string += (rop + s);
                 }   
             )+
     |   (shift_expression   IS)=> 
             return_string = shift_expression   
             (tis:IS   se = type
                 {
-                    return_string += (tis.getText () + se);
+                    return_string += (tis.getText () + se[0]+se[1]);
                 }
             )+
     |   (shift_expression   AS)=> 
             return_string = shift_expression   
             (tas:AS   se = type
                 {
-                    return_string += (tas.getText () + se);
+                    return_string += (tas.getText () + se[0]+se[1]);
                 }
             )+
     |   return_string = shift_expression
@@ -891,23 +927,53 @@ returns [StatementTree t]
     t = new StatementTree();
     string temp = "";
 }
-    :   local_variable_declaration   SEMI
-    |   temp = local_constant_declaration   s:SEMI
+    :   temp = local_variable_declaration   s1:SEMI
         {
-            t = new StatementTree (temp + ((ExtendedToken)s).GetWhitespaces ());
+            t = new StatementTree (temp + ((ExtendedToken)s1).GetWhitespaces ());
+        }
+    |   temp = local_constant_declaration   s2:SEMI
+        {
+            t = new StatementTree (temp + ((ExtendedToken)s2).GetWhitespaces ());
         }
     ;
 
 local_variable_declaration
-    :   type   local_variable_declarator ( COMMA   local_variable_declarator)*
+returns [string return_string]
+{
+    string [] t = new string[]{"",""};
+    string temp = "";
+    return_string = "";
+}
+    :   t = type   return_string = local_variable_declarator[t] 
+        ( c:COMMA   
+            temp = local_variable_declarator[t]
+            { return_string += (temp + ((ExtendedToken)c).GetWhitespaces ()); }
+        )*
     ;
 
-local_variable_declarator
-    :   IDENTIFIER   (ASSIGN  local_variable_initializer)?
-    ;
+local_variable_declarator[string [] t]
+returns [string return_string]
+{
+    string lvi = "";
+    return_string = "";
+}
+    :   (IDENTIFIER   ASSIGN)=>
+        id1:IDENTIFIER   a:ASSIGN lvi = local_variable_initializer
+        {
+            return_string = t[0] + "mutable " + id1.getText () + a.getText () + lvi + ";";
+        }
+    |   id2:IDENTIFIER
+        {
+            return_string = t[0] + "mutable " + id2.getText () + " = Nemerle.Extensions.DefaultValue ( _ :" + t[1] + ");";
+        }
+;
 
 local_variable_initializer
-    :   expression
+returns [string return_string]
+{
+    return_string = "";
+}
+    :   return_string = expression
     |   array_initializer
     ;
 
@@ -915,7 +981,7 @@ local_constant_declaration
 returns [string return_string]
 {
     return_string = "";
-    string t = "";
+    string [] t = new string[]{"",""};
     string temp = "";
 }
     :   c:CONST   t = type   return_string = local_constant_declarator[((ExtendedToken)c).GetWhitespaces (),""]
@@ -1057,8 +1123,8 @@ returns [StatementTree t]
 }
     :   t = while_statement
     |   t = do_statement
-    |   for_statement
-    |   foreach_statement
+    |   t = for_statement
+    |   t = foreach_statement
     ;
 
 while_statement
@@ -1099,45 +1165,92 @@ for_statement
 returns [StatementTree t]
 {
     t = new StatementTree();
+     StatementTree temp = new StatementTree();
+    string finit = "";
+    string fcond = "";
+    string fiter = "";
+    LinkedList a = new LinkedList ();
 }
-    :   FOR   LPAREN   (for_initializer)?   SEMI   (for_condition)?   SEMI   (for_iterator)?   RPAREN   embedded_statement
+    :   f:FOR                        {a.Add (new StatementTree(f));}
+        lp:LPAREN                    {a.Add (new StatementTree(lp));}
+        (finit = for_initializer)?   {a.Add (new StatementTree(finit));}
+        s1:SEMI                      {a.Add (new StatementTree(s1));}
+        (fcond = for_condition)?     {a.Add (new StatementTree(fcond));}
+        s2:SEMI                      {a.Add (new StatementTree(s2));}
+        (fiter = for_iterator)?      {a.Add (new StatementTree(fiter));}
+        rp:RPAREN                    {a.Add (new StatementTree(rp));}
+        temp = embedded_statement    {a.Add (temp);}
+        { t = new StatementTree("FOR",a); }
     ;
 
 for_initializer
-returns [StatementTree t]
+returns [string return_string]
 {
-    t = new StatementTree();
+    return_string = "";
 }
-    :   (type)=> local_variable_declaration
-    |   statement_expression_list
+    :   (type)=> return_string = local_variable_declaration
+    |   return_string = statement_expression_list
     ;
 
 for_condition
-returns [StatementTree t]
+returns [string return_string]
 {
-    t = new StatementTree();
+    return_string = "";
 }
-    :   boolean_expression
+    :   return_string = boolean_expression
     ;
 
 for_iterator
-returns [StatementTree t]
+returns [string return_string]
 {
-    t = new StatementTree();
+    return_string = "";
 }
-    :   statement_expression_list
+    :   return_string = statement_expression_list
     ;
 
 statement_expression_list
-    :   statement_expression (  COMMA   statement_expression )*
+returns [string return_string]
+{
+    string se = "";
+    return_string = "";
+    bool in_loop = false;
+}
+    :   return_string = statement_expression 
+        (  c:COMMA       
+            { in_loop = true; }
+            se = statement_expression 
+            {
+                return_string += (ExtendedToken.getWhitespaces (c) + ";" + se);
+            }
+        )*
+        {   if(in_loop)
+            {
+                return_string = "{" + return_string; 
+                return_string += "}" ; 
+            }
+        }
     ;
 
 foreach_statement
 returns [StatementTree t]
 {
     t = new StatementTree();
+    StatementTree es = new StatementTree();
+    LinkedList a = new LinkedList ();
+    string [] tp = new string[]{"",""};
+    string e = "";
 }
-    :   FOREACH   LPAREN   type   IDENTIFIER   IN   expression   RPAREN   embedded_statement
+    :   f:FOREACH       {a.Add (new StatementTree(f));}
+        l:LPAREN        {a.Add (new StatementTree(l));}
+        tp = type   
+        id:IDENTIFIER   {a.Add (new StatementTree(id));}
+                        {a.Add (new StatementTree(" : "));}
+                        {a.Add (new StatementTree(tp[0]+tp[1]));}
+        i:IN            {a.Add (new StatementTree(i));}
+        e = expression  {a.Add (new StatementTree(e));}
+        rp:RPAREN       {a.Add (new StatementTree(rp));}
+        es = embedded_statement {a.Add (es);}
+        { t = new StatementTree("FOREACH",a); }
     ;
 
 jump_statement
@@ -1347,7 +1460,7 @@ namespace_body
 
 using_directive
 {
-    string nn = "";
+    string [] nn = new string[]{"",""};
 }
     :   (USING  IDENTIFIER ASSIGN)=> 
         u1:USING  id:IDENTIFIER a:ASSIGN  
@@ -1358,7 +1471,7 @@ using_directive
         }
         nn = namespace_or_type_name s1:SEMI
         {    
-            Emit.EmitString (nn);
+            Emit.EmitString (nn[0]+nn[1]);
             Emit.EmitToken (s1);
         }
     |   u2:USING  
@@ -1368,7 +1481,7 @@ using_directive
         nn = namespace_name 
         s2:SEMI
         {         
-            Emit.EmitString (nn);
+            Emit.EmitString (nn[0]+nn[1]);
             Emit.EmitToken (s2);
         }
     ;
@@ -1424,8 +1537,7 @@ class_modifier
 
 class_base
 {
-    string t1 = "";
-    string t2 = "";
+    string [] t1 = new string[]{"",""};
 }
     :   cl:COLON 
         {
@@ -1433,10 +1545,10 @@ class_base
         }  
         t1 = type_name  
         {
-            Emit.EmitString (t1);
+            Emit.EmitString (t1[0]+t1[1]);
         }
         (cm:COMMA {Emit.EmitToken (cm);} 
-            t2 = type_name {Emit.EmitString (t2);})*
+            t1 = type_name {Emit.EmitString (t1[0]+t1[1]);})*
     ;
 
 class_body
@@ -1479,12 +1591,14 @@ class_member_declaration
 
 constant_declaration
 {
-    string t = "";
+    string [] t = new string[]{"",""};
 }
     :   { Emit.BeginBuffer ();}
         (attributes)?   (constant_modifier)*   
         { Emit.EndBuffer () ;} 
-        CONST   t=type   constant_declarator[false,Emit.Buffer,t] (COMMA constant_declarator[true,Emit.Buffer,t])*   SEMI
+        c1:CONST   t=type   constant_declarator[false, Emit.Buffer + ExtendedToken.getWhitespaces(c1) ,t[0]+t[1]] 
+        (c2:COMMA constant_declarator[true, Emit.Buffer  + ExtendedToken.getWhitespaces(c2) ,t[0]+t[1]])*   s:SEMI
+        { Emit.EmitString(ExtendedToken.getWhitespaces (s));}
     ;
 
 constant_modifier
@@ -1522,7 +1636,7 @@ constant_declarator [bool emit_prefix,string prefix,string t]
 
 field_declaration
 {
-    string t = "";
+    string [] t = new string[]{"",""};
     bool is_readonly = false;
     bool ret;
 }
@@ -1533,7 +1647,9 @@ field_declaration
                 Emit.EmitString(" mutable ");
             Emit.EndBuffer () ;
         } 
-        t=type   variable_declarator[false,Emit.Buffer,t] (COMMA variable_declarator[true,Emit.Buffer,t])*  SEMI
+        t=type   variable_declarator[false,Emit.Buffer,t[0]+t[1]] 
+        (c:COMMA variable_declarator[true,Emit.Buffer + ExtendedToken.getWhitespaces (c) ,t[0]+t[1]])*  s:SEMI
+        { Emit.EmitString(ExtendedToken.getWhitespaces (s)); }
     ;
 
 field_modifier
@@ -1590,7 +1706,7 @@ method_header
         rp:RPAREN   
         {
             Emit.EmitToken (rp);
-            Emit.EmitString (" : ");
+            Emit.EmitString (" :");
             Emit.EmitString (rt);
         }
         
@@ -1615,18 +1731,20 @@ return_type
 returns [string return_string]
 {
     return_string = "";
+    string [] temp = new string[] {"",""};
 }
-    :   return_string = type
+    :   temp = type
+        { return_string = temp[0] + temp[1]; }
     |   v:VOID {return_string = v.getText();}
     ;
 
 member_name
 {
-    string mn = "";
+    string [] mn = new string[]{"",""};
 }
     :   mn = type_name 
         {
-            Emit.EmitString (mn);
+            Emit.EmitString (mn[0]+mn[1]);
         }
     ;
 
@@ -1661,11 +1779,11 @@ formal_parameter_list
 fixed_parameter
 {
     string p = "";
-    string t = "";
+    string [] t = new string[]{"",""};
 }
     :   (attributes)?   (p = parameter_modifier)?   t = type  id:IDENTIFIER
         {
-            Emit.EmitString ( id.getText () + " : " + p + t );
+            Emit.EmitString ( id.getText () + " : " + p + t[0]+t[1] );
         }        
     ;
 
@@ -1688,11 +1806,11 @@ returns [string return_string]
 
 property_declaration
 {
-    string t="";
+    string [] t= new string[]{"",""};
 }
     :   (attributes)?   (property_modifier)*   t=type   member_name   
         {
-            Emit.EmitString(" : " + t);
+            Emit.EmitString(" : " + t[0]+t[1]);
         }
 
         lb:LBRACE   
@@ -1736,7 +1854,13 @@ set_accessor_declaration
     ;
 
 accessor_body
-    :   block 
+{
+    StatementTree t = new StatementTree ();
+}
+    :   t = block 
+        {
+            Emit.EmitString ( t.ToString () );
+        }
     |   s:SEMI   {Emit.EmitToken(s);}
     ;
 
@@ -2784,47 +2908,3 @@ PP_MESSAGE
     :   (NOT_NEW_LINE)*   NEW_LINE
     ;
 
-/* ************************************************************************* */
-/*                                                                           */
-/* TREE PARSER                                                               */
-/*                                                                           */
-/* ************************************************************************* */
-/*
-class CSharpTreeWalker extends TreeParser;
-
-class_modifier
-    :   #( CLASS_MODIFIER class_modifier_keyword )
-    ;
-
-class_modifier_keyword
-    :   NEW
-    |   PUBLIC
-    |   PROTECTED
-    |   INTERNAL
-    |   PRIVATE
-    |   SEALED
-    |   ABSTRACT
-    ;
-*/
-/*
-method_header 
-    :    #( atr:attributes ret:return_type name:member_name lst:formal_parameter_list )
-    ;
-
-method_header
-    :   (atr:attributes)?   
-        mod:method_modifiers   
-        ret:return_type   
-        name:member_name   
-        LPAREN   (lst:formal_parameter_list)?   RPAREN
-        {#method_header =
-            #(  "MethodHeader",
-                atr,
-                mod,
-                ret,
-                name,
-                lst
-            ); 
-        }
-    ;
-*/
