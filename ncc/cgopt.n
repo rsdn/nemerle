@@ -1,0 +1,179 @@
+(*
+ * Copyright (c) 2003 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *)
+
+//open Nemerle.Collections;
+
+namespace Nemerle.Compiler {
+module CGopt {
+
+(*
+    | CE_global_ref { decl : CG_member; } // not class
+    | CE_ctor_ref { klass : CM_class; }
+    | CE_field_ref { obj : CG_expr; fld : CM_field; }
+    | CE_property_ref { obj : CG_expr; fld : CM_property; }
+    | CE_method_ref { obj : CG_expr; meth : CM_method; }
+    | CE_tuple_ref { obj : CG_expr; pos : int; }
+    | CE_call { func : CG_expr; parms : list (CG_expr); }
+    | CE_assign { target : CG_expr; source : CG_expr; }
+    | CE_let { name : CG_val; body : CG_expr; }
+    | CE_has_type { expr : CG_expr; ty : CG_type; }
+    | CE_raise { exn : CG_expr; }
+    | CE_if { ty : CG_type; cond : CG_expr; e_then : CG_expr; e_else : CG_expr; }
+    | CE_true
+    | CE_false
+    | CE_try_with { body : CG_expr; exn : CG_val; handler : CG_expr; }
+    | CE_try_finally { body : CG_expr; handler : CG_expr; }
+    | CE_literal { val : Literal; }
+    | CE_this
+    | CE_skip
+    | CE_cast { expr : CG_expr; ty : CG_type; }
+    | CE_sequence { body : list (CG_expr); }
+    | CE_tuple_ctor { exprs : list (CG_expr); }
+    | CE_mkarray { initializers : list (CG_expr); }
+    | CE_indexer { ty : CG_type; obj : CG_expr; args : list (CG_expr); }
+
+    | CE_none
+*)
+
+  (**
+   * Check if given method tail-calls itself anywhere.
+   *)
+  has_self_tail_call (meth : CM_method) : bool {
+    def walk (ex : CG_expr) : bool {
+      match (ex) {
+        | CE_call (CE_global_ref (x), _) => x == meth
+        | CE_call (CE_method_ref (CE_this, x), _) => meth == x
+        | CE_let (_, e) => walk (e)
+        | CE_cast (e, _) => walk (e)
+        | CE_if (_, _, e1, e2) => walk (e1) || walk (e2)
+        | CE_sequence ([]) => false
+        | CE_sequence (l) => walk (List.last (l))
+        | _ => false
+      }
+    }
+
+    walk (meth.body)
+  }
+
+  (**
+   * Replace tail calls with loops.
+   * <remarks>
+   *   Method is updated in-place.
+   * </remarks>
+   *)
+  public tail_call_optimize (meth : CM_method) : void {
+    def up_loop (vals : list (CG_val), 
+                 assigns : list (CG_expr), 
+                 parms : list (CG_expr),
+                 meth_parms : list (CG_val)) : CG_expr {
+      match ((parms, meth_parms)) {
+        | ([], []) =>
+          def loc = (List.hd (assigns)).loc;
+          def mklet (acc : CG_expr, vals : list (CG_val)) : CG_expr {
+            match (vals) {
+              | v :: vs =>
+                def ex = CE_let (v, acc);
+                ex.loc <- loc;
+                mklet (ex, vs)
+              | [] => acc
+            }
+          }
+          def ex = CE_sequence (assigns);
+          ex.loc <- loc;
+          mklet (ex, vals)
+          
+        | (x :: xs, m :: ms) =>
+          def v = CG_val (loc = x.loc, 
+                          name = CGexpr.tmp (), 
+                          ty = CGflat.type_of (x),
+                          val = x);
+          def r1 = CE_ref (m);
+          def r2 = CE_ref (v);
+          def ass = CE_assign (r1, r2);
+          r1.loc <- x.loc;
+          r2.loc <- x.loc;
+          ass.loc <- x.loc;
+          up_loop (v :: vals, ass :: assigns, xs, ms)
+        
+        | _ => Util.ice ()
+      }
+    }
+
+    def replace_tailcalls (ex : CG_expr) : CG_expr {
+      def update_parms (parms : list (CG_expr)) : CG_expr {
+        def restart = CE_restart ();
+        restart.loc <- ex.loc;
+        match (parms) {
+          | [] => restart
+          | _ => up_loop ([], [restart], parms, meth.parms)
+        }
+      }
+    
+      def r =
+        match (ex) {
+          | CE_call (CE_global_ref (x), parms) => 
+            if (x == meth) update_parms (parms)
+            else ex
+
+          | CE_call (CE_method_ref (CE_this, x), parms) => 
+            if (meth == x) update_parms (parms)
+            else ex
+            
+          | CE_let (v, e) => 
+            CE_let (v, replace_tailcalls (e))
+            
+          | CE_if (t, c, e1, e2) => 
+            CE_if (t, c, replace_tailcalls (e1), replace_tailcalls (e2))
+            
+          | CE_sequence (l) =>
+            def loop (acc : list (CG_expr), l : list (CG_expr)) : list (CG_expr) {
+              match (l) {
+                | [x] => List.rev (replace_tailcalls (x) :: acc)
+                | x :: xs => loop (x :: acc, xs)
+                | [] => []
+              }
+            }
+            CE_sequence (loop ([], l))
+
+          | CE_cast (e, t) =>
+            CE_cast (replace_tailcalls (e), t)
+           
+          | _ => ex
+        };
+      r.loc <- ex.loc;
+      r
+    }
+
+    if (has_self_tail_call (meth)) {
+      def ex = CE_block (replace_tailcalls (meth.body));
+      ex.loc <- meth.body.loc;
+      meth.body <- ex;
+    } else ()
+  }
+}
+}

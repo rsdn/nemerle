@@ -51,7 +51,8 @@ n_src = \
 	cgflat.n \
 	xmldump.n \
 	typattern.n \
-	external.n
+	external.n \
+	cgopt.n
 
 
 cs_src  = lexer.cs main.cs parser.cs
