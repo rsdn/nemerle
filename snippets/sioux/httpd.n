@@ -1,0 +1,205 @@
+open System.Net;
+open System.Net.Sockets;
+
+namespace Sioux
+{
+
+    variant Request
+    {
+        | Invalid
+        | Get {fname : string;}
+    }
+
+    variant File_type
+    {
+        | Html
+        | Other
+    }
+    
+    class Httpd
+    {
+        private static mutable logger : Logger;
+        private static mutable config : Config;
+    
+        private static read_text (fp : System.IO.TextReader) : string
+        {
+            def     sb = System.Text.StringBuilder ();
+            mutable c <- fp.Read ();
+
+            while (c != -1 && c != 10){
+                def _ = sb.Append ((c :> System.Char));
+                c <- fp.Read ();
+            };
+
+            sb.ToString ()
+        }
+
+        private static find_name (str : string) : string
+        {
+            def     buf = System.Text.StringBuilder ();
+            def     len = str.Length;
+            mutable i  <- 0;
+
+            while (i < len && ! System.Char.IsWhiteSpace (str[i])){
+                ignore (buf.Append (str[i]));
+                i <- i + 1;
+            };
+
+            def s = config.get ("server/root") + buf.ToString ();
+
+            if (s.EndsWith ("/"))
+                s + "index.html"
+            else
+                s
+        }
+        
+        private static parse_request (str : string) : Request
+        {
+            def i = str.IndexOf ("GET ");
+
+            if (i == -1)
+                Invalid ()
+            else 
+                Get (find_name (str.Substring (i + 4)))
+        }
+    
+        private static write_string (stream : NetworkStream, s : string) : void
+        {
+            def buf = System.Text.Encoding.ASCII.GetBytes (s);
+
+            stream.Write (buf, 0, buf.Length)
+        }
+        
+        private static write_endline (stream : NetworkStream, s : string) : void
+        {
+            write_string (stream, s + "\r\n")
+        }
+        
+        private static write_invalid (stream : NetworkStream) : void
+        {
+            write_endline (stream, "HTTP/1.0 403 Error");
+            write_endline (stream, "Server: " + config.get ("server/name"));
+            write_endline (stream, "");
+            write_endline  (stream, config.get ("replies/invalid"));
+        }
+
+
+        private static write_not_found (stream : NetworkStream) : void
+        {
+            write_endline (stream, "HTTP/1.0 404 Not found");
+            write_endline (stream, "Server: " + config.get ("server/name"));
+            write_endline (stream, "");
+            write_endline (stream, config.get ("replies/not_found"));
+        }
+    
+    
+        private static write_type (fname : string, stream : NetworkStream) : void
+        {
+            def b = System.IO.File.Exists (fname);
+        
+            if (! b)
+                ()
+            else {
+                if (fname.EndsWith (".htm") || fname.EndsWith (".html"))
+                    write_endline (stream, "Content-Type: text/html")
+                else if (fname.EndsWith (".gif"))
+                    write_endline (stream, "Content-Type: image/gif")
+                else
+                    write_endline (stream, "Content-Type: application/octet-stream")
+            }
+        }
+    
+        private static write_file_content (fname : string, stream : NetworkStream) : void
+        {
+            def fp = System.IO.BinaryReader (System.IO.File.Open (fname, System.IO.FileMode.Open));
+
+            try 
+                while (true){
+                    def tmp = fp.ReadByte ();
+                    stream.WriteByte (tmp)
+                }
+            with {
+                e : System.IO.EndOfStreamException => ()
+            };
+
+            fp.Close ()
+        }
+    
+        private static write_file (fname : string, stream : NetworkStream) : void
+        {
+            if (! System.IO.File.Exists (fname))
+                write_not_found (stream)
+            else {
+                try {
+                    write_endline (stream, "HTTP/1.0 200 OK");
+                    write_type (fname, stream);
+                    write_endline (stream, "Server: " + config.get ("server/name"));
+                    write_endline (stream, "");
+                    write_file_content (fname, stream);
+                }
+                with {
+                    e : System.Exception =>
+                        logger.log ("Couldn't read file " + fname
+                                    + " " + e.Message);
+                }
+            }
+        }
+    
+        private static open_connection () : TcpListener
+        {
+            def addr = IPAddress.Parse (config.get ("server/address"));
+            def port = try System.Int32.Parse (config.get ("server/port"))
+                       with {
+                           e : System.Exception => 80
+                       };
+            def server = TcpListener (addr, port);
+
+            server.Start ();
+            server
+        }
+        
+        private static read_data (stream : NetworkStream) : string
+        {
+            def sb     = System.Text.StringBuilder ();
+            def buffer = (System.Array.CreateInstance (typeof (System.Byte), 1000) :> array (System.Byte));
+            mutable i <- 0;
+
+            def ret = stream.Read (buffer, 0, buffer.Length);
+            
+            while (i < ret && buffer[i] != ('\n' :> System.Byte)){
+                def _ = sb.Append ((buffer[i] :> System.Char));
+                i <- i + 1
+            };
+            sb.ToString ()
+        }
+
+        private static run () : void
+        {
+            def server = open_connection ();
+
+            while (true){
+                def client = server.AcceptTcpClient ();
+                def stream = client.GetStream ();
+                def str    = read_data (stream);
+
+                printf ("%s\n", str);
+
+                match (parse_request (str)){
+                    | Invalid     => write_invalid (stream);
+                    | Get (fname) => logger.log ("GET '" + fname + "'");
+                                     write_file (fname, stream);
+                };
+
+                client.Close ()
+            }
+        }
+    
+        public static Main () : void
+        {
+            logger <- Logger ();
+            config <- Config (Some ("httpd.conf"));
+            run ();
+            logger.destroy ();
+        }
+    }
+}
