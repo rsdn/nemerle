@@ -1089,6 +1089,15 @@ returns [StatementTree t]
 
         ( temp = statement {a.Add (temp);})*  
 
+        { StatementTree last = (StatementTree) Nemerle.Core.Option.UnSome (a.First ());
+          string plain = last.PlainString;
+          if (plain != null) {
+            plain = plain.Trim ();
+            if (plain.StartsWith ("def ") || plain.StartsWith ("mutable "))
+              a.Add (new StatementTree (" ()"));
+          }
+        }
+
         rb:RBRACE
         {a.Add (new StatementTree(rb));}
 
