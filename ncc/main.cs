@@ -120,6 +120,29 @@ class CS_glue {
 		int idx = s.LastIndexOf('.');
 		return s[idx + 1] >= 'A' && s[idx + 1] <= 'Z';
 	}
+
+	public static string xmlescape(string s)
+	{
+		System.Text.StringBuilder buf = new System.Text.StringBuilder();
+
+		for (int i = 0; i < s.Length; i++)
+			switch (s[i]) {
+			case '"':
+				buf.Append("&quot;");
+				break;
+			case '<':
+				buf.Append("&lt;");
+				break;
+			case '&':
+				buf.Append("&amp;");
+				break;
+			default:
+				buf.Append(s[i]);
+				break;
+			}
+			
+		return buf.ToString();
+	}
 }
 
 class XParser : Parser {
@@ -152,12 +175,16 @@ class MainClass {
 		
 		try {
 			list ret = new list.Nil();
+			bool do_xml = false;
 			for (int i = 1; i < argv.Length; i++) {
 //				System.Console.WriteLine("processing " + argv[i]);
 				Parser p = new XParser();
-				ret = new list.Cons(p.parse(new Lexer(argv[i])), ret);
+				if (argv[i] == "-x")
+					do_xml = true;
+				else
+					ret = new list.Cons(p.parse(new Lexer(argv[i])), ret);
 			}
-			Passes.run(ret);
+			Passes.run(do_xml, ret);
 			CS_glue.close_file ();
 		} catch (yyParser.yyException e) {
 		    Message.maybe_bailout();

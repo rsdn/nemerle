@@ -48,7 +48,8 @@ n_src = \
 	macros.n \
 	cgtree.n \
 	cgexpr.n \
-	cgflat.n 
+	cgflat.n \
+	xmldump.n
 #	t/todo/ok-macro.n
 
 cs_src  = lexer.cs main.cs parser.cs
