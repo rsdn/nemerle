@@ -1142,7 +1142,7 @@ returns [StatementTree t]
           if (plain != null) {
             plain = plain.Trim ();
             if (plain.StartsWith ("def ") || plain.StartsWith ("mutable "))
-              a.Add (new StatementTree (" ()"));
+              a.Add (new StatementTree (" ();"));
           }
         }
 
@@ -3370,6 +3370,8 @@ IDENTIFIER
 	   setText("list_");
 	if($getText == "array")	
 	   setText("array_");   
+	if($getText == "type")	
+	   setText("type_");   
 	}
     |   '@'  IDENTIFIER_START_CHARACTER (IDENTIFIER_PART_CHARACTER)*
     ;
