@@ -57,7 +57,7 @@ n_src = \
 
 cs_src  = lexer.cs main.cs parser.cs
 all_src = $(n_src) $(cs_src)
-all_cs  = out.cs $(cs_src)
+all_cs  = $(cs_src)
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 COMPILE = $(CSC) /optimize+ $(CSCFLAGS)
@@ -71,8 +71,8 @@ all: ncc.exe
 boot: ncc.exe
 	rm -f out.cs
 	$(EXECUTE) ./ncc.exe $(n_src)
-	$(COMPILE) $(OUTFLAG)ncc2.exe $(all_cs)
 	mv -f out.cs out2.cs
+	$(COMPILE) $(OUTFLAG)ncc2.exe $(all_cs) out2.cs
 	$(EXECUTE) ./ncc2.exe $(n_src)
 	cmp -s out2.cs out.cs
 	rm -f out.cs
@@ -84,8 +84,8 @@ sync:
 
 ncc.exe: $(all_src)
 	$(EXECUTE) ../boot/ncc.exe $(n_src)
-	$(COMPILE) $(OUTFLAG)$@ $(all_cs)
 	mv -f out.cs out1.cs
+	$(COMPILE) $(OUTFLAG)$@ $(all_cs) out1.cs
 
 ../config.mak:
 	$(MAKE) -C .. config.mak
