@@ -56,6 +56,7 @@ all:
 	$(Q)$(MAKE) -C ants-icfp2004/simulator all
 	$(Q)$(MAKE) -C sioux all
 	$(Q)$(MAKE) -C shootout all
+	$(Q)$(MAKE) -C course all
 
 myPoll.exe: myPoll.n
 	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r Npgsql myPoll.n -o myPoll.exe
@@ -70,5 +71,6 @@ clean:
 	$(MAKE) -C synq clean
 	$(MAKE) -C sioux clean
 	$(MAKE) -C ants-icfp2004 clean
+	$(MAKE) -C course clean
 	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]*
 	rm -f test.err test_error.log a.out
