@@ -513,11 +513,11 @@ public module Tyexpr {
   }
 
   // check if FN can be called with PARMS
-  check_call_to (ctx : CTX, parms : list <Parm>, fn : Expr, do_throw : bool) : Call_result
+  check_call_to (ctx : CTX, parms : list <Parm>, fn : Expr, 
+                 do_throw : bool, is_var_args : bool) : Call_result
   {
-    def check_arg (parm : Parm, ty : Type, ctx : int * Subst) : int * Subst {
-      def (arg_no, sub) = ctx;
-      if (arg_no < 0) ctx
+    def check_arg (parm : Parm, ty : Type, arg_no, sub) : int * Subst {
+      if (arg_no < 0) (arg_no, sub)
       else {
         def expr_ty = type_of (parm.expr);
         def parm_ty =
@@ -563,13 +563,9 @@ public module Tyexpr {
       match (fn) {
         | E_local_ref ({kind = D_local_fun (h, _)}) =>
           from_header (h)
-        | E_static_ref (m) =>
-          match (m.GetKind ()) {
-            | MK_method (m) => from_header (m.GetHeader ())
-            | _ => []
-          }
-        | E_method_ref (_, m, _) =>
-          from_header (m.GetHeader ())
+        | E_method_ref (_, meth, _)
+        | E_static_ref (meth : IMethod) =>
+          from_header (meth.GetHeader ())
         | _ => []
       }
     };
@@ -613,31 +609,71 @@ public module Tyexpr {
         try {
           def args =
             match ((parms, args)) {
-              | ([parm], _ :: _ :: _) =>
+              | ([parm], _ :: _ :: _) when ! is_var_args =>
                 // FIXME: it doesn't work when parm : 'a, where 'a is unconstrained
                 match (Tyutil.top_expand (type_of (parm.expr))) {
                   | T_prod (types) when List.Length (types) == List.Length (args) =>
                     [T_prod (args)]
                   | _ => wrong_args_cnt ()
                 }
-              | _ when List.Length (args) != List.Length (parms) => wrong_args_cnt ()
-              | _ => args
+              | _ =>
+                if (List.Length (args) == List.Length (parms) ||
+                    (is_var_args && List.Length (args) <= List.Length (parms) + 1))
+                  args
+                else
+                  wrong_args_cnt ()
             };
           def parms =
             if (args == null) null 
             else reorder_named_parms (formal_names, parms, do_throw);
           def (argno, sub) =
             if (parms == null || args == null) (-1, null)
-            else
-              List.FoldLeft2 (parms, args, (1, SystemMap ()), check_arg);
+            else {
+              def loop (arg_no, map, parms, args) {
+                match ((parms, args)) {
+                  | (parm :: parms, [T_array (t, 1)]) when is_var_args =>
+                    def (arg_no, map) = check_arg (parm, t, arg_no, map);
+                    loop (arg_no, map, parms, args) // args doesn't change
+                  | ([], [_]) when is_var_args => (arg_no, map)
+                  | (parm :: parms, arg :: args) =>
+                    def (arg_no, map) = check_arg (parm, arg, arg_no, map);
+                    loop (arg_no, map, parms, args)
+                  | ([], []) => (arg_no, map)
+                  | _ => assert (false)
+                }
+              }
+              loop (1, SystemMap (), parms, args)
+            }
           if (argno < 0)
             CR_unspecified_error ()
           else {
+            def parms =
+              if (is_var_args) {
+                def split (_, _, _) {
+                  | (acc, [_], lst) =>
+                    def get_expr (parm : Parm) {
+                      when (parm.kind != ParmKind.Normal)
+                        Message.error ("ref/out parameters are not allowed with `parms'");
+                      when (parm.name != "")
+                        Message.error ("named parameters are not allowed with `parms'");
+                      parm.expr
+                    }
+                    (acc, List.Map (lst, get_expr))
+                  | (acc, _ :: args, x :: xs) => 
+                    split (x :: acc, args, xs)
+                  | _ => assert (false)
+                }
+                def (regular_parms, for_array) = split ([], args, parms);
+                def mkarray = E_mkarray (fn.loc, List.Last (args), 
+                                         for_array, [List.Length (for_array)]);
+                List.Rev (Parm (mkarray) :: regular_parms)
+              } else parms;
             def res_expr =
               match (fn) {
                 | E_constant_object_ref (mem) =>
+                  assert (parms.IsEmpty ());
                   E_static_ref (fn.loc, ret /- sub, mem)
-                | _ => 
+                | _ =>
                   E_call (fn.loc, ret /- sub, fn, parms)
               };
             //Message.debug ("ret type = " + (ret /- sub).as_string ());
@@ -648,7 +684,7 @@ public module Tyexpr {
         match (LookupMembers (ctx, ty, "Invoke")) {
           | [mem] =>
             def fn' = E_method_ref (fn.loc, mem.GetMemType (), fn, (mem :> IMethod), false);
-            check_call_to (ctx, parms, fn', do_throw)
+            check_call_to (ctx, parms, fn', do_throw, is_var_args)
           | _ when do_throw =>
             CR_error ("cannot find `Invoke' method in delegate type " +
                       (type_of (fn)).as_string ())
@@ -702,21 +738,57 @@ public module Tyexpr {
   resolve_overloaded_call (ctx : CTX, in_tail_pos : bool, fncs : list <Expr>,
                            parms : list <Parm>) : Expr
   {
+    def is_var_args (fn) {
+      | E_method_ref (_, meth, _)
+      | E_static_ref (meth : IMethod) =>
+        meth.IsVarArgs
+      | _ => false
+    };
+
     def check_one (fn, acc) {
-      match (check_call_to (ctx, parms, fn, false)) {
+      match (check_call_to (ctx, parms, fn, false, false)) {
         | CR_ok (ex, sub) => (ex, sub) :: acc
         | _ => acc
       }
     };
 
+    def check_one_va (fn, acc) {
+      if (is_var_args (fn))
+        match (check_call_to (ctx, parms, fn, false, true)) {
+          | CR_ok (ex, sub) => (ex, sub) :: acc
+          | _ => acc
+        }
+      else acc
+    };
+
     def check_error (fn, acc) {
-      match (check_call_to (ctx, parms, fn, true)) {
-        | CR_error (msg) => (msg, fn) :: acc
+      match (check_call_to (ctx, parms, fn, true, false)) {
+        | CR_error (msg) =>
+          def acc = (msg, fn) :: acc;
+          if (is_var_args (fn))
+            match (check_call_to (ctx, parms, fn, true, true)) {
+              | CR_error (msg) =>
+                (msg, fn) :: acc
+              | _ => assert (false)
+            }
+          else acc
         | _ => assert (false)
       }
     };
 
-    match (List.FoldLeft (fncs, [], check_one)) {
+    mutable used_var_args = false;
+
+    def res = List.FoldLeft (fncs, [], check_one);
+    def res =
+      // varargs version is used *only* if there is no match not using it
+      match (res) {
+        | [] => 
+          used_var_args = true;
+          List.FoldLeft (fncs, [], check_one_va)
+        | _ => res
+      };
+
+    match (res) {
       // special case (simple)
       | [(x, sub)] =>
         Tyvar.global_store (sub);
@@ -740,7 +812,17 @@ public module Tyexpr {
           match (ex) {
             | E_call (fn, _) =>
               match (Tyutil.top_expand (type_of (fn))) {
-                | T_fun (t1, _) => (t1, (ex, s))
+                | T_fun (t1, _) =>
+                  if (used_var_args)
+                    match (List.DivideLast (Tyutil.fun_args (t1))) {
+                      | ([], T_array (t, 1)) =>
+                        (t, (ex, s))
+                      | (fun_args, T_array (t, 1)) =>
+                        (T_prod (fun_args + [t]), (ex, s))
+                      | _ => assert (false)
+                    }
+                  else
+                    (t1, (ex, s))
                 | _ => Util.ice ()
               }
             | _ => Util.ice ()
