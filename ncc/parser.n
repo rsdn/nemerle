@@ -52,7 +52,7 @@ module Parser {
   }
 
   'a where 'a :> Located 
-  locate (ctx : CTX, f : void -> option ('a)) : option ('a) {
+  locate (ctx : CTX, f : void -> 'a) : 'a {
     def loc = ctx.lexer.get_location ();
     def ret = Util.locate (loc, f);
     ret.loc <- loc;
@@ -89,7 +89,7 @@ module Parser {
   }
 
   'a fatal_error (ctx : CTX, msg : string) : 'a {
-    // FIXME: near...
+    // FIXME: near symbol...
     Message.fatal_error (location (ctx), "parse error: " + msg)
   }
 
@@ -119,6 +119,30 @@ module Parser {
     }
   }
   
+  get_id (ctx : CTX) : string {
+    match (get_token (ctx)) {
+      | Tok_identifier (x) => x
+      | _ =>
+        fatal_error (ctx, "expecting identifier")
+    }
+  }
+  
+  get_id_or_dummy (ctx : CTX) : string {
+    match (get_token (ctx)) {
+      | Tok_identifier (x) => x
+      | Tok_keyword ("_") => "_N_d" + string_of_int (Util.next_id ())
+      | _ =>
+        fatal_error (ctx, "expecting identifier")
+    }
+  }
+  
+  get_tyvar (ctx : CTX) : string {
+    match (get_token (ctx)) {
+      | Tok_tyvar (tv) => tv
+      | _ => fatal_error (ctx, "expecting type variable")
+    }
+  }
+
   expect_operator (ctx : CTX, op : string) : void {
     match (get_token (ctx)) {
       | Tok_operator (o, _) when op == o => ()
@@ -127,18 +151,211 @@ module Parser {
     }
   }
 
-
-  parse_type_member (ctx : CTX) : option (Class_member) { null
+  parse_fun_header (ctx : CTX, 
+                    allow_inference : bool, 
+                    allow_ctor : bool,
+                    got_name : bool) : Fun_header 
+  {
+    def tok = get_token (ctx);
+    locate (ctx, fun () {
+      def typarms =
+        match (tok) {
+          | Tok_tyvar when !got_name =>
+            push_back (ctx);
+            def tyvars = operator_separated_list (ctx, ",", get_tyvar);
+            parse_where_constraints (ctx, tyvars);
+          | _ => 
+            push_back (ctx); 
+            Typarms ([], [])
+        };
+      def name =
+        if (got_name) "?"
+        else
+          match (get_token (ctx)) {
+            | Tok_keyword ("this") when allow_ctor => ".ctor"
+            | Tok_identifier (n) => n
+            | _ => fatal_error (ctx, "expecting function name")
+          };
+      expect_operator (ctx, "(");
+      def parse_parm (_) {
+        def id = get_id_or_dummy (ctx);
+        def loc = location (ctx);
+        def t =
+          match (get_token (ctx)) {
+            | Tok_operator (":", _) => parse_type (ctx)
+            | _ when allow_inference => push_back (ctx); T_infer ()
+            | _ => fatal_error (ctx, "expecting typing constraint after parameter name")
+          };
+        Fun_parm (loc = loc, name = id, ty = t)
+      };
+      def parms = operator_separated_list (ctx, ",", parse_parm);
+      expect_operator (ctx, ")");
+      def ret_type =
+        match (get_token (ctx)) {
+          | Tok_operator (":", _) => parse_type (ctx)
+          | _ when allow_inference => push_back (ctx); T_infer ()
+          | _ => fatal_error (ctx, "expecting typing constraint on function return value")
+        };
+      Fun_header (name = name,
+                  ret_type = ret_type, 
+                  parms = parms, 
+                  typarms = typarms)
+    })
   }
 
-  parse_type (ctx : CTX) : Type { null }
-  parse_type_list (ctx : CTX) : list (Type) { null }
-
-  get_attrs (ctx : CTX) : list (Modifier) { [] }
+  parse_block (ctx : CTX) : Expr { null } // FIXME
   
-  parse_tyvars (ctx : CTX) : list (string) { [] }
+  parse_type_member (ctx : CTX) : Class_member {
+    ignore (peek_token (ctx));
+    def loc = location (ctx);
+    def attrs = get_attrs (ctx);
 
-  parse_where_constraints (ctx : CTX, tyvars : list (string)) : Typarms { null }
+    def parse_extern () {
+      match (get_token (ctx)) {
+        | Tok_keyword ("extern") =>
+          match (get_token (ctx)) {
+            | Tok_string_literal (s) => 
+              expect_operator (ctx, ";");
+              s
+            | _ => fatal_error (ctx, "found some junk after extern (expecting string)")
+          }
+        | _ => fatal_error (ctx, "found some junk after `=' (expecting extern)")
+      }
+    };
+
+    def parse_fun (h : Fun_header) {
+      def impl =
+        match (get_token (ctx)) {
+          | Tok_keyword ("implements") =>
+            operator_separated_list (ctx, ",", get_qid)
+          | _ => push_back (ctx); []
+        };
+      def body =
+        match (peek_token (ctx)) {
+          | Tok_operator ("=", _) =>
+            ignore (get_token (ctx));
+            FB_extern (parse_extern ())
+          | Tok_operator ("{", _) =>
+            FB_parsed_expr (parse_block (ctx))
+          | _ => fatal_error (ctx, "expecting method body")
+        };
+      
+      M_function (header = h, 
+                  name = h.name, 
+                  modifiers = attrs, 
+                  loc = loc, 
+                  body = body, 
+                  kind = FK_method (impl))
+    };
+    
+    def parse_field (is_ref, name) {
+      expect_operator (ctx, ":");
+      def t = parse_type (ctx);
+      def valkind = 
+        match (get_token (ctx)) {
+          | Tok_operator (";", _) => Val_normal ()
+          | Tok_operator ("=", _) => Val_extern (parse_extern ())
+          | _ => fatal_error (ctx, "found some junk after field")
+        };
+      
+      M_field (loc = loc,
+               name = name, 
+               modifiers = attrs, 
+               ty = t, 
+               is_ref = is_ref, 
+               kind = valkind);
+    };
+
+    match (get_token (ctx)) {
+      | Tok_tyvar =>
+        def h = parse_fun_header (ctx, 
+                                  allow_ctor = true, 
+                                  allow_inference = false, 
+                                  got_name = false);
+        push_back (ctx);
+        parse_fun (h)
+        
+      | Tok_keyword ("mutable") =>
+        match (get_token (ctx)) {
+          | Tok_identifier (name) => parse_field (true, name)
+          | _ => fatal_error (ctx, "expecting field name")
+        }
+        
+      | Tok_identifier (name) =>
+        match (peek_token (ctx)) {
+          | Tok_operator ("(", _) => 
+            def h = parse_fun_header (ctx, 
+                                      allow_ctor = true, 
+                                      allow_inference = false, 
+                                      got_name = true);
+            h.name <- name;
+            parse_fun (h)
+          | _ => parse_field (false, name)
+        }
+
+      | _ =>
+        def td = parse_type_decl (ctx);
+        td.modifiers <- List.append (td.modifiers, attrs);
+        M_type (td)
+    }
+  }
+  
+  parse_type (ctx : CTX) : Type { null } // FIXME
+
+  get_attrs (ctx : CTX) : list (Modifier) {
+    def loop (acc) {
+      match (get_token (ctx)) {
+        | Tok_keyword ("new") => loop (Mod_new () :: acc)
+        | Tok_keyword ("public") => loop (Mod_public () :: acc)
+        | Tok_keyword ("protected") => loop (Mod_protected () :: acc)
+        | Tok_keyword ("internal") => loop (Mod_internal () :: acc)
+        | Tok_keyword ("private") => loop (Mod_private () :: acc)
+        | Tok_keyword ("abstract") => loop (Mod_abstract () :: acc)
+        | Tok_keyword ("sealed") => loop (Mod_sealed () :: acc)
+        | Tok_keyword ("static") => loop (Mod_static () :: acc)
+        | _ =>
+          push_back (ctx);
+          List.rev (acc)
+      }
+    };
+    loop ([])
+  }
+  
+  'a operator_separated_list (ctx : CTX, op : string, f : CTX -> 'a) : list ('a) {
+    def loop (acc) {
+      match (get_token (ctx)) {
+        | Tok_operator (o, _) when o == op => loop (f (ctx) :: acc)
+        | _ => push_back (ctx); List.rev (acc)
+      }
+    };
+
+    loop ([f (ctx)])
+  }
+  
+  parse_tyvars (ctx : CTX) : list (string) {
+    operator_separated_list (ctx, ",", get_tyvar)
+  }
+
+  parse_where_constraints (ctx : CTX, tyvars : list (string)) : Typarms {
+    def constraints =
+      if (flag_keyword (ctx, "where")) {
+        def parse_constraint (_) {
+          def tv = get_tyvar (ctx);
+          expect_operator (ctx, ":>");
+          def t = parse_type (ctx);
+          Constraint (tv, t)
+        };
+        operator_separated_list (ctx, ",", parse_constraint)
+      } else [];
+    Typarms (tyvars, constraints)
+  }
+
+  flag_keyword (ctx : CTX, kw : string) : bool {
+    match (get_token (ctx)) {
+      | Tok_keyword (n) when n == kw => true
+      | _ => push_back (ctx); false
+    }
+  }
   
   parse_type_decl (ctx : CTX) : Type_decl {
     def parse_header () {
@@ -167,7 +384,7 @@ module Parser {
           def t_implements =
             match (get_token (ctx)) {
               | Tok_keyword ("implements") =>
-                parse_type_list (ctx)
+                operator_separated_list (ctx, ",", parse_type)
               | _ => 
                 push_back (ctx); 
                 []
@@ -180,42 +397,52 @@ module Parser {
     };
     
     def parse_variant_member (ctx) {
+      def tok = get_token (ctx);
       locate (ctx, fun () {
-        match (get_token (ctx)) {
+        match (tok) {
           | Tok_operator ("|", _) =>
             def id = get_id (ctx);
             def members =
               match (peek_token (ctx)) {
                 | Tok_operator ("{", _) =>
                   def parse_field (ctx) {
+                    ignore (peek_token (ctx));
                     locate (ctx, fun () {
                       def attrs = get_attrs (ctx);
-                      def is_ref =
-                        match (get_token (ctx)) {
-                          | Tok_keyword ("mutable") => true
-                          | _ => push_back (ctx); false
-                        };
+                      def is_ref = flag_keyword (ctx, "mutable");
                       def id = get_id (ctx);
                       expect_operator (ctx, ":");
                       def ty = parse_type (ctx);
                       expect_operator (ctx, ";");
-                      def f = M_field (ty = ty, 
-                                       is_ref = is_ref, 
-                                       kind = Val_normal ());
-                      f.name <- id;
-                      f.modifiers <- attrs;
-                      f
+                      M_field (name = id,
+                               modifiers = attrs,
+                               ty = ty, 
+                               is_ref = is_ref, 
+                               kind = Val_normal ())
                     })
                   };
                   collect_braced_list (ctx, parse_field)
                 | _ => []
               };
-            
+            TD_variant_option (name = id, 
+                               modifiers = [], 
+                               t_extends = None (),
+                               t_implements = [],
+                               typarms = Typarms ([], []),
+                               decls = members)
+          | _ => fatal_error (ctx, "expecting variant option")
         }
       })
     };
     
-    def parse_iface_member (_) { null };
+    def parse_iface_member (ctx) {
+      ignore (peek_token (ctx));
+      locate (ctx, fun () {
+        def is_new = flag_keyword (ctx, "new");
+        def h = parse_fun_header (ctx, allow_ctor = false, allow_inference = false, got_name = false);
+        M_function (h, FK_iface_method (is_new), FB_abstract ())
+      })
+    };
     
     def parse_members () {
       collect_braced_list (ctx, parse_type_member)
@@ -223,7 +450,7 @@ module Parser {
   
     def attrs = get_attrs (ctx);
     def tok = get_token (ctx);
-    opt_locate (ctx, fun () {
+    locate (ctx, fun () {
       match (tok) {
         | Tok_keyword ("type")
         | Tok_keyword ("class")
@@ -279,16 +506,11 @@ module Parser {
           td.t_extends <- t_extends;
           td.t_implements <- t_implements;
 
-          Some (td)
+          td
           
         | Tok_keyword ("macro") => Util.ice () // FIXME
         
-        | Tok_keyword ("}", _)
-        | Tok_EOF =>
-          push_back (ctx);
-          None ()
-
-        | _ => fatal_error ("expecting type declaration")
+        | _ => fatal_error (ctx, "expecting type declaration")
       }
     })
   }
@@ -354,7 +576,7 @@ module Parser {
     def r = collect_list (ctx, parse_topdecl);
     match (peek_token (ctx)) {
       | Tok_EOF => r
-      | _ => fatal_error ("expecting EOF")
+      | _ => fatal_error (ctx, "expecting EOF")
     }
   }
 
