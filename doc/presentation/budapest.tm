@@ -263,13 +263,13 @@
 
     <new_page>
 
-    <section|Variant inhertiance>
+    <section|Variant inheritance>
 
     <\itemize>
       <item>unlike in ML variants can have common part expressed in terms of
       inheritance
 
-      <item>this is used in Nemerle compiler (written in Nemerle itself)
+      <item>this is used in Nemerle compiler <em|(written in Nemerle itself)>
       <emdash> common part of all expressions is the originating source code
       location
     </itemize>
@@ -278,7 +278,7 @@
 
     <\code>
       <\with|font size|0.84>
-        <em|class> <with|color|brown|Locatated> {
+        <em|class> <with|color|brown|Located> {
 
         \ \ file : <with|color|brown|string>;
 
@@ -345,17 +345,44 @@
 
     <\with|font size|0.84>
       <\code>
-        <with|color|brown|'a> filter (f : <with|color|brown|'a -\<gtr\>
-        bool>,\ 
+        <with|color|brown|'a> split (l : <with|color|brown|list ('a)>, r :
+        <with|color|brown|list ('a)>,\ 
 
-        \ \ \ \ \ \ \ \ \ \ \ l : <with|color|brown|list ('a)>) :
+        \ \ \ \ \ \ \ \ \ \ cmp : <with|color|brown|'a * 'a -\<gtr\> int>, m
+        : <with|color|brown|'a>,\ 
+
+        \ \ \ \ \ \ \ \ \ \ inp : <with|color|brown|list ('a)>) :
         <with|color|brown|list ('a)> {
 
-        \ \ <em|match> (l) {
+        \ \ <em|match> (inp) {
 
-        \ \ \ \ \| x :: xs =\<gtr\> <em|if> (f (x)) x :: filter (f, xs)
+        \ \ \ \ \| x :: xs =\<gtr\>
 
-        \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ <em|else> filter (f, xs)
+        \ \ \ \ \ \ <em|if> (cmp (m, x) \<gtr\> 0) split (y :: l, r, xs)
+
+        \ \ \ \ \ \ <em|else> split (l, x :: r, xs)
+
+        \ \ \ \ \| [] =\<gtr\> (l, r)
+
+        \ \ }
+
+        }
+
+        \;
+
+        <with|color|brown|'a> qsort (cmp : <with|color|brown|'a * 'a -\<gtr\>
+        int>,\ 
+
+        \ \ \ \ \ \ \ \ \ \ inp : <with|color|brown|list ('a)>) :
+        <with|color|brown|list ('a)> {
+
+        \ \ <em|match> (inp) {
+
+        \ \ \ \ \| x :: xs =\<gtr\>
+
+        \ \ \ \ \ \ <em|def> (l, r) = split ([], [], cmp, x, xs);
+
+        \ \ \ \ \ \ qsort (cmp, l) @ (x :: qsort (cmp, r))
 
         \ \ \ \ \| [] =\<gtr\> []
 
@@ -364,34 +391,6 @@
         }
       </code>
     </with>
-
-    <with|font size|0.84|<\code>
-      <with|color|brown|><with|color|brown|'a> qsort (cmp :
-      <with|color|brown|'a * 'a -\<gtr\> int>,\ 
-
-      \ \ \ \ \ \ \ \ \ \ l : <with|color|brown|list ('a)>) :
-      <with|color|brown|list ('a)> {
-
-      \ \ <em|match> (l) {
-
-      \ \ \ \ \| x :: xs =\<gtr\>
-
-      \ \ \ \ \ \ <em|def> le (y : <with|color|brown|'a>) :
-      <with|color|brown|bool> { cmp (y, x) \<less\>= 0 }
-
-      \ \ \ \ \ \ <em|def> gt (y : <with|color|brown|'a>) :
-      <with|color|brown|bool> { cmp (y, x) \<gtr\> 0 }
-
-      \ \ \ \ \ \ qsort (cmp, filter (le, xs) @
-
-      \ \ \ \ \ \ \ \ (x :: qsort (cmp, filter (gt, xs)))
-
-      \ \ \ \ \| [] =\<gtr\> []
-
-      \ \ }
-
-      }
-    </code>>
 
     <new_page>
 
@@ -405,16 +404,72 @@
       <verbatim|VeriFun>) can be used to prove program properties
     </itemize>
 
-    <section|Assertions and tests>
-
-    Assertions in code will help in:
+    <section|Assertions>
 
     <\itemize>
-      <item>automatic test data generation
+      <item><verbatim|<em|require>> at the beginning of a block or function
 
-      <item>proving program properties at TRS level
+      <item><verbatim|<em|ensure>> at the end that can use
+      <verbatim|<em|value>> keyword (value of the block)
 
-      <item>design by contract
+      <with|font size|0.84|<\code>
+        <em|static> <em|public> factorial (x : <with|color|brown|int>) :
+        <with|color|brown|int> {
+
+        \ \ <em|require> { x \<gtr\>= 1 }
+
+        \;
+
+        \ \ <em|def> loop (acc : <with|color|brown|int>, x :
+        <with|color|brown|int>) : <with|color|brown|int> {
+
+        \ \ \ \ <em|require> { x \<gtr\>= 1 }
+
+        \ \ \ \ <em|if> (x == 1) \ acc
+
+        \ \ \ \ <em|else> \ \ \ \ \ \ \ \ loop (x * acc, x - 1)
+
+        \ \ }
+
+        \;
+
+        \ \ loop (1, x);
+
+        \ \ <em|ensure> { <em|value> \<gtr\>= x;
+
+        \ \ \ \ \ \ \ \ \ \ \ x \<gtr\>= 3 == (<em|value> % 3 == 0) }
+
+        }
+      </code>>
+
+      <item>assertions will help in automatic test data generation for
+      programs
+    </itemize>
+
+    <new_page>
+
+    <section|Assertions for mutables>
+
+    <\itemize>
+      <item><em|<verbatim|guarded>> mutable values
+
+      <\itemize-minus>
+        <item>update triggers assertion check
+
+        <item>can use special <verbatim|<em|previous>> qualifier to refer to
+        the value before update
+
+        <item>can be defined for all mutable values (class fields and locals)
+      </itemize-minus>
+
+      <item><verbatim|<em|transaction>> block
+
+      <\itemize-minus>
+        <item>guards are stacked and executed at the end of
+        <verbatim|<em|<em|transaction>>> block
+
+        <item>allow assertions like <verbatim|x + y == 5>
+      </itemize-minus>
     </itemize>
 
     <new_page>
@@ -447,6 +502,9 @@
 
     <\itemize>
       <item>type-safe <verbatim|printf>
+
+      <item><verbatim|$>--interpolation, <with|font shape|italic|a'la> Bourne
+      shell or Perl
 
       <item>convenient syntax for regular expressions
 
@@ -742,17 +800,18 @@
   <\collection>
     <associate|toc-10|<tuple|<uninit>|6>>
     <associate|toc-20|<tuple|<uninit>|11>>
-    <associate|gly-1|<tuple|1|?>>
     <associate|toc-11|<tuple|<uninit>|6>>
-    <associate|toc-21|<tuple|<uninit>|11>>
+    <associate|toc-21|<tuple|<uninit>|12>>
+    <associate|gly-1|<tuple|1|?>>
+    <associate|toc-22|<tuple|<uninit>|12>>
     <associate|toc-12|<tuple|<uninit>|7>>
     <associate|toc-13|<tuple|<uninit>|8>>
     <associate|toc-14|<tuple|<uninit>|8>>
     <associate|toc-15|<tuple|<uninit>|9>>
-    <associate|toc-16|<tuple|<uninit>|9>>
-    <associate|toc-17|<tuple|<uninit>|9>>
+    <associate|toc-16|<tuple|<uninit>|10>>
+    <associate|toc-17|<tuple|<uninit>|10>>
     <associate|toc-18|<tuple|<uninit>|10>>
-    <associate|toc-19|<tuple|<uninit>|10>>
+    <associate|toc-19|<tuple|<uninit>|11>>
     <associate|toc-1|<tuple|<uninit>|2>>
     <associate|toc-2|<tuple|<uninit>|2>>
     <associate|toc-3|<tuple|<uninit>|3>>
@@ -787,7 +846,7 @@
 
       Variants<value|toc-dots><pageref|toc-9>
 
-      Variant inhertiance<value|toc-dots><pageref|toc-10>
+      Variant inheritance<value|toc-dots><pageref|toc-10>
 
       <with|left margin|<quote|3fn>|Example<value|toc-dots><pageref|toc-11>>
 
@@ -795,22 +854,24 @@
 
       Formal semantics<value|toc-dots><pageref|toc-13>
 
-      Assertions and tests<value|toc-dots><pageref|toc-14>
+      Assertions<value|toc-dots><pageref|toc-14>
 
-      Powerful, type safe macros<value|toc-dots><pageref|toc-15>
+      Assertions for mutables<value|toc-dots><pageref|toc-15>
 
-      <with|left margin|<quote|3fn>|Combine<value|toc-dots><pageref|toc-16>>
+      Powerful, type safe macros<value|toc-dots><pageref|toc-16>
+
+      <with|left margin|<quote|3fn>|Combine<value|toc-dots><pageref|toc-17>>
 
       <with|left margin|<quote|3fn>|Example
-      uses<value|toc-dots><pageref|toc-17>>
+      uses<value|toc-dots><pageref|toc-18>>
 
-      Regular expression macro<value|toc-dots><pageref|toc-18>
+      Regular expression macro<value|toc-dots><pageref|toc-19>
 
-      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-19>>
+      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-20>>
 
-      SQL queries macro<value|toc-dots><pageref|toc-20>
+      SQL queries macro<value|toc-dots><pageref|toc-21>
 
-      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-21>>
+      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-22>>
     </associate>
   </collection>
 </auxiliary>
