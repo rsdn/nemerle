@@ -12,3 +12,6 @@ val end_ns : string -> unit
 
 val val_name : value_decl -> string
 val fun_name : function_decl -> string
+val proxy_name : function_decl -> string
+
+val get_proxies : unit -> function_decl list

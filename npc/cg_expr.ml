@@ -480,6 +480,33 @@ let iface_header td =
   let impl = if impl = "" then "" else " : " ^ impl in
   out (xf "interface %s %s {" (chop_ns td.td_name) impl)
 
+let cg_proxy f =
+  let clname = proxy_name f ^ "_class" in
+  out (xf "class %s : Nemerle.Func%d {"
+          clname (List.length f.fun_parms));
+  let mk_apply_arg (args, parms) v =
+    let n = List.length args in
+    let t = ty (unsome v.val_type) in
+    (xf "object arg_%d" n :: args, xf "(%s) arg_%d" t n :: parms)
+  in
+  let (args, parms) = List.fold_left mk_apply_arg ([], []) f.fun_parms in
+  out (xf "public object apply(%s) {" (String.concat ", " (List.rev args)));
+  let funpar = Ty_info.td_qname (Ty_info.function_parent f) in
+  let args = String.concat ", " (List.rev parms) in
+  let call = xf "%s.%s(%s);" funpar f.fun_name args in
+  begin
+    match real_function_type f.fun_type with
+    | _, T_void -> 
+      out call;
+      out "return null;"
+    | _ ->
+      out ("return " ^ call);
+  end;
+  out "} // end fun\n";
+  out (xf "static public %s_class __N__instance = new %s_class();" 
+          (proxy_name f) (proxy_name f));
+  out "} // end proxy\n"
+
 let cg_local_fun c f =
   let clname = fun_name f ^ "_class" in
   out (xf "class %s : Nemerle.Func%d {"
@@ -604,5 +631,7 @@ let cg_decls decls =
         push_funs ()
       end
   in push_funs ();
+
+  List.iter cg_proxy (get_proxies ());
 
   Closure.push_all ()

@@ -95,11 +95,29 @@ let val_name v =
   | Val_exn
   | Val_local _ ->
     xf "__N__var_%d_%s" v.val_id (mangle v.val_name)
-  
+
+let proxies = Stack.create ()
+
+let get_proxies () =
+  let s = Stack.copy proxies in
+  let rec loop acc =
+    if Stack.is_empty s then acc
+    else loop (Stack.pop s :: acc)
+  in loop []
+
 let fun_name f =
   match f.fun_defined_in_fun with
   | 0 ->
-    f.fun_needs_proxy <- true;
-    xf "__N__proxy_%d_%s" f.fun_id (chop_ns f.fun_name)
+    if f.fun_needs_proxy then ()
+    else begin
+      f.fun_needs_proxy <- true;
+      Stack.push f proxies
+    end;
+    xf "__N__proxy_%d_%s_class.__N__instance" f.fun_id (chop_ns f.fun_name)
   | _ ->
     xf "__N__fun_%d_%s" f.fun_id f.fun_name
+    
+let proxy_name f =
+  match f.fun_defined_in_fun with
+  | 0 -> xf "__N__proxy_%d_%s" f.fun_id (chop_ns f.fun_name)
+  | _ -> assert false

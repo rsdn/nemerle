@@ -205,7 +205,7 @@ let referenced_decl_type decl =
     free_variable ()
   | D_value {val_type = Some t} -> t
   | D_value {val_type = None} -> ice "untychecked value"
-  | D_function {fun_type = t} -> t
+  | D_function {fun_type = t; fun_typarms = tp} -> fresh_vars tp.tp_tyvars t
   | D_field _ ->
     error (xf "expected value, got field `%s'" name);
     error ~loc:loc "defined here";
