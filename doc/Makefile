@@ -155,7 +155,7 @@ clean:
 
 www: nemerle-web.tar.gz
 
-nemerle-web.tar.gz: $(normal_docs) $(wildcard styles/*.css styles/*.png styles/*.jpg)
+nemerle-web.tar.gz: $(normal_docs) $(wildcard styles/*.css styles/*.png styles/*.jpg) poll1.html
 	$(MAKE) verify-html
 	rm -rf www
 	mkdir -p www/{styles,course/styles}
