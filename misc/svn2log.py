@@ -36,7 +36,7 @@ import string
 
 from xml.utils import qp_xml
 
-kill_prefix = ""
+kill_prefix_rx = None
 default_domain = "localhost"
 exclude = []
 users = { }
@@ -60,10 +60,11 @@ def child(e, n):
 def convert_path(n):
   for src in reloc.keys():
     n = string.replace(n, src, reloc[src])
-  if n.startswith(kill_prefix):
-    n = n[len(kill_prefix):]
-  else:
-    return None
+  if kill_prefix_rx != None:
+    if kill_prefix_rx.search(n):
+      n = kill_prefix_rx.sub("", n)
+    else:
+      return None
   if n.startswith("/"): n = n[1:]
   if n == "": n = "/"
   for pref in exclude:
@@ -183,7 +184,7 @@ def usage():
 Convert specified subversion xml logfile to GNU-style ChangeLog.
 
 Options:
-  -p, --prefix=DIR     set root directory of project (it will be striped off
+  -p, --prefix=REGEXP  set root directory of project (it will be striped off
                        from ChangeLog entries, paths outside it will be 
                        ignored)
   -x, --exclude=DIR    exclude DIR from ChangeLog (relative to prefix)
@@ -206,7 +207,7 @@ mark    Marcus Blah <mb@example.org>
 
 Typical usage of this script is something like this:
 
-  svn log -v --xml | %s -p /foo/trunk -u aux/users
+  svn log -v --xml | %s -p '/foo/(branches/[^/]+|trunk)' -u aux/users
   
 Please send bug reports and comments to author:
   Michal Moskal <malekith@pld-linux.org>
@@ -223,10 +224,10 @@ def process_opts():
     sys.exit(2)
   fin = sys.stdin
   fout = None
-  global kill_prefix, exclude, users, default_domain, reloc, max_join_delta
+  global kill_prefix_rx, exclude, users, default_domain, reloc, max_join_delta
   for o, a in opts:
     if o in ("--prefix", "-p"):
-      kill_prefix = a
+      kill_prefix_rx = re.compile("^" + a)
     elif o in ("--exclude", "-x"):
       exclude.append(a)
     elif o in ("--help", "-h"):
