@@ -59,8 +59,8 @@ all:
 	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -n "../boot/ncc.exe"
 	rm -f out.dll out.exe out.netmodule ext_test.out Nemerle.dll
 
-myPoll.exe:
-	../boot/ncc.exe -r Npgsql poll-cgi.n -o myPoll.exe
+myPoll.exe: myPoll.n
+	$(EXECUTE) ../boot/ncc.exe -r Npgsql myPoll.n -o myPoll.exe
 
 dist:
 	$(CP) '*.n'
