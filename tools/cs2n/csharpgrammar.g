@@ -635,27 +635,31 @@ returns [string return_string]
     :   (NEW   array_type   array_initializer)=> 
             n1:NEW   tp = array_type   return_string  = array_initializer
         {
-            return_string = ExtendedToken.getWhitespaces (n1) + tp[0] + return_string; 
+            return_string = ExtendedToken.getWhitespaces (n1) + tp[0] +
+                            return_string; 
         }
     |   n2:NEW   
         tp = non_array_type  
         lb:LBRACK   
         el = expression_list   
         rb:RBRACK   
-        {
-            return_string = ExtendedToken.getWhitespaces (n2) + tp[0]; 
-            return_string = ExtendedToken.getWhitespaces (lb) + " array(" + el + ExtendedToken.getWhitespaces (rb) + ")";
-        }
         (rank = rank_specifier
-        {
-            return_string +=  rank[0];
-        }
+         {
+           return_string +=  rank[0];
+         }
         )*   
-        (ai = array_initializer)?       
-        {
-            return_string +=  ai;
-        }
-        
+        (
+          {
+            return_string = ExtendedToken.getWhitespaces (n2) + tp[0]; 
+            return_string = ExtendedToken.getWhitespaces (lb) + 
+                            " array(" + el + ExtendedToken.getWhitespaces (rb) + ")";
+          }
+         |
+            (ai = array_initializer)?       
+            {
+                return_string +=  ai;
+            }
+        )        
     ;
 
 typeof_expression
@@ -1933,9 +1937,13 @@ constant_declaration
            (attributes)?   (constant_modifier)*   
         { Emit.EndBuffer ();}
 
-        c1:CONST   t=type   constant_declarator[false, ExtendedToken.getWhitespaces(c1) ,t[0]+t[1]] 
+        c1:CONST 
+        { Emit.EmitString (ExtendedToken.getWhitespaces(c1) + "static"); } // const implies static
+        t=type   constant_declarator[false, "" ,t[0]+t[1]] 
 
-        (c2:COMMA constant_declarator[true, Emit.Buffer + ExtendedToken.getWhitespaces(c2) ,t[0]+t[1]])*   s:SEMI
+        (c2:COMMA 
+         constant_declarator[true, Emit.Buffer +
+                             ExtendedToken.getWhitespaces(c2) + "static",t[0]+t[1]])*   s:SEMI
         { Emit.EmitString(ExtendedToken.getWhitespaces (s));}
     ;
 
