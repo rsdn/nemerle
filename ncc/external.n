@@ -26,44 +26,168 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *)
 
-(*
- * NOTE: this is bootstrap code that will be eventually removed
- *)
-
 namespace Nemerle.Compiler 
 {
   open Nemerle.Collections;
   open Nemerle.Compiler.Parsetree;
   open Nemerle.Compiler;
+  
+
+  (**
+   * We can specify libraries either by using assembly or file names
+   *)
+  variant LibraryName {  
+    | AssemblyName { name : string; }
+    | FileName { name : string; }
+  }
 
 
   (**
-   * External declarations for Framework classes.
+   * The library reference exception is typically thrown
+   * when unable to load an assembly file.
    *)
-  class ExternalDeclarationsRegistry
+  public class LibraryReferenceException extends System.Exception 
   {
-    public static mutable SystemDll : System.Reflection.Assembly;
-        
+    public this () {}
+  }
+
+
+  (**
+   * Manager for the referenced libraries
+   *)
+  class LibraryReferenceManager
+  {
+    (* -- CONSTRUCTORS ----------------------------------------------------- *)
+  
+    (**
+     * Static constructor. Always load the Framework core library.
+     *)
+    public static this () {
+
+      _libraries <- [];
+      
+      AddLibrary (LoadCoreLibrary ())
+    }
+
+
+    (* -- PUBLIC METHODS --------------------------------------------------- *)
+  
+    (**
+     * Searches for a type name in all referenced external libraries
+     * keeping in mind the list of all the open namespaces.
+     *)
+    public static Lookup (env : Env, path : list (string), type_name : string) : list (Decl)
+    {
+      match (path) {
+        | [] => Lookup (env, type_name, _libraries)
+        | path :: rest =>
+          List.append (Lookup (env, path + type_name, _libraries), 
+                       Lookup (env, rest, type_name))
+      }
+    }
+    
+
+    (* -- PRIVATE METHODS -------------------------------------------------- *)
 
     (**
-     * The static constructor initializes the delarations store
+     * Scans through all the referenced external libraries looking for a type name.
      *)
-    public static this ()
+    private static Lookup (env : Env, type_name : string, 
+                           libraries : list (LibraryReference)) : list (Decl) 
     {
-      try
-        ExternalDeclarationsRegistry.SystemDll <- System.Reflection.Assembly.Load ("mscorlib.dll")
-      with e : System.IO.FileNotFoundException =>
-        ExternalDeclarationsRegistry.SystemDll <- System.Reflection.Assembly.Load ("corlib.dll")
+      match (libraries) {
+        | [] => []
+        | library :: rest =>
+          List.append (library.Lookup (env, type_name), 
+                       Lookup (env, type_name, rest))
+      }
     }
+
+
+    (**
+     * Tries to load the core framework library using both 
+     * the .NET Framework and Mono naming conventions.
+     *)
+    private static LoadCoreLibrary () : LibraryReference {
+
+      def mscorelib = try LibraryReference (AssemblyName ("mscorlib.dll"))
+                      with e : System.IO.FileNotFoundException => null;
+          
+      if (mscorelib == null) {
+      
+        def corlib = try LibraryReference (AssemblyName ("corlib.dll"))
+                     with e : System.IO.FileNotFoundException =>
+                       raise LibraryReferenceException ();
+        
+        corlib
+      }
+      else
+        mscorelib    
+    }
+    
+  
+    (**
+     * Stores the referenced library for later lookup by the namespaces.
+     *)
+    private static AddLibrary (library : LibraryReference) : void {
+    
+      _libraries <- library :: _libraries;
+    }
+  
+    
+    (* -- PRIVATE VARIABLES ------------------------------------------------ *)
+    
+    (**
+     * The referenced library list
+     *)
+    private static mutable _libraries : list (LibraryReference);
+  }
+
+
+  (**
+   * This class stores information extracted from a referenced external library.
+   *)
+  class LibraryReference
+  {
+    (**
+     * The assembly associated with this object
+     *)
+    private mutable _library : System.Reflection.Assembly;
+       
+    (**
+     * The location of this library
+     *)
+    private mutable _location : Location;
+    
+    (**
+     * The environment of this library
+     *)
+    private mutable _env : Env;
+    
+       
+    (**
+     * Loads an assembly given it's file or assembly name
+     *)
+    public this (library_name : LibraryName) {
+    
+      match (library_name) {
+        | AssemblyName (name) =>
+          this._library <- System.Reflection.Assembly.Load (name)
+        | FileName (name) =>
+          this._library <- System.Reflection.Assembly.LoadFrom (name)
+      };
+
+	    this._location <- Location("[library:" + this._library.FullName + "]", 0, 0)
+    } 
 
 
     (**
      * Creates a public constructor declaration
      *)
-    public static make_ctor (env : Env, location : Location, class_name : string, 
-                             param_list : list (Fun_parm)) : Class_member
+    private make_ctor (class_name : string, param_list : list (Fun_parm)) : Class_member
     {
-      def header = Fun_header (location, ".ctor", Type.T_void (), param_list);
+      // FIXME: what about abstract constructors?
+      def header = Fun_header (this._location, ".ctor", Type.T_void (), param_list);
       def member = Class_member.M_function (header, FK_ctor (), FB_extern (class_name + "..ctor"));
       member.name <- ".ctor";
       member.modifiers <- [Modifier.Mod_public ()];
@@ -74,11 +198,11 @@ namespace Nemerle.Compiler
     (**
      * Creates a public static method declaration
      *)
-    public static make_static_method (env : Env, location : Location, class_name : string, method_name : string, 
-                                      return_type : Type, param_list : list (Fun_parm)) : Class_member
+    private make_static_method (class_name : string, method_name : string, 
+                                return_type : Type, param_list : list (Fun_parm)) : Class_member
     {
-      def location = Location("[MsCoreLib:" + class_name + "]", 0, 0);
-      def header = Fun_header (location, method_name, return_type, param_list);
+      // FIXME: what about abstract static methods?
+      def header = Fun_header (this._location, method_name, return_type, param_list);
       def member = Class_member.M_function (header, FK_function (), FB_extern (class_name + "." + method_name));
       member.name <- method_name;
       member.modifiers <- [Modifier.Mod_public ()];
@@ -89,10 +213,11 @@ namespace Nemerle.Compiler
     (**
      * Creates a public method declaration
      *)
-    public static make_method (env : Env, location : Location, class_name : string, method_name : string, 
-                               return_type : Type, param_list : list (Fun_parm)) : Class_member
+    private make_method (class_name : string, method_name : string, 
+                         return_type : Type, param_list : list (Fun_parm)) : Class_member
     {
-      def header = Fun_header (location, method_name, return_type, param_list);
+      // FIXME: what about abstract methods?
+      def header = Fun_header (this._location, method_name, return_type, param_list);
       def member = Class_member.M_function (header, FK_method ([]), FB_extern (class_name + "." + method_name));
       member.name <- method_name;
       member.modifiers <- [Modifier.Mod_public ()];
@@ -103,16 +228,181 @@ namespace Nemerle.Compiler
     (**
      * Creates a public property declaration
      *)
-    public static make_property (env : Env, location : Location, class_name : string, property_name : string, 
-                                 property_type : Type, is_readable : bool, is_writeable : bool,
-                                 indexer_parameters : list (Fun_parm)) : Class_member
+    private make_property (class_name : string, property_name : string, 
+                           property_type : Type, is_readable : bool, is_writeable : bool,
+                           indexer_parameters : list (Fun_parm)) : Class_member
     {
+      // FIXME: what about the location?
       def reader = if (is_readable) Some (FB_extern (class_name + ".get_" + property_name)) else None ();
       def writer = if (is_writeable) Some (FB_extern (class_name + ".set_" + property_name)) else None ();      
       def member = Class_member.M_property (property_type, reader, writer, indexer_parameters);
       member.name <- property_name;
       member.modifiers <- [Modifier.Mod_public ()];
       member  
+    }
+
+
+    (**
+     * Turns a Framework type into something edible by Nemerle's type system
+     *)
+    private process_framework_type (framework_type : System.Type) : Type
+    {
+      // FIXME: ref and out types, anyone?
+      def framework_type_as_string = framework_type.ToString ();
+    
+      if (framework_type_as_string == "System.Void")
+        T_void ()
+      else
+        if (framework_type.IsArray)
+          T_array (T_app ((framework_type.GetElementType ()).ToString (), []))
+        else
+          T_app (framework_type_as_string, []);    
+    } 
+
+
+    (**
+     * Builds a parameter list for a constructor, method or indexer
+     *)
+    private build_params (parameters : list (System.Reflection.ParameterInfo)) : list (Fun_parm)
+    {
+      match (parameters) {
+        | param :: rest =>          
+          def parameter_type = this.process_framework_type (param.ParameterType);
+          
+          Fun_parm (this._location, param.Name, parameter_type) ::
+            this.build_params (rest)
+        | [] => []
+      } 
+    }
+
+
+    (**
+     * Builds a list of constructors of a type
+     *)
+    private build_constructors (class_name : string,
+                                type_constructors : list (System.Reflection.ConstructorInfo)) 
+                                : list (Class_member)
+    {        
+      match (type_constructors) {
+        | constructor :: rest =>
+          def constructor_params = List.from_array (constructor.GetParameters ());
+          def parameters = this.build_params (constructor_params);
+                       
+          this.make_ctor (class_name, parameters) ::
+            this.build_constructors (class_name, rest)
+        | [] => []
+      }
+    }
+
+
+    (**
+     * Builds a list of methods of a type
+     *)
+    private build_methods (class_name : string,
+                           methods : list (System.Reflection.MethodInfo))
+                           : list (Class_member) 
+    {
+      match (methods) {
+        | method :: rest =>
+        
+          def method_params = this.build_params (List.from_array (method.GetParameters ()));
+          def method_rettype = this.process_framework_type (method.ReturnType);
+          
+          def member = 
+            if (method.IsStatic) 
+              this.make_static_method (class_name, method.Name, 
+                                       method_rettype, method_params)
+            else
+              this.make_method (class_name, method.Name, 
+                                method_rettype, method_params);
+          member.loc <- this._location;
+          member :: this.build_methods (class_name, rest)
+        | [] => []
+      }
+    }
+
+
+    (**
+     * Builds a list of properties of a type
+     *)
+    private build_properties (class_name : string,
+                              properties : list (System.Reflection.PropertyInfo))
+                              : list (Class_member)
+    {
+      match (properties) {
+        | property :: rest =>
+          
+          def property_type = this.process_framework_type (property.PropertyType);
+
+          def index_parameters = this.build_params (List.from_array (property.GetIndexParameters ()));
+          
+          def member = this.make_property (class_name,
+                                           property.Name, property_type,
+                                           property.CanRead, property.CanWrite,
+                                           index_parameters);
+    
+          member :: this.build_properties (class_name, rest)
+        | [] => []
+      }
+    }
+
+    
+    (**
+     * Looks up a type name in this assembly. The type name is expected
+     * to be full, i.e. containing the full namespace qualifier.
+     *)
+    public Lookup (env : Env, name : string) : list (Decl) {
+
+      (* need to check that again, as the same type could be found using different paths before *)
+      def cached_type = (Env.externals [name] :> Decl);
+      
+      if (cached_type == null) {
+      
+        def reflected_type = this._library.GetType (name);
+                          
+        if (reflected_type != null) {
+
+          this._env <- env.copy ();
+          this._env.current_namespace <- "";
+        
+          def is_class = reflected_type.IsClass;
+        
+          def base_type = reflected_type.BaseType;
+
+          def type_constructors = List.from_array (reflected_type.GetConstructors ());
+          def type_methods = List.from_array (reflected_type.GetMethods ());
+          def type_properties = List.from_array (reflected_type.GetProperties ());
+
+          def constructors = this.build_constructors (name, type_constructors);
+          def methods = this.build_methods (name, type_methods);
+          def properties = this.build_properties (name, type_properties);
+  
+    	    def members = List.append (List.append (constructors, methods), properties);
+          
+  	      def declaration = TD_class (members);
+	        declaration.name <- name;
+	        declaration.loc <- this._location;
+          declaration.typarms <- Typarms ([], []);
+          declaration.t_extends <- None ();
+          declaration.t_implements <- []; 
+          declaration.modifiers <- [Mod_public ()];
+
+          def type_info = Tyinfo (None (), this._env, declaration, true);
+
+          def decl = Env.add_type (type_info);
+
+          Env.externals.Add (name, decl);
+
+          Tyinfo.make_external (this._env, type_info);
+              
+          [decl]
+        }
+        else {
+        
+          []
+        }
+      }
+      else [cached_type]
     }
   }
 } (* namespace *)
