@@ -34,8 +34,7 @@ $cs_compiler = shift;
 defined $cs_compiler or $cs_compiler = "mcs";
 $cs_compiler =~ /^(csc|cscc|mcs)$/ or die "bad cs_compiler";
 
-$runtime = "mono --debug ";
-#$runtime = "";
+$runtime = "";
 if ($cs_complier eq "mcs") {
     $runtime = "mono --debug ";
 }
