@@ -38,7 +38,7 @@ DISTFILES = \
 	Makefile \
 	README   \
 	run      \
-	
+
 STAGE3    = $(TOP)/ncc/out.stage3
 TESTN     = $(TOP)/ncc/testsuite/test.n
 
@@ -60,7 +60,8 @@ CP = @echo CP      $1
 ############################################################
 
 all:
-	cp $(STAGE3)/Nemerle{,.Compiler}.dll .
+	cp $(STAGE3)/Nemerle.dll .
+	cp $(STAGE3)/Nemerle.Compiler.dll .
 	$(EXECUTE) $(STAGE3)/ncc.exe -out test.exe $(TESTN)
 	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" -n "$(STAGE3)/ncc.exe" $(TEST_FILES)
 	rm -f out.dll out.exe out.netmodule ext_test.out Nemerle.dll test.exe
