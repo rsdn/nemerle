@@ -1560,13 +1560,16 @@ returns [StatementTree t]
 }
     :   tr:TRY       {a.Add (new StatementTree(tr));}
         temp = block {a.Add (temp);}  
-        {a.Add (new StatementTree ( ExtendedToken.getWhitespaces (tr) + "catch {"));}
-        (    temp = catch_clauses {a.Add (temp);}    
-             {a.Add (new StatementTree ( ExtendedToken.getWhitespaces (tr) + "}"));}
-            (temp = finally_clause {a.Add (temp);}  )? 
+        ( temp = catch_clauses 
+            {
+               a.Add (new StatementTree ( ExtendedToken.getWhitespaces (tr) + "catch {"));
+               a.Add (temp);
+               a.Add (new StatementTree ( ExtendedToken.getWhitespaces (tr) + "}"));
+            }    
+            (temp = finally_clause { a.Add (temp); }  )? 
             
-            | temp = finally_clause {a.Add (temp);})      
-            
+          | temp = finally_clause {a.Add (temp);}
+        )      
         { t = new StatementTree("TRY",a); }
     ;
 
@@ -2028,6 +2031,7 @@ returns [string return_string]
     string [] rt =  new string[]{"",""};
     bool mod = false;
     return_string = "";
+    string [] mem_name = null;
     string parms;
 }
     :   (attributes)?   (method_modifier {mod = true;})*  rt = return_type_array  
@@ -2035,7 +2039,10 @@ returns [string return_string]
             if(!mod)
                 Emit.EmitString(rt[0]);
         }
-        member_name           
+        mem_name = member_name           
+        { Emit.EmitString (mem_name [0]);
+          Emit.EmitString (mem_name [1]);
+        }
 
         ( parms = generic_parameters
          { Emit.EmitString (parms); }
@@ -2053,7 +2060,11 @@ returns [string return_string]
 	    return_string = rt[1];
         }	                
         (parms = where_constraints { return_string += parms; })?
-
+        { if (mem_name[2] != null) {
+            Emit.EmitString (" implements ");
+            Emit.EmitString (mem_name [2]);
+          }
+        }
     ;
 
 method_modifier
@@ -2093,12 +2104,21 @@ returns [string [] return_strings]
     ;
 
 member_name
+returns [string [] return_strings]
 {
+    return_strings = new string [] {"", "", null};
     string [] mn = new string[]{"",""};
 }
-    :   mn = type_name
+    :   mn = type
         {
-            Emit.EmitString (mn[0]+mn[1]);
+            int dot = mn[1].LastIndexOf ('.');
+            if (dot != -1) {
+                return_strings [1] = mn[1].Replace ('.', '_');
+                return_strings [2] = mn[1];
+            }
+            else return_strings [1] = mn[1];
+
+            return_strings [0] = mn[0];
         }
     ;
 
@@ -2162,18 +2182,28 @@ property_declaration
 {
     string [] t= new string[]{"",""};
     bool mod = false;
+    string [] mem_name = null;
 }
     :   (attributes)?   (property_modifier {mod = true;})*   t = type   
         {
             if(!mod)
                 Emit.EmitString(t[0]);
         }
-        member_name   
+        mem_name = member_name           
+        { Emit.EmitString (mem_name [0]);
+          Emit.EmitString (mem_name [1]);
+        }
         {
             if(mod)
                 Emit.EmitString(" :" + t[0]+t[1]);
             else
                 Emit.EmitString(" : " + t[1]);
+        }
+
+        { if (mem_name[2] != null) {
+            Emit.EmitString (" implements ");
+            Emit.EmitString (mem_name [2]);
+          }
         }
 
         lb:LBRACE   
@@ -2233,12 +2263,16 @@ returns [string return_string]
     return_string = "";
     string rt = "";
     string rt1 = "";
+    string [] mem_name = null;
 }
     :  ((attributes)?   (event_modifier)*   EVENT  return_type   member_name RBRACE)=>
         (attributes)?   (event_modifier)*   
         e1:EVENT                 { Emit.EmitToken (e1); }
         rt = return_type   
-        member_name   
+        mem_name = member_name           
+        { Emit.EmitString (mem_name [0]);
+          Emit.EmitString (mem_name [1]);
+        }
         lb1:LBRACE               { Emit.EmitString(" : " + rt);
                                    Emit.EmitToken (lb1); }
         event_accessor_declarations   
@@ -2247,7 +2281,11 @@ returns [string return_string]
     |   (attributes)?   (event_modifier)*   
         e2:EVENT                 { Emit.EmitToken (e2); }
         rt1 = return_type   
-        member_name   
+        mem_name = member_name           
+        { Emit.EmitString (mem_name [0]);
+          Emit.EmitString (mem_name [1]);
+        }
+
         s:SEMI                   { Emit.EmitString (" : " + rt1);
                                    Emit.EmitToken (s); }
     ;
@@ -2942,7 +2980,9 @@ global_attribute_section
     ;
 
 global_attribute_target_specifier
-    :   idgat:IDENTIFIER {ExtendedToken.getTextOnly(idgat)=="assembly"}?  
+    :   idgat:IDENTIFIER 
+        { ExtendedToken.getTextOnly(idgat)=="assembly" || 
+          ExtendedToken.getTextOnly(idgat)=="module" }?  
         {Emit.EmitToken(idgat);}
         c:COLON {Emit.EmitToken(c);}
     ;
