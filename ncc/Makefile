@@ -28,7 +28,7 @@
 
 include ../config.mak
 
-lib_src = ../lib/core.n ../lib/option.n ../lib/list.n tree.n ../lib/hashtable.n ../lib/stack.n
+lib_src = ../lib/core.n ../lib/option.n ../lib/list.n tree.n ../lib/hashtable.n ../lib/stack.n ../lib/queue.n
 
 n_src = \
 	$(lib_src) \
@@ -87,6 +87,11 @@ ncc.exe: $(all_src)
 	$(EXECUTE) ../boot/ncc.exe $(n_src)
 	mv -f out.cs out1.cs
 	$(COMPILE) $(OUTFLAG)$@ $(all_cs) out1.cs
+
+stdlib.dll: $(lib_src)
+	$(EXECUTE) ../boot/ncc.exe $(lib_src)
+	mv -f out.cs stdlib.cs
+	$(COMPILE) /target:library $(OUTFLAG)$@ stdlib.cs
 
 ../config.mak:
 	$(MAKE) -C .. config.mak
