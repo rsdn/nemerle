@@ -200,12 +200,18 @@ class Lexer : yyParser.yyInput
 		return Token.NUMBER_LITERAL;
 	}
 
+
+
 	int get_id(int first_ch)
 	{
 		StringBuilder buf = new StringBuilder();
 	
-		if (first_ch != '\'')
+		if (first_ch == '\'') {
+			if (!is_id_beg(peek()))
+				return get_char();
+		} else
 			buf.Append((char)first_ch);
+		
 		for (;;) {
 			if (is_id_beg(peek()) || is_digit(peek()) || peek() == '\'')
 				buf.Append((char)read());
@@ -214,6 +220,11 @@ class Lexer : yyParser.yyInput
 		}
 		
 		string str = buf.ToString();
+
+		if (first_ch == '\'' && str.Length == 2 && str[1] == '\'') {
+			val = (object)((int)str[0]);
+			return Token.CHAR_LITERAL;
+		}
 
 		val = (object)str;
 
@@ -248,16 +259,28 @@ class Lexer : yyParser.yyInput
 		return Token.ERROR;
 	}
 
-	int get_string()
+	int get_char()
+	{
+		int ret = get_string('\'');
+		if (ret == Token.ERROR)
+			return ret;
+		string v = (string)val;
+		if (v.Length == 0)
+			return error("empty character literal");
+		if (v.Length != 1)
+			return error("character literal too long");
+		val = (object)((int)v[0]);
+		return Token.CHAR_LITERAL;
+	}
+
+	int get_string(char end_ch)
 	{
 		StringBuilder buf = new StringBuilder();
 		int ch = -1;
 		
-		while (ch != '"') {
+		while (ch != end_ch) {
 			ch = read();
 			switch (ch) {
-			case '"':
-				break;
 
 			case '\\':
 				ch = read();
@@ -275,7 +298,8 @@ class Lexer : yyParser.yyInput
 				return error("EOF in string literal");
 
 			default:
-				buf.Append((char)ch);
+				if (ch != end_ch)
+					buf.Append((char)ch);
 				break;
 			}
 		}
@@ -370,7 +394,7 @@ class Lexer : yyParser.yyInput
 			return get_token();
 
 		case '"':
-			return get_string();
+			return get_string('"');
 
 		case '`':
 			if (peek() == '`') {
@@ -382,10 +406,7 @@ class Lexer : yyParser.yyInput
 				return get_quoted_id();
 
 		case '\'':
-			if (is_id_beg(peek()))
-				return get_id('\'');
-			else
-				return error("invalid character in type variable");
+			return get_id('\'');
 
 		case '(':
 			if (peek() == '*') {
