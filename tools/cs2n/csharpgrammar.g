@@ -129,7 +129,7 @@ returns [string [] return_strings]
 {
     return_strings = new string[]{"",""};
 }
-    :   (array_type)=> array_type
+    :   (array_type)=> return_strings = array_type
     |   o:OBJECT 
         {return_strings[0] = ExtendedToken.getWhitespaces (o);
          return_strings[1] = ExtendedToken.getTextOnly (o);}
@@ -211,30 +211,60 @@ returns [string [] return_strings]
     ;
 
 array_type
-returns [string return_string]
+returns [string [] return_strings]
 {
-    int rank = 1;
-    return_string = "";
+    string [] rank = new string[] {"",""};
+    return_strings = new string[] {"",""};
+    string [] nat  = new string[] {"",""};
+    string end = "";
 }
-    :   non_array_type   rank = rank_specifier {return_string = " array <" + rank.ToString () + ">";}
-        (rank = rank_specifier)*
+    :   nat = non_array_type   rank = rank_specifier 
+        {return_strings[1] = " array [" + rank[0];
+            if(rank[1] != "1")
+               return_strings[1] += (rank[1] + ",");
+         return_strings[0] = nat[0];
+            end = "]";
+        }
+        (rank = rank_specifier
+            { return_strings[1] += " array [" + rank[0];
+                if(rank[1] != "1")
+                    return_strings[1] += (rank[1] + ",");
+              end += "]"; }
+        )*
+        {   return_strings[1] += nat[1];
+            return_strings[1] += end;
+        }
     ; 
 
 non_array_type
-    :   OBJECT 
-    |   STRING 
-    |   type_name
-    |   simple_type
+returns [string [] return_strings]
+{ 
+    return_strings = new string[] {"",""};
+}
+    :   o:OBJECT 
+        {return_strings[0] = ExtendedToken.getWhitespaces (o);
+         return_strings[1] = ExtendedToken.getTextOnly (o);}
+    |   s:STRING 
+        {return_strings[0] = ExtendedToken.getWhitespaces (s);
+         return_strings[1] = ExtendedToken.getTextOnly (s);}
+    |   return_strings = type_name
+    |   return_strings = simple_type
     ;
 
 rank_specifier
-returns [int rank]
-{
-    rank = 1;
+returns [string [] return_strings]
+{ 
+    return_strings = new string[] {"",""};
+    int rank = 1;
 }
-    :   LBRACK 
-        (COMMA  {rank += 1;})*   
-        RBRACK
+    :   lb:LBRACK { return_strings[0] = ExtendedToken.getWhitespaces (lb);}
+        (c:COMMA  {rank += 1;}
+            {return_strings[0] = ExtendedToken.getWhitespaces (c);}
+        )*   
+        rb:RBRACK 
+        {return_strings[0] = ExtendedToken.getWhitespaces (rb);
+         return_strings[1] = rank.ToString ();   
+        }
     ;
 
 //---------------
@@ -496,12 +526,36 @@ returns [string return_string]
 array_creation_expression 
 returns [string return_string]
 {
-    string at = "";
+    string ai = "";
+    string el = "";
     return_string = "";
+    string [] tp = new string[]{"",""};
+    string [] rank = new string[]{"",""};
 }
-    :   (NEW   array_type   array_initializer)=> // TODO ----------------------------------
-            NEW   at = array_type   array_initializer
-    |   NEW   non_array_type  LBRACK   expression_list   RBRACK   (rank_specifier)*   (array_initializer)?       
+    :   (NEW   array_type   array_initializer)=> 
+            n1:NEW   tp = array_type   return_string  = array_initializer
+        {
+            return_string = ExtendedToken.getWhitespaces (n1) + tp[0] + return_string; 
+        }
+    |   n2:NEW   
+        tp = non_array_type  
+        lb:LBRACK   
+        el = expression_list   
+        rb:RBRACK   
+        {
+            return_string = ExtendedToken.getWhitespaces (n2) + tp[0]; 
+            return_string = ExtendedToken.getWhitespaces (lb) + " array(" + el + ExtendedToken.getWhitespaces (rb) + ")";
+        }
+        (rank = rank_specifier
+        {
+            return_string +=  rank[0];
+        }
+        )*   
+        (ai = array_initializer)?       
+        {
+            return_string +=  ai;
+        }
+        
     ;
 
 typeof_expression
@@ -552,7 +606,7 @@ returns [string return_string]
     |   m:MINUS   return_string = unary_expression  {return_string = m.getText () + return_string ;  }
     |   l:LNOT   return_string = unary_expression   {return_string = l.getText () + return_string ;  }
     |   b:BNOT   return_string = unary_expression   {return_string = b.getText () + return_string ;  }
-    |   STAR unary_expression  // ------------- ?? -----------------------
+    |   STAR return_string = unary_expression  // ------------- ?? -----------------------
     |   return_string = pre_increment_expression
     |   return_string = pre_decrement_expression
     ;
@@ -798,7 +852,7 @@ returns [string return_string]
 {
     return_string = "";
 }
-    :   return_string = conditional_or_expression   (QUESTION   expression   COLON   expression)? // TODO ------------------------
+    :   return_string = conditional_or_expression //  (QUESTION   expression   COLON   expression)? // TODO ------------------------
     ;
 
 assignment_operator 
@@ -974,7 +1028,7 @@ returns [string return_string]
     return_string = "";
 }
     :   return_string = expression
-    |   array_initializer
+    |   return_string = array_initializer
     ;
 
 local_constant_declaration
@@ -1744,6 +1798,9 @@ returns [bool is_readonly]
     ;
 
 variable_declarator [bool emit_prefix,string prefix,string t]
+{
+    string temp = "";
+}
     :   {
             if(emit_prefix)
                 Emit.EmitString(prefix);
@@ -1755,17 +1812,17 @@ variable_declarator [bool emit_prefix,string prefix,string t]
             Emit.EmitString (t);
         }
         (a:ASSIGN {Emit.EmitToken (a);}
-            variable_initializer)? 
-        {Emit.EmitString (";");}
+            temp = variable_initializer { Emit.EmitString (temp);})? 
+        {Emit.EmitString (";"); }
     ;
     
 variable_initializer
+returns [string return_string]
 {
-    string return_string = "";
+    return_string = "";
 }
-    :   (array_initializer)=> array_initializer // TODO -------------------------------
+    :   (array_initializer)=> return_string = array_initializer        
     |   return_string = expression       
-        { Emit.EmitString (return_string);}
     ;
 
 method_declaration
@@ -1974,8 +2031,19 @@ returns [string return_string]
     return_string = "";
 }
     :   ((attributes)?   (event_modifier)*   EVENT  type   member_name   RBRACE)=>
-            (attributes)?   (event_modifier)*   EVENT  type   member_name   RBRACE   event_accessor_declarations   RBRACE
-    |   (attributes)?   (event_modifier)*   EVENT  type   variable_declarator[false,"",""] (COMMA variable_declarator[false,"",""])*   SEMI
+
+        (attributes)?   (event_modifier)*   
+        e1:EVENT  
+        type   
+        member_name   
+        lb1:LBRACE   
+        event_accessor_declarations   
+        rb1:RBRACE
+        
+    |   (attributes)?   (event_modifier)*   
+        EVENT  
+        type   
+        variable_declarator[false,"",""] (COMMA variable_declarator[false,"",""])*   SEMI
     ;
 
 event_modifier
@@ -2371,13 +2439,36 @@ struct_member_declaration
 //------------
 
 array_initializer
+returns [string return_string]
+{
+    return_string = "";
+    string temp = "";
+}
     :   (LBRACE   variable_initializer_list COMMA  RBRACE)=>
-            LBRACE   variable_initializer_list COMMA  RBRACE
-    |   LBRACE   (variable_initializer_list)?  RBRACE
+            lb1:LBRACE   temp = variable_initializer_list c:COMMA  rb1:RBRACE
+        {
+            return_string = ExtendedToken.getWhitespaces (lb1) + " array" + "[" + temp + ExtendedToken.getWhitespaces(c) + 
+            ExtendedToken.getWhitespaces(rb1) + "]";
+        }
+    |   lb2:LBRACE   (temp = variable_initializer_list)?  rb2:RBRACE
+        {
+            return_string = ExtendedToken.getWhitespaces (lb2) + " array" + "[" + temp +
+            ExtendedToken.getWhitespaces(rb2) + "]";;
+        }
     ;
 
 variable_initializer_list
-    :   variable_initializer   (options {greedy=true;}:COMMA   variable_initializer)*
+returns [string return_string]
+{
+    return_string = "";
+    string temp = "";
+}
+    :   return_string = variable_initializer   
+        (options {greedy=true;}:c:COMMA   temp=variable_initializer
+            {
+                return_string += (c.getText () + temp);
+            } 
+        )*
     ;
 
 //-----------------
@@ -2526,35 +2617,61 @@ interface_indexer_declaration
 //------------
 
 enum_declaration
-    :   (attributes)?   (enum_modifier)*   ENUM   IDENTIFIER   (enum_base)?   enum_body   (SEMI)?
+    :   (attributes)?   
+        (enum_modifier)*   
+        e:ENUM         {Emit.EmitToken(e);} 
+        id:IDENTIFIER  {Emit.EmitToken(id);} 
+        (enum_base)?   
+        enum_body   
+        (s:SEMI {Emit.EmitToken(s);} )?
     ;
 
 enum_base
-    :   COLON integral_type
+{
+    string [] tp = new string [] {"",""};
+}
+    :   c:COLON tp = integral_type
+        {
+            Emit.EmitToken(c);
+            Emit.EmitString(tp[0]+tp[1]);
+        }
     ;
 
 enum_body
     :   (LBRACE   enum_member_declarations   COMMA)=>
-            LBRACE   enum_member_declarations   COMMA RBRACE
+            lb:LBRACE   {Emit.EmitToken(lb);} 
+            enum_member_declarations   
+            c:COMMA     {Emit.EmitString (ExtendedToken.getWhitespaces (c));}
+            rb:RBRACE   {Emit.EmitToken(rb);} 
     |   LBRACE   (enum_member_declarations)?   RBRACE
     ;
 
 enum_modifier
-    :   NEW
-    |   PUBLIC
-    |   PROTECTED
-    |   INTERNAL
-    |   PRIVATE
+    :   em1:NEW          {Emit.EmitToken(em1);} 
+    |   em2:PUBLIC       {Emit.EmitToken(em2);} 
+    |   em3:PROTECTED    {Emit.EmitToken(em3);} 
+    |   em4:INTERNAL     {Emit.EmitToken(em4);} 
+    |   em5:PRIVATE      {Emit.EmitToken(em5);} 
     ;
     
 enum_member_declarations
-    :   enum_member_declaration  (options {greedy=true;}:COMMA   enum_member_declaration)*
+    :   enum_member_declaration  (options {greedy=true;}: c:COMMA {Emit.EmitString (ExtendedToken.getWhitespaces (c));}  
+            enum_member_declaration)*
     ;
 
 enum_member_declaration
-    :   ((attributes)?   IDENTIFIER   ASSIGN)=>
-            (attributes)?   IDENTIFIER   ASSIGN   constant_expression
-    |   (attributes)?   IDENTIFIER   
+{
+    string ce = "";
+}
+    :   (attributes)?   
+        id:IDENTIFIER   
+        { Emit.EmitString (ExtendedToken.getWhitespaces (id) + "| " + ExtendedToken.getTextOnly (id)) ;}
+        (a:ASSIGN   ce = constant_expression
+            {
+                Emit.EmitToken (a);
+                Emit.EmitString (ce);
+            }
+        )?
     ;
 
 //----------------
