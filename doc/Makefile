@@ -183,6 +183,6 @@ dist: $(html-no-course)
 	$(CP) html
 	$(Q)cp $(html-no-course) $(DIR)/html
 	$(CP) css
-	$(Q)cp styles/*.{css,png,jpg} $(DIR)/html/styles
+	$(Q)cp styles/*.{css,png} $(DIR)/html/styles
 	$(CP)
 	$(Q)cp $(DISTFILES) $(DIR)
