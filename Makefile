@@ -12,8 +12,6 @@ send-www:
 	cp doc/styles/*.{css,png} www/styles/
 	cp doc/*.{html,ps,pdf} www/
 	for f in www/*.pdf www/*.ps ; do gzip <$$f > $$f.gz ; done
-	(cd www; tar zcf - .) | ssh ep \
-		'cd www/nemerle; cat > download/nemerle-web.tar.gz; tar xzf download/nemerle-web.tar.gz'
 	(cd www; tar zcf - .) | ssh lilith \
 		'cd /home/services/httpd/html; cat > download/nemerle-web.tar.gz; tar xzf download/nemerle-web.tar.gz'
 	rm -rf www
@@ -50,9 +48,6 @@ send-dist:
 	if [ "X`find -maxdepth 1 -mindepth 1 -name 'nemerle-[0-9]*.tar.gz'`" = X ] ; then \
 		echo "No files available" ; \
 		false ; fi
-	scp `find -maxdepth 1 -mindepth 1 -name 'nemerle-[0-9]*.tar.gz'` ep:www/nemerle/download/
-	scp `find -maxdepth 1 -mindepth 1 -name 'nemerle-[0-9]*.tar.gz' | sort | tail -1` \
-		ep:www/nemerle/download/nemerle-latest.tar.gz
 	scp `find -maxdepth 1 -mindepth 1 -name 'nemerle-[0-9]*.tar.gz'` \
 		lilith:/home/services/httpd/html/download/
 	scp `find -maxdepth 1 -mindepth 1 -name 'nemerle-[0-9]*.tar.gz' | sort | tail -1` \
