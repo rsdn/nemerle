@@ -360,6 +360,59 @@ returns [string return_string]
     |   return_string = typeof_expression
     |   return_string = checked_expression
     |   return_string = unchecked_expression
+    |   return_string = anonymous_method_expression
+    ;
+
+anonymous_method_expression
+returns [string return_string]
+{
+    return_string = "";
+    StatementTree t = new StatementTree ();
+    string ams = "()";
+}
+    :   d:DELEGATE (ams = anonymous_method_signature)?  t = block
+        {
+            return_string = ExtendedToken.getWhitespaces (d) + "fun" + ams + t.ToString ();
+        }
+    ;
+
+anonymous_method_signature
+returns [string return_string]
+{
+    return_string = "";
+    string ampl = "";
+}
+    :   lp:LPAREN (ampl = anonymous_method_parameter_list)? rp:RPAREN 
+        {
+            return_string = lp.getText () + ampl + rp.getText ();
+        }
+    ;
+
+anonymous_method_parameter_list
+returns [string return_string]
+{
+    return_string = "";
+    string ampl = "";
+}
+    :   return_string = anonymous_method_parameter 
+        (c:COMMA ampl = anonymous_method_parameter
+            {
+                return_string += c.getText () + ampl;
+            }
+        )*
+    ;
+
+anonymous_method_parameter
+returns [string return_string]
+{
+    return_string = "";
+    string p = "";
+    string [] t = new string[]{"",""};
+}
+    :   (p = parameter_modifier)? t = type id:IDENTIFIER
+        {
+            return_string = id.getText () + " : " + p + t[0]+t[1];
+        }
     ;
 
 delegate_creation_expression
@@ -2650,7 +2703,11 @@ enum_body
             enum_member_declarations   
             c:COMMA     {Emit.EmitString (ExtendedToken.getWhitespaces (c));}
             rb:RBRACE   {Emit.EmitToken(rb);} 
-    |   LBRACE   (enum_member_declarations)?   RBRACE
+    |   lb:LBRACE   (enum_member_declarations)?   rb:RBRACE
+        {
+            Emit.EmitToken(lb);
+            Emit.EmitToken(rb);
+        }
     ;
 
 enum_modifier
@@ -2714,13 +2771,11 @@ delegate_modifier
 //-----------------
 
 global_attributes
-    :  (options {greedy=true;}:global_attribute_section)+
+    :   (options {greedy=true;}:global_attribute_section)+
     ;
 
 global_attribute_section
-    :   (LBRACK   global_attribute_target_specifier   attribute_list   COMMA)=>
-        LBRACK   global_attribute_target_specifier   attribute_list   COMMA RBRACK
-    |   LBRACK   global_attribute_target_specifier   attribute_list   RBRACK
+    :   LBRACK   global_attribute_target_specifier   attribute_list   (COMMA)? RBRACK
     ;
 
 global_attribute_target_specifier
