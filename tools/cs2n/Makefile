@@ -40,7 +40,7 @@ NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
 NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe -q
 MCS = $(CSC)
 
-NEMERLE_DLLS = Nemerle.dll Nemerle.Macros.dll Nemerle.Compiler.dll
+NEMERLE_DLLS = Nemerle.dll
 ANTLR_DLL = antlr.runtime.dll
 
 GRAMMAR_FILE = csharpgrammar.g
@@ -70,19 +70,15 @@ Nemerle.CSharp.dll : $(NEMERLE_CSHARP_DLL_SOURCES) $(ANTLR_DLL)
 	$(NCC) -tdll -r:antlr.runtime.dll -o:$@ $(NEMERLE_CSHARP_DLL_SOURCES) 
 
 $(GENERATED_SOURCES_PARSER): $(GRAMMAR_FILE)
-	antlr $(GRAMMAR_FILE) 2> error_log
+	$(ANTLR) $(GRAMMAR_FILE) 2> error_log
 
 $(NEMERLE_DLLS): $(NCC_DIR)/$@
-	cp -f $(NCC_DIR)/$@ $@
+	$(Q)cp -f $(NCC_DIR)/$@ $@
 
 $(ANTLR_DLL): antlr/$@
-	cp -f antlr/$@ $@
-
-config.cs2n.mak: configure
-	./configure
+	$(Q)cp -f antlr/$@ $@
 
 dist-clean: clean
-	rm -f  config.cs2n.mak
 
 # put the antlr-generated stuff in tarball so it will build without it
 dist: $(GENERATED_SOURCES_PARSER)

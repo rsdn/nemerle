@@ -108,7 +108,8 @@ install:
 	$(Q)$(MAKE) -C doc install
 	$(Q)if test -f ncc/out.stage3/ncc.exe ; then $(MAKE) -C ncc install; \
             else $(MAKE) -C boot install; fi
-	$(Q)$(MAKE) -C tools/cs2n install                    
+	$(Q)if test $(ANTLR); then \
+	  $(MAKE) NCC_DIR=$(PWD)/boot/ -C tools/cs2n install; fi
 
 uninstall:
 	$(Q)$(MAKE) -C tools/cs2n uninstall
