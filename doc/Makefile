@@ -36,12 +36,11 @@ course_docs = index
 
 root_docs =  index nemerlePlanned \
 	coreNemExamples coreNemGrammar coreNemCompiler coreNemDesc \
-	TRSideas faq license hacking nemerleMacros ncc \
-	absNem absNemSemantics absNemGrammar
+	TRSideas faq license hacking nemerleMacros ncc
 
 docs = $(root_docs) $(addprefix course/, $(course_docs))
 
-tex_docs = absNemOperationalSem intro
+tex_docs = intro
 
 normal_docs = $(html) $(addsuffix .ps, $(tex_docs)) $(addsuffix .pdf, $(tex_docs))
 
@@ -73,10 +72,6 @@ course/%.html: course-src/%.xml mainStyle.xsl
 	$(XSPP) $< > $@
 
 coreNemGrammar.tex coreNemGrammar.html: coreNemGrammar.xml
-absNemGrammar.tex absNemGrammar.html: absNemGrammar.xml
-
-absNemGrammar.xml: src/absNemGrammar.txt scripts/grammar-txt-2-xml.pl
-	$(MAKE_GRAMMAR)
 
 coreNemGrammar.xml: src/coreNemGrammar.txt scripts/grammar-txt-2-xml.pl
 	$(MAKE_GRAMMAR)
