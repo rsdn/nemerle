@@ -308,13 +308,13 @@ namespace Nemerle.Compiler
     }
 
 
-    MarkError () : void
+    internal MarkError () : void
     {
       solver.MarkError ();
     }
     
 
-    Error (msg : string) : void
+    internal Error (msg : string) : void
     {
       if (solver.StateStackIsEmpty)
         if (solver.InErrorMode)
@@ -326,7 +326,7 @@ namespace Nemerle.Compiler
     }
     
 
-    FatalError (msg : string) : TExpr
+    internal FatalError (msg : string) : TExpr
     {
       if (solver.StateStackIsEmpty) {
         if (solver.InErrorMode) {
@@ -339,6 +339,18 @@ namespace Nemerle.Compiler
         MarkError ();
         TExpr.Error ()
       }
+    }
+
+    internal ShallIReport () : bool
+    {
+      MarkError ();
+
+      if (solver.StateStackIsEmpty)
+        if (solver.InErrorMode)
+          true
+        else
+          throw RestartInErrorMode ()
+      else false
     }
 
 
@@ -444,6 +456,76 @@ namespace Nemerle.Compiler
       }
     }
 
+
+    CaptureErrorMessage (fn : void -> void) : string
+    {
+      try {
+        fn ();
+        assert (false)
+      } catch {
+        | e : ErrorMessage => e.ToString ()
+      }
+    }
+
+
+    ResolveOverload (overloads : list [OverloadPossibility], 
+                     parms : list [Parm], expected : TyVar) : TExpr
+    {
+      def error_message (overload : OverloadPossibility) {
+        CaptureErrorMessage (
+          fun () {
+            solver.PushState ();
+            TryTypeCall (overload.Compile (), 
+                         parms, 
+                         expected, 
+                         throw_on_error = true);
+            solver.PopState ();
+          })
+      }
+
+      match (OverloadPossibility.OnlyPossible (overloads)) {
+        | [] =>
+          TExpr.Error ()
+
+        | overloads =>
+          mutable ok = [];
+
+          foreach (overload in overloads) {
+            solver.PushState ();
+            unless (IsError (TryTypeCall (overload.Compile (), 
+                                          parms, 
+                                          expected, 
+                                          throw_on_error = false)))
+              ok = overload :: ok;
+            solver.PopState ();
+          }
+
+          match (GetBestOverload (ok)) {
+            | [] =>
+              when (ShallIReport ()) {
+                match (overloads) {
+                  | [o] =>
+                    Error ($ "typing error in call: $(error_message (o)))");
+                  | _ =>
+                    Error ("each overload has an error during call:");
+                    mutable cnt = 1;
+                    foreach (o in overloads)
+                      Error ($ "  overload $(o): $(error_message (o))")
+                }
+              }
+              TExpr.Error ()
+            | [one] =>
+              TryTypeCall (one.Compile (),
+                           parms,
+                           expected,
+                           throw_on_error = true)
+            | _ =>
+              // XXX somehow
+              Delay ()
+          }
+      }
+    }
+
     
     TypeCall (fnc : PT.PExpr, parms : list [PT.PExpr], expected : TyVar) : TExpr
     {
@@ -473,58 +555,31 @@ namespace Nemerle.Compiler
 
       def parms = List.Map (parms, compile_parm);
 
-      def tv = FreshTyVar ("called value");
-      def fnc = TypeExpr (fnc, tv);
+      def res =
+        match (TypeExpr (fnc, FreshTyVar ("called value"))) {
+          | TExpr.Overloaded (overloads) =>
+            ResolveOverload (overloads, parms, expected)
 
-      match (fnc) {
-        | TExpr.Overloaded (lst) =>
-          mutable all_ok = [];
-          mutable only_constraints_ok = [];
-          
-          foreach ((expr, constraints) in lst) {
-            solver.PushState ();
-            constraints ();
-            def was_wrong = solver.InErrorState;
-            def is_wrong = IsError (TryTypeCall (expr, parms, expected));
-            solver.PopState ();
+          | TExpr.Error =>
+            fnc
 
-            if (!was_wrong && is_wrong)
-              only_constraints_ok = (expr, constraints) :: only_constraints_ok;
-            else if (!is_wrong)
-              all_ok = (expr, constraints) :: all_ok;
-            else {}
-          }
-
-          if (all_ok.IsEmpty) {
-            if (solver.StateStackIsEmpty) {
-              
-            } else {
-              MarkError ();
-              TExpr.Error ()
+          | _ =>
+            try {
+              TryTypeCall (fnc, parms, expected, throw_on_error = true)
+            } catch {
+              | e : ErrorMessage =>
+                Error ($ "typing error in call: $e")
             }
-          } else {
-            
-          }
-
-        | TExpr.Error =>
-          fnc
-
-        | _ =>
-          TryTypeCall (fnc, parms, expected)
-      }
+        }
       
-      
-      def fncs = make_value_reference (ctx, fnc, fallback = true);
-      def ex = resolve_overloaded_call (ctx, in_tail_pos, fncs, parms);
-
       // XXX what's that?
-      match (ex) {
+      match (res) {
         | TExpr.Call (TExpr.PropertyMember (_, prop), _) when is_indexer_property (prop) =>
           Error ("attempt to call an indexer property `$(prop.Name)'");
         | _ => ()
       };
 
-      ex
+      res
     }
 
 
