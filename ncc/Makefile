@@ -61,7 +61,7 @@ all_src = $(n_src) $(cs_src)
 all_cs  = $(cs_src)
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
-COMPILE = $(CSC) /optimize+ $(CSCFLAGS)
+COMPILE = $(CSC) /debug+ $(CSCFLAGS)
 
 
 all: ncc.exe
