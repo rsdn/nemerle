@@ -36,7 +36,8 @@ include ../config.mak
 course_docs = index
 
 root_docs = index rationale license hacking macros reference tutorial download \
-	    csharp-diff wprowadzenie lecture grokking documentation contact
+	    csharp-diff wprowadzenie lecture grokking documentation contact \
+	    examples
 
 docs = $(root_docs) $(addprefix course/, $(course_docs))
 
