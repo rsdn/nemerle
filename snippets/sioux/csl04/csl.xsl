@@ -5,7 +5,7 @@
     <html xmlns="http://www.w3.org/1999/xhtml" lang="en">
       <head>
         <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-        <title>Annual Conference of the European Association for Computer Science Logic - Registation</title>
+        <title>CSL 2004 - Registation</title>
         <link rel="stylesheet" href="/csl04/style.css" />
       </head>
       <body>
@@ -30,7 +30,7 @@
           </tbody>
         </table>
         <a name="top-of-page" id="top-of-page"></a>
-        <h1>Annual Conference of the European Association for Computer Science Logic</h1>
+        <h1>CSL 2004</h1>
 
         <table width="100%" border="0" align="left" cellspacing="0" cellpadding="0">
           <tbody>

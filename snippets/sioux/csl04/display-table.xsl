@@ -48,19 +48,19 @@
         <xsl:text> </xsl:text>
       </td>
       <td>
-        <xsl:if test="normalize-space(fee_regular)">pełnopłatny, </xsl:if>
-        <xsl:if test="normalize-space(fee_student)">studencina, </xsl:if>
-        <xsl:if test="normalize-space(vega)">wegetarianiec, </xsl:if>
-        <xsl:if test="normalize-space(accompany)">z towarzystwem, </xsl:if>
-        <xsl:if test="normalize-space(accompany_vega)">towarz. wegetariańskie, </xsl:if>
-        <xsl:if test="normalize-space(arrive_center)">przyjazd z centrum, </xsl:if>
-        <xsl:if test="normalize-space(arrive_directly)">przyjazd Karpacz, </xsl:if>
-        <xsl:if test="normalize-space(arrive_book)">przyjazd z hotlem, </xsl:if>
-        <xsl:if test="normalize-space(arrive_airport)">przyjazd z lotniska, </xsl:if>
-        <xsl:if test="normalize-space(depart_book)">hotel wyjazd, </xsl:if>
-        <xsl:if test="normalize-space(depart_friday)">wyjazd piątek, </xsl:if>
-        <xsl:if test="normalize-space(depart_stay)">wyjazd później, </xsl:if>
-        <xsl:if test="normalize-space(depart_saturday)">wyjazd sobota, </xsl:if>
+        <xsl:if test="normalize-space(fee_regular)">full paid, </xsl:if>
+        <xsl:if test="normalize-space(fee_student)">student, </xsl:if>
+        <xsl:if test="normalize-space(vega)">vagetarian, </xsl:if>
+        <xsl:if test="normalize-space(accompany)">with company, </xsl:if>
+        <xsl:if test="normalize-space(accompany_vega)">vegetarian company, </xsl:if>
+        <xsl:if test="normalize-space(arrive_center)">arrive center, </xsl:if>
+        <xsl:if test="normalize-space(arrive_directly)">arrive Karpacz, </xsl:if>
+        <xsl:if test="normalize-space(arrive_book)">arrive with hotel, </xsl:if>
+        <xsl:if test="normalize-space(arrive_airport)">arrive to airport, </xsl:if>
+        <xsl:if test="normalize-space(depart_book)">departure hotel, </xsl:if>
+        <xsl:if test="normalize-space(depart_friday)">departure Friday, </xsl:if>
+        <xsl:if test="normalize-space(depart_stay)">departure later, </xsl:if>
+        <xsl:if test="normalize-space(depart_saturday)">departute saturday, </xsl:if>
       </td>
       <td>
         <xsl:value-of select="remarks" />
@@ -72,17 +72,17 @@
     <html>
       <head>
         <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-        <title>Lista zgłoszeń</title>
+        <title>Submission list</title>
       </head>
       <body>
-        <h1>Lista zgłoszeń</h1>
+        <h1>Submission list</h1>
         <table border="1">
           <tr>
-            <th>Imię i nazwisko</th>
+            <th>Name</th>
             <th>E-mail</th>
-            <th>Dane</th>
-            <th>Flagi</th>
-            <th>Uwagi</th>
+            <th>Data</th>
+            <th>Flags</th>
+            <th>Remarks</th>
           </tr>
           <xsl:apply-templates select="submission" />
         </table>
