@@ -185,16 +185,21 @@ class MainClass {
 		try {
 			list ret = new list.Nil();
 			bool do_xml = false;
+			bool did_file = false;
 			for (int i = 1; i < argv.Length; i++) {
 //				System.Console.WriteLine("processing " + argv[i]);
 				Parser p = new XParser();
 				if (argv[i] == "-x")
 					do_xml = true;
-				else
+				else {
 					ret = new list.Cons(p.parse(new Lexer(argv[i])), ret);
+					did_file = true;
+				}
 			}
-			Passes.run(do_xml, ret);
-			CS_glue.close_file ();
+			if (did_file) {
+				Passes.run(do_xml, ret);
+				CS_glue.close_file ();
+			}
 		} catch (yyParser.yyException e) {
 		    Message.maybe_bailout();
 			bomb(e, "got parsing exception, but no error seen");
