@@ -80,13 +80,16 @@ all: $(normal_docs)
 pdf: $(ps) $(pdf)
 
 %.html: src/%.xml mainStyle.xsl
-	$(MAKE) -C src/nem-examples docs
 	$(XSLT_) $@
 	$(Q)$(XSLT) -o $@ mainStyle.xsl $<
+	$(Q)perl styles/include-sources $@
+
+grokking.html:: src/nem-examples/grokking.n
 
 course/%.html: course-src/%.xml mainStyle.xsl
 	$(XSLT_) $@
 	$(Q)$(XSLT) -o $@ mainStyle.xsl $<
+	$(Q)perl styles/include-sources $@
 
 %.docb: src/%.xml docb.xsl
 	$(XSLT_) $@
