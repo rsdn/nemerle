@@ -37,7 +37,7 @@ course_docs = index
 
 root_docs = index rationale license hacking macros reference tutorial download \
 	    csharp-diff wprowadzenie lecture grokking documentation contact \
-	    examples
+	    examples macrouse
 
 docs = $(root_docs) $(addprefix course/, $(course_docs))
 
