@@ -59,6 +59,8 @@ namespace Nemerle.Compiler
      * Static constructor. Always load the Framework core library.
      */
     public static this () {
+      namespace_nodes <- Hashtable (300);
+
       def assembly_dir (t) {
         DirectoryOfCodebase ((t : System.Type).Assembly.CodeBase)
       };
@@ -253,6 +255,8 @@ namespace Nemerle.Compiler
 
     private static _loaded_assemblies_by_name : Hashtable <string, Assembly>;
 
+    private static namespace_nodes : Hashtable <string, GlobalEnv.NamespaceND>;
+
 
     /* -- TYPE CACHE ----- */
 
@@ -275,22 +279,16 @@ namespace Nemerle.Compiler
         def e = ExternalType (t, lib, null, null);
         def notcached = GlobalEnv.NotLoaded (e);
 
-        def mainnode = GlobalEnv.types_tr.Path (name);
-        def fullnode = codebasens.Path (name);
-        def subnode =
-          if (t.DeclaringType != null)
-            GlobalEnv.types_tr.Path (name.Replace ('+', '.'))
-          else
-            null;
+        def (ns_node, path_to_type) = framework_nesting (t);
+        def mainnode = ns_node.Path (path_to_type);
+        def fullnode = codebasens.Path (name.Replace ('+', '.'));
 
         // check if we have met such type before
         def ambiguous_other = 
-          match ((mainnode.Value, fullnode.Value,
-                  if (t.DeclaringType != null) subnode.Value else GlobalEnv.No ()))
+          match ((mainnode.Value, fullnode.Value))
           {
-            | (GlobalEnv.NotLoaded (x), _, _)
-            | (_, GlobalEnv.NotLoaded (x), _)
-            | (_, _, GlobalEnv.NotLoaded (x)) => x              
+            | (GlobalEnv.NotLoaded (x), _)
+            | (_, GlobalEnv.NotLoaded (x)) => x
             | _ => null
           };
 
@@ -307,19 +305,17 @@ namespace Nemerle.Compiler
               ambiguous_other.message;
         };
         
-        // assign wprappers for future loading of typecons
+        // assign wrappers for future loading of typecons
         mainnode.Value <- notcached;
         fullnode.Value <- notcached;
-        when (t.DeclaringType != null) {
-          subnode.Value <- notcached;
-        }
       }
     }
 
     internal static CacheTycon (t : System.Type, tc : Tycon) : void
     {
       def codebase = GlobalEnv.types_tr.Child (t.Assembly.CodeBase); 
-      def ns = codebase.Path (t.FullName);
+      def (_, path_to_type) = framework_nesting (t);
+      def ns = codebase.Path (t.Namespace).Path (path_to_type);
       match (ns.Value) {
         | GlobalEnv.NotLoaded (e) =>
           e.tycon <- tc;
@@ -327,14 +323,15 @@ namespace Nemerle.Compiler
         | GlobalEnv.No =>
           ns.Value <- GlobalEnv.Cached (tc)
         | _ =>
-          Util.ice ("wanted to cache cached value")
+          Util.ice ("wanted to cache cached value " + t.FullName)
       }
     }
 
     internal static GetInternalType (lib : LibraryReference, t : System.Type) : Tycon
     {
-      def codebase = GlobalEnv.types_tr.Child (t.Assembly.CodeBase); 
-      def ns = codebase.Path (t.FullName);
+      def codebase = GlobalEnv.types_tr.Child (t.Assembly.CodeBase);
+      def (_, path_to_type) = framework_nesting (t);
+      def ns = codebase.Path (t.Namespace).Path (path_to_type);
       match (ns.Value) {
         | GlobalEnv.Cached (tc) => tc
         | GlobalEnv.No =>
@@ -343,8 +340,26 @@ namespace Nemerle.Compiler
           tc
 
         | GlobalEnv.MacroCall | GlobalEnv.NotLoaded =>
-          Util.ice ("not loaded internal type...")
+          Util.ice ("not loaded internal type... " + t.Assembly.CodeBase + ":" + t.FullName)
       }
+    }
+
+    internal static framework_nesting (t : System.Type) : GlobalEnv.NamespaceND * list <string>
+    {
+      def loop (t : System.Type, acc) {
+        def dt = t.DeclaringType;
+        if (dt != null)
+          loop (dt, dt.Name :: acc)
+        else
+          match (namespace_nodes.Get (t.Namespace)) {
+            | Some (nd) => (nd, acc)
+            | None =>
+              def nd = GlobalEnv.types_tr.Path (t.Namespace);
+              namespace_nodes.Add (t.Namespace, nd);
+              (nd, acc)
+          }
+      };
+      loop (t, [t.Name])
     }
   }
 
@@ -423,48 +438,39 @@ namespace Nemerle.Compiler
       loop (this._assembly_attributes);
     }
 
-
-    private framework_nesting (t : System.Type) : list <string>
-    {
-      def loop (t : System.Type, acc) {
-        def dt = t.DeclaringType;
-        if (dt != null)
-          loop (dt, dt.Name :: acc)
-        else
-          List.Append (NString.Split (t.Namespace, array ['.']), acc)
-      };
-      loop (t, [t.Name])
-    }
-
     /**
      * Turns a Framework type into something edible by Nemerle's type system
      */
     private TypeOfType (framework_type : System.Type) : Type
     {
-      def framework_type_as_list = framework_nesting (framework_type);
-      
       // FIXME: ref and out types, anyone?
-      match (framework_type_as_list) {
-        | ["System", "Void"] =>
-          T_void ()
-        | _ when framework_type.IsArray =>
+      if (framework_type.Name == "Void" && framework_type.Namespace == "System")
+        T_void ()
+      else
+        if (framework_type.IsArray)
           T_array (TypeOfType (framework_type.GetElementType ()))
-        | _ when framework_type.IsByRef =>
-          T_ref (TypeOfType (framework_type.GetElementType ()))
-        | x =>
-          match (GlobalEnv.LookupExactType (x)) {
-            | Some (tc) => T_app (tc, [])
-            | None => 
-              match (LookupInternalType (framework_type.FullName)) {
-                | Some (tc) => T_app (tc, [])
-                | None =>
-                  Message.fatal_error ("unbound external type `" +
-                                       framework_type.FullName + 
-                                       "' referenced from library `" +
-                                       _library.CodeBase + "'")
-              }
+        else 
+          if (framework_type.IsByRef)
+            T_ref (TypeOfType (framework_type.GetElementType ()))
+          else {
+            def (ns_node, path_to_type) = LibraryReferenceManager.framework_nesting (framework_type);
+//            Message.debug (path_to_type.ToString ());
+//            Message.debug (framework_type.FullName);
+//            Message.debug (framework_type.Name);
+
+            match (ns_node.LookupType (path_to_type)) {
+              | Some (tc) => T_app (tc, [])
+              | None => 
+                match (LookupInternalType (framework_type.FullName)) {
+                  | Some (tc) => T_app (tc, [])
+                  | None =>
+                    Message.fatal_error ("unbound external type `" +
+                                         framework_type.FullName + 
+                                         "' referenced from library `" +
+                                         _library.CodeBase + "'")
+                }
+            }
           }
-      }
     } 
 
     private TyconOfType (framework_type : System.Type) : Tycon
@@ -897,8 +903,7 @@ namespace Nemerle.Compiler
       }
     }
     
-    private class NetField 
-      : IField
+    private class NetField : IField
     {
       protected handle : FieldInfo;
       protected library : LibraryReference;
@@ -976,8 +981,7 @@ namespace Nemerle.Compiler
       }
     }
 
-    class NetEvent 
-      : IEvent
+    class NetEvent : IEvent
     {
       protected handle : EventInfo;
       protected library : LibraryReference;
@@ -1081,8 +1085,7 @@ namespace Nemerle.Compiler
       }
     }
     
-    class NetProperty
-      : IProperty
+    class NetProperty : IProperty
     {
       protected handle : PropertyInfo;
       protected library : LibraryReference;
@@ -1205,8 +1208,7 @@ namespace Nemerle.Compiler
       }
     }
     
-    class NetMethod
-      : IMethod
+    class NetMethod : IMethod
     {
       protected handle : MethodBase;
       protected library : LibraryReference;
@@ -1440,7 +1442,7 @@ namespace Nemerle.Compiler
         if (has_attribute ("Nemerle.Internal.VariantAttribute", type_attrs)) {
           def names = get_variant_options (type_attrs);
           def get_opt (name : string) {
-            match (GlobalEnv.LookupExactType (name)) {
+            match (GlobalEnv.LookupExactType (NString.Split (name, array ['.', '+']))) {
               | Some (tc) => tc
               | None => Util.ice ("cannot find variant option named " + name)
             }
