@@ -18,8 +18,7 @@
                     <tr>
                       <td align="left">
                         <a href="index.xml">Strona główna</a> :: 
-                        <a href="register.xml">Rejestracja</a> ::
-                        <a href="abstracts.xml">Streszczenia</a>
+                        <a href="register.xml">Rejestracja</a>
                       </td>
                       <td align="right">
                         <a href="#top-of-page">Top</a> :: <a href="#bottom-of-page">Bottom</a>
