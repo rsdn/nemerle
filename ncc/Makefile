@@ -77,10 +77,10 @@ NEMERLE_COMPILER_DLL_SRC = \
 	$(NTE_SOURCES)			 \
         parsing/AST.n			 \
         parsing/ParseTree.n		 \
-        parsing/Parser.n		 \
+        parsing/MainParser.n		 \
+        parsing/PreParser.n		 \
         parsing/Lexer.n			 \
         parsing/Utility.n                \
-	temp/NewParser.n                 \
         CompilationOptions.n             \
         external/LibrariesLoader.n	 \
         external/InternalTypes.n	 \
