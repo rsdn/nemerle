@@ -1,10 +1,5 @@
-all: all-pnet all-mono
-
-all-pnet:
-	perl tests.pl cscc
-
-all-mono:
-	perl tests.pl mcs
+all:
+	perl tests.pl
 
 clean:
 	rm -f *.cs *.exe *.il
