@@ -3234,6 +3234,7 @@ class CSharpLexer extends Lexer;
 options 
 {
     k=4;
+    charVocabulary = '\3'..'\377'; 
 }
 
 //--------------
