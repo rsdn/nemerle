@@ -481,7 +481,7 @@ returns [string return_string]
     :   n:NEW   
         tp = maybe_generic_type [false]
 
-//        (parms = generic_parameters )? 
+        (generic_parameters )? 
         lp:LPAREN   (al = argument_list)?   rp:RPAREN
         {
             return_string = ExtendedToken.getWhitespaces (n) + tp[0]+tp[1];
@@ -501,7 +501,7 @@ returns [string return_string]
 }
     :   n:NEW   
         tp = maybe_generic_type [false]
-//        (parms = generic_parameters )? 
+        (generic_parameters )? 
         lp:LPAREN   (al = argument_list)?   rp:RPAREN
         {
             return_string = ExtendedToken.getWhitespaces (n) + tp[0]+tp[1];
@@ -1733,9 +1733,9 @@ returns [StatementTree t]
 //----------------
 
 compilation_unit
-    :   (using_directive)*  
-        (options {greedy=true;}:global_attributes)*  
-        (namespace_member_declaration )* 
+    :   (using_directive
+         | (options {greedy=true;}:global_attributes)
+         | namespace_member_declaration )* 
         {
             Emit.EmitString ("\n");
         }
