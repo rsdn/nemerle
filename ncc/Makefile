@@ -38,7 +38,7 @@ n_src = \
 	util.n \
 	csglue.n \
 	env.n \
-	treeutil.n \
+	passes.n \
 	scan_globals.n \
 	tyvars.n \
 	tyinfo.n \
