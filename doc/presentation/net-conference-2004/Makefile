@@ -8,3 +8,4 @@ notes:
 	latex notes.tex </dev/null
 	latex notes.tex </dev/null
 	dvips -o notes.ps notes.dvi
+	psnup -2 notes.ps notes2.ps
