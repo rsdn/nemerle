@@ -20,7 +20,7 @@ server.exe: daemon.n Server.dll
 	$(COMPILE) -texe -r:Server -out:$@ daemon.n
 
 client.exe: client.n Packet.dll 
-	$(COMPILE) -texe -r:Packet -r:glade-sharp -out:$@ client.n
+	$(COMPILE) -texe -r:Packet -pkg:glade-sharp -out:$@ client.n
 
 client: Packet.dll client.exe
 
