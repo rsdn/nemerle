@@ -272,14 +272,14 @@ returns [string return_string]
     :    lb:LTHAN 
         { return_string = ExtendedToken.getWhitespaces (lb) + "["; }
        
-        ( ty = type 
+        (options {greedy=true;}: ty = type 
           { return_string += ty [0] + ty [1]; } )?
 
-        ( c : COMMA ty = type
+        (options {greedy=true;}: c : COMMA ty = type
           { return_string += c.getText () + ty [0] + ty [1]; }
         )*
 
-        (  rb:GTHAN 
+        (options {greedy=true;}: rb:GTHAN 
            { return_string += ExtendedToken.getWhitespaces (rb) + "]"; }
          | rb1 : SR
            { return_string += ExtendedToken.getWhitespaces (rb1) + "]]"; }
@@ -3052,7 +3052,8 @@ attribute_arguments
     ;
 
 positional_argument_list
-    :   id1:IDENTIFIER  {Emit.EmitToken(id1);} a1:ASSIGN {Emit.EmitToken(a1);}  attribute_argument_expression   
+    : (IDENTIFIER ASSIGN) =>
+       id1:IDENTIFIER  {Emit.EmitToken(id1);} a1:ASSIGN {Emit.EmitToken(a1);}  attribute_argument_expression   
         (c:COMMA  {Emit.EmitToken(c);} positional_argument_list)?
 
     |  attribute_argument_expression (c1:COMMA {Emit.EmitToken(c1); } positional_argument_list)?
@@ -3174,7 +3175,7 @@ NOT_NEW_LINE
 //--------------
 
 SINGLE_LINE_COMMENT
-    :   "//"  (NOT_NEW_LINE | '`')*  (NEW_LINE) 
+    :   "//"  (NOT_NEW_LINE /*| '`'*/)*  (NEW_LINE) 
         { 
             _ttype = Token.SKIP;
             ExtendedToken.AddToWhitespaces ($getText);
@@ -3185,7 +3186,7 @@ DELIMITED_COMMENT
     :   "/*"  
         (   { LA(2)!='/' }? '*'
         |   NEW_LINE 
-	|   '`'
+//	|   '`'
         |   ~('*'|'\u000D'|'\u000A'|'\u2028'|'\u2029')
         )*
         "*/" 
