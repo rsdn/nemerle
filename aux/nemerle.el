@@ -37,7 +37,6 @@
 
 ;;; Todo:
 
-;; - syntax table
 ;; - indentation
 ;; - imenu
 
@@ -49,13 +48,16 @@
 
 
 (defvar nemerle-mode-map nil
-  "*The keymap used in nemerle-mode.")
+  "The keymap used in nemerle-mode.")
 
 (defvar nemerle-font-lock-keywords nil
-  "*Font lock definitions for nemerle-mode.")
+  "Font lock definitions for nemerle-mode.")
+
+(defvar nemerle-mode-syntax-table nil
+  "The syntax table used in nemerle-mode.")
 
 (defvar nemerle-mode-hook nil
-  "*This hook is run when nemerle-mode is loaded, or a new nemerle-mode
+  "This hook is run when nemerle-mode is loaded, or a new nemerle-mode
 buffer created.  This is a good place to put your customizations.")
 
 (unless nemerle-mode-map
@@ -67,12 +69,33 @@ buffer created.  This is a good place to put your customizations.")
 (unless nemerle-font-lock-keywords
   (setq nemerle-font-lock-keywords
 	(list
-	 '("//.*" (0 font-lock-comment-face))
+	 '("//.*" 0 font-lock-comment-face)
 	 '("(\\*+\\(\\([^\\*]\\)\\|\\(\\*[^)]\\)\\)+\\*+)" 
-	   (0 font-lock-comment-face))
-	 '("\"[^\"]*\"" (0 font-lock-string-face))
-	 '("\\(\\b\\(abstract\\|and\\|as\\|base\\|class\\|const\\|else\\|enum\\|extends\\|extern\\|field\\|finally\\|fun\\|if\\|implements\\|in\\|interface\\|internal\\|let\\|letfun\\|match\\|method\\|namespace\\|new\\|null\\|open\\|out\\|private\\|protected\\|public\\|raise\\|record\\|ref\\|sealed\\|struct\\|then\\|this\\|try\\|tymatch\\|type\\|value\\|volatile\\|where\\|with\\)\\b\\)\\|\\(\\B_\\B\\)"
-	   (0 font-lock-keyword-face)))))
+	   0 font-lock-comment-face)
+	 '("\"[^\"]*\"" 0 font-lock-string-face)
+	 '("\\b\\(_\\|abstract\\|and\\|as\\|base\\|class\\|const\\|else\\|enum\\|extends\\|extern\\|field\\|finally\\|fun\\|if\\|implements\\|in\\|interface\\|internal\\|let\\|letfun\\|match\\|method\\|namespace\\|new\\|null\\|open\\|out\\|private\\|protected\\|public\\|raise\\|record\\|ref\\|sealed\\|struct\\|then\\|this\\|try\\|tymatch\\|type\\|value\\|variant\\|volatile\\|where\\|with\\)\\b"
+	   0 font-lock-keyword-face)
+	 '("\\b\\(void\\|int\\|char\\|float\\|bool\\|string\\|option\\|list\\|object\\)\\b"
+	   0 font-lock-type-face)
+	 '("\\b\\(false\\|true\\)\\b" 0 font-lock-constant-face)
+	 '("\\bmatch\\s +\\(\\w+\\)\\s +with\\b" 1 font-lock-variable-name-face)
+	 '("\\blet\\s +\\(\\w+\\)" 1 font-lock-variable-name-face)
+	 '("\\b\\(class\\|variant\\|open\\)\\s +\\(\\w+\\)" 2 font-lock-function-name-face)
+	 '("\\b\\(let\\)?fun\\s *\\((.*)\\s *\\)?\\(\\w+\\)" 
+	   3 font-lock-function-name-face))))
+
+(unless nemerle-mode-syntax-table
+  (setq nemerle-mode-syntax-table (copy-syntax-table c-mode-syntax-table))
+  
+  (modify-syntax-entry ?\, "."    nemerle-mode-syntax-table)
+  (modify-syntax-entry ?\' "."    nemerle-mode-syntax-table)
+  (modify-syntax-entry ?\/ "."    nemerle-mode-syntax-table)
+  (modify-syntax-entry ?\( "()1"  nemerle-mode-syntax-table)
+  (modify-syntax-entry ?\) ")(4"  nemerle-mode-syntax-table)
+  (modify-syntax-entry ?\* ". 23" nemerle-mode-syntax-table)
+  (modify-syntax-entry ?\? "w"    nemerle-mode-syntax-table)
+  (modify-syntax-entry ?\_ "w"    nemerle-mode-syntax-table))
+
 
 
 (defun nemerle-indent-line ()
@@ -97,6 +120,7 @@ Mode map
   (setq major-mode 'nemerle-mode)
 
   (use-local-map nemerle-mode-map)
+  (set-syntax-table nemerle-mode-syntax-table)
 
   (make-local-variable 'font-lock-defaults)
   (setq font-lock-defaults (list 'nemerle-font-lock-keywords nil t))
