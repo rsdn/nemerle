@@ -540,7 +540,6 @@ class Lexer : yyParser.yyInput
 		keywords["variant"] = Token.KW_VARIANT;
 		keywords["letfun"] = Token.KW_LETFUN;
 		keywords["as"] = Token.KW_AS;
-		keywords["record"] = Token.KW_RECORD;
 		keywords["match"] = Token.KW_MATCH;
 		keywords["static"] = Token.KW_STATIC;
 		keywords["mutable"] = Token.KW_MUTABLE;
