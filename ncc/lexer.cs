@@ -510,7 +510,6 @@ class Lexer : yyParser.yyInput
 		keywords["extends"] = Token.KW_EXTENDS;
 		keywords["finally"] = Token.KW_FINALLY;
 		keywords["in"] = Token.KW_IN;
-		keywords["method"] = Token.KW_METHOD;
 		keywords["null"] = Token.KW_NULL;
 		keywords["out"] = Token.KW_OUT;
 		keywords["public"] = Token.KW_PUBLIC;
@@ -523,8 +522,6 @@ class Lexer : yyParser.yyInput
 		keywords["implements"] = Token.KW_IMPLEMENTS;
 		keywords["namespace"] = Token.KW_NAMESPACE;
 		keywords["where"] = Token.KW_WHERE;
-		keywords["field"] = Token.KW_FIELD;
-		keywords["value"] = Token.KW_VALUE;
 		keywords["type"] = Token.KW_TYPE;
 		keywords["let"] = Token.KW_LET;
 		keywords["in"] = Token.KW_IN;
@@ -544,6 +541,7 @@ class Lexer : yyParser.yyInput
 		keywords["as"] = Token.KW_AS;
 		keywords["record"] = Token.KW_RECORD;
 		keywords["match"] = Token.KW_MATCH;
+		keywords["static"] = Token.KW_STATIC;
 	}
 }
 
