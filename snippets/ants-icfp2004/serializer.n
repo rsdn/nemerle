@@ -1,0 +1,326 @@
+using Nemerle.Collections;
+
+class Node_base {
+  public mutable entries : list <Node>;
+  public mutable position : int;
+  public this ()
+  {
+    entries <- [];
+    position <- -1;
+  }
+}
+
+variant Node : Node_base {
+  | N_binary {
+      cond : NodeCondition;
+      true_branch : Link;
+      false_branch : Link;
+    }
+  | N_unary {
+      cond : NodeAction;
+      next : Link;
+    }
+
+  public override ToString () : string
+  {
+    match (this) {
+      | N_binary (C_sense (dir, cond), t, f) =>
+        "Sense" +
+                " " + dir.ToString () + 
+                " " + t.Target + 
+                " " + f.Target + 
+                " " + cond.ToString ()
+      | N_binary (C_pickup, t, f) =>
+        "PickUp" +
+                " " + t.Target + 
+                " " + f.Target
+      | N_binary (C_move, t, f) =>
+        "Move" +
+                " " + t.Target + 
+                " " + f.Target
+      | N_binary (C_flip (x), t, f) =>
+        "Flip" +
+                " " + x.ToString () +
+                " " + t.Target + 
+                " " + f.Target
+      | N_unary (A_mark (x), n) =>
+        "Mark" +
+                " " + x.ToString () +
+                " " + n.Target 
+      | N_unary (A_unmark (x), n) =>
+        "Unmark" +
+                " " + x.ToString () +
+                " " + n.Target 
+      | N_unary (A_drop, n) =>
+        "Drop" +
+                " " + n.Target 
+      | N_unary (A_turn (true), n) =>
+        "Turn Left" +
+                " " + n.Target 
+      | N_unary (A_turn (false), n) =>
+        "Turn Right" +
+                " " + n.Target 
+    }
+  }
+}
+
+class UserErrorException : System.Exception
+{
+  public this (msg : string) { base (msg); }
+}
+
+class Link {
+  internal static mutable string_links : list <Link>;
+ 
+  // FIXME: compiler bug, cannot initialize two lines up
+  static this () { string_links <- []; }
+  
+  variant Val {
+    | V_node { n : Node; }
+    | V_link { l : Link; }
+    | V_label { l : string; }
+    | V_none
+  }
+  
+  mutable val : Val;
+
+  public this () { val <- V_none (); }
+  public this (n : Node) { Set (n); }
+  public this (l : Link) { Set (l); }
+  public this (s : string)
+  {
+    val <- V_label (s);
+    string_links <- this :: string_links;
+  }
+
+  internal StringValue : string {
+    get {
+      match (val) {
+        | V_label (s) => s
+        | _ => assert (false)
+      }
+    }
+  }
+  
+  internal Value : Node {
+    get {
+      match (val) {
+        | V_link (l) =>
+          def n = l.Value;
+          val <- V_node (n);
+          n
+        | V_node (n) => n
+        | _ => assert (false)
+      }
+    }
+  }
+
+  public Target : string
+  {
+    get { Value.position.ToString () }
+  }
+  
+  public Set (l : Link) : void
+  {
+    val <- V_link (l);
+  }
+  public Set (n : Node) : void
+  {
+    val <- V_node (n);
+  }
+}
+
+public class StmtCompiler
+{
+  mutable stmts : list <Stmt>;
+  labels : Hashtable <string, Link>;
+  mutable root : Node;
+
+  public this (stmts : list <Stmt>)
+  {
+    this.stmts <- stmts;
+    labels <- Hashtable (100);
+  }
+
+  error<'a> (msg : string) : 'a
+  {
+    throw UserErrorException (msg);
+  }
+
+  expect_empty (stmts : list <Stmt>) : option <Link>
+  {
+    match (stmts) {
+      | [] => None ()
+      | S_label :: _ =>
+        def (_res, end) = compile (stmts);
+        end
+      | _ =>
+        //error ("unreachable code detected " + stmts.ToString ())
+        def (_res, end) = compile (stmts);
+        end
+    }
+  }
+
+  compile_binary (cond : option <NodeCondition>,
+                  xs : list <Stmt>,
+                  t : list <Stmt>, 
+                  f : list <Stmt>) : Link * option <Link>
+  {
+    def (t', end1) = compile (t);
+    def (f', end2) = compile (f);
+    
+    def end =
+      match ((end1, end2)) {
+        | (Some (x), None)
+        | (None, Some (x)) => Some (x)
+        | (None, None) => None ()
+        | (Some (x), Some (y)) =>
+          def l = Link ();
+          x.Set (l);
+          y.Set (l);
+          Some (l)
+      };
+    
+    def end =
+      match (end) {
+        | Some (e) =>
+          def (res, end') = compile (xs);
+          e.Set (res);
+          end'
+        | None =>
+          expect_empty (xs)
+      };
+
+    match (cond) {
+      | Some (c) =>
+        def n = N_binary (c, true_branch = t', false_branch = f');
+        (Link (n), end)
+      | None =>
+        (t', end)
+    }
+  }
+
+  compile_unary (act : NodeAction, xs : list <Stmt>) : Link * option <Link>
+  {
+    def (rest, end) = compile (xs);
+    def n = N_unary (act, rest);
+    (Link (n), end)
+  }
+
+  compile (stmts : list <Stmt>) : Link * option <Link>
+  {
+    match (stmts) {
+      | S_label (lab) :: xs =>
+        if (labels.Contains (lab))
+          error ("redefinition of label " + lab)
+        else {
+          def l = Link ();
+          labels.Add (lab, l);
+          def (res, end) = compile (xs);
+          l.Set (res);
+          (l, end)
+        }
+
+      | S_goto ([], target) :: xs =>
+        (Link (target), expect_empty (xs))
+        
+      | S_if (BF_cond (c), t, f) :: xs =>
+        compile_binary (Some (c), xs, t, f)
+
+      | S_if (BF_dummy_true, t, f) :: xs =>
+        compile_binary (None (), xs, t, f)
+
+      | S_action (a) :: xs =>
+        compile_unary (a, xs)
+
+      | S_if :: _ =>
+        error ("non positional if argument")
+        
+      | S_goto :: _ =>
+        error ("goto with assigns!")
+
+      | S_vars :: _ =>
+        error ("vars!")
+
+      | [] =>
+        def l = Link ();
+        (l, Some (l))
+    }
+  }
+
+  resolve_links () : void
+  {
+    def hash = Hashtable (100);
+    
+    List.Iter (Link.string_links, fun (l : Link) {
+      def name = l.StringValue;
+      match (labels.Get (name)) {
+        | Some (lnk) => l.Set (lnk); hash.Set (name, null)
+        | None => error ("undefined label " + name)
+      }
+    });
+    labels.Iter (fun (n, _) {
+      unless (hash.Contains (n)) {
+        System.Console.Error.WriteLine ("unused label " + n)
+      }
+    });
+  }
+
+  mutable output : list <Node>;
+  mutable position : int;
+
+  emit (n : Node) : void
+  {
+    n.position <- position;
+    output <- n :: output;
+    ++position;
+  }
+
+  serialize (n : Node) : void
+  {
+    when (n.position == -1) {
+      emit (n);
+      match (n) {
+        | N_binary (_, t, f) =>
+          serialize (t.Value);
+          serialize (f.Value);
+        | N_unary (_, x) =>
+          serialize (x.Value);
+      }
+    }
+  }
+
+  public Compile () : void
+  {
+    def unfolder = UnfoldVars (stmts);
+    stmts <- unfolder.Execute ();
+    def (main, _end) = compile (stmts);
+    //when (Option.IsSome (end))
+    //  error ("main code fall off");
+    resolve_links ();
+    root <- main.Value;
+  }
+
+  public Optimize () : void
+  {
+    
+  }
+
+  public Output () : void
+  {
+    output <- [];
+    position <- 0;
+    serialize (root);
+    output <- List.Rev (output);
+    List.Iter (output, fun (n : Node) {
+      assert (n.position != -1);
+      System.Console.WriteLine ("{0}      ; {1}", n, n.position);
+    });
+    
+    //labels.Iter (fun (n, l : Link) {
+    //  when (l.Value.position == -1)
+    //    System.Console.Error.WriteLine ("(closure) unused label " + n)
+    //});
+  }
+
+}

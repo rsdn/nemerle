@@ -1,0 +1,396 @@
+/*
+ * The Ants simulator
+ */
+ 
+namespace Nemerle.Ants 
+{ 
+  using System;
+  using System.IO;
+  using Nemerle.Attributes;
+ 
+  public class Simulator
+  {
+    m_output : TextWriter;
+    
+    public this (map_file_name : string, 
+                 red_brain_file_name : string, 
+                 black_brain_file_name : string)
+    {
+      m_initial_seed <- 12345u;
+      
+      m_random <- AntRandom (m_initial_seed);
+            
+      m_map <- WorldMap (map_file_name);
+      m_red_brain <- Brain (red_brain_file_name);
+      m_black_brain <- Brain (black_brain_file_name);
+      
+      m_ants <- array (m_map.AntHillsCount);
+      
+      create_ants ();
+
+      m_round <- 0;
+
+      m_output <- StreamWriter (BufferedStream (Console.OpenStandardOutput ()));
+    }
+    
+    public static Main (args : array <string>) : void
+    {
+      if ((args.Length != 4 && args.Length != 6) || (args.Length == 6 &&
+                                                 args [4] != "dump" &&
+                                                 args [4] != "dump-icfp" &&
+                                                 args [4] != "dump-results"))
+      {
+        Console.WriteLine ("Usage: simulator.exe [map] [red-brain] [black-brain] [turns]"
+                           " ([dump|dump-icfp|dump-results] [dumpdelay])?");
+      }
+      else
+      {
+        m_skip <- 1;
+        def simulator = 
+          Simulator (args [0], args [1], args [2]);
+
+        when (args.Length == 6) 
+        {
+          if (args [4] == "dump")
+            simulator.m_dump <- true
+          else if (args [4] == "dump-icfp")
+            simulator.m_dump_icfp <- true
+          else if (args [4] == "dump-results") {
+            simulator.m_dump_results <- true;
+            simulator.m_dump <- true;
+          } else {};
+          m_skip <- System.Convert.ToInt32 (args [5])
+        };
+      
+        when (simulator.m_dump_icfp)
+          Console.WriteLine ("random seed: {0}", simulator.m_initial_seed);
+                
+        simulator.Run (System.Convert.ToInt32 (args [3]));
+        
+        unless (simulator.m_dump_icfp)
+          simulator.Dump ()
+      }
+    }    
+    
+        
+    /* -- PUBLIC METHODS --------------------------------------------------- */
+    
+    /**
+     * Dumps the current state of the simulator
+     */
+    public Dump () : void
+    {
+      def (score_red, score_black) =
+        m_map.GetScores ();
+        
+      m_output.WriteLine ("Dump after round {0} (scores: red {1}, black {2}):",
+                         m_round, score_red, score_black);
+      unless (m_dump_results) {
+        m_map.Dump (m_output);
+        m_output.WriteLine ();
+      };
+      m_output.Flush ();
+    }
+    
+    
+    /**
+     * Dumps a round of the game in the ICFP format
+     */
+    public DumpIcfp () : void
+    {
+      m_output.WriteLine ();
+      
+      m_output.WriteLine ("After round {0}...", m_round);
+      
+      m_map.DumpIcfp (m_output)
+    }
+
+    
+    /**
+     * Performs a single step of the simulation
+     */
+    public SingleStep () : void
+    {
+      for (mutable i <- 0; i < m_ants.Length; ++i)
+        Step (i)
+    }
+    
+
+    /**
+     * Performs a number of steps of the simulation
+     */
+    public Run (steps : int) : void
+    {
+      for (mutable i <- 0; i < steps; ++i)
+      {
+        Cell.CurrentRound <- i;
+
+        SingleStep ();
+      
+        when (i % m_skip == 0 || m_dump || m_dump_icfp)
+          if (m_dump) Dump () else DumpIcfp ();
+          
+        ++m_round
+      };
+      
+      m_output.Flush ()
+    }
+    
+    
+    /**
+     * Checks if a cell matches a condition
+     */
+    public CellMatches (pos : Position, cond : Condition, col : Color) : bool
+    {
+      if (m_map.At (pos).IsRocky) {
+        match (cond) {
+          | C_Rock => true
+          | _ => false
+        }
+      }
+      else {
+        match (cond) {
+          | C_Friend =>
+            match (m_map.At (pos).Ant) {
+              | Some (ant) => ant.IsFriend (col)
+              | None => false
+            }
+
+          | C_Foe =>
+            match (m_map.At (pos).Ant) {
+              | Some (ant) => !ant.IsFriend (col)
+              | None => false
+            }
+
+          | C_FriendWithFood =>
+            match (m_map.At (pos).Ant) {
+              | Some (ant) => ant.IsFriend (col) && ant.HasFood
+              | None => false
+            }
+
+          | C_FoeWithFood =>
+            match (m_map.At (pos).Ant) {
+              | Some (ant) => !ant.IsFriend (col) && ant.HasFood
+              | None => false
+            }
+
+          | C_Food =>
+            m_map.At (pos).Food > 0
+
+          | C_Rock =>
+            false
+
+          | C_Marker (marker) =>
+            m_map.At (pos).CheckMarker (col, marker)
+
+          | C_FoeMarker =>
+            m_map.At (pos).CheckAnyMarker (col.OtherColor)
+
+          | C_Home =>
+            m_map.At (pos).IsHome (col)
+            
+          | C_FoeHome =>
+            m_map.At (pos).IsHome (col.OtherColor)
+        }
+      }    
+    }
+
+
+    public GetInstruction (color : Color, state : State) : Instruction
+    {
+      match (color) {
+        | Red => m_red_brain.GetInstruction (state)
+        | _ => m_black_brain.GetInstruction (state)
+      }
+    }
+
+
+    [Requires (id >= 0 && id < m_ants.Length)]
+    public Step (id : int) : void
+    {    
+      def ant = m_ants [id];
+
+      when (ant.IsAlive) {
+        def pos = ant.GetPosition ();
+
+        if (ant.Resting > 0)
+          ant.Rest ()
+        else {
+          def modify_current_cell () {
+            m_map.At (pos).IsModified <- true
+          };
+          
+          match (GetInstruction (ant.Color, ant.State)) {
+            | I_Sense (sensedir, on_success, on_failure, cond) =>            
+              def pos' = 
+                m_map.SensedCell (pos, ant.Direction, sensedir);
+
+              def next_state = 
+                if (CellMatches (pos', cond, ant.Color)) on_success else on_failure;
+              
+              ant.State <- next_state
+              
+            | I_Mark (marker, next_state) =>
+              m_map.At (pos).AddMarker (ant.Color, marker);
+              ant.State <- next_state
+
+            | I_Unmark (marker, next_state) =>
+              m_map.At (pos).RemoveMarker (ant.Color, marker);
+              ant.State <- next_state
+
+            | I_PickUp (on_success, on_failure) =>
+              def cell =
+                m_map.At (pos);
+
+              if (ant.HasFood || cell.Food == 0)
+                ant.State <- on_failure
+              else {
+                --cell.Food;
+                ant.HasFood <- true;
+                ant.State <- on_success
+              }
+
+            | I_Drop (next_state) =>
+              when (ant.HasFood) {
+                def cell =
+                  m_map.At (pos);
+
+                ++cell.Food;
+                ant.HasFood <- false
+              };
+              ant.State <- next_state
+              
+            | I_Turn (lr, next_state) =>
+              ant.Direction <- m_map.Turn (lr, ant.Direction);
+              modify_current_cell ();
+              ant.State <- next_state
+
+            | I_Move (on_success, on_failure) =>
+              def new_pos =
+                m_map.AdjacentCell (pos, ant.Direction);
+                
+              def new_cell =
+                m_map.At (new_pos);
+
+              if (new_cell.IsRocky || new_cell.IsOccupied)
+                ant.State <- on_failure
+              else {
+                def current_cell =
+                  m_map.At (pos);
+              
+                current_cell.Ant <- None ();
+                new_cell.Ant <- Some (ant);
+                ant.SetPosition (new_pos);
+                ant.State <- on_success;
+                ant.Resting <- 14;
+                CheckForSurroundedAnts (new_pos)
+              }
+
+            | I_Flip (dice, on_zero, on_not_zero) =>
+              def next_state =
+                if (get_next_random () % dice == 0)
+                  on_zero
+                else
+                  on_not_zero;
+
+              ant.State <- next_state
+          }
+        }
+      }
+    }    
+
+
+    public CheckForSurroundedAnt (pos : Position) : void
+    {
+      def cell = m_map.At (pos);
+      
+      match (cell.Ant) {
+        | Some (ant) =>
+          when (m_map.AdjacentAnts (pos, ant.Color.OtherColor) >= 5) {
+            ant.IsAlive <- false;
+            cell.Ant <- None ();
+            cell.Food <- cell.Food + 3 + (if (ant.HasFood) 1 else 0)
+          }
+        | _ => ()
+      }
+    }
+    
+    
+    public CheckForSurroundedAnts (pos : Position) : void
+    {
+      CheckForSurroundedAnt (pos);
+      
+      for (mutable dir <- 0; dir < 6; ++dir)
+        CheckForSurroundedAnt (m_map.AdjacentCell (pos, dir))
+    }
+
+
+    /* -- PRIVATE METHODS -------------------------------------------------- */
+        
+    /// returns the next number from the pseudorandom number generator
+    private get_next_random () : int
+    {
+      (m_random.Next () :> int)
+    }
+    
+    
+    /// creates the ants
+    private create_ants () : void
+    {
+      def red = Red ();
+      def black = Black ();
+      
+      mutable id <- 0;
+
+      for (mutable y <- 0; y < m_map.Height; ++y)
+        for (mutable x <- 0; x < m_map.Width; ++x) 
+        {
+          def cell = m_map.At ((x, y));
+                  
+          if (cell.IsHome (red)) {      
+            def ant =
+              Ant (id, red, (x, y));
+
+            m_map.At ((x, y)).Ant <- Some (ant);
+        
+            m_ants [id] <- ant;
+        
+            ++id
+          }
+          else when (cell.IsHome (black)) {
+            def ant =
+              Ant (id, black, (x, y));
+          
+            m_map.At ((x, y)).Ant <- Some (ant);
+        
+            m_ants [id] <- ant;
+        
+            ++id
+          }
+        }
+    }
+         
+        
+    /* -- PRIVATE FIELDS --------------------------------------------------- */
+
+    /// numeber of turns skipped when dumping m_output
+    private static mutable m_skip : int;
+    private m_map : WorldMap;
+    private m_random : AntRandom;
+    
+    private m_red_brain : Brain;
+    private m_black_brain : Brain;
+    
+    private m_ants : array <Ant>;
+    
+    private mutable m_round : int;
+    
+    private mutable m_dump : bool;
+    private mutable m_dump_icfp : bool;
+    private mutable m_dump_results : bool;
+    
+    private mutable m_initial_seed : uint;
+  }
+}
+
+/*** END OF FILE ***/

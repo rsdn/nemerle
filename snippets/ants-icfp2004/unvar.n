@@ -1,0 +1,361 @@
+using Nemerle.Collections;
+using Nemerle.Utility;
+
+[Record]
+class Variable {
+  public name : string;
+  public max_value : int;
+  public mutable current_value : int;
+}
+
+class UnfoldVars {
+  label_under : Hashtable <string, list <Variable>> = Hashtable (100);
+  variables : Hashtable <string, Variable> = Hashtable (100);
+  mutable stmts : list <Stmt>;
+
+  error<'a> (msg : string) : 'a
+  {
+    throw UserErrorException (msg);
+  }
+  
+  public this (stmts : list <Stmt>)
+  {
+    this.stmts <- stmts;
+  }
+
+  scan_labels () : void
+  {
+    def scan (vars, stmt) {
+      match (stmt) {
+        | S_label (name) =>
+          if (label_under.Contains (name))
+            error ("redef of label " + name)
+          else
+            label_under.Add (name, vars)
+        | S_if (_, l1, l2) =>
+          scanl (vars, l1);
+          scanl (vars, l2);
+        | S_vars (newvars, body) =>
+          mutable vars <- vars;
+          List.Iter (newvars, fun (name, size) {
+            def v = Variable (name, size - 1, 0);
+            if (variables.Contains (name))
+              error ("redef of variable " + name)
+            else
+              variables.Add (name, v);
+            vars <- v :: vars;
+          });
+          scanl (vars, body)
+        | S_goto
+        | S_action => ()
+      }
+    } and scanl (vars, stmts) {
+      List.Iter (stmts, fun (s) { scan (vars, s) }) 
+    };
+    scanl ([], stmts);
+  }
+
+  no_actions (expr : BooleanFormula) : void
+  {
+    | BF_cond => error ("condition ripped off")
+    | BF_dummy_true
+    | BF_const => ()
+    | BF_not (e) => no_actions (e)
+    | BF_and (e1, e2)
+    | BF_or (e1, e2) => no_actions (e1); no_actions (e2)
+  }
+
+  can_fold (expr : BooleanFormula) : bool
+  {
+    | BF_cond => false
+    | BF_dummy_true
+    | BF_const => true
+    | BF_not (x) => can_fold (x)
+    | BF_and (x1, x2) 
+    | BF_or (x1, x2) => can_fold (x1) && can_fold (x2)
+  }
+
+  fold_expr (expr : BooleanFormula) : BooleanFormula
+  {
+    | BF_dummy_true
+    | BF_cond => expr
+    | BF_const (c) => BF_const (Const_const (eval_const (c)))
+    | BF_not (x) =>
+      match (fold_expr (x)) {
+        | BF_const (Const_const (0)) =>
+          BF_const (Const_const (1))
+        | BF_const (Const_const (1)) =>
+          BF_const (Const_const (0))
+        | BF_const =>
+          error ("invalid argument to !")
+        | x => BF_not (x)
+      }
+    | BF_and (x1, x2) =>
+      match (fold_expr (x1)) {
+        | BF_const (Const_const (0)) => no_actions (x2); BF_const (Const_const (0))
+        | BF_const (Const_const (1)) => fold_expr (x2)
+        | BF_const =>
+          error ("invalid left argument to &&")
+        | x1 =>
+          match (fold_expr (x2)) {
+            | BF_const (Const_const (0)) => no_actions (x1); BF_const (Const_const (0))
+            | BF_const (Const_const (1)) => x1
+            | BF_const =>
+              error ("invalid right argument to &&")
+            | x2 => BF_and (x1, x2)
+          }
+      }
+
+    | BF_or (x1, x2) =>
+      match (fold_expr (x1)) {
+        | BF_const (Const_const (0)) => fold_expr (x2)
+        | BF_const (Const_const (1)) => no_actions (x2); BF_const (Const_const (1))
+        | BF_const =>
+          error ("invalid left argument to ||")
+        | x1 =>
+          match (fold_expr (x2)) {
+            | BF_const (Const_const (1)) => no_actions (x1); BF_const (Const_const (1))
+            | BF_const (Const_const (0)) => x1
+            | BF_const =>
+              error ("invalid right argument to ||")
+            | x2 => BF_or (x1, x2)
+          }
+      }
+  }
+
+  eval_const (expr : ConstantExpr) : int
+  {
+    match (expr) {
+      | Const_const (x) => if (x < 0) error ("negative literal") else x
+      | Const_ref (name) =>
+        match (variables.Get (name)) {
+          | Some (v) =>
+            v.current_value
+          | None => error ("undef variable " + name)
+        }
+      | Const_binary (op, e1, e2) =>
+        def e1 = eval_const (e1);
+        def e2 = eval_const (e2);
+        match (op) {
+          | Bin_plus => e1 + e2
+          | Bin_minus =>
+            if (e1 - e2 < 0) error ("negative `-' result")
+            else e1 - e2
+          | Bin_equal =>
+            if (e1 == e2) 1 else 0
+          | Bin_less_than => 
+            if (e1 < e2) 1 else 0
+          | Bin_more_than => 
+            if (e1 > e2) 1 else 0
+        }
+
+      | Const_not (e) =>
+        def e = eval_const (e);
+        if (e > 1) error ("non boolean arg to !")
+        else if (e == 0) 1 else 0
+    }
+  }
+
+  mutable unique_id : int;
+  
+  unfolds_and (s : list <Stmt>) : list <Stmt>
+  {
+    List.Concat (List.Map (s, unfold_and))
+  }
+
+  unfold_and (s : Stmt) : list <Stmt>
+  {
+    match (s) {
+      | S_vars (newvars, body) =>
+        def label = "__varsend_" + unique_id.ToString ();
+        ++unique_id;
+        def body = unfolds_and (body + [S_goto ([], label)]);
+        [S_vars (newvars, body), S_label (label)]
+        
+      | S_if (expr, l1, l2) =>
+        match (expr) {
+          | c when can_fold (c) =>
+            [S_if (c, unfolds_and (l1), unfolds_and (l2))]
+          | BF_and (e1, e2) =>
+            def label = "__and_" + unique_id.ToString ();
+            ++unique_id;
+            unfold_and (S_if (e1, [S_if (e2, l1, [S_goto ([], label)])], S_label (label) :: l2))
+          | BF_or (e1, e2) =>
+            def label = "__or_" + unique_id.ToString ();
+            ++unique_id;
+            unfold_and (S_if (e1, S_label (label) :: l1, [S_if (e2, [S_goto ([], label)], l2)]))
+          | BF_not (e) =>
+            unfold_and (S_if (e, l2, l1))
+          | c =>
+            [S_if (c, unfolds_and (l1), unfolds_and (l2))]
+        }
+        
+      | S_goto
+      | S_label
+      | S_action => [s]
+    }
+  }
+ 
+  unfolds (s : list <Stmt>) : list <Stmt>
+  {
+    List.Concat (List.Map (s, unfold))
+  }
+
+  unfold (s : Stmt) : list <Stmt>
+  {
+    match (s) {
+      | S_label (name) =>
+        def var_name (v : Variable) {
+          "_" + v.name + "=" + v.current_value.ToString ()
+        };
+        def vars = Option.UnSome (label_under.Get (name));
+        [S_label (name + NString.Concat ("", List.Map (vars, var_name)))]
+      
+      | S_goto (assigns, name) =>
+        def used = Hashtable ();
+        def value (v : Variable) {
+          mutable expr <- null;
+          if (List.Exists (assigns, fun (x, e) { 
+                if (x == v.name) { expr <- e; true } else false 
+              })) {
+            used.Set (v.name, null);
+            def e = 
+              match (fold_expr (expr)) {
+                | BF_const (Const_const (x)) => x
+                | _ => error ("evil constant folding result")
+              };
+            e % (v.max_value + 1);
+          } else
+            v.current_value
+        };
+        def var_name (v : Variable) {
+          "_" + v.name + "=" + value (v).ToString ()
+        };
+        match (label_under.Get (name)) {
+          | Some (vars) =>
+            def name = name + NString.Concat ("", List.Map (vars, var_name));
+            List.Iter (assigns, fun (x, _) {
+              unless (used.Contains (x))
+                error ("unused goto assign to `" + x + "'")
+            });
+            [S_goto ([], name)]
+          | None => error ("undef label " + name)
+        }
+        
+      | S_vars (newvars, body) =>
+        def incr () {
+          List.Exists (newvars, fun (name, _) {
+            def v = Option.UnSome (variables.Get (name));
+            if (v.current_value < v.max_value) {
+              ++v.current_value;
+              true
+            } else {
+              v.current_value <- 0;
+              false
+            }
+          })
+        };
+        def loop (acc) {
+          def acc = unfolds (body) :: acc;
+          if (incr ())
+            loop (acc)
+          else 
+            List.Concat (List.Rev (acc))
+        };
+        loop ([])
+        
+      | S_if (expr, l1, l2) =>
+        match (fold_expr (expr)) {
+          | BF_dummy_true
+          | BF_const (Const_const (1)) =>
+            [S_if (BF_dummy_true (), unfolds (l1), unfolds (l2))]
+            //unfolds (l1)
+          | BF_const (Const_const (0)) =>
+            [S_if (BF_dummy_true (), unfolds (l2), unfolds (l1))]
+            //unfolds (l2)
+          | BF_const => error ("evil constant folding result to if")
+          | BF_and
+          | BF_or
+          | BF_not => error ("&&, || or ! survived!")
+          | (BF_cond) as c =>
+            [S_if (c, unfolds (l1), unfolds (l2))]
+        }
+      
+      | S_action => [s]
+    }
+  }
+ 
+  public static Dump (stmts : list <Stmt>) : void
+  {
+    def w (i, s : string) {
+      for (mutable j <- 0; j < i; ++j)
+        System.Console.Error.Write ("  ");
+      System.Console.Error.WriteLine (s);
+    };
+    
+    def dump (i, x) {
+      match (x) {
+        | S_label (name) => w (i - 1, name + ":");
+        | S_goto (_, name) => w (i, "goto " + name)
+        
+        | S_vars => assert (false)
+        
+        | S_if (BF_cond (C_pickup), l1, l2) =>
+          w (i, "pickup {");
+          dumps (i + 1, l1);
+          w (i, "} nofood {");
+          dumps (i + 1, l2);
+          w (i, "}");
+
+        | S_if (BF_cond (C_move), l1, l2) =>
+          w (i, "move {");
+          dumps (i + 1, l1);
+          w (i, "} blocked {");
+          dumps (i + 1, l2);
+          w (i, "}");
+
+        | S_if (BF_cond (C_flip (max)), l1, l2) =>
+          w (i, "ifrand " + max.ToString () + " {");
+          dumps (i + 1, l1);
+          w (i, "} else {");
+          dumps (i + 1, l2);
+          w (i, "}");
+          
+        | S_if (BF_cond (C_sense (c1, c2)), l1, l2) =>
+          w (i, "if " + c1.ToString () + " " + c2.ToString () + " {");
+          dumps (i + 1, l1);
+          w (i, "} else {");
+          dumps (i + 1, l2);
+          w (i, "}");
+          
+        | S_if (BF_dummy_true, l1, l2) =>
+          w (i, "alwys {");
+          dumps (i + 1, l1);
+          w (i, "} junk {");
+          dumps (i + 1, l2);
+          w (i, "}");
+          
+        | S_if (c, _, _) => 
+          assert (false, c.ToString ())
+        
+        | S_action (A_mark (c)) => w (i, "mark " + c.ToString ());
+        | S_action (A_unmark (c)) => w (i, "unmark " + c.ToString ());
+        | S_action (A_turn (true)) => w (i, "turn left");
+        | S_action (A_turn (false)) => w (i, "turn right");
+        | S_action (A_drop) => w (i, "drop");
+      }
+    } and dumps (i, s) { List.Iter (s, fun (x) { dump (i, x) }) };
+
+    dumps (1, stmts);
+  }
+
+  public Execute () : list <Stmt>
+  {
+    stmts <- unfolds_and (stmts);
+    scan_labels ();
+    stmts <- unfolds (stmts);
+    when (System.Array.IndexOf (System.Environment.GetCommandLineArgs (), "-dump") != -1)
+      Dump (stmts);
+    stmts
+  }
+}
