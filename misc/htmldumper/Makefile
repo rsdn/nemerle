@@ -41,7 +41,7 @@ EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 all:  dumper.exe
 
 dumper.exe: dumper.n
-	$(EXECUTE) ../../ncc/out.stage3/ncc.exe -r ../../ncc/out.stage3/Nemerle.Compiler.dll -out dumper.exe dumper.n
+	$(EXECUTE) ../../boot/ncc.exe -r ../../boot/Nemerle.Compiler.dll -out dumper.exe dumper.n
 
 clean:
 	rm -f *.exe  core core.[0-9]*

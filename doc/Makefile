@@ -86,7 +86,7 @@ pdf: $(ps) $(pdf)
 
 grokking.html:: src/nem-examples/grokking.n dumper
 
-dumper: ../misc/htmldumper/dumper.exe
+dumper:
 	$(MAKE) -C ../misc/htmldumper all
 
 course/%.html: course-src/%.xml mainStyle.xsl
