@@ -73,7 +73,6 @@ NEMERLE_COMPILER_DLL_SRC = \
 	xmldump.n \
 	cgil.n \
 	cgmatch.n \
-	extensions.n \
 	globalenv.n \
 	localvalue.n \
 	macros.n \
