@@ -85,7 +85,9 @@ dist-clean: clean
 tests-clean:
 	rm -f tests/*.n tests/*.exe tests/*.log
 
-test:
+test: log
+
+log: 
 	./test | tee log
 
 etest:
