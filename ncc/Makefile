@@ -35,6 +35,7 @@ include ../config.mak
 
 COMPILER_PATH = ../boot/
 COMPILER      = $(COMPILER_PATH)ncc.exe
+COMPILER_DEP  = $(COMPILER_PATH)ncc.exe $(COMPILER_PATH)stdmacros.dll
 EXECUTE       = $(NET_ENGINE) $(NET_FLAGS)
 RUN_COMPILER  = $(Q)$(TIME) $(EXECUTE) $(COMPILER) -no-stdlib $(COMP_FLAGS)
 
@@ -230,25 +231,25 @@ out.%/aliases.n: ../lib/aliases.n
 	$(Q)cp -f $< $@
 
 out.$(STAGE)/Nemerle.dll out.$(STAGE)/Nemerle.$(STAGE).dll: \
-		$(COMPILER) $(COMPILER_PATH)aliases.n $(NEMERLE_DLL_SRC)
+		$(COMPILER_DEP) $(COMPILER_PATH)aliases.n $(NEMERLE_DLL_SRC)
 	$(COMP) [$(STAGE)] Nemerle.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ $(GENERIC_SRC) $(NEMERLE_DLL_SRC)
 
 out.$(STAGE)/Nemerle.Compiler.dll: \
-		$(COMPILER) out.$(STAGE)/Nemerle.dll $(NEMERLE_COMPILER_DLL_SRC)
+		$(COMPILER_DEP) out.$(STAGE)/Nemerle.dll $(NEMERLE_COMPILER_DLL_SRC)
 	$(COMP) [$(STAGE)] Nemerle.Compiler.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:out.$(STAGE)/Nemerle.dll \
 		$(GENERIC_SRC) $(NEMERLE_COMPILER_DLL_SRC)
 
 out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll: \
-		$(COMPILER) out.$(STAGE)/Nemerle.$(STAGE).dll $(NEMERLE_COMPILER_DLL_SRC)
+		$(COMPILER_DEP) out.$(STAGE)/Nemerle.$(STAGE).dll $(NEMERLE_COMPILER_DLL_SRC)
 	$(COMP) [$(STAGE)] Nemerle.Compiler.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:out.$(STAGE)/Nemerle.$(STAGE).dll \
 		$(GENERIC_SRC) $(NEMERLE_COMPILER_DLL_SRC)
 
-out.stage1/stdmacros.dll: $(COMPILER) out.stage1/Nemerle.stage1.dll \
+out.stage1/stdmacros.dll: $(COMPILER_DEP) out.stage1/Nemerle.stage1.dll \
 		out.stage1/Nemerle.Compiler.stage1.dll $(STDMACROS_DLL_SRC)
 	$(COMP) [stage1] stdmacros.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
@@ -256,7 +257,7 @@ out.stage1/stdmacros.dll: $(COMPILER) out.stage1/Nemerle.stage1.dll \
 		-reference:out.stage1/Nemerle.Compiler.stage1.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
 
-out.stage2/stdmacros.dll: $(COMPILER) out.stage2/Nemerle.stage2.dll \
+out.stage2/stdmacros.dll: $(COMPILER_DEP) out.stage2/Nemerle.stage2.dll \
 		out.stage2/Nemerle.Compiler.stage2.dll $(STDMACROS_DLL_SRC)
 	$(COMP) [stage2] stdmacros.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
@@ -264,7 +265,7 @@ out.stage2/stdmacros.dll: $(COMPILER) out.stage2/Nemerle.stage2.dll \
 		-reference:out.stage2/Nemerle.Compiler.stage2.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
 
-out.stage3/stdmacros.dll: $(COMPILER) out.$(STAGE)/Nemerle.dll \
+out.stage3/stdmacros.dll: $(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll $(STDMACROS_DLL_SRC)
 	$(COMP) [stage3] stdmacros.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
@@ -272,7 +273,7 @@ out.stage3/stdmacros.dll: $(COMPILER) out.$(STAGE)/Nemerle.dll \
 		-reference:out.$(STAGE)/Nemerle.Compiler.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
 
-out.stage1/ncc.exe: $(COMPILER) out.stage1/Nemerle.stage1.dll \
+out.stage1/ncc.exe: $(COMPILER_DEP) out.stage1/Nemerle.stage1.dll \
 		out.stage1/Nemerle.Compiler.stage1.dll $(NCC_EXE_SRC)
 	$(COMP) [stage1] ncc.exe
 	$(Q)$(RUN_COMPILER) -target-exe -out:$@ \
@@ -280,7 +281,7 @@ out.stage1/ncc.exe: $(COMPILER) out.stage1/Nemerle.stage1.dll \
 		-reference:out.stage1/Nemerle.Compiler.stage1.dll \
 		$(GENERIC_SRC) $(NCC_EXE_SRC)
 
-out.stage2/ncc.exe: $(COMPILER) out.stage2/Nemerle.stage2.dll \
+out.stage2/ncc.exe: $(COMPILER_DEP) out.stage2/Nemerle.stage2.dll \
 		out.stage2/Nemerle.Compiler.stage2.dll $(NCC_EXE_SRC)
 	$(COMP) [stage2] ncc.exe
 	$(Q)$(RUN_COMPILER) -target-exe -out:$@ \
@@ -288,7 +289,7 @@ out.stage2/ncc.exe: $(COMPILER) out.stage2/Nemerle.stage2.dll \
 		-reference:out.stage2/Nemerle.Compiler.stage2.dll \
 		$(GENERIC_SRC) $(NCC_EXE_SRC)
 
-out.stage3/ncc.exe: $(COMPILER) out.$(STAGE)/Nemerle.dll \
+out.stage3/ncc.exe: $(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll $(NCC_EXE_SRC)
 	$(COMP) [stage3] ncc.exe
 	$(Q)$(RUN_COMPILER) -target-exe -out:$@ \
