@@ -53,6 +53,7 @@ public class TypeBuilder : TypeInfo
   public mutable pt_tydecl : PT.TopDeclaration;
   pt_name : PT.Name;
 
+  loc : Location;
   modifiers : Modifiers;
 
   mutable tydecl : TypeDeclaration;
@@ -62,13 +63,12 @@ public class TypeBuilder : TypeInfo
   mutable attributes : NemerleAttributes;
   
   is_enum : bool;
-  is_interface : bool;
 
   mutable is_finalized : bool;
   mutable cannot_finalize : bool;
   name : string;
   public env : GlobalEnv;
-  loc : Location;
+
   accessibility : Accessibility;
   private mutable m_has_been_used : bool;
   mutable contained_types : list [TypeBuilder];
@@ -79,8 +79,6 @@ public class TypeBuilder : TypeInfo
 
   /// if it doesn't, we must add implicit empty constructor
   mutable instance_ctor_occured : bool;
-
-//  public mutable is_finalized : bool;
 
   // the list of additional method overrides, see resolve_method_implements
   // (listed as pairs of implementation method / interface method)
@@ -158,9 +156,13 @@ public class TypeBuilder : TypeInfo
     ++Passes.tyinfo_counter;
     infos = this :: infos;
 
-    is_interface = (this.pt_tydecl is PT.TopDeclaration.Interface);
+    if (this.pt_tydecl is PT.TopDeclaration.Interface)
+      this.tydecl = TypeDeclaration.Interface ();
+    else
+      this.tydecl = TypeDeclaration.Class (); // may change later (in bind_types)
+
     instance_ctor_occured = (attributes %&& (NemerleAttributes.Struct %| NemerleAttributes.Static))
-                            || IsModule || instance_ctor_occured || is_interface || is_enum;
+                            || IsModule || instance_ctor_occured || IsInterface || is_enum;
     
     unless (attributes %&& NemerleAttributes.AccessModifiers)
       match (enclosing_type) {
@@ -182,8 +184,7 @@ public class TypeBuilder : TypeInfo
 
     match (enclosing_type) {
       | Some (tc) =>
-        accessibility = 
-          Tyutil.AccessibilityIntersect (accessibility, tc.Accessibility)
+        accessibility = Tyutil.AccessibilityIntersect (accessibility, tc.Accessibility)
       | None => ()
     }
 
@@ -263,7 +264,7 @@ public class TypeBuilder : TypeInfo
 
   public override IsInterface : bool
   {
-    get { is_interface }
+    get { tydecl matches TypeDeclaration.Interface }
   }
 
   public IsAlias : bool
@@ -404,9 +405,9 @@ public class TypeBuilder : TypeInfo
   public AddImplementedInterface (t : PT.PType) : void
   {
     match (pt_tydecl) {
-      | (PT.TopDeclaration.Class) as td => td.t_extends += [t]
-      | (PT.TopDeclaration.Interface) as td => td.t_extends += [t]
-      | (PT.TopDeclaration.Variant) as td => td.t_extends += [t]
+      | PT.TopDeclaration.Class as td => td.t_extends += [t]
+      | PT.TopDeclaration.Interface as td => td.t_extends += [t]
+      | PT.TopDeclaration.Variant as td => td.t_extends += [t]
       | _ => Message.error ("cannot add interface to this kind of type")
     }
   }
@@ -565,11 +566,8 @@ public class TypeBuilder : TypeInfo
   {
     match (member_map.Find (name)) {
       | None =>
-        match (tydecl) {
-          | TypeDeclaration.Interface =>
-            InternalType.Object_tc.LookupMember (name)
-          | _ => []
-        }
+        if (IsInterface) InternalType.Object_tc.LookupMember (name)
+        else []
       | Some (mems) => mems
     }
   }
@@ -778,14 +776,14 @@ public class TypeBuilder : TypeInfo
 
     def collect (t : TType.Class, acc) {
       def tc = t.tycon;
-      match (tc.GetTydecl ()) {
-        | TypeDeclaration.Interface =>
-          match (base_class.SuperType (tc)) {
-            | Some => acc
-            | None => tc :: acc
-          }
-        | _ => acc
+      if (tc.IsInterface) {
+        match (base_class.SuperType (tc)) {
+          | Some => acc
+          | None => tc :: acc
+        }
       }
+      else
+        acc
     };
     
     List.FoldLeft (GetSuperTypes (), [], collect);
@@ -928,13 +926,10 @@ public class TypeBuilder : TypeInfo
         this.tenv = variant_option_parent.tenv;
         this.typarms = variant_option_parent.typarms;
        
-        def make_public (d : PT.ClassMember) : void {
-          d.Attributes |= NemerleAttributes.Public
-        };
-        List.Iter (members, make_public)
+        foreach (d : PT.ClassMember in members)
+          d.Attributes |= NemerleAttributes.Public;
         
-      | PT.TopDeclaration.Variant =>
-        attributes |= NemerleAttributes.Abstract
+      | PT.TopDeclaration.Variant =>  attributes |= NemerleAttributes.Abstract
       | _ => ()
     };
 
@@ -988,24 +983,12 @@ public class TypeBuilder : TypeInfo
       | PT.TopDeclaration.Interface { t_extends = hd :: tl }
       | PT.TopDeclaration.Variant { t_extends = hd :: tl } 
       | PT.TopDeclaration.Enum { t_extends = hd :: tl } =>        
-        def is_interface (tc : TypeInfo) {
-          if (tc.GetTydecl () == null)
-            match ((tc :> TypeBuilder).pt_tydecl) {
-              | PT.TopDeclaration.Interface => true
-              | _ => false
-            }
-          else
-            match (tc.GetTydecl ()) {
-              | TypeDeclaration.Interface => true
-              | _ => false
-            }
-        };
         def bind_to_class (t : PT.PType) {
           this.tenv.bind (this.env, this, t, check_parms = false) :> TType.Class;
         };
         def hd' = bind_to_class (hd);
         match (hd') {
-          | ttc when !is_interface (ttc.tycon) =>
+          | ttc when !ttc.tycon.IsInterface =>
             this.parent_type = Some (ttc); 
             this.t_implements = List.Map (tl, bind_to_class);
           | _ =>
@@ -1017,10 +1000,10 @@ public class TypeBuilder : TypeInfo
         this.parent_type = None ()
     };
 
-    when (pt_tydecl is PT.TopDeclaration.Enum)  handle_underlying_enum_type ();
+    when (is_enum)  handle_underlying_enum_type ();
     
     // warn about nested value types 
-    when (Option.IsSome (enclosing_type) && IsValueType)
+    when ((enclosing_type matches Some) && IsValueType)
       Message.warning (loc, "nested value types fail to compile under .NET Framework v1.1");
 
     when (IsStruct)
@@ -1036,20 +1019,19 @@ public class TypeBuilder : TypeInfo
     
     match (parent_type) {
       | None =>
-        match (pt_tydecl) {
-          | PT.TopDeclaration.Interface 
-          | PT.TopDeclaration.Alias => ()
-          | _ =>
-            parent_type = Some (
-              // make the structure inherit from System.ValueType                           
-              if (IsStruct)
-                InternalType.ValueType;
-              else 
-                InternalType.Object
-            )
+        unless (IsInterface || IsAlias) {
+          def parent = 
+            // make the structure inherit from System.ValueType                           
+            if (IsStruct)
+              InternalType.ValueType;
+            else 
+              InternalType.Object;
+
+          parent_type = Some (parent)
         }
+
       | Some (tclass) =>
-        when (is_interface) {
+        when (IsInterface) {
           Message.error (loc, "interfaces are not allowed to inherit from other types");
           parent_type = None ();
         }
@@ -1156,15 +1138,13 @@ public class TypeBuilder : TypeInfo
       t.tycon.GetMembers ()
     };
     def members = 
-      match (GetTydecl ()) {
-        | TypeDeclaration.Interface =>
-          List.Concat (List.RevMap (GetDirectSuperTypes (), get_members))
-        | _ =>
-          match (parent_type) {
-            | Some (t) => get_members (t)
-            | None => []
-          }
-      };
+      if (IsInterface)
+        List.Concat (List.RevMap (GetDirectSuperTypes (), get_members))
+      else
+        match (parent_type) {
+          | Some (t) => get_members (t)
+          | None => []
+        }
       
     def inherit_it (mem : IMember) {
       !(mem.MemberType %&& MemberTypes.Constructor ||
@@ -1426,7 +1406,7 @@ public class TypeBuilder : TypeInfo
       when (IsModule)
         class_member.Attributes |= NemerleAttributes.Static;      
         
-      when (is_interface) {
+      when (IsInterface) {
         when (class_member.Attributes != NemerleAttributes.None)
           Message.error ("interface members are not allowed"
                          " to have any attributes specified");
@@ -1776,10 +1756,8 @@ public class TypeBuilder : TypeInfo
     
     when (run_phase >= 1)
       match (enclosing_type) {
-        | Some (ti) =>
-          make_tyenvs (ti.tenv)
-        | None =>
-          make_tyenvs (Tyvar.TEnv ())
+        | Some (ti) => make_tyenvs (ti.tenv)
+        | None      => make_tyenvs (Tyvar.TEnv ())
       };
     when (run_phase >= 2)
       Util.locate (loc, bind_types ());
@@ -2282,10 +2260,8 @@ public class TypeBuilder : TypeInfo
   public static TopIter (f : TypeBuilder -> void) : void
   {
     def wrap (x : TypeBuilder) : void {
-      match (x.enclosing_type) {
-        | Some => ()
-        | None => Util.locate (x.loc, f (x))
-      }
+      when (x.enclosing_type matches None) 
+        Util.locate (x.loc, f (x))
     };
     Iter (wrap);
   }
@@ -2345,10 +2321,8 @@ public class TypeBuilder : TypeInfo
     });
     
     def check_method_implements (ti : TypeBuilder) {
-      match (ti.GetTydecl ()) {
-        | TypeDeclaration.Interface => ()
-        | _ => ti.resolve_method_implements ()
-      }
+      unless (ti.IsInterface)
+        ti.resolve_method_implements ()
     };
 
     Iter (check_method_implements);
@@ -2394,7 +2368,7 @@ public class TypeBuilder : TypeInfo
 
       // access check with exception of interfaces derived / implemented by class
       // which case is not mentioned by http://www.jaggersoft.com/csharp_standard/10.5.4.htm
-      when (is_interface || !is_iface)
+      when (this.IsInterface || !is_iface)
         Tyutil.CheckAccessibility (this, accessibility, deriv_t);
       check_type (deriv_t);
     }
@@ -2468,10 +2442,9 @@ public class TypeBuilder : TypeInfo
     unless (tb.IsDelegate)
     {
       def is_variant = !(tb.variant_options matches []);
-      def is_alias = tb.tydecl is TypeDeclaration.Alias;
       
       // first, check if this type has ever been referenced
-      when (!(tb.HasBeenUsed || is_variant || is_alias))
+      when (!(tb.HasBeenUsed || is_variant || tb.IsAlias))
         Message.warning (tb.loc, $ "`$(tb)' is not externally visible and has never been referenced");
 
       // then, proceed with the members of this type
@@ -2604,7 +2577,7 @@ public class TypeBuilder : TypeInfo
   internal CheckTypeAttributes () : void
   {
     def title () {
-      if (this.is_interface) "interface" else (if (IsStruct) "struct" else "type");
+      if (IsInterface) "interface" else (if (IsStruct) "struct" else "type");
     }
         
     // make sure only a valid subset of NemerleAttributes has been used
@@ -2621,7 +2594,7 @@ public class TypeBuilder : TypeInfo
     check_for_invalid_attr (NemerleAttributes.Volatile, "volatile");
 
     // some extra checks for structs and interfaces
-    when (this.is_interface || this.IsStruct)
+    when (this.IsInterface || this.IsStruct)
     {
       check_for_invalid_attr (NemerleAttributes.Abstract, "abstract");
       check_for_invalid_attr (NemerleAttributes.Sealed, "sealed");
@@ -2629,7 +2602,7 @@ public class TypeBuilder : TypeInfo
     }
     
     // some extra checks for interfaces
-    when (this.is_interface)
+    when (this.IsInterface)
     {
       check_for_invalid_attr (NemerleAttributes.Struct, "struct")
     }
