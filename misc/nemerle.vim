@@ -68,7 +68,7 @@ syn keyword nemerleKeyword class enum extends finally in null out public raise r
 syn keyword nemerleKeyword variant interface implements namespace where type let static
 syn keyword nemerleKeyword in fun and tymatch with try open void base if then else variant letfun
 syn keyword nemerleKeyword match as mutable def module when for while array
-syn keyword nemerleKeyword macro unless using
+syn keyword nemerleKeyword macro unless using override
 
 syn keyword nemerleConst null true false this
 
