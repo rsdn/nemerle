@@ -25,7 +25,8 @@
 # NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
-
+export PATH = $(shell echo $$PATH):$(shell pwd)/../out.stage3/
+export MONO_PATH = $(shell echo $$MONO_PATH):$(shell pwd)/../out.stage3
 include ../../config.mak
 
 lib_src = ../../lib/aliases.n ../../lib/core.n ../../lib/option.n ../../lib/list.n \
@@ -36,10 +37,11 @@ lib_src = ../../lib/aliases.n ../../lib/core.n ../../lib/option.n ../../lib/list
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 
 all:
+	./c
 	cp ../out.stage3/Nemerle.dll .
 	$(EXECUTE) ../out.stage3/ncc.exe -out test.exe test.n
-	$(EXECUTE) ./test.exe -p "../../" -n "../out.stage3/ncc.exe" -r "$(EXECUTE)"
-	rm -f out.dll out.exe out.netmodule ext_test.out
+	$(EXECUTE) ./test.exe -r "$(EXECUTE)"
+	rm -f out.dll out.exe out.netmodule ext_test.out Nemerle.dll
 
 clean:
 	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]*
