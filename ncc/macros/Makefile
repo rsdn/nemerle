@@ -28,7 +28,7 @@
 
 include ../../config.mak
 
-lib_src = ../lib/core.n ../option.n ../list.n ../tree.n
+lib_src = ../../lib/core.n ../../lib/option.n ../../lib/list.n ../tree.n ../../lib/aliases.n
 
 n_src = \
 	$(lib_src) \
@@ -50,8 +50,11 @@ n_src = \
 	../cgexpr.n \
 	../cgflat.n \
 	../xmldump.n \
+	../cgopt.n \
 	../typattern.n \
-	../external.n
+	../external.n \
+	../extensions.n \
+	../macroregistry.n
 
 m_src = \
 	ok-macro.n
