@@ -55,7 +55,7 @@ all:
 	$(Q)$(MAKE) -C sioux all
 	$(Q)$(MAKE) -C shootout all
 	$(Q)$(MAKE) -C course all
-#	$(Q)$(MAKE) -C sokoban all
+	$(Q)$(MAKE) -C sokoban all
 	$(Q)$(MAKE) -C concurrency all
 
 myPoll.exe: myPoll.n
