@@ -37,6 +37,58 @@ namespace Nemerle.Compiler {
 
   class CGexpr
     {
+      value ref cg_members : Int_map (CG_member);
+      
+      fun lookup_field (decl : M_field) : CM_field =
+        match cg_members#find (decl#id) with [
+          | Some (?r) => (r :> CM_field)
+          | None =>
+            let m = (CM_field (cg_type (decl#ty)) :> CM_field) in {
+              m#name <- decl#name;
+              m#attrs <- cg_attrs (decl#modifiers);
+              cg_members <- cg_members#add (decl#id, m);
+              m
+            }
+        ];
+
+      fun lookup_value (decl : M_value) : CM_field =
+        match cg_members#find (decl#id) with [
+          | Some (?r) => (r :> CM_field)
+          | None =>
+            let m = (CM_field (cg_type (decl#ty)) :> CM_field) in {
+              m#name <- decl#name;
+              m#attrs <- cg_attrs (decl#modifiers);
+              make_static (m);
+              cg_members <- cg_members#add (decl#id, m);
+              m
+            }
+        ];
+
+      fun lookup_function (h : Fun_header) : CM_method =
+        match cg_members#find (h#id) with [
+          | Some (?r) => (r :> CM_method)
+          | None =>
+            let m = cg_fun_header (h) in {
+              cg_members <- cg_members#add (h#id, m);
+              m
+           }
+        ];
+
+      fun lookup_class (decl : Type_decl) : CM_class =
+        match cg_members#find (decl#id) with [
+          | Some (?r) => (r :> CM_class)
+          | None =>
+            let ti = Tyinfo.lookup (decl) in
+            let inh = List.map (cg_type, ti#direct_supertypes ()) in
+            let r = (CM_class ("", CK_class (), inh, Nil ()) :> CM_class) in {
+              r#loc <- decl#loc;
+              r#name <- decl#name;
+              r#attrs <- Nil ();
+              cg_members <- cg_members#add (decl#id, r);
+              r
+            }
+        ];
+        
       fun cg_type (t : Type) : CG_type =
         match Tyutil.top_expand (t) with [
           | T_void => CT_void ()
@@ -65,22 +117,192 @@ namespace Nemerle.Compiler {
 
       value ref closures : list (CG_member);
 
-      fun raw_cg_expr (ex : Expr) : CG_expr =
-        let (?ex, ?t) =
-          match ex with [
-            | _ => (CE_none (), CT_void ())
+      record CTX
+        {
+          ref current_fun : Decl;
+          ref current_closure : option (CG_val);
+          ref closure_fields : Int_map (CM_field);
+          ref closure_ptrs : Int_map (CM_field);
+          ref locals : Int_map (CG_val);
+        }
+
+      fun copy_ctx (c : CTX) : CTX =
+        CTX (current_fun = c#current_fun,
+             current_closure = c#current_closure,
+             closure_fields = c#closure_fields,
+             closure_ptrs = c#closure_ptrs,
+             locals = c#locals);
+
+      fun empty_ctx () : CTX =
+        CTX (current_fun = null,
+             current_closure = None (),
+             closure_fields = Map.int_map (),
+             closure_ptrs = Map.int_map (),
+             locals = Map.int_map ());
+
+      fun raw_cg_expr (ctx : CTX, inex : Expr) : CG_expr =
+        let ex =
+          match inex with [
+            | E_ref (?d) =>
+              if d#in_closure then
+                let defined_in = Util.unsome (d#parent_fun) in
+                if defined_in#id == ctx#current_fun#id then
+                  CE_field_ref (CE_ref (Util.unsome (ctx#current_closure)),
+                                ctx#closure_fields#get (d#id))
+                else
+                  CE_field_ref (CE_field_ref (CE_this (), ctx#closure_ptrs#get (defined_in#id)),
+                                ctx#closure_fields#get (d#id))
+              else
+                match d#kind with [
+                  | D_class_member (M_value ?v) => 
+                    CE_global_ref (lookup_value (v))
+                    
+                  | D_class_member (M_function ?f) => 
+                    // FIXME: need proxy here
+                    CE_global_ref (lookup_function (f#fun_header))
+
+                  | D_class_member => Util.ice ()
+
+                  | _ => CE_ref (ctx#locals#get (d#id))
+                ]
+                  
+            | _ => CE_none ()
           ]
         in {
-          ex#expr_ty <- t;
+          if ex#expr_ty == null then
+            ex#expr_ty <- cg_type (Tyexpr.type_of (inex))
+          else ();
           ex
         };
 
-      fun cg_expr (ex : Expr) : CG_expr =
+      fun cg_expr (ctx : CTX, ex : Expr) : CG_expr =
         Util.locate (ex#loc, fun () : CG_expr =>
-          let e = raw_cg_expr (ex) in {
+          let e = raw_cg_expr (ctx, ex) in {
             e#loc <- ex#loc;
             e
           });
+
+      fun fixup_function (f : M_function) : CM_method =
+        let m = lookup_function (f#fun_header) in {
+          m#attrs <- cg_attrs (f#modifiers);
+          let ti = Tyinfo.lookup (f#id) in
+          match f#fun_kind with [
+            | FK_method => ()
+            | FK_static_ctor => 
+              {
+                m#name <- ti#basename ();
+                make_static (m)
+              }
+            | FK_ctor => m#name <- ti#basename ()
+            | FK_function => make_static (m)
+            | FK_iface_method => Util.ice ()
+          ];
+          m
+        };
+
+      fun decl_uniq_name (d : Decl) : string =
+        d#name + "_" + string_of_int (d#id);
+
+      fun cg_fun (ctx : CTX, fn : Decl, body : Expr) : CG_member =
+        letfun mk_clo_fld (d : Decl) : CG_member =
+          let f = CM_field (cg_type (d#ty)) in {
+            f#name <- decl_uniq_name (d);
+            f#loc <- d#loc;
+            f
+          }
+        in
+      
+        letfun mk_clo_var (clo_vars : Int_map (CM_field), d : Decl, v : CG_member) : Int_map (CM_field) =
+          clo_vars#add (d#id, (v :> CM_field))
+        in
+        
+        let ctx = 
+          match fn#closure_vars with [
+            | Nil => 
+              let ctx = copy_ctx (ctx) in {
+                ctx#current_closure <- None ();
+                ctx
+              }
+
+            | Cons =>
+              let fields = List.map (mk_clo_fld, fn#closure_vars) in
+              let clovars = List.fold_left2 (mk_clo_var, ctx#closure_fields, 
+                                             fn#closure_vars, fields) in
+              let cloclass = (CM_class ("", CK_class (), Nil (), fields) :> CM_class) in
+              let cloclname = "_N_cl_" + decl_uniq_name (fn) in
+              let clotype = CT_ref (cloclname) in
+              let cloexpr = fixup (CE_call (CE_ctor_ref (cloclass), Nil ()), clotype) in
+              let cloval = CG_val (fn#loc, "_N_closure", clotype, cloexpr) in
+              let ctx = copy_ctx (ctx) in {
+                cloclass#name <- cloclname;
+                cloclass#loc <- fn#loc;
+                closures <- Cons ((cloclass : CG_member), closures); // push it
+                ctx#closure_fields <- clovars;
+                ctx#current_closure <- Some (cloval);
+                ctx
+              }
+          ]
+        in
+
+        let _ = {
+          ctx#closure_ptrs <- Map.int_map ();
+          ctx#locals <- Map.int_map ();
+          ctx#current_fun <- fn;
+        } in
+
+        letfun make_ctor (mems : list (CG_member)) : CG_member =
+          letfun mkparm (f : CG_member) : CG_val =
+            CG_val (loc = f#loc, name = f#name, ty = (f :> CM_field)#ty, val = CE_none ())
+          in
+          letfun mkassign (p : CG_val, f : CG_member) : CG_expr =
+            CE_assign (CE_field_ref (CE_this (), (f :> CM_field)), CE_ref (p))
+          in
+          let parms = List.map (mkparm, mems) in
+          let assigns = List.map2 (mkassign, parms, mems) in
+          let meth = CM_method (parms, CT_void (), CE_sequence (assigns)) 
+          in {
+            meth#name <- decl_uniq_name (fn);
+            meth
+          }
+        in
+
+        let (?ret, ?meth) = 
+          match fn#kind with [
+            | D_local_fun (?h, ?pars) =>
+              let meth = lookup_function (h) in
+              let funty = CT_fun (List.length (h#parms)) in
+              letfun mkcloptr (fn : Decl) : CG_member =
+                let clotype = CT_ref ("_N_cl_" + decl_uniq_name (fn)) in
+                let fld = CM_field (clotype) in {
+                  fld#name <- decl_uniq_name (fn);
+                  ctx#closure_ptrs <- ctx#closure_ptrs#add (fn#id, (fld :> CM_field));
+                  fld
+                }
+              in
+              let fields = List.map (mkcloptr, pars) in
+              let members = Cons (make_ctor (fields), Cons ((meth : CG_member), fields)) in
+              let lambdaclass = CM_class ("", CK_class (), List.cons (funty), members) in {
+                lambdaclass#name <- decl_uniq_name (fn);
+                (lambdaclass, meth)
+              }
+              
+            | D_class_member (M_function ?f) =>
+              let meth = fixup_function (f) in
+              (meth, meth)
+            | _ => Util.ice ()
+          ]
+        in
+        
+        let body = cg_expr (ctx, body) in
+        let body =
+          match ctx#current_closure with [
+            | Some (?v) => CE_let (v, body)
+            | None => body
+          ]
+        in {
+          meth#body <- body;
+          ret
+        };
 
       // produce cast only if needed
       fun cast_expr (ex : CG_expr, t : CG_type) : CG_expr =
@@ -136,51 +358,21 @@ namespace Nemerle.Compiler {
               List.map (fun (x : CM_class) : CG_member => (x : CG_member), 
                         cg_tydecl (t))
 
-            | M_value (?t, _) =>
-              let m = CM_field (cg_type (t)) in {
-                m#name <- decl#name;
-                m#attrs <- cg_attrs (decl#modifiers);
-                make_static (m);
-                List.cons (m)
-              }
+            | M_value ?v => List.cons ((lookup_value (v) : CG_member))
 
-            | M_field (?t, _) =>
-              let m = CM_field (cg_type (t)) in {
-                m#name <- decl#name;
-                m#attrs <- cg_attrs (decl#modifiers);
-                List.cons (m)
-              }
+            | M_field ?v => List.cons ((lookup_field (v) : CG_member))
 
             | M_function ?f =>
               match f#body with [
                 | FB_extern => Nil () // skip?
                 | FB_expr => Util.ice ()
-                | _ =>
-                  let ti = Tyinfo.lookup (f#id) in
-                  let m = cg_fun_header (f#fun_header) in {
-                    m#attrs <- cg_attrs (decl#modifiers);
-                    match f#fun_kind with [
-                      | FK_method => ()
-                      | FK_static_ctor => 
-                        {
-                          m#name <- ti#basename ();
-                          make_static (m)
-                        }
-                      | FK_ctor => m#name <- ti#basename ()
-                      | FK_function => make_static (m)
-                      | FK_iface_method => Util.ice ()
-                    ];
-                    match f#body with [
-                      | FB_typed_expr (?e) =>
-                        {
-                          CGexpr.closures <- Nil ();
-                          m#body <- cg_expr (e);
-                          Cons ((m : CG_member), CGexpr.closures)
-                        }
-                      | FB_abstract => List.cons ((m : CG_member))
-                      | _ => Util.ice ()
-                    ]
-                  }
+                | FB_typed_expr (?body) =>
+                  let decl = Env.global_by_id (f#id) in
+                  let _ = CGexpr.closures <- Nil () in
+                  let mem = cg_fun (empty_ctx (), decl, body) in
+                  Cons (mem, CGexpr.closures)
+                | FB_abstract =>
+                  List.cons ((fixup_function (f) :> CG_member))
               ]
           ]);
       
@@ -190,11 +382,8 @@ namespace Nemerle.Compiler {
       fun cg_tydecl (decl : Type_decl) : list (CM_class) =
         let ti = Tyinfo.lookup (decl) in
         letfun make_cm (decl : Type_decl, kind : CM_kind) : CM_class =
-          let inh = List.map (cg_type, ti#direct_supertypes ()) in
-          let r = (CM_class ("", kind, inh, Nil ()) :> CM_class) in {
-            r#loc <- decl#loc;
-            r#name <- decl#name;
-            r#attrs <- Nil ();
+          let r = lookup_class (decl) in {
+            r#kind <- kind;
             r
           }
         in
@@ -257,6 +446,7 @@ namespace Nemerle.Compiler {
             res
           }
         in
+        let _ = cg_members <- Map.int_map () in
         let decls = List.map (run_cg_tydecl, decls) in
         List.concat (decls);
     }
