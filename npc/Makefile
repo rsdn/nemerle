@@ -72,7 +72,6 @@ clean:
 	rm -f *.cm* *.o npc npc.opt 
 	rm -f .deps parser.ml parser.mli lexer.ml parser.output tags
 	rm -f make.config
-	$(MAKE) -C ncc clean
 
 .PHONY: t
 
