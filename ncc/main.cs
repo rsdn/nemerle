@@ -65,6 +65,17 @@ class CS_glue {
 			return s.Substring(3, s.Length - 3);
 		return "";
 	}
+
+	public static string mangle(string s)
+	{
+		char [] p = s.ToCharArray();
+		for (int i = 0; i < p.Length; i++)
+			if (!((p[i] >= 'a' && p[i] <= 'z') ||
+			      (p[i] >= 'A' && p[i] <= 'Z') ||
+				  (p[i] >= '0' && p[i] <= '9')))
+				p[i] = '_';
+		return new string(p);
+	}
 }
 
 class XParser : Parser {
