@@ -112,6 +112,22 @@ let get_current_location () = !current_location
 
 let strip_quotes s =
   String.sub s 1 (String.length s - 2) 
+
+let unescape s =
+  let buf = Buffer.create (String.length s) in
+  for i = 0 to String.length s - 1 do
+    match s.[i] with
+      | '\\' ->
+        let c =
+          match s.[i + 1] with
+          | 'n' -> '\n'
+          | 'r' -> '\r'
+          | 't' -> '\t'
+          | c -> c
+        in Buffer.add_char buf c
+      | c -> Buffer.add_char buf c
+  done;
+  Buffer.contents buf
 }
 
 let nl = ('\r' '\n' | '\n' | '\r')
@@ -130,9 +146,9 @@ rule token = parse
   | ((num+ '.' num+ 'e' (['+' '-']?) num+) | (num+ 'e' (['+' '-']?) num+))
                         { let f = float_of_string (Lexing.lexeme lexbuf) in
                           NUMBER_LITERAL (L_float f) }
-  | '"' [^ '"']* '"'   (* FIXME: process escapes *) 
+  | '"' ( '\\' _ | [^ '\\' '"'] )* '"'   (* FIXME: process escapes *) 
     { let s = Lexing.lexeme lexbuf in 
-      STRING_LITERAL (String.sub s 1 (String.length s - 2)) }
+      STRING_LITERAL (unescape (String.sub s 1 (String.length s - 2))) }
   | (num+ | '0' ['x' 'X'] ['0'-'9''a'-'f''A'-'F']+ | '0' ['b' 'B'] ['0' '1']+)
                         { let n = Int64.of_string (Lexing.lexeme lexbuf) in
                           NUMBER_LITERAL (L_int n) }
