@@ -30,7 +30,7 @@ include ../config.mak
 
 lib_src = ../lib/aliases.n ../lib/core.n ../lib/option.n ../lib/list.n \
 	  tree.n ../lib/hashtable.n ../lib/stack.n ../lib/queue.n ../lib/input.n \
-	  ../lib/getopt.n
+	  ../lib/getopt.n ../lib/icollection.n
 
 src = \
 	extensions.n \
