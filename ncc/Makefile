@@ -46,6 +46,7 @@ NEMERLE_DLL_SRC = \
 	../lib/internal-numbered.n	\
 	../lib/internal.n		\
 	../lib/core.n			\
+	../lib/macros.n			\
 	../lib/getopt.n			\
 	../lib/hashtable.n		\
 	../lib/icollection.n		\
