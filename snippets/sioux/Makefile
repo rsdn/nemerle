@@ -14,7 +14,7 @@ SIOUX_EXE_SOURCES = sioux.n
 
 SOURCES = $(SIOUX_DLL_SOURCES) $(SIOUX_EXE_SOURCES)
 
-NEMERLE_XML_DLL_SOURCES = xmltemplate.n
+NEMERLE_XML_DLL_SOURCES = xmltemplate.n generator.n xml_generator.n xml_pipeline.n
 
 CSL_APPLICATION_SOURCES = csl04/csl.n csl04/submission.n
 FIT_APPLICATION_SOURCES = fit/fit.n fit/submission.n
