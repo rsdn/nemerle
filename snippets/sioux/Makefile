@@ -14,7 +14,7 @@ SIOUX_EXE_SOURCES = sioux.n
 
 NEMERLE_XML_DLL_SOURCES = xmltemplate.n
 
-APPLICATION_SOURCES = fit/fit.n fit/submission.n
+APPLICATION_SOURCES = csl04/csl.n csl04/submission.n
 
 all: copy-dlls Nemerle.Xml.dll Sioux.dll $(APPLICATION_DLL_NAME) httpd.exe
 
@@ -24,11 +24,11 @@ Nemerle.Xml.dll: $(NEMERLE_XML_DLL_SOURCES)
 Sioux.dll: Nemerle.Xml.dll $(SIOUX_DLL_SOURCES)
 	$(EXECUTE) $(NCC) -tdll -r:System.Web -r:Nemerle.Xml -out:$@ $(SIOUX_DLL_SOURCES)
 
-Sioux.Fit.dll: Nemerle.Xml.dll Sioux.dll $(APPLICATION_SOURCES)
+Sioux.Csl.dll: Nemerle.Xml.dll Sioux.dll $(APPLICATION_SOURCES)
 	$(EXECUTE) $(NCC) -tdll -r:System.Web -r:Nemerle.Xml -r:Sioux -out:$@ $(APPLICATION_SOURCES)
 
-httpd.exe: $(SOURCES) Sioux.dll Sioux.Fit.dll
-	$(EXECUTE) $(NCC) -texe -r:System.Web -r:Sioux -r:Sioux.Fit -out:$@ $(SIOUX_EXE_SOURCES)
+httpd.exe: $(SOURCES) Sioux.dll Sioux.Csl.dll
+	$(EXECUTE) $(NCC) -texe -r:System.Web -r:Sioux -r:Sioux.Csl -out:$@ $(SIOUX_EXE_SOURCES)
 
 dist:
 	$(Q)cp $(DISTFILES) $(DIR)
