@@ -47,13 +47,19 @@ namespace Nemerle.Compiler {
         if expr#expr_ty == null then Util.ice ()
         else expr#expr_ty;
         
-      static run(decls : list (Type_decl)) : void =
+      static fixup (expr : TT.Expr, loc : Location, t : Type) : TT.Expr {
+        expr#loc <- loc;
+        expr#expr_ty <- t;
+        expr
+      }
 
-        letfun fixup (expr : TT.Expr, loc : Location, t : Type) : TT.Expr {
-          expr#loc <- loc;
-          expr#expr_ty <- t;
-          expr
-        } in
+      static fixup (expr : TT.Expr, t : Type) : TT.Expr {
+        expr#loc <- Location_stack.top ();
+        expr#expr_ty <- t;
+        expr
+      }
+
+      static run(decls : list (Type_decl)) : void =
 
         letfun expect_type (name : string, expr : TT.Expr, t : Type) : void =
           if type_of (expr) >> t then ()
@@ -482,6 +488,32 @@ namespace Nemerle.Compiler {
               }
           ]
 
+        and ty_letfun (env : Env, fs : list (PT.Function_decl)) : list (TT.Function_decl) * Env =
+          letfun add_fun (acc : Env * list (Decl), d : PT.Function_decl) : Env * list (Decl) =
+            let (?env, ?ds) = acc in
+            let (?env, ?d) =
+              let this_fn = Util.unsome (env#parent_fun) in
+              let pars =
+                match this_fn with [
+                  | {kind = D_local_fun (_, ?pars)} => Cons (this_fn, pars)
+                  | {kind = D_class_member (M_function)} => List.cons (this_fn)
+                  | _ => Util.ice ()
+                ]
+              in
+              env#add_local(d#fun_header#name, D_local_fun(d#fun_header, pars), 
+                            Tyutil.fun_type (d#fun_header)) 
+            in (env, Cons (d, ds))
+          in
+          let (?env', ?decls) = List.fold_left(add_fun, (env, Nil ()), fs) in
+          letfun do_fun (d : PT.Function_decl, dc : Decl) : TT.Function_decl =
+            let env = env'#copy () in {
+              env#parent_fun <- Some (dc);
+              let body' = do_function_expr (env, d#fun_header, d#body) in
+              TT.Function_decl (dc, body')
+            }
+          in
+          (List.map2 (do_fun, fs, List.rev (decls)), env')
+
         and ty_expr(env : Env, expr : PT.Expr) : TT.Expr =
           let (?ret, ?expr_ty) = Util.locate (expr#loc, fun () : TT.Expr * Type =>
             letfun self (e : PT.Expr) : TT.Expr = ty_expr (env, e) in
@@ -491,40 +523,19 @@ namespace Nemerle.Compiler {
             in
 
             match expr with [
-              | PT.E_letfun (?fs, ?b) =>
-                letfun add_fun (acc : Env * list (Decl), d : PT.Function_decl) : Env * list (Decl) =
-                  let (?env, ?ds) = acc in
-                  let (?env, ?d) =
-                    let this_fn = Util.unsome (env#parent_fun) in
-                    let pars =
-                      match this_fn with [
-                        | {kind = D_local_fun (_, ?pars)} => Cons (this_fn, pars)
-                        | {kind = D_class_member (M_function)} => List.cons (this_fn)
-                        | _ => Util.ice ()
-                      ]
-                    in
-                    env#add_local(d#fun_header#name, D_local_fun(d#fun_header, pars), 
-                                  Tyutil.fun_type (d#fun_header)) 
-                  in (env, Cons (d, ds))
-                in
-                let (?env', ?decls) = List.fold_left(add_fun, (env, Nil ()), fs) in
-                letfun do_fun (d : PT.Function_decl, dc : Decl) : TT.Function_decl =
-                  let env = env'#copy () in {
-                    env#parent_fun <- Some (dc);
-                    let body' = do_function_expr (env, d#fun_header, d#body) in
-                    TT.Function_decl (dc, body')
-                  }
-                in
-                let fs' = List.map2 (do_fun, fs, List.rev (decls)) in
-                let b' = ty_expr(env', b) in
-                (TT.E_letfun (fs', b'), type_of (b'))
+              // this doesn't make much sense I hope
+              | PT.E_let => Message.fatal_error ("let binding not followed by any expression")
+              | PT.E_letpat => Message.fatal_error ("letpat binding not followed by any expression")
+              | PT.E_letfun => Message.fatal_error ("letfun binding not followed by any expression")
                   
               | PT.E_lambda (?d) =>
                 let rf = PT.E_ref (d#fun_header#name) in
-                let lf = PT.E_letfun (List.cons (d), rf) in {
+                let lf = PT.E_letfun (List.cons (d)) in 
+                let sq = PT.E_sequence (List.cons (lf, rf)) in {
                   rf#loc <- expr#loc;
                   lf#loc <- expr#loc;
-                  restart (lf)
+                  sq#loc <- expr#loc;
+                  restart (sq)
                 }
                   
               | PT.E_try_with ?x =>
@@ -540,15 +551,6 @@ namespace Nemerle.Compiler {
                 let e2 = ty_expr (env, e2) in {
                   expect_type ("try...finally handler", e2, T_void ());
                   (TT.E_try_finally (e1, e2), type_of (e1))
-                }
-
-              | PT.E_let ?x =>
-                let val = ty_expr(env, x#val) in
-                let (?env', ?decl) = env#add_local(x#name, D_local_value(), type_of (val)) in
-                {
-                  decl#is_ref <- x#is_ref;
-                  let body = ty_expr(env', x#body) in
-                  (TT.E_let (decl, val, body), type_of (body))
                 }
 
               | PT.E_type_conversion (?e, ?t) =>
@@ -655,18 +657,43 @@ namespace Nemerle.Compiler {
                 (TT.E_literal (L_void ()), T_void ())
               
               | PT.E_sequence (?l) =>
-                letfun loop (acc : list (TT.Expr), l : list (PT.Expr)) : TT.Expr * Type =
-                  match l with [
-                    | Cons (?x, Nil) =>
-                      let ex = ty_expr (env, x) in
-                      (TT.E_sequence (List.rev (Cons (ex, acc))), type_of (ex))
-                    | Cons (?x, ?xs) =>
-                      let ex = ty_expr (env, x) in {
-                        expect_type ("sequence member", ex, T_void ());
-                        loop (Cons (ex, acc), xs)
-                      }
-                  ]
-                in loop (Nil (), l)
+                letfun loop (env : Env, l : list (PT.Expr)) : TT.Expr =
+                  letfun go () : TT.Expr =
+                    match l with [
+                      | Cons (?x, Nil) => ty_expr (env, x)
+
+                      | Cons (PT.E_letfun (?fs), ?xs) =>
+                        let (?fs', ?env') = ty_letfun (env, fs) in
+                        let body = loop (env', xs) in
+                        fixup (TT.E_letfun (fs', body), type_of (body))
+
+                      | Cons (PT.E_let ?x, ?xs) =>
+                        let val = ty_expr (env, x#val) in
+                        let (?env', ?decl) = env#add_local(x#name, D_local_value(), type_of (val)) in
+                        {
+                          decl#is_ref <- x#is_ref;
+                          let body = loop (env', xs) in
+                          fixup (TT.E_let (decl, val, body), type_of (body))
+                        }
+
+                      | Cons (PT.E_letpat (?p, ?v), ?xs) =>
+                        let body = PT.E_sequence (xs) in
+                        let mtch = PT.E_match (v, List.cons (PT.Match_case (p#loc, p, body))) in {
+                          body#loc <- (List.head (xs))#loc;
+                          mtch#loc <- p#loc;
+                          ty_expr (env, mtch)
+                        }
+                        
+                      | Cons (?x, ?xs) =>
+                        let ex = ty_expr (env, x) in
+                        let _ = expect_type ("sequence member", ex, T_void ()) in
+                        let tl = loop (env, xs) in
+                        fixup (TT.E_sequence (ex, tl), type_of (tl))
+                    ]
+                  in Util.locate ((List.head (l))#loc, go)
+                in 
+                let ex = loop (env, l) in
+                (ex, type_of (ex))
 
               | PT.E_tuple (?l) =>
                 let parms = List.map (self, l) in
