@@ -28,6 +28,7 @@
 
 using Nemerle.Collections;
 using Nemerle.Utility;
+using Nemerle.IO;
 
 using Nemerle.Compiler;
 using Nemerle.Compiler.Tyops;
@@ -42,12 +43,22 @@ module Tyops {
   public @>> (x : Type, y : Type) : bool = extern "Nemerle.Compiler.Tyutil.subtypes";
 }
   
-type Subst = SystemMap <int, Type>;
+public variant TvValue
+{
+  | TV_unspecified
+  | TV_free
+  | TV_free_from_null
+  | TV_at_most { t : Type; }
+  | TV_exactly { t : Type; }
+}
+
+type Subst = SystemMap <int, TvValue>;
 
 public module Tyutil {
 
   public subst (t : Type, s : Subst) : Type
   {
+    //Message.debug ("subst " + t.as_string ());
     if (s.IsEmpty ())
       t
     else {
@@ -62,69 +73,289 @@ public module Tyutil {
         | T_app (ti, args) =>
           T_app (ti, List.Map (args, self))
         | T_var (tv) =>
+          def self (_) {
+            | T_var (tv2) when tv.id == tv2.id => assert (false)
+            | t' => subst (t', s)
+          };
           match (s.Find (tv.id)) {
-            | Some (T_var (tv2)) when tv.id == tv2.id => Util.ice ()
-            | Some (t') => self (t') // fixpoint
-            | None => t
+            | Some (TV_at_most (t'))
+            | Some (TV_exactly (t')) => t'
+            | _ =>
+              match (tv.value) {
+                | TV_at_most (t') =>
+                  //Message.debug ("killed at most " + t'.as_string ());
+                  tv.value <- TV_exactly (t');
+                  self (t')
+                | TV_exactly (t') =>
+                  self (t')
+                | _ => t
+              }
           }
       }
     }
   }
   
-  public subst_of_app (t : Type) : Subst * Tycon 
+  tv_value (s : Subst, tv : Tyvar.T) : TvValue
   {
-    match (t) {
-      | T_app (ti, args) => (ti.MakeSubst (args), ti)
-      | _ => Util.ice ()
+    match (s.Find (tv.id)) {
+      | Some (r) => r
+      | None => tv.value
     }
   }
 
   public top_expand (t : Type) : Type 
   {
+    def (s, t) = top_expand (SystemMap (), t, false);
+    Tyvar.global_store (s);
+    t
+  }
+
+  join_substs (s1 : Subst, s2 : Subst) : Subst
+  {
+    s1.Fold (fun (i, v, s : Subst) { s.Add (i, v) }, s2)
+  }
+  
+  top_expand (s : Subst, t : Type, stop : bool) : Subst * Type
+  {
     match (t) {
-      | T_app =>
-        def (sub, ti) = subst_of_app (t);
+      | T_app (ti, args) =>
         match (ti.GetTydecl ()) {
           | TD_alias (t) =>
-            top_expand (t /- sub)  // fixpoint iteration
-          | _ => t
+            top_expand (s, t /- ti.MakeSubst (args), stop)
+          | _ => (s, t)
         }
-      | T_var (tv) when Tyvar.global_subst != null =>
-        match (Tyvar.global_subst.Find (tv.id)) {
-          | Some (T_var (tv2)) when tv.id == tv2.id => Util.ice ()
-          | Some (t') => top_expand (t')
-          | None => t
+        
+      | T_var (tv) =>
+        match (tv_value (s, tv)) {
+          | TV_exactly (t) => top_expand (s, t, stop)
+          | TV_at_most (t) when !stop =>
+            top_expand (s.Replace (tv.id, TV_exactly (t)), t, stop)
+          | _ => (s, t)
         }
-      | _ => t
+        
+      | _ => (s, t)
     }
   }
+
+  common_supertypes (ti1 : Tycon, a1 : list <Type>, ti2 : Tycon, a2 : list <Type>) : list <Type>
+  {
+    def ht = Hashtable ();
+
+    def s1 = ti1.MakeSubst (a1);
+    def s2 = ti1.MakeSubst (a2);
+
+    List.Iter (ti1.GetSuperTypes (), fun (t) {
+      match (top_expand (t)) {
+        | (T_app (ti, _)) as t =>
+          when (ti.GetFullName () != "System.Object")
+            ht.Add (ti.GetId (), t /- s1)
+        | _ => assert (false)
+      }
+    });
+
+    List.FoldLeft (ti2.GetSuperTypes (), [], fun (t, acc) {
+      match (top_expand (t)) {
+        | (T_app (ti, _)) as t =>
+          match (ht.Get (ti.GetId ())) {
+            | Some (t') =>
+              match (unify (s2, t, t', false)) {
+                | Some (s) => (t /- s) :: acc
+                | None => acc
+              }
+            | None => acc
+          }
+        | _ => assert (false)
+      }
+    })
+  }
+
+  
+  maximal_types (types : list <Type>) : list <Type>
+  {
+    List.FoldLeft (types, [], fun (t, max) {
+      def is_bigger_then_t (t') {
+        Option.IsSome (unify (t', t, true))
+      };
+      
+      if (List.Exists (max, is_bigger_then_t))
+        max
+      else
+        t :: max
+    })
+  }
+
+  internal maximal_common_supertypes (s : Subst, t1 : Type, t2 : Type) : list <Type>
+  {
+    //Message.debug ("mcs unify");
+    match (unify (s, t1, t2, true)) {
+      | Some => [t2]
+      | None =>
+        match (unify (s, t2, t1, true)) {
+         | Some => [t1]
+         | None =>
+            match ((top_expand (t1 /- s), top_expand (t2 /- s))) {
+              | (T_app (ti1, a1), T_app (ti2, a2)) =>
+                maximal_types (common_supertypes (ti1, a1, ti2, a2))
+              | _ => []
+            }
+        }
+    }
+  }
+
+  is_value_type (t : Type) : bool
+  {
+    | T_app (tc, _) =>
+      match (tc.GetTyconKind ()) {
+        | TK_ExternalNemerleType (st)
+        | TK_ExternalNetType (st) =>
+          st.IsValueType || st.FullName == "System.Void"
+        | TK_NemerleType => false
+      }
+    | T_void => true
+    | _ => false
+  }
+
+  try_subst (s : Subst, tv : Tyvar.T, t2 : Type, is_at_most : bool) : option <Subst>
+  {
+    //Message.debug ("ccs");
+    def check_constraint (c : Type, s : option <Subst>) {
+      match (s) {
+        | None => None ()
+        | Some (s) =>
+          //Message.debug ("check_constraint unify");
+          unify (s, t2, c, true)
+      }
+    };
+
+    def occur_check (_) {
+      | T_ref (t)
+      | T_out (t)
+      | T_array (t) => 
+        occur_check (t)
+      | T_fun (t1, t2) => 
+        occur_check (t1) || occur_check (t2)
+      | T_void => false
+      | T_prod (tl)
+      | T_app (_, tl) => List.Exists (tl, occur_check)
+      | T_var (tv') when tv.id == tv'.id => true
+      | T_var (tv) =>
+        match (tv_value (s, tv)) {
+          | TV_at_most (t)
+          | TV_exactly (t) => occur_check (t)
+          | _ => false
+        };
+    };
+
+    match (tv_value (s, tv)) {
+      | TV_free_from_null when is_value_type (t2) => None ()
+      | TV_free_from_null
+      | TV_free 
+      | TV_at_most =>
+        if (occur_check (t2))
+          None ()
+        else {
+          def repl =
+            if (is_at_most) TV_at_most (t2) 
+            else TV_exactly (t2);
+          List.FoldLeft (Tyvar.constraints (tv),
+                         Some (s.Replace (tv.id, repl)),
+                         check_constraint)
+        }
+      | TV_exactly => assert (false)
+      | TV_unspecified => assert (false)
+    }
+  }
+
+  unify_tyvars (s : Subst, t1 : Type, t2 : Type, allow_subtyping : bool) : option <Subst>
+  {
+    def check_at_most_intro () {
+      match ((t1, t2)) {
+        | (t, T_var (tv)) when allow_subtyping =>
+          match (tv_value (s, tv)) {
+            | TV_free
+            | TV_free_from_null =>
+              try_subst (s, tv, t, true)
+              
+            | TV_at_most (t') =>
+              match (maximal_common_supertypes (s, t, t')) {
+                | [] => None ()
+                | [max] =>
+                  //Message.debug ("max = " + max.as_string ());
+                  def s = Option.UnSome (unify (s, t, max, true));
+                  def s = Option.UnSome (unify (s, t', max, true));
+                  match (tv_value (s, tv)) {
+                    | TV_exactly => None ()
+                    | TV_at_most =>
+                      try_subst (s, tv, max, true)
+                    | _ => assert (false)
+                  }
+                | _ => None ()
+              }
+              
+            | TV_exactly => assert (false)
+            
+            | TV_unspecified => None ()
+          }
+
+        | _ => None ()
+      }
+    };
+
+    def check_simple_unification (t1, t2) {
+      match (t1) {
+        | T_var (tv) =>
+          match (tv_value (s, tv)) {
+            | TV_free
+            | TV_free_from_null =>
+              try_subst (s, tv, t2, false)
+            | _ => None ()
+          }
+        | _ => None ()
+      }
+    };
+
+    def check_at_most_kill (t1, t2) {
+      match (t1) {
+        | T_var (tv) =>
+          match (tv_value (s, tv)) {
+            | TV_at_most (t) =>
+              //Message.debug ("kill_at_most " + t.as_string () + " vs " + (t2:Type).as_string ());
+              match (try_subst (s, tv, t, false)) {
+                | Some (s) =>
+                  unify (s, t, t2, true)
+                | None => None ()
+              }
+            | _ => None ()
+          }
+        | _ => None ()
+      }
+    };
+
+    def check_list (_) : option <Subst> {
+      | f :: fs =>
+        //Message.debug (sprintf("method %d", List.Length (fs)));
+        match ((f : void -> option <Subst>) ()) {
+          | (Some) as r => r
+          | None => check_list (fs)
+        }
+      | [] => None ()
+    };
+
+    //Message.debug ("unify tv");
+    
+    check_list ([check_at_most_intro, 
+                 fun () { check_simple_unification (t1, t2) },
+                 fun () { check_simple_unification (t2, t1) },
+                 fun () { check_at_most_kill (t1, t2) },
+                 fun () { check_at_most_kill (t2, t1) }
+                ])
+  }
+
 
   // t1 :> t2 (or t1 =? t2)
   public unify (s : Subst, t1 : Type, t2 : Type, allow_subtyping : bool) : option <Subst>
   {
-    def sub1 (t : Type) : Type {
-      def t = top_expand (t);
-      match (t) {
-        | T_var (tv) =>
-          match (s.Find (tv.id)) {
-            | Some (t') => sub1 (t')
-            | None => t
-          }
-        | _ => t
-      }
-    };
-    //def sign = if (allow_subtyping) " :> " else " =? ";
-    //Message.debug ("unify " + string_of_type (t1) + sign + string_of_type (t2));
-    def (t1, t2) = 
-      match ((t1, t2)) {
-        | (T_var (tv1), T_var (tv2)) =>
-          if (tv1.id == tv2.id) (t1, t2)
-          else (sub1 (t1), sub1 (t2))
-        | _ => (sub1 (t1), sub1 (t2))
-      };
-    //Message.debug ("  --> " + string_of_type (t1) + sign + string_of_type (t2));
-    def unify_lists (s : Subst, t1 : list <Type>, t2 : list <Type>, 
-                     allow_subtyping : bool) : option <Subst> {
+    def unify_lists (s, t1, t2, allow_subtyping) {
       match ((t1, t2)) {
         | (t1 :: ts1, t2 :: ts2) =>
           match (unify (s, t1, t2, allow_subtyping)) {
@@ -135,50 +366,25 @@ public module Tyutil {
         | _ => None ()
       }
     };
-    
-    def unify_with_tyvar (t1 : Type, t2 : Type) : option <Subst> {
-      match (t1) {
-        | T_var (tv) =>
-          if (Tyvar.is_free (tv)) {
-            def check_constraint (c : Type, s : option <Subst>) {
-              match (s) {
-                | None => None ()
-                | Some (s) => unify (s, t2, c, true)
-              }
-            };
-            def is_value_type (tc : Tycon) {
-              match (tc.GetTyconKind ()) {
-                | TK_ExternalNemerleType (st)
-                | TK_ExternalNetType (st) =>
-                  st.IsValueType || st.FullName == "System.Void"
-                | TK_NemerleType => false
-              }
-            };
-            if (tv.is_from_null)
-              match (t2) {
-                | T_app (tc, _) when is_value_type (tc)
-                | T_void => None ()
-                | _ =>
-                  List.FoldLeft (Tyvar.constraints (tv),
-                                 Some (s.Add (tv.id, t2)),
-                                 check_constraint)
-              }
-            else
-              List.FoldLeft (Tyvar.constraints (tv),
-                             Some (s.Add (tv.id, t2)),
-                             check_constraint)
-          } else None ()
-        | _ => None ()
-      }
-    };
-      
-    def fallback (t1 : Type, t2 : Type) : option <Subst> {
-      match (unify_with_tyvar (t1, t2)) {
-        | Some (s) => Some (s)
-        | None => unify_with_tyvar (t2, t1)
+
+    def alterable (tv) {
+      match (tv_value (s, tv)) {
+        | TV_free
+        | TV_free_from_null
+        | TV_at_most => true
+        | _ => false
       }
     };
     
+
+    //def sign = if (allow_subtyping) " :> " else " =? ";
+    //Message.debug ("(((unify " + string_of_type (t1) + sign + string_of_type (t2));
+    def (s, t1) = top_expand (s, t1, true);
+    def (s, t2) = top_expand (s, t2, true);
+    //Message.debug ("  --> " + string_of_type (t1) + sign + string_of_type (t2));
+
+    def res =
+
     match ((t1, t2)) {
       | (T_ref (t1), T_ref (t2)) => 
         unify (s, t1, t2, allow_subtyping)
@@ -205,48 +411,58 @@ public module Tyutil {
                                   ti2.GetFullName () == "System.Object" =>
         Some (s)
 
-      | (T_app (ti1, a1), T_app (ti2, a2)) =>
-        if (ti1.SameAs (ti2)) 
-          unify_lists (s, a1, a2, false)
-        else
-          if (allow_subtyping)
-            match (ti1.SuperType (ti2)) {
-              | Some (args) => 
-//                    Message.debug ("unify <: " + ti1.GetFullName () + " " + ti2.GetFullName ());
-                unify (s, ti2.GetMemType () 
-                            /- ti2.MakeSubst (args) 
-                            /- ti1.MakeSubst (a1), t2, true)
-              | None => None ()
-            }
-          else
-            None ()
-                            
-      | (T_var (tv1), T_var (tv2)) =>
-        if (tv1.id == tv2.id) Some (s)
-        else fallback (t1, t2)
+      | (T_app (ti1, a1), T_app (ti2, a2)) when ti1.SameAs (ti2) =>
+        unify_lists (s, a1, a2, false)
+
+      | (T_app (ti1, a1), T_app (ti2, _)) when allow_subtyping =>
+        match (ti1.SuperType (ti2)) {
+          | Some (args) => 
+            //Message.debug ("unify <: " + ti1.GetFullName () + " " + ti2.GetFullName ());
+            unify (s, ti2.GetMemType () 
+                        /- ti2.MakeSubst (args) 
+                        /- ti1.MakeSubst (a1), t2, true)
+          | None => None ()
+        }
+
+      | (T_var (tv1), T_var (tv2)) when tv1.id == tv2.id => Some (s)
       
-      | (T_var (tv), _) =>
-        if (allow_subtyping) {
-          // check to see if any of our constraints is enough
-          def check_constraints (cs : list <Type>) : option <Subst> {
-             match (cs) {
-               | [] => fallback (t1, t2)
-               | c :: cs =>
-                 match (unify (s, c, t2, true)) {
-                   | Some (r) => Some (r)
-                   | None => check_constraints (cs)
-                 }
-             }
-           };
-           check_constraints (Tyvar.constraints (tv))
-        } else fallback (t1, t2)
+      // don't let this case down, we don't want tv1's constraints to
+      // mess with tv2
+      | (_, T_var (tv2)) when alterable (tv2) =>
+        unify_tyvars (s, t1, t2, allow_subtyping)
+        
+      | (T_var (tv), _) when allow_subtyping =>
+        // check to see if any of our constraints is enough
+        def check_constraints (cs) {
+          match (cs) {
+            | [] => unify_tyvars (s, t1, t2, allow_subtyping)
+            | c :: cs =>
+              //Message.debug ("solved-by-constraint unify");
+              match (unify (s, c, t2, true)) {
+                | Some (r) => 
+                  //Message.debug ("hit scu");
+                  Some (r)
+                | None => check_constraints (cs)
+              }
+          }
+        };
+        check_constraints (Tyvar.constraints (tv))
       
-      | (_, T_app (ti2, _)) when allow_subtyping && 
-                                  ti2.GetFullName () == "System.Object" => Some (s)
-          
       | _ => 
-        fallback (t1, t2)
+        unify_tyvars (s, t1, t2, allow_subtyping)
     };
+   
+   /*
+    match (res) {
+      | Some (s) =>
+        Message.debug ("res = " + (t1 /- s).as_string () + 
+                " " + (t2 /- s).as_string () + ")))");
+      | None =>
+        Message.debug ("failed )))");
+    };
+    */
+
+    res
   }
 
   public unify (t1 : Type, t2 : Type, allow_subtyping : bool) : option <Subst> 
@@ -281,10 +497,9 @@ public module Tyutil {
 
   public string_of_type (t : Type) : string
   {
-    mutable cnt <- 0;
-    
-    def f (t) {
+    def f (lev, t) {
       match (t) {
+        | _ when lev > 20 => "..."
         | T_app (ti, args) =>
           def name = ti.GetFullName ();
           match (name) {
@@ -301,35 +516,36 @@ public module Tyutil {
             | _ => 
               match (args) {
                 | [] => name
-                | _ => name + " <" + map (", ", args) + ">"
+                | _ => name + " <" + map (lev + 1, ", ", args) + ">"
               }
           }
         | T_var (tv) =>
-          def tvname (tv : Tyvar.T) {
-            tv.name + "_" + tv.id.ToString () + if (Tyvar.is_free (tv)) "*" else ""
-          };
-          match (Tyvar.global_expand (t)) {
-            | T_var (tv) => tvname (tv)
-            | _ when cnt > 10 => tvname (tv)
-            | t' =>
-              cnt <- cnt + 1;
-              f (t')
+          match (tv.value) {
+            | TV_unspecified =>
+              sprintf ("%s_%d", tv.name, tv.id)
+            | TV_free
+            | TV_free_from_null =>
+              sprintf ("%s_%d*", tv.name, tv.id)
+            | TV_at_most (t) =>
+              f (lev + 1, t) + "+"
+            | TV_exactly (t) =>
+              f (lev + 1, t) + "@"
           }
-        | T_ref (t) => "ref " + f (t)
-        | T_out (t) => "out " + f (t)
+        | T_ref (t) => "ref " + f (lev + 1, t)
+        | T_out (t) => "out " + f (lev + 1, t)
         | T_void => "void"
         | T_prod (args) => 
-          "(" + map (" * ", args) + ")"
+          "(" + map (lev + 1, " * ", args) + ")"
         | T_fun (from, to) =>
-          f (from) + " -> " + f (to)
-        | T_array (t) => "array <" + f (t) + ">"
+          f (lev + 1, from) + " -> " + f (lev + 1, to)
+        | T_array (t) => "array <" + f (lev + 1, t) + ">"
       };
     }
-    and map (sep, args) {
-      NString.Concat (sep, List.Map (args, f))
+    and map (lev, sep, args) {
+      NString.Concat (sep, List.Map (args, fun (x) { f (lev, x) }))
     };
 
-    f (t);
+    f (0, t);
   }
 
 
