@@ -115,6 +115,7 @@ NEMERLE_COMPILER_DLL_SRC = \
         hierarchy/NumericTypes.n	 \
         hierarchy/CustomAttribute.n	 \
         hierarchy/XmlDump.n		 \
+        hierarchy/MacroClassGen.n        \
         passes.n			 \
 
 ifeq ($(NTE),1)
@@ -169,7 +170,7 @@ all: stage1
 .PHONY: nte
 nte:
 	$(MAKE) NTE=1 stage1
-	
+
 # This is necessary to make sure, that configuration file
 # has been generated, and it is up to date.
 ../config.mak:
