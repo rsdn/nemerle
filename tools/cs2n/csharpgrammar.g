@@ -2699,14 +2699,14 @@ enum_base
 
 enum_body
     :   (LBRACE   enum_member_declarations   COMMA)=>
-            lb:LBRACE   {Emit.EmitToken(lb);} 
+            lb1:LBRACE   {Emit.EmitToken(lb1);} 
             enum_member_declarations   
             c:COMMA     {Emit.EmitString (ExtendedToken.getWhitespaces (c));}
-            rb:RBRACE   {Emit.EmitToken(rb);} 
-    |   lb:LBRACE   (enum_member_declarations)?   rb:RBRACE
+            rb1:RBRACE   {Emit.EmitToken(rb1);} 
+    |   lb2:LBRACE   (enum_member_declarations)?   rb2:RBRACE
         {
-            Emit.EmitToken(lb);
-            Emit.EmitToken(rb);
+            Emit.EmitToken(lb2);
+            Emit.EmitToken(rb2);
         }
     ;
 
@@ -2775,11 +2775,14 @@ global_attributes
     ;
 
 global_attribute_section
-    :   LBRACK   global_attribute_target_specifier   attribute_list   (COMMA)? RBRACK
+    :   lb:LBRACK {Emit.EmitToken(lb);}  global_attribute_target_specifier   attribute_list   
+        (c:COMMA {Emit.EmitToken(c);})? rb:RBRACK {Emit.EmitToken(rb);}
     ;
 
 global_attribute_target_specifier
-    :   idgat:IDENTIFIER {idgat.getText()=="assembly" || idgat.getText()=="module"}?  COLON
+    :   idgat:IDENTIFIER {ExtendedToken.getTextOnly(idgat)=="assembly" || ExtendedToken.getTextOnly(idgat)=="module"}?  
+        {Emit.EmitToken(idgat);}
+        c:COLON {Emit.EmitToken(c);}
     ;
 
 attributes
@@ -2787,26 +2790,37 @@ attributes
     ;
 
 attribute_section
-    :   LBRACK   (attribute_target_specifier)?   attribute_list   (COMMA)? RBRACK
+    :   lb:LBRACK   
+        {Emit.EmitToken(lb);}
+
+        (attribute_target_specifier)?   
+        attribute_list   
+
+        (c:COMMA
+        {Emit.EmitToken(c);})? 
+        rb:RBRACK
+        {Emit.EmitToken(rb);}
     ;
 
 attribute_target_specifier
-    :   attribute_target   COLON
+    :   attribute_target   c:COLON{Emit.EmitToken(c);}
     ;
 
 attribute_target
     :   idat:IDENTIFIER 
-       {idat.getText()=="field"    || //FIELD
-        idat.getText()=="event"    || //EVENT
-        idat.getText()=="method"   || //METHOD
-        idat.getText()=="param"    || //PARAM
-        idat.getText()=="property" || //PROPERTY
-        idat.getText()=="return"   || //RETURN
-        idat.getText()=="type" }?     //TYPE
+       {ExtendedToken.getTextOnly(idat)=="field"    || //FIELD
+        ExtendedToken.getTextOnly(idat)=="event"    || //EVENT
+        ExtendedToken.getTextOnly(idat)=="method"   || //METHOD
+        ExtendedToken.getTextOnly(idat)=="param"    || //PARAM
+        ExtendedToken.getTextOnly(idat)=="property" || //PROPERTY
+        ExtendedToken.getTextOnly(idat)=="return"   || //RETURN
+        ExtendedToken.getTextOnly(idat)=="type" }?     //TYPE
+        {Emit.EmitToken(idat);}
     ;
 
 attribute_list
-    :   attribute (options {greedy=true;}: COMMA attribute)* 
+    :   attribute 
+        (options {greedy=true;}: c:COMMA {Emit.EmitToken(c);} attribute)* 
     ;
 
 attribute
@@ -2814,27 +2828,39 @@ attribute
     ;
 
 attribute_name
-    :   type_name
+{
+    string [] tp = new string[]{"",""};
+}
+    :   tp = type_name
+        {Emit.EmitString(tp[0] + tp[1]);}
     ;
 
 attribute_arguments
     :   (LPAREN   positional_argument_list   COMMA   named_argument_list   RPAREN)=>
-            LPAREN   positional_argument_list   COMMA   named_argument_list   RPAREN
+            lp1:LPAREN   {Emit.EmitToken(lp1);} positional_argument_list   
+            c1:COMMA  {Emit.EmitToken(c1);}  named_argument_list   
+            rp1:RPAREN {Emit.EmitToken(rp1);}
     |   (LPAREN   named_argument_list   RPAREN)=>
-            LPAREN   named_argument_list   RPAREN
-    |   LPAREN   (positional_argument_list)?   RPAREN
+            lp2:LPAREN   {Emit.EmitToken(lp2);} named_argument_list   
+            rp2:RPAREN   {Emit.EmitToken(rp2);}
+    |   lp3:LPAREN   {Emit.EmitToken(lp3);} (positional_argument_list)?   rp3:RPAREN {Emit.EmitToken(rp3);}
     ;
 
 positional_argument_list
-    :   attribute_argument_expression (options {greedy=true;}: COMMA attribute_argument_expression)*
+    :   attribute_argument_expression (options {greedy=true;}: c:COMMA {Emit.EmitToken(c);} attribute_argument_expression)*
     ;
 
 named_argument_list
-    :   IDENTIFIER   ASSIGN   attribute_argument_expression   (COMMA   IDENTIFIER   ASSIGN   attribute_argument_expression)*
+    :   id1:IDENTIFIER  {Emit.EmitToken(id1);} a1:ASSIGN {Emit.EmitToken(a1);}  attribute_argument_expression   
+        (c:COMMA  {Emit.EmitToken(c);} id2:IDENTIFIER {Emit.EmitToken(id2);}  a2:ASSIGN {Emit.EmitToken(a2);}  attribute_argument_expression)*
     ;
 
 attribute_argument_expression
-    :   expression
+{
+    string e = "";
+}
+    :   e = expression
+        {Emit.EmitString(e);}
     ;
 
 
