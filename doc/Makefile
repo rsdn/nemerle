@@ -168,6 +168,13 @@ publish-stamp: nemerle-web.tar.gz
 	(cd /home/services/nemerle.org; tar zxf nemerle-web.tar.gz)
 	touch publish-stamp
 
+build-ndoc:
+	$(MAKE) -C ../ncc doc-xml
+	ndoc -project=../misc/Nemerle.ndoc.xml
+	
+publish-ndoc: build-ndoc
+	(cd ndoc.output; tar cf - .) | (cd /home/services/nemerle.org/doc; tar xf -)
+
 dist-cleaner: all
 	$(MKDIR) html
 	$(Q)mkdir -p html
