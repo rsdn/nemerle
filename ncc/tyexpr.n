@@ -43,6 +43,7 @@ public module Tyexpr {
 
   variant Call_result
   {
+    | CR_unspecified_error
     | CR_error { msg : string; }
     | CR_ok { call : Expr; sub : Subst; }
   }
@@ -354,18 +355,22 @@ public module Tyexpr {
 
   // given list of formal parms names and actual parms names,
   // reorder actuals to match formals
-  reorder_named_parms (names : list <string>, parms : list <Parm>) : list <Parm>
+  reorder_named_parms (names : list <string>, parms : list <Parm>, 
+                       do_throw : bool) : list <Parm>
   {
     def is_named (p : Parm) : bool { p.name != "" };
     mutable seen_kw <- false;
 
     def loop (acc : list <Parm>, names : list <string>,
-              parms : list <Parm>) : list <Parm> {
+              parms : list <Parm>) {
       match ((parms, names)) {
         | (p :: ps, n :: ns) =>
           if (p.name == "")
             if (seen_kw)
-              throw Typing_error ("unnamed parameters after named")
+              if (do_throw)
+                throw Typing_error ("unnamed parameters after named")
+              else
+                null
             else
               loop (p :: acc, ns, ps)
           else {
@@ -379,12 +384,17 @@ public module Tyexpr {
                     def (r, ps) = lookup (ps);
                     (r, p :: ps)
                   }
-                | [] =>
+                | [] when do_throw =>
                   throw Typing_error ("keyword parameter `" + n + "' not found")
+                | [] =>
+                  (null, null)
               }
             };
             def (p, ps) = lookup (parms);
-            loop (p :: acc, ns, ps)
+            if (p == null)
+              null
+            else
+              loop (p :: acc, ns, ps)
           }
         | ([], []) => List.Rev (acc)
         | _ => Util.ice ()
@@ -392,9 +402,10 @@ public module Tyexpr {
     };
     if (List.Exists (parms, is_named))
       match (names) {
-        | [] =>
+        | [] when do_throw =>
           throw Typing_error ("named parameters given but formals' names cannot"
                               " be inferred")
+        | [] => null
         | _ =>
           loop ([], names, parms)
       }
@@ -403,18 +414,21 @@ public module Tyexpr {
   }
 
   // check if FN can be called with PARMS
-  check_call_to (ctx : CTX, parms : list <Parm>, fn : Expr) : Call_result
+  check_call_to (ctx : CTX, parms : list <Parm>, fn : Expr, do_throw : bool) : Call_result
   {
     def check_arg (parm : Parm, ty : Type, ctx : int * Subst) : int * Subst {
       def (arg_no, sub) = ctx;
-      match (Tyutil.unify (sub, type_of (parm.expr), ty, true)) {
-        | Some (u) =>
-          (arg_no + 1, u)
-        | None =>
-          throw Typing_error (sprintf ("in arg #%d needed %s got %s", 
-                                       arg_no, (ty /- sub).as_string (),
-                                       (type_of (parm.expr) /- sub).as_string ()))
-      }
+      if (arg_no < 0) ctx
+      else
+        match (Tyutil.unify (sub, type_of (parm.expr), ty, true)) {
+          | Some (u) =>
+            (arg_no + 1, u)
+          | None when do_throw =>
+            throw Typing_error (sprintf ("in arg #%d needed %s got %s", 
+                                         arg_no, (ty /- sub).as_string (),
+                                         (type_of (parm.expr) /- sub).as_string ()))
+          | None => (-1, sub)
+        }
     };
 
     def formal_names = {
@@ -439,8 +453,11 @@ public module Tyexpr {
       | T_fun (from, ret) =>
         def args = Tyutil.fun_args (from);
         def wrong_args_cnt () {
-          throw Typing_error ("needed " + (List.Length (args)).ToString () +
-                              " parameters, got " + (List.Length (parms)).ToString ())
+          if (do_throw)
+            throw Typing_error ("needed " + (List.Length (args)).ToString () +
+                                " parameters, got " + (List.Length (parms)).ToString ())
+          else
+            null
         };
         try {
           def args =
@@ -454,31 +471,43 @@ public module Tyexpr {
               | _ when List.Length (args) != List.Length (parms) => wrong_args_cnt ()
               | _ => args
             };
-          def parms = reorder_named_parms (formal_names, parms);
-          def (_, sub) =
-            List.FoldLeft2 (parms, args, (1, SystemMap ()), check_arg);
-          def res_expr =
-            match (fn) {
-              | E_constant_object_ref (mem) =>
-                E_static_ref (fn.loc, ret /- sub, mem)
-              | _ => 
-                E_call (fn.loc, ret /- sub, fn, parms)
-            };
-          //Message.debug ("ret type = " + (ret /- sub).as_string ());
-          CR_ok (res_expr, sub)
+          def parms =
+            if (args == null) null 
+            else reorder_named_parms (formal_names, parms, do_throw);
+          def (argno, sub) =
+            if (parms == null || args == null) (-1, null)
+            else
+              List.FoldLeft2 (parms, args, (1, SystemMap ()), check_arg);
+          if (argno < 0)
+            CR_unspecified_error ()
+          else {
+            def res_expr =
+              match (fn) {
+                | E_constant_object_ref (mem) =>
+                  E_static_ref (fn.loc, ret /- sub, mem)
+                | _ => 
+                  E_call (fn.loc, ret /- sub, fn, parms)
+              };
+            //Message.debug ("ret type = " + (ret /- sub).as_string ());
+            CR_ok (res_expr, sub)
+          }
         } catch { x : Typing_error => CR_error (x.msg) }
       | ty when Tyutil.IsDelegate (ty) =>
         match (LookupMembers (ctx, ty, "Invoke")) {
           | [mem] =>
             def fn' = E_method_ref (fn.loc, mem.GetMemType (), fn, (mem :> IMethod));
-            check_call_to (ctx, parms, fn')
-          | _ =>
+            check_call_to (ctx, parms, fn', do_throw)
+          | _ when do_throw =>
             CR_error ("cannot find `Invoke' method in delegate type " +
                       (type_of (fn)).as_string ())
+          | _ =>
+            CR_unspecified_error ()
         }
-      | _ =>
+      | _ when do_throw =>
         CR_error ("called value has non-functional type " +
                   (type_of (fn)).as_string ())
+      | _ =>
+        CR_unspecified_error ()
     }
   }
 
@@ -521,32 +550,40 @@ public module Tyexpr {
   resolve_overloaded_call (ctx : CTX, in_tail_pos : bool, fncs : list <Expr>,
                            parms : list <Parm>) : Expr
   {
-    match (fncs) { [] => Util.ice ("empty fncs") | _ => () };
     def check_one (fn, acc) {
-      def (errs, rets) = acc;
-      match (check_call_to (ctx, parms, fn)) {
-        | CR_ok (ex, sub) => (errs, (ex, sub) :: rets)
-        | CR_error (e) => ((e, fn) :: errs, rets)
+      match (check_call_to (ctx, parms, fn, false)) {
+        | CR_ok (ex, sub) => (ex, sub) :: acc
+        | _ => acc
       }
     };
 
-    match (List.FoldLeft (fncs, ([], []), check_one)) {
+    def check_error (fn, acc) {
+      match (check_call_to (ctx, parms, fn, true)) {
+        | CR_error (msg) => (msg, fn) :: acc
+        | _ => assert (false)
+      }
+    };
+
+    match (List.FoldLeft (fncs, [], check_one)) {
       // special case (simple)
-      | (_, [(x, sub)]) =>
+      | [(x, sub)] =>
         Tyvar.global_store (sub);
         transform_tail_call (ctx.WithInTailPosition (in_tail_pos), x)
-      | ([(err, fn)], []) =>
-        Message.error (err + " calling " + describe_expression (fn)); 
-        throw Recovery ()
-      | (p, []) =>
-        Message.error ("typing error in call:");
-        def print_err (err, fn) {
-          Message.error ("  " + err + " calling " + describe_expression (fn)) 
-        };
-        List.Iter (p, print_err);
-        throw Recovery ()
+      | [] =>
+        match (List.FoldLeft (fncs, [], check_error)) {
+          | [(err, fn)] =>
+            Message.error (err + " calling " + describe_expression (fn)); 
+            throw Recovery ()
+          | p =>
+            Message.error ("typing error in call:");
+            def print_err (err, fn) {
+              Message.error ("  " + err + " calling " + describe_expression (fn)) 
+            };
+            List.Iter (p, print_err);
+            throw Recovery ()
+        }
       // in general we look for set of maximal argument types
-      | (_, l) =>
+      | l =>
         def get_type (ex : Expr, s : Subst) : Type * (Expr * Subst) {
           match (ex) {
             | E_call (fn, _) =>
