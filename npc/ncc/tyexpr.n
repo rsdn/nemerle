@@ -39,7 +39,8 @@ namespace Nemerle.Compiler {
           let _ =
             match x#kind with [
               | D_class_member (M_value) => ()
-              | D_class_member (M_function) => ()
+              | D_class_member (M_function {fun_kind = FK_function}) => ()
+              | D_class_member (M_function {fun_kind = FK_ctor}) => ()
               | D_class_member (_) =>
                 {
                   Message.error ("`" + x#name + "' does not refer to value");
@@ -51,13 +52,30 @@ namespace Nemerle.Compiler {
           if x#ty == null then Util.ice ("null type " + x#name) else
           let t =
             match x#kind with [
+              | D_class_member (M_function {id = ?id; fun_kind = FK_ctor}) => 
+                match x#ty with [
+                  | T_fun (?args, T_void) =>
+                    let ti = Tyinfo.lookup (id) in
+                    let ti =
+                      match ti#tydecl with [
+                        | TD_variant_option => ti#enclosing_type_ti ()
+                        | _ => ti
+                      ]
+                    in
+                    let parms = Tyvars.get_parms (ti#tydecl#id) in
+                    Tyutil.fresh_vars (parms, T_fun (args, ti#generic_type ()))
+                  | _ => Util.ice ()
+                ]
               | D_class_member (M_function {fun_header = ?h}) => 
                 Tyutil.fresh_vars (Tyvars.get_parms (h#id), x#ty) 
               | D_local_fun (?h) =>
                 Tyutil.fresh_vars (Tyvars.get_parms (h#id), x#ty)
               | _ => x#ty
             ]
-          in fixup (TT.E_ref (x), loc, t)
+          in {
+            //Message.debug (loc, "exprty: " + t#as_string ());
+            fixup (TT.E_ref (x), loc, t)
+          }
         in
 
         letfun resolve_overloaded (fncs : list (TT.Expr), 
@@ -139,15 +157,15 @@ namespace Nemerle.Compiler {
                   letfun convert_ctor (acc : list (Decl), d : Decl) : list (Decl) =
                     match d#kind with [
                       | D_class_member (M_type) =>
+                        //let _ = Message.debug ("lookup " + d#name + "..ctor") in
                         List.append (env#bare_lookup (d#name + "..ctor"), acc)
                       | _ => Cons (d, acc)
                     ]
                   in
-                  let decls = List.fold_left (convert_ctor, Nil (), l) in
-                  match decls with [
+                  match List.fold_left (convert_ctor, Nil (), l) with [
                     | Nil => 
                       Message.fatal_error ("type `" + n + "' has no constructors")
-                    | _ =>
+                    | ?decls => 
                       List.map (fun (x : Decl) : TT.Expr => make_ref (fnc#loc, x), decls)
                   ]
               ]
@@ -173,6 +191,7 @@ namespace Nemerle.Compiler {
                   letfun mem_ref (ex : TT.Expr, m : Class_member) : TT.Expr =
                     fixup (ex, loc, ti#member_type (m) /- subst)
                   in
+                  //let _ = Message.debug ("lookup `" + mem + "' in " + ti#fullname()) in
                   match ti#lookup_field (mem) with [
                     | Some (?f) => 
                       (Cons (mem_ref (TT.E_field_ref (o, f), f), acc), visited)
@@ -188,7 +207,11 @@ namespace Nemerle.Compiler {
                           
                         | ?l =>
                           letfun make_meth (m : M_function) : TT.Expr =
-                            mem_ref (TT.E_method_ref (o, m), m)
+                            let ex = mem_ref (TT.E_method_ref (o, m), m) in
+                            let sub = Tyvars.fresh_subst (Tyvars.get_parms (m#fun_header#id)) in {
+                              ex#expr_ty <- type_of (ex) /- sub;
+                              ex
+                            }
                           in (List.append (List.map (make_meth, l), acc), visited)
                       ]
                   ]
@@ -262,25 +285,28 @@ namespace Nemerle.Compiler {
                           | _ => acc
                         ]
                       in
+                      letfun tuple_to_record (decls : list (Class_member)) : TT.Pattern =
+                        let names = List.rev (List.fold_left (collect_fields, Nil (), decls)) in
+                        if List.length (names) == List.length (pats) then
+                          letfun mk (n : string, p : PT.Pattern) : PT.Named_pattern =
+                            PT.Named_pattern (n, p)
+                          in
+                          f (t, PT.P_record (List.map2 (mk, names, pats)))
+                        else
+                          Message.fatal_error ("pattern matches " + string_of_int (List.length (pats)) + 
+                                               " values, while type " + ti#fullname () + " have " +
+                                               string_of_int (List.length (names)) + " fields")
+                      in
                       match ti#tydecl with [
-                        | TD_class (?decls) =>
-                          let names = List.rev (List.fold_left (collect_fields, Nil (), decls)) in
-                          if List.length (names) != List.length (pats) then
-                            letfun mk (n : string, p : PT.Pattern) : PT.Named_pattern =
-                              PT.Named_pattern (n, p)
-                            in
-                            f (t, PT.P_record (List.map2 (mk, names, pats)))
-                          else
-                            Message.fatal_error ("pattern matches " + string_of_int (List.length (pats)) + 
-                                                 " values, while type " + ti#fullname () + " have " +
-                                                 string_of_int (List.length (names)) + " fields")
+                        | TD_class (?decls) => tuple_to_record (decls)
+                        | TD_variant_option (?decls) => tuple_to_record (decls)
                         | _ =>
                             Message.fatal_error ("pattern matches " + string_of_int (List.length (pats)) + 
                                                  " values, while type " + ti#fullname () + " has no fields")
                       ]
                       
                     | T_prod (?ts) =>
-                      if List.length (ts) != List.length (pats) then
+                      if List.length (ts) == List.length (pats) then
                         TT.P_tuple (List.map2 (f, ts, pats))
                       else
                         Message.fatal_error ("pattern matches " + string_of_int (List.length (pats)) + 
@@ -310,7 +336,7 @@ namespace Nemerle.Compiler {
                       if t' >> t then
                         TT.P_cons (td, f (t', p))
                       else
-                        Message.fatal_error ("variant option `" + ti#fullname () + "' doesn't subtype " +
+                        Message.fatal_error ("variant option " + t'#as_string () + " doesn't subtype " +
                                              t#as_string ())
                     | _ =>
                       {
@@ -362,7 +388,7 @@ namespace Nemerle.Compiler {
                 let env' = List.fold_left(add_fun, env, fs) in
                 letfun do_fun (d : PT.Function_decl) : TT.Function_decl =
                   let body' = do_function_expr (env', d#fun_header, d#body) in
-                  TT.Function_decl (body = body', fun_header = d#fun_header)
+                  TT.Function_decl (d#fun_header, body')
                 in
                 let fs' = List.map (do_fun, fs) in
                 let b' = ty_expr(env', b) in
@@ -393,9 +419,12 @@ namespace Nemerle.Compiler {
 
               | PT.E_let ?x =>
                 let val = ty_expr(env, x#val) in
-                let (?env', ?decl) = env#add_local(x#name, D_local_value(x#is_ref), type_of (val)) in
-                let body = ty_expr(env', x#body) in
-                (TT.E_let (decl, val, body), type_of (body))
+                let (?env', ?decl) = env#add_local(x#name, D_local_value(), type_of (val)) in
+                {
+                  decl#is_ref <- x#is_ref;
+                  let body = ty_expr(env', x#body) in
+                  (TT.E_let (decl, val, body), type_of (body))
+                }
 
               | PT.E_type_conversion (?e, ?t) =>
                 // FIXME shall we check sth here?
@@ -448,6 +477,7 @@ namespace Nemerle.Compiler {
                       | TT.E_ref (?d) => d#is_ref
                       | TT.E_field_ref (TT.E_this, ?mem) => 
                         if in_ctor then true else mem#is_ref
+                      | TT.E_field_ref (_, ?mem) => mem#is_ref
                       | _ => false
                     ]
                   in if is_lval then () else Message.error ("assignment to non-lvalue");
@@ -529,6 +559,7 @@ namespace Nemerle.Compiler {
             | FB_expr (?e) => FB_typed_expr (ty_expr(env', e))
             | FB_typed_expr => Util.ice ()
             | FB_extern => b
+            | FB_abstract => b
           ]
           
         and do_function_expr(env : Env, h : Fun_header, b : PT.Expr) : TT.Expr =
@@ -552,6 +583,18 @@ namespace Nemerle.Compiler {
                    ];
                 f#body <- do_function (decl#env, f#fun_header, f#body)
               }
+
+            | M_type (TD_class ?cl) =>
+              letfun is_field (m : Class_member) : bool =
+                match m with [ M_field => true | _ => false ]
+              in
+              if List.forall (is_field, cl#decls) then
+                cl#decls <- Cons (Extensions.implicit_ctor (cl, cl#decls), cl#decls)
+              else ()
+
+            | M_type (TD_variant_option ?vo) =>
+              vo#decls <- Cons (Extensions.implicit_ctor (vo, vo#decls), vo#decls)
+
             | _ => ()
           ]
         in 
