@@ -305,7 +305,16 @@ namespace Nemerle.Contrib
             output.WriteLine('}');
 		}
 
-		protected override void GenerateThrowExceptionStatement ( CodeThrowExceptionStatement statement)
+        protected new void GenerateStatements(CodeStatementCollection c)
+        {
+            foreach (CodeStatement x in c)
+                GenerateStatement(x);
+            if (c.Count > 0 && c[c.Count - 1] is CodeVariableDeclarationStatement)
+                Output.WriteLine("();");
+            
+        }
+
+        protected override void GenerateThrowExceptionStatement ( CodeThrowExceptionStatement statement)
 		{
 			Output.Write ("throw");
 			if (statement.ToThrow != null) {
@@ -860,7 +869,8 @@ namespace Nemerle.Contrib
 		{
 			Output.Write( '[' );
 			CodeMemberMethod met = CurrentMember as CodeMemberMethod;
-			if (met != null && met.ReturnTypeCustomAttributes == attributes)
+
+         	if (met != null && met.ReturnTypeCustomAttributes == attributes)
 				Output.Write ("return: ");
 
             IEnumerator enumerator = attributes.GetEnumerator();
