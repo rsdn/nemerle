@@ -109,43 +109,167 @@
 
   <new_page>
 
-  <section|Examples>
+  <section|Hello world><subsubsection|>
 
-  <subsubsection|Hello world>
+  <\itemize>
+    <item>top-level program structure is similar to <verbatim|C#>
+
+    <item>core library (providing <verbatim|print_string> function) borrows
+    interfaces from OCaml
+  </itemize>
 
   <\with|font size|0.84>
     <\code>
-      <strong|<em|class>> Hello
+      <strong|<em| \ \ \ \ \ \ class>> Hello
 
-      \ \ {
+      \ \ \ \ \ \ \ \ \ {
 
-      \ \ \ \ <em|public> <em|static> Main () : <em|void> =
+      \ \ \ \ \ \ \ \ \ \ \ <em|public> <em|static> Main () : <em|void> =
 
-      \ \ \ \ \ \ print_string ("Hello world\\n");
+      \ \ \ \ \ \ \ \ \ \ \ \ \ print_string ("Hello world!\\n");
 
-      \ \ }
+      \ \ \ \ \ \ \ \ \ }
     </code>
   </with>
 
-  <subsubsection|Binary tree insertion>
+  <section|Factorial>
+
+  <\itemize>
+    <item>the simple way to write factorial function
+  </itemize>
 
   <with|font size|0.84|<\code>
-    <em|module> Tree {
+    \ \ \ \ \ \ \ <em|static> <em|public> fact (x : <with|color|brown|int>) :
+    <with|color|brown|int> =
 
-    \ \ <em|variant> <with|color|brown|t ('a)> <em|where>
-    <with|color|brown|'a> :\<gtr\> <with|color|brown|IComparable ('a)> =
+    \ \ \ \ \ \ \ \ \ <em|if> x \<less\>= 1 <em|then> 1
 
-    \ \ \ \ [ \ 
+    \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ <em|else> x * fact (x - 1);
+  </code>>
 
-    \ \ \ \ \ \ \| Node { l : <with|color|brown|t ('a)>; d :
-    <with|color|brown|'a>; r : <with|color|brown|t ('a)>; }
+  <\itemize>
+    <item>and now with local function and tail recursion, which is as
+    efficient as <verbatim|while> loop in <verbatim|C#>
+  </itemize>
 
-    \ \ \ \ \ \ \| Tip {}
+  <with|font size|0.84|<\code>
+    \ \ \ \ \ \ \ <em|static> <em|public> fact (x : <with|color|brown|int>) :
+    <with|color|brown|int>\ 
 
-    \ \ \ \ ]
+    \ \ \ \ \ \ \ \ \ {
 
-    \;
+    \ \ \ \ \ \ \ \ \ \ \ <em|def> loop (acc : <with|color|brown|int>, x :
+    <with|color|brown|int>) =
 
+    \ \ \ \ \ \ \ \ \ \ \ \ \ <em|if> x \<less\>= 1 <em|then> acc
+
+    \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ <em|else> loop (x * acc, x
+    - 1);
+
+    \ \ \ \ \ \ \ \ \ \ \ loop (1, x);
+
+    \ \ \ \ \ \ \ \ \ }
+  </code>>
+
+  <new_page>
+
+  <section|Variants>
+
+  <\itemize>
+    <item>variants provide simple yet powerful method of performing symbolic
+    computations
+
+    <item>list and tree are classic examples
+  </itemize>
+
+  <\with|font size|0.84>
+    <\code>
+      <em| \ \ \ \ \ \ variant> <with|color|brown|list ('a)> = [
+
+      \ \ \ \ \ \ \ \ \ \| Cons { hd : <with|color|brown|'a>; tl
+      :<with|color|brown| list ('a)>; }
+
+      \ \ \ \ \ \ \ \ \ \| Nil
+
+      \ \ \ \ \ \ \ ]
+    </code>
+  </with>
+
+  <\itemize>
+    <item>variants are de-constructed with <verbatim|<em|match>> expression
+  </itemize>
+
+  <\with|font size|0.84>
+    <\code>
+      \ \ \ \ \ \ \ <em|public> <with|color|brown|'a> head (l :
+      <with|color|brown|list ('a)>) : <with|color|brown|'a> =
+
+      \ \ \ \ \ \ \ \ \ \ <em|match> l <em|with> [
+
+      \ \ \ \ \ \ \ \ \ \ \ \ \| Cons (x, _) =\<gtr\> x
+
+      \ \ \ \ \ \ \ \ \ \ \ \ \| Nil =\<gtr\>\ 
+
+      \ \ \ \ \ \ \ \ \ \ \ \ \ \ <em|raise> Invalid_argument ("List.head")
+
+      \ \ \ \ \ \ \ \ \ \ ];
+    </code>
+  </with>
+
+  <\itemize>
+    <item>list is completely polymorphic, but tree require elements to
+    provide comparison function
+  </itemize>
+
+  <with|font size|0.84|<\code>
+    \ \ \ \ \ \ \ <em|variant> <with|color|brown|tree ('a)>\ 
+
+    \ \ \ \ \ \ \ \ \ <em|where> <with|color|brown|'a> :\<gtr\>
+    <with|color|brown|IComparable ('a)> = [
+
+    \ \ \ \ \ \ \ \ \ \ \ \| Node { l : <with|color|brown|tree ('a)>; d :
+    <with|color|brown|'a>;\ 
+
+    \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ r : <with|color|brown|tree ('a)>;
+    }
+
+    \ \ \ \ \ \ \ \ \ \ \ \| Tip
+
+    \ \ \ \ \ \ \ ]
+  </code>>
+
+  <section|Functional values>
+
+  <\itemize>
+    <item><strong|functions are first class citizens> -- can be passed as
+    arguments and returned as results from other functions
+
+    <item><verbatim|map> applies <verbatim|f> to all elements of <verbatim|x>
+    and returns list of results
+  </itemize>
+
+  <\with|font size|0.84>
+    <\code>
+      \ \ <with|color|brown| \ \ \ \ 'a>, <with|color|brown|'b> map (f :
+      <with|color|brown|'a -\<gtr\> 'b>, x : <with|color|brown|list ('a)>)\ 
+
+      \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ : <with|color|brown|list ('b)> =\ 
+
+      \ \ \ \ \ \ \ \ \ <em|match> x <em|with> [
+
+      \ \ \ \ \ \ \ \ \ \ \ \| Nil =\<gtr\> Nil ()
+
+      \ \ \ \ \ \ \ \ \ \ \ \| Cons x =\<gtr\>\ 
+
+      \ \ \ \ \ \ \ \ \ \ \ \ \ Cons (f (x.hd), map (f, x.tl))
+
+      \ \ \ \ \ \ \ \ \ ];
+    </code>
+  </with>
+
+  <section|Binary search tree insertion>
+
+  <with|font size|0.84|<\code>
     \ \ <with|color|brown|'a> <em|where> <with|color|brown|'a> :\<gtr\>
     <with|color|brown|IComparable ('a)>\ 
 
@@ -168,90 +292,12 @@
 
     \ \ \ \ \ \ \ \ <em|else>\ 
 
-    \ \ \ \ \ \ \ \ \ \ <em|raise> Invalid_argument ("Tree.insert")
+    \ \ \ \ \ \ \ \ \ \ <em|raise> Invalid_argument ("insert")
 
     \ \ \ \ \ \ \| Tip =\<gtr\> Node (Tip (), e, Tip ())
 
     \ \ \ \ ];
-
-    }
   </code>>
-
-  <new_page>
-
-  <subsubsection|Lists>
-
-  <\with|font size|0.84>
-    <\code>
-      <em|module> List {
-
-      \ \ <em|variant> <with|color|brown|list ('a)> = [
-
-      \ \ \ \ \| Cons { hd : <with|color|brown|'a>; tl :<with|color|brown|
-      list ('a)>; }
-
-      \ \ \ \ \| Nil
-
-      \ \ ]
-
-      \;
-
-      \ \ <with|color|brown|'a> invalid_arg (msg : <with|color|brown|string>)
-      : <with|color|brown|'a> =
-
-      \ \ \ \ \ <em|raise> Invalid_argument (msg);
-
-      \;
-
-      \ \ <with|color|brown|'a> head (l : <with|color|brown|list ('a)>) :
-      <with|color|brown|'a> =
-
-      \ \ \ \ <em|match> l <em|with> [
-
-      \ \ \ \ \ \ \| Cons (x, _) =\<gtr\> x
-
-      \ \ \ \ \ \ \| Nil =\<gtr\> invalid_arg ("List.head")
-
-      \ \ \ \ ];
-
-      \;
-
-      \ \ <with|color|brown|'a>, <with|color|brown|'b> map (f :
-      <with|color|brown|'a -\<gtr\> 'b>, x : <with|color|brown|list ('a)>)\ 
-
-      \ \ \ \ \ \ \ \ \ \ \ \ \ : <with|color|brown|list ('b)> =\ 
-
-      \ \ \ \ <em|match> x <em|with> [
-
-      \ \ \ \ \ \ \| Nil =\<gtr\> Nil ()
-
-      \ \ \ \ \ \ \| Cons x =\<gtr\> Cons (f (x.hd), map (f, x.tl))
-
-      \ \ \ \ ];
-
-      \;
-
-      \ \ <with|color|brown|'a> length (x :<with|color|brown| list ('a)>) :
-      <with|color|brown|int> {
-
-      \ \ \ \ <em|def> loop (acc : <with|color|brown|int>, x :
-      <with|color|brown|list ('a)>) : <with|color|brown|int> =
-
-      \ \ \ \ \ \ <em|match> x <em|with> [
-
-      \ \ \ \ \ \ \ \ \| Cons x =\<gtr\> loop (acc + 1, x.tl)
-
-      \ \ \ \ \ \ \ \ \| _ =\<gtr\> acc
-
-      \ \ \ \ \ \ ];
-
-      \ \ \ \ loop (0, x);
-
-      \ \ }
-
-      }
-    </code>
-  </with>
 
   <section|Language extensions>
 
@@ -501,7 +547,8 @@
   <\itemize>
     <item>transformed code marked with <with|color|magenta|color>
 
-    <item><verbatim|rxmatch> -- special function triggering plugin execution
+    <item><verbatim|rxmatch> -- a special function that triggers plugin
+    execution
 
     <item><verbatim|do_rxmatch> -- plain function call
   </itemize>
@@ -722,7 +769,7 @@
   <subsubsection|Remarks>
 
   <\itemize>
-    <item>this extension requires SQL parser aware of SQL functions types
+    <item>this extension requires SQL parser aware of types of SQL functions
 
     <item>but it knows and uses the correct type of
     <verbatim|<with|color|red|salary>> and <verbatim|<with|color|red|lname>>
@@ -735,6 +782,7 @@
     <associate|preamble|false>
     <associate|paragraph width|150mm>
     <associate|odd page margin|30mm>
+    <associate|shrinking factor|10>
     <associate|page right margin|30mm>
     <associate|page top margin|30mm>
     <associate|reduction page right margin|25mm>
@@ -751,18 +799,20 @@
 
 <\references>
   <\collection>
-    <associate|toc-10|<tuple|<uninit>|7>>
+    <associate|toc-10|<tuple|<uninit>|6>>
     <associate|gly-1|<tuple|1|?>>
+    <associate|toc-11|<tuple|<uninit>|6>>
+    <associate|toc-12|<tuple|<uninit>|7>>
+    <associate|toc-13|<tuple|<uninit>|7>>
+    <associate|toc-14|<tuple|<uninit>|8>>
+    <associate|toc-15|<tuple|<uninit>|8>>
+    <associate|toc-16|<tuple|<uninit>|9>>
+    <associate|toc-17|<tuple|<uninit>|9>>
     <associate|toc-1|<tuple|<uninit>|2>>
-    <associate|toc-11|<tuple|<uninit>|7>>
-    <associate|toc-12|<tuple|<uninit>|8>>
     <associate|toc-2|<tuple|<uninit>|2>>
-    <associate|toc-13|<tuple|<uninit>|8>>
     <associate|toc-3|<tuple|<uninit>|3>>
     <associate|toc-4|<tuple|<uninit>|3>>
-    <associate|toc-14|<tuple|<uninit>|9>>
     <associate|toc-5|<tuple|<uninit>|3>>
-    <associate|toc-15|<tuple|<uninit>|9>>
     <associate|toc-6|<tuple|<uninit>|4>>
     <associate|toc-7|<tuple|<uninit>|4>>
     <associate|toc-8|<tuple|<uninit>|4>>
@@ -784,28 +834,30 @@
 
       And the Result<value|toc-dots><pageref|toc-5>
 
-      Examples<value|toc-dots><pageref|toc-6>
+      Hello world<value|toc-dots><pageref|toc-6>
 
-      <with|left margin|<quote|3fn>|Hello
-      world<value|toc-dots><pageref|toc-7>>
+      <with|left margin|<quote|3fn>|<value|toc-dots><pageref|toc-7>>
 
-      <with|left margin|<quote|3fn>|Binary tree
-      insertion<value|toc-dots><pageref|toc-8>>
+      Factorial<value|toc-dots><pageref|toc-8>
 
-      <with|left margin|<quote|3fn>|Lists<value|toc-dots><pageref|toc-9>>
+      Variants<value|toc-dots><pageref|toc-9>
 
-      Language extensions<value|toc-dots><pageref|toc-10>
+      Functional values<value|toc-dots><pageref|toc-10>
+
+      Method call<value|toc-dots><pageref|toc-11>
+
+      Language extensions<value|toc-dots><pageref|toc-12>
 
       <with|left margin|<quote|3fn>|Example
-      uses<value|toc-dots><pageref|toc-11>>
+      uses<value|toc-dots><pageref|toc-13>>
 
-      Regular expression extension<value|toc-dots><pageref|toc-12>
-
-      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-13>>
-
-      SQL queries extension<value|toc-dots><pageref|toc-14>
+      Regular expression extension<value|toc-dots><pageref|toc-14>
 
       <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-15>>
+
+      SQL queries extension<value|toc-dots><pageref|toc-16>
+
+      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-17>>
     </associate>
   </collection>
 </auxiliary>
