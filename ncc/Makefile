@@ -174,7 +174,7 @@ out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll: \
 out.$(STAGE)/stdmacros.dll: $(COMPILER) out.$(STAGE)/Nemerle.$(STAGE).dll \
 		out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll $(STDMACROS_DLL_SRC)
 	$(RUN_COMPILER) -target-library -out:$@ \
-		-reference:$(DLL_PATH)System.dll \
+		-reference:$(DLL_PATH)System \
 		-reference:out.$(STAGE)/Nemerle.$(STAGE).dll \
 		-reference:out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
@@ -182,7 +182,7 @@ out.$(STAGE)/stdmacros.dll: $(COMPILER) out.$(STAGE)/Nemerle.$(STAGE).dll \
 out.stage3/stdmacros.dll: $(COMPILER) out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll $(STDMACROS_DLL_SRC)
 	$(RUN_COMPILER) -target-library -out:$@ \
-		-reference:$(DLL_PATH)System.dll \
+		-reference:$(DLL_PATH)System \
 		-reference:out.$(STAGE)/Nemerle.dll \
 		-reference:out.$(STAGE)/Nemerle.Compiler.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
@@ -209,14 +209,14 @@ sync:
 	done
 
 ../config.mak:
-	$(MAKE) -C .. config.mak
+	cd .. && $(MAKE) config.mak
 
 .PHONY: boot all tests t test ncc-il
 
 t test: tests
 
 tests:
-	$(MAKE) -C testsuite
+	cd testsuite && $(MAKE)
 
 install: ncc.exe
 	if test ! -d $(BINDIR) ; then mkdir -p $(BINDIR) ; fi
@@ -225,6 +225,6 @@ install: ncc.exe
 	$(INSTALL) -m 755 ncc.exe $(BINDIR)/ncc
 
 clean:
-	$(MAKE) -C testsuite clean
+	cd testsuite && $(MAKE) clean
 	rm -f *.exe.so *.dll.so *.pdb core.[0-9]* core
 	rm -rf out.stage*
