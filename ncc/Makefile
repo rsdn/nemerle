@@ -294,6 +294,7 @@ sync:
 	cd out.stage3 ; \
 	for x in *.dll *.exe ; do \
 		mv -vf ../../boot/$$x ../../boot/$$x.old ; \
+		cp -vf $$x.so ../../boot/$$x.so ; \
 		cp -vf $$x ../../boot/$$x ; \
 	done
 
