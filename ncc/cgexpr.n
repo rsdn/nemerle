@@ -426,20 +426,24 @@ module CGexpr {
     get_cg_method (ctx, meth.GetHeader ())
   }
 
+  make_untupled_parms (tuple_expr : CG_expr, parm_cnt : int) : list <CG_expr>
+  {
+    if (parm_cnt == 0)
+      []
+    else {
+      def tup = CE_cast (tuple_expr, tuple_type (parm_cnt));
+      def mkparm (acc, i) {
+        if (i == 0) acc
+        else mkparm (tuple_ref (tup, i, parm_cnt) :: acc, i - 1)
+      };
+      mkparm ([], parm_cnt)
+    }
+  }
+
   make_tupled_method (ctx : CTX, parm_cnt : int) : CG_method
   {
     def cgm = build_cg_method (ctx, get_apply_method (1));
-    def parms =
-      if (parm_cnt == 0) 
-        []
-      else {
-        def tup = CE_cast (CE_ref (List.Head (cgm.parms)), tuple_type (parm_cnt));
-        def mkparm (acc, i) {
-          if (i == 0) acc
-          else mkparm (tuple_ref (tup, i, parm_cnt) :: acc, i - 1)
-        };
-        mkparm ([], parm_cnt)
-      };
+    def parms = make_untupled_parms (CE_ref (List.Head (cgm.parms)), parm_cnt);
     def meth = get_apply_method (parm_cnt);
     def multi_apply = CE_method_ref (CE_this (), meth.GetMethodInfo ());
     cgm.body <- CE_call (multi_apply, parms);
@@ -572,10 +576,17 @@ module CGexpr {
 
   casted_parms (ctx : CTX, formals : list <CG_val>, parms : list <CG_expr>) : list <CG_expr>
   {
-    def do_cast (v : CG_val, e : CG_expr) {
-      maybe_cast (ctx, v.ty, e)
-    };
-    List.Map2 (formals, parms, do_cast)
+    def parms =
+      match ((formals, parms)) {
+        | (_ :: _ :: _, [parm]) =>
+          make_untupled_parms (parm, List.Length (formals))
+        | _ => parms
+      };
+      
+    List.Map2 (formals, parms, 
+      fun (v : CG_val, e) { 
+        maybe_cast (ctx, v.ty, e) 
+      })
   }
 
   emit_delegate_proxy (ctx : CTX, ctor : IMethod) : ConstructorInfo * CG_method
@@ -690,6 +701,28 @@ module CGexpr {
                    fun (v, expr) { CE_let (v, expr) })
   }
 
+  with_cached (expr : CG_expr, f : CG_expr -> CG_expr) : CG_expr
+  {
+    match (expr) {
+      | CE_ref
+      | CE_global_ref
+      | CE_ctor_ref
+      | CE_method_addr
+      | CE_opcode
+      | CE_literal
+      | CE_this
+      | CE_typeof =>
+        f (expr)
+
+      | _ =>
+        def v = CG_val (loc = Location_stack.top (),
+                        name = Util.tmpname ("cached"),
+                        ty = type_of (expr),
+                        val = expr);
+        CE_let (v, f (CE_ref (v)))
+    }
+  }
+
   raw_cg_expr (ctx : CTX, inex : Expr) : CG_expr
   {
     //Message.debug ("emit");
@@ -731,25 +764,31 @@ module CGexpr {
 
       | E_call (f, ps) 
       | E_tail_call (f, ps) =>
+        def is_tail = match (inex) { E_tail_call => true | _ => false };
         def compile_parm (p : Parm) { self (p.expr) };
         def emit_call (cgm : CG_method, callable) {
           def parms = List.Map (ps, compile_parm);
           if (cgm == null) {
             def t = cg_type (ctx, inex.expr_ty);
-            match (inex) {
-              | E_tail_call =>
-                CE_tail_call (t, callable, parms)
-              | _ =>
-                CE_call (t, callable, parms)
-            }
+            if (is_tail)
+              CE_tail_call (t, callable, parms)
+            else
+              CE_call (t, callable, parms)
           } else {
-            def parms = casted_parms (ctx, cgm.parms, parms);
+            def generate_call (parms) {
+              if (is_tail)
+                CE_tail_call (callable, casted_parms (ctx, cgm.parms, parms))
+              else
+                CE_call (callable, casted_parms (ctx, cgm.parms, parms))
+            };
+            
             def call =
-              match (inex) {
-                | E_tail_call =>
-                  CE_tail_call (callable, parms)
+              match ((parms, cgm.parms)) {
+                | ([parm], _ :: _ :: _) =>
+                  // need to cache it, so casted_parms can untuple it
+                  with_cached (parm, fun (parm) { generate_call ([parm]) })
                 | _ =>
-                  CE_call (callable, parms)
+                  generate_call (parms)
               };
             maybe_cast (ctx, cg_type (ctx, inex.expr_ty), call)
           }
