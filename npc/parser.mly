@@ -772,6 +772,10 @@ raw_expr:
                   val_kind = Val_local $5;
                 } in E_let (v, $7)
               }
+        | KW_LET tuple_pattern EQ expr KW_IN expr %prec KW_LET
+              {
+                E_match ($4, [{mc_pattern =  $2; mc_body = $6}])
+              }
         | KW_LETFUN fun_defs KW_IN expr %prec KW_LET
               { E_fun ($2, $4) }
         | KW_IF expr KW_THEN expr KW_ELSE expr %prec KW_LET
@@ -864,10 +868,14 @@ pattern:
                 }
         | L_BRACE record_patterns maybe_semicolon R_BRACE       
                 { P_record (List.rev $2) }
-        | L_PAREN comma_sep_patterns R_PAREN    { P_tuple (List.rev $2) }
+        | tuple_pattern                         { $1 }
+        | L_PAREN pattern R_PAREN               { P_tuple [$2] }
+
+tuple_pattern:
+        L_PAREN comma_sep_patterns R_PAREN    { P_tuple (List.rev $2) }
 
 comma_sep_patterns:
-          pattern                               { [$1] }
+          pattern COMMA pattern                 { [$3; $1] }
         | comma_sep_patterns COMMA pattern      { $3 :: $1 }
 
 record_patterns:
