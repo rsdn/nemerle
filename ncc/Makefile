@@ -28,12 +28,29 @@
 
 include ../config.mak
 
-lib_src = ../lib/aliases.n ../lib/core.n ../lib/option.n ../lib/list.n \
-	  tree.n ../lib/hashtable.n ../lib/stack.n ../lib/queue.n ../lib/input.n \
-	  ../lib/getopt.n ../lib/icollection.n ../lib/tree.n ../lib/ienumerator.n \
-	  ../lib/ienumerable.n
+COMPILER_PATH = ../boot/
 
-src = \
+RUN_COMPILER = $(TIME) $(EXECUTE) $(COMPILER_PATH)ncc.exe -r:$(COMPILER_PATH)stdmacros.dll
+
+GENERIC_SRC = ../lib/aliases.n
+
+NEMERLE_DLL_SRC = \
+	../lib/aliases.n		\
+	../lib/core.n			\
+	../lib/getopt.n			\
+	../lib/hashtable.n		\
+	../lib/icollection.n		\
+	../lib/ienumerable.n		\
+	../lib/ienumerator.n		\
+	../lib/input.n			\
+	../lib/linkedlist.n		\
+	../lib/list.n			\
+	../lib/option.n			\
+	../lib/queue.n			\
+	../lib/stack.n			\
+	../lib/tree.n			\
+
+NEMERLE_COMPILER_DLL_SRC = \
 	extensions.n \
 	globalenv.n \
 	localvalue.n \
@@ -44,8 +61,8 @@ src = \
 	tyexpr.n \
 	members.n \
 	tyinfo.n \
-	$(lib_src) \
 	ast.n \
+	tree.n \
 	parsetree.n \
 	typedtree.n \
 	util.n \
@@ -54,7 +71,6 @@ src = \
 	tyvars.n \
 	tyutil.n \
 	parser.n \
-	main.n \
 	flags.n \
 	lexer.n \
 	tycon.n \
@@ -68,33 +84,79 @@ src = \
 	cgmatch.n \
 
 
+NCC_EXE_SRC = main.n
+
+STDMACROS_DLL_SRC = stdmacros.n
+
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
-NEMFLAG = -r $(DLL_PATH)System.dll
 
-all: ncc.exe
+all: stage1
 
-# Do compiler bootstrap, compare results from stage2 and stage3,
-# generate ncc2.exe binary to be put in release for bootstrap.
-# Finally run testsuite.
-boot: ncc.exe
-	$(TIME) $(EXECUTE) ./ncc.exe $(NEMFLAG) -texe -out ncc2.exe $(src)
-	$(NGEN) ncc2.exe
-	$(TIME) $(EXECUTE) ./ncc2.exe $(NEMFLAG) -texe -out ncc3.exe $(src)
-	$(DASM) ncc2.exe | grep -v -E '(^//|// GUID|^\.assembly ncc|^\.module |MVID)' > ncc2.il
-	$(DASM) ncc3.exe | grep -v -E '(^//|// GUID|^\.assembly ncc|^\.module |MVID)' > ncc3.il  
-	diff -u ncc2.il ncc3.il
-	rm -f ncc2.il ncc3.il ncc3.exe
-	$(MAKE) tests
+stage1:
+	$(MAKE) STAGE=$@ COMPILER_PATH=../boot/ stage
+	
+stage2:
+	$(MAKE) STAGE=$@ COMPILER_PATH=out.stage1/ stage
+	
+stage3:
+	$(MAKE) STAGE=$@ COMPILER_PATH=out.stage2/ stage
+	
+stage:
+	mkdir -p out.$(STAGE)
+	$(MAKE) stage-files
+
+stage-files: \
+		out.$(STAGE)/Nemerle.dll \
+		out.$(STAGE)/Nemerle.Compiler.dll \
+		out.$(STAGE)/stdmacros.dll \
+		out.$(STAGE)/ncc.exe
+
+lib: out.stage1/Nemerle.dll
+
+boot: stage1 stage2 stage3 compare
+
+compare:
+	$(MAKE) compare-one CMP_TARGET=Nemerle.dll
+	$(MAKE) compare-one CMP_TARGET=Nemerle.Compiler.dll
+	$(MAKE) compare-one CMP_TARGET=stdmacros.dll
+	$(MAKE) compare-one CMP_TARGET=ncc.exe
+
+compare-one: out.stage2/$(CMP_TARGET) out.stage2/$(CMP_TARGET) 
+	$(DASM) out.stage2/$(CMP_TARGET) | \
+		grep -v -E '(^//|// GUID|^\.assembly ncc|^\.module |MVID)' \
+		> $(CMP_TARGET)2.il
+	$(DASM) out.stage3/$(CMP_TARGET) | \
+		grep -v -E '(^//|// GUID|^\.assembly ncc|^\.module |MVID)' \
+		> $(CMP_TARGET)3.il
+	diff -u $(CMP_TARGET)2.il $(CMP_TARGET)3.il
+	rm -f $(CMP_TARGET)2.il $(CMP_TARGET)3.il
+
+out.$(STAGE)/Nemerle.dll: $(COMPILER) $(NEMERLE_DLL_SRC)
+	$(RUN_COMPILER) -target-library -out:$@ $(NEMERLE_DLL_SRC)
+
+out.$(STAGE)/Nemerle.Compiler.dll: $(COMPILER) out.$(STAGE)/Nemerle.dll $(NEMERLE_COMPILER_DLL_SRC)
+	$(RUN_COMPILER) -target-library -out:$@ \
+		-reference:out.$(STAGE)/Nemerle.dll \
+		$(GENERIC_SRC) $(NEMERLE_COMPILER_DLL_SRC)
+
+out.$(STAGE)/stdmacros.dll: $(COMPILER) out.$(STAGE)/Nemerle.dll \
+		out.$(STAGE)/Nemerle.Compiler.dll $(STDMACROS_DLL_SRC)
+	$(RUN_COMPILER) -target-library -out:$@ \
+		-reference:$(DLL_PATH)System.dll \
+		-reference:out.$(STAGE)/Nemerle.dll \
+		-reference:out.$(STAGE)/Nemerle.Compiler.dll \
+		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
+
+out.$(STAGE)/ncc.exe: $(COMPILER) out.$(STAGE)/Nemerle.dll \
+		out.$(STAGE)/Nemerle.Compiler.dll $(NCC_EXE_SRC)
+	$(RUN_COMPILER) -target-exe -out:$@ \
+		-reference:out.$(STAGE)/Nemerle.dll \
+		-reference:out.$(STAGE)/Nemerle.Compiler.dll \
+		$(GENERIC_SRC) $(NCC_EXE_SRC)
 
 sync:
 	mv ../boot/ncc.exe ../boot/ncc-old.exe
 	cp ncc2.exe ../boot/ncc.exe
-
-ncc.exe: $(src)
-	$(TIME) $(EXECUTE) ../boot/ncc.exe $(NEMFLAG) -texe -out $@ $(src)
-
-stdlib.dll: $(lib_src)
-	$(TIME) $(EXECUTE) ./ncc.exe -tdll -out $@ $(lib_src)
 
 ../config.mak:
 	$(MAKE) -C .. config.mak

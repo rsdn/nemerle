@@ -1,0 +1,682 @@
+(*
+ * Copyright (c) 2003 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *)
+
+open Nemerle.Collections;
+open System.Text.RegularExpressions;
+
+open Nemerle.Compiler;
+open Nemerle.Compiler.Tyexpr;
+open Nemerle.Compiler.Typedtree;
+open Nemerle.Compiler.Extensions;
+
+namespace PT = Nemerle.Compiler.Parsetree;
+
+namespace Nemerle.Compiler {
+module Extensions {
+
+  (** MACROS EXTENDING SYNTAX OF LANGUAGE *)
+
+  macro ifmacro (cond, e1, e2)
+  syntax ("if", "(", cond, ")", e1, "else", e2) 
+  {
+    def tcond = ty_expr (_N_ctx, cond);
+    def te1 = ty_expr (_N_ctx, e1);
+    def te2 = ty_expr (_N_ctx, e2);
+    def bool_ty = Tyutil.make_tapp ("System.Boolean");
+    Tyexpr.expect_type ("if condition", tcond, bool_ty);
+    
+    match (Tyutil.unify_branches (type_of (te1), type_of (te2))) {
+      | Some =>
+        <[ match ($(tcond : typed)) { | true => $(te1 : typed) | _ => $(te2 : typed) } ]>
+      | None =>
+        Message.fatal_error ("if...else body has type " +
+          (type_of (te1)).as_string () + " while the else clause has type " +
+          (type_of (te2)).as_string ())
+    }
+  }
+
+  (** this macro provides convenient way to write simple while loop,
+      which perform execution of [body] parameter as long as
+      [condition] is true
+    *)
+  macro whilemacro (cond, body)
+  syntax ("while", "(", cond, ")", body) 
+  {
+    <[ { def _N_whileloop () : void {
+           if ($cond) { $body; _N_whileloop() } 
+           else () 
+         }; 
+         _N_whileloop (); 
+       } 
+    ]>
+  }
+
+  (** shortcut for [if (cond) body else ()] *)
+  macro whenmacro (cond, body)
+  syntax ("when", "(", cond, ")", body) 
+  {
+    <[ if ($cond) $body else () ]>
+  }
+
+  macro formacro (init, cond, change, body)
+  syntax ("for", "(", init, ";", cond, ";", change, ")", body) 
+  {
+    <[ { $init;
+         def _N_forloop () : void {
+           when ($cond) { $body; $change; _N_forloop() } 
+         }; 
+         _N_forloop (); 
+       } 
+    ]>
+  }
+
+  (** shortcut for [if (cond) () else body] *)
+  macro unlessmacro (cond, body)
+  syntax ("unless", "(", cond, ")", body) 
+  {
+    <[ if ($cond) () else $body ]>
+  }
+
+  (** macro providing C# 'using' functionality
+      http://msdn.microsoft.com/library/default.asp?url=/library/en-us/csref/html/vclrfusingstatement.asp
+   *)
+  macro usingmacro (body, params args : array(parm))
+  syntax ("using", "(", args, ")", body) 
+    {
+      def store_exprs (args : list(PT.Parm), preexprs, postexprs)
+      {
+        match (args) {
+          | [] => (List.rev (preexprs), List.rev (postexprs))
+
+          | <[ parameter: $ex ]> :: xs =>
+              store_exprs (xs, preexprs, <[ $ex . Dispose () ]> :: postexprs)
+
+          | <[ parameter: $(str : var) = $ex ]> :: xs =>
+            store_exprs (xs, <[ def $(str : var) = $ex ]> :: preexprs, 
+                         <[ $(str : var).Dispose () ]> :: postexprs)
+
+          | _ => Message.fatal_error ("Invalid parameters in 'using' macro")
+        }
+      };
+
+      def (preexps, postexps) = store_exprs (args, [], []);
+      def all_exps = List.append (preexps, body :: postexps);
+      <[ {.. $all_exps } ]>
+    }
+
+  macro dowhilemacro (cond, body) 
+  syntax ("do", body, "while", "(", cond, ")") {
+    <[ { $body;
+         while ($cond) $body;
+       }
+    ]>
+  }
+
+  macro repeatmacro (cond, body) 
+  syntax ("repeat", body, "until", "(", cond, ")") {
+    <[ do $body while (! $cond) ]>
+  }
+
+  macro regexpmacro (mat)
+  syntax ("regexp", "(", mat, ")") {
+//    regexpmacro (match ("a") { | "a" => printf ("1\n") | _ => printf ("defa\n") });
+
+    match (mat) {
+      | <[ match ($val) { ..$cases } ]> =>
+        // final pattern of regular expression for builded match
+        mutable pat <- System.Text.StringBuilder ();
+        // names of variables in patterns to be 
+        mutable alternatives <- [];
+        mutable first <- true;
+        mutable default <- None ();
+
+        def create_regpattern (cass : list (Parsetree.Match_case)) {
+          mutable patnames <- [];
+
+          def walk_guards (gs, acc) {
+            match (gs) {
+              | <[ caseguard: $(str : string) ]> :: xs =>
+                // take names of named groups
+                def namesreg = Regex (@"\(\?\<(\w+)\s*(:\s*((\w|\.)+))?");
+                mutable m <- namesreg.Match (str); 
+                while (m.Success) {
+//                  printf ("%s\n", m.Groups[i].ToString ());
+                  mutable end <- false;
+                  mutable paren <- 0;
+                  mutable optional <- false;
+                  for (mutable i <- m.Index; !end && i < str.Length; i <- i + 1) {
+                    match (str[i]) {
+                      | '(' => paren <- paren + 1
+                      | ')' => 
+                        paren <- paren - 1;
+                        when (paren == 0 && i + 1 < str.Length && str[i + 1] == '?') {
+                          end <- true;
+                          optional <- true;
+                        }
+                      | _ => ()
+                    }
+                  };
+
+                  match ((m.Groups[1].Success, m.Groups[3].Success)) {
+                    | (true, false) =>
+                      patnames <- (m.Groups[1].ToString (), optional, None ()) :: patnames
+                    | (true, true) =>
+                      patnames <- (m.Groups[1].ToString (), optional,
+                                   Some (m.Groups[3].ToString ())) :: patnames;
+                    | _ => ()
+                  };
+                  m <- m.NextMatch ();
+                };
+                def newsymb = Util.tmpname ("g");
+                // add | if it is not first alternative in our pattern
+                unless (first) pat <- pat.Append ("|");
+                first <- false;
+                def newstr = namesreg.Replace (str, "(?<$1");
+                // add current alternative to our pattern
+                pat <- pat.Append("(?<" + newsymb + ">^" + newstr + "$)");
+                walk_guards (xs, newsymb :: acc)
+
+              | [] => acc
+
+              | <[ caseguard: $_p when $(_) ]> :: _ =>
+                Message.fatal_error ("guarded pattern not allowed in regexp macro")
+              | _ :: _ =>
+                Message.fatal_error ("only string patterns allowed in regexp macro")
+            }
+          };
+          match (cass) {
+            | [ <[ case: _ => $expr ]> ] => default <- Some (expr)
+
+            | <[ case: | ..$guards => $expr ]> :: xs =>
+              alternatives <- (walk_guards (guards, []), patnames, expr) :: alternatives;
+              create_regpattern (xs)
+
+            | [] => ()
+          }
+        };
+
+        create_regpattern (cases);
+//        def myreg =  System.Text.RegularExpressions.Regex (pat.ToString ());
+//        printf ("pat = %s\n", pat.ToString());
+        def mname = Util.tmpname ("match");
+
+        def build_checking (cass) {
+          def build_alts (alts) {
+            match (alts) {
+              | [str] => 
+//                printf ("%s %d\n", str, myreg.GroupNumberFromName (str));
+//                <[ $(mname : var).Groups[$(myreg.GroupNumberFromName (str) : int)]
+                <[ $(mname : var).Groups[$(str : string)]
+                                 .Success ]>
+              | x::xs =>
+//                printf ("%s %d\n", x, myreg.GroupNumberFromName (x));
+                <[ $(mname : var).Groups[$(x : string)]
+                                 .Success || 
+                   $(build_alts (xs)) ]>
+                  
+              | [] => Message.fatal_error ("empty list of guards?")
+            }
+          };
+          def build_bindings (patnames, acc) {
+            match (patnames) {
+              | (nam, opt, ty) :: xs =>
+                def strin = <[ $(mname : var).Groups[$(nam : string)].ToString () ]>;
+                def value =
+                  match (ty) {
+                    | None => strin
+                    | Some (t) => 
+                      <[ $(t : var).Parse ($strin) ]>
+                  };
+                def binding =
+                  if (opt) 
+                    <[ def $(nam : var) = 
+                         if ($(mname : var).Groups[$(nam : string)].Success)
+                           Some ($value)
+                         else
+                           None ()
+                    ]>
+                  else
+                    <[ def $(nam : var) = $value ]>;
+                build_bindings (xs, binding :: acc);
+                
+              | [] => acc
+            }
+          };
+          match (cass) {
+            | [(grds, patnames, expr)] =>
+              <[ if ($(build_alts (grds))) {
+                   .. $(List.append (build_bindings (patnames, []), [expr])) 
+                 }
+                 else raise Nemerle.Core.Match_failure () 
+              ]>
+            | (grds, patnames, expr) :: xs =>
+              <[ if ($(build_alts (grds))) {
+                   .. $(List.append (build_bindings (patnames, []), [expr])) 
+                 }
+                 else $(build_checking (xs)) 
+              ]>
+            
+            | [] => Message.fatal_error ("empty list of guards?")
+          }
+        };
+        def defexpr = 
+          match (default) {
+            | None =>
+              Message.warning ("this pattern might be not exhaustive");
+              <[ () ]>
+            | Some (defexpr) => defexpr
+          };              
+
+//        def ret =
+        <[ { def _N_regge = System.Text.RegularExpressions.Regex 
+                              ($(pat.ToString () : string), 
+                               System.Text.RegularExpressions.RegexOptions.ExplicitCapture);
+             def $(mname : var) = _N_regge.Match ($val);
+             if ($(mname : var).Success)
+               $(build_checking (alternatives))
+             else
+               $defexpr
+           } 
+        ]>
+//        ; Macros.PrintExpr (ret, ""); printf ("\n"); ret
+      | _ =>
+        Message.fatal_error ("regexp macro expects match construct")
+    }
+  }
+
+//  it doesn't work, because of cgflat... C# limitations
+  macro @&& (e1, e2) 
+  {
+    <[ if ($e1) if ($e2) true else false else false ]>        
+  }
+  /*
+  public class AndMacro implements IMacro 
+  {
+    Run (_ : CTX, args : list (PT.SyntaxElement)) : PT.Expr implements IMacro.Run {
+      match (args) {
+        | [ PT.SyntaxExpr (e1); PT.SyntaxExpr (e2) ] =>
+            <[ if ($e1) if ($e2) true else false else false ]>
+        | _ => 
+          Util.ice ("|| operator didn't get two arguments")
+      }
+    }
+
+    GetName () : string implements IMacro.GetName { "&&" }
+
+    CallTransform (pars : list (PT.Parm)) : list (PT.SyntaxElement)
+    implements IMacro.CallTransform
+    {
+      match (pars) {
+        | [{ expr = x }; {expr = y}] =>
+          [PT.SyntaxExpr (x); PT.SyntaxExpr (y)]
+        | _ => []
+      }
+    }
+  
+    SyntaxExtension () : string * list (Parser.GrammarElement) * list (int)
+    implements IMacro.SyntaxExtension
+    {
+      ("", [], [])
+    }
+
+    public this () {}
+  }
+  */
+
+  macro @|| (e1, e2) 
+  {
+    <[ if ($e1) true else if ($e2) true else false ]>        
+  }
+  
+  /*
+  public class OrMacro implements IMacro 
+  {
+    Run (_ : CTX, args : list (PT.SyntaxElement)) : PT.Expr 
+    implements IMacro.Run {
+      match (args) {
+        | [ PT.SyntaxExpr (e1); PT.SyntaxExpr (e2) ] =>
+            <[ { if ($e1) true else if ($e2) true else false } ]>
+        | _ => 
+          Util.ice ("|| operator didn't get two arguments")
+      }
+    }
+
+    CallTransform (pars : list (PT.Parm)) : list (PT.SyntaxElement)
+    implements IMacro.CallTransform
+    {
+      match (pars) {
+        | [{ expr = x }; {expr = y}] =>
+          [PT.SyntaxExpr (x); PT.SyntaxExpr (y)]
+        | _ => []
+      }
+    }
+
+    SyntaxExtension () : string * list (Parser.GrammarElement) * list (int)
+    implements IMacro.SyntaxExtension
+    {
+      ("", [], [])
+    }
+
+
+    GetName () : string implements IMacro.GetName { "||" }
+    
+    public this () {}
+  }
+  */
+
+  (** TOOL MACROS *)
+
+  variant FormatToken {
+    | Text { body : string; }
+    | TextNewline { body : string; }
+    | Number
+    | NumberFloat
+    | Str
+    | Chr
+  }
+
+  parse_format (form : string) : list(FormatToken)
+  {
+    mutable i <- 0;
+    mutable buf <- System.Text.StringBuilder ();
+    mutable result <- [];
+    def n = form.Length;
+
+    while (i < n) { 
+      match (form[i]) {
+        | '%' =>
+          // % occured - first, dump text from buffer
+          when ( buf.Length > 0 ) {
+            result <- Text (buf.ToString ()) :: result;
+            buf <- buf.Remove (0, buf.Length);
+          };
+          // now analyze next character
+          i <- i + 1;
+          if ( i < n ) {
+            match (form[i]) {
+              | 'd' => result <- Number () :: result
+              | 'i' => result <- Number () :: result
+              | 'f' => result <- NumberFloat () :: result
+              | 's' => result <- Str () :: result
+              | 'c' => result <- Chr () :: result
+              | _ => 
+                Message.error ("Unsupported formatting sequence after % character")
+            }
+          }
+          else
+            Message.error ("Unexpected end of format after % character")
+        | '\n' =>
+          result <- TextNewline (buf.ToString ()) :: result;
+          buf <- buf.Remove (0, buf.Length)
+        | c =>
+          buf <- buf.Append (c)
+      };
+      i <- i + 1;
+    };
+
+    when (buf.Length > 0) { result <- Text (buf.ToString ()) :: result; };
+
+    // the result is reversed, but function using it will reverse it again
+    result
+  }
+  
+  macro printf (format : string, params parms : array (expr)) 
+    {
+      def make_expressions (toks, parms, acc) {
+        match ((toks, parms)) {
+          | ([], []) => acc
+          | (Text (t) :: xs, _) => 
+            make_expressions (xs, parms, 
+              <[ System.Console.Write ($(t : string)) ]> :: acc)
+          | (TextNewline (t) :: xs, _) => 
+            make_expressions (xs, parms, 
+              <[ System.Console.WriteLine ($(t : string)) ]> :: acc)
+
+          | (Number :: xs, p :: ps) =>
+            make_expressions (xs, ps, <[ System.Console.Write (($p : int)) ]> :: acc)
+
+          | (NumberFloat :: xs, p :: ps) =>
+            make_expressions (xs, ps, <[ System.Console.Write (($p : float)) ]> :: acc)
+
+          | (Str :: xs, p :: ps) =>
+            make_expressions (xs, ps, <[ System.Console.Write (($p : string)) ]> :: acc)
+
+          | (Chr :: xs, p :: ps) =>
+            make_expressions (xs, ps, <[ System.Console.Write (($p : char)) ]> :: acc)
+
+          | (_, _ :: _) =>
+            Message.error ("too many arguments for printf macro");
+            acc
+          | (_ :: _, _) =>
+            Message.error ("not enough arguments for printf macro");
+            acc
+        }
+      };
+
+      def seq = make_expressions (parse_format (format), List.rev (parms), []);
+      <[ {.. $seq } ]>
+    }
+
+  macro scanf (format : string, params parms : array(expr)) 
+    {
+      def make_expressions (toks, parms, acc) {
+        match ((toks, parms)) {
+          | ([], []) => acc
+          | (Text (t) :: xs, _) => 
+            make_expressions (xs, parms, 
+              <[ Nemerle.Input.CheckInput ($(t : string)) ]> :: acc)
+
+          | (TextNewline (t) :: xs, _) => 
+            make_expressions (xs, parms, 
+              <[ Nemerle.Input.CheckInput ($(t : string)) ]> :: acc)
+
+          | (Number :: xs, p :: ps) =>
+            make_expressions (xs, ps, 
+              <[ $p <- Nemerle.Input.ReadInt () ]> :: acc)
+
+          | (NumberFloat :: _, _) =>
+            Util.ice ("scaning floats not supported")
+
+          | (Str :: xs, p :: ps) =>
+            make_expressions (xs, ps, 
+              <[ $p <- Nemerle.Input.ReadString () ]> :: acc)
+
+          | (Chr :: xs, p :: ps) =>
+            make_expressions (xs, ps, 
+              <[ $p <- System.Char.ToChar (System.Console.Read ()) ]> :: acc)
+
+          | (_, _ :: _) =>
+            Message.error ("too many arguments for scanf macro");
+            acc
+          | (_ :: _, _) =>
+            Message.error ("not enough arguments for scanf macro");
+            acc
+        }
+      };
+
+      def seq = <[ Nemerle.Input.EatWhiteSpace () ]> ::
+        make_expressions (parse_format (format), List.rev (parms), []);
+      <[ {.. $seq } ]>
+    }
+
+  macro sprintf (target, format : string, params parms : array(expr))
+    {
+      match (target) {
+        | <[ $(_ : var) ]> =>
+          def make_expressions (toks, parms, acc) {
+            match ((toks, parms)) {
+              | ([], []) => acc
+              | (Text (t) :: xs, _) => 
+                make_expressions (xs, parms, 
+                  <[ def _ = _N_sb.Append ($(t : string)) ]> :: acc)
+              | (TextNewline (t) :: xs, _) => 
+                make_expressions (xs, parms, 
+                  <[ def _ = _N_sb.Append ($(t : string)) ]> :: 
+                  <[ def _ = _N_sb.Append ("\n") ]> :: acc)
+
+              | (Number :: xs, p :: ps) =>
+                make_expressions (xs, ps, <[ def _ = _N_sb.Append (($p : int)) ]> :: acc)
+
+              | (NumberFloat :: xs, p :: ps) =>
+                make_expressions (xs, ps, <[ def _ = _N_sb.Append (($p : float)) ]> :: acc)
+
+              | (Str :: xs, p :: ps) =>
+                make_expressions (xs, ps, <[ def _ = _N_sb.Append (($p : string)) ]> :: acc)
+
+              | (Chr :: xs, p :: ps) =>
+                make_expressions (xs, ps, <[ def _ = _N_sb.Append (($p : char)) ]> :: acc)
+
+              | (_, _ :: _) =>
+                Message.error ("too many arguments for sprintf macro");
+                acc
+              | (_ :: _, _) =>
+                Message.error ("not enough arguments for sprintf macro");
+                acc
+            }
+          };
+          
+          def seq = <[ def _N_sb = System.Text.StringBuilder () ]> ::
+                    make_expressions (parse_format (format), List.rev (parms), 
+                    [ <[ $target <- _N_sb.ToString () ]>; (target : PT.Expr) ]);
+          <[ {.. $seq } ]>
+        | _ => 
+          Message.fatal_error ("sprintf macro expects variable of type string as first argument")
+      }
+    }
+/*
+  public class SscanfMacro implements IMacro 
+  {
+    RunNew (_ : CTX, args : list (PT.SyntaxElement)) : PT.Expr implements IMacro.RunNew { <[ () ]> }
+
+    Run (_ : CTX, args : list (PT.Parm)) : PT.Expr implements IMacro.Run
+    {
+      match (get_params (args)) {
+        | valstr :: <[ $(format : string) ]> :: parms =>
+          def make_expressions (toks, parms, acc) {
+            match ((toks, parms)) {
+              | ([], []) => acc
+              | (Text (t) :: xs, _) => 
+                make_expressions (xs, parms, 
+                  <[ Nemerle.Input.CheckInput ($(t : string)) ]> :: acc)
+
+              | (TextNewline (t) :: xs, _) => 
+                make_expressions (xs, parms, 
+                  <[ Nemerle.Input.CheckInput ($(t : string)) ]> :: acc)
+
+              | (Number :: xs, p :: ps) =>
+                make_expressions (xs, ps, 
+                  <[ $p <- Nemerle.Input.ReadInt () ]> :: acc)
+
+              | (NumberFloat :: _, _) =>
+                Util.ice ("scanning floats not supported")
+
+              | (Str :: xs, p :: ps) =>
+                make_expressions (xs, ps, 
+                  <[ $p <- Nemerle.Input.ReadString () ]> :: acc)
+
+              | (Chr :: xs, p :: ps) =>
+                make_expressions (xs, ps, 
+                  <[ $p <- System.Char.ToChar (System.Console.Read ()) ]> :: acc)
+
+              | (_, _ :: _) =>
+                Message.error ("too many arguments for sscanf macro");
+                acc
+              | (_ :: _, _) =>
+                Message.error ("not enough arguments for sscanf macro");
+                acc
+            }
+          };
+          
+          def seq = <[ def _N_sscanf_str = $valstr ]> ::
+                    <[ mutable _N_sscanf_pos <- 0 ]> ::
+                    <[ def _N_sscanf_len = _N_sscanf_str.Length ]> ::
+                    <[ Nemerle.Input.EatWhiteSpace () ]> ::
+            make_expressions (parse_format (format), List.rev (parms), []);
+          <[ {.. $seq } ]>
+        | _ => 
+          Message.fatal_error ("sscanf macro expects string and formating " +
+                               "string as first arguments")
+      }
+    }
+
+    GetName () : string implements IMacro.GetName { "sscanf" }
+    
+    public this () {}
+  }
+*/
+  macro pretty_print_expr (exp, expand : bool)
+  {
+    if (expand) 
+      Macros.PrintExpr (MacroRegistry.expand_macro (_N_ctx, exp), "")
+    else
+      Macros.PrintExpr (exp, "");
+    printf ("\n");
+    <[ () ]>
+  }
+
+  macro assert (cond, message = <[ "" ]>) 
+  {
+    match (cond) {
+      | <[ false ]> =>
+        // skip cond in this case so it gets 'a type
+        <[ raise Assertion_failed ($(cond.loc.file : string), 
+                                   $(cond.loc.line : int), $message) ]>
+      | _ =>
+        <[ unless ($cond) 
+           raise Assertion_failed ($(cond.loc.file : string), 
+                                   $(cond.loc.line : int), $message) ]>
+    }
+  }
+
+  (** MACROS, WHICH WE CAN DO BETTER THAN HASKELL *)
+
+  macro selectFromTuple (k : int, n : int, tupl)
+    {
+      mutable tup <- [];
+      for (mutable i <- n; i > 0; i <- i - 1)
+        tup <- <[ pattern: $("_N_tp" + i.ToString () : var) ]> :: tup;
+
+      <[ { def (.. $tup) = $tupl; $("_N_tp" + k.ToString () : var) } ]>
+    }
+
+  macro tupleMap (f : expr, tup : expr)
+    {
+      match (tup) {
+        | <[ (.. $elms) ]> =>
+            def mapped = List.map (fun (e) { <[ $f ($e) ]> }, elms);
+                  <[ (.. $mapped) ]>
+        | _ => 
+          Message.fatal_error ("'tupleMap' macro expects function and tuple")
+      }
+    }
+
+
+  
+} // end module Extensions
+} // end ns
+
