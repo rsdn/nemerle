@@ -16,10 +16,10 @@ Sioux.dll: $(SIOUX_DLL_SOURCES) Nemerle.Xml.dll
 	$(NCC) -tdll -r:System.Xml -r:Nemerle.Xml -r:System.Web -out:$@  $(SIOUX_DLL_SOURCES)
 
 tester.exe: tester.n
-	$(NCC) -texe -r:System.Xml -r:Nemerle.Xml -out:$@ $^
+	$(NCC) -texe -r:System.Xml -r:Nemerle.Xml -r:System.Web -out:$@ $^
 
 clean:
-	rm -f httpd.exe
+	rm -f *.exe *.dll
 
 v:
 	set -xe; for f in fit/*.xml ; do \
