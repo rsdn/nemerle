@@ -28,7 +28,7 @@
 #
 
 $nem_comp = shift;
-defined $nem_comp or $nem_comp = "ncc2";
+defined $nem_comp or $nem_comp = "ncc";
 
 $cs_compiler = shift;
 defined $cs_compiler or $cs_compiler = "mcs";
@@ -66,7 +66,7 @@ sub err($)
   print STDERR "$fn: $m\n";
 }
 
-while (<*.n>) {
+FILE: while (<*.n>) {
   $fn = $_;
   %err = ();
   %warn = ();
@@ -83,8 +83,12 @@ while (<*.n>) {
   close(FH);
   $oops = 0;
   $test = "norm";
+  if (!xgrep("^BEGIN-OUTPUT", $fn)) {
+    next FILE;
+  }
   if (scalar (keys %err) != 0) {
     $test = "err ";
+    next FILE;
   } elsif (scalar (keys %warn) != 0) {
     $test = "warn";
   }
@@ -94,7 +98,7 @@ while (<*.n>) {
   print STDERR "${test} : $fn... ";
   $no_newline = 1;
   
-  $res = system("$compiler $fn > test.err 2>&1");
+  $res = system("$compiler -texe -out:t.exe $fn > test.err 2>&1");
 
   if ($res && scalar (keys %err) == 0) {
     err("unxepected error exit status");
@@ -124,6 +128,8 @@ while (<*.n>) {
       chomp;
       s/\r//;
       /\.\.\.$/ and next;
+      / debug: / and next;
+      /^$/ and next;
       err("unexpected compiler output ($_)");
     }
     close(IN);
@@ -143,21 +149,8 @@ while (<*.n>) {
         /^BEGIN-OUTPUT/ and $copy_mode = 1;
       }
       close (F);
-      if ($cs_compiler eq "cscc") {
-        $res = system("cscc -o t.exe out.cs >/dev/null 2>&1");
-	err("cscc failed on $fn (out.cs)") if $res;
-        $il_run = "ilrun ";
-      } elsif ($cs_compiler eq "mcs") {
-        $res = system("mcs -out:t.exe -target:exe out.cs >/dev/null 2>&1");
-	err("mcs failed on $fn (out.cs)") if $res;
-        $il_run = "mono ";
-      } elsif ($cs_compiler eq "csc") {
-        $res = system("csc /out:t.exe /target:exe out.cs >/dev/null 2>&1");
-	err("csc failed on $fn (out.cs)") if $res;
-        $il_run = "";
-      } else { die }
       $out = "";
-      open(F, $il_run . "t.exe 2>&1 |");
+      open(F, $runtime . "t.exe 2>&1 |");
       while (<F>) {
         s/\r\n/\n/g;
         $out .= $_;
@@ -168,19 +161,6 @@ while (<*.n>) {
         err("bad testcase output");
 	print STDERR "\nneeded:\n'$exp_out'\ngot:\n'$out'\n\n";
       }
-    } else {
-      if ($cs_compiler eq "cscc") {
-        $res = system("cscc -c -o /dev/null out.cs >/dev/null 2>&1");
-	err("cscc failed on $fn (out.cs)") if $res;
-      } elsif ($cs_compiler eq "mcs") {
-        $res = system("mcs -out:dev_null.o -target:module out.cs >/dev/null 2>&1");
-	err("mcs failed on $fn (out.cs))") if $res;
-	unlink("dev_null.o");
-      } elsif ($cs_compiler eq "csc") {
-        $res = system("csc /out:dev_null.o /target:module out.cs >/dev/null 2>&1");
-	err("csc failed on $fn (out.cs))") if $res;
-	unlink("dev_null.o");
-      } else { die }
     }
   }
 
