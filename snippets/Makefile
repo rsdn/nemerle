@@ -28,9 +28,6 @@
 # Include configuration determined by configure script.
 include ../config.mak
 
-#export PATH = $(shell echo $$PATH):$(shell pwd)/../boot/
-#export MONO_PATH = $(shell echo $$MONO_PATH):$(shell pwd)/../boot/
-
 
 ############################################################
 # VARIABLES
