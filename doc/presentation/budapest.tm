@@ -560,8 +560,6 @@
     <item>but it is capable to set proper type for <verbatim|salary> and
     <verbatim|lname> variables
   </itemize>
-
-  \;
 </body>
 
 <\initial>
@@ -614,6 +612,8 @@
       <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-6>>
 
       SQL queries extension<value|toc-dots><pageref|toc-7>
+
+      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-8>>
     </associate>
   </collection>
 </auxiliary>
