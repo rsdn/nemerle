@@ -156,5 +156,7 @@ publish-stamp: nemerle-web.tar.gz
 # This target is used to build the tarball.  It is passed the
 # directory name, where all files should be copied.
 dist: $(html-no-course)
+	$(MKDIR) $(DIR)/html
+	$(Q)mkdir -p $(DIR)/html
 	$(CP)
-	$(Q)cp $(html-no-course) $(DIR)
+	$(Q)cp $(html-no-course) $(DIR)/html

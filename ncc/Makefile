@@ -137,7 +137,7 @@ all: stage1
 # This is necessary to make sure, that configuration file
 # has been generated, and it is up to date.
 ../config.mak:
-	cd .. && $(MAKE) config.mak
+	$(Q)cd .. && $(MAKE) config.mak
 
 stage1:
 	$(Q)$(MAKE) STAGE=$@ COMPILER_PATH=../boot/ aux-stage
@@ -307,7 +307,7 @@ sync:
 t test: tests
 
 tests:
-	cd testsuite && $(MAKE)
+	$(Q)cd testsuite && $(MAKE)
 
 # This target is used to build the tarball.  It is passed the
 # directory name, where all files should be copied.
@@ -315,13 +315,10 @@ dist:
 	$(MKDIR) $(DIR)/ncc
 	$(MKDIR) $(DIR)/ncc/testsuite
 	$(Q)mkdir $(DIR)/ncc/testsuite
-	$(MKDIR) $(DIR)/ncc/macros
-	$(Q)mkdir $(DIR)/ncc/macros
 	$(CP) '*.n'
 	$(Q)cp $(DISTFILES) $(DIR)/ncc
 	$(CP) '../lib/*.n'
 	$(Q)cp $(LIBDISTFILES) $(DIR)/lib
-	$(Q)$(MAKE) -C macros    dist DIR=../$(DIR)/ncc/macros
 	$(Q)$(MAKE) -C testsuite dist DIR=../$(DIR)/ncc/testsuite
 
 clean:

@@ -81,7 +81,7 @@ sync-boot:
 	$(MAKE) -C ncc boot sync
 	svn commit -m "Sync for release." boot/
 
-dist: #sync-boot changelog
+dist: changelog
 	$(Q)rm -rf $(PACKAGE)-$(VERSION).*
 	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)
 	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)
@@ -97,11 +97,10 @@ dist: #sync-boot changelog
 	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/lib
 	$(CP)
 	$(Q)cp $(DISTFILES) $(PACKAGE)-$(VERSION).$(REVISION)
-	$(Q)$(MAKE) -C ncc  dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/ncc
+	$(Q)$(MAKE) -C ncc  dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)
 	$(Q)$(MAKE) -C doc  dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/doc
 	$(Q)$(MAKE) -C misc dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/misc
 	$(Q)$(MAKE) -C boot dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/boot
-	$(Q)$(MAKE) -C lib  dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/lib
 	$(TAR) $(PACKAGE)-$(VERSION).$(REVISION).tar.gz 
 	@tar zcf $(PACKAGE)-$(VERSION).$(REVISION).tar.gz $(PACKAGE)-$(VERSION).$(REVISION)
 	@rm -rf $(PACKAGE)-$(VERSION).$(REVISION)

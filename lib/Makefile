@@ -56,7 +56,7 @@ NEMFLAG =
 all: Nemerle.dll
 
 Nemerle.dll: $(src)
-	time $(EXECUTE) ../ncc/ncc.exe $(NEMFLAG) -tdll -out $@ $(src)
+	$(TIME) $(EXECUTE) ../ncc/ncc.exe $(NEMFLAG) -tdll -out $@ $(src)
 
 ../config.mak:
 	$(MAKE) -C .. config.mak
