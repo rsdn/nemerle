@@ -2,10 +2,10 @@
 # Sioux Makefile
 #
 
-include ../nemerle/trunk/config.mak
+include ../../config.mak
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
-NCC_DIR = ../nemerle/trunk/boot
+NCC_DIR = ../../boot
 NCC = $(NCC_DIR)/ncc.exe -q
 APP_DIR = webapps
 
@@ -20,7 +20,7 @@ CSL_APPLICATION_SOURCES = csl04/csl.n csl04/submission.n
 FIT_APPLICATION_SOURCES = fit/fit.n fit/submission.n
 HELLO_APPLICATION_SOURCES = hello.n
 
-all: Nemerle.Xml.dll Sioux.dll httpd.exe Csl.dll Hello.dll Fit.dll
+all: copy-dlls Nemerle.Xml.dll Sioux.dll httpd.exe Csl.dll Hello.dll Fit.dll
 
 Nemerle.Xml.dll: $(NEMERLE_XML_DLL_SOURCES)
 	$(EXECUTE) $(NCC) -tdll -out:$@  $(NEMERLE_XML_DLL_SOURCES)
