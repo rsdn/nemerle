@@ -184,7 +184,7 @@ let bind_types decls =
         self e;
         List.iter bind_tc tcs;
         raise Dont_descend
-      | E_match (e, mcs) ->
+      | E_match (_e, mcs) ->
         let rec bind_pat = function
           | P_cons (td, p) -> ignore (bind_td ctx td); bind_pat p
           | P_tuple ps -> List.iter bind_pat ps
@@ -198,7 +198,6 @@ let bind_types decls =
             with Recovery -> ()
           end
         in
-        self e;
         List.iter bind_mc mcs;
         ()
           
