@@ -29,6 +29,7 @@
 using Nemerle.Collections;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Compiler;
+using Nemerle.Utility;
 
 namespace PT = Nemerle.Compiler.Parsetree;
 
@@ -39,75 +40,23 @@ public variant Symbol
   | Sym_type { tycon : Tycon; }
   | Sym_type_member { member : IMember; }
 }
-///*
-public variant MacroContextChange
-{
-  | MCC_Enter { name : string; }
-  | MCC_Namespace { name : string; }
-  | MCC_Alias { short : string; long : string; }
-}
-
-public class MacroContextTree
-{
-  public id : int;
-  public action : MacroContextChange;
-  public mutable children : list <MacroContextTree>;
-
-  public this (id : int, action : MacroContextChange, 
-               children : list <MacroContextTree>)
-  {
-    this.id <- id;
-    this.action <- action;
-    this.children <- children;
-  }
-  
-  public AddChild (change : MacroContextChange) : MacroContextTree
-  {
-    def new_ctx = GlobalEnv.IncrementMacroContext ();
-    def child = MacroContextTree (new_ctx, change, []);
-    children <- child :: children;
-    child
-  }
-
-  public static Lift (x : MacroContextTree) : Parsetree.Expr
-  {
-    def lift (x : MacroContextChange) {
-      | MCC_Enter (name) =>
-        <[ Nemerle.Compiler.MCC_Enter ($(name : string)) ]>
-      | MCC_Namespace (name) =>
-        <[ Nemerle.Compiler.MCC_Namespace ($(name : string)) ]>        
-      | MCC_Alias (short, long) =>
-        <[ Nemerle.Compiler.MCC_Alias ($(short : string), $(long : string)) ]>        
-    };
-    
-    <[ Nemerle.Compiler.MacroContextTree ($(x.id : int), $(lift (x.action)),
-                                          $(Macros.Lift (List.Map (x.children, Lift)))) ]>
-  }
-}
-//*/
 
 public class GlobalEnv 
   {
     static mutable types : Hashtable <string, Tycon>;
     static mutable macro_context : int;
-    static macro_contexts : Nemerle.Compiler.MacroContextTree;
+    static macro_contexts : Hashtable <string, int>;
 
     static this () {
       types <- Hashtable (2000);
       macro_context <- 1;
-      macro_contexts <- MacroContextTree (macro_context, null, []);
+      macro_contexts <- Hashtable (100);
     }
 
-    public static IncrementMacroContext () : int
-    {
-      ++macro_context;
-      macro_context;
-    }
-    
     open_namespaces : list <string>;
     current_namespace : string;
     namespace_aliases : SystemMap <string, string>;
-    macro_ctx_node : MacroContextTree;
+    mutable macro_ctx_cache : int;
 
     public static AddType (name : string, t : Tycon) : void {
       match (types.Get (name)) {
@@ -223,23 +172,20 @@ public class GlobalEnv
     public AddOpenNamespace (ns : string) : GlobalEnv
     {
       GlobalEnv (List.Append (open_namespaces, [ns]),
-                 current_namespace, namespace_aliases,
-                 macro_ctx_node.AddChild (MCC_Namespace (ns)))
+                 current_namespace, namespace_aliases)
     }
 
     public AddNamespaceAlias (short_name : string, long_name : string) : GlobalEnv
     {
       GlobalEnv (open_namespaces, current_namespace,
-                 namespace_aliases.Add (short_name, long_name),
-                 macro_ctx_node.AddChild (MCC_Alias (short_name, long_name)))
+                 namespace_aliases.Add (short_name, long_name))
     }
     
     public EnterIntoNamespace (pref : string) : GlobalEnv
     {
       def new_name = current_namespace + pref;
       GlobalEnv (List.Append (open_namespaces, [new_name]), new_name + ".",
-                 namespace_aliases,
-                 macro_ctx_node.AddChild (MCC_Enter (pref)))
+                 namespace_aliases)
     }
 
     public this () 
@@ -247,16 +193,52 @@ public class GlobalEnv
       current_namespace <- "";
       open_namespaces <- [];
       namespace_aliases <- SystemMap ();
-      macro_ctx_node <- macro_contexts;
+      macro_ctx_cache <- 0;
     }
 
-    this (o : list <string>, c : string, n : SystemMap <string, string>,
-          m : MacroContextTree)
+    this (o : list <string>, c : string, n : SystemMap <string, string>)
     {
       current_namespace <- c;
       open_namespaces <- o;
       namespace_aliases <- n;
-      macro_ctx_node <- m;      
+      macro_ctx_cache <- 0;      
+    }
+
+    /** Creates environment described by given string encoded for purpose
+        of storing macro contexts */
+    public this (coded : string)
+    {
+      mutable state <- 0;
+      mutable last <- 0;
+      mutable short <- "";
+      for (mutable i <- 1; i < coded.Length; ++i) {
+        match ((state, coded[0])) {
+          | (0, '&') =>
+            current_namespace <- coded.Substring (0, i);
+            state <- 1;
+            last <- i + 1;
+           
+          | (1, '#') =>
+            open_namespaces <- coded.Substring (last, i - last) :: open_namespaces;
+            last <- i + 1;
+            
+          | (1, '&') =>
+            open_namespaces <- coded.Substring (last, i - last) :: open_namespaces;
+            state <- 2;
+            last <- i + 1;
+
+          | (2, '#') | (2, '&') =>
+            namespace_aliases <- namespace_aliases.
+              Add (short, coded.Substring (last, i - last));
+            last <- i + 1;
+
+          | (2, '=') =>
+            short <- coded.Substring (last, i - last);
+            last <- i + 1;
+
+          | _ => ()
+        }
+      }
     }
     
     public GetCurrentNamespace () : string
@@ -266,7 +248,33 @@ public class GlobalEnv
 
     public GetMacroContext () : int
     {
-      macro_ctx_node.id
+      when (macro_ctx_cache == 0) {
+        def cmp (x, y) { System.String.Compare (x,y) };
+        def collect (k, v, acc) { k + "=" + v :: acc };
+
+        def aliases = List.Sort (namespace_aliases.Fold (collect, []), cmp);
+        def spaces = List.Sort (open_namespaces, cmp);
+        def coded_al = NString.Concat ("#", aliases);
+        def coded_ns = NString.Concat ("#", spaces);
+        def coded = System.Text.StringBuilder (current_namespace + "&");
+        ignore (coded.Append (coded_ns + "&"));
+        ignore (coded.Append (coded_al + "&"));
+        match (macro_contexts.Get (coded.ToString ())) {
+          | None =>
+            ++macro_context;
+            macro_contexts.Add (coded.ToString (), macro_context);
+            macro_ctx_cache <- macro_context  
+          | Some (ctx) =>
+            macro_ctx_cache <- ctx
+        }
+      };
+      macro_ctx_cache
+    }
+
+    public static LiftMacroContexts () : Parsetree.Expr
+    {
+      def collect (k, v, acc) { <[ ($(k : string), $(v : int)) ]> :: acc };
+      Macros.Lift (macro_contexts.Fold (collect, []))
     }
   }
 } // ns
