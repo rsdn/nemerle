@@ -35,7 +35,7 @@ include ../config.mak
 
 COMPILER_PATH = ../boot/
 # -global-unused-symbols-warnings
-NCC_FLAGS     = -pedantic-lexer $(NEM_FLAGS)
+NCC_FLAGS     = -pedantic-lexer -global-unused-symbols-warnings $(NEM_FLAGS)
 COMPILER      = $(COMPILER_PATH)ncc.exe
 COMPILER_DEP  = $(COMPILER_PATH)ncc.exe $(COMPILER_PATH)Nemerle.Macros.dll
 EXECUTE       = $(NET_ENGINE) $(NET_FLAGS)
