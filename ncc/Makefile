@@ -66,6 +66,7 @@ NEMERLE_DLL_SRC = \
 
 
 NEMERLE_COMPILER_DLL_SRC = \
+	internaltypes.n \
 	constantfolder.n \
 	numerictype.n \
 	cgexpr.n \
