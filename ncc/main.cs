@@ -26,6 +26,15 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+/*
+This is the main compiler file. But all it does it running parser
+(parser.jay) and transferring control to Passes.run function (from
+passes.n).
+
+Main file also catches some exceptions, and defines some auxiliary
+functions (class CS_glue, these are later referenced from csglue.n).
+*/
+
 namespace Nemerle.Compiler {
 
 class CS_glue {

@@ -36,17 +36,10 @@ namespace PT = Nemerle.Compiler.Parsetree;
 
 namespace Nemerle.Compiler {
 
-(*
-pass 3:
-  For each Type_decl collect:
-    - set of types we directly or indirectly subtype, present this
-      as map from Type_decl to type expression describing variable
-      substitution.
-    - enclosing type (do we need it?)
-    - list of fields and methods (map from name to method list or 
-      field), special method -- ".ctor"
-    - list of methods we need to implement
-*)
+(** This pass operates on [Tyinfo] objects created for
+    each type declaration found in source files.  These objects are
+    already created, but most fields are empty.  The main function of
+    this pass is [Tyinfo.run].  *)
 
 class Tyinfo
   {
@@ -89,64 +82,6 @@ class Tyinfo
     static mutable infos : Int_map (Tyinfo);        // FIXME: this can be list
     static mutable can_check_constraints : bool;
 
-    this (par : option (Tyinfo), env : Env, td : PT.Type_decl) 
-      { 
-        this.enclosing_type <- par;
-        this.pt_tydecl <- td;
-        this.env <- env;
-        this.name <- td.name;
-        this.modifiers <- td.modifiers;
-        this.loc <- td.loc;
-        
-        this.subtypes <- Map.int_map ();
-        this.member_map <- Map.string_map ();
-
-        this.id <- Util.next_id ();
-
-        if (infos == null) 
-          infos <- Map.int_map () 
-        else ();
-        infos <- infos.add (this.id, this);
-      }
-
-    bind_tyvars (tenv : Tyvar.TEnv) : void 
-      {
-        if (this.tenv != null) Util.ice () else ();
-        def (tenv, tyvars) = tenv.add_typarms (this.env, this.pt_tydecl.typarms);
-        this.tenv <- tenv;
-        this.typarms <- tyvars;
-        
-        def bind_child (x : Tyinfo) : void
-          {
-            Util.locate (x.loc, fun () : void { x.bind_tyvars (tenv) });
-            match (x.pt_tydecl) {
-              | PT.TD_variant_option => x.typarms <- tyvars
-              | _ => ()
-            }
-          }
-        List.iter (bind_child, this.contained_types);
-      }
-
-    
-    bind_types () : void
-      {
-        def tenv = this.tenv;
-        def bind (t : PT.Type) : Type { tenv.bind (this.env, t) }
-        def td = this.pt_tydecl;
-        this.tydecl <-
-          match (td) {
-            | PT.TD_class => TD_class ()
-            | PT.TD_module => this.is_module <- true; TD_class ()
-            | PT.TD_alias (t) => TD_alias (bind (t))
-            | PT.TD_interface => TD_interface ()
-            | PT.TD_external (n) => TD_external (n)
-            | PT.TD_variant => TD_variant ()
-            | PT.TD_variant_option => TD_variant_option ()
-          };
-        this.t_extends <- Option.map (bind, td.t_extends);
-        this.t_implements <- List.map (bind, td.t_implements);
-      }
-    
     lookup_method (name : string) : list (M_function) {
       match (this.member_map.find(name)) {
         | Some (Mem_methods (x)) => x
@@ -324,23 +259,6 @@ class Tyinfo
         add_sr (s, new_sr)
       }
       
-    static determine_subtyping () : void
-      {
-        def make_srs (ti : Tyinfo) : void
-          {
-            def add_srs (s : Subinfo, t : Type) : Subinfo {
-              match (t) {
-                | T_app t => add_subtyping_of (ti, s, t)
-                | _ =>
-                  Message.error("cannot implement nor extend non-class type");
-                  s
-              }
-            }
-            ti.subtypes <- List.fold_left (add_srs, Map.int_map (), ti.direct_supertypes ())
-          }
-        iter (make_srs)
-      }
-
     subtyping_subst (ti : Tyinfo) : Subst {
       if (ti.id == this.id) 
         Map.int_map () // current type, no substitution
@@ -379,6 +297,152 @@ class Tyinfo
         this.member_list <- Cons (d, this.member_list);
       }
       
+    static top_iter (f : Tyinfo -> void) : void
+      {
+	def phase = Util.next_id ();
+        
+        def wrap (_ : int, x : Tyinfo) : void {
+          if (x.phase == phase) ()
+          else {
+            x.phase <- phase;
+            match (x.enclosing_type) {
+              | Some => ()
+              | None => Util.locate (x.loc, fun () : void { f (x) })
+            };
+          }
+        }
+	if (infos == null)
+          ()
+        else
+	  infos.iter (wrap)
+      }
+
+    this (par : option (Tyinfo), env : Env, td : PT.Type_decl) 
+      { 
+        this.enclosing_type <- par;
+        this.pt_tydecl <- td;
+        this.env <- env;
+        this.name <- td.name;
+        this.modifiers <- td.modifiers;
+        this.loc <- td.loc;
+        
+        this.subtypes <- Map.int_map ();
+        this.member_map <- Map.string_map ();
+
+        this.id <- Util.next_id ();
+
+        if (infos == null) 
+          infos <- Map.int_map () 
+        else ();
+        infos <- infos.add (this.id, this);
+      }
+
+    (** Construct typing environments for each declaration.
+
+        <remarks>
+          The first thing to do is to create typing environment [Tyvar.TEnv]
+          for each type declaration.  Then typing environment is populated
+          with type variables (transformed into [Tyvar.T] objects).  Finally
+          constraints (type expressions, which are first bound) of each
+          type variable are stored in [Tyvar.T].
+
+          Typing environment maps names of type variables to [Tyvar.T] objects.  
+        </remarks>
+      *)
+    make_tyenvs (tenv : Tyvar.TEnv) : void 
+      {
+        if (this.tenv != null) Util.ice () else ();
+        def (tenv, tyvars) = tenv.add_typarms (this.env, this.pt_tydecl.typarms);
+        this.tenv <- tenv;
+        this.typarms <- tyvars;
+        
+        def bind_child (x : Tyinfo) : void
+          {
+            Util.locate (x.loc, fun () : void { x.make_tyenvs (tenv) });
+            match (x.pt_tydecl) {
+              | PT.TD_variant_option => x.typarms <- tyvars
+              | _ => ()
+            }
+          }
+        List.iter (bind_child, this.contained_types);
+      }
+
+    
+    (** Bind type expressions occurring in type declarations. This
+        includes [extends] type, [implements] list, and aliased type in
+        case of type alias declaration.
+
+        <remarks>
+          Binding type expression refers to rewriting [Parsetree.Type]
+          into [Typedtree.Type], which involves resolving names of type
+          constructors (to [Tyinfo] objects) and type variables (to [Tyvar.T]
+          objects).  
+        </remarks>
+      *)
+    bind_types () : void
+      {
+        def tenv = this.tenv;
+        def bind (t : PT.Type) : Type { tenv.bind (this.env, t) }
+        def td = this.pt_tydecl;
+        this.tydecl <-
+          match (td) {
+            | PT.TD_class => TD_class ()
+            | PT.TD_module => this.is_module <- true; TD_class ()
+            | PT.TD_alias (t) => TD_alias (bind (t))
+            | PT.TD_interface => TD_interface ()
+            | PT.TD_external (n) => TD_external (n)
+            | PT.TD_variant => TD_variant ()
+            | PT.TD_variant_option => TD_variant_option ()
+          };
+        this.t_extends <- Option.map (bind, td.t_extends);
+        this.t_implements <- List.map (bind, td.t_implements);
+      }
+
+    (** Construct datastructures we use to check subtyping relations.
+
+        <remarks>
+          This probably the hardest part of processing type declarations.
+
+          Each type directly subtypes types it extends or implements.  This
+          pass computes transitive closure of direct subtyping relation
+          and stores it [Tyinfo.subtypes] map.  .NET generics doesn't allow
+          same type to be subtyped under different instantiations, so we
+          use map from (id of) subtyped Tyinfo object to actual parameters
+          of subtyped type.
+
+          Since this point during type binding we can check if subtyping
+          constraints are satisfied upon instantiations of types.  This is
+          reflected by setting [Tyinfo.can_check_constraints] variable.  We
+          also check it for unsatisfied constraints in already bound types
+          in the beginning of [Tyinfo.make_member_list] function.
+        </remarks>
+      *)
+    static determine_subtyping () : void
+      {
+        def make_srs (ti : Tyinfo) : void
+          {
+            def add_srs (s : Subinfo, t : Type) : Subinfo {
+              match (t) {
+                | T_app t => add_subtyping_of (ti, s, t)
+                | _ =>
+                  Message.error("cannot implement nor extend non-class type");
+                  s
+              }
+            }
+            ti.subtypes <- List.fold_left (add_srs, Map.int_map (), ti.direct_supertypes ())
+          }
+        iter (make_srs)
+      }
+
+    (** Collect type members (fields and methods, but not types, which
+        are already collected in [Tyinfo.contained_types]) and store
+        them in [Tyinfo.member_list] field.
+
+        <remarks>
+          Members are first transferred from the [Parsetree] into the
+          [Typedtree] namespace by binding appropriate types.
+        </remarks> 
+      *)      
     static make_member_list (this_ : Tyinfo) : void
       {
         def tenv = this_.tenv;
@@ -497,6 +561,49 @@ class Tyinfo
         this_.pt_tydecl <- null;
       }
 
+    (** Add record-like constructor to some classes. 
+
+        <remarks>
+          Record like constructor looks like this:
+
+          [[[
+            this (x : int, y : string) {
+              this.x <- x;
+              this.y <- y;
+            }
+          ]]]
+
+          Constructor building function is in extensions.n.
+        </remarks>
+     *)
+    static add_implicit_ctor (ti : Tyinfo) : void {
+      match (ti.tydecl) {
+        | TD_class cl =>
+          def is_field (m : Class_member) : bool {
+            match (m) { M_field => true | _ => false }
+          }
+          if (List.forall (is_field, ti.member_list))
+            match (ti.direct_supertypes ()) {
+              | Nil =>
+                ti.add_member (Extensions.implicit_ctor (ti))
+              | _ => ()
+            }
+          else ()
+
+        | TD_variant_option =>
+          ti.add_member (Extensions.implicit_ctor (ti))
+
+        | _ => ()
+      }
+    }
+      
+    (** Construct maps from names to non-static fields and methods in
+        given type (including derived ones). 
+        
+        <remarks>
+          This is used later in typing to lookup type members.
+        </remarks>
+      *)
     static make_member_map (ti : Tyinfo) : void
       {
         def parent_members =
@@ -616,53 +723,23 @@ class Tyinfo
         ti.member_map <- List.fold_left (process_decl, parent_members, ti.member_list);
       }
 
-    static add_implicit_ctor (ti : Tyinfo) : void {
-      match (ti.tydecl) {
-        | TD_class cl =>
-          def is_field (m : Class_member) : bool {
-            match (m) { M_field => true | _ => false }
-          }
-          if (List.forall (is_field, ti.member_list))
-            match (ti.direct_supertypes ()) {
-              | Nil =>
-                ti.add_member (Extensions.implicit_ctor (ti))
-              | _ => ()
-            }
-          else ()
+    (** Main function of type declaration handling pass.
 
-        | TD_variant_option =>
-          ti.add_member (Extensions.implicit_ctor (ti))
-
-        | _ => ()
-      }
-    }
-      
-    static top_iter (f : Tyinfo -> void) : void
-      {
-	def phase = Util.next_id ();
-        
-        def wrap (_ : int, x : Tyinfo) : void {
-          if (x.phase == phase) ()
-          else {
-            x.phase <- phase;
-            match (x.enclosing_type) {
-              | Some => ()
-              | None => Util.locate (x.loc, fun () : void { f (x) })
-            };
-          }
-        }
-	if (infos == null)
-          ()
-        else
-	  infos.iter (wrap)
-      }
-
+        <remarks>
+          - constructing typing environments [Tyinfo.make_tyenvs]
+          - binding types [Tyinfo.bind_types]
+          - determining subtyping relations [Tyinfo.determine_subtyping]
+          - constructing lists of members [Tyinfo.make_member_list]
+          - making implicit constructors [Tyinfo.add_implicit_ctor]
+          - constructing member maps [Tyinfo.make_member_map] 
+        </remarks>
+      *)
     static run () : void 
       {
         if (infos == null) 
           ()
         else {
-	  top_iter (fun (x : Tyinfo) : void { x.bind_tyvars (Tyvar.TEnv ()) });
+	  top_iter (fun (x : Tyinfo) : void { x.make_tyenvs (Tyvar.TEnv ()) });
 
           def bind_types (_ : int, x : Tyinfo) : void {
             Util.locate (x.loc, fun () : void { x.bind_types () })
