@@ -51,20 +51,23 @@ print <<EOF
       def y = (y :> System.$long);
       if (is_checked)
         match (name) {
-          | "+" => x + y :> object
-          | "-" => x - y :> object
-          | "*" => x * y :> object
-          | "/" => x / y :> object
-          | "%" => x % y :> object
+          | "+" => (x + y) :> object
+          | "-" => (x - y) :> object
+          | "*" => (x * y) :> object
+          | "/" => (x / y) :> object
+          | "%" => (x % y) :> object
 EOF
 ;
 if ($int) {
 print <<EOF
-          | "%&" => x %& y :> object
-          | "%|" => x %| y :> object
-          | "%^" => x %^ y :> object
-          | "<<" => x << (y :> int) :> object
-          | ">>" => x >> (y :> int) :> object
+          | "&" => (x %& y) :> object
+          | "|" => (x %| y) :> object
+          | "^" => (x %^ y) :> object
+          | "%&" => (x %& y) :> object
+          | "%|" => (x %| y) :> object
+          | "%^" => (x %^ y) :> object
+          | "<<" => (x << (y :> int)) :> object
+          | ">>" => (x >> (y :> int)) :> object
 EOF
 ;
 }
@@ -76,20 +79,23 @@ print <<EOF
       else
         unchecked {
           match (name) {
-            | "+" => x + y :> object
-            | "-" => x - y :> object
-            | "*" => x * y :> object
-            | "/" => x / y :> object
-            | "%" => x % y :> object
+            | "+" => (x + y) :> object
+            | "-" => (x - y) :> object
+            | "*" => (x * y) :> object
+            | "/" => (x / y) :> object
+            | "%" => (x % y) :> object
 EOF
 ;
 if ($int) {
 print <<EOF
-            | "%&" => x %& y :> object
-            | "%|" => x %| y :> object
-            | "%^" => x %^ y :> object
-            | "<<" => x << (y :> int) :> object
-            | ">>" => x >> (y :> int) :> object
+            | "%&" => (x %& y) :> object
+            | "%|" => (x %| y) :> object
+            | "%^" => (x %^ y) :> object
+            | "&" => (x %& y) :> object
+            | "|" => (x %| y) :> object
+            | "^" => (x %^ y) :> object
+            | "<<" => (x << (y :> int)) :> object
+            | ">>" => (x >> (y :> int)) :> object
 EOF
 ;
 }
@@ -136,21 +142,21 @@ print <<EOF
 
     public FromLiteral (lit : Literal) : object
     {
-      | L_$short (x) => x : object
+      | Literal.$short (x) => x : object
       | _ => null
     }
 
     public ToLiteral (x : object) : Literal
     {
-      L_$short (x :> System.$long)
+      Literal.$short (x :> System.$long)
     }
 
-    public GetNemerleType () : Typedtree.Type
+    public GetNemerleType () : Typedtree.TType
     {
       InternalType.$long
     }
 
-    public GetTycon () : Tycon
+    public GetTypeInfo () : TypeInfo
     {
       InternalType.${long}_tc
     }
@@ -164,17 +170,17 @@ EOF
 
 print "// Begin generated code\n";
 print "// Please edit ../misc/gen-ints.n, and not this file\n";
-inttype ("SByte", "sbyte", 1, 1, "B");
-inttype ("Byte", "byte", 0, 1, "UB");
-inttype ("Int16", "short", 1, 1, "S");
-inttype ("UInt16", "ushort", 0, 1, "US");
-inttype ("Int32", "int", 1, 1, "");
-inttype ("UInt32", "uint", 0, 1, "U");
-inttype ("Int64", "long", 1, 1, "L");
-inttype ("UInt64", "ulong", 0, 1, "UL");
+inttype ("SByte", "SByte", 1, 1, "B");
+inttype ("Byte", "Byte", 0, 1, "UB");
+inttype ("Int16", "Short", 1, 1, "S");
+inttype ("UInt16", "UShort", 0, 1, "US");
+inttype ("Int32", "Int", 1, 1, "");
+inttype ("UInt32", "UInt", 0, 1, "U");
+inttype ("Int64", "Long", 1, 1, "L");
+inttype ("UInt64", "ULong", 0, 1, "UL");
 
-inttype ("Single", "float", 1, 0, ".0F");
-inttype ("Double", "double", 1, 0, ".0");
+inttype ("Single", "Float", 1, 0, ".0F");
+inttype ("Double", "Double", 1, 0, ".0");
 print "// End generated code\n";
 
 
