@@ -35,7 +35,7 @@ all_src = $(n_src) $(cs_src)
 all_cs = env.n.cs $(cs_src)
 target = ncc.exe
 
-all: $(target) test
+all: $(target)
 
 # here we just test if new-built compiler is capable of builing
 # itself, run make t to check testsuite
@@ -46,7 +46,7 @@ $(target): $(all_src)
 	../npc/npc.opt $(n_src)
 	mcs -debug+ -o $@ $(all_cs)
 
-t:
+t: test
 	set -x ; for f in ../t/*.n ; do \
 		mono --debug ./$(target) ../lib/core.n $$f || true ; \
 	done
