@@ -67,6 +67,7 @@ src = \
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 COMPILE = $(CSC) /debug+ $(CSCFLAGS)
+NEMFLAG = -self
 
 all: ncc.exe
 
@@ -75,11 +76,11 @@ all: ncc.exe
 # Finally run testsuite.
 boot: ncc.exe
 	rm -f out.cs
-	$(EXECUTE) ./ncc.exe $(src)
+	$(EXECUTE) ./ncc.exe $(NEMFLAG) $(src)
 	mv -f out.cs out2.cs
 	$(COMPILE) $(OUTFLAG)ncc2.exe out2.cs
 	$(NGEN) ncc2.exe
-	$(EXECUTE) ./ncc2.exe $(src)
+	$(EXECUTE) ./ncc2.exe $(NEMFLAG) $(src)
 	cmp -s out2.cs out.cs
 	rm -f out.cs
 	$(MAKE) tests
@@ -89,7 +90,7 @@ sync:
 	cp ncc2.exe ../boot/ncc.exe
 
 ncc.exe: $(src)
-	$(EXECUTE) ../boot/ncc.exe $(src)
+	$(EXECUTE) ../boot/ncc.exe $(NEMFLAG) $(src)
 	mv -f out.cs out1.cs
 	$(COMPILE) $(OUTFLAG)$@ out1.cs
 
