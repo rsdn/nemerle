@@ -62,6 +62,10 @@ all:
 dist:
 	$(CP) '*.n'
 	$(Q)cp $(DISTFILES) $(DIR)
+	$(Q)mkdir -p $(DIR)/sioux
+	$(Q)$(MAKE) -C sioux dist DIR=$(DIR)/sioux
+	$(Q)mkdir -p $(DIR)/ntrace
+	$(Q)$(MAKE) -C ntrace dist DIR=$(DIR)/ntrace
 
 
 clean:

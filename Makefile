@@ -95,12 +95,15 @@ dist: changelog
 	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/boot
 	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)/lib
 	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/lib
+	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)/snippets
+	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/snippets
 	$(CP)
 	$(Q)cp $(DISTFILES) $(PACKAGE)-$(VERSION).$(REVISION)
 	$(Q)$(MAKE) -C ncc  dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)
 	$(Q)$(MAKE) -C doc  dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/doc
 	$(Q)$(MAKE) -C misc dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/misc
 	$(Q)$(MAKE) -C boot dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/boot
+	$(Q)$(MAKE) -C snippets dist DIR=$(shell pwd)/$(PACKAGE)-$(VERSION).$(REVISION)/snippets
 	$(TAR) $(PACKAGE)-$(VERSION).$(REVISION).tar.gz 
 	@tar zcf $(PACKAGE)-$(VERSION).$(REVISION).tar.gz $(PACKAGE)-$(VERSION).$(REVISION)
 	@rm -rf $(PACKAGE)-$(VERSION).$(REVISION)
