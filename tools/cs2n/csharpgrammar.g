@@ -2421,7 +2421,13 @@ indexer_declarator[bool mod]
         }
         tn = maybe_generic_type [true]   
         d:DOT            
-        t2:THIS          {Emit.EmitString (ExtendedToken.getWhitespaces(t2) + "Item");}
+        t2:THIS          {
+          Emit.EmitString (ExtendedToken.getWhitespaces(t2));
+          Emit.EmitString (tn[1].Replace ('.', '_').Replace (' ', '_').
+                           Replace ('[', '_').Replace (']', '_'));
+          Emit.EmitString ("Item");
+        }
+
         lb2:LBRACK       {Emit.EmitToken (lb2);}
         formal_parameter_list   
         rb2:RBRACK       {Emit.EmitToken (rb2);}        
@@ -2431,11 +2437,8 @@ indexer_declarator[bool mod]
             else
                 Emit.EmitString (" :" + tp[1]);
         }
-        { if (tn != null) {
-            Emit.EmitString (" implements ");
-            Emit.EmitString (tn [0] + tn [1] + d.getText () + "Item");
-          }
-        }
+        {  Emit.EmitString (" implements ");
+           Emit.EmitString (tn [0] + tn [1] + d.getText () + "Item"); }
     ;
 
 operator_declaration

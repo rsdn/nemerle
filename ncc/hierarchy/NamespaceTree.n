@@ -256,7 +256,7 @@ namespace Nemerle.Compiler {
     static namespace_tree : NamespaceND;
 
     // we store nodes, which were referenced from using / alias to check their existance
-    static mutable referenced_namespace_nodes : list [NamespaceND * Location];
+    static mutable referenced_namespace_nodes : list [list [NamespaceND] * Location];
     
     static this () {
       macro_contexts = Hashtable (100);
@@ -514,19 +514,35 @@ namespace Nemerle.Compiler {
       AddOpenNamespace (namespace_tree.Path (ns), loc)
     }
 
-    internal AddOpenNamespace (ns : NamespaceND, loc : Location) : GlobalEnv
+    private AddOpenNamespace (ns : NamespaceND, loc : Location) : GlobalEnv
     {
-      referenced_namespace_nodes = (ns, loc) :: referenced_namespace_nodes;
-      GlobalEnv (List.RevAppend (open_namespaces, [ns]),
+      mutable all_opened = [ns];
+      // in case we are inside some namespace, we must open every namespace path
+      // composed of current namespace's parts suffixed with opened one
+      def open_nested (curr : NamespaceND) {
+        unless (curr : object == namespace_tree) {
+          all_opened = curr.Path (ns.Name) :: all_opened;
+          open_nested (curr.Parent)
+        }
+      }
+      open_nested (current_namespace);
+
+      // we will warn when none of created namespace parts exists as real namespaces
+      referenced_namespace_nodes = (all_opened, loc) :: referenced_namespace_nodes;
+      GlobalEnv (List.RevAppend (open_namespaces, all_opened),
                  current_namespace, namespace_aliases)
     }
     
     internal AddNamespaceAlias (short_name : string, long_name : list [string], 
                                 loc : Location) : GlobalEnv
     {
-      def node_with_prefix = add_alias_nodes (short_name, long_name);
-      referenced_namespace_nodes = (node_with_prefix.Path ([short_name]), loc) :: referenced_namespace_nodes;
-      GlobalEnv (List.RevAppend (open_namespaces, [node_with_prefix]),
+      def nodes_with_prefix = add_alias_nodes (short_name, long_name);
+      def entered = List.Map (nodes_with_prefix, fun (x : NamespaceND) {
+        x.Path ([short_name])
+      });
+      referenced_namespace_nodes = (entered, loc) :: referenced_namespace_nodes;
+                                  
+      GlobalEnv (List.RevAppend (open_namespaces, nodes_with_prefix),
                  current_namespace, (short_name, NString.Concat (".", long_name)) :: namespace_aliases)
     }
 
@@ -601,8 +617,8 @@ namespace Nemerle.Compiler {
 
           | (2, '#') | (2, '&') =>
             def long_name = coded.Substring (last, i - last);
-            def node_with_prefix = add_alias_nodes (short, NString.Split (long_name, array ['.']));
-            open_namespaces = node_with_prefix :: open_namespaces;
+            def nodes_with_prefix = add_alias_nodes (short, NString.Split (long_name, array ['.']));
+            open_namespaces = List.RevAppend (nodes_with_prefix, open_namespaces);
             namespace_aliases = (short, long_name) :: namespace_aliases;
             last = i + 1;
 
@@ -615,28 +631,49 @@ namespace Nemerle.Compiler {
       }
     }
 
-    static add_alias_nodes (short_name : string, long_name : list [string]) : NamespaceND
+    /** We substitute
+        using Y = X.Z;
+        by
+        _tmp1.Y.pointed_by_X_Z // for each part in current namespace
+        using _tmp1;
+     */
+    add_alias_nodes (short_name : string, long_name : list [string]) : list [NamespaceND]
     {
-      def alias_prefix = Util.tmpname (short_name);
-      def node_with_prefix = NamespaceND (namespace_tree, short_name, TypeInfoCache.No ());
-      def full_node = namespace_tree.Path (long_name);
-      node_with_prefix.AddChild (short_name, full_node);
-      namespace_tree.AddChild (alias_prefix, node_with_prefix);
-      node_with_prefix
+      mutable all_opened = [];
+      // in case we are inside some namespace, we must open every namespace path
+      // composed of current namespace's parts suffixed with opened one
+      def open_nested (curr) {
+        unless (curr == null) {
+          def node_with_prefix = NamespaceND (curr, short_name, TypeInfoCache.No ());
+          def full_node = curr.Path (long_name);
+          node_with_prefix.AddChild (short_name, full_node);
+
+          all_opened = node_with_prefix :: all_opened;
+          open_nested (curr.Parent)
+        }
+      }
+      open_nested (current_namespace);
+      all_opened;
     }
    
     
     public static CheckReferencedNamespaces () : void
     {
-      foreach ((nd : NamespaceND, loc) in referenced_namespace_nodes)
-        match (nd.Value) {
-          | TypeInfoCache.No => 
-            nd.Value = TypeInfoCache.NamespaceReference ();
-            Message.error (loc, "referenced namespace `" + Util.qid_of_list (nd.Name) 
-                           + "' does not exist")
-          // we could forbid referencing type-style namespaces here if we want
-          | _ => ()  
+      foreach ((all_opened, loc) in referenced_namespace_nodes) {
+        mutable scream = true;
+        foreach (nd : NamespaceND in all_opened)
+          match (nd.Value) {
+            | TypeInfoCache.No => nd.Value = TypeInfoCache.NamespaceReference ();
+              
+            // we could forbid referencing type-style namespaces here if we want
+            | _ => scream = false
+          }
+        when (scream) {
+          Message.error (loc, "referenced namespace `" +
+                         Util.qid_of_list (List.Last (all_opened).Name)
+                         + "' does not exist")
         }
+      }
     }
 
     // the format is Current.Namespace.&open.ns1#open.ns2&al1=alias.one#al2=alias.two&
