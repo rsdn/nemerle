@@ -39,7 +39,7 @@ EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 all:
 	cp ../out.stage3/Nemerle.dll .
 	$(EXECUTE) ../out.stage3/ncc.exe -out test.exe test.n
-	$(EXECUTE) ./test.exe -r "$(EXECUTE)"
+	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -n "../out.stage3/ncc.exe"
 	rm -f out.dll out.exe out.netmodule ext_test.out Nemerle.dll
 
 clean:
