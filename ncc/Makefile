@@ -216,7 +216,16 @@ lib:
 
 boot: stage1 stage2 stage3 compare ngen-stage3
 
-ngen-stage3:
+out.stage3/all.done: \
+	out.stage3/Nemerle.Compiler.dll.done \
+	out.stage3/Nemerle.Macros.dll.done \
+	out.stage3/Nemerle.dll.done \
+	out.stage3/ncc.exe.done
+	$(Q)touch $@
+
+ngen-stage3: out.stage3/ngen.done
+
+out.stage3/ngen.done: out.stage3/all.done
 	$(AOT) Nemerle.dll
 	$(Q)cd out.stage3; $(NGEN) Nemerle.dll
 	$(AOT) Nemerle.Compiler.dll
@@ -225,6 +234,7 @@ ngen-stage3:
 	$(Q)cd out.stage3; $(NGEN) Nemerle.Macros.dll
 	$(AOT) ncc.exe
 	$(Q)cd out.stage3; $(NGEN) ncc.exe
+	$(Q)touch $@
 
 verify:
 	$(VERIFY) Nemerle.dll
@@ -236,11 +246,14 @@ verify:
 	$(VERIFY) ncc.exe
 	$(Q)$(PEVERIFY) out.stage3/ncc.exe
 
-compare:
+compare: out.stage3/compare.done
+
+out.stage3/compare.done: out.stage3/all.done
 	$(Q)$(MAKE) compare-one-with-stage CMP_TARGET=Nemerle
 	$(Q)$(MAKE) compare-one-with-stage CMP_TARGET=Nemerle.Compiler
 	$(Q)$(MAKE) compare-one CMP_TARGET=Nemerle.Macros.dll
 	$(Q)$(MAKE) compare-one CMP_TARGET=ncc.exe
+	$(Q)touch $@
 
 compare-one:
 	$(Q)test -f out.stage2/$(CMP_TARGET)
@@ -276,6 +289,7 @@ out.$(STAGE)/Nemerle.dll out.$(STAGE)/Nemerle.$(STAGE).dll: \
 		$(COMPILER_DEP) $(NEMERLE_DLL_SRC)
 	$(COMP) "[$(STAGE)]" Nemerle.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ $(GENERIC_SRC) $(NEMERLE_DLL_SRC)
+	$(Q)touch $@.done
 
 out.$(STAGE)/Nemerle.Compiler.dll: \
 		$(COMPILER_DEP) out.$(STAGE)/Nemerle.dll $(NEMERLE_COMPILER_DLL_SRC)
@@ -283,6 +297,7 @@ out.$(STAGE)/Nemerle.Compiler.dll: \
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:out.$(STAGE)/Nemerle.dll \
 		$(GENERIC_SRC) $(NEMERLE_COMPILER_DLL_SRC)
+	$(Q)touch $@.done
 
 out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll: \
 		$(COMPILER_DEP) out.$(STAGE)/Nemerle.$(STAGE).dll $(NEMERLE_COMPILER_DLL_SRC)
@@ -290,6 +305,7 @@ out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll: \
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:out.$(STAGE)/Nemerle.$(STAGE).dll \
 		$(GENERIC_SRC) $(NEMERLE_COMPILER_DLL_SRC)
+	$(Q)touch $@.done
 
 out.stage1/Nemerle.Macros.dll: $(COMPILER_DEP) out.stage1/Nemerle.stage1.dll \
 		out.stage1/Nemerle.Compiler.stage1.dll $(STDMACROS_DLL_SRC)
@@ -298,6 +314,7 @@ out.stage1/Nemerle.Macros.dll: $(COMPILER_DEP) out.stage1/Nemerle.stage1.dll \
 		-reference:out.stage1/Nemerle.stage1.dll \
 		-reference:out.stage1/Nemerle.Compiler.stage1.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
+	$(Q)touch $@.done
 
 out.stage2/Nemerle.Macros.dll: $(COMPILER_DEP) out.stage2/Nemerle.stage2.dll \
 		out.stage2/Nemerle.Compiler.stage2.dll $(STDMACROS_DLL_SRC)
@@ -306,6 +323,7 @@ out.stage2/Nemerle.Macros.dll: $(COMPILER_DEP) out.stage2/Nemerle.stage2.dll \
 		-reference:out.stage2/Nemerle.stage2.dll \
 		-reference:out.stage2/Nemerle.Compiler.stage2.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
+	$(Q)touch $@.done
 
 out.stage3/Nemerle.Macros.dll: $(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll $(STDMACROS_DLL_SRC)
@@ -314,6 +332,7 @@ out.stage3/Nemerle.Macros.dll: $(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
 		-reference:out.$(STAGE)/Nemerle.dll \
 		-reference:out.$(STAGE)/Nemerle.Compiler.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
+	$(Q)touch $@.done
 
 out.stage1/ncc.exe: $(COMPILER_DEP) out.stage1/Nemerle.stage1.dll \
 		out.stage1/Nemerle.Compiler.stage1.dll $(NCC_EXE_SRC)
@@ -322,6 +341,7 @@ out.stage1/ncc.exe: $(COMPILER_DEP) out.stage1/Nemerle.stage1.dll \
 		-reference:out.stage1/Nemerle.stage1.dll \
 		-reference:out.stage1/Nemerle.Compiler.stage1.dll \
 		$(GENERIC_SRC) $(NCC_EXE_SRC)
+	$(Q)touch $@.done
 
 out.stage2/ncc.exe: $(COMPILER_DEP) out.stage2/Nemerle.stage2.dll \
 		out.stage2/Nemerle.Compiler.stage2.dll $(NCC_EXE_SRC)
@@ -330,6 +350,7 @@ out.stage2/ncc.exe: $(COMPILER_DEP) out.stage2/Nemerle.stage2.dll \
 		-reference:out.stage2/Nemerle.stage2.dll \
 		-reference:out.stage2/Nemerle.Compiler.stage2.dll \
 		$(GENERIC_SRC) $(NCC_EXE_SRC)
+	$(Q)touch $@.done
 
 out.stage3/ncc.exe: $(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll $(NCC_EXE_SRC)
@@ -338,6 +359,7 @@ out.stage3/ncc.exe: $(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
 		-reference:out.$(STAGE)/Nemerle.dll \
 		-reference:out.$(STAGE)/Nemerle.Compiler.dll \
 		$(GENERIC_SRC) $(NCC_EXE_SRC)
+	$(Q)touch $@.done
 
 doc: 
 	$(Q)$(MAKE) doc-xml COMPILER_PATH=out.stage3/  
