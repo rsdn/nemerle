@@ -372,6 +372,7 @@ profile:
 	$(Q)../misc/profiler/runprof $(COMPILER) -no-stdlib -t:dll \
           -r out.stage1/Nemerle.stage1.dll -r System.dll \
           $(NEMERLE_COMPILER_DLL_SRC) > nc-prof-log
+	$(Q)../misc/profiler/prof
 
 
 halfboot:
