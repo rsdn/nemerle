@@ -34,12 +34,13 @@ $cs_compiler = shift;
 defined $cs_compiler or $cs_compiler = "mcs";
 $cs_compiler =~ /^(csc|cscc|mcs)$/ or die "bad cs_compiler";
 
-$runtime = "";
+$runtime = "mono --debug ";
+#$runtime = "";
 if ($cs_complier eq "mcs") {
     $runtime = "mono --debug ";
 }
 
-$compiler = $runtime . "../$nem_comp.exe ../../lib/core.n";
+$compiler = $runtime . "../$nem_comp.exe ../../lib/core.n ../../lib/list.n";
 
 sub xgrep($$)
 {
