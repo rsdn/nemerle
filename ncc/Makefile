@@ -55,6 +55,7 @@ NEMERLE_DLL_SRC = \
 	../lib/input.n			\
 	../lib/linkedlist.n		\
 	../lib/list.n			\
+	../lib/listenumerator.n		\
 	../lib/option.n			\
 	../lib/queue.n			\
 	../lib/stack.n			\
