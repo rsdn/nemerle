@@ -170,7 +170,10 @@ publish-stamp: nemerle-web.tar.gz
 dist: $(html-no-course)
 	$(MKDIR) $(DIR)/html
 	$(Q)mkdir -p $(DIR)/html
+	$(Q)mkdir -p $(DIR)/html/styles
 	$(CP) html
 	$(Q)cp $(html-no-course) $(DIR)/html
+	$(CP) css
+	$(Q)cp styles/*.{css,png} $(DIR)/html/styles
 	$(CP)
 	$(Q)cp $(DISTFILES) $(DIR)
