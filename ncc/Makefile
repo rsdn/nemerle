@@ -54,6 +54,7 @@ src = \
 	tyutil.n \
 	parser.n \
 	main.n \
+	flags.n \
 	lexer.n \
 	tycon.n \
 	cgtree.n \
