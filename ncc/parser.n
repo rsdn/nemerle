@@ -265,28 +265,34 @@ module Parser {
   parse_fun_header (ctx : CTX, 
                     allow_inference : bool, 
                     allow_ctor : bool,
-                    is_lambda : bool) : Fun_header 
+                    is_lambda : bool, knownname : option (Splicable_string)) : Fun_header
   {
-    def tok = get_token (ctx);
     locate (ctx, fun () {
-      def typarms =
-        match (tok) {
-          | Tok_tyvar =>
-            push_back (ctx);
-            def tyvars = operator_separated_list (ctx, ",", get_tyvar);
-            parse_where_constraints (ctx, tyvars);
-          | _ => 
-            push_back (ctx); 
-            Typarms ([], [])
-        };
       mutable is_ctor <- false;
-      def name =
-        match (get_token (ctx)) {
-          | Tok_keyword ("this") when allow_ctor => is_ctor <- true; ".ctor"
-          | Tok_keyword ("fun") when is_lambda => ""
-          | _ when is_lambda => fatal_error (ctx, "expecting `fun'")
-          | Tok_identifier (n) => n
-          | _ => fatal_error (ctx, "expecting function name")
+      def (typarms, name) = 
+        match (knownname) {
+          | None =>
+            def tparms =
+              match (peek_token (ctx)) {
+                | Tok_tyvar =>
+                  def tyvars = operator_separated_list (ctx, ",", get_tyvar);
+                  parse_where_constraints (ctx, tyvars);
+                | _ => 
+                  Typarms ([], [])
+              };
+            def nam =
+              match (peek_token (ctx)) {
+                | Tok_keyword ("this") when allow_ctor => 
+                  shift (ctx);
+                  is_ctor <- true; SS_string (".ctor")
+                | Tok_keyword ("fun") when is_lambda => shift (ctx); SS_string ("")
+                | _ when is_lambda => fatal_error (ctx, "expecting `fun'")
+                | Tok_identifier  
+                | Tok_operator ("$", _) => get_splicable_id (ctx)
+                | _ => fatal_error (ctx, "expecting function name")
+              };
+            (tparms, nam)
+          | Some (n) => (Typarms ([], []), n)
         };
       expect_operator (ctx, "(");
       def parse_parm (_) {
@@ -565,58 +571,97 @@ module Parser {
 
     loop ()
   }
-  
-  parse_closed_pattern (ctx : CTX) : Pattern {
-    def loc = location_here (ctx);
 
-    (** this function expects first '{' to be already shifted, starting
-        its scanning routine from inside of record;
-        but it shifts the ending '}'
-     *)
-    def parse_record () {
-      def loop (acc) {
-        match (get_token (ctx)) {
-          | Tok_operator ("}", _) => List.rev (acc)
-          | Tok_identifier (n) =>
-            expect_operator (ctx, "=");
-            def pat = parse_pattern (ctx);
-            def res = (n, pat);
-            match (get_token (ctx)) {
-              | Tok_operator (";", _) => ()
-              | Tok_operator ("}", _) => push_back (ctx)
-              | _ => fatal_error (ctx, "found junk after pattern in record")
-            };
-            loop (res :: acc)
-          | _ => fatal_error (ctx, "expecting named pattern")
-        }
-      };
-
+  parse_pattern_after_id (ctx : CTX, id : Splicable_string) : Pattern {
+    def id = 
       match (peek_token (ctx)) {
         | Tok_operator (".", _) =>
           shift (ctx);
-          match (get_token (ctx)) {
-            | Tok_operator (".", _) => 
-              def res = P_record ([("", P_patt_list (loc, parse_pattern (ctx)))]);
-              expect_operator (ctx, "}");
-              res
-            | _ => fatal_error (ctx, "expecting second dot in pattern context")              
+          def qid = get_qid (ctx);
+          match (id) {
+            | SS_string (n) => 
+              SS_string (n + "." + qid)
+            | _ =>
+              fatal_error (ctx, "mixing spliced names with regular ids isn't allowed")
           }
-        | _ =>
-          P_record (loc, loop ([]))
-      }
-    };
+        | _ => id;
+      };
+    def loc = location (ctx);
+    match (peek_token (ctx)) {
+      | Tok_operator ("{", _)
+      | Tok_operator ("(", _) => 
+        P_cons (loc, id, tuple_or_record (ctx)) 
+      | Tok_keyword ("_") => 
+        shift (ctx);
+        P_cons (loc, id, P_underscore (loc))
+      | _ =>
+        match (id) {
+          | SS_string => P_cons (loc, id, P_underscore (loc))
+          | SS_spliced_expr (E_spliced_special (ty, expr)) =>
+            match (ty) {
+              | "var" | "int" | "string" | "bool" | "float" 
+              | "char" =>
+                P_spliced_special (loc, ty, expr)
+              | _ =>
+                fatal_error (ctx, "wrong splicing type after ':'")
+            }
+          | SS_spliced_expr (expr) =>
+            P_spliced (loc, expr)
+        }
+    }
+  }
 
-    def tuple_or_record () {
+  (** this function expects first '{' to be already shifted, starting
+      its scanning routine from inside of record;
+      but it shifts the ending '}'
+   *)
+  parse_record (ctx : CTX) : Pattern {
+    def loop (acc) {
       match (get_token (ctx)) {
-        | Tok_operator ("(", _) =>
-          def pats = operator_separated_list (ctx, ",", parse_pattern);
-          expect_operator (ctx, ")");
-          P_tuple (loc, pats)
-        | Tok_operator ("{", _) => parse_record ()
-        | _ => fatal_error (ctx, "expecting tuple or record pattern")
+        | Tok_operator ("}", _) => List.rev (acc)
+        | Tok_identifier (n) =>
+          expect_operator (ctx, "=");
+          def pat = parse_pattern (ctx);
+          def res = (n, pat);
+          match (get_token (ctx)) {
+            | Tok_operator (";", _) => ()
+            | Tok_operator ("}", _) => push_back (ctx)
+            | _ => fatal_error (ctx, "found junk after pattern in record")
+          };
+          loop (res :: acc)
+        | _ => fatal_error (ctx, "expecting named pattern")
       }
     };
+    def loc = location (ctx);
+    match (peek_token (ctx)) {
+      | Tok_operator (".", _) =>
+        shift (ctx);
+        match (get_token (ctx)) {
+          | Tok_operator (".", _) => 
+            def res = P_record ([("", P_patt_list (loc, parse_pattern (ctx)))]);
+            expect_operator (ctx, "}");
+            res
+          | _ => fatal_error (ctx, "expecting second dot in pattern context")              
+        }
+      | _ =>
+        P_record (loc, loop ([]))
+    }
+  }
+
+  tuple_or_record (ctx : CTX) : Pattern {
+    match (get_token (ctx)) {
+      | Tok_operator ("(", _) =>
+        def pats = operator_separated_list (ctx, ",", parse_pattern);
+        expect_operator (ctx, ")");
+        P_tuple (location_here (ctx), pats)
+      | Tok_operator ("{", _) => parse_record (ctx)
+      | _ => fatal_error (ctx, "expecting tuple or record pattern")
+    }
+  }
     
+  parse_closed_pattern (ctx : CTX) : Pattern {
+    def loc = location_here (ctx);
+  
     match (parse_literal (ctx)) {
       | Some (l) => P_literal (loc, l)
       | None =>
@@ -632,44 +677,10 @@ module Parser {
           | Tok_identifier =>
             push_back (ctx);
             def id = get_splicable_id (ctx);
-            def id = 
-              match (peek_token (ctx)) {
-                | Tok_operator (".", _) =>
-                  shift (ctx);
-                  def qid = get_qid (ctx);
-                  match (id) {
-                    | SS_string (n) => 
-                      SS_string (n + "." + qid)
-                    | _ =>
-                      fatal_error (ctx, "mixing spliced names with regular ids isn't allowed")
-                  }
-                | _ => id;
-              };
-            match (peek_token (ctx)) {
-              | Tok_operator ("{", _)
-              | Tok_operator ("(", _) => 
-                P_cons (loc, id, tuple_or_record ())
-              | Tok_keyword ("_") => 
-                shift (ctx);
-                P_cons (loc, id, P_underscore (loc))
-              | _ =>
-                match (id) {
-                  | SS_string => P_cons (loc, id, P_underscore (loc))
-                  | SS_spliced_expr (E_spliced_special (ty, expr)) =>
-                    match (ty) {
-                      | "var" | "int" | "string" | "bool" | "float" 
-                      | "char" =>
-                        P_spliced_special (loc, ty, expr)
-                      | _ =>
-                        fatal_error (ctx, "wrong splicing type after ':'")
-                    }
-                  | SS_spliced_expr (expr) =>
-                    P_spliced (loc, expr)
-                }
-            }
+            parse_pattern_after_id (ctx, id)
             
           | Tok_operator ("{", _) =>
-            parse_record ()
+            parse_record (ctx)
 
           | Tok_operator (".", _) =>
             match (get_token (ctx)) {
@@ -786,7 +797,7 @@ module Parser {
 
     Match_case (pats, expr)
   }
-  
+
   parse_semiclosed_expr (ctx : CTX) : Expr {
     def loc = location_here (ctx);
     def tok = get_token (ctx);
@@ -873,7 +884,7 @@ module Parser {
         push_back (ctx);
         def h = parse_fun_header (ctx, allow_ctor = false,
                                        allow_inference = true, 
-                                       is_lambda = true);
+                                       is_lambda = true, knownname = None ());
         def expr = parse_block (ctx);
         E_lambda (loc, Function_decl (h, expr))
 
@@ -883,49 +894,49 @@ module Parser {
         E_let (loc, true, id, parse_expr (ctx))
 
       | Tok_keyword ("def") =>
-        def parse_val () {
-          def id = get_splicable_id (ctx);
+        def parse_val (id) {
           expect_operator (ctx, "=");
           E_let (loc, false, id, parse_expr (ctx))
         };
-
-        def parse_funs (acc) {
-          def h = parse_fun_header (ctx, allow_ctor = false, 
-                                         allow_inference = true, 
-                                         is_lambda = false);
-          def fd = Function_decl (h,parse_block (ctx));
-          match (peek_token (ctx)) {
-            | Tok_keyword ("and") =>
-              shift (ctx);
-              parse_funs (fd :: acc)
-            | _ => E_letfun (loc, List.rev (fd :: acc))
-          }
-        };
-
-        def parse_pat () {
-          def pat = parse_pattern (ctx);
+        def parse_pat (idopt) {
+          def pat =
+            match (idopt) {
+              | None => parse_pattern (ctx)
+              | Some (id) =>
+                parse_pattern_after_id (ctx, id);
+            };
           expect_operator (ctx, "=");
           def expr = parse_expr (ctx);
           E_letpat (loc, pat, expr)
         };
+        def parse_funs (acc, idopt) {
+          def h = parse_fun_header (ctx, allow_ctor = false, 
+                                    allow_inference = true, 
+                                    is_lambda = false, knownname = idopt);
+          def fd = Function_decl (h,parse_block (ctx));
+          match (peek_token (ctx)) {
+            | Tok_keyword ("and") =>
+              shift (ctx);
+              parse_funs (fd :: acc, None ())
+            | _ => E_letfun (loc, List.rev (fd :: acc))
+          }
+        };
         
         match (peek_token (ctx)) {
-          | Tok_tyvar => parse_funs ([])
-          
+          | Tok_tyvar => parse_funs ([], None ())
+
+          | Tok_keyword ("_")
+          | Tok_operator ("$", _) 
           | Tok_identifier =>
-            shift (ctx);
+            def id = get_splicable_id (ctx);
             match (peek_token (ctx)) {
               | Tok_operator ("(", _) => 
-                push_back (ctx);
-                parse_funs ([])
+                parse_funs ([], Some (id))
                 
               | Tok_operator ("=", _) =>
-                push_back (ctx);
-                parse_val ()
+                parse_val (id)
               
-              | _ => 
-                push_back (ctx);
-                parse_pat ()
+              | _ => parse_pat (Some (id))
             }
 
           | Tok_operator (".", _) =>
@@ -934,10 +945,7 @@ module Parser {
             E_letfun (loc, [Function_decl (Fun_header (), 
                                            E_expr_list (parse_expr (ctx)))])
 
-          | Tok_operator ("$", _) 
-          | Tok_keyword ("_") => parse_val ()
-
-          | _ => parse_pat ()
+          | _ => parse_pat (None ())
         }
       
       | _ => push_back (ctx); parse_unary_expr (ctx)
@@ -1055,9 +1063,11 @@ module Parser {
     };
 
     def parse_fun (h : Fun_header) {
+      def hname = 
+        match (h.name) { | SS_string (n) => n | _ => Util.ice ("spliced in fun name") };
       def impl =
         match (get_token (ctx)) {
-          | Tok_keyword ("implements") when h.name != ".ctor" =>
+          | Tok_keyword ("implements") when hname != ".ctor" =>
             operator_separated_list (ctx, ",", get_qid)
           | _ => push_back (ctx); []
         };
@@ -1072,11 +1082,11 @@ module Parser {
         };
       
       M_function (header = h, 
-                  name = h.name, 
+                  name = hname, 
                   modifiers = attrs, 
                   loc = loc, 
                   body = body, 
-                  kind = if (h.name == ".ctor") FK_ctor () else FK_method (impl))
+                  kind = if (hname == ".ctor") FK_ctor () else FK_method (impl))
     };
     
     def parse_field (is_ref, name) {
@@ -1103,7 +1113,7 @@ module Parser {
         def h = parse_fun_header (ctx, 
                                   allow_ctor = true, 
                                   allow_inference = false,
-                                  is_lambda = false);
+                                  is_lambda = false, knownname = None ());
         parse_fun (h)
         
       | Tok_keyword ("mutable") =>
@@ -1119,7 +1129,7 @@ module Parser {
             def h = parse_fun_header (ctx, 
                                       allow_ctor = false, 
                                       allow_inference = false,
-                                      is_lambda = false);
+                                      is_lambda = false, knownname = None ());
             parse_fun (h)
           | _ => parse_field (false, name)
         }
@@ -1129,7 +1139,7 @@ module Parser {
         def h = parse_fun_header (ctx, 
                                   allow_ctor = true, 
                                   allow_inference = false,
-                                  is_lambda = false);
+                                  is_lambda = false, knownname = None ());
         parse_fun (h)
 
       | _ =>
@@ -1388,9 +1398,10 @@ module Parser {
       locate (ctx, fun () {
         def is_new = flag_keyword (ctx, "new");
         def h = parse_fun_header (ctx, allow_ctor = false, allow_inference = false,
-                                  is_lambda = false);
+                                  is_lambda = false, knownname = None ());
+        def hname = match (h.name) { | SS_string (n) => n | _ => Util.ice ("spliced") };
         expect_operator (ctx, ";");
-        M_function (name = h.name, 
+        M_function (name = hname, 
                     modifiers = Mod_public () :: if (is_new) [Mod_new ()] else [],
                     header = h, 
                     kind = FK_iface_method (is_new), 
@@ -1462,8 +1473,8 @@ module Parser {
           
           td
           
-        | Tok_keyword ("macro") => //Util.ice () // FIXME
-          def header = parse_fun_header (ctx, true, false, false);
+        | Tok_keyword ("macro") => 
+          def header = parse_fun_header (ctx, true, false, false, None ());
           def synt = 
             match (peek_token (ctx)) {
               | Tok_keyword ("syntax") =>
@@ -1554,6 +1565,12 @@ module Parser {
 // workaround for compiler bug
               def (a,b) = parse_case_guard (ctx);
               ParseCaseGuard (a,b)
+
+            | Tok_identifier ("fundecl") =>
+              def h = parse_fun_header (ctx, allow_ctor = false, 
+                                        allow_inference = true, 
+                                        is_lambda = false, knownname = None ());
+              ParseFunDecl (Function_decl (h, parse_block (ctx)))
 
             | _ =>
               fatal_error (ctx, "bad quotation type")
@@ -1660,27 +1677,12 @@ module Parser {
 
   public make_parsing_function (macro_name : string, rule : list (GrammarElement), 
                          perm : list (Parm) -> list (Parm)) : CTX -> Expr {
-(*
-    Message.debug ("making macro " + macro_name + " with ");
-    List.iter (fun (x) {
-      match (x) {
-        | GE_keyword (k) => printf ("key %s, ", k)
-        | GE_operator (k) => printf ("op %s, ", k)
-        | GE_expression => printf ("expr, ")
-        | GE_parm_list (s) => printf ("parmlst %s, ", s)
-        | _ => printf ("other")
-      }
-    }, rule);
-    printf ("\n");
-*)
     fun (ctx) {
       def loc = location (ctx);
       def parms = parse_wrt_rule (ctx, rule);
-//    Message.debug ("calling macro " + macro_name + " with " + string_of_int (List.length (parms)) + " parms");
       E_call (loc, E_ref (loc, macro_name), perm (parms))
     }
   }
-
 
   init_parens (ctx : CTX) : void {
     def add (o, c, f) {
