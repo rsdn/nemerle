@@ -53,8 +53,7 @@ docb = $(addsuffix .docb, $(docs))
 
 DISTFILES = \
 	ncc.1 \
-	Makefile \
-	ChangeLog
+	Makefile
 
 ############################################################
 # OUTPUT

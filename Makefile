@@ -73,10 +73,7 @@ send: dist send-dist
 changelog:
 	svn up
 	svn log -v --xml > changelog.xml
-	$(svn2log) -p '$(nemroot)' -x npc -x doc -x ncc -x lib
-	$(svn2log) -p '$(nemroot)/lib' -o lib/ChangeLog
-	$(svn2log) -p '$(nemroot)/ncc' -o ncc/ChangeLog -r npc/ncc=ncc
-	$(svn2log) -p '$(nemroot)/doc' -o doc/ChangeLog
+	$(svn2log) -p '$(nemroot)' -r npc/ncc=ncc
 	rm -f changelog.xml
 
 sync-boot:

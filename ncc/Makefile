@@ -115,13 +115,11 @@ STDMACROS_DLL_SRC = \
         ../macros/io.n \
 
 DISTFILES = \
-	ChangeLog                   \
 	Makefile                    \
 	$(NEMERLE_COMPILER_DLL_SRC) \
 	$(NCC_EXE_SRC)              \
 
 LIBDISTFILES = \
-	../lib/ChangeLog   \
 	../lib/STDLIB      \
 	../lib/TODO        \
 	../lib/Makefile    \
