@@ -117,6 +117,8 @@ class Lexer : yyParser.yyInput
 		case '.':
 		case ':':
 		case '#':
+		case '[':
+		case ']':
 			return true;
 		default:
 			return false;
@@ -161,6 +163,7 @@ class Lexer : yyParser.yyInput
 		case "?":
 		case "|":
 		case "$":
+		case "]":
 			return s[0];
 
 		case "<-":
@@ -170,7 +173,7 @@ class Lexer : yyParser.yyInput
 			return Token.MINUS_MORE;
 
 		case "=>":
-			return Token.EQ_MORE;
+                        return Token.EQ_MORE;
 			
 		case "<[":
 			return Token.LESS_SQBRAC;
@@ -429,7 +432,6 @@ class Lexer : yyParser.yyInput
 		case '{':
 		case '}':
 		case '[':
-		case ']':
 		case ',':
 		case ';':
 		case '.':
@@ -471,6 +473,7 @@ class Lexer : yyParser.yyInput
 		case '<':
 		case '>':
 		case '!':
+		case ']':
 			return get_op(Token.OP5, ch);
 
 		case '&':
