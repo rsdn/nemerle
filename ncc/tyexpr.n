@@ -457,9 +457,9 @@ public module Tyexpr {
   transform_tail_call (ctx : CTX, ex : Expr) : Expr
   {
     match (ex) {
-      | E_call (E_local_ref ({kind = D_local_fun (h, _)}), _parms) =>
+      | E_call ((E_local_ref ({kind = D_local_fun (h, _)})) as fn, parms) =>
         if (ctx.in_tail_position && ctx.current_fun.id == h.id)
-          ex // tail call here
+          E_self_tail_call (ex.loc, ex.expr_ty, parms)
         else {
           match (h.usage) {
             | FU_not_used =>
@@ -468,8 +468,13 @@ public module Tyexpr {
               h.usage <- FU_used ()
             | FU_used | FU_used_as_first_class => ()
           };
-          ex
+          if (ctx.in_tail_position)
+            E_tail_call (ex.loc, ex.expr_ty, fn, parms)
+          else
+            ex
         }
+      | E_call (fn, parms) when ctx.in_tail_position =>
+        E_tail_call (ex.loc, ex.expr_ty, fn, parms)
       | _ => ex
     }
   }
@@ -635,11 +640,13 @@ public module Tyexpr {
   // type given match {} construct
   ty_match (ctx : Tyexpr.CTX, mtch : PT.E_match) : Expr * Type
   {
+    def itp = ctx.in_tail_position;
+    def ctx = ctx.WithInTailPosition (false);
     def matched_value = ty_expr (ctx, mtch.expr);
 
     def do_case (c : PT.Match_case, acc) {
       def (pat, ctx') = Typattern.ty_patterns (ctx, type_of (matched_value), c.patterns);
-      def body = ty_expr (ctx', c.body);
+      def body = ty_expr (ctx'.WithInTailPosition (itp), c.body);
       match (acc) {
         | (Some (t), l) =>
           match (Tyutil.unify_branches (t, type_of (body))) {
@@ -709,15 +716,16 @@ public module Tyexpr {
   ty_sequence (ctx : CTX, l : list <PT.Expr>) : Expr
   {
     def in_tail_pos = ctx.in_tail_position;
+    def orig_ctx = ctx;
     def ctx = ctx.WithInTailPosition (false);
 
     def go () : Expr {
       match (l) {
-        | [x] => ty_expr (ctx.WithInTailPosition (in_tail_pos), x)
+        | [x] => ty_expr (orig_ctx, x)
 
         | PT.E_letfun (fs) :: xs =>
           def (fs', ctx') = ty_letfun (ctx, fs);
-          def body = ty_sequence (ctx', xs);
+          def body = ty_sequence (ctx'.WithInTailPosition (in_tail_pos), xs);
           fixup (E_letfun (fs', body), type_of (body))
 
         | (PT.E_let) as x :: xs =>
@@ -729,7 +737,7 @@ public module Tyexpr {
           };
           def decl = ctx.DefineLocal (name, D_local_value(), type_of (val));
           decl.is_ref <- x.is_ref;
-          def body = ty_sequence (ctx.WithLocal (decl), xs);
+          def body = ty_sequence (ctx.WithLocal (decl).WithInTailPosition (in_tail_pos), xs);
           fixup (E_let (decl, val, body), type_of (body))
 
         | PT.E_letpat (p, v) :: xs =>
@@ -737,13 +745,13 @@ public module Tyexpr {
           def mtch = PT.E_match (v, [PT.Match_case ([(p, None ())], body)]);
           body.loc <- (List.Head (xs)).loc;
           mtch.loc <- p.loc;
-          ty_expr (ctx, mtch)
+          ty_expr (orig_ctx, mtch)
 
         | x :: xs =>
           def ex = ty_expr (ctx, x);
           def t = type_of (ex);
           if (t >> T_void ()) {
-            def tl = ty_sequence (ctx, xs);
+            def tl = ty_sequence (orig_ctx, xs);
             fixup (E_sequence (ex, tl), type_of (tl))
           } else {
             Message.warning ("ignored computed value of type " + t.as_string ());
@@ -751,7 +759,7 @@ public module Tyexpr {
 
             def tmp = Util.tmpname ("ign");
             def decl = ctx.DefineLocal (tmp, D_local_value (), type_of (ex));
-            def body = ty_sequence (ctx.WithLocal (decl), xs);
+            def body = ty_sequence (ctx.WithLocal (decl).WithInTailPosition (in_tail_pos), xs);
             fixup (E_let (decl, ex, body), type_of (body))
           }
         | [] => Util.ice ("empty sequence")
@@ -800,8 +808,11 @@ public module Tyexpr {
         "a reference to property `" + p.GetName () + "'"
       | E_method_ref (_, m) =>
         "a reference to method `" + m.GetName () + "'"
+      | E_tail_call (f, _)
       | E_call (f, _) =>
         "a function call to " + describe_expression (f)
+      | E_self_tail_call =>
+        "self-recursive function call"
       | E_assign => "an assignment"
       | E_let => "an value binding"
       | E_letfun => "an function binding"
@@ -921,12 +932,12 @@ public module Tyexpr {
         ctx.parent_type.BindType (ctx.tenv, t)
       };
 
-      def expr = MacroRegistry.expand_macro (ctx, expr);
-      
       def orig_ctx = ctx;
       // default to non-tail position (good for most expressions)
       def ctx = ctx.WithInTailPosition (false);
 
+      def expr = MacroRegistry.expand_macro (ctx, expr);
+      
       match (expr) {
         // this doesn't make much sense I hope
         | PT.E_let => Message.fatal_error ("let binding not followed by any expression")
@@ -1228,6 +1239,10 @@ public module Tyexpr {
         Util.locate (expr.loc, do_typing)
       catch { _ : Recovery =>
         (E_literal (L_null ()), Tyvar.free_variable ()) };
+        
+    //Message.debug (expr.loc, "compilied " + describe_expression (ret) + 
+    //                    if (ctx.in_tail_position) " [tp]" else "");
+
     fixup (ret, expr.loc, expr_ty)
   }
 
@@ -1260,7 +1275,7 @@ public module Tyexpr {
 
   ty_function (ctx : CTX, h : Fun_header, b : Fun_body) : Fun_body
   {
-    def ctx = ctx.WithCurrentFunction (h);
+    def ctx = ctx.WithCurrentFunction (h).WithInTailPosition (true);
     
     def make_parm_decl (p : Fun_parm) {
       Util.locate (p.loc, fun () {
