@@ -79,7 +79,7 @@ namespace Nemerle.Compiler
     {
       current_type = m.DeclaringType :> TypeBuilder;
       parent_typer = None ();
-      env = parent_type.env;
+      env = current_type.env;
       current_fun = m.GetHeader ();
       tenv = current_fun.tenv;
       messenger = solver.CurrentMessenger;
@@ -96,7 +96,7 @@ namespace Nemerle.Compiler
         | _ => ()
       }
 
-      MaybeAddBaseCall ();
+      MaybeAddBaseCall (m);
       
       try {
         RunTyper ();
@@ -138,7 +138,7 @@ namespace Nemerle.Compiler
     }
 
 
-    MaybeAddBaseCall () : void
+    MaybeAddBaseCall (m : NemerleMethod) : void
     {
       when (is_instance_ctor && !m.DeclaringType.IsValueType)
         match (m.fun_body) {
@@ -160,11 +160,11 @@ namespace Nemerle.Compiler
     MaybeDumpTypedTree () : void
     {
       when (Options.DumpTypedTree) {
-        match (current_fun.fun_body) {
+        match (current_fun.body) {
           | FunBody.Typed (expr) =>
             Message.debug (expr.loc, $ "$current_type.$(current_fun.name) -> "
                                        "$(current_fun.ret_type) : " +
-                                     PrettyPrint.SprintTyExpr (Some (ctx), expr) + "\n")
+                                     PrettyPrint.SprintTyExpr (None (), expr) + "\n")
           | _ => ()
         }
       }
@@ -178,7 +178,7 @@ namespace Nemerle.Compiler
           when (p.kind != ParmKind.Normal && !IsTopLevel)
             ReportError (messenger, "ref/out parameters are not supported in local methods");
           def is_mutable = p.modifiers.mods %&& NemerleAttributes.Mutable;
-          def l = LocalValue (current_fun, p.name, p.ty,
+          def l = LocalValue (current_fun, p.name, FIXME (p.ty),
                               LocalValue.Kind.FunParm (p.kind),
                               is_mutable = is_mutable);
           AddLocal (PT.Name (p.name, p.color, null), l);
@@ -188,7 +188,7 @@ namespace Nemerle.Compiler
 
       match (current_fun.body) {
         | FunBody.Parsed (e) =>
-          def e' = TypeExpr (e, current_fun.ret_type);
+          def e' = TypeExpr (e, FIXME (current_fun.ret_type));
           current_fun.body = FunBody.Typed (e');
         | FunBody.Typed => assert (false)
         | FunBody.Compiled => assert (false)
@@ -214,7 +214,7 @@ namespace Nemerle.Compiler
     TypeOf (expr : TExpr) : TyVar
     {
       if (expr.ty == null) Util.ice ("type of TT.TExpr was not initialized")
-      else expr.ty;
+      else FIXME (expr.ty);
     }
 
 
@@ -295,12 +295,12 @@ namespace Nemerle.Compiler
     {
       def is_lvalue =
         match (e) {
-          | TExpr.LocalRef (d) => d.is_ref
+          | TExpr.LocalRef (d) => d.IsMutable
           | TExpr.StaticRef (m) =>
             match (m.GetKind ()) {
               | MemberKind.Field (f) =>
                 f.IsMutable || (current_fun.name == ".cctor" &&
-                                f.DeclaringType.SameAs (current_type))
+                                f.DeclaringType.Equals (current_type))
               | MemberKind.Property (p) when !need_ref => p.IsMutable
               | _ => false
             }
@@ -352,12 +352,13 @@ namespace Nemerle.Compiler
       def seen = Hashtable ();
       mutable res = [];
       foreach (elem : IMember in lst) {
-        if (seen.Member (elem.GetId ())) {}
+        if (seen.Contains (elem.GetId ())) {}
         else {
           seen [elem.GetId ()] = null;
           res = elem :: res;
         }
       }
+      res
     }
 
 
@@ -491,11 +492,12 @@ namespace Nemerle.Compiler
               DoType (e, expected);
           } catch {
             | _ : Recovery =>
-              MarkError ();
+              messenger.MarkError ();
               TExpr.Error ()
           }
 
-        e'.ty = expected;
+        // FIXME
+        // e'.ty = expected;
         e'
       })
     }
@@ -674,7 +676,12 @@ namespace Nemerle.Compiler
 
 
         | PT.PExpr.Ref (name) =>
-          TypeName ([name.Id], name, expected)
+          def idl = [name.Id];
+          match (TypeLocal (idl, name, expected)) {
+            | Some (e) => e
+            | None =>
+              MakeOverloadedNode (TypeName (idl, name, expected), expected)
+          }
 
           
         | PT.PExpr.Member (obj, PT.Splicable.Name (name)) =>
@@ -749,7 +756,8 @@ namespace Nemerle.Compiler
 
 
         | PT.PExpr.Throw (e) =>
-          def ty = AtLeast (InternalType.Exception, "thrown value");
+          // FIXME
+          def ty = AtLeast (InternalType.Exception :> MType, "thrown value");
           def e = TypeExpr (e, ty);
           TExpr.Throw (e)
 
@@ -761,7 +769,8 @@ namespace Nemerle.Compiler
 
         | PT.PExpr.This =>
           if (is_method) {
-            _ = Expect (expected, current_type.GetMemType (), "`this'");
+            // FIXME
+            _ = Expect (expected, current_type.GetMemType () :> MType, "`this'");
             TExpr.This ()
           } else
             ReportFatal (messenger, "`this' used outside method");
@@ -770,7 +779,7 @@ namespace Nemerle.Compiler
         | PT.PExpr.Base =>
           if (is_method) {
             def baseti = Option.UnSome (current_type.SuperClass ());
-            def parms = Option.UnSome (ti.SuperType (baseti));
+            def parms = Option.UnSome (current_type.SuperType (baseti));
             def parms = List.Map (parms, solver.MonoType);
             def ty = MType.Class (baseti, parms);
             _ = Expect (expected, ty, "`base'");
@@ -780,18 +789,21 @@ namespace Nemerle.Compiler
 
 
         | PT.PExpr.Sequence ([]) =>
-          TypeLiteral (Literal.Void (), expected)
+          _ = Expect (expected, MType.Void (), "empty sequence");
+          TExpr.Literal (Literal.Void ())
 
 
         | PT.PExpr.Sequence (l) =>
           def loop (res, lst) {
-            | [e] =>
-              def e' = TypeExpr (e, expected);
-              TExpr.Sequence (FixupSequence (e' :: res))
-            | x :: xs =>
-              def x' = TypeExpr (x, FreshTyVar (""));
-              loop (x' :: res, xs)
-            | [] => assert (false)
+            match (lst) {
+              | [e] =>
+                def e' = TypeExpr (e, expected);
+                FixupSequence (e' :: res)
+              | x :: xs =>
+                def x' = TypeExpr (x, FreshTyVar (""));
+                loop (x' :: res, xs)
+              | [] => assert (false)
+            }
           }
 
           PushLocals ();
@@ -825,10 +837,11 @@ namespace Nemerle.Compiler
 
 
         | PT.PExpr.Quoted (parse_element) =>
+          // FIXME!!!
+          def ctx = null;
           def lifted =
             match (parse_element) {
               | PT.SyntaxElement.Expression (e) => Macros.quoted_expr (ctx, e)
-              | PT.SyntaxElement.Type (e) => Macros.quoted_type (ctx, e)
               | PT.SyntaxElement.MatchCase (e) => Macros.QuotedMatchCase (ctx, e)
               | PT.SyntaxElement.MatchCaseGuard (a, b) => Macros.QuotedCaseGuard (ctx, (a, b))
               | PT.SyntaxElement.Function (e) => Macros.quoted_fundecl (ctx, e)
@@ -851,8 +864,19 @@ namespace Nemerle.Compiler
           ReportFatal (messenger, "$ macro keyword used in regular expression")
           
 
-        | PT.PExpr.Wildcard | PT.PExpr.Application | PT.PExpr.As =>
+        | PT.PExpr.TypedType
+        | PT.PExpr.Wildcard 
+        | PT.PExpr.Application 
+        | PT.PExpr.As =>
           ReportFatal (messenger, "found pattern expression inside a raw expression")
+
+          
+        | PT.PExpr.Void =>
+          ReportFatal (messenger, "found type expression inside a raw expression")
+
+
+        | PT.PExpr.Error =>
+          ReportFatal (messenger, "parse error")
           
 
         | PT.PExpr.Ellipsis =>
@@ -1309,7 +1333,7 @@ namespace Nemerle.Compiler
     }
 
 
-    TypeName (idl : list [string], name : PT.Name, expected : TyVar) : list [OverloadPossibility]
+    TypeLocal (idl : list [string], name : PT.Name, expected : TyVar) : option [TExpr]
     {
       match (idl) {
         | [_] when local_context.FindLocal (name) matches Some =>
@@ -1321,24 +1345,28 @@ namespace Nemerle.Compiler
               | _ => local.Type
             }
           _ = Expect (expected, ty, "value reference");
-          TExpr.LocalRef (local)
-
-        | _ =>
-          def from_this =
-            match (idl) {
-              | [name] when is_method =>
-                solver.PushState ();
-                def res = TypeMember (<[ this ]>, name, expected);
-                solver.PopState ();
-                if (res.IsEmpty) []
-                else TypeMember (<[ this ]>, name, expected)
-              | _ => []
-            };
-          def globals = name.GetEnv (env).LookupSymbol (idl, current_type);
-          def from_global = InterpretGlobals (globals, expected);
-
-          MakeOverloadedNode (from_this + from_global, expected)
+          Some (TExpr.LocalRef (local))
+        | _ => None ()
       }
+    }
+
+
+    TypeName (idl : list [string], name : PT.Name, expected : TyVar) : list [OverloadPossibility]
+    {
+      def from_this =
+        match (idl) {
+          | [name] when is_method =>
+            solver.PushState ();
+            def res = TypeMember (<[ this ]>, name, expected);
+            solver.PopState ();
+            if (res.IsEmpty) []
+            else TypeMember (<[ this ]>, name, expected)
+          | _ => []
+        };
+      def globals = name.GetEnv (env).LookupSymbol (idl, current_type);
+      def from_global = InterpretGlobals (globals, expected);
+
+      from_this + from_global
     }
     #endregion
 

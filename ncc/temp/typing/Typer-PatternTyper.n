@@ -31,6 +31,7 @@ using Nemerle.Collections;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Tyexpr;
 using Nemerle.Compiler.Typedtree;
+using Nemerle.Compiler.SolverMacros;
 
 using PT = Nemerle.Compiler.Parsetree;
 
@@ -43,6 +44,7 @@ namespace Nemerle.Compiler
       typer : Typer;
       matched_value_type : TyVar;
       patterns : list [PT.PExpr * option [PT.PExpr]];
+      messenger : Messenger;
 
       mutable common_variables : NemerleMap [PT.Name, LocalValue];
       mutable current_pattern_variables : NemerleMap [PT.Name, LocalValue];
@@ -55,6 +57,7 @@ namespace Nemerle.Compiler
         this.typer = typer;
         this.matched_value_type = matched_value_type;
         this.patterns = patterns;
+        messenger = typer.messenger;
       }
 
 
@@ -64,11 +67,11 @@ namespace Nemerle.Compiler
 
         foreach ((pattern, guard) in patterns) {
           current_pattern_variables = NemerleMap ();
-          def typed_pattern = TypePattern (pattern);
+          def typed_pattern = TypePattern (matched_value_type, pattern);
 
           // FIXME: shouldn't this be in the library?
-          def intersect (map1, map2) {
-            map1.Fold (fun (key, value, res : NemerleMap [_, _]) {
+          def intersect (map1 : NemerleMap [PT.Name, _], map2 : NemerleMap [PT.Name, _]) {
+            map1.Fold (fun (key, value, res : NemerleMap [PT.Name, _]) {
               if (map2.Member (key))
                 res.Add (key, value)
               else
@@ -86,15 +89,15 @@ namespace Nemerle.Compiler
             current_pattern_variables.Iter (typer.AddLocal);
 
             def expr =
-              match (expr) {
+              match (guard) {
                 | None => <[ true ]>
                 | Some (expr) => expr
               }
 
             def bool_ty =
-              typer.MonoType (InternalType.Boolean, "when guard type");
+              typer.MonoType (typer.FIXME (InternalType.Boolean), "when guard type");
               
-            def typed_expr = TypeExpr (expr, bool_ty);
+            def typed_expr = typer.TypeExpr (expr, bool_ty);
           typer.PopLocals ();
 
           result = (typed_pattern, typed_expr) :: result;
@@ -104,6 +107,8 @@ namespace Nemerle.Compiler
                                 v.UsedInPatternBody = true
                                });
         common_variables.Iter (typer.AddLocal);
+
+        result
       }
 
 
@@ -118,7 +123,7 @@ namespace Nemerle.Compiler
           if (List.ForAll (pats, is_assignment)) {
               match (matched_value_type.LowerBound) {
                 | Some (MType.Class (ti, _)) when matched_value_type.IsFixed =>
-                  def is_instance_field (_) {
+                  def is_instance_field (_ : IMember) {
                     | field : IField => !field.IsStatic
                     | _ => false
                   }
@@ -130,9 +135,9 @@ namespace Nemerle.Compiler
                         | [] =>
                           ReportError (messenger,
                                        "the type `$(ti)' has no field named `$(name)'");
-                          Pattern.Error ()
+                          (null, Pattern.Error ())
 
-                        | [field] =>
+                        | [field : IField] =>
                           def ty = matched_value_type.TypeOfMember (field);
                           (field, TypePattern (ty, pat))
 
@@ -141,7 +146,7 @@ namespace Nemerle.Compiler
                           ReportError (messenger,
                                        "overload ambiguity during "
                                        "selection of `$(ti).$(name)'");
-                          Pattern.Error ()
+                          (null, Pattern.Error ())
                       }
 
                     | _ => assert (false)
@@ -174,7 +179,7 @@ namespace Nemerle.Compiler
               if (names.Length == pats.Length) {
                 def assigns = List.Map2 (names, pats,
                   fun (n, p) {
-                    PT.PExpr.Assign (PT.PExpr.Ref (PT.Name ([n])), p)
+                    PT.PExpr.Assign (PT.PExpr.Ref (PT.Name (n)), p)
                   });
                 TypeTuplePattern (matched_value_type, assigns)
               } else {
@@ -214,7 +219,7 @@ namespace Nemerle.Compiler
         Util.locate (pattern.loc, {
           def typed = DoTypePattern (matched_value_type, pattern);
           when (typed.ty == null)
-            typed.ty = matched_value_type;
+            typed.ty = typer.FIXME (matched_value_type);
           typed
         })
       }
@@ -224,12 +229,10 @@ namespace Nemerle.Compiler
                        name : PT.PExpr, pattern : PT.PExpr) : Pattern
       {
         match (Util.qidl_of_expr (name)) {
-          | Some ((li, name)) =>
-            def name = PT.Name (li, name.color, name.context);
-
-            if (System.Char.IsUpper (List.Last (name.idl) [0])) {
+          | Some ((idl, name)) =>
+            if (System.Char.IsUpper (List.Last (idl) [0])) {
               def env = name.GetEnv (typer.env);
-              def proper_symbol (sym) {
+              def is_proper_symbol (sym) {
                 | Symbol.TypeMember (fld : IField) =>
                   fld.CanAccess (typer.current_type) &&
                   fld.IsLiteral && 
@@ -237,12 +240,15 @@ namespace Nemerle.Compiler
 
                 | Symbol.Type (ti) =>
                   ti.CanAccess (typer.current_type)
+
+                | _ => false
               }
 
-              match (List.Filter (env.LookupSymbol (name.idl), is_proper_symbol)) {
+              match (List.Filter (env.LookupSymbol (idl, typer.current_type), 
+                                  is_proper_symbol)) {
                 | [Symbol.TypeMember (fld : IField)]  =>
                   if (pattern matches PT.PExpr.Wildcard) {
-                    if (matched_value_type.Require (fld.GetMemType ())) {
+                    if (matched_value_type.Require (typer.FIXME (fld.GetMemType ()) : MType)) {
                       def val = Option.UnSome (ConstantFolder.FieldValueAsLiteral (fld));
                       Pattern.Enum (fld, val)
                     } else {
@@ -259,11 +265,11 @@ namespace Nemerle.Compiler
                   }
 
                 | [Symbol.Type (ti)] =>
-                  def lookup (ti) {
+                  def lookup (ti : TypeInfo) {
                     match (ti.GetTydecl ()) {
                       | TypeDeclaration.VariantOption =>
-                        def parent_tycon = Option.UnSome (ti.SuperClass ());
-                        def option_type = ti.FreshSubst ().Apply (ti.GetMemType ());
+                        // def parent_tycon = Option.UnSome (ti.SuperClass ());
+                        def option_type = ti.FreshSubst ().ApplyTv (typer.FIXME (ti.GetMemType ()));
                         if (matched_value_type.Provide (option_type))
                           Pattern.Application (ti, TypePattern (option_type, pattern));
                         else {
@@ -283,21 +289,29 @@ namespace Nemerle.Compiler
                         lookup (tc)
 
                       | _ =>
-                        ReportError (messenger, "`$(name)' is not a variant option");
+                        ReportError (messenger, "`$(idl)' is not a variant option");
                         Pattern.Wildcard ()
                     }
                   }
 
                   lookup (ti)
+                  
+                | [] =>
+                  ReportError (messenger, $ "unbound variant $idl");
+                  Pattern.Error ()
+
+                | _ =>
+                  ReportError (messenger, $ "overloading ambiguity $idl");
+                  Pattern.Error ()
               }
             } 
             else
               match (pattern) {
                 | PT.PExpr.Wildcard =>
                   TypePattern (matched_value_type,
-                               PT.PExpr.As (PT.PExpr.Wildcard (), PT.Splicable.Name (n)))
+                               PT.PExpr.As (PT.PExpr.Wildcard (), PT.Splicable.Name (name)))
                 | _ =>
-                  ReportError (messenger, $ "`$(n)' cannot be variant option, "
+                  ReportError (messenger, $ "`$(name)' cannot be variant option, "
                                             "since it starts with lowercase letter");
                   Pattern.Error ()
               }
@@ -317,7 +331,7 @@ namespace Nemerle.Compiler
             def fixed_type =
               match (typed_pattern) {
                 | Pattern.Application (ti, _) =>
-                  def raw_type = ti.FreshSubst ().Apply (ti.GetMemType ());
+                  def raw_type = ti.FreshSubst ().Apply (typer.FIXME (ti.GetMemType ()));
                   when (!raw_type.Require (matched_value_type))
                     ReportError (messenger,
                                  $ "the matched value type "
@@ -334,16 +348,16 @@ namespace Nemerle.Compiler
 
             def decl =
               if (common_variables == null || !common_variables.Member (name)) {
-                DefineLocal (name, 
-                             fixed_type,
-                             LocalValue.Kind.PatternVariable (false),
-                             false)
+                typer.DefineLocal (name, 
+                                   fixed_type,
+                                   LocalValue.Kind.PatternVariable (false),
+                                   false)
               } else {
-                def decl = common_variables [name];
+                def decl = common_variables.Get (name);
                 unless (decl.Type.Provide (fixed_type)) {
                   ReportError (messenger,
                                $ "$decl used to have type $(decl.Type) but now it "
-                                 "has type $");
+                                 "has type $fixed_type");
                   when (messenger.InErrorMode)
                     Message.hint ("rename variable if they have no connection");
                 }
@@ -364,7 +378,9 @@ namespace Nemerle.Compiler
             
 
           | PT.PExpr.TypeEnforcement (nested, needed_type) =>
-            def needed_type = BindType (needed_type);
+            def needed_type = typer.BindType (needed_type);
+            assert (needed_type.IsFixed);
+            def needed_type = Option.UnSome (needed_type.LowerBound);
             
             solver.PushState ();
             def just_a_hint = matched_value_type.Require (needed_type);
@@ -372,7 +388,7 @@ namespace Nemerle.Compiler
 
             if (just_a_hint) {
               _ = matched_value_type.Require (needed_type);
-              TypePattern (nested, matched_value_type)
+              TypePattern (matched_value_type, nested)
             } else {
               solver.PushState ();
               def properly_subtypes = matched_value_type.Provide (needed_type);
@@ -382,8 +398,7 @@ namespace Nemerle.Compiler
                 _ = matched_value_type.Provide (needed_type);
               } else {
                 if (needed_type.IsInterface ||
-                    Option.UnSome (matched_value_type.UpperBound)
-                       .IsInterface) {
+                    Option.UnSome (matched_value_type.UpperBound).IsInterface) {
                   // ok, we allow interfaces here
                 } else
                   ReportError (messenger,
@@ -394,8 +409,8 @@ namespace Nemerle.Compiler
               match (needed_type) {
                 | MType.Class (ti, _) =>
                   def typed_pattern =
-                    Pattern.HasType (pattern.loc, matched_value_type, ti);
-                  match (TypePattern (MonoType (needed_type), nested)) {
+                    Pattern.HasType (pattern.loc, typer.FIXME (matched_value_type), ti);
+                  match (TypePattern (typer.MonoType (needed_type), nested)) {
                     | Pattern.As (Pattern.Wildcard, decl) =>
                       Pattern.As (pattern.loc, matched_value_type, 
                                   typed_pattern, decl)
