@@ -162,9 +162,9 @@ buffer created.  This is a good place to put your customizations.")
 	   0 font-lock-type-face)
 	 
 	 ;; constants
+         '("\\<[0-9]+\\>" 0 font-lock-constant-face)
          '("\\[\\]" 0 font-lock-constant-face)
 	 '("\\<\\(false\\|true\\)\\>" 0 font-lock-constant-face))))
-
 
 
 (unless nemerle-mode-syntax-table
