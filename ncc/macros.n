@@ -909,7 +909,6 @@ public module Macros
       }
     };
 
-    // build method Run running macro's body
     def (macro_patts, macro_exprs, macro_parms) = 
       analyze_params (header.parms, [], [], [], [], System.Text.StringBuilder ());
     def macro_cases = List.rev (consolide_cases (macro_patts, macro_exprs, []));
@@ -971,23 +970,6 @@ public module Macros
     };
     def (callname, key, rules, positions) = analyze_syntax (synt, [], []);
 
-    def runHeader =
-      Fun_header (header.loc, SS_string ("Run"), 
-                  <[ type: Nemerle.Compiler.Parsetree.Expr ]>,
-                  [Fun_parm (header.loc, SS_string ("_N_ctx"), 
-                             <[ type: Nemerle.Compiler.Tyexpr.CTX ]>,
-                             FP_normal ());
-                   Fun_parm (header.loc, SS_string ("_N_parms"), 
-                             <[ type: list (Nemerle.Compiler.Parsetree.SyntaxElement) ]>,
-                             FP_normal ())]);
-    def runBody = <[ match (_N_parms) { ..$macro_cases } ]>;
-    def runFunc = M_function (header = runHeader, 
-                              name = "Run",
-                              modifiers = [],
-                              loc = header.loc,
-                              kind = FK_method (["Nemerle.Compiler.IMacro.Run"]), 
-                              body = FB_parsed_expr (runBody));
-
     // build SyntaxExtension method
     def roll_gramm_els (l) {
       match (l) {
@@ -1035,7 +1017,34 @@ public module Macros
                   loc = header.loc,
                   kind = FK_method (["Nemerle.Compiler.IMacro.SyntaxExtension"]), 
                   body = FB_parsed_expr (syntBody));
-    
+
+    // we also add this syntax extensions to current compilation
+    // to override old definition from previous compilations
+    def permute = CreatePermutingFunction (List.rev (positions));
+    Lexer.AddKeyword (key);
+    List.iter (fun (x) { | Parser.GE_keyword (k) => 
+                           Lexer.AddKeyword (k); | _ => () }, rules);
+    Parser.ctx.keywords.Set (key, Parser.KeywordCallback (key, 
+      Parser.make_parsing_function (callname, rules, permute)));
+
+    // build method Run running macro's body
+    def runHeader =
+      Fun_header (header.loc, SS_string ("Run"), 
+                  <[ type: Nemerle.Compiler.Parsetree.Expr ]>,
+                  [Fun_parm (header.loc, SS_string ("_N_ctx"), 
+                             <[ type: Nemerle.Compiler.Tyexpr.CTX ]>,
+                             FP_normal ());
+                   Fun_parm (header.loc, SS_string ("_N_parms"), 
+                             <[ type: list (Nemerle.Compiler.Parsetree.SyntaxElement) ]>,
+                             FP_normal ())]);
+    def runBody = <[ match (_N_parms) { ..$macro_cases } ]>;
+    def runFunc = M_function (header = runHeader, 
+                              name = "Run",
+                              modifiers = [],
+                              loc = header.loc,
+                              kind = FK_method (["Nemerle.Compiler.IMacro.Run"]), 
+                              body = FB_parsed_expr (runBody));
+   
 
     // build CallTransform method
     def (trans_p, trans_r) = (Util.tmpname ("p"), Util.tmpname ("r"));
@@ -1134,21 +1143,68 @@ public module Macros
     td
   }
 
+  public CreatePermutingFunction (positions : list (int)) 
+  : list (SyntaxElement) -> list (SyntaxElement)
+  {
+    def len = List.length (positions);
+    def permute (li) {
+      def take_first (n, l, acc) {
+        match ((n, l)) {
+          | (0, _) => (List.rev (acc), l)
+          | (_, []) => Util.ice ("too few parameters")
+          | (n, x :: xs) =>
+            take_first (n - 1, xs, x :: acc)
+        }
+      };
+      def pararr = (System.Array.CreateInstance (typeof (SyntaxElement), len) 
+                    :> array (SyntaxElement));
+      mutable m <- 0;
+      def loop (l, ps) {
+        match ((l, ps)) {
+          | (x :: xs, [p]) =>
+            pararr[p] <- x;
+            loop (xs, [])
+          | (x :: xs, p :: pp) =>
+            if (p == len - 1) {
+              def (rtail, rfront) = take_first (len - m - 1, 
+                                                List.rev (xs), []);
+              pararr[p] <- x;
+              loop (List.append (List.rev (rtail), List.rev (rfront)), pp)
+            }
+            else {
+              pararr[p] <- x;
+              m <- m + 1;
+              loop (xs, pp)
+            }
+          | (xs, []) => List.append (List.from_array (pararr), xs)
+          | ([], _) => Util.ice ("too few parameters")
+        }
+      };
+      loop (li, positions)
+    };
+    permute
+  }
+
   // PRETTY PRINTING TOOLS SECTION
 
-  public PrintExpr (expr : Expr, empty : string) : void 
+  public PrintExpr (ctx : CTX, expr : Expr, empty : string, expand : bool) : void 
   {
+    def expr = 
+      if (expand) MacroRegistry.expand_macro (ctx, expr)
+      else expr;
+
     match (expr) {
       | <[ $(id : var) ]> => 
         printf ("%s", id)
 
       | <[ $obj . $(mem : var) ]> => 
-        PrintExpr (obj, empty); printf (".%s", mem)
+        PrintExpr (ctx, obj, empty, expand); printf (".%s", mem)
 
       | <[ [] ]> => printf ("[]")
 
       | <[ $x :: $xs ]> =>
-        PrintExpr (x, empty);  printf (" :: "); PrintExpr (xs, empty)
+        PrintExpr (ctx, x, empty, expand);  
+        printf (" :: "); PrintExpr (ctx, xs, empty, expand)
 
       | <[ $func (.. $parms) ]> =>
         def print_params (pars) {
@@ -1156,10 +1212,10 @@ public module Macros
             match (p) {
               | <[ parameter: $(name : var) = $expr ]> =>
                 unless (name == "") printf ("%s = ", name);
-                PrintExpr (expr, empty + "  ")
+                PrintExpr (ctx, expr, empty + "  ", expand)
               | <[ parameter: ref $(name : var) = $expr ]> =>
                 unless (name == "") printf ("%s = ", name);
-                PrintExpr (expr, empty + "  ")
+                PrintExpr (ctx, expr, empty + "  ", expand)
               | _ => Message.error ("spliced in PrintExpr")
             }
           };
@@ -1171,25 +1227,25 @@ public module Macros
           }
         };
 
-        PrintExpr (func, empty); printf (" (");
+        PrintExpr (ctx, func, empty, expand); printf (" (");
         print_params (parms); printf (")");
 
       | <[ $target <- $source ]> =>
-        PrintExpr (target, empty); printf (" <- ");
-        PrintExpr (source, empty);
+        PrintExpr (ctx, target, empty, expand); printf (" <- ");
+        PrintExpr (ctx, source, empty, expand);
 
       | <[ def $(name : var) = $val ]> =>
         printf ("def %s = ", name);
-        PrintExpr (val, empty)
+        PrintExpr (ctx, val, empty, expand)
 
       | <[ mutable $(name : var) <- $val ]> =>
-        printf ("mutable %s = ", name); PrintExpr (val, empty)
+        printf ("mutable %s = ", name); PrintExpr (ctx, val, empty, expand)
 
       | <[ def (.. $elems) = $val ]> =>
         printf ("def ("); 
         List.iter (fun (x) { PrintPattern (x); printf ("; ") }, elems);
         printf (") = ");
-        PrintExpr (val, empty);
+        PrintExpr (ctx, val, empty, expand);
 
       | <[ match ($expr) {.. $cases } ]> =>
         def print_case (c : Match_case) {
@@ -1199,7 +1255,7 @@ public module Macros
                 printf ("\n%s| ", empty + "  ");
                 PrintPattern (pat);
                 printf (" when ");
-                PrintExpr (e, empty + "    ")
+                PrintExpr (ctx, e, empty + "    ", expand)
               | <[ caseguard: $pat ]> =>
                 printf ("\n%s| ", empty + "  "); 
                 PrintPattern (pat);
@@ -1209,29 +1265,30 @@ public module Macros
           def <[ case: | ..$guards => $expr ]> = c;
           List.iter (print_guard, guards);
           printf (" => \n%s", empty + "    ");
-          PrintExpr (expr, empty + "    ")
+          PrintExpr (ctx, expr, empty + "    ", expand)
         };
 
-        printf ("match ("); PrintExpr (expr, empty); printf (") {");
+        printf ("match ("); 
+        PrintExpr (ctx, expr, empty, expand); printf (") {");
         List.iter (print_case, cases);
         printf ("\n%s}", empty)
 
       | <[ raise $exc ]> =>
-        printf ("raise "); PrintExpr (exc, empty);
+        printf ("raise "); PrintExpr (ctx, exc, empty, expand);
 
       | <[ try $body with { $(exn : var) : $exn_ty => $handler } ]> => 
         printf ("try\n%s  ", empty);
-        PrintExpr (body, empty + "  ");
+        PrintExpr (ctx, body, empty + "  ", expand);
         printf ("\n%swith {\n%s", empty, empty + "  ");
         printf ("%s : ", exn);
         PrintType (exn_ty); printf ("=>\n%s", empty + "    ");
-        PrintExpr (handler, empty + "    ")
+        PrintExpr (ctx, handler, empty + "    ", expand)
 
       | <[ try $body finally $handler ]> =>
         printf ("try\n%s  ", empty);
-        PrintExpr (body, empty + "  ");
+        PrintExpr (ctx, body, empty + "  ", expand);
         printf ("\n%sfinally\n%s  ", empty, empty);
-        PrintExpr (handler, empty + "  ")
+        PrintExpr (ctx, handler, empty + "  ", expand)
 
       | <[ () ]> => 
         printf ("()")
@@ -1266,34 +1323,38 @@ public module Macros
         printf ("typeof ("); PrintType (t); printf (")")
 
       | <[ ( $expr :> $ty ) ]> =>
-        printf ("("); PrintExpr (expr, empty); printf (" :> ");
+        printf ("("); PrintExpr (ctx, expr, empty, expand); printf (" :> ");
         PrintType (ty); printf (")")
 
       | <[ ( $expr : $ty ) ]> =>
-        printf ("("); PrintExpr (expr, empty); printf (" : ");
-        PrintType (ty); printf (")")
+        printf ("("); PrintExpr (ctx, expr, empty, expand); 
+        printf (" : "); PrintType (ty); printf (")")
 
       | <[ {.. $seq } ]> =>
         printf ("{");
         List.iter (fun (x) { printf ("\n%s", empty + "  "); 
-                             PrintExpr (x, empty + "  "); 
+                             PrintExpr (ctx, x, empty + "  ", expand); 
                              printf (";"); }, seq);
         printf ("\n%s}", empty)
 
       | <[ (.. $args) ]> =>
         printf ("(");
-        List.iter (fun (x) { printf (", "); PrintExpr (x, empty) }, args);
+        List.iter (fun (x) { printf (", "); 
+                             PrintExpr (ctx, x, empty, expand) }, 
+                   args);
         printf (")")
 
       | <[ mkarray [.. $args] ]> =>
         printf ("mkarray [");
-        List.iter (fun (x) { printf ("; "); PrintExpr (x, empty) }, args);
+        List.iter (fun (x) { printf ("; "); 
+                             PrintExpr (ctx, x, empty, expand) }, args);
         printf ("]")
 
       | <[ $obj [.. $args] ]> =>
-        PrintExpr (obj, empty);
+        PrintExpr (ctx, obj, empty, expand);
         printf ("[");
-        List.iter (fun (x) { printf ("; "); PrintExpr (x, empty) }, args);
+        List.iter (fun (x) { printf ("; "); PrintExpr (ctx, x, empty, expand) }, 
+                   args);
         printf ("]")
 
 //      | <[ 
@@ -1382,7 +1443,7 @@ public module Macros
       | <[ pattern: $(name : var) _ ]> =>
         printf ("%s", name)
 
-      | _ => printf ("other")
+      | _ => printf("other");
     }
   }
 
@@ -1517,8 +1578,12 @@ public module Macros
 	  print_endline ("Bad constructed quoted expression in print - expr_list ")
     	| E_spliced_special => 
 	  print_endline ("spliced_special ")
-        | _ =>
-         print_endline ("other")
+    	| E_macrocall => 
+	  print_endline ("macro_call ")
+    	| E_typed_expr => 
+	  print_endline ("typed tree ")
+//        | _ =>
+//         print_endline ("other")
       }
     }
 
