@@ -1,4 +1,4 @@
-n_src = option.n list.n util.n parsetree.n tree.n pass1.n treeutil.n \
+n_src = option.n list.n util.n parsetree.n tree.n scan_globals.n treeutil.n \
 	bind_types.n tyvars.n env.n
 cs_src = lexer.cs main.cs parser.cs
 all_src = $(n_src) $(cs_src)
