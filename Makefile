@@ -50,6 +50,7 @@ version_files = \
 MKDIR = @echo MKDIR $1
 TAR   = @echo TAR   $1
 CP    = @echo CP    $1
+INST  = @echo INSTALL $1
 
 ############################################################
 # TARGETS
@@ -110,11 +111,15 @@ install:
             else $(MAKE) -C boot install; fi
 	$(Q)if test $(ANTLR); then \
 	  $(MAKE) NCC_DIR=$(PWD)/boot/ -C tools/cs2n install; fi
+	$(INST) $(PKGCONFIGDIR)/nemerle.pc
+	$(Q)install -d $(DESTDIR)$(PKGCONFIGDIR)
+	$(Q)install -m 644 nemerle.pc $(DESTDIR)$(PKGCONFIGDIR)/nemerle.pc
 
 uninstall:
 	$(Q)$(MAKE) -C tools/cs2n uninstall
 	$(Q)$(MAKE) -C boot uninstall
 	$(Q)$(MAKE) -C doc  uninstall
+	$(Q)rm -f $(PKGCONFIGDIR)/nemerle.pc
 
 check:
 	$(Q)$(MAKE) -C ncc  tests
