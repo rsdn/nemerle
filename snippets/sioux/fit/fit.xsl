@@ -114,7 +114,16 @@
   </xsl:template>
 
   <xsl:template match="input">
-    <input type="{@type}" name="{@name}" value="{@value}">
+    <input type="{@type}">
+      <xsl:if test="@checked != ''">
+        <xsl:attribute name="checked">checked</xsl:attribute>
+      </xsl:if> 
+      <xsl:if test="@name != ''">
+        <xsl:attribute name="name"><xsl:value-of select="@name"/></xsl:attribute>
+      </xsl:if> 
+      <xsl:if test="@value != ''">
+        <xsl:attribute name="value"><xsl:value-of select="@value"/></xsl:attribute>
+      </xsl:if> 
       <xsl:apply-templates />  
     </input>
   </xsl:template>
