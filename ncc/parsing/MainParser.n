@@ -56,6 +56,50 @@ namespace Nemerle.Compiler
     | Parameter
     | ExpressionList
     | Optional { body : GrammarElement; }
+    | Branch { options : list [GrammarElement]; }
+    | End { define : SyntaxDefinition; }      
+
+    /// Next element in grammar tree. It is used only in merged
+    /// trees created by parser
+    internal Next : GrammarElement;
+
+    public this () { }
+
+    internal this (next : GrammarElement) { Next = next; }
+
+    internal CloneWithNext (other : GrammarElement) : GrammarElement {
+      match (this) {
+        | Operator (name) => Operator (other, name)
+        | Keyword (name)  => Keyword (other, name)
+        | Expression      => Expression (other)
+        | Parameter       => Parameter (other)
+        | ExpressionList  => ExpressionList (other)
+        | Optional (body) => Optional (other, body)
+        | Branch | End    => Util.ice ("tree like elements are not allowed to be cloned")
+      }
+    }
+
+    internal AddBranch (next : GrammarElement) : GrammarElement {
+      match (this) {
+        | Branch (li) => Branch (next :: li)
+        | _ => Branch ([next, this])
+      }
+    }
+
+    [Nemerle.OverrideObjectEquals]
+    public Equals (other : GrammarElement) : bool {
+      if (other == null) true
+      else
+        match ((this, other)) {
+          | (Operator (n1), Operator (n2))
+          | (Keyword (n1), Keyword (n2)) => n1 == n2
+          | (ExpressionList, ExpressionList)            
+          | (Parameter, Parameter)
+          | (Expression, Expression) => true
+          | (Optional (e1), Optional (e2)) => e1.Equals (e2)
+          | _ => false
+        }
+    }
   }
   
   [Record]
@@ -176,7 +220,7 @@ namespace Nemerle.Compiler
     mutable in_variant : bool;
     mutable stream : Token;
     mutable last_tok : Token;
-    mutable syntax_keywords : SystemMap [string, SyntaxDefinition];
+    mutable syntax_keywords : SystemMap [string, GrammarElement];
 
     mutable streams_stack : array [Token] = array (200);
     mutable stack_pos : int = 0;
@@ -477,11 +521,39 @@ namespace Nemerle.Compiler
     }
 
 
-    load_syntax (extensions : list [SyntaxDefinition]) : SystemMap [string, SyntaxDefinition]
+    load_syntax (extensions : list [SyntaxDefinition]) : SystemMap [string, GrammarElement]
     {
+      def merge_into (li, ext, tree : GrammarElement) {
+        match (li) {
+          | [] => GrammarElement.End (ext)
+          | (x : GrammarElement) :: xs =>
+            if (x.Equals (tree)) {
+              def next = if (tree == null) null else tree.Next;
+              def end = merge_into (xs, ext, next);
+              x.CloneWithNext (end)
+            }
+            else {
+              def end = merge_into (xs, ext, null);
+              def next = x.CloneWithNext (end);
+              if (tree != null)
+                tree.AddBranch (next)
+              else
+                next
+            }
+        }
+      }
+      
       mutable keywords = syntax_keywords;
-      foreach (definition in extensions)
-        keywords = keywords.Replace (definition.Start, definition);
+      foreach (definition in extensions) {
+        def start = definition.Start;
+        keywords =
+          match (keywords.Find (start)) {
+            | Some (existing) =>
+              keywords.Replace (start, merge_into (definition.Rules, definition, existing))
+            | _ =>
+              keywords.Add (start, merge_into (definition.Rules, definition, null))
+          }
+      }
       keywords
     }
     
@@ -1662,7 +1734,13 @@ namespace Nemerle.Compiler
           | Token.Operator ("|") =>
             shift ();
             match (maybe_parse_ellipsis ()) {
-              | Some (e) => expect_operator ("=>"); [e]
+              | Some (e) => expect_operator ("=>");
+                match (peek_token ()) {
+                  | Token.EndOfGroup | Token.Operator ("|") =>
+                    Error (last_tok, "expecting body of match case")
+                  | _ => ()
+                }
+                [e]
               | None => loop2 ([])
             }
           | _ => loop2 ([])
@@ -2027,28 +2105,57 @@ namespace Nemerle.Compiler
     
     //------------- PARSING OF MACRO SYNTAX EXTENSIONS ---------------------
 
-    parse_syntax_definition (definition : SyntaxDefinition, stop : TokenStoppers) : PExpr
+    parse_syntax_definition (tree : GrammarElement, stop : TokenStoppers) : PExpr
     {
       def loc = last_tok.Location;
-      def parms = parse_grammar_rule (definition.Rules, stop);
-      PExpr.MacroCall (loc, mkname (""), definition.MacroNamespace,
-                       definition.Permute (parms))
-    }
-    
-    parse_grammar_rule (rule : list [GrammarElement], stop : TokenStoppers)
-      : list [SyntaxElement]
-    {
-      def find_closing (li) {
-        def loop (ac, l) {
-          match (l) {
-            | [] => Message.fatal_error ("syntax definition do not have `)' after '(");
-            | GrammarElement.Operator (")") :: xs => (List.Rev (ac), xs)
-            | x :: xs => loop (x :: ac, xs)
-          }
-        }
-        loop ([], li)
+      def (end, parms) = parse_grammar_rule (tree, stop);
+      match (end) {
+        | GrammarElement.End (definition) =>
+          PExpr.MacroCall (loc, mkname (""), definition.MacroNamespace,
+                           definition.Permute (parms))
+        | _ =>
+          fatal_error (loc, "unable to parse syntax rule")
       }
+    }
 
+    matches_stream (tree : GrammarElement) : bool {
+      | GrammarElement.Operator (")") => stream == null
+      | GrammarElement.Operator (";") =>
+        stream == null || stream matches Token.Semicolon
+
+      | GrammarElement.Operator (n) =>
+        match (stream) {
+          | Token.Operator (o) when n == o => true
+          | _ => false
+        }
+        
+      | GrammarElement.Keyword (k) =>
+        match (stream) {
+          | Token.Keyword (k1) when k1 == k => true
+          | _ => false
+        }
+
+      | GrammarElement.End => true
+        
+      | _ => false
+    }
+
+    shift_rule (rule : GrammarElement) : void {
+      | GrammarElement.Keyword (k) => expect_keyword (k)
+      | GrammarElement.Operator (")") => ()
+      | GrammarElement.Operator (";") =>
+        if (stream == null)
+          jump_to_sibling ();
+        else
+          shift ();
+
+      | GrammarElement.Operator (n) => expect_operator (n);
+      | _ => ()
+    } 
+    
+    parse_grammar_rule (tree : GrammarElement, stop : TokenStoppers)
+      : GrammarElement * list [SyntaxElement]
+    {
       def expect_semicolon () {
         if (stream == null)
           jump_to_sibling ();
@@ -2058,126 +2165,95 @@ namespace Nemerle.Compiler
           Error (stream, "expected `;'");
       }
       
-      def loop (acc, lst) {
-        match (lst) {
-          | GrammarElement.Operator ("(") :: xs =>
-            def (g_elements, rest) = find_closing (xs);
-            
+      def loop (acc, x : GrammarElement) {
+        def next = x.Next;
+        match (x) {
+          | GrammarElement.Operator ("(") =>
+            def expect_close (el : GrammarElement) {
+              | GrammarElement.Operator (")") as x => x.Next
+              | x => Error (last_tok, "error parsing `(..)' syntax rule"); x
+            }
             match (get_token ()) {
               | Token.RoundGroup (Token.LooseGroup (first) as loose) =>
-                match (g_elements) {
-                  | [GrammarElement.ExpressionList] =>
+                match (next) {
+                  | GrammarElement.ExpressionList =>
                     def exprs = parse_expr_sequence (loose);
-                    loop (List.RevMap (exprs, fun (x) { SyntaxElement.Expression (x)}) + acc, rest)
+                    loop (List.RevMap (exprs, fun (x) { SyntaxElement.Expression (x)}) + acc,
+                          expect_close (next.Next))
 
                   | _ =>
                     push_stream (loose);
                     push_stream (first);
-                    def res = parse_grammar_rule (g_elements, TokenStoppers.None);
-                    pop_stream ("inside `()'");
+                    def (next, res) = parse_grammar_rule (next, TokenStoppers.None);                    
+                    pop_stream ("tokens inside of `()'");
                     shift (); // shift the loose group, which just ended
                     pop_stream ("end of `()'");
-                    loop (List.RevAppend (res, acc), rest)
+                    loop (List.RevAppend (res, acc), expect_close (next))
                 }
 
-              | Token.RoundGroup as x => Error (x, "it cannot be empty"); loop (acc, rest)
-              | x => Error (x, "expecting `(..)'"); loop (acc, rest);
+              | Token.RoundGroup as x => Error (x, "it cannot be empty"); loop (acc, next)
+              | x => Error (x, "expecting `(..)'"); loop (acc, next);
             }
 
-          | GrammarElement.Operator (";") :: xs =>
-            expect_semicolon ();
-            loop (acc, xs)
+          | GrammarElement.Operator (")") => (x, List.Rev (acc))
             
-          | GrammarElement.Operator (n) :: xs =>
+          | GrammarElement.Operator (";") =>
+            expect_semicolon ();
+            loop (acc, next)
+            
+          | GrammarElement.Operator (n) =>
             expect_operator (n);
-            loop (acc, xs)
+            loop (acc, next)
 
-          | GrammarElement.Keyword (n) :: xs =>
+          | GrammarElement.Keyword (n) =>
             unless (flag_sibling_keyword (n)) 
               Error (peek_token (), $"expected `$(n)' keyword");
-            loop (acc, xs)
+            loop (acc, next)
 
-          | GrammarElement.Expression :: xs =>
+          | GrammarElement.Expression =>
             def expr = parse_expr (stop);
-            loop (SyntaxElement.Expression (expr) :: acc, xs)
+            loop (SyntaxElement.Expression (expr) :: acc, next)
 
-          | GrammarElement.ExpressionList :: _ => Util.ice ("expr list?")
+          | GrammarElement.ExpressionList => Util.ice ("expr list?")
 
-          | GrammarElement.Parameter :: xs =>
+          | GrammarElement.Parameter =>
             def p = parse_parameter ();
-            loop (SyntaxElement.Parameter (p) :: acc, xs)
+            loop (SyntaxElement.Parameter (p) :: acc, next)
 
-          | GrammarElement.Optional (GrammarElement.Operator (";")) :: xs =>
-            if (stream == null)
-              jump_to_sibling ()
-            else when (stream matches Token.Semicolon)
-              shift ();
-            loop (acc, xs)
-            
-          | GrammarElement.Optional (GrammarElement.Operator (n)) :: xs =>
-            match (peek_token ()) {
-              | Token.Operator (o) when n.StartsWith (o) || o.StartsWith (n) =>
-                expect_operator (n)
-              | _ => ()
-            };
-            loop (acc, xs)
+          | GrammarElement.Optional (GrammarElement.Expression) =>
+            def expr =
+              if (matches_stream (next))
+                SyntaxElement.Expression (null);
+              else
+                SyntaxElement.Expression (parse_expr ());
+            shift_rule (next);
+                
+            match (next) {
+              | GrammarElement.Operator (")") | GrammarElement.End =>
+                (next, List.Rev (expr :: acc))
 
-          | GrammarElement.Optional (GrammarElement.Keyword (n)) :: xs =>
-            ignore (flag_keyword (n));
-            loop (acc, xs)
+              | GrammarElement.Operator (";") 
+              | GrammarElement.Keyword | GrammarElement.Operator =>
+                loop (expr :: acc, next.Next)                
 
-          | GrammarElement.Optional (GrammarElement.Expression) :: GrammarElement.Keyword (n) :: xs =>
-            match (peek_token ()) {
-              | Token.Keyword (o) when o == n =>
-                shift ();
-                loop (SyntaxElement.Expression (null) :: acc, xs)
-              | _ =>
-                def expr = parse_expr (stop);
-                expect_keyword (n);
-                loop (SyntaxElement.Expression (expr) :: acc, xs)
-            };
-
-          | GrammarElement.Optional (GrammarElement.Expression) :: GrammarElement.Operator (";") :: xs =>
-            if (stream == null) {
-              jump_to_sibling ();
-              loop (SyntaxElement.Expression (null) :: acc, xs)
-            }
-            else if (stream matches Token.Semicolon) {
-              shift ();
-              loop (SyntaxElement.Expression (null) :: acc, xs)
-            } 
-            else {
-              def expr = parse_expr (stop);
-              expect_semicolon ();
-              loop (SyntaxElement.Expression (expr) :: acc, xs)
+              | x =>
+                Message.fatal_error (last_tok.Location, "syntax definition of macro is ambiguous: " + 
+                                     x.ToString ())
             }
 
-          | [GrammarElement.Optional (GrammarElement.Expression)] =>
-            if (stream == null)
-              List.Rev (SyntaxElement.Expression (null) :: acc)
-            else
-              List.Rev (SyntaxElement.Expression (parse_expr ()) :: acc)
+          | GrammarElement.Optional (opt) =>
+            when (matches_stream (opt))
+              shift_rule (opt);
+            loop (acc, next)
             
-          | GrammarElement.Optional (GrammarElement.Expression) :: GrammarElement.Operator (n) :: xs =>
-            match (peek_token ()) {
-              | Token.Operator (o) when n.StartsWith (o) || o.StartsWith (n) =>
-                shift ();
-                loop (SyntaxElement.Expression (null) :: acc, xs)
-              | _ =>
-                def expr = parse_expr (stop);
-                expect_operator (n);
-                loop (SyntaxElement.Expression (expr) :: acc, xs)
-            };
-
-          | x :: _ =>
+          | GrammarElement.End => (x, List.Rev (acc))
+            
+          | x =>
             Message.fatal_error (last_tok.Location, "syntax definition of macro is ambiguous: " + 
                                  x.ToString ())
-
-          | [] => List.Rev (acc)
         }
       };
-
-      loop ([], rule)
+      loop ([], tree)
     }
   } // end MainParser
 } // end namespace
