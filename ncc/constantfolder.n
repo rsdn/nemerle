@@ -31,6 +31,8 @@ using Nemerle.Utility;
 
 using Nemerle.Compiler.Parsetree;
 
+namespace TT = Nemerle.Compiler.Typedtree;
+
 namespace Nemerle.Compiler 
 {
   module ConstantFolder
@@ -52,81 +54,75 @@ namespace Nemerle.Compiler
       | _ => false
     }
 
-    is_flag_enum (t : System.Type) : bool
+    is_flag_enum (t : Tycon) : bool
     {
-      t.GetCustomAttributes (typeof (System.FlagsAttribute), false).Length > 0
+      def st = t.GetSystemType ();
+      // FIXME
+      def attrs = 
+        st.GetCustomAttributes (typeof (System.FlagsAttribute), false);
+      attrs.Length > 0
     }
 
-    underlaying_enum_type (t : System.Type) : System.Type
+    underlaying_enum_type (t : Tycon) : Tycon
     {
       def res =
-        NArray.Fold (t.GetFields (), null, fun (elt : System.Reflection.FieldInfo, acc) {
-          if (!elt.IsStatic) {
-            assert (acc == null);
-            elt.FieldType
-          } else
-            acc
+        List.FoldLeft (t.GetMembers (), null, fun (elt : IMember, acc) {
+          match (elt.GetKind ()) {
+            | MK_field (f) when !f.IsStatic () =>
+              assert (acc == null);
+              match (f.GetMemType ()) {
+                | TT.T_app (tc, []) => tc
+                | _ => assert (false)
+              }
+            | _ => acc
+          }
         });
       assert (res != null);
       res
     }
 
-    enum_field_value (env : GlobalEnv, expr : Expr) : Expr
+    emit_literal_field (field : IField, expr : Expr) : Expr
     {
-      def split (l, acc) {
-        match (l) {
-          | [x] => (List.Rev (acc), x)
-          | x :: xs => split (xs, x :: acc)
-          | _ => Util.ice ("empty")
-        }
-      };
-      
+      def decl_type = field.DeclaringType;
+      def (enum_ty, field_type) =
+        match (decl_type.GetTydecl ()) {
+          | TT.TD_enum =>
+            (Some (decl_type), underlaying_enum_type (decl_type))
+          | _ => 
+            match (field.GetMemType ()) {
+              | TT.T_app (tc, []) => (None (), tc)
+              | _ => assert (false) // shouldn't be literal
+            }
+        };
+      match (NumericType.ByName (field_type.GetFullName ())) {
+        | Some (num_ty) =>
+          def lit = num_ty.ToLiteral (field.GetValue ());
+          match (enum_ty) {
+            | Some (tc) =>
+              E_literal (L_enum (lit, tc))
+            | None =>
+              E_literal (lit)
+          }
+        | None =>
+          // ice?
+          Message.warning ("literal field of unknown type `" + 
+                           field_type.GetFullName () + "'");
+          expr
+      }
+    }
+
+    literal_field_value (env : GlobalEnv, expr : Expr) : Expr
+    {
       match (Util.qidl_of_expr (expr)) {
         | Some ((id, name)) =>
-          def val = 
-            List.FoldLeft (name.GetEnv (env).ExpandName (id), None (),
-              fun (fullname, acc) {
-                def (front, last) = split (fullname, []);
-                
-                match (GlobalEnv.LookupExactType (front)) {
-                  | Some (t) =>
-                    def is_enum_field (m : IMember) {
-                      m.IsStatic () && match (m.GetKind ()) {
-                        | MK_field => true
-                        | _ => false
-                      }
-                    };
-                    def members = t.LookupMember (last);
-                    match (List.Filter (members, is_enum_field)) {
-                      | [] => acc
-                      | [x] =>
-                        match (acc) {
-                          | Some (y) when (y : IMember).GetId () != x.GetId () =>
-                            Message.error ("the field name `" +
-                                           Util.qid_of_list (id) +
-                                           "' is ambigious");
-                            Some (x)
-                          | _ => Some (x)
-                        }
-                      | _ =>
-                        Message.error ("the field name `" +
-                                       Util.qid_of_list (id) + 
-                                       "' is ambigious in its own type");
-                        acc
-                    }
-                  | None => acc
-                }
-              });
-          match (val) {
-            | Some (field) =>
-              def field = (field :> IField);
-              def enum_ty = field.DeclaringType.GetSystemType ();
-              def under_ty = underlaying_enum_type (enum_ty);
-              def obj = field.GetFieldInfo ().GetValue (null);
-              def num_ty = NumericType.ByName (under_ty.FullName);
-              def num_ty = Option.UnSome (num_ty);
-              E_literal (L_enum (num_ty.ToLiteral (obj), enum_ty))
-            | None => expr
+          match (name.GetEnv (env).LookupSymbol (id)) {
+            | [Sym_type_member (m)] =>
+              match (m.GetKind ()) {
+                | MK_field (fld) when fld.IsLiteral =>
+                  emit_literal_field (fld, expr)
+                | _ => expr
+              }
+            | _ => expr
           }
         | None => expr
       }
@@ -135,7 +131,7 @@ namespace Nemerle.Compiler
     literal_of_expr (e : Expr) : option <Literal>
     {
        | E_literal (l) => Some (l)
-       | E_typed_expr (Typedtree.E_literal (l)) => Some (l)
+       | E_typed_expr (TT.E_literal (l)) => Some (l)
        | _ => None ()
     }
     
@@ -172,7 +168,7 @@ namespace Nemerle.Compiler
           def (l1, l2, enum_ty) =
             match ((l1, l2)) {
               | (L_enum (l1, t1), L_enum (l2, t2)) 
-                when t1.Equals (t2) && is_flag_enum (t1) =>
+                when t1.SameAs (t2) && is_flag_enum (t1) =>
                 (l1, l2, Some (t1))
               | _ => (l1, l2, None ())
             };
@@ -221,7 +217,7 @@ namespace Nemerle.Compiler
   
         | <[ $_o . $_f ]>
         | <[ $(_ : name) ]> => 
-          enum_field_value (env, expr)
+          literal_field_value (env, expr)
 
         | _ => expr
       }
