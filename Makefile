@@ -158,6 +158,9 @@ set-version: config.mak
 		: clean up ; \
 		perl -p -i -e 's/MARK-SET-VER//' $$f ; \
 	done
+	@perl -p -i -e \
+		's/(property name="msi.version" value=")[^"]*"/$${1}$(VERSION).$(REVISION)"/' \
+		misc/packages/msi/msi.build
 	@echo .
 
 snapshot:
