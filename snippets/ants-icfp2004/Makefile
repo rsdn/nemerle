@@ -1,6 +1,6 @@
 include ../../config.mak
 
-NPATH   = ../../boot
+NPATH   = ../../ncc/out.stage3
 MONO    = $(NET_ENGINE) $(NET_FLAGS)
 COMPILE = $(MONO) $(NPATH)/ncc.exe
 
@@ -28,9 +28,10 @@ t: all
 	$(MONO) ./ants.exe > the-ant 2>/dev/null
 	$(MONO) simulator/simulator.exe simulator/worlds/sample$(MAP).world \
 		the-ant simulator/brain.2.in 10000 dump-results 1000
-	
+
 run: ants.exe
 	$(MONO) ants.exe
 
 clean:
+	$(MAKE) -C simulator clean
 	rm -f ants.exe antslib.dll antsmacro.dll serializer.dll

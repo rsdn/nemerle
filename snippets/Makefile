@@ -51,10 +51,15 @@ all:
 	cp ../ncc/out.stage3/Nemerle.dll .
 	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -n "../ncc/out.stage3/ncc.exe"
 	rm -f out.dll out.exe out.netmodule ext_test.out Nemerle.dll
+	$(Q)$(MAKE) -C synq all
+	$(Q)$(MAKE) -C ants-icfp2004 all
+	$(Q)$(MAKE) -C ants-icfp2004/simulator all
+	$(Q)$(MAKE) -C sioux all
+	$(Q)$(MAKE) -C shootout all
 
 myPoll.exe: myPoll.n
 	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r Npgsql myPoll.n -o myPoll.exe
-	
+
 nswiki.exe: nswiki.n
 	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r System.Web $< -o $@
 
@@ -62,6 +67,8 @@ sql: sql.n
 	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r Npgsql -r ../macros/Nemerle.Data.Npgsql.dll sql.n -o sql.exe
 
 clean:
+	$(MAKE) -C synq clean
 	$(MAKE) -C sioux clean
+	$(MAKE) -C ants-icfp2004 clean
 	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]*
 	rm -f test.err test_error.log a.out

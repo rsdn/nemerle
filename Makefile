@@ -113,11 +113,9 @@ uninstall:
 	$(Q)$(MAKE) -C doc  uninstall
 
 check:
-	$(Q)$(MAKE) -C snippets clean
 	$(Q)$(MAKE) -C ncc  tests
+	$(Q)$(MAKE) -C snippets clean
 	$(Q)$(MAKE) -C snippets all
-	$(Q)$(MAKE) -C snippets/shootout all
-	$(Q)$(MAKE) -C snippets/sioux all
 
 clean:
 	$(MAKE) -C doc clean
