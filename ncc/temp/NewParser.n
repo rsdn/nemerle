@@ -1,0 +1,351 @@
+/*
+ * Copyright (c) 2003-2005 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+#if NEWPARSER
+ 
+using Nemerle.Compiler;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+
+namespace Nemerle.Compiler
+{
+  public enum TokenSeparator {
+    | None 
+    | Comma
+    | Semicolon
+/*
+    public override ToString () : string {
+      match (this) {
+        | None => " "
+        | Comma => ", "
+        | Semicolon => "; "
+      }
+    }
+*/    
+  }
+
+  class PreParserException : System.Exception { }
+
+  /** Transforms stream of tokens from given LexerBase to token tree
+      with matched brackets.
+   */
+  public class PreParser
+  {
+    lexer : LexerBase;
+    mutable last_token : Token = null;
+
+    /** Parent stream is the stack of processed token nodes,
+        which are already assigned to be in currently build sequence.
+        For example:
+          a; b; c (); d e _we_are_here_
+        'a, b, c()', are alredy known to be in parent sequence,
+        while 'd e' are in current temporary sequence, which might
+        get added to parent_stream if separator (e.g. ';') occurs
+     */
+    mutable parent_stream : array [Token] = array (1000);
+    mutable parent_pos : int;
+
+    /** Currently builded stream of token nodes is an array of
+        loose tokens, which have occured after last separator.
+        It will probably form LooseGroup as an element of parent
+        sequence or all elements will constitue parent
+     */
+    mutable current_stream : array [Token] = array (200);
+    mutable current_pos : int;
+
+    public this (lex : LexerBase) {
+      lexer = lex;
+    }
+
+    /** Fetch next token (from one token buffer or lexer if it's empty */
+    get_token () : Token {
+      if (last_token != null) {
+        def result = last_token;
+        last_token = null;
+        result;
+      }
+      else
+        lexer.GetToken ()
+    }
+
+    /** Store token in our mini one token buffer */
+    push_back (tok : Token) : void {
+      assert (last_token == null);
+      last_token = tok;
+    }
+
+    /** makes list of Tokens from specified subarray */
+    static make_list (tokens : array [Token], start : int, end : int) : list [Token]
+    {
+      make_list (tokens, start, end, []);
+    }
+
+    /** makes list of Tokens from specified subarray and concatenate given one at end */
+    static make_list (tokens : array [Token], start : int, end : int,
+                      mutable initial : list [Token]) : list [Token]
+    {
+      for (mutable i = end - 1; i >= start; --i) 
+        initial = tokens [i] :: initial;
+      initial
+    }
+
+    static store (tokens : ref array [Token], idx : ref int, tok : Token) : void
+    {
+      tokens [idx] = tok;
+      ++idx;
+    }
+    
+    static Dump (tok : Token, ident : string) : string {
+      def (open, close, sepstr, elements) =
+        match (tok) {
+          | Token.RoundGroup (separator, elements) =>    // ( ... )
+            ("(", ")", separator.ToString (), elements)
+          | Token.BracesGroup (elements) =>
+            ("{\n", "}", "; ", elements)
+          | Token.SquareGroup (elements) =>
+            ("[", "]", ", ", elements)
+          | Token.QuoteGroup (elements) =>
+            ("<[\n", "]>", "; ", elements)
+          | Token.LooseGroup (elements)   =>
+            ("", "", " ", elements)
+
+          | _ => ("", tok.ToString (), "", [])
+        }
+      def builder = System.Text.StringBuilder (ident + open);
+      foreach (e in elements) {
+        _ = builder.Append (ident).Append (Dump (e, ident + "  ")).Append (sepstr);
+      }
+      builder.Append (ident + close).ToString ()
+    }
+
+    /** Closes both currently created LooseGroup and parent group.
+        Returns list of tokens composing parent group */
+    finish_parent (parent_begin : int, current_begin : int) : list [Token] {
+      def parent_group = 
+        if (parent_begin == parent_pos)
+          if (current_begin == current_pos)
+            [] // case of `(` `)`
+          else {
+            // case of `(` a b `)`
+            def current_group = make_list (current_stream, current_begin, current_pos);
+            [Token.LooseGroup (current_group)]
+          }
+        else
+          if (current_begin == current_pos)
+            // case of `(` A `,` B `,` `)`
+            make_list (parent_stream, parent_begin, parent_pos)
+          else {
+            // case of `(` A `,` B `,` c d `)`
+            def current_group = make_list (current_stream, current_begin, current_pos);
+            make_list (parent_stream, parent_begin, parent_pos,
+                       [Token.LooseGroup (current_group)]);
+          }
+      parent_pos = parent_begin;
+      current_pos = current_begin;
+      parent_group
+    }
+
+    /** Closes currently created LooseGroup and adds it at the end of the
+        parent group. After that we are ready to make another LooseGroup.
+
+        It is called mainly when separator token occurs.
+     */   
+    finish_current (current_begin : int) : void {
+      if (current_begin == current_pos)
+        Message.warning ("superfluous separator token")
+      else {
+        def loose_group = make_list (current_stream, current_begin, current_pos);
+        store (ref parent_stream, ref parent_pos, Token.LooseGroup (loose_group));
+        current_pos = current_begin;
+      }
+    }
+
+    /** Handle standard situations when new bracket group is beginning
+        or there is erronous situation. Any non bracket token is
+        appended to current LooseGroup.
+
+        Throws PreParserException when there is unmatched end bracket.
+     */
+    handle_default_token (current_begin : int, tok : Token) : void {
+      match (tok) {
+        | Token.BeginBrace =>
+          def brace_group = parse_brace_group (tok.Location, parent_pos, current_pos);
+          if (current_begin == current_pos)
+            store (ref parent_stream, ref parent_pos, brace_group)
+          else {
+            store (ref current_stream, ref current_pos, brace_group);
+            finish_current (current_begin);
+          }
+
+        | Token.BeginRound =>
+          def round_group = parse_round_group (tok.Location, parent_pos, current_pos);
+          store (ref current_stream, ref current_pos, round_group);
+
+        | Token.BeginSquare =>
+          def square_group = parse_square_group (tok.Location, parent_pos, current_pos);
+          store (ref current_stream, ref current_pos, square_group);
+
+        | Token.BeginQuote =>
+          def quote_group = parse_quote_group (tok.Location, parent_pos, current_pos);
+          store (ref current_stream, ref current_pos, quote_group);
+
+        | Token.EndRound | Token.EndSquare | Token.EndQuote | Token.EndBrace =>
+          push_back (tok);
+          Message.error (tok.Location, "unexpected closing bracket: " + tok.ToString ());
+          throw PreParserException ();
+
+        | Token.EndOfFile =>
+          Message.error (tok.Location, "unexpected end of file");
+          throw PreParserException ();
+
+        | _ => store (ref current_stream, ref current_pos, tok);
+      }
+    }
+    
+    parse_brace_group (loc : Location, parent_begin : int, current_begin : int) : Token.BracesGroup
+    {
+      def loop () {
+        def tok = get_token ();
+        match (tok) {
+          // finish entire brace group
+          | Token.EndBrace =>
+            def brace_group = finish_parent (parent_begin, current_begin);
+            Token.BracesGroup (loc + tok.Location, brace_group);
+
+          // finish current loose group
+          | Token.Semicolon => finish_current (current_begin); loop ()
+
+          | Token.EndOfFile when parent_begin == 0 =>
+            def brace_group = finish_parent (parent_begin, current_begin);
+            Token.BracesGroup (loc + tok.Location, brace_group);
+            
+          | _ => handle_default_token (current_begin, tok); loop ()
+        }
+      }
+      try { loop () :> Token.BracesGroup }
+      catch { _ : PreParserException =>
+        def group = finish_parent (parent_begin, current_begin);
+        Token.BracesGroup (loc, group) :> Token.BracesGroup;
+      }
+    }
+
+    parse_round_group (loc : Location, parent_begin : int, current_begin : int) : Token.RoundGroup
+    {
+      mutable separator = TokenSeparator.None;
+      
+      def loop () {
+        def tok = get_token ();
+        match (tok) {
+          // finish entire round group
+          | Token.EndRound =>
+            def round_group = finish_parent (parent_begin, current_begin);
+            Token.RoundGroup (loc + tok.Location, separator, round_group);
+
+          // finish current loose group
+          | Token.Comma =>
+            match (separator) {
+              | TokenSeparator.None => separator = TokenSeparator.Comma;
+              | TokenSeparator.Comma => finish_current (current_begin);
+              | TokenSeparator.Semicolon =>
+                Message.error (tok.Location, "inconsistent `,' separator (expected `;')");
+                finish_current (current_begin); 
+            }
+            loop ()
+
+          | Token.Semicolon =>
+            match (separator) {
+              | TokenSeparator.None => separator = TokenSeparator.Semicolon;
+              | TokenSeparator.Semicolon => finish_current (current_begin);
+              | TokenSeparator.Comma =>
+                Message.error (tok.Location, "inconsistent `;' separator (expected `,')");
+                finish_current (current_begin); 
+            }
+            loop ()
+
+          | _ => handle_default_token (current_begin, tok); loop ()
+        }
+      }
+      try { loop () :> Token.RoundGroup }
+      catch { _ : PreParserException =>
+        def group = finish_parent (parent_begin, current_begin);
+        Token.RoundGroup (loc, separator, group) :> Token.RoundGroup;
+      }
+    }
+
+    parse_square_group (loc : Location, parent_begin : int, current_begin : int) : Token.SquareGroup
+    {
+      def loop () {
+        def tok = get_token ();
+        match (tok) {
+          // finish entire brace group
+          | Token.EndSquare =>
+            def group = finish_parent (parent_begin, current_begin);
+            Token.SquareGroup (loc + tok.Location, group);
+
+          // finish current loose group
+          | Token.Comma => finish_current (current_begin); loop ()
+
+          | _ => handle_default_token (current_begin, tok); loop ()
+        }
+      }
+      try { loop () :> Token.SquareGroup }
+      catch { _ : PreParserException =>
+        def group = finish_parent (parent_begin, current_begin);
+        Token.SquareGroup (loc, group) :> Token.SquareGroup;
+      }
+    }
+
+    parse_quote_group (loc : Location, parent_begin : int, current_begin : int) : Token.QuoteGroup
+    {
+      def loop () {
+        def tok = get_token ();
+        match (tok) {
+          // finish entire brace group
+          | Token.EndQuote =>
+            def group = finish_parent (parent_begin, current_begin);
+            Token.QuoteGroup (loc + tok.Location, group) :> Token.QuoteGroup;
+
+          // finish current loose group
+          | Token.Semicolon => finish_current (current_begin); loop ()
+
+          | _ => handle_default_token (current_begin, tok); loop ()
+        }
+      }
+      try { loop () :> Token.QuoteGroup }
+      catch { _ : PreParserException =>
+        def group = finish_parent (parent_begin, current_begin);
+        Token.QuoteGroup (loc, group) :> Token.QuoteGroup;
+      }
+    }
+    
+    public PreParse () : list [Token] {
+      parse_brace_group (Location.Default, 0, 0).Elements
+    }
+  }
+}
+
+#endif NEWPARSER

@@ -116,6 +116,7 @@ NEMERLE_COMPILER_DLL_SRC = \
         parsing/Parser.n		 \
         parsing/Lexer.n			 \
         parsing/Utility.n                \
+	temp/NewParser.n                 \
 
 
 NCC_EXE_SRC       = main.n
