@@ -39,7 +39,7 @@ dist: changelog
 	  rm -rf $(name)-$$ver; \
 	  svn export . $(name)-$$ver; \
 	  for f in . npc npc/ncc doc ; do \
-	    cp $f/ChangeLog $(name)-$$ver/$f; \
+	    cp $$f/ChangeLog $(name)-$$ver/$$f; \
 	  done; \
 	  tar zcf $(name)-$$ver.tar.gz $(name)-$$ver; \
 	  rm -rf $(name)-$$ver; \
