@@ -20,22 +20,221 @@ namespace Nemerle.Compiler {
         else expr#expr_ty;
         
       fun run(decls : list (Type_decl)) : void =
-        let ref this_ptr_type = None () in
 
-        letfun ty_expr(env : Env, expr : PT.Expr) : TT.Expr =
+        letfun fixup (expr : TT.Expr, orig : PT.Expr, t : Type) : TT.Expr {
+          expr#loc <- orig#loc;
+          expr#expr_ty <- t;
+          expr
+        } in
+
+        letfun expect_type (name : string, expr : TT.Expr, t : Type) : void =
+          if type_of (expr) >> t then ()
+          else
+            Message.error (expr#loc, name + " was expected to have type " + 
+                                     t#as_string () + " while it has " +
+                                     (type_of (expr))#as_string ())
+        in
+
+        letfun make_ref (expr : PT.Expr, x : Decl) : TT.Expr =
+          let _ =
+            match x#kind with [
+              | D_class_member (M_value) => ()
+              | D_class_member (M_function) => ()
+              | D_class_member (_) =>
+                {
+                  Message.error ("`" + x#name + "' does not refer to value");
+                  raise Recovery ()
+                }
+              | _ => ()
+            ]
+          in
+          if x#ty == null then Util.ice ("null type " + x#name) else
+          let t =
+            match x#kind with [
+              | D_class_member (M_function {fun_header = ?h}) => 
+                Tyutil.fresh_vars (Tyvars.get_parms (h#id), x#ty) 
+              | D_local_fun (?h) =>
+                Tyutil.fresh_vars (Tyvars.get_parms (h#id), x#ty)
+              | _ => x#ty
+            ]
+          in fixup (TT.E_ref (x), expr, t)
+        in
+
+        letfun resolve_overloaded (fncs : list (TT.Expr), 
+                                   parms : list (TT.Parm)) : TT.Expr =
+          letfun check_one (ctx : list (string) * list (TT.Expr * Subst), fn : TT.Expr) 
+                        : list (string) * list (TT.Expr * Subst) =
+            let ref problem = "typing error in call" in
+            letfun check_arg (ctx : int * Subst, parm : TT.Parm, ty : Type) : int * Subst =
+              let (?arg_no, ?sub) = ctx in
+              match Tyutil.unify (sub, type_of (parm#expr), ty, true) with [
+                | Some (?u) => (arg_no + 1, u)
+                | None =>
+                  {
+                    problem <- "in arg #" + string_of_int (arg_no) + " type clash " +
+                               (type_of (parm#expr))#as_string () +
+                               " vs " + ty#as_string ();
+                    raise Recovery ()
+                  }
+              ]
+            in 
+            let (?errs, ?rets) = ctx in
+            match Tyutil.top_expand (type_of (fn)) with [
+              | T_fun (?args, ?ret) =>
+                //let _ = Message.debug ((type_of (fn)) # as_string ()) in
+                if List.length (args) != List.length (parms) then
+                  (Cons ("needed " + string_of_int (List.length (args)) + " parameters, got " +
+                         string_of_int (List.length (parms)), errs), rets)
+                else
+                  try
+                    let (_, ?sub) =
+                      List.fold_left2 (check_arg, (1, Map.int_map ()), parms, args)
+                    in 
+                    let ex = TT.E_call (fn, parms) in {
+                      ex#loc <- fn#loc;
+                      ex#expr_ty <- ret /- sub;
+                      (errs, Cons ((ex, sub), rets))
+                    }
+                  with ?x : Recovery =>
+                    (Cons (problem, errs), rets)
+                
+              | _ =>
+                let err = "called value has non-functional type " + (type_of (fn))#as_string () in
+                (Cons (err, errs), rets)
+            ]
+          in
+          match List.fold_left (check_one, (Nil (), Nil ()), fncs) with [
+            | (_, Cons ((?x, ?sub), Nil)) => { Tyvars.global_store (sub); x }
+            | (?p, Nil) =>
+              {
+                Message.error ("typing error in call");
+                letfun print_err (err : string) : void =
+                  Message.error ("  " + err)
+                  // FIXME: include location of function that failed
+                in List.iter (print_err, p);
+                raise Recovery ()
+              }
+            | (_, ?l) =>
+              {
+                Message.error ("overloading resolution ambiguity");
+                // FIXME: include location of function that failed
+                raise Recovery ()
+              }
+          ]
+        in
+        
+        let ref this_ptr_type = None () in
+        let ref in_ctor = false in
+
+        letfun make_callables (env : Env, fnc : PT.Expr) : list (TT.Expr) =
+          match fnc with [
+            | PT.E_ref (?n) =>
+              // FIXME constructors
+              match env#bare_lookup (n) with [
+                | Nil =>
+                  Message.fatal_error ("unbound symbol `" + n + "'")
+
+                | ?l =>
+                  letfun convert_ctor (acc : list (Decl), d : Decl) : list (Decl) =
+                    match d#kind with [
+                      | D_class_member (M_type) =>
+                        List.append (env#bare_lookup (d#name + "..ctor"), acc)
+                      | _ => Cons (d, acc)
+                    ]
+                  in
+                  let decls = List.fold_left (convert_ctor, Nil (), l) in
+                  List.map (fun (x : Decl) : TT.Expr => make_ref (fnc, x), decls)
+              ]
+                
+            | PT.E_member (?o, ?mem) =>
+              let o = ty_expr (env, o) in
+              let (?subst, ?ti) = Tyutil.subst_of_app (Tyutil.top_expand (type_of (o))) in
+              letfun mem_ref (ex : TT.Expr, m : Class_member) : TT.Expr =
+                fixup (ex, fnc, ti#member_type (m) /- subst)
+              in
+              match ti#lookup_field (mem) with [
+                | Some (?f) => 
+                  List.cons (mem_ref (TT.E_field_ref (o, f), f))
+                 
+                | None =>
+                  match ti#lookup_method (mem) with [
+                    | Nil =>
+                      Message.fatal_error ("unbound member `" + mem + "' in type `" + 
+                                           ti#fullname () + "'")
+                    | ?l =>
+                      letfun make_meth (m : M_function) : TT.Expr =
+                        mem_ref (TT.E_method_ref (o, m), m)
+                      in List.map (make_meth, l)
+                  ]
+              ]
+
+            | ?x =>
+              List.cons (ty_expr (env, x))
+          ]
+
+        and ty_match (env : Env, mtch : PT.E_match) : TT.Expr * Type =
+          letfun do_case (ctx : option (Type) * list (TT.Match_case), 
+                          c : PT.Match_case) : option (Type) * list (TT.Match_case) =
+            let ref pat_env = env in
+            letfun f (p : PT.Pattern) : TT.Pattern =
+              match p with [
+                | PT.P_variable (?n) =>
+                  // FIXME: report error for duplicate variables
+                  // FIXME: type
+                  let (?env', ?decl) = pat_env#add_local(n, D_pattern_variable(), 
+                                                         Tyvars.free_variable ()) in
+                  let _ = pat_env <- env' in
+                  TT.P_variable (decl)
+                | PT.P_underscore => TT.P_underscore ()
+                | PT.P_tuple (?l) => TT.P_tuple (List.map (f, l))
+                | PT.P_record (?l) =>
+                  letfun fn (np : PT.Named_pattern) : TT.Named_pattern =
+                    TT.Named_pattern (name = np#name, pat = f (np#pat))
+                  in TT.P_record (List.map (fn, l))
+                | PT.P_cons (?n, ?p) =>
+                  match pat_env#lookup_type (n) with [
+                    | TD_variant_option ?o =>
+                      TT.P_cons (o, f (p))
+                    | _ =>
+                      {
+                        Message.error ("`" + n + "' isn't variant case");
+                        TT.P_underscore ()
+                      }
+                  ]
+              ]
+            in
+            Util.locate (c#loc, fun () : option (Type) * list (TT.Match_case) =>
+              let pat = f (c#pattern) in
+              let body = ty_expr (pat_env, c#body) in
+              match ctx with [
+                | (Some (?t), ?l) =>
+                  {
+                    expect_type ("match case body", body, t);
+                    (Some (t), Cons (TT.Match_case (c#loc, pat, body), l))
+                  }
+                | (None, ?l) =>
+                  (Some (type_of (body)), Cons (TT.Match_case (c#loc, pat, body), l))
+              ])
+          in  
+          let ex' = ty_expr (env, mtch#expr) in
+          match List.fold_left (do_case, (None (), Nil ()), mtch#cases) with [
+            | (Some (?t), ?mcs') =>
+              (TT.E_match (ex', List.rev (mcs')), t)
+            | (None, _) =>
+              {
+                Message.error ("cannot have empty match construct");
+                raise Recovery ()
+              }
+          ]
+
+        and ty_expr(env : Env, expr : PT.Expr) : TT.Expr =
           let (?ret, ?expr_ty) = Util.locate (expr#loc, fun () : TT.Expr * Type =>
             letfun self (e : PT.Expr) : TT.Expr = ty_expr (env, e) in
             letfun restart (e : PT.Expr) : TT.Expr * Type =
               let ex = ty_expr (env, e) in
               (ex, type_of (ex))
             in
-            letfun expect_type (name : string, expr : TT.Expr, t : Type) : void =
-              if type_of (expr) >> t then ()
-              else
-                Message.error (expr#loc, name + " was expected to have type " + 
-                                         t#as_string () + " while it has " +
-                                         (type_of (expr))#as_string ())
-            in
+
             match expr with [
               | PT.E_letfun (?fs, ?b) =>
                 letfun add_fun (env : Env, d : PT.Function_decl) : Env =
@@ -95,33 +294,12 @@ namespace Nemerle.Compiler {
               | PT.E_ref (?n) =>
                 match env#bare_lookup (n) with [
                   | Nil =>
-                    {
-                      Message.error ("unbound symbol `" + n + "'");
-                      raise Recovery ()
-                    }
+                    Message.fatal_error ("unbound symbol `" + n + "'")
+
                   | Cons (?x, Nil) =>
-                    let _ =
-                      match x#kind with [
-                        | D_class_member (M_value) => ()
-                        | D_class_member (M_function) => ()
-                        | D_class_member (_) =>
-                          {
-                            Message.error ("`" + n + "' does not refer to value");
-                            raise Recovery ()
-                          }
-                        | _ => ()
-                      ]
-                    in
-                    if x#ty == null then Util.ice ("null type " + x#name) else
-                    let t =
-                      match x#kind with [
-                        | D_class_member (M_function {fun_header = ?h}) =>
-                          Tyutil.fresh_vars (Tyvars.get_parms (h#id), x#ty)
-                        | D_local_fun (?h) =>
-                          Tyutil.fresh_vars (Tyvars.get_parms (h#id), x#ty)
-                        | _ => x#ty
-                      ]
-                    in (TT.E_ref (x), t)
+                    let ex = make_ref (expr, x) in
+                    (ex, type_of (ex))
+
                   | ?l =>
                     letfun print (d : Decl) : void = Message.error(d#loc, "  - this")
                     in {
@@ -131,16 +309,23 @@ namespace Nemerle.Compiler {
                     }
                 ]
 
-              | PT.E_member (?o, ?fld) =>
-                // FIXME
-                (TT.E_field_ref (ty_expr (env, o), null), Tyvars.free_variable ())
+              | PT.E_member (_, ?fld) => 
+                match make_callables (env, expr) with [
+                  | Cons (TT.E_field_ref ?x, Nil) => (x, type_of (x))
+                  | _ => 
+                    Message.fatal_error ("member `" + fld + 
+                                         "' was expected to be a field, not method")
+                ]
 
               | PT.E_call (?fnc, ?parms) =>
-                // FIXME
                 letfun fp (p : PT.Parm) : TT.Parm =
                   let ex = ty_expr (env, p#expr) in
                   TT.Parm (p#is_ref, ex, p#name)
-                in (TT.E_call (ty_expr (env, fnc), List.map (fp, parms)), Tyvars.free_variable ())
+                in 
+                let parms = List.map (fp, parms) in
+                let fncs = make_callables (env, fnc) in
+                let ex = resolve_overloaded (fncs, parms) in
+                (ex, type_of (ex))
 
               | PT.E_assign (?e1, ?e2) =>
                 let e1 = ty_expr (env, e1) in
@@ -149,8 +334,8 @@ namespace Nemerle.Compiler {
                   let is_lval =
                     match e1 with [
                       | TT.E_ref (?d) => d#is_ref
-                      // FIXME:
-                      //| TT.E_field_ref (TT.E_this, ...
+                      | TT.E_field_ref (TT.E_this, ?mem) => 
+                        if in_ctor then true else mem#is_ref
                       | _ => false
                     ]
                   in if is_lval then () else Message.error ("assignment to non-lvalue");
@@ -217,66 +402,9 @@ namespace Nemerle.Compiler {
                 let parms = List.map (self, l) in
                 (TT.E_tuple (parms), T_prod (List.map (type_of, parms)))
 
-              | PT.E_match (?ex, ?mcs) =>
-                letfun do_case (ctx : option (Type) * list (TT.Match_case), 
-                                c : PT.Match_case) : option (Type) * list (TT.Match_case) =
-                  let ref pat_env = env in
-                  letfun f (p : PT.Pattern) : TT.Pattern =
-                    match p with [
-                      | PT.P_variable (?n) =>
-                        // FIXME: report error for duplicate variables
-                        // FIXME: type
-                        let (?env', ?decl) = pat_env#add_local(n, D_pattern_variable(), 
-                                                               Tyvars.free_variable ()) in
-                        let _ = pat_env <- env' in
-                        TT.P_variable (decl)
-                      | PT.P_underscore => TT.P_underscore ()
-                      | PT.P_tuple (?l) => TT.P_tuple (List.map (f, l))
-                      | PT.P_record (?l) =>
-                        letfun fn (np : PT.Named_pattern) : TT.Named_pattern =
-                          TT.Named_pattern (name = np#name, pat = f (np#pat))
-                        in TT.P_record (List.map (fn, l))
-                      | PT.P_cons (?n, ?p) =>
-                        match pat_env#lookup_type (n) with [
-                          | TD_variant_option ?o =>
-                            TT.P_cons (o, f (p))
-                          | _ =>
-                            {
-                              Message.error ("`" + n + "' isn't variant case");
-                              TT.P_underscore ()
-                            }
-                        ]
-                    ]
-                  in
-                  Util.locate (c#loc, fun () : option (Type) * list (TT.Match_case) =>
-                    let pat = f (c#pattern) in
-                    let body = ty_expr (pat_env, c#body) in
-                    match ctx with [
-                      | (Some (?t), ?l) =>
-                        {
-                          expect_type ("match case body", body, t);
-                          (Some (t), Cons (TT.Match_case (c#loc, pat, body), l))
-                        }
-                      | (None, ?l) =>
-                        (Some (type_of (body)), Cons (TT.Match_case (c#loc, pat, body), l))
-                    ])
-                in  
-                let ex' = ty_expr (env, ex) in
-                match List.fold_left (do_case, (None (), Nil ()), mcs) with [
-                  | (Some (?t), ?mcs') =>
-                    (TT.E_match (ex', List.rev (mcs')), t)
-                  | (None, _) =>
-                    {
-                      Message.error ("cannot have empty match construct");
-                      raise Recovery ()
-                    }
-                ]
+              | PT.E_match ?m => ty_match (env, m)
             ])
-          in {
-            ret#loc <- expr#loc;
-            ret#expr_ty <- expr_ty;
-            ret
-          }
+          in fixup (ret, expr, expr_ty)
 
         and do_function(env : Env, h : Fun_header, b : Fun_body) : Fun_body =
           letfun add_parm (env : Env, p : Fun_parm) : Env =
@@ -302,11 +430,12 @@ namespace Nemerle.Compiler {
           match decl with [
             | M_function ?f =>
               {
+                in_ctor <- false;
                 let th = (Tyinfo.lookup (par)) # generic_type () in
                 this_ptr_type <-
                    match f#fun_kind with [
                      | FK_method => Some (th)
-                     | FK_ctor => Some (th)
+                     | FK_ctor => { in_ctor <- true; Some (th) }
                      | _ => None ()
                    ];
                 f#body <- do_function (decl#env, f#fun_header, f#body)
