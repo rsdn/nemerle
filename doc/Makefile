@@ -93,8 +93,10 @@ coreNemGrammar.xml: src/coreNemGrammar.txt scripts/grammar-txt-2-xml.pl
 
 %.dvi: src/%.tex
 	latex $< < /dev/null
+	latex $< < /dev/null
 
 %.dvi: %.tex
+	latex $< < /dev/null
 	latex $< < /dev/null
 
 %.tex: %.docb styles/docb2latex.xsl
