@@ -2152,21 +2152,25 @@ event_declaration
 returns [string return_string]
 {
     return_string = "";
+    string rt = "";
+    string rt1 = "";
 }
-    :   ((attributes)?   (event_modifier)*   EVENT  type   member_name   RBRACE)=>
-
+    :  ((attributes)?   (event_modifier)*   EVENT  return_type   member_name RBRACE)=>
         (attributes)?   (event_modifier)*   
-        e1:EVENT  
-        type   
+        e1:EVENT                 { Emit.EmitToken (e1); }
+        rt = return_type   
         member_name   
-        lb1:LBRACE   
+        lb1:LBRACE               { Emit.EmitString(" : " + rt);
+                                   Emit.EmitToken (lb1); }
         event_accessor_declarations   
-        rb1:RBRACE
+        rb1:RBRACE               { Emit.EmitToken (rb1); }
         
     |   (attributes)?   (event_modifier)*   
-        EVENT  
-        type   
-        variable_declarator[false,"",""] (COMMA variable_declarator[false,"",""])*   SEMI
+        e2:EVENT                 { Emit.EmitToken (e2); }
+        rt1 = return_type   
+        member_name   
+        s:SEMI                   { Emit.EmitString (" : " + rt1);
+                                   Emit.EmitToken (s); }
     ;
 
 event_modifier
