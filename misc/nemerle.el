@@ -3,8 +3,8 @@
 ;; Copyright (C) 2003, 2004 The University of Wroclaw
 ;; All rights reserved.
 
-;; Author: Jacek Sliwerski (rzyjontko) <rzyj@plusnet.pl>
-;; Maintainer: Jacek Sliwerski (rzyjontko) <rzyj@plusnet.pl>
+;; Author: Jacek Sliwerski (rzyjontko) <rzyj@o2.pl>
+;; Maintainer: Jacek Sliwerski (rzyjontko) <rzyj@o2.pl>
 ;; Created: 5 Oct 2003
 ;; Version: 0.1
 ;; Keywords: nemerle, mode, languages
@@ -62,34 +62,34 @@
 
 ;;; Change Log:
 
-;; 2004-04-27
+;; 2004-04-27 rzyjontko <rzyj@o2.pl>
 ;;   * further coloring improvements
 ;;   * fixed syntax table
 
-;; 2004-01-24
+;; 2004-01-24 rzyjontko <rzyj@o2.pl>
 ;;   * fixed coloring
 
-;; 2004-01-23
+;; 2004-01-23 rzyjontko <rzyj@o2.pl>
 ;;   * indent to open parenthesis
 
-;; 2004-01-21 rzyjontko <rzyj@plusnet.pl>
+;; 2004-01-21 rzyjontko <rzyj@o2.pl>
 ;;   * improved indentation
 ;;   * changed syntax table
 ;;   * disabled tab-indent
 ;;   * switched to new grammar
 ;;   * electric-bar and electric-brace
 
-;; 2003-11-17 rzyjontko <rzyj@plusnet.pl>
+;; 2003-11-17 rzyjontko <rzyj@o2.pl>
 ;;   * updated copyright disclaimer
 ;;   * basic indentation engine
 
-;; 2003-10-09 rzyjontko <rzyj@plusnet.pl>
+;; 2003-10-09 rzyjontko <rzyj@o2.pl>
 ;;   * nemerle mode automatically sets file coding system to utf-8
 ;;   * syntax table changes
 ;;   * more colours
 ;;   * indentation framework
 
-;; 2003-10-05 rzyjontko <rzyj@plusnet.pl>
+;; 2003-10-05 rzyjontko <rzyj@o2.pl>
 ;;   * initial version
 
 
@@ -141,14 +141,14 @@ buffer created.  This is a good place to put your customizations.")
 	 '("//.*" 0 font-lock-comment-face)
 	 
 	 ;; keywords
-	 '("\\<\\(_\\|abstract\\|and\\|as\\|base\\|catch\\|const\\|def\\|delegate\\|enum\\|extends\\|extern\\|finally\\|fun\\|implements\\|interface\\|internal\\|is\\|macro\\|match\\|matches\\|mutable\\|new\\|out\\|override\\|params\\|private\\|protected\\|public\\|ref\\|sealed\\|static\\|struct\\|syntax\\|this\\|throw\\|try\\|type\\|typeof\\|virtual\\|where\\)\\>"
+	 '("\\<\\(_\\|abstract\\|and\\|as\\|base\\|catch\\|const\\|def\\|delegate\\|enum\\|extends\\|extern\\|finally\\|fun\\|implements\\|interface\\|internal\\|is\\|macro\\|match\\|matches\\|mutable\\|new\\|out\\|override\\|params\\|private\\|protected\\|public\\|ref\\|sealed\\|static\\|struct\\|syntax\\|this\\|throw\\|try\\|tymatch\\|type\\|typeof\\|virtual\\|where\\|with\\)\\>"
 	   0 font-lock-keyword-face)
 	 ;; these aren't really keywords but we set them so
 	 '("\\<\\(do\\|else\\|for\\|if\\|regexp\\|unless\\|while\\|when\\|in\\|foreach\\)\\>"
 	   0 font-lock-keyword-face)
 	 '("=>\\||" 0 font-lock-keyword-face)
 
-	 '("\\<\\(foreach\\)\\s *(.*:\\s *\\(\\w*\\)\\s *\\(in\\)"
+	 '("\\<\\(foreach\\)\\s *(.*:\\s *\\(\\w*\\)\\s *\\(\\<in\\>\\)"
 	   (1 font-lock-keyword-face) (2 font-lock-type-face) (3 font-lock-keyword-face))
 	 
 	 '("\\<\\(variant\\|class\\|interface\\|module\\|namespace\\|using\\)\\s +\\(\\(\\w\\|\\.\\)*\\)"
