@@ -50,16 +50,16 @@ print <<EOF
       def y = (y :> System.$long);
       match (name) {
         | "+" => (x + y :> object)
-        | "-" => x - y
-        | "*" => x * y
-        | "/" => x / y
-        | "%" => x % y
+        | "-" => (x - y :> object)
+        | "*" => (x * y :> object)
+        | "/" => (x / y :> object)
+        | "%" => (x % y :> object)
 EOF
 ;
 if ($int) {
 print <<EOF
-        | "%&" => x %& y
-        | "%|" => x %| y
+        | "%&" => (x %& y :> object)
+        | "%|" => (x %| y :> object)
 EOF
 ;
 }
@@ -74,13 +74,13 @@ print <<EOF
     {
       def x = (x :> System.$long);
       match (name) {
-        | "+" => (+x : object)
+        | "+" => (+x :> object)
 EOF
 ;
 
-print "        | \"-\" => -x\n" if ($signed);
+print "        | \"-\" => (-x :> object)\n" if ($signed);
 print <<EOF
-        //| "~" => ~x
+        //| "~" => (~x :> object)
         | _ =>
           null
           // Util.ice ("invalid $short operator `" + name + "'")
