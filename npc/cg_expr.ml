@@ -268,7 +268,8 @@ let rec cg_expr c expr =
     | E_literal L_void ->
       begin
         match c.c_target with
-        | Targ_return -> ()
+        | Targ_return 
+        | Targ_dev_null -> ()
         | _ -> ice "non-return target and ()"
       end 
     | E_literal L_null -> out_expr c "null"
