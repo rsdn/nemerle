@@ -42,4 +42,4 @@ all:
 	rm -f out.cs out.exe test.exe out.netmodule ext_test.out
 
 clean:
-	rm -f *.cs *.exe *.il *.dll *.netmodule ext_test.out
+	rm -f *.cs *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]* test.err test_error.log
