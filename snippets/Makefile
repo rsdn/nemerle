@@ -59,5 +59,6 @@ sql: sql.n
 	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r Npgsql -r ../macros/Nemerle.Data.Npgsql.dll sql.n -o sql.exe
 
 clean:
+	$(MAKE) -C sioux clean
 	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]*
 	rm -f test.err test_error.log a.out

@@ -100,6 +100,7 @@ uninstall:
 	$(Q)$(MAKE) -C doc  uninstall
 
 check:
+	$(Q)$(MAKE) -C snippets clean
 	$(Q)$(MAKE) -C ncc  tests
 	$(Q)$(MAKE) -C snippets all
 	$(Q)$(MAKE) -C snippets/shootout all
@@ -108,6 +109,7 @@ check:
 clean:
 	$(MAKE) -C doc clean
 	$(MAKE) -C ncc clean
+	$(MAKE) -C snippets clean
 	rm -f config.mak configure.log
 
 snapshot:
