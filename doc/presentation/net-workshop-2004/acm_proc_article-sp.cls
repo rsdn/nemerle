@@ -1266,9 +1266,9 @@
         }%
     }{#2}%
 }
-\let\@biblabel\@gobble
+%\let\@biblabel\@gobble
 \newdimen\bibindent
-\setcounter{enumi}{1}
+\setcounter{enumiv}{1}
 \bibindent=0em
 \def\thebibliography#1{%
 \ifnum\addauflag=0\addauthorsection\global\addauflag=1\fi
@@ -1276,14 +1276,15 @@
        {REFERENCES}
         \@mkboth{{\refname}}{{\refname}}%
     }%
-    \list{[\arabic{enumi}]}{%
-        \settowidth\labelwidth{[#1]}%
+    \list{\@biblabel{\@arabic\c@enumiv}}{%
+    %[\arabic{enumi}]}{%
+        \settowidth\labelwidth{\@biblabel{#1}}%
         \leftmargin\labelwidth
         \advance\leftmargin\labelsep
         \advance\leftmargin\bibindent
         \itemindent -\bibindent
         \listparindent \itemindent
-        \usecounter{enumi}
+        \usecounter{enumiv}
     }%
     \let\newblock\@empty
     \raggedright  %% 7 JAN 2000 gkmt
