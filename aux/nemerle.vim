@@ -1,9 +1,9 @@
 " Vim syntax file
 " Language:    Nemerle
 " Maintainer:  Michal Moskal <malekith@pld-linux.org>
-" Last Change: $LastChangedDate: 2003-09-08 18:42:48 +0200 (Mon, 08 Sep 2003) $
+" Last Change: $LastChangedDate$
 " Version:     1.00
-" Revision:    $Rev: 2191 $
+" Revision:    $Rev$
 
 " Adapted from gont.vim file.
 
