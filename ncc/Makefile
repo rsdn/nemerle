@@ -127,6 +127,7 @@ STDMACROS_DLL_SRC = \
 	../macros/AssemblyInfo.n \
 	../macros/xml.n \
 	../macros/concurrency.n \
+	../macros/Data.n \
 
 ############################################################
 # OUTPUT
