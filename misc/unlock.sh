@@ -1,7 +1,7 @@
 #!/bin/bash
 svn up ../boot/lock.txt
 if test -n $(tail -n 2 ../boot/lock.txt | grep locked | awk '{print $1}'); then 
-  echo "  unlocked "$(date) >> ../boot.txt
+  echo "  unlocked "$(date) >> ../boot/lock.txt
   cd ..
   if svn commit -m "Release lock. $1"; then
     echo OK: release lock succesful;
