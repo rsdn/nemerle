@@ -42,8 +42,8 @@ namespace Nemerle.Compiler {
     already created, but most fields are empty.  The main function of
     this pass is [TypeBuilder.run].  */
 
-public class TypeBuilder : Tycon, ITypeModifier {
-
+public class TypeBuilder : Tycon, ITypeModifier
+{
   enclosing_type : option <TypeBuilder>;
   variant_option_parent : TypeBuilder;
   id : int;
@@ -64,6 +64,7 @@ public class TypeBuilder : Tycon, ITypeModifier {
   public env : GlobalEnv;
   loc : Location;
   accessibility : Accessibility;
+  private mutable m_has_been_used : bool;
   mutable is_value_type : bool;
   mutable contained_types : list <TypeBuilder>;
   mutable variant_options : list <TypeBuilder>;
@@ -202,6 +203,40 @@ public class TypeBuilder : Tycon, ITypeModifier {
     accessibility
   }
 
+  public IsExternallyAccessible : bool
+  {
+    get
+    {
+      def is_visible =
+        (accessibility is A_public) ||
+        (accessibility is A_protected) ||
+        (accessibility is A_protected_or_internal);
+
+      match (enclosing_type) {
+        | Some (enclosing_type) =>
+          is_visible && enclosing_type.IsExternallyAccessible
+          
+        | _ =>
+          is_visible
+      }
+    }
+  }
+
+  public HasBeenUsed : bool
+  {
+    get { m_has_been_used }
+    set {
+      m_has_been_used = m_has_been_used || value;
+      match (enclosing_type) {
+        | Some (enclosing_type) =>
+          enclosing_type.HasBeenUsed = value
+
+        | _ =>
+          ()
+      }
+    }
+  }
+    
   public GetLibraryReference () : LibraryReference { null }
   
   /**
@@ -541,7 +576,9 @@ public class TypeBuilder : Tycon, ITypeModifier {
 
     additional_decls = [];
 
-    CheckTypeAttributes ()
+    CheckTypeAttributes ();
+
+    m_has_been_used = IsExternallyAccessible
   }
 
   public CanAccess (source : Tycon) : bool
@@ -1735,12 +1772,37 @@ public class TypeBuilder : Tycon, ITypeModifier {
       system_type = type_builder;
     }
   }
+
+  
+  /*
+   * This method emits the warnings about unused global symbols.
+   */
+  private static check_for_unused_global_symbols (tb : TypeBuilder) : void
+  {
+    unless (tb.IsDelegate)
+    {
+      def is_variant = !(tb.variant_options matches []);
+      def is_alias = tb.tydecl is TD_alias;
+      
+      // first, check if this type has ever been referenced
+      when (!(tb.HasBeenUsed || is_variant || is_alias))
+        Message.warning (tb.loc, tb.FullName + " is not externally visible and has never been referenced");
+
+      // then, proceed with the members of this type
+      List.Iter (tb.member_list, fun (member : IMember) {
+        when (!(member.HasBeenUsed || (member is Tycon) || (is_variant && member.Name == ".ctor")))
+          Message.warning (member.GetLocation (), tb.FullName + "." + member.Name +
+                           " is not externally visible and has never been referenced")        
+      })
+    }
+  }
+
   
   public FinalizeType () : void
   {
     when (!cannot_finalize && type_builder != null) {
       define_additional_method_overrides ();
-      
+
       system_type = type_builder.CreateType ();
       type_builder = null;
     }
@@ -1813,20 +1875,102 @@ public class TypeBuilder : Tycon, ITypeModifier {
     }
   }
 
+
+  /**
+   * Checks for abstract method in non-abstract class errors.
+   * Marks abstract declaration/implementation pairs as used.
+   *
+   * FIXME: we should store information about abstract overrides
+   *        the same way we store information about interfaces,
+   *        this way this code would be linear instead of n^2
+   */
   check_abstract () : void
   {
-    unless (Attributes %&& NemerleAttributes.Abstract) {
-      List.Iter (GetMembers (), fun (m : IMember) {
-        match (m.GetKind ()) {
-          | MK_method when (m.Attributes %&& NemerleAttributes.Abstract) =>
+    def override_methods = Hashtable (30);
+    def type_members = GetMembers ();
+
+    // first, check for the abstract method/non-abstract class errors
+    List.Iter (type_members, fun (m : IMember) {
+      match (m.GetKind ()) {
+        | MK_method when m.Attributes %&& NemerleAttributes.Abstract =>
+          unless (Attributes %&& NemerleAttributes.Abstract)
+          {
             modifiers.mods |= NemerleAttributes.Abstract;
             Message.error (describe_member (m) + 
                            " is abstract, but the parent class `" + 
                            FullName + "' is not");
-          | _ => ()
-        }
+          }
+            
+        | _ => ()
+      }
+    });
+
+    // find all the `override' methods in this type
+    List.Iter (type_members, fun (m : IMember) {
+      match (m.GetKind ()) {
+        | MK_method when m.Attributes %&& NemerleAttributes.Override =>
+          def previous_methods =
+            match (override_methods.Get (m.Name)) {
+              | Some (methods) => methods
+              | _ => []
+            }
+            
+          override_methods.Set (m.Name, (m :> IMethod) :: previous_methods);
+          m.HasBeenUsed = true
+    
+        | _ => ()
+      }
+    });
+
+    // then, mark abstract declaration/implementation pair as used
+    def walk_hierarchy (tycon : Tycon)
+    {
+      // FIXME: this should be defined on Fun_header -- IsCompatible () (?)
+      def fun_parms_agree (abstract_parms : list <Fun_parm>, impl_parms : list <Fun_parm>)
+      {          
+        | ([], []) => true
+          
+        | (abstract_parm :: rest_abstract_parms, impl_parm :: rest_impl_parms) =>
+          abstract_parm.name == impl_parm.name &&
+          Tyutil.types_eq (abstract_parm.ty, impl_parm.ty) &&
+          fun_parms_agree (rest_abstract_parms, rest_impl_parms)
+          
+        | _ => false
+      }
+      
+      override_methods.Iter (fun (name : string, meths : list <IMethod>) {
+        List.Iter (meths, fun (meth : IMethod) {
+          def meth_parms = meth.GetHeader ().parms;
+        
+          def possible_abstract_meths =
+            List.Filter (tycon.LookupMember (name), fun (mem : IMember) {            
+              mem.Attributes %&& NemerleAttributes.Abstract
+            });
+
+          List.Iter (possible_abstract_meths, fun (abstract_meth : IMember) {
+            def abstract_meth = abstract_meth :> IMethod;
+
+            when (fun_parms_agree (abstract_meth.GetHeader ().parms, meth_parms)) {
+              abstract_meth.HasBeenUsed = true;
+              meth.HasBeenUsed = true
+            }
+          })
+        })
       })
     }
+    and recurse (supertypes : list <Type>)
+    {
+      | T_app (tycon, _) :: rest =>
+        walk_hierarchy (tycon);
+        recurse (rest)
+
+      | _ :: rest =>
+        recurse (rest)
+        
+      | [] => ()
+    }
+
+    recurse (GetDirectSuperTypes ())
   }
 
   
@@ -1839,7 +1983,8 @@ public class TypeBuilder : Tycon, ITypeModifier {
     def define_override (meth : IMethod, iface_meth : IMethod)
     {
       type_builder.DefineMethodOverride (meth.GetMethodInfo (),
-                                         iface_meth.GetMethodInfo ())      
+                                         iface_meth.GetMethodInfo ());
+      meth.HasBeenUsed = true
     }
     
     List.Iter (m_additional_method_overrides, define_override)
@@ -1906,8 +2051,9 @@ public class TypeBuilder : Tycon, ITypeModifier {
                 Message.fatal_error ("interface `" + ty.FullName + 
                                      "' does not contain method named `" + member + 
                                      "' with proper signature")
-              | [m] =>
+              | [m] =>                
                 iface_methods.Set (member, List.Filter (meths, fun (x) { ! is_correct (x) }));
+                meth.HasBeenUsed = true;
                 m
               | _ =>
                 Message.fatal_error ("interface `" + ty.FullName + 
@@ -1945,6 +2091,7 @@ public class TypeBuilder : Tycon, ITypeModifier {
               | lst =>
                 iface_methods.Set (meth.Name, 
                                    List.Filter (meths, fun (x) { ! is_correct (x) }));
+                meth.HasBeenUsed = true;
                 lst
             }
           | None => []
@@ -2215,7 +2362,7 @@ public class TypeBuilder : Tycon, ITypeModifier {
     }
   }
 
-
+  
   /**
    * Main function of type declaration handling pass.
    *
@@ -2286,6 +2433,18 @@ public class TypeBuilder : Tycon, ITypeModifier {
     Iter (fun (x : TypeBuilder) { x.check_ctor_constraints () });
   }
 
+
+  /**
+   * This method iterates through all the known type builders,
+   * looking for unused global symbols.
+   */
+  public static CheckForUnusedGlobalSymbols () : void
+  {
+    when (Flags.global_unused_symbols_warnings)
+      Iter (check_for_unused_global_symbols)
+  }
+
+  
   internal FixupDefinedClass () : void
   {
     // finalization is blocked until call to Compile
