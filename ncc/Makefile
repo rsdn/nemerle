@@ -57,10 +57,6 @@ NEFLAGS = --debug
 CSFLAGS = -nowarn:162 -debug+
 COMPILE = $(CSC) $(CSFLAGS)
 
-x:
-	mono --debug ncc.exe lib/core.n option.n list.n tree.n ast.n parsetree.n typedtree.n util.n csglue.n env.n passes.n scan_globals.n tyvars.n tyinfo.n tyutil.n extensions.n tyexpr.n cgtree.n cgexpr.n cgflat.n 
-
-
 all: ncc.exe
 
 # Do compiler bootstrap, compare results from stage2 and stage3,
