@@ -1,6 +1,6 @@
 # $Revision: 1.5 $, $Date: 2004/02/04 14:22:32 $
 Summary:	Nemerle compiler
-Summary(pl):	Kompilator jêzyka Nemerle
+Summary(pl):	Kompilator j?ka Nemerle
 Name:		nemerle
 Version:	0.0.1592
 Release:	1
@@ -25,17 +25,16 @@ powerful macro system. It has simple, C-like syntax and makes access
 to imperative features easy, and thus is easy to learn.
 
 %description -l pl
-Nemerle jest nowym jêzykiem funkcjonalnym zaprojektowym od pocz±tku z
-my¶l± o platformie .NET. Nemerle wspiera programowanie obiektowe i
-imperatywne, typy wariantowe, dopasowanie wzorca, funkcje wy¿szych
-rzêdów oraz pote¿ny system makr. Sk³adnia Nemerle jest prosta,
-przypomina trochê C. Nemerle umo¿liwa ³atwy dostêp do swych
-imperatywnych oraz obiektowych cech, co powinno u³atwiæ uczenie siê
-go.
+Nemerle jest nowym j?kiem funkcjonalnym zaprojektowym od pocz?ku z
+my??o platformie .NET. Nemerle wspiera programowanie obiektowe i
+imperatywne, typy wariantowe, dopasowanie wzorca, funkcje wy?zych
+rz?w oraz pote?y system makr. Sk?dnia Nemerle jest prosta,
+przypomina troch?. Nemerle umo?iwa ?twy dostê° do swych
+imperatywnych oraz obiektowych cech, co powinno u?twiæ µczenie si?o.
 
 %package libs
 Summary:	Nemerle runtime environment
-Summary(pl):	¦rodowisko uruchomieniowe jêzyka Nemerle
+Summary(pl):	?odowisko uruchomieniowe j?ka Nemerle
 BuildArch:	noarch
 Group:		Libraries
 Requires(post):	mono >= 0.29
@@ -45,7 +44,7 @@ Requires:	mono >= 0.29
 Libraries needed to run programs written in Nemerle.
 
 %description libs -l pl
-Biblioteki niezbêdne do uruchamiania programów napisanych w Nemerle.
+Biblioteki niezb?e do uruchamiania program?apisanych w Nemerle.
 
 %prep
 %setup -q
@@ -80,7 +79,7 @@ rm -rf $RPM_BUILD_ROOT
 
 %post
 mono --aot %{_libdir}/Nemerle.Compiler.dll || :
-mono --aot %{_libdir}/stdmacros.dll || :
+mono --aot %{_libdir}/Nemerle.Macros.dll || :
 mono --aot %{_bindir}/ncc.exe || :
 
 %post libs
@@ -91,11 +90,11 @@ mono --aot %{_libdir}/Nemerle.dll || :
 %doc AUTHORS README doc/html/*
 %attr(755,root,root) %{_bindir}/ncc
 %attr(755,root,root) %{_bindir}/ncc.exe
-%attr(755,root,root) %{_libdir}/stdmacros.dll
+%attr(755,root,root) %{_libdir}/Nemerle.Macros.dll
 %attr(755,root,root) %{_libdir}/Nemerle.Compiler.dll
 %{_mandir}/man1/*
 %ghost %attr(755,root,root) %{_bindir}/ncc.exe.so
-%ghost %attr(755,root,root) %{_libdir}/stdmacros.dll.so
+%ghost %attr(755,root,root) %{_libdir}/Nemerle.Macros.dll.so
 %ghost %attr(755,root,root) %{_libdir}/Nemerle.Compiler.dll.so
 
 %files libs

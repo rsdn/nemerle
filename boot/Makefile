@@ -38,7 +38,7 @@ DISTFILES = \
 	Nemerle.Compiler.dll \
 	Nemerle.dll          \
 	ncc.exe              \
-	stdmacros.dll        \
+	Nemerle.Macros.dll        \
 
 ############################################################
 # OUTPUT
@@ -75,8 +75,8 @@ install:
 	$(Q)$(INSTALL) -m 644 Nemerle.dll $(DESTDIR)$(LIBDIR)/Nemerle.dll
 	$(INST) [$(BINDIR)] ncc
 	$(Q)$(INSTALL) -m 755 ncc.exe $(DESTDIR)$(BINDIR)/ncc
-	$(INST) [$(LIBDIR)] stdmacros.dll
-	$(Q)$(INSTALL) -m 644 stdmacros.dll $(DESTDIR)$(LIBDIR)/stdmacros.dll
+	$(INST) [$(LIBDIR)] Nemerle.Macros.dll
+	$(Q)$(INSTALL) -m 644 Nemerle.Macros.dll $(DESTDIR)$(LIBDIR)/Nemerle.Macros.dll
 
 uninstall:
 	$(RM) $(LIBDIR)/Nemerle.Compiler.dll
@@ -85,11 +85,11 @@ uninstall:
 	$(Q)rm -f $(LIBDIR)/Nemerle.dll
 	$(RM) $(BINDIR)/ncc
 	$(Q)rm -f $(BINDIR)/ncc
-	$(RM) $(LIBDIR)/stdmacros.dll
-	$(Q)rm -f $(LIBDIR)/stdmacros.dll
+	$(RM) $(LIBDIR)/Nemerle.Macros.dll
+	$(Q)rm -f $(LIBDIR)/Nemerle.Macros.dll
 
 ngen aot:
 	$(NGEN) Nemerle.dll
 	$(NGEN) Nemerle.Compiler.dll
-	$(NGEN) stdmacros.dll
+	$(NGEN) Nemerle.Macros.dll
 	$(NGEN) ncc.exe

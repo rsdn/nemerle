@@ -36,7 +36,7 @@ include ../config.mak
 COMPILER_PATH = ../boot/
 NCC_FLAGS     = -pedantic-lexer
 COMPILER      = $(COMPILER_PATH)ncc.exe
-COMPILER_DEP  = $(COMPILER_PATH)ncc.exe $(COMPILER_PATH)stdmacros.dll
+COMPILER_DEP  = $(COMPILER_PATH)ncc.exe $(COMPILER_PATH)Nemerle.Macros.dll
 EXECUTE       = $(NET_ENGINE) $(NET_FLAGS)
 RUN_COMPILER  = $(Q)$(TIME) $(EXECUTE) $(COMPILER) -no-stdlib $(NCC_FLAGS)
 
@@ -169,7 +169,7 @@ aux-stage:
 aux-stage-files: \
 		out.$(STAGE)/Nemerle.$(STAGE).dll \
 		out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll \
-		out.$(STAGE)/stdmacros.dll \
+		out.$(STAGE)/Nemerle.Macros.dll \
 		out.$(STAGE)/ncc.exe
 
 last-stage:
@@ -180,7 +180,7 @@ last-stage:
 last-stage-files: \
 		out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll \
-		out.$(STAGE)/stdmacros.dll \
+		out.$(STAGE)/Nemerle.Macros.dll \
 		out.$(STAGE)/ncc.exe
 
 lib:
@@ -193,15 +193,15 @@ ngen-stage3:
 	$(Q)$(NGEN) out.stage3/Nemerle.dll
 	$(AOT) Nemerle.Compiler.dll
 	$(Q)$(NGEN) out.stage3/Nemerle.Compiler.dll
-	$(AOT) stdmacros.dll
-	$(Q)$(NGEN) out.stage3/stdmacros.dll
+	$(AOT) Nemerle.Macros.dll
+	$(Q)$(NGEN) out.stage3/Nemerle.Macros.dll
 	$(AOT) ncc.exe
 	$(Q)$(NGEN) out.stage3/ncc.exe
 
 compare:
 	$(Q)$(MAKE) compare-one-with-stage CMP_TARGET=Nemerle
 	$(Q)$(MAKE) compare-one-with-stage CMP_TARGET=Nemerle.Compiler
-	$(Q)$(MAKE) compare-one CMP_TARGET=stdmacros.dll
+	$(Q)$(MAKE) compare-one CMP_TARGET=Nemerle.Macros.dll
 	$(Q)$(MAKE) compare-one CMP_TARGET=ncc.exe
 
 compare-one:
@@ -253,25 +253,25 @@ out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll: \
 		-reference:out.$(STAGE)/Nemerle.$(STAGE).dll \
 		$(GENERIC_SRC) $(NEMERLE_COMPILER_DLL_SRC)
 
-out.stage1/stdmacros.dll: $(COMPILER_DEP) out.stage1/Nemerle.stage1.dll \
+out.stage1/Nemerle.Macros.dll: $(COMPILER_DEP) out.stage1/Nemerle.stage1.dll \
 		out.stage1/Nemerle.Compiler.stage1.dll $(STDMACROS_DLL_SRC)
-	$(COMP) [stage1] stdmacros.dll
+	$(COMP) [stage1] Nemerle.Macros.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:out.stage1/Nemerle.stage1.dll \
 		-reference:out.stage1/Nemerle.Compiler.stage1.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
 
-out.stage2/stdmacros.dll: $(COMPILER_DEP) out.stage2/Nemerle.stage2.dll \
+out.stage2/Nemerle.Macros.dll: $(COMPILER_DEP) out.stage2/Nemerle.stage2.dll \
 		out.stage2/Nemerle.Compiler.stage2.dll $(STDMACROS_DLL_SRC)
-	$(COMP) [stage2] stdmacros.dll
+	$(COMP) [stage2] Nemerle.Macros.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:out.stage2/Nemerle.stage2.dll \
 		-reference:out.stage2/Nemerle.Compiler.stage2.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
 
-out.stage3/stdmacros.dll: $(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
+out.stage3/Nemerle.Macros.dll: $(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll $(STDMACROS_DLL_SRC)
-	$(COMP) [stage3] stdmacros.dll
+	$(COMP) [stage3] Nemerle.Macros.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:out.$(STAGE)/Nemerle.dll \
 		-reference:out.$(STAGE)/Nemerle.Compiler.dll \
@@ -325,8 +325,8 @@ install:
 	$(Q)$(INSTALL) -m 644 out.stage3/Nemerle.dll $(DESTDIR)$(LIBDIR)/Nemerle.dll
 	$(INST) [$(BINDIR)] ncc
 	$(Q)$(INSTALL) -m 755 out.stage3/ncc.exe $(DESTDIR)$(BINDIR)/ncc
-	$(INST) [$(LIBDIR)] stdmacros.dll
-	$(Q)$(INSTALL) -m 644 out.stage3/stdmacros.dll $(DESTDIR)$(LIBDIR)/stdmacros.dll
+	$(INST) [$(LIBDIR)] Nemerle.Macros.dll
+	$(Q)$(INSTALL) -m 644 out.stage3/Nemerle.Macros.dll $(DESTDIR)$(LIBDIR)/Nemerle.Macros.dll
 
 # This target is used to build the tarball.  It is passed the
 # directory name, where all files should be copied.
