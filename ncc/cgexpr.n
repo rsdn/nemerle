@@ -162,6 +162,17 @@ namespace Nemerle.Compiler {
         else
           CE_field_ref (CE_this (), ctx#closure_ptrs#get (fn#id));
 
+      static null_value (t : CG_type) : CG_expr =
+        match t with [
+          | CT_bool => CE_false ()
+          | CT_ref (?n) =>
+            if n == "int" then CE_literal (L_int (0))
+            else if n == "bool" then CE_false ()
+            else if n == "float" then CE_literal (L_int (0)) // FIXME ?
+            else CE_literal (L_null ())
+          | _ => CE_literal (L_null ())
+        ];
+
       static cg_pattern (ctx : CTX, val : CG_expr, pat : Pattern) : CG_expr * bool * CTX * list (CG_val) =
         let ref vals = Nil () in
         let ref rctx = ctx in
@@ -174,7 +185,7 @@ namespace Nemerle.Compiler {
               {
                 if d#in_closure then ()
                 else 
-                  let (?ctx, ?v) = store_local (rctx, d, CE_literal (L_null ())) in {
+                  let (?ctx, ?v) = store_local (rctx, d, null_value (cg_type (d#ty))) in {
                     rctx <- ctx;
                     vals <- Cons (v, vals);
                   };
@@ -232,6 +243,8 @@ namespace Nemerle.Compiler {
             List.fold_left (mklet, CE_if (t, cond, then_part, else_part), vals)
         ];
 
+      static ref lambda_proxies : Int_map (CM_class);
+
       static val_ref (ctx : CTX, d : Decl) : CG_expr =
         if d#in_closure then
           let defined_in = Util.unsome (d#parent_fun) in
@@ -242,14 +255,35 @@ namespace Nemerle.Compiler {
             | D_class_member (M_value ?v) => 
               CE_global_ref (lookup_value (v))
               
-            | D_class_member (M_function ?f) => 
-              // FIXME: this should be cached
-              let lc = make_lambda_class (ctx, Env.global_by_id (f#id)) in 
-              let fn = lookup_function (f#fun_header) in {
-                fn#body <- CE_call (CE_global_ref (lookup_function (f#fun_header)), 
-                                    List.map (fun (v : CG_val) : CG_expr => CE_ref (v), fn#parms));
-                (lc :> CM_class)#decls <- List.cons ((fn : CG_member));
-                CE_call (CE_ctor_ref (lc), Nil ())
+            | D_class_member (M_function ?f) =>
+              {
+                if lambda_proxies == null then lambda_proxies <- Map.int_map ()
+                else ();
+                let lc =
+                  match lambda_proxies#find (f#id) with [
+                    | Some (?lc) => lc
+                    | None =>
+                      let lc = make_lambda_class (ctx, Env.global_by_id (f#id)) in 
+                      letfun mkparm (v : CG_val) : CG_expr =
+                        let t = v#ty in { 
+                          v#ty <- CT_object ();
+                          CE_cast (CE_ref (v), t)
+                        }
+                      in
+                      let fn = cg_fun_header (f#fun_header) in {
+                        fn#body <- CE_call (CE_global_ref (lookup_function (f#fun_header)), 
+                                            List.map (mkparm, fn#parms));
+                        lc#decls <- List.cons ((fn : CG_member));
+                        lc#extern_name <- lc#name;
+                        fn#name <- "apply";
+                        fn#attrs <- Cons ("public", Nil ());
+                        fn#ret_type <- CT_object ();
+                        closures <- Cons ((lc : CG_member), closures);
+                        lambda_proxies <- lambda_proxies#add (f#id, lc);
+                        lc
+                      }
+                  ]
+                in CE_call (CE_ctor_ref (lc), Nil ())
               }
 
             | D_class_member => Util.ice ()
@@ -409,7 +443,7 @@ namespace Nemerle.Compiler {
               {
                 m#name <- ti#basename ();
                 m#ret_type <- CT_unreached ();
-                make_static (m)
+                m#attrs <- Cons ("static", Nil ())
               }
             | FK_ctor => 
               {
