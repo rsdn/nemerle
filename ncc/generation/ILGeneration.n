@@ -36,6 +36,7 @@ namespace Nemerle.Compiler
 
   using System.Reflection;
   using System.Reflection.Emit;
+  using System.Diagnostics.SymbolStore;
   using System.IO;
 
   using NC = Nemerle.Compiler;
@@ -71,7 +72,11 @@ namespace Nemerle.Compiler
       this._module_builder =
         this._assembly_builder.DefineDynamicModule (_assembly_name.Name,
                                                     Path.GetFileName (_OutputFileName),
-                                                    true); // FIXME
+                                                    Options.EmitDebug); 
+
+      when (Options.EmitDebug) {
+        _debug_emit = _module_builder.GetSymWriter ();
+      }
 
       add_resources_to_assembly ();
 
@@ -192,6 +197,7 @@ namespace Nemerle.Compiler
       // save the assembly
       try {
         _assembly_builder.Save (Path.GetFileName (_OutputFileName));
+        //when (_debug_emit != null) _debug_emit.Close ();
       }
       catch {
         | e : IOException =>
@@ -774,9 +780,9 @@ namespace Nemerle.Compiler
         CGopt.Optimize (cgm);
 
         /* emit the constructor's body */
-        def _ = CodeGenerator (cb, _module_builder, cgm);
-
-        ()
+        def gen = CodeGenerator (cb, _module_builder, cgm);
+        when (Options.EmitDebug) gen.SetDocument (context.Location);
+        gen.Run ();
       }
     }
 
@@ -885,6 +891,7 @@ namespace Nemerle.Compiler
               Message.error ($ "more then one entry point (Main function) "
                                "found in $(mb.DeclaringType)")
             | None =>
+              when (_debug_emit != null) _debug_emit.SetUserEntryPoint (SymbolToken (1));
               _entry_point = Some ((mb : MethodInfo))
           }
         };
@@ -902,9 +909,15 @@ namespace Nemerle.Compiler
         };
 
         /* emit the method body */
-        def _ = CodeGenerator (mb, _module_builder, cgm);
+        when (_debug_emit != null) {
+          //_debug_emit.SetMethodSourceRange (_debug_doc, 2, 3, _debug_doc, 7, 8);
+          _debug_emit.OpenMethod (SymbolToken (1));
+        }
+        def gen = CodeGenerator (mb, _module_builder, cgm);
+        when (Options.EmitDebug) gen.SetDocument (context.Location);
+        gen.Run ();
 
-        ()
+        when (_debug_emit != null) _debug_emit.CloseMethod ();        
       }
     }
 
@@ -1091,6 +1104,7 @@ namespace Nemerle.Compiler
     private _assembly_name : System.Reflection.AssemblyName;
     private _assembly_builder : AssemblyBuilder;
     private _module_builder : ModuleBuilder;
+    private _debug_emit : ISymbolWriter;
     private mutable _emit_nemerle_attributes : bool;
     private _need_entry_point : bool;
 
@@ -1123,12 +1137,14 @@ namespace Nemerle.Compiler
     private  _method_name : string;
     private _method_is_static : bool;
     private _cg_method : CG_method;
-    private _method_start_label : Label;
+    private mutable _method_start_label : Label;
+    private mutable _debug_doc : ISymbolDocumentWriter;        
 
     /**
      * Creates and executes a code generator for a method
      */
-    internal this (method_builder : MethodBuilder, module_builder : ModuleBuilder, cg_method : CG_method)
+    internal this (method_builder : MethodBuilder, module_builder : ModuleBuilder, 
+                   cg_method : CG_method)
     {
       _cg_method = cg_method;
 
@@ -1139,13 +1155,6 @@ namespace Nemerle.Compiler
       _method_is_static = method_builder.IsStatic;
       _this_is_value_type = method_builder.DeclaringType.IsValueType;
       _type_of_this = method_builder.DeclaringType;
-
-      _method_start_label = _ilg.DefineLabel ();
-      _ilg.MarkLabel (_method_start_label);
-
-      emit (cg_method.body);
-      unless (throws (cg_method.body))
-        _ilg.Emit (OpCodes.Ret)
     }
 
 
@@ -1165,12 +1174,14 @@ namespace Nemerle.Compiler
       _method_is_static = constructor_builder.IsStatic;
       _this_is_value_type = constructor_builder.DeclaringType.IsValueType;
       _type_of_this = constructor_builder.DeclaringType;
+    }
 
+    public Run () : void {
       _method_start_label = _ilg.DefineLabel ();
       _ilg.MarkLabel (_method_start_label);
-
-      emit (cg_method.body);
-      unless (throws (cg_method.body))
+    
+      emit (_cg_method.body);
+      unless (throws (_cg_method.body))
         _ilg.Emit (OpCodes.Ret)
     }
 
@@ -1191,6 +1202,11 @@ namespace Nemerle.Compiler
       | _ => false
     }
 
+    public SetDocument (loc : Location) : void
+    {
+      _debug_doc = _module_builder.DefineDocument (Path.GetFullPath (loc.File), 
+        SymDocumentType.Text, SymLanguageType.ILAssembly, SymLanguageVendor.Microsoft);
+    }
 
     private is_always_false (expr : CExpr) : bool
     {
@@ -1228,13 +1244,20 @@ namespace Nemerle.Compiler
       | _ => ()
     }
 
+    /** Marks the point in source file for currently emmited opcode */
+    Mark (loc : Location) : void
+    {
+      when (_debug_doc != null && loc != Location.Default) 
+        _ilg.MarkSequencePoint (_debug_doc, loc.Line, loc.Column, loc.Line, loc.Column);
+    } 
+
     /**
      * Emits an expression.
      */
     private emit (expr : CExpr) : void
     {
       // Message.debug (expr.loc, "emit: " + pretty_print (expr));
-
+      Mark (expr.loc);
       match (expr) {
 
         /* -- SEQUENCING --------------------------------------------------- */
@@ -2341,7 +2364,7 @@ namespace Nemerle.Compiler
     private declare_val_local_slot (val : CG_val) : LocalBuilder
     {
       def local_slot = _ilg.DeclareLocal (val.ty);
-      local_slot.SetLocalSymInfo (val.name);
+      when (Options.EmitDebug) local_slot.SetLocalSymInfo (val.name);
       val.local_slot = Some (local_slot);
       local_slot
     }
