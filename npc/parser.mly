@@ -247,11 +247,11 @@ let implicit_record_ctor fields =
 
 %token KW_ABSTRACT KW_CONST KW_EXTERN KW_INTERNAL KW_NEW KW_PRIVATE
 %token KW_PROTECTED KW_SEALED KW_VOLATILE KW_NAMESPACE KW_BASE
-%token KW_CLASS KW_ENUM KW_EXTENDS KW_FINALLY KW_IN KW_METHOD KW_NULL KW_OUT
+%token KW_CLASS KW_ENUM KW_EXTENDS KW_FINALLY KW_IN KW_NULL KW_OUT
 %token KW_PUBLIC KW_RAISE KW_REF KW_STRUCT KW_THIS KW_VARIANT
-%token KW_INTERFACE KW_IMPLEMENTS KW_WHERE KW_FIELD KW_VALUE KW_TYPE KW_LET
+%token KW_INTERFACE KW_IMPLEMENTS KW_WHERE KW_TYPE KW_LET
 %token KW_IN KW_FUN KW_AND KW_TYMATCH KW_WITH KW_TRY KW_OPEN KW_VOID
-%token KW_IF KW_THEN KW_ELSE KW_LETFUN KW_AS KW_RECORD KW_MATCH
+%token KW_IF KW_THEN KW_ELSE KW_LETFUN KW_AS KW_RECORD KW_MATCH KW_STATIC
 
 %token L_BRACE R_BRACE R_SQUERE L_SQUERE COMMA COLON SEMICOLON BAR 
 %token COLON_MORE STAR DOT L_PAREN R_PAREN EQ HASH QUESTION_MARK
@@ -381,11 +381,11 @@ maybe_new:
         | KW_NEW  { true }
         
 interface_member:
-        maybe_new maybe_method fun_def_head SEMICOLON
+        maybe_new fun_def_head SEMICOLON
         {
           let (is_ctor, 
                 (typarms, (loc, name), parms, ret_type), 
-                implements) = $3 in
+                implements) = $2 in
           if is_ctor || implements <> [] then raise Parse_error
           else
            D_iface_method {
@@ -399,10 +399,6 @@ interface_member:
            }
         }
 
-maybe_method:
-          /* */         { () }
-        | KW_METHOD     { () }
-        
 typarms:
           /* */  { empty_typarms }
         | L_PAREN tyvars R_PAREN maybe_where
@@ -557,33 +553,36 @@ record_member:
                 }
 
 type_member:
-          attrs KW_FIELD maybe_ref located_id COLON ty SEMICOLON
+          attrs maybe_ref typarms located_id COLON ty SEMICOLON
                 {
+                  if $3 != empty_typarms then raise Parse_error else
                   let (loc, name) = $4 in
                   D_field
                     {
                       fld_loc = loc;
                       fld_name = name;
-                      fld_mutable = $3;
+                      fld_mutable = $2;
                       fld_type = $6;
                       fld_modifiers = $1; 
                       fld_id = next_id ();
                     }
                 }
-        | attrs KW_VALUE maybe_ref located_id COLON ty SEMICOLON
+        | attrs KW_STATIC maybe_ref typarms located_id COLON ty SEMICOLON
                 {
-                  let (loc, name) = $4 in
+                  if $4 != empty_typarms then raise Parse_error else
+                  let (loc, name) = $5 in
                   D_value
                     {(empty_val ()) with
                       val_loc = loc;
                       val_name = name;
                       val_mutable = $3;
-                      val_type = Some $6;
+                      val_type = Some $7;
                       val_modifiers = $1; 
                       val_kind = Val_global}
                 }
-        | attrs KW_METHOD fun_def_term
+        | attrs maybe_ref fun_def_term
                 {
+                  if $2 then raise Parse_error else
                   let (is_ctor, fn, impl) = $3 in
                   let fn = {fn with fun_modifiers = $1} in
                      D_method
@@ -605,11 +604,12 @@ type_member:
                            else Method_normal;
                        }
                 }
-        | attrs KW_FUN fun_def_term
+        | attrs KW_STATIC maybe_ref fun_def_term
                 { 
-                  let (_, fn, _) = $3 in
+                  if $3 then raise Parse_error else
+                  let (_, fn, _) = $4 in
                   let fn = {fn with fun_modifiers = $1} in
-                  match $3 with
+                  match $4 with
                   | (true, _, []) -> 
                     D_function {fn with fun_kind = Fun_static_ctor}
                   | (false, _, []) -> 

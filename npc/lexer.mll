@@ -54,7 +54,6 @@ let process_id =
        ("extends", KW_EXTENDS);
        ("finally", KW_FINALLY);
        ("in", KW_IN);
-       ("method", KW_METHOD);
        ("null", KW_NULL);
        ("out", KW_OUT);
        ("public", KW_PUBLIC);
@@ -67,8 +66,6 @@ let process_id =
        ("implements", KW_IMPLEMENTS);
        ("namespace", KW_NAMESPACE);
        ("where", KW_WHERE);
-       ("field", KW_FIELD);
-       ("value", KW_VALUE);
        ("type", KW_TYPE);
        ("let", KW_LET);
        ("in", KW_IN);
@@ -89,6 +86,7 @@ let process_id =
        ("as", KW_AS);
        ("record", KW_RECORD);
        ("match", KW_MATCH);
+       ("static", KW_STATIC);
     ]
   in
   fun id ->
