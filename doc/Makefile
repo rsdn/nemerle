@@ -86,7 +86,7 @@ grokking.html:: src/nem-examples/grokking.n dumper
 tutorial.html:: src/nem-examples/tutorial.n dumper
 
 dumper:
-	$(MAKE) -C ../misc/htmldumper all
+	$(MAKE) -C ../tools/htmldumper all
 
 %.docb: src/%.xml docb.xsl
 	$(XSLT_) $@
