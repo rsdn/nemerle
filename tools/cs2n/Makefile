@@ -37,7 +37,7 @@ INST	= @echo INSTALL $1
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
-NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe -q
+NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe
 MCS = $(CSC)
 
 NEMERLE_DLLS = Nemerle.dll
@@ -51,8 +51,14 @@ GENERATED_TOKEN_DESCRIPTION = CSharpParserTokenTypes.txt
 
 GENERATED_SOURCES = $(GENERATED_SOURCES_LEXER) $(GENERATED_SOURCES_PARSER) $(GENERATED_SOURCES_TOKEN_TYPES) 
 
-NEMERLE_CSHARP_DLL_SOURCES = ExtendedToken.n Emit.n StatementTree.n AssemblyInfo.n
+NEMERLE_CSHARP_DLL_SOURCES = ExtendedToken.n Emit.n StatementTree.n GotoElimination.n AssemblyInfo.n
 CS2N_EXE_SOURCES = cs2n.n
+
+ifeq ($(origin GOTO), command line)
+	override GOTO = -def:GOTO_ELIMINATION
+else
+    	override GOTO = 
+endif
 
 ######################################################
 # TARGETS
@@ -67,7 +73,7 @@ Nemerle.CSharp.CS.dll : Nemerle.CSharp.dll $(GENERATED_SOURCES_PARSER) $(ANTLR_D
 	$(MCS) /t:library /r:antlr.runtime.dll /r:Nemerle.CSharp.dll /r:Nemerle.dll -out:$@ $(GENERATED_SOURCES) AssemblyInfo.cs
 
 Nemerle.CSharp.dll : $(NEMERLE_CSHARP_DLL_SOURCES) $(ANTLR_DLL)
-	$(NCC) -tdll -r:antlr.runtime.dll -o:$@ $(NEMERLE_CSHARP_DLL_SOURCES) 
+	$(NCC) $(GOTO) -tdll -r:antlr.runtime.dll -o:$@ $(NEMERLE_CSHARP_DLL_SOURCES) 
 
 $(GENERATED_SOURCES_PARSER): $(GRAMMAR_FILE)
 	$(ANTLR) $(GRAMMAR_FILE) 2> error_log
