@@ -104,6 +104,7 @@ NEMERLE_COMPILER_DLL_SRC = \
 	itypemodifier.n \
 	attribute.n \
     AssemblyInfo.n \
+	pretty-print.n
 
 
 

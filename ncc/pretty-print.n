@@ -1,0 +1,935 @@
+/*
+ * Copyright (c) 2003, 2004 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+/*
+ * Pretty printing of the parse and typed trees
+ */
+
+using System.Text;
+ 
+using Nemerle.Collections;
+using Nemerle.Utility;
+using Nemerle.IO;
+
+using Nemerle.Compiler.Parsetree;
+namespace TT = Nemerle.Compiler.Typedtree;
+
+namespace Nemerle.Compiler
+{
+  public module PrettyPrint
+  {
+    /* ------------------------------------------------------------------------ */
+    /* -- PARSE TREE ---------------------------------------------------------- */
+    /* ------------------------------------------------------------------------ */
+    
+    SprintExpr (ctx : option<TypingContext>, expr : Expr, indentation : string,
+                acc : StringBuilder) : void 
+    {
+      def add (x : string) { ignore (acc.Append (x)) };
+    
+      def expr = 
+        match (ctx) {
+          | Some (c) => MacroRegistry.expand_macro (c, expr)
+          | _ => expr
+        };
+
+      def print_tparms (pars) {
+        add ("<");
+        add (NString.Concat (", ", pars));
+        add (">")
+      };
+
+      def print_tconstraints (cts : list <Constraint>) {
+        | [] => ()
+        | x :: xs =>
+          add (sprintf ("where %s : ", x.tyvar));
+          SprintType (x.ty, acc);
+          print_tconstraints (xs)
+      };
+
+      def print_funparms (fps) {
+        def print_funparm (p : Fun_parm) {
+          | <[ funparm: $(n : name) : $ty ]> =>
+            add (List.Head (n.idl) + " : ");
+            SprintType (ty, acc)
+          
+          | <[ funparm: params $(n : name) : $ty ]> =>
+            add (sprintf ("params %s : ", List.Head (n.idl)));
+            SprintType (ty, acc)
+          
+          | <[ funparm: $(n : name) : $ty = $expr ]> =>
+            add (sprintf ("params %s : ", List.Head (n.idl)));
+            SprintType (ty, acc);
+            add (" = ");
+            SprintExpr (ctx, expr, indentation, acc)
+
+          | _ => add ("spliced funparm name")
+        };
+
+        NString.SeparatedCalls (", ", fps, print_funparm, acc)
+      };
+
+      def sprint_ss (x) {
+        | SS_string (n) =>
+          add (n.GetId ())
+        | SS_spliced_expr (e) =>
+          add ("$(");
+          SprintExpr (ctx, e, indentation, acc);
+          add (")");
+      }
+      
+      match (expr) {
+        | <[ $(id : name) ]> => 
+          add (id.GetHead ())
+
+        | <[ $obj . $mem ]> => 
+          SprintExpr (ctx, obj, indentation, acc); add ("."); sprint_ss (mem)
+
+        | <[ [] ]> => add ("[]")
+
+        | <[ $x :: $xs ]> =>
+          SprintExpr (ctx, x, indentation, acc);  
+          add (" :: "); SprintExpr (ctx, xs, indentation, acc)
+
+        | <[ $func (.. $parms) ]> =>
+          def print_parm (p : Expr) {
+            match (p) {
+              | <[ $(n : name) = $expr ]> =>
+                match (n.idl) {
+                  | [] => ()
+                  | x :: _ => add (x + " = ")
+                };
+                SprintExpr (ctx, expr, indentation + "  ", acc)
+              | _ =>
+                SprintExpr (ctx, p, indentation + "  ", acc)
+            }
+          };
+          match ((func, parms)) {
+            | (<[ $({idl = [x]} : name) ]>, [e]) when LexerBase.IsOperator (x) =>
+              add (x);
+              print_parm (e)
+
+            | (<[ $({idl = [x]} : name) ]>, [e1, e2]) when LexerBase.IsOperator (x) =>
+              print_parm (e1);
+              add (" " + x + " ");
+              print_parm (e2);            
+
+            | _ =>
+              SprintExpr (ctx, func, indentation, acc); add (" (");
+              NString.SeparatedCalls (", ", parms, print_parm, acc);             
+              add (")");
+          }
+
+        | <[ $target = $source ]> =>
+          SprintExpr (ctx, target, indentation, acc); add (" = ");
+          SprintExpr (ctx, source, indentation, acc);
+
+        | <[ def $n = $val ]> =>
+          add ("def "); sprint_ss (n);
+          add (" = "); SprintExpr (ctx, val, indentation, acc)
+
+        | <[ mutable $n = $val ]> =>
+          add ("mutable "); sprint_ss (n);
+          add (" = "); SprintExpr (ctx, val, indentation, acc)
+
+        | <[ def (.. $elems) = $val ]> =>
+          add ("def (");
+          def pp (x) { SprintPattern (x, acc) };
+          NString.SeparatedCalls (", ", elems, pp, acc); 
+          add (") = ");
+          SprintExpr (ctx, val, indentation, acc);
+
+        | <[ match ($expr) {.. $cases } ]> =>
+          def print_case (c : Match_case) {
+            def print_guard (g : Pattern * option <Expr>) {
+              | <[ caseguard: $pat when $e ]> =>
+                add (sprintf ("\n%s| ", indentation + "  "));
+                SprintPattern (pat, acc);
+                add (" when ");
+                SprintExpr (ctx, e, indentation + "    ", acc)
+              | <[ caseguard: $pat ]> =>
+                add (sprintf ("\n%s| ", indentation + "  ")); 
+                SprintPattern (pat, acc);
+            };
+
+            def <[ case: | ..$guards => $expr ]> = c;
+            List.Iter (guards, print_guard);
+            add (sprintf (" => \n%s", indentation + "    "));
+            SprintExpr (ctx, expr, indentation + "    ", acc)
+          };
+
+          add ("match ("); 
+          SprintExpr (ctx, expr, indentation, acc); add (") {");
+          List.Iter (cases, print_case);
+          add (sprintf ("\n%s}", indentation))
+
+        | <[ throw $exc ]> =>
+          add ("throw "); SprintExpr (ctx, exc, indentation, acc);
+
+        | <[ try $body catch { $exn : $exn_ty => $handler } ]> => 
+          add (sprintf ("try\n%s  ", indentation));
+          SprintExpr (ctx, body, indentation + "  ", acc);
+          add (sprintf ("\n%swith {\n%s", indentation, indentation + "  "));
+          sprint_ss (exn); add (" : ");
+          SprintType (exn_ty, acc);
+          add (sprintf ("=>\n%s", indentation + "    "));
+          SprintExpr (ctx, handler, indentation + "    ", acc)
+
+        | <[ try $body finally $handler ]> =>
+          add (sprintf ("try\n%s  ", indentation));
+          SprintExpr (ctx, body, indentation + "  ", acc);
+          add (sprintf ("\n%sfinally\n%s  ", indentation, indentation));
+          SprintExpr (ctx, handler, indentation + "  ", acc)
+
+        | E_literal (lit) =>
+          add (lit.ToString ())
+
+        | <[ this ]> =>
+          add ("this")
+
+        | <[ base ]> => 
+          add ("base")
+
+        | <[ typeof ($t) ]> =>
+          add ("typeof ("); SprintType (t, acc); add (")")
+
+        | <[ ( $expr :> $ty ) ]> =>
+          add ("("); SprintExpr (ctx, expr, indentation, acc); add (" :> ");
+          SprintType (ty, acc); add (")")
+
+        | <[ ( $expr : $ty ) ]> =>
+          add ("("); SprintExpr (ctx, expr, indentation, acc); 
+          add (" : "); SprintType (ty, acc); add (")")
+
+        | <[ {.. $seq } ]> =>
+          match (seq) {
+            | [e] =>
+              SprintExpr (ctx, e, indentation, acc)
+            | _ =>
+              add ("{");
+              NString.SeparatedCalls (";", seq, fun (x) { 
+                add (sprintf ("\n%s", indentation + "  ")); 
+                SprintExpr (ctx, x, indentation + "  ", acc); 
+              }, acc);
+              add (sprintf ("\n%s}", indentation))
+          }
+
+        | <[ (.. $args) ]> =>
+          add ("(");
+          NString.SeparatedCalls (", ", args, fun (x) { 
+            SprintExpr (ctx, x, indentation, acc) 
+          }, acc);
+          add (")")
+
+        | <[ array (..$args) ]> =>
+          add ("array (");
+          NString.SeparatedCalls (", ", args, fun (x) { 
+            SprintExpr (ctx, x, indentation, acc) 
+          }, acc);
+
+        | <[ ref $e ]> => add ("ref "); SprintExpr (ctx, e, indentation, acc)
+
+        | <[ out $e ]> => add ("ref "); SprintExpr (ctx, e, indentation, acc)
+
+        | <[ array $args ]> =>
+          add ("array ");
+          SprintExpr (ctx, args, indentation, acc);
+
+        | <[ array < $rank > $args ]> =>
+          add ("array <");
+          SprintExpr (ctx, rank, indentation, acc);
+          add ("> ");
+          SprintExpr (ctx, args, indentation, acc);
+
+        | <[ $obj [.. $args] ]> =>
+          SprintExpr (ctx, obj, indentation, acc);
+          add ("[");
+          NString.SeparatedCalls (", ", args, fun (x) { 
+            SprintExpr (ctx, x, indentation, acc) 
+          }, acc);
+          add ("]")
+
+        | <[ fun < ..$tparms> (..$args) : $ty where ..$tconstrs $body ]> =>
+          add ("fun "); print_tparms (tparms);
+          add (" ("); print_funparms (args); add (") ");
+          add (": "); SprintType (ty, acc); add (" ");
+          print_tconstraints (tconstrs); add (" ");
+          SprintExpr (ctx, body, indentation, acc)
+
+        | <[ def ..$funs ]> =>
+          def print_fun (f : Function_decl) {
+            | <[ fundecl: $(n : name) < ..$tparms> (..$args)
+                 where .. $tconstrs $body ]> =>
+              add (n.GetId () + " "); print_tparms (tparms);
+              add (" ("); print_funparms (args); add (") ");
+              print_tconstraints (tconstrs); add (" ");
+              SprintExpr (ctx, body, indentation, acc)
+            | _ => add ("spliced fun name")
+          };
+        
+          add ("def ");
+          NString.SeparatedCalls ("\nand ", funs, print_fun, acc)
+
+        | E_macrocall (_, namespc, parms) =>
+          match (namespc.Value) {
+            | GlobalEnv.MacroCall (m) =>
+              def (key, rules, _) = m.SyntaxExtension ();
+              mutable parms_left = parms;
+              add (key + " ");
+              def print_gel (x) { 
+                | Parser.GE_keyword (k) => add (" "); add (k); add (" ")
+                | Parser.GE_operator (")") => add (") ")
+                | Parser.GE_operator ("}") => add ("} ")                
+                | Parser.GE_operator (o) => add (o)
+                | Parser.GE_optional (g) => print_gel (g)
+                | Parser.GE_expression =>
+                  match (List.Head (parms_left)) {
+                    | SyntaxExpr (e) =>
+                      SprintExpr (ctx, e, indentation, acc);
+                    | _ =>
+                      Message.fatal_error ("types of parameters do not match"
+                                           " definition of macro")
+                  };
+                  parms_left = List.Tail (parms_left);
+                | _ => () 
+              };
+              List.Iter (rules, print_gel);
+            | _ => add ("macro_call")
+          }
+
+        | E_spliced (e) =>
+          add ("$("); SprintExpr (ctx, e, indentation, acc); add (")");
+
+        | E_spliced_patt (p) =>
+          add ("$("); SprintPattern (p, acc); add (")");
+
+        | E_expr_list (e) =>
+          add (".."); SprintExpr (ctx, e, indentation, acc); 
+
+        | E_quoted  =>
+          //        add ("<[ "); SprintExpr (ctx, e, indentation, acc); add (" ]>");
+          add ("quoted");
+
+        | E_typed_expr  =>
+          add ("typed");
+
+        | E_spliced_special => Util.ice ("Bad construction of E_spliced_special")
+
+        | E_letpat => Util.ice ("Bad construction of E_letpat")
+        | E_lambda => Util.ice ("Bad construction of E_lambda")
+        
+//      | _ => add ("other")
+      }
+    }
+
+    public SprintExpr (ctx : option<TypingContext>, expr : Expr) : string
+    {
+      def result = StringBuilder ();
+      SprintExpr (ctx, expr, "", result);
+      result.ToString ()    
+    }
+
+    public PrintExpr (ctx : option<TypingContext>, expr : Expr) : void
+    {
+      printf ("%s\n", SprintExpr (ctx, expr))
+    }
+
+    public PrintPattern (pat : Pattern) : void
+    {
+      def acc = StringBuilder ();
+      SprintPattern (pat, acc);
+      printf ("%s\n", acc.ToString ())
+    }
+
+    public SprintPattern (patt : Pattern, acc : StringBuilder) : void
+    {
+      def add (x : string) { ignore (acc.Append (x)) };
+      def print_named_pattern (patt : string * Pattern) : void
+      {
+        def (name, pat) = patt;
+        add (sprintf ("%s = ", name)); SprintPattern (pat, acc);
+      };
+    
+      match (patt) {
+        | <[ pattern: _ ]> =>
+          add ("_")
+
+        | <[ pattern: $(n : name) ]> =>
+          add (n.GetId ())
+
+        | <[ pattern: ($pat) as $(n : name) ]> => 
+          add ("("); SprintPattern (pat, acc); 
+          add (") as "); add (n.GetId ())
+
+        | <[ pattern: [] ]> => add ("[]")
+
+        | <[ pattern: $x :: $xs ]> => 
+          SprintPattern (x, acc); add (" :: "); SprintPattern (xs, acc)
+
+        | <[ pattern: (.. $args) ]> =>
+          add ("(");
+          NString.SeparatedCalls (", ", args, fun (x) {
+            SprintPattern (x, acc);
+          }, acc);
+          add (")")
+
+        | <[ pattern: {.. $args } ]> =>
+          add ("{");
+          NString.SeparatedCalls ("; ", args, print_named_pattern, acc);
+          add ("}")
+
+        | <[ pattern: $(n : name) (.. $args) ]> =>
+          add (n.GetId ()); add (" (");
+          NString.SeparatedCalls (", ", args, fun (x) {
+            SprintPattern (x, acc)
+          }, acc);
+          add (")");
+
+        | <[ pattern: $(n : name) {.. $args} ]> =>
+          add (n.GetId ()); add (" {");
+          NString.SeparatedCalls ("; ", args, print_named_pattern, acc);          
+          add ("}")
+
+        | <[ pattern: $(val : int) ]> =>
+          add (val.ToString ())
+
+        | <[ pattern: $(val : string) ]> =>
+          add (sprintf ("\"%s\"", val))
+
+        | <[ pattern: $(val : bool) ]> =>
+          if (val) add ("true") else add ("false")
+
+        | <[ pattern: $(val : float) ]> =>
+          add (val.ToString ())
+
+        | <[ pattern: $(val : char) ]> =>
+          add (val.ToString ())
+
+        | <[ pattern: () ]> =>
+          add ("()")
+
+        | <[ pattern: null ]> =>
+          add ("null")
+
+        | <[ pattern: $(n : name) _ ]> =>
+          add (n.GetId ())
+
+        | P_spliced (e) =>
+          add ("$("); SprintExpr (None (), e, "", acc); add (")");
+
+        | P_has_type (p, t) =>
+          SprintPattern (p, acc); add (" : "); SprintType (t, acc);
+
+        | _ => add ("other");
+      }
+    }
+
+    public SprintType (ty : Type, acc : StringBuilder) : void 
+    {
+      def add (x : string) { ignore (acc.Append (x)) };
+    
+      match (ty) {
+        | <[ type: $(tycon : name) < .. $args> ]> =>
+         add (tycon.GetId ());
+         match (args) {
+           | [] => ()
+           | _ => add (" <");
+             NString.SeparatedCalls (" * ", args, fun (x) {
+               SprintType (x, acc)
+             }, acc);
+             add (">");
+         }
+
+        | <[ type: $(n : name) ]> =>
+          add (n.GetId ());
+
+        | <[ type: ref $ty ]> =>
+          add ("ref "); SprintType (ty, acc);
+
+        | <[ type: out $ty ]> =>
+          add ("out "); SprintType (ty, acc);
+
+        | <[ type: $from -> $to ]> =>
+          SprintType (from, acc); add (" -> "); SprintType (to, acc);
+
+        | <[ type: void ]> =>
+          add ("void");
+
+        | <[ type: .. $args ]> =>
+          NString.SeparatedCalls (" * ", args, fun (x) {
+            SprintType (x, acc);
+          }, acc);
+
+        | <[ type: array < $(1 : int), $ty > ]> =>
+          add ("array <"); SprintType (ty, acc); add (">")
+
+        | <[ type: array < $(rank : int), $ty > ]> =>
+          add ("array <"); add (rank.ToString ()); add (", "); 
+          SprintType (ty, acc); add (">")
+
+        | _ => add ("other")
+      }
+    }
+
+
+
+    /* ------------------------------------------------------------------------ */
+    /* -- TYPED TREE ---------------------------------------------------------- */
+    /* ------------------------------------------------------------------------ */
+
+    /**
+     * Pretty prints a match ('expr') { 'match_cases' } instruction.
+     * This is a string generating wrapper for SprintTyMatch/6.
+     */
+    public SprintTyMatch (ctx : option <TypingContext>,
+                          expr : TT.Expr,
+                          match_cases : list <TT.Match_case>) : string
+    {
+      def result = StringBuilder ();
+      ignore (result.Append ("\n"));
+      SprintTyMatch (ctx, expr, match_cases, false, "", result);
+      ignore (result.Append ("\n"));
+      result.ToString ()          
+    }
+    
+
+    /**
+     * Pretty prints a match ('expr') { 'match_cases' } instruction.
+     */
+    public SprintTyMatch (ctx : option <TypingContext>,
+                          expr : TT.Expr,
+                          match_cases : list <TT.Match_case>,
+                          indent_first_line : bool,
+                          indentation : string,
+                          result : StringBuilder) : void
+    {
+      def append (x : string) { ignore (result.Append (x)) }
+      def indent () { append (indentation) }
+
+      def recurse (expr : TT.Expr) {
+        SprintTyExpr (ctx, expr, false, indentation, result)
+      }
+      def recurse_and_indent (expr : TT.Expr) {
+        SprintTyExpr (ctx, expr, false, indentation + "  ", result)
+      }
+        
+      def print_pattern (pattern : TT.Pattern)
+      {
+        | TT.P_underscore => append ("_")
+        | TT.P_as (pat /* Pattern */, decl /* LocalValue */) =>
+          append ("(");
+          print_pattern (pat);
+          append (") as " + decl.name)
+        | TT.P_has_type (tycon /* Tycon */) =>
+          append (" : " + tycon.GetFullName ()) // FIXME
+        | TT.P_tuple (args /* list <Pattern> */) =>
+          append ("(");
+          def loop (args) {
+            | [] => ()
+            | [arg] =>
+              print_pattern (arg)
+            | arg :: args =>
+              print_pattern (arg);
+              append (", ");
+              loop (args)
+          };
+          loop (args);
+          append (")")         
+
+        | TT.P_record (_ /* args : list <IField * Pattern> */) =>
+          () // FIXME
+
+        // variant constructors
+        | TT.P_cons (name /* Tycon */, TT.P_underscore /* Pattern */) =>
+          append (name.GetFullName ())        
+        | TT.P_cons (name /* Tycon */, arg /* Pattern */) =>
+          append (name.GetFullName () + " (");          
+          print_pattern (arg);
+          append (")")
+
+        // literals
+        | TT.P_literal (lit /* Literal */) =>
+          append (lit.ToString ())
+      }
+      
+      def print_patterns (patterns : list <TT.Pattern * TT.Expr>)
+      {
+        def do_print (pattern, guard, terminator)
+        {
+          indent ();
+          append ("  | ");
+          print_pattern (pattern);
+
+          match (guard) {
+            | TT.E_literal (L_bool (true)) => ()
+            | _ =>
+              append (" when ");
+              recurse (guard);
+          }
+          
+          append (terminator)
+        }
+        
+        match (patterns) {
+          | [(pattern, guard)] =>
+            do_print (pattern, guard, " => ")
+          | (pattern, guard) :: rest =>
+            do_print (pattern, guard, "\n");
+            print_patterns (rest)
+          | _ => ()
+        }
+      }
+      
+      def print_match_cases (cases : list <TT.Match_case>)
+      {
+        | (patterns, body) :: rest =>
+          print_patterns (patterns);
+          recurse_and_indent (body);
+          append ("\n");
+          print_match_cases (rest)          
+        | _ => ()      
+      }
+
+      when (indent_first_line) indent ();
+      append ("match (");
+      recurse (expr);
+      append (") {\n");
+      
+      print_match_cases (match_cases);
+
+      indent ();
+      append ("}")
+    }
+    
+    
+    public SprintTyExpr (ctx : option <TypingContext>, expr : TT.Expr) : string
+    {
+      def result = StringBuilder ();
+      ignore (result.Append ("\n"));
+      SprintTyExpr (ctx, expr, false, "", result);
+      ignore (result.Append ("\n"));
+      result.ToString ()    
+    }
+    
+    
+    public SprintTyExpr (ctx : option <TypingContext>,
+                         expr : TT.Expr,
+                         indent_first_line : bool,
+                         indentation : string,
+                         result : StringBuilder) : void
+    {
+      def append (x : string) { ignore (result.Append (x)) }
+      def indent () { append (indentation) }
+
+      def recurse (expr : TT.Expr) {
+        SprintTyExpr (ctx, expr, false, indentation, result)
+      }
+      def recurse_and_indent (expr : TT.Expr) {
+        SprintTyExpr (ctx, expr, false, indentation + "  ", result)
+      }
+      def recurse_and_indent_first_line (expr : TT.Expr) {
+        SprintTyExpr (ctx, expr, true, indentation + "  ", result)
+      }
+      
+      def print_expr_list (begin : string, args : list <TT.Expr>,
+                           separator : string, end : string)
+      {
+        append (begin);
+        def loop (args) {
+          | [] => ()
+          | [arg] =>
+            recurse (arg)
+          | arg :: args =>
+            recurse (arg);
+            append (separator);
+            loop (args)
+        }
+        loop (args);
+        append (end)
+      }
+      
+      def print_types_list (types : list <TT.Type>, separator : string)
+      {
+        match (types) {
+          | [ty] =>
+            print_type (ty)
+          | ty :: rest =>
+            print_type (ty);
+            append (separator);
+            print_types_list (rest, separator)
+          | _ => ()
+        }
+      }
+      and print_type (ty : TT.Type)
+      {
+        | TT.T_app (tycon, []) =>
+          append (tycon.GetFullName ());          
+        | TT.T_app (tycon, args) =>
+          append (tycon.GetFullName () + " <");
+          print_types_list (args, " * ");
+          append (">")
+        | TT.T_var (tyvar) =>
+          append (tyvar.name)
+        | TT.T_ref (ty) =>
+          append ("ref ");
+          print_type (ty)
+        | TT.T_out (ty) =>
+          append ("out ");
+          print_type (ty)
+        | TT.T_fun (from, to) =>
+          print_type (from);
+          append (" -> ");
+          print_type (to);
+        | TT.T_void =>
+          append ("void")
+        | TT.T_prod (args) =>
+          print_types_list (args, " * ")
+        | TT.T_array (ty, rank) =>
+          append ("array <");
+          when (rank > 1) append (rank.ToString () + ", ");
+          print_type (ty);
+          append (">")
+      }
+      
+      def print_fun_decl (title : string, fun_decl : TT.Function_decl)
+      {
+        append (title + " " + fun_decl.decl.name + "() {\n"); // FIXME: parameters?
+        recurse_and_indent_first_line (fun_decl.body);
+        append ("\n" + indentation + "}\n")
+      }
+
+      def print_func_parms (parms : list <TT.Parm>)
+      {
+        | [parm] =>
+          recurse (parm.expr)
+          
+        | parm :: rest =>
+          recurse (parm.expr);
+          append (", ");
+          print_func_parms (rest)
+
+        | _ => ()
+      }
+
+      when (indent_first_line) indent ();
+      
+      match (expr) {
+        // reference building
+        | TT.E_local_ref (decl /* LocalValue */) =>          
+          append (decl.name)
+          
+        | TT.E_static_ref (mem /* IMember */) =>
+          def ty_name = mem.DeclaringType.GetFullName ();
+          def co_name = mem.Name;
+
+          if (ty_name == "Nemerle.Core.Nil" &&
+              co_name == "_N_constant_object") {
+            append ("[]")
+          }
+          else {
+            append (ty_name);
+
+            unless (co_name == ".ctor") {
+              append ("." + co_name)
+            }
+          }
+          
+        | TT.E_field_ref (obj /* Expr */, fld /* IField */) =>
+          recurse (obj);
+          append ("." + fld.Name)
+          
+        | TT.E_constant_object_ref (mem /* IField */) =>
+          append (mem.DeclaringType.GetFullName () + "." + mem.Name);
+          
+        | TT.E_property_ref (obj /* Expr */, prop /* IProperty */) =>
+          recurse (obj);
+          append ("." + prop.Name)
+          
+        | TT.E_static_property_ref (prop /* IProperty */) =>
+          append (prop.DeclaringType.GetFullName () + "." + prop.Name)
+
+        // FIXME: handle the 'notvirtual' flag
+        | TT.E_method_ref (obj /* Expr */, meth /* IMethod */, _ /* notvirtual : bool */) =>
+          recurse (obj);
+          append ("." + meth.Name)          
+
+
+        // the special case for unary operators
+        | TT.E_call (TT.E_opcode (name), [parm]) =>
+          append (name);
+          recurse (parm.expr);
+
+        // the special case for infix binary operators
+        | TT.E_call (TT.E_opcode (name), [parm1, parm2]) =>
+          append ("(");
+          recurse (parm1.expr);
+          append (" " + name + " ");
+          recurse (parm2.expr);
+          append (")")
+          
+        // write all the other calls in prefix form 
+        | TT.E_call (func /* Expr */, parms /* list <Parm> */)
+        | TT.E_tail_call (func /* Expr */, parms /* list <Parm> */) =>
+          recurse (func);
+          append (" (");
+          print_func_parms (parms);
+          append (")")
+                  
+        | TT.E_self_tail_call (parms /* list <Parm> */) =>
+          match (ctx) {
+            | Some (ctx) =>
+              append (ctx.current_fun.name);
+              append (" (");
+              print_func_parms (parms);
+              append (")")
+
+            | None =>
+              Util.ice ("no typing context available for E_self_tail_call serialization")
+          }
+
+
+        // assignment
+        | TT.E_assign (target /* Expr */, source /* Expr */) =>
+          recurse (target);
+          append (" = ");
+          recurse (source);
+
+          
+        // we will make a special case for sequenced definitions
+        | TT.E_let (name /* LocalValue */, TT.E_sequence (e1, e2) /* Expr */, body /* Expr */) =>
+          append ("def " + name.name + " = { ");
+          recurse_and_indent (TT.E_sequence (e1, e2));
+          append (" };\n");
+          recurse (body)          
+          
+        | TT.E_let (name /* LocalValue */, val /* Expr */, body /* Expr */) =>
+          append ("def " + name.name + " = ");
+          recurse_and_indent (val);
+          append (";\n");
+          recurse (body)
+
+          
+        // local function definitions can be grouped using the 'and' keyword
+        | TT.E_letfun (funs /* list <Function_decl> */, body /* Expr */) =>
+          match (funs) {
+            | fun_decl :: rest =>
+              print_fun_decl ("def", fun_decl);
+              List.Iter (rest, fun (fun_decl) { print_fun_decl ("and", fun_decl) })
+            | _ => Util.ice ("TT.E_letfun with no function declarations")
+          }
+          recurse (body)
+
+          
+        // the 'match' instruction is handled separately
+        | TT.E_match (expr /* Expr */, cases /* list <Match_case> */) =>
+          SprintTyMatch (ctx, expr, cases, indent_first_line, indentation, result)
+
+
+        // exception handling
+        | TT.E_raise (exn /* Expr */) =>
+          append ("throw ");
+          recurse (exn)
+          
+        | TT.E_try_with (body /* Expr */, exn /* LocalValue */, handler /* Expr */) =>
+          append ("try {\n");
+          recurse_and_indent_first_line (body);
+          append ("\n" + indentation + "} catch {\n  " + indentation + exn.name + " : ");
+          print_type (exn.ty);
+          append (" => ");
+          recurse_and_indent (handler);
+          append ("\n" + indentation + "}\n")
+          
+        | TT.E_try_finally (body /* Expr */, handler /* Expr */) =>
+          append ("try {\n");
+          recurse_and_indent_first_line (body);
+          append ("\n" + indentation +"} finally {\n");
+          recurse_and_indent_first_line (handler);
+          append ("\n" + indentation + "}\n")
+
+
+        // 'this' and 'base' objects
+        | TT.E_this =>
+          append ("this");
+          
+        | TT.E_base /* (base_ctor : IMethod) */ =>
+          append ("base")
+
+
+        // type related nodes
+        | TT.E_type_conversion (expr /* Expr */, target_type /* Type */) =>
+          append ("(");
+          recurse (expr);
+          append (" :> ");
+          print_type (target_type);
+          append (")")
+          
+        | TT.E_type_enforcement (expr /* Expr */, target_type /* Type */) =>
+          append ("(");
+          recurse (expr);
+          append (" : ");
+          print_type (target_type);
+          append (")")
+
+        | TT.E_typeof (target_type /* Type */) =>
+          append ("typeof (");
+          print_type (target_type);
+          append (")")
+
+          
+        // array related nodes
+        | TT.E_mkarray (_/* args : list <Expr> */, _ /* dimensions : list <int> */) =>
+          append ("/* E_mkarray */")
+                    
+        | TT.E_array_indexer (_ /* over_type : Type */, obj /* Expr */, args /* list <Expr> */) =>
+          recurse (obj);
+          print_expr_list (" [", args, ", ", "]")
+          
+
+        // loading of a literal
+        | TT.E_literal (val /* Literal */) =>
+          append (val.ToString ())
+
+
+        // other nodes
+        | TT.E_sequence (e1 /* Expr */, e2 /* Expr */) =>
+          recurse (e1);
+          append (";\n");
+          indent ();
+          recurse (e2);
+          
+        | TT.E_tuple (args /* list <Expr> */) =>
+          print_expr_list ("(", args, ", ", ")")                    
+
+        | TT.E_opcode (name /* string */) =>
+          append (name)
+      }
+    }
+  }
+}
+
+/*** END OF FILE ***/
