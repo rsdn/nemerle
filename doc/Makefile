@@ -72,12 +72,8 @@ course/%.html: course-src/%.xml mainStyle.xsl
 %.xsl: tex/%.xspp
 	$(XSPP) $< > $@
 
-nemerleGrammar.tex nemerleGrammar.html: nemerleGrammar.xml
 coreNemGrammar.tex coreNemGrammar.html: coreNemGrammar.xml
 absNemGrammar.tex absNemGrammar.html: absNemGrammar.xml
-
-nemerleGrammar.xml: src/nemerleGrammar.txt scripts/grammar-txt-2-xml.pl
-	$(MAKE_GRAMMAR)
 
 absNemGrammar.xml: src/absNemGrammar.txt scripts/grammar-txt-2-xml.pl
 	$(MAKE_GRAMMAR)
