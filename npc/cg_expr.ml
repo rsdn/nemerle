@@ -393,10 +393,16 @@ and cg_fun ?(do_header = true) ?(implemented = []) ctx f =
     let ret_type = expand_type (snd (real_function_type f.fun_type)) in
     if do_header then
       if f.fun_name = "this" then
-        out (xf "%s %s%s {" 
-                (mods f.fun_modifiers)
-                (chop_ns (unsome ctx.c_enclosing_td).td_name)
-                (fun_args f.fun_parms))
+        match f.fun_kind with
+        | Fun_static_ctor ->
+          out (xf "%s%s {" 
+                  (chop_ns (unsome ctx.c_enclosing_td).td_name)
+                  (fun_args f.fun_parms))
+        | _ ->
+          out (xf "%s %s%s {" 
+                  (mods f.fun_modifiers)
+                  (chop_ns (unsome ctx.c_enclosing_td).td_name)
+                  (fun_args f.fun_parms))
       else
         out (xf "%s %s %s%s {" (mods f.fun_modifiers) 
                 (ty ret_type)
