@@ -17,8 +17,7 @@
                   <tbody>
                     <tr>
                       <td align="left">
-                        <a href="index.xml">Main page</a> :: 
-                        <a href="register.xml">Registration</a>
+                        <a href="register.xml">Main registration page</a> :: 
                       </td>
                       <td align="right">
                         <a href="#top-of-page">Top</a> :: <a href="#bottom-of-page">Bottom</a>
