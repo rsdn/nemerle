@@ -89,14 +89,166 @@ public module Tyexpr {
             else {
               //Message.debug ("clo " + x.name + " = " + string_of_int (x.id));
               x.in_closure <- true;
-              def h = d.fun_header ();
-              h.closure_vars <- x :: h.closure_vars;
+              d.closure_vars <- x :: d.closure_vars;
               true
             }
         | None => false
       }
     }
 
+  make_value_reference (ctx : CTX, expr : PT.Expr, fallback : bool) : list (Expr) {
+    def check_eref (expr) {
+      match (expr) {
+        | PT.E_ref (n) => Some (n)
+        | PT.E_member (e1, PT.SS_string (x)) =>
+          match (check_eref (e1)) {
+            | Some (y) => Some (y + "." + x)
+            | None => None ()
+          }
+        | _ => None ()
+      }
+    };
+    
+    def lookup_type (expr) {
+      match (check_eref (expr)) {
+        | Some (r) =>
+          match (ctx.env.LookupType (r)) {
+            | (Some) as r => r
+            | None => None ()
+          }
+        | _ => None ()
+      }
+    };
+
+    def lookup_ctors (ti : Tycon) {
+      def is_ctor (m : IMember) {
+        match (m.GetKind ()) {
+          | MK_method (m) => 
+            match (m.GetFunKind ()) {
+              | FK_ctor => true
+              | _ => false
+            }
+          | _ => false
+        }
+      };
+      match (List.filter (is_ctor, ti.LookupMember (".ctor", LF_instance ()))) {
+        | [] => 
+          Message.fatal_error ("type `" + ti.GetFullName () + "' has no constructors")
+        | decls => decls
+      }
+    };
+      
+    def convert_symbols (acc, syms) {
+      def handle_type (t : Tycon) {
+        def mkctor (m : IMember) {
+          def ty =
+            match (m.GetMemType ()) {
+              | T_fun (arg, T_void) =>
+                def ret_tc =
+                  match (t.GetTydecl ()) {
+                    | TD_variant_option => t.GetDeclaringTycon ()
+                    | _ => t
+                  };
+                T_fun (arg, ret_tc.GetMemType ()) /- ret_tc.FreshSubst ()
+              | t => Util.ice ("fscked ctor type " + t.as_string ())
+            };
+          E_static_ref (loc = expr.loc, ty = ty, mem = m)
+        };
+        List.rev_append (List.map (mkctor, lookup_ctors (t)), acc)
+      };
+      match (syms) {
+        | Sym_type_member (x) when x.IsStatic () =>
+          match (x.GetKind ()) {
+            | MK_type (t) => handle_type (t)
+            | MK_method (m) =>
+              E_static_ref (loc = expr.loc, ty = m.GetFreshType (), mem = x) :: acc
+            | MK_field | MK_property =>
+              E_static_ref (loc = expr.loc, ty = x.GetMemType (), mem = x) :: acc
+          }
+        | Sym_type_member => acc
+        | Sym_type (t) => handle_type (t)
+        | Sym_local (d) =>
+          ignore (closurise (ctx.env, d));
+          E_local_ref (loc = expr.loc, ty = d.ty, decl = d) :: acc
+      }
+    };
+    
+    Util.locate (expr.loc, fun () {
+      match (expr) {
+        | PT.E_ref (n) =>
+          match (ctx.env.LookupSymbol (n)) {
+            | [] =>
+              Message.fatal_error ("unbound symbol `" + n + "'")
+            | [Sym_local (d)] =>
+              ignore (closurise (ctx.env, d));
+              [E_local_ref (loc = expr.loc, ty = d.ty, decl = d)]
+            | lst =>
+              def from_this =
+                match (ctx.this_ptr_decl) {
+                  | Some ({ty = (T_app (ti, _)) as this_type}) =>
+                    match (ti.LookupMember (n, LF_instance ())) {
+                      | [] => []
+                      | _ => lookup_member (expr.loc, ty_expr (ctx, PT.E_this ()), n)
+                    }
+                  | _ => []
+                };
+              List.fold_left (convert_symbols, from_this, lst)
+          }
+          
+        | PT.E_member (e1, PT.SS_string (x)) =>
+          match (lookup_type (e1)) {
+            | Some (t) =>
+              match (t.LookupMember (x, LF_static ())) {
+                | [] =>
+                  match (lookup_type (expr)) {
+                    | Some (t) =>
+                      convert_symbols ([], Sym_type (t))
+                    | None =>
+                      Message.fatal_error ("unbound member `" + x + "' in type `" + 
+                                           t.GetFullName () + "'")
+                  }
+                | lst => 
+                  def lst' = List.map (fun (x) { Sym_type_member (x) }, lst);
+                  List.fold_left (convert_symbols, [], lst')
+              }
+            | None =>
+              match (lookup_type (expr)) {
+                | Some (t) =>
+                  convert_symbols ([], Sym_type (t))
+                | None =>
+                  lookup_member (expr.loc, ty_expr (ctx, e1), x)
+              }
+          };
+          
+        | PT.E_member (_, _) =>
+          Message.fatal_error ("$ operator outside quotation <[ ... ]> context")
+
+        | PT.E_base =>
+          match (ctx) {
+            | {this_ptr_decl = Some ({ty = T_app (ti, _)}); in_ctor = true} =>
+              match (ti.SuperClass ()) {
+                | Some (baseti) =>
+                  def mkbase (m : IMember) {
+                    E_base (loc = expr.loc, 
+                            ty = m.GetMemType () /- ti.SubtypingSubst (baseti),
+                            base_class = ti)
+                  };
+                  List.map (mkbase, lookup_ctors (baseti))
+
+                | None =>
+                  Message.fatal_error ("class " + ti.GetFullName () + " has no base class")
+              }
+            | _ => 
+              Message.fatal_error ("`base' used outside constructor")
+          }
+          
+        | _ when fallback => [ty_expr (ctx, expr)]
+        | _ => Util.ice ("evil value passed to make_value_reference")
+      }
+    });
+  }
+
+  (*
   make_ref (env : Env, loc : Location, x : Decl) : Expr
     {
       match (x.kind) {
@@ -135,6 +287,7 @@ public module Tyexpr {
         };
       fixup (E_ref (x), loc, t)
     }
+  *)
 
   // given list of formal parms names and actual parms names,
   // reorder actuals to match formals
@@ -192,7 +345,8 @@ public module Tyexpr {
         {
           def (arg_no, sub) = ctx;
           match (Tyutil.unify (sub, type_of (parm.expr), ty, true)) {
-            | Some (u) => (arg_no + 1, u)
+            | Some (u) => 
+              (arg_no + 1, u)
             | None =>
               raise Typing_error ("in arg #" + string_of_int (arg_no) + " needed " +
                                   (ty /- sub).as_string () + " got " +
@@ -200,19 +354,21 @@ public module Tyexpr {
           }
         };
         
-      
       def formal_names =
         {
           def from_header (h : Fun_header) : list (string) {
             List.map (fun (p : Fun_parm) : string { p.name }, h.parms)
           };
           match (fn) {
-            | E_ref ({kind = D_local_fun (h, _)}) => 
+            | E_local_ref ({kind = D_local_fun (h, _)}) =>
               from_header (h)
-            | E_ref ({kind = D_class_member (M_function {header = h})}) =>
-              from_header (h)
-            | E_method_ref (_, {header = h}) =>
-              from_header (h)
+            | E_static_ref (m) =>
+              match (m.GetKind ()) {
+                | MK_method (m) => from_header (m.GetHeader ())
+                | _ => []
+              }
+            | E_method_ref (_, m) =>
+              from_header (m.GetHeader ())
             | _ => []
           }
         };
@@ -285,9 +441,11 @@ public module Tyexpr {
             | l =>
               def print_err (_ : Type, x : Expr * Subst) : void {
                 match (x) {
+                  (*
                   | (E_call (E_ref (d), _), _) =>
                     // FIXME: we could do better
                     Message.error (d.loc, "    functional value of type " + d.ty.as_string ())
+                  *)
                   | (E_call (ex, _), _) =>
                     Message.error ("    functional value of type " + (type_of (ex)).as_string ())
                   | _ => Util.ice ()
@@ -300,135 +458,82 @@ public module Tyexpr {
       }
     }
 
-  (**
-   * Checks if a given property is defined in the expression
-   *)
-  has_property (loc : Location, o : Expr, mem : string) : bool
-  {
-    def collect_from (ctx : list (Expr) * Int_map (int), t : Type) 
-                      : list (Expr) * Int_map (int)
-    {
-      def t' = Tyutil.top_expand (t);
-      def (acc, visited) = ctx;
-
-      match (t') {
+  public lookup_member (loc : Location, o : Expr, mem : string) : list (Expr) {
+    lookup_member (loc, o, mem, true);
+  }
+  
+  // lookup member MEM in type_of (O)
+  // return list of how we can call it
+  public lookup_member (loc : Location, o : Expr, mem : string, error_when_not_found : bool) : list (Expr) {
+    mutable problem <- "???";
+    def visited = Hashtable (10);
+    
+    def collect_from (acc, t) {
+      match (Tyutil.top_expand (t)) {
         | T_app (ti, args) =>
-          def subst = ti.make_subst (args);
-          if (visited.mem (ti.id)) ctx
+          if (visited.Contains (ti.GetId ())) acc
           else {
-            def visited = visited.add (ti.id, 0);
-            def mem_ref (ex : Expr, m : Class_member) : Expr {
-              fixup (ex, loc, ti.member_type (m) /- subst)
-            };
-            match (ti.lookup_property (mem)) {
-              | Some (p) => (mem_ref (E_property_ref (o, p), p) :: acc, visited)              
-              | _ => ctx
-            }                      
+            visited.Add (ti.GetId (), null);
+
+            def subst = ti.MakeSubst (args);
+            def mems =
+              match (List.map (fun (x : IMember) { x.GetKind () }, 
+                               ti.LookupMember (mem, LF_instance ()))) {
+                | [MK_field (f)] =>
+                  [E_field_ref (loc, Tyutil.TypeOfMemberIn (f, ti) /- subst, o, f)]
+                | [MK_property (p)] =>
+                  [E_property_ref (loc, Tyutil.TypeOfMemberIn (p, ti) /- subst, o, p)]
+                | [] =>
+                  problem <- "unbound member `" + mem + "' in type `" + 
+                             ti.GetFullName () + "'";
+                  []
+                | lst =>
+                  def make_meth (m) {
+                    match (m) {
+                      | MK_method (m) =>
+                        E_method_ref (loc, Tyutil.TypeOfMethodIn (m, ti) /- subst, o, m)
+                      | _ =>
+                        Message.fatal_error ("ambiguous member name `" + mem + 
+                                             "' in type `" + ti.GetFullName () + "'")
+                    }
+                  };
+                  List.map (make_meth, lst)
+               };
+            List.append (mems, acc)
           }
 
         | T_var (tv) =>
-          if (visited.mem (tv.id)) ctx
+          if (visited.Contains (tv.id)) acc
           else {
-            def visited = visited.add (tv.id, 0);
-            def types = Tyvar.constraints (tv);
-            List.fold_left (collect_from, (acc, visited), types)
+            visited.Add (tv.id, null);
+            match (List.fold_left (collect_from, acc, Tyvar.constraints (tv))) {
+              | [] =>
+                problem <- "no constrain of " + t.as_string () + 
+                           " provides member `" + mem + "'";
+                []
+              | acc => acc
+            }
           }
-
-        | _ => ctx
+          
+        | T_ref (t) =>
+          collect_from (acc, t) // FIXME: this is a quick hack for Kamil
+          
+        | T_array =>
+          collect_from (acc, Tyutil.make_tapp ("System.Array"))
+          
+        | _ =>
+          problem <- "type `" + t.as_string () + "' was expected to be class";
+          acc
       }
     };
 
-    match (collect_from (([], Map.int_map ()), type_of (o))) {
-      | ([], _) => false
-      | _ => true
-    }  
-  }
-  
-
-  // lookup member MEM in type_of (O)
-  // return list of how we can call it
-  lookup_member (loc : Location, o : Expr, mem : string) : list (Expr)
-    {
-      mutable problem <- "???";
-      
-      def collect_from (ctx : list (Expr) * Int_map (int), t : Type) 
-                       : list (Expr) * Int_map (int)
-        {
-          def t' = Tyutil.top_expand (t);
-          def (acc, visited) = ctx;
-          match (t') {
-            | T_app (ti, args) =>
-              def subst = ti.make_subst (args);
-              if (visited.mem (ti.id)) ctx
-              else {
-                def visited = visited.add (ti.id, 0);
-                def mem_ref (ex : Expr, m : Class_member) : Expr {
-                  fixup (ex, loc, ti.member_type (m) /- subst)
-                };
-                match (ti.lookup_field (mem)) {
-                  | Some (f) => 
-                    (mem_ref (E_field_ref (o, f), f) :: acc, visited)
-                   
-                  | None =>
-                    match (ti.lookup_method (mem)) {
-                      | [] =>
-                        match (ti.lookup_property (mem)) {
-                          | Some (p) =>
-                            (mem_ref (E_property_ref (o, p), p) :: acc, visited)
-                          
-                          | _ =>
-                            problem <- "unbound member `" + mem + "' in type `" + 
-                                       ti.fullname () + "'";
-                            ctx
-                        }                      
-                      | l =>
-                        def make_meth (m : M_function) : Expr
-                          {
-                            def ex = mem_ref (E_method_ref (o, m), m);
-                            def sub = Tyvar.fresh_subst (m.header.typarms);
-                            ex.expr_ty <- type_of (ex) /- sub;
-                            ex
-                          };
-                        (List.append (List.map (make_meth, l), acc), visited)
-                    }
-                }
-              }
-
-            | T_var (tv) =>
-              if (visited.mem (tv.id)) ctx
-              else {
-                def visited = visited.add (tv.id, 0);
-                def types = Tyvar.constraints (tv);
-                def ctx = List.fold_left (collect_from, (acc, visited), types);
-                match (ctx) {
-                  | ([], _) =>
-                    problem <- "no constrain of " + t.as_string () + 
-                               " provides member `" + mem + "'";
-                    ctx
-                  | _ => ctx
-                }
-              }
-              
-            | T_ref (t) =>
-              collect_from (ctx, t) // FIXME: this is a quick hack for Kamil
-              
-            | T_array =>
-              collect_from (ctx, Tyutil.make_tapp ("System.Array"))
-              
-            | _ =>
-              problem <- "type `" + t.as_string () + "' was expected to be class";
-              ctx
-          }
-        };
-
-      match (collect_from (([], Map.int_map ()), type_of (o))) {
-        | ([], _) =>
-          Message.fatal_error (problem)
-        | (x, _) => x
-      }
+    match (collect_from ([], type_of (o))) {
+      | [] when error_when_not_found => Message.fatal_error (problem)
+      | x => x
     }
+  }
 
-
+(*
   is_a_field (loc : Location, o : Expr, fld : string) : bool {
     match (lookup_member (loc, o, fld)) {
       | [E_field_ref] => true
@@ -460,7 +565,8 @@ public module Tyexpr {
       | _ => Util.ice ()
     }
   }
-          
+  *)
+
   public class CTX
     {
       public this_ptr_decl : option (Decl);
@@ -485,6 +591,8 @@ public module Tyexpr {
         CTX (this.this_ptr_decl, this.in_ctor, this.env, e)
       }
     }
+
+  (*
 
   // given an expression return list of symbols it can expand to (so we can
   // later call resolve_overloaded_call)
@@ -532,9 +640,9 @@ public module Tyexpr {
         | PT.E_base =>
           match (ctx) {
             | {this_ptr_decl = Some ({ty = T_app (ti, _)}); in_ctor = true} =>
-              match (ti.superclass ()) {
+              match (ti.SuperClass ()) {
                 | Some (baseti) =>
-                  def decls = ctx.env.bare_lookup (baseti.fullname () + "..ctor");
+                  def decls = ctx.env.bare_lookup (baseti.GetFullName () + "..ctor");
                   match (List.filter (is_ctor, decls)) {
                     | [] => 
                       Message.fatal_error ("type `" + baseti.fullname () + "' has no constructors")
@@ -558,6 +666,7 @@ public module Tyexpr {
           [ty_expr (ctx, x)]
       }
     }
+  *)
 
   // type given match {} construct
   ty_match (ctx : Tyexpr.CTX, mtch : PT.E_match) : Expr * Type
@@ -594,17 +703,22 @@ public module Tyexpr {
 
   ty_letfun (ctx : CTX, fs : list (PT.Function_decl)) : list (Function_decl) * Env
     {
-      def add_fun (acc : Env * list (Decl), d : PT.Function_decl) : Env * list (Decl)
+      def add_fun (acc : Env * list (Fun_header), d : PT.Function_decl)
         {
-          def (env, ds) = acc;
-          
-          def this_fn = Option.unsome (env.parent_fun);
+          def (env, hs) = acc;
+         
           def pars =
-            match (this_fn) {
-              | {kind = D_local_fun (_, pars)} => this_fn :: pars
-              | {kind = D_class_member (M_function)} => [this_fn]
-              | _ => Util.ice ()
+            match (env.parent_fun) {
+              | Some (h) =>
+                if (h.decl == null) [h]
+                else
+                  match (h.decl.kind) {
+                    | D_local_fun (_, pars) => h :: pars
+                    | _ => Util.ice ()
+                  }
+              | None => Util.ice ()
             };
+            
           def h = d.header;
           def (tenv, typarms) = ctx.tenv.add_typarms (env, h.typarms);
           def mkparm (p : PT.Fun_parm) : Fun_parm {
@@ -618,24 +732,21 @@ public module Tyexpr {
              id = Util.next_id (),
              closure_vars = [],
              tenv = tenv,
-             loc = h.loc);
+             loc = h.loc,
+             decl = null);
           
           def (env, d) =
             env.add_local (d.header.name, D_local_fun (h', pars), Tyutil.fun_type (h'));
-            
-          (env, d :: ds)
+          h'.decl <- d;
+          (env, h' :: hs)
         };
         
       def (env', decls) = List.fold_left (add_fun, (ctx.env, []), fs);
-      def do_fun (d : PT.Function_decl, dc : Decl) : Function_decl
+      def do_fun (d : PT.Function_decl, h : Fun_header) : Function_decl
         {
           def env = env'.copy ();
-          env.parent_fun <- Some (dc);
-          match (dc.kind) {
-            | D_local_fun (h, _) =>
-              Function_decl (dc, ty_function (ctx.with_env (env), h, d.body))
-            | _ => Util.ice ()
-          }
+          env.parent_fun <- Some (h);
+          Function_decl (h.decl, ty_function (ctx.with_env (env), h, d.body))
         };
       (List.map2 (do_fun, fs, List.rev (decls)), env')
     }
@@ -703,7 +814,8 @@ public module Tyexpr {
       | L_bool => Tyutil.make_tapp ("Nemerle.Core.Aliases.bool")
     }
   }
-
+  
+  (*
   convert_member_to_qid (ctx : CTX, expr : PT.Expr) : PT.Expr {
     def ret =
       match (expr) {
@@ -761,6 +873,76 @@ public module Tyexpr {
     ret.loc <- expr.loc;
     ret
   }
+  *)
+ 
+  describe_expression (expr : Expr) : string 
+  {
+    match (expr) {
+      | E_local_ref (d) => 
+        "a reference to local symbol `" + d.name + "'"
+      | E_static_ref (m) => 
+        def tyname = 
+          if (m.GetDeclaringTycon () == null) 
+            "" 
+          else 
+            m.GetDeclaringTycon ().GetFullName () + ".";
+        "a reference to global symbol `" + tyname + m.GetName () + "'"
+      | E_field_ref (_, f) =>
+        "a reference to field `" + f.GetName () + "'"
+      | E_property_ref (_, p) =>
+        "a reference to property `" + p.GetName () + "'"
+      | E_method_ref (_, m) =>
+        "a reference to method `" + m.GetName () + "'"
+      | E_call (f, _) =>
+        "a function call to " + describe_expression (f)
+      | E_assign => "an assignment"
+      | E_let => "an value binding"
+      | E_letfun => "an function binding"
+      | E_match => "an `match' expression"
+      | E_raise => "a raise expression"
+      | E_try_with => "a try...with expression"
+      | E_try_finally => "a try...finally expression"
+      | E_literal => "a literal value"
+      | E_this => "a this pointer reference"
+      | E_base => "a base class reference"
+      | E_type_conversion => "a type conversion (:>)"
+      | E_type_enforcement => "a type enforcement (:)"
+      | E_sequence => "a sequence"
+      | E_tuple => "a tuple constructor"
+      | E_mkarray => "a array constructor"
+      | E_indexer => "a indexer reference"
+    }
+  }
+
+  make_first_class (ctx : CTX, expr : Expr) : Expr {
+    match (expr) {
+      | E_method_ref (obj_ref, mem) =>
+        match (Tyutil.top_expand (type_of (expr))) {
+          | T_fun (from, _) =>
+            def mkparm (acc, _) {
+               def t = Util.tmpname ("parm");
+               def (fps, ps) = acc;
+               (PT.Fun_parm (expr.loc, t, PT.T_infer ()) :: fps,
+                PT.Parm (PT.E_ref (expr.loc, t)) :: ps) 
+            };
+            def (fps, ps) = List.fold_left (mkparm, ([], []), Tyutil.fun_args (from));
+            def ptr_name = Util.tmpname ("ptr");
+            def header = PT.Fun_header (expr.loc, Util.tmpname ("ml"), PT.T_infer (), fps);
+            def body = PT.E_call (PT.E_member (PT.E_ref (ptr_name), PT.SS_string (mem.GetName ())), ps);
+            //def body = <[ $(ptr_name : var) . $mem_name (.. $ps) ]>;
+            def lambda = PT.E_lambda (expr.loc, PT.Function_decl (header, body));
+            ty_expr (ctx, PT.E_sequence ([
+                PT.E_let (false, PT.SS_string (ptr_name), PT.E_typed_expr (obj_ref));
+                lambda;
+                ]))
+            //ty_expr (ctx, <[ { def $ptr_name = $(PT.E_typed_expr (tye));
+            //              $lambda } ]>)
+          | _ => Util.ice ()
+        }
+      | _ => expr
+    }
+  }
+    
 
   public ty_expr (ctx : CTX, expr : PT.Expr) : Expr {
     def do_typing () : Expr * Type {
@@ -789,7 +971,7 @@ public module Tyexpr {
       };
 
       def expr = MacroRegistry.expand_macro (ctx, expr);
-      def expr = convert_member_to_qid (ctx, expr);
+      //def expr = convert_member_to_qid (ctx, expr);
 
       match (expr) {
         // this doesn't make much sense I hope
@@ -806,18 +988,6 @@ public module Tyexpr {
           sq.loc <- expr.loc;
           restart (sq)
 
-        | PT.E_list (lst) =>
-          def mklst (lst) {
-            match (lst) {
-              | x :: xs => make_cons (x, mklst (xs))
-              | [] => make_nil ()
-            }
-          };
-          restart (mklst (lst))
-
-        | PT.E_list_cons (e1, e2) =>
-          restart (make_cons (e1, e2))
-        
         | PT.E_mkarray (lst) =>
           def (typed_initializers, array_type) =
           match (lst) {
@@ -839,18 +1009,14 @@ public module Tyexpr {
           def fresh_name = Util.tmpname ("array_initializer");
           def (env', decl) = ctx.env.add_local (fresh_name, D_local_value (), array_type);
           decl.is_ref <- false;
-          def array_as_let = E_let (decl, typed_initializers, E_ref (decl));
+          def array_as_let = E_let (decl, typed_initializers, E_local_ref (decl));
           array_as_let.loc <- expr.loc;
           (array_as_let, array_type)
 
         // FIXME: allow for multi-dimensional indexers
         | PT.E_indexer (obj, args) =>
-          def ty_args (arg : PT.Expr) : Expr {
-            ty_expr (ctx, arg);
-          };
-        
           def typed_obj = ty_expr (ctx, obj);                    
-          def typed_args = List.map (ty_args, args);
+          def typed_args = List.map (fun (x) { ty_expr (ctx, x) }, args);
           
           match (typed_obj.expr_ty) {
             | T_array (indexer_over_type) =>
@@ -858,34 +1024,34 @@ public module Tyexpr {
               def typed_index = 
               match (typed_args) {
                 | [index] => index
-                | [] => Message.fatal_error ("empty indexer applied to indexer type")                  
+                | [] => Message.fatal_error ("empty indexer applied to indexer type")
                 // FIXME: allow for multi-dimensional indexers
                 | _ => Message.fatal_error ("multi-dimensional indexers not supported yet") 
               };
               expect_type ("indexer type", typed_index, Tyutil.make_tapp ("Nemerle.Core.Aliases.int"));
               (E_indexer (indexer_over_type, typed_obj, [typed_index]), indexer_over_type)
 
-            | T_app (ti, args) =>
+            | _ =>
               (* indexers over the Item or Chars property *)            
               def check_for_indexer_property (prop_name : string) : option (Expr * Type) {
-                if (has_property (expr.loc, typed_obj, prop_name)) {
-                  def ex = lookup_property (expr.loc, typed_obj, prop_name);
-                  def indexer_over_type = ex.prop.ty;
+                match (lookup_member (expr.loc, typed_obj, prop_name, error_when_not_found = false)) {
+                  | [E_property_ref (_, prop)] =>
+                    def indexer_over_type = prop.GetMemType ();
 
-                  (** FIXME: add type checking and overloading verification
-                  if (List.length (typed_args) != List.length (ex.prop.indexer_parameters))
-                  Message.fatal_error (
-                  "wrong arity of the " + prop_name + " indexer application (have " +
-                  string_of_int (List.length (typed_args)) + ", expected " +
-                  string_of_int (List.length (ex.prop.indexer_parameters)) + 
-                  " parameters)"
-                  )
-                  else ();
-                  *)
+                    (** FIXME: add type checking and overloading verification
+                    if (List.length (typed_args) != List.length (ex.prop.indexer_parameters))
+                    Message.fatal_error (
+                    "wrong arity of the " + prop_name + " indexer application (have " +
+                    string_of_int (List.length (typed_args)) + ", expected " +
+                    string_of_int (List.length (ex.prop.indexer_parameters)) + 
+                    " parameters)"
+                    )
+                    else ();
+                    *)
 
-                  Some ((E_indexer (indexer_over_type, typed_obj, typed_args), indexer_over_type))
+                    Some ((E_indexer (indexer_over_type, typed_obj, typed_args), indexer_over_type))
+                  | _ => None ()
                 }
-                else None ()
               };
               
               match (check_for_indexer_property ("Chars")) {
@@ -898,9 +1064,6 @@ public module Tyexpr {
                                            "(Chars or Item property required)") 
                   }
               }
-            | _ =>
-              Message.fatal_error ("indexer applied to non-indexer type (Chars or Item property required): " +
-                                   Tyutil.string_of_type (typed_obj.expr_ty))
           }
         
         | (PT.E_try_with) as x =>
@@ -947,56 +1110,30 @@ public module Tyexpr {
           (E_type_enforcement (ex, t), t)
 
         | PT.E_ref (n) =>
-          def ex =
-          match (ctx.env.bare_lookup (n)) {
-            | [] =>
-              Message.fatal_error ("unbound symbol `" + n + "'")
-
-            | [x] => make_ref (ctx.env, expr.loc, x)
+          match (make_value_reference (ctx, expr, fallback = false)) {
+            | [x] =>
+              def x = make_first_class (ctx, x);
+              (x, type_of (x))
 
             | l =>
-              def print (d : Decl) : void { Message.error(d.loc, "  - this") };
               Message.error ("name `" + n + "' is ambiguous:");
+              def print (ex) { Message.error ("  " + describe_expression (ex)) };
               List.iter (print, l);
               raise Recovery ()
-          };
-          (ex, type_of (ex))
+          }
 
-        | PT.E_member (o, PT.SS_string (mem_name)) =>
-          def tye = ty_expr (ctx, o);
-          def ex =
-            match (lookup_member (expr.loc, tye, mem_name)) {
-              | [(E_field_ref) as ex] => ex
-              | [(E_property_ref) as ex] => ex
-              | [(E_method_ref) as ex] =>
-                match (Tyutil.top_expand (type_of (ex))) {
-                  | T_fun (from, _) =>
-                    def mkparm (acc, _) {
-                       def t = Util.tmpname ("parm");
-                       def (fps, ps) = acc;
-                       (PT.Fun_parm (ex.loc, t, PT.T_infer ()) :: fps,
-                        PT.Parm (PT.E_ref (ex.loc, t)) :: ps) 
-                    };
-                    def (fps, ps) = List.fold_left (mkparm, ([], []), Tyutil.fun_args (from));
-                    def ptr_name = Util.tmpname ("ptr");
-                    def header = PT.Fun_header (ex.loc, Util.tmpname ("ml"), PT.T_infer (), fps);
-                    def body = PT.E_call (PT.E_member (PT.E_ref (ptr_name), PT.SS_string (mem_name)), ps);
-                    //def body = <[ $(ptr_name : var) . $mem_name (.. $ps) ]>;
-                    def lambda = PT.E_lambda (ex.loc, PT.Function_decl (header, body));
-                    ty_expr (ctx, PT.E_sequence ([
-                        PT.E_let (false, PT.SS_string (ptr_name), PT.E_typed_expr (tye));
-                        lambda;
-                        ]))
-                    //ty_expr (ctx, <[ { def $ptr_name = $(PT.E_typed_expr (tye));
-                    //              $lambda } ]>)
+        | PT.E_member (_, PT.SS_string (mem_name)) =>
+          match (make_value_reference (ctx, expr, fallback = false)) {
+            | [x] =>
+              def x = make_first_class (ctx, x);
+              (x, type_of (x))
 
-                  | _ => Util.ice ()
-                }
-              | _ =>
-                // FIXME: list locations?
-                Message.fatal_error ("member `" + mem_name + "' is ambiguous")
-            };
-          (ex, type_of (ex))
+            | l =>
+              Message.error ("reference to member `" + mem_name + "' is ambiguous:");
+              def print (ex) { Message.error ("  " + describe_expression (ex)) };
+              List.iter (print, l);
+              raise Recovery ()
+          }
           
         | PT.E_member (_, _) =>
           Message.fatal_error ("$ operator outside quotation <[ ... ]> context")
@@ -1007,26 +1144,26 @@ public module Tyexpr {
             Parm (p.is_ref, ex, p.name)
           };
           def parms = List.map (fp, parms);
-          def fncs = make_callables (ctx, fnc);
+          def fncs = make_value_reference (ctx, fnc, fallback = true);
           def ex = resolve_overloaded_call (fncs, parms);
           def res (v : int) : Expr * Type { (E_literal (L_int (v)), type_of (ex)) };
           match (ex) {
-            | E_call (E_ref ({kind = D_class_member (M_function {body = FB_extern (op)})}), 
+            | E_call (E_static_ref (mem), 
                       [{expr = E_literal (L_int (x1))}; {expr = E_literal (L_int (x2))}]) =>
-              match (op) {
-                | "%op+" => res (x1 + x2)
-                | "%op-" => res (x1 - x2)
-                | "%op/" => res (x1 / x2)
-                | "%op%" => res (x1 % x2)
-                | "%op*" => res (x1 * x2)
+              match (mem.GetName ()) {
+                | "+" => res (x1 + x2)
+                | "-" => res (x1 - x2)
+                | "/" => res (x1 / x2)
+                | "%" => res (x1 % x2)
+                | "*" => res (x1 * x2)
                 | _ => (ex, type_of (ex))
               }
             
-            | E_call (E_ref ({kind = D_class_member (M_function {body = FB_extern (op)})}), 
+            | E_call (E_static_ref (mem), 
                              [{expr = E_literal (L_int (x))}]) =>
-              match (op) {
-                | "%op+" => res (x)
-                | "%op-" => res (-x)
+              match (mem.GetName ()) {
+                | "+" => res (x)
+                | "-" => res (-x)
                 | _ => (ex, type_of (ex))
               }
             | _ => (ex, type_of (ex))
@@ -1038,12 +1175,16 @@ public module Tyexpr {
           expect_type ("assigned value", e2, type_of (e1));
           def is_lval =
             match (e1) {
-              | E_ref (d) => d.is_ref
-              | E_field_ref (E_this, mem) => 
-                if (ctx.in_ctor) true else mem.is_ref
-              | E_field_ref (_, mem) => mem.is_ref
-              | E_property_ref (_, {set_methods = []}) => false
-              | E_property_ref (_, {set_methods = _}) => true
+              | E_local_ref (d) => d.is_ref
+              | E_static_ref (m) => 
+                match (m.GetKind ()) {
+                  | MK_field (f) => f.IsMutable ()
+                  | MK_property (p) => p.IsMutable ()
+                  | _ => false
+                }
+              | E_field_ref (E_this, _) when ctx.in_ctor => true
+              | E_field_ref (_, mem) => mem.IsMutable ()
+              | E_property_ref (_, p) => p.IsMutable ()
               | E_indexer => true //FIXME: are all the indexers writeable?
               | _ => false
             };
@@ -1063,7 +1204,7 @@ public module Tyexpr {
           match (ctx.this_ptr_decl) {
               | Some (d) =>
               def e =
-                if (closurise (ctx.env, d)) E_ref (d)
+                if (closurise (ctx.env, d)) E_local_ref (d)
                 else E_this ();
               (e, d.ty)
             | None =>
@@ -1152,7 +1293,7 @@ public module Tyexpr {
                 def (env, decl) = env.add_local (single_parm.name, D_local_value (), single_parm.ty);
                 h.parms <- List.rev (parms);
                 def mkref (p : Fun_parm) : Expr { 
-                  fixup (E_ref (p.decl), p.loc, p.ty)
+                  fixup (E_local_ref (p.decl), p.loc, p.ty)
                 };
                 def val = fixup (E_tuple (List.map (mkref, h.parms)), 
                                  single_parm.loc, single_parm.ty);
@@ -1191,45 +1332,46 @@ public module Tyexpr {
     }
   }
 
-  bind_impl (env : Env, fd : Decl, name : string) : Decl
-    {
-      def is_method (d : Decl) : bool {
-        match (d.kind) {
-          | D_class_member (M_function {kind = FK_iface_method}) => true
-          | _ => false
-        }
-      };
-        
-      def ti = 
-        match (fd.kind) {
-          | D_class_member ((M_function) as f) => f.tyinfo
-          | _ => Util.ice ()  
-        };
-
-      def is_correct_method (d : Decl) : bool {
-        match (d.kind) {
-          | D_class_member ((M_function) as f') =>
-            fd.ty >> (d.ty /- ti.subtyping_subst (f'.tyinfo))
-          | _ => Util.ice ()
-        }
-      };
-
-      match (List.filter (is_method, env.bare_lookup (name))) {
-        | [] =>
-          Message.fatal_error ("unbound interface method `" + name + "'")
-        | syms =>
-          match (List.filter (is_correct_method, syms)) {
-            | [] =>
-              Message.fatal_error ("none of type signatures of interface method `" + 
-                                   name + "' matches `" + fd.name + "'")
-            | [x] => x
-            | _ =>
-              // FIXME: not quite sure
-              Message.fatal_error ("more then one type signature of interface method `" + 
-                                   name + "' matches `" + fd.name + "'")
+  bind_impl (env : Env, nm : IMethod, name : string) : IMethod {
+    def is_method (d : IMember) {
+      match (d.GetKind ()) {
+        | MK_method (m) =>
+          match (m.GetFunKind ()) {
+            | FK_iface_method => true
+            | _ => false
           }
+        | _ => false
       }
+    };
+      
+    def is_correct_method (d : IMember) : bool {
+      nm.GetMemType () >> Tyutil.TypeOfMemberIn (d, nm.GetDeclaringTycon ())
+    };
+
+    def ns = name.Substring (0, name.LastIndexOf ('.'));
+    def member = name.Substring (name.LastIndexOf ('.') + 1);
+    def ty = env.GetType (ns);
+
+    match (List.filter (is_method, ty.LookupMember (member, LF_instance ()))) {
+      | [] =>
+        Message.fatal_error ("unbound interface method `" + name + "'")
+      | syms =>
+        match (List.filter (is_correct_method, syms)) {
+          | [] =>
+            Message.fatal_error ("none of type signatures of interface method `" + 
+                                 name + "' matches `" + nm.GetName () + "'")
+          | [x] =>
+            match (x.GetKind ()) {
+              | MK_method (m) => m
+              | _ => Util.ice ()
+            }
+          | _ =>
+            // FIXME: not quite sure
+            Message.fatal_error ("more then one type signature of interface method `" + 
+                                 name + "' matches `" + nm.GetName () + "'")
+        }
     }
+  }
 
   (** 
    * Walk through members of given [Tyinfo] object.  Type all 
@@ -1260,41 +1402,45 @@ public module Tyexpr {
    *)
   handle_tyinfo_members (ti : Tyinfo) : void 
     {
-      def handle_decl (decl : Class_member) : void {
-        match (decl) {
-          | (M_function) as f =>
-            def in_ctor = match (f.kind) { FK_ctor => true | _ => false };
-            def is_method = match (f.kind) { FK_ctor => true | FK_method => true | _ => false };
-            def our_decl = Env.global_by_id (f.id);
+      def handle_decl (decl : IMember) : void {
+        match (decl.GetKind ()) {
+          | MK_method (m) =>
+            def (in_ctor, is_method) = 
+              match (m.GetFunKind ()) { 
+                | FK_ctor => (true, true)
+                | FK_method => (false, true)
+                | _ => (false, false)
+              };
+              
             def ctx = CTX (in_ctor = in_ctor, 
                            this_ptr_decl = 
                              if (is_method) 
                                Some (Decl ("_N_this", D_closurised_this_ptr (), 
-                                           ti.generic_type (), our_decl))
+                                           ti.GetMemType (), m.GetHeader ()))
                              else None (),
                            env = ti.env.copy (),
-                           tenv = f.header.tenv);
+                           tenv = m.GetHeader ().tenv);
 
-            match (f.kind) {
+            def m' = (m :> NemerleMethod);
+            match (m.GetFunKind ()) {
               | FK_method (impl) =>
-                f.kind <- FK_bound_method (List.map (fun (s : string) : Decl 
-                                                             { bind_impl (ti.env, our_decl, s) },
-                                                              impl))
+                m'.fun_kind <- 
+                  FK_bound_method (List.map (fun (s) { bind_impl (ti.env, m, s) }, impl))
               | _ => ()
             };
-            ctx.env.parent_fun <- Some (our_decl);
+            ctx.env.parent_fun <- Some (m.GetHeader ());
             try
-              f.body <- ty_function (ctx, f.header, f.body)
+              m'.fun_body <- ty_function (ctx, m.GetHeader (), m'.fun_body)
             with { x : Recovery => () }
           | _ => ()
         }
       };
-      List.iter (handle_decl, ti.member_list);
+      List.iter (handle_decl, ti.GetDirectMembers ());
     }
 
   (** The main typing function.  *)
   public run () : void {
-    Tyinfo.iter (handle_tyinfo_members)
+    Tyinfo.Iter (handle_tyinfo_members)
   }
 }
   

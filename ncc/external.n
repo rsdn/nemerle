@@ -29,8 +29,8 @@
 namespace Nemerle.Compiler 
 {
   open Nemerle.Collections;
-  open Nemerle.Compiler.Parsetree;
   open Nemerle.Compiler;
+  open Nemerle.Compiler.Typedtree;
 
   (**
    * We can specify libraries either by using assembly or file names
@@ -64,6 +64,7 @@ namespace Nemerle.Compiler
     public static this () {
 
       _libraries <- [];
+      _loaded_types <- Hashtable (1000);
       
       AddLibrary (LoadCoreLibrary ())
     }
@@ -78,44 +79,35 @@ namespace Nemerle.Compiler
     
       _libraries <- library :: _libraries;
     }
-  
+    
+    // used also by LibraryReference class below
+    internal static mutable _loaded_types : Hashtable (string, option (Tycon));
   
     (**
-     * Searches for a type name in all referenced external libraries
-     * keeping in mind the list of all the open namespaces.
+     * Searches for a type name in all referenced external libraries.
      *)
-    public static Lookup (env : Env, path : list (string), type_name : string) : list (Decl)
+    public static LookupType (type_name : string) : option (Tycon)
     {
-      match (path) {
-        | [] =>
-          LookupCollect (env, type_name, _libraries)
-        | "" :: rest => 
-          Lookup (env, rest, type_name)
-        | path :: rest =>
-          def looked_up = LookupCollect (env, path + type_name, _libraries);
-          
-          List.append (looked_up, Lookup (env, rest, type_name))
+      def loop (acc, lib : LibraryReference) {
+        match ((acc, lib.Lookup (type_name))) {
+          | (_, None) => acc
+          | (Some, Some) =>
+            Message.fatal_error ("type `" + type_name + 
+                                 "' is defined in more then one library")
+          | (None, (Some) as x) => x
+        }
+      };
+      match (_loaded_types.Get (type_name)) {
+        | Some (r) => r
+        | None =>
+          def res = List.fold_left (loop, None (), _libraries);
+          _loaded_types.Set (type_name, res);
+          res
       }
     }
     
 
     (* -- PRIVATE METHODS -------------------------------------------------- *)
-
-    (**
-     * Scans through all the referenced external libraries looking for a type name.
-     *)
-    private static LookupCollect (env : Env, type_name : string, 
-                                  libraries : list (LibraryReference)) : list (Decl) 
-    {
-      match (libraries) {
-        | [] => []
-        | library :: rest =>
-          def looked_up = library.Lookup (env, type_name);
-          
-          List.append (looked_up, LookupCollect (env, type_name, rest))
-      }
-    }
-
 
     (**
      * Tries to load the core framework library using both 
@@ -164,11 +156,6 @@ namespace Nemerle.Compiler
      * The location of this library
      *)
     private mutable _location : Location;
-    
-    (**
-     * The environment of this library
-     *)
-    private mutable _env : Env;
     
     (**
      * The assembly's custom attributes
@@ -227,368 +214,35 @@ namespace Nemerle.Compiler
       loop (this._assembly_attributes)
     }
 
-    (**
-     * Creates a public constructor declaration
-     *)
-    private make_ctor (class_name : string, param_list : list (Fun_parm)) : Class_member
-    {
-      // FIXME: what about abstract constructors?
-      def header = Fun_header (this._location, ".ctor", Type.T_void (), param_list);
-      Class_member.M_function (loc = this._location,
-                               name = ".ctor",
-                               modifiers = [Mod_public ()],
-                               header = header,
-                               kind = FK_ctor (), 
-                               body = FB_extern (class_name + "..ctor"))
-    }
-  
-
-    (**
-     * Creates a public static method declaration
-     *)
-    private make_static_method (class_name : string, method_name : string, 
-                                return_type : Type, param_list : list (Fun_parm)) : Class_member
-    {
-      // FIXME: what about abstract static methods?
-      def header = Fun_header (this._location, method_name, return_type, param_list);
-      Class_member.M_function (loc = this._location,
-                               name = method_name, 
-                               modifiers = [Mod_public ()], 
-                               header = header, 
-                               kind = FK_function (), 
-                               body = FB_extern (class_name + "." + method_name))
-    }
-
-  
-    (**
-     * Creates a public method declaration
-     *)
-    private make_method (class_name : string, method_name : string, 
-                         return_type : Type, param_list : list (Fun_parm)) : Class_member
-    {
-      // FIXME: what about abstract methods?
-      def header = Fun_header (this._location, method_name, return_type, param_list);
-      Class_member.M_function (loc = this._location, 
-                               name = method_name,
-                               modifiers = [Mod_public ()],
-                               header = header, 
-                               kind = FK_method ([]), 
-                               body = FB_extern (class_name + "." + method_name))
-    }
-
-
-    (**
-     * Creates a public property declaration
-     *)
-    private make_property (class_name : string, property_name : string, 
-                           property_type : Type, is_readable : bool, is_writeable : bool,
-                           is_static : bool, indexer_parameters : list (list (Fun_parm))) : Class_member
-    {
-      def build_accessors (prefix : string, indexer_parameters : list (list (Fun_parm))) {
-        def walk_parameters (indexer_parameters) {
-          match (indexer_parameters) {
-            | parameters :: rest =>
-              (FB_extern (class_name + "." + prefix + "_" + property_name), parameters) ::
-                walk_parameters (rest)
-            | [] => []
-          }
-        };
-        
-        match (indexer_parameters) {
-          | [] => [(FB_extern (class_name + "." + prefix + "_" + property_name), [])]
-          | indexer_parameters => walk_parameters (indexer_parameters)
-        }          
-      };
-      
-      // FIXME: what about the location?
-      def get_methods = if (is_readable) build_accessors ("get", indexer_parameters) else [];
-      def set_methods = if (is_writeable) build_accessors ("set", indexer_parameters) else [];      
-      Class_member.M_property (loc = this._location,
-                               name = property_name,
-                               modifiers =
-                                 if (is_static) [Mod_public (); Mod_static ()] 
-                                 else [Mod_public ()],
-                               ty = property_type, 
-                               get_methods = get_methods, 
-                               set_methods = set_methods, 
-                               is_static = is_static)
-    }
-
-
-    (**
-     * Creates a public field declaration
-     *)
-    private make_field (class_name : string, field_name : string, 
-                        field_type : Type, is_static : bool) : Class_member
-    {
-      Class_member.M_field (loc = this._location,
-                            modifiers =
-                              if (is_static) [Mod_public (); Mod_static ()]
-                              else [Mod_public ()],
-                            name = field_name,
-                            ty = field_type, 
-                            is_ref = true, 
-                            kind = Val_normal ())
-    }
-
 
     (**
      * Turns a Framework type into something edible by Nemerle's type system
      *)
-    private process_framework_type (framework_type : System.Type) : Type
+    private TypeOfType (framework_type : System.Type) : Type
     {
+      def framework_type_as_string = framework_type.FullName;
+      
       // FIXME: ref and out types, anyone?
-      def framework_type_as_string = framework_type.ToString ();
-    
       if (framework_type_as_string == "System.Void")
         T_void ()
+      else if (framework_type.IsArray)
+        T_array (TypeOfType (framework_type.GetElementType ()))
+      else if (framework_type.IsByRef)
+        T_ref (TypeOfType (framework_type.GetElementType ()))
       else
-        if (framework_type.IsArray)
-          T_array (this.process_framework_type (framework_type.GetElementType ()))
-        else
-          if (framework_type.IsByRef)
-            T_ref (this.process_framework_type (framework_type.GetElementType ()))
-          else
-            T_app (SS_string (framework_type_as_string), []);    
+        match (LibraryReferenceManager.LookupType (framework_type_as_string)) {
+          | Some (tc) => T_app (tc, [])
+          | None => Util.ice ("unbound external type " + framework_type_as_string)
+        }
     } 
 
-
-    (**
-     * Scans a list of attributes, returns a Nemerle type if an appropriate
-     * NemerleType attribute has been associated with the type member...
-     *)
-    private extract_type_from_attributes (attributes : list (System.Object)) : option (Type) {
-    
-      match (attributes) {
-        | [] => None ()
-        | attribute :: rest =>      
-          def attribute_type = attribute.GetType ();
-            
-          if ((attribute.GetType ()).FullName == "Nemerle.TypeAttribute") {
-
-            def get_encoded_type = attribute_type.GetMethod ("GetEncodedType");
-            def encoded_type = (get_encoded_type.Invoke (attribute, null) :> string);
-            
-            Some (Tyutil.decode_type (this._env, encoded_type))
-          } 
-          else this.extract_type_from_attributes (rest)
-      }
-    }
-
-
-    (**
-     * Returns true if a Nemerle.VariantAttribute exists in the attributes list.
-     *)
-    private check_variant_attributes (attributes : list (System.Object)) : bool {
-    
-      match (attributes) {
-        | [] => false
-        | attribute :: rest =>      
-          def attribute_type = attribute.GetType ();
-            
-          if ((attribute.GetType ()).FullName == "Nemerle.VariantAttribute")
-            true
-          else            
-            this.check_variant_attributes (rest)
-      }
-    }
-
-
-    (**
-     * Returns the encoded variant option type if a Nemerle.VariantOptionAttribute 
-     * exists in the attributes list.
-     *
-     * FIXME: decode the type...
-     *)
-    private check_variant_option_attributes (attributes : list (System.Object)) : option (string) {
-    
-      match (attributes) {
-        | [] => None ()
-        | attribute :: rest =>      
-          def attribute_type = attribute.GetType ();
-            
-          if ((attribute.GetType ()).FullName == "Nemerle.VariantOptionAttribute") {
-          
-            def get_encoded_type = attribute_type.GetMethod ("GetEncodedType");
-            def encoded_type = (get_encoded_type.Invoke (attribute, null) :> string);
-            
-            Some (encoded_type)
-          } 
-          else            
-            this.check_variant_option_attributes (rest)
-      }
-    }
-
-    (**
-     * Builds a parameter list for a constructor, method or indexer
-     *)
-    private build_params (parameters : list (System.Reflection.ParameterInfo)) : list (Fun_parm)
+    private TyconOfType (framework_type : System.Type) : Tycon
     {
-      match (parameters) {
-        | param :: rest =>          
-          def parameter_type = this.process_framework_type (param.ParameterType);
-          
-          Fun_parm (this._location, param.Name, parameter_type) ::
-            this.build_params (rest)
-        | [] => []
-      } 
-    }
-
-
-    (**
-     * Builds a list of constructors of a type
-     *)
-    private build_constructors (class_name : string,
-                                type_constructors : list (System.Reflection.ConstructorInfo)) 
-                                : list (Class_member)
-    {        
-      match (type_constructors) {
-        | constructor :: rest =>
-          def constructor_params = List.from_array (constructor.GetParameters ());
-          def parameters = this.build_params (constructor_params);
-
-          this.make_ctor (class_name, parameters) ::
-            this.build_constructors (class_name, rest)
-        | [] => []
+      match (TypeOfType (framework_type)) {
+        | T_app (tc, []) => tc
+        | _ => Util.ice ()
       }
-    }
-    
-
-    (**
-     * Builds a list of methods of a type
-     *)
-    private build_methods (current_type : System.Type,
-                           class_name : string,
-                           methods : list (System.Reflection.MethodInfo))
-                           : list (Class_member) 
-    {
-      match (methods) {
-        | method :: rest =>        
-          def attributes = method.GetCustomAttributes (true);
-          
-          when (this.IsGeneratedByNemerle ()) {          
-            def nemerle_type = this.extract_type_from_attributes (List.from_array (attributes));
-          
-            match (nemerle_type) {
-              | Some (nemerle_type) =>
-                Message.debug ("Method " + class_name + "." + method.Name +
-                               " exposes a Nemerle type.") // FIXME
-              | None => 
-                Message.debug ("Method " + class_name + "." + method.Name + 
-                               " does not expose a Nemerle type.") // FIXME
-            }
-          };
-          
-          def method_params = this.build_params (List.from_array (method.GetParameters ()));
-          def method_rettype = this.process_framework_type (method.ReturnType);
-
-          // woraround for mono bug #52182
-          if (method.IsStatic && method.DeclaringType != current_type)
-            this.build_methods (current_type, class_name, rest)
-          else {
-            def member = 
-              if (method.IsStatic) 
-                this.make_static_method (class_name, method.Name, 
-                                         method_rettype, method_params)
-              else
-                this.make_method (class_name, method.Name, 
-                                  method_rettype, method_params);
-            member.loc <- this._location;
-            member :: this.build_methods (current_type, class_name, rest)
-          }
-
-        | [] => []
-      }
-    }
-
-
-    (**
-     * Builds a list of properties of a type
-     *)
-    private build_properties (class_name : string,
-                              properties : list (System.Reflection.PropertyInfo))
-                              : list (Class_member)
-    {
-      def is_static (property : System.Reflection.PropertyInfo) : bool {
-            
-        def get_method = property.GetGetMethod ();
-        def set_method = property.GetSetMethod ();
-        
-        if (get_method != null && get_method.IsStatic) true
-        else if (set_method != null && set_method.IsStatic) true
-        else false
-      };
-
-      def ungroup_parameters (group : list (System.Reflection.PropertyInfo)) {
-        match (group) {
-          | property :: rest =>
-            def parameters =
-              this.build_params (List.from_array (property.GetIndexParameters ()));
-            parameters :: ungroup_parameters (rest)
-          | [] => []
-        }
-      };
-
-      def walk_groups (groups : list (list (System.Reflection.PropertyInfo))) : list (Class_member) {            
-        match (groups) {
-          | group :: rest =>
-                  
-            def property = List.head (group);
-                                      
-            def property_type = this.process_framework_type (property.PropertyType);
-
-            def index_parameters = ungroup_parameters (group);
-                      
-            def member = this.make_property (class_name,
-                                            property.Name, property_type,
-                                            property.CanRead, property.CanWrite,
-                                            is_static (property),
-                                            index_parameters);
-      
-            member :: walk_groups (rest)
-              
-          | [] => []
-        }      
-      };
-      
-      def compare_properties_by_name (l : System.Reflection.PropertyInfo, r : System.Reflection.PropertyInfo) : int {
-        System.String.Compare (l.Name, r.Name)
-      };
-
-      def grouped_properties = List.group (compare_properties_by_name, properties);
-
-      walk_groups (grouped_properties)
-    }
-
-
-    (**
-     * Builds a list of the fields of a type
-     *)
-    private build_fields (current_type : System.Type,
-                          class_name : string,
-                          fields : list (System.Reflection.FieldInfo))
-                          : list (Class_member)
-    {      
-      match (fields) {
-        | field :: rest =>
-          
-          def field_type = this.process_framework_type (field.FieldType);
-
-          // woraround for mono bug #52182
-          if (field.IsStatic && field.DeclaringType != current_type)
-            this.build_fields (current_type, class_name, rest)
-          else {
-            def member = this.make_field (class_name,
-                                          field.Name, field_type,
-                                          field.IsStatic);
-      
-            member :: this.build_fields (current_type, class_name, rest)
-          }
-
-        | [] => []
-      }
-    }
-
+    } 
 
     (**
      * If true, the library seems to have been generated by the Nemerle compiler
@@ -598,98 +252,497 @@ namespace Nemerle.Compiler
       this._is_generated_by_nemerle
     }
     
-    
-    (**
-     * Imports a System.Type, inserting it into the Nemerle type system.
-     *)
-    private ProcessType (reflected_type : System.Type) : Decl
-    {
-      def name = reflected_type.FullName; // FIXME: what about the + marks?
-      
-      def type_attributes = List.from_array (reflected_type.GetCustomAttributes (false));
-          
-      if (this.check_variant_attributes (type_attributes))
-        Message.debug ("type '" + name + "' is a variant...") else ();
-        
-      if (Option.is_some (this.check_variant_option_attributes (type_attributes)))
-        Message.debug ("type '" + name + "' is a variant option...") else ();
-                          
-      def is_class = reflected_type.IsClass;
-    
-      def base_type = reflected_type.BaseType;
-
-      def type_constructors = List.from_array (reflected_type.GetConstructors ());
-      def type_methods = List.from_array (reflected_type.GetMethods ());
-      def type_properties = List.from_array (reflected_type.GetProperties ());
-      def type_fields = List.from_array (reflected_type.GetFields ());
-      def subtypes = List.from_array (reflected_type.GetNestedTypes ());
-
-      // FIXME: handle the subtypes here
-
-      def constructors = this.build_constructors (name, type_constructors);
-      def methods = this.build_methods (reflected_type, name, type_methods);
-      def properties = this.build_properties (name, type_properties);
-      def fields = this.build_fields (reflected_type, name, type_fields);
-
-    	def members = 
-    	  List.append (List.append (List.append (constructors, methods), properties), fields);
-      
-  	  def declaration = TD_class (members);
-	    declaration.name <- name;
-	    declaration.loc <- this._location;
-      declaration.typarms <- Typarms ([], []);
-  
-      if (reflected_type.IsEnum)
-        declaration.t_extends <- Some (T_app (SS_string ("System.Enum"), []))
-      else
-        declaration.t_extends <- None ();
-        
-      declaration.t_implements <- []; 
-      declaration.modifiers <- [Mod_public ()];
-
-      def type_info = Tyinfo (None (), this._env, declaration, true);
-
-      when (this._is_generated_by_nemerle) {
-        Message.debug ("adding Nemerle type: '" + name + "'")
-      };
-
-      def decl = Env.add_type (type_info);
-
-      Env.externals.Add (name, decl);
-
-      Tyinfo.make_external (this._env, type_info);
-
-      decl    
-    }
-    
-    
     (**
      * Looks up a type name in this assembly. The type name is expected
      * to be full, i.e. containing the full namespace qualifier.
      *)
-    public Lookup (env : Env, name : string) : list (Decl) {
+    public Lookup (name : string) : option (Tycon) {
 
       (* always first check if such a type is defined in the current library *)
       def reflected_type = this._library.GetType (name);
 
-      if (reflected_type != null) {
+      if (reflected_type != null)
+        Some ((NetType (this, reflected_type) : Tycon))
+      else None ()
+    }
 
-        (* need to check that again, as the same type could be found using different paths before *)
-        def cached_type = (Env.externals [name] :> Decl);
+    private class NetType
+      implements Tycon
+    {
+      handle : System.Type;
+      library : LibraryReference;
+      id : int;
+      members : Hashtable (string, list (IMember));
+
+      public this (lib : LibraryReference, h : System.Type)
+      {
+        // first cache ourself to avoid loops
+        LibraryReferenceManager._loaded_types.Set (h.FullName, Some ((this : Tycon)));
+        id <- Util.next_id ();
+        library <- lib;
+        handle <- h;
+        members <- Hashtable (2);
+      }
       
-        if (cached_type == null) {
-        
-          this._env <- env.copy ();
-          this._env.current_namespace <- "";
+      public GetName () : string
+      {
+        handle.Name
+      }
 
-          [this.ProcessType (reflected_type)]
-        }
-        else {
-        
-          [cached_type]
+      public GetHandle () : System.Reflection.MemberInfo
+      {
+        // FIXME: wtf is that?
+        (handle :> System.Reflection.MemberInfo)
+      }
+
+      public GetMemType () : Type
+      {
+        T_app (this, [])
+      }
+
+      public GetKind () : MemberKind
+      {
+        MK_type (this)
+      }
+
+      public GetDeclaringTycon () : Tycon
+      {
+        library.TyconOfType (handle.DeclaringType)
+      }
+
+      public GetLocation () : Location
+      {
+        library._location
+      }
+
+      public GetModifiers () : list (Modifier)
+      {
+        // FIXME
+        [Mod_public ()]
+      }
+
+      public IsStatic () : bool
+      {
+        true
+      }
+
+      public GetId () : int
+      {
+        id
+      }
+
+      public GetFullName () : string
+      {
+        handle.FullName
+      }
+
+      public GetTyconKind () : TyconKind
+      {
+        TK_ExternalNetType (handle)
+      }
+
+      public GetTydecl () : Type_decl
+      {
+        if (handle.IsInterface)
+          TD_interface ()
+        else
+          TD_class ()
+      }
+
+      public MakeSubst (parms : list (Type)) : Subst
+      {
+        match (parms) {
+          | [] => ()
+          | _ =>
+            Message.error ("framework type `" + GetFullName () + "' supplied with type arguments")
+        };
+        Map.int_map ()
+      }
+
+      public FreshSubst () : Subst
+      {
+        Map.int_map ()
+      }
+
+      public SuperType (tc : Tycon) : option (list (Type))
+      {
+        match (tc.GetTyconKind ()) {
+          | TK_ExternalNetType (t) when handle.IsSubclassOf (t)
+          | TK_ExternalNemerleType (t) when handle.IsSubclassOf (t) => Some ([])
+          | _ => None ()
         }
       }
-      else []
+
+      public SubtypingSubst (_ : Tycon) : Subst
+      {
+        Map.int_map ()
+      }
+
+      public SuperClass () : option (Tycon)
+      {
+        if (handle.BaseType == null)
+          None ()
+        else
+          Some (library.TyconOfType (handle.BaseType))
+      }
+
+      public GetSuperTypes () : list (Type)
+      {
+        def supertypes = Hashtable (30);
+        def add_bt (t : Type) {
+          match (t) {
+            | T_app (tc, []) =>
+              if (supertypes.Contains (tc.GetId ())) ()
+              else {
+                supertypes.Add (tc.GetId (), t);
+                match (tc.SuperClass ()) {
+                  | Some (tc) => add_bt (T_app (tc, []))
+                  | None => ()
+                }
+              }
+            | _ => Util.ice ()
+          }
+        };
+        List.iter (add_bt, GetDirectSuperTypes ());
+        supertypes.Fold (fun (_, tc, acc) { tc :: acc }, [])
+      }
+
+      public GetDirectSuperTypes () : list (Type)
+      {
+        def ifaces = List.map (library.TypeOfType, 
+                               List.from_array (handle.GetInterfaces ()));
+        match (SuperClass ()) {
+          | Some (r) => T_app (r, []) :: ifaces
+          | None => ifaces
+        }
+      }
+
+      public SameAs (tc : Tycon) : bool 
+      {
+        GetId () == tc.GetId ()
+      }
+
+      public GetMembers () : list (IMember) 
+      {
+        LookupMember ("", LF_all ())
+      }
+
+      private collect_members (name : string) : list (IMember) 
+      {
+        def add_member (acc, m : System.Reflection.MemberInfo) {
+          def tc = library.TyconOfType (m.DeclaringType);
+          if (this.SameAs (tc)) {
+            def is_a (x) {
+              m.MemberType %& x != (0 :> System.Reflection.MemberTypes)
+            };
+            if (is_a (System.Reflection.MemberTypes.Constructor) ||
+                is_a (System.Reflection.MemberTypes.Method))
+              (NetMethod (library, (m :> System.Reflection.MethodBase)) : IMember) :: acc
+            else if (is_a (System.Reflection.MemberTypes.Field))
+              (NetField (library, (m :> System.Reflection.FieldInfo)) : IMember) :: acc
+            else if (is_a (System.Reflection.MemberTypes.Property))
+              (NetProperty (library, (m :> System.Reflection.PropertyInfo)) : IMember) :: acc
+            else if (is_a (System.Reflection.MemberTypes.NestedType))
+              (library.TyconOfType ((m :> System.Type)) : IMember) :: acc
+            else
+              acc
+          } else {
+            def fullname = m.ToString ();
+            def proper_name (m : IMember) {
+              m.GetHandle ().ToString () == fullname
+            };
+//            Message.debug ("name " + name + " look for " + fullname + " in " + tc.GetFullName () + " from " + GetFullName ());
+            match (List.filter (proper_name, tc.LookupMember (name, LF_all ()))) {
+              | [] => Util.ice ("no match for " + name)
+              | [x] => x :: acc
+              | _ =>  Util.ice ("2+ matches for " + name)
+            }
+          }
+        };
+        
+        def flags = System.Reflection.BindingFlags.Public     %|
+                    System.Reflection.BindingFlags.NonPublic  %|
+                    System.Reflection.BindingFlags.Static     %|
+                    System.Reflection.BindingFlags.Instance   ;
+                    
+        def member_array = 
+          if (name == "")
+            handle.GetMembers (flags) 
+          else 
+            handle.GetMember (name, flags);
+            
+        List.fold_left (add_member, [], List.from_array (member_array))
+      }
+
+      public LookupMember (name : string, lookup_flag : LookupFlag) : list (IMember) 
+      {
+        match (members.Get (name)) {
+          | Some (r) =>
+            Tyutil.FilterMembers (r, lookup_flag)
+          | None =>
+            def lst = collect_members (name);
+            members.Set (name, lst);
+            Tyutil.FilterMembers (lst, lookup_flag)
+        }
+      }
     }
+    
+    private class NetField 
+      implements IField
+    {
+      handle : System.Reflection.FieldInfo;
+      library : LibraryReference;
+      id : int;
+
+      public this (lib : LibraryReference, h : System.Reflection.FieldInfo)
+      {
+        id <- Util.next_id ();
+        library <- lib;
+        handle <- h;
+      }
+      
+      public GetName () : string
+      {
+        handle.Name
+      }
+
+      public GetHandle () : System.Reflection.MemberInfo
+      {
+        // FIXME
+        (handle :> System.Reflection.MemberInfo)
+      }
+
+      public GetMemType () : Type
+      {
+        library.TypeOfType (handle.FieldType);
+      }
+
+      public GetKind () : MemberKind
+      {
+        MK_field (this)
+      }
+
+      public GetDeclaringTycon () : Tycon
+      {
+        library.TyconOfType (handle.DeclaringType)
+      }
+
+      public GetLocation () : Location
+      {
+        library._location
+      }
+
+      public GetModifiers () : list (Modifier)
+      {
+        // FIXME
+        if (handle.IsStatic) [Mod_public (); Mod_static ()]
+        else [Mod_public ()]
+      }
+
+      public IsStatic () : bool
+      {
+        handle.IsStatic
+      }
+
+      public GetId () : int
+      {
+        id
+      }
+
+      public IsMutable () : bool
+      {
+        ! handle.IsInitOnly
+      }
+    }
+    
+    class NetProperty
+      implements IProperty
+    {
+      handle : System.Reflection.PropertyInfo;
+      library : LibraryReference;
+      id : int;
+      is_static : bool;
+
+      public this (lib : LibraryReference, h : System.Reflection.PropertyInfo)
+      {
+        id <- Util.next_id ();
+        library <- lib;
+        handle <- h;
+        is_static <- {
+          def get_method = handle.GetGetMethod (true);
+          def set_method = handle.GetSetMethod (true);
+          (get_method != null && get_method.IsStatic) ||
+          (set_method != null && set_method.IsStatic);
+        };
+      }
+      
+      public GetName () : string
+      {
+        handle.Name
+      }
+
+      public GetHandle () : System.Reflection.MemberInfo
+      {
+        (handle :> System.Reflection.MemberInfo)
+      }
+
+      public GetMemType () : Type
+      {
+        library.TypeOfType (handle.PropertyType);
+      }
+
+      public GetKind () : MemberKind
+      {
+        MK_property (this)
+      }
+
+      public GetDeclaringTycon () : Tycon
+      {
+        library.TyconOfType (handle.DeclaringType)
+      }
+
+      public GetLocation () : Location
+      {
+        library._location
+      }
+
+      public GetModifiers () : list (Modifier)
+      {
+        // FIXME
+        if (is_static) [Mod_public (); Mod_static ()]
+        else [Mod_public ()]
+      }
+
+      public IsStatic () : bool
+      {
+        is_static
+      }
+
+      public GetId () : int
+      {
+        id
+      }
+
+      public IsMutable () : bool
+      {
+        handle.CanWrite
+      }
+    }
+    
+    class NetMethod
+      implements IMethod
+    {
+      handle : System.Reflection.MethodBase;
+      library : LibraryReference;
+      id : int;
+      fun_header : Fun_header;
+
+      public this (lib : LibraryReference, h : System.Reflection.MethodBase)
+      {
+        id <- Util.next_id ();
+        library <- lib;
+        handle <- h;
+        def mkparm (p : System.Reflection.ParameterInfo) {
+          Fun_parm (
+            loc = library._location,
+            name = p.Name,
+            ty = library.TypeOfType (p.ParameterType),
+            decl = null
+          )
+        };
+        def ret_type =
+          if (handle.Name == ".ctor" || handle.Name == ".cctor")
+            T_void ()
+          else
+            library.TypeOfType ((handle :> System.Reflection.MethodInfo).ReturnType);
+        fun_header <-
+          Fun_header (
+            loc = library._location,
+            name = GetName (),
+            id = id,
+            ret_type = ret_type,
+            parms = List.map (mkparm, List.from_array (handle.GetParameters ())),
+            typarms = [],
+            tenv = null,
+            closure_vars = null, // hm..
+            decl = null
+          )
+      }
+      
+      public GetName () : string
+      {
+        handle.Name
+      }
+
+      public GetHandle () : System.Reflection.MemberInfo
+      {
+        (handle :> System.Reflection.MemberInfo)
+      }
+
+      public GetMemType () : Type
+      {
+        Tyutil.fun_type (GetHeader ())
+      }
+
+      public GetKind () : MemberKind
+      {
+        MK_method (this)
+      }
+
+      public GetDeclaringTycon () : Tycon
+      {
+        library.TyconOfType (handle.DeclaringType)
+      }
+
+      public GetLocation () : Location
+      {
+        library._location
+      }
+
+      public GetModifiers () : list (Modifier)
+      {
+        // FIXME
+        if (handle.IsStatic) [Mod_public (); Mod_static ()]
+        else [Mod_public ()]
+      }
+
+      public IsStatic () : bool
+      {
+        handle.IsStatic 
+      }
+
+      public GetId () : int
+      {
+        id
+      }
+
+      public GetFreshType () : Type
+      {
+        GetMemType ()
+      }
+
+      public GetFunKind () : Fun_kind
+      {
+        if (handle.IsConstructor)
+          if (handle.IsStatic)
+            FK_static_ctor ()
+          else
+            FK_ctor ()
+        else
+          if (handle.IsStatic)
+            FK_function ()
+          else
+            FK_bound_method ([])
+      }
+
+      public GetHeader () : Fun_header
+      {
+        fun_header
+      }
+    }
+    
   }
+
+
+  
 } (* namespace *)

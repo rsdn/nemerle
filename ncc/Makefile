@@ -33,32 +33,34 @@ lib_src = ../lib/aliases.n ../lib/core.n ../lib/option.n ../lib/list.n \
 	  ../lib/getopt.n
 
 src = \
+	env.n \
+	macros.n \
+	macroregistry.n \
+	typattern.n \
+	tyexpr.n \
+	members.n \
+	tyinfo.n \
 	$(lib_src) \
 	ast.n \
 	parsetree.n \
 	typedtree.n \
+	extensions.n \
 	util.n \
-	env.n \
 	passes.n \
 	scan_globals.n \
 	tyvars.n \
-	tyinfo.n \
 	tyutil.n \
-	extensions.n \
-	tyexpr.n \
-	macros.n \
-	cgtree.n \
-	cgexpr.n \
-	cgflat.n \
-	xmldump.n \
-	typattern.n \
-	external.n \
-	cgopt.n \
-	macroregistry.n \
-	cgil.n \
 	parser.n \
 	main.n \
-	lexer.n
+	lexer.n \
+	tycon.n \
+	cgtree.n \
+	cgexpr.n \
+	cgopt.n \
+	cgflat.n \
+	external.n \
+	xmldump.n \
+	cgil.n \
 
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
@@ -88,7 +90,6 @@ ncc.exe: $(src)
 	$(EXECUTE) ../boot/ncc.exe $(src)
 	mv -f out.cs out1.cs
 	$(COMPILE) $(OUTFLAG)$@ out1.cs
-	$(NGEN) ncc.exe
 
 stdlib.dll: $(lib_src)
 	$(EXECUTE) ./ncc.exe $(lib_src)

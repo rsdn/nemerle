@@ -42,9 +42,9 @@ namespace Nemerle.Compiler
    *)
   variant CGIL_tree {
     | CGIL_class { type_builder : TypeBuilder; subtree : list (CGIL_tree); }
-    | CGIL_field { field : CM_field; field_builder : FieldBuilder; }
-    | CGIL_constructor { constructor : CM_method; constructor_builder : ConstructorBuilder; }
-    | CGIL_method { method : CM_method; method_builder : MethodBuilder; }
+    | CGIL_field { class_name : string; field : CM_field; field_builder : FieldBuilder; }
+    | CGIL_constructor { class_name : string; constructor : CM_method; constructor_builder : ConstructorBuilder; }
+    | CGIL_method { class_name : string; method : CM_method; method_builder : MethodBuilder; }
   }
 
 
@@ -63,6 +63,12 @@ namespace Nemerle.Compiler
       (* create the type builder queue *)
       this._type_builder_queue <- Queue ();
       
+      (* create the member builders storage *)
+      _classes <- Hashtable ();
+      _field_builders <- Hashtable ();
+      _method_builders <- Hashtable ();
+      _static_method_builders <- Hashtable ();
+      
       (* create a weak assembly name and define a dynamic assembly *)
       this._assembly_name <- System.Reflection.AssemblyName ();
       this._assembly_name.Version <- System.Version (1, 0, 0, 0); // FIXME
@@ -74,7 +80,7 @@ namespace Nemerle.Compiler
 
       (* create a dynamic module *)
       this._module_builder <- 
-        this._assembly_builder.DefineDynamicModule ("CGILTest", "cgil-test.dll"); // FIXME
+        this._assembly_builder.DefineDynamicModule ("CGILTest", "cgil-test.exe", true); // FIXME
 
       (* select the classes that have to be generated separately *)
       def (aux_decls, standard_decls) =
@@ -97,16 +103,27 @@ namespace Nemerle.Compiler
 
       (* emit all the other declarations *)
       this._emit_nemerle_attributes <- true;
-      
+
       def classes_tree = List.map (add_classes, standard_decls);
       def declarations_tree = List.map (add_declarations, classes_tree);
       def implementations_tree = List.map (add_implementations, declarations_tree);
-            
+
       (* execute the type builder queue *)
       create_types_in_queue ();
+
+      (* set the entry point *)
+      def entry_point_class = reflect_type ("CGILTest");
+
+      assert (entry_point_class != null);
+
+      def entry_point_method_info =
+        entry_point_class.GetMethod ("Main");
+            
+      _module_builder.SetUserEntryPoint (entry_point_method_info);
+      _assembly_builder.SetEntryPoint (entry_point_method_info, PEFileKinds.ConsoleApplication);
             
       (* save the assembly *)
-      this._assembly_builder.Save ("cgil-test.dll"); // FIXME
+      this._assembly_builder.Save ("cgil-test.exe"); // FIXME
     }
 
 
@@ -137,6 +154,7 @@ namespace Nemerle.Compiler
     {
       def is_aux (decl : CM_class) : bool {
         match (decl.ns + decl.name) {
+          | "Nemerle.Func1"
           | "Nemerle.TypeAttribute"
           | "Nemerle.VariantAttribute"
           | "Nemerle.VariantOptionAttribute" => true
@@ -243,8 +261,13 @@ namespace Nemerle.Compiler
           def internal_type = reflect_nemerle_type (t);          
           this.reflect_type (internal_type.FullName + "[]", true, true)
 
-        | CT_ref (name) => 
-          this.reflect_type (name, true, true)
+        | CT_ref (name) =>
+          match (name) {
+            | "bool" => typeof (System.Boolean)
+            | "int" => typeof (System.Int32)
+            | "string" => typeof (System.String)
+            | _ => this.reflect_type (name, true, true)
+          }
         
         | CT_tuple (arity) =>
           this.reflect_type ("Nemerle.Tuple" + string_of_int (arity), false, false)
@@ -258,6 +281,45 @@ namespace Nemerle.Compiler
         
         | CT_unreached => Util.ice ("nemerle_to_framework_type:CT_unreached")
       }          
+    }
+
+    (**
+     *
+     *)
+    internal split_global_ref (global_ref : string) : string * string
+    {
+      def last_dot = global_ref.LastIndexOf ('.');
+      assert (last_dot != -1);
+
+      (global_ref.Substring (0, last_dot), global_ref.Substring (last_dot + 1))
+    }    
+    
+    (**
+     *
+     *)
+    internal is_value_type (ty : CG_type) : bool 
+    {
+      match (ty) {
+        | CT_bool => true
+        | CT_ref (name) =>
+          match (name) {
+            // FIXME: add all the other types here
+            // FIXME: implement intelligent type name unaliasing
+            // FIXME: move this function to tyutil or wherever it belongs...
+            | "bool" 
+            | "System.Boolean"
+            | "char" 
+            | "System.Char"
+            | "int"
+            | "Int32"
+            | "System.Int32"
+            | "float"
+            | "System.Single"
+            | "System.Double" => true
+            | _ => false
+          }
+        | _ => false
+      }    
     }
     
     
@@ -284,7 +346,7 @@ namespace Nemerle.Compiler
         
       match (attrs) {
         | modifier :: rest =>
-          process_modifier (modifier) + this.make_field_attributes (rest)
+          process_modifier (modifier) %| this.make_field_attributes (rest)
         | [] =>
           FieldAttributes.PrivateScope
       }
@@ -314,17 +376,33 @@ namespace Nemerle.Compiler
         
       match (attrs) {
         | modifier :: rest =>
-          process_modifier (modifier) + this.make_method_attributes (rest)
+          process_modifier (modifier) %| this.make_method_attributes (rest)
         | [] =>
-          MethodAttributes.PrivateScope
+          MethodAttributes.HideBySig
       }
+    }
+
+
+    (**
+     * Checks if the given method is static
+     *)
+    internal is_static_method (method : CM_method) : bool
+    {
+      def is_mod_static (modifier : Modifier) : bool {
+        match (modifier) {
+          | Mod_static => true
+          | _ => false
+        }
+      };
+
+      List.exists (is_mod_static, method.modifiers)
     }
 
 
     (**
      *
      *)  
-    private type_list_to_type_array (x : list (System.Type)) : array (System.Type) {
+    internal type_list_to_type_array (x : list (System.Type)) : array (System.Type) {
 
       def result = 
         (System.Array.CreateInstance (typeof (System.Type), List.length (x)) :> array (System.Type));
@@ -345,24 +423,82 @@ namespace Nemerle.Compiler
 
 
     (**
-     *
+     * Reads the inheritance list of a class and retrieves the base
+     * type and builds the array of interfaces implemented by the class.
      *)
     private determine_inheritance (m : CM_class) : (System.Type * array (System.Type))
     {
-(*            
-          def inh =
-            match (m.inheritance) {
-              | [] => ST_leaf ("")
-              | _ => " : " ++ st_concat (", ", List.map (flat_ty, m.inheritance))
-            };
-*)
+      def walk_parents (parents : list (CG_type), 
+                        extends_acc : list (System.Type), 
+                        implements_acc : list (System.Type)) 
+                        : list (System.Type) * list (System.Type) 
+      {
+        def find_parent_type (parent_name : string, rest : list (CG_type)) 
+                                    : list (System.Type) * list (System.Type) {
 
-      def result = 
-        (System.Array.CreateInstance (typeof (System.Type), 0) :> array (System.Type));
+          Message.debug ("determine inheritance of " + m.extern_name + ": " + parent_name);
+
+          def incomplete_type = get_class_by_name (parent_name);
+
+          match (incomplete_type) {
+            | Some (({ kind = CK_interface }) as incomplete_type) =>
+              def incomplete_type = Option.unsome (incomplete_type.type_builder);
+              walk_parents (rest, extends_acc, (incomplete_type :> System.Type) :: implements_acc)
+            | Some (incomplete_type) =>
+              def incomplete_type = Option.unsome (incomplete_type.type_builder);
+              walk_parents (rest, (incomplete_type :> System.Type) :: extends_acc, implements_acc)
+            | None =>
+              // FIXME: search in externals
+              def external_type = reflect_type (parent_name);
+              assert (external_type != null);
+              
+              if (external_type.IsInterface)
+                walk_parents (rest, extends_acc, external_type :: implements_acc)
+              else                               
+                walk_parents (rest, external_type :: extends_acc, implements_acc)
+          }        
+        };
         
-      (typeof (System.Object), result) // FIXME
+        match (parents) {
+          | [] => (extends_acc, implements_acc)
+          | parent :: rest =>
+            match (parent) {
+              | CT_tuple (arity) => find_parent_type ("Nemerle.Tuple" + string_of_int (arity), rest)
+              | CT_fun (arity) => find_parent_type ("Nemerle.Func" + string_of_int (arity), rest)
+              | CT_ref (parent_name) => find_parent_type (parent_name, rest)
+              
+              | CT_object =>
+                walk_parents (rest, typeof (System.Object) :: extends_acc, implements_acc)
+                              
+              | _ => Util.ice ("determine_inheritance: invalid type in parents list")
+            }
+        }
+      };
+    
+      def (extends_list, implements_list) = walk_parents (m.inheritance, [], []);
+            
+      Message.debug ("determine inheritance of " + m.extern_name + ": " + 
+        string_of_int (List.length (extends_list)) + ", " + string_of_int (List.length (implements_list)));
+            
+      def extends_type =
+        match (extends_list) {
+          | [] => null
+          | [ty] => ty
+          | _ => Util.ice ("class " + m.extern_name + " extends more than one base type")
+        };
+        
+      (extends_type, type_list_to_type_array (implements_list))
     }
   
+  
+    (**
+     *
+     *)
+    internal get_class_by_name (class_name : string) : option (CM_class)
+    {
+      _classes.Get (plus_to_dot (class_name))
+    }
+    
 
     (**
      * This method makes a skeleton of a class -- the class partial type and
@@ -371,11 +507,14 @@ namespace Nemerle.Compiler
      * before constructing a dependant class. All the declarations and method
      * implementations will be created successively in subsequent passes.
      *)
-    private make_class (m : CM_class, type_builder : TypeBuilder) : CGIL_tree
+    private make_class (klass : CM_class, type_builder : TypeBuilder) : CGIL_tree
     {       
+      (* store the class pointer for later use *)
+      _classes.Add (klass.extern_name, klass);
+      
       (* create optional custom attributes for this type *)
       def custom_attribute =
-        match (m.kind) {          
+        match (klass.kind) {          
           | CK_variant => 
             this.make_nemerle_variant_attribute ()
           | CK_variant_option (encoded_type) =>
@@ -384,52 +523,107 @@ namespace Nemerle.Compiler
         };
 
       (* decide the new type attributes *)
+      mutable is_interface <- false;
+      
       def type_kind_attrs = 
-        match (m.kind) { 
+        match (klass.kind) { 
           | CK_class => TypeAttributes.Class
           | CK_struct => Util.ice ("CK_struct")
-          | CK_interface => TypeAttributes.Interface + TypeAttributes.Abstract
+          | CK_interface => 
+            is_interface <- true;
+            TypeAttributes.Interface %| TypeAttributes.Abstract
           | CK_variant => TypeAttributes.Class
           | CK_variant_option (_) => TypeAttributes.Class
         };
         
-      def attrs = type_kind_attrs + TypeAttributes.Public;
+      def attrs = type_kind_attrs;
 
       (* determine the inheritance relation for this type *)
-      def (extends_class, implements_interfaces) = this.determine_inheritance (m);
+      def (extends_class, implements_interfaces) = this.determine_inheritance (klass);
 
-      (* create the type builder for a top-level or nested class declaration *)
+      (* create the type builder for a top-level or nested class declaration *)      
       def new_type_builder = 
         if (type_builder == null)
-          this._module_builder.DefineType (m.ns + m.name, attrs)
+          this._module_builder.DefineType (klass.ns + klass.name, TypeAttributes.Public %| attrs, 
+                                          extends_class, implements_interfaces)
         else
-          type_builder.DefineNestedType (m.name, TypeAttributes.NestedPublic + attrs);
+          type_builder.DefineNestedType (klass.name, TypeAttributes.NestedPublic %| attrs,
+                                        extends_class, implements_interfaces);
+
+      Message.debug ("make_class " + new_type_builder.FullName);
 
       when (custom_attribute != null && this._emit_nemerle_attributes) {
         new_type_builder.SetCustomAttribute (custom_attribute);
       };
 
+      klass.type_builder <- Some (new_type_builder);
+
       this._type_builder_queue.add (new_type_builder);
 
+      (* add a default constructor, if none present *)
+      unless (is_interface) { add_default_constructor (klass) };
+
       (* create the type builder's CGIL subtree *)
+      def new_type_name = plus_to_dot (new_type_builder.FullName);
+            
       def walk_members (decls : list (CG_member)) : list (CGIL_tree) {
         match (decls) {
           | decl :: rest => 
-            this.make_subtree (decl, new_type_builder) :: walk_members (rest)
+            this.make_subtree (klass, new_type_name, decl, new_type_builder) 
+              :: walk_members (rest)
           | [] => []
         }
       };
       
-      CGIL_class (new_type_builder, walk_members (m.decls))    
+      CGIL_class (new_type_builder, walk_members (klass.decls))    
     }
 
+
+    (**
+     * Adds a default constructor if necessary
+     *)
+    private add_default_constructor (klass : CM_class) : void
+    {
+      def is_ctor (m : CG_member) : bool {
+        match (m) {
+          | (CM_method) as m =>
+            match (m.ret_type) {
+              | CT_unreached => true
+              | _ => false
+            }
+          | _ => false
+        }
+      };
+      
+      unless (List.exists (is_ctor, klass.decls)) {      
+        def ctor = CM_method (Tyutil.encode_type_to_string (T_void ()), [], 
+                              CT_unreached (), CE_skip (), None ());
+
+        ctor.name <- klass.extern_name + "..ctor";
+        ctor.extern_name <- klass.extern_name + "..ctor";
+        ctor.modifiers <- [Mod_public ()];
+        ctor.attrs <- ["public"];
+        
+        klass.decls <- ctor :: klass.decls;
+      }
+    }
+
+
+    (**
+     *
+     *)
+    internal plus_to_dot (type_name : string) : string
+    {
+      type_name.Replace ('+', '.')
+    }
 
 
     (**
      * This method walks the declarations tree, creating partial types
      * and building the CGIL tree of the compilation unit.
      *)
-    make_subtree (m : CG_member, type_builder : TypeBuilder) : CGIL_tree
+    make_subtree (parent_class : CM_class, parent_class_name : string, 
+                  m : CG_member, type_builder : TypeBuilder) : CGIL_tree
     {
       assert (type_builder != null);
       
@@ -438,19 +632,36 @@ namespace Nemerle.Compiler
           this.make_class (m, type_builder)
 
         | (CM_field) as f =>
-          CGIL_field (f, null)
+          CGIL_field (parent_class_name, f, null)
                                
         | (CM_property) as p =>
           Message.fatal_error ("emitting properties is not supported yet")
                             
         | (CM_method) as m =>
           CGopt.tail_call_optimize (m);
-
+          
           match (m.ret_type) {
-            | CT_unreached => CGIL_constructor (m, null)
-            | _ => CGIL_method (m, null)
+            | CT_unreached =>
+              mark_default_constructor (parent_class, m);              
+              CGIL_constructor (parent_class_name, m, null)
+            | _ => CGIL_method (parent_class_name, m, null)
           }
       }          
+    }
+
+
+    (**
+     * If no default constructor has been selected yet, the provided method
+     * is marked as the class' default constructor. Otherwise, the new constructor
+     * is memorized only if it's parameters list has zero length. This should be
+     * a good heuristic to handle the CE_default_ctor_ref issue (which is generated
+     * before relevant constructor CM_method is ever built).
+     *)
+    mark_default_constructor (klass : CM_class, ctor : CM_method) : void
+    {
+      when (Option.is_none (klass.default_ctor) || List.length (ctor.parms) == 0) {
+        klass.default_ctor <- Some (ctor)
+      }
     }
 
 
@@ -471,9 +682,9 @@ namespace Nemerle.Compiler
           };          
           CGIL_class (type_builder, walk_members (members))    
 
-        | CGIL_field (field, _) =>
+        | CGIL_field (class_name, field, _) =>
           assert (type_builder != null);
-          
+                    
           def field_builder = 
             type_builder.DefineField (field.name, 
                                       this.reflect_nemerle_type (field.ty), 
@@ -483,17 +694,19 @@ namespace Nemerle.Compiler
             field_builder.SetCustomAttribute (this.make_nemerle_type_attr (field.encoded_type));
           };
           
-          CGIL_field (field, field_builder)
+          _field_builders.Add (class_name + "." + field.name, field_builder);
+          
+          CGIL_field (class_name, field, field_builder)
                             
-        | CGIL_constructor (constructor, _) =>
+        | CGIL_constructor (class_name, constructor, _) =>
           assert (type_builder != null);
 
-          this.make_constructor_skeleton (constructor, type_builder)
+          this.make_constructor_skeleton (class_name, constructor, type_builder)
 
-        | CGIL_method (method, _) =>
+        | CGIL_method (class_name, method, _) =>
           assert (type_builder != null);
 
-          this.make_method_skeleton (method, type_builder)
+          this.make_method_skeleton (class_name, method, type_builder)
       }          
     }
 
@@ -508,12 +721,12 @@ namespace Nemerle.Compiler
           def walk_branches (branch) { this.add_implementations (branch) }; // FIXME: aargh
           CGIL_class (type_builder, List.map (walk_branches, subtree))
           
-        | (CGIL_constructor (constructor, constructor_builder)) as member =>
-          this.add_constructor_body (constructor, constructor_builder);
+        | (CGIL_constructor (class_name, constructor, constructor_builder)) as member =>
+          this.add_constructor_body (class_name, constructor, constructor_builder);
           member
         
-        | (CGIL_method (method, method_builder)) as member =>
-          this.add_method_body (method, method_builder);
+        | (CGIL_method (class_name, method, method_builder)) as member =>
+          this.add_method_body (class_name, method, method_builder);
           member
         
         | member => member
@@ -521,22 +734,27 @@ namespace Nemerle.Compiler
     }
 
 
-
-    private make_constructor_skeleton (m : CM_method, type_builder : TypeBuilder) : CGIL_tree
+    (**
+     *
+     *)
+    private make_constructor_skeleton (class_name : string, m : CM_method, type_builder : TypeBuilder) : CGIL_tree
     {
       (* build the parameter types array *)      
       def mkparm (v : CG_val) : System.Type {
         this.reflect_nemerle_type (v.ty)
       };
-                    
-      def parameter_types = this.type_list_to_type_array (List.map (mkparm, m.parms));
+
+      def parm_types_list = List.map (mkparm, m.parms);
+      def parm_types_array = type_list_to_type_array (parm_types_list);
 
       (* create the constructor builder *)
       def constructor_builder = 
-        type_builder.DefineConstructor (this.make_method_attributes (m.modifiers),
-                                        CallingConventions.Standard, parameter_types);
+        type_builder.DefineConstructor (make_method_attributes (m.modifiers),
+                                        CallingConventions.Standard, parm_types_array);
 
-      CGIL_constructor (m, constructor_builder)
+      m.ctor_builder <- Some (constructor_builder);
+
+      CGIL_constructor (class_name, m, constructor_builder)
     }
 
     
@@ -544,76 +762,298 @@ namespace Nemerle.Compiler
     (**
      *
      *)    
-    private add_constructor_body (constructor : CM_method, constructor_builder : ConstructorBuilder) : void
+    private add_constructor_body (class_name : string, constructor : CM_method, constructor_builder : ConstructorBuilder) : void
     {
       def il_generator = constructor_builder.GetILGenerator ();
 
-      il_generator.Emit (OpCodes.Ret);
-    }
+      unless (CodeGenerator.has_base_ctor_call (constructor.body)) {      
+        Message.debug ("class " + class_name + " does not have a base ctor call, adding a default one");
+        
+        def class_type = reflect_type (class_name);
+        def base_type = 
+          if (class_type.BaseType == null)
+            typeof(System.Object)
+          else
+            class_type.BaseType;
 
+        Message.debug ("add_constructor_body " + class_name + ", base class: " + base_type.FullName);
+        
+        def default_ctor_info = base_type.GetConstructor (BindingFlags.NonPublic %| BindingFlags.Public %| 
+                                                          BindingFlags.Instance, null, System.Type.EmptyTypes, null);
+        assert (default_ctor_info != null);
+
+        il_generator.Emit (OpCodes.Ldarg_0);
+        il_generator.Emit (OpCodes.Call, default_ctor_info);
+      };
+
+      (* emit the constructor body, add the RET instruction only if it will be reachable *)
+      def cg = CodeGenerator (this, il_generator, class_name, constructor);
+      
+      unless (cg.emit ()) {
+        il_generator.Emit (OpCodes.Ret);
+      }
+    }
 
 
     (**
      *
      *)
-    private make_method_skeleton (m : CM_method, type_builder : TypeBuilder) : CGIL_tree
+    private make_method_skeleton (class_name : string, m : CM_method, type_builder : TypeBuilder) : CGIL_tree
     {
-      (* build the return type and parameter types *)      
+      (* build the return type and parameter types *)
       def mkparm (v : CG_val) : System.Type {
         this.reflect_nemerle_type (v.ty)
       };
-      
-      def return_type = this.reflect_nemerle_type (m.ret_type);
-              
-      def parameter_types = this.type_list_to_type_array (List.map (mkparm, m.parms));
+
+      def return_type = reflect_nemerle_type (m.ret_type);
+
+      def parm_types_list = List.map (mkparm, m.parms);
+      def parm_types_array = type_list_to_type_array (parm_types_list);
 
       (* add the method to the type builder *)
       def method_builder = 
-        type_builder.DefineMethod (m.name, this.make_method_attributes (m.modifiers),
-                                   return_type, parameter_types);
+        type_builder.DefineMethod (m.name, make_method_attributes (m.modifiers),
+                                   return_type, parm_types_array);
 
-      CGIL_method (m, method_builder)
+      if (is_static_method (m)) {
+        // Message.debug ("adding method " + encode_method_name (class_name, m.name, parm_types_list) + " to static method builders...");
+        _static_method_builders.Add (encode_method_name (class_name, m.name, parm_types_list), method_builder)
+      }
+      else {
+        // Message.debug ("adding method " + encode_method_name (class_name, m.name, parm_types_list) + " to instance method builders...");
+        _method_builders.Add (encode_method_name (class_name, m.name, parm_types_list), method_builder)
+      };
+
+      CGIL_method (class_name, m, method_builder)
     }
 
 
     (**
      *
-     *)    
-    private add_method_body (method : CM_method, method_builder : MethodBuilder) : void
+     *)
+    private add_method_body (class_name : string, method : CM_method, method_builder : MethodBuilder) : void
     {
       def il_generator = method_builder.GetILGenerator ();
 
-      when (method.name == "method_a") {
-        def _ = CodeGenerator (this, il_generator, method.body);
-        ()
-      };
-      
-      il_generator.Emit (OpCodes.Ldstr, "Hello world, my name is not Jan B.!");
+      (* emit the method body, add the RET instruction only if it will be reachable *)
+      def cg = CodeGenerator (this, il_generator, class_name, method);
 
-      def system_console = typeof(System.Console);
-
-      def method_info =
-        system_console.GetMethod ("WriteLine", (mkarray [typeof(string)] :> array (System.Type)));
-
-      il_generator.Emit (OpCodes.Call, method_info);
-      il_generator.Emit (OpCodes.Ret);
-
-    (*
-      def (pref, r) = make_complex (flat (m.body));
-      def ret =
-        if (is_dummy_type (m.ret_type))
-          side_effect_run (r)
-        else
-          if (is_dummy_type (type_of (m.body)))
-            side_effect_run (r) ++ "return null;\n"
-          else
-            "return " ++ r ++ ";\n";
-
-      print_st ("\n{\n" ++ pref ++ ret ++ "} // end of fun " ++ m.name ++ "\n")
-    *)
-
+      unless (cg.emit ()) {
+        il_generator.Emit (OpCodes.Ret)
+      }
     }
-    
+
+
+    (**
+     *
+     *)
+    internal get_ctor_info (ctor : CM_method, parm_types_list : list (System.Type)) : ConstructorInfo
+    {      
+      if (Option.is_some (ctor.ctor_builder)) {
+        def ctor_builder = Option.unsome (ctor.ctor_builder);
+        
+        (ctor_builder :> ConstructorInfo)
+      }
+      else {
+        def class_name = (ctor.extern_name).Substring (0, (ctor.extern_name).Length - 6);
+
+        def class_type = reflect_type (class_name);
+
+        if (class_type != null) {
+          def parm_types_array = type_list_to_type_array (parm_types_list);
+
+          def ctor_info =
+            class_type.GetConstructor (BindingFlags.Public %| BindingFlags.Instance %|
+                                       BindingFlags.FlattenHierarchy, null, parm_types_array, null);
+          assert (ctor_info != null);
+          
+          ctor_info
+        }
+        else {
+
+          Message.fatal_error ("could not find constructor for class " + class_name)
+        }
+      }
+    }
+
+
+    (**
+     *
+     *)
+    internal get_default_ctor_info (klass : CM_class, parm_types_list : list (System.Type)) : ConstructorInfo
+    {
+      if (Option.is_some (klass.default_ctor)) {
+        def ctor = Option.unsome (klass.default_ctor);
+        get_ctor_info (ctor, parm_types_list)
+      }
+      else {
+        // FIXME: search the externals
+        def class_type = reflect_type (klass.extern_name);
+
+        if (class_type != null) {
+          def parm_types_array = type_list_to_type_array (parm_types_list);
+
+          def ctor_info = 
+            class_type.GetConstructor (BindingFlags.Public %| BindingFlags.Instance %| 
+                                       BindingFlags.FlattenHierarchy, null, parm_types_array, null);
+          assert (ctor_info != null);
+          
+          ctor_info
+        }
+        else {
+
+          Message.fatal_error ("could not find default constructor for class " + klass.extern_name)
+        }
+      }
+    }
+
+
+    (**
+     *
+     *)
+    internal get_field_builder (field_name : string) : option (FieldBuilder)
+    {
+      _field_builders.Get (plus_to_dot (field_name))
+    }
+
+
+    (**
+     *
+     *)
+    internal get_field_info (field_name : string) : option (FieldInfo)
+    {
+      def field_builder = get_field_builder (field_name);
+
+      match (field_builder) {
+        | Some (field_builder) => Some ((field_builder :> FieldInfo))
+        | None =>
+          (* lookup the externals and the Framework *)
+          None () // FIXME
+      }
+    }
+
+    (**
+     *
+     *)
+    private encode_ctor_name (class_name : string, parms : list (System.Type)) : string 
+    {
+      def iter_parms (parms : list (System.Type)) {
+        match (parms) {
+          | [] => ""
+          | parm :: rest =>
+            "%%" + parm.FullName + iter_parms (rest)
+        }
+      };
+
+      class_name + "<<" + iter_parms (parms) + ">>"
+    }
+
+    (**
+     *
+     *)
+    private encode_method_name (class_name : string, method_name : string, parms : list (System.Type)) : string 
+    {
+      def iter_parms (parms : list (System.Type)) {
+        match (parms) {
+          | [] => ""
+          | parm :: rest =>
+            "%%" + parm.FullName + iter_parms (rest)
+        }
+      };
+
+      class_name + "::" + method_name + "<<" + iter_parms (parms) + ">>"
+    }
+
+
+    (**
+     *
+     *)
+    internal get_method_builder (encoded_method_name : string) : option (MethodBuilder)
+    {
+      _method_builders.Get (plus_to_dot (encoded_method_name))
+    }
+
+
+    (**
+     *
+     *)
+    internal get_method_info (class_name : string, method_name : string, 
+                              parm_types_list : list (System.Type)) : option (MethodInfo)
+    {
+      Message.debug ("get_method_info: " + encode_method_name (class_name, method_name, parm_types_list));
+
+      def method_builder = 
+        get_method_builder (encode_method_name (class_name, method_name, parm_types_list));
+
+      match (method_builder) {
+        | Some (method_builder) => Some ((method_builder :> MethodInfo))
+        | None =>
+          Message.debug ("get_method_info: " + class_name + "." + method_name + " not found in incomplete types");
+
+          def class_type = reflect_type (class_name);
+
+          if (class_type != null) {            
+            def parm_types_array = type_list_to_type_array (parm_types_list);
+
+            def method_info = 
+              class_type.GetMethod (method_name, BindingFlags.Public %| BindingFlags.Instance %| 
+                                    BindingFlags.FlattenHierarchy, null, parm_types_array, null);
+            assert (method_info != null);
+
+            Some (method_info)
+          }
+          else {
+            (* lookup the externals *)
+            None () // FIXME
+          }
+      }
+    }
+
+
+    (**
+     *
+     *)
+    internal get_static_method_builder (encoded_method_name : string) : option (MethodBuilder)
+    {
+      Message.debug ("get_static_method_builder " + encoded_method_name);
+
+      _static_method_builders.Get (plus_to_dot (encoded_method_name))
+    }
+
+
+    (**
+     *
+     *)
+    internal get_static_method_info (class_name : string, method_name : string, 
+                                     parm_types_list : list (System.Type)) : option (MethodInfo)
+    {
+      def method_builder =
+        get_static_method_builder (encode_method_name (class_name, method_name, parm_types_list));
+
+      match (method_builder) {
+        | Some (method_builder) => Some ((method_builder :> MethodInfo))
+        | None =>
+          Message.debug ("get_static_method_info: looking up in framework");
+          def class_type = reflect_type (class_name);
+
+          if (class_type != null) {
+            def parm_types_array = type_list_to_type_array (parm_types_list);
+
+            def method_info = 
+              class_type.GetMethod (method_name, BindingFlags.Public %| BindingFlags.Static %| 
+                                    BindingFlags.FlattenHierarchy, null, parm_types_array, null);
+            assert (method_info != null);
+
+            Some (method_info)
+          }
+          else {
+            (* lookup the externals *)
+            None () // FIXME
+          }
+      }
+    }
+
+
     (* -- PRIVATE FIELDS --------------------------------------------------- *)
 
     private mutable _assembly_name : System.Reflection.AssemblyName;
@@ -621,226 +1061,482 @@ namespace Nemerle.Compiler
     private mutable _module_builder : ModuleBuilder;
     private mutable _type_builder_queue : Queue (TypeBuilder);
     private mutable _emit_nemerle_attributes : bool;
+    private mutable _classes : Hashtable (string, CM_class);
+    private mutable _field_builders : Hashtable (string, FieldBuilder);
+    private mutable _method_builders : Hashtable (string, MethodBuilder);
+    private mutable _static_method_builders : Hashtable (string, MethodBuilder);
   }
 
+
+
+  (* ----------------------------------------------------------------------- *)
+  (* -- CODE GENERATOR CLASS ----------------------------------------------- *)
+  (* ----------------------------------------------------------------------- *)
+
+  (**
+   *
+   *)
   internal class CodeGenerator
   {
     private mutable _cgil : CGIL;
     private mutable _ilg : ILGenerator;
-    
+    private mutable _class_name : string;
+    private mutable _method_name : string;
+    private mutable _method_body : CG_expr;
+    private mutable _parms : list (CG_val);
+    private mutable _is_static_method : bool;
+    private mutable _tail_call_block_label : Label;
+
+
     (**
      *
      *)
-    internal this (cgil : CGIL, ilg : ILGenerator, method_body : CG_expr)
-    {    
+    internal this (cgil : CGIL, ilg : ILGenerator, class_name : string, method : CM_method)
+    {
       _cgil <- cgil;
       _ilg <- ilg;
-      
-      emit (method_body)
+      _class_name <- class_name;
+      _method_name <- method.extern_name;
+      _method_body <- method.body;
+      _parms <- method.parms;
+      _is_static_method <- _cgil.is_static_method (method);
     }
 
-    (**
-     *
-     *)    
-    private emit (expr : CG_expr) : void {
 
+    (**
+     * Emits the method body. Returns true if the expression ended
+     * with a control flow terminating instruction (like throw)
+     * -- meaning that the current branch has to be cut off in
+     * order to avoid dead code emission.
+     *)
+    internal emit () : bool 
+    {
+      Message.debug (" -- EMITTING " + _method_name + " --\n");
+
+      emit (_method_body)
+    }
+
+
+    (**
+     * Emits an expression.
+     *)
+    private emit (expr : CG_expr) : bool 
+    {
       // Message.debug ("CGIL: emit_il: " + pretty_print (expr));
 
       match (expr) {
-        | CE_literal (l) =>
-          match (l) {
-            | L_void => ()
-            | L_null => _ilg.Emit (OpCodes.Ldnull)
-            | L_int (k) => _ilg.Emit (OpCodes.Ldc_I4, k)
-            | L_bool (true) => _ilg.Emit (OpCodes.Ldc_I4_1)
-            | L_bool (false) => _ilg.Emit (OpCodes.Ldc_I4_0)
-            | L_char (k) => _ilg.Emit (OpCodes.Ldc_I4_S, k)
-            | L_string (s) => _ilg.Emit (OpCodes.Ldstr, s)
-            | L_float (v) => Util.ice ("CGIL: emit_il: CE_literal: L_float")
-          }
 
-        | CE_sequence ([]) => ()
+        (* -- SEQUENCING --------------------------------------------------- *)
 
-        | CE_sequence (body) =>
-          def cutoff_after_raise (e : list (CG_expr), acc : list (CG_expr)) : list (CG_expr) {
-            match (e) {
-              | [] => List.rev (acc)
-              | (CE_raise) as expr :: _ => 
-                cutoff_after_raise ([], (expr : CG_expr) :: acc) 
-              | (CE_restart) as expr :: _ => 
-                cutoff_after_raise ([], (expr : CG_expr) :: acc) 
-              | expr :: rest => 
-                cutoff_after_raise (rest, expr :: acc)
+        (* emits a sequence of expressions *)
+        | CE_sequence (expr_seq) =>
+          def emit_sequence (expr_seq : list (CG_expr)) : bool {
+            match (expr_seq) {
+              | [] => false
+              | expr :: rest =>
+                if (emit (expr)) true
+                else emit_sequence (rest)
             }
           };
 
-          def emit_sequence (expr : CG_expr) : void { emit (expr) };
-          List.iter (emit_sequence, cutoff_after_raise (body, []))
+          emit_sequence (expr_seq)
 
-(*          
-          def serialize (e : CG_expr) : String_tree
-            {
-              def (pre, r) = make_complex (flat (e));
-              pre ++ side_effect_run (r)
-            };
-          def concat (acc : String_tree, es : list (CG_expr)) : CS_code {
-            match (es) {
-              | [x] => 
-                def (pre, r) = make_complex (flat (x));
-                CS_complex (acc ++ pre, r)
-              | CE_skip :: xs =>
-                concat (acc, xs)
-              | x :: xs =>
-                concat (acc ++ serialize (x), xs)
-              | [] => CS_simple (ST_leaf ("null"))
-            }
-          };
-
-          concat (ST_leaf (""), cutoff_after_raise (body, []))
-*)
-
+        (* emits the local value definition *)
         | CE_let (let_val, let_in) =>
           match (let_val.val) {
             | CE_none =>
-              let_val.local_slot <- _ilg.DeclareLocal (_cgil.reflect_nemerle_type (let_val.ty));              
+              let_val.local_slot <- _ilg.DeclareLocal (_cgil.reflect_nemerle_type (let_val.ty));
+              let_val.local_slot.SetLocalSymInfo (let_val.name);
+
+              emit (let_in)
 
             | _ =>
-              emit (let_val.val);
-              
-              unless (is_dummy_type (let_val.ty)) {
-                let_val.local_slot <- _ilg.DeclareLocal (_cgil.reflect_nemerle_type (let_val.ty));
-                _ilg.Emit (OpCodes.Stloc_S, let_val.local_slot);
+              if (emit (let_val.val)) true
+              else {
+                if (is_dummy_type (let_val.ty)) false
+                else {
+                  let_val.local_slot <- _ilg.DeclareLocal (_cgil.reflect_nemerle_type (let_val.ty));
+                  let_val.local_slot.SetLocalSymInfo (let_val.name);
+                  _ilg.Emit (OpCodes.Stloc_S, let_val.local_slot);
+
+                  emit (let_in)
+                }
               }
           };
-          
-          emit (let_in)
-                
-(*              
-              def (p, r) = make_complex (flat (v.val));
-              def pref = 
-                if (is_dummy_type (v.ty))
-                  p ++ side_effect_run (r)
-                else
-                  p ++ flat_ty (v.ty) ++ " " ++ v.name ++ " = " ++ r ++ ";\n";
-              def (p, r) = make_complex (flat (e));
-              CS_complex (pref ++ p, r)
-*)
 
-        | CE_assign (CE_ref (local_var), expr) =>
+
+        (* -- ASSIGNMENTS -------------------------------------------------- *)
+
+        (* assignment to a local variable *)
+        // FIXME: what about out/ref parameters?
+        | CE_assign (CE_ref (local_var), val) =>
           assert (local_var.local_slot != null);
-          
-          emit (expr);
-          
-          _ilg.Emit (OpCodes.Stloc_S, local_var.local_slot)
-          
-(*          
-        | CE_assign (e1, e2) =>
-          Util.ice (
-          def (p1, r1) = make_complex (flat (e1));
-          def (p2, r2) = make_complex (flat (e2));
-          CS_complex (p1 ++ p2, r1 ++ " = " ++ r2)
-*)
 
+          if (emit (val)) true
+          else {
+            _ilg.Emit (OpCodes.Stloc_S, local_var.local_slot);
+            false
+          }
+
+        (* assignment to a field *)
+        | CE_assign (CE_field_ref (base_object, field), val) =>
+          def base_class_type = 
+            _cgil.reflect_nemerle_type (type_of (base_object));
+
+          assert (base_class_type != null);
+
+          def field_info = 
+            _cgil.get_field_info (base_class_type.FullName + "." + field.name);
+
+          assert (Option.is_some (field_info));
+
+          if (emit (base_object)) true
+          else if (emit (val)) true
+          else {
+            _ilg.Emit (OpCodes.Stfld, Option.unsome (field_info));
+            false
+          }
+
+        (* assignment to a property *)
+        | CE_assign (CE_property_ref (expr, prop), val) =>
+          Message.debug ("FIXME: CE_assign CE_property_ref");
+          false
+
+        (* assignment to a tuple element *)
+        | CE_assign (CE_tuple_ref (expr, index), val) =>
+          Message.debug ("FIXME: CE_assign CE_tuple_ref");
+          false
+
+
+        (* -- CONDITIONAL CONSTRUCTIONS ------------------------------------ *)
+
+        (* emits the if (true) instruction *)
+        | CE_if (_, CE_literal (L_bool (true)), e1, _) =>
+          emit (e1)
+
+        (* emits the if (false) instruction *)
+        | CE_if (_, CE_literal (L_bool (false)), _, e2) =>
+          emit (e2)
+
+        (* emits the if/then/else construction *)
+        | CE_if (_, c, e1, e2) =>
+          if (emit (c)) true
+          else {
+            def label_condition_else = _ilg.DefineLabel ();
+            def label_condition_fi = _ilg.DefineLabel ();
+
+            _ilg.Emit (OpCodes.Brfalse, label_condition_else);
+            
+            def cutoff_then = emit (e1);
+            unless (cutoff_then) { _ilg.Emit (OpCodes.Br, label_condition_fi) };
+
+            _ilg.MarkLabel (label_condition_else);
+            def cutoff_else = emit (e2);
+
+            _ilg.MarkLabel (label_condition_fi);
+            cutoff_then && cutoff_else
+          }
+
+
+        (* emit a type check construction *)
+        | CE_has_type (expr, ty) =>
+          if (emit (expr)) true
+          else {
+            def label_condition_not_null = _ilg.DefineLabel ();
+            def label_condition_has_type = _ilg.DefineLabel ();
+            def label_condition_continue = _ilg.DefineLabel ();
+
+            _ilg.Emit (OpCodes.Dup);
+            _ilg.Emit (OpCodes.Brtrue, label_condition_not_null);
+
+            emit_raise ("Nemerle.Core.Null_match");
+
+            _ilg.MarkLabel (label_condition_not_null);
+
+            def ty = _cgil.reflect_nemerle_type (ty);
+            assert (ty != null);
+
+            _ilg.Emit (OpCodes.Isinst, ty);
+            _ilg.Emit (OpCodes.Brtrue_S, label_condition_has_type);
+            _ilg.Emit (OpCodes.Ldc_I4_0);
+            _ilg.Emit (OpCodes.Br_S, label_condition_continue);
+            _ilg.MarkLabel (label_condition_has_type);
+            _ilg.Emit (OpCodes.Ldc_I4_1);
+            _ilg.MarkLabel (label_condition_continue);
+            false
+          }
+
+
+        (* -- TYPE CONVERSIONS --------------------------------------------- *)
+
+        (* special case: do not cast values to the CT_void type *)
+        | CE_cast (expr, CT_void) =>
+          // FIXME: should this pop the stack?
+          Message.warning ("CGIL: emit: casting expression to CT_void");
+          emit (expr)
+
+        (* box value types, cast all the other types to System.Object *)
+        | CE_cast (expr, CT_object)
+        | CE_cast (expr, CT_ref ("System.Object")) =>
+          if (emit (expr)) true
+          else {
+            def type_of_expr = type_of (expr);
+
+            if (_cgil.is_value_type (type_of_expr))
+              _ilg.Emit (OpCodes.Box, _cgil.reflect_nemerle_type (type_of_expr))
+            else
+              _ilg.Emit (OpCodes.Castclass, typeof(System.Object));
+
+            false
+          }
+
+        (* unbox, convert or upcast / downcast *)
+        | CE_cast (expr, cast_to_type) =>
+          if (emit (expr)) true
+          else {
+            if (_cgil.is_value_type (cast_to_type)) {
+              def type_of_expr = type_of (expr);
+
+              if (_cgil.is_value_type (type_of_expr)) {
+                // conversion between value types
+                Message.debug ("FIXME: CE_cast: conversion between value types")
+
+                // FIXME: add type checking / conversion here
+              }
+              else {
+                // unboxing
+                _ilg.Emit (OpCodes.Unbox, _cgil.reflect_nemerle_type (type_of_expr))
+              }
+            }
+            else {
+              // upcasting / downcasting
+              _ilg.Emit (OpCodes.Castclass, _cgil.reflect_nemerle_type (cast_to_type))
+            };
+
+            false
+          }
+
+
+        (* -- REFERENCES --------------------------------------------------- *)
+
+        (* load the value of a local variable or a method parameter *)
+        | CE_ref (decl) => 
+          match (find_parm (decl.name)) {
+            | Some ((parm, index)) =>
+              match (index) {
+                | 0 => _ilg.Emit (OpCodes.Ldarg_0)
+                | 1 => _ilg.Emit (OpCodes.Ldarg_1)
+                | 2 => _ilg.Emit (OpCodes.Ldarg_2)
+                | 3 => _ilg.Emit (OpCodes.Ldarg_3)
+                | n when n < 256 => _ilg.Emit (OpCodes.Ldarg_S, index)
+                | _ => _ilg.Emit (OpCodes.Ldarg, index)
+              }
+            | None =>
+              assert (decl.local_slot != null);
+              _ilg.Emit (OpCodes.Ldloc, decl.local_slot)
+          };
+          false
+
+        (* load the value of a field *)
+        | CE_field_ref (base_object, field) =>
+          if (emit (base_object)) true
+          else {
+            def base_class_type = 
+              _cgil.reflect_nemerle_type (type_of (base_object));
+              
+            assert (base_class_type != null);
+
+            def field_info = 
+              _cgil.get_field_info (base_class_type.FullName + "." + field.name);
+              
+            assert (Option.is_some (field_info));
+
+            _ilg.Emit (OpCodes.Ldfld, Option.unsome (field_info));
+            false
+          }
+
+        (* load the value of a property *)
+        | CE_property_ref (e, p) =>
+          Message.debug ("FIXME: CE_property_ref");
+          false
+
+          (* FIXME
+          def e = flat (e);
+          mono (e, csref (e) ++ "." ++ p.name)
+          *)
+
+        (* load the value of a tuple element *)
+        | CE_tuple_ref (e, n) => 
+          Message.debug ("FIXME: CE_tuple_ref");
+          false
+
+          (* FIXME
+          def e = flat (e);
+          mono (e, csref (e) ++ ".field" ++ string_of_int (n + 1))
+          *)
+
+
+        (* -- CALLS -------------------------------------------------------- *)
+
+        (* call the base constructor *)
+        | CE_call (CE_base (base_class), ctor_params) =>
+          _ilg.Emit (OpCodes.Ldarg_0);
+
+          if (emit_call_parameters (ctor_params)) true
+          else {
+            def ctor_info = _cgil.get_default_ctor_info (base_class, make_expr_call_parms (ctor_params));
+
+            _ilg.Emit (OpCodes.Call, ctor_info);
+            false
+          }
+
+
+        (* create a new object using a default constructor *)
+        | CE_call (CE_default_ctor_ref (ctor_class), ctor_params) =>
+          if (emit_call_parameters (ctor_params)) true
+          else {
+            def ctor_info = _cgil.get_default_ctor_info (ctor_class, make_expr_call_parms (ctor_params));
+
+            _ilg.Emit (OpCodes.Newobj, ctor_info);
+            false
+          }
+
+
+        (* create a new object *)
+        | CE_call (CE_ctor_ref (ctor_class, ctor), ctor_params) =>
+          if (emit_call_parameters (ctor_params)) true
+          else {
+            def ctor_info = _cgil.get_ctor_info (ctor, make_call_parms (ctor.parms));
+            
+            _ilg.Emit (OpCodes.Newobj, ctor_info);
+            false
+          }
+
+
+        (* emit a call to an instance method *)
+        | CE_call (CE_method_ref (base_object, method), method_params) => 
+          if (emit (base_object)) true
+          else {
+            def base_class_type = 
+              _cgil.reflect_nemerle_type (type_of (base_object));
+            assert (base_class_type != null);
+
+            def method_info = 
+              _cgil.get_method_info (base_class_type.FullName, method.name, 
+                                     make_call_parms (method.parms));
+            assert (Option.is_some (method_info));
+
+            if (emit_call_parameters (method_params)) true
+            else {
+              _ilg.Emit (OpCodes.Callvirt, Option.unsome (method_info));
+              false
+            }
+          }
+
+
+        (* emit a call to a static method *)
+        | CE_call (CE_global_ref ((CM_method) as m), parms) =>
+          if (emit_call_parameters (parms)) true
+          else {
+            match (m.extern_name) {
+              // FIXME: add type information to the %op notation
+              // FIXME: add the checked/unchecked flags
+              // FIXME: handle the overloaded operators properly (see == and != for System.String)
+              | "%op+" => _ilg.Emit (OpCodes.Add_Ovf);
+              | "%op-" => _ilg.Emit (OpCodes.Sub_Ovf);
+              | "%op*" => _ilg.Emit (OpCodes.Mul_Ovf);
+              | "%op/" => _ilg.Emit (OpCodes.Div);
+              | "%op%" => _ilg.Emit (OpCodes.Rem);
+              | "%op==" => _ilg.Emit (OpCodes.Ceq);
+              | "%op!=" => 
+                _ilg.Emit (OpCodes.Ceq);
+                _ilg.Emit (OpCodes.Ldc_I4_0);
+                _ilg.Emit (OpCodes.Ceq);
+              | "%op<" => emit_compare (OpCodes.Blt_S)
+              | "%op>" => emit_compare (OpCodes.Bgt_S)
+              | "%op<=" => emit_compare (OpCodes.Ble_S)
+              | "%op>=" => emit_compare (OpCodes.Bge_S)
+              | _ =>
+                Message.debug ("CE_call (CE_global_ref (" + m.extern_name + "), _)");
+              
+                def (class_name, method_name) = _cgil.split_global_ref (m.extern_name);
+
+                def method_info =
+                  _cgil.get_static_method_info (class_name, method_name, make_call_parms (m.parms));
+
+                assert (Option.is_some (method_info));
+
+                _ilg.Emit (OpCodes.Call, Option.unsome (method_info))
+            };
+
+            false
+          }
+
+(*
         | CE_call (function, instructions) => 
           List.iter (emit, instructions);
 
           emit (function)
+*)
 
-        | CE_if (_, CE_literal (L_bool (true)), e1, _) =>
-          emit (e1)
 
-        | CE_if (_, CE_literal (L_bool (false)), _, e2) =>
-          emit (e2)
+        (* -- TAIL CALLS --------------------------------------------------- *)
 
-        | CE_if (_, c, e1, e2) =>
-          def label_condition_else = _ilg.DefineLabel ();
-          def label_condition_fi = _ilg.DefineLabel ();
-            
-          emit (c);
-          _ilg.Emit (OpCodes.Brfalse, label_condition_else);          
-          
-          emit (e1);          
-          _ilg.Emit (OpCodes.Br, label_condition_fi);                    
+        // FIXME: convert this to tailcall/call
 
-          _ilg.MarkLabel (label_condition_else);
-          emit (e2);          
+        (* marks a method as tail calling *)
+        | CE_block (expr) =>
+          _tail_call_block_label <- _ilg.DefineLabel ();
+          emit (expr)
 
-          _ilg.MarkLabel (label_condition_fi);
 
-        | CE_ref (decl) => 
-          assert (decl.local_slot != null);          
-          _ilg.Emit (OpCodes.Ldloc, decl.local_slot)
+        (* restarts the method execution *)
+        | CE_restart =>
+          _ilg.Emit (OpCodes.Br, _tail_call_block_label);
+          true
 
-        | CE_global_ref (m) =>        
-          match (m.extern_name) {
-            // FIXME: add type information to the %op notation
-            // FIXME: add the checked/unchecked flags
-            | "%op+" => _ilg.Emit (OpCodes.Add_Ovf);
-            | "%op-" => _ilg.Emit (OpCodes.Sub_Ovf);
-            | "%op*" => _ilg.Emit (OpCodes.Mul_Ovf);
-            | "%op/" => _ilg.Emit (OpCodes.Div);
-            | "%op%" => _ilg.Emit (OpCodes.Rem);
-            | _ => () // Message.debug ("CE_global_ref extern_name: '" + m.extern_name + "', name: '" + m.name + "'");
+
+        (* -- MISC --------------------------------------------------------- *)
+
+        (* loads the 'this' pointer on the evaluation stack *)
+        | CE_this =>
+          assert (!_is_static_method);
+
+          _ilg.Emit (OpCodes.Ldarg_0);
+          false
+
+
+        (* loads a literal on the evaluation stack *)
+        | CE_literal (l) =>
+          emit_literal (l);
+          false
+
+
+        (* raise an exception *)
+        | CE_raise (exc) =>
+          if (emit (exc)) true
+          else {
+            _ilg.Emit (OpCodes.Throw);
+            true
           }
 
 
-(*
-        | CE_field_ref (e, f) =>
-          def e = flat (e);
-          mono (e, csref (e) ++ "." ++ f.name)
-        | CE_property_ref (e, p) =>
-          def e = flat (e);
-          mono (e, csref (e) ++ "." ++ p.name)
+        (* FIXME *)
+        | CE_tuple_ctor (es) =>
+          Message.debug ("FIXME: CE_tuple_ctor");
+          false
 
-        | CE_tuple_ref (e, n) => 
-          def e = flat (e);
-          mono (e, csref (e) ++ ".field" ++ string_of_int (n + 1))
+          (* FIXME: flat_call (ST_leaf ("new Nemerle.Tuple") ++ string_of_int (List.length (es)), es) *)
 
-        | CE_call (e, es) => 
-          match ((e, flat (e))) {
-            | (CE_base, CS_simple (s)) => 
-              match (flat_call (s, es)) {
-                | CS_simple (s) => base_class_ctor <- s; CS_simple (ST_leaf (""))
-                | _ => Util.ice ("complex expressions in base call")
-              }
-            | (_, CS_simple (s)) => flat_call (s, es)
-            | (_, CS_complex (pref, v)) => 
-              Util.ice ("CE_call on a complex instruction (" + st_flatten(pref) + ": " + st_flatten(v) + ")")
-          }
 
-        | CE_indexer (_, obj, args) =>
-          def (obj_pre, obj_val) = make_complex (flat (obj));
-          mutable indexers_pre <- ST_leaf ("");
-          def serialize (e : CG_expr) : String_tree {
-            def (pre, val) = make_complex (flat (e));
-            indexers_pre <- indexers_pre ++ pre;
-            val
-          };
-          def concat (acc : String_tree, indexers : list (CG_expr)) : String_tree {
-            match (indexers) {
-              | [] =>
-                acc ++ ST_leaf ("]")
-              | [indexer] =>          
-                acc ++ serialize (indexer) ++ ST_leaf ("]")
-              | indexer :: rest =>
-                concat (acc ++ serialize (indexer) ++ ST_leaf (", "), rest)
-            }
-          };
-          def indexers_val = concat (ST_leaf ("["), args);
-          simplify (CS_complex (obj_pre ++ indexers_pre, obj_val ++ indexers_val))
 
-        | CE_has_type (e, t) =>
-          def e = flat (e);
-          mono (e, "((" ++ csref (e) ++ " == null &&" ++ 
-                  " Nemerle.Core.Null_match.raise_self ()) || (" 
-                  ++ csref (e) ++ " is " ++ flat_ty (t) ++ "))")
-          
-        | CE_raise (x) =>
-          def (p, r) = make_complex (flat (x));
-          CS_complex (p ++ "throw " ++ r ++ ";\n", ST_leaf ("null"))
+        (* -- EXCEPTION HANDLING ------------------------------------------- *)
 
-        
-        | CE_try_with (e1', v, e2') =>
+        | CE_try_with (try_expr, catch_type, catch_expr) =>
+          Message.debug ("FIXME: CE_try_with");
+          false
+
+(*        
           def (p1, e1) = make_complex (flat (e1'));
           def (p2, e2) = make_complex (flat (e2'));
           def t = type_of (e1');
@@ -864,7 +1560,33 @@ namespace Nemerle.Compiler
                           tmpname ++ " = " ++ e2 ++ ";\n" ++
                         "}\n", ST_leaf (tmpname))
           }
-                      
+*)
+
+        (* -- TODO --------------------------------------------------------- *)
+
+(*
+
+        | CE_indexer (_, obj, args) =>
+          def (obj_pre, obj_val) = make_complex (flat (obj));
+          mutable indexers_pre <- ST_leaf ("");
+          def serialize (e : CG_expr) : String_tree {
+            def (pre, val) = make_complex (flat (e));
+            indexers_pre <- indexers_pre ++ pre;
+            val
+          };
+          def concat (acc : String_tree, indexers : list (CG_expr)) : String_tree {
+            match (indexers) {
+              | [] =>
+                acc ++ ST_leaf ("]")
+              | [indexer] =>          
+                acc ++ serialize (indexer) ++ ST_leaf ("]")
+              | indexer :: rest =>
+                concat (acc ++ serialize (indexer) ++ ST_leaf (", "), rest)
+            }
+          };
+          def indexers_val = concat (ST_leaf ("["), args);
+          simplify (CS_complex (obj_pre ++ indexers_pre, obj_val ++ indexers_val))
+
         | CE_try_finally (e1', e2') =>
           def (p1, e1) = make_complex (flat (e1'));
           def (p2, e2) = make_complex (flat (e2'));
@@ -889,8 +1611,7 @@ namespace Nemerle.Compiler
                           side_effect_run (e2) ++
                         "}\n", ST_leaf (tmpname))
           }
-                      
-          
+
         | CE_mkarray (initializers) =>
           mutable pref <- ST_leaf ("");
           def serialize (e : CG_expr) : String_tree {
@@ -910,49 +1631,224 @@ namespace Nemerle.Compiler
           };
           def body = concat (ST_leaf ("{ "), initializers);
           CS_complex (pref, body)
-          
-        | CE_this => CS_simple (ST_leaf ("this"))
-        | CE_base => CS_simple (ST_leaf ("base"))
-        | CE_skip => CS_simple (ST_leaf ("null"))
-        
-        | CE_cast (e, CT_void) => flat (e) // C# doesn't like (void)foo
-        
-        | CE_cast (e, t) =>
-          def e = flat (e); 
-          mono (e, "((" ++ flat_ty (t) ++ ")" ++ csref (e) ++ ")")
-                  
-        | CE_tuple_ctor (es) =>
-          flat_call (ST_leaf ("new Nemerle.Tuple") ++ string_of_int (List.length (es)), es)
-        
-        | CE_ctor_ref (c) => 
-          if (c.extern_name == "") 
-            Util.ice ("empty extern name " + c.ns + ":" + c.name)
-          else
-            CS_simple (ST_leaf ("new " + c.extern_name))
-        
-        | CE_method_ref (e, f) => 
-          def e = flat (e); 
-          mono (e, csref (e) ++ "." ++ f.name)
-
-        | CE_block (e) =>
-          def (pref, val) = make_complex (flat (e));
-          CS_complex ("_N_block_beg:\n" ++ pref, val)
-
-        | CE_restart =>
-          CS_complex (ST_leaf ("goto _N_block_beg;"), ST_leaf ("null"))
 *)
 
-        | CE_none => ()
+        | CE_skip => false
+        | CE_none => false
 
-        | _ => () // Message.warning ("CGIL: emit_il: expression match was not exhaustive")
+        | _ =>
+          Message.debug ("FIXME: unmatched: " + pretty_print (expr));
+          false
       }
-    }     
+    }
+
+
+    (**
+     * This method checks if a given expression contains 
+     * a call to a class' base constructor.
+     *)     
+    internal static has_base_ctor_call (expr : CG_expr) : bool 
+    {        
+      match (expr) {
+        | CE_sequence ([]) => false
+        | CE_sequence (body) => List.exists (has_base_ctor_call, body)
+        | CE_call (CE_base (_), _) => true
+        | CE_cast (expr, _)
+        | CE_block (expr) => has_base_ctor_call (expr)
+        | _ => false
+      }
+    }
+
+
+    (**
+     * Emits a literal
+     *)
+    private emit_literal (l : Literal) : void
+    {
+      match (l) {
+        | L_void => ()
+        | L_null => _ilg.Emit (OpCodes.Ldnull)
+        | L_int (k) => _ilg.Emit (OpCodes.Ldc_I4, k)
+        | L_bool (true) => _ilg.Emit (OpCodes.Ldc_I4_1)
+        | L_bool (false) => _ilg.Emit (OpCodes.Ldc_I4_0)
+        | L_char (k) => _ilg.Emit (OpCodes.Ldc_I4_S, k)
+        | L_string (s) => _ilg.Emit (OpCodes.Ldstr, s)
+        | L_float (v) => Util.ice ("CGIL: emit_il: CE_literal: L_float")
+      }
+    }
+
+
+    (**
+     * Emits a list of expressions. This is used to emit call parameters,
+     * specialization allows better error messages here.
+     *)
+    private emit_call_parameters (parms : list (CG_expr)) : bool
+    {
+      match (parms) {
+        | [] => false
+        | parm :: rest =>
+          if (emit (parm)) {
+            Message.warning ("a control-flow terminating call parameter in " + _method_name);
+            true
+          }
+          else emit_call_parameters (rest)
+      }
+    }
 
 
     (**
      *
      *)
-    pretty_print_list (exs : list(CG_expr), acc : string) : string {
+    private emit_compare (opcode : OpCode) : void
+    {
+      def label_condition_met = _ilg.DefineLabel ();
+      def label_condition_not_met = _ilg.DefineLabel ();
+
+      _ilg.Emit (opcode, label_condition_met);
+      _ilg.Emit (OpCodes.Ldc_I4_0);
+      _ilg.Emit (OpCodes.Br, label_condition_not_met);
+      _ilg.MarkLabel (label_condition_met);
+      _ilg.Emit (OpCodes.Ldc_I4_1);
+      _ilg.MarkLabel (label_condition_not_met)
+    }
+
+
+    (**
+     *
+     *)
+    private make_call_parms (parms : list (CG_val)) : list (System.Type)
+    {
+      def mk_parm (parm : CG_val) : System.Type {
+        _cgil.reflect_nemerle_type (parm.ty)
+      };
+
+      List.map (mk_parm, parms)    
+    }
+
+
+    (**
+     *
+     *)
+    private make_expr_call_parms (parms : list (CG_expr)) : list (System.Type)
+    {
+      def mk_parm (parm : CG_expr) : System.Type {
+        _cgil.reflect_nemerle_type (type_of (parm))
+      };
+
+      List.map (mk_parm, parms)
+    }
+
+
+    (**
+     * Emits a code that raises an exception, using the exception 
+     * class' default constructor.
+     *
+     * FIXME: this only works for types being built
+     *)
+    private emit_raise (exception_name : string) : void
+    {
+      def klass = Option.unsome (_cgil.get_class_by_name (exception_name));
+      def ctor_info = _cgil.get_default_ctor_info (klass, []);
+
+      _ilg.Emit (OpCodes.Newobj, ctor_info);
+      _ilg.Emit (OpCodes.Throw)
+    }
+
+    
+    (**
+     * FIXME: put these values in a lookup table?
+     *)
+    private find_parm (parm_name : string) : option (CG_val * int)
+    {
+      def arg_index_offset = if (_is_static_method) 0 else 1;
+
+      def find_parm_by_name (parms : list (CG_val), index) {
+        match (parms) {
+          | [] => None ()
+          | parm :: rest =>
+            if (parm.name == parm_name)
+              Some ((parm, index))
+            else
+              find_parm_by_name (rest, index + 1)
+        }
+      };
+
+      find_parm_by_name (_parms, arg_index_offset);
+    }
+
+
+    (**
+     *
+     *)
+    private class_type (c : CM_class) : CG_type
+    { 
+      CT_ref (c.ns + c.name) 
+    }
+
+
+    (**
+     *
+     *)
+    type_of (ex : CG_expr) : CG_type 
+    {
+      match (ex) {
+        | CE_ref (d) => d.ty
+        | CE_global_ref ((CM_field) as f) => f.ty
+        | CE_global_ref ((CM_property) as p) => p.ty
+        | CE_field_ref (_, f) => f.ty
+        | CE_property_ref (_, p) => p.ty
+        | CE_tuple_ref => CT_object ()
+        | CE_call (CE_global_ref ((CM_method) as m), _) => m.ret_type
+        | CE_call (CE_method_ref (_, m), _) => m.ret_type
+        | CE_call (CE_default_ctor_ref (c), _) => class_type (c)
+        | CE_call (CE_ctor_ref (c, _), _) => class_type (c)
+        | CE_call (CE_base, _) => CT_void ()
+        | CE_call => Util.ice ()
+        | CE_assign => CT_void ()
+        | CE_let (_, b) => type_of (b)
+        | CE_has_type => CT_bool ()
+        | CE_raise => CT_unreached ()
+        | CE_if (t, _, _, _) => t
+        | CE_try_with (e, _, _) => type_of (e)
+        | CE_try_finally (e, _) => type_of (e)
+        | CE_literal (l) => 
+          match (l) {
+            | L_void => CT_void ()
+            | L_null => CT_object ()
+            | L_int => CT_ref ("int")
+            | L_char => CT_ref ("char")
+            | L_string => CT_ref ("string")
+            | L_float => CT_ref ("float")
+            | L_bool => CT_ref ("bool")
+          }
+        | CE_this => CT_ref (_class_name)
+        | CE_skip => CT_void ()
+        | CE_cast (_, t) => t
+        | CE_sequence (b) => type_of (List.last (b))
+        | CE_tuple_ctor (es) => CT_tuple (List.length (es))
+        // can't tell
+        | CE_none => Util.ice ()
+        // these are supported only as part of call
+        | CE_global_ref (CM_method) => Util.ice ()
+        | CE_global_ref (CM_class) => Util.ice ()
+        | CE_default_ctor_ref => Util.ice ()
+        | CE_ctor_ref => Util.ice ()
+        | CE_method_ref => Util.ice ()
+        | CE_base => Util.ice ()
+        | CE_mkarray (x :: _) => CT_array (type_of (x))
+        | CE_mkarray ([]) => CT_array (CT_object ())
+        | CE_indexer (t, obj, args) => t
+        | CE_block (expr) => type_of (expr)
+        | CE_restart => CT_void ()
+      }
+    }
+
+
+    (**
+     *
+     *)
+    pretty_print_list (exs : list (CG_expr), acc : string) : string 
+    {
       match (exs) {
         | [] => acc
         | ex :: rest => pretty_print_list (rest, acc + pretty_print (ex))
@@ -963,16 +1859,18 @@ namespace Nemerle.Compiler
     (**
      *
      *)
-    pretty_print (ex : CG_expr) : string {
+    pretty_print (ex : CG_expr) : string 
+    {
       match (ex) {
         | CE_ref (decl) => "CE_ref; "
         | CE_global_ref (decl) => "CE_global_ref; "
-        | CE_ctor_ref (klass) => "CE_ctor_ref; "
+        | CE_default_ctor_ref (klass) => "CE_ctor_ref; "
+        | CE_ctor_ref (klass, _) => "CE_ctor_ref; "
         | CE_field_ref (obj, fld) => "CE_field_ref; "
         | CE_property_ref (obj, prop) => "CE_property_ref; "
         | CE_method_ref (obj, meth) => "CE_method_ref; "
         | CE_tuple_ref (obj, pos) => "CE_tuple_ref; "
-        | CE_call (func, parms) => "CE_call; "
+        | CE_call (func, parms) => "CE_call " + pretty_print (func) + " (" + pretty_print_list (parms, "") + "); "
         | CE_assign (target, source) => 
           pretty_print (target) + " = " + pretty_print (source) + "; "
         | CE_let (name, body) => 
@@ -1002,13 +1900,14 @@ namespace Nemerle.Compiler
     (**
      *
      *)
-    private is_dummy_type (t : CG_type) : bool {
+    private is_dummy_type (t : CG_type) : bool 
+    {
       match (t) {
         | CT_void => true
         | CT_unreached => true
         | _ => false
       }
-    }    
-  } (* end of the module *)
+    }
+  } (* end of the class *)
   
 } (* end of the namespace *)
