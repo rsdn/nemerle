@@ -1,2 +1,2 @@
-all clean:
+all clean v:
 	$(MAKE) -C .. $@
