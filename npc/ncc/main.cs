@@ -64,6 +64,8 @@ class MainClass {
 			bomb(e, "got parsing exception, but no error seen");
 		} catch (Recovery e) {
 			bomb(e, "got Recovery exception");
+		} catch (Nemerle.Core.Invalid_argument e) {
+			bomb(e, "got Invalid_argument (" + e.msg + ")");
 		} catch (Nemerle.Core.Match_failure e) {
 			bomb(e, "got Match_failure exception");
 		} catch (ICE i) {
