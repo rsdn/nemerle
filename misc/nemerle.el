@@ -62,6 +62,9 @@
 
 ;;; Change Log:
 
+;; 2004-01-23
+;;   * indent to open parenthesis
+
 ;; 2004-01-21 rzyjontko <rzyj@plusnet.pl>
 ;;   * improved indentation
 ;;   * changed syntax table
@@ -165,15 +168,11 @@ buffer created.  This is a good place to put your customizations.")
   
   (modify-syntax-entry ?\( "()1"  nemerle-mode-syntax-table)
   (modify-syntax-entry ?\) ")(4"  nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\* ". 23" nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\/ ". 14" nemerle-mode-syntax-table)
-  (modify-syntax-entry ?_  "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\' "_"    nemerle-mode-syntax-table))
+  (modify-syntax-entry ?_  "w"    nemerle-mode-syntax-table))
 
 
 
 (defun nemerle-syntax ()
-  "Returns syntactic information."
   (save-excursion
     (beginning-of-line)
     (cond ((looking-at "[ \t]*\\<try\\>")
@@ -197,26 +196,36 @@ buffer created.  This is a good place to put your customizations.")
 
 
 (defun nemerle-prev-line ()
-  "Calculates indentation level for the previous line, and checks
-its syntatctic information."
   (save-excursion
     (beginning-of-line)
     (if (bobp)
 	0
-      (skip-chars-backward " \t\n")
-      (beginning-of-line)
-      (let ((syntax (nemerle-syntax))
-	    (indent (current-indentation)))
-	(cons indent syntax)))))
+      (let ((there (point)))
+	(skip-chars-backward " \t\n")
+	(beginning-of-line)
+	(let* ((here (point))
+	       (syntax (nemerle-syntax))
+	       (indent (current-indentation))
+	       (state (parse-partial-sexp here there)))
+	  (cond ((and (< (nth 0 state) 0) (eq ?\) (nth 2 state)))
+		 (goto-char (scan-lists (nth 2 state) -1 1))
+		 (cons (current-indentation) (nemerle-syntax)))
+	        ((null (nth 1 state))
+		 (cons indent syntax))
+		((eq (char-after (nth 1 state)) ?\()
+		 (cons (- (nth 1 state) here) 'open-paren))
+		(t
+		 (cons indent syntax))))))))
 
 
 (defun nemerle-calculate-indentation ()
-  "Calculates indentation level for the current line."
   (let* ((prev-info (nemerle-prev-line))
 	 (prev-indent (car prev-info))
 	 (prev-syntax (cdr prev-info))
 	 (cur-syntax (nemerle-syntax)))
-    (cond ((eq prev-syntax 'match-case)	; match-case
+    (cond ((eq prev-syntax 'open-paren)
+	   (1+ prev-indent))
+	  ((eq prev-syntax 'match-case)	; match-case
 	   (cond ((eq cur-syntax 'match-case)
 		  prev-indent)
 		 ((eq cur-syntax 'block-end)
@@ -254,7 +263,6 @@ its syntatctic information."
 
 
 (defun nemerle-indent-to (level)
-  "Indent to given column."
   (save-excursion
     (beginning-of-line)
     (skip-chars-forward " \t")
@@ -265,11 +273,13 @@ its syntatctic information."
       (skip-chars-forward " \t")))
   
 
+
 (defun nemerle-indent-line ()
   "Indent current line of nemerle code."
   (interactive)
   (let ((level (nemerle-calculate-indentation)))
     (nemerle-indent-to level)))
+
 
 
 (defun nemerle-electric-bar (arg)
