@@ -84,7 +84,10 @@ pdf: $(ps) $(pdf)
 	$(Q)$(XSLT) -o $@ mainStyle.xsl $<
 	$(Q)perl styles/include-sources $@
 
-grokking.html:: src/nem-examples/grokking.n
+grokking.html:: src/nem-examples/grokking.n dumper
+
+dumper: ../misc/htmldumper/dumper.exe
+	$(MAKE) -C ../misc/htmldumper all
 
 course/%.html: course-src/%.xml mainStyle.xsl
 	$(XSLT_) $@
