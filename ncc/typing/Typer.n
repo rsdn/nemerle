@@ -237,6 +237,19 @@ namespace Nemerle.Compiler
     }
 
 
+    /** Filter out wrong nodes, and if more then one left -- make the
+        [Overloaded] node, and register it.
+
+        Wrong node is [Error] node, or one type of which cannot unify with
+        [expected].
+        
+        Nodes are registered only if solver stack is empty. */
+    [Nemerle.NotImplemented]
+    MakeOverloadedNode (exprs : list [TExpr], expected : TyVar) : TExpr
+    {
+    }
+
+
     [Nemerle.NotImplemented]
     PushLocals () : void
     {
@@ -248,7 +261,78 @@ namespace Nemerle.Compiler
     {
     }
 
+    /** Run given typing action, without possiblity of any error messages. */
+    TryTyping (fn : void -> TExpr) : TExpr
+    {
+      solver.PushState ();
+      def is_wrong = IsError (fn ());
+      solver.PopState ();
+      if (is_wrong)
+        TExpr.Error ()
+      else
+        // we cannot reuse the previous result, since it's has been
+        // popped off the stack
+        fn ()
+    }
 
+    IsError (expr : TExpr) : bool
+    {
+      expr matches TExpr.Error
+    }
+
+
+    TypeMember (obj : PT.PExpr, mem_name : string, expected : TyVar) : TExpr
+    {
+      // XXX we should add a bound here, that the type should have the
+      // field mem_name
+      def tv = FreshTyVar ("left hand side of the dot");
+      def obj = TypeExpr (obj, tv);
+      if (tv.IsFixed) {
+        def mems = Hashtable ();
+        mutable res = [];
+
+        def lookup (t) {
+          | MType.Class (tc, args) =>
+            foreach (mem : IMember in tc.LookupMember (mem_name))
+              when (!mems.Contains (mem.GetId ())) {
+                def ty =
+                  match (mem) {
+                    | meth : IMethod =>
+                      meth.GetFreshType ()
+                    | mem : IMember =>
+                      mem.GetMemType ()
+                  };
+                def ty = tc.SubtypingSubst (mem.DeclaringType).Apply (ty);
+                def ty = tc.MakeSubst (args).Apply (ty);
+                mems [mem.GetId ()] = null;
+                res = TExpr.Member (ty, obj, mem) :: res;
+              }
+          | MType.TyVar (tv) =>
+            List.Iter (tv.Constraints, lookup)
+          | MType.Array =>
+            lookup (InternalType.Array)
+          | MType.Intersection (lst) =>
+            List.Iter (lst, lookup)
+          | _ => ()
+        }
+        lookup (Option.UnSome (tv.LowerBound));
+        MakeOverloadedNode (res, expected)
+      } else if (IsError (obj)) {
+        obj
+      } else {
+        // FIXME: here we should traverse all type paths from lower to
+        // upper bound and look how this field is defined there, and finally
+        // add maybe-more-specific lower bound
+        if (cannot_delay) {
+          Message.error ($ "cannot find determine proper type for `$(tv)', "
+                           "to find member `$(mem_name)'");
+          TExpr.Error ()
+        } else
+          Delay (<[ $(obj : typed) . $mem_name ]>)
+      }
+    }
+
+    
     DoType (expression : PT.PExpr, expected : TyVar) : TExpr
     {
       match (expression) {
@@ -364,18 +448,30 @@ namespace Nemerle.Compiler
           TExpr.TypeEnforcement (e, t)
 
 
-        | PT.PExpr.Member (_, PT.Splicable.Name (({idl = _}) as name))
-        | PT.PExpr.Ref (({ idl = _ }) as name) =>
-          match (MakeValueReference (expression, expected, fallback = false)) {
-            | [x] => MakeFirstClass (x)
+        | PT.PExpr.Ref (name) =>
+          TypeName (name, expected)
+          
+        | PT.PExpr.Member (obj, PT.Splicable.Name (name)) =>
+          assert (List.Length (name.idl) == 1);
+          def mem_name = name.Id;
+          match (Util.qidl_of_expr (expression)) {
+            | Some ((idl, name)) => 
+              def name' = PT.Name (idl, name.color, name.context);
+              def res1 = TryTyping (fun () {
+                TypeName (name', expected)
+              });
+              def res2 = TryTyping (fun () {
+                TypeMember (obj, mem_name, expected) 
+              });
 
-            | l when cannot_delay =>
-              Message.error ($ "name `$(name)' is ambiguous:");
-              foreach (ex in l) Message.error ("  " + describe_expression (ex));
-              throw Recovery ()
+              if (IsError (res1) && IsError (res2))
+                // run the typing again, so it will present
+                // the error message if needed
+                TypeName (name', expected)
+              else
+                MakeOverloadedNode ([res1, res2], expected)
 
-            | _ =>
-              Delay (expression)
+            | None => TypeMember (obj, mem_name, expected)
           }
 
 
