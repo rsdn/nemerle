@@ -2321,6 +2321,7 @@ accessor_declarations[string tp]
 get_accessor_declaration[string tp]
     :   (attributes)?   (constant_modifier)*
 	g:IDENTIFIER {ExtendedToken.getTextOnly(g)=="get" }?  
+	{Emit.EmitToken(g);}
         accessor_body[tp]
     ;
 
