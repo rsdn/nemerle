@@ -29,6 +29,8 @@
 using Nemerle.Collections;
 using Nemerle.Utility;
 
+using System.IO;
+
 namespace PT = Nemerle.Compiler.Parsetree;
 namespace SR = System.Reflection;
 using Nemerle.Compiler.Typedtree;
@@ -37,12 +39,16 @@ namespace Nemerle.Compiler
 {
   module AttributeCompiler
   {
+    mutable assembly_attributes : list <GlobalEnv * PT.Expr>;
+    mutable resolved_assembly_attrs : list <GlobalEnv * Tycon * list <PT.Expr>>;
+
+    this () { 
+      assembly_attributes = [];
+    }
 
     compile_expr (env : GlobalEnv, ti : TypeBuilder, allow_rec : bool, 
                   expr : PT.Expr) : object * Type
     {
-      def expr = ConstantFolder.FoldConstants (env, expr);
-
       match (expr) {
         | <[ $(x : string) ]> => ((x : object), InternalType.String)
         | <[ $(x : bool) ]> => ((x : object), InternalType.Boolean)
@@ -57,8 +63,8 @@ namespace Nemerle.Compiler
               (t.FromLiteral (lit), t.GetNemerleType ())
             | None => assert (false)
           }
-      // FIXME: we have no TypeBuilder in [assembly: .. ]
-        | <[ typeof ($t) ]> =>
+
+        | <[ typeof ($t) ]> when ti != null =>
           match (ti.BindType (t)) {
             | T_app (tc, []) =>
               (tc.GetSystemType (), InternalType.Type)
@@ -68,6 +74,10 @@ namespace Nemerle.Compiler
               Message.fatal_error ("complex type expressions are not allowed in"
                                    " attributes: " + bld.ToString ())
           }
+
+        // FIXME: 
+        | <[ typeof ($_) ]> when ti != null =>
+          Util.ice ("typeof in assembly attributes not implementes");
 
         | <[ array $elems ]> when allow_rec =>
           def flatten_expr_list (e) {
@@ -206,6 +216,13 @@ namespace Nemerle.Compiler
     internal static CompileAttribute (env : GlobalEnv, ti : TypeBuilder, expr : PT.Expr)
         : SR.Emit.CustomAttributeBuilder
     {
+      def (_, tc, parms) = ResolveAttribute (env, expr);
+      do_compile (env, ti, tc, parms);
+    }
+
+    internal static ResolveAttribute (env : GlobalEnv, expr : PT.Expr) 
+    : GlobalEnv * Tycon * list <PT.Expr>
+    {
       def add_end (l, suff : string) {
         match (l) {
           | [x] => [x + suff]
@@ -218,27 +235,29 @@ namespace Nemerle.Compiler
         match (expr) {
           | <[ $(_ : name) ]>
           | <[ $_x . $_y ]> =>
-            CompileAttribute (env, ti, <[ $expr () ]>)
+            ResolveAttribute (env, <[ $expr () ]>)
             
           | <[ $name ( .. $parms ) ]> =>
+            def parms = List.Map (parms, fun (expr) { 
+              ConstantFolder.FoldConstants (env, expr);
+            });
             match (Util.qidl_of_expr (name)) {
               | Some ((id, name)) =>
                 def ctx = name.GetEnv (env); 
-                def tc =
-                  match (ctx.LookupType (id)) {
-                    | Some (t) => t
-                    | None =>
+                match (ctx.LookupType (id)) {
+                  | Some (t)  => (env, t, parms)
+                  | None =>
                       match (ctx.LookupType (add_end (id, "Attribute"))) {
-                        | Some (t) => t
+                        | Some (t) => (env, t, parms)
                         | None =>
                           Message.fatal_error ("the custom attribute type `" + 
                                                Util.qid_of_list (id) +
                                                "' could not be found")
                       }
-                  };
-                do_compile (env, ti, tc, parms)
+                };
+                
               | None =>
-                Message.fatal_error ("this expression is not valid custom"
+                Message.fatal_error ("this expression is not a valid custom"
                                      " attribute name")
             }
 
@@ -247,5 +266,54 @@ namespace Nemerle.Compiler
         })
     }
 
+    internal static AddAssemblyAttribute (env : GlobalEnv, att : PT.Expr) : void {
+      assembly_attributes = (env, att) :: assembly_attributes;
+    }
+
+    internal static GetCompiledAssemblyAttributes () : list <SR.Emit.CustomAttributeBuilder> {
+       List.Map (resolved_assembly_attrs, fun (env, tc, parms) {
+        do_compile (env, null, tc, parms);      
+       });
+    }
+
+    internal CreateAssemblyName () : SR.AssemblyName
+    {
+      /* obtain TypeInfo of assembly attributes' constructors */
+      resolved_assembly_attrs = List.Map (assembly_attributes, ResolveAttribute);
+
+      /* create an assembly name and set its properties according to defined
+         global assembly attributes */
+      def an = SR.AssemblyName ();
+      List.Iter (resolved_assembly_attrs, fun (_, tc : Tycon, parms) {
+        def take_string (pars) {
+          | [ <[ $(x : string) ]> ] => x
+          | _ => Message.fatal_error ("given attribute must have single string as parameter")
+        }
+        if (tc.SameAs (Option.UnSome (GlobalEnv.
+          LookupExactType (["System", "Reflection", "AssemblyVersionAttribute"])))) {
+          an.Version = System.Version (take_string (parms));
+        }
+        else if (tc.SameAs (Option.UnSome (GlobalEnv.
+          LookupExactType (["System", "Reflection", "AssemblyKeyFileAttribute"])))) {
+          an.KeyPair = read_keypair (take_string (parms));
+        }
+        else when (tc.SameAs (Option.UnSome (GlobalEnv.
+          LookupExactType (["System", "Reflection", "AssemblyCultureAttribute"])))) {
+          an.CultureInfo = System.Globalization.CultureInfo (take_string (parms));
+        }
+      });
+      an
+    }
+
+    private read_keypair (name : string) : SR.StrongNameKeyPair 
+    {
+      try {
+        SR.StrongNameKeyPair(File.Open(name, FileMode.Open, FileAccess.Read))
+      }
+      catch {
+        | _ : FileNotFoundException =>
+          Message.fatal_error ("could not find file `" + name + "' with key pair for assembly")
+      }
+    }
   }
 }
