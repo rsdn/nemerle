@@ -66,7 +66,7 @@ syn keyword nemerleModifier abstract extern internal new private protected
 syn keyword nemerleModifier public sealed virtual static override
 
 syn keyword nemerleTopDecl class interface syntax module namespace type implements
-syn keyword nemerleTopDecl extends struct using macro
+syn keyword nemerleTopDecl extends struct using macro enum
 
 syn keyword nemerleKeyword and as catch def finally fun match out params ref throw
 syn keyword nemerleKeyword try typeof variant when where array mutable
@@ -97,8 +97,6 @@ syn cluster nemerleCommentGroup	contains=nemerleTodo
 syn match nemerleComment	"//.*$"	contains=@nemerleCommentGroup
 syn region nemerleComment start="/\*" end="\*/" contains=@nemerleCommentGroup
 
-syn match	nemerleModPrefix	"[A-Z][a-zA-Z_0-9]*\."
-
 syn match	nemerleSpecial	display contained "\\\(x\x\x\|.\|$\)"
 syn region	nemerleString	start=+L\="+ skip=+\\\\\|\\"+ end=+"+ contains=nemerleSpecial
 
@@ -118,7 +116,6 @@ if version >= 508 || !exists("did_nemerle_syntax_inits")
 
 "  HiLink nemerleIdentifier	Identifier
 "  HiLink nemerleUIdentifier	Constant
-  HiLink nemerleModPrefix	Include
   HiLink nemerleComment	Comment
   HiLink nemerleKeyword	Statement
   HiLink nemerleTopDecl	Statement
