@@ -164,8 +164,8 @@ nemerle-web.tar.gz: $(normal_docs) $(wildcard styles/*.js styles/*.css styles/*.
 publish: publish-stamp
 
 publish-stamp: nemerle-web.tar.gz
-	cp nemerle-web.tar.gz /home/services/httpd/html
-	(cd /home/services/httpd/html; tar zxf nemerle-web.tar.gz)
+	cp nemerle-web.tar.gz /home/services/nemerle.org
+	(cd /home/services/nemerle.org; tar zxf nemerle-web.tar.gz)
 	touch publish-stamp
 
 dist-cleaner: all
