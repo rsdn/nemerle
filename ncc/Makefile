@@ -107,7 +107,10 @@ NEMERLE_COMPILER_DLL_SRC = \
 	attribute.n \
 	AssemblyInfo.n \
 	pretty-print.n \
-	delegates.n
+	delegates.n \
+	codedom/NemerleCodeCompiler.n \
+	codedom/NemerleCodeProvider.n \
+	codedom/NemerleCodeGenerator.n
 
 
 NCC_EXE_SRC       = main.n
