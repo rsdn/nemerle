@@ -7192,10 +7192,15 @@ _loop234_breakloop:				;
 	public void using_directive() //throws RecognitionException, TokenStreamException
 {
 		
-		Token  u = null;
+		Token  u1 = null;
 		Token  id = null;
 		Token  a = null;
-		Token  s = null;
+		Token  s1 = null;
+		Token  u2 = null;
+		Token  s2 = null;
+		
+		string nn = "";
+		
 		
 		try {      // for error handling
 			bool synPredMatched247 = false;
@@ -7220,7 +7225,7 @@ _loop234_breakloop:				;
 			}
 			if ( synPredMatched247 )
 			{
-				u = LT(1);
+				u1 = LT(1);
 				match(USING);
 				id = LT(1);
 				match(IDENTIFIER);
@@ -7229,35 +7234,39 @@ _loop234_breakloop:				;
 				if (0==inputState.guessing)
 				{
 					
-					Emit.EmitToken (u);
+					Emit.EmitToken (u1);
 					Emit.EmitToken (id);
 					Emit.EmitToken (a);
 					
 				}
-				namespace_or_type_name();
-				s = LT(1);
+				nn=namespace_or_type_name();
+				s1 = LT(1);
 				match(SEMI);
 				if (0==inputState.guessing)
 				{
 					
-					Emit.EmitToken (s);
+					Emit.EmitString (nn);
+					Emit.EmitToken (s1);
 					
 				}
 			}
 			else if ((LA(1)==USING) && (LA(2)==IDENTIFIER)) {
+				u2 = LT(1);
 				match(USING);
 				if (0==inputState.guessing)
 				{
 					
-					Emit.EmitToken (u);
+					Emit.EmitToken (u2);
 					
 				}
-				namespace_name();
+				nn=namespace_name();
+				s2 = LT(1);
 				match(SEMI);
 				if (0==inputState.guessing)
 				{
 					
-					Emit.EmitToken (s);
+					Emit.EmitString (nn);
+					Emit.EmitToken (s2);
 					
 				}
 			}

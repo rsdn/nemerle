@@ -1346,25 +1346,30 @@ namespace_body
 
 
 using_directive
+{
+    string nn = "";
+}
     :   (USING  IDENTIFIER ASSIGN)=> 
-        u:USING  id:IDENTIFIER a:ASSIGN  
+        u1:USING  id:IDENTIFIER a:ASSIGN  
         {
-            Emit.EmitToken (u);
+            Emit.EmitToken (u1);
             Emit.EmitToken (id);
             Emit.EmitToken (a);
         }
-        namespace_or_type_name s:SEMI
-        {         
-            Emit.EmitToken (s);
+        nn = namespace_or_type_name s1:SEMI
+        {    
+            Emit.EmitString (nn);
+            Emit.EmitToken (s1);
         }
-    |   USING  
+    |   u2:USING  
         {         
-            Emit.EmitToken (u);
+            Emit.EmitToken (u2);
         }
-        namespace_name 
-        SEMI
+        nn = namespace_name 
+        s2:SEMI
         {         
-            Emit.EmitToken (s);
+            Emit.EmitString (nn);
+            Emit.EmitToken (s2);
         }
     ;
 
