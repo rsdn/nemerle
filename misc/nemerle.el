@@ -148,6 +148,9 @@ buffer created.  This is a good place to put your customizations.")
 	   0 font-lock-keyword-face)
 	 '("=>\\||" 0 font-lock-keyword-face)
 
+	 '("\\<\\(foreach\\)\\s *(.*:\\s *\\(\\w*\\)\\s *\\(in\\)"
+	   (1 font-lock-keyword-face) (2 font-lock-type-face) (3 font-lock-keyword-face))
+	 
 	 '("\\<\\(variant\\|class\\|interface\\|module\\|namespace\\|using\\)\\s +\\(\\(\\w\\|\\.\\)*\\)"
 	   (1 font-lock-keyword-face) (2 font-lock-function-name-face))
 	 
