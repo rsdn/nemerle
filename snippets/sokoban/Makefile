@@ -13,11 +13,11 @@ MACROS = macros.n
 
 all: sokoban.exe
 	cp -f $(NPATH)/Nemerle.dll .
-	$(MONO) sokoban.exe zestaw1.xml 1 IDFS
-	$(MONO) sokoban.exe zestaw1.xml 2 IDFS
-	$(MONO) sokoban.exe zestaw1.xml 3 IDFS
-	$(MONO) sokoban.exe zestaw1.xml 4 IDFS
-	$(MONO) sokoban.exe zestaw1.xml 5 IDFS
+	$(MONO) ./sokoban.exe zestaw1.xml 1 IDFS
+	$(MONO) ./sokoban.exe zestaw1.xml 2 IDFS
+	$(MONO) ./sokoban.exe zestaw1.xml 3 IDFS
+	$(MONO) ./sokoban.exe zestaw1.xml 4 IDFS
+	$(MONO) ./sokoban.exe zestaw1.xml 5 IDFS
 	make -C . clean
 
 sokoban.exe: $(SOURCES) macros.dll

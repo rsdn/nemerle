@@ -45,10 +45,12 @@ output_method (MonoMethod *meth, struct method_descriptor *desc, MonoProfiler *p
 {
   //        assert (desc->used_times == 0);
 
-	printf("%10lld %10lld %7d  %s %s\n", 
+	printf("%10lld %10lld %10d %8lld %12lld   %s %s\n", 
 	       (desc->cumulative_time - desc->children_time) / (prof->total_time / 100000),
 	       desc->real_cumulative / (prof->total_time / 100000),
 	       desc->calls,
+	       (desc->cumulative_time - desc->children_time) / desc->calls,
+	       desc->real_cumulative / desc->calls,
 	       mono_method_full_name (meth, TRUE),
 	       desc->flags & 1 ? "(flawed)" : "");
 }
@@ -56,6 +58,9 @@ output_method (MonoMethod *meth, struct method_descriptor *desc, MonoProfiler *p
 static void
 simple_shutdown (MonoProfiler *prof)
 {
+	printf("%10s %10s %10s %8s %12s   %s\n",
+		"Total [%]", "Self [%]", "Cnt called",
+		"Cyc/call", "TotCyc/Call", "Name");
 	g_hash_table_foreach (prof->methods, (GHFunc) output_method, prof);
 }
 
