@@ -1,0 +1,307 @@
+/*
+ * Copyright (c) 2004 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.SolverMacros;
+
+/*
+
+There are two kinds of type variables:
+
+  * free type variables with an associated upper and lower bounds on
+    types that can be substituted for it
+    
+  * fixed type variables, that are already substituted some type
+    constructor
+    
+The constraint solver maintains a graph of type variables (vertices)
+and subtyping relations (edges).  The graph follows several invariants:
+
+  1. There are only free type variables in it.
+
+  2. There are no cycles in it. If a cycle emerge, all type variables
+     involved in it are merged into one type variable. (The graph is
+     therefore a DAG).
+
+  3. The graph is transitively closed, that is if A :> B and B :> C, then
+     A :> C, where X :> Y stands for an edge in the graph from X to Y.
+     
+  4. The upper and lower bounds are also transitively closed, that is
+     if t :> A, A :> B, B :> t' then t :> t', where :> stands for a
+     subtyping relation.
+
+  5. If t :> A and A :> t', then t :> t' (that is upper bound has to be
+     bigger then lower bound). If t = t', then the type t is substituted
+     for the variable A (that is A gets fixed), since it is the only
+     type to fulfill both upper and lower limits. To maintain 1., it's
+     then removed from the graph.
+     
+It is sometimes crucial to save the graph in a certain state and then go
+back to it. This is done with the PushState and PopState methods -- they
+maintain stack of maps from type variable identifiers to type variables
+themselves. Type variables in given state are looked up with the Find
+method, while if there is a need to update a type variable, Copy should
+be called.  Copy is a noop if there is already a copy in the current
+state, while both Copy and Find are noops if the stack of states is empty.
+
+The Find() methods also takes into account the equality constraints
+on type variables (they result from subtyping tests or cycle merging).
+It returns the selected representative of given merged variable class.
+New equality constraints are added using the AddLink method.
+
+*/
+
+namespace Nemerle.Compiler 
+{
+  /** A constraint solver. */
+  public class Solver
+  {
+    /** Store current constraint state.
+        
+        Called before some speculative type checking fragment, like
+        overload resolution. */
+    public PushState () : void
+    {
+      if (state.IsEmpty)
+        state.Push (SystemMap ())
+      else
+        state.Push (state.Top)
+    }
+
+
+    /** Go one constraint state back.
+        
+        This function rollbacks all constraints made in current state,
+        and also clear the error state if it was in */
+    public PopState () : void
+    {
+      _ = state.Pop ()
+    }
+
+
+    /** Check if the solver has encountered an error in the current of
+        parent state. */
+    public InErrorState : bool
+    {
+      get { in_error_state }
+    }
+    
+
+    public EnsureClearState () : void
+    {
+      when (in_error_state)
+        throw RestartWithMessages ()
+    }
+
+
+    /** Make sure all TyVars created so far won't go anywhere.
+        
+        Called when the type checking process for a method is finished (or
+        for a class, if we decide to go with inferred private types). */
+    public FixateAll () : void
+    {
+    }
+
+
+    /** Generate a new type variable. */
+    public FreshTyVar () : TyVar
+    {
+      TyVar (this)
+    }
+
+
+    /** Increment current type variable rank.
+
+        Called before typing of a local function. */
+    public PushRank () : void
+    {
+      ++current_rank;
+    }
+
+    
+    /** Restore previous type variable rank.
+
+        Called after typing of a local function. */
+    public PopRank () : void
+    {
+      --current_rank;
+    }
+
+    /** Return the biggest type [t] such that [t <: t1] and [t <: t2]. 
+        It doesn't work for separated types. */
+    public Intersect (t1 : MType, t2 : MType) : MType
+    {
+      def intersect_classes (tc1 : TypeInfo, args1, tc2, args2) {
+        match (tc1.SuperType (tc2)) {
+          | None =>
+            match (tc2.SuperType (tc1)) {
+              | None =>
+                match ((tc1.GetTydecl (), tc2.GetTydecl ())) {
+                  | (TypeDeclaration.Interface, TypeDeclaration.Interface)
+                  | (TypeDeclaration.Class, TypeDeclaration.Interface)
+                  | (TypeDeclaration.Interface, TypeDeclaration.Class) =>
+                    [t1, t2]
+                  | _ =>
+                    ReportError ($ "types $t1 and $t2 are not compatible "
+                                   "[during intersection]")
+                }
+              | Some =>
+                intersect_classes (tc2, args2, tc1, args1)
+            }
+          | Some (args) =>
+            // tc1 : tc2(args)
+            def subst = tc1.GetSubst (args1);
+            List.Iter2 (args, args2,
+                        fun (t : MType, tv : TyVar) { 
+                             tv.Unify (subst.Apply (t)) 
+                        });
+            [t2]
+        }
+      }
+
+      if (t1 == null) t2
+      else if (t2 == null) t1
+      else {
+        def result =
+          match ((t1, t2)) {
+            | (MType.Class (tc, args), MType.Intersection (lst))
+            | (MType.Intersection (lst), MType.Class (tc, args)) =>
+              def loop (res, tc, args, lst) {
+                | (MType.Class (tc', args')) as t :: tl =>
+                  if (tc'.SuperType (tc) matches Some ||
+                      tc.SuperType (tc') matches Some)
+                    match (intersect_classes (tc, args, tc', args')) {
+                      | [MType.Class (tc, args)] =>
+                        loop (res, tc, args, tl)
+                      | _ => assert (false)
+                    }
+                  else loop (t :: res, tc, args, tl)
+                  
+                | _ :: _ => assert (false)
+
+                | [] => MType.Class (tc, args) :: res
+              }
+              loop (tc, args, lst)
+              
+              
+            | (MType.Class (tc1, args1), MType.Class (tc2, args2) =>
+              intersect_classes (tc1, args1, tc2, args2)
+            | _ => 
+              ReportError ($ "types $t1 and $t2 are not compatible "
+                             "[during intersection]")
+          }
+        match (result) {
+          | [x] => x
+          | lst => MType.Intersection (lst)
+        }
+      }
+    }
+    
+
+    public Sum (t1 : MType, t2 : MType) : MType
+    {
+    }
+    
+
+    /** Any usage of [t2] is from now on replaced by usage of [t1]. */
+    public AddLink (t1 : TyVar, t2 : TyVar) : void
+    {
+      def t1 = Find (t1);
+      def t2 = Copy (t2);
+      when ((t1 : object) != t2)
+        t2.state = TyVar.State.Alias (t1);
+    }
+
+
+    Unalias (tv : TyVar) : TyVar
+    {
+      match (tv.state) {
+        | TyVar.State.Alias (tv') =>
+          def res = Unalias (tv');
+          when (res != (tv' : object))
+            tv.state = TyVar.State.Alias (res);
+          res
+        | _ => tv
+      }
+    }
+    
+
+    public Find (tv : TyVar) : TyVar
+    {
+      def tv = Unalias (tv);
+      if (state.IsEmpty)
+        tv
+      else
+        match (state.Top.Find (tv.id)) {
+          | Some ({ state = TyVar.State.Alias }) =>
+            Find (Unalias (x))
+          | Some (x) => x
+          | None => tv
+        }
+    }
+
+
+    public Copy (tv : TyVar) : TyVar
+    {
+      def tv = Unalias (tv);
+      if (state.IsEmpty)
+        tv
+      else
+        match (state.Top.Find (tv.id)) {
+          | Some ({ state = TyVar.State.Alias }) =>
+            Copy (Unalias (x))
+          | Some (x) => x
+          | None =>
+            def tv' = TyVar (tv);
+            state.Top = state.Top.Add (tv.id, tv');
+            tv'
+        }
+    }
+
+    
+    /** Set the solver to be in the error state. */
+    MarkError () : void
+    {
+      assert (!throw_on_error);
+      in_error_state = true;
+    }
+
+
+    ThrowMessage (msg : string) : void
+    {
+      assert (throw_on_error);
+      throw ErrorMessage (msg)
+    }
+
+    mutable throw_on_error : bool;
+    mutable in_error_state : bool;
+    state : Stack <SystemMap <int, TyVar>>;
+    mutable current_rank : int;
+  }
+}
