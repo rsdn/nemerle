@@ -133,6 +133,8 @@ buffer created.  This is a good place to put your customizations.")
 
 	 ;; constants
 	 '("\\b\\(false\\|true\\)\\b" 0 font-lock-constant-face)
+	 '("\\[\\([^]]\\)*\\]" 0 font-lock-constant-face)
+	 '("\\(\\w::\\)+\\w" 0 font-lock-constant-face)
 
 	 ;; variables
 	 '("``\\w+``" 0 font-lock-variable-name-face)
