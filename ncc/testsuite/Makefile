@@ -37,7 +37,6 @@ lib_src = ../../lib/aliases.n ../../lib/core.n ../../lib/option.n ../../lib/list
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 
 all:
-	./c
 	cp ../out.stage3/Nemerle.dll .
 	$(EXECUTE) ../out.stage3/ncc.exe -out test.exe test.n
 	$(EXECUTE) ./test.exe -r "$(EXECUTE)"
