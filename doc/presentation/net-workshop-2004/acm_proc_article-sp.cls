@@ -126,10 +126,10 @@
 \headheight 12pt                % Height of box containing running head.
 \headsep 25pt                   % Space between running head and text.
 
-\textheight 666pt       % 9 1/4 column height
-\textwidth 42pc         % Width of text line.
+\textheight 666pt
+\textwidth 6.3in         % Width of text line.
                         % For two-column mode:
-\columnsep 2pc          %    Space between columns
+\columnsep 0.3cm          %    Space between columns
 \columnseprule 0pt      %    Width of rule between columns.
 \hfuzz 1pt              % Allow some variation in column width, otherwise it's
                         % too hard to typeset in narrow columns.
@@ -810,14 +810,14 @@
 \@float{copyrightbox}[b]
 \begin{center}
 \setlength{\unitlength}{1pc}
-\begin{picture}(20,6) %Space for copyright notice
+\begin{picture}(18,9) %Space for copyright notice
 \put(0,-0.95){\crnotice{\@toappear}}
 \end{picture}
 \end{center}
 \end@float}
 
 \def\@toappear{} % Default setting blank - commands below change this.
-\long\def\toappear#1{\def\@toappear{\parbox[b]{20pc}{\baselineskip 9pt#1}}}
+\long\def\toappear#1{\def\@toappear{\fbox{\parbox[b]{18pc}{\baselineskip 9pt#1}}}}
 \def\toappearbox#1{\def\@toappear{\raisebox{5pt}{\framebox[20pc]{\parbox[b]{19pc}{#1}}}}}
 
 \newtoks\conf
@@ -1379,7 +1379,7 @@
 \def\setpagenumber#1{\global\setcounter{page}{#1}}
 %\pagenumbering{arabic}  % Arabic page numbers but commented out for NO page numbes - Gerry Nov. 30th. 1999
 \twocolumn             % Double column.
-\flushbottom           % Even bottom -- alas, does not balance columns at end of document
+%\flushbottom           % Even bottom -- alas, does not balance columns at end of document
 \pagestyle{plain}
 
 % Need Copyright Year and Copyright Data to be user definable (in .tex file).
