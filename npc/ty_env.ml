@@ -21,14 +21,16 @@ let add e tv t =
   | None -> Imap.add tv.tv_id t e
   | Some _ -> assert false
 
-let expand e = function
-  | T_var b as t ->
-    begin
-      match find e (binding b) with
-      | Some t -> t
-      | None -> t
-    end
-  | t -> t
+let expand e tb = 
+  let rec f n = function
+    | T_var b as t ->
+      begin
+        match find e (binding b) with
+        | Some t -> if n < 10 then f (n + 1) t else t
+        | None -> t
+      end
+    | t -> t
+  in f 0 tb
 
 let join e1 e2 =
   let add k v s =
