@@ -105,10 +105,10 @@ tarball:
 	@tar zcf $(PACKAGE)-$(VERSION).$(REVISION).tar.gz $(PACKAGE)-$(VERSION).$(REVISION)
 	@echo "Looking for missing files."
 	svn export . $(PACKAGE)-$(VERSION).$(REVISION).svn
-	@rm -rf $(PACKAGE)-$(VERSION).$(REVISION).svn/{doc,boot/lock.txt,misc,snippets/sioux/fit}
+	@rm -rf $(PACKAGE)-$(VERSION).$(REVISION).svn/{doc,boot/lock.txt,misc,snippets/sioux/{fit,csl04}}
 	@cd $(PACKAGE)-$(VERSION).$(REVISION).svn ; find . | sed -e 's/^\.\///' | sort > ../files.svn
 	@cd $(PACKAGE)-$(VERSION).$(REVISION) ; find . | sed -e 's/^\.\///' | sort > ../files.tar
-	@diff -u files.{svn,tar} | sed -e 's/^-//' | grep '^-[^-]' || echo "No files missing."
+	@diff -u files.{svn,tar} | grep '^-[^-]' | sed -e 's/^-//' || echo "No files missing."
 	@rm -f files.{svn,tar}
 	@rm -rf $(PACKAGE)-$(VERSION).$(REVISION)
 	@rm -rf $(PACKAGE)-$(VERSION).$(REVISION).svn
