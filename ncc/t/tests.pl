@@ -27,7 +27,9 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-$compiler = "mono --debug ../ncc.exe ../lib/core.n";
+$nem_comp = shift;
+defined $nem_comp or $nem_comp = "ncc2";
+$compiler = "mono --debug ../$nem_comp.exe ../lib/core.n";
 $cs_compiler = shift;
 defined $cs_compiler or $cs_compiler = "mcs";
 $cs_compiler =~ /^(cscc|mcs)$/ or die "bad cs_compiler";
