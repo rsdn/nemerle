@@ -97,8 +97,8 @@ ncc.exe: $(src)
 boot-il: ncc-il.exe
 	$(EXECUTE) ./ncc-il.exe $(NEMFLAG) -texe -out ncc-il-2.exe $(src)
 	$(EXECUTE) ./ncc-il-2.exe $(NEMFLAG) -texe -out ncc-il.exe $(src)
-	ildasm /text ncc-il.exe | grep -v MVID > ncc-il.il
-	ildasm /text ncc-il-2.exe | grep -v MVID > ncc-il-2.il  
+	ildasm /text ncc-il.exe | grep -v MVID | grep -v Input: > ncc-il.il
+	ildasm /text ncc-il-2.exe | grep -v MVID | grep -v Input: > ncc-il-2.il  
 	cmp -s ncc-il.il ncc-il-2.il
 	rm -f ncc-il-2.il
 	$(MAKE) tests-il
