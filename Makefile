@@ -1,21 +1,8 @@
-
 all:
 	echo "no all..."
 	false
 
-send: dist send-www send-dist
-
-send-www:
-	$(MAKE) -C doc
-	rm -rf www
-	mkdir -p www/{styles,course}
-	cp doc/styles/*.{css,png} www/styles/
-	cp doc/*.{html,ps,pdf} www/
-	cp doc/course/*.html www/course/
-	for f in www/*.pdf www/*.ps ; do gzip <$$f > $$f.gz ; done
-	(cd www; tar zcf - .) | ssh lilith \
-		'cd /home/services/httpd/html; cat > download/nemerle-web.tar.gz; tar xzf download/nemerle-web.tar.gz'
-	rm -rf www
+send: dist send-dist
 
 name = nemerle
 svn2log = python aux/svn2log.py changelog.xml -u aux/users
