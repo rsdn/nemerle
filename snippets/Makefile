@@ -66,15 +66,10 @@ sql: sql.n
 	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r Npgsql -r ../macros/Nemerle.Data.Npgsql.dll sql.n -o sql.exe
 
 dist:
-	$(CP) '*.n'
-	$(Q)cp $(DISTFILES) $(DIR)
-	$(Q)mkdir -p $(DIR)/sioux
-	$(Q)$(MAKE) -C sioux dist DIR=$(DIR)/sioux
-	$(Q)mkdir -p $(DIR)/ntrace
-	$(Q)$(MAKE) -C ntrace dist DIR=$(DIR)/ntrace
-	$(Q)mkdir -p $(DIR)/shootout
-	$(Q)$(MAKE) -C shootout dist DIR=$(DIR)/shootout
-
+	@echo export...
+	@rm -rf $(DIR)
+	@svn export . $(DIR)
+	@rm -rf $(DIR)/sioux/{csl04,fit}
 
 clean:
 	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]*

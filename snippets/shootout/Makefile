@@ -36,10 +36,6 @@ export MONO_PATH = $(shell echo $$MONO_PATH):$(shell pwd)/../boot/
 # VARIABLES
 ############################################################
 
-DISTFILES = \
-	Makefile \
-	*.n      \
-
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 
 ############################################################
@@ -57,9 +53,6 @@ all:
 	$(EXECUTE) ../../boot/ncc.exe -out test.exe ../../ncc/testsuite/test.n
 	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -n "../../boot/ncc.exe"
 	rm -f out.dll out.exe out.netmodule ext_test.out Nemerle.dll
-
-dist:
-	$(Q)cp $(DISTFILES) $(DIR)
 
 clean:
 	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]*

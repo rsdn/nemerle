@@ -7,7 +7,6 @@ include ../../config.mak
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 NCC_DIR = ../../boot
 NCC = $(NCC_DIR)/ncc.exe
-DISTFILES = Makefile *.n *.xml httpd.conf compile.bat
 
 SIOUX_DLL_SOURCES = config.n logger.n httpd.n request.n response.n application.n
 SIOUX_EXE_SOURCES = sioux.n
@@ -29,9 +28,6 @@ Sioux.Csl.dll: Nemerle.Xml.dll Sioux.dll $(APPLICATION_SOURCES)
 
 httpd.exe: $(SOURCES) Sioux.dll Sioux.Csl.dll
 	$(EXECUTE) $(NCC) -texe -r:System.Web -r:Sioux -r:Sioux.Csl -out:$@ $(SIOUX_EXE_SOURCES)
-
-dist:
-	$(Q)cp $(DISTFILES) $(DIR)
 
 clean:
 	rm -f *.exe *.dll *.pdb *~
