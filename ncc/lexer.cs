@@ -525,7 +525,6 @@ class Lexer : yyParser.yyInput
 		keywords["where"] = Token.KW_WHERE;
 		keywords["type"] = Token.KW_TYPE;
 		keywords["let"] = Token.KW_LET;
-		keywords["in"] = Token.KW_IN;
 		keywords["fun"] = Token.KW_FUN;
 		keywords["and"] = Token.KW_AND;
 		keywords["tymatch"] = Token.KW_TYMATCH;
@@ -537,7 +536,6 @@ class Lexer : yyParser.yyInput
 		keywords["if"] = Token.KW_IF;
 		keywords["then"] = Token.KW_THEN;
 		keywords["else"] = Token.KW_ELSE;
-		keywords["variant"] = Token.KW_VARIANT;
 		keywords["letfun"] = Token.KW_LETFUN;
 		keywords["as"] = Token.KW_AS;
 		keywords["match"] = Token.KW_MATCH;
