@@ -10,7 +10,7 @@ svn2log = python aux/svn2log.py changelog.xml -u aux/users
 changelog:
 	svn up
 	svn log -v --xml > changelog.xml
-	$(svn2log) -p /nemerle/trunk -x npc -x doc
+	$(svn2log) -p /nemerle/trunk -x npc -x doc -x ncc
 	$(svn2log) -p /nemerle/trunk/npc -o npc/ChangeLog -x ncc
 	$(svn2log) -p /nemerle/trunk/ncc -o ncc/ChangeLog -r npc/ncc=ncc
 	$(svn2log) -p /nemerle/trunk/doc -o doc/ChangeLog
