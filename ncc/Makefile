@@ -370,7 +370,7 @@ tests:
 
 t-mcs test-mcs: tests-mcs
 tests-mcs:
-	$(Q)cd testsuite && $(MAKE) all-mcs
+	$(Q)cd testsuite/frommcs && $(MAKE)
 
 profile:
 	$(Q)../misc/profiler/runprof $(COMPILER) -no-stdlib -t:dll \
