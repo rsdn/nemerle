@@ -1,6 +1,7 @@
 #!/bin/sh
 
 set -x
+set -e
 
 top=../../../
 tar=
@@ -13,8 +14,10 @@ test -f $x || {
 }
 rm -rf dist
 mkdir -p dist/bin
-cp $top/boot/*.exe dist/bin
-cp $top/boot/*.dll dist/bin
+cp -f $top/tools/cs2n/*.dll dist/bin/
+cp -f $top/tools/cs2n/*.exe dist/bin/
+cp -f $top/boot/*.exe dist/bin
+cp -f $top/boot/*.dll dist/bin
 tar -C dist -zxf $tar
 mv dist/nemerle-*/doc/html dist/
 rm -rf dist/nemerle-*
