@@ -118,6 +118,7 @@ NCC_EXE_SRC       = main.n
 
 STDMACROS_DLL_SRC = \
         ../macros/core.n \
+        ../macros/compiler.n \
         ../macros/assertions.n \
 	../macros/operators.n \
         ../macros/io.n \
