@@ -339,7 +339,7 @@ install:
 	$(Q)$(GACUTIL_COMMAND) out.stage3/Nemerle.dll
 	$(Q)$(GACUTIL_COMMAND) out.stage3/Nemerle.Compiler.dll
 	$(Q)$(GACUTIL_COMMAND) out.stage3/Nemerle.Macros.dll
-	MONO_PATH=$$MONO_PATH:$$PWD/out.stage3 $(NGEN_GAC)
+	export MONO_PATH=$$MONO_PATH:$$PWD/out.stage3 ; $(NGEN_GAC)
 	$(INST) [$(BINDIR)] ncc.exe
 	$(Q)$(INSTALL) -m 755 out.stage3/ncc.exe $(DESTDIR)$(BINDIR)/ncc.exe
 	$(Q)if [ "$(NET_ENGINE)" != "" ] ; then \
