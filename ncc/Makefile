@@ -80,6 +80,7 @@ boot: ncc.exe
 	$(EXECUTE) ./ncc.exe $(n_src)
 	mv -f out.cs out2.cs
 	$(COMPILE) $(OUTFLAG)ncc2.exe $(all_cs) out2.cs
+	$(NGEN) ncc2.exe
 	$(EXECUTE) ./ncc2.exe $(n_src)
 	cmp -s out2.cs out.cs
 	rm -f out.cs
@@ -93,6 +94,7 @@ ncc.exe: $(all_src)
 	$(EXECUTE) ../boot/ncc.exe $(n_src)
 	mv -f out.cs out1.cs
 	$(COMPILE) $(OUTFLAG)$@ $(all_cs) out1.cs
+	$(NGEN) ncc.exe
 
 stdlib.dll: $(lib_src)
 	$(EXECUTE) ./ncc.exe $(lib_src)

@@ -38,6 +38,17 @@ namespace Nemerle.Compiler
 
 
   (**
+   *
+   *)
+  variant CGIL_tree {
+    | CGIL_class { type_builder : TypeBuilder; subtree : list (CGIL_tree); }
+    | CGIL_field { field_builder : FieldBuilder; }
+    | CGIL_constructor { constructor_builder : ConstructorBuilder; method : CM_method; }
+    | CGIL_method { method_builder : MethodBuilder; method : CM_method; }
+  }
+
+
+  (**
    * An IL code generator
    *)
   public class CGIL
@@ -62,14 +73,17 @@ namespace Nemerle.Compiler
           (this._assembly_name, AssemblyBuilderAccess.RunAndSave);
 
       (* create a dynamic module *)
-      this._module_builder <- this._assembly_builder.DefineDynamicModule ("CGILTest", "cgil-test.dll");      
+      this._module_builder <- 
+        this._assembly_builder.DefineDynamicModule ("CGILTest", "cgil-test.dll"); // FIXME
 
-      (* iterate the top declarations, adding them to the newly created assembly *)
-      def emit_decl (decl : CM_class) : void {
-        this.flat_member (decl, null)
-      };
-      List.iter (emit_decl, decls);
-      
+      (* create the assembly skeleton *)
+      def make_class_skeleton (decl) { this.make_class_skeleton (decl, null) };
+      def module_skeleton = List.map (make_class_skeleton, decls);
+            
+      (* fill in the method definitions *)
+      def fill_skeleton_tree (tree) { this.fill_skeleton_tree (tree) }; // FIXME: aargh
+      List.iter (fill_skeleton_tree, module_skeleton);
+            
       (* execute the type builder queue *)
       def create_type (tb : TypeBuilder) : void {
         def _ = tb.CreateType ();
@@ -194,6 +208,7 @@ namespace Nemerle.Compiler
 
 
     (**
+     *
      *)  
     private type_list_to_type_array (x : list (System.Type)) : array (System.Type) {
 
@@ -215,10 +230,14 @@ namespace Nemerle.Compiler
     }
 
 
-    private make_method (type_builder : TypeBuilder, m : CM_method) : void
+    (**
+     *
+     *)
+    private make_method_skeleton (type_builder : TypeBuilder, m : CM_method) : CGIL_tree
     {
       // Message.debug ("making a method");
-      
+
+      (* build the return type and parameter types *)      
       def mkparm (v : CG_val) : System.Type {
         this.nemerle_to_framework_type (v.ty)
       };
@@ -227,12 +246,205 @@ namespace Nemerle.Compiler
               
       def parameter_types = this.type_list_to_type_array (List.map (mkparm, m.parms));
 
+      (* add the method to the type builder *)
       def method_builder = 
         type_builder.DefineMethod (m.name, this.make_method_attributes (m.modifiers),
                                    return_type, parameter_types);
 
-      def il_generator = method_builder.GetILGenerator ();
+      CGIL_method (method_builder, m)
+
+(*
       
+      match (m.body) {
+        | CE_none => ()
+        | _ =>
+      }
+*)
+    }
+
+
+    private make_constructor_skeleton (type_builder : TypeBuilder, m : CM_method) : CGIL_tree
+    {
+      // Message.debug ("making a constructor");
+
+(*      
+          def (pref, r) = make_complex (flat (m.body));
+          def ret =
+            if (is_dummy_type (m.ret_type))
+              side_effect_run (r)
+            else
+              if (is_dummy_type (type_of (m.body)))
+                side_effect_run (r) ++ "return null;\n"
+              else
+                "return " ++ r ++ ";\n";
+                  
+          when (base_class_ctor != null) {
+            print_st (" : " ++ base_class_ctor ++ "\n");
+            base_class_ctor <- null
+          };
+          
+          print_st ("\n{\n" ++ pref ++ ret ++ "} // end of fun " ++ m.name ++ "\n")
+*)      
+      
+      CGIL_constructor (null, m)
+    }
+
+    (**
+     *
+     *)
+    private determine_inheritance (m : CM_class) : (System.Type * array (System.Type))
+    {
+(*            
+          def inh =
+            match (m.inheritance) {
+              | [] => ST_leaf ("")
+              | _ => " : " ++ st_concat (", ", List.map (flat_ty, m.inheritance))
+            };
+*)
+
+      def result = 
+        (System.Array.CreateInstance (typeof (System.Type), 0) :> array (System.Type));
+        
+      (typeof (System.Object), result) // FIXME
+    }
+  
+
+    (**
+     * This method makes a skeleton of a class
+     *)
+    private make_class_skeleton (m : CM_class, type_builder : TypeBuilder) : CGIL_tree
+    {       
+      (* create optional custom attributes for this type *)
+      def custom_attribute =
+        match (m.kind) {          
+          | CK_variant => 
+            this.make_nemerle_variant_attribute ()
+          | CK_variant_option (encoded_type) =>
+            this.make_nemerle_variant_option_attribute (encoded_type)
+          | _ => null
+        };
+
+      (* decide the new type attributes *)
+      def type_kind_attrs = 
+        match (m.kind) { 
+          | CK_class => TypeAttributes.Class
+          | CK_struct => Util.ice ("CK_struct")
+          | CK_interface => TypeAttributes.Interface + TypeAttributes.Abstract
+          | CK_variant => TypeAttributes.Class
+          | CK_variant_option (_) => TypeAttributes.Class
+        };
+        
+      def attrs = type_kind_attrs + TypeAttributes.Public;
+
+      (* determine the inheritance relation for this type *)
+      def (extends_class, implements_interfaces) = this.determine_inheritance (m);
+
+      (* create the type builder for a top-level or nested class declaration *)
+      def tb = 
+        if (type_builder == null)
+          this._module_builder.DefineType (m.ns + m.name, attrs)
+        else
+          type_builder.DefineNestedType (m.name, TypeAttributes.NestedPublic + attrs);
+
+      when (custom_attribute != null) {
+        tb.SetCustomAttribute (custom_attribute);
+      };
+
+      this._type_builder_queue.add (tb);
+
+      (* create the type builder's CGIL subtree *)
+      def walk_members (decls : list (CG_member)) : list (CGIL_tree) {
+        match (decls) {
+          | decl :: rest => 
+            this.make_skeleton_subtree (decl, tb) :: walk_members (rest)
+          | [] => []
+        }
+      };
+      
+      CGIL_class (type_builder, walk_members (m.decls))    
+    }
+
+
+    (**
+     * This function creates a skeleton of the module -- method implementations
+     * will be created in a second pass over the generated tree. The types are
+     * assumed to be sorted w.r.t. the inheritance relation.
+     *)
+    make_skeleton_subtree (m : CG_member, type_builder : TypeBuilder) : CGIL_tree
+    {
+      assert (type_builder != null);
+      
+      match (m) {
+        | (CM_class) as m =>
+          this.make_class_skeleton (m, type_builder)
+
+        | (CM_field) as m =>
+          def field_builder = 
+            type_builder.DefineField (m.name, 
+                                      this.nemerle_to_framework_type (m.ty), 
+                                      this.nemerle_field_modifiers_to_framework_attrs (m.modifiers));
+          field_builder.SetCustomAttribute (this.make_nemerle_type_attr (m.encoded_type));
+
+          CGIL_field (field_builder)
+
+                     
+        | (CM_property) as p =>
+          Message.fatal_error ("emitting properties is not supported yet")
+
+                            
+        | (CM_method) as m =>
+          CGopt.tail_call_optimize (m);
+
+          match (m.ret_type) {
+            | CT_unreached => this.make_constructor_skeleton (type_builder, m)
+            | _ => this.make_method_skeleton (type_builder, m)
+          }
+      }          
+    }
+
+
+    (**
+     *
+     *)
+    private fill_skeleton_tree (tree : CGIL_tree) : void
+    {
+      match (tree) {
+        | CGIL_class (_, subtree) => 
+          def fill_skeleton_tree (tree) { this.fill_skeleton_tree (tree) }; // FIXME: aargh
+          List.iter (fill_skeleton_tree, subtree)
+        | CGIL_constructor (constructor_builder, method) =>
+          this.fill_constructor_skeleton (constructor_builder, method)
+        | CGIL_method (method_builder, method) =>
+          this.fill_method_skeleton (method_builder, method)
+        | _ => ()
+      }
+    }
+    
+    
+    private fill_constructor_skeleton (constructor_builder : ConstructorBuilder, method : CM_method) : void
+    {
+      ()
+    }
+
+
+    private fill_method_skeleton (method_builder : MethodBuilder, method : CM_method) : void
+    {
+      def il_generator = method_builder.GetILGenerator ();
+
+    (*
+      def (pref, r) = make_complex (flat (m.body));
+      def ret =
+        if (is_dummy_type (m.ret_type))
+          side_effect_run (r)
+        else
+          if (is_dummy_type (type_of (m.body)))
+            side_effect_run (r) ++ "return null;\n"
+          else
+            "return " ++ r ++ ";\n";
+
+      print_st ("\n{\n" ++ pref ++ ret ++ "} // end of fun " ++ m.name ++ "\n")
+    *)
+
       il_generator.Emit (OpCodes.Ldstr, "Hello world!");
 
       def system_console = typeof(System.Console);
@@ -242,139 +454,6 @@ namespace Nemerle.Compiler
 
       il_generator.Emit (OpCodes.Call, method_info);
       il_generator.Emit (OpCodes.Ret);
-    }
-
-
-    private make_constructor (type_builder : TypeBuilder, m : CM_method) : void
-    {
-      // Message.debug ("making a constructor");
-      
-      ()
-    }
-
-    (**
-     * Outputs a type member
-     *)  
-    flat_member (m : CG_member, type_builder : TypeBuilder) : void 
-    {
-      match (m) {
-        | (CM_class) as m =>
-          // Message.debug ("processing class " + m.ns + m.name);
-
-          (* create optional custom attributes for this type *)
-          def custom_attribute =
-            match (m.kind) {          
-              | CK_variant => 
-                this.make_nemerle_variant_attribute ()
-              | CK_variant_option (encoded_type) =>
-                this.make_nemerle_variant_option_attribute (encoded_type)
-              | _ => null
-            };
-
-          (* decide the new type attributes and inheritance rules *)
-          def type_kind_attrs = 
-            match (m.kind) { 
-              | CK_class => TypeAttributes.Class
-              | CK_struct => Util.ice ("CK_struct")
-              | CK_interface => TypeAttributes.Interface + TypeAttributes.Abstract
-              | CK_variant => TypeAttributes.Class
-              | CK_variant_option (_) => TypeAttributes.Class
-            };
-            
-(*            
-          def inh =
-            match (m.inheritance) {
-              | [] => ST_leaf ("")
-              | _ => " : " ++ st_concat (", ", List.map (flat_ty, m.inheritance))
-            };
-*)
-
-          def attrs = type_kind_attrs + TypeAttributes.Public;
-
-          (* create the type builder for a top-level or nested class declaration *)
-          def tb = 
-            if (type_builder == null)
-              this._module_builder.DefineType (m.ns + m.name, attrs)
-            else
-              type_builder.DefineNestedType (m.name, TypeAttributes.NestedPublic + attrs);
-
-          when (custom_attribute != null) {
-            tb.SetCustomAttribute (custom_attribute);
-          };
-
-          this._type_builder_queue.add (tb);
-
-          (* populate the newly created type builder *)
-          def walk_members (decls : list (CG_member)) : void {
-            match (decls) {
-              | decl :: rest => 
-                this.flat_member (decl, tb);
-                walk_members (rest)
-              | [] => ()
-            }
-          };                
-          walk_members (m.decls)
-
-
-      | (CM_field) as m =>
-        assert (type_builder != null);
-        
-        // Message.debug ("emitting field " + m.name);
-        def fb = type_builder.DefineField (m.name, 
-                                           this.nemerle_to_framework_type (m.ty), 
-                                           this.nemerle_field_modifiers_to_framework_attrs (m.modifiers));
-        fb.SetCustomAttribute (this.make_nemerle_type_attr (m.encoded_type));
-
-                   
-      | (CM_property) as p =>
-        Message.fatal_error ("emitting properties is not supported yet")
-
-                          
-      | (CM_method) as m =>
-        assert (type_builder != null);
-
-        CGopt.tail_call_optimize (m);
-
-        match (m.ret_type) {
-          | CT_unreached => this.make_constructor (type_builder, m)
-          | _ => this.make_method (type_builder, m)
-        }
-
-(*      
-        def mkparm (v : CG_val) : String_tree {
-          flat_ty (v.ty) ++ " " ++ v.name
-        };
-        def rett = 
-          match (m.ret_type) {
-            | CT_unreached => ST_leaf ("")
-            | _ => flat_ty (m.ret_type)
-          };
-
-        print_st (emit_nemerle_type_attr (m.encoded_type) ++ s_concat (" ", m.attrs) ++ " " ++ rett ++ "\n" ++ 
-                  m.name ++ "(" ++ st_concat (", ", List.map (mkparm, m.parms)) ++ ")");
-
-        match (m.body) {
-          | CE_none => print_st (ST_leaf (";\n"))
-          | _ =>
-            def (pref, r) = make_complex (flat (m.body));
-            def ret =
-              if (is_dummy_type (m.ret_type))
-                side_effect_run (r)
-              else
-                if (is_dummy_type (type_of (m.body)))
-                  side_effect_run (r) ++ "return null;\n"
-                else
-                  "return " ++ r ++ ";\n";
-                   
-            when (base_class_ctor != null) {
-              print_st (" : " ++ base_class_ctor ++ "\n");
-              base_class_ctor <- null
-            };
-           
-            print_st ("\n{\n" ++ pref ++ ret ++ "} // end of fun " ++ m.name ++ "\n")
-        }
-*)      
-      }
     }
 
 
