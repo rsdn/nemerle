@@ -66,7 +66,13 @@ namespace Nemerle.CSharp
         
         override public ToString () : string
         {
-            s_tree.eliminate_return_body ().ToString ()
+            def st = s_tree.eliminate_breaks ();
+            match (st)
+            {
+                | [tree] =>
+                  tree.eliminate_return_body ().ToString ()
+                | _ => throw System.Exception ("Internal error in break elimination");
+            }
             //tree.ToString ()
         }
         
@@ -113,6 +119,8 @@ namespace Nemerle.CSharp
             }
         }                        
 
+        /* -- RETURN ELIMINATION ----------------------------------------- */
+        
         internal eliminate_return_body () : STree
         {
             def (lbrace,statements,rbrace) = cut_off_braces (this);
@@ -216,7 +224,7 @@ namespace Nemerle.CSharp
                     | x :: xs =>loop (xs,x :: acc)
                     | _ => throw System.ArgumentException ("Cutting off braces with list of length < 2");
                 }
-            }
+            }         
             match(t)
             {
                 | Statement("BLOCK",x::xs) =>                  
@@ -252,8 +260,177 @@ namespace Nemerle.CSharp
                 | _ => false
             }            
         }     
+
+        /* -- BREAK ELIMINATION -------------------------------------------- */
         
-        internal mutable returns : option[bool] = None ();        
+        internal eliminate_breaks () : list [STree]
+        {
+            def loop (stmts : list [STree],acc : list [STree]) : list [STree]
+            {
+                match(stmts)
+                {
+                    | [] => List.Rev (acc)
+                    | head :: tail => loop (tail, head.eliminate_breaks () + acc)
+                }
+            }
+            
+            match(this)
+            {
+                | Statement("BLOCK",stmts) =>
+                  def (lbrace,statements,rbrace) = cut_off_braces (stmts);
+                  [Statement("BLOCK",lbrace :: loop(statements,[]) + [rbrace])]
+                  
+                | Statement("WHILE",[Tok(w),lp,TokS(be),rp,block]) =>
+                  if (block.break_inside ())
+                  {
+                      def ns = new_break_loop_symbol ();
+                      [Statement("WHILE",[Tok(w),lp,TokS(be + " && !" + ns),rp,block.eliminate_break_in_loop (ns)]),
+                       TokS (ExtendedToken.getWhitespaces (w) + "mutable " + ns + " = false;")];
+                  }
+                  else
+                  {
+                      match(block.eliminate_breaks ())
+                      {
+                          | [block] =>
+                            [Statement("WHILE",[Tok(w),lp,TokS(be),rp,block])]
+                          | _ => throw System.Exception ("Internal error in break elimination");
+                      }
+                  }
+                  
+                | _ => [this]
+            }
+        }
+
+        protected eliminate_break_in_loop (ns : string) : STree 
+        {
+            def loop (sts : list [STree], acc : list [STree]) : list [STree]
+            {
+                match (sts)
+                {
+                    | [] => List.Rev (acc)
+
+                    //| (Statement("WHILE",_) as while_st) :: tail =>
+                    //  loop (tail , while_st.eliminate_breaks () + acc)
+                      
+                    | (Statement ("WHEN",_) as if_st) :: []
+                    | (Statement ("IF",_) as if_st) :: [] =>
+                      def if_st_el = if_st.eliminate_break_in_loop (ns);
+                      
+                      List.Rev (if_st_el :: acc)
+
+                    | (Statement ("WHEN",[Tok(i),_,_,_,_]) as if_st) :: tail 
+                    | (Statement ("IF",[Tok(i),_,_,_,_,_,_]) as if_st) :: tail =>
+                      if (if_st.break_inside ())
+                      {
+                          def whitespaces = ExtendedToken.getWhitespaces (i);
+                          def if_st_el = if_st.eliminate_break_in_loop (ns);
+                          def block = Statement("BLOCK", TokS(whitespaces + "{") :: tail + [TokS(whitespaces + "}")]);
+                          def block_el = block.eliminate_break_in_loop (ns);
+                          def when_st = Statement("WHEN", [TokS(whitespaces + "when"),TokS("( "),TokS("!"+ns),TokS(" )"),block_el]);
+                          
+                          List.Rev (when_st :: if_st_el :: acc)
+                      }
+                      else
+                          loop (tail , (if_st :> STree) :: acc)
+                      
+                    | Statement("BREAK",[Tok(b),s]) :: _=>                     
+                      List.Rev(Statement("EXPRESSION_STATEMENT",[TokS(ExtendedToken.getWhitespaces(b) + ns + " = true"),s]) :: acc)                                          
+                      
+                    | head :: tail => loop (tail , head :: acc)
+                }
+            }
+            
+            match(this)
+            {
+                | Statement("IF",[i,lp,be,rp,st1,e,st2]) =>
+
+                  mutable st1_el = null;
+                  mutable st2_el = null;
+                  
+                  match (st1.eliminate_breaks ())
+                  {
+                      | [tree] => st1_el = tree
+                      | _ => throw System.Exception ("Internal error in break elimination");
+                  }
+
+                  match (st2.eliminate_breaks ())
+                  {
+                      | [tree] => st2_el = tree
+                      | _ => throw System.Exception ("Internal error in break elimination");
+                  }
+                  
+                  if (st1.break_inside () && st2.break_inside ())
+                      Statement("IF",[i,lp,be,rp,st1.eliminate_break_in_loop (ns),e,st2.eliminate_break_in_loop (ns)])
+
+                  else if (st1.break_inside ())                      
+                      Statement("IF",[i,lp,be,rp,st1.eliminate_break_in_loop (ns),e,st2_el])
+                       
+                  else if (st2.break_inside ())
+                      Statement("IF",[i,lp,be,rp,st1_el,e,st2.eliminate_break_in_loop (ns)])
+                  else
+                      Statement("IF",[i,lp,be,rp,st1_el,e,st2_el])
+                      
+                | Statement("WHEN",[w,lp,be,rp,st]) =>
+                  Statement("WHEN",[w,lp,be,rp,st.eliminate_break_in_loop (ns)])
+                  
+                | Statement("BREAK",[Tok(b),s]) =>
+                  Statement("EXPRESSION_STATEMENT",[TokS(ExtendedToken.getWhitespaces(b) + ns + " = true"),s])
+
+                | Statement("BLOCK",stmts) =>                  
+                  def (lbrace,statements,rbrace) = cut_off_braces (stmts);
+                  Statement("BLOCK",lbrace :: loop (statements,[]) + [rbrace])
+                  
+                | x =>
+                  match(x.eliminate_breaks ())
+                  {
+                      | [y] => y
+                      | _ => throw System.Exception ("Internal error in break elimination");
+                  }
+            }
+        }
+        
+        protected break_inside () : bool
+        {
+            def loop(xs : list [STree]) : bool
+            {
+                match(xs)
+                {
+                    | head :: tail =>
+                      if(head.break_inside ())
+                          true
+                      else
+                          loop(tail)
+                    | _ => false                              
+                }
+            }
+            
+            match(this)
+            {
+                | Statement("BREAK",_) => true
+                | Statement("BLOCK",xs) =>
+                  def b = loop(xs);
+                  b
+                | Statement("IF",[_,_,_,_,st1,_,st2]) =>
+                  st1.break_inside () || st2.break_inside ()
+                | Statement("WHEN",[_,_,_,_,st]) =>
+                  st.break_inside () 
+                | Statement("WHILE",[_,_,_,_,_]) => false
+                | _ => false
+            }
+        }
+        
+        private new_symbol (suffix : string) : string
+        {
+            ++ symbol_count;
+            "temp_" + symbol_count.ToString() + suffix
+        }
+
+        private new_break_loop_symbol () : string
+        {
+            new_symbol ("_break_loop")
+        }
+        
+        private static mutable symbol_count : int = 0;
         
     }
 
