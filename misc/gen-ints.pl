@@ -98,6 +98,16 @@ print <<EOF
       L_$short ((x :> System.$long))
     }
 
+    public GetNemerleType () : Typedtree.Type
+    {
+      InternalType.$long
+    }
+
+    public GetTycon () : Tycon
+    {
+      InternalType.${long}_tc
+    }
+
     public this () {}
   }
 
