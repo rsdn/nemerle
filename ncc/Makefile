@@ -74,6 +74,7 @@ NEMERLE_DLL_SRC = \
 	../lib/AssemblyInfo.n
 
 NEMERLE_COMPILER_DLL_SRC = \
+	$(NTE_SOURCES)			 \
         parsing/AST.n			 \
         parsing/ParseTree.n		 \
         parsing/Parser.n		 \
@@ -117,7 +118,7 @@ NEMERLE_COMPILER_DLL_SRC = \
         passes.n			 \
 
 ifeq ($(NTE),1)
-NEMERLE_COMPILER_DLL_SRC += $(wildcard temp/typing/*.n)
+NTE_SOURCES = $(wildcard temp/typing/*.n)
 NCC_FLAGS += -D:NTE
 else
 NEMERLE_COMPILER_DLL_SRC += \
