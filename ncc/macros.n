@@ -620,59 +620,149 @@ module Macros {
   // GENERATION OF MACRO CLASSES SECTION
 
   public GenerateMacroClass (attrs : list(Modifier), header : Fun_header, 
-                             synt : list(Expr), expr : Expr) : Type_decl {
+                             synt : list(Expr), expr : Expr) : Type_decl 
+  {
+    def name = header.name;
+
     // walk through parameters given to macro, extract their names,
     // note type names, control if they correspond to Nemerle grammar,
+    // handle variable amount of parameters and default values
     // create code decomposing passed parameters if needed
-    def analyze_params (pars : list (Fun_parm), acc, 
-                        types : System.Text.StringBuilder) {
+    def analyze_params (pars : list (Fun_parm), acc, accs, defaults,
+                        types : System.Text.StringBuilder) 
+                        : list (Pattern) * list (Expr) 
+    {
+      // build pattern for list from list of patterns
       def roll (li, bu) {
         match (li) {
           | [] => bu
           | x::xs => roll (xs, <[ pattern: $x :: $bu ]>)
         }
       };
-      match (pars) {
-        | [] => (roll (acc, <[ pattern: [] ]>), types, false, expr)
-        | {name = va; ty = t}::xs =>
-          match (t) {
-            | T_infer 
-            | <[ type: expr ]> => 
-              analyze_params (xs, <[ pattern: { expr = $(va : var) } ]> :: acc,
-                              types.Append (" expr"))
-            | <[ type: parm ]> =>
-              analyze_params (xs, <[ pattern: $(va : var) ]> :: acc, 
-                              types.Append (" parm"))
-            | <[ type: string ]> =>
-              analyze_params (xs, 
-                              <[ pattern: { expr = Nemerle.Compiler.Parsetree.E_literal 
-                                 (Nemerle.Compiler.L_string ($(va : var))) } ]> :: acc, 
-                              types.Append (" string"))
-            | <[ type: int ]> =>
-              analyze_params (xs, 
-                              <[ pattern: { expr = Nemerle.Compiler.Parsetree.E_literal 
-                                 (Nemerle.Compiler.L_int ($(va : var))) } ]> :: acc, 
-                              types.Append (" string"))
-            | <[ type: list (parm) ]> =>
-              (roll (acc, <[ pattern: $(va : var) ]>), 
-               types.Append (" list (parm)"), true, expr)
+      // build expression for list from list of expressions
+      def roll_expr (li, bu) {
+        match (li) {
+          | [] => bu
+          | (va, d)::xs => roll_expr (xs, <[ { def $(SS_string (va)) = $d; $bu } ]>)
+        }
+      };
+      // handle case of standard (not params or with default value) parameter
+      // decompose handled types, note them and build pattern matching
+      // parameter's expression
+      def normal_parm (t, va) {
+        match (t) {
+          | T_infer 
+          | <[ type: expr ]> => 
+            (<[ pattern: { expr = $(va : var) } ]>, types.Append (" expr"))
+          | <[ type: parm ]> =>
+            (<[ pattern: $(va : var) ]>, types.Append (" parm"))
+          | <[ type: string ]> =>
+            (<[ pattern: { expr = Nemerle.Compiler.Parsetree.E_literal 
+                             (Nemerle.Compiler.L_string ($(va : var))) } ]>,
+             types.Append (" string"))
+          | <[ type: int ]> =>
+            (<[ pattern: { expr = Nemerle.Compiler.Parsetree.E_literal 
+                            (Nemerle.Compiler.L_int ($(va : var))) } ]>,
+             types.Append (" string"))
+          | <[ type: bool ]> =>
+            (<[ pattern: { expr = Nemerle.Compiler.Parsetree.E_literal 
+                            (Nemerle.Compiler.L_bool ($(va : var))) } ]>,
+             types.Append (" bool"))
+          | _ =>
+            Message.fatal_error ("type not supported")
+        }
+      };
+      // create list of match cases (patterns and expressions) containing
+      // cases for default values of parameters, add expressions defining
+      // missed parameters according to those default values
+      def traverse_patterns (pattss, defaults, defsrest, accpat, accexp) {
+        match ((pattss, defaults)) {
+          | ([], _) => (accpat, accexp)
+          | (patts :: xss, []) =>
+            traverse_patterns (xss, [], [], roll (patts, <[ pattern: [] ]>) :: accpat,
+                               roll_expr (defsrest, expr) :: accexp)
+          | (patts :: xss, d :: ds) =>
+            def newdrest = d :: defsrest;
+            traverse_patterns (xss, ds, newdrest, 
+                               roll (patts, <[ pattern: [] ]>) :: accpat,
+                               roll_expr (defsrest, expr) :: accexp)
+        }
+      };
 
-            | <[ type: list (expr) ]> =>
-              (roll (acc, <[ pattern: $("_N_" + va : var) ]>), 
-               types.Append (" list (expr)"), true, 
-               <[ { def $(SS_string (va)) = 
-                     List.map (fun (p : PT.Parm) { p.expr }, $("_N_" + va : var));
-                    $expr } ]>)
-            | _ =>
-              Message.fatal_error ("types other than expr and parm not supported")
+      // iterate through parameters
+      match (pars) {
+        | [] => 
+          // we have fixed amount of parameters, so there is always
+          // case, which triggers error, handle it
+          def warn = <[ Nemerle.Compiler.Message.fatal_error ("macro `" 
+            + $(name : string) + "' expects following list of arguments: " + 
+            $(types.ToString () : string)) ]>;
+          traverse_patterns (acc :: accs, defaults, [], [ <[ pattern: _ ]> ], [warn])
+        | { name = va; ty = t; attr = at } :: xs =>
+          match (at) {
+            // variable amount of parameters is handled here
+            | FP_params =>
+              def (initpat, initex) =
+                match (acc) {
+                  // if there are some elemnts other than out 'va', then this
+                  // pattern won't be exchaustive, and we must supply error msg
+                  | _ :: _ => 
+                    def types = types.Append (" params array");
+                    def warn = <[ Nemerle.Compiler.Message.fatal_error ("macro `"
+                      + $(name : string) + "' expects following list of arguments: "
+                      + $(types.ToString () : string)) ]>;
+                    ([ <[ pattern: _ ]> ], [warn])
+                  | _ =>
+                    ([], [])
+                };
+              match (t) {
+                | <[ type: array (parm) ]> =>
+                  traverse_patterns (accs, defaults, [], 
+                                     roll (acc, <[ pattern: $(va : var) ]>) :: initpat, 
+                                     expr :: initex)
+
+                | <[ type: array (expr) ]> =>
+                  traverse_patterns (accs, defaults, [], 
+                                     roll (acc, <[ pattern: $("_N_" + va : var) ]>) :: initpat,
+                                     <[ { def $(SS_string (va)) = 
+                                          List.map (fun (p : PT.Parm) { p.expr }, 
+                                          $("_N_" + va : var));
+                                          $expr } ]> :: initex)
+                | _ =>
+                  Message.fatal_error ("only array of expr or parm are supported in params")
+              }
+            // parameter with default value
+            | FP_default (e) =>
+              def (p, str) = normal_parm (t, va);
+              analyze_params (xs, p :: acc, acc :: accs, (va, e) :: defaults, str.Append ("(opt)"))
+          
+            | FP_normal =>
+              match (defaults) {
+                | [] =>
+                  def (p, str) = normal_parm (t, va);
+                  analyze_params (xs, p :: acc, accs, defaults, str)
+                | _ =>
+                  Message.fatal_error ("parameters with default values must not be mixed with normal")
+              }
           }
       }    
     };
 
+    // creates match caces from pairs of pattern and expression
+    def consolide_cases (pats, exps, acc) {
+      match ((pats, exps)) {
+        | ([], []) => acc
+        | (x :: xs, y :: ys) => 
+          consolide_cases (xs, ys, <[ case: $x => $y ]> :: acc)
+        | _ => Util.ice ()
+      }
+    };
+
     // build method Run running macro's body
-    def (macro_args, arglist, exhaustive, expr) = 
-      analyze_params (header.parms, [], System.Text.StringBuilder ());
-    def name = header.name;
+    def (macro_patts, macro_exprs) = 
+      analyze_params (header.parms, [], [], [], System.Text.StringBuilder ());
+    def macro_cases = List.rev (consolide_cases (macro_patts, macro_exprs, []));
+
     def callname = 
       match (synt) {
         | [] => name
@@ -688,19 +778,9 @@ module Macros {
                              <[ type: list (Nemerle.Compiler.Parsetree.Parm) ]>,
                              FP_normal ())]);
 
-    def run_body =                         
-      if (exhaustive && List.length (header.parms) == 1)
-        <[ match (_N_parms) { | $macro_args => $expr } ]>
-      else
-        <[
-          match (_N_parms) {
-            | $macro_args => $expr
-            | _ =>
-              Nemerle.Compiler.Message.fatal_error ("macro '" 
-                + $(name : string) + "' expects following list of arguments: "
-                + $(arglist.ToString () : string))
-          }
-        ]>;
+//    PrintExpr (<[ match (_N_parms) { ..$macro_cases } ]>, "");
+//    printf("\n");
+    def run_body = <[ match (_N_parms) { ..$macro_cases } ]>;
 
     def runFunc = M_function (header = run_header, 
                               name = "Run",
@@ -802,7 +882,8 @@ module Macros {
                 printf (" when ");
                 PrintExpr (e, empty + "    ")
               | <[ caseguard: $pat ]> =>
-                printf ("\n%s| pat", empty + "  ")
+                printf ("\n%s| ", empty + "  "); 
+                PrintPattern (pat);
             }
           };
 
@@ -813,7 +894,8 @@ module Macros {
         };
 
         printf ("match ("); PrintExpr (expr, empty); printf (") {");
-        List.iter (print_case, cases)
+        List.iter (print_case, cases);
+        printf ("\n%s}", empty)
 
       | <[ raise $exc ]> =>
         printf ("raise "); PrintExpr (exc, empty);
@@ -921,6 +1003,11 @@ module Macros {
             Util.ice ("spliced in as")
         }
 
+      | <[ pattern: [] ]> => printf ("[]")
+
+      | <[ pattern: $x :: $xs ]> => 
+        PrintPattern (x); printf (" :: "); PrintPattern (xs)
+
       | <[ pattern: (.. $args) ]> =>
         printf ("(");
         List.iter (fun (x) { PrintPattern (x); printf (", ") }, args);
@@ -990,6 +1077,8 @@ module Macros {
         printf ("null")
 
 //        | <[ pattern: $name _ ]> =>
+      | P_cons (SS_string (name), P_underscore) =>
+        printf ("%s", name)
       | _ => printf ("other")
     }
   }
