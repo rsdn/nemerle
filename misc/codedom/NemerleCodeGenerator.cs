@@ -262,7 +262,6 @@ namespace Nemerle.Contrib
 			Output.Write (GetSafeName (expression.PropertyName));
 		}
 
-		// FIXME: It is still C#-ism
 		protected override void GeneratePropertySetValueReferenceExpression (
 			CodePropertySetValueReferenceExpression expression)
 		{
@@ -284,7 +283,6 @@ namespace Nemerle.Contrib
 			Output.WriteLine (';');
 		}
 
-		// FIXME: It is still C#-ism
 		protected override void GenerateIterationStatement ( CodeIterationStatement statement)
 		{
 			TextWriter output = Output;
@@ -462,7 +460,6 @@ namespace Nemerle.Contrib
 
 			output.Write ("mutable ");
 
-//			OutputTypeNamePair (statement.Type, GetSafeName (statement.Name));
 			output.Write (GetSafeName (statement.Name));
 
 			CodeExpression initExpression = statement.InitExpression;
@@ -476,8 +473,6 @@ namespace Nemerle.Contrib
 
 		protected override void GenerateLinePragmaStart (CodeLinePragma linePragma)
 		{
-			throw new NotSupportedException ("Line pragma is not supported in Nemerle.");
-			/*
 			Output.WriteLine ();
 			Output.Write ("#line ");
 			Output.Write (linePragma.LineNumber);
@@ -485,16 +480,12 @@ namespace Nemerle.Contrib
 			Output.Write (linePragma.FileName);
 			Output.Write ("\"");
 			Output.WriteLine ();
-			*/
 		}
 
 		protected override void GenerateLinePragmaEnd (CodeLinePragma linePragma)
 		{
-			throw new NotSupportedException ("Line pragma is not supported in Nemerle.");
-			/*
 			Output.WriteLine ();
 			Output.WriteLine ("#line default");
-			*/
 		}
 
 		protected override void GenerateEvent (CodeMemberEvent eventRef,
@@ -613,20 +604,22 @@ namespace Nemerle.Contrib
 			OutputMemberAccessModifier( attributes );
 			OutputMemberScopeModifier( attributes );
 
-/*
+
 			if (property.Name == "Item")
 			{
 				// indexer
-				OutputTypeNamePair( property.Type, "this");
-				output.Write("[");
-				OutputParameters(property.Parameters);
-				output.Write("]");
+                          output.Write (GetSafeName (property.Name));
+                          output.Write (' ');
+                          output.Write("[");
+                          OutputParameters(property.Parameters);
+                          output.Write("]");
+                          output.Write (" : ");
+                          OutputType (property.Type);                          
 			}
 			else
 			{
-*/
-				OutputTypeNamePair( property.Type, GetSafeName (property.Name));
-//			}
+         	     	   OutputTypeNamePair( property.Type, GetSafeName (property.Name));
+			}
 			output.WriteLine (" {");
 			++Indent;
 
@@ -923,7 +916,6 @@ namespace Nemerle.Contrib
 			}
 			else { 
 				switch ( type.BaseType ) {
-				// FIXME: It is still C#-ism.
 				case "System.Decimal":
 					output = "decimal";
 					break;
