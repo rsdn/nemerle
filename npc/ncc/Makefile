@@ -5,9 +5,11 @@ all_src = $(n_src) $(cs_src)
 all_cs = env.n.cs $(cs_src)
 target = ncc.exe
 
-all: $(target)
-	# here we just test if new-built compiler is capable of builing
-	# itself, run make t to check testsuite
+all: $(target) test
+
+# here we just test if new-built compiler is capable of builing
+# itself, run make t to check testsuite
+test:
 	mono --debug ./$(target) ../lib/core.n $(n_src)
 
 $(target): $(all_src)
