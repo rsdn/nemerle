@@ -22,11 +22,13 @@ class MainClass {
 		string[] argv = System.Environment.GetCommandLineArgs();
 		
 		try {
+			list ret = new list.Nil();
 			for (int i = 1; i < argv.Length; i++) {
 //				System.Console.WriteLine("processing " + argv[i]);
 				Parser p = new XParser();
-				p.parse(new Lexer(argv[i]));
+				ret = new list.Cons(p.parse(new Lexer(argv[i])), ret);
 			}
+			Passes.run(ret);
 		} catch (yyParser.yyException e) {
 		} catch (ICE i) {
 			System.Console.WriteLine("internal compiler error: " + i.msg);
