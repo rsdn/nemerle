@@ -786,15 +786,15 @@ raw_expr:
               { E_match ($2, $6) }
         | KW_RAISE expr
               { E_raise $2 }
-        | KW_TRY expr KW_WITH L_PAREN QUESTION_MARK located_id COLON ty R_PAREN expr %prec KW_LET
+        | KW_TRY expr KW_WITH QUESTION_MARK located_id COLON ty EQ_MORE expr %prec KW_LET
               { 
-                let (loc, name) = $6 in
+                let (loc, name) = $5 in
                 let v = {(empty_val ()) with
                   val_loc = loc;
                   val_name = name;
-                  val_type = Some $8;
+                  val_type = Some $7;
                   val_kind = Val_exn;
-                } in E_try_with ($2, v, $10)
+                } in E_try_with ($2, v, $9)
               }
         | KW_TRY expr KW_FINALLY expr %prec KW_LET
               { E_try_finally ($2, $4) }
