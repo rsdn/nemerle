@@ -75,6 +75,7 @@ NEMERLE_COMPILER_DLL_SRC = \
 	constantfolder.n \
 	numerictype.n \
 	cgexpr.n \
+	cgpost.n \
 	cgopt.n \
 	external.n \
 	xmldump.n \
