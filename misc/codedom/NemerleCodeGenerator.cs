@@ -868,13 +868,8 @@ namespace Nemerle.Contrib
                 attribute.Name = attribute.Name.Replace('+', '.');
             }
         }
-/*		
-        protected override void GenerateAttributeDeclaration ( CodeAttributeDeclarationCollection attributes )
-        {
-            attribute.Name = attribute.Name.Replace ('+', '.'));
-        }
-*/
-		protected override void GenerateAttributeDeclarationsEnd( CodeAttributeDeclarationCollection attributes )
+
+        protected override void GenerateAttributeDeclarationsEnd( CodeAttributeDeclarationCollection attributes )
 		{
 			Output.WriteLine( ']' );
 		}
@@ -1071,7 +1066,7 @@ namespace Nemerle.Contrib
 				output += ")";
 			}
 
-			return output;
+			return output.Replace ("+", ".");
 		}
 
 		protected override bool IsValidIdentifier ( string identifier )
