@@ -39,7 +39,7 @@ module IO {
 
   variant FormatToken {
     | Text { body : string; }
-    | Number
+    | Number { unsigned : bool; longformat : bool; }
     | NumberFloat
     | Str
     | Chr
@@ -77,22 +77,34 @@ module IO {
           // % occured - first, dump text from buffer
           when ( buf.Length > 0 ) append_text ();
 
-          // now analyze next character
-          ++i;
-          if ( i < n ) {
-            match (form[i]) {
-              | 'd' => result = Number () :: result
-              | 'i' => result = Number () :: result
-              | 'f' => result = NumberFloat () :: result
-              | 's' => result = Str () :: result
-              | 'c' => result = Chr () :: result
-              | '%' => ignore (buf.Append ('%'))
-              | _ => 
-                Message.error ("Unsupported formatting sequence after % character")
+          mutable longform = false;
+
+          def next_char () {
+            // now analyze next character
+            ++i;
+
+            if ( i < n ) {
+              match (form[i]) {
+                | 'd' | 'i' => result = Number (false, longform) :: result
+                | 'u' => result = Number (true, longform) :: result
+                | 'f' => result = NumberFloat () :: result
+                | 's' => result = Str () :: result
+                | 'c' => result = Chr () :: result
+                | '%' => ignore (buf.Append ('%'))
+                | 'l' => 
+                  if (longform) 
+                    Message.error ("`l' in printf-format specified twice")
+                  else {
+                    longform = true; next_char ();
+                  }
+                | _ => 
+                  Message.error ("Unsupported formatting sequence after % character")
+              }
             }
+            else
+              Message.error ("Unexpected end of format after % character")
           }
-          else
-            Message.error ("Unexpected end of format after % character")
+          next_char ();
 
         | c => ignore (buf.Append (c))
       };
@@ -109,6 +121,12 @@ module IO {
   : list <PT.Expr> * list <PT.Expr>
   {
     def make_expressions (toks, i, acc_eval, acc_ref) {
+      def continue (x, xs) {
+        def sym = Macros.NewSymbol ();
+        make_expressions (xs, i - 1, <[ def $(sym : name) = $x ]> :: acc_eval,
+                          <[ $(sym : name) ]> :: acc_ref)
+      }
+
       match (toks) {
         | [] when i == 0 => (acc_eval, acc_ref)
         | Text (t) :: xs => 
@@ -118,32 +136,21 @@ module IO {
           Message.error ("not enough arguments for printf macro");
           (acc_eval, acc_ref)
             
-        | Number :: xs =>
-          def sym = Macros.NewSymbol ();
-          make_expressions (xs, i - 1, <[ 
-            def $(sym : name) = $(parms[i - 1]) : int 
-          ]> :: acc_eval, <[ $(sym : name) ]> :: acc_ref)
+        | Number (false, false) :: xs => continue (<[ $(parms[i - 1]) : int ]>, xs)
+        | Number (true, false) :: xs => continue (<[ $(parms[i - 1]) : uint ]>, xs)
+        | Number (false, true) :: xs => continue (<[ $(parms[i - 1]) : long ]>, xs)
+         /// FIXME: bug in pattern exhaustiveness
+        | Number :: xs => continue (<[ $(parms[i - 1]) : ulong ]>, xs)
 
         | NumberFloat :: xs =>
-          def sym = Macros.NewSymbol ();
-          make_expressions (xs, i - 1,
-            <[ def $(sym : name) = Convert.ToString (($(parms[i - 1]) : double),
-                 Globalization.NumberFormatInfo.InvariantInfo) ]> :: acc_eval, 
-            <[ $(sym : name) ]> :: acc_ref)
+          continue (<[ Convert.ToString (($(parms[i - 1]) : double),
+                         Globalization.NumberFormatInfo.InvariantInfo) ]>, xs)
 
-        | Str :: xs =>
-          def sym = Macros.NewSymbol ();
-          make_expressions (xs, i - 1, <[ 
-            def $(sym : name) = $(parms[i - 1]) : string
-          ]> :: acc_eval, <[ $(sym : name) ]> :: acc_ref)
+        | Str :: xs => continue (<[ $(parms[i - 1]) : string ]>, xs)
 
-        | Chr :: xs =>
-          def sym = Macros.NewSymbol ();
-          make_expressions (xs, i - 1, <[ 
-            def $(sym : name) = $(parms[i - 1]) : char
-          ]> :: acc_eval, <[ $(sym : name) ]> :: acc_ref)
+        | Chr :: xs => continue (<[ $(parms[i - 1]) : char ]>, xs)
 
-        | [] =>
+        | [] => 
           Message.error ("too many arguments for printf macro");
           (acc_eval, acc_ref)
       }
@@ -171,6 +178,19 @@ module IO {
       def result = Text.StringBuilder ();
       {.. $seq } 
       result.ToString ();
+    ]>
+  }
+
+  /** Writes output to given System.IO.TextWriter */
+  macro fprintf (writer, format : string, params parms : array <expr>)
+  {
+    def (evals, refs) = make_evaluation_exprs (parse_format (format), parms);
+    def seq = List.Append (evals, List.Map (refs, fun (x) { 
+      <[ writer_v.Write ($x) ]> 
+    }));
+    <[ 
+      def writer_v = $writer : IO.TextWriter;
+      {.. $seq } 
     ]>
   }
 
@@ -215,7 +235,12 @@ module IO {
     ]>
   }
 
-  macro print (str : string)
+  /** we could extend it to $(..) expressions - in such a case:
+      - first evaluate expressions
+      - store intermediate results in variables
+      - return list of evaluators and reference variables
+   */
+  make_splice_distribution (str : string) : list <PT.Expr>
   {
     // take names after $
     def namesreg = Regex (@"(([^\$]*)\$(\w+))|(.+)", RegexOptions.Singleline);
@@ -224,18 +249,51 @@ module IO {
 
     while (m.Success) {
       if (m.Groups[1].Success) {
-        def variable_name = Macros.UseSiteSymbol (m.Groups[3].ToString ());
-        res = <[ Console.Write ($(variable_name : name).ToString ()) ]> ::
-               <[ Console.Write ($(m.Groups[2].ToString () : string)) ]> ::
-               res;
+        def variable_name = m.Groups[3].ToString ();
+        res = <[ $(variable_name : usesite).ToString () ]> ::
+              <[ $(m.Groups[2].ToString () : string) ]> :: res;
       }
       else
-        res = <[ Console.Write ($(m.Groups[4].ToString () : string)) ]> :: res;
+        res = <[ $(m.Groups[4].ToString () : string) ]> :: res;
 
       m = m.NextMatch ();
     };
+    res
+  } 
 
-    <[ {.. $(List.Rev (res)) } ]>
+  /** If string literal is supplied, then prints it to System.Console, replacing all
+      occurences of $id with id.ToString () invocation
+      If any other expression is supplied, it is equivalent to System.Console.Write 
+  */
+  macro print (value)
+  {
+    match (value) {
+      | <[ $(str : string) ]> =>
+        def seq = List.RevMap (make_splice_distribution (str), fun (x) {
+          <[ Console.Write ($x) ]> 
+        });
+        <[ {.. $seq } ]>
+
+      | _ =>
+        <[ Console.Write ($value) ]>       
+    }
+  }
+
+  macro sprint (str : string)
+  {
+    def seq = List.RevMap (make_splice_distribution (str), fun (x) {
+      <[ ignore (result.Append ($x)) ]> 
+    });
+    <[ def result = Text.StringBuilder (); {.. $seq }; result.ToString () ]>
+  }
+
+  /** Writes text to given System.IO.TextWriter */
+  macro fprint (writer, str : string)
+  {
+    def seq = List.RevMap (make_splice_distribution (str), fun (x) {
+      <[ writer_v.Write ($x) ]> 
+    });
+    <[ def writer_v = $writer : IO.TextWriter; {.. $seq }; ]>
   }
 
 /*
