@@ -49,6 +49,7 @@ namespace Nemerle.Compiler {
       | Cached { tycon : Tycon; }
       | NotLoaded { e : LibraryReferenceManager.ExternalType; }
       | MacroCall { m : IMacro; }
+      | NamespaceReference
     }
     
     public class NamespaceND {
@@ -167,7 +168,7 @@ namespace Nemerle.Compiler {
             nd.Value = Cached (e.tycon);
             Some (e.tycon)
 
-          | MacroCall | No => None ()
+          | MacroCall | No | NamespaceReference => None ()
         }
       }
 
@@ -176,7 +177,7 @@ namespace Nemerle.Compiler {
         match (TryPath (split)) {
           | Cached (tc) => Some (tc.GetSystemType ())
           | NotLoaded (e) => Some (e.system_type)
-          | MacroCall | No => None ()
+          | MacroCall | No | NamespaceReference => None ()
         }
       }
 
@@ -219,21 +220,21 @@ namespace Nemerle.Compiler {
       }
     }
     
-    static mutable macro_context : int;
+    static mutable macro_context : int = 0;
     static macro_contexts : Hashtable <string, int>;
-    static imported_contexts : array <GlobalEnv>;
+    static imported_contexts : array <GlobalEnv> = null;
     static mutable macro_context_class : ITypeModifier;
     static namespace_tree : NamespaceND;
+
+    // we store nodes, which were referenced from using / alias to check their existance
+    static mutable referenced_namespace_nodes : list<NamespaceND * Location> = [];
     
     static this () {
-      macro_context = 0;
-      imported_contexts = null;
       macro_contexts = Hashtable (100);
-      namespace_tree = NamespaceND ([], No ());
+      namespace_tree = NamespaceND ([], NamespaceReference ());
 
       Empty = GlobalEnv ();
-      Core = Empty.AddOpenNamespace (["Nemerle", "Core"])
-                   .AddOpenNamespace (["Nemerle", "Core", "Aliases"]);
+      Core = Empty.AddOpenNamespace (["Nemerle", "Core"], Located.default_loc);
     }
 
     open_namespaces : list <NamespaceND>;
@@ -256,12 +257,12 @@ namespace Nemerle.Compiler {
     public static AddMacro (split : list<string>, m : IMacro) : void {
       def ns = namespace_tree.Path (split);
       match (ns.Value) {
-        | No =>
-          ns.Value = MacroCall (m)
-
+        | No => ns.Value = MacroCall (m)
+        | NamespaceReference =>
+          Message.error ("cannot define `" + Util.qid_of_list (split) + 
+                         "' because the same namespace exists ");
         | _ =>
-          Message.error ("redefinition of `" +
-                         Util.qid_of_list (split) + "'");
+          Message.error ("redefinition of `" + Util.qid_of_list (split) + "'");
       }
     }
 
@@ -295,7 +296,7 @@ namespace Nemerle.Compiler {
               EnterIntoNamespace (current_namespace.Path (namesp))
           };
         def fullns = env.current_namespace.Path ([name]);
-        def tyinfo = TypeBuilder (None (), None (), env.AddOpenNamespace (fullns), td);
+        def tyinfo = TypeBuilder (None (), None (), env.AddOpenNamespace (fullns, td.loc), td);
         AddType (fullns, tyinfo);
         tyinfo.FixupDefinedClass ();
         match (td) {
@@ -484,24 +485,27 @@ namespace Nemerle.Compiler {
       }
     }
       
-    public AddOpenNamespace (ns : list <string>) : GlobalEnv
+    public AddOpenNamespace (ns : list <string>, loc : Location) : GlobalEnv
     {
-      AddOpenNamespace (namespace_tree.Path (ns))
+      AddOpenNamespace (namespace_tree.Path (ns), loc)
     }
 
-    internal AddOpenNamespace (ns : NamespaceND) : GlobalEnv
+    internal AddOpenNamespace (ns : NamespaceND, loc : Location) : GlobalEnv
     {
+      referenced_namespace_nodes = (ns, loc) :: referenced_namespace_nodes;
       GlobalEnv (List.Append (open_namespaces, [ns]),
                  current_namespace, namespace_aliases)
     }
     
-    internal AddNamespaceAlias (short_name : string, long_name : list <string>) : GlobalEnv
+    internal AddNamespaceAlias (short_name : string, long_name : list <string>, 
+                                loc : Location) : GlobalEnv
     {
-      AddNamespaceAlias (short_name, namespace_tree.Path (long_name))
+      AddNamespaceAlias (short_name, namespace_tree.Path (long_name), loc)
     }
 
-    internal AddNamespaceAlias (short_name : string, ns : NamespaceND) : GlobalEnv
+    internal AddNamespaceAlias (short_name : string, ns : NamespaceND, loc : Location) : GlobalEnv
     {
+      referenced_namespace_nodes = (ns, loc) :: referenced_namespace_nodes;
       GlobalEnv (open_namespaces, current_namespace,
                  namespace_aliases.Add (short_name, ns))
     }
@@ -509,11 +513,13 @@ namespace Nemerle.Compiler {
     internal EnterIntoNamespace (pref : list <string>) : GlobalEnv
     {
       def ns = current_namespace.Path (pref);
-      GlobalEnv (List.Append (open_namespaces, [ns]), ns, namespace_aliases)
+      EnterIntoNamespace (ns)
     }
 
     internal EnterIntoNamespace (full : NamespaceND) : GlobalEnv
     {
+      when (full.Value is No)
+        full.Value = NamespaceReference ();
       GlobalEnv (List.Append (open_namespaces, [full]), full, namespace_aliases)
     }
     
@@ -576,6 +582,20 @@ namespace Nemerle.Compiler {
           | _ => ()
         }
       }
+    }
+
+    public static CheckReferencedNamespaces () : void
+    {
+      List.Iter (referenced_namespace_nodes, fun (nd : NamespaceND, loc) {
+        match (nd.Value) {
+          | No => 
+            nd.Value = NamespaceReference ();
+            Message.error (loc, "referenced namespace `" + Util.qid_of_list (nd.Name) 
+                           + "' does not exist")
+          // we could forbid referencing type-style namespaces here if we want
+          | _ => ()  
+        }
+      })
     }
 
     internal GetCurrentNamespaceND () : NamespaceND {
