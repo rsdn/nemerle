@@ -50,6 +50,12 @@ let push c =
   in
   List.iter push_val c.cl_values;
   List.iter push_fun c.cl_funvals;
+  begin
+    match c.cl_this_td with
+    | Some td ->
+      out (xf "public %s __N__this;" (Ty_info.td_qname td))
+    | None -> ()
+  end;
   out "} // end clo\n"
 
 let push_all () =

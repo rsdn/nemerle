@@ -304,7 +304,7 @@ let rec cg_expr c expr =
       in
       let add_fun f =
         Closure.add_fun_val c.c_closure f;
-        Stack.push (c.c_this_id, f) fun_stack;
+        Stack.push (c.c_this_id, c.c_enclosing_td, f) fun_stack;
         let args = String.concat ", " (List.map make_arg f.fun_needed_closures) in
         out (xf "%s = new %s_class(%s);" (fun_ref f) (fun_name f) args)
       in
@@ -632,8 +632,9 @@ let cg_decls decls =
     if Stack.is_empty fun_stack then ()
     else
       begin
-        let (this_id, f) = Stack.pop fun_stack in
-        locate f.fun_loc (fun () -> cg_local_fun {ctx with c_this_id = this_id} f);
+        let (this_id, enc_td, f) = Stack.pop fun_stack in
+        let ctx' = {ctx with c_this_id = this_id; c_enclosing_td = enc_td} in
+        locate f.fun_loc (fun () -> cg_local_fun ctx' f);
         push_funs ()
       end
   in push_funs ();
