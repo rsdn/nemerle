@@ -33,6 +33,7 @@ lib_src = ../lib/aliases.n ../lib/core.n ../lib/option.n ../lib/list.n \
 	  ../lib/getopt.n
 
 src = \
+	extensions.n \
 	globalenv.n \
 	localvalue.n \
 	typingcontext.n \
@@ -46,7 +47,6 @@ src = \
 	ast.n \
 	parsetree.n \
 	typedtree.n \
-	extensions.n \
 	util.n \
 	passes.n \
 	scan_globals.n \
