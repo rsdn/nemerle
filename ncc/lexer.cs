@@ -588,15 +588,13 @@ class Lexer : yyParser.yyInput
 		keywords["mutable"] = Token.KW_MUTABLE;
 		keywords["def"] = Token.KW_DEF;
 		keywords["module"] = Token.KW_MODULE;
-		keywords["require"] = Token.KW_REQUIRE;
-		keywords["ensure"] = Token.KW_ENSURE;
 		keywords["array"] = Token.KW_ARRAY;
  		keywords["mkarray"] = Token.KW_MKARRAY;
 		keywords["macro"] = Token.KW_MACRO;
 		keywords["when"] = Token.KW_WHEN;
-                keywords["while"] = Token.KW_WHILE;
-                keywords["unless"] = Token.KW_UNLESS;
-	}
+    keywords["while"] = Token.KW_WHILE;
+    keywords["unless"] = Token.KW_UNLESS;
+  }
 }
 
 }
