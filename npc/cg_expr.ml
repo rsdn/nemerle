@@ -429,7 +429,7 @@ and cg_fun ?(do_header = true) ?(implemented = []) ctx f =
         ()
     in
     List.iter maybe_store_parm f.fun_parms;
-    if ctx.c_this_id <> 0 then
+    if ctx.c_this_id <> 0 && f.fun_defined_in_fun = 0 then
       Closure.add_this_pointer ctx.c_closure (unsome ctx.c_enclosing_td)
     else ();
     let () = cg_expr {ctx with c_target = Targ_return; c_ret_type = ret_type} e in
