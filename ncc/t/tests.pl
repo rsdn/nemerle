@@ -93,8 +93,6 @@ while (<*.n>) {
     err("unxepected error exit status");
   }
 
-  system("grep -v '\\.\\.\\.\$' test.err > test.tmp; mv test.tmp test.err");
-
   foreach (keys %err) {
     $line = $_;
     err("expected error: \"$err{$line}\" at line $line")
@@ -112,9 +110,17 @@ while (<*.n>) {
     err("unexpected error at line $line")
       if (xgrep("^$fn:$line:", "test.err"));
   }
- 
-  err("unexpected compiler output")
-    if (!$any_errors && -s "test.err");
+
+  unless ($any_errors) {
+    open (IN, "<test.err") or die;
+    while (<IN>) {
+      chomp;
+      s/\r//;
+      /\.\.\.$/ and next;
+      err("unexpected compiler output ($_)");
+    }
+    close(IN);
+  }
 
   if ($res == 0) {
     print STDERR "C# ";
