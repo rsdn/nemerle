@@ -33,11 +33,24 @@ open Nemerle.Compiler.Parsetree;
 namespace Nemerle.Compiler {
 
 module Parser {
+  class ParenCallback {
+    public opening_paren : string;
+    public closing_paren : string;
+    public parsing_function : CTX -> Expr;
+  }
+
+  class KeywordCallback {
+    public name : string;
+    public parsing_function : CTX -> Expr;
+  }
 
   class CTX {
     public lexer : ILexer;
-    public mutable last_token : Token;
-    public mutable push_back : option (Token);
+    public mutable last_token1 : Token; // most recent token
+    public mutable last_token2 : Token; // one token before
+    public mutable push_back : int; // position in last_token{1,2} or 0
+    public parens : Hashtable (string, ParenCallback);
+    public keywords : Hashtable (string, KeywordCallback);
   }
 
   'a where 'a :> Located 
@@ -59,14 +72,18 @@ module Parser {
     ret
   }
 
-  get_token (ctx : CTX) : Token { 
+  get_token (ctx : CTX) : Token {
     match (ctx.push_back) {
-      | Some (x) =>
-        ctx.push_back <- None ();
-        x
-      | None =>
-        ctx.last_token <- ctx.lexer.get_token ();
-        ctx.last_token
+      | 1 =>
+        ctx.push_back <- 0;
+        ctx.last_token1
+      | 2 =>
+        ctx.push_back <- 1;
+        ctx.last_token2
+      | _ => 
+        ctx.last_token2 <- ctx.last_token1;
+        ctx.last_token1 <- ctx.lexer.get_token ();
+        ctx.last_token1
     }
   }
 
@@ -78,9 +95,9 @@ module Parser {
   
   push_back (ctx : CTX) : void {
     match (ctx.push_back) {
-      | Some => Util.ice ()
-      | None =>
-        ctx.push_back <- Some (ctx.last_token)
+      | 1 => ctx.push_back <- 2
+      | 2 => Util.ice ()
+      | _ => ctx.push_back <- 1
     }
   }
 
@@ -151,16 +168,23 @@ module Parser {
     }
   }
 
+  expect_keyword (ctx : CTX, op : string) : void {
+    match (get_token (ctx)) {
+      | Tok_keyword (o) when op == o => ()
+      | _ =>
+        fatal_error (ctx, "expecting '" + op + "'");
+    }
+  }
+
   parse_fun_header (ctx : CTX, 
                     allow_inference : bool, 
-                    allow_ctor : bool,
-                    got_name : bool) : Fun_header 
+                    allow_ctor : bool) : Fun_header 
   {
     def tok = get_token (ctx);
     locate (ctx, fun () {
       def typarms =
         match (tok) {
-          | Tok_tyvar when !got_name =>
+          | Tok_tyvar =>
             push_back (ctx);
             def tyvars = operator_separated_list (ctx, ",", get_tyvar);
             parse_where_constraints (ctx, tyvars);
@@ -169,13 +193,11 @@ module Parser {
             Typarms ([], [])
         };
       def name =
-        if (got_name) "?"
-        else
-          match (get_token (ctx)) {
-            | Tok_keyword ("this") when allow_ctor => ".ctor"
-            | Tok_identifier (n) => n
-            | _ => fatal_error (ctx, "expecting function name")
-          };
+        match (get_token (ctx)) {
+          | Tok_keyword ("this") when allow_ctor => ".ctor"
+          | Tok_identifier (n) => n
+          | _ => fatal_error (ctx, "expecting function name")
+        };
       expect_operator (ctx, "(");
       def parse_parm (_) {
         def id = get_id_or_dummy (ctx);
@@ -203,7 +225,235 @@ module Parser {
     })
   }
 
-  parse_block (ctx : CTX) : Expr { null } // FIXME
+  parse_literal (ctx : CTX) : option (Literal) {
+    match (get_token (ctx)) {
+      | Tok_keyword ("null") => Some (L_null ())
+      | Tok_operator ("(", _) =>
+        match (get_token (ctx)) {
+          | Tok_operator (")", _) => Some (L_void ())
+          | _ => push_back (ctx); push_back (ctx); None ()
+        }
+      | Tok_string_literal (s) => Some (L_string (s))
+      | Tok_number_literal (n) => Some (L_int (n))
+      | Tok_char_literal (c) => Some (L_char (c))
+      | _ => push_back (ctx); None ()
+    }
+  }
+
+  parse_closed_prim_expr (ctx : CTX) : Expr {
+    ignore (peek_token (ctx));
+    def loc = location (ctx);
+    match (parse_literal (ctx)) {
+      | Some (l) => E_literal (loc, l)
+      | None =>
+        def is_id (tok) { 
+          match (tok) { 
+            | Tok_identifier => true 
+            | _ => false
+          }
+        };
+
+        def problem () {
+          push_back (ctx);
+          Message.fatal_error (loc, "expecting primary expression")
+        };
+        
+        match (get_token (ctx)) {
+          | Tok_keyword ("this") => E_this (loc)
+          | Tok_keyword ("base") => E_base (loc)
+          | Tok_identifier (n) => E_ref (loc, n)
+          | Tok_operator ("(", _) =>
+            def expr = parse_expr (ctx);
+            match (get_token (ctx)) {
+              | Tok_operator (":>", _) =>
+                def t = parse_type (ctx);
+                expect_operator (ctx, ")");
+                E_type_conversion (loc, expr, t)
+
+              | Tok_operator (":", _) =>
+                def t = parse_type (ctx);
+                expect_operator (ctx, ")");
+                E_type_conversion (loc, expr, t)
+
+              | Tok_operator (",", _) =>
+                def exprs = expr :: operator_separated_list (ctx, ",", parse_expr);
+                expect_operator (ctx, ")");
+                E_tuple (loc, exprs)
+                
+              | Tok_operator (")", _) => expr
+
+              | _ => Message.fatal_error (loc, "unbalanced `('")
+            }
+
+          | Tok_operator ("$", _) when is_id (peek_token (ctx)) =>
+            match (get_token (ctx)) {
+              | Tok_identifier (n) => E_unquoted (loc, E_ref (location (ctx), n))
+              | _ => Util.ice ()
+            }
+
+          | Tok_operator (o, _) =>
+            def parse_paren (p : ParenCallback) {
+              def problem () {
+                push_back (ctx);
+                Message.error (loc, "unbalanced `" + p.opening_paren + "'");
+                fatal_error (ctx, "expecting `" + p.closing_paren + "' here")
+              };
+              def expr = p.parsing_function (ctx);
+              match (get_token (ctx)) {
+                | Tok_operator (o, _) =>
+                  if (p.closing_paren == o)
+                    expr
+                  else
+                    match (get_token (ctx)) {
+                      | Tok_operator (o', _) when p.closing_paren == o + o' => expr
+                      | _ => push_back (ctx); problem ()
+                    }
+                | _ => problem ()
+              } 
+            };
+
+            
+            match (ctx.parens.Get (o)) {
+              | Some (p) => parse_paren (p)
+              | None =>
+                match (get_token (ctx)) {
+                  | Tok_operator (o', _) =>
+                    match (ctx.parens.Get (o + o')) {
+                      | Some (p) => parse_paren (p)
+                      | None => push_back (ctx); problem ()
+                    }
+                  | _ => push_back (ctx); problem ()
+                }
+            }
+            
+          | _ => problem ()
+        }
+    }
+  }
+
+  parse_prim_expr (ctx : CTX) : Expr {
+    def parse_call_parm (_) {
+      def is_ref = flag_keyword (ctx, "ref");
+      def tok = get_token (ctx);
+      def name =
+        match ((tok, get_token (ctx))) {
+          | (Tok_identifier (n), Tok_operator ("=", _)) => n
+          | _ => push_back (ctx); push_back (ctx); ""
+        };
+      Parm (is_ref, parse_expr (ctx), name)
+    };
+    
+    def loop (expr : Expr) {
+      match (get_token (ctx)) {
+        | Tok_operator ("[", _) =>
+          def exprs = operator_separated_list (ctx, ",", parse_expr);
+          expect_operator (ctx, "]");
+          loop (E_indexer (expr.loc, expr, exprs))
+          
+        | Tok_operator (".", _) => 
+          match (get_token (ctx)) {
+            | Tok_operator ("$", _) =>
+              def id = get_id (ctx);
+              def loc = location (ctx);
+              E_member (expr.loc, expr, SS_spliced_expr (loc, E_ref (loc, id)))
+            | Tok_identifier (id) =>
+              E_member (expr.loc, expr, SS_string (location (ctx), id))
+            | _ =>
+              fatal_error (ctx, "expecting field name after dot")
+          }
+          
+        | Tok_operator ("(", _) =>
+          def parms =
+            match (peek_token (ctx)) {
+              | Tok_operator (")", _) => []
+              | _ => 
+                def parms = operator_separated_list (ctx, ",", parse_call_parm);
+                expect_operator (ctx, ")");
+                parms
+            };
+          loop (E_call (expr.loc, expr, parms))
+
+        | _ => expr
+      }
+    };
+
+    loop (parse_closed_prim_expr (ctx))
+  }
+
+  parse_unary_expr (ctx : CTX) : Expr {
+    match (peek_token (ctx)) {
+      | Tok_operator ("(", _)
+      | Tok_operator ("$", _) => parse_prim_expr (ctx)
+      | Tok_operator (o, _) =>
+        def loc = location (ctx);
+        def unary () {
+          ignore (get_token (ctx)); // shift
+          E_call (loc, E_ref (loc, o), [Parm (parse_unary_expr (ctx))])
+        };
+        
+        if (ctx.parens.Contains (o))
+          parse_prim_expr (ctx)
+        else {
+          ignore (get_token (ctx));
+          def tok = peek_token (ctx);
+          push_back (ctx);
+          match (tok) {
+            | Tok_operator (o', _) =>
+              if (ctx.parens.Contains (o + o'))
+                parse_prim_expr (ctx)
+              else unary ()
+            | _ => unary ()
+          }
+        }
+      | _ => parse_prim_expr (ctx)
+    }
+  }
+  
+  parse_expr (ctx : CTX) : Expr {
+    null // FIXME
+  }
+
+  parse_expr_sequence (ctx : CTX) : list (Expr) {
+    def loop (acc) {
+      match (get_token (ctx)) {
+        | Tok_operator (";", _) =>
+          match (peek_token (ctx)) {
+            | Tok_operator ("}", _) 
+            | Tok_operator ("|", _) 
+            | Tok_operator ("]", _) 
+              => List.rev (acc)
+            | _ => loop (parse_expr (ctx) :: acc)
+          }
+        | Tok_operator ("}", _) 
+        | Tok_operator ("|", _) 
+        | Tok_operator ("]", _) 
+          => List.rev (acc)
+        | _ => fatal_error (ctx, "expecting expression in sequence")
+      }
+    };
+
+    loop ([parse_expr (ctx)])
+  }
+
+  parse_maybe_null_expr_sequence (ctx : CTX) : list (Expr) {
+    match (peek_token (ctx)) {
+      | Tok_operator ("}", _) 
+      | Tok_operator ("]", _) => []
+      | _ => parse_expr_sequence (ctx)
+    }
+  }
+
+  parse_block (ctx : CTX) : Expr {
+    expect_operator (ctx, "{");
+    match (peek_token (ctx)) {
+      | Tok_operator ("}", _) => E_sequence (location (ctx), [])
+      | _ => 
+        def loc = location (ctx);
+        def r = E_sequence (loc, parse_expr_sequence (ctx));
+        expect_operator (ctx, "}");
+        r
+    }
+  }
   
   parse_type_member (ctx : CTX) : Class_member {
     ignore (peek_token (ctx));
@@ -268,11 +518,10 @@ module Parser {
 
     match (get_token (ctx)) {
       | Tok_tyvar =>
+        push_back (ctx);
         def h = parse_fun_header (ctx, 
                                   allow_ctor = true, 
-                                  allow_inference = false, 
-                                  got_name = false);
-        push_back (ctx);
+                                  allow_inference = false);
         parse_fun (h)
         
       | Tok_keyword ("mutable") =>
@@ -284,16 +533,16 @@ module Parser {
       | Tok_identifier (name) =>
         match (peek_token (ctx)) {
           | Tok_operator ("(", _) => 
+            push_back (ctx);
             def h = parse_fun_header (ctx, 
                                       allow_ctor = true, 
-                                      allow_inference = false, 
-                                      got_name = true);
-            h.name <- name;
+                                      allow_inference = false);
             parse_fun (h)
           | _ => parse_field (false, name)
         }
 
       | _ =>
+        push_back (ctx);
         def td = parse_type_decl (ctx);
         td.modifiers <- List.append (td.modifiers, attrs);
         M_type (td)
@@ -518,7 +767,7 @@ module Parser {
       ignore (peek_token (ctx));
       locate (ctx, fun () {
         def is_new = flag_keyword (ctx, "new");
-        def h = parse_fun_header (ctx, allow_ctor = false, allow_inference = false, got_name = false);
+        def h = parse_fun_header (ctx, allow_ctor = false, allow_inference = false);
         M_function (h, FK_iface_method (is_new), FB_abstract ())
       })
     };
@@ -630,6 +879,9 @@ module Parser {
     })
   }
 
+  parse_quotation (ctx : CTX) : Expr { null } // FIXME
+  parse_unquoted (ctx : CTX) : Expr { null } // FIXME
+
   'a collect_braced_list (ctx : CTX, f : CTX -> 'a) : list ('a) {
     expect_operator (ctx, "{");
     def r = collect_list (ctx, f);
@@ -648,10 +900,107 @@ module Parser {
     loop ([])
   }
 
+  variant GrammarElement {
+    | GE_operator { name : string; }
+    | GE_keyword { name : string; }
+    | GE_expression
+    | GE_block
+    | GE_expression_list { sep : string; }
+  }
+
+  parse_wrt_rule (ctx : CTX, rule : list (GrammarElement)) : list (Expr) {
+    def loc = location (ctx);
+    
+    def loop (acc, lst) {
+      match (lst) {
+        | GE_operator (n) :: xs =>
+          expect_operator (ctx, n);
+          loop (acc, xs)
+
+        | GE_keyword (n) :: xs =>
+          expect_keyword (ctx, n);
+          loop (acc, xs)
+
+        | GE_expression :: xs =>
+          def expr = parse_expr (ctx);
+          loop (expr :: acc, xs)
+
+        | GE_block :: xs =>
+          def expr = parse_block (ctx);
+          loop (expr :: acc, xs)
+
+        | GE_expression_list (sep) :: xs =>
+          def exprs = operator_separated_list (ctx, sep, parse_expr);
+          loop (List.rev_append (exprs, acc), xs)
+
+        | [] => List.rev (acc)
+      }
+    };
+
+    loop ([], rule)
+  }
+
+  make_parsing_function (macro_name : string, rule : list (GrammarElement)) : CTX -> Expr {
+    fun (ctx) {
+      def loc = location (ctx);
+      def exprs = parse_wrt_rule (ctx, rule);
+      def parms = List.map (fun (x) { Parm (x) }, exprs);
+      E_call (loc, E_ref (loc, macro_name), parms)
+    }
+  }
+
+
+  init_parens (ctx : CTX) : void {
+    def add (o, c, f) {
+      ctx.parens.Add (o, ParenCallback (o, c, f))
+    };
+    add ("<[", "]>", parse_quotation);
+    add ("$(", ")", parse_unquoted);
+    
+    add ("[", "]", fun (ctx) {
+      def loc = location (ctx);
+      E_list (loc, parse_maybe_null_expr_sequence (ctx))
+    });
+    
+    add ("{", "}", fun (ctx) {
+      def loc = location (ctx);
+      E_sequence (loc, parse_maybe_null_expr_sequence (ctx))
+    });
+  }
+
+  init_keywords (ctx : CTX) : void {
+    def add_macro (name, rule) {
+      ctx.keywords.Add (name, KeywordCallback (name, make_parsing_function ("_N_" + name, rule)))
+    };
+
+    def while_rule = [GE_operator ("("); GE_expression (); GE_operator (")");
+                        GE_expression ()];
+
+    add_macro ("while", while_rule);
+    add_macro ("when", while_rule);
+    add_macro ("unless", while_rule);
+    
+    add_macro ("using", [GE_operator ("(");
+                         GE_expression_list (",");
+                         GE_operator (")");
+                         GE_expression ()]);
+
+    add_macro ("for", [GE_operator ("(");
+                         GE_expression (); GE_operator (";");
+                         GE_expression (); GE_operator (";");
+                         GE_expression (); GE_operator (")");
+                       GE_expression ()])
+  }
+
   public parse (lexer : ILexer) : list (Top_decl) {
     def ctx = CTX (lexer = lexer,
-                   last_token = null, 
-                   push_back = None ());
+                   last_token1 = null, 
+                   last_token2 = null, 
+                   push_back = 0,
+                   keywords = Hashtable (),
+                   parens = Hashtable ());
+    init_parens (ctx);
+    init_keywords (ctx);
     def r = collect_list (ctx, parse_topdecl);
     match (peek_token (ctx)) {
       | Tok_EOF => r
