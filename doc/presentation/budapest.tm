@@ -109,25 +109,30 @@
 
   <new_page>
 
-  <section|TRS and automatic tests>
+  <section|Formal semantics>
 
   <\itemize>
     <item>formal semantics of the language will be described using term
     rewriting systems
 
-    <item>assertions in code
-
-    <\itemize-minus>
-      <item>design by contract
-
-      <item>help in automatic test data generation
-
-      <item>help in proving program properties at TRS level
-    </itemize-minus>
-
-    <item>FIXME!
+    <item>existing equational theorem provers (<verbatim|Isabelle>,
+    <verbatim|VeriFun>) can be used to prove program properties
 
     \;
+  </itemize>
+
+  \;
+
+  <section|Assertions and tests>
+
+  Assertions in code will help in:
+
+  <\itemize>
+    <item>automatic test data generation
+
+    <item>proving program properties at TRS level
+
+    <item>design by contract
   </itemize>
 
   <new_page>
@@ -959,24 +964,25 @@
 
 <\references>
   <\collection>
-    <associate|toc-10|<tuple|<uninit>|6>>
+    <associate|toc-20|<tuple|<uninit>|11>>
+    <associate|toc-10|<tuple|<uninit>|5>>
     <associate|gly-1|<tuple|1|?>>
-    <associate|toc-11|<tuple|<uninit>|7>>
+    <associate|toc-11|<tuple|<uninit>|6>>
     <associate|toc-12|<tuple|<uninit>|7>>
-    <associate|toc-13|<tuple|<uninit>|8>>
+    <associate|toc-13|<tuple|<uninit>|7>>
     <associate|toc-14|<tuple|<uninit>|8>>
-    <associate|toc-15|<tuple|<uninit>|9>>
+    <associate|toc-15|<tuple|<uninit>|8>>
     <associate|toc-16|<tuple|<uninit>|9>>
-    <associate|toc-17|<tuple|<uninit>|10>>
+    <associate|toc-17|<tuple|<uninit>|9>>
     <associate|toc-18|<tuple|<uninit>|10>>
-    <associate|toc-19|<tuple|<uninit>|11>>
+    <associate|toc-19|<tuple|<uninit>|10>>
     <associate|toc-1|<tuple|<uninit>|2>>
     <associate|toc-2|<tuple|<uninit>|2>>
     <associate|toc-3|<tuple|<uninit>|3>>
     <associate|toc-4|<tuple|<uninit>|3>>
     <associate|toc-5|<tuple|<uninit>|3>>
     <associate|toc-6|<tuple|<uninit>|4>>
-    <associate|toc-7|<tuple|<uninit>|5>>
+    <associate|toc-7|<tuple|<uninit>|4>>
     <associate|toc-8|<tuple|<uninit>|5>>
     <associate|toc-9|<tuple|<uninit>|5>>
   </collection>
@@ -996,34 +1002,36 @@
 
       And the Result<value|toc-dots><pageref|toc-5>
 
-      TRS and automatic tests<value|toc-dots><pageref|toc-6>
+      Formal semantics<value|toc-dots><pageref|toc-6>
 
-      Hello world<value|toc-dots><pageref|toc-7>
+      Assertions and tests<value|toc-dots><pageref|toc-7>
 
-      <with|left margin|<quote|3fn>|<value|toc-dots><pageref|toc-8>>
+      Hello world<value|toc-dots><pageref|toc-8>
 
-      Factorial<value|toc-dots><pageref|toc-9>
+      <with|left margin|<quote|3fn>|<value|toc-dots><pageref|toc-9>>
 
-      Variants<value|toc-dots><pageref|toc-10>
+      Factorial<value|toc-dots><pageref|toc-10>
 
-      Functional values<value|toc-dots><pageref|toc-11>
+      Variants<value|toc-dots><pageref|toc-11>
 
-      Binary search tree insertion<value|toc-dots><pageref|toc-12>
+      Functional values<value|toc-dots><pageref|toc-12>
 
-      Language extensions<value|toc-dots><pageref|toc-13>
+      Binary search tree insertion<value|toc-dots><pageref|toc-13>
+
+      Language extensions<value|toc-dots><pageref|toc-14>
 
       <with|left margin|<quote|3fn>|Example
-      uses<value|toc-dots><pageref|toc-14>>
+      uses<value|toc-dots><pageref|toc-15>>
 
-      Regular expression extension<value|toc-dots><pageref|toc-15>
+      Regular expression extension<value|toc-dots><pageref|toc-16>
 
-      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-16>>
+      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-17>>
 
-      SQL queries extension<value|toc-dots><pageref|toc-17>
+      SQL queries extension<value|toc-dots><pageref|toc-18>
 
-      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-18>>
+      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-19>>
 
-      Big example: red-black trees<value|toc-dots><pageref|toc-19>
+      Big example: red-black trees<value|toc-dots><pageref|toc-20>
     </associate>
   </collection>
 </auxiliary>
