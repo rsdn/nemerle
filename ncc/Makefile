@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2003 The University of Wroclaw.
+# Copyright (c) 2003, 2004 The University of Wroclaw.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -26,12 +26,16 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
+# Include configuration determined by configure script.
 include ../config.mak
 
-COMPILER_PATH = ../boot/
-COMPILER = $(COMPILER_PATH)ncc.exe
+############################################################
+# VARIABLES
+############################################################
 
-RUN_COMPILER = $(TIME) $(EXECUTE) $(COMPILER) -no-stdlib $(COMP_FLAGS)
+COMPILER_PATH = ../boot/
+COMPILER      = $(COMPILER_PATH)ncc.exe
+RUN_COMPILER  = $(Q)$(TIME) $(EXECUTE) $(COMPILER) -no-stdlib $(COMP_FLAGS)
 
 GENERIC_SRC =
 
@@ -87,26 +91,57 @@ NEMERLE_COMPILER_DLL_SRC = \
 	cgmatch.n \
 
 
-NCC_EXE_SRC = main.n
-
+NCC_EXE_SRC       = main.n
 STDMACROS_DLL_SRC = stdmacros.n
 
-EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
+DISTFILES = \
+	ChangeLog                   \
+	Makefile                    \
+	$(NEMERLE_COMPILER_DLL_SRC) \
+	$(NCC_EXE_SRC)              \
+	$(STDMACROS_DLL_SRC)        \
 
+
+############################################################
+# OUTPUT
+############################################################
+
+COMPARE = @echo COMPARE $1 $2 $3
+DEAS    = @echo DASM    $1 $2
+AOT     = @echo NGEN    $1
+COMP    = @echo COMPILE $1
+MKDIR   = @echo MKDIR   $1
+TAR     = @echo TAR     $1
+CP      = @echo CP      $1
+
+############################################################
+# TARGETS
+############################################################
+
+# Default rule is to build a compiler.  It is mainly used by
+# developers as they are the only people invoking make from
+# inside this directory.  All other people should invoke
+# make boot, or have it invoked from the top-level make.
 all: stage1
 
+# This is necessary to make sure, that configuration file
+# has been generated, and it is up to date.
+../config.mak:
+	cd .. && $(MAKE) config.mak
+
 stage1:
-	$(MAKE) STAGE=$@ COMPILER_PATH=../boot/ aux-stage
+	$(Q)$(MAKE) STAGE=$@ COMPILER_PATH=../boot/ aux-stage
 
 stage2:
-	$(MAKE) STAGE=$@ COMPILER_PATH=out.stage1/ aux-stage
+	$(Q)$(MAKE) STAGE=$@ COMPILER_PATH=out.stage1/ aux-stage
 
 stage3:
-	$(MAKE) STAGE=$@ COMPILER_PATH=out.stage2/ last-stage
+	$(Q)$(MAKE) STAGE=$@ COMPILER_PATH=out.stage2/ last-stage
 
 aux-stage:
-	mkdir -p out.$(STAGE)
-	$(MAKE) aux-stage-files
+	$(MKDIR) out.$(STAGE)
+	$(Q)mkdir -p out.$(STAGE)
+	$(Q)$(MAKE) aux-stage-files
 
 aux-stage-files: \
 		out.$(STAGE)/aliases.n		\
@@ -131,101 +166,120 @@ lib: out.stage1/Nemerle.stage1.dll
 boot: stage1 stage2 stage3 compare ngen-stage3 tests
 
 ngen-stage3:
-	$(NGEN) out.stage3/Nemerle.dll
-	$(NGEN) out.stage3/Nemerle.Compiler.dll
-	$(NGEN) out.stage3/stdmacros.dll
-	$(NGEN) out.stage3/ncc.exe
+	$(AOT) Nemerle.dll
+	$(Q)$(NGEN) out.stage3/Nemerle.dll
+	$(AOT) Nemerle.Compiler.dll
+	$(Q)$(NGEN) out.stage3/Nemerle.Compiler.dll
+	$(AOT) stdmacros.dll
+	$(Q)$(NGEN) out.stage3/stdmacros.dll
+	$(AOT) ncc.exe
+	$(Q)$(NGEN) out.stage3/ncc.exe
 
 compare:
-	$(MAKE) compare-one-with-stage CMP_TARGET=Nemerle
-	$(MAKE) compare-one-with-stage CMP_TARGET=Nemerle.Compiler
-	$(MAKE) compare-one CMP_TARGET=stdmacros.dll
-	$(MAKE) compare-one CMP_TARGET=ncc.exe
+	$(Q)$(MAKE) compare-one-with-stage CMP_TARGET=Nemerle
+	$(Q)$(MAKE) compare-one-with-stage CMP_TARGET=Nemerle.Compiler
+	$(Q)$(MAKE) compare-one CMP_TARGET=stdmacros.dll
+	$(Q)$(MAKE) compare-one CMP_TARGET=ncc.exe
 
 compare-one:
-	test -f out.stage2/$(CMP_TARGET)
-	test -f out.stage3/$(CMP_TARGET) 
-	$(DASM) out.stage2/$(CMP_TARGET) | \
+	$(Q)test -f out.stage2/$(CMP_TARGET)
+	$(Q)test -f out.stage3/$(CMP_TARGET) 
+	$(DEAS) [stage2] $(CMP_TARGET)
+	$(Q)$(DASM) out.stage2/$(CMP_TARGET) | \
 		grep -v -E '(^//|// GUID|MVID)' \
 		| sed -e 's/\.stage2//g' > $(CMP_TARGET)2.il
-	$(DASM) out.stage3/$(CMP_TARGET) | \
+	$(DEAS) [stage3] $(CMP_TARGET)
+	$(Q)$(DASM) out.stage3/$(CMP_TARGET) | \
 		grep -v -E '(^//|// GUID|MVID)' \
 		| sed -e 's/\.stage2//g' > $(CMP_TARGET)3.il
-	diff -u -w $(CMP_TARGET)2.il $(CMP_TARGET)3.il
-	rm -f $(CMP_TARGET)2.il $(CMP_TARGET)3.il
+	$(COMPARE) [stage2] [stage3] $(CMP_TARGET)
+	$(Q)diff -u -w $(CMP_TARGET)2.il $(CMP_TARGET)3.il
+	$(Q)rm -f $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 
 compare-one-with-stage:
-	test -f out.stage2/$(CMP_TARGET).stage2.dll
-	test -f out.stage3/$(CMP_TARGET).dll
-	$(DASM) out.stage2/$(CMP_TARGET).stage2.dll | \
+	$(Q)test -f out.stage2/$(CMP_TARGET).stage2.dll
+	$(Q)test -f out.stage3/$(CMP_TARGET).dll
+	$(DEAS) [stage2] $(CMP_TARGET)
+	$(Q)$(DASM) out.stage2/$(CMP_TARGET).stage2.dll | \
 		grep -v -E '(^//|// GUID|MVID)' \
 		| sed -e 's/\.stage2//g' > $(CMP_TARGET)2.il
-	$(DASM) out.stage3/$(CMP_TARGET).dll | \
+	$(DEAS) [stage3] $(CMP_TARGET)
+	$(Q)$(DASM) out.stage3/$(CMP_TARGET).dll | \
 		grep -v -E '(^//|// GUID|MVID)' \
 		| sed -e 's/\.stage2//g' > $(CMP_TARGET)3.il
-	diff -u -w $(CMP_TARGET)2.il $(CMP_TARGET)3.il
-	rm -f $(CMP_TARGET)2.il $(CMP_TARGET)3.il
+	$(COMPARE) [stage2] [stage3] $(CMP_TARGET)
+	$(Q)diff -u -w $(CMP_TARGET)2.il $(CMP_TARGET)3.il
+	$(Q)rm -f $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 
 ../boot/aliases.n: ../lib/aliases.n
-	cp -f $< $@
+	$(Q)cp -f $< $@
 
 out.%/aliases.n: ../lib/aliases.n
-	cp -f $< $@
+	$(Q)cp -f $< $@
 
 out.$(STAGE)/Nemerle.dll out.$(STAGE)/Nemerle.$(STAGE).dll: \
 		$(COMPILER) $(COMPILER_PATH)aliases.n $(NEMERLE_DLL_SRC)
-	$(RUN_COMPILER) -target-library -out:$@ $(GENERIC_SRC) $(NEMERLE_DLL_SRC)
+	$(COMP) [$(STAGE)] Nemerle.dll
+	$(Q)$(RUN_COMPILER) -target-library -out:$@ $(GENERIC_SRC) $(NEMERLE_DLL_SRC)
 
 out.$(STAGE)/Nemerle.Compiler.dll: \
 		$(COMPILER) out.$(STAGE)/Nemerle.dll $(NEMERLE_COMPILER_DLL_SRC)
-	$(RUN_COMPILER) -target-library -out:$@ \
+	$(COMP) [$(STAGE)] Nemerle.Compiler.dll
+	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:out.$(STAGE)/Nemerle.dll \
 		$(GENERIC_SRC) $(NEMERLE_COMPILER_DLL_SRC)
 
 out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll: \
 		$(COMPILER) out.$(STAGE)/Nemerle.$(STAGE).dll $(NEMERLE_COMPILER_DLL_SRC)
-	$(RUN_COMPILER) -target-library -out:$@ \
+	$(COMP) [$(STAGE)] Nemerle.Compiler.dll
+	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:out.$(STAGE)/Nemerle.$(STAGE).dll \
 		$(GENERIC_SRC) $(NEMERLE_COMPILER_DLL_SRC)
 
 out.stage1/stdmacros.dll: $(COMPILER) out.stage1/Nemerle.stage1.dll \
 		out.stage1/Nemerle.Compiler.stage1.dll $(STDMACROS_DLL_SRC)
-	$(RUN_COMPILER) -target-library -out:$@ \
+	$(COMP) [stage1] stdmacros.dll
+	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:out.stage1/Nemerle.stage1.dll \
 		-reference:out.stage1/Nemerle.Compiler.stage1.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
 
 out.stage2/stdmacros.dll: $(COMPILER) out.stage2/Nemerle.stage2.dll \
 		out.stage2/Nemerle.Compiler.stage2.dll $(STDMACROS_DLL_SRC)
-	$(RUN_COMPILER) -target-library -out:$@ \
+	$(COMP) [stage2] stdmacros.dll
+	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:out.stage2/Nemerle.stage2.dll \
 		-reference:out.stage2/Nemerle.Compiler.stage2.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
 
 out.stage3/stdmacros.dll: $(COMPILER) out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll $(STDMACROS_DLL_SRC)
-	$(RUN_COMPILER) -target-library -out:$@ \
+	$(COMP) [stage3] stdmacros.dll
+	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:out.$(STAGE)/Nemerle.dll \
 		-reference:out.$(STAGE)/Nemerle.Compiler.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
 
 out.stage1/ncc.exe: $(COMPILER) out.stage1/Nemerle.stage1.dll \
 		out.stage1/Nemerle.Compiler.stage1.dll $(NCC_EXE_SRC)
-	$(RUN_COMPILER) -target-exe -out:$@ \
+	$(COMP) [stage1] ncc.exe
+	$(Q)$(RUN_COMPILER) -target-exe -out:$@ \
 		-reference:out.stage1/Nemerle.stage1.dll \
 		-reference:out.stage1/Nemerle.Compiler.stage1.dll \
 		$(GENERIC_SRC) $(NCC_EXE_SRC)
 
 out.stage2/ncc.exe: $(COMPILER) out.stage2/Nemerle.stage2.dll \
 		out.stage2/Nemerle.Compiler.stage2.dll $(NCC_EXE_SRC)
-	$(RUN_COMPILER) -target-exe -out:$@ \
+	$(COMP) [stage2] ncc.exe
+	$(Q)$(RUN_COMPILER) -target-exe -out:$@ \
 		-reference:out.stage2/Nemerle.stage2.dll \
 		-reference:out.stage2/Nemerle.Compiler.stage2.dll \
 		$(GENERIC_SRC) $(NCC_EXE_SRC)
 
 out.stage3/ncc.exe: $(COMPILER) out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll $(NCC_EXE_SRC)
-	$(RUN_COMPILER) -target-exe -out:$@ \
+	$(COMP) [stage3] ncc.exe
+	$(Q)$(RUN_COMPILER) -target-exe -out:$@ \
 		-reference:out.$(STAGE)/Nemerle.dll \
 		-reference:out.$(STAGE)/Nemerle.Compiler.dll \
 		$(GENERIC_SRC) $(NCC_EXE_SRC)
@@ -236,9 +290,6 @@ sync:
 		mv -vf ../../boot/$$x ../../boot/$$x.old ; \
 		cp -vf $$x ../../boot/$$x ; \
 	done
-
-../config.mak:
-	cd .. && $(MAKE) config.mak
 
 .PHONY: boot all tests t test ncc-il
 

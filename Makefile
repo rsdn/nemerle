@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2003 The University of Wroclaw.
+# Copyright (c) 2003, 2004 The University of Wroclaw.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -26,18 +26,47 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
+# Include configuration determined by configure script.
 include config.mak
 
-all:
-	$(MAKE) -C ncc boot
+############################################################
+# VARIABLES
+############################################################
 
-send: dist send-dist
+DISTFILES = \
+	AUTHORS   \
+	COPYRIGHT \
+	ChangeLog \
+	INSTALL   \
+	Makefile  \
+	README    \
+	configure \
 
-name    = nemerle
 svn2log = $(PYTHON) misc/svn2log.py changelog.xml -u misc/users
 
+############################################################
+# OUTPUT
+############################################################
+
+MKDIR = @echo MKDIR $1
+TAR   = @echo TAR   $1
+CP    = @echo CP    $1
+
+############################################################
+# TARGETS
+############################################################
+
+# This is the default target.  It bootstraps compiler, and
+# builds standard library.
+all:
+	$(Q)$(MAKE) -C ncc boot
+
+# This is necessary to make sure, that configuration file
+# has been generated, and it is up to date.
 config.mak: configure
 	./configure
+
+send: dist send-dist
 
 changelog:
 	svn up
@@ -52,23 +81,31 @@ sync-boot:
 	$(MAKE) -C ncc boot sync
 	svn commit -m "Sync for release." boot/
 
-dist: sync-boot changelog
-	if svn status 2>&1 | grep -qv '^?' ; then \
-	  echo "Some files modified"; \
-	  false; \
-	else \
-	  ver=`svn info . | awk '/^Revision:/ { print $$2 }'`; \
-	  set -e; \
-	  rm -rf $(name)-$$ver; \
-	  svn export . $(name)-$$ver; \
-	  for f in . ncc doc ; do \
-	    cp $$f/ChangeLog $(name)-$$ver/$$f; \
-	  done; \
-	  rm -f $(name)-$$ver/doc/src/metaprogramming.tex; \
-	  tar zcf $(name)-$$ver.tar.gz $(name)-$$ver; \
-	  rm -rf $(name)-$$ver; \
-	  ls -l $(name)-$$ver.tar.gz; \
-	fi
+dist: #sync-boot changelog
+	$(Q)rm -rf $(PACKAGE)-$(VERSION).*
+	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)
+	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)
+	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)/ncc
+	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/ncc
+	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)/doc
+	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/doc
+	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)/misc
+	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/misc
+	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)/boot
+	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/boot
+	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)/lib
+	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/lib
+	$(CP)
+	$(Q)cp $(DISTFILES) $(PACKAGE)-$(VERSION).$(REVISION)
+	$(Q)$(MAKE) -C ncc  dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/ncc
+	$(Q)$(MAKE) -C doc  dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/doc
+	$(Q)$(MAKE) -C misc dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/misc
+	$(Q)$(MAKE) -C boot dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/boot
+	$(Q)$(MAKE) -C lib  dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/lib
+	$(TAR) $(PACKAGE)-$(VERSION).$(REVISION).tar.gz 
+	@tar zcf $(PACKAGE)-$(VERSION).$(REVISION).tar.gz $(PACKAGE)-$(VERSION).$(REVISION)
+	@rm -rf $(PACKAGE)-$(VERSION).$(REVISION)
+
 
 send-dist:
 	if [ "X`find -maxdepth 1 -mindepth 1 -name 'nemerle-[0-9]*.tar.gz'`" = X ] ; then \
@@ -82,10 +119,10 @@ send-dist:
 	scp boot/ncc.exe lilith:/home/services/httpd/html/download/ncc-boot.exe
 
 install:
-	$(MAKE) -C ncc install
-	$(MAKE) -C doc install
+	$(MAKE) -C doc  install
+	$(MAKE) -C boot install
 
 clean:
 	$(MAKE) -C doc clean
 	$(MAKE) -C ncc clean
-	rm -f config.mak
+	rm -f config.mak configure.log
