@@ -94,6 +94,9 @@ ncc.exe: $(src)
 	mv -f out.cs out1.cs
 	$(COMPILE) $(OUTFLAG)$@ out1.cs
 
+ncc-il.exe: ncc.exe $(src)
+	$(EXECUTE) ./ncc.exe $(NEMFLAG) -texe -out ncc-il.exe $(src)
+
 stdlib.dll: $(lib_src)
 	$(EXECUTE) ./ncc.exe $(lib_src)
 	mv -f out.cs stdlib.cs
@@ -102,7 +105,7 @@ stdlib.dll: $(lib_src)
 ../config.mak:
 	$(MAKE) -C .. config.mak
 
-.PHONY: boot all tests t test
+.PHONY: boot all tests t test ncc-il
 
 t test: tests
 
