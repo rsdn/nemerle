@@ -1079,11 +1079,10 @@ returns [string return_string]
     :   (IDENTIFIER   ASSIGN)=>
         id1:IDENTIFIER   a:ASSIGN lvi = local_variable_initializer
         {
-	    lvi = lvi + " : " + t[1];
             return_string = t[0] + "mutable " + id1.getText () + a.getText () + lvi + ";";
         }
     |   id2:IDENTIFIER
-        {
+        {	    
             return_string = t[0] + "mutable " + id2.getText () + " = " + "Nemerle.Extensions.DefaultValue (" + t[1] + ") :" + t[1] + ";";
         }
 ;
@@ -1211,29 +1210,76 @@ switch_statement
 returns [StatementTree t]
 {
     t = new StatementTree();
+    LinkedList a = new LinkedList ();
+    string exp = "";
 }
-    :   SWITCH LPAREN   expression  RPAREN   switch_block
+    :   s:SWITCH lp:LPAREN   exp = expression  rp:RPAREN   t = switch_block
+        {
+	    a.Add (new StatementTree(s));
+	    a.Add (new StatementTree(lp));
+	    a.Add (new StatementTree(exp));
+	    a.Add (new StatementTree(rp));
+	    a.Add (t);
+	    t = new StatementTree("SWITCH",a);
+	}
     ;
 
-switch_block
+switch_block 
 returns [StatementTree t]
-{
+{    
     t = new StatementTree();
+    LinkedList a = new LinkedList ();
 }
-    :   LBRACE   (switch_section)*   RBRACE
+    :   lb:LBRACE   {a.Add(new StatementTree(lb));}
+	(t = switch_section
+	    {a.Add(t);}
+	)*   
+	rb:RBRACE   {a.Add(new StatementTree(rb));}
+	{ t = new StatementTree("SWITCH_BLOCK",a);}
     ;
 
 switch_section
 returns [StatementTree t]
 {
     t = new StatementTree();
+    StatementTree t1 = new StatementTree ();
+    StatementTree t2 = new StatementTree ();
+    LinkedList a1 = new LinkedList ();
+    LinkedList a2 = new LinkedList ();
+    LinkedList a = new LinkedList ();
 }
-    :   (options {greedy=true;}: switch_label)+   (options {greedy=true;}: statement)+
+    :   (options {greedy=true;}: t = switch_label
+	    { a1.Add(t); }
+	)+   	
+
+	(options {greedy=true;}: t = statement
+	    { a2.Add(t);}
+	)+
+	
+	{ 
+	    t1 = new StatementTree("SWITCH_SECTION_LABELS",a1);
+	    t2 = new StatementTree("SWITCH_SECTION_STATEMENTS",a2);	
+	    a.Add(t1);
+	    a.Add(t2);
+	    t = new StatementTree("SWITCH_SECTION",a);
+	}
+	
     ;
 
 switch_label
-    :   CASE   constant_expression   COLON
-    |   DEFAULT COLON
+returns [StatementTree t]
+{
+    t = new StatementTree ();    
+    LinkedList a = new LinkedList ();
+    string ce = "";
+}
+    :   c:CASE                      {a.Add (new StatementTree(c));}
+	ce = constant_expression    {a.Add (new StatementTree(ce));}
+	cl1:COLON		    {a.Add (new StatementTree(cl1));}
+	{ t = new StatementTree("SWITCH_LABEL",a);}
+    |   d:DEFAULT	{a.Add (new StatementTree(d));}
+	cl2:COLON	{a.Add (new StatementTree(cl2));}
+	{ t = new StatementTree("SWITCH_DEFAULT",a);}
     ;
 
 iteration_statement

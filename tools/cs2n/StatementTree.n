@@ -68,16 +68,27 @@ namespace Nemerle.CSharp
         public ToString (tp : string) : string
         {	 
 	    STree.set_type(tp);	
-            def st = s_tree.eliminate_continues (). eliminate_breaks ();
+            def st = s_tree.translate_switch(). eliminate_continues (). eliminate_breaks ();
             match (st)
             {
                 | [tree] =>
-                  tree.eliminate_return_body (false).ToString ()
+                  tree.eliminate_jump (Jump.Return ()).ToString ()
                 | _ => assert (false);
             }            
         }
         
         private s_tree : STree;
+    }
+
+    /**
+     *  Description of jump
+     */
+    public variant Jump
+    {
+	| Return
+	| Continue
+	| Break
+	| Goto
     }
 
     /**
@@ -87,8 +98,8 @@ namespace Nemerle.CSharp
     {        
         | TokS { s : string; }
         | Tok { t : antlr.Token; }
-        | Statement { s_name : string; children : list[STree] ; }                           
-        
+        | Statement { s_name : string; children : list[STree] ; }                                   	
+	
         override public ToString () : string
         {	    
             match(this)
@@ -114,6 +125,47 @@ namespace Nemerle.CSharp
 		     | _ => new_while.ToString ();
 		  }
 		
+		| Statement ("SWITCH",[Tok(s),lp,exp,rp,switch_block]) =>
+		    ExtendedToken.getWhitespaces(s) + "match" + lp.ToString () + exp.ToString () + rp.ToString () + switch_block.ToString ()
+
+		| Statement ("SWITCH_BLOCK",xs) =>
+		    def print (sections) : string
+		    {
+			| [] => ""
+			| head :: tail => 
+			    if(get_default_label(head))
+				print (tail) + head.ToString ()
+			    else 
+				head.ToString () + print (tail)
+		    }
+
+		    def (lbrace,sections,rbrace) = cut_off_braces(xs);
+		    lbrace.ToString () + print (sections) + rbrace.ToString ()
+		    
+		| Statement ("SWITCH_SECTION",[Statement("SWITCH_SECTION_LABELS",lbs),Statement("SWITCH_SECTION_STATEMENTS",sts)]) =>
+		    def print_labels (labels) : string
+		    {
+			| [] => ""
+			| head :: tail => head.ToString () + print_labels(tail)			
+		    }
+
+		    def print_statements(statements) : string
+		    {
+			| [] => ""
+			| head :: tail => head.ToString () + print_statements(tail)
+		    }
+
+		    print_labels(lbs) + "=> " + print_statements(sts)
+
+		| Statement ("SWITCH_LABEL",[Tok(c),ce,Tok(colon)]) =>
+		    ExtendedToken.getWhitespaces(c) + "|" + ce.ToString () + ExtendedToken.getWhitespaces (colon)
+		    
+		| Statement ("SWITCH_DEFAULT",[Tok(d),Tok(colon)]) =>
+		    ExtendedToken.getWhitespaces(d) + "|" + " _ " + ExtendedToken.getWhitespaces (colon) 
+		  
+		| Statement ("BREAK",[Tok(b),s]) =>
+		    ExtendedToken.getWhitespaces(b) + "()" + s.ToString ()
+		  
                 | Statement ( _ , children) =>
                   
                   def sb = System.Text.StringBuilder ();
@@ -131,7 +183,92 @@ namespace Nemerle.CSharp
                   sb.ToString ()                  
             }
         }                        
+	
+	/* -- SWITCH TRANSLATION ----------------------------------------- */
+	
+	private is_default (label : STree) : bool
+	{
+	    | Statement ("SWITCH_DEFAULT",_) => true
+	    | _ => false
+        }
+	
+	private get_default_label (section : STree) : bool
+	{
+	    | Statement ("SWITCH_SECTION",[Statement("SWITCH_SECTION_LABELS",lbs),_]) =>
+		def loop (labels) : bool
+		{   
+    		    | [] => false
+		    | head :: tail => 
+		        if(is_default(head))
+			    true
+			else loop(tail)		    
+		}
 
+		loop(lbs)
+
+	    | _ => false
+	}	
+
+	internal translate_switch () : STree
+	{
+	    def loop (stmts : list [STree],acc : list [STree]) : list [STree]
+            {
+                match(stmts)
+                {
+                    | [] => List.Rev (acc)
+                    | head :: tail => loop (tail, head.translate_switch () :: acc)
+                }
+            }
+
+	    match(this)
+	    {
+		| Statement("BLOCK",stmts) =>
+		    def (lbrace,statements,rbrace) = cut_off_braces (stmts);
+		    Statement("BLOCK",lbrace :: loop(statements,[]) + [rbrace])
+
+		| Statement("SWITCH",[s,lp,exp,rp,switch_block]) =>
+		    def (lbrace,sections,rbrace) = cut_off_braces (switch_block);
+		    def translated_switch_block = Statement("SWITCH_BLOCK",lbrace :: translate_switch_sections (sections) + [rbrace]);
+		    Statement("SWITCH",[s,lp,exp,rp, translated_switch_block])
+		| x => x		    
+	    }
+	}	
+	
+	private translate_switch_sections (sections : list [STree]) : list [STree]
+	{
+	    if(break_is_last_in_all(sections))
+		sections;
+	    else
+		sections; //FIXME: there should be checking for other forms of 'switch'  
+	}
+
+	private break_is_last_in_all (sections : list [STree]) : bool
+	{
+	    | [] => true
+	    | head :: tail => 
+	        if(!break_is_last (head))
+		    false
+		else
+		    break_is_last_in_all (tail)
+	}
+
+	private break_is_last (section : STree) : bool
+	{	    
+	    | Statement("SWITCH_SECTION",[_,Statement("SWITCH_SECTION_STATEMENTS",xs)]) =>
+	       def loop (lst)
+	        {
+		    | Statement("BREAK",_) :: [] => true
+		    | Statement("BREAK",_) :: _ => false
+		    | Statement("BLOCK",_xs) :: tail =>		    
+		        loop(tail)
+		    | _ :: tail => loop (tail)
+		    | _ => false
+		}
+		
+		loop(xs)
+	    | _ => false		    	    
+	}
+	
 	/* -- JUMP ELIMINATION ------------------------------------------- */
 
 	private jump_inside (continue : bool) : bool
@@ -149,24 +286,22 @@ namespace Nemerle.CSharp
         }
         
         private cut_off_braces (t : STree) : STree * list [STree] * STree
-        {
-            def loop ['a](lst : list['a],acc : list['a]) : list ['a] * 'a
-            {
-                match(lst)
-                {
-                    | [x] => (List.Rev (acc),x)
-                    | x :: xs =>loop (xs,x :: acc)
-                    | [] => assert(false);
-                }
-            }         
-            match(t)
-            {
-                | Statement("BLOCK",x::xs) =>		    
-		    def (sx,end) = loop(xs,[]);
-		    (x,sx,end)
-                | _ => 		
-		    assert(false);
-            }
+        {                     
+	    | Statement("SWITCH_BLOCK",x::xs) 
+            | Statement("BLOCK",x::xs) =>		    
+		def loop ['a](lst : list['a],acc : list['a]) : list ['a] * 'a
+		{
+		    match(lst)
+		    {
+			| [x] => (List.Rev (acc),x)
+			| x :: xs =>loop (xs,x :: acc)
+			| [] => assert(false);
+		    }
+		}
+		def (sx,end) = loop(xs,[]);
+		(x,sx,end)		
+            | _ => 		
+		assert(false);            
         }
 
 
@@ -191,12 +326,12 @@ namespace Nemerle.CSharp
 	    def eliminate_block (block) : STree
 	    {
 	      	| Statement("BLOCK",_) => 
-		  def (lbrace,body_eliminated,rbrace) = cut_off_braces(block.eliminate_return_body (true));
+		  def (lbrace,body_eliminated,rbrace) = cut_off_braces(block.eliminate_jump (Jump.Continue ()));
 		  Statement("BLOCK",lbrace :: body_eliminated + [rbrace]);		  
 				  
 		| _  => 
 		  def body = Statement ("BLOCK",[TokS("{"),block,TokS("}")]);
-		  def (_,body_eliminated,_) = cut_off_braces(body.eliminate_return_body (true));
+		  def (_,body_eliminated,_) = cut_off_braces(body.eliminate_jump (Jump.Continue ()));
 		  match(body_eliminated)
                   {
                     | [block_eliminated] => block_eliminated
@@ -240,7 +375,7 @@ namespace Nemerle.CSharp
 		  if (block.continue_inside ())
 		      Statement("FOREACH",[f,lp,id,c,t,i,col,rp,eliminate_block(block)])  
                   else                  
-		      Statement("FOREACH",[f,lp,id,c,t,i,col,rp,block.eliminate_continues()])       
+		      Statement("FOREACH",[f,lp,id,c,t,i,col,rp,block.eliminate_continues()])       		
 		
                 | _ => this
             }
@@ -278,13 +413,12 @@ namespace Nemerle.CSharp
             }
         }
         
-        /* -- RETURN ELIMINATION ----------------------------------------- */
+        /* -- JUMP ELIMINATION -------------------------------------------- */
         
 	/**
-         *  Function used to eliminate 'return' from function bodies
-	 *  and eliminate 'continue' from loop bodies
+         *  Function used to eliminate jumps from function bodies, loop bodies, switch bodies...	 
          */	
-        internal eliminate_return_body (continue : bool) : STree
+        internal eliminate_jump (jump : Jump) : STree
         {
             def (lbrace,statements,rbrace) = cut_off_braces (this);
 
@@ -295,37 +429,52 @@ namespace Nemerle.CSharp
                     | (Statement("IF", _) as if_st)  :: tail
                     | (Statement("WHEN", _) as if_st) :: tail =>                      
                       def block_statement = Statement("BLOCK",(lbrace :: tail) + [rbrace]);
-                      def est_block       = block_statement.eliminate_return_body (continue);
-                      def est_if          = if_st.eliminate_return_in_if (est_block,continue);
+                      def est_block       = block_statement.eliminate_jump (jump);
+                      def est_if          = if_st.eliminate_jump_if (est_block,jump);
                       
                       List.Rev(est_if :: acc)
                       
                     | Statement("BLOCK",xs) :: tail =>
                       def (_,ys,_) = cut_off_braces (xs);
                       def block_statement = Statement("BLOCK",lbrace :: ys + tail  + [rbrace]);
-                      def est_block       = block_statement.eliminate_return_body (continue);
+                      def est_block       = block_statement.eliminate_jump (jump);
                       List.Rev(est_block :: acc)
 
                     | (Statement("RETURN", _) as ret_st) :: tail =>
-		      if(!continue)
-                      	List.Rev ((ret_st :> STree) :: acc)
-		      else	
-                        loop (tail, (ret_st :> STree) :: acc )
+			match(jump : Jump)
+			{
+			    | Jump.Goto
+			    | Jump.Break
+			    | Jump.Continue => 
+				loop (tail, (ret_st :> STree) :: acc )
+			    | Jump.Return =>
+				List.Rev ((ret_st :> STree) :: acc)
+			}
 			
 	 	    | (Statement("CONTINUE", _) as con_st) :: tail =>		      
-			if(continue)
-			    List.Rev ((con_st :> STree) :: acc)
-			else	
-			    loop (tail, (con_st :> STree) :: acc )
+			match(jump)
+			{
+			    | Jump.Goto
+			    | Jump.Break
+			    | Jump.Return =>
+				loop (tail, (con_st :> STree) :: acc )
+			    | Jump.Continue => 			    
+				List.Rev ((con_st :> STree) :: acc)
+			}
 
                     | (Statement("FOREACH", _) as while_st) :: tail
 		    | (Statement("FOR", _) as while_st) :: tail	
 		    | (Statement("DO", _) as while_st) :: tail
-		    | (Statement("WHILE", _) as while_st) :: tail =>		      
-		      if(continue)
-		      	loop (tail, (while_st.eliminate_continues () :> STree) :: acc )		
-		      else
-		        loop (tail, (while_st :> STree) :: acc )
+		    | (Statement("WHILE", _) as while_st) :: tail =>
+			match(jump)
+			{
+			    | Jump.Goto
+			    | Jump.Break
+			    | Jump.Return =>
+				loop (tail, (while_st :> STree) :: acc )
+			    | Jump.Continue => 			    
+				loop (tail, (while_st.eliminate_continues () :> STree) :: acc )	
+			}		      
 		 
                     | head :: tail => loop (tail, head :: acc )
                     | _ =>  List.Rev(acc)
@@ -337,50 +486,88 @@ namespace Nemerle.CSharp
         }
 	
 	/**
-         *  Function used to transform 'if' trees containing 'return' or 'continue'
+         *  Function used to transform 'if' trees containing jumps
          */
-        protected eliminate_return_in_if (return_st : STree,continue : bool) : STree
+        protected eliminate_jump_if (return_st : STree,jump : Jump) : STree
         {
             def(lb,sts,rb) = cut_off_braces (return_st);
+	    
             match(this)
             {
                 | Statement("IF",[Tok(i),lp,exp,rp,st1,Tok(e),st2]) =>
 
-                  def ws_if    = ExtendedToken.getWhitespaces(i);
-                  def ws_else  = ExtendedToken.getWhitespaces(e);
+		    def ws_if    = ExtendedToken.getWhitespaces(i);
+		    def ws_else  = ExtendedToken.getWhitespaces(e);
                   
-                  // checking "if"
+		    // checking "if"
                   
-                  if(st1.jump_inside (continue) || st2.jump_inside (continue))
-		  {
-		    def s1 = Statement("BLOCK",[TokS(ws_if+"{"),st1] + sts +[TokS(ws_if+"}")]);
-		    def es1 = s1.eliminate_return_body (continue);
-		    def s2 = Statement("BLOCK",[TokS(ws_else+"{"),st2] + sts +  [TokS(ws_else+"}")]);
-                    def es2 = s2.eliminate_return_body (continue);
-
-		    Statement("IF",[Tok(i),lp,exp,rp,es1,Tok(e),es2])
-		  }
-                    
-                  else
-                      Statement("BLOCK", this :: sts)
- 		
+		    def transform_if () : STree
+		    {
+			def s1 = Statement("BLOCK",[TokS(ws_if+"{"),st1] + sts +[TokS(ws_if+"}")]);
+			def es1 = s1.eliminate_jump (jump);
+			def s2 = Statement("BLOCK",[TokS(ws_else+"{"),st2] + sts +  [TokS(ws_else+"}")]);
+			def es2 = s2.eliminate_jump (jump);
+			
+			Statement("IF",[Tok(i),lp,exp,rp,es1,Tok(e),es2])
+		    }
+		    
+		    match(jump)
+		    {
+			| Jump.Continue => 
+			    if (st1.continue_inside() || st2.continue_inside())
+				transform_if()
+			    else
+				Statement("BLOCK", this :: sts)
+			| Jump.Return =>
+			    if (st1.return_inside() || st2.return_inside())
+				transform_if()
+			    else
+				Statement("BLOCK", this :: sts)
+			| Jump.Break =>
+			    if (st1.break_inside_() || st2.break_inside_())
+				transform_if()
+			    else
+				Statement("BLOCK", this :: sts)
+			| Jump.Goto =>
+			    Statement("BLOCK", this :: sts)
+		    }
+		    		    	   		
 		// checking "when"
                       
-                | Statement("WHEN",[Tok (i),lp,exp,rp,st1]) =>		  
-                  if(st1.jump_inside (continue))
-                  {
-		    def es1 = 
-		    match(st1)
+                | Statement("WHEN",[Tok (i),lp,exp,rp,st1]) =>
+		    def transform_when () : STree
 		    {
-		      | Statement("BLOCK",_) => st1.eliminate_return_body (continue);
-		      | _ => Statement("BLOCK",[TokS("{"),st1,TokS("}")])
+			def es1 = 
+			match(st1)
+			{
+			    | Statement("BLOCK",_) => st1.eliminate_jump (jump);
+			    | _ => Statement("BLOCK",[TokS("{"),st1,TokS("}")])
+			}
+
+			def whitespaces = ExtendedToken.getWhitespaces(i);
+			Statement("IF", [TokS(whitespaces + "if"), lp, exp, rp, es1, TokS(whitespaces + "else"), return_st])
 		    }
 
-                    def whitespaces = ExtendedToken.getWhitespaces(i);
-                    Statement("IF", [TokS(whitespaces + "if"), lp, exp, rp, es1, TokS(whitespaces + "else"), return_st])
-                  }                  
-                  else                  
-                      Statement("BLOCK", lb :: (this :: sts) + [rb])
+		    match(jump)
+		    {
+			| Jump.Continue => 
+			    if(st1.continue_inside ())
+				transform_when ()
+			    else
+				Statement("BLOCK", lb :: (this :: sts) + [rb])
+			| Jump.Return =>
+			    if(st1.return_inside ())
+				transform_when ()
+			    else
+				Statement("BLOCK", lb :: (this :: sts) + [rb])
+			| Jump.Break => 			
+			    if(st1.break_inside_ ())
+				transform_when ()
+			    else
+				Statement("BLOCK", lb :: (this :: sts) + [rb])
+			| Jump.Goto =>
+			    Statement("BLOCK", lb :: (this :: sts) + [rb])
+		    }
 
                 | Statement("WHEN", _) =>
                   assert(false);
@@ -759,6 +946,38 @@ namespace Nemerle.CSharp
                 | _ => false
             }
         }
+	
+	/** 
+	 *  the same as break_inside (), but no RETURN checking
+	 */	 
+	protected break_inside_ () : bool
+	{
+	    def loop(xs : list [STree]) : bool
+            {
+                match(xs)
+                {
+                    | head :: tail =>
+                      if(head.break_inside ())
+                          true
+                      else
+                          loop(tail)
+                    | _ => false                              
+                }
+            }
+            
+            match(this)
+            {	        	     
+                | Statement("BREAK",_) => true		
+                | Statement("BLOCK",xs) =>
+                  def b = loop(xs);
+                  b
+                | Statement("IF",[_,_,_,_,st1,_,st2]) =>
+                  st1.break_inside () || st2.break_inside ()
+                | Statement("WHEN",[_,_,_,_,st]) =>
+                  st.break_inside () 
+                | _ => false
+            }
+	}
 
         /* -- SYMBOL GENERATION ----------------------------------------- */
         
