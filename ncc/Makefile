@@ -78,9 +78,9 @@ all: ncc.exe
 # Finally run testsuite.
 boot: ncc.exe
 	rm -f out.cs
-	$(EXECUTE) ./ncc.exe $(NEMFLAG) -texe -out ncc2.exe $(src)
+	time $(EXECUTE) ./ncc.exe $(NEMFLAG) -texe -out ncc2.exe $(src)
 	$(NGEN) ncc2.exe
-	$(EXECUTE) ./ncc2.exe $(NEMFLAG) -texe -out ncc3.exe $(src)
+	time $(EXECUTE) ./ncc2.exe $(NEMFLAG) -texe -out ncc3.exe $(src)
 	$(DASM) ncc2.exe | grep -v -E '(^//|// GUID|^\.assembly ncc|MVID)' > ncc2.il
 	$(DASM) ncc3.exe | grep -v -E '(^//|// GUID|^\.assembly ncc|MVID)' > ncc3.il  
 	diff -u ncc2.il ncc3.il
@@ -92,10 +92,10 @@ sync:
 	cp ncc2.exe ../boot/ncc.exe
 
 ncc.exe: $(src)
-	$(EXECUTE) ../boot/ncc.exe $(NEMFLAG) -texe -out $@ $(src)
+	time $(EXECUTE) ../boot/ncc.exe $(NEMFLAG) -texe -out $@ $(src)
 
 stdlib.dll: $(lib_src)
-	$(EXECUTE) ./ncc.exe -tdll -out $@ $(lib_src)
+	time $(EXECUTE) ./ncc.exe -tdll -out $@ $(lib_src)
 
 ../config.mak:
 	$(MAKE) -C .. config.mak
