@@ -1074,17 +1074,17 @@ returns [string return_string]
 {
     string lvi = "";
     return_string = "";
+    string temp = "";
 }
     :   (IDENTIFIER   ASSIGN)=>
         id1:IDENTIFIER   a:ASSIGN lvi = local_variable_initializer
         {
-	    if(t[1]=="object")
-	    	lvi = "(" + lvi + " : object )";
+	    lvi = lvi + " : " + t[1];
             return_string = t[0] + "mutable " + id1.getText () + a.getText () + lvi + ";";
         }
     |   id2:IDENTIFIER
         {
-            return_string = t[0] + "mutable " + id2.getText () + " = Nemerle.Extensions.DefaultValue (" + t[1] + ");";
+            return_string = t[0] + "mutable " + id2.getText () + " = " + "Nemerle.Extensions.DefaultValue (" + t[1] + ") :" + t[1] + ";";
         }
 ;
 
