@@ -126,7 +126,7 @@ namespace Nemerle.Compiler
       messenger = parent.messenger;
       
       current_fun = fn;
-      tenv = current_fun.tenv; // FIXME
+      tenv = current_fun.tenv;
 
       RunTyper ();
     }
@@ -385,45 +385,6 @@ namespace Nemerle.Compiler
     }
 
    
-    [Nemerle.NotImplemented]
-    TypeMatch (m : PT.PExpr.Match, expected : TyVar) : TExpr
-    {
-    }
-
-
-    TypeLocalDefinition (is_mutable : bool, name : PT.Name, val : PT.PExpr) : TExpr
-    {
-      // check for mutable symbol redefinitions
-      match (local_context.FindLocal (name)) {
-        | Some (l) =>
-          def warn (was_of_kind, is_of_kind) {
-              Message.warning ($ "redefinition of a local $was_of_kind "
-                                 "value `$(l.Name)' $is_of_kind");
-              Message.warning (l.loc, "  <-- previously seen here")
-          }
-
-          match ((is_mutable, l.IsMutable)) {
-            | (true, true) =>
-              warn ("mutable", "")
-            | (false, true) =>
-              warn ("mutable", " as non-mutable")
-            | (true, false) =>
-              warn ("non-mutable", " as mutable")
-            | _ => {}
-          }
-        | _ => {}
-      }
-      
-      def tv = FreshTyVar ("");
-      def val = TypeExpr (val, tv);
-      def decl = DefineLocal (name, tv, 
-                              LocalValue.Kind.LocalVariable (), 
-                              is_mutable);
-      AddLocal (name, decl);
-      TExpr.DefValIn (decl, val, null)
-    }
-
-    
     DoType (expression : PT.PExpr, expected : TyVar) : TExpr
     {
       match (expression) {
@@ -440,12 +401,16 @@ namespace Nemerle.Compiler
         | PT.PExpr.Define =>
           ReportFatal (messenger,
                        "$ operator used outside quotation <[ ... ]> context")
+                       
 
-        | PT.PExpr.DefPattern =>
-          Message.fatal_error ("def pattern binding not followed by any expression")
+        | PT.PExpr.DefPattern (pat, expr) =>
+          expected.Unify (MonoType (MType.Void (), "definition ``result''"));
+          TypeDefPattern (pat, expr);
+          
 
-        | PT.PExpr.DefFunctions =>
-          Message.fatal_error ("letfun binding not followed by any expression")
+        | PT.PExpr.DefFunctions (functions) =>
+          expected.Unify (MonoType (MType.Void (), "definition ``result''"));
+          TypeLocalFunction (functions)
 
 
         // FIXME: this should be a macro
@@ -664,7 +629,7 @@ namespace Nemerle.Compiler
           def loop (res, lst) {
             | [e] =>
               def e' = TypeExpr (e, expected);
-              TExpr.Sequence (List.Rev (e' :: res))
+              TExpr.Sequence (FixupSequence (e' :: res))
             | x :: xs =>
               def x' = TypeExpr (x, FreshTyVar (""));
               loop (x' :: res, xs)
@@ -743,6 +708,109 @@ namespace Nemerle.Compiler
         | PT.PExpr.TypedPattern  =>
           Util.ice ("typed pattern in raw expr")
       }
+    }
+    #endregion
+
+       
+    #region def typing
+    TypeLocalDefinition (is_mutable : bool, name : PT.Name, val : PT.PExpr) : TExpr
+    {
+      // check for mutable symbol redefinitions
+      match (local_context.FindLocal (name)) {
+        | Some (l) =>
+          def warn (was_of_kind, is_of_kind) {
+              Message.warning ($ "redefinition of a local $was_of_kind "
+                                 "value `$(l.Name)' $is_of_kind");
+              Message.warning (l.loc, "  <-- previously seen here")
+          }
+
+          match ((is_mutable, l.IsMutable)) {
+            | (true, true) =>
+              warn ("mutable", "")
+            | (false, true) =>
+              warn ("mutable", " as non-mutable")
+            | (true, false) =>
+              warn ("non-mutable", " as mutable")
+            | _ => {}
+          }
+        | _ => {}
+      }
+      
+      def tv = FreshTyVar ("");
+      def val = TypeExpr (val, tv);
+      def decl = DefineLocal (name, tv, 
+                              LocalValue.Kind.LocalVariable (), 
+                              is_mutable);
+      AddLocal (name, decl);
+      TExpr.DefValIn (decl, val, null)
+    }
+
+   
+    TypeDefPattern (pattern : PT.PExpr, value : PT.PExpr) : void
+    {
+      def res = FreshTyVar ("value doconstructed with def pattern");
+      def matched_value = TypeExpr (value, res);
+      def pats = TypePatterns (res, [(pattern, None ())]);
+      def case = Match_case (pats, null);
+
+      PatternTyping.check_matching ([case]);
+      FixupMatchCase (case);
+      TExpr.Match (matched_value, [case])
+    }
+
+
+    TypeLocalFunction (functions : list [PT.Function_decl]) : TExpr
+    {
+      mutable headers = [];
+
+      foreach (fn in functions) {
+        def (tenv, typarms) =
+          current_type.BindTyparms (ten, fn.header.typarms);
+        def parms = List.Map (fn.header.parms,
+          fun (p : PT.Fun_parm) {
+            def name = p.name.GetName ();
+            Fun_parm (loc = p.loc,
+                      name = name.Id,
+                      color = name.color,
+                      ty = current_type.BindType (tenv, p.ty),
+                      decl = null,
+                      modifiers = p.modifiers)
+          });
+        def name_obj = fn.header.name.GetName ();
+        def header = Fun_header (
+           ret_type = current_type.BindType (tenv, fn.header.ret_type),
+           typarms = typarms,
+           name = name_obj.Id,
+           parms = parms,
+           tenv = tenv,
+           loc = fn.header.loc);
+        def parm_types = List.Map (parms, fun (p : Fun_parm) { p.ty });
+        def fun_type = ConstructFunctionType (parm_types, header.ret_type);
+        def local = 
+          DefineLocal (name_obj, 
+                       fun_type, 
+                       LocalValue.Kind.Function (header, null));
+        header.decl = local;
+        header.body = FunBody.Parser (fn.body);
+        AddLocal (local);
+        headers = header :: headers;
+      }
+
+      def headers = List.Rev (headers);
+
+      foreach (hd in headers) {
+        _ = Typer (this, hd);
+      }
+
+      TExpr.DefFunctionsIn (headers, null)
+    }
+
+
+    /** Given a sequence of expression in a sequence (in reverse order),
+        reverse them and nest properly (def ... => let ... in ...).  */
+    [Nemerle.NotImplemented]
+    FixupSequence (exprs : list [TExpr]) : TExpr
+    {
     }
     #endregion
 
@@ -1236,447 +1304,58 @@ namespace Nemerle.Compiler
     #endregion
 
 
-    #region Pattern typing
-    class PatternTyper
+    #region Matching typing
+    TypePatterns (matched_value_type : TyVar, 
+                  patterns : list [PT.PExpr * option [PT.PExpr]]) 
+                  : list [Pattern * TExpr]
     {
-      typer : Typer;
-      matched_value_type : TyVar;
-      patterns : list [PT.PExpr * option [PT.PExpr]];
-
-      mutable common_variables : NemerleMap [PT.Name, LocalValue];
-      mutable current_pattern_variables : NemerleMap [PT.Name, LocalValue];
+      def typer = PatternTyper (this, matched_value_type, patterns);
+      typer.Run ()
+    }
 
 
-      public this (typer : Typer,
-                   matched_value_type : TyVar,
-                   patterns : list [PT.PExpr * option [PT.PExpr]])
-      {
-        this.typer = typer;
-        this.matched_value_type = matched_value_type;
-        this.patterns = patterns;
-      }
-
-
-      public Run () : list [Pattern * TExpr]
-      {
-        mutable result = [];
-
-        foreach ((pattern, guard) in patterns) {
-          current_pattern_variables = NemerleMap ();
-          def typed_pattern = TypePattern (pattern);
-
-          // FIXME: shouldn't this be in the library?
-          def intersect (map1, map2) {
-            map1.Fold (fun (key, value, res : NemerleMap [_, _]) {
-              if (map2.Member (key))
-                res.Add (key, value)
-              else
-                res
-            }, NemerleMap ())
-          }
-
-          if (common_variables == null)
-            common_variables = current_pattern_variables;
-          else
-            common_variables = intersect (common_variables,
-                                          current_pattern_variables);
-
-          typer.PushLocals ();
-            current_pattern_variables.Iter (typer.AddLocal);
-
-            def expr =
-              match (expr) {
-                | None => <[ true ]>
-                | Some (expr) => expr
-              }
-
-            def bool_ty =
-              typer.MonoType (InternalType.Boolean, "when guard type");
-              
-            def expr' = TypeExpr (expr, bool_ty)
-          typer.PopLocals ();
-
-          result = (typed_pattern, typed_expr) :: result;
-        }
-
-        common_variables.Iter (fun (_, v : LocalValue) {
-                                v.UsedInPatternBody = true
-                               });
-        common_variables.Iter (typer.AddLocal);
-      }
-
-
-      TypeTuplePattern (matched_value_type : TyVar,
-                        pats : list [PT.PExpr]) : Pattern
-      {
-        def is_assignment (expr) {
-          expr matches PT.PExpr.Assign (PT.PExpr.Ref, _) 
-        }
-
-        if (List.Exists (pats, is_assignment)) {
-          if (List.ForAll (pats, is_assignment)) {
-              match (matched_value_type.LowerBound) {
-                | Some (MType.Class (ti, _)) when matched_value_type.IsFixed =>
-                  def is_instance_field (_) {
-                    | field : IField => !field.IsStatic
-                    | _ => false
-                  }
-                  def lookup_field (expr) {
-                    | PT.PExpr.Assign (PT.PExpr.Ref (name), pat) =>
-                      def fields = List.Filter (ti.LookupMember (name.Id), 
-                                                is_instance_field);
-                      match (fields) {
-                        | [] =>
-                          ReportError (messenger,
-                                       "the type `$(ti)' has no field named `$(name)'");
-                          Pattern.Error ()
-
-                        | [field] =>
-                          def ty = matched_value_type.TypeOfMember (field);
-                          (field, TypePattern (ty, pat))
-
-                        | _ =>
-                          // I don't thinks this can happen
-                          ReportError (messenger,
-                                       "overload ambiguity during "
-                                       "selection of `$(ti).$(name)'");
-                          Pattern.Error ()
-                      }
-
-                    | _ => assert (false)
-                  }
-
-                  Pattern.Record (List.Map (pats, lookup_field))
-                  
-                  
-                | _ =>
-                  ReportError (messenger,
-                               "the (fieldname = ...) pattern is not allowed "
-                               "here, try prefixing it with the class name");
-                  Pattern.Error ()
-              }
-
-          } else {
-            ReportError (messenger, 
-                         "not all, but some patterns in tuple are named");
-            Pattern.Error ()
-          }
-        } else {
-          match (matched_value_type.LowerBound) {
-            // if we expecte to match on a class, transform the pattern
-            // to include field names
-            | Some (MType.Class (ti, _)) =>
-              def mems = ti.GetFields (BindingFlags.DeclaredOnly %|
-                                       BindingFlags.Public %|
-                                       BindingFlags.Instance);
-              def names = List.Map (mems, fun (x : IField) { x.Name });
-              if (names.Length == pats.Length) {
-                def assigns = List.Map2 (names, pats,
-                  fun (n, p) {
-                    PT.PExpr.Assign (PT.PExpr.Ref (PT.Name ([n])), p)
+    FixupMatchCase (case : Match_case) : void
+    {
+      case.patterns = 
+        List.Map (case.patterns, 
+                  fun (p, e) { 
+                     (PatternTyping.strip_enums (p), e) 
                   });
-                TypeTuplePattern (matched_value_type, assigns)
-              } else {
-                ReportError (messenger,
-                             $ "pattern matches $(pats.Length) values, "
-                               "while the type `$(ti)' has $(names.Length) "
-                               "fields");
-                Pattern.Error ()
-              }
-              
-            | Some (MType.Tuple (types)) 
-              when types.Length != pats.Length =>
-              ReportError (messenger,
-                           $ "pattern matches $(pats.Length)-tuples, "
-                             "while the value matched is a "
-                             "$(types.Length)-tuple");
-              Pattern.Error ()
-              
-            | _ =>
-              def types =
-                List.Map (pats, fun (_) { typer.FreshTyVar ("") });
-              matched_value_type.Unify (MType.Tuple (types));
-              if (messenger.SeenError) {
-                ReportError (messenger,
-                             $ "type clash in pattern typing");
-                Pattern.Error ()
-              } else {
-                def typed_pats = List.Map2 (types, pats, TypePattern);
-                Pattern.Tuple (typed_pats)
-              }
-          }
-        }
-      }
-        
-        
-      TypePattern (matched_value_type : TyVar, pattern : PT.PExpr) : Pattern
-      {
-        Util.locate (pattern.loc, {
-          def typed = DoTypePattern (matched_value_type, pattern);
-          when (typed.ty == null)
-            typed.ty = matched_value_type;
-          typed
-        })
+      // case.body = TExpr.TypeEnforcement (case.body, t);
+    }
+
+    
+    TypeMatch (mtch : PT.PExpr.Match, expected : TyVar) : TExpr
+    {
+      def matched_value_type = FreshTyVar ("matched value type");
+      def matched_value = TypeExpression (mtch.expr, matched_value_type);
+      mutable disable_warnings = false;
+      mutable res = []
+
+      foreach (case in mtch.cases) {
+        when (case.disable_warnings)
+          disable_warnings = true;
+
+        PushLocals ();
+        def pats = TypePatterns (matched_value_type, case.patterns);
+        def res_ty = AtLeast (expected);
+        def body = TypeExpr (case.body, res_ty);
+        PopLocals ();
+
+        res = Match_case (pats, body) :: res;
       }
 
+      if (res.IsEmpty) {
+        ReportError (messenger, "cannot have an empty match construct");
+        TExpr.Error ()
+      } else {
+        res = List.Rev (res);
 
-      TypeApplication (matched_value_type : TyVar, 
-                       name : PT.PExpr, pattern : PT.PExpr) : Pattern
-      {
-        match (Util.qidl_of_expr (name)) {
-          | Some ((li, name)) =>
-            def name = PT.Name (li, name.color, name.context);
+        unless (disable_warnings)
+          PatternTyping.check_matching (mcs);a
+        List.Iter (mcs, FixupMatchCase);
 
-            if (System.Char.IsUpper (List.Last (name.idl) [0])) {
-              def env = name.GetEnv (typer.env);
-              def proper_symbol (sym) {
-                | Symbol.TypeMember (fld : IField) =>
-                  fld.CanAccess (typer.current_type) &&
-                  fld.IsLiteral && 
-                  (fld.DeclaringType.GetTydecl () matches TypeDeclaration.Enum)
-
-                | Symbol.Type (ti) =>
-                  ti.CanAccess (typer.current_type)
-              }
-
-              match (List.Filter (env.LookupSymbol (name.idl), is_proper_symbol)) {
-                | [Symbol.TypeMember (fld : IField)]  =>
-                  if (pattern matches PT.PExpr.Wildcard) {
-                    matched_value_type.Require (fld.GetMemType ());
-                    def val = Option.UnSome (ConstantFolder.FieldValueAsLiteral (fld));
-                    Pattern.Enum (fld, val)
-                  } else {
-                    ReportError (messenger, 
-                                 "a pattern was supplied after enum field name");
-                    Pattern.Error ()
-                  }
-
-                | [Symbol.Type (ti)] =>
-                  def lookup (ti) {
-                    match (ti.GetTydecl ()) {
-                      | TypeDeclaration.VariantOption =>
-                        def parent_tycon = Option.UnSome (ti.SuperClass ());
-                        def option_type = ti.FreshSubst ().Apply (ti.GetMemType ());
-                        matched_value_type.Provide (option_type);
-                        //else if (option_type >:> t)
-                        //  Message.warning ($ "matching of $t with $option_type is redundant");
-                        //  Message.hint_once ("refer to fields of this variant option without matching");
-
-                        Pattern.Application (ti, TypePattern (option_type, pattern));
-                        
-                      | TypeDeclaration.Alias (TType.Class (tc, _)) =>
-                        lookup (tc)
-
-                      | _ =>
-                        ReportError (messenger, "`$(name)' is not a variant option");
-                        Pattern.Wildcard ()
-                    }
-                  }
-
-                  lookup (ti)
-              }
-            } 
-            else
-              match (pattern) {
-                | PT.PExpr.Wildcard =>
-                  TypePattern (matched_value_type,
-                  walk (t, PT.PExpr.As (PT.PExpr.Wildcard (), PT.Splicable.Name (n)))
-                | _ =>
-                  Message.fatal_error ("`" + n.FullId + "' cannot be variant option, "
-                                       "since it starts with lowercase letter")
-              }
-
-          | None =>
-            ReportError (messenger, "expected qualified identifier in pattern");
-            Pattern.Error ()
-        }
-      }
-
-
-      DoTypePattern (matched_value_type : TyVar, pattern : PT.PExpr) : Pattern
-      {
-        match (pattern) {
-          | PT.PExpr.As (pat, PT.Splicable.Name (name)) =>
-            def typed_pattern = TypePattern (matched_value_type, pattern);
-            def fixed_type =
-              match (typed_pattern) {
-                | Pattern.Application (ti, _) =>
-                  def raw_type = ti.FreshSubst ().Apply (ti.GetMemType ());
-                  raw_type.Require (matched_value_type);
-                  raw_type
-                | _ => matched_value_type
-              }
-              
-            when (current_pattern_variables.Member (name))
-              ReportError (messenger, 
-                           $ "pattern variable `$(name)' already seen "
-                             "in this pattern");
-
-            def decl =
-              if (common_variables == null || !common_variables.Member (name)) {
-                DefineLocal (name, 
-                             fixed_type,
-                             LocalValue.Kind.PatternVariable (false),
-                             false)
-              } else {
-                def decl = common_variables [name];
-                decl.Type.Provide (fixed_type);
-                when (messenger.SeenError) {
-                  ReportError (messenger,
-                               $ "$decl used to have type $(decl.Type) but now it "
-                                         "has type $");
-                  when (messenger.InErrorMode)
-                    Message.hint ("rename variable if they have no connection");
-                }
-                decl
-              }
-
-            current_pattern_variables =
-              current_pattern_variables.Add (name, decl);
-              
-            Pattern.As (typed_pattern, decl)
-
-            
-          | PT.PExpr.As (_, PT.Splicable.Expression) =>
-            ReportError (messenger, 
-                         "$ operator used outside of quotation <[ ... ]> "
-                         "context");
-            Pattern.Error ()
-            
-
-          | PT.PExpr.TypeEnforcement (nested, needed_type) =>
-            def needed_type = BindType (needed_type);
-            
-            solver.PushState ();
-            matched_value_type.Require (needed_type);
-            def just_a_hint = !messenger.SeenError ();
-            solver.PopState ();
-
-            if (just_a_hint) {
-              matched_value_type.Require (needed_type);
-              TypePattern (nested, matched_value_type)
-            } else {
-              solver.PushState ();
-              matched_value_type.Provide (needed_type);
-              def properly_subtypes = !messenger.SeenError ();
-              solver.PopState ();
-
-              if (properly_subtypes) {
-                matched_value_type.Provide (needed_type);
-              } else {
-                if (needed_type.IsInterface ||
-                    Option.UnSome (matched_value_type.UpperBound)
-                       .IsInterface) {
-                  // ok, we allow interfaces here
-                } else
-                  ReportError (messenger,
-                               $ "matched value has type $matched_value_type "
-                                 "while the pattern enforces $needed_type")
-              }
-
-              match (needed_type) {
-                | MType.Class (ti, _) => ti
-                  def typed_pattern =
-                    Pattern.HasType (pattern.loc, matched_value_type, ti);
-                  match (TypePattern (MonoType (needed_type), nested)) {
-                    | Pattern.As (Pattern.Wildcard, decl) =>
-                      Pattern.As (pattern.loc, matched_value_type, 
-                                  typed_pattern, decl)
-                    | Pattern.Wildcard => typed_pattern
-                    | _ =>
-                      ReportError (messenger,
-                                   "only variable patterns are allowed "
-                                   "(here : type)");
-                      Pattern.Error ()
-                  }
-                | _ =>
-                  ReportError (messenger,
-                               $ "invalid type in (x : type) pattern: "
-                                 "$needed_type");
-                  Pattern.Error ()
-              }
-            }
-
-
-          | PT.PExpr.Wildcard => Pattern.Wildcard ()
-
-
-          | PT.PExpr.Literal (lit) =>
-            matched_value_type.Unify (typer.TypeOfLiteral (lit));
-            Pattern.Literal (lit)
-
-
-          | PT.PExpr.Tuple (pats) =>
-            TypeTuplePattern (matched_value_type, pats)
-            
-
-          | PT.PExpr.Ref
-          | PT.PExpr.Member => 
-            TypeApplication (pattern, PT.PExpr.Wildcard ())
-
-             
-          | PT.PExpr.Call (PT.PExpr.Ref (n), _) when ConstantFolder.is_known_operator (n.Id) => 
-            TypePattern (matched_value_type, 
-                         ConstantFolder.FoldConstants (typer, pattern))
-                         
-
-          | PT.PExpr.Application (f, PT.PExpr.Wildcard)
-          | PT.PExpr.Call (f, []) =>
-            TypeApplication (f, PT.PExpr.Wildcard ())
-
-
-          | PT.PExpr.Application (f, pa) => 
-            TypeApplication (f, PT.PExpr.Tuple ([pa]))
-
-          
-          | PT.PExpr.Call (f, args) =>
-            TypeApplication (f, PT.PExpr.Tuple (args))
-            
-
-          | PT.PExpr.TypedPattern (body) => body
-
-              
-          | PT.PExpr.Quoted (parse_element) =>
-            // we use Macros functions to translate quoted element
-            Macros.in_pattern = true;          
-            def lifted = 
-              match (parse_element) {
-                | PT.SyntaxElement.Expression (e) => Macros.quoted_expr (ctx, e)
-                | PT.SyntaxElement.MatchCase (e) => Macros.QuotedMatchCase (ctx, e)
-                | PT.SyntaxElement.MatchCaseGuard (a, b) => Macros.QuotedCaseGuard (ctx, (a, b))
-                | PT.SyntaxElement.Function (e) => Macros.quoted_fundecl (ctx, e)
-                | PT.SyntaxElement.Parameter (e) => Macros.quoted_fparam (ctx, e)
-                | PT.SyntaxElement.ClassMember (e) => Macros.quoted_member (ctx, e)                
-                | PT.SyntaxElement.TType =>
-                  Message.fatal_error ("matching over typed types not supported")
-                | PT.SyntaxElement.TypeBuilder
-                | PT.SyntaxElement.MethodBuilder
-                | PT.SyntaxElement.EventBuilder
-                | PT.SyntaxElement.FieldBuilder
-                | PT.SyntaxElement.PropertyBuilder
-                | PT.SyntaxElement.ParameterBuilder => 
-                  Util.ice ("strange syntax element appeared in quotation")
-              };
-            Macros.in_pattern = false;            
-            TypePattern (matched_value_type, Macros.patternize_quotation (lifted))
-            
-
-          | PT.PExpr.Spliced =>
-            ReportError (messenger, 
-                         "$ operator may appear only within <[ ... ]> quotation");
-            Pattern.Error ()
-            
-
-          | PT.PExpr.Ellipsis =>
-            ReportError (messenger, 
-                         ".. arguments list may appear only within <[ ... ]> quotation");
-            Pattern.Error ()
-            
-            
-          | _ =>
-            ReportError (messenger, "invalid pattern");
-            Pattern.Error ()
-        }
+        TExpr.Match (matched_value, mcs)
       }
     }
     #endregion
@@ -1734,7 +1413,6 @@ namespace Nemerle.Compiler
       }
     }
     #endregion
-
   }
 }
 
@@ -1789,189 +1467,4 @@ namespace Nemerle.Compiler
         throw Recovery ()
     }
   }
-
-
-
-  ty_sequence (ctx : CTX, l : list [PT.PExpr]) : TExpr
-  {
-    def in_tail_pos = ctx.in_tail_position;
-    def orig_ctx = ctx;
-    def ctx = ctx.WithInTailPosition (false);
-
-    def go () : TExpr {
-      match (l) {
-        | [x] =>
-          def x = ConstantFolder.FoldTopConstants (ctx.IsChecked, ctx.env, x);
-          ty_expr (orig_ctx, MacroRegistry.expand_macro (orig_ctx, ctx, x))
-
-        | x :: xs =>
-          def x = ConstantFolder.FoldTopConstants (ctx.IsChecked, ctx.env, x);          
-          match (MacroRegistry.expand_macro (ctx, ctx, x)) {
-            | PT.PExpr.DefFunctions (fs) =>
-              def (fs', ctx') = ty_letfun (ctx, fs);
-              def body = ty_sequence (ctx'.WithInTailPosition (in_tail_pos), xs);
-              fixup (TExpr.DefFunctionsIn (fs', body), type_of (body))
-
-            | (PT.PExpr.Define) as x =>
-              def val = ty_expr (ctx, x.val);
-              def name = match (x.name) {
-                | PT.Splicable.Name (n) => n
-                | _ =>
-                  Message.fatal_error ("$ operator used outside quotation "
-                                       "<[ ... ]> context")
-              };
-
-              // check for mutable symbol redefinitions
-              match (ctx.LookupLocal (name)) {
-                | Some (l) when l.name == x.name.GetName ().Id =>
-                  def warn =
-                    if (x.is_ref && l.is_ref)
-                      Some (("mutable", ""))
-                    else if (!x.is_ref && l.is_ref)
-                      Some (("mutable", " as non-mutable"))
-                    else if (x.is_ref && !l.is_ref)
-                      Some (("non-mutable", " as mutable"))
-                    else
-                      None ();
-
-                  match (warn) {                    
-                    | Some ((was_of_kind, is_of_kind)) =>                      
-                      Message.warning (x.loc, "redefinition of a local " +
-                                       was_of_kind + " value `" + l.name +
-                                       "'" + is_of_kind);
-                      Message.warning (l.loc, "  <-- previously seen here")
-                    | _ => ()                      
-                  }                      
-                | _ => ()
-              }
-              
-              def decl = ctx.DefineLocal (name, LocalValueKind.LocalVariable(), type_of (val));
-              decl.is_ref = x.is_ref;
-              def body = ty_sequence (ctx.WithLocal (decl).
-                                      WithInTailPosition (in_tail_pos), xs);
-              fixup (TExpr.DefValIn (decl, val, body), type_of (body))
-
-            | PT.PExpr.DefPattern (p, v) =>
-              def body = PT.PExpr.Sequence (xs);
-              def mtch = PT.PExpr.Match (p.loc, v, [PT.MatchCase ([(p, None ())], body)]);
-              body.loc = (List.Head (xs)).loc;
-              ty_expr (orig_ctx, mtch)
-
-            | x =>
-              def ex = ty_expr (ctx, x);
-              def t = type_of (ex);
-              if (t >:> TType.Void ()) {
-                def tl = ty_sequence (orig_ctx, xs);
-                fixup (TExpr.Sequence (ex, tl), type_of (tl))
-              }
-              else {
-                when (Options.IgnoredValueWarnings) {
-                  Message.warning ($ "ignored computed value of type $t");
-                  Message.hint_once ("use _ = ...; or -Wno-ignore to avoid the warning");
-                }
-
-                def tmp = Util.tmpname ("ign");
-                def decl = ctx.DefineLocal (tmp, 1, LocalValueKind.LocalVariable (), type_of (ex));
-                def body = ty_sequence (ctx.WithLocal (decl).
-                                        WithInTailPosition (in_tail_pos), xs);
-                fixup (TExpr.DefValIn (decl, ex, body), type_of (body))
-              }
-          }
-        | [] => Util.ice ("empty sequence")
-      }
-    };
-
-    Util.locate ((List.Head (l)).loc, go ())
-  }
-
-
-
-  // type given match {} construct
-  ty_match (ctx : Tyexpr.CTX, mtch : PT.PExpr.Match) : TExpr * TType
-  {
-    def itp = ctx.in_tail_position;
-    def ctx = ctx.WithInTailPosition (false);
-    def matched_value = ty_expr (ctx, mtch.expr);
-    mutable disable_warnings = false;
-
-    def do_case (c : PT.MatchCase, acc) {
-      when (c.disable_warnings) disable_warnings = true;
-      def (pat, ctx') = PatternTyping.TypePatterns (ctx, type_of (matched_value), c.patterns);
-      def body = ty_expr (ctx'.WithInTailPosition (itp), c.body);
-      match (acc) {
-        | (Some (t), l) =>
-          match (Tyutil.unify_branches (t, type_of (body))) {
-            | Some (t') => (Some (t'), Match_case (pat, body) :: l)
-            | None =>
-              expect_type ("match case body", body, t);
-              Util.ice () // not reached
-          }
-        | (None, l) =>
-          (Some (type_of (body)), Match_case (pat, body) :: l)
-      }
-    };
-
-    match (List.FoldLeft (mtch.cases, (None (), []), do_case)) {
-      | (Some (t), mcs') =>
-        def mcs = List.Rev (mcs');
-        unless (disable_warnings) PatternTyping.check_matching (mcs);
-        foreach (mc : Match_case in mcs) {
-          mc.patterns = 
-            List.Map (mc.patterns, 
-                      fun (p, e) { 
-                         (PatternTyping.strip_enums (p), e) 
-                      });
-          mc.body = TExpr.TypeEnforcement (mc.body, t);
-        }
-        (TExpr.Match (matched_value, mcs), t)
-      | (None, _) =>
-        Message.fatal_error ("cannot have empty match construct");
-    }
-  }
-
-
-
-  ty_letfun (ctx : CTX, fs : list [PT.Function_decl]) : list [Fun_header] * CTX
-  {
-    def make_fun (d : PT.Function_decl) {
-      def pars = {
-        def h = ctx.current_fun;
-        h :: h.GetParents ()
-      };
-
-      def h = d.header;
-      def name_obj = h.name.GetName ();
-      def (tenv, typarms) = ctx.parent_type.BindTyparms (ctx.tenv, h.typarms);
-      def mkparm (p : PT.Fun_parm) : Fun_parm {
-        def name = p.name.GetName ();
-        Fun_parm (loc = p.loc, name = name.Id, color = name.color,
-                  ty = ctx.parent_type.BindType (tenv, p.ty), decl = null,
-                  modifiers = p.modifiers)
-      };
-      def h' = Fun_header (
-         ret_type = ctx.parent_type.BindType (tenv, h.ret_type),
-         typarms = typarms,
-         name = name_obj.Id,
-         parms = List.Map (h.parms, mkparm),
-         tenv = tenv,
-         loc = h.loc);
-
-      def lv = ctx.DefineLocal (name_obj,
-                                LocalValueKind.Function (h', pars), 
-                                Tyutil.fun_type (h'));
-      h'.decl = lv;
-      h'
-    };
-
-    def headers = List.Map (fs, make_fun);
-    def localvals = List.Map (headers, fun (h : Fun_header) { h.decl });
-    def ctx = ctx.WithLocals (localvals);
-    def loop (headers : list [Fun_header], parsed : list [PT.Function_decl]) {
-      | (h :: hs, d :: ds) => h.body = ty_function (ctx, h, d.body); loop (hs, ds);
-      | _ => () // both must / will be empty
-    } 
-    loop (headers, fs);
-    (headers, ctx)
-  }
-
 #endregion
