@@ -28,43 +28,59 @@
 
 using System.Data;
 using System.Text.RegularExpressions;
+using Nemerle.Collections;
 using Npgsql;
+
+using Nemerle.Compiler;
 
 namespace Nemerle.Data {
 module Npgsql {
-  mutable connection : NpgsqlConnection;
+  private connections : Hashtable <string, NpgsqlConnection>;
 
-  type_representant (t : Nemerle.Compiler.Typedtree.Type) : DbType * object
+  public this () { connections <- Hashtable () }
+
+  get_connection (name : string) : NpgsqlConnection
+  {
+    match (connections.Get (name)) {
+      | Some (c) => c
+      | None =>
+        Message.fatal_error ("connection `" + name + "' was not found")
+    }
+  }
+  
+  type_representant (t : Typedtree.Type) : DbType * object
   {
     match (t) {
-      | Nemerle.Compiler.Typedtree.T_app (tc, []) =>
+      | Typedtree.T_app (tc, []) =>
         match (tc.GetFullName ()) {
-          | "System.String" =>
+          | "System.String" | "Nemerle.Core.string" =>
             (DbType.String, ("string parameter" : object))
           | "System.Int32" =>
             (DbType.Int32, 234)
           | x =>
-            Nemerle.Compiler.Message.fatal_error (x + " type not supported")
+            Message.fatal_error (x + " type not supported")
         }
       | _ =>
-        Nemerle.Compiler.Message.fatal_error ("only basic types supported in sql query")
+        Message.fatal_error ("only basic types supported in sql query")
     }
   }
-  
-  macro CreateCompileTimeConnection (con_str : string)
-  {
-    connection <- NpgsqlConnection (con_str);
-    connection.Open ();
-    <[ () ]>
-  }
 
-  macro SqlLoop (query : string, conn, body)
+  /** Extracts parameters after $, type expressions containing variables with
+      names of those parameters.
+
+      Returns:
+       - final SQL provider secific query
+       - collection of name and typed expression containing variable with this
+         name
+   */
+  extract_parameters (ctx : Tyexpr.CTX, query : string)
+  : string * Hashtable <string, Typedtree.Expr>
   {
     // take names after $
     def namesreg = Regex (@"(([^\$]*)\$(\w+))|(.+)", RegexOptions.Singleline);
     mutable m <- namesreg.Match (query);
     def fquery = System.Text.StringBuilder (query);
-    def pars = Nemerle.Collections.Hashtable ();
+    def pars = Hashtable ();
 
     // extract names and prefix them with Npgsql parameter delimiter `:'
     while (m.Success) {
@@ -76,42 +92,104 @@ module Npgsql {
     };
 
     // initializers of sql command parameters
-    def tpars = Nemerle.Collections.Hashtable ();    
-    mutable pars_init <- [];
+    def tpars = Hashtable ();    
     pars.Iter (fun (x, _) {
-      def varname = Nemerle.Compiler.Macros.UseSiteSymbol (x);
-      def tvar = Nemerle.Compiler.Tyexpr.ty_expr (_N_ctx, <[ $(varname : var) ]>);
+      def varname = Macros.UseSiteSymbol (x);
+      def tvar = Tyexpr.ty_expr (ctx, <[ $(varname : var) ]>);
       tpars.Set (x, tvar);
-      pars_init <- <[ ignore (querycmd.Parameters.Add ($(x : string), 
+    });
+    (fquery.ToString (), tpars)
+  }
+
+  
+  macro CreateCompileTimeConnection (con_str : string, name : string = "")
+  {
+    if (connections.Contains (name))
+      Message.fatal_error ("Connection with name `" + name + "' is already defined")
+    else {
+      def connection = NpgsqlConnection (con_str);
+      connection.Open ();
+      connections.Add (name, connection)
+    };
+    <[ () ]>
+  }
+
+  macro ExecuteNonQuery (query : string, conn, con_name : string = "")
+  {
+    def (query, tpars) = extract_parameters (_N_ctx, query);
+    mutable pars_init <- [];
+
+    // create compile-time query to check syntax and types in query
+    def mycmd = NpgsqlCommand ("BEGIN TRANSACTION; " + query + "; ROLLBACK;",
+                               get_connection (con_name));
+    
+    tpars.Iter (fun (name, tvar : Typedtree.Expr) {
+      def (dbtype, dbvalue) = type_representant (tvar.expr_ty);
+      mycmd.Parameters.Add (name, dbtype).Value <- dbvalue;
+      
+      /// add parameter initializer
+      pars_init <- <[ ignore (querycmd.Parameters.Add ($(name : string), 
+                                                       $(tvar : typed))) ]> 
+                   :: pars_init;
+    });
+    // try to execute query chcecking its syntax and typecorrectness
+    try
+      ignore (mycmd.ExecuteNonQuery ())
+    catch {
+      | e : NpgsqlException =>
+        Message.fatal_error ("sql query error: " + e.Message)
+    };
+    
+    <[
+      def querycmd = NpgsqlCommand ($(query : string), $conn);
+      { .. $pars_init };
+      def result = querycmd.ExecuteNonQuery ();
+      querycmd.Dispose ();
+      result
+    ]>
+  }
+  
+  macro SqlLoop (query : string, conn, body)
+  {
+    def (query, tpars) = extract_parameters (_N_ctx, query);
+
+    /// expressions initializing [querycmd.Parameters] with their values
+    mutable pars_init <- [];
+
+    // create compile-time query to check syntax and types in query
+    def mycmd = NpgsqlCommand (query, get_connection (""));
+    tpars.Iter (fun (name, tvar : Typedtree.Expr) {
+      def (dbtype, dbvalue) = type_representant (tvar.expr_ty);
+      mycmd.Parameters.Add (name, dbtype).Value <- dbvalue;
+
+      /// add parameter initializer
+      pars_init <- <[ ignore (querycmd.Parameters.Add ($(name : string), 
                                                        $(tvar : typed))) ]> 
                    :: pars_init;
     });
 
-    // try to execute query chcecking its syntax and aquiring names of columns
+    // list of definitions of query results inside loop body
     mutable bodyseq <- [body];
-    def mycmd = NpgsqlCommand (fquery.ToString (), connection);
-    tpars.Iter (fun (name, typed : Nemerle.Compiler.Typedtree.Expr) {
-      def (dbtype, dbvalue) = type_representant (typed.expr_ty);
-      mycmd.Parameters.Add (name, dbtype).Value <- dbvalue;
-    });
     try {
+      // try to execute query chcecking its syntax and aquiring names of columns
       def myreader = mycmd.ExecuteReader(CommandBehavior.SchemaOnly);
       def table = myreader.GetSchemaTable ();
       foreach(myRow : DataRow in table.Rows){
         def col = myRow["ColumnName"].ToString ();
-        def col_type = Nemerle.Compiler.Macros.UseSiteSymbol (myRow["DataType"].ToString ());
-        def col_name = Nemerle.Compiler.Macros.UseSiteSymbol (col);
+        def col_type = Macros.UseSiteSymbol (myRow["DataType"].ToString ());
+        def col_name = Macros.UseSiteSymbol (col);
         bodyseq <- <[ def $(col_name : var) = (reader[$(col : string)] 
                                               :> $(col_type : var)) ]> :: bodyseq;
       }
     }
     catch {
       | e : NpgsqlException =>
-        Nemerle.Compiler.Message.fatal_error ("sql query error: " + e.Message)
+        Message.fatal_error ("sql query error: " + e.Message)
     };
 
+    /// final code for entire sql loop
     <[
-      def querycmd = NpgsqlCommand ($(fquery.ToString () : string), $conn);
+      def querycmd = NpgsqlCommand ($(query : string), $conn);
       { .. $pars_init };
       def reader = querycmd.ExecuteReader ();
       while (reader.Read ()) { ..$bodyseq };
