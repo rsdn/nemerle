@@ -1697,7 +1697,7 @@ class_declaration
 {
     string semi = "";
 }
-    :   (attributes)?   (class_modifier)*   (p:PARTIAL {Emit.EmitToken (p);})?
+    :   (attributes)?   (class_modifier)* 
         c:CLASS id:IDENTIFIER  
         {
             Emit.EmitToken (c);
@@ -2437,7 +2437,7 @@ destructor_body
 //-------------
 
 struct_declaration
-    :   (attributes)?   (struct_modifier)*   (p:PARTIAL {Emit.EmitToken (p);})?
+    :   (attributes)?   (struct_modifier)*   
         s:STRUCT              {Emit.EmitToken(s);}
         id:IDENTIFIER         {Emit.EmitToken(id);}
         (struct_interfaces)?   
@@ -2451,6 +2451,7 @@ struct_modifier
     |   sm3:PROTECTED {Emit.EmitToken(sm3);}
     |   sm4:INTERNAL  {Emit.EmitToken(sm4);}
     |   sm5:PRIVATE   {Emit.EmitToken(sm5);}
+    |   sm6:PARTIAL   {Emit.EmitToken(sm6);}
     ;
 
 struct_interfaces
@@ -2536,7 +2537,7 @@ returns [string return_string]
 //-----------------
 
 interface_declaration
-    :   (attributes)?   (interface_modifier)*   (p:PARTIAL {Emit.EmitToken (p);})?
+    :   (attributes)?   (interface_modifier)*  
         i:INTERFACE  id:IDENTIFIER   
         {
             Emit.EmitToken (i);
@@ -2551,6 +2552,7 @@ interface_modifier
     |   im3:PROTECTED {Emit.EmitToken(im3);}
     |   im4:INTERNAL  {Emit.EmitToken(im4);}
     |   im5:PRIVATE   {Emit.EmitToken(im5);}
+    |   im6:PARTIAL   {Emit.EmitToken(im6);}
     ;
     
 interface_base
