@@ -331,14 +331,11 @@ halfboot:
 	$(Q)$(MAKE) boot
 
 install:
-	$(Q)if test ! -d $(DESTDIR)$(LIBDIR); then $(INSTALL) -d $(DESTDIR)$(LIBDIR); fi
 	$(Q)if test ! -d $(DESTDIR)$(BINDIR); then $(INSTALL) -d $(DESTDIR)$(BINDIR); fi
-	$(INST) [$(LIBDIR)] Nemerle.Compiler.dll
-	$(Q)$(INSTALL) -m 644 out.stage3/Nemerle.Compiler.dll $(DESTDIR)$(LIBDIR)/Nemerle.Compiler.dll
-	$(INST) [$(LIBDIR)] Nemerle.dll
-	$(Q)$(INSTALL) -m 644 out.stage3/Nemerle.dll $(DESTDIR)$(LIBDIR)/Nemerle.dll
-	$(INST) [$(LIBDIR)] Nemerle.Macros.dll
-	$(Q)$(INSTALL) -m 644 out.stage3/Nemerle.Macros.dll $(DESTDIR)$(LIBDIR)/Nemerle.Macros.dll
+	$(Q)$(GACUTIL_COMMAND) out.stage3/Nemerle.dll
+	$(Q)$(GACUTIL_COMMAND) out.stage3/Nemerle.Compiler.dll
+	$(Q)$(GACUTIL_COMMAND) out.stage3/Nemerle.Macros.dll
+	export MONO_PATH=$$MONO_PATH:$$PWD/out.stage3 ; $(NGEN_GAC)
 	$(INST) [$(BINDIR)] ncc
 	$(Q)if [ "$(NET_ENGINE)" = "" ] ; then \
 		$(INSTALL) -m 755 out.stage3/ncc.exe $(DESTDIR)$(BINDIR)/ncc ; \

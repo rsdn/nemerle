@@ -68,14 +68,11 @@ dist:
 	$(Q)cp $(DISTFILES) $(DIR)
 
 install:
-	$(Q)if test ! -d $(DESTDIR)$(LIBDIR); then $(INSTALL) -d $(DESTDIR)$(LIBDIR); fi
 	$(Q)if test ! -d $(DESTDIR)$(BINDIR); then $(INSTALL) -d $(DESTDIR)$(BINDIR); fi
-	$(INST) [$(LIBDIR)] Nemerle.Compiler.dll
-	$(Q)$(INSTALL) -m 644 Nemerle.Compiler.dll $(DESTDIR)$(LIBDIR)/Nemerle.Compiler.dll
-	$(INST) [$(LIBDIR)] Nemerle.dll
-	$(Q)$(INSTALL) -m 644 Nemerle.dll $(DESTDIR)$(LIBDIR)/Nemerle.dll
-	$(INST) [$(LIBDIR)] Nemerle.Macros.dll
-	$(Q)$(INSTALL) -m 644 Nemerle.Macros.dll $(DESTDIR)$(LIBDIR)/Nemerle.Macros.dll
+	$(Q)$(GACUTIL_COMMAND) Nemerle.dll
+	$(Q)$(GACUTIL_COMMAND) Nemerle.Compiler.dll
+	$(Q)$(GACUTIL_COMMAND) Nemerle.Macros.dll
+	export MONO_PATH=$$MONO_PATH:$$PWD ; $(NGEN_GAC)
 	$(INST) [$(BINDIR)] ncc
 	$(Q)if [ "$(NET_ENGINE)" = "" ] ; then \
 		$(INSTALL) -m 755 ncc.exe $(DESTDIR)$(BINDIR)/ncc ; \
