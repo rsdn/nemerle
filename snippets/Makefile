@@ -69,7 +69,7 @@ dist:
 	@echo export...
 	@rm -rf $(DIR)
 	@svn export . $(DIR)
-	@rm -rf $(DIR)/sioux/{csl04,fit}
+	@rm -rf $(DIR)/sioux/fit
 
 clean:
 	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]*
