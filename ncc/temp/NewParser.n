@@ -331,6 +331,15 @@ namespace Nemerle.Compiler
     | Postfix
   }
 
+  [System.Flags]
+  enum TokenStoppers {
+    | None   = 0x0000
+    | Pipe   = 0x0001 // |
+    | Equal = 0x0002 // =
+    | Braces = 0x0004 // {}
+    | All = Pipe %| Equal %| Braces
+  }
+  
   /// Reverse Polish Notation token. It is used on the stack created during translation
   /// of infix operator expression into RPN on the way to create appropriate PExpr.
   [Record]
@@ -748,10 +757,7 @@ namespace Nemerle.Compiler
                         | Some (e) => [PExpr.Ellipsis (e)]
                         | _ =>
                           // parse , separated sequence as one expression
-                          match (parse_expr ()) {
-                            | PExpr.Call (PExpr.Ref ({ idl = [","] }), parms) => parms
-                            | e => [e]
-                          }
+                          comma_separated_list (fun () { parse_expr (TokenStoppers.All) });
                       }
                     | _ => []
                   };
@@ -816,7 +822,7 @@ namespace Nemerle.Compiler
                       match (get_token ()) {
                         | Token.RoundGroup (TokenSeparator.Comma, _) as group =>
                           // FIXME: use parse_expr directly
-                          TokenMap (group, fun (x) { parse_expr (x) });
+                          TokenMap (group, fun (x : Token) { parse_expr (x) });
 
                         | t => Error (t, "expecting comma sperated list of syntax specifiers in `()'"); []
                       }
@@ -1042,12 +1048,8 @@ namespace Nemerle.Compiler
           | Token.EndOfFile =>
             shift (); FunBody.Abstract ()
 
-          | Token.Operator ("$", _) =>
-            match (get_splicable_id ()) {
-              | Splicable.Expression (e) =>
-                FunBody.Parsed (PExpr.Spliced (e))
-              | _ => Util.ice ("get_splicable_id returned impossible value")
-            }
+          | Token.Operator ("$", _) => FunBody.Parsed (parse_spliced_expr ())
+
           | x => Error (x, "expecting method body"); FunBody.Abstract ();
         };
 
@@ -1076,20 +1078,7 @@ namespace Nemerle.Compiler
           
         | Token.Operator ("=", _) =>
           shift ();
-          mutable cur = stream;
-          mutable prev = null;
-          while (cur != null && !(cur matches Token.Operator ("|", _))) {
-            prev = cur;
-            cur = cur.Next;
-          }
-          when (cur != null) {
-            if (prev != null) prev.Next = null;
-            else stream = null;
-            def newgroup = Token.LooseGroup (cur);
-            newgroup.Next = streams_stack [stack_pos - 2];
-            streams_stack [stack_pos - 2] = newgroup;
-          }
-          ClassMember.EnumOption (id.Location, id, Modifiers.Empty, Some (parse_expr ()));
+          ClassMember.EnumOption (id.Location, id, Modifiers.Empty, Some (parse_expr (TokenStoppers.Pipe)));
 
         | Token.EndOfFile =>
           ClassMember.EnumOption (id.Location, id, Modifiers.Empty, None ());
@@ -1301,11 +1290,7 @@ namespace Nemerle.Compiler
             | _ =>
               def tv = get_tyvar (Token.LooseGroup (get_token ()));
               expect_operator (":");
-              def types =
-                match (parse_expr ()) {
-                  | PExpr.Call (PExpr.Ref ({ idl = [","] }), parms) => parms
-                  | e => [e]
-                }
+              def types = comma_separated_list (fun () { parse_expr (TokenStoppers.Braces) });
               def acc = List.FoldLeft (types, acc, fun (t, acc) { 
                 Constraint (tv, t) :: acc 
               });
@@ -1363,7 +1348,7 @@ namespace Nemerle.Compiler
         def id = get_splicable_id ();
         def t =
           match (peek_token ()) {
-            | Token.Operator (":", _) => shift (); parse_expr ()
+            | Token.Operator (":", _) => shift (); parse_expr (TokenStoppers.Equal)
             | _ => PExpr.Wildcard (id.Location)
           };
         match (peek_token ()) {
@@ -1406,7 +1391,7 @@ namespace Nemerle.Compiler
 
     parse_return_type (allow_inference : bool) : PExpr {
       match (peek_token ()) {
-        | Token.Operator (":", _) => shift (); parse_expr ()
+        | Token.Operator (":", _) => shift (); parse_expr (TokenStoppers.Braces)
         | _ when allow_inference => PExpr.Wildcard (last_tok.Location)
         | t => Error (t, "expecting `:' and type specifier for class member");
           PExpr.Wildcard (last_tok.Location)
@@ -1465,9 +1450,6 @@ namespace Nemerle.Compiler
       List.Rev (result);
     }
 
-    [Nemerle.NotImplemented]
-    parse_expr_sequence () : list [PExpr];
-    
     parse_block (parms : list [Fun_parm]) : PExpr
     {
       def tok = get_token ();
@@ -1510,7 +1492,7 @@ namespace Nemerle.Compiler
         // standard body enclosed by { ... }
         | Token.BracesGroup (group) =>
           push_stream (group);
-          def seq = parse_expr_sequence ();
+          def seq = parse_expr_sequence (TokenStoppers.None);
           pop_stream ("function body");
           PExpr.Sequence (loc, seq);
 
@@ -1609,9 +1591,14 @@ namespace Nemerle.Compiler
       }
       loop ();
     }
+
+    parse_expr () : PExpr {
+      parse_expr (TokenStoppers.None);
+    }
     
-    /** Parse expression from current stream of tokens */
-    parse_expr () : PExpr
+    /** Parse expression from current stream of tokens.
+        Reading is terminated before every token from [stop]. */
+    parse_expr (stop : TokenStoppers) : PExpr
     {
       mutable _expr_stack = [];
       mutable rpn_op_stack = [];
@@ -1626,7 +1613,7 @@ namespace Nemerle.Compiler
               loop ();
 
             | _ =>
-              def expr = parse_embedded_expr ();
+              def expr = parse_embedded_expr (stop);
               _expr_stack = expr :: _expr_stack;
               // after raw expression we are in postfix context
               _op_context = OpContext.Postfix;
@@ -1639,8 +1626,12 @@ namespace Nemerle.Compiler
               | Token.Operator ("*", _) =>
                 NaryOperatorInfo (OperatorInfo.ProductInfo);
 
-              | Token.Operator (str, _) => OperatorInfo.GetOrCreate (str)
-              | Token.Comma => OperatorInfo.CommaInfo
+              | Token.Operator (str, _) =>
+                if (str == "|" && stop %&& TokenStoppers.Pipe ||
+                    str == "=" && stop %&& TokenStoppers.Equal) null
+                else
+                  OperatorInfo.GetOrCreate (str)
+                  
               | Token.Keyword (k) => OperatorInfo.Infos [k]
               | Token.SquareGroup as g  =>
                 group = g;                
@@ -1649,7 +1640,7 @@ namespace Nemerle.Compiler
               | Token.RoundGroup as g =>
                 group = g;
                 NaryOperatorInfo (OperatorInfo.RoundInfo);
-                
+
               | _ => null
             }
           if (info == null) {
@@ -1695,7 +1686,7 @@ namespace Nemerle.Compiler
     {
       def group_token = group_token :> Token.LooseGroup;
       push_stream (group_token.Child);
-      def expr = parse_expr ();
+      def expr = parse_expr (TokenStoppers.None);
       pop_stream ("expression in sequence");
       expr
     }
@@ -1744,10 +1735,63 @@ namespace Nemerle.Compiler
       }
     }
 
-    [Nemerle.NotImplemented]
-    parse_match_group () : list [MatchCase];
+    parse_case_guard () : PExpr * option [PExpr] {
+      match (parse_expr (TokenStoppers.Pipe)) {
+        | <[ @when ($pat, $guard) ]> => (pat, Some (guard))
+        | pat                        => (pat, None ())
+      }
+    }
+   
+    parse_match_case () : MatchCase {
+      def loop2 (acc) {
+        def res = parse_case_guard ();
+        match (get_token ()) {
+          | Token.Operator ("=>", _) => List.Rev (res :: acc)
+          | Token.Operator ("|", _) => loop2 (res :: acc)
+          | x => Error (x, "found junk after pattern"); List.Rev (res :: acc)
+        }
+      };
+
+      def case_group = (stream :> Token.LooseGroup);
+      push_stream (case_group.Child);
+      
+      // eat pattern part and '=>'
+      def pats = 
+        match (peek_token ()) {
+          | Token.Operator ("|", _) =>
+            shift ();
+            match (maybe_parse_ellipsis ()) {
+              | Some (e) =>
+                expect_operator ("=>");
+                [(PExpr.Ellipsis (e.loc, e), None ())]                  
+                
+              | None => loop2 ([])
+            }
+          | _ => loop2 ([])
+        };
+      // modify beginning of current group to point at match case body  
+      case_group.Child = stream; 
+      pop_stream ();
+        
+      def expr =
+        match (parse_expr_sequence (TokenStoppers.Pipe)) {
+          | [x] => x
+          | l => PExpr.Sequence (l)
+        };
+
+      MatchCase (pats, expr)
+    }
     
-    parse_embedded_expr () : PExpr
+    parse_match_group () : list [MatchCase]
+    {
+      mutable result = [];
+      while (stream != null) {
+        result = parse_match_case () :: result
+      }
+      List.Rev (result)
+    }
+    
+    parse_embedded_expr (stop : TokenStoppers) : PExpr
     {
       def lit = parse_literal ();
       if (lit != null) lit
@@ -1784,11 +1828,11 @@ namespace Nemerle.Compiler
             def body = peek_token ();              
             match (body) {
               | Token.SquareGroup | Token.Operator ("$", _) =>
-                PExpr.Array (loc, rank, parse_embedded_expr ())
+                PExpr.Array (loc, rank, parse_embedded_expr (TokenStoppers.All))
 
               | Token.RoundGroup =>
                 shift ();
-                def exprs = TokenMap (body, fun (x) { parse_expr (x) });
+                def exprs = TokenMap (body, fun (x : Token) { parse_expr (x) });
                 PExpr.EmptyArray (loc + body.Location, exprs)
 
               | x =>
@@ -1799,30 +1843,36 @@ namespace Nemerle.Compiler
             
           // tuples
           | Token.RoundGroup =>
-            def exprs = TokenMap (tok, fun (x) { parse_expr (x) });
+            def exprs = TokenMap (tok, fun (x : Token) { parse_expr (x) });
             match (exprs) {
               | [PExpr.Ellipsis] => PExpr.Tuple (loc, exprs)
               | [e] => e
               | _ => PExpr.Tuple (loc, exprs)
             }
 
+          | Token.BracesGroup (group) when !(stop %&& TokenStoppers.Braces) =>
+            push_stream (group);
+            def seq = parse_expr_sequence (TokenStoppers.None);
+            pop_stream ("sequence of expressions");
+            PExpr.Sequence (loc, seq);
+            
           | Token.Keyword ("ref") =>
-            def refexpr = parse_expr ();
+            def refexpr = parse_expr (TokenStoppers.All);
             PExpr.ParmByRef (loc + refexpr.loc, refexpr)
 
           | Token.Keyword ("out") =>
-            def outexpr = parse_expr ();
+            def outexpr = parse_expr (TokenStoppers.All);
             PExpr.ParmOut (loc + outexpr.loc, outexpr)
 
           | Token.Keyword ("throw") =>
-            def exn = parse_expr ();
+            def exn = parse_expr (stop);
             PExpr.Throw (loc + exn.loc, exn)
             
           | Token.Keyword ("mutable") =>
             def id = get_splicable_id ();
             match (get_token ()) {
               | Token.Operator ("=", _) =>
-                def val = parse_expr ();
+                def val = parse_expr (stop);
                 PExpr.Define (loc + val.loc, true, id, val)
               | x =>
                 Error (x, "expected assignment operator ="); <[ () ]>
@@ -1876,49 +1926,47 @@ namespace Nemerle.Compiler
               | x => Error (x, "expecting '{' after 'match (e)'"); <[ () ]>
             }
 
-/*
           | Token.Keyword ("try") =>
-            def body = parse_block ([]);
-            match (get_token ()) {
-              | Token.Keyword ("catch") =>
-                def parse_with () {
-                  match (peek_token ()) {
-                    | Token.Operator ("|", _) => shift ()
-                    | _ => ()
-                  };
-                  def id = get_splicable_id ();
-                  expect_operator (":");
-                  def t = parse_expr ();
-                  expect_operator ("=>");
-                  match (parse_expr_sequence ()) {
-                    | [x] => (id, t, x)
-                    | l => (id, t, PExpr.Sequence (loc, l))
-                  }
-                };
+            def try_body = parse_block ([]);
+            mutable body = null; // resulting expression
 
-                def mktry (h, body) {
-                  def (id, t, handler) = h;
-                  PExpr.TryWith (loc, body, id, t, handler)
-                };
+            // exception handlers
+            when (flag_keyword ("catch")) {
+              def mktry (h : MatchCase, body) {
+                match (h.patterns) {
+                  | [(PExpr.TypeEnforcement (PExpr.Ref (id), t), _)] =>
+                    PExpr.TryWith (loc, body, Splicable.Name (id), t, h.body)
 
-                def res = List.FoldLeft (collect_braced_list (parse_with), 
-                                         body, mktry);
+                  | [(PExpr.TypeEnforcement (PExpr.Spliced (id), t), _)] =>
+                    PExpr.TryWith (loc, body, Splicable.Expression (id), t, h.body)
 
-                match (get_token ()) {
-                  | Token.Keyword ("finally") =>
-                    def handler = parse_block ([]);
-                    PExpr.TryFinally (loc, res, handler)
-
-                  | _ => push_back (); res
+                  | _ =>
+                    Message.error (h.body.Location, "exception catch pattern must"
+                                   " be in form of `| e : ExceptionType => handler'"); body
                 }
+              };
+              match (get_token ()) {
+                | Token.BracesGroup (group) =>
+                  push_stream (group);
+                  body = List.FoldLeft (parse_match_group (), try_body, mktry);
+                  pop_stream ("exception handlers");
 
-              | Token.Keyword ("finally") =>
-                def handler = parse_block ([]);
-                PExpr.TryFinally (loc, body, handler)
-
-              | _ => fatal_error ("expecting `catch' or `finally'")
+                | x => Error (x, "expecting handlers of exceptions")
+              }
             }
-
+            
+            if (flag_keyword ("finally")) {
+              def handler = parse_block ([]);
+              PExpr.TryFinally (loc, body, handler)
+            }
+            else {
+              if (body == null) {
+                Message.error (body.Location, "expecting `catch' or `finally'");
+                try_body
+              }
+              else body
+            }
+/*
           | Token.Keyword ("def") =>
             def parse_val (id) {
               expect_operator ("=");
@@ -1990,7 +2038,33 @@ namespace Nemerle.Compiler
         }
       }
     }
-    
+
+    /** special function to parse sequence in a way allowing other functions
+        switching to sibling LooseGroup of tokens. Like:
+          LooseGroup (..a b c..); LooseGroup (d..)
+     */
+    parse_expr_sequence (stop : TokenStoppers) : list [PExpr]
+    {
+      mutable result = [];
+      def loop () {
+        when (stream != null) {
+          def group_token = stream :> Token.LooseGroup;
+          push_stream (group_token.Child);
+          result = parse_expr (stop) :: result;        
+          if (stop == TokenStoppers.None || stream == null) {
+            pop_stream ("expression in sequence");
+            stream = stream.Next;
+            loop ();
+          }
+          else {
+            group_token.Child = stream;
+            pop_stream ();
+          }
+        }
+      }
+      loop ();
+      List.Rev (result)
+    }
   } // end MainParser
 } // end namespace
 
