@@ -258,6 +258,7 @@ class Lexer : yyParser.yyInput
 				if (esc == -1)
 					return error("invalid escape in string literal");
 				buf.Append((char)esc);
+				ch = ' ';
 				break;
 
 			case '\n':
