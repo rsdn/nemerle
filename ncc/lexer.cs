@@ -258,6 +258,7 @@ class Lexer : yyParser.yyInput
 		case 'b': return '\b';
 		case '"': return '"';
 		case '\'': return '\'';
+		case '\\': return '\\';
 		default:
 			return -1;
 		}

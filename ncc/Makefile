@@ -52,7 +52,8 @@ n_src = \
 	xmldump.n \
 	typattern.n \
 	external.n \
-	cgopt.n
+	cgopt.n 
+#	lexer.n
 
 
 cs_src  = lexer.cs main.cs parser.cs
