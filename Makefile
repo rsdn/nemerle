@@ -40,6 +40,7 @@ DISTFILES = \
 	INSTALL   \
 	Makefile  \
 	README    \
+	NEWS	  \
 	configure \
 
 svn2log = $(PYTHON) misc/svn2log.py changelog.xml -u misc/users
