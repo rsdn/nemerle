@@ -851,12 +851,13 @@ conditional_expression
 returns [string return_string]
 {
     return_string = "";
-    string e1, e2;
+    string e1="", e2="";
 }
   : return_string = conditional_or_expression
-    (QUESTION e1 = expression COLON
+    (q:QUESTION e1 = expression c:COLON
               e2 = expression
-       { return_string = "if (" + return_string + ")" + e1 + " else" + e2; }
+       { return_string = ExtendedToken.getWhitespaces (q) + "if (" + return_string + ")" + e1 + 
+                ExtendedToken.getWhitespaces (c) + "else " + e2; }
     )?
   ;
 
