@@ -42,7 +42,8 @@ config.mak: configure
 changelog:
 	svn up
 	svn log -v --xml > changelog.xml
-	$(svn2log) -p /nemerle/trunk -x npc -x doc -x ncc
+	$(svn2log) -p /nemerle/trunk -x npc -x doc -x ncc -x lib
+	$(svn2log) -p /nemerle/trunk/lib -o lib/ChangeLog
 	$(svn2log) -p /nemerle/trunk/ncc -o ncc/ChangeLog -r npc/ncc=ncc
 	$(svn2log) -p /nemerle/trunk/doc -o doc/ChangeLog
 	rm -f changelog.xml
