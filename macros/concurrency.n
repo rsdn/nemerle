@@ -1,10 +1,46 @@
+/*
+ * Copyright (c) 2004-2005 Ricardo Fernández Pascual r.fernandez at ditec.um.es
+ * Copyright (c) 2004-2005 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using System;
 using System.Threading;
+using Nemerle.Collections;
 using Nemerle.Macros;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Tyutil;
 using Nemerle.Compiler.Tyexpr;
 
 using PT = Nemerle.Compiler.Parsetree;
+using TT = Nemerle.Compiler.Typedtree;
 
-namespace Nemerle.Concurrency {
+namespace Nemerle.Concurrency
+{
   module Helper {
     public MakeAsync (expr : PT.PExpr) : PT.PExpr
     {
@@ -12,6 +48,330 @@ namespace Nemerle.Concurrency {
             def threadBody () { $expr }; 
             def thread = Thread (ThreadStart (threadBody));
             thread.Start ();
+        ]>
+    }
+
+    AddInit (t : TypeBuilder, is_static : bool, init : PT.PExpr) : void
+    {
+       AddInit (t, is_static, init, false) 
+    }
+
+    AddInit (t : TypeBuilder, is_static : bool, init : PT.PExpr, after : bool) : void
+    {
+        def static_attr =
+            if (is_static) BindingFlags.Static
+            else BindingFlags.Instance;
+        def mems = t.GetConstructors (static_attr 
+                                      %| BindingFlags.Public 
+                                      %| BindingFlags.NonPublic 
+                                      %| BindingFlags.DeclaredOnly);
+
+        // given existing constructor, insert call to base constructor
+        // at its beginning 
+        def inject (ctor : NemerleMethod) 
+        {
+            def bd = ctor.Body;
+            ctor.Body = 
+                if (after) <[ $bd; $init ]>
+                else match (bd) {
+                    | <[ {.. $(e :: rest) } ]> =>
+                      match (e) {
+                          | <[ base (..$_) ]> => <[ $e; $init; {.. $rest } ]>
+                          | <[ this (..$_) ]> => bd
+                          | _ => <[ $init; $bd ]>
+                      }
+                    | _ => <[ $init; $bd ]>
+                }
+        }
+
+        match (mems) {
+            | [] =>
+              if (is_static) 
+                  t.Define (<[ decl: static public this () { $init } ]>)
+              else
+                  t.Define (<[ decl: public this () { $init } ]>)
+            | _ =>
+              List.Iter ((mems :> list [NemerleMethod]), inject)
+        }
+    }
+
+    public CreateChordCommonMembers (tb : TypeBuilder) : void
+    {
+        match (tb.LookupMember ("__Chord_Mask")) {
+            | [] =>
+              tb.Define (<[ decl:
+                  __Chord_Mask : BitMask;
+              ]>);
+              AddInit (tb, false, <[
+                      this.__Chord_Mask = BitMask ();
+              ]>)
+            | [_] =>
+              ()
+            | _ => 
+              assert (false)
+        }
+        match (tb.LookupMember ("__Chord_Lock")) {
+            | [] =>
+              tb.Define ( <[ decl:
+                  __Chord_Lock : object;
+              ]> );
+              AddInit (tb, false, <[
+                  this.__Chord_Lock = object ();
+              ]>)
+            | [_] =>
+              ()
+            | _ => 
+              assert (false)
+        }
+        match (tb.LookupMember ("__Chord_Scan")) {
+            | [] =>
+              tb.Define ( <[ decl:
+                  __Chord_Scan () : void { }
+              ]> )
+            | [_] =>
+              ()
+            | _ => 
+              assert (false)
+        }
+    }
+
+    AddChordScanCase (tb : TypeBuilder, mask : PT.Name, queue : PT.Name) : void
+    {
+        match (tb.LookupMember ("__Chord_Scan")) {
+            | [m] =>
+              def m = (m :> NemerleMethod);
+              m.Body = <[
+                  if (this.__Chord_Mask.Match ($(mask : name)))
+                  {
+                      this.$(queue : name).Wakeup ()
+                  }
+                  else
+                  {
+                      $(m.Body)
+                  }
+              ]>
+            | _ => 
+              assert (false)
+        }
+    }
+
+    MaxMethodValueCounter : Hashtable [TypeBuilder, int];// = Hashtable ();
+    
+    this ()
+    {
+        MaxMethodValueCounter = Hashtable ()
+    }
+
+    public CreateChordMaskMethodValue (tb : TypeBuilder, m : NemerleMethod) : uint
+    {
+        def i = match (MaxMethodValueCounter.Get (tb)) {
+            | Some (i) => i
+            | None => 0
+        }
+        MaxMethodValueCounter.Set (tb, i + 1);
+        def value = 1U << i;
+        def name = "__Chord_MaskMethodValue_" + m.Name;
+        def symbol = Macros.UseSiteSymbol (name);
+        tb.Define ( <[ decl:
+            public static $(symbol : name) : uint /*= $(value : uint)*/;
+        ]> );
+        AddInit (tb, true, <[
+            $(symbol : name) = $(value : uint);
+        ]>);
+        value
+    }
+
+    public CreateChordMaskValue (tb : TypeBuilder, m : NemerleMethod, body_index : int,
+                          members : list [PT.PExpr]) : PT.Name * PT.Name
+    {
+        def partialvalue = List.FoldLeft (members, <[ (0U : uint) ]>, fun (i, acc) 
+        {
+            match (i) {
+                | PT.PExpr.Ref (name) =>
+                  def n = "__Chord_MaskMethodValue_" + name.Id;
+                  <[ $(acc) | $(n : usesite) ]>
+                  
+                | _ => Message.fatal_error ("wrong chord member");
+            }
+        });
+        def partialname = "__Chord_MaskPartialValue_" + m.Name + "_" + body_index.ToString ();
+        def partialsymbol = Macros.UseSiteSymbol (partialname);
+        def ourMethodName = "__Chord_MaskMethodValue_" + m.Name;
+        def ourMethodNameSymbol = Macros.UseSiteSymbol (ourMethodName);
+        def value = <[ $(ourMethodNameSymbol : name) %| $(partialvalue) ]>;
+        def name = "__Chord_MaskValue_" + m.Name + "_" + body_index.ToString ();
+        def symbol = Macros.UseSiteSymbol (name);
+        tb.Define ( <[ decl:
+            static $(partialsymbol : name) : uint;
+        ]>);
+        tb.Define ( <[ decl:
+            static $(symbol : name) : uint;
+        ]>);
+        AddInit (tb, true, <[
+            $(partialsymbol : name) = $(partialvalue);
+            $(symbol : name) = $(value);
+        ]>, true);
+        (partialsymbol, symbol)
+    }
+
+    public CreateChordMethodQueue (tb : TypeBuilder, m : NemerleMethod) : PT.Name
+    {
+        def name = "__Chord_MethodQueue_" + m.Name;
+        def symbol = Macros.UseSiteSymbol (name);
+
+        def paramsTypes = match (m.GetMemType ()) {
+            | TT.TType.Function (f, _) => f
+            | _ => assert (false);
+        }
+
+        match (paramsTypes) {
+            | TT.TType.Void =>
+              tb.Define ( <[ decl:
+                  $(symbol : name) : DummyQueue; 
+              ]>);
+              AddInit (tb, false, <[
+                  this.$(symbol : name) = DummyQueue ();
+              ]>)
+            | _ => 
+              tb.Define ( <[ decl:
+                  $(symbol : name) : Queue [ $(paramsTypes : typed) ]; 
+              ]>);
+              AddInit (tb, false, <[
+                  this.$(symbol : name) = Queue ();
+              ]>)
+        }
+        symbol
+    }
+
+    CreateChordThreadQueue (tb : TypeBuilder, m : NemerleMethod) : PT.Name
+    {
+        def name = "__Chord_ThreadQueue_" + m.Name;
+        def symbol = Macros.UseSiteSymbol (name);
+        tb.Define ( <[ decl:
+            $(symbol : name) : ThreadQueue;
+        ]> );
+        AddInit (tb, false, <[
+            this.$(symbol : name) = ThreadQueue ();
+        ]>);
+        symbol
+    }
+
+    public chord' (tb : TypeBuilder, m : NemerleMethod, chords : array [PT.PExpr]) : void
+    {
+        CreateChordCommonMembers (tb);
+        def qsymb = CreateChordThreadQueue (tb, m);
+        def methodValue = CreateChordMaskMethodValue (tb, m);
+
+        def iterChords (i, acc)
+        {
+            if (i < chords.Length)
+            {
+                unless (i + 1 < chords.Length) Message.fatal_error ("Odd chord!");
+
+                def members = chords [i];
+                def body = chords [i + 1];
+                def innerBody = <[ 
+                    this.__Chord_Scan ();
+                    Monitor.Exit (this.__Chord_Lock);
+                    $(body)
+                ]>;
+
+                def unLift (e)
+                {
+                  | <[ [..$result] ]> => result
+                  | _ => Message.fatal_error ("Syntax error in chord")
+                }
+                def members = unLift (members);
+
+                def (partialmask, mask) = CreateChordMaskValue (tb, m, i, members);
+                AddChordScanCase (tb, mask, qsymb);
+
+                def execBody = List.FoldLeft (members, innerBody, fun (i, acc) {
+                    match (i) {
+                        | PT.PExpr.Ref (name) =>
+                          def qn = "__Chord_MethodQueue_" + name.Id;
+                          def qnsymbol = Macros.UseSiteSymbol (qn);
+                          def member = match (tb.LookupMember (name.Id)) {
+                              | [m] => (m :> NemerleMethod)
+                              | _ => Message.fatal_error ("wrong chord member " + name.Id);
+                          };
+                          def cmmvn = "__Chord_MaskMethodValue_" + name.Id;
+                          def acc = <[
+                              when (this.$(qnsymbol : name).IsEmpty)
+                              {
+                                  this.__Chord_Mask.Clear ($(cmmvn : usesite))
+                              }
+                              $acc
+                          ]>;
+                          match (member.GetHeader ().parms) {
+                              | [] => 
+                                <[
+                                    this.$(qnsymbol : name).Take ();
+                                    $acc
+                                ]>
+                              | [p] =>
+                                <[ 
+                                    def $(p.name : usesite) = this.$(qnsymbol : name).Take ();
+                                    $acc 
+                                ]>
+                              | _ =>
+                                def paramNames = List.FoldRight (member.GetHeader ().parms, [],
+                                  fun (p : TT.Fun_parm, acc) {
+                                    <[ $(p.name : usesite) ]> :: acc
+                                  });
+                                <[
+                                    def (..$paramNames) = this.$(qnsymbol : name).Take ();
+                                    $acc
+                                ]>
+                          }                  
+                        | _ => Message.fatal_error ("wrong chord member");
+                    }
+                });
+
+                iterChords (i + 2, <[
+                    if (this.__Chord_Mask.Match ($(partialmask : name)))
+                    {
+                        $execBody;
+                    }
+                    else
+                    {
+                        $acc
+                    }
+                ]>)
+            }
+            else
+            {
+                acc
+            }
+        }
+        def now = iterChords (0, <[
+            this.__Chord_Mask.Set ($(methodValue : uint));
+            later ()
+        ]>);
+
+        m.Body = <[
+            def later () 
+            {
+                this.$(qsymb : name).Yield (this.__Chord_Lock);
+                when (this.$(qsymb : name).Empty) 
+                {
+                    this.__Chord_Mask.Clear ($(methodValue : uint))
+                }
+                now ()
+            }
+            and now () 
+            {
+                $now
+            }
+            Monitor.Enter (this.__Chord_Lock);
+            if (this.__Chord_Mask.Match ($(methodValue : uint)))
+            {
+                later ()
+            }
+            else
+            {
+                now ()
+            }
         ]>
     }
   }
@@ -32,6 +392,68 @@ namespace Nemerle.Concurrency {
                        Inherited = true)]
   macro Async (_ : TypeBuilder, m : ParsedMethod)
   {
+      m.Body = Helper.MakeAsync (m.Body)
+  }
+
+
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
+                       Nemerle.MacroTargets.Method,
+                       Inherited = true)]
+  macro ChordMember (tb : TypeBuilder, m : MethodBuilder)
+  {
+      Helper.CreateChordCommonMembers (tb);
+      def qsymb = Helper.CreateChordMethodQueue (tb, m);
+      def methodValue = Helper.CreateChordMaskMethodValue (tb, m);
+      def paramslist = List.FoldRight (m.GetParameters (), [], fun (p : TT.Fun_parm, acc) {
+          <[ $(p.name : usesite) ]> :: acc
+      });
+      match (paramslist) {
+          | [] =>
+            m.Body = <[
+                $(m.Body);
+                this.$(qsymb : name).Add ()
+            ]>
+          | [p] => 
+            m.Body = <[
+                $(m.Body);
+                this.$(qsymb : name).Add ($(p))
+            ]>
+          | _ =>
+            def tuple = <[ (.. $paramslist) ]>;
+            m.Body = <[
+                $(m.Body);
+                this.$(qsymb : name).Add ($(tuple))
+            ]>
+      }
+      m.Body = <[
+          lock (this.__Chord_Lock)
+          {
+              $(m.Body);
+              unless (this.__Chord_Mask.Match ($(methodValue : uint)))
+              {
+                  this.__Chord_Mask.Set ($(methodValue : uint));
+                  this.__Chord_Scan ()
+              }
+          }
+      ]>
+  }
+
+  // FIXME: if one of the members is declared after the Chord body, things can go wrong.
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
+                       Nemerle.MacroTargets.Method,
+                       Inherited = true)]
+  macro Chord (tb : TypeBuilder, m : MethodBuilder, params chords : array [expr])
+  syntax ("chord", "(", chords, ")")
+  {
+      Helper.chord' (tb, m, chords)
+  }
+
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
+                       Nemerle.MacroTargets.Method,
+                       Inherited = true)]
+  macro AsyncChord (tb : TypeBuilder, m : MethodBuilder, params chords : array [expr])
+  {
+      Helper.chord' (tb, m, chords);
       m.Body = Helper.MakeAsync (m.Body)
   }
 }

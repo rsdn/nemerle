@@ -71,6 +71,7 @@ NEMERLE_DLL_SRC = \
 	../lib/pair.n			\
 	../lib/set.n			\
 	../lib/vector.n			\
+	../lib/concurrency.n		\
 	../lib/AssemblyInfo.n
 
 NEMERLE_COMPILER_DLL_SRC = \
