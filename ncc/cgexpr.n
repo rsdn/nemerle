@@ -33,124 +33,131 @@ open Nemerle.Compiler.CGexpr;
 open Nemerle.Compiler.Tyops;
 open Nemerle.Compiler.Typedtree;
 
+open System.Reflection;
+open System.Reflection.Emit;
+
 namespace Nemerle.Compiler {
 
 module CGexpr {
-  private mutable cg_members : Hashtable (int, CG_member);
-  private mutable _fixup_function_cache : Hashtable (int, CM_method);
+  public cg_type (ctx : CTX, t : Type) : System.Type
+  {
+    cg_type (ctx.current_type.GetSystemType (), t)
+  }
+
+  tuple_type (len : int) : System.Type
+  {
+    def name = "Nemerle.Tuple" + string_of_int (len);
+    (GlobalEnv.LookupInternalType (name)).GetSystemType ()
+  }
   
-  lookup_field (decl : IField) : CM_field {
-    match (cg_members.Get (decl.GetId ())) {
-      | Some ((CM_field) as result) => result
-      | Some => Util.ice ()
-      | None =>
-        def ty = decl.GetMemType ();
-        def m = (CM_field (Tyutil.encode_type_to_string (ty), cg_type (ty), None ()) :> CM_field);
-        m.name <- decl.GetName ();
-        m.extern_name <- decl.GetDeclaringTycon ().GetFullName () + "." + decl.GetName ();
-        m.attrs <- cg_attrs (decl.GetModifiers ());
-        m.modifiers <- decl.GetModifiers ();
-        cg_members.Add (decl.GetId (), m);
-        m
-     }
+  function_type (len : int) : System.Type
+  {
+    def name = "Nemerle.Func" + string_of_int (len);
+    (GlobalEnv.LookupInternalType (name)).GetSystemType ()
   }
 
-  lookup_property (decl : IProperty) : CM_property {
-    match (cg_members.Get (decl.GetId ())) {
-      | Some ((CM_property) as res) => res
-      | Some => Util.ice ()
-      | None =>
-        def ty = decl.GetMemType ();
-        def m = (CM_property (cg_type (ty)) :> CM_property);
-        m.name <- decl.GetName ();
-        m.extern_name <- decl.GetDeclaringTycon ().GetFullName () + "." + decl.GetName ();
-        m.attrs <- cg_attrs (decl.GetModifiers ());
-        m.modifiers <- decl.GetModifiers ();
-        cg_members.Add (decl.GetId (), m);
-        m
+  get_apply_method (parm_cnt : int) : IMethod
+  {
+    def name = "Nemerle.Func" + string_of_int (parm_cnt);
+    def tc = GlobalEnv.LookupInternalType (name);
+    def our_method (m : IMember) {
+      match (m.GetKind ()) {
+        | MK_method (m) => 
+          List.length (m.GetHeader ().parms) == parm_cnt
+        | _ => false
+      }
+    };
+    match (List.filter (our_method, tc.LookupMember ("apply", LF_all ()))) {
+      | [m] => (m :> IMethod)
+      | _ => Util.ice ()
     }
   }
 
-  lookup_function (h : Fun_header) : CM_method {
-    match (cg_members.Get (h.id)) {
-      | Some ((CM_method) as m) => m
-      | Some => Util.ice ()
-      | None =>
-        def m = cg_header (h);
-        cg_members.Add (h.id, m);
-        m
-    }
+  tuple_ref (val : CG_expr, pos : int, len : int) : CG_expr
+  {
+    def name = "Nemerle.Tuple" + string_of_int (len);
+    def tc = GlobalEnv.LookupInternalType (name);
+    def fld =
+      match (tc.LookupMember ("field" + string_of_int (pos), LF_all ())) {
+        | [x] =>
+          match (x.GetKind ()) {
+            | MK_field (f) => f
+            | _ => Util.ice ("tuple_ref: not field")
+          }
+        | [] => Util.ice ("tuple_ref: not found " + string_of_int (pos) + 
+                          " / " + string_of_int (len))
+        | _ => Util.ice ("tuple_ref: more then 1")
+      };
+    CE_field_ref (val, fld.GetFieldInfo ())
   }
 
-  lookup_function (h : Fun_header, ti : Tycon) : CM_method {
-    match (cg_members.Get (h.id)) {
-      | Some ((CM_method) as m) => m
-      | Some => Util.ice ()
-      | None =>
-        def m = cg_header (h);
-        m.extern_name <- ti.GetFullName () + "." + m.name;
-        cg_members.Add (h.id, m);
-        m
-    }
+  tuple_ctor (vals : list (CG_expr)) : CG_expr
+  {
+    def len = List.length (vals);
+    def name = "Nemerle.Tuple" + string_of_int (len);
+    def tc = GlobalEnv.LookupInternalType (name);
+    def ctor =
+      match (tc.LookupMember (".ctor", LF_all ())) {
+        | [x] =>
+          match (x.GetKind ()) {
+            | MK_method (f) => f.GetConstructorInfo ()
+            | _ => Util.ice ()
+          }
+        | _ => Util.ice ()
+      };
+    CE_call (CE_ctor_ref (ctor), vals)
   }
-
-  lookup_class (ti : Tycon) : CM_class {
-    match (cg_members.Get (ti.GetId ())) {
-      | Some ((CM_class) as c) => c
-      | Some => Util.ice ()
-      | None =>
-        def inh = List.map (cg_type, ti.GetDirectSuperTypes ());
-        def r = (CM_class ("", CK_class (), inh, [], None (), None ()) :> CM_class);
-        r.loc <- ti.GetLocation ();
-        r.name <- ti.GetName ();
-        r.extern_name <- ti.GetFullName ();
-        r.attrs <- cg_attrs (ti.GetModifiers ());
-        r.modifiers <- ti.GetModifiers ();
-        cg_members.Add (ti.GetId (), r);
-        r
-    }
-  }
-    
-  cg_type (t : Type) : CG_type {
+  
+  public cg_type (tybuilder : System.Type, t : Type) : System.Type
+  {
     match (Tyutil.top_expand (t)) {
-      | T_void => CT_void ()
-      | T_prod (l) => CT_tuple (List.length (l))
-      | T_fun (args, _) => CT_fun (List.length (Tyutil.fun_args (args)))
+      | T_void => typeof (System.Void)
+      | T_prod (l) =>
+        tuple_type (List.length (l))
+      | T_fun (args, _) => 
+        function_type (List.length (Tyutil.fun_args (args)))
       | T_var (tv) =>
         match (Tyvar.constraints (tv)) {
-          | [] => CT_object ()
-          | t :: _ => cg_type (t)
+          | [] => typeof (System.Object)
+          | t :: _ => cg_type (tybuilder, t)
         }
       | T_app (ti, _) => 
         match (ti.GetTydecl ()) {
-          | TD_external ("System.Object") => CT_object ()
-          | TD_external (x) => CT_ref (x)
-          | _ => 
-            def n = ti.GetFullName ();
-            if (n == "System.Object")
-              CT_object ()
-            else
-              CT_ref (n)
+          | TD_external (x) =>
+            (GlobalEnv.LookupInternalType (x)).GetSystemType ()
+          | _ =>
+            def ret = ti.GetSystemType ();
+            assert (ret != null);
+            ret
         }
       | T_ref => Util.ice ("FIXME: cg ref")
       | T_out => Util.ice ("FIXME: cg out")
-      | T_array (at) => CT_array (cg_type (at))
+      | T_array (et) =>
+        def et = cg_type (tybuilder, et);
+        def ty = tybuilder.Module.GetType (et.FullName + "[]");
+        if (ty == null) {
+          def arr = System.Array.CreateInstance (et, 0);
+          when (arr == null)
+            Util.ice ("unbound array type " + et.FullName + "[]");
+          arr.GetType ()
+        } else {
+          ty
+        }
     }
   }
 
-  mutable closures : list (CG_member);
-
   class CTX
-    {
-      public mutable current_fun : Fun_header;
-      public mutable current_closure : option (CG_val);
-      public mutable closure_fields : Int_map (CM_field);
-      public mutable closure_ptrs : Int_map (CM_field);
-      public mutable locals : Int_map (CG_val);
-      public mutable current_type : Tyinfo;
-    }
+  {
+    public mutable current_fun : Fun_header;
+    public mutable current_closure : option (CG_val);
+    public mutable closure_fields : Int_map (FieldInfo);
+    public mutable closure_ptrs : Int_map (FieldInfo);
+    public mutable locals : Int_map (CG_val);
+    public mutable current_type : Tyinfo;
+  }
 
-  copy_ctx (c : CTX) : CTX {
+  copy_ctx (c : CTX) : CTX 
+  {
     CTX (current_fun = c.current_fun,
          current_closure = c.current_closure,
          closure_fields = c.closure_fields,
@@ -159,7 +166,8 @@ module CGexpr {
          current_type = c.current_type)
   }
 
-  empty_ctx (ti : Tyinfo) : CTX {
+  empty_ctx (ti : Tyinfo) : CTX
+  {
     CTX (current_fun = null,
          current_closure = None (),
          closure_fields = Map.int_map (),
@@ -169,118 +177,112 @@ module CGexpr {
   }
 
   store_in_closure (ctx : CTX, d : LocalValue, val : CG_expr) : CG_expr
-    {
-      def rf = CE_field_ref (CE_ref (Option.unsome (ctx.current_closure)),
-                             ctx.closure_fields.get (d.id));
-      CE_assign (rf, val);
-    }
+  {
+    def rf = CE_field_ref (CE_ref (Option.unsome (ctx.current_closure)),
+                           ctx.closure_fields.get (d.id));
+    CE_assign (rf, val);
+  }
 
-  store_local (ctx : CTX, d : LocalValue, val : CG_expr) : CTX * CG_val {
+  store_local (ctx : CTX, d : LocalValue, val : CG_expr) : CTX * CG_val
+  {
     if (d.in_closure) {
       def assign = store_in_closure (ctx, d, val);
       def cgv = CG_val (loc = d.loc, 
                         name = Util.tmpname ("dummy"),
-                        ty = CT_void (), 
-                        val = assign,
-                        local_slot = null);
+                        ty = typeof (System.Void), 
+                        val = assign);
       (copy_ctx (ctx), cgv)
     } else {
       def cgv = CG_val (loc = d.loc, 
                         name = decl_uniq_name(d), 
-                        ty = cg_type (d.ty), 
-                        val = val,
-                        local_slot = null);
+                        ty = cg_type (ctx, d.ty), 
+                        val = val);
       def ctx' = copy_ctx (ctx);
       ctx'.locals <- ctx.locals.add (d.id, cgv);
       (ctx', cgv)
     }
   }
 
-  closure_ref (ctx : CTX, fn : Fun_header) : CG_expr {
+  closure_ref (ctx : CTX, fn : Fun_header) : CG_expr
+  {
     if (ctx.current_fun.id == fn.id)
       CE_ref (Option.unsome (ctx.current_closure))
     else
       CE_field_ref (CE_this (), ctx.closure_ptrs.get (fn.id))
   }
 
-  null_value (t : CG_type) : CG_expr {
-    match (t) {
-      | CT_bool => CE_literal (L_bool (false))
-      | CT_ref (n) =>
-        if (n == "int" || n == "System.Int32") CE_literal (L_int (0))
-        else if (n == "char" || n == "System.Char") CE_literal (L_char ((0 :> char)))
-        else if (n == "bool" || n == "System.Boolean") CE_literal (L_bool (false))
-        else if (n == "float" || n == "System.Single" || n == "System.Double") CE_literal (L_float (0)) // FIXME
-        else CE_literal (L_null ())
-      | _ => CE_literal (L_null ())
-    }
+  public is_dummy_type (t : System.Type) : bool
+  {
+    t.FullName == "System.Void"
   }
 
-  public is_dummy_type (t : CG_type) : bool
+  public type_of (ex : CG_expr) : System.Type
   {
-    match (t) {
-      | CT_void => true
-      | CT_unreached => true
-      | _ => false
-    }
-  }
+    if (ex.ty != null) ex.ty
+    else {
+      def ty =
+        match (ex) {
+          | CE_ref (d) => d.ty
+          | CE_global_ref (obj) =>
+            if (obj.MemberType %& MemberTypes.Field != (0 :> MemberTypes))
+              (obj :> FieldInfo).FieldType
+            else if (obj.MemberType %& MemberTypes.Property != (0 :> MemberTypes))
+              (obj :> PropertyInfo).PropertyType
+            else
+              Util.ice ()
+              
+          | CE_field_ref (_, f) => f.FieldType
+          
+          | CE_tail_call (CE_global_ref (m), _)
+          | CE_call (CE_global_ref (m), _) => (m :> MethodInfo).ReturnType
+          
+          | CE_tail_call (CE_method_ref (_, m), _)
+          | CE_call (CE_method_ref (_, m), _) => m.ReturnType
+          
+          | CE_tail_call (CE_ctor_ref (c), _)
+          | CE_call (CE_ctor_ref (c), _) => c.DeclaringType
+          
+          | CE_tail_call (CE_base_ctor_ref, _)
+          | CE_call (CE_base_ctor_ref, _) => typeof (System.Void)
+          
+          | CE_tail_call
+          | CE_call => Util.ice ()
+          
+          | CE_assign => typeof (System.Void)
+          | CE_let (_, b) => type_of (b)
+          | CE_has_type => typeof (System.Boolean)
+          | CE_raise => typeof (System.Void)
+          | CE_if (_, _, _) => Util.ice ("ought to be cached")
+          | CE_try_with (e, _, _) => type_of (e)
+          | CE_try_finally (e, _) => type_of (e)
+          | CE_literal (l) => 
+            match (l) {
+              | L_void => typeof (System.Void)
+              | L_null => typeof (System.Object)
+              | L_int => typeof (System.Int32)
+              | L_char => typeof (System.Char)
+              | L_string => typeof (System.String)
+              | L_float => typeof (System.Double)
+              | L_bool => typeof (System.Boolean)
+            }
+          | CE_this => typeof (System.Object) // cheat a bit 
+          | CE_cast (_, t) => t
+          | CE_sequence (b) => type_of (List.last (b))
+          | CE_mkarray 
+          | CE_array_indexer (_, _) => Util.ice ("should be cached")
+          | CE_opcode => Util.ice ()
+          | CE_ignore | CE_skip => typeof (System.Void)
 
-  class_type (c : CM_class) : CG_type
-  {
-    CT_ref (c.ns + c.name)
-  }
+          // can't tell
+          | CE_none => Util.ice ()
 
-  public type_of (ex : CG_expr) : CG_type
-  {
-    match (ex) {
-      | CE_ref (d) => d.ty
-      | CE_global_ref ((CM_field) as f) => f.ty
-      | CE_global_ref ((CM_property) as p) => p.ty
-      | CE_field_ref (_, f) => f.ty
-      | CE_property_ref (_, p) => p.ty
-      | CE_tuple_ref => CT_object ()
-      | CE_call (CE_global_ref ((CM_method) as m), _) => m.ret_type
-      | CE_call (CE_method_ref (_, m), _) => m.ret_type
-      | CE_call (CE_default_ctor_ref (c), _) => class_type (c)
-      | CE_call (CE_ctor_ref (c, _), _) => class_type (c) 
-      | CE_call (CE_base, _) => CT_void ()
-      | CE_call => Util.ice ()
-      | CE_assign => CT_void ()
-      | CE_let (_, b) => type_of (b)
-      | CE_has_type => CT_bool ()
-      | CE_raise => CT_unreached ()
-      | CE_if (t, _, _, _) => t
-      | CE_try_with (e, _, _) => type_of (e)
-      | CE_try_finally (e, _) => type_of (e)
-      | CE_literal (l) => 
-        match (l) {
-          | L_void => CT_void ()
-          | L_null => CT_object ()
-          | L_int => CT_ref ("int")
-          | L_char => CT_ref ("char")
-          | L_string => CT_ref ("string")
-          | L_float => CT_ref ("float")
-          | L_bool => CT_ref ("bool")
-        }
-      | CE_this => CT_object () // cheat a bit
-      | CE_skip => CT_void ()
-      | CE_cast (_, t) => t
-      | CE_sequence (b) => type_of (List.last (b))
-      | CE_tuple_ctor (es) => CT_tuple (List.length (es))
-      // can't tell
-      | CE_none => Util.ice ()
-      // these are supported only as part of call
-      | CE_global_ref (CM_method) => Util.ice ()
-      | CE_global_ref (CM_class) => Util.ice ()
-      | CE_default_ctor_ref => Util.ice ()
-      | CE_ctor_ref => Util.ice ()
-      | CE_method_ref => Util.ice ()
-      | CE_base => Util.ice ()
-      | CE_mkarray (element_type, _) => CT_array (element_type)
-      | CE_indexer (t, _, _, _) => t
-      | CE_array_indexer (t, _, _) => t
-      | CE_block (expr) => type_of (expr)
-      | CE_restart => CT_void ()
+          // these are supported only as part of call
+          | CE_ctor_ref => Util.ice ()
+          | CE_method_ref => Util.ice ()
+          | CE_base_ctor_ref => Util.ice ()
+        };
+      ex.ty <- ty;
+      ty
     }
   }
 
@@ -289,118 +291,126 @@ module CGexpr {
     if (is_dummy_type (type_of (body)))
       CE_sequence ([body; CE_literal (L_null ())])
     else
-      CE_cast (body, CT_object ())
+      if (type_of (body).IsValueType)
+        CE_cast (body, typeof (System.Object))
+      else
+        body
   }
 
   cg_pattern (ctx : CTX, val : CG_expr, pats : list (Pattern * Expr)) : CG_expr * bool * CTX * list (CG_val)
-    {
-      mutable vals <- Map.int_map ();
-      mutable rctx <- ctx;
-      mutable always_matches <- true;
-      
-      def cgpat (val : CG_expr, pat : Pattern) : CG_expr {
-        match (pat) {
-          | P_underscore => CE_literal (L_bool (true))
-          
-          | P_as (subpat, d) =>
-            if (d.in_closure) ()
-            else
-              match (vals.find (d.id)) {
-                | Some => ()
-                | None =>
-                  def (ctx, v) = store_local (rctx, d, null_value (cg_type (d.ty)));
-                  rctx <- ctx;
-                  vals <- vals.add (d.id, v);
-              };
-            def ass = CE_assign (local_ref (rctx, d), maybe_cast (d.ty, val));
-            match (subpat) {
-              | P_cons =>
-                match (cgpat (val, subpat)) {
-                  | CE_if (t, c, e_then, e_else) =>
-                    CE_if (t, c, CE_sequence ([ass; e_then]), e_else)
-                  | _ => Util.ice ()
-                }
-              | _ =>
-                CE_sequence ([ass; cgpat (val, subpat)])
-            }
-            
-          | P_tuple (args) =>
-            def len = List.length (args);
-            def f (acc, arg)
-              {
-                def (pos, ex) = acc;
-                def cond = cgpat (CE_tuple_ref (CE_cast (val, CT_tuple (len)), pos), arg);
-                (pos - 1, CE_if (CT_bool (), cond, ex, CE_literal (L_bool (false))))
-              };
-            def ini = (len - 1, CE_literal (L_bool (true)));
-            def (_, ex) = List.fold_left (f, ini, List.rev (args));
-            ex
-
-          | P_literal (lit) =>
-            // FIXME: cache it
-            def aliases = GlobalEnv.LookupInternalType ("Nemerle.Core.Aliases");
-            def eq = 
-              match (aliases.LookupMember ("==", LF_static ())) {
-                | [x] =>
-                  match (x.GetKind ()) {
-                    | MK_method (m) => lookup_function (m.GetHeader ())
-                    | _ => Util.ice ()
-                  }
-                | _ => Util.ice ()
-              };
-            def litexpr = CE_literal (lit);
-            CE_call (CE_global_ref (eq), [CE_cast (val, type_of (litexpr)); litexpr])
-            
-          | P_record (args) =>
-            def val = CE_cast (val, cg_type (pat.ty));
-            def f (ex, np) {
-              def (name, pat) = np;
-              def cond = cgpat (CE_field_ref (val, lookup_field (name)), pat);
-              CE_if (CT_bool (), cond, ex, CE_literal (L_bool (false)))
+  {
+    mutable vals <- Map.int_map ();
+    mutable rctx <- ctx;
+    mutable always_matches <- true;
+    
+    def cgpat (val : CG_expr, pat : Pattern) : CG_expr {
+      match (pat) {
+        | P_underscore => CE_literal (L_bool (true))
+        
+        | P_as (subpat, d) =>
+          if (d.in_closure) ()
+          else
+            match (vals.find (d.id)) {
+              | Some => ()
+              | None =>
+                def (ctx, v) = store_local (rctx, d, CE_none ());
+                rctx <- ctx;
+                vals <- vals.add (d.id, v);
             };
-            List.fold_left (f, CE_literal (L_bool (true)), List.rev (args))
+          def ass = CE_assign (local_ref (rctx, d), maybe_cast (ctx, cg_type (ctx, d.ty), val));
+          match (subpat) {
+            | P_cons =>
+              match (cgpat (val, subpat)) {
+                | (CE_if (c, e_then, e_else)) as e =>
+                  CE_if (e.ty, c, CE_sequence ([ass; e_then]), e_else)
+                | _ => Util.ice ()
+              }
+            | _ =>
+              CE_sequence ([ass; cgpat (val, subpat)])
+          }
           
-          | P_cons (n, a) =>
-            always_matches <- false;
-            def tyname = CT_ref (n.GetFullName ());
-            def ex = CE_has_type (val, tyname);
-            CE_if (CT_bool (), ex, cgpat (CE_cast (val, tyname), a), CE_literal (L_bool (false)))
+        | P_tuple (args) =>
+          def len = List.length (args);
+          def f (acc, arg)
+            {
+              def (pos, ex) = acc;
+              def cond = cgpat (tuple_ref (CE_cast (val, tuple_type (len)), pos, len), arg);
+              (pos - 1, CE_if (typeof (System.Boolean), cond, ex, CE_literal (L_bool (false))))
+            };
+          def ini = (len, CE_literal (L_bool (true)));
+          def (_, ex) = List.fold_left (f, ini, List.rev (args));
+          ex
+
+        | P_literal (lit) =>
+          def litexpr = CE_literal (lit);
+          CE_call (typeof (System.Boolean), 
+                   CE_opcode ("=="), 
+                   [CE_cast (val, type_of (litexpr)); litexpr])
+          
+        | P_record (args) =>
+          def val = CE_cast (val, cg_type (ctx, pat.ty));
+          def f (ex, np) {
+            def (name, pat) = np;
+            def cond = cgpat (CE_field_ref (val, (name : IField).GetFieldInfo ()), pat);
+            CE_if (typeof (System.Boolean), cond, ex, CE_literal (L_bool (false)))
+          };
+          List.fold_left (f, CE_literal (L_bool (true)), List.rev (args))
+        
+        | P_cons (n, a) =>
+          always_matches <- false;
+          def tyname = n.GetSystemType ();
+          def ex = CE_has_type (val, tyname);
+          CE_if (typeof (System.Boolean), ex, 
+                   cgpat (CE_cast (val, tyname), a), 
+                   CE_literal (L_bool (false)))
+      }
+    };
+
+    mutable global_always_matches <- false;
+
+    def loop (pats) {
+      match (pats) {
+        | (pat, expr) :: rest =>
+          always_matches <- true;
+          def cond = cgpat (val, pat);
+          def cond =
+            match (expr) {
+              | E_literal (L_bool (true)) => cond
+              | _ =>
+                always_matches <- false;
+                CE_if (typeof (System.Boolean), cond, cg_expr (rctx, expr), CE_literal (L_bool (false)))
+            };
+          global_always_matches <- global_always_matches || always_matches;
+          CE_if (typeof (System.Boolean), cond, CE_literal (L_bool (true)), loop (rest))
+        | [] =>
+          CE_literal (L_bool (false))
+      }
+    };
+
+    def r = loop (pats);
+    def collect_vals (acc : list (CG_val), _ : int, v : CG_val) : list (CG_val) { v :: acc };
+    (r, global_always_matches, rctx, vals.fold (collect_vals, []))
+  }
+
+  get_default_ctor (_ctx : CTX, tc : Tycon) : ConstructorInfo
+  {
+    match (tc.LookupMember (".ctor", LF_all ())) {
+      | [x] =>
+        match (x.GetKind ()) {
+          | MK_method (m) => m.GetConstructorInfo ()
+          | _ => Util.ice ()
         }
-      };
-
-      mutable global_always_matches <- false;
-
-      def loop (pats) {
-        match (pats) {
-          | (pat, expr) :: rest =>
-            always_matches <- true;
-            def cond = cgpat (val, pat);
-            def cond =
-              match (expr) {
-                | E_literal (L_bool (true)) => cond
-                | _ =>
-                  always_matches <- false;
-                  CE_if (CT_bool (), cond, cg_expr (rctx, expr), CE_literal (L_bool (false)))
-              };
-            global_always_matches <- global_always_matches || always_matches;
-            CE_if (CT_bool (), cond, CE_literal (L_bool (true)), loop (rest))
-          | [] =>
-            CE_literal (L_bool (false))
-        }
-      };
-
-      def r = loop (pats);
-      def collect_vals (acc : list (CG_val), _ : int, v : CG_val) : list (CG_val) { v :: acc };
-      (r, global_always_matches, rctx, vals.fold (collect_vals, []))
+      | _ => Util.ice ()
     }
+  }
 
-  cg_match (t : CG_type, ctx : CTX, val : CG_expr, mcs : list (Match_case)) : CG_expr {
+  cg_match (t : System.Type, ctx : CTX, val : CG_expr, mcs : list (Match_case)) : CG_expr {
     match (mcs) {
       | [] =>
         // FIXME: cache it
-        def match_failure = 
-          lookup_class (GlobalEnv.LookupInternalType ("Nemerle.Core.Match_failure"));
-        CE_raise (CE_call (CE_default_ctor_ref (match_failure), []))
+        def tc = GlobalEnv.LookupInternalType ("Nemerle.Core.Match_failure");
+        def match_failure = get_default_ctor (ctx, tc);
+        CE_raise (CE_call (CE_ctor_ref (match_failure), []))
 
       | m :: ms =>
         // FIXME: do something with always_matches
@@ -411,50 +421,145 @@ module CGexpr {
         List.fold_left (mklet, CE_if (t, cond, then_part, else_part), vals)
     }
   }
-
-  mutable lambda_proxies : Int_map (CM_class);
-
-  set_apply_implements (lambdaclass : CG_member) : void 
+ 
+  // always return a new copy
+  build_cg_method (tybuilder : System.Type, header : Fun_header) : CG_method
   {
-    match (lambdaclass) {
-      | CM_class { decls = decls; inheritance = CT_fun (arity) :: _; } =>
-        def iface_type = GlobalEnv.LookupInternalType ("Nemerle.Func" + string_of_int (arity));
-        def arg_count (m : IMember) {
-          match (m.GetKind ()) {
-            | MK_method (m) => List.length (m.GetHeader ().parms)
-            | _ => Util.ice ()
-          }
+    def mkparm (p : Fun_parm) : CG_val {
+      CG_val (loc = header.loc,
+              name = p.name, 
+              ty = cg_type (tybuilder, p.ty),
+              val = CE_none ())
+    };
+    def m = CG_method ();
+    m.name <- header.name;
+    m.ret_type <- cg_type (tybuilder, header.ret_type);
+    m.parms <- List.map (mkparm, header.parms);
+    m.implemented_methods <- [];
+    m
+  }
+  
+  build_cg_method (ctx : CTX, header : Fun_header) : CG_method
+  {
+    build_cg_method (ctx.current_type.GetSystemType (), header)
+  }
+
+  fixup_cg_method (meth : IMethod) : void
+  {
+    def cgm = GetCgMethod (meth);
+    cgm.modifiers <- meth.GetModifiers ();
+  }
+
+  public GetCgMethod (meth : IMethod) : CG_method
+  {
+    def header = meth.GetHeader ();
+    when (header.cg_method == null) {
+      def tb = meth.GetDeclaringTycon ().GetSystemType ();
+      header.cg_method <- build_cg_method (tb, header);
+      fixup_cg_method (meth);
+    };
+    header.cg_method
+  }
+  
+  build_cg_method (ctx : CTX, meth : IMethod) : CG_method
+  {
+    build_cg_method (ctx, meth.GetHeader ())
+  }
+
+  // return cached copy for given method
+  get_cg_method (ctx : CTX, header : Fun_header) : CG_method
+  {
+    when (header.cg_method == null) {
+      header.cg_method <- build_cg_method (ctx, header);
+    };
+    header.cg_method;
+  }
+  
+  get_cg_method (ctx : CTX, meth : IMethod) : CG_method
+  {
+    get_cg_method (ctx, meth.GetHeader ())
+  }
+
+  make_tupled_method (ctx : CTX, parm_cnt : int) : CG_method
+  {
+    def cgm = build_cg_method (ctx, get_apply_method (1));
+    def parms =
+      if (parm_cnt == 0) 
+        []
+      else {
+        def tup = CE_cast (CE_ref (List.hd (cgm.parms)), tuple_type (parm_cnt));
+        def mkparm (acc, i) {
+          if (i == 0) acc
+          else mkparm (tuple_ref (tup, i, parm_cnt) :: acc, i - 1)
         };
-        def get_cm (m : IMember) {
-          match (m.GetKind ()) {
-            | MK_method (m) => lookup_function (m.GetHeader ())
-            | _ => Util.ice ()
-          }
-        };
-        def (arity_one, arity_many) =
-          match (iface_type.LookupMember ("apply", LF_all ())) {
-            | [x] when arg_count (x) == 1 => (get_cm (x), get_cm (x))
-            | [x; y] when arg_count (x) == 1 =>
-              (get_cm (x), get_cm (y))
-            | [x; y] when arg_count (y) == 1 =>
-              (get_cm (y), get_cm (x))
-            | _ => Util.ice ()
-          };
-        def one_member (m) {
-          match (m) {
-            | (CM_method) as m when m.name == "apply" =>
-              match (m.parms) {
-                | [_] => m.implemented_methods <- [arity_one]
-                | lst =>
-                  assert (List.length (arity_many.parms) == List.length (lst));
-                  m.implemented_methods <- [arity_many]
-              }
-            | _ => ()
-          }
-        };
-        List.iter (one_member, decls)
-      | _ => Util.ice ()
-    }
+        mkparm ([], parm_cnt)
+      };
+    def meth = get_apply_method (parm_cnt);
+    def multi_apply = CE_method_ref (CE_this (), meth.GetMethodInfo ());
+    cgm.body <- CE_call (multi_apply, parms);
+    cgm.implemented_methods <- [get_apply_method (1)];
+    cgm.modifiers <- [Mod_internal ()];
+    cgm
+  }
+
+  make_untupled_method (ctx : CTX, parm_cnt : int) : CG_method
+  {
+    def cgm = build_cg_method (ctx, get_apply_method (parm_cnt));
+    
+    def mkparm (v) { CE_ref (v) };
+    def parm = tuple_ctor (List.map (mkparm, cgm.parms));
+
+    def meth = get_apply_method (1);
+    def single_apply = CE_method_ref (CE_this (), meth.GetMethodInfo ());
+    
+    cgm.body <- CE_call (single_apply, [parm]);
+    cgm.implemented_methods <- [get_apply_method (parm_cnt)];
+    cgm.modifiers <- [Mod_internal ()];
+    cgm
+  }
+
+  get_lambda_proxy (ctx : CTX, meth : IMethod) : ConstructorInfo
+  {
+    def cg_method = GetCgMethod (meth);
+    when (cg_method.lambda_ctor == null) {
+      // FIXME: we should generate proxies in module *or* in the class depending
+      // on permissions
+      //def mod = (ctx.current_type.GetSystemType ().Module :> ModuleBuilder);
+      def parm_cnt = List.length (cg_method.parms);
+      def impl =
+        if (parm_cnt == 1)
+          mkarray [function_type (1)]
+        else
+          mkarray [function_type (parm_cnt); function_type (1)];
+      //def tb = mod.DefineType ("Nemerle.Proxies." + fun_uniq_name (meth.GetHeader ()), 
+      //                         TypeAttributes.Class, typeof (System.Object), impl);
+      def tb = ctx.current_type.GetTypeBuilder ().
+                DefineNestedType (fun_uniq_name (meth.GetHeader ()), 
+                                  TypeAttributes.NestedAssembly, typeof (System.Object), impl);
+      Passes.cgil.RegisterAuxType (tb);
+      cg_method.lambda_ctor <- Passes.cgil.AddImplicitCtor (tb);
+      
+      // get separate copy
+      def cgm = build_cg_method (ctx, meth);
+      cgm.name <- "apply";
+      cgm.implemented_methods <- [get_apply_method (parm_cnt)];
+      cgm.modifiers <- [Mod_internal ()];
+      
+      def mkparm (v : CG_val) {
+        def t = v.ty;
+        v.ty <- typeof (System.Object);
+        CE_cast (CE_ref (v), t)
+      };
+      cgm.ret_type <- typeof (System.Object);
+      cgm.body <- box_value (CE_call (CE_global_ref (meth.GetMethodInfo ()), 
+                                      List.map (mkparm, cgm.parms)));
+
+      ignore (Passes.cgil.AddMethod (cgm, tb));
+      when (parm_cnt != 1)
+        ignore (Passes.cgil.AddMethod (make_tupled_method (ctx, parm_cnt), tb));
+    };
+    
+    cg_method.lambda_ctor
   }
 
   global_ref (ctx : CTX, m : IMember) : CG_expr {
@@ -462,321 +567,226 @@ module CGexpr {
       | MK_type => Util.ice ()
 
       | MK_field (f) =>
-        def f = lookup_field (f);
-        CE_global_ref (f)
+        CE_global_ref (f.GetFieldInfo ())
 
       | MK_property (f) =>
-        def f = lookup_property (f);
-        CE_global_ref (f)
+        CE_global_ref (f.GetPropertyInfo ())
         
       | MK_method (f) =>
-        when (lambda_proxies == null) { lambda_proxies <- Map.int_map () };
-        def lc =
-          match (lambda_proxies.find (f.GetId ())) {
-            | Some (lc) => lc
-            | None =>
-              def lc = make_lambda_class (ctx, f.GetHeader ());
-              def mkparm (v : CG_val) {
-                def t = v.ty;
-                v.ty <- CT_object ();
-                CE_cast (CE_ref (v), t)
-              };
-              def header = f.GetHeader ();
-              def fn = cg_header (header);
-              def fun_ref = CE_global_ref (lookup_function (header));
-              fn.body <- box_value (CE_call (fun_ref, List.map (mkparm, fn.parms)));
-              lc.decls <- [(fn : CG_member)];
-              
-              match (header.parms) {
-                | [_] => ()
-                | _ =>
-                  def parm = 
-                    CG_val (loc = Location_stack.top (),
-                            name = "_N_tupled",
-                            ty = CT_object (),
-                            val = CE_none (),
-                            local_slot = null);
-                  mutable pos <- -1;
-                  def parm' = CE_cast (CE_ref (parm), CT_tuple (List.length (header.parms)));
-                  def mktparm (p : Fun_parm) {
-                    pos <- pos + 1;
-                    CE_cast (CE_tuple_ref (parm', pos), cg_type (p.ty));
-                  };
-                  def body = box_value (CE_call (fun_ref, List.map (mktparm, header.parms)));
-                  
-                  // extract the parameter types, build the the new function encoded type
-                  def extract_parm_types (parms : list (Fun_parm)) : list (Type) {
-                    match (parms) {
-                      | [] => []
-                      | parm :: rest => parm.ty :: extract_parm_types (rest)
-                    }                     
-                  };
-                  def fun_type = 
-                    T_fun (T_prod (extract_parm_types (header.parms)), 
-                           Tyutil.make_tapp ("System.Object"));
-                    
-                  def meth = CM_method (encoded_type = Tyutil.encode_type_to_string (fun_type),
-                                        parms = [parm],
-                                        ret_type = CT_object (),
-                                        body = body,
-                                        ctor_builder = None (),
-                                        method_builder = None (),
-                                        implemented_methods = []);
-                  meth.name <- "apply";
-                  meth.extern_name <- lc.extern_name + ".apply";
-                  meth.attrs <- ["public"];
-                  meth.modifiers <- [Mod_public ()];
-                  lc.decls <- meth :: lc.decls
-              };
-              
-              fn.name <- "apply";
-              fn.extern_name <- lc.extern_name + ".apply";
-              fn.attrs <- ["public"];
-              fn.ret_type <- CT_object ();
-              closures <- (lc : CG_member) :: closures;
-              lambda_proxies <- lambda_proxies.add (f.GetId (), lc);
-              set_apply_implements (lc);
-              lc
-          };
-        CE_call (CE_default_ctor_ref (lc), [])
+        CE_call (CE_ctor_ref (get_lambda_proxy (ctx, f)), [])
     }
   }
 
-  local_ref (ctx : CTX, d : LocalValue) : CG_expr {
+  local_ref (ctx : CTX, d : LocalValue) : CG_expr
+  {
     if (d.in_closure) {
       def defined_in = Option.unsome (d.parent_fun);
       CE_field_ref (closure_ref (ctx, defined_in), 
                     ctx.closure_fields.get (d.id))
     } else if (ctx.locals.mem (d.id)) {
-        CE_ref (ctx.locals.get (d.id))
+      CE_ref (ctx.locals.get (d.id))
     } else {
       Message.debug ("undef " + d.name + " = " + string_of_int (d.id));
       Util.ice ("ref to undef val " + d.name)
     }
   }
 
-  maybe_cast (needed_type : Type, ex : CG_expr) : CG_expr {
-    match ((type_of (ex), cg_type (needed_type))) {
-      | (CT_object, CT_object) => ex
-      | (CT_object, t) => CE_cast (ex, t)
-      | (CT_ref (n1), CT_ref (n2)) =>
-        if (n1 == n2) ex else CE_cast (ex, CT_ref (n2))
-      | _ => CE_cast (ex, cg_type (needed_type)) // FIXME: Micha³, I've added this instead of just ex
-    }
+  maybe_cast (_ctx : CTX, needed_type : System.Type, ex : CG_expr) : CG_expr
+  {
+    assert (needed_type != null);
+    def current_type = type_of (ex);
+    assert (current_type != null);
+    if (needed_type.FullName == "System.Void")
+      if (current_type.FullName == "System.Void")
+        ex
+      else
+        CE_ignore (ex)
+    else if (needed_type.FullName == current_type.FullName || 
+        (current_type.IsSubclassOf (needed_type) && !current_type.IsValueType))
+      ex
+    else 
+     CE_cast (ex, needed_type)
   }
 
-  get_fn_header (fn : LocalValue) : Fun_header {
+  get_fn_header (fn : LocalValue) : Fun_header
+  {
     match (fn.kind) {
       | D_local_fun (h, _) => h
       | _ => Util.ice ()
     }
   }
 
-  casted_parms (expr : CG_expr, parms : list (CG_expr)) : list (CG_expr)
+  casted_parms (ctx : CTX, formals : list (CG_val), parms : list (CG_expr)) : list (CG_expr)
   {
     def do_cast (v : CG_val, e : CG_expr) {
-      match (v.ty) {
-        | CT_object => CE_cast (e, v.ty)
-        | _ => e
-      }
+      maybe_cast (ctx, v.ty, e)
     };
-    match (expr) {
-      | CE_global_ref (CM_method {name = "!="})
-      | CE_global_ref (CM_method {name = "=="}) => parms
-
-      | CE_global_ref ((CM_method) as m) => List.map2 (do_cast, m.parms, parms)
-      | CE_method_ref (_, m) => List.map2 (do_cast, m.parms, parms)
-      | CE_default_ctor_ref => parms // can't tell
-      | CE_ctor_ref (_, m) => List.map2 (do_cast, m.parms, parms)
-      | CE_base => parms // can't tell
-      | _ => Util.ice ()
-    }
+    List.map2 (do_cast, formals, parms)
   }
 
   raw_cg_expr (ctx : CTX, inex : Expr) : CG_expr
-    {
-      def self (e : Expr) : CG_expr { cg_expr (ctx, e) };
-      match (inex) {
-        | E_local_ref (d) => 
-          local_ref (ctx, d)
+  {
+    //Message.debug ("emit");
+    def self (e : Expr) : CG_expr { cg_expr (ctx, e) };
+    match (inex) {
+      | E_local_ref (d) => 
+        local_ref (ctx, d)
 
-        | E_static_ref (d) => 
-          global_ref (ctx, d)
+      | E_static_ref (d) => 
+        global_ref (ctx, d)
 
-        | E_field_ref (o, f) =>
-          maybe_cast (inex.expr_ty, CE_field_ref (self (o), lookup_field (f)))
+      | E_field_ref (o, f) =>
+        maybe_cast (ctx, cg_type (ctx, inex.expr_ty), CE_field_ref (self (o), f.GetFieldInfo ()))
 
-        | E_property_ref (o, p) =>
-          maybe_cast (inex.expr_ty, CE_property_ref (self (o), lookup_property (p)))
+      | E_method_ref => Util.ice ()
+      | E_property_ref => Util.ice ()
+      | E_static_property_ref => Util.ice ()
 
-        | E_method_ref => Util.ice ()
-
-        | E_call (f, ps) =>
-          def mkp (p : Parm) : CG_expr { self (p.expr) };
-          def plain_call () : CG_expr {
-            def len = List.length (ps);
-            // FIXME: cache it
-            def iface_type = GlobalEnv.LookupInternalType ("Nemerle.Func" + string_of_int (len));
-            def get_header (m : IMember) : option (Fun_header) {
+      | E_call (f, ps) =>
+        def plain_call () {
+          def len = List.length (ps);
+          def imeth = get_apply_method (len);
+          (imeth, CE_method_ref (self (f), imeth.GetMethodInfo ()))
+        };
+        def (meth, callable) =
+          match (f) {
+            | E_static_ref (m) =>
               match (m.GetKind ()) {
                 | MK_method (m) =>
-                  def h = m.GetHeader ();
-                  if (List.length (h.parms) == len) Some (h)
-                  else None ()
-                | _ => Util.ice ()
-              }
-            };
-            def header =
-              match (iface_type.LookupMember ("apply", LF_instance ())) {
-                | [x1; x2] =>
-                  match ((get_header (x1), get_header (x2))) {
-                    | (Some (h), None) => h
-                    | (None, Some (h)) => h
-                    | _ => Util.ice ()
+                  match (m.GetFunKind ()) {
+                    | _ when m.GetExternName () != null =>
+                      def opname = m.GetExternName ();
+                      assert (opname.StartsWith ("%op"));
+                      (null, CE_opcode (opname.Substring (3)))
+                    | FK_ctor =>
+                      (m, CE_ctor_ref (m.GetConstructorInfo ()))
+                    | _ =>
+                      (m, CE_global_ref (m.GetMethodInfo ()))
                   }
-                | [x] => Option.unsome (get_header (x))
-                | _ => Util.ice ()
-              };
-            def fn = lookup_function (header);
-            fn.extern_name <- iface_type.GetFullName () + ".apply";
-            CE_method_ref (self (f), lookup_function (header))
+                | _ => plain_call ()
+              }
+            | E_method_ref (o, m) => 
+              (m, CE_method_ref (self (o), m.GetMethodInfo ()))
+            | E_base (m) =>
+              (m, CE_base_ctor_ref (m.GetConstructorInfo ()))
+            (* FIXME: this is here to transform self call -- optmization
+            | E_local_ref (d) =>
+              match (d.kind) {
+                | D_local_fun (h, _) when h.id == ctx.current_fun.id =>
+                  CE_method_ref (CE_this (), h.cg_method.method_builder)
+                | _ => plain_call ()
+              }
+              *)
+            | _ => plain_call ()
           };
-          def callable =
-            match (f) {
-              | E_static_ref (m) =>
-                match (m.GetKind ()) {
-                  | MK_method (m) =>
-                    match (m.GetFunKind ()) {
-                      | FK_ctor =>
-                        CE_ctor_ref (lookup_class (m.GetDeclaringTycon ()),
-                                     lookup_function (m.GetHeader (), m.GetDeclaringTycon ()))
-                      | _ =>
-                        CE_global_ref (fixup_function (m))
-                    }
-                  | _ => plain_call ()
-                }
-              | E_method_ref (o, m) => 
-                CE_method_ref (self (o), fixup_function (m))
-              | E_base (ti) =>
-                CE_base (lookup_class (ti))
-              | E_local_ref (d) =>
-                match (d.kind) {
-                  | D_local_fun (h, _) when h.id == ctx.current_fun.id =>
-                    CE_method_ref (CE_this (), lookup_function (h))
-                  | _ => plain_call ()
-                }
-              | _ => plain_call ()
-            };
-          def parms = casted_parms (callable, List.map (mkp, ps));
-          maybe_cast (inex.expr_ty, CE_call (callable, parms))
+        def mkp (p : Parm) { self (p.expr) };
+        def parms = List.map (mkp, ps);
+        if (meth == null) {
+          CE_call (cg_type (ctx, inex.expr_ty), callable, parms) // opcode
+        } else {
+          def parms = casted_parms (ctx, GetCgMethod (meth).parms, parms);
+          maybe_cast (ctx, cg_type (ctx, inex.expr_ty), CE_call (callable, parms))
+        }
 
-        | E_assign (e1, e2) =>
-          CE_assign (self (e1), self (e2))
-          
-        | E_mkarray (initializers) =>
-          def element_type =
-            match (initializers) {
-              | [] => CT_object ()
-              | element :: _ =>
-                cg_type (element.expr_ty)
-            };
-          CE_mkarray (element_type, List.map (self, initializers))
-
-        | E_indexer (ty, prop, obj, args) =>
-          // FIXME: this won't work for multidimensional arrays which have to
-          // be treated as System.Array objects and use respective access props.
-          match (obj.expr_ty) {
-            | T_array => CE_array_indexer (cg_type (ty), self (obj), List.map (self, args))
-            | _ => CE_indexer (cg_type (ty), lookup_property (prop), self (obj), List.map (self, args))
-          }
-
-        | E_let (d, v, b) =>
-          def (ctx', cgv) = store_local (ctx, d, self (v));
-          CE_let (cgv, cg_expr (ctx', b))
-
-        | E_letfun (fs, body) =>
-          mutable l <- [];
-          def store (ctx : CTX, f : Function_decl) : CTX {
-            def cl = make_lambda_class (ctx, get_fn_header (f.decl));
-            def ct = make_lambda_ctor (ctx, f.decl, cl);
-            def (ctx, val) = store_local (ctx, f.decl, ct);
-            l <- (val, cl) :: l;
-            ctx
+      | E_assign (e1, e2) =>
+        CE_assign (self (e1), self (e2))
+        
+      | E_mkarray (initializers) =>
+        def element_type =
+          match (initializers) {
+            | [] => typeof (System.Object)
+            | element :: _ =>
+              cg_type (ctx, element.expr_ty)
           };
+        CE_mkarray (ty = cg_type (ctx, inex.expr_ty), 
+                    element_type = element_type, 
+                    initializers = List.map (self, initializers))
 
-          def ctx = List.fold_left (store, ctx, fs);
-          
-          def fill (f : Function_decl, acc : CG_val * CM_class) : void 
-            {
-              def (_, cl) = acc;
-              closures <- (cl : CG_member) :: closures;
-              fill_lambda_class (ctx, f.decl, f.body, cl)
-            };
+      | E_array_indexer (ty, obj, args) =>
+        // FIXME: this won't work for multidimensional arrays which have to
+        // be treated as System.Array objects and use respective access props.
+        match (obj.expr_ty) {
+          | T_array => CE_array_indexer (cg_type (ctx, ty), self (obj), List.map (self, args))
+          | _ => Util.ice ()
+        }
 
-          List.iter2 (fill, fs, List.rev (l));
+      | E_let (d, v, b) =>
+        def (ctx', cgv) = store_local (ctx, d, self (v));
+        CE_let (cgv, cg_expr (ctx', b))
 
-          def mklet (acc : CG_expr, x : CG_val * CM_class) : CG_expr
-            {
-              def (val, _) = x;
-              CE_let (val, acc)
-            };
+      | E_letfun (fs, body) =>
+        mutable vals <- [];
+        def store (ctx : CTX, f : Function_decl) : CTX {
+          def ct = make_lambda_ctor_call (ctx, get_fn_header (f.decl));
+          def (ctx, val) = store_local (ctx, f.decl, ct);
+          vals <- val :: vals;
+          ctx
+        };
+        def emit (f : Function_decl) {
+          emit_lambda_code (ctx, get_fn_header (f.decl), f.body);
+        };
+        def mklet (acc, val) { CE_let (val, acc) };
 
-          List.fold_left (mklet, cg_expr (ctx, body), l)
+        def ctx = List.fold_left (store, ctx, fs);
+        List.iter (emit, fs);
+        List.fold_left (mklet, cg_expr (ctx, body), vals)
 
-        | E_match (e, mcs) =>
-          def v =
-            CG_val (loc = e.loc, 
-                    name = Util.tmpname ("matched_value"),
-                    ty = cg_type (e.expr_ty), 
-                    val = cg_expr (ctx, e),
-                    local_slot = null);
-          CE_let (v, cg_match (cg_type (inex.expr_ty), ctx, CE_ref (v), mcs))
+      | E_match (e, mcs) =>
+        def v =
+          CG_val (loc = e.loc, 
+                  name = Util.tmpname ("matched_value"),
+                  ty = cg_type (ctx, e.expr_ty), 
+                  val = cg_expr (ctx, e));
+        CE_let (v, cg_match (cg_type (ctx, inex.expr_ty), ctx, CE_ref (v), mcs))
 
-        | E_raise (e) =>
-          CE_raise (cg_expr (ctx, e))
+      | E_raise (e) =>
+        CE_raise (cg_expr (ctx, e))
 
-        | E_try_with (body, exn, handler) =>
-          def body = cg_expr (ctx, body);
-          // FIXME: this is broken for exn values to go into closure
-          def (ctx', v) = store_local (ctx, exn, CE_none ());
-          def handler = cg_expr (ctx', handler);
-          CE_try_with (body, v, handler)
+      | E_try_with (body, exn, handler) =>
+        def body = cg_expr (ctx, body);
+        // FIXME: this is broken for exn values to go into closure
+        def (ctx', v) = store_local (ctx, exn, CE_none ());
+        def handler = cg_expr (ctx', handler);
+        def res = CE_try_with (body, v, handler);
+        res.ty <- cg_type (ctx, inex.expr_ty);
+        res
 
-        | E_try_finally (e1, e2) =>
-          CE_try_finally (cg_expr (ctx, e1), cg_expr (ctx, e2))
+      | E_try_finally (e1, e2) =>
+        CE_try_finally (cg_expr (ctx, e1), cg_expr (ctx, e2))
 
-        | E_literal (l) => 
-          CE_literal (l)
+      | E_literal (l) => 
+        CE_literal (l)
 
-        | E_this => 
-          CE_this ()
+      | E_this => 
+        CE_this ()
 
-        | E_type_conversion (e, t) => 
-          CE_cast (cg_expr (ctx, e), cg_type (t))
+      | E_type_conversion (e, t) => 
+        CE_cast (cg_expr (ctx, e), cg_type (ctx, t))
 
-        | E_type_enforcement (e, _) =>
-          cg_expr (ctx, e)
+      | E_type_enforcement (e, _) =>
+        cg_expr (ctx, e)
 
-        | E_sequence (e1, e2) =>
-          CE_sequence ([cg_expr (ctx, e1); cg_expr (ctx, e2)])
+      | E_sequence (e1, e2) =>
+        CE_sequence ([cg_expr (ctx, e1); cg_expr (ctx, e2)])
 
-        | E_tuple (l) =>
-          CE_tuple_ctor (List.map (fun (e) { CE_cast (self (e), CT_object ()) }, l))
+      | E_tuple (l) =>
+        tuple_ctor (List.map (fun (e) { box_value (self (e)) }, l))
 
-        | E_base =>
-          Util.ice ("stray base")
-      }
+      | E_base =>
+        Util.ice ("stray base")
     }
+  }
 
   (** 
    * Flatten given [Typedtree.Expr] object into [CG_expr].
    *
    * <remarks>
    *   As a side-effect few classes for closures and local functions
-   *   can be generated and stored in [closures] stack.
+   *   can be generated and stored in current type builder.
    * </remarks>
    *)
-  cg_expr (ctx : CTX, ex : Expr) : CG_expr {
+  cg_expr (ctx : CTX, ex : Expr) : CG_expr
+  {
     Util.locate (ex.loc, fun () {
         def e = raw_cg_expr (ctx, ex);
         e.loc <- ex.loc;
@@ -784,51 +794,8 @@ module CGexpr {
       })
   }
 
-
-  (**
-   *
-   *)
-  fixup_function (f : IMethod) : CM_method
+  mangle (s : string) : string
   {
-    def cached = _fixup_function_cache.Get (f.GetId ());
-
-    match (cached) {
-      | Some (cached) => cached
-      | None =>
-        def m = lookup_function (f.GetHeader ());
-        def ti = f.GetDeclaringTycon ();
-
-        m.attrs <- 
-          match (f.GetFunKind ()) {
-            | FK_iface_method => []
-            | _ => cg_attrs (f.GetModifiers ())
-          };
-        m.modifiers <- f.GetModifiers ();
-        m.encoded_type <- Tyutil.encode_type_to_string (f.GetMemType ());
-        
-        when (m.extern_name == "")
-          m.extern_name <- ti.GetFullName () + "." + f.GetName ();
-       
-        match (f.GetFunKind ()) {
-          | FK_bound_method => ()
-          | FK_method => ()
-          | FK_static_ctor => 
-            m.name <- ti.GetName ();
-            m.ret_type <- CT_unreached ();
-            m.attrs <- ["static"] // FIXME: this is a hack, without that line the 'static' keyword is generated twice, what is the root cause?
-          | FK_ctor => 
-            m.name <- ti.GetName ();
-            m.ret_type <- CT_unreached ()
-          | FK_function => ()
-          | FK_iface_method => ()
-        };
-        
-        _fixup_function_cache.Set (f.GetId (), m);
-        m
-    }
-  }
-
-  mangle (s : string) : string {
     def p = s.ToCharArray ();
     
     for (mutable i <- 0; i < (p : System.Array).Length; i <- i + 1)
@@ -840,522 +807,296 @@ module CGexpr {
     System.String (p)
   }
 
-  fun_uniq_name (h : Fun_header) : string {
+  fun_uniq_name (h : Fun_header) : string
+  {
     mangle (h.name) + "_" + string_of_int (h.id)
   }
 
-  decl_uniq_name (d : LocalValue) : string {
+  decl_uniq_name (d : LocalValue) : string
+  {
     mangle (d.name) + "_" + string_of_int (d.id)
   }
 
-  prepare_ctx_for_fun (ctx : CTX, h : Fun_header) : CTX
-    {
-      def mk_clo_fld (d : LocalValue) : CG_member
-        {
-          def f = CM_field (Tyutil.encode_type_to_string (d.ty), cg_type (d.ty), None ());
-          f.name <- decl_uniq_name (d);
-          f.attrs <- ["internal"];
-          f.modifiers <- [Mod_internal ()];
-          f.loc <- d.loc;
-          f
-        };
-  
-      def mk_clo_var (clo_vars : Int_map (CM_field), d : LocalValue, v : CG_member) 
-                     : Int_map (CM_field) {
-        clo_vars.add (d.id, (v :> CM_field))
-      };
+  make_closure_class (ctx : CTX, h : Fun_header) : CTX
+  {
+    def name = fun_uniq_name (h);
+    def tb = ctx.current_type.GetTypeBuilder ().DefineNestedType 
+                ("_N_cl_" + name, TypeAttributes.NestedAssembly, typeof (System.Object),
+                 System.Type.EmptyTypes);
+    Passes.cgil.RegisterAuxType (tb);
+    def ctor = Passes.cgil.AddImplicitCtor (tb);
     
-      def ctx =
-        {
-          if (h.closure_vars == null) Util.ice () else ();
-          match (h.closure_vars) {
-            | [] => 
-              def ctx = copy_ctx (ctx);
-              ctx.current_closure <- None ();
-              ctx
+    def mk_clo_fld (acc : Int_map (FieldInfo), d : LocalValue) {
+      def fi = tb.DefineField (decl_uniq_name (d), cg_type (ctx, d.ty), FieldAttributes.FamORAssem);
+      acc.add (d.id, fi)
+    };
+    def closure_fields = List.fold_left (mk_clo_fld, ctx.closure_fields, h.closure_vars);
+    def cloexpr = CE_call (CE_ctor_ref (ctor), []);
+    def cloval = CG_val (h.loc, "_N_closure", tb, cloexpr);
+    def cgm = get_cg_method (ctx, h);
+    cgm.closure_type <- tb;
+    def ctx = copy_ctx (ctx);
+    ctx.closure_fields <- closure_fields;
+    ctx.current_closure <- Some (cloval);
+    ctx
+  }
 
-            | _ :: _ =>
-              def fields = List.map (mk_clo_fld, h.closure_vars);
-              def clovars = List.fold_left2 (mk_clo_var, ctx.closure_fields, 
-                                             h.closure_vars, fields);
-              def cloclass = (CM_class ("", CK_class (), [], fields, None (), None ()) :> CM_class);
-              def cloclname = "_N_cl_" + fun_uniq_name (h);
-              def clotype = CT_ref (ctx.current_type.GetFullName () + "." + cloclname);
-              def cloexpr = CE_call (CE_default_ctor_ref (cloclass), []);
-              def cloval = CG_val (h.loc, "_N_closure", clotype, cloexpr, null);
-              def ctx = copy_ctx (ctx);
+  prepare_ctx_for_fun (ctx : CTX, h : Fun_header) : CTX
+  {
+    def ctx =
+      match (h.closure_vars) {
+        | [] => 
+          def ctx = copy_ctx (ctx);
+          ctx.current_closure <- None ();
+          ctx
 
-              cloclass.name <- cloclname;
-              cloclass.loc <- h.loc;
-              closures <- (cloclass : CG_member) :: closures; // push it
-              ctx.closure_fields <- clovars;
-              ctx.current_closure <- Some (cloval);
-              ctx
-          }
-        };
-        
-      ctx.closure_ptrs <- Map.int_map ();
-      ctx.locals <- Map.int_map ();
-      ctx.current_fun <- h;
-      ctx
-    }
-
-  make_lambda_class (ctx : CTX, h : Fun_header) : CM_class
-    {
-      def parlen =
-        match (h.parms) {
-          | [{ty = t}] => 
-            match (Tyutil.top_expand (t)) {
-              | T_prod (types) => List.length (types)
-              | _ => 1
-            }
-          | parms => List.length (parms)
-        };
-      def lambdaclass = CM_class ("", CK_class (), if (parlen == 1) [CT_fun (parlen)] else
-                [CT_fun (parlen); CT_fun (1)], [], None (), None ());
-      lambdaclass.name <- fun_uniq_name (h);
-      lambdaclass.extern_name <- ctx.current_type.GetFullName () + "." + lambdaclass.name;
-      (lambdaclass :> CM_class)
-    }
-
-  make_lambda_ctor (ctx : CTX, fn : LocalValue, cl : CM_class) : CG_expr
-    {
-      def pars =
-        match (fn.kind) {
-          | D_local_fun (_, pars) => pars
-          | _ => []
-        };
-      def loop (acc : list (CG_expr), fh : Fun_header) : list (CG_expr) {
-        match (fh.closure_vars) {
-          | _ :: _ => closure_ref (ctx, fh) :: acc
-          | [] => acc
-        }
+        | _ =>
+          make_closure_class (ctx, h)
       };
-      CE_call (CE_default_ctor_ref (cl), List.fold_left (loop, [], pars))
-    }
+   
+    def cgm = get_cg_method (ctx, h);
+    ctx.closure_ptrs <- cgm.closure_pointers;
+    ctx.locals <- Map.int_map ();
+    ctx.current_fun <- h;
+    ctx
+  }
 
-  fill_lambda_class (ctx : CTX, fn : LocalValue, body : Expr, lambdaclass : CM_class) : void
-    {
-      def make_ctor (mems : list (CG_member)) : CG_member
-        {
-          def mkparm (f : CG_member) : CG_val {
-            CG_val (loc = f.loc, name = f.name, ty = (f :> CM_field).ty, 
-                    val = CE_none (), local_slot = null)
-          };
-          def mkassign (p : CG_val, f : CG_member) : CG_expr {
-            CE_assign (CE_field_ref (CE_this (), (f :> CM_field)), CE_ref (p))
-          };
-            
-          def parms = List.map (mkparm, mems);
-          def assigns = List.map2 (mkassign, parms, mems);
-          def meth = CM_method (Tyutil.encode_type_to_string (T_void ()), 
-                                parms, CT_unreached (), CE_sequence (assigns), 
-                                [], None (), None ()); // FIXME: the full type
-          meth.name <- lambdaclass.name;
-          meth.attrs <- ["internal"];
-          meth
-        };
-        
-      def (hd, meth, pars) = 
-        match (fn.kind) {
-          | D_local_fun (h, pars) => (h, lookup_function (h), pars)
+  get_parents_with_closures (_ctx : CTX, h : Fun_header) : list (Fun_header)
+  {
+    def parents =
+      match (h.decl.kind) {
+        | D_local_fun (_, pars) => pars
+        | _ => Util.ice ()
+      };
+    def loop (acc, fh : Fun_header) {
+      match (fh.closure_vars) {
+        | _ :: _ => fh :: acc
+        | [] => acc
+      }
+    };
+    List.fold_left (loop, [], parents)
+  }
+
+  get_lambda_ctor (ctx : CTX, h : Fun_header) : ConstructorInfo
+  {
+    def cg_method = get_cg_method (ctx, h);
+    when (cg_method.lambda_ctor == null) {
+      def name = fun_uniq_name (h);
+      def real_parm_cnt = List.length (cg_method.parms);
+      def virtual_parm_cnt =
+        match (Tyutil.fun_type (h)) {
+          | T_fun (args, _) => 
+            List.length (Tyutil.fun_args (args))
           | _ => Util.ice ()
         };
-
-      def ctx = prepare_ctx_for_fun (ctx, hd);
-      def mkcloptr (acc : list (CG_member), fh : Fun_header) : list (CG_member) {
-        match (fh.closure_vars) {
-          | _ :: _ => 
-            def clotype = CT_ref (ctx.current_type.GetFullName () + "._N_cl_" + fun_uniq_name (fh));
-            // FIXME: is this the correct type here?
-            def fld = CM_field (Tyutil.encode_type_to_string (Tyutil.fun_type (fh)), clotype, None ()); 
-            fld.name <- fun_uniq_name (fh);
-            ctx.closure_ptrs <- ctx.closure_ptrs.add (fh.id, (fld :> CM_field));
-            fld :: acc
-          | [] => acc
-        }
-      };
-      def fields = List.fold_left (mkcloptr, [], pars);
-      def set_obj_parm (v : CG_val) : void { v.ty <- CT_object () };
-      def members = make_ctor (fields) :: (meth : CG_member) :: fields;
-      def members =
-        match (meth.parms) {
-          | [{ty = CT_tuple (arity)}] =>
-            def mkparms (acc, cnt) {
-              if (cnt == 0) acc
-              else {
-                def val = CG_val (loc = Location_stack.top (),
-                                  name = Util.tmpname ("untupled"),
-                                  ty = CT_object (),
-                                  val = CE_none (),
-                                  local_slot = null);
-                mkparms (val :: acc, cnt - 1)
-              }
-            };
-            def parms = mkparms ([], arity);
-            def expr_parms = List.map (fun (v) { CE_ref (v) }, parms);
-            def body = CE_call (CE_method_ref (CE_this (), meth), [CE_tuple_ctor (expr_parms)]);
-            def meth' = CM_method (encoded_type = Tyutil.encode_type_to_string (T_void ()),
-                                   parms = parms,
-                                   ret_type = CT_object (),
-                                   body = body,
-                                   implemented_methods = [],
-                                   ctor_builder = None (),
-                                   method_builder = None ());
-            meth'.name <- "apply";
-            meth'.extern_name <- lambdaclass.extern_name + ".apply";
-            meth'.attrs <- ["public"];
-            meth' :: members
-
-          | [_] => members
-
-          | _ =>
-            def parm = 
-              CG_val (loc = Location_stack.top (),
-                      name = "_N_tupled",
-                      ty = CT_object (),
-                      val = CE_none (),
-                      local_slot = null);
-            mutable pos <- -1;
-            def parm' = CE_cast (CE_ref (parm), CT_tuple (List.length (meth.parms)));
-            def mktparm (_) {
-              pos <- pos + 1;
-              CE_tuple_ref (parm', pos);
-            };
-            def fun_ref = CE_method_ref (CE_this (), meth);
-            def body = CE_call (fun_ref, List.map (mktparm, meth.parms));
-            def meth' = CM_method (encoded_type = Tyutil.encode_type_to_string (T_void ()), // FIXME: build the full type here
-                                   parms = [parm],
-                                   ret_type = CT_object (),
-                                   body = body,
-                                   implemented_methods = [],
-                                   ctor_builder = None (),
-                                   method_builder = None ());
-            meth'.name <- "apply";
-            meth'.extern_name <- lambdaclass.extern_name + ".apply";
-            meth'.attrs <- ["public"];
-            meth'.modifiers <- [Mod_public ()];
-            meth' :: members
-        };
       
-      lambdaclass.decls <- members;
-      List.iter (set_obj_parm, meth.parms);
-      meth.name <- "apply";
-      meth.extern_name <- lambdaclass.extern_name + ".apply";
-      meth.attrs <- ["public"];
-      meth.modifiers <- [Mod_public ()];
-      meth.ret_type <- CT_object ();
-      meth.body <- cg_fun_body (ctx, hd, meth, body);
-      set_apply_implements (lambdaclass);
-    }
+      // first create type builder
+      def impl =
+        if (virtual_parm_cnt == 1)
+          mkarray [function_type (1)]
+        else
+          mkarray [function_type (virtual_parm_cnt); function_type (1)];
+      def tb = ctx.current_type.GetTypeBuilder ().DefineNestedType 
+                  ("_N_lm_" + name, TypeAttributes.NestedAssembly, typeof (System.Object),
+                   impl);
+      Passes.cgil.RegisterAuxType (tb);
+      cg_method.lambda_type_builder <- tb;
 
-  cg_fun_body (ctx : CTX, hd : Fun_header, meth : CM_method, body : Expr) : CG_expr
-    {
-      def ctx' = copy_ctx (ctx);
-      mutable assigns <- [];
-      mutable vals <- [];
+      when (virtual_parm_cnt != real_parm_cnt) {
+        assert (real_parm_cnt == 1);
+        ignore (Passes.cgil.AddMethod (make_untupled_method (ctx, virtual_parm_cnt), tb));
+      };
       
-      def loadparm (parm_val : CG_val, fp : Fun_parm) : void
-        {
-          def parm = fp.decl;
-          def needed_type = cg_type (fp.decl.ty);
-          def need_downcast =
-            match ((needed_type, parm_val.ty)) {
-              | (CT_object, CT_object) => false
-              | (_, CT_object) => true
-              | _ => false
-            };
-
-          if (parm.in_closure) {
-            def a =
-              CE_assign (local_ref (ctx, parm), 
-                         if (need_downcast) 
-                           CE_cast (CE_ref (parm_val), needed_type)
-                         else CE_ref (parm_val));
-            assigns <- a :: assigns
-          } else {
-            def v =
-              if (need_downcast) {
-                def v = CG_val (loc = fp.decl.loc, 
-                                name = Util.tmpname (parm_val.name),
-                                ty = needed_type, 
-                                val = CE_cast (CE_ref (parm_val), needed_type),
-                                local_slot = null);
-                vals <- v :: vals;
-                v
-              } else parm_val;
-            ctx'.locals <- ctx'.locals.add (parm.id, v)
-          }
-        };
-
-      def store_this (d : LocalValue) : void {
-        match (d.kind) {
-          | D_closurised_this_ptr =>
-            when (d.in_closure) {
-              assigns <- CE_assign (local_ref (ctx, d), CE_this ()) :: assigns
-            }
-          | _ => ()
-        }
-      };
-
-      List.iter2 (loadparm, meth.parms, hd.parms);
-      List.iter (store_this, ctx.current_fun.closure_vars);
-      
-      def body = cg_expr (ctx', body);
-      def buildlet (e : CG_expr, v : CG_val) : CG_expr { CE_let (v, e) };
-      def body =
-        List.fold_left (buildlet, 
-                        CE_sequence (List.rev (body :: assigns)),
-                        vals);
-
-      def body =
-        match (ctx.current_closure) {
-          | Some (v) => CE_let (v, body)
-          | None => body
-        };
-
-      match (meth.ret_type) {
-        | CT_object => box_value (body)
-        | _ => body
-      }
-    }
-
-  cg_global_fun (ctx : CTX, m : IMethod, body : Expr) : CG_member
-    {
-      def hd = m.GetHeader ();
-      def ctx = prepare_ctx_for_fun (ctx, hd);
-      def meth = fixup_function (m);
-      meth.body <- cg_fun_body (ctx, hd, meth, body);
-      meth
-    }
-    
-  cg_header (h : Fun_header) : CM_method
-    {
-      def mkparm (p : Fun_parm) : CG_val {
-        CG_val (loc = Location_stack.top (),
-                name = p.name, 
-                ty = cg_type (p.ty),
-                val = CE_none (),
-                local_slot = null)
-      };
-      def m = CM_method (encoded_type = Tyutil.encode_type_to_string (Tyutil.fun_type (h)),
-                         parms = List.map (mkparm, h.parms), 
-                         ret_type = cg_type (h.ret_type),
-                         body = CE_none (),
-                         implemented_methods = [],
-                         ctor_builder = None (),
-                         method_builder = None ());
-      m.name <- h.name;
-      m.modifiers <- [];
-      m.attrs <- [];
-      //Message.debug ("cgh " + string_of_int (h.id) + " " + h.name + " " + string_of_int (m.id));
-      (m :> CM_method)
-    }
-
-  cg_attrs (mods : list (Modifier)) : list (string)
-    {
-      def cg_attr (a : Modifier) : string {
-        match (a) {
-          | Mod_public => "public"
-          | Mod_private => "private"
-          | Mod_new => "new"
-          | Mod_protected => "protected"
-          | Mod_internal => "internal"
-          | Mod_abstract => "abstract"
-          | Mod_virtual => "virtual"
-          | Mod_sealed => "sealed"
-          | Mod_static => "static"
-          | Mod_struct => Util.ice ("FIXME: sorry, no structs yet")
-          | Mod_attribute => Util.ice ("FIXME: sorry, no attributes yet")
-          | Mod_module | Mod_macro => ""
-        }
-      };
+      // and then constructor
+      def mkparm (acc, fh : Fun_header) {
+        def (assigns, vals, ptrs) = acc;
+        def cgm = get_cg_method (ctx, fh);
+        assert (cgm.closure_type != null);
+        def name = fun_uniq_name (fh);
         
-      List.map (cg_attr, mods);
-    }
+        def fld = 
+          tb.DefineField (name, cgm.closure_type, FieldAttributes.Private);
+          
+        def val =
+          CG_val (loc = fh.loc, name = name, ty = cgm.closure_type,
+                  val = CE_none ());
+        
+        def assign =
+          CE_assign (CE_field_ref (CE_this (), fld), CE_ref (val));
 
-  cg_decl (ti : Tyinfo, decl : IMember) : list (CG_member) {
-    Util.locate (decl.GetLocation (), fun () {
-      match (decl.GetKind ()) {
-        | MK_field (v) => [(lookup_field (v) : CG_member)]
-        | MK_property (v) => [(lookup_property (v) : CG_member)]
-        | MK_type (t) => List.map (fun (x : CM_class) { (x : CG_member) }, cg_tydecl ((t :> Tyinfo)))
+        (assign :: assigns, val :: vals, (ptrs : Int_map (FieldInfo)).add (fh.id, fld))
+      };
 
-        | MK_method (f) =>
-          match ((f :> NemerleMethod).fun_body) {
-            | FB_extern (n) =>
-              def m = lookup_function (f.GetHeader ());
-              m.extern_name <- n; 
-              []
-            | FB_parsed_expr => Util.ice ()
-            | FB_typed_expr (body) =>
-              CGexpr.closures <- [];
-              def mem = cg_global_fun (empty_ctx (ti), f, body);
-              match (f.GetFunKind ()) {
-                | FK_bound_method (impl) =>
-                  def mkparm (ifp : CG_val, methp : CG_val) : CG_expr {
-                    CE_cast (CE_ref (ifp), methp.ty)
-                  };
-                  def make_impl_wrapper (meth : IMethod) : CG_member {
-                    def mem = (mem :> CM_method);
-                    def m = cg_header (meth.GetHeader ());
-                    m.body <- CE_call (CE_method_ref (CE_this (), mem),
-                                       List.map2 (mkparm, m.parms, mem.parms));
-                    m.name <- meth.GetDeclaringTycon ().GetName () + "." + meth.GetName ();
-                    m.implemented_methods <- [lookup_function (meth.GetHeader ())];
-                    m
-                  };
-                  //def make_impl_method (meth : IMethod) { lookup_function (meth.GetHeader ()) };
-                  //(mem :> CM_method).implemented_methods <- List.map (make_impl_method, impl);
-                  List.append (List.map (make_impl_wrapper, impl), 
-                               mem :: CGexpr.closures)
-                | _ => 
-                  mem :: CGexpr.closures
-              }
-            | FB_abstract =>
-              [(fixup_function (f) :> CG_member)]
-          }
-      }})
+      def (assigns, vals, ptrs) = 
+        List.fold_left (mkparm, ([], [], Map.int_map ()), 
+                        get_parents_with_closures (ctx, h));
+
+      def ctor_cgm = CG_method ();
+      ctor_cgm.parms <- List.rev (vals);
+      ctor_cgm.modifiers <- [Mod_internal ()];
+      ctor_cgm.body <- CE_sequence (assigns);
+
+      cg_method.closure_pointers <- ptrs;
+      cg_method.lambda_ctor <- Passes.cgil.AddConstructorBuilder (ctor_cgm, tb);
+      Passes.cgil.EmitConstructor (ctor_cgm, cg_method.lambda_ctor);
+    };
+    cg_method.lambda_ctor
   }
-  
-  cg_list_decl (ti : Tyinfo, decls : list (IMember)) : list (CG_member) {
-    List.concat (List.map (fun (d) { cg_decl (ti, d) }, decls))
+
+  emit_lambda_code (ctx : CTX, fh : Fun_header, body : Expr) : void
+  {
+    ignore (get_lambda_ctor (ctx, fh));
+    def ctx = prepare_ctx_for_fun (ctx, fh);
+    def cgm = get_cg_method (ctx, fh);
+    List.iter (fun (parm : CG_val) { parm.ty <- typeof (System.Object) }, cgm.parms);
+    cgm.ret_type <- typeof (System.Object);
+    cg_fun_body (ctx, fh, body);
+
+    def parm_cnt = List.length (cgm.parms);
+    cgm.implemented_methods <- [get_apply_method (parm_cnt)];
+    cgm.modifiers <- [Mod_internal ()];
+    
+    ignore (Passes.cgil.AddMethod (cgm, cgm.lambda_type_builder));
+    when (parm_cnt != 1)
+      ignore (Passes.cgil.AddMethod (make_tupled_method (ctx, parm_cnt), cgm.lambda_type_builder));
+  }
+
+  make_lambda_ctor_call (ctx : CTX, fh : Fun_header) : CG_expr
+  {
+    def ctor = get_lambda_ctor (ctx, fh);
+    def parms = get_parents_with_closures (ctx, fh);
+    def parms' = List.map (fun (x) { closure_ref (ctx, x) }, parms);
+    CE_call (CE_ctor_ref (ctor), parms')
+  }
+
+  cg_fun_body (ctx : CTX, hd : Fun_header, body : Expr) : void
+  {
+    def ctx' = copy_ctx (ctx);
+    mutable assigns <- [];
+    mutable vals <- [];
+    
+    def loadparm (parm_val : CG_val, fp : Fun_parm) {
+      def parm = fp.decl;
+      def needed_type = cg_type (ctx, parm.ty);
+
+      if (parm.in_closure) {
+        def a =
+          CE_assign (local_ref (ctx, parm), 
+                     maybe_cast (ctx, needed_type, CE_ref (parm_val)));
+        assigns <- a :: assigns
+      } else {
+        def v =
+          if (needed_type.FullName == parm_val.ty.FullName)
+            parm_val
+          else {
+            def v = CG_val (loc = fp.decl.loc, 
+                            name = Util.tmpname (parm_val.name),
+                            ty = needed_type, 
+                            val = CE_cast (CE_ref (parm_val), needed_type));
+            vals <- v :: vals;
+            v
+          };
+        ctx'.locals <- ctx'.locals.add (parm.id, v)
+      }
+    };
+
+    def store_this (d : LocalValue) : void {
+      match (d.kind) {
+        | D_closurised_this_ptr =>
+          when (d.in_closure) {
+            assigns <- CE_assign (local_ref (ctx, d), CE_this ()) :: assigns
+          }
+        | _ => ()
+      }
+    };
+
+    def cgm = get_cg_method (ctx, hd);
+
+    List.iter2 (loadparm, cgm.parms, hd.parms);
+    List.iter (store_this, ctx.current_fun.closure_vars);
+    
+    def body = cg_expr (ctx', body);
+    def buildlet (e : CG_expr, v : CG_val) : CG_expr { CE_let (v, e) };
+    def body =
+      List.fold_left (buildlet, 
+                      CE_sequence (List.rev (body :: assigns)),
+                      vals);
+
+    def body =
+      match (ctx.current_closure) {
+        | Some (v) => CE_let (v, body)
+        | None => body
+      };
+
+    def body =
+      if (cgm.ret_type.FullName == "System.Object")
+        box_value (body)
+      else
+        body;
+
+    cgm.body <- body;
+  }
+
+  cg_global_fun (ctx : CTX, m : IMethod, body : Expr) : void
+  {
+    fixup_cg_method (m);
+    def hd = m.GetHeader ();
+    def ctx = prepare_ctx_for_fun (ctx, hd);
+    cg_fun_body (ctx, hd, body)
   }
     
-  cg_list_tydecl (decls : list (Tyinfo)) : list (CG_member)
-    {
-      def f (x) {
-        List.map (fun (x : CM_class) { (x : CG_member) }, cg_tydecl (x))
-      };
-      List.concat (List.map (f, decls))
-    }
-
-  set_extern_name (pref : string, decls : list (CG_member)) : void
-    {
-      def set_en (m : CG_member) : void 
-        {
-          when (m.extern_name == "") { m.extern_name <- pref + m.name };
-          match (m) {
-            | (CM_class) as c => set_extern_name (pref + c.name + ".", c.decls)
-            | _ => ()
-          }
-        };
-      List.iter (set_en, decls)
-    }
-
-  (** 
-   * Generate code for given [Tyinfo] object and declarations within it.
-   *
-   * <remark>
-   *   Type compilation is pretty straightforward.  Nemerle types
-   *   mostly map to CIL types in 1:1 fashion.  We just drop type aliases.
-   *
-   *   FIXME: describe how variants are compiled.
-   * </remark>
-   *)        
-  cg_tydecl (ti : Tyinfo) : list (CM_class)
-    {
-      def make_cm (decl : Tyinfo, kind : CM_kind) : CM_class
-        {
-          def r = lookup_class (decl);
-          r.kind <- kind;
-          r
-        };
-
-      def members_of (ti : Tycon) {
-        def defined_here (m : IMember) { m.GetDeclaringTycon ().SameAs (ti) };
-        List.filter (defined_here, ti.GetMembers ())
-      };
-      def members = members_of (ti);
-      
-      match (ti.GetTydecl ()) {
-        | TD_interface =>
-          def mkmember (m : IMember) : CG_member {
-            match (m.GetKind ()) {
-              | MK_method (m) =>
-                match (m.GetFunKind ()) {
-                  | FK_iface_method (new_flag) =>
-                    def m = fixup_function (m);
-                    m.modifiers <- [Mod_public (); Mod_abstract (); Mod_virtual ()];
-                    when (new_flag) { 
-                      m.attrs <- "new" :: m.attrs;
-                      m.modifiers <- Mod_new () :: m.modifiers;
-                    };
-                    m
-                  | _ => Util.ice ()
-                }
-              | _ => Util.ice ()
-            }
-          };
-          def cm = make_cm (ti, CK_interface ());
-          cm.decls <- List.map (mkmember, members);
-          [cm]
-
-        | TD_variant =>
-          def mkopt (m : Tyinfo) : CG_member {
-            match (m.GetTydecl ()) {
-              | TD_variant_option (encoded_type) =>
-                def cm = make_cm (m, CK_variant_option (encoded_type));
-                cm.inheritance <- [cg_type (ti.GetMemType ())]; // FIXME: variant options inheriting from themselves?
-                cm.decls <- cg_list_decl (ti, members_of (m));
-                cm
-              | _ => Util.ice ()
-            }
-          };
-          def cm = make_cm (ti, CK_variant ());
-          def types_inside (acc, mems) {
-            match (mems) {
-              | x :: xs =>
-                match ((x : IMember).GetKind ()) {
-                  | MK_type (t) => types_inside ((t :> Tyinfo) :: acc, xs)
-                  | _ => types_inside (acc, xs)
-                }
-              | [] => acc
-            }
-          };
-          cm.decls <- List.append (List.map (mkopt, types_inside ([], members)), 
-                                   cg_list_decl (ti, members));
-          [cm]
-
-        | TD_class =>
-          def cm = make_cm (ti, CK_class ());
-          cm.decls <- cg_list_decl (ti, members);
-          [cm]
-
-        | TD_variant_option => []    
-        | TD_external => []
-        // C# doesn't seem to provide typedef, not sure about CLS though
-        | TD_alias => [] 
-      }
-    }
-  
-  (** 
-   * Generate code for all [Tyinfo] objects.
-   *
-   * <remarks>
-   *   We define types and expressions flattened to CIL level in cgtree.n.
-   * </remarks>
-   *)
-  public run () : list (CM_class)
+  public CompileMethod (meth : NemerleMethod) : void
   {
-    mutable gres <- [];
-  
-    def run_cg_tydecl (decl : Tyinfo) : void {
-      def set_ns (cmc : CM_class) : void {
-        cmc.ns <- decl.env.GetCurrentNamespace ();
-        set_extern_name (cmc.ns, [(cmc : CG_member)])
-      };
-      def res = Util.locate (decl.GetLocation (), 
-        fun () : list (CM_class) { cg_tydecl (decl) });
-      List.iter (set_ns, res);
-      gres <- res :: gres
+    match (meth.fun_body) {
+      | FB_parsed_expr => Tyexpr.TypeMethod (meth)
+      | _ => ()
     };
     
-    cg_members <- Hashtable (2000);
-    _fixup_function_cache <- Hashtable ();
-    
-    Tyinfo.TopIter (run_cg_tydecl);
-    List.concat (List.rev (gres));
+    Util.locate (meth.GetLocation (), fun () {
+      match (meth.fun_body) {
+        | FB_extern => ()
+        | FB_compiled_expr => Util.ice ()
+        | FB_parsed_expr => Util.ice ()
+
+        | FB_typed_expr when Message.seen_error () =>
+          // just skip it
+          meth.fun_body <- FB_compiled_expr ()
+          
+        | FB_typed_expr (body) =>
+          def ctx = empty_ctx ((meth.GetDeclaringTycon () :> Tyinfo));
+          cg_global_fun (ctx, meth, body);
+          // release memory for GC
+          meth.fun_body <- FB_compiled_expr ();
+          match (meth.GetFunKind ()) {
+            | FK_bound_method (impl_list) =>
+              def cgm = GetCgMethod (meth);
+              Passes.cgil.EmitMethod (cgm, meth.GetMethodBuilder ());
+
+              def tb = (meth.GetDeclaringTycon () :> Tyinfo).GetTypeBuilder ();
+
+              def mkparm (ifp : CG_val, methp : CG_val) : CG_expr {
+                CE_cast (CE_ref (ifp), methp.ty)
+              };
+              def make_impl_wrapper (impl_meth : IMethod) {
+                def cgm' = build_cg_method (ctx, impl_meth);
+                cgm'.body <- CE_call (CE_method_ref (CE_this (), meth.GetMethodBuilder ()),
+                                      List.map2 (mkparm, cgm'.parms, cgm.parms));
+                cgm'.name <- impl_meth.GetDeclaringTycon ().GetFullName () + "." + cgm.name;
+                cgm'.implemented_methods <- [impl_meth];
+                cgm'.modifiers <- [Mod_private ()];
+                ignore (Passes.cgil.AddMethod (cgm', tb))
+              };
+              List.iter (make_impl_wrapper, impl_list)
+              
+            | FK_ctor =>
+              Passes.cgil.EmitConstructor (GetCgMethod (meth), meth.GetConstructorBuilder ())
+              
+            | _ => 
+              Passes.cgil.EmitMethod (GetCgMethod (meth), meth.GetMethodBuilder ())
+          }
+        | FB_abstract => ()
+      }
+    })
   }
 
 } // end module

@@ -31,13 +31,16 @@ open Nemerle.Compiler.Tyops;
 open Nemerle.Collections;
 open Nemerle.Compiler.Typedtree;
 
+open System.Reflection;
+open System.Reflection.Emit;
+
 namespace PT = Nemerle.Compiler.Parsetree;
 
 namespace Nemerle.Compiler {
 
 class NemerleMember implements IMember {
   loc : Location;
-  name : string;
+  protected mutable name : string;
   modifiers : list (Modifier);
   declaring_type : Tyinfo;
   id : int;
@@ -116,6 +119,7 @@ class NemerleField
   implements IField
 {
   is_mutable : bool;
+  public mutable field_builder : FieldBuilder;
   
   public this (par : Tyinfo, f : PT.M_field) {
     base (par, f);
@@ -125,7 +129,14 @@ class NemerleField
   }
 
   public IsMutable () : bool
-  { is_mutable }
+  {
+    is_mutable
+  }
+
+  public GetFieldInfo () : FieldInfo
+  {
+    field_builder
+  }
 }
 
 class NemerleMethod
@@ -136,6 +147,39 @@ class NemerleMethod
   public mutable fun_kind : Fun_kind;
   public mutable fun_body : Fun_body;
   public mutable fun_header : Fun_header;
+  
+  public mutable method_builder : System.Reflection.Emit.MethodBuilder;
+  public mutable ctor_builder : System.Reflection.Emit.ConstructorBuilder;
+
+  public GetMethodBase () : MethodBase
+  {
+    if (method_builder == null)
+      (ctor_builder : MethodBase)
+    else
+      method_builder
+  }
+
+  public GetConstructorBuilder () : ConstructorBuilder 
+    implements IMethod.GetConstructorInfo
+  {
+    assert (ctor_builder != null);
+    ctor_builder
+  }
+  
+  public GetMethodBuilder () : MethodBuilder 
+    implements IMethod.GetMethodInfo
+  {
+    assert (method_builder != null);
+    method_builder
+  }
+
+  public GetExternName () : string
+  {
+    match (fun_body) {
+      | FB_extern (name) => name
+      | _ => null
+    }
+  }
   
   public this (par : Tyinfo, f : PT.M_function) {
     base (par, f);
@@ -150,7 +194,40 @@ class NemerleMethod
     };
     def is_static = List.exists (fun (m) { match (m) { Mod_static => true | _ => false } }, 
                                  GetModifiers ());
-   
+ 
+    fun_body <- f.body;
+    
+   (* We need to convert things like:
+        foo (x : int * int) : int { bar }
+            ===>
+        foo (_1 : int, _2 : int) : int { def x = (_1, _2); bar }
+      To be consistent. *)
+
+    def parms =
+      match (f.header.parms) {
+        | [parm] =>
+          match (Tyutil.top_expand (bind (parm.ty))) {
+            | T_prod (types) =>
+              def mkdummyparm (t : Type) {
+                Fun_parm (loc = parm.loc, 
+                          name = Util.tmpname ("tupled"),
+                          ty = t, 
+                          decl = null)
+              };
+              def parms = List.map (mkdummyparm, types);
+              def refs = List.map (fun (fp : Fun_parm) { PT.E_ref (fp.name) }, parms);
+              match (fun_body) {
+                | FB_parsed_expr (body) =>
+                  def name = Macros.unsstring (parm.name);
+                  fun_body <- FB_parsed_expr (<[ { def $(name : var) = ( .. $refs ); $body } ]>)
+                | _ => Util.ice ()
+              };
+              parms
+            | _ => List.map (mkparm, f.header.parms)
+          }
+        | _ => List.map (mkparm, f.header.parms)
+      };
+
     fun_kind <-
       match (f.kind) {
         | FK_method ([]) when is_static =>
@@ -158,24 +235,25 @@ class NemerleMethod
         | FK_method (_ :: _) when is_static =>
           Message.error ("static function cannot implement anything");
           FK_function ()
-        | FK_ctor when is_static => FK_static_ctor ()
+        | FK_ctor when is_static =>
+          this.name <- ".cctor";
+          FK_static_ctor ()
         | x => x
       };
 
     fun_header <- Fun_header (
       ret_type = bind (f.header.ret_type),
       typarms = typarms,
-      name = Macros.unsstring (f.header.name),
-      parms = List.map (mkparm, f.header.parms),
+      name = this.name,
+      parms = parms,
       id = Util.next_id (),
       closure_vars = [],
       all_locals = [],
       tenv = tenv',
       loc = f.header.loc,
-      decl = null);
+      decl = null,
+      cg_method = null);
 
-    fun_body <- f.body;
-    
     ty <- Tyutil.fun_type (fun_header);
     
     kind <- MK_method (this);

@@ -63,6 +63,9 @@ public class Tyinfo implements Tycon {
   mutable subtypes : Int_map (Tycon * list (Type));
   mutable member_map : String_map (list (IMember));
   mutable member_list : list (IMember);
+
+  mutable type_builder : System.Reflection.Emit.TypeBuilder;
+  mutable system_type : System.Type;
   
   (**
    * Marker for [Tyinfo.Iter].
@@ -743,6 +746,11 @@ public class Tyinfo implements Tycon {
     Util.locate (class_member.loc, fun () {
       when (is_module)
         class_member.modifiers <- Mod_static () :: class_member.modifiers;
+      match (tydecl) {
+        | TD_interface =>
+          class_member.modifiers <- Mod_virtual () :: Mod_abstract () :: class_member.modifiers
+        | _ => ()
+      };
       match (class_member) {
         | PT.M_type => ()
         | PT.M_property => Util.ice ("bind_member on property")
@@ -818,6 +826,19 @@ public class Tyinfo implements Tycon {
   {
     member_list
   }
+
+  public GetTypeBuilder () : System.Reflection.Emit.TypeBuilder
+  {
+    assert (type_builder != null);
+    type_builder
+  }
+
+  public GetSystemType () : System.Type
+  {
+    assert (system_type != null);
+    system_type
+  }
+  
 
   (**
    * Collect type members (fields and methods, but not types, which
@@ -900,6 +921,171 @@ public class Tyinfo implements Tycon {
     infos <- [];
   }
 
+  public ConstructTypeBuilder () : void
+  {
+    match (tydecl) {
+      | TD_alias => ()
+      | TD_external => ()
+      | _ =>
+        type_builder <- Passes.cgil.ConstructTypeBuilder (this);
+        system_type <- type_builder;
+    }
+  }
+
+  public FinalizeType () : void
+  {
+    when (type_builder != null) {
+      system_type <- type_builder.CreateType ();
+      type_builder <- null;
+    }
+  }
+
+  (** Return interfaces [this] needs to implement (that is it says it will
+      implement them, but they are not implemented in base class). *)
+  public InterfacesToImplement () : list (Tycon) 
+  {
+    def base_class =
+      match (SuperClass ()) {
+        | Some (tc) => tc
+        | None => GlobalEnv.LookupInternalType ("System.Object")
+      };
+
+    def collect (acc, t) {
+      match (t) {
+        | T_app (tc, _) =>
+          match (tc.GetTydecl ()) {
+            | TD_interface =>
+              match (base_class.SuperType (tc)) {
+                | Some => acc
+                | None => tc :: acc
+              }
+            | _ => acc
+          }
+        | _ => acc
+      }
+    };
+    
+    List.fold_left (collect, [], GetSuperTypes ());
+  }
+
+  check_method_implements () : void
+  {
+    def collect (acc, mem : IMember) {
+      match (mem.GetKind ()) {
+        | MK_method (m) =>
+          match (m.GetFunKind ()) {
+            | FK_method => (m :> NemerleMethod) :: acc
+            | _ => acc
+          }
+        | _ => acc
+      }
+    };
+    def methods = List.fold_left (collect, [], this.GetDirectMembers ());
+    
+    // FIXME: in fact we should only mark some methods as implemented and scream
+    // when signature match is ambigious
+    def iface_methods = Hashtable (30);
+    
+    def add_iface_methods (tc : Tycon) {
+      def add_method (m : IMember) {
+        match (m.GetKind ()) {
+          | MK_method (m) =>
+            match (m.GetFunKind ()) {
+              | FK_iface_method when m.GetDeclaringTycon ().SameAs (tc) =>
+                match (iface_methods.Get (m.GetName ())) {
+                  | Some (lst) => iface_methods.Set (m.GetName (), m :: lst)
+                  | None => iface_methods.Add (m.GetName (), [m])
+                }
+              | _ => ()
+            }
+          | _ => ()
+        }
+      };
+      List.iter (add_method, tc.GetMembers ())
+    };
+    List.iter (add_iface_methods, InterfacesToImplement ());
+    
+    def bind_explicit_implements (meth : NemerleMethod) {
+      def bind_one (name : string) {
+        def ns = name.Substring (0, name.LastIndexOf ('.'));
+        def member = name.Substring (name.LastIndexOf ('.') + 1);
+        def ty = this.env.GetType (ns);
+        match (iface_methods.Get (member)) {
+          | Some (meths) =>
+            def is_correct (iface_meth : IMethod) {
+              iface_meth.GetDeclaringTycon ().SameAs (ty) &&
+                meth.GetMemType () >> Tyutil.TypeOfMethodIn (iface_meth, this)
+            };
+            match (List.filter (is_correct, meths)) {
+              | [] =>
+                Message.fatal_error ("interface `" + ty.GetFullName () + 
+                                     "' does not contain method named `" + member + 
+                                     "' with proper signature")
+              | [m] =>
+                iface_methods.Set (member, List.filter (fun (x) { ! is_correct (x) }, meths));
+                m
+              | _ =>
+                Message.fatal_error ("interface `" + ty.GetFullName () + 
+                                     "' contains more then one method named `" + member + 
+                                     "' with proper signature")
+            }
+          | None =>
+            Message.fatal_error ("no interface implemented by `" + this.GetFullName () + 
+                                 "' contains method named `" + member + 
+                                 "' (looking for `" + name + "')")
+        }
+      };
+      match (meth.GetFunKind ()) {
+        | FK_method (impl) =>
+          def impl' =
+            try List.map (bind_one, impl)
+            with { _ : Recovery => [] };
+          meth.fun_kind <- FK_bound_method (impl')
+        | _ => ()
+      }
+    };
+    List.iter (bind_explicit_implements, methods);
+    
+    def bind_implicit_implements (meth : NemerleMethod) {
+      def lookup_iface_members () {
+        match (iface_methods.Get (meth.GetName ())) {
+          | Some (meths) =>
+            def is_correct (iface_meth : IMethod) {
+              meth.GetMemType () >> Tyutil.TypeOfMethodIn (iface_meth, this)
+            };
+            match (List.filter (is_correct, meths)) {
+              | [] => []
+              | lst =>
+                iface_methods.Set (meth.GetName (), List.filter (fun (x) { ! is_correct (x) }, meths));
+                lst
+            }
+          | None => []
+        }
+      };
+      match (meth.GetFunKind ()) {
+        | FK_bound_method (impl) =>
+          match (lookup_iface_members ()) {
+            | [] => ()
+            | impl' => 
+              meth.fun_kind <- FK_bound_method (List.append (impl', impl))
+          }
+        | _ => ()
+      }
+    };
+    List.iter (bind_implicit_implements, methods);
+
+    def scream_about_unimplemented (_, meths) {
+      def scream_about (meth : IMethod) {
+        Message.error ("unimplemented interface method `" + 
+                       meth.GetDeclaringTycon ().GetFullName () + 
+                       "." + meth.GetName () + "' with signature " +
+                       Tyutil.fun_type (meth.GetHeader ()).as_string ())
+      };
+      List.iter (scream_about, meths)
+    };
+    iface_methods.Iter (scream_about_unimplemented);
+  }
+
   (**
    * Main function of type declaration handling pass.
    *
@@ -926,6 +1112,15 @@ public class Tyinfo implements Tycon {
     Iter (fun (x : Tyinfo) { x.check_bound_types () });
     Iter (fun (x : Tyinfo) { x.add_members () });
     Iter (fun (x : Tyinfo) { x.add_implicit_ctor () });
+
+    def check_method_implements (ti : Tyinfo) {
+      match (ti.GetTydecl ()) {
+        | TD_interface => ()
+        | _ => ti.check_method_implements ()
+      }
+    };
+
+    Iter (check_method_implements);
   }
 
 }

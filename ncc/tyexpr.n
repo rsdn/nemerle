@@ -168,8 +168,35 @@ public module Tyexpr {
                 match (x.GetKind ()) {
                   | MK_type (t) => List.rev_append (handle_type (t), acc)
                   | MK_method (m) =>
-                    E_static_ref (loc = expr.loc, ty = m.GetFreshType (), mem = x) :: acc
-                  | MK_field | MK_property =>
+                      def name = m.GetExternName ();
+                      if (name == null || name.StartsWith ("%op"))
+                        E_static_ref (loc = expr.loc, ty = m.GetFreshType (), mem = x) :: acc
+                      else {
+                        def split_at_dots (str : string) {
+                          def idx = str.LastIndexOf ('.');
+                          if (idx == -1) PT.E_ref (str)
+                          else PT.E_member (split_at_dots (str.Substring (0, idx)),
+                                            PT.SS_string (str.Substring (idx + 1)))
+                        };
+                        def exprs = make_value_reference (ctx, split_at_dots (name), fallback = false);
+                        def valid (expr) {
+                          match (expr) {
+                            | E_static_ref (mem) =>
+                              Tyutil.types_eq (mem.GetMemType (), m.GetMemType ())
+                            | _ => false
+                          }
+                        };
+                        match (List.filter (valid, exprs)) {
+                          | [x] => x :: acc
+                          | [] =>
+                            Message.fatal_error ("unbound extern symbol `" + name + "'")
+                          | _ =>
+                            Message.fatal_error ("wrong extern symbol `" + name + "'")
+                        }
+                      }
+                  | MK_property (x) =>
+                    E_static_property_ref (loc = expr.loc, ty = x.GetMemType (), prop = x) :: acc
+                  | MK_field =>
                     E_static_ref (loc = expr.loc, ty = x.GetMemType (), mem = x) :: acc
                 };
               convert_symbols (acc, xs)
@@ -263,7 +290,7 @@ public module Tyexpr {
                   def mkbase (m : IMember) {
                     E_base (loc = expr.loc,
                             ty = m.GetMemType () /- ti.SubtypingSubst (baseti),
-                            base_class = baseti)
+                            base_ctor = (m :> IMethod))
                   };
                   List.map (mkbase, lookup_ctors (baseti))
 
@@ -486,8 +513,6 @@ public module Tyexpr {
               match (accessible_members) {
                 | [MK_field (f)] =>
                   [E_field_ref (loc, Tyutil.TypeOfMemberIn (f, ti) /- subst, o, f)]
-                | [MK_property (p)] =>
-                  [E_property_ref (loc, Tyutil.TypeOfMemberIn (p, ti) /- subst, o, p)]
                 | [] =>
                   def how =
                     match (members) {
@@ -497,20 +522,24 @@ public module Tyexpr {
                   problem <- how + " member `" + mem + "' in type `" +
                              ti.GetFullName () + "'";
                   []
-                // FIXME: this is crude hack...
-                | MK_property (p) :: _ =>
-                  [E_property_ref (loc, Tyutil.TypeOfMemberIn (p, ti) /- subst, o, p)]
+                  
                 | lst =>
-                  def make_meth (m) {
+                  mutable was_prop <- false;
+                  mutable was_meth <- false;
+                  def make (m) {
                     match (m) {
-                      | MK_method (m) =>
+                      | MK_property (p) when !was_meth =>
+                        was_prop <- true;
+                        E_property_ref (loc, Tyutil.TypeOfMemberIn (p, ti) /- subst, o, p)
+                      | MK_method (m) when !was_prop =>
+                        was_meth <- true;
                         E_method_ref (loc, Tyutil.TypeOfMethodIn (m, ti) /- subst, o, m)
                       | _ =>
                         Message.fatal_error ("ambiguous member name `" + mem +
                                              "' in type `" + ti.GetFullName () + "'")
                     }
                   };
-                  List.map (make_meth, lst)
+                  List.map (make, lst)
                };
             List.append (mems, acc)
           }
@@ -608,7 +637,8 @@ public module Tyexpr {
          all_locals = [],
          tenv = tenv,
          loc = h.loc,
-         decl = null);
+         decl = null,
+         cg_method = null);
 
       def lv = LocalValue (hname, D_local_fun (h', pars), 
                            Tyutil.fun_type (h'), ctx.current_fun);
@@ -704,6 +734,7 @@ public module Tyexpr {
         "a reference to global symbol `" + tyname + m.GetName () + "'"
       | E_field_ref (_, f) =>
         "a reference to field `" + f.GetName () + "'"
+      | E_static_property_ref (p)
       | E_property_ref (_, p) =>
         "a reference to property `" + p.GetName () + "'"
       | E_method_ref (_, m) =>
@@ -725,7 +756,7 @@ public module Tyexpr {
       | E_sequence => "a sequence"
       | E_tuple => "a tuple constructor"
       | E_mkarray => "a array constructor"
-      | E_indexer => "a indexer reference"
+      | E_array_indexer => "an array indexer reference"
     }
   }
 
@@ -762,6 +793,58 @@ public module Tyexpr {
   }
 
   public ty_expr (ctx : CTX, expr : PT.Expr) : Expr
+  {
+    def expr = ty_expr_with_no_properties_conversion (ctx, expr);
+    def make_getter (obj, prop : IProperty, args) {
+      def meth = prop.GetGetter ();
+      E_call (expr.loc, expr.expr_ty, 
+              E_method_ref (expr.loc, meth.GetMemType (), obj, meth),
+              args)
+    };
+    def make_static_getter (prop : IProperty, args) {
+      def meth = prop.GetGetter ();
+      E_call (expr.loc, expr.expr_ty, 
+              E_static_ref (expr.loc, meth.GetMemType (), meth),
+              args)
+    };
+    match (expr) {
+      | E_property_ref (obj, prop) => make_getter (obj, prop, [])
+      | E_call (E_property_ref (obj, prop), args) => make_getter (obj, prop, args)
+      | E_static_property_ref (prop) => make_static_getter (prop, [])
+      | E_call (E_static_property_ref (prop), args) => make_static_getter (prop, args)
+      | expr => expr
+    }
+  }
+
+  convert_setter_property (_ctx : CTX, expr : Expr, val : Expr) : Expr * Type
+  {
+    def make_setter (obj, prop : IProperty, args) {
+        def meth = prop.GetSetter ();
+        E_call (expr.loc, T_void (), 
+                E_method_ref (expr.loc, meth.GetMemType (), obj, meth),
+                List.append (args, [Parm (false, val, "")]))
+    };
+      
+    def make_static_setter (prop : IProperty, args) {
+        def meth = prop.GetSetter ();
+        E_call (expr.loc, T_void (), 
+                E_static_ref (expr.loc, meth.GetMemType (), meth),
+                List.append (args, [Parm (false, val, "")]))
+    };
+      
+    def res =
+      match (expr) {
+        | E_property_ref (obj, prop) => make_setter (obj, prop, [])
+        | E_call (E_property_ref (obj, prop), args) => make_setter (obj, prop, args)
+        | E_static_property_ref (prop) => make_static_setter (prop, [])
+        | E_call (E_static_property_ref (prop), args) => make_static_setter (prop, args)
+        | expr => E_assign (expr.loc, T_void (), expr, val)
+      };
+
+    (res, T_void ())
+  }
+  
+  ty_expr_with_no_properties_conversion (ctx : CTX, expr : PT.Expr) : Expr
   {
     def do_typing () : Expr * Type {
       def restart (e : PT.Expr) : Expr * Type {
@@ -810,6 +893,8 @@ public module Tyexpr {
               };
               (E_mkarray (type_array_initializers (lst)), T_array (array_type))
           };
+          typed_initializers.expr_ty <- array_type;
+          typed_initializers.loc <- expr.loc;
           def fresh_name = Util.tmpname ("array_initializer");
           def decl = LocalValue (fresh_name, D_local_value (), array_type, ctx.current_fun);
           decl.is_ref <- false;
@@ -833,27 +918,16 @@ public module Tyexpr {
                 | _ => Message.fatal_error ("multi-dimensional indexers not supported yet")
               };
               expect_type ("indexer type", typed_index, Tyutil.make_tapp ("Nemerle.Core.Aliases.int"));
-              (E_indexer (indexer_over_type, null, typed_obj, [typed_index]), indexer_over_type)
+              (E_array_indexer (indexer_over_type, typed_obj, [typed_index]), indexer_over_type)
 
             | _ =>
               (* indexers over the Item or Chars property *)
               def check_for_indexer_property (prop_name : string) : option (Expr * Type) {
                 match (lookup_member (ctx, expr.loc, typed_obj, prop_name, error_when_not_found = false)) {
-                  | [E_property_ref (_, prop)] =>
-                    def indexer_over_type = prop.GetMemType ();
-
-                    (** FIXME: add type checking and overloading verification
-                    if (List.length (typed_args) != List.length (ex.prop.indexer_parameters))
-                    Message.fatal_error (
-                    "wrong arity of the " + prop_name + " indexer application (have " +
-                    string_of_int (List.length (typed_args)) + ", expected " +
-                    string_of_int (List.length (ex.prop.indexer_parameters)) +
-                    " parameters)"
-                    )
-                    else ();
-                    *)
-
-                    Some ((E_indexer (indexer_over_type, prop, typed_obj, typed_args), indexer_over_type))
+                  | (E_property_ref :: _) as lst =>
+                    def args' = List.map (fun (x) { Parm (false, x, "") }, typed_args);
+                    def ex = resolve_overloaded_call (lst, args');
+                    Some ((ex, type_of (ex)))
                   | _ => None ()
                 }
               };
@@ -974,7 +1048,7 @@ public module Tyexpr {
           }
 
         | PT.E_assign (e1, e2) =>
-          def e1 = ty_expr (ctx, e1);
+          def e1 = ty_expr_with_no_properties_conversion (ctx, e1);
           def e2 = ty_expr (ctx, e2);
           expect_type ("assigned value", e2, type_of (e1));
           def is_lval =
@@ -989,11 +1063,14 @@ public module Tyexpr {
               | E_field_ref (E_this, _) when ctx.in_ctor => true
               | E_field_ref (_, mem) => mem.IsMutable ()
               | E_property_ref (_, p) => p.IsMutable ()
-              | E_indexer => true //FIXME: are all the indexers writeable?
+              | E_call (E_property_ref (_, p), _) => p.IsMutable ()
+              | E_array_indexer => true
               | _ => false
             };
-          unless (is_lval) Message.error ("assignment to read-only location");
-          (E_assign (e1, e2), T_void ())
+          unless (is_lval)
+            Message.error ("assignment to read-only location");
+            
+          convert_setter_property (ctx, e1, e2)
 
         | PT.E_raise (e) =>
           def ex = ty_expr (ctx, e);
@@ -1040,7 +1117,7 @@ public module Tyexpr {
               | PT.ParsePattern (e) => Macros.quoted_pattern (e)
               | PT.ParseParam (e) => Macros.quoted_param (e)
               | PT.ParseCase (e) => Macros.quoted_case (e)
-              | PT.ParseCaseGuard ((a,b)) => Macros.quoted_case_guard (a, b)
+              | PT.ParseCaseGuard (a, b) => Macros.quoted_case_guard (a, b)
               | PT.ParseFunDecl (e) => Macros.quoted_fundecl (e)
               | PT.ParseFunParm (e) => Macros.quoted_fparam (e)
             };
@@ -1095,52 +1172,12 @@ public module Tyexpr {
                          })
     };
 
-    def (de_tuple, ctx) =
-      match (h.parms) {
-        | [single_parm] =>
-          // We need to convert things like:
-          // foo (x : int * int) : int { bar }
-          //    ===>
-          // foo (_1 : int, _2 : int) : int { def x = (_1, _2); bar }
-          // To be consistent.
-          match (Tyutil.top_expand (single_parm.ty)) {
-            | T_prod (types) =>
-              mutable parms <- [];
-              def mkparm (t) {
-                def name = Util.tmpname ("tuple_arg");
-                def decl = LocalValue (name, D_fun_parm (), t, h);
-                def fp = Fun_parm (loc = single_parm.loc,
-                                   name = name,
-                                   ty = t,
-                                   decl = decl);
-                parms <- fp :: parms;
-                decl
-              };
-              def single_parm_decl = LocalValue (single_parm.name, D_local_value (), single_parm.ty, h);
-              def ctx = ctx.WithLocals (single_parm_decl :: List.map (mkparm, types));
-              h.parms <- List.rev (parms);
-              def mkref (p : Fun_parm) : Expr {
-                fixup (E_local_ref (p.decl), p.loc, p.ty)
-              };
-              def val = fixup (E_tuple (List.map (mkref, h.parms)),
-                               single_parm.loc, single_parm.ty);
-              (Some ((single_parm_decl, val)), ctx)
-            | _ =>
-              (None (), ctx.WithLocals (List.map (make_parm_decl, h.parms)))
-          }
-        | _ =>
-          (None (), ctx.WithLocals (List.map (make_parm_decl, h.parms)))
-      };
+    def ctx = ctx.WithLocals (List.map (make_parm_decl, h.parms));
 
     match (b) {
       | FB_parsed_expr (e) =>
         def ctx = ctx.WithTEnv (h.tenv);
         def e' = ty_expr (ctx, e);
-        def e' =
-          match (de_tuple) {
-            | Some ((d, v)) => fixup (E_let (d, v, e'), v.loc, type_of (e'))
-            | None => e'
-          };
         if (type_of (e') >> h.ret_type) ()
         else
           Message.error (e.loc, "function return type was declared to be " +
@@ -1149,6 +1186,7 @@ public module Tyexpr {
         check_unused_values (ctx);
         FB_typed_expr (e')
       | FB_typed_expr => Util.ice ()
+      | FB_compiled_expr => Util.ice ()
       | FB_extern => b
       | FB_abstract => b
     }
@@ -1162,143 +1200,8 @@ public module Tyexpr {
     }
   }
 
-  (** Return interfaces [ti] needs to implement (that is it says it will
-      implement them, but they are not implemented in base class). *)
-  interfaces_to_implement (ti : Tyinfo) : list (Tycon) 
-  {
-    def base_class =
-      match (ti.SuperClass ()) {
-        | Some (tc) => tc
-        | None => GlobalEnv.LookupInternalType ("System.Object")
-      };
-
-    def collect (acc, t) {
-      match (t) {
-        | T_app (tc, _) =>
-          match (tc.GetTydecl ()) {
-            | TD_interface =>
-              match (base_class.SuperType (tc)) {
-                | Some => acc
-                | None => tc :: acc
-              }
-            | _ => acc
-          }
-        | _ => acc
-      }
-    };
-    
-    List.fold_left (collect, [], ti.GetSuperTypes ());
-  }
-
-  bind_impl (env : GlobalEnv, ti : Tyinfo, methods : list (NemerleMethod)) : void
-  {
-    // FIXME: in fact we should only mark some methods as implemented and scream
-    // when signature match is ambigious
-    def iface_methods = Hashtable (30);
-    
-    def add_iface_methods (tc : Tycon) {
-      def add_method (m : IMember) {
-        match (m.GetKind ()) {
-          | MK_method (m) =>
-            match (m.GetFunKind ()) {
-              | FK_iface_method when m.GetDeclaringTycon ().SameAs (tc) =>
-                match (iface_methods.Get (m.GetName ())) {
-                  | Some (lst) => iface_methods.Set (m.GetName (), m :: lst)
-                  | None => iface_methods.Add (m.GetName (), [m])
-                }
-              | _ => ()
-            }
-          | _ => ()
-        }
-      };
-      List.iter (add_method, tc.GetMembers ())
-    };
-    List.iter (add_iface_methods, interfaces_to_implement (ti));
-    
-    def bind_explicit_implements (meth : NemerleMethod) {
-      def bind_one (name : string) {
-        def ns = name.Substring (0, name.LastIndexOf ('.'));
-        def member = name.Substring (name.LastIndexOf ('.') + 1);
-        def ty = env.GetType (ns);
-        match (iface_methods.Get (member)) {
-          | Some (meths) =>
-            def is_correct (iface_meth : IMethod) {
-              iface_meth.GetDeclaringTycon ().SameAs (ty) &&
-                meth.GetMemType () >> Tyutil.TypeOfMethodIn (iface_meth, ti)
-            };
-            match (List.filter (is_correct, meths)) {
-              | [] =>
-                Message.fatal_error ("interface `" + ty.GetFullName () + 
-                                     "' does not contain method named `" + member + 
-                                     "' with proper signature")
-              | [m] =>
-                iface_methods.Set (member, List.filter (fun (x) { ! is_correct (x) }, meths));
-                m
-              | _ =>
-                Message.fatal_error ("interface `" + ty.GetFullName () + 
-                                     "' contains more then one method named `" + member + 
-                                     "' with proper signature")
-            }
-          | None =>
-            Message.fatal_error ("no interface implemented by `" + ti.GetFullName () + 
-                                 "' contains method named `" + member + 
-                                 "' (looking for `" + name + "')")
-        }
-      };
-      match (meth.GetFunKind ()) {
-        | FK_method (impl) =>
-          def impl' =
-            try List.map (bind_one, impl)
-            with { _ : Recovery => [] };
-          meth.fun_kind <- FK_bound_method (impl')
-        | _ => ()
-      }
-    };
-    List.iter (bind_explicit_implements, methods);
-    
-    def bind_implicit_implements (meth : NemerleMethod) {
-      def lookup_iface_members () {
-        match (iface_methods.Get (meth.GetName ())) {
-          | Some (meths) =>
-            def is_correct (iface_meth : IMethod) {
-              meth.GetMemType () >> Tyutil.TypeOfMethodIn (iface_meth, ti)
-            };
-            match (List.filter (is_correct, meths)) {
-              | [] => []
-              | lst =>
-                iface_methods.Set (meth.GetName (), List.filter (fun (x) { ! is_correct (x) }, meths));
-                lst
-            }
-          | None => []
-        }
-      };
-      match (meth.GetFunKind ()) {
-        | FK_bound_method (impl) =>
-          match (lookup_iface_members ()) {
-            | [] => ()
-            | impl' => 
-              meth.fun_kind <- FK_bound_method (List.append (impl', impl))
-          }
-        | _ => ()
-      }
-    };
-    List.iter (bind_implicit_implements, methods);
-
-    def scream_about_unimplemented (_, meths) {
-      def scream_about (meth : IMethod) {
-        Message.error ("unimplemented interface method `" + 
-                       meth.GetDeclaringTycon ().GetFullName () + 
-                       "." + meth.GetName () + "' with signature " +
-                       Tyutil.fun_type (meth.GetHeader ()).as_string ())
-      };
-      List.iter (scream_about, meths)
-    };
-    iface_methods.Iter (scream_about_unimplemented);
-  }
-
   (**
-   * Walk through members of given [Tyinfo] object.  Type all
-   * declarations found.
+   * Walk through method body typing it.
    *
    * <remarks>
    *   Typing generally involves rewriting from [Parsetree] to [Typedtree]
@@ -1323,56 +1226,35 @@ public module Tyexpr {
    *   about closures, binding method implement list.
    * </remarks>
    *)
-  handle_tyinfo_members (ti : Tyinfo) : void
+  public TypeMethod (m : NemerleMethod) : void
   {
-    mutable methods <- [];
-    
-    def handle_decl (decl : IMember) : void {
-      match (decl.GetKind ()) {
-        | MK_method (m) =>
-          def (in_ctor, is_method) =
-            match (m.GetFunKind ()) {
-              | FK_ctor => (true, true)
-              | FK_method => (false, true)
-              | _ => (false, false)
-            };
+    def ti = (m.GetDeclaringTycon () :> Tyinfo);
 
-          def ctx = TypingContext 
-                        (in_ctor = in_ctor,
-                         this_ptr_decl =
-                           if (is_method)
-                             Some (LocalValue ("_N_this", D_closurised_this_ptr (),
-                                         ti.GetMemType (), m.GetHeader ()))
-                           else None (),
-                         env = ti.env,
-                         tenv = m.GetHeader ().tenv,
-                         current_fun = m.GetHeader (),
-                         locals = Map.string_map (),
-                         parent_type = ti);
+    def (in_ctor, is_method) =
+      match (m.GetFunKind ()) {
+        | FK_ctor => (true, true)
+        | FK_method | FK_bound_method => (false, true)
+        | _ => (false, false)
+      };
 
-          def m' = (m :> NemerleMethod);
-          match (m.GetFunKind ()) {
-            | FK_method =>
-              methods <- m' :: methods
-            | _ => ()
-          };
-          try
-            m'.fun_body <- ty_function (ctx, m.GetHeader (), m'.fun_body)
-          with { _ : Recovery => () }
-        | _ => ()
-      }
-    };
-    List.iter (handle_decl, ti.GetDirectMembers ());
-    match (ti.GetTydecl ()) {
-      | TD_interface => ()
-      | _ => bind_impl (ti.env, ti, methods)
-    }
-  }
+    // Message.debug ("type " + m.GetName () + if (is_method) " method" else "");
 
-  (** The main typing function.  *)
-  public run () : void
-  {
-    Tyinfo.Iter (handle_tyinfo_members)
+    def ctx = TypingContext 
+                  (in_ctor = in_ctor,
+                   this_ptr_decl =
+                     if (is_method)
+                       Some (LocalValue ("_N_this", D_closurised_this_ptr (),
+                                   ti.GetMemType (), m.GetHeader ()))
+                     else None (),
+                   env = ti.env,
+                   tenv = m.GetHeader ().tenv,
+                   current_fun = m.GetHeader (),
+                   locals = Map.string_map (),
+                   parent_type = ti);
+
+    try
+      m.fun_body <- ty_function (ctx, m.GetHeader (), m.fun_body)
+    with { _ : Recovery => () }
   }
 }
 
