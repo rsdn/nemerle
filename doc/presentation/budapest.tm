@@ -454,12 +454,25 @@
       <item><em|<verbatim|guarded>> mutable values
 
       <\itemize-minus>
-        <item>update triggers assertion check
+        <item>update of guarded value triggers assertion check
 
         <item>can use special <verbatim|<em|previous>> qualifier to refer to
         the value before update
 
         <item>can be defined for all mutable values (class fields and locals)
+      </itemize-minus>
+
+      <item><em|<verbatim|guard>> assertions
+
+      <\itemize-minus>
+        <item>checked at the definition point
+
+        <item>checked at update of each directly referenced mutable value
+
+        <item>propagated up the call stack for fields
+
+        <item>checked after calls for locals (in case locals are passed by
+        <verbatim|ref>)
       </itemize-minus>
 
       <item><verbatim|<em|transaction>> block
@@ -470,6 +483,8 @@
 
         <item>allow assertions like <verbatim|x + y == 5>
       </itemize-minus>
+
+      \;
     </itemize>
 
     <new_page>
@@ -774,6 +789,81 @@
       <verbatim|<with|color|red|lname>> variables
     </itemize>
   </with>
+
+  <new_page>
+
+  <section|Real--life example>
+
+  Small part of Nemerle compiler, so you can see how the language ``feels''.
+
+  <\code>
+    <\with|font size|0.84>
+      string_of_type (t : <with|color|brown|Type>) :
+      <with|color|brown|string> {
+
+      \ \ <em|def> map (sep : <with|color|brown|string>,\ 
+
+      \ \ \ \ \ \ \ \ \ \ \ args : <with|color|brown|list (Type)>) :
+      <with|color|brown|string> {
+
+      \ \ \ \ Util.concat_strings (sep,\ 
+
+      \ \ \ \ \ \ \ \ List.map (string_of_type, args))
+
+      \ \ }
+
+      \ \ <em|match> (t) {
+
+      \ \ \ \ \| T_app (ti, args) =\<gtr\>
+
+      \ \ \ \ \ \ <em|def> name = ti.fullname ();
+
+      \ \ \ \ \ \ <em|match> (args) {
+
+      \ \ \ \ \ \ \ \ \| Nil =\<gtr\> name
+
+      \ \ \ \ \ \ \ \ \| _ =\<gtr\>\ 
+
+      \ \ \ \ \ \ \ \ \ \ \ name + <with|color|magenta|" ("> + map
+      (<with|color|magenta|", ">, args) + <with|color|magenta|")">
+
+      \ \ \ \ \ \ }
+
+      \ \ \ \ \| T_var (tv) =\<gtr\>\ 
+
+      \ \ \ \ \ \ <with|color|magenta|"'"> + tv.name +
+      <with|color|magenta|"_"> +\ 
+
+      \ \ \ \ \ \ string_of_int (tv.id) +\ 
+
+      \ \ \ \ \ \ <em|if> (Tyvar.is_free (tv)) <with|color|magenta|"*">
+      <em|else> <with|color|magenta|"">
+
+      \ \ \ \ \| T_ref (t) =\<gtr\> <with|color|magenta|"ref "> +
+      string_of_type (t)
+
+      \ \ \ \ \| T_out (t) =\<gtr\> <with|color|magenta|"out "> +
+      string_of_type (t)
+
+      \ \ \ \ \| T_void =\<gtr\> <with|color|magenta|"void">
+
+      \ \ \ \ \| T_prod (args) =\<gtr\>\ 
+
+      \ \ \ \ \ \ <with|color|magenta|"("> + map (<with|color|magenta|" * ">,
+      args) + <with|color|magenta|")">
+
+      \ \ \ \ \| T_fun (from, to) =\<gtr\>
+
+      \ \ \ \ \ \ <with|color|magenta|"("> + string_of_type (from) +
+      <with|color|magenta|" -\<gtr\> "> +
+
+      \ \ \ \ \ \ \ string_of_type (to) + <with|color|magenta|")">
+
+      \ \ }
+
+      }
+    </with>
+  </code>
 </body>
 
 <\initial>
@@ -798,14 +888,16 @@
 
 <\references>
   <\collection>
-    <associate|toc-10|<tuple|<uninit>|6>>
     <associate|toc-20|<tuple|<uninit>|11>>
+    <associate|toc-10|<tuple|<uninit>|6>>
+    <associate|gly-1|<tuple|1|?>>
     <associate|toc-11|<tuple|<uninit>|6>>
     <associate|toc-21|<tuple|<uninit>|12>>
-    <associate|gly-1|<tuple|1|?>>
-    <associate|toc-22|<tuple|<uninit>|12>>
     <associate|toc-12|<tuple|<uninit>|7>>
+    <associate|toc-22|<tuple|<uninit>|12>>
+    <associate|toc-23|<tuple|<uninit>|13>>
     <associate|toc-13|<tuple|<uninit>|8>>
+    <associate|toc-24|<tuple|<uninit>|14>>
     <associate|toc-14|<tuple|<uninit>|8>>
     <associate|toc-15|<tuple|<uninit>|9>>
     <associate|toc-16|<tuple|<uninit>|10>>
@@ -872,6 +964,8 @@
       SQL queries macro<value|toc-dots><pageref|toc-21>
 
       <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-22>>
+
+      Real--life example<value|toc-dots><pageref|toc-23>
     </associate>
   </collection>
 </auxiliary>
