@@ -66,6 +66,8 @@ namespace Sioux
       session_table = Hashtable();
       application_table = Hashtable();
       session_mutex = System.Threading.Mutex();
+      connected_users_mutex = System.Threading.Mutex();
+      connected_users_count = 0;
       
       // initialize session id generator
       SessionID.Initialize()
@@ -123,12 +125,20 @@ namespace Sioux
 
     internal static AddSession(session : Session) : void
     {
-        session_table.Add(session.SessionID,session)
+        ignore(session_mutex.WaitOne());                                      
+                    
+        session_table.Add(session.SessionID,session);
+        
+        ignore(session_mutex.ReleaseMutex());
     }
 
     internal static RemoveSession(id : string) : void
     {
-        session_table.Remove(id)
+        ignore(session_mutex.WaitOne());                                      
+        
+        session_table.Remove(id);
+
+        ignore(session_mutex.ReleaseMutex());
     }
 
     internal static ContainsApplication(id : string) : bool
@@ -186,6 +196,10 @@ namespace Sioux
     {
       def server = open_connection ();
 
+      def max_connections = Int32.Parse( config.Get ("server/max_connections"));
+      def max_sessions = Int32.Parse( config.Get ("server/max_sessions"));
+          
+      
       while (true) 
       {
         def client = server.AcceptSocket ();
@@ -196,26 +210,19 @@ namespace Sioux
           
           def request = Request (stream);
           def response = Response (stream);
-
-          def max_sessions = Int32.Parse( config.Get ("server/max_sessions"));
           
-          if(session_table.Count > max_sessions && max_sessions != -1)  
+          match (request.RequestInfo)
           {
-              response.WriteServerFull();
-          }
-          else
-              match (request.RequestInfo)
-              {
-                  | RequestInfo.Invalid => 
-                    response.WriteInvalid ()
-
-                  | RequestInfo.StaticGet (url) =>
-                    response.ServeStaticFile (url)
-
-                  | RequestInfo.DynamicGet
-                  | RequestInfo.Post =>
-                    dynamic_handler (request, response)
-              };
+              | RequestInfo.Invalid => 
+                response.WriteInvalid ()
+                
+              | RequestInfo.StaticGet (url) =>
+                response.ServeStaticFile (url)
+                
+              | RequestInfo.DynamicGet
+              | RequestInfo.Post =>
+                dynamic_handler (request, response)
+          };
           
           try {
             // this is crucial! otherwise browser gets ECONNRESET
@@ -224,14 +231,49 @@ namespace Sioux
           catch {
             | _ : System.Exception => ()
           };
+
+          ignore(connected_users_mutex.WaitOne());                                      
+          
+          connected_users_count -= 1;
+
+          ignore(connected_users_mutex.ReleaseMutex());
           
           stream.Close ()
         };
 
-        def th = 
-          System.Threading.Thread (System.Threading.ThreadStart (handle_request));
+        ignore(connected_users_mutex.WaitOne());                                      
+        
+        connected_users_count += 1;
 
-        th.Start ()
+        ignore(connected_users_mutex.ReleaseMutex());                                      
+
+        mutable make_thread = false;
+        mutable th = None();
+        
+        while(!make_thread)
+        {
+            ignore(connected_users_mutex.WaitOne());                                      
+            ignore(session_mutex.WaitOne());
+            
+            when((connected_users_count <= max_connections || max_connections == -1)
+                  && (session_table.Count <= max_sessions || max_sessions == -1))
+            {
+               make_thread = true;
+               th = Some(System.Threading.Thread (System.Threading.ThreadStart (handle_request)));
+            }            
+
+            ignore(session_mutex.ReleaseMutex());        
+            ignore(connected_users_mutex.ReleaseMutex());
+
+            if(make_thread)
+            {
+                def t = Option.UnSome(th);
+                t.Start()
+            }
+            else
+                System.Threading.Thread.Sleep(500);
+        }
+        
       }
     }
 
@@ -273,6 +315,8 @@ namespace Sioux
     private static mutable logger : Logger;
     private static mutable config : Config;
     private static mutable session_mutex : System.Threading.Mutex;
+    private static mutable connected_users_mutex : System.Threading.Mutex;
+    private static mutable connected_users_count : int;
     
     private static mutable dynamic_handler : Request * Response -> void;
   }
