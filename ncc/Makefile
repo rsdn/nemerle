@@ -74,6 +74,12 @@ NEMERLE_DLL_SRC = \
 	../lib/AssemblyInfo.n
 
 NEMERLE_COMPILER_DLL_SRC = \
+        parsing/AST.n			 \
+        parsing/ParseTree.n		 \
+        parsing/Parser.n		 \
+        parsing/Lexer.n			 \
+        parsing/Utility.n                \
+	temp/NewParser.n                 \
         CompilationOptions.n             \
         external/LibrariesLoader.n	 \
         external/InternalTypes.n	 \
@@ -111,12 +117,6 @@ NEMERLE_COMPILER_DLL_SRC = \
         hierarchy/CustomAttribute.n	 \
         hierarchy/XmlDump.n		 \
         passes.n			 \
-        parsing/AST.n			 \
-        parsing/ParseTree.n		 \
-        parsing/Parser.n		 \
-        parsing/Lexer.n			 \
-        parsing/Utility.n                \
-	temp/NewParser.n                 \
 
 
 NCC_EXE_SRC       = main.n
