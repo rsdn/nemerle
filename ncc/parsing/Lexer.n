@@ -67,6 +67,14 @@ public variant Token
   | Comment { value : string; } 
 
   | EndOfFile
+  
+  public mutable Location : Nemerle.Compiler.Location;
+  
+  public this () { }
+  
+  public this (loc : Location) {
+    this.Location = loc;
+  }
 }
 
 public abstract class LexerBase
@@ -76,6 +84,8 @@ public abstract class LexerBase
   protected mutable isPendingChar : bool;  // is there already some first char
   protected mutable pendingChar : char;
   protected mutable negated_literal : bool;
+  protected mutable line : int;
+  protected mutable col : int;
 
   protected static opchars : array [bool];  
   protected static keywords : Hashtable [string, int];
@@ -88,6 +98,8 @@ public abstract class LexerBase
 
   public this ()
   {
+    line = 1;
+    col = 1;
     putback = false;
     isPendingChar = false;
     negated_literal = false;
@@ -97,12 +109,26 @@ public abstract class LexerBase
         
   protected read () : char
   {
-    if (!putback)
-      do_read ()
-    else {
-      putback = false;
-      putbackVal
-    }
+    def ch = 
+      if (!putback)
+        do_read ()
+      else {
+        putback = false;
+        putbackVal
+      }
+  
+    match (ch) {
+      | '\n' => ++line; col = 1
+      
+      | '\r' when (Options.PedanticLexer) =>
+        Message.warning (this.Location, "CR character found in input stream")
+          
+      | '\t' when (Options.PedanticLexer) =>
+        Message.warning (this.Location, "tab character found in input stream")
+          
+      | _ => ++col;
+    };
+    ch
   }
 
   protected peek () : char
@@ -465,28 +491,28 @@ public abstract class LexerBase
   protected get_string (end_ch : char) : Token
   {
     def buf = StringBuilder ();
-    mutable go = true;
-              
-    while (go) {
+    def loop () {
       match (read ()) {
         | '\\' =>
           def esc = escape_value (read ());
           _ = buf.Append (esc);
-        | '\n' =>
-          throw Error ("newline before end of string")
+          loop ();
+          
+        | '\n' => throw Error ("newline before end of string")
         | ch when ch != end_ch => 
-          _ = buf.Append (ch)
+          _ = buf.Append (ch);
+          loop ();
+          
         | _ =>
-          def ch = eat_whitespace (' ');
-          if (ch == end_ch)
+          eat_whitespace ();
+          when (peek () == end_ch) {
             ignore_comments ();
-          else {
-            isPendingChar = true;
-            pendingChar = ch;
-            go = false
+            _ = read ();
+            loop ();
           }
       }
-    };
+    }
+    loop ();
      
     Token.StringLiteral (buf.ToString ())
   }
@@ -516,10 +542,19 @@ public abstract class LexerBase
 
   abstract protected comment_beginning () : char;
   
-  abstract protected eat_whitespace (ch : char) : char;
+  abstract protected eat_whitespace () : void;
 
-  protected do_get_token (ch : char) : Token
+  protected do_get_token () : Token
   {
+    def ch = 
+      if (isPendingChar) {
+        isPendingChar = false;
+        pendingChar
+      }
+      else {
+        try { read () }
+        catch { _ : LexerBase.Error => ' ' }
+      }
     match (ch) {
       | '"' => get_string ('"')
 
@@ -591,6 +626,7 @@ public abstract class LexerBase
       | ':' => get_op (8, ch)
 
       // after executing eat_whitespace it is the only possibility for space
+      // (try..catch above)
       | ' ' => Token.EndOfFile ()
         
       | _ =>
@@ -607,8 +643,6 @@ public abstract class LexerBase
   abstract public GetToken () : Token;
 
   abstract public Location : Location { get; }
-
-  abstract public CurrentLocation : Location { get; }
 
   public static this () 
   {
@@ -683,11 +717,6 @@ public class LexerFile : LexerBase, IDisposable
   mutable file_idx : int;
   comment_store : StringBuilder;
 
-  mutable line : int;
-  mutable col : int;
-  mutable last_line : int;
-  mutable last_col : int;
-  
  #region PREPROCESSOR VARIABLES
   /** if there was only white chars from beginnig of line */
   mutable white_beginning : bool;  
@@ -740,8 +769,6 @@ public class LexerFile : LexerBase, IDisposable
   public this (fn : string)
   {
     base ();
-    line = 1;
-    col = 1;
     comment_store = StringBuilder (300);
     file_name = fn;
     file_idx = Location.GetFileIndex (file_name);
@@ -764,21 +791,6 @@ public class LexerFile : LexerBase, IDisposable
     def inp = reader.Read ();
     if (inp >= 0) {
       def ch = (inp :> char);
-      match (ch) {
-        | '\n' =>
-          line = line + 1;
-          col = 1
-        | '\r' =>
-          when (Options.PedanticLexer)
-            Message.warning (this.Location,
-                             "CR character found in input stream")
-        | '\t' =>
-          when (Options.PedanticLexer)
-            Message.warning (this.Location,
-                             "tab character found in input stream")
-        | _ =>
-          col = col + 1
-      };
       ch
     } else 
       throw LexerBase.Error ("unexpected end of file")
@@ -791,9 +803,6 @@ public class LexerFile : LexerBase, IDisposable
         // we are for sure in one line comment
         _ = read ();
         if (store_comments && peek () == '/') {
-          last_line = line;
-          last_col = col - 2;
-          
           _ = read ();
           mutable cc = ' ';
           do {
@@ -803,7 +812,7 @@ public class LexerFile : LexerBase, IDisposable
         }
         else
           while (read () != '\n') {};
-          white_beginning = true;
+        white_beginning = true;
         // pass whitespace, so next read would be eof checked
         ' '
 
@@ -822,9 +831,6 @@ public class LexerFile : LexerBase, IDisposable
           }
         };
         if (store_comments && peek () == '*') {
-          last_line = line;
-          last_col = col - 2;
-       
           _ = read ();
           loop1 (true, true);
           if (comment_store.Length == 1)
@@ -842,41 +848,48 @@ public class LexerFile : LexerBase, IDisposable
     }
   }
 
-  override protected eat_whitespace (ch : char) : char
+  override protected eat_whitespace () : void
   {
     mutable eof = false;
     
-    def loop (c) {
-      | ' ' | '\t' | '\r' | '\n' =>
-        when (c == '\n') white_beginning = true;
-        def ch = 
-          try { 
-            read ()
-          } catch { 
-            _ : LexerBase.Error => eof = true; '_'  
-          };
-        if (eof) ' ' else loop (ch)
-      | '/' =>
-        white_beginning = false;
-        match (comment_beginning ()) {
-          | '/' => '/'
-          | c => loop (c)
-        }
+    def loop (shift : bool) {
+      when (shift) _ = read (); 
+      def ch = try { peek () } 
+      catch {
+        _ : LexerBase.Error => eof = true; '_'  
+      };
+      unless (eof)
+        match (ch) {
+          | ' ' | '\t' | '\r' => loop (true);
+ 
+          | '\n' =>
+            white_beginning = true;
+            loop (true)
+            
+          | '/' =>
+            white_beginning = false;
+            _ = read ();
+            match (comment_beginning ()) {
+              | '/' => 
+                pendingChar = '/';
+                isPendingChar = true;
+              | _ => loop (false)
+            }
         
-      | '#' =>
-        if (white_beginning) {
-          parse_preprocessor ();
-          loop (' ')
-        }
-        else
-          throw LexerBase.Error ("preprocessor directives must occur only in"
-                                 " lines beginning with whitespaces")
+          | '#' =>
+            if (white_beginning) {
+              _ = read ();
+              parse_preprocessor ();
+              loop (false)
+            }
+            else
+              throw LexerBase.Error ("preprocessor directives must occur only in"
+                                     " lines beginning with whitespaces")
         
-      | _ =>
-        white_beginning = false;
-        c
+          | _ => white_beginning = false;
+        }
     };
-    loop (ch)
+    loop (false)
   }
 
   override protected ignore_comments () : void {
@@ -1003,10 +1016,10 @@ public class LexerFile : LexerBase, IDisposable
         }
 
       | "error" => 
-        Message.error (CurrentLocation, read_to_the_end_of_line ().Trim ());
+        Message.error (this.Location, read_to_the_end_of_line ().Trim ());
         
       | "warning" =>
-        Message.warning (CurrentLocation, read_to_the_end_of_line ().Trim ());
+        Message.warning (this.Location, read_to_the_end_of_line ().Trim ());
 
       | "region" =>
         _ = read_to_the_end_of_line ();
@@ -1122,26 +1135,20 @@ public class LexerFile : LexerBase, IDisposable
 
   private take_token () : Token
   {
-    def ch = 
-      if (isPendingChar) {
-        isPendingChar = false;
-        eat_whitespace (pendingChar)
-      }
-      else
-        eat_whitespace (' ');
+    unless (isPendingChar)
+      eat_whitespace ();
 
     if (comment_store.Length > 0) {
-      isPendingChar = true;
-      pendingChar = ch;
-
       def res = Token.Comment (comment_store.ToString ());
-      ignore (comment_store.Remove (0, comment_store.Length));
+      _ = comment_store.Remove (0, comment_store.Length);
       res
     }
     else {
-      last_line = line;
-      last_col = col;
-      do_get_token (ch)
+      def last_line = line;
+      def last_col = col;
+      def tok = do_get_token ();
+      tok.Location = Location (file_idx, last_line, last_col, line, col);
+      tok
     }
   }
   
@@ -1152,14 +1159,14 @@ public class LexerFile : LexerBase, IDisposable
       match (take_token ()) {
         | Token.EndOfFile =>
           if (eating_now > 0) {
-            Message.error (CurrentLocation, "unexpected end of file"
+            Message.error (this.Location, "unexpected end of file"
                            " before finishing preprocessor directive");
             eating_now = 0;
             result = Token.EndOfFile ()
           }
           else {
             unless (eating_stack matches [])
-              Message.error (CurrentLocation, "there are still open"
+              Message.error (this.Location, "there are still open"
                              " preprocessing directives at the end of file");
             result = Token.EndOfFile ()
           }
@@ -1170,11 +1177,6 @@ public class LexerFile : LexerBase, IDisposable
   }
 
   public override Location : Location
-  {
-    get { Location (file_idx, last_line, last_col) }
-  }
-
-  public override CurrentLocation : Location
   {
     get { Location (file_idx, line, col) }
   }
@@ -1237,50 +1239,46 @@ public class LexerString : LexerBase
     }
   }
   
-  override protected eat_whitespace (ch : char) : char
+  override protected eat_whitespace () : void
   {
     mutable eof = false;
     
-    def loop (c) {
-      | ' ' | '\t' | '\r' | '\n' =>
-        def ch = 
-          try { read () }
-          catch { _ : LexerBase.Error => eof = true; '_'  };
-        if (eof) ' ' else loop (ch)
-      | '/' =>
-        match (comment_beginning ()) {
-          | '/' => '/'
-          | c => loop (c)
+    def loop (shift : bool) {
+      when (shift) _ = read ();
+      def ch = 
+        try { peek () } 
+        catch { _ : LexerBase.Error => eof = true; '_' };
+      unless (eof)
+        match (ch) {
+          | ' ' | '\t' | '\r' | '\n' => loop (true);
+ 
+          | '/' =>
+            _ = read ();
+            match (comment_beginning ()) {
+              | '/' => 
+                pendingChar = '/';
+                isPendingChar = true;
+              | _ => loop (false)
+            }
+        
+          | '#' =>
+            throw LexerBase.Error ("preprocessor directives may not occur in"
+                                   " string programs")
+          | _ => ()
         }
-        
-      | '#' =>
-        throw LexerBase.Error ("preprocessor directives may not occur in"
-                               " string programs")
-        
-      | _ => c
     };
-    loop (ch)
+    loop (false)
   }
 
   public override GetToken () : Token
   {
-    def ch = 
-      if (isPendingChar) {
-        isPendingChar = false;
-        eat_whitespace (pendingChar)
-      }
-      else
-        eat_whitespace (' ');
+    unless (isPendingChar)
+      eat_whitespace ();
 
-    do_get_token (ch)
+    do_get_token ()
   }
 
   public override Location : Location
-  {
-    get { location }
-  }
-
-  public override CurrentLocation : Location
   {
     get { location }
   }

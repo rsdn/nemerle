@@ -173,11 +173,17 @@ public module Parser {
     ignore (get_token ()) 
   }
 
+  shift_loc () : Location {
+    def tok = get_token ();
+    tok.Location 
+  }
+
+
   public mutable doc_comments : NemerleMap [Location, string];
 
   location_here () : Location {
-    _ = peek_token ();
-    def loc = location ();
+    def t = peek_token ();
+    def loc = t.Location;
     when (doc_comments != null && pending_comment != null) {
       doc_comments = doc_comments.Add (loc, pending_comment);
       pending_comment = null;
@@ -261,13 +267,16 @@ public module Parser {
   }
     
   get_splicable_id () : Splicable {
-    def loc = location_here ();
-    match (get_token ()) {
+    def tok = get_token ();
+    def loc = tok.Location;
+    match (tok) {
       | Token.Identifier (n) => Splicable.Name (loc, Name ([n]))
       | Token.Operator ("$", _) =>
-        match (get_token ()) {
+        def bodytok = get_token ();
+        match (bodytok) {
           | Token.Identifier (id) =>
-              Splicable.Expression (loc, PExpr.Ref (location (), Name ([id])))
+            def idloc = bodytok.Location;
+            Splicable.Expression (loc + idloc, PExpr.Ref (idloc, Name ([id])))
               
           | Token.Operator ("(", _) =>
             def expr = parse_expr ();
@@ -280,20 +289,21 @@ public module Parser {
             }
 
           | Token.Keyword ("_") =>
-              Splicable.Expression (loc, PExpr.Wildcard (location ()))
+            def locend = bodytok.Location;
+              Splicable.Expression (loc + locend, PExpr.Wildcard (locend))
               
           | _ => fatal_error ("expecting identifier or '(' after '$'")
         }
       | Token.Keyword ("_") => 
         Splicable.Name (loc, Name ([Util.tmpname ("u")]))
-      | _ => fatal_error ("expecting identifier")
+      | _ => Message.fatal_error (loc, "expecting identifier")
     }
   }
 
   get_tyvar () : string * int {
     match (get_token ()) {
       | Token.Identifier (tv) => (tv, TypingContext.MacroColor)
-      | _ => fatal_error ("expecting type variable")
+      | t => Message.fatal_error (t.Location, "expecting type variable")
     }
   }
 
@@ -311,6 +321,24 @@ public module Parser {
         fatal_error ("expecting operator `" + op + "'");
     }
   }
+
+  expect_operator_loc (op : string) : Location {
+    def tok = get_token ();
+    match (tok) {
+      | Token.Operator (o, _) when op == o => tok.Location
+      | Token.Operator (o, _) when o.StartsWith (op) =>
+        push_back (Token.Operator (o.Substring (op.Length), 0));
+        tok.Location
+      | Token.Operator (o, _) =>
+        match (peek_token ()) {
+          | Token.Operator (o', _) when op == o + o' => tok.Location + shift_loc ();
+          | _ => Message.fatal_error (tok.Location, "expecting operator `" + op + "'");
+        }
+      | _ =>
+        Message.fatal_error (tok.Location, "expecting operator `" + op + "'");
+    }
+  }
+
 
   expect_keyword (op : string) : void {
     match (get_token ()) {
@@ -336,7 +364,6 @@ public module Parser {
       | _ => ()
     };
     def id = get_splicable_id ();
-    def loc = location ();
     def t =
       match (get_token ()) {
         | Token.Operator (":", _) => parse_type ()
@@ -351,7 +378,7 @@ public module Parser {
                             ]> :: atts.custom_attrs;
       | _ => ()
     };
-    Fun_parm (loc = loc, name = id, ty = t, modifiers = atts)
+    Fun_parm (loc = id.loc, name = id, ty = t, modifiers = atts)
   }
 
   // `splicing_type' is for noting, that there are spliced tyvars
@@ -403,21 +430,21 @@ public module Parser {
                     knownname : option [Splicable]) : Fun_header
   {
     mutable is_ctor = false;
-    def loc = location_here ();
+    mutable loc = Location.Default;
     
     def name = 
       match (knownname) {
         | None =>
           match (peek_token ()) {
-            | Token.Keyword ("this") when allow_ctor => 
-              shift ();
+            | Token.Keyword ("this") when allow_ctor =>
+              loc = shift_loc ();
               is_ctor = true; Splicable.Name (Name ([".ctor"]))
             | Token.Keyword ("fun") when is_lambda =>
-              shift (); Splicable.Name (Name ([]))
+              loc = shift_loc (); Splicable.Name (Name ([]))
             | _ when is_lambda => fatal_error ("expecting `fun'")
             | Token.Identifier  
             | Token.Operator ("$", _) => get_splicable_id ()
-            | _ => fatal_error ("expecting function name")
+            | t => Message.fatal_error (t.Location, "expecting function name")
           }
         | Some (n) => n
       };
@@ -440,8 +467,10 @@ public module Parser {
       };
     expect_operator (")");
     
+    def tok = get_token ();
+    loc += tok.Location;
     def ret_type =
-      match (get_token ()) {
+      match (tok) {
         | _ when is_ctor => push_back (); PType.Void ()
         | Token.Operator (":", _) => parse_type ()
         | _ when allow_inference => push_back (); PType.Infer ()
@@ -615,23 +644,23 @@ public module Parser {
     match (get_token ()) {
       | Token.Operator ("[", _) =>
         def exprs = operator_separated_list (",", parse_expr);
-        expect_operator ("]");
-        parse_prim_expr (PExpr.Indexer (expr.loc, expr, exprs))
+        def loc = expect_operator_loc ("]");
+        parse_prim_expr (PExpr.Indexer (expr.loc + loc, expr, exprs))
           
       | Token.Operator (".", _) => 
         def id = get_splicable_id ();
-        parse_prim_expr (PExpr.Member (expr.loc, expr, id))
+        parse_prim_expr (PExpr.Member (expr.loc + id.loc, expr, id))
           
       | Token.Operator ("(", _) =>
-        def parms =
+        def (loc, parms) =
           match (peek_token ()) {
-            | Token.Operator (")", _) => shift (); []
+            | Token.Operator (")", _) => (shift_loc (), [])
             | _ => 
               def parms = operator_separated_list (",", parse_expr);
-              expect_operator (")");
-              parms
+              (expect_operator_loc (")"), parms)
           };
-        parse_prim_expr (PExpr.Call (expr.loc, expr, parms))
+        //Message.debug (loc.Column.ToString () + " " + loc.EndColumn.ToString ());   
+        parse_prim_expr (PExpr.Call (expr.loc + loc, expr, parms))
 
       | Token.Operator ("{", _) =>
         push_back ();
@@ -658,14 +687,13 @@ public module Parser {
             fatal_error ("expected spliced expression")
         }
 
-      | Token.Operator (o, pri) =>
-        def loc = location ();
+      | Token.Operator (o, pri) as tok =>
         def unary () {
           when (pri == 0) {
             fatal_error ("operator `" + o + "' cannot be used in unary context")
           };
           shift ();
-          PExpr.Call (loc, PExpr.Ref (loc, Name ([o])), [parse_unary_expr ()])
+          PExpr.Call (tok.Location, PExpr.Ref (tok.Location, Name ([o])), [parse_unary_expr ()])
         };
         
         if (ctx.parens.Contains (o))
@@ -741,8 +769,7 @@ public module Parser {
     //Message.debug ("pse " + token_name (tok));
     match (tok) {
       | Token.Operator ("{", _) =>
-        def loc = location ();
-        def res = PExpr.Sequence (loc, parse_maybe_null_expr_sequence ());
+        def res = PExpr.Sequence (tok.Location, parse_maybe_null_expr_sequence ());
         expect_operator ("}");
         res
 
@@ -1097,8 +1124,9 @@ public module Parser {
 
   parse_block (parms : list [Fun_parm]) : PExpr 
   {
-    def loc = location ();
-    match (peek_token ()) {
+    def tok = peek_token ();
+    def loc = tok.Location;
+    match (tok) {
       // entire function body may be spliced
       | Token.Operator ("$", _) =>
         parse_expr ()
@@ -1107,8 +1135,8 @@ public module Parser {
       | Token.Operator ("{", _) =>
         shift ();
         match (peek_token ()) {
-          | Token.Operator ("}", _) => 
-            shift (); PExpr.Sequence (location (), [])
+          | Token.Operator ("}", _) as tok1 => 
+            shift (); PExpr.Sequence (loc + tok1.Location, [])
           | Token.Operator ("|", _) =>
             // convert function's parameters to tuple to be matched
             def parms_to_tupl (prs : list [Fun_parm], acc) {
@@ -2186,7 +2214,7 @@ public module Parser {
 
   parse_quotation () : PExpr {
     def tok = get_token ();
-    def loc = location ();
+    def loc = tok.Location;
     
     PExpr.Quoted (loc,
       match (get_token ()) {
@@ -2335,7 +2363,7 @@ public module Parser {
                                 : void -> PExpr 
   {
     fun () {
-      def loc = location ();
+      def loc = peek_token ().Location;
       def parms = parse_wrt_rule (rule);
       PExpr.MacroCall (loc, Name ([]), macro_ns, perm (parms))
     }
@@ -2369,10 +2397,10 @@ public module Parser {
     add ("<[", "]>", parse_quotation);
     
     add ("[", "]", fun () {
-      def loc = location ();
+      def loc = location_here ();
       def make_list (exps : list [PExpr]) {
         match (exps) {
-          | [] => PExpr.Call (loc, PExpr.Ref (loc, Name (["Nil"])), [])
+          | [] => PExpr.Call (PExpr.Ref (loc, Name (["Nil"])), [])
           | x :: xs => PExpr.Call (x.loc, PExpr.Ref (x.loc, Name (["Cons"])), 
                                [x, make_list (xs)])
         }
