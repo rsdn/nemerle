@@ -59,6 +59,9 @@ all:
 myPoll.exe: myPoll.n
 	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r Npgsql myPoll.n -o myPoll.exe
 
+blogComments.exe: blogComments.n
+	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r System.Web $< -o $@
+
 nswiki.exe: nswiki.n
 	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r System.Web $< -o $@
 
