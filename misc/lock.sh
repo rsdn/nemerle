@@ -1,6 +1,8 @@
 #!/bin/bash
-svn up ../boot/lock.txt
-if test $(tail -n 1 ../boot/lock.txt | awk '{print $1 }';) = "unlocked,"; then 
+cd ..
+svn up
+cd ncc
+if test $(tail -n 1 ../boot/lock.txt | awk '{print $1 }';) = "unlocked"; then 
   cp ../boot/lock.txt locktmp.txt
   echo "" >> ../boot/lock.txt
   echo $(id -un)":" >> ../boot/lock.txt
