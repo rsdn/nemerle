@@ -84,6 +84,13 @@ dist-clean: clean
 
 tests-clean:
 	rm -f tests/*.n tests/*.exe tests/*.log
+
+test:
+	./test | tee log
+
+etest:
+	./test errors | tee log
+
 clean:
 	rm -f *.exe *.dll *.pdb *~ error_log $(GENERATED_SOURCES) $(GENERATED_TOKEN_DESCRIPTION)
 
