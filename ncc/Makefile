@@ -50,7 +50,8 @@ n_src = \
 	cgexpr.n \
 	cgflat.n \
 	xmldump.n \
-	typattern.n
+	typattern.n \
+	external.n
 #	t/todo/ok-macro.n
 
 cs_src  = lexer.cs main.cs parser.cs
