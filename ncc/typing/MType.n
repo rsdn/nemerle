@@ -55,8 +55,10 @@ namespace Nemerle.Compiler
 
       /* Used when given value is required to have all the listed types.
 
-         Invariant: the types listed cannot be in the subtyping relation
+         Invariant 1: the types listed cannot be in the subtyping relation
          pairwise.
+
+         Invariant 2: there can be only Class() objects inside.
          
          This type is not expressible in the .NET type system directly,
          it can be however expressed with type variable bounds in some
@@ -69,8 +71,49 @@ namespace Nemerle.Compiler
     /** Check for type equality, taking intersection types
         into account. */
     [Nemerle.OverrideObjectEquals]
+    [Nemerle.NotImplemented]
     public Equals (t : MType) : bool
     {
+    }
+
+
+    /** Check for type equality, taking intersection types
+        into account. If it's possible that types are equal -- enforce 
+        that.  Assume non-seperated types. */
+    [Nemerle.OverrideObjectEquals]
+    [Nemerle.NotImplemented]
+    public TryUnify (solver : Solver, t : MType) : bool
+    {
+      assert (!this.IsSeparated);
+      assert (!t.IsSeparated);
+      
+      solver.EnsureClearState ();
+      
+      match ((this, t)) {
+        | (MType.Class (tc1, args1), MType.Class (tc2, args2))
+          when tc1.Equals (tc2) =>
+          List.Iter2 (args1, args2, fun (t1 : TyVar, t2 : TyVar) {
+            t1.Unify (t2)
+          });
+          !solver.InErrorState
+          
+        | (MType.Intersection (l1), MType.Intersection (l2)) 
+          when List.Length (l1) == List.Length (l2) =>
+          def ht = Hashtable ();
+          foreach ((MType.Class (tc, _)) as t in l1)
+            ht [tc.GetId ()] = t;
+          mutable cnt = 0;
+          foreach ((MType.Class (tc, _)) as t in l2)
+            when (ht.Contains (tc.GetId ()))
+              ++cnt;
+          if (cnt == List.Length (l1)) {
+            foreach ((MType.Class (tc, _)) as t in l2)
+              ht [tc.GetId ()].Unify (t);
+            !solver.InErrorState
+          } else false
+
+        | _ => false
+      }
     }
 
 
@@ -78,6 +121,9 @@ namespace Nemerle.Compiler
     public Require (s : Solver, t : MType) : void
     {
       match ((this, t)) {
+        | (_, MType.Class (tc, _)) 
+          when tc.Equals (InternalType.Object_tc) => ()
+          
         | (MType.Class (tc1, args1), MType.Class (tc2, args2)) =>
           match (tc1.SuperType (tc2)) {
             | Some (args) =>
@@ -90,7 +136,51 @@ namespace Nemerle.Compiler
               ReportError (solver, $ "$tc1 is not a subtype of $tc2 "
                                      "[simple require]")
           }
-        // FIXME handle the rest
+          
+        | (MType.Fun (f1, t1), MType.Fun (f2, t2)) =>
+          f2.Require (f1);
+          t1.Require (t2);
+          
+        | (MType.Tuple (l1), MType.Tuple (l2)) 
+          when List.Length (l1) == List.Length (l2) =>
+          List.Iter2 (l1, l2, fun (x : TyVar, y : TyVar) { x.Require (y) })
+          
+        | (MType.Array (t1, rank1), MType.Array (t2, rank2))
+          when rank1 == rank2 =>
+          // XXX we allow array covariance here! we may want to change it
+          t1.Require (t2)
+        
+        | (MType.Void, MType.Class (tc, _)) when tc.Equals (InternalType.Void_tc)
+        | (MType.Class (tc, _), MType.Void) when tc.Equals (InternalType.Void_tc)
+        | (MType.Void, MType.Void) => ()
+
+        | (MType.Array, MType.Class (tc, _)) 
+          when tc.Equals (InternalType.Array_tc) => ()
+
+        | (MType.TyVar (tv1), MType.TyVar (tv2))
+          when tv1.Equals (tv2) => ()
+
+        | (MType.TyVar (tv1), t2) =>
+          tv1.LowerBound.Require (t2)
+
+        | (MType.Intersection (lst), (MType.Class (tc, _)) as t2) =>
+          def loop (_) {
+            | (MType.Class (tc', _)) as t1 :: xs =>
+              if (tc'.SuperType (tc) matches Some)
+                t1.Require (t2)
+              else
+                loop (xs)
+            | [] =>
+              ReportError (solver, $ "$(this) is not a subtype of $t "
+                                     "[simple require, intersection]")
+            | _ => assert (false)
+          }
+          loop (lst)
+        
+        | (t1, MType.Intersection (lst)) =>
+          foreach (t2 in lst)
+            t1.Require (t2);
+
         | _ =>
           ReportError (solver, $ "$(this) is not a subtype of $t "
                                  "[simple require]")
@@ -101,6 +191,39 @@ namespace Nemerle.Compiler
     /** Enforce [this] to be equal [t]. */
     [Nemerle.NotImplemented]
     public Unify (s : Solver, t : MType) : void
+    {
+      match ((this, t)) {
+        | (MType.Intersection, MType.Intersection) when TryUnify (s, t)
+        | (MType.Class, MType.Class) when TryUnify (s, t) => ()
+        
+        | (MType.Fun (f1, t1), MType.Fun (f2, t2)) =>
+          f1.Unify (f2);
+          t1.Unify (t2);
+          
+        | (MType.Tuple (l1), MType.Tuple (l2)) 
+          when List.Length (l1) == List.Length (l2) =>
+          List.Iter2 (l1, l2, fun (x : TyVar, y : TyVar) { x.Unify (y) })
+          
+        | (MType.Array (t1, rank1), MType.Array (t2, rank2))
+          when rank1 == rank2 =>
+          t1.Unify (t2)
+        
+        | (MType.Void, MType.Class (tc, _)) when tc.Equals (InternalType.Void_tc)
+        | (MType.Class (tc, _), MType.Void) when tc.Equals (InternalType.Void_tc)
+        | (MType.Void, MType.Void) => ()
+
+        | (MType.TyVar (tv1), MType.TyVar (tv2))
+          when tv1.Equals (tv2) => ()
+
+        | _ =>
+          ReportError (solver, $ "the types $(this) and $t are not compatible "
+                                 "[simple unify]")
+      }
+    }
+
+
+    [Nemerle.NotImplemented]
+    public override ToString () : string
     {
     }
 
@@ -118,11 +241,9 @@ namespace Nemerle.Compiler
           | Void => true
           
           | Intersection (lst) =>
-            mutable is = false;
             foreach (x in lst)
-              if (x.IsSeparated)
-                is = true;
-            is
+              assert (!x.IsSeparated);
+            false
         }
       }
     }
