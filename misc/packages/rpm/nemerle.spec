@@ -1,6 +1,6 @@
 # $Revision: 1.5 $, $Date: 2004/02/04 14:22:32 $
 Summary:	Nemerle compiler
-Summary(pl):	Kompilator j?ka Nemerle
+Summary(pl):	Kompilator jêzyka Nemerle
 Name:		nemerle
 Version:	0.0.1592
 Release:	1
@@ -25,16 +25,17 @@ powerful macro system. It has simple, C-like syntax and makes access
 to imperative features easy, and thus is easy to learn.
 
 %description -l pl
-Nemerle jest nowym j?kiem funkcjonalnym zaprojektowym od pocz?ku z
-my??o platformie .NET. Nemerle wspiera programowanie obiektowe i
-imperatywne, typy wariantowe, dopasowanie wzorca, funkcje wy?zych
-rz?w oraz pote?y system makr. Sk?dnia Nemerle jest prosta,
-przypomina troch?. Nemerle umo?iwa ?twy dostê° do swych
-imperatywnych oraz obiektowych cech, co powinno u?twiæ µczenie si?o.
+Nemerle jest nowym jêzykiem funkcjonalnym zaprojektowym od pocz±tku z
+my¶l± o platformie .NET. Nemerle wspiera programowanie obiektowe i
+imperatywne, typy wariantowe, dopasowanie wzorca, funkcje wy¿szych
+rzêdów oraz pote¿ny system makr. Sk³adnia Nemerle jest prosta,
+przypomina trochê C. Nemerle umo¿liwa ³atwy dostêp do swych
+imperatywnych oraz obiektowych cech, co powinno u³atwiæ uczenie siê
+go.
 
 %package libs
 Summary:	Nemerle runtime environment
-Summary(pl):	?odowisko uruchomieniowe j?ka Nemerle
+Summary(pl):	¦rodowisko uruchomieniowe jêzyka Nemerle
 BuildArch:	noarch
 Group:		Libraries
 Requires(post):	mono >= 0.29
@@ -44,7 +45,7 @@ Requires:	mono >= 0.29
 Libraries needed to run programs written in Nemerle.
 
 %description libs -l pl
-Biblioteki niezb?e do uruchamiania program?apisanych w Nemerle.
+Biblioteki niezbêdne do uruchamiania programów napisanych w Nemerle.
 
 %prep
 %setup -q
