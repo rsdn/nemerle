@@ -39,6 +39,7 @@ all:
 	$(EXECUTE) ../ncc2.exe -reference $(CSCDLLS)System.dll $(lib_src) test.n
 	$(COMPILE) $(OUTFLAG)test.exe out.cs
 	$(EXECUTE) ./test.exe -c $(CSC) -n ../ncc2.exe -r $(EXECUTE)
+	rm -f out.cs out.exe test.exe out.netmodule ext_test.out
 
 clean:
-	rm -f *.cs *.exe *.il *.dll *.netmodule
+	rm -f *.cs *.exe *.il *.dll *.netmodule ext_test.out
