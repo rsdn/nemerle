@@ -62,7 +62,6 @@ m_src = \
 all_src = $(n_src) $(m_src)
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
-COMPILE = $(CSC) $(CSCFLAGS)
 
 
 all: test

@@ -33,19 +33,12 @@ lib_src = ../../lib/aliases.n ../../lib/core.n ../../lib/option.n ../../lib/list
 	  ../../lib/getopt.n ../../lib/icollection.n
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
-COMPILE = $(CSC) /debug+ $(CSCFLAGS)
 
 all:
-	$(EXECUTE) ../ncc2.exe -reference $(CSCDLLS)System.dll $(lib_src) test.n
-	$(COMPILE) $(OUTFLAG)test.exe out.cs
-	$(EXECUTE) ./test.exe -p "../../" -c "$(CSC)" -n "../ncc2.exe" -r "$(EXECUTE)"
-	rm -f out.cs out.exe test.exe out.netmodule ext_test.out
-
-il:
-	$(EXECUTE) ../ncc2.exe -reference $(CSCDLLS)System.dll $(lib_src) test.n
-	$(COMPILE) $(OUTFLAG)test.exe out.cs
-	$(EXECUTE) ./test.exe -p "../../" -c "$(CSC)" -n "../ncc-il.exe" -r "$(EXECUTE)"
-	rm -f out.cs out.exe test.exe out.netmodule ext_test.out
+	$(EXECUTE) ../ncc2.exe -texe -out test.exe -reference $(CSCDLLS)System.dll $(lib_src) test.n
+	$(EXECUTE) ./test.exe -p "../../" -n "../ncc2.exe" -r "$(EXECUTE)"
+	rm -f out.dll out.exe out.netmodule ext_test.out
 
 clean:
-	rm -f *.cs *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]* test.err test_error.log
+	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]*
+	rm -f test.err test_error.log a.out

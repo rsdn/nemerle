@@ -59,14 +59,12 @@ src = \
 	cgtree.n \
 	cgexpr.n \
 	cgopt.n \
-	cgflat.n \
 	external.n \
 	xmldump.n \
 	cgil.n \
 
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
-COMPILE = $(CSC) /optimize+ $(CSCFLAGS)
 NEMFLAG = -self
 
 all: ncc.exe
@@ -76,13 +74,13 @@ all: ncc.exe
 # Finally run testsuite.
 boot: ncc.exe
 	rm -f out.cs
-	$(EXECUTE) ./ncc.exe $(NEMFLAG) $(src)
-	mv -f out.cs out2.cs
-	$(COMPILE) $(OUTFLAG)ncc2.exe out2.cs
+	$(EXECUTE) ./ncc.exe $(NEMFLAG) -texe -out ncc2.exe $(src)
 	$(NGEN) ncc2.exe
-	$(EXECUTE) ./ncc2.exe $(NEMFLAG) $(src)
-	cmp -s out2.cs out.cs
-	rm -f out.cs
+	$(EXECUTE) ./ncc2.exe $(NEMFLAG) -texe -out ncc3.exe $(src)
+	ildasm /text ncc2.exe | grep -v '^// ' > ncc2.il
+	ildasm /text ncc3.exe | grep -v '^// ' > ncc3.il  
+	diff -u ncc2.il ncc3.il
+	rm -f ncc2.il ncc3.il ncc3.exe
 	$(MAKE) tests
 
 sync:
@@ -90,26 +88,10 @@ sync:
 	cp ncc2.exe ../boot/ncc.exe
 
 ncc.exe: $(src)
-	$(EXECUTE) ../boot/ncc.exe $(NEMFLAG) $(src)
-	mv -f out.cs out1.cs
-	$(COMPILE) $(OUTFLAG)$@ out1.cs
-
-boot-il: ncc-il.exe
-	$(EXECUTE) ./ncc-il.exe $(NEMFLAG) -texe -out ncc-il-2.exe $(src)
-	$(EXECUTE) ./ncc-il-2.exe $(NEMFLAG) -texe -out ncc-il.exe $(src)
-	ildasm /text ncc-il.exe | grep -v MVID | grep -v Input: > ncc-il.il
-	ildasm /text ncc-il-2.exe | grep -v MVID | grep -v Input: > ncc-il-2.il  
-	cmp -s ncc-il.il ncc-il-2.il
-	rm -f ncc-il-2.il
-	$(MAKE) tests-il
-
-ncc-il.exe: $(src)
-	$(EXECUTE) ../boot/ncc.exe $(NEMFLAG) -texe -out ncc-il.exe $(src)
+	$(EXECUTE) ../boot/ncc.exe $(NEMFLAG) -texe -out $@ $(src)
 
 stdlib.dll: $(lib_src)
-	$(EXECUTE) ./ncc.exe $(lib_src)
-	mv -f out.cs stdlib.cs
-	$(COMPILE) /target:library $(OUTFLAG)$@ stdlib.cs
+	$(EXECUTE) ./ncc.exe -tdll -out $@ $(lib_src)
 
 ../config.mak:
 	$(MAKE) -C .. config.mak
@@ -121,13 +103,10 @@ t test: tests
 tests:
 	$(MAKE) -C testsuite
 
-tests-il:
-	$(MAKE) il -C testsuite
-
 install: ncc.exe
 	if test ! -d $(BINDIR) ; then mkdir -p $(BINDIR) ; fi
 	$(INSTALL) -m 755 ncc.exe $(BINDIR)/ncc
 
 clean:
 	$(MAKE) -C testsuite clean
-	rm -f out.cs out[0-9].cs *.exe *.exe.so *.dll.so cgil-test.dll
+	rm -f *.exe *.exe.so *.dll.so ncc*.il cgil-test.dll
