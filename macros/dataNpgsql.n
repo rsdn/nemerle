@@ -65,16 +65,18 @@ module Npgsql {
     }
   }
 
-  /** Extracts parameters after $, type expressions containing variables with
-      names of those parameters.
+  /** Extracts parameters after $, perform typing of expressions containing
+      variables with names of those parameters.
 
       Returns:
        - final SQL provider secific query
        - collection of name and typed expression containing variable with this
          name
+       - list of expressions initializing [querycmd.Parameters] to value of
+         above variables
    */
   extract_parameters (ctx : Tyexpr.CTX, query : string)
-  : string * Hashtable <string, Typedtree.Expr>
+  : string * Hashtable <string, Typedtree.Expr> * list <Parsetree.Expr>
   {
     // take names after $
     def namesreg = Regex (@"(([^\$]*)\$(\w+))|(.+)", RegexOptions.Singleline);
@@ -91,14 +93,22 @@ module Npgsql {
       m <- m.NextMatch ();
     };
 
-    // initializers of sql command parameters
-    def tpars = Hashtable ();    
+    /// initializers of sql command parameters
+    def tpars = Hashtable ();
+    /// expressions initializing [querycmd.Parameters] with their values    
+    mutable pars_init <- [];
+    // itreate through parameters to type them and create initializers
     pars.Iter (fun (x, _) {
       def varname = Macros.UseSiteSymbol (x);
       def tvar = Tyexpr.ty_expr (ctx, <[ $(varname : var) ]>);
       tpars.Set (x, tvar);
+
+      /// add parameter initializer
+      pars_init <- <[
+        ignore (querycmd.Parameters.Add ($(x : string), $(tvar : typed)))
+      ]> :: pars_init;
     });
-    (fquery.ToString (), tpars)
+    (fquery.ToString (), tpars, pars_init)
   }
 
   
@@ -116,8 +126,7 @@ module Npgsql {
 
   macro ExecuteNonQuery (query : string, conn, con_name : string = "")
   {
-    def (query, tpars) = extract_parameters (_N_ctx, query);
-    mutable pars_init <- [];
+    def (query, tpars, pars_init) = extract_parameters (_N_ctx, query);
 
     // create compile-time query to check syntax and types in query
     def mycmd = NpgsqlCommand ("BEGIN TRANSACTION; " + query + "; ROLLBACK;",
@@ -126,11 +135,6 @@ module Npgsql {
     tpars.Iter (fun (name, tvar : Typedtree.Expr) {
       def (dbtype, dbvalue) = type_representant (tvar.expr_ty);
       mycmd.Parameters.Add (name, dbtype).Value <- dbvalue;
-      
-      /// add parameter initializer
-      pars_init <- <[ ignore (querycmd.Parameters.Add ($(name : string), 
-                                                       $(tvar : typed))) ]> 
-                   :: pars_init;
     });
     // try to execute query chcecking its syntax and typecorrectness
     try
@@ -148,24 +152,81 @@ module Npgsql {
       result
     ]>
   }
-  
-  macro SqlLoop (query : string, conn, body)
-  {
-    def (query, tpars) = extract_parameters (_N_ctx, query);
 
-    /// expressions initializing [querycmd.Parameters] with their values
-    mutable pars_init <- [];
+  macro ExecuteScalar (query : string, conn, con_name : string = "")
+  {
+    def (query, tpars, pars_init) = extract_parameters (_N_ctx, query);
+
+    // create compile-time query to check syntax and types in query
+    def mycmd = NpgsqlCommand (query, get_connection (con_name));
+    tpars.Iter (fun (name, tvar : Typedtree.Expr) {
+      def (dbtype, dbvalue) = type_representant (tvar.expr_ty);
+      mycmd.Parameters.Add (name, dbtype).Value <- dbvalue;
+    });
+
+    mutable col_type <- null;
+    try {
+      // try to execute query chcecking its syntax and aquiring names of columns
+      def myreader = mycmd.ExecuteReader(CommandBehavior.SchemaOnly);
+      def table = myreader.GetSchemaTable ();
+      if (table.Rows.Count < 1)
+        Message.fatal_error ("this query doesn't return any value")
+      else 
+        col_type <- Macros.UseSiteSymbol (table.Rows[0]["DataType"].ToString ());
+    }
+    catch {
+      | e : NpgsqlException =>
+        Message.fatal_error ("sql query error: " + e.Message)
+    };
+
+    /// final code for entire sql loop
+    <[
+      def querycmd = NpgsqlCommand ($(query : string), $conn);
+      { .. $pars_init };
+      def result = (querycmd.ExecuteScalar () :> $(col_type : var));
+      querycmd.Dispose ();
+      result
+    ]>
+  }
+
+  macro ExecuteReader (query : string, conn, con_name : string = "")
+  {
+    def (query, tpars, pars_init) = extract_parameters (_N_ctx, query);
+
+    // create compile-time query to check syntax and types in query
+    def mycmd = NpgsqlCommand (query, get_connection (con_name));
+    tpars.Iter (fun (name, tvar : Typedtree.Expr) {
+      def (dbtype, dbvalue) = type_representant (tvar.expr_ty);
+      mycmd.Parameters.Add (name, dbtype).Value <- dbvalue;
+    });
+
+    // try to execute query chcecking its syntax and aquiring names of columns
+    try
+      ignore (mycmd.ExecuteScalar())
+    catch {
+      | e : NpgsqlException =>
+        Message.fatal_error ("sql query error: " + e.Message)
+    };
+
+    /// final code for entire sql loop
+    <[
+      def querycmd = NpgsqlCommand ($(query : string), $conn);
+      { .. $pars_init };
+      def result = querycmd.ExecuteReader ();
+      querycmd.Dispose ();
+      result
+    ]>
+  }
+  
+  macro ExecuteReaderLoop (query : string, conn, body)
+  {
+    def (query, tpars, pars_init) = extract_parameters (_N_ctx, query);
 
     // create compile-time query to check syntax and types in query
     def mycmd = NpgsqlCommand (query, get_connection (""));
     tpars.Iter (fun (name, tvar : Typedtree.Expr) {
       def (dbtype, dbvalue) = type_representant (tvar.expr_ty);
       mycmd.Parameters.Add (name, dbtype).Value <- dbvalue;
-
-      /// add parameter initializer
-      pars_init <- <[ ignore (querycmd.Parameters.Add ($(name : string), 
-                                                       $(tvar : typed))) ]> 
-                   :: pars_init;
     });
 
     // list of definitions of query results inside loop body
@@ -174,12 +235,16 @@ module Npgsql {
       // try to execute query chcecking its syntax and aquiring names of columns
       def myreader = mycmd.ExecuteReader(CommandBehavior.SchemaOnly);
       def table = myreader.GetSchemaTable ();
+      mutable col_num <- 0;
       foreach(myRow : DataRow in table.Rows){
-        def col = myRow["ColumnName"].ToString ();
         def col_type = Macros.UseSiteSymbol (myRow["DataType"].ToString ());
-        def col_name = Macros.UseSiteSymbol (col);
-        bodyseq <- <[ def $(col_name : var) = (reader[$(col : string)] 
-                                              :> $(col_type : var)) ]> :: bodyseq;
+        def col_name = Macros.UseSiteSymbol (myRow["ColumnName"].ToString ());
+        def type_suff = col_type.id.Substring (col_type.id.LastIndexOf ('.') + 1);
+                                               
+        bodyseq <- <[ def $(col_name : var) =
+                        reader.$("Get" + type_suff : dyn) ($(col_num : int)) ]>
+                   :: bodyseq;
+        ++col_num;
       }
     }
     catch {
