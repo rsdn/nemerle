@@ -40,29 +40,16 @@ struct _MonoProfiler {
 };
 
 
-static char*
-method_get_name (MonoMethod* method)
-{
-        char *sig, *res;
-                                                                                                               
-        sig = mono_signature_get_desc (method->signature, FALSE);
-        res = g_strdup_printf ("%s.%s::%s(%s)", method->klass->name_space, method->klass->name,
-                method->name, sig);
-        g_free (sig);
-        return res;
-}
-
-
 static void
 output_method (MonoMethod *meth, struct method_descriptor *desc, MonoProfiler *prof)
 {
-  	assert (desc->used_times == 0);
+  //        assert (desc->used_times == 0);
 
 	printf("%10lld %10lld %7d  %s %s\n", 
 	       (desc->cumulative_time - desc->children_time) / (prof->total_time / 100000),
 	       desc->real_cumulative / (prof->total_time / 100000),
 	       desc->calls,
-	       method_get_name (meth),
+	       mono_method_full_name (meth, TRUE),
 	       desc->flags & 1 ? "(flawed)" : "");
 }
 
@@ -126,7 +113,7 @@ simple_method_leave (MonoProfiler *prof, MonoMethod *method)
 
 		record = prof->the_stack;
 		if (record == NULL) {
-			printf ("unwind failed for `%s'\n", method->name);
+                  printf ("unwind failed for `%s'\n", mono_method_full_name (method, TRUE));
 			abort ();
 		}
 		desc = record->method;

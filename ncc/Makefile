@@ -345,7 +345,7 @@ sync:
 		cp -vf $$x ../../boot/$$x ; \
 	done
 
-.PHONY: boot all tests t test ncc-il
+.PHONY: boot all tests t test
 
 t test: tests
 
@@ -353,7 +353,13 @@ tests:
 	$(Q)cd testsuite && $(MAKE)
 
 profile:
-	../misc/profiler/runprof
+	$(Q)../misc/profiler/runprof $(COMPILER) -no-stdlib -t:dll \
+          -out:out.stage1/Nemerle.stage1.dll -r System.dll \
+          $(NEMERLE_DLL_SRC) > n-prof-log
+	$(Q)../misc/profiler/runprof $(COMPILER) -no-stdlib -t:dll \
+          -r out.stage1/Nemerle.stage1.dll -r System.dll \
+          $(NEMERLE_COMPILER_DLL_SRC) > nc-prof-log
+
 
 halfboot:
 	touch out.stage1/*
@@ -376,5 +382,5 @@ install:
 
 clean:
 	cd testsuite && $(MAKE) clean
-	rm -f *.exe.so *.dll.so *.pdb *.xml core.[0-9]* core
+	rm -f *.exe.so *.dll.so *.pdb *.xml core.[0-9]* core *prof-log
 	rm -rf out.stage* doc
