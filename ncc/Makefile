@@ -65,36 +65,37 @@ NEMERLE_DLL_SRC = \
 
 
 NEMERLE_COMPILER_DLL_SRC = \
-	extensions.n \
-	globalenv.n \
-	localvalue.n \
-	typingcontext.n \
-	macros.n \
-	macroregistry.n \
-	typattern.n \
-	tyexpr.n \
-	members.n \
-	tyinfo.n \
-	ast.n \
-	parsetree.n \
-	typedtree.n \
-	util.n \
-	passes.n \
-	scan_globals.n \
-	tyvars.n \
-	tyutil.n \
-	parser.n \
-	flags.n \
-	lexer.n \
-	tycon.n \
-	cgtree.n \
 	cgexpr.n \
 	cgopt.n \
-	tycodec.n \
 	external.n \
 	xmldump.n \
 	cgil.n \
 	cgmatch.n \
+	extensions.n \
+	globalenv.n \
+	localvalue.n \
+	macros.n \
+	macroregistry.n \
+	members.n \
+	util.n \
+	scan_globals.n \
+	flags.n \
+	lexer.n \
+	cgtree.n \
+	passes.n \
+	tycon.n \
+	typingcontext.n \
+	typattern.n \
+	tyexpr.n \
+	tyinfo.n \
+	ast.n \
+	parsetree.n \
+	typedtree.n \
+	parser.n \
+	tycodec.n \
+	tyvars.n \
+	tyutil.n \
+
 
 
 NCC_EXE_SRC       = main.n
