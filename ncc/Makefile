@@ -175,7 +175,7 @@ last-stage-files: \
 
 lib: out.stage1/Nemerle.stage1.dll
 
-boot: stage1 stage2 stage3 compare ngen-stage3 tests
+boot: stage1 stage2 stage3 compare ngen-stage3
 
 ngen-stage3:
 	$(AOT) Nemerle.dll
@@ -303,6 +303,18 @@ t test: tests
 
 tests:
 	$(Q)cd testsuite && $(MAKE)
+
+install:
+	$(Q)if test ! -d $(DESTDIR)$(LIBDIR); then $(INSTALL) -d $(DESTDIR)$(LIBDIR); fi
+	$(Q)if test ! -d $(DESTDIR)$(BINDIR); then $(INSTALL) -d $(DESTDIR)$(BINDIR); fi
+	$(INST) [$(LIBDIR)] Nemerle.Compiler.dll
+	$(Q)$(INSTALL) -m 644 out.stage3/Nemerle.Compiler.dll $(DESTDIR)$(LIBDIR)/Nemerle.Compiler.dll
+	$(INST) [$(LIBDIR)] Nemerle.dll
+	$(Q)$(INSTALL) -m 644 out.stage3/Nemerle.dll $(DESTDIR)$(LIBDIR)/Nemerle.dll
+	$(INST) [$(BINDIR)] ncc
+	$(Q)$(INSTALL) -m 755 out.stage3/ncc.exe $(DESTDIR)$(BINDIR)/ncc
+	$(INST) [$(LIBDIR)] stdmacros.dll
+	$(Q)$(INSTALL) -m 644 out.stage3/stdmacros.dll $(DESTDIR)$(LIBDIR)/stdmacros.dll
 
 # This target is used to build the tarball.  It is passed the
 # directory name, where all files should be copied.
