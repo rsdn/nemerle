@@ -128,11 +128,15 @@ class Lexer : yyParser.yyInput
 		int ch;
 		bool seen_star = false;
 
-		do {
+		for (;;) {
 			ch = read();
+			if (seen_star && ch == ')')
+				break;
 			if (ch == '*')
 				seen_star = true;
-		} while (!(ch == ')' && seen_star));
+			else
+				seen_star = false;
+		}
 	}
 
 	int get_op(int tok, int first_ch)
