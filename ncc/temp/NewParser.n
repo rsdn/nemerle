@@ -745,7 +745,7 @@ namespace Nemerle.Compiler
                     | Token.Operator (":", _) =>
                       shift ();
                       match (maybe_parse_ellipsis ()) {
-                        | Some (e) => [PExpr.Ellipsis (PExpr.Spliced (e))]
+                        | Some (e) => [PExpr.Ellipsis (e)]
                         | _ =>
                           // parse , separated sequence as one expression
                           match (parse_expr ()) {
@@ -1028,7 +1028,7 @@ namespace Nemerle.Compiler
           | Token.Keyword ("implements") =>
             shift ();
             match (maybe_parse_ellipsis ()) {
-              | Some (e) => [Splicable.Expression (PExpr.Ellipsis (PExpr.Spliced (e)))]
+              | Some (e) => [Splicable.Expression (PExpr.Ellipsis (e))]
               | _        => comma_separated_list (get_splicable_id);
             }
           | _ => []
@@ -1201,15 +1201,7 @@ namespace Nemerle.Compiler
       match (peek_token ()) {
         | Token.Operator (".", _) =>
           expect_operator ("..");
-
-          def id = get_splicable_id ();
-          match (id) {
-            | Splicable.Name | Splicable.Int =>
-              Message.error (id.Location, "expected spliced expression");
-              None ();
-
-            | Splicable.Expression (e) => Some (e)
-          }
+          Some (parse_spliced_expr ())
         | _ => None ()
       }
     } 
@@ -1288,7 +1280,7 @@ namespace Nemerle.Compiler
             | Some (e) =>
               pop_stream ("type variables");
               expect_empty ("type variables");
-              ([], PExpr.Spliced (e.Location, e))
+              ([], e)
 
             | _ =>
               pop_stream ("type variables");
@@ -1305,7 +1297,7 @@ namespace Nemerle.Compiler
       def loop (acc) {
         if (flag_keyword ("where"))
           match (maybe_parse_ellipsis ()) {
-            | Some (e) => (List.Rev (acc), PExpr.Spliced (e))
+            | Some (e) => (List.Rev (acc), e)
             | _ =>
               def tv = get_tyvar (Token.LooseGroup (get_token ()));
               expect_operator (":");
@@ -1403,7 +1395,7 @@ namespace Nemerle.Compiler
                 | Some (e) =>
                   pop_stream ("ellipsis spliced expression");
                   [Fun_parm (e.loc, Splicable.Name (Name ([])), PExpr.Void (), 
-                             Modifiers (NemerleAttributes.None, [PExpr.Spliced (e)]))]
+                             Modifiers (NemerleAttributes.None, [e]))]
                 | _ => pop_stream (); []
               }
             | _ => TokenMap (group, parse_parameter);
@@ -1474,7 +1466,58 @@ namespace Nemerle.Compiler
     }
 
     [Nemerle.NotImplemented]
-    parse_block (parms : list [Fun_parm]) : PExpr;                    
+    parse_expr_sequence () : list [PExpr];
+    
+    parse_block (parms : list [Fun_parm]) : PExpr
+    {
+      def tok = get_token ();
+      def loc = tok.Location;
+      match (tok) {
+        // entire function body may be spliced
+        | Token.Operator ("$", _) =>
+          push_back (); parse_spliced_expr ()
+
+        // empty { }
+        | Token.BracesGroup (x) when x == null => PExpr.Sequence (loc, [])
+
+        // function body with embedded matching { | pat => bd | ... }
+        | Token.BracesGroup (Token.LooseGroup (Token.Operator ("|", _)) as group) =>
+          // convert function's parameters to tuple to be matched
+          def parms_to_tupl (prs : list [Fun_parm], acc) {
+            match (prs) {
+              | [] => PExpr.Tuple (List.Rev (acc))
+              | ({name = Splicable.Name (x); loc = l}) :: xs => 
+                parms_to_tupl (xs, PExpr.Ref (l, x) :: acc)
+              | x :: _  => Message.error (x.Location, "illegal spliced parameter?"); <[ () ]>
+            }
+          };
+          push_stream (group);          
+          def cases = parse_match_group ();
+          pop_stream ("function body");
+          match (parms) {
+            | [{name = Splicable.Name (x)}] => PExpr.Match (loc, PExpr.Ref (loc, x), cases)
+            | _::_::_ => 
+              def tup = parms_to_tupl (parms, []);
+              tup.loc = loc;
+              PExpr.Match (loc, tup, cases)
+              
+            | [] =>             
+              Message.error (loc, "functions with direct matching must have parameters"); <[ () ]>
+              
+            | x :: _ => Message.error (x.Location, "illegal spliced parameter?"); <[ () ]>
+          }
+          
+        // standard body enclosed by { ... }
+        | Token.BracesGroup (group) =>
+          push_stream (group);
+          def seq = parse_expr_sequence ();
+          pop_stream ("function body");
+          PExpr.Sequence (loc, seq);
+
+        | x =>
+          Error (x, "expected `{' at the beginning of function body"); <[ () ]>
+      }
+    }
 
     make_operator_call (name : string, e1 : PExpr, e2 : PExpr) : PExpr
     {
@@ -1689,15 +1732,20 @@ namespace Nemerle.Compiler
     }
 
     parse_spliced_expr () : PExpr {
-      match (get_splicable_id ()) {
+      def id = get_splicable_id ();
+      match (id) {
         | Splicable.Expression (e) =>
           match (e) {
             | PExpr.Spliced (PExpr.TypeEnforcement) => e
-            | _ => PExpr.Spliced (e)
+            | _ => PExpr.Spliced (id.Location, e)
           }
-        | Splicable.Name | Splicable.Int => Util.ice ("expected spliced expression")
+        | Splicable.Name | Splicable.Int =>
+          Message.error (id.Location, "expected spliced expression"); <[ () ]>
       }
     }
+
+    [Nemerle.NotImplemented]
+    parse_match_group () : list [MatchCase];
     
     parse_embedded_expr () : PExpr
     {
@@ -1804,34 +1852,31 @@ namespace Nemerle.Compiler
                 push_back ();
                 parse_spliced_expr ();
             }
-/*
+            
           | Token.Keyword ("match") =>
-            expect_operator ("(");
-            def expr = parse_expr ();
-            expect_operator (")");
+            def expr = 
+              match (get_token ()) {
+                | Token.RoundGroup (TokenSeparator.None, group) when group != null =>
+                  parse_expr (group);
+                | x => Error (x, "expecting `(expr)' after `match'"); <[ () ]>
+              }
             match (get_token ()) {
-              | Token.Operator ("{", _) =>
-                match (peek_token ()) {
-                  | Token.Operator (".", _) =>
-                    expect_operator ("..");
-                    match (get_splicable_id ()) {
-                      | Splicable.Expression (e) =>
-                        expect_operator ("}");                  
-                        PExpr.Match (loc, expr, 
-                                 [MatchCase ([], PExpr.Ellipsis (e.loc, PExpr.Spliced (e)))]);
-                      | Splicable.Name | Splicable.Int =>
-                        fatal_error ("expected spliced expression")
-                    }
-                  | _ =>
-                    push_back ();
-                    def cases = collect_braced_list (parse_match_case);
-                    PExpr.Match (loc, expr, cases)
-                }
-              | _ =>
-                fatal_error ("expecting '{' after 'match (e)'")
+              | Token.BracesGroup (group) =>
+                push_stream (group);
+                def result = 
+                  match (maybe_parse_ellipsis ()) {
+                    | Some (e) =>
+                      PExpr.Match (loc, expr, [MatchCase ([], PExpr.Ellipsis (e.loc, e))]);
+                                   
+                    | _ => PExpr.Match (loc, expr, parse_match_group ())
+                  }
+                pop_stream ("match body");
+                result
+                
+              | x => Error (x, "expecting '{' after 'match (e)'"); <[ () ]>
             }
 
-
+/*
           | Token.Keyword ("try") =>
             def body = parse_block ([]);
             match (get_token ()) {
@@ -1905,32 +1950,28 @@ namespace Nemerle.Compiler
               }
             };
 
-            match (peek_token ()) {
-              | Token.Keyword ("_")
-              | Token.Operator ("$", _) 
-              | Token.Identifier =>
-                def id = get_splicable_id ();
+            match (maybe_parse_ellipsis ()) {
+              | Some (e) =>
+                PExpr.DefFunctions (loc, [Function_decl (null, PExpr.Ellipsis (e))])
+              
+              | _ =>
                 match (peek_token ()) {
-                  | Token.Operator ("[", _) 
-                  | Token.Operator ("(", _) 
-                    parse_funs ([], Some (id))
+                  | Token.Keyword ("_")
+                  | Token.Operator ("$", _) 
+                  | Token.Identifier =>
+                    def id = get_splicable_id ();
+                    match (peek_token ()) {
+                      | Token.Operator ("[", _) 
+                      | Token.Operator ("(", _) 
+                        parse_funs ([], Some (id))
 
-                  | Token.Operator ("=", _) =>
-                    parse_val (id)
+                      | Token.Operator ("=", _) =>
+                        parse_val (id)
 
-                  | _ => parse_pat (Some (id))
+                      | _ => parse_pat (Some (id))
+                    }
+                  | _ => parse_pat (None ())                    
                 }
-
-              | Token.Operator (".", _) =>
-                expect_operator ("..");
-                match (get_splicable_id ()) {
-                  | Splicable.Expression (e) =>
-                    PExpr.DefFunctions (loc, [Function_decl (null, 
-                                                             PExpr.Ellipsis (PExpr.Spliced (e)))])
-
-                  | _ => fatal_error ("expected spliced expression")
-                }
-              | _ => parse_pat (None ())
             }
 */
           | Token.Identifier (k) =>
