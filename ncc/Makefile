@@ -77,8 +77,8 @@ boot: ncc.exe
 	$(EXECUTE) ./ncc.exe $(NEMFLAG) -texe -out ncc2.exe $(src)
 	$(NGEN) ncc2.exe
 	$(EXECUTE) ./ncc2.exe $(NEMFLAG) -texe -out ncc3.exe $(src)
-	$(DASM) ncc2.exe | grep -v '// GUID' > ncc2.il
-	$(DASM) ncc3.exe | grep -v '// GUID' > ncc3.il  
+	$(DASM) ncc2.exe | grep -v '// GUID' | grep -v MVID > ncc2.il
+	$(DASM) ncc3.exe | grep -v '// GUID' | grep -v MVID > ncc3.il  
 	diff -u ncc2.il ncc3.il
 	rm -f ncc2.il ncc3.il ncc3.exe
 	$(MAKE) tests
