@@ -362,7 +362,7 @@ Mode map
   (make-local-variable 'comment-start-skip)
   (setq comment-start-skip "/\\*+[ \t]*\\|//+ *")
 
-  (setq buffer-file-coding-system 'ISO8)
+  (setq buffer-file-coding-system 'utf-8)
   (setq indent-tabs-mode nil)
   
   (run-hooks 'nemerle-mode-hook))
