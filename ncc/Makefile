@@ -79,6 +79,7 @@ NEMERLE_COMPILER_DLL_SRC = \
         parsing/AST.n			 \
         parsing/ParseTree.n		 \
         parsing/MainParser.n		 \
+        parsing/MainParser-Extensions.n  \
         parsing/PreParser.n		 \
         parsing/Lexer.n			 \
         parsing/Utility.n                \
