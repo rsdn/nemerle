@@ -160,40 +160,79 @@ namespace Nemerle.Compiler
     {
       mutable skip_types = false;
       def emit_member (m : IMember) {
-        def attrs = m.GetCustomAttributes ();
-        def macro_attrs = m.GetMacroAttributes ();
-        match ((attrs, macro_attrs)) {
-          | ([], []) => ()
-          | _ =>
-            def handle = m.GetHandle ();
-            assert (handle != null, "handle is null for " + m.Name);
-            //Message.debug (handle.ToString () + ": " + handle.GetType ().ToString ());
-            mutable context = m.DeclaringType;
-            def adder =
-              match (m.GetKind ()) {
-                | MK_method => 
-                  if ((handle :> MethodBase).IsConstructor)
-                    fun (a) { (handle :> ConstructorBuilder).SetCustomAttribute (a) }
-                  else
-                    fun (a) { (handle :> MethodBuilder).SetCustomAttribute (a) }
-                | MK_property => 
-                  fun (a) { (handle :> PropertyBuilder).SetCustomAttribute (a) }
-                | MK_event => 
-                  fun (a) { (m :> NemerleEvent).event_builder.SetCustomAttribute (a) }
-                | MK_field  =>
-                  fun (a) { (handle :> FieldBuilder).SetCustomAttribute (a) }
-                | MK_type (tc) =>
-                  if (skip_types)
-                    null
-                  else {
-                    context = tc;
-                    fun (a) { (handle :> SR.Emit.TypeBuilder).SetCustomAttribute (a) }
+        def mods = m.GetModifiers ();
+        unless (mods.IsEmpty) {
+          def handle = m.GetHandle ();
+          assert (handle != null, "handle is null for " + m.Name);
+          //Message.debug (handle.ToString () + ": " + handle.GetType ().ToString ());
+          mutable context = m.DeclaringType;
+          def adder =
+            match (m.GetKind ()) {
+              | MK_method => 
+                // FIXME: we should allow [return:] here, but lame S.R.E. doesn't allow
+                // this, mono has an extension though
+                if ((handle :> MethodBase).IsConstructor)
+                  fun (target, attribute) {
+                    if (target != System.AttributeTargets.Method &&
+                        target != System.AttributeTargets.All)
+                      Message.error ("only [method:] target allowed on constructor")
+                    else
+                      (handle :> ConstructorBuilder).SetCustomAttribute (attribute) 
+                    }
+                else
+                  fun (target, a) {
+                    if (target == System.AttributeTargets.ReturnValue)
+                      Message.error ("[return:] attribute target not supported yet")
+                    else if (target != System.AttributeTargets.Method &&
+                             target != System.AttributeTargets.All)
+                      Message.error ("only [method:] and [return:] targets allowed on methods")
+                    else
+                     (handle :> MethodBuilder).SetCustomAttribute (a)
                   }
-              };
-            
-            when (adder != null)
-              add_custom_attributes ((context :> NC.TypeBuilder), 
-                                     attrs, macro_attrs, adder)
+              | MK_property => 
+                fun (target, a) {
+                  if (target == System.AttributeTargets.ReturnValue)
+                    Message.error ("[return:] attribute target not supported yet")
+                  else if (target != System.AttributeTargets.Property &&
+                           target != System.AttributeTargets.All)
+                    // FIXME: is it?
+                    Message.error ("only [property:] and [return:] targets allowed on properties")
+                  else
+                   (handle :> PropertyBuilder).SetCustomAttribute (a)
+                }
+              | MK_event => 
+                fun (target, a) {
+                  if (target != System.AttributeTargets.Event &&
+                      target != System.AttributeTargets.All)
+                    Message.error ("only [event:] target allowed on events")
+                  else
+                   (m :> NemerleEvent).event_builder.SetCustomAttribute (a)
+                }
+              | MK_field  =>
+                fun (target, a) {
+                  if (target != System.AttributeTargets.Field &&
+                      target != System.AttributeTargets.All)
+                    Message.error ("only [field:] target allowed on fields")
+                  else
+                   (handle :> FieldBuilder).SetCustomAttribute (a)
+                }
+              | MK_type (tc) =>
+                if (skip_types)
+                  null
+                else {
+                  context = tc;
+                  fun (target, a) {
+                    if (target != System.AttributeTargets.Class &&
+                        target != System.AttributeTargets.All)
+                      Message.error ("only [type:] target allowed on types")
+                    else
+                     (handle :> SR.Emit.TypeBuilder).SetCustomAttribute (a)
+                  }
+                }
+            };
+          
+          when (adder != null)
+            mods.SaveCustomAttributes ((context :> NC.TypeBuilder), adder)
         }
         
         match (m.GetKind ()) {
@@ -402,44 +441,6 @@ namespace Nemerle.Compiler
                              SystemType.ConstantVariantOptionAttribute
                            else 
                              SystemType.VariantOptionAttribute)
-    }
-
-
-    private add_custom_attributes (ti : NC.TypeBuilder,
-                                   attrs : list <Parsetree.Expr>,
-                                   macro_attrs : list <string * Parsetree.Expr>,   
-                                   adder : CustomAttributeBuilder -> void) : void
-    {
-      List.Iter (attrs, fun (expr) {
-        try {
-          adder (AttributeCompiler.CompileAttribute (ti.env, ti, expr))
-        } catch {
-          | _ : Recovery => ()
-        }
-      });
-      List.Iter (macro_attrs, fun (mattribute) {
-        def (suff, expr) = mattribute;
-        try {
-          def (m, parms) = 
-            match (MacroRegistry.lookup_macro (ti.env, expr, suff)) {
-              | Some ((_, m, parms)) => (m, parms)
-              | _ => Util.ice ("macro is not a macro?" +
-                               PrettyPrint.SprintExpr (None (), expr))
-            };
-          def sparms = List.Map (parms, fun (x) { PrettyPrint.SprintExpr (None (), x) });
-          def concatenated = NString.Concat ("@", sparms);
-//          def _x = ti.env.GetMacroContext ();
-          def serialized = <[ 
-            Nemerle.Internal.MacroAttribute ($(m.GetNamespace () + m.GetName () : string),
-          //                                   $(ti.env.GetMacroContext () : int),
-                                             0,
-                                             $(concatenated : string)) 
-          ]>;
-          adder (AttributeCompiler.CompileAttribute (ti.env, ti, serialized))
-        } catch {
-          | _ : Recovery => ()
-        }
-      });
     }
 
 
@@ -789,10 +790,13 @@ namespace Nemerle.Compiler
     emit_parameter_attributes (context : NC.TypeBuilder, cgm : CG_method) : void
     {
       List.Iter (cgm.parms, fun (v : CG_val) {
-        add_custom_attributes (context, 
-                               v.parm_info.modifiers.custom_attrs, 
-                               v.parm_info.modifiers.macro_attrs, 
-                               fun (a) { v.parm_info.builder.SetCustomAttribute (a) })
+        v.parm_info.modifiers.SaveCustomAttributes (context, fun (target, attr) {
+          if (target != System.AttributeTargets.Parameter &&
+              target != System.AttributeTargets.All)
+            Message.error ("only [param:] custom attribute target is allowed here")
+          else
+            v.parm_info.builder.SetCustomAttribute (attr)
+        })
       })
     }
 
@@ -1236,7 +1240,7 @@ namespace Nemerle.Compiler
      */
     private emit (expr : CG_expr) : bool 
     {      
-      //Message.debug ("emit: " + pretty_print (expr));
+      // Message.debug ("emit: " + pretty_print (expr));
 
       match (expr) {
       
@@ -1263,6 +1267,13 @@ namespace Nemerle.Compiler
               unless (is_system_void (let_val.ty)) {
                 def _ = declare_val_local_slot (let_val); ()
               };
+
+              emit (let_in)
+
+            | CE_init_obj (t) =>
+              def slot = declare_val_local_slot (let_val);
+              _ilg.Emit (OpCodes.Ldloca, slot);
+              _ilg.Emit (OpCodes.Initobj, t);
 
               emit (let_in)
 
@@ -2050,6 +2061,25 @@ namespace Nemerle.Compiler
         | CE_method_addr (meth) =>
           _ilg.Emit (OpCodes.Ldftn, meth);
           false
+
+
+        /* creates object of value type using implicit ctor */
+        | CE_init_obj (t) =>
+          def local_slot = _ilg.DeclareLocal (t);
+          _ilg.Emit (OpCodes.Ldloca, local_slot);
+          _ilg.Emit (OpCodes.Initobj, t);
+          _ilg.Emit (OpCodes.Ldloc, local_slot);
+          false
+          
+
+        /* special case these assignments for performance */
+        | CE_assign (CE_ref (decl), CE_init_obj (t)) =>
+          if (emit_ce_ref (decl, get_address_for_value_types = true)) true
+          else {
+            _ilg.Emit (OpCodes.Initobj, t);
+            false
+          }
+          
 
         /* creates a new array, given a list of initializers */
         | CE_mkarray (element_type, initializers, [size]) =>
@@ -3031,6 +3061,8 @@ namespace Nemerle.Compiler
         | CE_cast (expr, ty, _) =>
           "CE_cast < " + pretty_print (expr)
           + " to " + pretty_print_type (ty) + "> "
+        | CE_init_obj (ty) =>
+          "CE_init_obj (" + pretty_print_type (ty) + ") "
         | CE_sequence (body) => "{ " + pretty_print_list (body, "") + " }; "
         | CE_none => "CE_none"
         | CE_mkarray (_, initializers, dimensions) =>

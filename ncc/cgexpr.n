@@ -297,6 +297,8 @@ module CGexpr {
                 def (_, expr) = List.Last (switch_cases);
                 type_of (expr)
             }
+          | CE_init_obj (t) => t
+
           | CE_mkarray 
           | CE_array_indexer (_, _) => Util.ice ("should be cached")
           | CE_opcode => Util.ice ("opcode")
@@ -577,7 +579,7 @@ module CGexpr {
       match (d.kind) {
         | D_closurised_this_ptr => CE_this ()
         | _ =>
-          Message.debug ("undef " + d.name + " = " + d.id.ToString ());
+          //Message.debug ("undef " + d.name + " = " + d.id.ToString ());
           Util.ice ("ref to undef val " + d.name)
       }
     }
@@ -608,19 +610,46 @@ module CGexpr {
     }
   }
 
+  /**
+   * Properly format list of expression before being passed in a function
+   * call -- box value types, and add needed downcasts.
+   */
   casted_parms (ctx : CTX, formals : list <CG_val>, parms : list <CG_expr>) : list <CG_expr>
   {
-    def parms =
-      match ((formals, parms)) {
-        | (_ :: _ :: _, [parm]) =>
-          make_untupled_parms (parm, List.Length (formals))
-        | _ => parms
-      };
-      
+    //Message.debug ("formals : " + formals.ToString () + " params : " + parms.ToString ());
+    def parms = adjust_tupled_parms (ctx, List.Length (formals), parms);
     List.Map2 (formals, parms, 
       fun (v : CG_val, e) { 
         maybe_cast (ctx, v.ty, e) 
       })
+  }
+
+  casted_parms (ctx : CTX, formals : list <Fun_parm>, parms : list <Parm>) : list <CG_expr>
+  {
+    def parms = List.Map (parms, fun (p : Parm) { cg_expr (ctx, p.expr) });
+    def parms = adjust_tupled_parms (ctx, List.Length (formals), parms);
+    List.Map2 (formals, parms, 
+      fun (v : Fun_parm, e) { 
+        maybe_cast (ctx, cg_type (ctx, v.ty), e) 
+      })
+  }
+
+  /**
+   * Split tuple to parameters or vice versa.
+   */
+  adjust_tupled_parms (ctx : CTX, formals_cnt : int, parms : list <CG_expr>) : list <CG_expr>
+  {
+    match ((formals_cnt, parms)) {
+      | (x, [parm]) when x > 1 =>
+        make_untupled_parms (parm, formals_cnt)
+      | (1, _ :: _ :: _) =>
+        def parms = List.Map (parms, 
+          fun (e) { 
+            maybe_cast (ctx, SystemType.Object, e) 
+          });
+        [tuple_ctor (parms)]
+      | _ => parms
+    }
   }
 
   /**
@@ -727,11 +756,12 @@ module CGexpr {
   emit_loop (ctx : CTX, h : Fun_header, parms : list <Parm>) : CG_expr
   {
     def ctx' = copy_ctx (ctx);
-    def parm_vals = List.Map2 (h.parms, parms, fun (fp : Fun_parm, ap : Parm) {
+    def parms = casted_parms (ctx, h.parms, parms);
+    def parm_vals = List.Map2 (h.parms, parms, fun (fp : Fun_parm, ap) {
       def val = CG_val (loc = fp.decl.loc, 
                         name = fp.name,
                         ty = cg_type (ctx, fp.ty),
-                        val = cg_expr (ctx, ap.expr));
+                        val = ap);
       ignore (set_parm_info (fp, val));
       ctx'.locals = ctx'.locals.Add (fp.decl.id, val);
       val
@@ -796,6 +826,7 @@ module CGexpr {
         else
           CE_call (t, callable, parms)
       } else {
+        //Message.debug ("real casted params for " + cgm.name);
         def generate_call (parms) {
           if (is_tail)
             CE_tail_call (callable, casted_parms (ctx, cgm.parms, parms))
@@ -891,6 +922,9 @@ module CGexpr {
             
         maybe_cast (ctx, cg_type (ctx, inex.expr_ty), field_ref)
 
+      | E_implicit_value_type_ctor (t) =>
+        CE_init_obj (t.GetSystemType ())
+
       | E_method_ref => Util.ice ("E_method_ref")
       | E_property_ref => Util.ice ("E_property_ref")
       | E_static_property_ref => Util.ice ("E_static_property_ref")
@@ -914,14 +948,16 @@ module CGexpr {
         def fn = ctx.current_fun_or_loop;
         match (fn.usage) {
           | FU_used_just_once =>
+            def parms = casted_parms (ctx, fn.parms, parms);
             def assigns = 
-              List.Map2 (parms, fn.parms, fun (p : Parm, fp : Fun_parm) {
-                (ctx.locals.Get (fp.decl.id), self (p.expr))
+              List.Map2 (parms, fn.parms, fun (expr, fp : Fun_parm) {
+                (ctx.locals.Get (fp.decl.id), expr)
               });
             CE_sequence ([CE_multiple_assign (assigns), 
                           CE_continue_loop (Option.UnSome (ctx.current_loop))])
           | _ =>
             def parms = List.Map (parms, fun (p : Parm) { self (p.expr) });
+            // Message.debug ("self casted params for " + fn.cg_method.name);
             def parms = casted_parms (ctx, fn.cg_method.parms, parms);
             def t = cg_type (ctx, inex.expr_ty);
             CE_self_tail_call (t, parms)
