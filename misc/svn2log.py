@@ -186,7 +186,7 @@ Options:
   -p, --prefix=DIR     set root directory of project (it will be striped off
                        from ChangeLog entries, paths outside it will be 
                        ignored)
-  -e, --exclude=DIR    exclude DIR from ChangeLog (relative to prefix)
+  -x, --exclude=DIR    exclude DIR from ChangeLog (relative to prefix)
   -o, --output         set output file (defaults to 'ChangeLog')
   -d, --domain=DOMAIN  set default domain for logins not listed in users file
   -u, --users=FILE     read logins from specified file
