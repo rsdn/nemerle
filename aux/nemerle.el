@@ -21,7 +21,7 @@
 ;; To install the nemerle mode, put the following lines into your
 ;; ~/.emacs file:
 
-;; (setq load-path (cons "/path/to/nemerle.el" load-path))
+;; (setq load-path (cons "/path/to/where/this/file/resides" load-path))
 ;; (autoload 'nemerle-mode "nemerle-mode"
 ;;   "Major mode for editing nemerle programs." t)
 ;; (setq auto-mode-alist (cons '("\\.n$" . nemerle-mode) auto-mode-alist))
@@ -94,15 +94,15 @@ buffer created.  This is a good place to put your customizations.")
 	 '("\\b\\(void\\|int\\|char\\|float\\|bool\\|string\\|option\\|list\\|object\\)\\b"
 	   0 font-lock-type-face)
 	 '("\\btype\\s +\\(\\w+\\)" 1 font-lock-type-face)
+	 '("'\\w+" 0 font-lock-type-face)
 
 	 ;; constants
 	 '("\\b\\(false\\|true\\)\\b" 0 font-lock-constant-face)
 
 	 ;; variables
 	 '("``\\w+``" 0 font-lock-variable-name-face)
-	 '("'\\w+" 0 font-lock-variable-name-face)
 	 '("\\b\\(\\w+\\)\\ *:" 1 font-lock-variable-name-face)
-	 '("\\bmatch\\s +\\(\\w+\\)\\s +with\\b" 1 font-lock-variable-name-face)
+	 '("\\bmatch\\s +\\(\\w+\\)" 1 font-lock-variable-name-face)
 	 '("\\blet\\s +\\(\\w+\\)" 1 font-lock-variable-name-face)
 
 	 ;; functions
@@ -141,7 +141,8 @@ buffer created.  This is a good place to put your customizations.")
   (modify-syntax-entry ?\~ "w"    nemerle-mode-syntax-table)
   (modify-syntax-entry ?\. "w"    nemerle-mode-syntax-table)
   (modify-syntax-entry ?\: "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\_ "w"    nemerle-mode-syntax-table))
+  (modify-syntax-entry ?\_ "w"    nemerle-mode-syntax-table)
+  (modify-syntax-entry ?\' "w"    nemerle-mode-syntax-table))
 
 
 
