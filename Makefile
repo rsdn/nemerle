@@ -87,3 +87,4 @@ install:
 clean:
 	$(MAKE) -C doc clean
 	$(MAKE) -C ncc clean
+	rm -f config.mak

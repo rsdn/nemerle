@@ -57,6 +57,7 @@ NEFLAGS = --debug
 CSFLAGS = -nowarn:162 -debug+
 COMPILE = $(CSC) $(CSFLAGS)
 
+
 all: ncc.exe
 
 # Do compiler bootstrap, compare results from stage2 and stage3,
@@ -65,11 +66,11 @@ all: ncc.exe
 boot: ncc.exe
 	rm -f out.cs
 	$(NET_ENGINE) $(NEFLAGS) ncc.exe $(n_src)
-	$(COMPILE) -o ncc2.exe $(all_cs)
+	$(COMPILE) $(OUTFLAG)ncc2.exe $(all_cs)
 	mv out.cs out2.cs
 	$(NET_ENGINE) $(NEFLAGS) ncc2.exe $(n_src)
 	cmp -s out2.cs out.cs
-	$(COMPILE) -o ncc3.exe $(all_cs)
+	$(COMPILE) $(OUTFLAG)ncc3.exe $(all_cs)
 	mv out.cs out3.cs
 	$(MAKE) testsuite
 
@@ -79,7 +80,7 @@ sync:
 
 ncc.exe: $(all_src)
 	$(NET_ENGINE) $(NEFLAGS) ../boot/ncc.exe $(n_src)
-	$(COMPILE) -o $@ $(all_cs)
+	$(COMPILE) $(OUTFLAG)$@ $(all_cs)
 	mv -f out.cs out1.cs
 
 ../config.mak:
@@ -100,7 +101,6 @@ parser.cs: parser.jay
 install: ncc.exe
 	if test ! -d $(BINDIR) ; then mkdir -p $(BINDIR) ; fi
 	$(INSTALL) -m 755 ncc.exe $(BINDIR)/ncc.exe
-	$(INSTALL) -m 755 ncc $(BINDIR)/ncc
 
 
 clean:
