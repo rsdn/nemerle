@@ -30,11 +30,10 @@ include ../config.mak
 
 XSPP = xspp
 XSLT = xsltproc --xinclude
-MAKE_GRAMMAR = perl scripts/grammar-txt-2-xml.pl $< | xmllint -o $@ --format -
 
 course_docs = index
 
-root_docs = 	index grammar coreNemCompiler coreNemDesc \
+root_docs = 	index coreNemCompiler coreNemDesc \
 		TRSideas faq license hacking macros reference
 
 docs = $(root_docs) $(addprefix course/, $(course_docs))
@@ -69,11 +68,6 @@ course/%.html: course-src/%.xml mainStyle.xsl
 
 %.xsl: tex/%.xspp
 	$(XSPP) $< > $@
-
-grammar.tex grammar.html: grammar.xml
-
-grammar.xml: src/grammar.txt scripts/grammar-txt-2-xml.pl
-	$(MAKE_GRAMMAR)
 
 %.ps: %.dvi
 	dvips -o $@ $<
@@ -118,8 +112,9 @@ www: nemerle-web.tar.gz
 nemerle-web.tar.gz: $(normal_docs) $(wildcard styles/*.css styles/*.png)
 	$(MAKE) verify-html
 	rm -rf www
-	mkdir -p www/{styles,course}
+	mkdir -p www/{styles,course/styles}
 	cp styles/*.{css,png} www/styles/
+	cp styles/*.{css,png} www/course/styles/
 	cp *.{html,ps,pdf} www/
 	cp course/*.html www/course/
 	for f in www/*.pdf www/*.ps ; do gzip <$$f > $$f.gz ; done
