@@ -300,14 +300,27 @@ returns [string return_string]
     :    lb:LTHAN 
         { return_string = ExtendedToken.getWhitespaces (lb) + "<"; }
 
-	al = argument_list
+	al = argument_list2
 	{ return_string += al; }
 
         (options {greedy=true;}: rb:GTHAN 
            { return_string += ExtendedToken.getWhitespaces (rb) + ">"; }
-        )?
+        )
     ;
 
+argument_list2
+returns [string return_string]
+{
+    string ar = "";
+    return_string = "";
+}
+    :   return_string = argument 
+        (c:COMMA   ar = argument
+            {
+                return_string += (c.getText () + ar);
+            }
+        )+
+    ;
 
 
 non_array_type
@@ -1811,7 +1824,7 @@ namespace_body
     ;
 
 
-using_directive
+using_directive //FIXME: add generic parameters here
 {
     string [] nn = new string[]{"",""};
 }
