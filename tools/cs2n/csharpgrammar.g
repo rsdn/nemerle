@@ -371,7 +371,7 @@ returns [string return_string]
 }
     :   n:NEW   tp = type   lp:LPAREN   exp = expression rp:RPAREN
         {
-            return_string = ((ExtendedToken)n).GetWhitespaces ()  + tp[0]+tp[1] + lp.getText () + exp + rp.getText ();
+            return_string = ExtendedToken.getWhitespaces (n)  + tp[0]+tp[1] + lp.getText () + exp + rp.getText ();
         }
     ;
 
@@ -384,7 +384,7 @@ returns [string return_string]
 }
     :   n:NEW   tp = type  lp:LPAREN   (al = argument_list)?   rp:RPAREN
         {
-            return_string = ((ExtendedToken)n).GetWhitespaces () + tp[0]+tp[1] + lp.getText () + al + rp.getText ();
+            return_string = ExtendedToken.getWhitespaces (n) + tp[0]+tp[1] + lp.getText () + al + rp.getText ();
         }
     ;
 
@@ -786,7 +786,7 @@ returns [string return_string]
     :   return_string = equality_expression   
         ( b:BAND   ee = equality_expression
             {
-                return_string += (((ExtendedToken)b).GetWhitespaces () + "%" +  ExtendedToken.getTextOnly (b) + ee);
+                return_string += (b.getText () + ee);
             }
         )*
     ;
@@ -800,7 +800,7 @@ returns [string return_string]
     :   return_string = and_expression   
         (b:BXOR   ae = and_expression
             {
-                return_string += (((ExtendedToken)b).GetWhitespaces () + "%" +  ExtendedToken.getTextOnly (b) + ae);
+                return_string += (b.getText () + ae);
             }
         )*
     ;
@@ -814,7 +814,7 @@ returns [string return_string]
     :   return_string = exclusive_or_expression   
         (b:BOR   eoe = exclusive_or_expression
             {
-                return_string += (((ExtendedToken)b).GetWhitespaces () + "%" + ExtendedToken.getTextOnly (b) + eoe);
+                return_string += (b.getText () + eoe);
             }
         )*
     ;
@@ -828,7 +828,7 @@ returns [string return_string]
     :   return_string = inclusive_or_expression   
         (l:LAND   ioe = inclusive_or_expression
             {
-                return_string += (((ExtendedToken)l).GetWhitespaces () + "%" +  ExtendedToken.getTextOnly (l) + ioe);
+                return_string += (l.getText () + ioe);
             }
         )*
     ;
@@ -954,7 +954,7 @@ returns [StatementTree t]
     t = new StatementTree();
 }
     :   s:SEMI
-        {t = new StatementTree (s);}
+        {t = new StatementTree (ExtendedToken.getWhitespaces(s) + "();");}
     ;
 
 block
@@ -983,11 +983,11 @@ returns [StatementTree t]
 }
     :   temp = local_variable_declaration   s1:SEMI
         {
-            t = new StatementTree (temp + ((ExtendedToken)s1).GetWhitespaces ());
+            t = new StatementTree (temp + ExtendedToken.getWhitespaces (s1));
         }
     |   temp = local_constant_declaration   s2:SEMI
         {
-            t = new StatementTree (temp + ((ExtendedToken)s2).GetWhitespaces ());
+            t = new StatementTree (temp + ExtendedToken.getWhitespaces (s2));
         }
     ;
 
@@ -1001,7 +1001,7 @@ returns [string return_string]
     :   t = type   return_string = local_variable_declarator[t] 
         ( c:COMMA   
             temp = local_variable_declarator[t]
-            { return_string += (temp + ((ExtendedToken)c).GetWhitespaces ()); }
+            { return_string += (temp + ExtendedToken.getWhitespaces (c)); }
         )*
     ;
 
@@ -1011,19 +1011,11 @@ returns [string return_string]
     string lvi = "";
     return_string = "";
 }
-    :   (IDENTIFIER ASSIGN NULL) =>
-        id3:IDENTIFIER   a1:ASSIGN n:NULL
-        {
-            return_string = t[0] + "mutable " + id3.getText () + a1.getText () +
-                            n.getText () + " : " + t[1] + ";";
-        }
-
-    |   (IDENTIFIER   ASSIGN)=>
+    :   (IDENTIFIER   ASSIGN)=>
         id1:IDENTIFIER   a:ASSIGN lvi = local_variable_initializer
         {
             return_string = t[0] + "mutable " + id1.getText () + a.getText () + lvi + ";";
         }
-
     |   id2:IDENTIFIER
         {
             return_string = t[0] + "mutable " + id2.getText () + " = Nemerle.Extensions.DefaultValue ( _ :" + t[1] + ");";
@@ -1046,9 +1038,9 @@ returns [string return_string]
     string [] t = new string[]{"",""};
     string temp = "";
 }
-    :   c:CONST   t = type   return_string = local_constant_declarator[((ExtendedToken)c).GetWhitespaces (),""]
+    :   c:CONST   t = type   return_string = local_constant_declarator[ExtendedToken.getWhitespaces (c),""]
         (cm:COMMA  
-            temp = local_constant_declarator[((ExtendedToken)c).GetWhitespaces (),((ExtendedToken)cm).GetWhitespaces ()]
+            temp = local_constant_declarator[ExtendedToken.getWhitespaces (c),ExtendedToken.getWhitespaces (cm)]
             { return_string += temp; }
         )*
     ;
@@ -1141,7 +1133,7 @@ returns [StatementTree t]
         t2 = embedded_statement   {a.Add (t2);}
         { t = new StatementTree("IF",a);}
 
-    |   i2:IF                     {a.Add (new StatementTree( ((ExtendedToken)i2).GetWhitespaces () + "when"));}
+    |   i2:IF                     {a.Add (new StatementTree( ExtendedToken.getWhitespaces (i2) + "when"));}
         lp2:LPAREN                {a.Add (new StatementTree(lp2));}
         be = boolean_expression   {a.Add (new StatementTree(be));}
         rp2:RPAREN                {a.Add (new StatementTree(rp2));}
@@ -1913,7 +1905,7 @@ method_body
     StatementTree t = new StatementTree ();
 }
     :   t = block 
-        {
+        {         
             Emit.EmitString ( t.ToString () );
         }
     |   s:SEMI
@@ -1927,7 +1919,7 @@ formal_parameter_list
                 c1:COMMA   { Emit.EmitToken (c1); }
                 fixed_parameter            
             )*   
-            c3:COMMA  { Emit.EmitToken (c3); } parameter_array
+            COMMA   parameter_array
     |   (fixed_parameter (COMMA   fixed_parameter)*) =>       
             fixed_parameter 
             (c2:COMMA   { Emit.EmitToken (c2); }
@@ -1957,13 +1949,11 @@ returns [string return_string]
     ;
 
 parameter_array
+returns [string return_string]
 {
-    string [] t = new string[]{"",""};
+    return_string = "";
 }
-    :   (attributes)?   p:PARAMS   t = array_type  id:IDENTIFIER
-        {
-            Emit.EmitString ( p.getText () + id.getText () + " :" + t[0]+t[1] );
-        }        
+    :   (attributes)?   PARAMS   array_type   IDENTIFIER
     ;
 
 property_declaration
@@ -2238,9 +2228,9 @@ overloadable_binary_operator
     |   obn3:STAR       {Emit.EmitToken (obn3);}
     |   obn4:DIV        {Emit.EmitToken (obn4);}
     |   obn5:MOD        {Emit.EmitToken (obn5);}
-    |   obn6:BAND       {Emit.EmitString ("%"); Emit.EmitToken (obn6);}
-    |   obn7:BOR        {Emit.EmitString ("%"); Emit.EmitToken (obn7);}
-    |   obn8:BXOR       {Emit.EmitString ("%"); Emit.EmitToken (obn8);}
+    |   obn6:BAND       {Emit.EmitToken (obn6);}
+    |   obn7:BOR        {Emit.EmitToken (obn7);}
+    |   obn8:BXOR       {Emit.EmitToken (obn8);}
     |   obn9:SL         {Emit.EmitToken (obn9);}
     |   obn10:SR        {Emit.EmitToken (obn10);}
     |   obn11:EQUAL     {Emit.EmitToken (obn11);}
@@ -2286,7 +2276,7 @@ returns [string return_string]
 }
     :   id:IDENTIFIER   
         {
-            Emit.EmitString ( ((ExtendedToken)id).GetWhitespaces () + "this");           
+            Emit.EmitString ( ExtendedToken.getWhitespaces (id) + "this");           
         }
         lp:LPAREN   
         {Emit.EmitToken(lp);}
@@ -2307,11 +2297,11 @@ returns [string return_string]
 }
     :   (COLON  BASE)=> c1:COLON b:BASE   lp1:LPAREN   (al=argument_list)?   rp1:RPAREN
         {
-            return_string = ((ExtendedToken)c1).GetWhitespaces () + b.getText () + lp1.getText () + al + rp1.getText();
+            return_string = ExtendedToken.getWhitespaces (c1) + b.getText () + lp1.getText () + al + rp1.getText();
         }
     |   c2:COLON  t:THIS   lp2:LPAREN   (al=argument_list)?   rp2:RPAREN
         {
-            return_string = ((ExtendedToken)c2).GetWhitespaces () + t.getText () + lp2.getText () + al + rp2.getText();
+            return_string = ExtendedToken.getWhitespaces (c2) + t.getText () + lp2.getText () + al + rp2.getText();
         }
     ;
 
@@ -2337,7 +2327,7 @@ constructor_body[string ctor_initializer]
     |   s:SEMI
         {
             if(ctor_initializer != "")
-                Emit.EmitString( ((ExtendedToken)s).GetWhitespaces () + "{ " + ctor_initializer + " }");
+                Emit.EmitString( ExtendedToken.getWhitespaces (s) + "{ " + ctor_initializer + " }");
             else
                 Emit.EmitToken (s);
         }
@@ -2653,10 +2643,7 @@ enum_body
             enum_member_declarations   
             c:COMMA     {Emit.EmitString (ExtendedToken.getWhitespaces (c));}
             rb:RBRACE   {Emit.EmitToken(rb);} 
-    |   (LBRACE   (enum_member_declarations)?   RBRACE) =>
-            lb1:LBRACE   {Emit.EmitToken(lb1);} 
-            enum_member_declarations   
-            rb1:RBRACE   {Emit.EmitToken(rb1);} 
+    |   LBRACE   (enum_member_declarations)?   RBRACE
     ;
 
 enum_modifier
