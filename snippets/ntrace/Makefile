@@ -1,13 +1,8 @@
-NPATH   = ../..
-NCC     = $(NPATH)/ncc/ncc.exe
-LIBS    = $(NPATH)/lib/aliases.n $(NPATH)/lib/core.n \
-          $(NPATH)/lib/hashtable.n $(NPATH)/lib/option.n
-COMPILE = $(NCC) $(LIBS) -r:System
-CS      = mcs /nowarn:162 /debug+
+NPATH   = ../../boot
+COMPILE = $(NPATH)/ncc.exe
 
-ntrace.exe: out.cs
-	$(CS) /out:ntrace.exe out.cs
+ntrace.exe: ntrace.n
+	$(COMPILE) -texe -out:$@ $<
 
-out.cs: ntrace.n
-	$(COMPILE) ntrace.n
-
+clean:
+	rm -f ntrace.exe

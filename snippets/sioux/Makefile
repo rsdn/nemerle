@@ -1,18 +1,8 @@
-NPATH   = /home/rzyj/ii/nemerle/svn/nemerle/trunk
-NCC     = $(NPATH)/ncc/ncc.exe
-LIBS    = $(NPATH)/lib/aliases.n $(NPATH)/lib/core.n \
-          $(NPATH)/lib/hashtable.n $(NPATH)/lib/option.n \
-          $(NPATH)/lib/list.n $(NPATH)/lib/getopt.n
-COMPILE = $(NCC) $(LIBS) -r:System -r:System.Xml
-CS      = mcs /nowarn:162 /debug+
-
+NCC     = ../../boot/ncc.exe
 SOURCES = httpd.n config.n logger.n
 
-httpd.exe: out.cs
-	$(CS) /out:$@ $<
-
-out.cs: $(SOURCES)
-	$(COMPILE) $(SOURCES)
+httpd.exe: $(SOURCES)
+	$(NCC) -texe -r:System.Xml -out:$@ $(SOURCES)
 
 clean:
-	rm -f out.cs httpd.exe
+	rm -f httpd.exe
