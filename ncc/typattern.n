@@ -1,0 +1,213 @@
+(*
+ * Copyright (c) 2003 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *)
+
+open Nemerle.Collections;
+
+open Nemerle.Compiler;
+open Nemerle.Compiler.Tyops;
+open Nemerle.Compiler.Typedtree;
+
+namespace PT = Nemerle.Compiler.Parsetree;
+
+namespace Nemerle.Compiler {
+module Typattern {
+(*
+class Pattern_base extends Located
+  {
+    mutable ty : Type;
+  }
+  
+variant Pattern extends Pattern_base
+  {
+    | P_underscore
+    | P_variable { decl : Decl; }
+    | P_tuple { args : list (Pattern); }
+    | P_record { args : list (Named_pattern); }
+    | P_cons { name : Tyinfo; arg : Pattern; }
+    | P_literal { lit : Literal; }
+  }
+*)
+
+  ty_pattern (ctx : Tyexpr.CTX, t : Type, p : PT.Pattern) : Pattern * Env {
+    def mkcons (p1 : PT.Pattern, p2 : PT.Pattern) : PT.Pattern {
+      def tup = PT.P_tuple (List.cons (p1, p2));
+      def ret = PT.P_cons ("Cons", tup);
+      tup.loc <- p1.loc;
+      ret.loc <- p1.loc;
+      ret
+    }
+
+    def mknil (loc : Location) : PT.Pattern {
+      def tup = PT.P_underscore ();
+      def ret = PT.P_cons ("Nil", tup);
+      tup.loc <- loc;
+      ret.loc <- loc;
+      ret
+    }
+
+    mutable pat_env <- ctx.env;
+    mutable vars <- Map.string_map ();
+    
+    def do_walk (t : Type, p : PT.Pattern) : Pattern {
+      match (p) {
+        | PT.P_variable (n) =>
+          if (n == "true")
+            walk (t, PT.P_literal (L_bool (true)))
+          else if (n == "false")
+            walk (t, PT.P_literal (L_bool (false)))
+          else {
+            if (vars.mem (n))
+              Message.error ("pattern variable `" + n + "' already seen in this pattern")
+            else ();
+            vars <- vars.add (n, 0);
+            def (env', decl) = pat_env.add_local(n, D_pattern_variable(), t);
+            pat_env <- env';
+            P_variable (decl)
+          }
+          
+        | PT.P_underscore => P_underscore ()
+
+        | PT.P_list (lst) =>
+          def mklst (lst : list (PT.Pattern)) : PT.Pattern {
+            match (lst) {
+              | Cons (x, xs) => mkcons (x, mklst (xs))
+              | Nil => mknil (p.loc)
+            }
+          }
+          walk (t, mklst (lst))
+          
+        | PT.P_list_cons (p1, p2) =>
+          walk (t, mkcons (p1, p2))
+          
+        | PT.P_literal (lit) =>
+          def t' = Tyexpr.ty_literal (ctx, lit);
+          match (Tyutil.unify (t, t', false)) {
+            | Some (s) => 
+              Tyvar.global_store (s);
+              P_literal (lit)
+            | None =>
+              Message.fatal_error ("literal has type " + t'.as_string () + 
+                                   " while matched value has type " + t.as_string ())
+          }
+
+        | PT.P_tuple (pats) =>
+          match (Tyutil.top_expand (t)) {
+            | T_app (ti, args) =>
+              def collect_fields (acc : list (string), m : Class_member) : list (string) {
+                match (m) {
+                  | M_field => Cons (m.name, acc)
+                  | _ => acc
+                }
+              }
+              def names = List.rev (List.fold_left (collect_fields, Nil (), ti.member_list));
+              match (names) {
+                | Cons =>
+                  if (List.length (names) == List.length (pats)) {
+                    def mk (n : string, p : PT.Pattern) : PT.Named_pattern {
+                      PT.Named_pattern (n, p)
+                    }
+                    walk (t, PT.P_record (List.map2 (mk, names, pats)))
+                  } else
+                    Message.fatal_error ("pattern matches " + 
+                                         string_of_int (List.length (pats)) + 
+                                         " values, while type " + 
+                                         ti.fullname () + " have " +
+                                         string_of_int (List.length (names)) + 
+                                         " fields")
+                | Nil =>
+                    Message.fatal_error ("pattern matches " + string_of_int (List.length (pats)) + 
+                                         " values, while type " + ti.fullname () + " has no fields")
+              }
+              
+            | T_prod (ts) =>
+              if (List.length (ts) == List.length (pats))
+                P_tuple (List.map2 (walk, ts, pats))
+              else
+                Message.fatal_error ("pattern matches " + 
+                                     string_of_int (List.length (pats)) + 
+                                     "-tuples, while " + 
+                                     string_of_int (List.length (ts)) + 
+                                     "-tuple is required")
+                                     
+            | _ =>
+              Message.fatal_error ("pattern matches " + string_of_int (List.length (pats)) + 
+                                   "-tuples, not values of type " + t.as_string ())
+          }
+          
+        | PT.P_record (l) =>
+          def fn (np : PT.Named_pattern) : Named_pattern {
+            // just a placeholder with correct type
+            def bogus_expr = E_type_enforcement (null, t);
+            def loc = Location_stack.top ();
+            bogus_expr.loc <- loc;
+            bogus_expr.expr_ty <- t;
+            def fr = Tyexpr.lookup_field (loc, bogus_expr, np.name);
+            Named_pattern (fr.fld, walk (Tyexpr.type_of (fr), np.pat))
+          }
+          P_record (List.map (fn, l))
+          
+        | PT.P_cons (n, p) =>
+          if (CSglue.is_capitalized (n)) {
+            def ti = pat_env.lookup_type (n);
+            match (ti.tydecl) {
+              | TD_variant_option =>
+                def t' = ti.fresh_generic_type ();
+                if (t' >> t)
+                  P_cons (ti, walk (t', p))
+                else
+                  Message.fatal_error ("variant option " + t'.as_string () + 
+                                       " doesn't subtype " + t.as_string ())
+              | _ =>
+                Message.error ("`" + n + "' isn't variant case");
+                P_underscore ()
+            }
+          } else
+            match (p) {
+              | PT.P_underscore => walk (t, PT.P_variable (n))
+              | _ =>
+                Message.fatal_error ("`" + n + "' cannot be variant option, " +
+                                     "since it starts with lowercase letter")
+            }
+        | PT.P_quoted_expr (e) =>
+          // we use Macros functions to translate quoted pattern
+          walk (t, Macros.expr_to_pattern (Macros.quoted_expr (e)))
+      }
+    }
+    and walk (t : Type, p : PT.Pattern) : Pattern {
+      def r = do_walk (t, p);
+      r.ty <- t; 
+      r
+    }
+
+    def r = walk (t, p);
+    (r, pat_env)
+
+  }
+
+}
+}
