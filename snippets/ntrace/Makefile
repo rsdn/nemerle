@@ -1,5 +1,7 @@
+include ../../config.mak
+
 NPATH   = ../../boot
-COMPILE = $(NPATH)/ncc.exe
+COMPILE = $(NET_ENGINE) $(NET_FLAGS) $(NPATH)/ncc.exe
 
 ntrace.exe: ntrace.n
 	$(COMPILE) -texe -out:$@ $<
