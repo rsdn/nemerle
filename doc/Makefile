@@ -35,7 +35,7 @@ include ../config.mak
 
 course_docs = index
 
-root_docs = index faq license hacking macros reference tutorial
+root_docs = index faq license hacking macros reference tutorial download
 
 docs = $(root_docs) $(addprefix course/, $(course_docs))
 
