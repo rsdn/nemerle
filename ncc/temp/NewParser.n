@@ -425,11 +425,29 @@ namespace Nemerle.Compiler
       }
     }
 
+    expect_keyword (op : string) : void {
+      match (get_token ()) {
+        | Token.Keyword (o) when op == o => ()
+        | x =>
+          Error (x, "expecting keyword `" + op + "'");
+      }
+    }
+    
     flag_keyword (kw : string) : bool {
       match (peek_token ()) {
         | Token.Keyword (n) when n == kw => shift (); true
         | _ => false
       }
+    }
+
+    comma_separated_list ['a] (f : void -> 'a) : list ['a] {
+      def loop (acc) {
+        match (peek_token ()) {
+          | Token.Comma => shift (); loop (f () :: acc)
+          | _ => List.Rev (acc)
+        }
+      };
+      loop ([f ()])
     }
     
     #endregion Utility functions operating on current token stream
@@ -604,16 +622,8 @@ namespace Nemerle.Compiler
                   match (peek_token ()) {
                     | Token.Operator (":", _) =>
                       shift ();
-                      match (peek_token ()) {
-                        | Token.Operator (".", _) =>
-                          expect_operator ("..");
-                          match (get_splicable_id ()) {
-                            | Splicable.Expression (e) =>
-                              [PExpr.Ellipsis (PExpr.Spliced (e))]
-                              
-                            | x => Message.error (x.Location, "expected spliced expression"); []
-                          }
-
+                      match (maybe_parse_ellipsis ()) {
+                        | Some (e) => [PExpr.Ellipsis (PExpr.Spliced (e))]
                         | _ =>
                           // parse , separated sequence as one expression
                           match (parse_expr ()) {
@@ -730,15 +740,15 @@ namespace Nemerle.Compiler
 
                     | (Token.SquareGroup, _) =>
                       is_property = true;                      
-                      (null, parse_parameters ());                        
+                      ((null, null), parse_parameters ());                        
 
                     | (Token.RoundGroup, _) =>
                       shift ();
-                      (null, parse_parameters ());
+                      ((null, null), parse_parameters ());
 
                     | _ =>
                       is_property = true; // most probably it is a field or property
-                      (null, [])
+                      ((null, null), [])
                   }
 
                 def ret_type = parse_return_type (false);
@@ -866,7 +876,7 @@ namespace Nemerle.Compiler
             }
             pop_stream ("property member");
           }
-          
+          // FIXME: create prop type
           ClassMember.Property (id.Location + ret_type.Location, id,
                                 Modifiers (mods, pcustoms), ret_type, null, parms, getter, setter)
           
@@ -880,7 +890,210 @@ namespace Nemerle.Compiler
       }
     }
 
-   
+    parse_method (h : Fun_header, modifiers : Modifiers) : ClassMember
+    {
+      def parse_extern () {
+        expect_keyword ("extern");
+        match (get_token ()) {
+          | Token.StringLiteral (s) => 
+            expect_empty ("extern function name");
+            s
+          | x => Error (x, "expecting string after `extern'"); ""
+        }
+      };
+      def impl =
+        match (peek_token ()) {
+          | Token.Keyword ("implements") =>
+            shift ();
+            match (maybe_parse_ellipsis ()) {
+              | Some (e) => [Splicable.Expression (PExpr.Ellipsis (PExpr.Spliced (e)))]
+              | _        => comma_separated_list (get_splicable_id);
+            }
+          | _ => []
+        };
+      def body =
+        match (peek_token ()) {
+          | Token.Operator ("=", _) =>
+            shift (); FunBody.Extern (parse_extern ())
+            
+          | Token.Operator ("{", _) => FunBody.Parsed (parse_block (h.parms))
+          | Token.EndOfFile =>
+            shift (); FunBody.Abstract ()
+
+          | Token.Operator ("$", _) =>
+            match (get_splicable_id ()) {
+              | Splicable.Expression (e) =>
+                FunBody.Parsed (PExpr.Spliced (e))
+              | _ => Util.ice ("get_splicable_id returned impossible value")
+            }
+          | x => Error (x, "expecting method body"); FunBody.Abstract ();
+        };
+
+      ClassMember.Function (header = h, name = h.name, modifiers = modifiers, 
+                            loc = h.loc, body = body, kind = FunKind.Method (impl))
+    }
+
+    parse_option () : ClassMember
+    {
+      def id = get_splicable_id ();
+      match (peek_token ()) {
+        | Token.BracesGroup (children) =>
+          push_stream (children);
+          mutable members = [];
+          mutable child = null;
+          do {
+            child = ParseClassMember ();
+            when (child != null) members = child :: members;
+          }
+          while (child != null);
+          pop_stream ();          
+          def td = TopDeclaration.VariantOption (name = id, loc = id.loc,
+                                                 modifiers = Modifiers.Empty,
+                                                 decls = members);
+
+          ClassMember.TypeDeclaration (loc = id.loc, name = id, 
+                                       modifiers = Modifiers.Empty, td = td)
+          
+        | Token.Operator ("=", _) =>
+          shift ();
+          mutable cur = stream;
+          mutable prev = null;
+          while (cur != null && !(cur matches Token.Operator ("|", _))) {
+            prev = cur;
+            cur = cur.Next;
+          }
+          when (cur != null) {
+            if (prev != null) prev.Next = null;
+            else stream = null;
+            def newgroup = Token.LooseGroup (cur);
+            newgroup.Next = streams_stack [stack_pos - 2];
+            streams_stack [stack_pos - 2] = newgroup;
+          }
+          ClassMember.EnumOption (id.Location, id, Modifiers.Empty, Some (parse_expr ()));
+
+        | Token.EndOfFile =>
+          ClassMember.EnumOption (id.Location, id, Modifiers.Empty, None ());
+          
+        | _ =>
+          def newgroup = Token.LooseGroup (stream);
+          newgroup.Next = streams_stack [stack_pos - 2];
+          streams_stack [stack_pos - 2] = newgroup;
+          
+          ClassMember.EnumOption (id.Location, id, Modifiers.Empty, None ());
+      }
+    }
+
+    parse_event (loc : Location, mods : NemerleAttributes,
+                 mutable customs : list [Token.SquareGroup]) : ClassMember
+    {
+      def id = get_splicable_id ();
+      def ret_type = parse_return_type (false);
+      match (get_token ()) {
+        | Token.BracesGroup (group) =>
+          mutable ecustoms = take_attributes_out (ref customs, System.AttributeTargets.Event, true);
+          mutable remove = None ();
+          mutable add = None ();
+
+          def plain_name = match (id) { | Splicable.Name (n) => n.Id | _ => "" };
+
+          def parse_bd (p) {
+            match (peek_token ()) {
+              | Token.EndOfFile => (FunKind.Method ([]), FunBody.Abstract ())
+              | _ =>
+                def bl = parse_block (p);
+                (FunKind.Method ([]), FunBody.Parsed (bl))
+            };
+          };
+
+          foreach (Token.LooseGroup (toks) in group) {
+            push_stream (toks);
+            mutable mycustoms = get_customs ();
+            def mymods = get_modifiers ();
+
+            match (get_token ()) {
+              | Token.Identifier (i) as nametok =>
+                def loc = nametok.Location;
+                match (i) {
+                  | "remove" =>
+                    unless (remove matches None)
+                      Message.error (loc, "event cannot have multiple remove methods");
+
+                    def method_atts = take_attributes_out (ref mycustoms, System.AttributeTargets.Method, false);
+                    def method_atts = Modifiers (mymods, method_atts);                    
+
+                    def par_atts = Modifiers (NemerleAttributes.None,
+                      take_attributes_out (ref mycustoms, System.AttributeTargets.Parameter, true));
+                    def method_parms = [Fun_parm (Splicable.Name (loc, Name ("value")), ret_type, par_atts)];
+                    
+                    def (kind, bd) = parse_bd (method_parms);
+                    def name = Splicable.Name (loc, Name ("remove_" + plain_name));
+                    def fh = Fun_header (loc, name, PExpr.Void (), method_parms);
+                    remove = Some (ClassMember.Function (loc, fh.name, method_atts, fh, kind, bd) :>
+                                   ClassMember.Function);
+
+                  | "add" =>
+                    unless (add matches None)
+                      Message.error (loc, "event cannot have multiple add methods");
+                    
+                    def method_atts = take_attributes_out (ref mycustoms, System.AttributeTargets.Method, false);
+                    def method_atts = Modifiers (mymods, method_atts);                    
+
+                    def par_atts = Modifiers (NemerleAttributes.None,
+                      take_attributes_out (ref mycustoms, System.AttributeTargets.Parameter, true));
+                    def method_parms = [Fun_parm (Splicable.Name (loc, Name ("value")), ret_type, par_atts)];
+                    
+                    def (kind, bd) = parse_bd (method_parms);
+                    def name = Splicable.Name (loc, Name ("add_" + plain_name));
+                    def fh = Fun_header (loc, name, PExpr.Void (), method_parms);
+                    add = Some (ClassMember.Function (loc, fh.name, method_atts, fh, kind, bd) :>
+                                ClassMember.Function);
+
+                  | _ =>
+                    def nm = Splicable.Name (loc, Name (i));
+                    def t = parse_return_type (false);
+                    def attrs = Modifiers (mymods, take_attributes_out
+                                  (ref mycustoms, System.AttributeTargets.Field, true));
+                    def embed = PExpr.Quoted (SyntaxElement.ClassMember (
+                                  ClassMember.Field (loc + t.Location, nm, attrs, t)));
+                    ecustoms = <[ $(Name ("EventEmbeddedField") : name) ($embed) ]> :: ecustoms;
+                }
+
+              | x => Error (x, "expecting event accessor"); 
+            }
+            pop_stream ("property member");
+          }
+          ClassMember.Event (loc + ret_type.Location, id, Modifiers (mods, ecustoms),
+                             ret_type, add, remove)
+          
+        | Token.EndOfFile =>
+          // FIXME: take out also attributes for auto methods and field
+          def ecustoms = take_attributes_out (ref customs, System.AttributeTargets.Event, true);
+          /// FIXME: always provide add and remove                    
+          ClassMember.Event (loc + ret_type.Location, id, Modifiers (mods, ecustoms),
+                             ret_type, null, null)
+          
+        | t => Error (t, "expecting `;' or `{ }' in event declaration"); null
+      }
+    }
+    
+    maybe_parse_ellipsis () : option [PExpr]
+    {
+      match (peek_token ()) {
+        | Token.Operator (".", _) =>
+          expect_operator ("..");
+
+          def id = get_splicable_id ();
+          match (id) {
+            | Splicable.Name | Splicable.Int =>
+              Message.error (id.Location, "expected spliced expression");
+              None ();
+
+            | Splicable.Expression (e) => Some (e)
+          }
+        | _ => None ()
+      }
+    } 
+    
     get_customs () : list [Token.SquareGroup] {
       def loop (acc) {
         match (peek_token ()) {
@@ -947,24 +1160,19 @@ namespace Nemerle.Compiler
     {
       match (peek_token ()) {
         | Token.SquareGroup (Token.LooseGroup (body) as groups) =>
-          match (body) {
-            | Token.Operator (".", _) =>
-              push_stream (body);
-              expect_operator ("..");
-              match (get_splicable_id ()) {
-                | Splicable.Name | Splicable.Int =>
-                  pop_stream ("spliced type variables");
-                  Error (body, "expected spliced expression"); ([], PExpr.Void ())
+          push_stream (body);          
+          match (maybe_parse_ellipsis ()) {
+            | Some (e) =>
+              pop_stream ("type variables");
+              expect_empty ("type variables");
+              ([], PExpr.Spliced (e.Location, e))
 
-                | Splicable.Expression (e) =>
-                  pop_stream ("spliced type variables");
-                  ([], PExpr.Spliced (e.Location, e))
-              }
             | _ =>
+              pop_stream ("type variables");
               shift (); // now we are after whole '[..]' group
               (TokenMap (groups, get_tyvar), PExpr.Void ())
           }
-        | _ => ([], PExpr.Void ())
+        | _ => (null, null)
       };
     }
 
@@ -972,16 +1180,9 @@ namespace Nemerle.Compiler
     : Typarms 
     {
       def loop (acc) {
-        if (flag_keyword ("where")) {
-          match (peek_token ()) {
-            | Token.Operator (".", _) =>
-              expect_operator ("..");
-              match (get_splicable_id ()) {
-                | Splicable.Expression (e) => (List.Rev (acc), PExpr.Spliced (e))
-                | x =>
-                  Message.error (x.Location, "expected spliced expression");
-                  ([], PExpr.Void ())
-              }
+        if (flag_keyword ("where"))
+          match (maybe_parse_ellipsis ()) {
+            | Some (e) => (List.Rev (acc), PExpr.Spliced (e))
             | _ =>
               def tv = get_tyvar (Token.LooseGroup (get_token ()));
               expect_operator (":");
@@ -995,18 +1196,40 @@ namespace Nemerle.Compiler
               });
               loop (acc)
           }
-        } else (List.Rev (acc), PExpr.Void ())
+        else (List.Rev (acc), PExpr.Void ())
       };
-      def (where_cts, where_spl_t) = loop ([]);
-      match ((splicing_type, where_spl_t)) {
-        | (PExpr.Void, PExpr.Void) => Typarms (tyvars, where_cts)
-        | _ =>
-          // we have spliced type variables
-          Typarms (tyvars, Constraint (("", 0), <[ $splicing_type * $where_spl_t ]>) 
-                   :: where_cts)
+      if (tyvars != null) {
+        def (where_cts, where_spl_t) = loop ([]);
+        match ((splicing_type, where_spl_t)) {
+          | (PExpr.Void, PExpr.Void) => Typarms (tyvars, where_cts)
+          | _ =>
+            // we have spliced type variables
+            Typarms (tyvars, Constraint (("", 0), <[ $splicing_type * $where_spl_t ]>) 
+                     :: where_cts)
+        }
       }
+      else Typarms.Empty
     }
 
+    /**
+     *  Parse plain functional header (with optional '[..]' generic parameters
+     *                                 and '(..)' fun parameters)
+     */
+    parse_fun_header () : Fun_header
+    {
+      def name = get_splicable_id ();
+      def tyvars = parse_tyvars ();      
+      def parms = parse_parameters ();
+      def ret_type = parse_return_type (false);
+      def typarms = parse_where_constraints (tyvars);
+
+      Fun_header (name.Location + ret_type.Location,
+                  name = name,
+                  ret_type = ret_type, 
+                  parms = parms, 
+                  typarms = typarms)
+    }
+   
 
     /** Parse function parameter definition from given LooseGroup */
     parse_parameter (_ : Token) : Fun_parm {
@@ -1042,25 +1265,6 @@ namespace Nemerle.Compiler
       | _ => Util.ice ("non loose group in parameter parsing")
     }
 
-    /**
-     *  Parse plain functional header (with optional '[..]' generic parameters
-     *                                 and '(..)' fun parameters)
-     */
-    parse_fun_header () : Fun_header
-    {
-      def name = get_splicable_id ();
-      def tyvars = parse_tyvars ();      
-      def parms = parse_parameters ();
-      def ret_type = parse_return_type (false);
-      def typarms = parse_where_constraints (tyvars);
-
-      Fun_header (name.Location + ret_type.Location,
-                  name = name,
-                  ret_type = ret_type, 
-                  parms = parms, 
-                  typarms = typarms)
-    }
-
     parse_parameters () : list [Fun_parm] {
       match (get_token ()) {
         | Token.RoundGroup (TokenSeparator.Comma, group)
@@ -1069,15 +1273,13 @@ namespace Nemerle.Compiler
             | Token.EndOfFile => []
             | Token.LooseGroup (Token.Operator (".", _) as dot) =>
               push_stream (dot);
-              expect_operator ("..");
-              match (get_splicable_id ()) {
-                | Splicable.Expression (e) =>
+              match (maybe_parse_ellipsis ()) {
+                | Some (e) =>
                   pop_stream ("ellipsis spliced expression");
                   [Fun_parm (e.loc, Splicable.Name (Name ([])), PExpr.Void (), 
                              Modifiers (NemerleAttributes.None, [PExpr.Spliced (e)]))]
-                | Splicable.Name | Splicable.Int =>
-                  pop_stream ();
-                  Error (group, "expecting spliced expression"); []
+
+                | _ => pop_stream (); []
               }
             | _ => TokenMap (group, parse_parameter);
           }
@@ -1147,15 +1349,6 @@ namespace Nemerle.Compiler
       List.Rev (result);
     }
 
-    [Nemerle.NotImplemented]
-    parse_event (loc : Location, mods : NemerleAttributes, customs : list [Token.SquareGroup]) : ClassMember;
-    
-    [Nemerle.NotImplemented]
-    parse_method (h : Fun_header, modifiers : Modifiers) : ClassMember;
-    
-    [Nemerle.NotImplemented]
-    parse_option () : ClassMember;
-    
     [Nemerle.NotImplemented]
     parse_block (parms : list [Fun_parm]) : PExpr;                    
     
