@@ -63,25 +63,24 @@ namespace Nemerle.Compiler
       Target = target;
     }
 
-    internal CloneWithNext (other : GrammarElement,
-                            target : MacroTargets) : GrammarElement
+    internal CloneWithNext (other : GrammarElement) : GrammarElement
     {
       match (this) {
-        | Operator (name) => Operator (other, target, name)
-        | Keyword (name)  => Keyword (other, target, name)
-        | Expression      => Expression (other, target)
-        | Parameter       => Parameter (other, target)
-        | ExpressionList  => ExpressionList (other, target)
-        | RawToken        => RawToken (other, target)         
-        | Optional (body) => Optional (other, target, body)
+        | Operator (name) => Operator (other, other.Target, name)
+        | Keyword (name)  => Keyword (other, other.Target, name)
+        | Expression      => Expression (other, other.Target)
+        | Parameter       => Parameter (other, other.Target)
+        | ExpressionList  => ExpressionList (other, other.Target)
+        | RawToken        => RawToken (other, other.Target)         
+        | Optional (body) => Optional (other, other.Target, body)
         | Branch | End    => Util.ice ("tree like elements are not allowed to be cloned")
       }
     }
 
     internal AddBranch (next : GrammarElement) : GrammarElement {
       match (this) {
-        | Branch (li) => Branch (next :: li)
-        | _ => Branch ([next, this])
+        | Branch (li) => Branch (null, Target | next.Target, next :: li)
+        | _ => Branch (null, Target | next.Target, [next, this])
       }
     }
 
@@ -138,22 +137,31 @@ namespace Nemerle.Compiler
      */
     load_syntax (extensions : list [SyntaxDefinition]) : SystemMap [string, GrammarElement]
     {
-      def merge_into (li, ext, tree : GrammarElement) {
+      def merge_into (li, ext : SyntaxDefinition, tree : GrammarElement) {
         match (li) {
           | [] =>
-            def end = GrammarElement.End (ext);
-            if (tree != null) tree.AddBranch (end)
-            else end
+            match (ext.MacroNamespace.Value) {
+              | GlobalEnv.TypeInfoCache.MacroCall (m) =>
+                def target =
+                  if (m.Usage == null) (1 << 15) :> MacroTargets
+                  else m.Usage.ValidOn;
+
+                def end = GrammarElement.End (null, target, ext);
+                if (tree != null) tree.AddBranch (end)
+                else end
+                    
+              | _ => Util.ice ("no macro")
+            }
             
           | (x : GrammarElement) :: xs =>
             if (x.Equals (tree)) {
               def next = if (tree == null) null else tree.Next;
               def end = merge_into (xs, ext, next);
-              x.CloneWithNext (end, 0 :> MacroTargets)
+              x.CloneWithNext (end)
             }
             else {
               def end = merge_into (xs, ext, null);
-              def next = x.CloneWithNext (end, 0 :> MacroTargets);
+              def next = x.CloneWithNext (end);
               if (tree != null)
                 tree.AddBranch (next)
               else
@@ -178,15 +186,33 @@ namespace Nemerle.Compiler
     
     //------------- PARSING OF MACRO SYNTAX EXTENSIONS ---------------------
 
-    parse_top_extensions (modifiers : Modifiers) : void
+    parse_top_extensions (modifiers : Modifiers, target : MacroTargets) : void
     {
       def extensions () {
         match (peek_token ()) {
-          | Token.Keyword (k) =>
+          | Token.Keyword (k) as tok =>
             match (syntax_keywords.Find (k)) {
               | Some (ext) =>
                 shift ();
-                modifiers.AddCustomAttribute (parse_syntax_definition (ext, TokenStoppers.All));
+                def (end, parms) = parse_grammar_rule (ext, TokenStoppers.None, target);
+
+                def eat_definition (definition : SyntaxDefinition) {
+                  def expr = PExpr.MacroCall (tok.Location, mkname (""), definition.MacroNamespace,
+                                              definition.Permute (parms));
+                  modifiers.AddCustomAttribute (expr);
+                }
+                
+                match (end) {
+                  | GrammarElement.End (definition) => eat_definition (definition)
+
+                  | GrammarElement.Branch (opts) =>
+                    foreach (GrammarElement.End (definition) as el in opts)
+                      when (el.Target %&& target)
+                        eat_definition (definition)
+                    
+                  | _ =>
+                    Message.fatal_error (tok.Location, "unable to parse syntax rule")
+                }
                 extensions ()
                 
               | None => ()
@@ -200,7 +226,7 @@ namespace Nemerle.Compiler
     parse_syntax_definition (tree : GrammarElement, stop : TokenStoppers) : PExpr
     {
       def loc = last_tok.Location;
-      def (end, parms) = parse_grammar_rule (tree, stop);
+      def (end, parms) = parse_grammar_rule (tree, stop, (1 << 15) :> MacroTargets);
       match (end) {
         | GrammarElement.End (definition) =>
           PExpr.MacroCall (loc, mkname (""), definition.MacroNamespace,
@@ -242,7 +268,9 @@ namespace Nemerle.Compiler
           matches_stream (sub) || matches_stream (tree.Next)
 
         | GrammarElement.End => str matches Token.EndOfGroup
-        
+
+        | GrammarElement.Expression => stream != null
+          
         | _ => false
       }
     }
@@ -261,7 +289,7 @@ namespace Nemerle.Compiler
       | _ => ()
     } 
     
-    parse_grammar_rule (tree : GrammarElement, stop : TokenStoppers)
+    parse_grammar_rule (tree : GrammarElement, stop : TokenStoppers, target : MacroTargets)
       : GrammarElement * list [SyntaxElement]
     {
       def expect_semicolon () {
@@ -295,7 +323,7 @@ namespace Nemerle.Compiler
                   | _ =>
                     push_stream (loose);
                     push_stream (first);
-                    def (next, res) = parse_grammar_rule (next, TokenStoppers.None);                    
+                    def (next, res) = parse_grammar_rule (next, TokenStoppers.None, target);                    
                     pop_stream ($"tokens inside of $brace...");
                     shift (); // shift the loose group, which just ended
                     pop_stream ($"end of $brace...");
@@ -383,27 +411,41 @@ namespace Nemerle.Compiler
             loop (acc, next)
            
           | GrammarElement.Branch (opts) =>
-            mutable end = null : GrammarElement.End;
+            mutable end = null;
             def check (_) {
               | [] => 
-                if (end == null)
+                if (end == null) {
+                  foreach (x in opts) Message.debug (x.Target.ToString () + " " +
+                                                     (x.Target %&& target).ToString ());
+                  Message.debug (target.ToString ());
                   Message.fatal_error (last_tok.Location, "parse error, none of syntax definitions"
-                                       " matches input")
+                                       " matches input: " + opts.ToString ())
+                }
                 else (end, List.Rev (acc))
-              
-              | GrammarElement.End as cur :: rest =>
-                when (end != null) 
-                  Message.warning (last_tok.Location, "reduce / reduce conflict: " +
-                                   end.define.MacroNamespace.Name.ToString () + " vs " +
-                                   cur.define.MacroNamespace.Name.ToString ());
-                end = cur;
-                check (rest);
+
+              | (cur : GrammarElement) :: rest when cur.Target %&& target => 
+                match (cur) {
+                  | GrammarElement.End as cur =>
+                    if (end != null)
+                      end = x; // if many ends are there, return branch node
+                    else
+                      end = cur;
+                      
+                      /*
+                      Message.warning (last_tok.Location, "reduce / reduce conflict: " +
+                                       end.define.MacroNamespace.Name.ToString () + " vs " +
+                                       cur.define.MacroNamespace.Name.ToString ());
+*/                                       
+                    check (rest);
+
+                  | _ =>
+                    if (matches_stream (cur))
+                      loop (acc, cur)
+                    else
+                      check (rest)
+                }
                 
-              | cur :: rest =>
-                if (matches_stream (cur))
-                  loop (acc, cur)
-                else
-                  check (rest)
+              | _ :: rest => check (rest)
             }
             check (opts)          
             
