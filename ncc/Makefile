@@ -49,12 +49,11 @@ n_src = \
 	cgexpr.n \
 	cgflat.n 
 
-cs_src = lexer.cs main.cs parser.cs
+cs_src  = lexer.cs main.cs parser.cs
 all_src = $(n_src) $(cs_src)
-all_cs = out.cs $(cs_src)
+all_cs  = out.cs $(cs_src)
 
-NEFLAGS = --debug
-CSFLAGS = -nowarn:162 -debug+
+EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 COMPILE = $(CSC) $(CSFLAGS)
 
 
@@ -65,10 +64,10 @@ all: ncc.exe
 # Finally run testsuite.
 boot: ncc.exe
 	rm -f out.cs
-	$(NET_ENGINE) $(NEFLAGS) ncc.exe $(n_src)
+	$(EXECUTE) ncc.exe $(n_src)
 	$(COMPILE) $(OUTFLAG)ncc2.exe $(all_cs)
 	mv out.cs out2.cs
-	$(NET_ENGINE) $(NEFLAGS) ncc2.exe $(n_src)
+	$(EXECUTE) ncc2.exe $(n_src)
 	cmp -s out2.cs out.cs
 	$(COMPILE) $(OUTFLAG)ncc3.exe $(all_cs)
 	mv out.cs out3.cs
@@ -79,7 +78,7 @@ sync:
 	cp ncc3.exe ../boot/ncc.exe
 
 ncc.exe: $(all_src)
-	$(NET_ENGINE) $(NEFLAGS) ../boot/ncc.exe $(n_src)
+	$(EXECUTE) ../boot/ncc.exe $(n_src)
 	$(COMPILE) $(OUTFLAG)$@ $(all_cs)
 	mv -f out.cs out1.cs
 
@@ -100,7 +99,7 @@ parser.cs: parser.jay
 
 install: ncc.exe
 	if test ! -d $(BINDIR) ; then mkdir -p $(BINDIR) ; fi
-	$(INSTALL) -m 755 ncc.exe $(BINDIR)/ncc.exe
+	$(INSTALL) -m 755 ncc.exe $(BINDIR)/ncc
 
 
 clean:
