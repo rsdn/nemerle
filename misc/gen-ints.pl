@@ -145,6 +145,7 @@ print <<EOF
     public FromLiteral (lit : Literal) : object
     {
       | Literal.$short (x) => x : object
+      | Literal.Enum (l, _) => FromLiteral (l)
       | _ => null
     }
 

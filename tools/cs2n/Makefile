@@ -121,8 +121,7 @@ uninstall:
 	$(Q)rm -f $(BINDIR)/cs2n
 	$(RM) $(BINDIR)/cs2n.exe
 	$(Q)rm -f $(BINDIR)/cs2n.exe
-	
+
 
 clean:
 	rm -f *.exe *.dll *.pdb *~ error_log $(GENERATED_SOURCES) $(GENERATED_TOKEN_DESCRIPTION)
-
