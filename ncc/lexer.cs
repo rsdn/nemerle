@@ -585,8 +585,8 @@ class Lexer : yyParser.yyInput
 		keywords["module"] = Token.KW_MODULE;
 		keywords["require"] = Token.KW_REQUIRE;
 		keywords["ensure"] = Token.KW_ENSURE;
-    keywords["array"] = Token.KW_ARRAY;
-    keywords["mkarray"] = Token.KW_MKARRAY;
+		keywords["array"] = Token.KW_ARRAY;
+ 		keywords["mkarray"] = Token.KW_MKARRAY;
 		keywords["macro"] = Token.KW_MACRO;
 //                keywords["pattern"] = Token.KW_PATTERN;
 	}

@@ -52,7 +52,7 @@ n_src = \
 	xmldump.n \
 	typattern.n \
 	external.n
-#	t/todo/ok-macro.n
+
 
 cs_src  = lexer.cs main.cs parser.cs
 all_src = $(n_src) $(cs_src)
