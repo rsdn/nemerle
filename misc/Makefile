@@ -34,8 +34,9 @@ include ../config.mak
 ############################################################
 
 DISTFILES = \
-	nemerle.vim \
-	nemerle.el
+	nemerle.vim      \
+	nemerle.el       \
+	nemerle-fortunes \
 
 ############################################################
 # OUTPUT
@@ -63,3 +64,7 @@ all:
 dist:
 	$(CP) modes
 	$(Q)cp $(DISTFILES) $(DIR)
+
+
+nemerle-fortunes.dat: nemerle-fortunes
+	strfile nemerle-fortunes
