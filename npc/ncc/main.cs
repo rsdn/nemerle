@@ -6,6 +6,21 @@ class CS_glue {
 		int idx = s.LastIndexOf('.', s.Length - 2);
 		return s.Substring(0, idx + 1);
 	}
+	
+	public static string get_ns(string s)
+	{
+		int idx = s.LastIndexOf('.');
+		if (idx == -1)
+			return "";
+		else
+			return s.Substring(0, idx);
+	}
+
+	public static string strip_ns(string s)
+	{
+		int idx = s.LastIndexOf('.');
+		return s.Substring(idx + 1);
+	}
 }
 
 class XParser : Parser {
