@@ -1,16 +1,40 @@
 ;;; nemerle.el -- major mode for editing nemerle programs
 
-;; Copyright (C) 2003 University of Wroclaw
+;; Copyright (C) 2003 The University of Wroclaw
+;; All rights reserved.
 
 ;; Author: Jacek Sliwerski (rzyjontko) <rzyj@plusnet.pl>
 ;; Maintainer: Jacek Sliwerski (rzyjontko) <rzyj@plusnet.pl>
 ;; Created: 5 Oct 2003
 ;; Version: 0.1
-;; Keywords: nemerle, mode
+;; Keywords: nemerle, mode, languages
 ;; Website: http://nemerle.org
 
-;; This file is not part of GNU Emacs, but it is distributed under
-;; the same conditions.
+
+;; This file is not part of GNU Emacs.
+;;
+;; Redistribution and use in source and binary forms, with or without
+;; modification, are permitted provided that the following conditions
+;; are met:
+;;    1. Redistributions of source code must retain the above copyright
+;;       notice, this list of conditions and the following disclaimer.
+;;    2. Redistributions in binary form must reproduce the above copyright
+;;       notice, this list of conditions and the following disclaimer in the
+;;       documentation and/or other materials provided with the distribution.
+;;    3. The name of the University may not be used to endorse or promote
+;;       products derived from this software without specific prior
+;;       written permission.
+;;
+;; THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+;; IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+;; OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+;; NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+;; SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+;; TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+;; PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+;; LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+;; NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+;; SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 
@@ -21,14 +45,26 @@
 ;; To install the nemerle mode, put the following lines into your
 ;; ~/.emacs file:
 
-;; (setq load-path (cons "/path/to/where/this/file/resides" load-path))
+;; (setq load-path (cons "/path/to/dir/where/this/file/resides" load-path))
 ;; (autoload 'nemerle-mode "nemerle-mode"
 ;;   "Major mode for editing nemerle programs." t)
 ;; (setq auto-mode-alist (cons '("\\.n$" . nemerle-mode) auto-mode-alist))
 
+;; If you'd like to have every line indented right after new line put
+;; these lines into your ~/.emacs files.
+
+;; (defun my-nemerle-mode-hook ()
+;;   (setq nemerle-basic-offset 2)
+;;   (define-key nemerle-mode-map "\C-m" 'newline-and-indent))
+
+
 
 
 ;;; Change Log:
+
+;; 2003-11-17 rzyjontko <rzyj@plusnet.pl>
+;;   * updated copyright disclaimer
+;;   * basic indentation engine
 
 ;; 2003-10-09 rzyjontko <rzyj@plusnet.pl>
 ;;   * nemerle mode automatically sets file coding system to utf-8
@@ -43,8 +79,8 @@
 
 ;;; Todo:
 
-;; - indentation
-;; - imenu
+;; - further indentation improvements
+;; - imenu (with ncc execution)
 
 
 
@@ -66,13 +102,12 @@
   "This hook is run when nemerle-mode is loaded, or a new nemerle-mode
 buffer created.  This is a good place to put your customizations.")
 
-(defvar nemerle-indent-level 4
+(defvar nemerle-basic-offset 4
   "Indentation of blocks in nemerle.")
 
 (unless nemerle-mode-map
   (let ((map (make-sparse-keymap)))
-    ;; this is where to put keybindings like this
-    ;; (define-key map "\C-c\C-a" 'something)
+    (define-key map "\C-c\C-c" 'comment-region)
     (setq nemerle-mode-map map)))
 
 (unless nemerle-font-lock-keywords
@@ -87,7 +122,7 @@ buffer created.  This is a good place to put your customizations.")
 	 '("\"[^\"]*\"" 0 font-lock-string-face)
 
 	 ;; keywords
-	 '("\\b\\(_\\|abstract\\|and\\|as\\|base\\|class\\|const\\|else\\|enum\\|extends\\|extern\\|field\\|finally\\|fun\\|if\\|implements\\|in\\|interface\\|internal\\|let\\|letfun\\|match\\|method\\|namespace\\|new\\|null\\|open\\|out\\|private\\|protected\\|public\\|raise\\|record\\|ref\\|sealed\\|struct\\|then\\|this\\|try\\|tymatch\\|type\\|value\\|variant\\|volatile\\|where\\|with\\)\\b"
+	 '("\\b\\(_\\|abstract\\|and\\|as\\|base\\|class\\|const\\|def\\|else\\|enum\\|extends\\|extern\\|finally\\|fun\\|if\\|implements\\|in\\|interface\\|internal\\|let\\|letfun\\|match\\|module\\|mutable\\|namespace\\|new\\|null\\|open\\|out\\|private\\|protected\\|public\\|raise\\|ref\\|sealed\\|static\\|struct\\|then\\|this\\|try\\|tymatch\\|type\\|variant\\|void\\|volatile\\|where\\|with\\)\\b"
 	   0 font-lock-keyword-face)
 
 	 ;; types
@@ -148,7 +183,20 @@ buffer created.  This is a good place to put your customizations.")
 
 (defun nemerle-calculate-indentation ()
   "Calculates indentation level for the current line."
-  (current-indentation))
+  (save-excursion
+    (beginning-of-line)
+    (let ((modifier 0))
+      (cond ((looking-at "[^{\n]*}[ \t]*$")
+	     (setq modifier (- nemerle-basic-offset)))
+	    (t nil))
+      (if (bobp)
+	  nil
+	(forward-line -1)
+	(cond ((looking-at ".*{[ \t]*$")
+	       (setq modifier nemerle-basic-offset))
+	      (t nil)))
+      (+ (current-indentation) modifier))))
+
 
 
 (defun nemerle-indent-line ()
