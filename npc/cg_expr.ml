@@ -149,6 +149,7 @@ let rec cg_expr c expr =
       let did_if = ref false in
       let rec compile_pattern = function
         | [] ->
+          out "{";
           cg_expr c mc.mc_body;
           begin
             match c.c_target with
@@ -156,7 +157,8 @@ let rec cg_expr c expr =
             | _ ->
               out (xf "goto %s;" after_block);
               used_after := true
-          end
+          end;
+          out "}"
         | (P_underscore, _) :: pats -> compile_pattern pats
         | (P_variable v, ex) :: pats ->
           Closure.add_val c.c_closure v;
@@ -329,7 +331,7 @@ let rec cg_expr c expr =
       out "try {";
       cg_expr c e1;
       out "} finally {";
-      cg_expr c e2;
+      cg_expr {c with c_target = Targ_dev_null} e2;
       out "}"
       
     | E_this ->
