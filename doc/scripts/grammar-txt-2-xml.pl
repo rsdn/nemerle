@@ -34,9 +34,7 @@ EOF
 while (<>) {
 restart:
 if (/^([a-z0-9_]+):/) {
-print "</rule>" if defined $rule;
 $rule = $1;
-print "<rule name=\"$rule\">\n";
 } elsif (/^\t[^\s]/) {
 	chomp;
 	s/&/&amp;/g;
@@ -54,21 +52,22 @@ print "<rule name=\"$rule\">\n";
 		s/\s\]\s/ <\/optional> /;
 		s/\s([a-z0-9_]+)\s/ <non-terminal name="$1" \/> /;
 	}	
-	print "<rhs><body>$_</body>\n";
+	print "<rule name=\"$rule\">$_</rule>\n";
 	while (<>) {
 		/^\s*$/ or last;
 	}
 	if (s/^\t\t//) {
-		print "<desc>$_";
+		#print "<desc>$_";
 		while (<>) {
 			/(^\t[^\t])|(^[^\t])/ and do {
-			  print "</desc></rhs>\n";
+			  #print "</desc></rhs>\n";
 			  goto restart;
 			};
 			s/^\t\t//;
-			print;
+			#print;
 		}
-	} else { print "</rhs>\n"; goto restart; }
+	} else { #print "</rhs>\n"; 
+	goto restart; }
 	
 } elsif (/^#/ || /^\s*$/) {
 } elsif (/^\s*<comment>/) {
@@ -80,4 +79,4 @@ print "<rule name=\"$rule\">\n";
 	defined $_ or die "runaway comment";
 } else { die "syntax error"; }
 }
-print "</rule></grammar>\n";
+print "</grammar>\n";
