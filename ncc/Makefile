@@ -84,7 +84,7 @@ sync:
 	mv ../boot/ncc.exe ../boot/ncc-old.exe
 	cp ncc2.exe ../boot/ncc.exe
 
-ncc.exe: $(all_src)
+ncc.exe: $(src)
 	$(EXECUTE) ../boot/ncc.exe $(src)
 	mv -f out.cs out1.cs
 	$(COMPILE) $(OUTFLAG)$@ out1.cs
