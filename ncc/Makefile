@@ -92,7 +92,7 @@ NEMERLE_COMPILER_DLL_SRC = \
 	lexer.n \
 	cgtree.n \
 	passes.n \
-	tycon.n \
+	TypeInfo.n \
 	typingcontext.n \
 	typattern.n \
 	tyexpr.n \
