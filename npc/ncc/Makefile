@@ -1,5 +1,6 @@
 n_src = option.n list.n util.n parsetree.n tree.n scan_globals.n treeutil.n \
-	bind_types.n tyvars.n tyinfo.n tyutil.n check_constraints.n env.n
+	bind_types.n tyvars.n tyinfo.n tyutil.n check_constraints.n \
+	abstracttree.n env.n
 cs_src = lexer.cs main.cs parser.cs
 all_src = $(n_src) $(cs_src)
 all_cs = env.n.cs $(cs_src)
