@@ -1,47 +1,137 @@
-using System;
-using System.Text;
-using System.CodeDom;
-using System.CodeDom.Compiler;
-using System.Reflection;
+
+using Nemerle.Collections;
 using Nemerle.Compiler;
-using Nemerle.Collections.List;
-using Nemerle.Utility;
+using Nemerle.Compiler.Parsetree;
 
 public class Evaluator
 {
- cmplr: ICodeCompiler;
+  public static mutable Locals : list [string * PExpr];
+  public static mutable code : string;
+ 
+  public this () {
+    Evaluator.Locals = [];
+    Message.InitOutput (System.Console.Out);         
 
- public this () {
-  cmplr = NemerleCodeProvider ().CreateCompiler ();
- }
+    Options.Sources = [""];
+    Options.CompileToMemory = true;
+    Options.ProgressBar = false;
+    Options.IgnoreConfusion = true;
+    Options.IgnoredValueWarnings = false;
 
- public Eval (ret: Type, refr: list [string], 
-              ns: list [string], code: string): object {
-  def cp = CompilerParameters ();
-  cp.GenerateInMemory = true;
-  def re = NArray.FromList (typeof (string), refr);
-  foreach (r in re)
-   cp.ReferencedAssemblies.Add (r);
-  def prog =
-   FoldLeft (ns, "", fun (x: string, acc) { acc + "using " + x + ";\n" }) +
-   "public module Exec {\n"
-   " public static Foo(): " + ret.Name + " {\n"
-   "  " + code + "\n"
-   " }\n"
-   "}\n";
-  def cr = cmplr.CompileAssemblyFromSource (cp, prog);
-
-  if (cr.Errors.HasErrors) {
-   def error = StringBuilder ();
-   foreach (err: CompilerError in cr.Errors)  
-    error.Append (err.ErrorText + "\n");
-   
-   throw Exception (error.ToString ());
+    Passes.LexingPipeline = fun (_) { null };
+    Passes.ParsingPipeline = fun (_) { [null] };
+    Passes.ScanningPipeline = DoTheStuff;
   }
-  else {
-   def a = Assembly.LoadFrom (cp.OutputAssembly);
-   def mi = a.GetTypes ()[0].GetMethod ("Foo");
-   mi.Invoke (null, null);
+
+  public Eval (refr: list [string], _ns: list [string], code: string): object {
+    def prev = (array []) : array [object];
+    Locals = [];
+    Evaluator.code = code;
+    Options.ReferencedLibraries = refr;
+
+    Passes.Run ();
+
+    def ass = Passes.GeneratedAssembly;
+    def meth = ass.GetTypes()[0].GetMethod("Run");
+    def ret = meth.Invoke (null, array [prev : object]) :> array [object];
+    def result = ret[0];
+    def locals = ret[1] :> array [object];
+
+    def l = List.FromArray (locals);
+    match ((Locals, l)) {
+      | (_, []) | ([], _) => ()
+      | _ => List.Iter2 (l, Locals, fun (x: object, y: string*PExpr) { 
+                                      def (y1, y2) = y;
+                                      when (y1 != "_N_prevs") {
+                                        System.Console.WriteLine (y1 + " = " +
+                                        x.ToString () + " : " + 
+                                        PrettyPrint.SprintExpr (None (), y2));
+                                      }
+                                    });
+    }
+
+    result
   }
- }
+
+  static DoTheStuff (tdecl : Parsetree.TopDeclaration, env : GlobalEnv) : GlobalEnv {
+    MacroRegistry.register_macro (StagedMacro ());
+
+    def cname = Macros.NewSymbol ();
+    def tb = GlobalEnv.DefineExact (<[ decl: public class $(cname : name) { } ]>);
+
+    def body = Parser.ParseExpr ("{" + Evaluator.code + "}"); 
+    
+    def whole = inject (body);
+
+    mutable i = -1;    
+    def inits = List.FoldLeft (Evaluator.Locals, [], fun (x, acc) {
+      match (x) {
+        | (name, ty) =>
+          ++i;          
+          <[ def $(name : usesite) = _N_prevs [$(i : int)] :> $ty; ]> :: acc;
+      }
+    });
+    def whole = <[ {.. $(inits + [whole]) } ]>;
+    
+//    PrettyPrint.PrintExpr (None (), whole);
+    
+    tb.Define (<[ decl:
+                 public static Run (_N_prevs : array [System.Object]) : array [System.Object]
+                 { $whole }
+               ]>);
+    tb.Compile ();
+
+//    env
+    env.AddOpenNamespace (["System"], tdecl.loc);
+  }
+
+  // analyze given expression and return the new one with
+  // our macro's call at the end
+  static inject (body : PExpr) : PExpr {
+    match (body) {
+      | <[ {..$seq } ]> =>
+        def (beg, last) = List.DivideLast (seq);
+        def last = 
+          match (last) {
+            // if the last expression in sequence is definition,
+            // it must be before our macro and also return value is void then
+            | <[ def $_ = $_ ]> | <[ mutable $_ = $_ ]> =>
+              <[ $last; stagedmacro (()) ]>
+            // pass last expression (return value) to our macro
+            | _ => <[ stagedmacro ($last) ]>
+          }
+        // return enchanced sequence, with our macro as the last expression
+        <[ {..$ (beg + [last]) } ]>
+      | _ => <[ stagedmacro ($body) ]>
+    }
+  }
+
+  class StagedMacro : IMacro 
+  {
+    public Run (_ctx : TypingContext, val : list [SyntaxElement]) : PExpr {
+      match (val) {
+        | [SyntaxElement.Expression (expr)] =>
+          Evaluator.Locals = [];
+          
+          def locals = _ctx.GetLocals ();
+          def values = locals.Fold (fun (n : Name, loc : LocalValue, acc) {
+            Evaluator.Locals = (loc.name, PrettyPrint.TypedTypeToParseTree (loc.ty)) :: Evaluator.Locals;
+            <[ ($(n : name) : object) :: $acc ]>
+          }, <[ [] ]>);
+          <[ array [$expr : object, array $values] ]>
+
+        | _ => Util.ice ()
+      }
+    }
+
+    // not interesting macro stuff (will disappear)
+    public CallTransform (l : list [PExpr]) : list [SyntaxElement]
+    { List.Map (l, SyntaxElement.Expression); }
+    public SyntaxExtension () : string * list [Parser.GrammarElement] * list [int]
+    { ("", [], []) }
+    public IsTailRecursionTransparent : bool { get { false } }
+    public GetName () : string { "stagedmacro" }
+    public GetNamespace () : string { "" }
+    // not interesting macro stuff
+  }
 }
