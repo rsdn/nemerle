@@ -71,6 +71,8 @@ public class TypeBuilder : Tycon, ITypeModifier {
   public mutable tenv : Tyvar.TEnv;
   mutable additional_decls : list <PT.Class_member>;
   mutable default_indexer : string;
+  /// if it doesn't, we must add implicit empty constructor
+  mutable instance_ctor_occured : bool;
 
   // the list of additional method overrides, see check_method_implements
   // (listed as pairs of implementation method / interface method)
@@ -461,9 +463,11 @@ public class TypeBuilder : Tycon, ITypeModifier {
     this.name = List.Head (Macros.UnSString (td.name));
     this.loc = td.loc;
     modifiers = td.modifiers;
+    instance_ctor_occured = td is PT.TD_alias;
         
     match (td) {
       | PT.TD_variant_option =>
+        instance_ctor_occured = true;
         match (vop) {
           | Some (ti) =>
             ti.variant_options = this :: ti.variant_options;
@@ -481,6 +485,7 @@ public class TypeBuilder : Tycon, ITypeModifier {
           | None => assert (false)
         }
       | PT.TD_variant =>
+        instance_ctor_occured = true;
         modifiers.macro_attrs = (":type:postadd", <[ Record ]>) :: modifiers.macro_attrs;
       | PT.TD_enum =>
         is_enum = true;
@@ -501,6 +506,8 @@ public class TypeBuilder : Tycon, ITypeModifier {
     is_interface = (this.pt_tydecl is PT.TD_interface);
     is_module = NemerleAttributes.Module %&& modifiers.mods;
     is_struct = NemerleAttributes.Struct %&& modifiers.mods;
+    instance_ctor_occured = is_struct || is_module || instance_ctor_occured 
+      || is_interface || is_enum;
     
     unless (is_public || is_internal || is_protected || is_private) {
       match (enclosing_type) {
@@ -1017,7 +1024,7 @@ public class TypeBuilder : Tycon, ITypeModifier {
                 BindingFlags.Public %| BindingFlags.NonPublic)
   }
 
-  /** Searches for the constructors defined for the current TypeInfo, using the
+  /** Searches for the constructors defined for the current TypeBuilder, using the
       specified BindingFlags.
   */
   public GetConstructors (bindingAttr : BindingFlags) : list <IMethod>
@@ -1225,6 +1232,9 @@ public class TypeBuilder : Tycon, ITypeModifier {
         | (PT.M_function) as f =>          
           def r = NemerleMethod (this, f);
           CheckMethodAttributes (r);
+          unless (instance_ctor_occured)
+            when (r.GetFunKind () matches FK_ctor) instance_ctor_occured = true;
+
           AddMember (r);
           r
           
@@ -1294,6 +1304,7 @@ public class TypeBuilder : Tycon, ITypeModifier {
                   | _ when m.DeclaringType.SameAs (this) =>
                     Message.error (mem.GetLocation (),
                                    "redefinition of " + describe_member (mem))
+
                   | FK_ctor | FK_static_ctor => ()
                   | _ when mem.Attributes %&& NemerleAttributes.New => ()
                   | _ when mem.Attributes %&& NemerleAttributes.Override =>
@@ -1370,10 +1381,7 @@ public class TypeBuilder : Tycon, ITypeModifier {
       };
 
     unless (has_fields) {
-      match (mem.GetKind ()) {
-        | MK_field => has_fields = true
-        | _ => ()
-      }
+      has_fields = mem.GetKind () matches MK_field;
     };
 
     member_map = member_map.Replace (mem.Name, new_mems);
@@ -1592,6 +1600,7 @@ public class TypeBuilder : Tycon, ITypeModifier {
           add_enum_members (ds); []
         | _ => []
       };
+
     List.Iter (decls, BindAndAddMember);
     List.Iter (additional_decls, BindAndAddMember);
 
@@ -1599,6 +1608,10 @@ public class TypeBuilder : Tycon, ITypeModifier {
     List.Iter (contained_types, AddMember);
     
     member_list = List.Rev (member_list);
+
+    /// define implicit instance constructor if none exists
+    unless (instance_ctor_occured) 
+      Define (<[ decl: public this () { } ]>);
 
     // we no longer need it, let GC kill it
     pt_tydecl = null;
@@ -1623,10 +1636,6 @@ public class TypeBuilder : Tycon, ITypeModifier {
         
         constant_object = Some ((typed_field : IField));
         
-        def fh = PT.Fun_header (loc = loc, 
-                                name = PT.SS_string (PT.Name ("this")),
-                                ret_type = <[ type: void ]>,
-                                parms = []);
         def ttf = typed_field.ty;
         
         // use typed trees here to avoid problems during actual typing
@@ -1635,14 +1644,7 @@ public class TypeBuilder : Tycon, ITypeModifier {
                               E_call (loc, ttf,
                                       E_static_ref (loc, ctor.GetMemType (), ctor), []));
                                       
-        def body = <[ { $(tbody : typed) } ]>;
-        def static_ctor =
-          PT.M_function (loc = loc, 
-                         name = PT.SS_string (PT.Name ("this")),
-                         modifiers = Modifiers (NemerleAttributes.Static, []),
-                         header = fh,
-                         kind = FK_ctor (),
-                         body = FB_parsed_expr (body));
+        def static_ctor = <[ decl: static this () { $(tbody : typed) } ]>;
         BindAndAddMember (static_ctor);
 
         // add the constant object generator function
@@ -2745,6 +2747,10 @@ public class TypeBuilder : Tycon, ITypeModifier {
                            FullName)
   }
 
+  public DisableImplicitConstructor () : void
+  {
+    instance_ctor_occured = true;
+  }
   
   /**
    * Marks this with the SpecialName attribute, the attribute will
