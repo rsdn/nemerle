@@ -392,6 +392,9 @@ class Lexer : yyParser.yyInput
 			if (peek() == '>') {
 				read();
 				return Token.COLON_MORE;
+			} else if (peek() == ':') {
+				read();
+				return Token.COLON_COLON;
 			} else
 				return ch;
 
