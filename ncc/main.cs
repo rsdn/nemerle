@@ -108,6 +108,11 @@ class CS_glue {
 			
 		return new string(o, 0, p);
 	}
+
+	public static bool is_capitalized(string s)
+	{
+		return s[0] >= 'A' && s[0] <= 'Z';
+	}
 }
 
 class XParser : Parser {
