@@ -34,7 +34,7 @@ course_docs = index
 
 root_docs =  index nemerlePlanned \
 	coreNemExamples coreNemGrammar coreNemCompiler coreNemDesc \
-	TRSideas faq license hacking \
+	TRSideas faq license hacking nemerleExtensions \
 	absNem absNemSemantics absNemGrammar
 
 docs = $(root_docs) $(addprefix course/, $(course_docs))
