@@ -37,9 +37,129 @@ namespace Nemerle.Compiler {
 
   class CGexpr
     {
+      fun cg_type (t : Type) : CG_type =
+        match Tyutil.top_expand (t) with [
+          | T_void => CT_void ()
+          | T_prod (?l) => CT_tuple (List.length (l))
+          | T_fun (?args, _) => CT_fun (List.length (args))
+          | T_var (_, ?id) =>
+            match Tyvars.constraints (id) with [
+              | Nil => CT_object ()
+              | Cons (?t, _) => cg_type (t)
+            ]
+          | T_app (_, _, ?id) => 
+            CT_ref ((Tyinfo.lookup (id))#fullname())
+          | T_ref => Util.ice ("FIXME: cg ref")
+          | T_out => Util.ice ("FIXME: cg out")
+        ];
+
+      fun type_of (ex : CG_expr) : CG_type =
+        if ex#expr_ty == null then Util.ice ()
+        else ex#expr_ty;
+
+      fun fixup (ex : CG_expr, t : CG_type) : CG_expr {
+        ex#loc <- Location_stack.top ();
+        ex#expr_ty <- t;
+        ex
+      }
+
+      // produce cast only if needed
+      fun cast_expr (ex : CG_expr, t : CG_type) : CG_expr =
+        letfun cast (ex : CG_expr) : CG_expr =
+          fixup (CE_cast (ex, t), t)
+        in
+        match (type_of (ex), t) with [
+          | (CT_void, CT_void) => ex
+          | (CT_void, _) => Util.ice ()
+          | (CT_object, CT_object) => ex
+          | (CT_tuple (?l1), CT_tuple (?l2)) =>
+            if l1 == l2 then ex
+            else Util.ice ()
+          | (CT_fun (?l1), CT_fun (?l2)) =>
+            if l1 == l2 then ex
+            else Util.ice ()
+          | (_, CT_object) => 
+            // not strictly needed, but we'll better have this
+            cast (ex) 
+          | (CT_object, _) => 
+            cast (ex)
+          | (CT_ref (?n1), CT_ref (?n2)) =>
+            if n1 == n2 then ex
+            else cast (ex)
+          | _ => Util.ice ()
+        ];
+
+      fun cg_fun_header (h : Fun_header) : CM_method =
+        letfun mkparm (p : Fun_parm) : CG_val =
+          CG_val (loc = Location_stack.top (),
+                  name = p#name, 
+                  ty = cg_type (p#ty),
+                  val = CE_none ())
+        in
+        let m = CM_method (parms = List.map (mkparm, h#parms), 
+                           ret_type = cg_type (h#ret_type),
+                           body = CE_none ())
+        in {
+          m#name <- h#name;
+          (m :> CM_method)
+        };
+
+      fun cg_attrs (mods : list (Modifier)) : list (string) = 
+        List.cons ("public");
+
+      fun make_static (m : CG_member) : void =
+        m#attrs <- Cons ("static", m#attrs);
+
+      fun cg_decl (decl : Class_member) : list (CG_member) =
+        Util.locate (decl#loc, fun () : list (CG_member) =>
+          match decl with [
+            | M_type (?t) => 
+              List.map (fun (x : CM_class) : CG_member => (x : CG_member), 
+                        cg_tydecl (t))
+
+            | M_value (?t, _) =>
+              let m = CM_field (cg_type (t)) in {
+                m#name <- decl#name;
+                m#attrs <- cg_attrs (decl#modifiers);
+                make_static (m);
+                List.cons (m)
+              }
+
+            | M_field (?t, _) =>
+              let m = CM_field (cg_type (t)) in {
+                m#name <- decl#name;
+                m#attrs <- cg_attrs (decl#modifiers);
+                List.cons (m)
+              }
+
+            | M_function ?f =>
+              let ti = Tyinfo.lookup (f#id) in
+              let m = cg_fun_header (f#fun_header) in {
+                m#attrs <- cg_attrs (decl#modifiers);
+                match f#fun_kind with [
+                  | FK_method => ()
+                  | FK_static_ctor => 
+                    {
+                      m#name <- ti#basename ();
+                      make_static (m)
+                    }
+                  | FK_ctor => m#name <- ti#basename ()
+                  | FK_function => make_static (m)
+                  | FK_iface_method => Util.ice ()
+                ];
+                // FIXME: m#body
+                List.cons ((m : CG_member))
+              } 
+          ]);
+      
+      fun cg_list_decl (decls : list (Class_member)) : list (CG_member) =
+        List.concat (List.map (cg_decl, decls));
+        
       fun cg_tydecl (decl : Type_decl) : list (CM_class) =
-        letfun make_cm (kind : CM_kind) : CM_class =
-          let r = (CM_class ("", kind, Nil (), Nil ()) :> CM_class) in {
+        let ti = Tyinfo.lookup (decl) in
+        letfun make_cm (decl : Type_decl, kind : CM_kind) : CM_class =
+          let inh = List.map (cg_type, ti#direct_supertypes ()) in
+          let r = (CM_class ("", kind, inh, Nil ()) :> CM_class) in {
             r#loc <- decl#loc;
             r#name <- decl#name;
             r#attrs <- Nil ();
@@ -48,8 +168,46 @@ namespace Nemerle.Compiler {
         in
         match decl with [
           | TD_interface (?members) =>
-            let cm = make_cm (CK_interface ()) in
-            List.cons (cm)
+            letfun mkmember (m : Class_member) : CG_member =
+              match m with [
+                | M_function {fun_kind = FK_iface_method (?new_flag); fun_header = ?h} =>
+                  let m = cg_fun_header (h) in {
+                    if new_flag then m#attrs <- Cons ("new", m#attrs) else ();
+                    m
+                  }
+                | _ => Util.ice ()
+              ]
+            in
+            let cm = make_cm (decl, CK_interface ()) in {
+              cm#decls <- List.map (mkmember, members);
+              List.cons (cm)
+            }
+
+          | TD_variant (?opts) =>
+            letfun mkopt (m : Type_decl) : CG_member =
+              match m with [
+                | TD_variant_option ?o =>
+                  let cm = make_cm (o, CK_class ()) in {
+                    cm#inheritance <- List.cons (cg_type (ti#generic_type ()));
+                    cm#decls <- cg_list_decl (o#decls);
+                    cm
+                  }
+                | _ => Util.ice ()
+              ]
+            in
+            let cm = make_cm (decl, CK_class ()) in {
+              cm#decls <- List.map (mkopt, opts);
+              List.cons (cm)
+            }
+
+          | TD_class (?decls) =>
+            let cm = make_cm (decl, CK_class ()) in {
+              cm#decls <- cg_list_decl (decls);
+              List.cons (cm)
+            }
+
+          | TD_variant_option => Util.ice ()
+            
           | TD_external => Nil ()
           // C# doesn't seem to provide typedef, not sure about CLS though
           | TD_alias => Nil () 
@@ -60,7 +218,9 @@ namespace Nemerle.Compiler {
           letfun set_ns (cmc : CM_class) : void =
             cmc#ns <- decl#env#current_namespace 
           in
-          let res = cg_tydecl (decl) in {
+          let res = Util.locate (decl#loc, fun () : list (CM_class) => 
+                                                cg_tydecl (decl)) 
+          in {
             List.iter (set_ns, res);
             res
           }
