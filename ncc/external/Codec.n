@@ -32,17 +32,23 @@ using Nemerle.Compiler;
 using Nemerle.Compiler.Tyops;
 using Nemerle.Compiler.Typedtree;
 
+using SRE = System.Reflection.Emit;
+
 namespace Nemerle.Compiler {
 
+/** This module is used to decode and encode Nemerle specific information about types,
+    methods, etc. which are not directly expressible in .NET metadata.
 
+    We use custom attributes to save / read this data in emitted / loaded assemblies.
+ */
 module TyCodec 
 {
-
   variant Term
   {
     | App { name : string; args : list [Term]; }
   }
-  
+
+  // --------------- DECODING -------------------------  
 
   ParseTerm (s : string) : Term
   {
@@ -77,55 +83,6 @@ module TyCodec
   }
   
 
-  FlattenTerm (t : Term) : string
-  {
-    def ret = System.Text.StringBuilder ();
-    def walk (t) {
-      | Term.App (name, args) =>
-        ignore (ret.Append (name));
-        ignore (ret.Append ('('));
-        List.Iter (args, walk);
-        ignore (ret.Append (')'));
-    };
-    walk (t);
-    ret.ToString ()
-  }
-
-
-  encode (t : TType) : Term
-  {
-    match (t) {
-      | TType.ByRef (t) => 
-        Term.App (".r", [encode (t)])
-      | TType.Out (t) =>
-        Term.App (".o", [encode (t)])
-      | TType.Array (t, rank) =>
-        Term.App (".a", [Term.App (rank.ToString (), []), encode (t)])
-      | TType.Variable (tv) =>
-        Term.App (".v", [Term.App (tv.id.ToString (), [])])
-      | TType.Void =>
-        Term.App ("System.Void", [])
-      | TType.Function (arg, rt) =>
-        Term.App (".f", [encode (arg), encode (rt)])
-      | TType.Product (args) =>
-        Term.App (".p", List.Map (args, encode))
-      | TType.Class (ti, args) =>
-        Term.App (Tyutil.FrameworkTypeName (ti), List.Map (args, encode))
-    }
-  }
-    
-  /**
-   * Used to emit Nemerle types in assembly metadata
-   *
-   * <remarks>
-   *   The type tree is converted to prefix, term-like notation.
-   * </remarks>
-   */
-  public EncodeType (t : TType) : string
-  {
-    FlattenTerm (encode (t))
-  }
-
   decode (lib : LibraryReference, tenv : SystemMap [int, Tyvar.T], t : Term) : TType
   {
     def self (t) { decode (lib, tenv, t) };
@@ -157,28 +114,6 @@ module TyCodec
     }
   }
 
-
-  /**
-   * Used to decode Nemerle types extracted from assembly metadata
-   */
-  public DecodeType (lib : LibraryReference, tenv : SystemMap [int, Tyvar.T], tokens : string) : TType
-  {
-    decode (lib, tenv, ParseTerm (tokens))
-  }
-  
-
-  encode_typarms (tyvars : list [Tyvar.T]) : Term
-  {
-    def encode_tyvar (tv : Tyvar.T) {
-      Term.App ("", [Term.App (tv.id.ToString (), []),
-                Term.App (tv.name, []),
-                Term.App ("", List.Map (tv.GetConstraints (), encode))])
-    };
-    
-    Term.App (".tp", List.Map (tyvars, encode_tyvar))
-  }
-  
-   
   decode_typarms (lib : LibraryReference, 
                   tenv : SystemMap [int, Tyvar.T], 
                   t : Term) : list [Tyvar.T] * SystemMap [int, Tyvar.T]
@@ -216,15 +151,13 @@ module TyCodec
     
     (tyvars, tenv)
   }
-  
 
-  encode_tyinfo (ti : TypeBuilder) : Term
+  /**
+   * Used to decode Nemerle types extracted from assembly metadata
+   */
+  public DecodeType (lib : LibraryReference, tenv : SystemMap [int, Tyvar.T], tokens : string) : TType
   {
-    Term.App (".ti", [
-      encode_typarms (ti.GetTyparms ()),
-      Term.App ("", List.Map (ti.GetDirectSuperTypes (), encode)),
-      Term.App ("", List.Map (ti.GetSuperTypes (), encode))
-    ])
+    decode (lib, tenv, ParseTerm (tokens))
   }
 
   public DecodeTypeBuilder (lib : LibraryReference, 
@@ -245,7 +178,7 @@ module TyCodec
   public FixupFunctionHeader (lib : LibraryReference,
                               tenv : SystemMap [int, Tyvar.T], 
                               fh : Fun_header, 
-                              tokens : string) : void
+                              [Nemerle.Assertions.NotNull] tokens : string) : void
   {
     match (ParseTerm (tokens)) {
       | Term.App (".m", [tp, ty]) =>
@@ -264,27 +197,144 @@ module TyCodec
       | _ => Util.ice ("evil encoded method header " + tokens)
     }
   }
-  
-  
-  public EncodeMemberType (m : IMember) : string
+
+
+  // -------------- ENCODING ----------------------
+
+  FlattenTerm (t : Term) : string
   {
-    match (m.GetKind ()) {
-      | MemberKind.Field (m) => EncodeType (m.GetMemType ())
-      | MemberKind.Method (m) =>
-        def tp = encode_typarms (m.GetHeader ().typarms);
-        def mt = encode (m.GetMemType ());
-        FlattenTerm (Term.App (".m", [tp, mt]))
-      | MemberKind.Property (m) =>
-        EncodeType (m.GetMemType ())
-      | MemberKind.Event (m) =>
-        EncodeType (m.GetMemType ())
-      | MemberKind.Type (t) =>
-        match (t.GetTypeInfoKind ()) {
-          | TypeInfoKind.NemerleType (ti) =>
-            FlattenTerm (encode_tyinfo (ti))
-          | _ => assert (false)
-        }
+    def ret = System.Text.StringBuilder ();
+    def walk (t) {
+      | Term.App (name, args) =>
+        ignore (ret.Append (name));
+        ignore (ret.Append ('('));
+        List.Iter (args, walk);
+        ignore (ret.Append (')'));
+    };
+    walk (t);
+    ret.ToString ()
+  }
+
+  needs_encoding (t : TType) : bool
+  {
+    match (t) {
+      | TType.ByRef (t) 
+      | TType.Out (t) 
+      | TType.Array (t, _) => needs_encoding (t)
+      | TType.Void 
+      | TType.Class (_, []) => false
+      | TType.Variable | TType.Function | TType.Product
+      | TType.Class => true
     }
+  } 
+
+
+  encode (t : TType) : Term
+  {
+    | TType.ByRef (t) => 
+      Term.App (".r", [encode (t)])
+    | TType.Out (t) =>
+      Term.App (".o", [encode (t)])
+    | TType.Array (t, rank) =>
+      Term.App (".a", [Term.App (rank.ToString (), []), encode (t)])
+    | TType.Variable (tv) =>
+      Term.App (".v", [Term.App (tv.id.ToString (), [])])
+    | TType.Void =>
+      Term.App ("System.Void", [])
+    | TType.Function (arg, rt) =>
+      Term.App (".f", [encode (arg), encode (rt)])
+    | TType.Product (args) =>
+      Term.App (".p", List.Map (args, encode))
+    | TType.Class (ti, args) =>
+      Term.App (Tyutil.FrameworkTypeName (ti), List.Map (args, encode))
+  }
+    
+  /**
+   * Used to emit Nemerle types in assembly metadata
+   *
+   * <remarks>
+   *   The type tree is converted to prefix, term-like notation.
+   * </remarks>
+   */
+  public EncodeType (t : TType) : string
+  {
+    FlattenTerm (encode (t))
+  }
+
+  encode_typarms (tyvars : list [Tyvar.T]) : Term
+  {
+    def encode_tyvar (tv : Tyvar.T) {
+      Term.App ("", [Term.App (tv.id.ToString (), []),
+                Term.App (tv.name, []),
+                Term.App ("", List.Map (tv.GetConstraints (), encode))])
+    };
+    
+    Term.App (".tp", List.Map (tyvars, encode_tyvar))
+  }
+
+
+  encode_tyinfo (ti : TypeBuilder) : Term
+  {
+    def generic_parms = ti.GetTyparms ();
+    def direct_super = ti.GetDirectSuperTypes ();
+    def super = ti.GetSuperTypes ();
+
+    if (ti.IsNemerleSpecific || !generic_parms.IsEmpty 
+        || List.Exists (direct_super, needs_encoding)
+        || List.Exists (super, needs_encoding))
+      Term.App (".ti", [
+        encode_typarms (generic_parms),
+        Term.App ("", List.Map (direct_super, encode)),
+        Term.App ("", List.Map (super, encode))
+      ])
+    else null
+  }
+ 
+  
+  public EncodeMemberType (tb : TypeBuilder) : SRE.CustomAttributeBuilder
+  {
+    def coded = encode_tyinfo (tb);
+    if (coded != null) {
+      when (tb.DeclaringType != null)
+        tb.DeclaringType.IsNemerleSpecific = true;
+      HierarchyEmitter.make_nemerle_type_attr (FlattenTerm (coded))
+    }
+    else 
+      null
+  }
+
+  public EncodeMemberType (m : NemerleMember) : SRE.CustomAttributeBuilder
+  {
+    def t = m.GetMemType ();
+    if (needs_encoding (t)) {
+      m.DeclaringType.IsNemerleSpecific = true;
+      HierarchyEmitter.make_nemerle_type_attr (EncodeType (t)) 
+    }
+    else
+      null
+  }
+
+  public EncodeMemberType (m : NemerleMethod) : SRE.CustomAttributeBuilder
+  { 
+    def generic_params = m.GetHeader ().typarms;
+    def mem_type = m.GetMemType ();
+    def need_enc = 
+      match (mem_type) {
+        | TType.Function (TType.Product (parms), to) =>
+          List.Exists (to :: parms, needs_encoding)
+        | TType.Function (from, to) =>
+          needs_encoding (from) || needs_encoding (to)
+        | _ => Util.ice ("method of non -> type")
+      }
+    
+    if (!generic_params.IsEmpty || need_enc) {
+      m.DeclaringType.IsNemerleSpecific = true;
+      def tp = encode_typarms (generic_params);
+      def mt = encode (mem_type);
+      def flat = FlattenTerm (Term.App (".m", [tp, mt]));
+      HierarchyEmitter.make_nemerle_type_attr (flat)
+    }
+    else null
   }
 }
 
