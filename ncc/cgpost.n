@@ -39,7 +39,7 @@ namespace Nemerle.Compiler
    */
   internal class CGpost
   {
-    internal Run (expr : CG_expr) : bool
+    internal Run (expr : CG_expr) : CG_expr
     {
       transform_try_blocks (true, expr);
       walk (expr, CgExprFlags.None)
@@ -48,34 +48,27 @@ namespace Nemerle.Compiler
     internal static Postprocess (cgm : CG_method) : void
     {
       def th = CGpost ();
-      cgm.need_no_final_ret = th.Run (cgm.body);
+      def res = th.Run (cgm.body);
+      if (res == null) ()
+      else {
+        cgm.need_no_final_ret = true;
+        cgm.body = res;
+      }
     }
 
 
-    walk (expr : CG_expr, flags : CgExprFlags) : bool
+    /** 
+        Walk given expression, requiring [flags]. If the expression cuts
+        control flow, a new expression is returned (and the surrounding
+        tree is rebuild accordingly, for example CE_call(...) is
+        transformed into cut down CE_sequence). Otherwise (the normal
+        case) null is returned.
+     */
+    walk (expr : CG_expr, flags : CgExprFlags) : CG_expr
     {
+      //Message.debug ($ "walk ($expr)");
       def simple_walk (e) {
         walk (e, CgExprFlags.None)
-      }
-
-      def skip (expr : CG_expr) {
-        expr.flags |= CgExprFlags.SkipEmission;
-        Message.warning (expr.loc, "this expression has been skipped in code "
-                                   "emission, due to `throw' usage")
-      }
-      
-      def simple_walks (es : list <CG_expr>) {
-        mutable skip_flag = false;
-        
-        foreach (e in es) {
-          if (skip_flag)
-            ignore (skip (e))
-          else
-            when (walk (e, CgExprFlags.None))
-              skip_flag = true
-        }
-
-        skip_flag
       }
 
       def cannot_addr () {
@@ -86,12 +79,18 @@ namespace Nemerle.Compiler
       
       expr.flags = flags;
 
+      def transform (e) {
+        def e' = walk (e, CgExprFlags.None);
+        if (e' == null) e
+        else e'
+      }
+
       match (expr) {
         | CE_this
         | CE_ref
         | CE_global_ref
         | CE_volatile_global_ref =>
-          false
+          null
 
         | CE_loop (e, _)
         | CE_cast (e, _, _)
@@ -103,11 +102,10 @@ namespace Nemerle.Compiler
           cannot_addr ();
           simple_walk (e)
 
-        // ??
         | CE_init_obj 
         | CE_literal =>
-          cannot_addr ();
-          false
+          cannot_addr (); // ??
+          null
 
         | CE_none
         | CE_base_ctor_ref
@@ -116,12 +114,12 @@ namespace Nemerle.Compiler
         | CE_method_addr
         | CE_opcode =>
           cannot_addr ();
-          false
+          null
         
         | CE_call (x, xs)
         | CE_tail_call (x, xs) =>
           cannot_addr ();
-          simple_walks (x :: xs)
+          walk_seq (expr, x :: xs, "call")
 
         | CE_field_ref (e, _) =>
           // can take address
@@ -129,69 +127,93 @@ namespace Nemerle.Compiler
 
         | CE_array_indexer (x, xs) =>
           // can take address
-          simple_walks (x :: xs)
+          walk_seq (expr, x :: xs, "array indexer")
         
-        | CE_mkarray (_, xs, _)
+        | CE_mkarray (_, xs, _) =>
+          cannot_addr ();
+          walk_seq (expr, xs, "array [...] constructor")
+
         | CE_self_tail_call (xs) =>
           cannot_addr ();
-          simple_walks (xs)
+          walk_seq (expr, xs, "self tail call")
         
         | CE_assign (target, source) =>
           cannot_addr ();
-          if (walk (target, flags %| CgExprFlags.NeedAddress)) {
-            skip (source);
-            true
-          } else
-            simple_walk (source)
+          def target = walk (target, flags %| CgExprFlags.NeedAddress);
+          if (target != null) {
+            Message.warning (target.loc, "`throw' in assignment target " + target.ToString ());
+            target.flags = CgExprFlags.None;
+            target
+          } else {
+            def source = walk (source, CgExprFlags.None);
+            if (source != null) {
+              Message.warning (source.loc, "`throw' in assignment source");
+              target.flags = CgExprFlags.None;
+              CE_sequence ([side_effect_run (target), source]).WithCtx (expr)
+            } else
+              null
+          }
           
         | CE_let (name, body) =>
-          if (simple_walk (name.val)) {
-            skip (body);
-            true
-          } else
-            walk (body, flags)
+          def val = walk (name.val, CgExprFlags.None);
+          if (val != null) {
+            Message.warning (val.loc, "`throw' in initial `def' value");
+            val
+          } else {
+            def body = walk (body, flags);
+            if (body == null)
+              null
+            else
+              CE_let (name, body).WithCtx (expr)
+          }
           
         | CE_raise (e) =>
           // we can take address of throw... 
-          ignore (simple_walk (e));
-          true
+          def e' = walk (e, CgExprFlags.None);
+          if (e' == null) {
+            expr // cutoff here
+          } else {
+            Message.warning (e'.loc, "`throw' in `throw'");
+            e'
+          }
           
-        | CE_if (e, e1, e2) =>
-          if (simple_walk (e)) {
-            skip (e1);
-            skip (e2);
-            true
-          } else
-            walk (e1, flags) && walk (e2, flags)
+        | (CE_if (e, e1, e2)) as rec =>
+          def e' = walk (e, CgExprFlags.None);
+          if (e' != null) {
+            Message.warning (e'.loc, "`throw' in `if' condition");
+            e'
+          } else {
+            def e1 = walk (e1, flags);
+            def e2 = walk (e2, flags);
+            when (e1 != null)
+              rec.e_then = e1;
+            when (e2 != null)
+              rec.e_else = e2;
+            if (e1 != null && e2 != null)
+              expr
+            else
+              null
+          }
           
-        | CE_try_with (body, _, handler) =>
+        | (CE_try_with) as rec =>
           cannot_addr ();
-          ignore (simple_walk (body));
-          ignore (simple_walk (handler));
-          false
+          rec.body = transform (rec.body);
+          rec.handler = transform (rec.handler);
+          null // never cutoff
           
-        | CE_try_finally (body, handler) =>
+        | (CE_try_finally) as rec =>
           cannot_addr ();
-          ignore (simple_walk (body));
-          simple_walk (handler)
+          rec.body = transform (rec.body);
+          def handler = walk (rec.handler, CgExprFlags.None);
+          if (handler == null) {
+            null
+          } else {
+            rec.handler = handler;
+            rec
+          }
           
         | CE_sequence (lst) =>
-          def loop (do_skip, lst) {
-            match (lst) {
-              | [] => do_skip
-              | x :: xs when do_skip =>
-                skip (x);
-                loop (true, xs)
-              | [x] => walk (x, flags)
-              | x :: xs =>
-                if (simple_walk (x))
-                  loop (true, xs)
-                else
-                  loop (false, xs)
-            }
-          }
-
-          loop (false, lst)
+          walk_seq (expr, lst, null)
         
         | CE_addr (e) =>
           cannot_addr ();
@@ -202,32 +224,151 @@ namespace Nemerle.Compiler
           simple_walk (e)
           
         | CE_continue_loop =>
-          true
+          expr
 
         | CE_multiple_assign (lst) =>
           cannot_addr ();
-          simple_walks (List.Map (lst, Pair.Second))
+          def loop (acc, lst) {
+            match (lst) {
+              | ((v, e)) as x :: xs  =>
+                def e' = walk (e, CgExprFlags.None);
+                if (e' == null)
+                  loop (x :: acc, xs)
+                else {
+                  Message.warning (e.loc, "`throw' in self tail call");
+                  CE_multiple_assign (List.Rev ((v, e') :: acc))
+                    .WithCtx (expr)
+                }
+              | [] => null
+            }
+          }
+          loop ([], lst)
           
-        | CE_switch (idx, default, cases) =>
+        | (CE_switch (idx, default, cases)) as rec =>
           // optimize switch here?
-          if (simple_walk (idx)) {
-            Option.Iter (default, skip);
-            List.Iter (cases, fun (_, e) { skip (e) });
-            true
+          def idx' = walk (idx, CgExprFlags.None);
+          if (idx' != null) {
+            Message.warning (idx'.loc, "`throw' in `switch' condition");
+            idx'
           } else {
-            def exprs = List.Map (cases, Pair.Second);
-            def exprs =
-              match (default) {
-                | Some (e) => e :: exprs
-                | None => exprs
-              };
-            if (List.ForAll (exprs, fun (e) { walk (e, flags) }))
-              true
+            mutable seen_normal = false;
+            match (default) {
+              | Some (expr) =>
+                def expr = walk (expr, flags);
+                if (expr == null) seen_normal = true;
+                else rec.default = Some (expr)
+              | None => ()
+            }
+            rec.cases =
+              List.Map (cases, fun (id, e) {
+                def e' = walk (e, flags);
+                if (e' == null) {
+                  seen_normal = true;
+                  (id, e)
+                } else {
+                  (id, e')
+                }
+              });
+            if (seen_normal)
+              null
             else
-              false
+              expr
           }
       }
     }
+
+    /** Helper for walk(). */
+    walk_seq (parent_expr : CG_expr,
+              exprs : list <CG_expr>, 
+              warning_object : string) : CG_expr
+    {
+      mutable len = 1;
+      
+      def loop (lst) {
+        | e :: es =>
+          if (walk (e, CgExprFlags.None) != null) {
+            def blah = "has been skipped in code emission, due to `throw' "
+                       "usage";
+            match (es) {
+              | [] =>
+                when (warning_object != null)
+                  Message.warning (parent_expr.loc, 
+                                   $ "this $warning_object $blah");
+              | e :: _ =>
+                def middle =
+                  if (warning_object == null)
+                    ""
+                  else
+                    $" (an argument of the $warning_object)";
+                Message.warning (e.loc, $ "this expression$middle $blah");
+            }
+            
+            def exprs' = 
+              if (warning_object == null && es.IsEmpty ())
+                exprs // sequence with throw at the end.
+              else
+                List.Map (exprs.FirstN (len), side_effect_run);
+            CE_sequence (exprs').WithCtx (parent_expr)
+          } else {
+            ++len;
+            loop (es)
+          }
+        | [] => null
+      }
+
+      loop (exprs)
+    }
+
+    /** Run given expression for side effects only. */
+    side_effect_run (expr : CG_expr) : CG_expr
+    {
+      def res =
+        match (expr) {
+          | CE_base_ctor_ref
+          | CE_literal
+          | CE_this
+          | CE_none
+          | CE_ref 
+          | CE_global_ref 
+          | CE_ctor_ref
+          | CE_init_obj
+          | CE_method_addr
+          | CE_typeof
+          | CE_opcode =>
+            CE_sequence ([]).WithCtx (expr)
+          
+          | CE_continue_loop => assert (false)
+          | CE_self_tail_call => assert (false)
+          
+          | CE_addr
+          | CE_indirect
+          | CE_has_type
+          | CE_not_null
+          | CE_if
+          | CE_try_with
+          | CE_try_finally
+          | CE_sequence
+          | CE_mkarray
+          | CE_loop
+          | CE_switch
+          | CE_volatile_global_ref 
+          | CE_field_ref
+          | CE_volatile_field_ref
+          | CE_method_ref 
+          | CE_array_indexer
+          | CE_call
+          | CE_tail_call 
+          | CE_let
+          | CE_cast => CE_ignore (expr)
+
+          | CE_raise
+          | CE_multiple_assign
+          | CE_ignore
+          | CE_assign => expr
+        };
+      res.WithCtx (expr)
+    }
+
 
     // marge with walk()
     transform_try_blocks (allow_try : bool, expr : CG_expr) : void
