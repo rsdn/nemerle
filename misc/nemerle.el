@@ -148,11 +148,11 @@ buffer created.  This is a good place to put your customizations.")
 	   0 font-lock-keyword-face)
 	 '("=>\\||" 0 font-lock-keyword-face)
 
-	 '("\\<\\(variant\\|class\\|module\\|namespace\\|using\\)\\s +\\(\\(\\w\\|\\.\\)*\\)"
+	 '("\\<\\(variant\\|class\\|interface\\|module\\|namespace\\|using\\)\\s +\\(\\(\\w\\|\\.\\)*\\)"
 	   (1 font-lock-keyword-face) (2 font-lock-function-name-face))
 	 
 	 ;; types
-	 '("\\<list\\s *<[^>]*>+" 0 font-lock-type-face t)
+	 '("\\<list\\s *<[^>]*[^\\-]>+" 0 font-lock-type-face t)
 	 '("\\<option\\s *<[^>]*>+" 0 font-lock-type-face t)
 	 '("\\<array\\s *<[^>]*>+" 0 font-lock-type-face t)
 	 '("->" 0 font-lock-type-face)
@@ -190,6 +190,10 @@ buffer created.  This is a good place to put your customizations.")
 	   'block-end)
 	  ((looking-at "[^\n]*{[^\n}]*$")
 	   'block-beg)
+	  ((looking-at "[ \t]*\\<when\\>")
+	   'if)
+	  ((looking-at "[ \t]*\\<unless\\>")
+	   'if)
 	  (t 
 	   'other))))
 
