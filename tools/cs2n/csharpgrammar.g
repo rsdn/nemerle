@@ -327,8 +327,10 @@ returns [string return_string]
     return_string = "";
 }
     :   return_string = member_access_end 
-    |   d:DEC { return_string = d.getText (); }
-    |   i:INC { return_string = i.getText (); }
+    |   d:DEC //{ return_string = d.getText (); }
+        { return_string = " -= 1"; }
+    |   i:INC //{ return_string = i.getText (); }
+        { return_string = " += 1"; }
     |   return_string = invocation_expression_end
     ;
 
@@ -1073,11 +1075,13 @@ returns [string return_string]
     :   (IDENTIFIER   ASSIGN)=>
         id1:IDENTIFIER   a:ASSIGN lvi = local_variable_initializer
         {
+	    if(t[1]=="object")
+	    	lvi = "(" + lvi + " : object )";
             return_string = t[0] + "mutable " + id1.getText () + a.getText () + lvi + ";";
         }
     |   id2:IDENTIFIER
         {
-            return_string = t[0] + "mutable " + id2.getText () + " = Nemerle.Extensions.DefaultValue ( _ :" + t[1] + ");";
+            return_string = t[0] + "mutable " + id2.getText () + " = Nemerle.Extensions.DefaultValue (" + t[1] + ");";
         }
 ;
 
@@ -1886,13 +1890,18 @@ returns [string return_string]
     ;
 
 method_declaration
-    :   method_header   method_body
+{
+    string tp = "";
+}
+    :   tp = method_header   method_body[tp]
     ;
 
-method_header
+method_header 
+returns [string return_string]
 {
     string [] rt =  new string[]{"",""};
     bool mod = false;
+    return_string = "";
 }
     :   (attributes)?   (method_modifier {mod = true;})*  rt = return_type_array  
         { 
@@ -1909,9 +1918,8 @@ method_header
             if(mod)
                 Emit.EmitString(rt[0]);
             Emit.EmitString (rt[1]);
-        }
-        
-        
+	    return_string = rt[1];
+        }	                
     ;
 
 method_modifier
@@ -1960,13 +1968,13 @@ member_name
         }
     ;
 
-method_body
+method_body[string tp]
 {
     StatementTree t = new StatementTree ();
 }
     :   t = block 
-        {         
-            Emit.EmitString ( t.ToString () );
+        {         	    
+            Emit.EmitString ( t.ToString (tp) );
         }
     |   s:SEMI
         { Emit.EmitToken (s); }
@@ -2037,7 +2045,7 @@ property_declaration
         lb:LBRACE   
         {Emit.EmitToken (lb);}
 
-        accessor_declarations   
+        accessor_declarations[t[1]]
 
         rb:RBRACE
         {Emit.EmitToken (rb);}
@@ -2057,30 +2065,30 @@ property_modifier
     |   cm11:EXTERN    {Emit.EmitToken (cm11);}
     ;
     
-accessor_declarations
-    :   (get_accessor_declaration)=> get_accessor_declaration   (set_accessor_declaration)?
-    |   set_accessor_declaration   (get_accessor_declaration)?
+accessor_declarations[string tp]
+    :   (get_accessor_declaration[tp])=> get_accessor_declaration[tp]   (set_accessor_declaration[tp])?
+    |   set_accessor_declaration[tp]   (get_accessor_declaration[tp])?
     ;
 
-get_accessor_declaration
+get_accessor_declaration[string tp]
     :   (attributes)?   
         g:GET    {Emit.EmitToken(g);}
-        accessor_body
+        accessor_body[tp]
     ;
 
-set_accessor_declaration
+set_accessor_declaration[string tp]
     :   (attributes)?   
         s:SET    {Emit.EmitToken(s);}
-        accessor_body
+        accessor_body[tp]
     ;
 
-accessor_body
+accessor_body[string tp]
 {
     StatementTree t = new StatementTree ();
 }
     :   t = block 
         {
-            Emit.EmitString ( t.ToString () );
+            Emit.EmitString ( t.ToString (tp) );
         }
     |   s:SEMI   {Emit.EmitToken(s);}
     ;
@@ -2157,7 +2165,7 @@ indexer_declaration
     :   (attributes)?   (indexer_modifier {mod = true;})*   
         indexer_declarator[mod]   
         lb:LBRACE              {Emit.EmitToken (lb);}
-        accessor_declarations   
+        accessor_declarations[""]
         rb:RBRACE              {Emit.EmitToken (rb);}
     ;
 
@@ -2382,7 +2390,7 @@ constructor_body[string ctor_initializer]
         rb:RBRACE    {a.Add (new StatementTree(rb));}
         {
             t = new StatementTree("BLOCK",a);
-            Emit.EmitString( t.ToString ());
+            Emit.EmitString( t.ToString ("void"));
         }
     |   s:SEMI
         {
@@ -2700,14 +2708,13 @@ enum_base
     ;
 
 enum_body
-    :   (LBRACE   enum_member_declarations   COMMA)=>
-            lb1:LBRACE   {Emit.EmitToken(lb1);} 
-            enum_member_declarations   
+    :   (lb:LBRACE   enum_member_declarations[lb]   COMMA)=>
+            lb1:LBRACE   //{Emit.EmitToken(lb1);} 
+            enum_member_declarations[lb1]
             c:COMMA     {Emit.EmitString (ExtendedToken.getWhitespaces (c));}
             rb1:RBRACE   {Emit.EmitToken(rb1);} 
-    |   lb2:LBRACE   (enum_member_declarations)?   rb2:RBRACE
-        {
-            Emit.EmitToken(lb2);
+    |   lb2:LBRACE   (enum_member_declarations[lb2])?   rb2:RBRACE
+        {            
             Emit.EmitToken(rb2);
         }
     ;
@@ -2720,8 +2727,9 @@ enum_modifier
     |   em5:PRIVATE      {Emit.EmitToken(em5);} 
     ;
     
-enum_member_declarations
-    :   enum_member_declaration  (options {greedy=true;}: c:COMMA {Emit.EmitString (ExtendedToken.getWhitespaces (c));}  
+enum_member_declarations[antlr.Token lb]
+    :   {Emit.EmitToken(lb);} 
+    	enum_member_declaration  (options {greedy=true;}: c:COMMA {Emit.EmitString (ExtendedToken.getWhitespaces (c));}  
             enum_member_declaration)*
     ;
 
@@ -2777,12 +2785,12 @@ global_attributes
     ;
 
 global_attribute_section
-    :   lb:LBRACK {Emit.EmitToken(lb);}  global_attribute_target_specifier   attribute_list   
+    :   lb:LBRACK {Emit.EmitToken(lb);}  (global_attribute_target_specifier)?   attribute_list   
         (c:COMMA {Emit.EmitToken(c);})? rb:RBRACK {Emit.EmitToken(rb);}
     ;
 
 global_attribute_target_specifier
-    :   idgat:IDENTIFIER {ExtendedToken.getTextOnly(idgat)=="assembly" || ExtendedToken.getTextOnly(idgat)=="module"}?  
+    :   idgat:IDENTIFIER {ExtendedToken.getTextOnly(idgat)=="assembly"}?  
         {Emit.EmitToken(idgat);}
         c:COLON {Emit.EmitToken(c);}
     ;
@@ -3004,7 +3012,11 @@ UNICODE_ESCAPE_SEQUENCE
 //-----------------
 
 IDENTIFIER
-    :   IDENTIFIER_START_CHARACTER (IDENTIFIER_PART_CHARACTER)*
+    :   IDENTIFIER_START_CHARACTER (IDENTIFIER_PART_CHARACTER)* 
+    	{
+	if($getText == "list")	
+	   setText("list_");
+	}
     |   '@'  IDENTIFIER_START_CHARACTER (IDENTIFIER_PART_CHARACTER)*
     ;
     
