@@ -171,12 +171,8 @@ namespace Nemerle.Compiler
       match (tok) {
         | Token.BeginBrace =>
           def brace_group = parse_brace_group (tok.Location, parent_pos, current_pos);
-          if (current_begin == current_pos)
-            store (ref parent_stream, ref parent_pos, brace_group)
-          else {
-            store (ref current_stream, ref current_pos, brace_group);
-            finish_current (current_begin);
-          }
+          store (ref current_stream, ref current_pos, brace_group);
+          finish_current (current_begin);
 
         | Token.BeginRound =>
           def round_group = parse_round_group (tok.Location, parent_pos, current_pos);
@@ -481,14 +477,14 @@ namespace Nemerle.Compiler
       PrefixInfos.Add ("-", UnaryOperatorInfo ("-", 281, 280));
       PrefixInfos.Add ("+", UnaryOperatorInfo ("+", 281, 280));      
       PrefixInfos.Add ("++", UnaryOperatorInfo ("++", 281, 280));
-      PrefixInfos.Add ("--", UnaryOperatorInfo ("--", 281, 280));            
+      PrefixInfos.Add ("--", UnaryOperatorInfo ("--", 281, 280));
+      PrefixInfos.Add ("!", UnaryOperatorInfo ("!", 281, 280));
+      PrefixInfos.Add ("~", UnaryOperatorInfo ("~", 281, 280));      
 
       Infos = Hashtable ();
       Infos.Add ("++", UnaryOperatorInfo ("++", 300, 301));
       Infos.Add ("--", UnaryOperatorInfo ("--", 300, 301));            
       Infos.Add (".", BinaryOperatorInfo (".", 290, 291));
-      Infos.Add ("!", UnaryOperatorInfo ("!", 281, 280));
-      Infos.Add ("~", UnaryOperatorInfo ("~", 281, 280));
       Infos.Add (":", BinaryOperatorInfo (":", 270, 271));
       Infos.Add (":>", BinaryOperatorInfo (":>", 270, 271));
       Infos.Add ("/", BinaryOperatorInfo ("/", 260, 261));
@@ -568,7 +564,7 @@ namespace Nemerle.Compiler
     mutable env : GlobalEnv;
     mutable stream : Token;
     mutable last_tok : Token;
-    mutable syntax_keywords : SystemMap [string, void -> PExpr];
+    mutable syntax_keywords : SystemMap [string, SyntaxDefinition];
 
     mutable streams_stack : array [Token] = array (200);
     mutable stack_pos : int = 0;
@@ -719,6 +715,13 @@ namespace Nemerle.Compiler
       }
     }
 
+    flag_sibling_keyword (kw : string) : bool {
+      match (peek_sibling_token ()) {
+        | Token.Keyword (k) when kw == k => shift_sibling (); true
+        | _ => false
+      }
+    }
+    
     comma_separated_list ['a] (f : void -> 'a) : list ['a] {
       def loop (acc) {
         match (peek_token ()) {
@@ -727,6 +730,24 @@ namespace Nemerle.Compiler
         }
       };
       loop ([f ()])
+    }
+
+    should_stop (stop : TokenStoppers) : bool {
+      if (stream == null) true
+      else {
+        match (stream) {
+          | Token.LooseGroup (Token.Operator (str, _))
+          | Token.Operator (str, _) =>
+            match (str) {
+              | "|" when stop %&& TokenStoppers.Pipe 
+              | "=" when stop %&& TokenStoppers.Equal 
+              | "=>" when stop %&& TokenStoppers.Arrow 
+              | ":" when stop %&& TokenStoppers.Colon => true
+              | _ => false
+            }
+          | _ => false
+        }
+      }
     }
     
     #endregion Utility functions operating on current token stream
@@ -782,27 +803,12 @@ namespace Nemerle.Compiler
       }
     }
 
-    make_parsing_function (macro_ns : GlobalEnv.NamespaceND,
-                           rule : list [Parser.GrammarElement], 
-                           perm : list [SyntaxElement] -> list [SyntaxElement]) 
-                           : void -> PExpr 
-    {
-      fun () {
-        def loc = last_tok.Location;
-        def parms = parse_wrt_rule (rule);
-        PExpr.MacroCall (loc, Name ([]), macro_ns, perm (parms))
-      }
-    }
-    
-    load_syntax (extensions : list [SyntaxDefinition]) : SystemMap [string, void -> PExpr]
+
+    load_syntax (extensions : list [SyntaxDefinition]) : SystemMap [string, SyntaxDefinition]
     {
       mutable keywords = syntax_keywords;
-      foreach (definition in extensions) {
-        def callback = make_parsing_function (definition.MacroNamespace,
-                                              definition.Rules,
-                                              definition.Permute);
-        keywords = keywords.Replace (definition.Start, callback);
-      }
+      foreach (definition in extensions)
+        keywords = keywords.Replace (definition.Start, definition);
       keywords
     }
     
@@ -1210,6 +1216,15 @@ namespace Nemerle.Compiler
 
     parse_option () : ClassMember
     {
+      def new_group_beginning () {
+        when (stream != null) {
+          def newgroup = Token.LooseGroup (stream);
+          newgroup.Next = streams_stack [stack_pos - 1];
+          streams_stack [stack_pos - 1] = newgroup;
+          stream = null;
+        }
+      }
+      
       def id = get_splicable_id ();
       match (peek_token ()) {
         | Token.BracesGroup (children) =>
@@ -1227,19 +1242,18 @@ namespace Nemerle.Compiler
 
           ClassMember.TypeDeclaration (loc = id.loc, name = id, 
                                        modifiers = Modifiers.Empty, td = td)
-          
-        | Token.Operator ("=", _) =>
-          shift ();
-          ClassMember.EnumOption (id.Location, id, Modifiers.Empty, Some (parse_expr (TokenStoppers.Pipe)));
 
         | Token.EndOfFile =>
           ClassMember.EnumOption (id.Location, id, Modifiers.Empty, None ());
-          
+                                       
+        | Token.Operator ("=", _) =>
+          shift ();
+          def val = Some (parse_expr (TokenStoppers.Pipe));
+          new_group_beginning ();
+          ClassMember.EnumOption (id.Location, id, Modifiers.Empty, val);
+
         | _ =>
-          def newgroup = Token.LooseGroup (stream);
-          newgroup.Next = streams_stack [stack_pos - 2];
-          streams_stack [stack_pos - 2] = newgroup;
-          
+          new_group_beginning ();
           ClassMember.EnumOption (id.Location, id, Modifiers.Empty, None ());
       }
     }
@@ -1760,10 +1774,17 @@ namespace Nemerle.Compiler
         if (_op_context == OpContext.Prefix)
           match (peek_token ()) {
             | Token.Operator (str, _) =>
-              shift ();
-              rpn_op_stack = OperatorInfo.PrefixInfos [str] :: rpn_op_stack;
-              // we leave prefix context here (for things like `!!expr'
-              loop ();
+              def info = OperatorInfo.PrefixInfos [str];
+              if (info == null) {
+                Error (stream, "invalid operator in prefix position");
+                <[ () ]>
+              }
+              else {
+                shift ();
+                rpn_op_stack = info :: rpn_op_stack;
+                // we leave prefix context here (for things like `!!expr'
+                loop ();
+              }
 
             | _ =>
               def expr = parse_embedded_expr (stop);
@@ -1933,11 +1954,11 @@ namespace Nemerle.Compiler
       // modify beginning of current group to point at match case body  
       case_group.Child = stream; 
       pop_stream ();
-        
+
       def expr =
         match (parse_expr_sequence (TokenStoppers.Pipe)) {
           | [x] => x
-          | l => PExpr.Sequence (l)
+          | l => PExpr.Sequence (case_group.Child.Location, l)
         };
 
       MatchCase (pats, expr)
@@ -2099,9 +2120,12 @@ namespace Nemerle.Compiler
             mutable body = null; // resulting expression
 
             // exception handlers
-            when (flag_keyword ("catch")) {
+            when (flag_sibling_keyword ("catch")) {
               def mktry (h : MatchCase, body) {
                 match (h.patterns) {
+                  | [(PExpr.TypeEnforcement (PExpr.Wildcard, t), _)] =>
+                    PExpr.TryWith (loc, body, Splicable.Name (Name ([Util.tmpname ("u")])), t, h.body)
+                  
                   | [(PExpr.TypeEnforcement (PExpr.Ref (id), t), _)] =>
                     PExpr.TryWith (loc, body, Splicable.Name (id), t, h.body)
 
@@ -2123,13 +2147,13 @@ namespace Nemerle.Compiler
               }
             }
             
-            if (flag_keyword ("finally")) {
+            if (flag_sibling_keyword ("finally")) {
               def handler = parse_block ([]);
               PExpr.TryFinally (loc, body, handler)
             }
             else {
               if (body == null) {
-                Message.error (body.Location, "expecting `catch' or `finally'");
+                Message.error (loc, "expecting `catch' or `finally'");
                 try_body
               }
               else body
@@ -2150,14 +2174,12 @@ namespace Nemerle.Compiler
             def parse_funs (acc, idopt) {
               def h = parse_fun_header (idopt);
               def fd = Function_decl (h, parse_block (h.parms));
-              match (peek_token ()) {
-                | Token.Keyword ("and") =>
-                  shift ();
-                  def id = get_splicable_id ();
-                  parse_funs (fd :: acc, id)
-                  
-                | _ => PExpr.DefFunctions (loc + h.loc, List.Rev (fd :: acc))
+              if (flag_sibling_keyword ("and")) {
+                def id = get_splicable_id ();
+                parse_funs (fd :: acc, id)
               }
+              else    
+                PExpr.DefFunctions (loc + h.loc, List.Rev (fd :: acc))
             };
 
             match (maybe_parse_ellipsis ()) {
@@ -2185,7 +2207,8 @@ namespace Nemerle.Compiler
           | Token.Keyword (k) =>
             match (syntax_keywords.Find (k)) {
               | None => Error (tok, "unexpected keyword in expression context"); <[ () ]>
-              | Some (parsing_function) => parsing_function ()                
+              | Some (syntax_definition) =>
+                parse_syntax_definition (syntax_definition, stop)                
             }
 
           | _ => Error (tok, "expecting expression"); <[ () ]>
@@ -2193,6 +2216,7 @@ namespace Nemerle.Compiler
       }
     }
 
+ 
     /** special function to parse sequence in a way allowing other functions
         switching to sibling LooseGroup of tokens. Like:
           LooseGroup (..a b c..); LooseGroup (d..)
@@ -2201,18 +2225,20 @@ namespace Nemerle.Compiler
     {
       mutable result = [];
       def loop () {
-        when (stream != null) {
+        unless (should_stop (stop)) {
           def group_token = stream :> Token.LooseGroup;
           push_stream (group_token.Child);
-          result = parse_expr (stop) :: result;        
+          result = parse_expr (stop) :: result;
+          
           if (stop == TokenStoppers.None || stream == null) {
             pop_stream ("expression in sequence");
-            stream = stream.Next;
+            shift (); // shift group in which we reached the end
             loop ();
           }
           else {
-            group_token.Child = stream;
+            def next = stream;
             pop_stream ();
+            (stream :> Token.LooseGroup).Child = next;
           }
         }
       }
@@ -2221,8 +2247,15 @@ namespace Nemerle.Compiler
     }
 
     //------------- PARSING OF MACRO SYNTAX EXTENSIONS ---------------------
+
+    parse_syntax_definition (definition : SyntaxDefinition, stop : TokenStoppers) : PExpr
+    {
+      def loc = last_tok.Location;
+      def parms = parse_wrt_rule (definition.Rules, stop);
+      PExpr.MacroCall (loc, Name ([]), definition.MacroNamespace, definition.Permute (parms))
+    }
     
-    parse_wrt_rule (rule : list [Parser.GrammarElement]) : list [SyntaxElement] {
+    parse_wrt_rule (rule : list [Parser.GrammarElement], stop : TokenStoppers) : list [SyntaxElement] {
       def find_closing (li) {
         def loop (ac, l) {
           match (l) {
@@ -2250,12 +2283,15 @@ namespace Nemerle.Compiler
               | Token.RoundGroup (_, Token.LooseGroup (first) as loose) =>
                 push_stream (loose);
                 push_stream (first);
-                def res = parse_wrt_rule (g_elements);
+                def res = parse_wrt_rule (g_elements, TokenStoppers.None);
                 pop_stream ("inside `()'");
                 shift (); // shift the loose group, which just ended
                 pop_stream ("end of `()'");
                 loop (List.Rev (res) + acc, rest)
 
+              | Token.RoundGroup (_, x) =>
+                Message.fatal_error (x.ToString ())
+                
               | x => Error (x, "expecting `(..)'"); loop (acc, rest);
             }
 
@@ -2268,14 +2304,12 @@ namespace Nemerle.Compiler
             loop (acc, xs)
 
           | Parser.GrammarElement.GE_keyword (n) :: xs =>
-            match (peek_sibling_token ()) {
-              | Token.Keyword (k) when n == k => shift_sibling ();
-              | x => Error (x, $"expected `$(n)' keyword")
-            }
+            unless (flag_sibling_keyword (n)) 
+              Error (peek_token (), $"expected `$(n)' keyword");
             loop (acc, xs)
 
           | Parser.GrammarElement.GE_expression :: xs =>
-            def expr = parse_expr ();
+            def expr = parse_expr (stop);
             loop (SyntaxElement.Expression (expr) :: acc, xs)
 
           | Parser.GrammarElement.GE_expression_list (_) :: _ =>
@@ -2308,7 +2342,7 @@ namespace Nemerle.Compiler
                 shift ();
                 loop (SyntaxElement.Expression (null) :: acc, xs)
               | _ =>
-                def expr = parse_expr ();
+                def expr = parse_expr (stop);
                 expect_keyword (n);
                 loop (SyntaxElement.Expression (expr) :: acc, xs)
             };
@@ -2320,7 +2354,7 @@ namespace Nemerle.Compiler
               loop (SyntaxElement.Expression (null) :: acc, xs)
             }
             else {
-              def expr = parse_expr ();
+              def expr = parse_expr (stop);
               expect_semicolon ();
               loop (SyntaxElement.Expression (expr) :: acc, xs)
             }
@@ -2338,7 +2372,7 @@ namespace Nemerle.Compiler
                 shift ();
                 loop (SyntaxElement.Expression (null) :: acc, xs)
               | _ =>
-                def expr = parse_expr ();
+                def expr = parse_expr (stop);
                 expect_operator (n);
                 loop (SyntaxElement.Expression (expr) :: acc, xs)
             };
