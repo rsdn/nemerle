@@ -67,7 +67,7 @@ syn keyword nemerleKeyword abstract const extern internal new private protected 
 syn keyword nemerleKeyword class enum extends finally in null out public raise ref struct
 syn keyword nemerleKeyword variant interface implements namespace where type let static
 syn keyword nemerleKeyword in fun and tymatch with try open void base if then else variant letfun
-syn keyword nemerleKeyword match as record mutable def
+syn keyword nemerleKeyword match as mutable def module
 
 syn keyword nemerleConst null true false this
 
