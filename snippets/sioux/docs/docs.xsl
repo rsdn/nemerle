@@ -17,9 +17,11 @@
                   <tbody>
                     <tr>
                       <td align="left">
-                        <a href="EncodeUrl(index.xml)">Main page</a> :: 
+                        <a href="EncodeUrl(index.xml)">Main page</a> ::
+			<a href="EncodeUrl(tutorial.xml)">Tutorial</a> ::
 			<a href="EncodeUrl(examples.xml)">Examples</a> ::
-			<a href="EncodeUrl(reference.xml)">Reference manual</a>
+			<a href="EncodeUrl(reference.xml)">Reference manual</a> 
+
                       </td>
                       <td align="right">
                         <a href="#top-of-page">Top</a> :: <a href="#bottom-of-page">Bottom</a>
@@ -154,7 +156,9 @@
   </xsl:template>
 
   <xsl:template match="ul">
-    <xsl:copy-of select="*" />
+    <ul class="toc">	
+       <xsl:copy-of select="*" />
+    </ul>
   </xsl:template>
   
   <xsl:template match="enumerate2">
