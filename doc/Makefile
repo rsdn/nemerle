@@ -33,8 +33,7 @@ XSLT = xsltproc --xinclude
 
 course_docs = index
 
-root_docs = 	index coreNemCompiler coreNemDesc \
-		faq license hacking macros reference
+root_docs = index faq license hacking macros reference
 
 docs = $(root_docs) $(addprefix course/, $(course_docs))
 
