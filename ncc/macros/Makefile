@@ -48,7 +48,10 @@ n_src = \
 	../macros.n \
 	../cgtree.n \
 	../cgexpr.n \
-	../cgflat.n 
+	../cgflat.n \
+	../xmldump.n \
+	../typattern.n \
+	../external.n
 
 m_src = \
 	ok-macro.n
