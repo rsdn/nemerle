@@ -132,3 +132,6 @@ clean:
 	$(MAKE) -C doc clean
 	$(MAKE) -C ncc clean
 	rm -f config.mak configure.log
+
+snapshot:
+	$(MAKE) tarball REVISION=$(REVISION).`svn info | grep 'Revision:'|sed -e 's/.*://'|xargs`
