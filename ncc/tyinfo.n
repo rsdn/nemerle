@@ -30,6 +30,9 @@ open Nemerle.Compiler;
 open Nemerle.Compiler.Tyops;
 open Nemerle.Compiler.Tyinfo;
 open Nemerle.Collections;
+open Nemerle.Compiler.Typedtree;
+
+namespace PT = Nemerle.Compiler.Parsetree;
 
 namespace Nemerle.Compiler {
 
@@ -55,75 +58,156 @@ class Tyinfo
       
     class Subtyping_relation
       {
-        td : Type_decl;
+        ti : Tyinfo;
         args : list (option (Type));
       }
     
-    enclosing_type : option (Type_decl);
-    tydecl : Type_decl;
+    enclosing_type : option (Tyinfo);
+    id : int;
+
+    ref pt_tydecl : PT.Type_decl;
+    
+    ref tydecl : Type_decl;
+    ref t_extends : option (Type);
+    ref t_implements : list (Type);
+    name : string;
+    env : Env;
+    loc : Location;
+    modifiers : list (Modifier);
+    ref member_list : list (Class_member);
+    ref contained_types : list (Tyinfo);
+    ref typarms : list (Tyvar.T);
+    ref tenv : Tyvar.TEnv;
+    
     ref subtypes : Int_map (Subtyping_relation);
-    ref members : String_map (Member);
+    ref member_map : String_map (Member);
     ref phase : int; // used by iter function
     // FIXME methods to implement
     
-    this (par : option (Type_decl), td : Type_decl) 
+    static ref infos : Int_map (Tyinfo);
+    static ref can_check_constraints : bool;
+
+    this (par : option (Tyinfo), env : Env, td : PT.Type_decl) 
       { 
         this.enclosing_type <- par;
-        this.tydecl <- td;
+        this.pt_tydecl <- td;
+        this.env <- env;
+        this.name <- td.name;
+        this.modifiers <- td.modifiers;
+        this.loc <- td.loc;
+        
         this.subtypes <- Map.int_map ();
-        this.members <- Map.string_map ();
+        this.member_map <- Map.string_map ();
+
+        this.id <- Util.next_id ();
+
+        if infos == null then 
+          infos <- Map.int_map () 
+        else ();
+        infos <- infos.add (this.id, this);
       }
 
+    bind_tyvars (tenv : Tyvar.TEnv) : void 
+      {
+        if this.tenv != null then Util.ice () else ();
+        def (tenv, tyvars) = tenv.add_typarms (this.env, this.pt_tydecl.typarms);
+        this.tenv <- tenv;
+        this.typarms <- tyvars;
+        
+        def bind_child (x : Tyinfo) : void
+          {
+            Util.locate (x.loc, fun () : void => x.bind_tyvars (tenv));
+            match x.pt_tydecl with [
+              | PT.TD_variant_option => x.typarms <- tyvars
+              | _ => ()
+            ]
+          };
+        List.iter (bind_child, this.contained_types);
+      }
+
+    
+    bind_types () : void
+      {
+        def tenv = this.tenv;
+        def bind (t : PT.Type) : Type = tenv.bind (this.env, t);
+        def td = this.pt_tydecl;
+        this.tydecl <-
+          match td with [
+            | PT.TD_class  => TD_class ()
+            | PT.TD_alias (t) => TD_alias (bind (t))
+            | PT.TD_interface => TD_interface ()
+            | PT.TD_external (n) => TD_external (n)
+            | PT.TD_variant => TD_variant ()
+            | PT.TD_variant_option => TD_variant_option ()
+          ];
+        this.t_extends <- Option.map (bind, td.t_extends);
+        this.t_implements <- List.map (bind, td.t_implements);
+      }
+    
     lookup_method (name : string) : list (M_function) =
-      match this.members.find(name) with [
+      match this.member_map.find(name) with [
         | Some (Mem_methods (x)) => x
         | _ => Nil()
       ];
       
     lookup_field (name : string) : option (M_field) =
-      match this.members.find(name) with [
+      match this.member_map.find(name) with [
         | Some (Mem_field (x)) => Some(x)
         | _ => None()
       ];
 
-    how_subtypes (td : Type_decl) : option (list (option (Type))) =
-      match this.subtypes.find(td.id) with [
-        | Some (sr) => Some(sr.args)
-        | None => None()
+    how_subtypes (ti : Tyinfo) : option (list (option (Type))) =
+      match this.subtypes.find (ti.id) with [
+        | Some (sr) => Some (sr.args)
+        | None => None ()
       ];
 
-    fullname () : string = 
-      let td = this.tydecl in td.env.current_namespace + td.name;
+    fullname () : string = this.env.current_namespace + this.name;
 
-    basename () : string = this.tydecl.name;
+    basename () : string = this.name;
    
-    enclosing_type_ti () : Tyinfo =
-      lookup (Util.unsome (this.enclosing_type));
+    enclosing_tyinfo () : Tyinfo = 
+      Util.unsome (this.enclosing_type);
       
-    enclosing_type_td () : Type_decl =
-      (this.enclosing_type_ti ()) . tydecl;
-
     direct_supertypes () : list (Type) =
-      let td = this.tydecl in
-      match td with [
+      match this.tydecl with [
         | TD_variant_option =>
-          List.cons ((this.enclosing_type_ti ()).generic_type ())
+          List.cons ((this.enclosing_tyinfo ()).generic_type ())
         | _ =>
-          match td.t_extends with [
-            | Some (t) => Cons (t, td.t_implements)
-            | None => td.t_implements
+          match this.t_extends with [
+            | Some (t) => Cons (t, this.t_implements)
+            | None => this.t_implements
           ]
       ];
 
-    generic_type () : Type =
-      letfun make_tv (id : int) : Type = 
-        T_var (Tyvars.name (id), id)
-      in
-      let vars = List.map (make_tv, Tyvars.get_parms (this.tydecl.id)) in
-      T_app (this.fullname (), vars, this.tydecl.id);
+    generic_type () : Type
+      {
+        def make_tv (tv : Tyvar.T) : Type = T_var (tv);
+        T_app (this, List.map (make_tv, this.typarms))
+      }
 
     fresh_generic_type () : Type =
-      Tyutil.fresh_vars (this.tydecl, this.generic_type ());
+      this.generic_type () /- this.fresh_subst ();
+
+    fresh_subst () : Subst = 
+      Tyvar.fresh_subst (this.typarms);
+
+    make_subst (args : list (Type)) : Subst
+      {
+        def loop (ini : Subst, parms : list (Tyvar.T), args : list (Type)) : Subst =
+          match (parms, args) with [
+            | (Cons (p, ps), Cons (a, args)) =>
+              match a with [
+                | T_var (p') =>
+                  if p.id == p'.id then ini
+                  else loop (ini.add (p.id, a), ps, args)
+                | _ => loop (ini.add (p.id, a), ps, args)
+              ]
+            | (Nil, Nil) => ini
+            | _ => Util.ice ()
+          ];
+        loop (Map.int_map (), this.typarms, args)
+      }
     
     // check if we can access D from THIS
     // FIXME
@@ -132,76 +216,48 @@ class Tyinfo
     can_access_any (ds : list (Class_member)) : bool = 
       List.exists (fun (d : Class_member) : bool => this.can_access (d), ds);
 
-    static td_name (td : Type_decl) : string = (lookup(td.id)).fullname();
-
-    static ref infos : Int_map(Tyinfo);
-    
     static lookup (id : int) : Tyinfo =
       match infos.find(id) with [
         | Some (ti) => ti
         | None => Util.ice()
       ];
 
-    static lookup (td : Decl_base) : Tyinfo = lookup(td.id);
-    
-    static lookup_td (id : int) : Type_decl = (lookup (id)).tydecl;
-    
-    static make (decls : list (Type_decl)) : void =
-      letfun tydecl_f (par : option (Type_decl), d : Type_decl) : option (Type_decl) = {
-        if infos.mem (d.id) then ()
-        else infos <- infos.add(d.id, Tyinfo(par, d));
-        Some (d)
-      } and decl_f (par : option (Type_decl), d : Class_member) : void =
-        let ti =
-          match (d, par) with [
-            | (M_type (td), _) =>
-              match infos.find (td.id) with [
-                | Some (ti) => ti
-                | None => Tyinfo (par, td)
-              ]
-            | (_, Some (td)) => Util.unsome (infos.find (td.id))
-            | _ => Util.ice ()
-          ]
-        in infos <- infos.add (d.id, ti)
-      in {
-        infos <- Map.int_map();
-        Treeutil.decl_walk(tydecl_f, decl_f, None(), decls);
-      };
-
     type Subinfo = Int_map (Subtyping_relation);
 
     // iterate over tyinfos, but supertypes are always processed before subtypes
     // otherwise source-code order is retained
-    static iter (f : Tyinfo -> void) : void =
-      let working_on = Util.next_id () in
-      let done = Util.next_id () in
-      letfun sub_do (t : Type) : void =
-        match t with [
-          | T_app td => maybe_f (lookup (td.ref_to))
-          | _ => ()
-        ]
-      and maybe_f (ti : Tyinfo) : void =
-        if ti.phase == done then ()
-        else if ti.phase == working_on then {
-          Message.error(ti.tydecl.loc, "type definition for `" + ti.fullname() + "' is cyclic")
-        } else {
-          ti.phase <- working_on;
-          Util.locate (ti.tydecl.loc, fun () : void => {
-            List.iter (sub_do, ti.direct_supertypes ());
-            f (ti)
-          });
-          ti.phase <- done
-        }
-      in infos.iter(fun (_ : int, ti : Tyinfo) : void => maybe_f (ti));
-      
-    static determine_subtyping () : void = 
-      letfun add_subtyping_of (ti : Tyinfo, s : Subinfo, t : T_app) : Subinfo =
-        let (sub, ti') = Tyutil.subst_of_app (t) in
-        letfun add_sr (s : Subinfo, sr : Subtyping_relation) : Subinfo =
-          match s.find (sr.td.id) with [
+    static iter (f : Tyinfo -> void) : void
+      {
+        def working_on = Util.next_id ();
+        def done = Util.next_id ();
+        def sub_do (t : Type) : void =
+          match t with [
+            | T_app (ti, _) => maybe_f (ti)
+            | _ => ()
+          ]
+        and maybe_f (ti : Tyinfo) : void =
+          if ti.phase == done then ()
+          else if ti.phase == working_on then
+            Message.error(ti.loc, "type definition for `" + ti.fullname() + "' is cyclic")
+          else {
+            ti.phase <- working_on;
+            Util.locate (ti.loc, fun () : void => {
+              List.iter (sub_do, ti.direct_supertypes ());
+              f (ti)
+            });
+            ti.phase <- done
+          };
+        infos.iter(fun (_ : int, ti : Tyinfo) : void => maybe_f (ti));
+      }
+
+    static add_subtyping_of (ti : Tyinfo, s : Subinfo, t : T_app) : Subinfo
+      {
+        def (sub, ti') = Tyutil.subst_of_app (t);
+        def add_sr (s : Subinfo, sr : Subtyping_relation) : Subinfo =
+          match s.find (sr.ti.id) with [
             | Some (sr') =>
-              let ref problem = "" in
-              letfun opt_eq (a : option (Type), b : option (Type)) : bool =
+              mutable problem <- "";
+              def opt_eq (a : option (Type), b : option (Type)) : bool =
                 match (a, b) with [
                   | (Some (t1), Some (t2)) =>
                     if Tyutil.types_eq (t1, t2) then true
@@ -212,15 +268,14 @@ class Tyinfo
                     }
                   | (None, None) => true
                   | _ => false
-                ]
-              in
+                ];
               if List.forall2 (opt_eq, sr.args, sr'.args) then s
               else {
-                Message.error ("type `" + td_name(sr.td) + 
+                Message.error ("type `" + sr.ti.fullname () + 
                                "' is implemented by type `" +
                                ti.fullname() +
                                "' twice under different instantiations");
-                if ti'.tydecl.id == sr.td.id then
+                if ti'.id == sr.ti.id then
                   Message.error ("second one directly")
                 else
                   Message.error ("second one through `" + ti'.fullname() + "'");
@@ -228,56 +283,55 @@ class Tyinfo
                 s
               }
             | None => 
-              s.add (sr.td.id, sr)
-          ]
-        in
-        letfun add_sr_from_parent (s : Subinfo, _ : int, 
-                                   sr : Subtyping_relation) : Subinfo =
-          letfun apply_sub (t : option (Type)) : option (Type) =
-            match t with [ 
-              | Some (x) => Some (x /- sub) 
-              | None => None ()
-            ]
-          in
-          let new_sr = Subtyping_relation (sr.td, List.map (apply_sub, sr.args)) in
-          add_sr (s, new_sr)
-        in {
-          let s = ti'.subtypes.fold(add_sr_from_parent, s) in
-          let new_sr = 
-            Subtyping_relation (ti'.tydecl, 
-                                List.map (fun (x : Type) : option (Type) => Some (x), t.args))
-          in add_sr (s, new_sr)
-        }
-
-      and make_srs (ti : Tyinfo) : void =
-        letfun add_srs (s : Subinfo, t : Type) : Subinfo =
-          match t with [
-            | T_app t => add_subtyping_of (ti, s, t)
-            | _ =>
-              {
-                Message.error("cannot implement nor extend non-class type");
-                s
-              }
-          ]
-        in ti.subtypes <- List.fold_left (add_srs, Map.int_map (), ti.direct_supertypes ())
-      in iter (make_srs);
+              s.add (sr.ti.id, sr)
+          ];
+        def add_sr_from_parent (s : Subinfo, _ : int, 
+                                sr : Subtyping_relation) : Subinfo
+          {
+            def apply_sub (t : option (Type)) : option (Type) =
+              match t with [ 
+                | Some (x) => Some (x /- sub) 
+                | None => None ()
+              ];
+            def new_sr = Subtyping_relation (sr.ti, List.map (apply_sub, sr.args));
+            add_sr (s, new_sr)
+          };
+          
+        def s = ti'.subtypes.fold(add_sr_from_parent, s);
+        def args = List.map (fun (x : Type) : option (Type) => Some (x), t.args);
+        def new_sr = Subtyping_relation (ti', args);
+        add_sr (s, new_sr)
+      }
+      
+    static determine_subtyping () : void
+      {
+        def make_srs (ti : Tyinfo) : void
+          {
+            def add_srs (s : Subinfo, t : Type) : Subinfo =
+              match t with [
+                | T_app t => add_subtyping_of (ti, s, t)
+                | _ =>
+                  Message.error("cannot implement nor extend non-class type");
+                  s
+              ];
+            ti.subtypes <- List.fold_left (add_srs, Map.int_map (), ti.direct_supertypes ())
+          };
+        iter (make_srs)
+      }
 
     subtyping_subst (ti : Tyinfo) : Subst =
-      let td = ti.tydecl in
-      if td.id == this.tydecl.id then 
+      if ti.id == this.id then 
         Map.int_map () // current type, no substitution
       else
-        match this.how_subtypes (td) with [
+        match this.how_subtypes (ti) with [
           | None => Util.ice ()
           | Some (args) =>
-            letfun f (t : option (Type)) : Type =
+            def f (t : option (Type)) : Type =
               match t with [
                 | Some (t) => t
-                | None => Tyvars.free_variable ()
-              ]
-            in 
-            let (s, _) = Tyutil.subst_of_app (T_app ("", List.map (f, args), td.id)) in
-            s
+                | None => Tyvar.free_variable ()
+              ];
+            ti.make_subst (List.map (f, args))
         ];
     
     // Return type of given member in this type (i.e. if type comes from
@@ -286,106 +340,187 @@ class Tyinfo
       let t =
         match m with [
           | M_field f => f.ty
-          | M_function f => Tyutil.fun_type (f.fun_header)
+          | M_function f => Tyutil.fun_type (f.header)
         ]
       in t /- this.subtyping_subst (lookup (m.id));
+
+    add_member (d : Class_member) : void
+      {
+        Env.add_global (this.fullname () + ".", d);
+        infos <- infos.add (d.id, this);
+        this.member_list <- Cons (d, this.member_list);
+      }
       
-    static make_member_list (ti : Tyinfo) : void =
-      let parent_members =
-        match ti.tydecl.t_extends with [
-          | Some (T_app a) =>
-            (lookup (a.ref_to)).members
-          | None =>
-            match ti.tydecl with [
-              | TD_variant_option =>
-                (ti.enclosing_type_ti ()).members
-              | _ => Map.string_map ()
-            ]
-        ]
-      in
-      letfun can_access (m : M_function) : bool = ti.can_access (m) in
-      let parent_members = 
-        letfun filter_accessible (ms : String_map (Member), n : string, 
-                                  m : Member) : String_map (Member) =
-          match m with [
-            | Mem_field (f) =>
-              if ti.can_access (f) then ms.add (n, m)
-              else ms
-            | Mem_methods (meths) =>
-              match List.filter (can_access, meths) with [
-                | Nil => ms
-                | meths => ms.add (n, Mem_methods (meths))
-              ]
-          ]
-        in
-        parent_members.fold (filter_accessible, Map.string_map ()) 
-      in
-      letfun process_decl (mem : String_map (Member), d : Class_member) : String_map (Member) =
-        Util.locate (d.loc, fun () : String_map (Member) =>
-          match d with [
-            | M_field f =>
-              {
-                match parent_members.find (f.name) with [
-                  | Some (Mem_field f') =>
-                    if Util.is_new (f) then ()
-                    else Message.error ("field `" + f.name + 
-                                        "' overrides field from parent, but no `new'")
-                  | Some (Mem_methods ms) =>
-                    Message.error ("name `" + f.name + 
-                                   "' used to be method, it cannot be field now")
-                  | None => ()
+    static make_member_list (this_ : Tyinfo) : void
+      {
+        def tenv = this_.tenv;
+        can_check_constraints <- true;
+        def types =
+          match this_.tydecl with [
+            | TD_alias (t) => Cons (t, this_.direct_supertypes ())
+            | _ => this_.direct_supertypes ()
+          ];
+        def check_type (t : Type) : void = 
+          match t with [
+            | T_ref (t) => check_type (t)
+            | T_out (t) => check_type (t)
+            | T_fun (ts, t) => check_type (ts); check_type (t)
+            | T_void => ()
+            | T_prod (ts) => List.iter (check_type, ts)
+            | T_var => ()
+            | T_app (ti, args) => 
+              Tyvar.check_constraints (ti, args)
+          ];
+        def check_constraints_in_tv (tv : Tyvar.T) : void =
+          List.iter (check_type, Tyvar.constraints (tv));
+        List.iter (check_type, types);
+        List.iter (check_constraints_in_tv, this_.typarms);
+        
+        def bind_member (d : PT.Class_member) : void =
+          Util.locate (d.loc, fun () : void =>
+            {
+              mutable tenv <- tenv;
+              def bind (t : PT.Type) : Type = tenv.bind (this_.env, t);
+              def mkparm (p : PT.Fun_parm) : Fun_parm =
+                Fun_parm (loc = p.loc, name = p.name, ty = bind (p.ty), decl = null);
+              def id = Util.next_id ();
+              def d' =
+                match d with [
+                  | PT.M_type => None ()
+                  | PT.M_value (t, r, k) => Some (M_value (bind (t), r, k))
+                  | PT.M_field (t, r) => Some (M_field (bind (t), r))
+                  | PT.M_function (h, k, b) =>
+                    def (tenv', typarms) = tenv.add_typarms (this_.env, h.typarms);
+                    tenv <- tenv';
+                    def h' = Fun_header (
+                      ret_type = bind (h.ret_type),
+                      typarms = typarms,
+                      name = h.name,
+                      parms = List.map (mkparm, h.parms),
+                      id = id,
+                      closure_vars = Nil (),
+                      tenv = tenv',
+                      loc = h.loc);
+                    Some (M_function (header = h', kind = k, body = b))
                 ];
-                mem.add (f.name, Mem_field (f))
-              }
-            | M_function f =>
-              let fun_ty = Tyutil.fun_type (f.fun_header) in
-              letfun put_f_in (meths : list (M_function)) : String_map (Member) =
-                let ref replaced = false in
-                letfun replace (acc : list (M_function), old : M_function) : list (M_function) =
-                  if Tyutil.types_eq (ti.member_type (old), fun_ty) then {
-                    replaced <- true;
-                    Cons (f, acc)
-                  } else
-                    Cons (old, acc)
-                in
-                let meths = List.fold_left (replace, Nil (), meths) in
-                let meths = 
-                  if replaced then meths
-                  else Cons (f, meths)
-                in mem.replace (f.name, Mem_methods (meths))
-              in
-              letfun store_f () : String_map (Member) =
-                match mem.find (f.name) with [
-                  | Some (Mem_field) =>
-                    {
-                      Message.error ("name `" + f.name + 
-                                     "' used to be field, it cannot be method now");
-                      mem.add (f.name, Mem_methods (List.cons (f)))
-                    }
-                  | Some (Mem_methods (meths)) => put_f_in (meths)
-                  | None => mem.add (f.name, Mem_methods (List.cons (f)))
-                ]
-              in
-              match f with [
-                | {fun_kind = FK_method (impl)} => store_f ()
-                | {fun_kind = FK_ctor} => store_f ()
-                // FIXME we don't really want it. We should hide interface members
-                // in classes but not in interfaces
-                | {fun_kind = FK_iface_method} => store_f ()
-                | _ => mem
+              match d' with [
+                | Some (d') =>
+                  d'.name <- d.name;
+                  d'.loc <- d.loc;
+                  d'.modifiers <- d.modifiers;
+                  d'.tenv <- tenv;
+                  d'.id <- id;
+                  this_.add_member (d');
+                | None => ()
               ]
-            | _ => mem
-          ])
-      in
-      let decls =
-        match ti.tydecl with [
-          | TD_class (decls) => decls
-          | TD_interface (decls) => decls
-          | TD_variant_option (decls) => decls
-          | _ => Nil ()
-        ]
-      in 
-      ti.members <- List.fold_left (process_decl, parent_members, decls);
+            });
+
+        def decls = 
+          match this_.pt_tydecl with [
+            | PT.TD_class (ds) => ds
+            | PT.TD_interface (ds) => ds
+            | PT.TD_variant_option (ds) => 
+              if CSglue.is_capitalized (this_.name) then ()
+              else Message.error (this_.loc, "variant options names must start with capital letters");
+              ds
+            | _ => Nil ()
+          ];
+        
+        this_.member_list <- Nil ();
+        List.iter (bind_member, decls);
+        
+        this_.member_list <- List.rev (this_.member_list);
+        this_.contained_types <- List.rev (this_.contained_types);
+
+        // we no longer need it, let GC kill it
+        this_.pt_tydecl <- null;
+      }
+
+    static make_member_map (ti : Tyinfo) : void
+      {
+        def parent_members =
+          match ti.t_extends with [
+            | Some (T_app (ti, _)) => ti.member_map
+            | None =>
+              match ti.tydecl with [
+                | TD_variant_option =>
+                  (ti.enclosing_tyinfo ()).member_map
+                | _ => Map.string_map ()
+              ]
+          ];
+        def can_access (m : M_function) : bool = ti.can_access (m);
+        def parent_members =
+          {
+            def filter_accessible (ms : String_map (Member), n : string, 
+                                      m : Member) : String_map (Member) =
+              match m with [
+                | Mem_field (f) =>
+                  if ti.can_access (f) then ms.add (n, m)
+                  else ms
+                | Mem_methods (meths) =>
+                  match List.filter (can_access, meths) with [
+                    | Nil => ms
+                    | meths => ms.add (n, Mem_methods (meths))
+                  ]
+              ];
+            parent_members.fold (filter_accessible, Map.string_map ()) 
+          };
+        def process_decl (mem : String_map (Member), d : Class_member) : String_map (Member) =
+          Util.locate (d.loc, fun () : String_map (Member) =>
+            match d with [
+              | M_field f =>
+                  match parent_members.find (f.name) with [
+                    | Some (Mem_field f') =>
+                      if Util.is_new (f) then ()
+                      else Message.error ("field `" + f.name + 
+                                          "' overrides field from parent, but no `new'")
+                    | Some (Mem_methods ms) =>
+                      Message.error ("name `" + f.name + 
+                                     "' used to be method, it cannot be field now")
+                    | None => ()
+                  ];
+                  mem.add (f.name, Mem_field (f))
+              | M_function f =>
+                let fun_ty = Tyutil.fun_type (f.header) in
+                letfun put_f_in (meths : list (M_function)) : String_map (Member) =
+                  let ref replaced = false in
+                  letfun replace (acc : list (M_function), old : M_function) : list (M_function) =
+                    if Tyutil.types_eq (ti.member_type (old), fun_ty) then {
+                      replaced <- true;
+                      Cons (f, acc)
+                    } else
+                      Cons (old, acc)
+                  in
+                  let meths = List.fold_left (replace, Nil (), meths) in
+                  let meths = 
+                    if replaced then meths
+                    else Cons (f, meths)
+                  in mem.replace (f.name, Mem_methods (meths))
+                in
+                letfun store_f () : String_map (Member) =
+                  match mem.find (f.name) with [
+                    | Some (Mem_field) =>
+                      {
+                        Message.error ("name `" + f.name + 
+                                       "' used to be field, it cannot be method now");
+                        mem.add (f.name, Mem_methods (List.cons (f)))
+                      }
+                    | Some (Mem_methods (meths)) => put_f_in (meths)
+                    | None => mem.add (f.name, Mem_methods (List.cons (f)))
+                  ]
+                in
+                match f with [
+                  | {kind = FK_method (impl)} => store_f ()
+                  | {kind = FK_ctor} => store_f ()
+                  // FIXME we don't really want it. We should hide interface members
+                  // in classes but not in interfaces
+                  | {kind = FK_iface_method} => store_f ()
+                  | _ => mem
+                ]
+              | _ => mem
+            ]);
+        ti.member_map <- List.fold_left (process_decl, parent_members, ti.member_list);
+      }
 
     static add_implicit_ctor (ti : Tyinfo) : void =
       match ti.tydecl with [
@@ -393,25 +528,49 @@ class Tyinfo
           letfun is_field (m : Class_member) : bool =
             match m with [ M_field => true | _ => false ]
           in
-          if List.forall (is_field, cl.decls) then
+          if List.forall (is_field, ti.member_list) then
             match ti.direct_supertypes () with [
               | Nil =>
-                cl.decls <- Cons (Extensions.implicit_ctor (cl, cl.decls), cl.decls)
+                ti.add_member (Extensions.implicit_ctor (ti))
               | _ => ()
             ]
           else ()
 
-        | TD_variant_option vo =>
-          vo.decls <- Cons (Extensions.implicit_ctor (vo, vo.decls), vo.decls)
+        | TD_variant_option =>
+          ti.add_member (Extensions.implicit_ctor (ti))
 
         | _ => ()
       ];
       
-    static fill (decls : list (Type_decl)) : void {
-      determine_subtyping ();
-      iter (make_member_list);
-      iter (add_implicit_ctor);
-    }
+    static top_iter (f : Tyinfo -> void) : void
+      {
+        def phase = Util.next_id ();
+        
+        def wrap (_ : int, x : Tyinfo) : void =
+          if x.phase == phase then ()
+          else {
+            x.phase <- phase;
+            match x.enclosing_type with [
+              | Some => ()
+              | None => Util.locate (x.loc, fun () : void => f (x))
+            ];
+          };
+        infos.iter (wrap)
+      }
+
+    static run () : void 
+      {
+        top_iter (fun (x : Tyinfo) : void => x.bind_tyvars (Tyvar.TEnv ()));
+
+        def bind_types (_ : int, x : Tyinfo) : void =
+            Util.locate (x.loc, fun () : void => x.bind_types ());
+        infos.iter (bind_types);
+
+        determine_subtyping ();
+        iter (make_member_list);
+        iter (add_implicit_ctor);
+        iter (make_member_map);
+      }
   }
 
 } // ns

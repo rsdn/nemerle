@@ -31,798 +31,865 @@ open Nemerle.Collections;
 open Nemerle.Compiler;
 open Nemerle.Compiler.Tyexpr;
 open Nemerle.Compiler.Tyops;
+open Nemerle.Compiler.Typedtree;
 
 namespace PT = Nemerle.Compiler.Parsetree;
-namespace TT = Nemerle.Compiler.Typedtree;
 
 namespace Nemerle.Compiler {
-(*
-  Also setup local environment for each expression and populate it
-  with local values.
-*)
+module Tyexpr {
 
-  class Tyexpr
+  variant Call_result =
+    [
+      | CR_error { msg : string; }
+      | CR_ok { call : Expr; sub : Subst; }
+    ]
+
+  class Typing_error extends System.Exception
     {
-      static type_of (expr : TT.Expr) : Type =
-        if expr.expr_ty == null then Util.ice ()
-        else expr.expr_ty;
-        
-      static fixup (expr : TT.Expr, loc : Location, t : Type) : TT.Expr {
-        expr.loc <- loc;
-        expr.expr_ty <- t;
-        expr
-      }
+      msg : string;
+      this (s : string) { this.msg <- s; }
+    }
 
-      static fixup (expr : TT.Expr, t : Type) : TT.Expr {
-        expr.loc <- Location_stack.top ();
-        expr.expr_ty <- t;
-        expr
-      }
+  type_of (expr : Expr) : Type =
+    if expr.expr_ty == null then Util.ice ()
+    else expr.expr_ty;
+    
+  fixup (expr : Expr, loc : Location, t : Type) : Expr 
+    {
+      expr.loc <- loc;
+      expr.expr_ty <- t;
+      expr
+    }
 
-      static run(decls : list (Type_decl)) : void =
+  fixup (expr : Expr, t : Type) : Expr 
+    {
+      expr.loc <- Location_stack.top ();
+      expr.expr_ty <- t;
+      expr
+    }
 
-        letfun expect_type (name : string, expr : TT.Expr, t : Type) : void =
-          if type_of (expr) >> t then ()
+  expect_type (name : string, expr : Expr, t : Type) : void =
+    if type_of (expr) >> t then ()
+    else
+      Message.error (expr.loc, name + " was expected to have type " + 
+                               t.as_string () + " while it has " +
+                               (type_of (expr)).as_string ());
+
+  decl_fun_header (x : Decl) : Fun_header =
+    match x.kind with [
+      | D_local_fun x => x.header
+      | D_class_member (M_function x) => x.header
+    ];
+    
+  closurise (env : Env, x : Decl) : bool
+    {
+      //Message.debug ("tryclo " + x.name + " = " + string_of_int (x.id));
+      match x.parent_fun with [
+        | Some (d) =>
+          def this_fn = Util.unsome (env.parent_fun);
+          if d.id == this_fn.id then false
           else
-            Message.error (expr.loc, name + " was expected to have type " + 
-                                     t.as_string () + " while it has " +
-                                     (type_of (expr)).as_string ())
-        in
+            if x.in_closure then true
+            else {
+              //Message.debug ("clo " + x.name + " = " + string_of_int (x.id));
+              x.in_closure <- true;
+              def h = decl_fun_header (d);
+              h.closure_vars <- Cons (x, h.closure_vars);
+              true
+            }
+        | None => false
+      ]
+    }
 
-        letfun closurise (env : Env, x : Decl) : bool =
-          match x.parent_fun with [
-            | Some (d) =>
-              let this_fn = Util.unsome (env.parent_fun) in
-              if d.id == this_fn.id then false
+  make_ref (env : Env, loc : Location, x : Decl) : Expr
+    {
+      match x.kind with [
+        | D_class_member (M_value) => ()
+        | D_class_member (M_function {kind = FK_function}) => ()
+        | D_class_member (M_function {kind = FK_ctor}) => ()
+        | D_class_member (_) =>
+          Message.fatal_error ("`" + x.name + "' does not refer to value");
+        | D_type (_) =>
+          Message.fatal_error ("`" + x.name + "' does not refer to value");
+        | _ => ()
+      ];
+      def _ = closurise (env, x);
+
+      if x.ty == null then Util.ice ("null type " + x.name) else ();
+
+      def t =
+        match x.kind with [
+          | D_class_member (M_function {id = id; kind = FK_ctor}) => 
+            match x.ty with [
+              | T_fun (args, T_void) =>
+                def ti = Tyinfo.lookup (id);
+                def ti =
+                  match ti.tydecl with [
+                    | TD_variant_option => ti.enclosing_tyinfo ()
+                    | _ => ti
+                  ];
+                T_fun (args, ti.generic_type ()) /- ti.fresh_subst ()
+              | _ => Util.ice ()
+            ]
+          | D_class_member (M_function {header = h}) => 
+            x.ty /- Tyvar.fresh_subst (h.typarms)
+          | D_local_fun (h, _) =>
+            x.ty /- Tyvar.fresh_subst (h.typarms)
+          | _ => x.ty
+        ];
+      fixup (E_ref (x), loc, t)
+    }
+
+  // given list of formal parms names and actual parms names,
+  // reorder actuals to match formals
+  reorder_named_parms (names : list (string), parms : list (Parm)) : list (Parm)
+    {
+      def is_named (p : Parm) : bool = p.name != "";
+      mutable seen_kw <- false;
+
+      def loop (acc : list (Parm), names : list (string), 
+                parms : list (Parm)) : list (Parm) =
+        match (parms, names) with [
+          | (Cons (p, ps), Cons (n, ns)) =>
+            if p.name == "" then
+              if seen_kw then
+                raise Typing_error ("unnamed parameters after named")
               else
-                if x.in_closure then true
-                else {
-                  x.in_closure <- true;
-                  d.closure_vars <- Cons (x, d.closure_vars);
-                  true
-                }
-            | None => false
-          ]
-        in
-
-        letfun make_ref (env : Env, loc : Location, x : Decl) : TT.Expr =
-          let _ =
-            match x.kind with [
-              | D_class_member (M_value) => ()
-              | D_class_member (M_function {fun_kind = FK_function}) => ()
-              | D_class_member (M_function {fun_kind = FK_ctor}) => ()
-              | D_class_member (_) =>
-                {
-                  Message.error ("`" + x.name + "' does not refer to value");
-                  raise Recovery ()
-                }
-              | _ => ()
-            ]
-          in
-          let _ = closurise (env, x) in
-          if x.ty == null then Util.ice ("null type " + x.name) else
-          let t =
-            match x.kind with [
-              | D_class_member (M_function {id = id; fun_kind = FK_ctor}) => 
-                match x.ty with [
-                  | T_fun (args, T_void) =>
-                    let ti = Tyinfo.lookup (id) in
-                    let ti =
-                      match ti.tydecl with [
-                        | TD_variant_option => ti.enclosing_type_ti ()
-                        | _ => ti
-                      ]
-                    in
-                    let parms = Tyvars.get_parms (ti.tydecl.id) in
-                    Tyutil.fresh_vars (parms, T_fun (args, ti.generic_type ()))
-                  | _ => Util.ice ()
-                ]
-              | D_class_member (M_function {fun_header = h}) => 
-                Tyutil.fresh_vars (Tyvars.get_parms (h.id), x.ty) 
-              | D_local_fun (h, _) =>
-                Tyutil.fresh_vars (Tyvars.get_parms (h.id), x.ty)
-              | _ => x.ty
-            ]
-          in {
-            //Message.debug (loc, "exprty: " + t.as_string ());
-            fixup (TT.E_ref (x), loc, t)
-          }
-        in
-
-        letfun resolve_overloaded (fncs : list (TT.Expr), 
-                                   parms : list (TT.Parm)) : TT.Expr =
-          letfun check_one (ctx : list (string) * list (TT.Expr * Subst), fn : TT.Expr) 
-                        : list (string) * list (TT.Expr * Subst) =
-            let ref problem = "unknown" in
-
-            // given list of formal parms names and actual parms names,
-            // reorder actuals to match formals
-            letfun reorder_named (names : list (string), parms : list (TT.Parm)) : list (TT.Parm) =
-              letfun is_named (p : TT.Parm) : bool = p.name != "" in
-              let ref seen_kw = false in
-              letfun loop (acc : list (TT.Parm), names : list (string), 
-                           parms : list (TT.Parm)) : list (TT.Parm) =
-                match (parms, names) with [
-                  | (Cons (p, ps), Cons (n, ns)) =>
-                    if p.name == "" then
-                      if seen_kw then {
-                        problem <- "unnamed parameters after named";
-                        raise Recovery ()
-                      } else
-                        loop (Cons (p, acc), ns, ps)
-                    else
-                      let _ = seen_kw <- true in
-                      letfun lookup (parms : list (TT.Parm)) : TT.Parm * list (TT.Parm) =
-                        match parms with [
-                          | Cons (p, ps) =>
-                            if p.name == n then
-                              (p, ps)
-                            else
-                              let (r, ps) = lookup (ps) in
-                              (r, Cons (p, ps))
-                          | Nil =>
-                            {
-                              problem <- "keyword parameter `" + n + "' not found";
-                              raise Recovery ()
-                            }
-                        ]
-                      in 
-                      let (p, ps) = lookup (parms) in
-                      loop (Cons (p, acc), ns, ps)
-                  | (Nil, Nil) => List.rev (acc)
-                ]
-              in
-              if List.exists (is_named, parms) then
-                match names with [
-                  | Nil =>
-                    {
-                      problem <- "named parameters given but formals' names cannot be inferred";
-                      raise Recovery ()
+                loop (Cons (p, acc), ns, ps)
+            else {
+              seen_kw <- true;
+              def lookup (parms : list (Parm)) : Parm * list (Parm) =
+                match parms with [
+                  | Cons (p, ps) =>
+                    if p.name == n then
+                      (p, ps)
+                    else {
+                      def (r, ps) = lookup (ps);
+                      (r, Cons (p, ps))
                     }
-                  | _ =>
-                    loop (Nil (), names, parms)
-                ]
-              else
-                parms
-            in
-
-            letfun check_arg (ctx : int * Subst, parm : TT.Parm, ty : Type) : int * Subst =
-              let (arg_no, sub) = ctx in
-              match Tyutil.unify (sub, type_of (parm.expr), ty, true) with [
-                | Some (u) => (arg_no + 1, u)
-                | None =>
-                  {
-                    problem <- "in arg ." + string_of_int (arg_no) + " needed " +
-                               ty.as_string () + " got " +
-                               (type_of (parm.expr)).as_string ();
-                    raise Recovery ()
-                  }
-              ]
-            in 
-            let (errs, rets) = ctx in
-            let named =
-              letfun from_header (h : Fun_header) : list (string) =
-                List.map (fun (p : Fun_parm) : string => p.name, h.parms)
-              in
-              match fn with [
-                | TT.E_ref ({kind = D_local_fun (h, _)}) => 
-                  from_header (h)
-                | TT.E_ref ({kind = D_class_member (M_function {fun_header = h})}) =>
-                  from_header (h)
-                | TT.E_method_ref (_, {fun_header = h}) =>
-                  from_header (h)
-                | _ => Nil ()
-              ]
-            in
-            match Tyutil.top_expand (type_of (fn)) with [
-              | T_fun (args, ret) =>
-                //let _ = Message.debug ((type_of (fn)) . as_string ()) in
-                let args = Tyutil.fun_args (args) in
-                if List.length (args) != List.length (parms) then
-                  (Cons ("needed " + string_of_int (List.length (args)) + " parameters, got " +
-                         string_of_int (List.length (parms)), errs), rets)
-                else
-                  try
-                    let parms = reorder_named (named, parms) in
-                    let (_, sub) =
-                      List.fold_left2 (check_arg, (1, Map.int_map ()), parms, args)
-                    in 
-                    let ex = TT.E_call (fn, parms) in {
-                      ex.loc <- fn.loc;
-                      ex.expr_ty <- ret /- sub;
-                      (errs, Cons ((ex, sub), rets))
-                    }
-                  with x : Recovery =>
-                    (Cons (problem, errs), rets)
-                
-              | _ =>
-                let err = "called value has non-functional type " + (type_of (fn)).as_string () in
-                (Cons (err, errs), rets)
-            ]
-          in
-          let _ = match fncs with [ Nil => Util.ice () | _ => () ] in
-          match List.fold_left (check_one, (Nil (), Nil ()), fncs) with [
-            | (_, Cons ((x, sub), Nil)) => { Tyvars.global_store (sub); x }
-            | (p, Nil) =>
-              {
-                Message.error ("typing error in call");
-                letfun print_err (err : string) : void =
-                  Message.error ("  " + err)
-                  // FIXME: include location of function that failed
-                in List.iter (print_err, p);
-                raise Recovery ()
-              }
-            | (_, l) =>
-              {
-                Message.error ("overloading resolution ambiguity");
-                // FIXME: include location of function that failed
-                raise Recovery ()
-              }
-          ]
-        in
-        
-        let ref this_ptr_decl = None () in
-        let ref in_ctor = false in
-        
-        letfun fixup_dot (env : Env, expr : PT.Expr) : PT.Expr =
-          match expr with [
-            | PT.E_ref (n) =>
-              if Env.get_ns (n) == "" then expr
-              else
-                match env.bare_lookup (n) with [
                   | Nil =>
-                    def rf = PT.E_ref (Env.get_ns (n));
-                    rf.loc <- expr.loc;
-                    def mem = PT.E_member (fixup_dot (env, rf), Env.strip_ns (n));
-                    mem.loc <- expr.loc;
-                    mem
-                  | _ => expr
-                ]
+                    raise Typing_error ("keyword parameter `" + n + "' not found")
+                ];
+              def (p, ps) = lookup (parms);
+              loop (Cons (p, acc), ns, ps)
+            }
+          | (Nil, Nil) => List.rev (acc)
+        ];
+      if List.exists (is_named, parms) then
+        match names with [
+          | Nil =>
+            raise Typing_error ("named parameters given but formals' names cannot be inferred")
+          | _ =>
+            loop (Nil (), names, parms)
+        ]
+      else
+        parms
+    }
+
+  // check if FN can be called with PARMS
+  check_call_to (parms : list (Parm), fn : Expr) : Call_result
+    {
+      def check_arg (ctx : int * Subst, parm : Parm, ty : Type) : int * Subst
+        {
+          def (arg_no, sub) = ctx;
+          match Tyutil.unify (sub, type_of (parm.expr), ty, true) with [
+            | Some (u) => (arg_no + 1, u)
+            | None =>
+              raise Typing_error ("in arg " + string_of_int (arg_no) + " needed " +
+                                  ty.as_string () + " got " +
+                                  (type_of (parm.expr)).as_string ())
+          ]
+        };
+        
+      
+      def formal_names =
+        {
+          def from_header (h : Fun_header) : list (string) =
+            List.map (fun (p : Fun_parm) : string => p.name, h.parms);
+          match fn with [
+            | E_ref ({kind = D_local_fun (h, _)}) => 
+              from_header (h)
+            | E_ref ({kind = D_class_member (M_function {header = h})}) =>
+              from_header (h)
+            | E_method_ref (_, {header = h}) =>
+              from_header (h)
+            | _ => Nil ()
+          ]
+        };
+
+      match Tyutil.top_expand (type_of (fn)) with [
+        | T_fun (args, ret) =>
+          def args = Tyutil.fun_args (args);
+          if List.length (args) != List.length (parms) then
+            CR_error ("needed " + string_of_int (List.length (args)) + 
+                      " parameters, got " + 
+                      string_of_int (List.length (parms)))
+          else
+            try {
+              def parms = reorder_named_parms (formal_names, parms);
+              def (_, sub) =
+                List.fold_left2 (check_arg, (1, Map.int_map ()), parms, args);
+              def ex = E_call (fn, parms);
+              ex.loc <- fn.loc;
+              ex.expr_ty <- ret /- sub;
+              CR_ok (ex, sub)
+            } with x : Typing_error =>
+              CR_error (x.msg)
+          
+        | _ =>
+          CR_error ("called value has non-functional type " + 
+                    (type_of (fn)).as_string ())
+      ]
+    }
+      
+  resolve_overloaded_call (fncs : list (Expr), parms : list (Parm)) : Expr
+    {
+      match fncs with [ Nil => Util.ice () | _ => () ];
+      def check_one (ctx : list (string) * list (Expr * Subst), fn : Expr) 
+                    : list (string) * list (Expr * Subst)
+        {
+          def (errs, rets) = ctx;
+          match check_call_to (parms, fn) with [
+            | CR_ok (ex, sub) => (errs, Cons ((ex, sub), rets))
+            | CR_error (e) => (Cons (e, errs), rets)
+          ]
+        };
+
+      match List.fold_left (check_one, (Nil (), Nil ()), fncs) with [
+        | (_, Cons ((x, sub), Nil)) => 
+          Tyvar.global_store (sub); 
+          x
+        | (p, Nil) =>
+          Message.error ("typing error in call");
+          def print_err (err : string) : void = Message.error ("  " + err);
+          // FIXME: include location of function that failed
+          List.iter (print_err, p);
+          raise Recovery ()
+        | (_, l) =>
+          Message.error ("overloading resolution ambiguity");
+          // FIXME: include locations of functions that were ok
+          raise Recovery ()
+      ]
+    }
+
+  // resolve ambiguity between foo being module and expression in foo.x
+  fixup_dot (env : Env, expr : PT.Expr) : PT.Expr =
+    match expr with [
+      | PT.E_ref (n) =>
+        if CSglue.get_ns (n) == "" then expr
+        else
+          match env.bare_lookup (n) with [
+            | Nil =>
+              def rf = PT.E_ref (CSglue.get_ns (n));
+              rf.loc <- expr.loc;
+              def mem = PT.E_member (fixup_dot (env, rf), CSglue.strip_ns (n));
+              mem.loc <- expr.loc;
+              mem
             | _ => expr
           ]
-        in
+      | _ => expr
+    ];
 
-        letfun make_callables (env : Env, fnc : PT.Expr) : list (TT.Expr) =
-          match fixup_dot (env, fnc) with [
-            | PT.E_ref (n) =>
-              match env.bare_lookup (n) with [
-                | Nil =>
-                  Message.fatal_error ("unbound symbol `" + n + "'")
-
-                | l =>
-                  letfun convert_ctor (acc : list (Decl), d : Decl) : list (Decl) {
-                    match d.kind with [
-                      | D_class_member (M_type) =>
-                        //let _ = Message.debug ("lookup " + d.name + "..ctor") in
-                        List.append (env.bare_lookup (d.name + "..ctor"), acc)
-                      | _ => Cons (d, acc)
-                    ]
-                  } in
-                  match List.fold_left (convert_ctor, Nil (), l) with [
-                    | Nil => 
-                      Message.fatal_error ("type `" + n + "' has no constructors")
-                    | decls => 
-                      List.map (fun (x : Decl) : TT.Expr => make_ref (env, fnc.loc, x), decls)
-                  ]
-              ]
-                
-            | PT.E_member (o, mem) =>
-              lookup_member (fnc.loc, ty_expr (env, o), mem)
-
-            | x =>
-              List.cons (ty_expr (env, x))
-          ]
-        and lookup_member (loc : Location, o : TT.Expr, mem : string) : list (TT.Expr) =
-          let ref problem = "???" in
-          letfun collect_from (ctx : list (TT.Expr) * Int_map (int), t : Type) 
-                    : list (TT.Expr) * Int_map (int) =
-            let t' = Tyutil.top_expand (t) in
-            let (acc, visited) = ctx in
-            match t' with [
-              | T_app =>
-                let (subst, ti) = Tyutil.subst_of_app (t') in
-                if visited.mem (ti.tydecl.id) then ctx
-                else
-                  let visited = visited.add (ti.tydecl.id, 0) in
-                  letfun mem_ref (ex : TT.Expr, m : Class_member) : TT.Expr =
-                    fixup (ex, loc, ti.member_type (m) /- subst)
-                  in
-                  //let _ = Message.debug ("lookup `" + mem + "' in " + ti.fullname()) in
-                  match ti.lookup_field (mem) with [
-                    | Some (f) => 
-                      (Cons (mem_ref (TT.E_field_ref (o, f), f), acc), visited)
-                     
-                    | None =>
-                      match ti.lookup_method (mem) with [
-                        | Nil =>
-                          { 
-                            problem <- "unbound member `" + mem + "' in type `" + 
-                                        ti.fullname () + "'";
-                            ctx
-                          }
-                          
-                        | l =>
-                          letfun make_meth (m : M_function) : TT.Expr =
-                            let ex = mem_ref (TT.E_method_ref (o, m), m) in
-                            let sub = Tyvars.fresh_subst (Tyvars.get_parms (m.fun_header.id)) in {
-                              ex.expr_ty <- type_of (ex) /- sub;
-                              ex
-                            }
-                          in (List.append (List.map (make_meth, l), acc), visited)
-                      ]
-                  ]
-
-              | T_var (_, tv) =>
-                if visited.mem (tv) then ctx
-                else
-                  let visited = visited.add (tv, 0) in
-                  let types = Tyvars.constraints (tv) in
-                  let ctx = List.fold_left (collect_from, (acc, visited), types) in
-                  match ctx with [
-                    | (Nil, _) =>
-                      {
-                        problem <- "no constrain of " + t.as_string () + 
-                                   " provides member `" + mem + "'";
+  // lookup member MEM in type_of (O)
+  // return list of how we can call it
+  lookup_member (loc : Location, o : Expr, mem : string) : list (Expr)
+    {
+      mutable problem <- "???";
+      
+      def collect_from (ctx : list (Expr) * Int_map (int), t : Type) 
+                       : list (Expr) * Int_map (int)
+        {
+          def t' = Tyutil.top_expand (t);
+          def (acc, visited) = ctx;
+          match t' with [
+            | T_app (ti, args) =>
+              def subst = ti.make_subst (args);
+              if visited.mem (ti.id) then ctx
+              else {
+                def visited = visited.add (ti.id, 0);
+                def mem_ref (ex : Expr, m : Class_member) : Expr =
+                  fixup (ex, loc, ti.member_type (m) /- subst);
+                match ti.lookup_field (mem) with [
+                  | Some (f) => 
+                    (Cons (mem_ref (E_field_ref (o, f), f), acc), visited)
+                   
+                  | None =>
+                    match ti.lookup_method (mem) with [
+                      | Nil =>
+                        problem <- "unbound member `" + mem + "' in type `" + 
+                                    ti.fullname () + "'";
                         ctx
-                      }
-                    | _ => ctx
-                  ]
+                        
+                      | l =>
+                        def make_meth (m : M_function) : Expr =
+                          {
+                            def ex = mem_ref (E_method_ref (o, m), m);
+                            def sub = Tyvar.fresh_subst (m.header.typarms);
+                            ex.expr_ty <- type_of (ex) /- sub;
+                            ex
+                          };
+                        (List.append (List.map (make_meth, l), acc), visited)
+                    ]
+                ]
+              }
 
-              | _ =>
-                {
-                  problem <- "type " + t.as_string () + " was expected to be class";
-                  ctx
-                }
-            ]
-          in 
-          match collect_from ((Nil (), Map.int_map ()), type_of (o)) with [
-            | (Nil, _) =>
-              Message.fatal_error (problem)
-            | (x, _) => x
-          ]
+            | T_var (tv) =>
+              if visited.mem (tv.id) then ctx
+              else {
+                def visited = visited.add (tv.id, 0);
+                def types = Tyvar.constraints (tv);
+                def ctx = List.fold_left (collect_from, (acc, visited), types);
+                match ctx with [
+                  | (Nil, _) =>
+                    problem <- "no constrain of " + t.as_string () + 
+                               " provides member `" + mem + "'";
+                    ctx
+                  | _ => ctx
+                ]
+              }
 
-        and lookup_field (loc : Location, o : TT.Expr, fld : string) : TT.E_field_ref =
-          match lookup_member (loc, o, fld) with [
-            | Cons (TT.E_field_ref x, Nil) => x
-            | _ => 
-              // FIXME: better error message when is it for example multibound field
-              Message.fatal_error ("member `" + fld + 
-                                   "' was expected to be a field, not method")
+            | _ =>
+              problem <- "type `" + t.as_string () + "' was expected to be class";
+              ctx
           ]
-                
-        and ty_match (env : Env, mtch : PT.E_match) : TT.Expr * Type =
-          let matched_value = ty_expr (env, mtch.expr) in
-          letfun do_case (ctx : option (Type) * list (TT.Match_case), 
-                          c : PT.Match_case) : option (Type) * list (TT.Match_case) =
-            let ref pat_env = env in
-            let ref vars = Map.string_map () in
-            letfun f (t : Type, p : PT.Pattern) : TT.Pattern =
-              let r = 
-              match p with [
-                | PT.P_variable (n) =>
-                  {
+        };
+
+      match collect_from ((Nil (), Map.int_map ()), type_of (o)) with [
+        | (Nil, _) =>
+          Message.fatal_error (problem)
+        | (x, _) => x
+      ]
+    }
+
+
+  // wrapper over lookup_member to find exactly one matching field 
+  // and otherwise bailout
+  lookup_field (loc : Location, o : Expr, fld : string) : E_field_ref =
+    match lookup_member (loc, o, fld) with [
+      | Cons (E_field_ref x, Nil) => x
+      | _ => 
+        // FIXME: better error message when is it for example multibound field
+        Message.fatal_error ("member `" + fld + 
+                             "' was expected to be a field, not method")
+    ];
+          
+  class CTX
+    {
+      this_ptr_decl : option (Decl);
+      in_ctor : bool;
+      env : Env;
+      tenv : Tyvar.TEnv;
+
+      this (this_ptr_decl : option (Decl),
+            in_ctor : bool, env : Env, tenv : Tyvar.TEnv)
+        {
+          this.this_ptr_decl <- this_ptr_decl;
+          this.in_ctor <- in_ctor;
+          this.env <- env;
+          this.tenv <- tenv;
+        }
+
+      with_env (e : Env) : CTX =
+        CTX (this.this_ptr_decl, this.in_ctor, e, this.tenv);
+    }
+
+  // given an expression return list of symbols it can expand to (so we can
+  // later call resolve_overloaded_call)
+  make_callables (ctx : CTX, fnc : PT.Expr) : list (Expr)
+    {
+      def fnc = fixup_dot (ctx.env, fnc);
+      match fnc with [
+        | PT.E_ref (n) =>
+          match ctx.env.bare_lookup (n) with [
+            | Nil =>
+              Message.fatal_error ("unbound symbol `" + n + "'")
+
+            | l =>
+              def convert_ctor (acc : list (Decl), d : Decl) : list (Decl) =
+                match d.kind with [
+                  | D_type =>
+                    List.append (ctx.env.bare_lookup (d.name + "..ctor"), acc)
+                  | _ => Cons (d, acc)
+                ];
+              match List.fold_left (convert_ctor, Nil (), l) with [
+                | Nil => 
+                  Message.fatal_error ("type `" + n + "' has no constructors")
+                | decls => 
+                  List.map (fun (x : Decl) : Expr => make_ref (ctx.env, fnc.loc, x), decls)
+              ]
+          ]
+            
+        | PT.E_member (o, mem) =>
+          lookup_member (fnc.loc, ty_expr (ctx, o), mem)
+
+        | x =>
+          List.cons (ty_expr (ctx, x))
+      ]
+    }
+
+  // type given match [] construct
+  // FIXME: split pattern-walking function out
+  ty_match (ctx : CTX, mtch : PT.E_match) : Expr * Type
+    {
+      def matched_value = ty_expr (ctx, mtch.expr);
+    
+      def do_case (acc : option (Type) * list (Match_case), 
+                   c : PT.Match_case) : option (Type) * list (Match_case)
+        {
+          mutable pat_env <- ctx.env;
+          mutable vars <- Map.string_map ();
+          
+          def f (t : Type, p : PT.Pattern) : Pattern
+            {
+              def r = 
+                match p with [
+                  | PT.P_variable (n) =>
                     if vars.mem (n) then
                       Message.error ("pattern variable `" + n + "' already seen in this pattern")
                     else ();
-                      vars <- vars.add (n, 0);
-                    let (env', decl) = pat_env.add_local(n, D_pattern_variable(), t) in
-                    let _ = pat_env <- env' in
-                    TT.P_variable (decl)
-                  }
+                    vars <- vars.add (n, 0);
+                    def (env', decl) = pat_env.add_local(n, D_pattern_variable(), t);
+                    pat_env <- env';
+                    P_variable (decl)
+                    
+                  | PT.P_underscore => P_underscore ()
                   
-                | PT.P_underscore => TT.P_underscore ()
-                
-                | PT.P_tuple (pats) =>
-                  match Tyutil.top_expand (t) with [
-                    | T_app (_, _, ref_to) =>
-                      let ti = Tyinfo.lookup (ref_to) in
-                      letfun collect_fields (acc : list (string), m : Class_member) : list (string) =
-                        match m with [
-                          | M_field => Cons (m.name, acc)
-                          | _ => acc
+                  | PT.P_tuple (pats) =>
+                    match Tyutil.top_expand (t) with [
+                      | T_app (ti, args) =>
+                        def collect_fields (acc : list (string), m : Class_member) : list (string) =
+                          match m with [
+                            | M_field => Cons (m.name, acc)
+                            | _ => acc
+                          ];
+                        def names = List.rev (List.fold_left (collect_fields, Nil (), ti.member_list));
+                        match names with [
+                          | Cons =>
+                            if List.length (names) == List.length (pats) then {
+                              def mk (n : string, p : PT.Pattern) : PT.Named_pattern =
+                                PT.Named_pattern (n, p);
+                              f (t, PT.P_record (List.map2 (mk, names, pats)))
+                            } else
+                              Message.fatal_error ("pattern matches " + 
+                                                   string_of_int (List.length (pats)) + 
+                                                   " values, while type " + 
+                                                   ti.fullname () + " have " +
+                                                   string_of_int (List.length (names)) + 
+                                                   " fields")
+                          | Nil =>
+                              Message.fatal_error ("pattern matches " + string_of_int (List.length (pats)) + 
+                                                   " values, while type " + ti.fullname () + " has no fields")
                         ]
-                      in
-                      letfun tuple_to_record (decls : list (Class_member)) : TT.Pattern =
-                        let names = List.rev (List.fold_left (collect_fields, Nil (), decls)) in
-                        if List.length (names) == List.length (pats) then
-                          letfun mk (n : string, p : PT.Pattern) : PT.Named_pattern =
-                            PT.Named_pattern (n, p)
-                          in
-                          f (t, PT.P_record (List.map2 (mk, names, pats)))
-                        else
-                          Message.fatal_error ("pattern matches " + string_of_int (List.length (pats)) + 
-                                               " values, while type " + ti.fullname () + " have " +
-                                               string_of_int (List.length (names)) + " fields")
-                      in
-                      match ti.tydecl with [
-                        | TD_class (decls) => tuple_to_record (decls)
-                        | TD_variant_option (decls) => tuple_to_record (decls)
-                        | _ =>
-                            Message.fatal_error ("pattern matches " + string_of_int (List.length (pats)) + 
-                                                 " values, while type " + ti.fullname () + " has no fields")
-                      ]
-                      
-                    | T_prod (ts) =>
-                      if List.length (ts) == List.length (pats) then
-                        TT.P_tuple (List.map2 (f, ts, pats))
-                      else
-                        Message.fatal_error ("pattern matches " + string_of_int (List.length (pats)) + 
-                                             "-tuples, while " + string_of_int (List.length (ts)) + 
-                                             "-tuple is required")
-                                             
-                    | _ =>
-                      Message.fatal_error ("pattern matches " + string_of_int (List.length (pats)) + 
-                                           "-tuples, not values of type " + t.as_string ())
-                  ]
-                  
-                | PT.P_record (l) =>
-                  letfun fn (np : PT.Named_pattern) : TT.Named_pattern =
-                    // just a placeholder with correct type
-                    let bogus_expr = TT.E_type_enforcement (null, t) in
-                    let loc = mtch.expr.loc in
-                    let _ = fixup (bogus_expr, loc, t) in
-                    let fr = lookup_field (loc, bogus_expr, np.name) in
-                    TT.Named_pattern (fr.fld, f (type_of (fr), np.pat))
-                  in TT.P_record (List.map (fn, l))
-                  
-                | PT.P_cons (n, p) =>
-                  if Bind_types.is_capitalized (n) then
-                    match pat_env.lookup_type (n) with [
-                      | TD_variant_option td =>
-                        let ti = Tyinfo.lookup (td) in
-                        let t' = ti.fresh_generic_type () in
-                        if t' >> t then
-                          TT.P_cons (td, f (t', p))
-                        else
-                          Message.fatal_error ("variant option " + t'.as_string () + " doesn't subtype " +
-                                               t.as_string ())
-                      | _ =>
-                        {
-                          Message.error ("`" + n + "' isn't variant case");
-                          TT.P_underscore ()
-                        }
-                    ]
-                  else
-                    match p with [
-                      | PT.P_underscore => f (t, PT.P_variable (n))
-                      | _ =>
-                        Message.fatal_error ("`" + n + "' cannot be variant option, " +
-                                             "since it starts with lowercase letter")
-                    ]
-              ] in { r.ty <- t; r }
-            in
-            Util.locate (c.loc, fun () : option (Type) * list (TT.Match_case) =>
-              let pat = f (type_of (matched_value), c.pattern) in
-              let body = ty_expr (pat_env, c.body) in
-              match ctx with [
-                | (Some (t), l) =>
-                  {
-                    expect_type ("match case body", body, t);
-                    (Some (t), Cons (TT.Match_case (c.loc, pat, body), l))
-                  }
-                | (None, l) =>
-                  (Some (type_of (body)), Cons (TT.Match_case (c.loc, pat, body), l))
-              ])
-          in  
-          match List.fold_left (do_case, (None (), Nil ()), mtch.cases) with [
-            | (Some (t), mcs') =>
-              (TT.E_match (matched_value, List.rev (mcs')), t)
-            | (None, _) =>
-              {
-                Message.error ("cannot have empty match construct");
-                raise Recovery ()
-              }
-          ]
-
-        and ty_letfun (env : Env, fs : list (PT.Function_decl)) : list (TT.Function_decl) * Env =
-          letfun add_fun (acc : Env * list (Decl), d : PT.Function_decl) : Env * list (Decl) =
-            let (env, ds) = acc in
-            let (env, d) =
-              let this_fn = Util.unsome (env.parent_fun) in
-              let pars =
-                match this_fn with [
-                  | {kind = D_local_fun (_, pars)} => Cons (this_fn, pars)
-                  | {kind = D_class_member (M_function)} => List.cons (this_fn)
-                  | _ => Util.ice ()
-                ]
-              in
-              env.add_local(d.fun_header.name, D_local_fun(d.fun_header, pars), 
-                            Tyutil.fun_type (d.fun_header)) 
-            in (env, Cons (d, ds))
-          in
-          let (env', decls) = List.fold_left(add_fun, (env, Nil ()), fs) in
-          letfun do_fun (d : PT.Function_decl, dc : Decl) : TT.Function_decl =
-            let env = env'.copy () in {
-              env.parent_fun <- Some (dc);
-              let body' = do_function_expr (env, d.fun_header, d.body) in
-              TT.Function_decl (dc, body')
-            }
-          in
-          (List.map2 (do_fun, fs, List.rev (decls)), env')
-
-        and ty_expr(env : Env, expr : PT.Expr) : TT.Expr =
-          let (ret, expr_ty) = Util.locate (expr.loc, fun () : TT.Expr * Type =>
-            letfun self (e : PT.Expr) : TT.Expr = ty_expr (env, e) in
-            letfun restart (e : PT.Expr) : TT.Expr * Type =
-              let ex = ty_expr (env, e) in
-              (ex, type_of (ex))
-            in
-
-            match expr with [
-              // this doesn't make much sense I hope
-              | PT.E_let => Message.fatal_error ("let binding not followed by any expression")
-              | PT.E_letpat => Message.fatal_error ("letpat binding not followed by any expression")
-              | PT.E_letfun => Message.fatal_error ("letfun binding not followed by any expression")
-                  
-              | PT.E_lambda (d) =>
-                let rf = PT.E_ref (d.fun_header.name) in
-                let lf = PT.E_letfun (List.cons (d)) in 
-                let sq = PT.E_sequence (List.cons (lf, rf)) in {
-                  rf.loc <- expr.loc;
-                  lf.loc <- expr.loc;
-                  sq.loc <- expr.loc;
-                  restart (sq)
-                }
-                  
-              | PT.E_try_with x =>
-                let b = ty_expr(env, x.body) in
-                let (env', decl) = env.add_local(x.exn, D_exn(), x.exn_ty) in
-                let h = ty_expr(env', x.handler) in {
-                  expect_type ("try...with handler", h, type_of (b));
-                  (TT.E_try_with (b, decl, h), type_of (b))
-                }
-
-              | PT.E_try_finally (e1, e2) =>
-                let e1 = ty_expr (env, e1) in
-                let e2 = ty_expr (env, e2) in {
-                  expect_type ("try...finally handler", e2, T_void ());
-                  (TT.E_try_finally (e1, e2), type_of (e1))
-                }
-
-              | PT.E_type_conversion (e, t) =>
-                // FIXME shall we check sth here ?
-                (TT.E_type_conversion (ty_expr (env, e), t), t)
-                
-              | PT.E_type_enforcement (e, t) =>
-                let ex = ty_expr (env, e) in {
-                  expect_type ("type-enforced expression", ex, t);
-                  (TT.E_type_enforcement (ex, t), t)
-                }
-
-              | PT.E_ref =>
-                def x = fixup_dot (env, expr);
-                def ex =
-                  match x with [
-                    | PT.E_ref (n) =>
-                      match env.bare_lookup (n) with [
-                        | Nil =>
-                          Message.fatal_error ("unbound symbol `" + n + "'")
-
-                        | Cons (x, Nil) => make_ref (env, expr.loc, x)
-
-                        | l =>
-                          letfun print (d : Decl) : void = Message.error(d.loc, "  - this")
-                          in {
-                            Message.error("name `" + n + "' is ambiguous:");
-                            List.iter(print, l);
-                            raise Recovery ()
-                          }
-                      ]
-                    | e => ty_expr (env, e)
-                  ];
-                (ex, type_of (ex))
-
-              | PT.E_member (o, fld) =>
-                let ex = lookup_field (expr.loc, ty_expr (env, o), fld) in
-                (ex, type_of (ex))
-
-              | PT.E_call (fnc, parms) =>
-                letfun fp (p : PT.Parm) : TT.Parm =
-                  let ex = ty_expr (env, p.expr) in
-                  TT.Parm (p.is_ref, ex, p.name)
-                in 
-                let parms = List.map (fp, parms) in
-                let fncs = make_callables (env, fnc) in
-                let ex = resolve_overloaded (fncs, parms) in
-                (ex, type_of (ex))
-
-              | PT.E_assign (e1, e2) =>
-                let e1 = ty_expr (env, e1) in
-                let e2 = ty_expr (env, e2) in {
-                  expect_type ("assigned value", e2, type_of (e1));
-                  let is_lval =
-                    match e1 with [
-                      | TT.E_ref (d) => d.is_ref
-                      | TT.E_field_ref (TT.E_this, mem) => 
-                        if in_ctor then true else mem.is_ref
-                      | TT.E_field_ref (_, mem) => mem.is_ref
-                      | _ => false
-                    ]
-                  in if is_lval then () else Message.error ("assignment to read-only location");
-                  (TT.E_assign (e1, e2), T_void ())
-                }
-
-              | PT.E_raise (e) =>
-                let ex = ty_expr (env, e) in 
-                let exn_ty = Tyutil.make_tapp (env, "System.Exception") in {
-                  expect_type ("raised value", ex, exn_ty);
-                  (TT.E_raise (ex), Tyvars.free_variable ())
-                }
-
-              | PT.E_if (e1, e2, e3) =>
-                let e1 = ty_expr (env, e1) in
-                let e2 = ty_expr (env, e2) in
-                let e3 = ty_expr (env, e3) in
-                let bool_ty = Tyutil.make_tapp (env, "Nemerle.Core.bool") in {
-                  expect_type ("if condition", e1, bool_ty);
-                  expect_type ("else clause", e3, type_of (e2));
-                  (TT.E_if (e1, e2, e3), type_of (e2))
-                }
-
-              | PT.E_literal (l) => 
-                let t =
-                  match l with [
-                    | L_void => T_void ()
-                    | L_null => Tyvars.free_variable ()
-                    | L_int => Tyutil.make_tapp (env, "Nemerle.Core.int")
-                    | L_string => Tyutil.make_tapp (env, "Nemerle.Core.string")
-                    | L_float => Tyutil.make_tapp (env, "Nemerle.Core.float")
-                  ]
-                in (TT.E_literal (l), t)
-
-              | PT.E_this => 
-                match this_ptr_decl with [
-                  | Some (d) =>
-                    let e =
-                      if closurise (env, d) then TT.E_ref (d)
-                      else TT.E_this ()
-                    in (e, d.ty)
-                  | None =>
-                    {
-                      Message.error ("`this' used outside method");
-                      (TT.E_literal (L_null ()), Tyvars.free_variable ())
-                    }
-                ]
-
-              | PT.E_sequence (Nil) =>
-                (TT.E_literal (L_void ()), T_void ())
-              
-              | PT.E_sequence (l) =>
-                letfun loop (env : Env, l : list (PT.Expr)) : TT.Expr =
-                  letfun go () : TT.Expr =
-                    match l with [
-                      | Cons (x, Nil) => ty_expr (env, x)
-
-                      | Cons (PT.E_letfun (fs), xs) =>
-                        let (fs', env') = ty_letfun (env, fs) in
-                        let body = loop (env', xs) in
-                        fixup (TT.E_letfun (fs', body), type_of (body))
-
-                      | Cons (PT.E_let x, xs) =>
-                        let val = ty_expr (env, x.val) in
-                        let (env', decl) = env.add_local(x.name, D_local_value(), type_of (val)) in
-                        {
-                          decl.is_ref <- x.is_ref;
-                          let body = loop (env', xs) in
-                          fixup (TT.E_let (decl, val, body), type_of (body))
-                        }
-
-                      | Cons (PT.E_letpat (p, v), xs) =>
-                        let body = PT.E_sequence (xs) in
-                        let mtch = PT.E_match (v, List.cons (PT.Match_case (p.loc, p, body))) in {
-                          body.loc <- (List.head (xs)).loc;
-                          mtch.loc <- p.loc;
-                          ty_expr (env, mtch)
-                        }
                         
-                      | Cons (x, xs) =>
-                        let ex = ty_expr (env, x) in
-                        let _ = expect_type ("sequence member", ex, T_void ()) in
-                        let tl = loop (env, xs) in
-                        fixup (TT.E_sequence (ex, tl), type_of (tl))
+                      | T_prod (ts) =>
+                        if List.length (ts) == List.length (pats) then
+                          P_tuple (List.map2 (f, ts, pats))
+                        else
+                          Message.fatal_error ("pattern matches " + 
+                                               string_of_int (List.length (pats)) + 
+                                               "-tuples, while " + 
+                                               string_of_int (List.length (ts)) + 
+                                               "-tuple is required")
+                                               
+                      | _ =>
+                        Message.fatal_error ("pattern matches " + string_of_int (List.length (pats)) + 
+                                             "-tuples, not values of type " + t.as_string ())
                     ]
-                  in Util.locate ((List.head (l)).loc, go)
-                in 
-                let ex = loop (env, l) in
-                (ex, type_of (ex))
+                    
+                  | PT.P_record (l) =>
+                    def fn (np : PT.Named_pattern) : Named_pattern
+                      {
+                        // just a placeholder with correct type
+                        def bogus_expr = E_type_enforcement (null, t);
+                        def loc = mtch.expr.loc;
+                        def _ = fixup (bogus_expr, loc, t);
+                        def fr = lookup_field (loc, bogus_expr, np.name);
+                        Named_pattern (fr.fld, f (type_of (fr), np.pat))
+                      };
+                    P_record (List.map (fn, l))
+                    
+                  | PT.P_cons (n, p) =>
+                    if CSglue.is_capitalized (n) then {
+                      def ti = pat_env.lookup_type (n);
+                      match ti.tydecl with [
+                        | TD_variant_option =>
+                          def t' = ti.fresh_generic_type ();
+                          if t' >> t then
+                            P_cons (ti, f (t', p))
+                          else
+                            Message.fatal_error ("variant option " + t'.as_string () + 
+                                                 " doesn't subtype " + t.as_string ())
+                        | _ =>
+                          Message.error ("`" + n + "' isn't variant case");
+                          P_underscore ()
+                      ]
+                    } else
+                      match p with [
+                        | PT.P_underscore => f (t, PT.P_variable (n))
+                        | _ =>
+                          Message.fatal_error ("`" + n + "' cannot be variant option, " +
+                                               "since it starts with lowercase letter")
+                      ]
+                ];
+              r.ty <- t; 
+              r
+            };
+            
+          Util.locate (c.loc, fun () : option (Type) * list (Match_case) {
+            def pat = f (type_of (matched_value), c.pattern);
+            def body = ty_expr (ctx.with_env (pat_env), c.body);
+            match acc with [
+              | (Some (t), l) =>
+                expect_type ("match case body", body, t);
+                (Some (t), Cons (Match_case (c.loc, pat, body), l))
+              | (None, l) =>
+                (Some (type_of (body)), Cons (Match_case (c.loc, pat, body), l))
+            ]})
+        };
 
-              | PT.E_tuple (l) =>
-                let parms = List.map (self, l) in
-                (TT.E_tuple (parms), T_prod (List.map (type_of, parms)))
+      match List.fold_left (do_case, (None (), Nil ()), mtch.cases) with [
+        | (Some (t), mcs') =>
+          (E_match (matched_value, List.rev (mcs')), t)
+        | (None, _) =>
+          Message.fatal_error ("cannot have empty match construct");
+      ]
+    }
 
-              | PT.E_match m => ty_match (env, m)
-            ])
-          in fixup (ret, expr.loc, expr_ty)
-
-        and do_function(env : Env, h : Fun_header, b : Fun_body) : Fun_body =
-          letfun add_parm (env : Env, p : Fun_parm) : Env =
-            Util.locate(p.loc, fun () : Env => 
-                                  let (env, d) = env.add_local(p.name, D_fun_parm(), p.ty) in
-                                  let _ = p.decl <- d in env)
-          in
-          let env' = List.fold_left(add_parm, env, h.parms) in
-          match b with [
-            | FB_expr (e) => 
-              let e' = ty_expr(env', e) in {
-                if type_of (e') >> h.ret_type then ()
-                else
-                  Message.error (e.loc, "function return type was declared to be " +
-                                        h.ret_type.as_string() + " while it is " +
-                                        (type_of (e')).as_string ());
-                FB_typed_expr (e')
-              }
-            | FB_typed_expr => Util.ice ()
-            | FB_extern => b
-            | FB_abstract => b
-          ]
+  ty_letfun (ctx : CTX, fs : list (PT.Function_decl)) : list (Function_decl) * Env
+    {
+      def add_fun (acc : Env * list (Decl), d : PT.Function_decl) : Env * list (Decl)
+        {
+          def (env, ds) = acc;
           
-        and do_function_expr(env : Env, h : Fun_header, b : PT.Expr) : TT.Expr =
-          match do_function (env, h, FB_expr (b)) with [
-            | FB_typed_expr (e) => e
+          def this_fn = Util.unsome (env.parent_fun);
+          def pars =
+            match this_fn with [
+              | {kind = D_local_fun (_, pars)} => Cons (this_fn, pars)
+              | {kind = D_class_member (M_function)} => List.cons (this_fn)
+              | _ => Util.ice ()
+            ];
+          def h = d.header;
+          def (tenv, typarms) = ctx.tenv.add_typarms (env, h.typarms);
+          def mkparm (p : PT.Fun_parm) : Fun_parm =
+              Fun_parm (loc = p.loc, name = p.name, ty = ctx.tenv.bind (env, p.ty), decl = null);
+          def h' = Fun_header (
+             ret_type = tenv.bind (env, h.ret_type),
+             typarms = typarms,
+             name = h.name,
+             parms = List.map (mkparm, h.parms),
+             id = Util.next_id (),
+             closure_vars = Nil (),
+             tenv = tenv,
+             loc = h.loc);
+          
+          def (env, d) =
+            env.add_local (d.header.name, D_local_fun (h', pars), Tyutil.fun_type (h'));
+            
+          (env, Cons (d, ds))
+        };
+        
+      def (env', decls) = List.fold_left (add_fun, (ctx.env, Nil ()), fs);
+      def do_fun (d : PT.Function_decl, dc : Decl) : Function_decl
+        {
+          def env = env'.copy ();
+          env.parent_fun <- Some (dc);
+          match dc.kind with [
+            | D_local_fun (h, _) =>
+              Function_decl (dc, ty_function (ctx.with_env (env), h, d.body))
             | _ => Util.ice ()
           ]
-        
-        and do_tydecl(ctx : Type_decl, td : Type_decl) : Type_decl = td
-        and do_decl(par : Type_decl, decl : Class_member) : void =
-          match decl with [
-            | M_function f =>
-              letfun bind_impl (name : string) : Decl = 
-                letfun is_method (d : Decl) : bool = 
-                  match d.kind with [
-                    | D_class_member (M_function {fun_kind = FK_iface_method}) => true
-                    | _ => false
-                  ]
-                in
-                letfun is_correct_method (d : Decl) : bool =
-                  match d.kind with [
-                    | D_class_member (M_function f') =>
-                      let ti' = Tyinfo.lookup (f'.id) in
-                      let ti = Tyinfo.lookup (f.id) in
-                      let s = ti.subtyping_subst (ti') in
-                      Tyutil.fun_type (f.fun_header) >> (d.ty /- s)
-                    | _ => Util.ice ()
-                  ]
-                in
-                match List.filter (is_method, f.env.bare_lookup (name)) with [
-                  | Nil =>
-                    Message.fatal_error ("unbound interface method `" + name + "'")
-                  | syms =>
-                    match List.filter (is_correct_method, syms) with [
-                      | Nil =>
-                        Message.fatal_error ("none of type signatures of interface method `" + 
-                                             name + "' matches `" + f.name + "'")
-                      | Cons (x, Nil) => x
-                      | _ =>
-                        // FIXME: not quite sure
-                        Message.fatal_error ("more then one type signature of interface method `" + 
-                                             name + "' matches `" + f.name + "'")
-                    ]
-                ]
-              in
-              let env' = decl.env.copy () in
-              {
-                in_ctor <- false;
-                let th = (Tyinfo.lookup (par)) . generic_type () in
-                let thd = Decl ("_N_this", D_closurised_this_ptr (), th, Env.global_by_id (f.id)) in
-                this_ptr_decl <-
-                   match f.fun_kind with [
-                     | FK_method => Some (thd)
-                     | FK_ctor => { in_ctor <- true; Some (thd) }
-                     | _ => None ()
-                   ];
-                match f.fun_kind with [
-                  | FK_method (impl) =>
-                    f.fun_kind <- FK_bound_method (List.map (bind_impl, impl))
-                  | _ => ()
-                ];
-                env'.parent_fun <- Some (Env.global_by_id (f.id));
-                f.body <- do_function (env', f.fun_header, f.body)
-              }
-
-            | _ => ()
-          ]
-        in 
-        Treeutil.decl_walk(do_tydecl, do_decl, null, decls);
+        };
+      (List.map2 (do_fun, fs, List.rev (decls)), env')
     }
+
+  ty_sequence (ctx : CTX, l : list (PT.Expr)) : Expr
+    {
+      def go () : Expr =
+        match l with [
+          | Cons (x, Nil) => ty_expr (ctx, x)
+
+          | Cons (PT.E_letfun (fs), xs) =>
+            def (fs', env') = ty_letfun (ctx, fs);
+            def body = ty_sequence (ctx.with_env (env'), xs);
+            fixup (E_letfun (fs', body), type_of (body))
+
+          | Cons (PT.E_let x, xs) =>
+            def val = ty_expr (ctx, x.val);
+            def (env', decl) = ctx.env.add_local (x.name, D_local_value(), type_of (val));
+            decl.is_ref <- x.is_ref;
+            def body = ty_sequence (ctx.with_env (env'), xs);
+            fixup (E_let (decl, val, body), type_of (body))
+
+          | Cons (PT.E_letpat (p, v), xs) =>
+            def body = PT.E_sequence (xs);
+            def mtch = PT.E_match (v, List.cons (PT.Match_case (p.loc, p, body)));
+            body.loc <- (List.head (xs)).loc;
+            mtch.loc <- p.loc;
+            ty_expr (ctx, mtch)
+            
+          | Cons (x, xs) =>
+            def ex = ty_expr (ctx, x);
+            expect_type ("sequence member", ex, T_void ());
+            def tl = ty_sequence (ctx, xs);
+            fixup (E_sequence (ex, tl), type_of (tl))
+        ];
+        
+      Util.locate ((List.head (l)).loc, go)
+    }
+
+  ty_expr (ctx : CTX, expr : PT.Expr) : Expr =
+    let (ret, expr_ty) = Util.locate (expr.loc, fun () : Expr * Type =>
+      letfun restart (e : PT.Expr) : Expr * Type =
+        let ex = ty_expr (ctx, e) in
+        (ex, type_of (ex))
+      in
+      letfun bind_ty (t : PT.Type) : Type =
+        ctx.tenv.bind (ctx.env, t)
+      in
+
+      match expr with [
+        // this doesn't make much sense I hope
+        | PT.E_let => Message.fatal_error ("let binding not followed by any expression")
+        | PT.E_letpat => Message.fatal_error ("letpat binding not followed by any expression")
+        | PT.E_letfun => Message.fatal_error ("letfun binding not followed by any expression")
+            
+        | PT.E_lambda (d) =>
+          def rf = PT.E_ref (d.header.name);
+          def lf = PT.E_letfun (List.cons (d));
+          def sq = PT.E_sequence (List.cons (lf, rf));
+          rf.loc <- expr.loc;
+          lf.loc <- expr.loc;
+          sq.loc <- expr.loc;
+          restart (sq)
+            
+        | PT.E_try_with x =>
+          def b = ty_expr (ctx, x.body);
+          def (env', decl) = ctx.env.add_local (x.exn, D_exn (), bind_ty (x.exn_ty));
+          def h = ty_expr (ctx.with_env (env'), x.handler);
+          expect_type ("try...with handler", h, type_of (b));
+          (E_try_with (b, decl, h), type_of (b))
+
+        | PT.E_try_finally (e1, e2) =>
+          def e1 = ty_expr (ctx, e1);
+          def e2 = ty_expr (ctx, e2); 
+          expect_type ("try...finally handler", e2, T_void ());
+          (E_try_finally (e1, e2), type_of (e1))
+
+        | PT.E_type_conversion (e, t) =>
+          // FIXME shall we check sth here ?
+          def t = bind_ty (t);
+          (E_type_conversion (ty_expr (ctx, e), t), t)
+          
+        | PT.E_type_enforcement (e, t) =>
+          def ex = ty_expr (ctx, e);
+          def t = bind_ty (t);
+          expect_type ("type-enforced expression", ex, t);
+          (E_type_enforcement (ex, t), t)
+
+        | PT.E_ref =>
+          def x = fixup_dot (ctx.env, expr);
+          def ex =
+            match x with [
+              | PT.E_ref (n) =>
+                match ctx.env.bare_lookup (n) with [
+                  | Nil =>
+                    Message.fatal_error ("unbound symbol `" + n + "'")
+
+                  | Cons (x, Nil) => make_ref (ctx.env, expr.loc, x)
+
+                  | l =>
+                    def print (d : Decl) : void = Message.error(d.loc, "  - this");
+                    Message.error ("name `" + n + "' is ambiguous:");
+                    List.iter (print, l);
+                    raise Recovery ()
+                ]
+              | e => ty_expr (ctx, e)
+            ];
+          (ex, type_of (ex))
+
+        | PT.E_member (o, fld) =>
+          def ex = lookup_field (expr.loc, ty_expr (ctx, o), fld);
+          (ex, type_of (ex))
+
+        | PT.E_call (fnc, parms) =>
+          def fp (p : PT.Parm) : Parm
+            {
+              def ex = ty_expr (ctx, p.expr);
+              Parm (p.is_ref, ex, p.name)
+            };
+          def parms = List.map (fp, parms);
+          def fncs = make_callables (ctx, fnc);
+          def ex = resolve_overloaded_call (fncs, parms);
+          (ex, type_of (ex))
+
+        | PT.E_assign (e1, e2) =>
+          def e1 = ty_expr (ctx, e1);
+          def e2 = ty_expr (ctx, e2);
+          expect_type ("assigned value", e2, type_of (e1));
+          def is_lval =
+            match e1 with [
+              | E_ref (d) => d.is_ref
+              | E_field_ref (E_this, mem) => 
+                if ctx.in_ctor then true else mem.is_ref
+              | E_field_ref (_, mem) => mem.is_ref
+              | _ => false
+            ];
+          if is_lval then () else Message.error ("assignment to read-only location");
+          (E_assign (e1, e2), T_void ())
+
+        | PT.E_raise (e) =>
+          def ex = ty_expr (ctx, e);
+          def exn_ty = Tyutil.make_tapp (ctx.env, "System.Exception");
+          expect_type ("raised value", ex, exn_ty);
+          (E_raise (ex), Tyvar.free_variable ())
+
+        | PT.E_if (e1, e2, e3) =>
+          def e1 = ty_expr (ctx, e1);
+          def e2 = ty_expr (ctx, e2);
+          def e3 = ty_expr (ctx, e3);
+          def bool_ty = Tyutil.make_tapp (ctx.env, "Nemerle.Core.bool");
+          expect_type ("if condition", e1, bool_ty);
+          expect_type ("else clause", e3, type_of (e2));
+          (E_if (e1, e2, e3), type_of (e2))
+
+        | PT.E_literal (l) => 
+          def t =
+            match l with [
+              | L_void => T_void ()
+              | L_null => Tyvar.free_variable ()
+              | L_int => Tyutil.make_tapp (ctx.env, "Nemerle.Core.int")
+              | L_string => Tyutil.make_tapp (ctx.env, "Nemerle.Core.string")
+              | L_float => Tyutil.make_tapp (ctx.env, "Nemerle.Core.float")
+            ];
+          (E_literal (l), t)
+
+        | PT.E_this => 
+          match ctx.this_ptr_decl with [
+            | Some (d) =>
+              def e =
+                if closurise (ctx.env, d) then E_ref (d)
+                else E_this ();
+              (e, d.ty)
+            | None =>
+              Message.error ("`this' used outside method");
+              (E_literal (L_null ()), Tyvar.free_variable ())
+          ]
+
+        | PT.E_sequence (Nil) =>
+          (E_literal (L_void ()), T_void ())
+        
+        | PT.E_sequence (l) =>
+          def ex = ty_sequence (ctx, l);
+          (ex, type_of (ex))
+
+        | PT.E_tuple (l) =>
+          def self (e : PT.Expr) : Expr = ty_expr (ctx, e);
+          def parms = List.map (self, l);
+          (E_tuple (parms), T_prod (List.map (type_of, parms)))
+
+        | PT.E_match m => ty_match (ctx, m)
+      ])
+    in fixup (ret, expr.loc, expr_ty);
+
+  ty_function (ctx : CTX, h : Fun_header, b : Fun_body) : Fun_body
+    {
+      def add_parm (env : Env, p : Fun_parm) : Env =
+        Util.locate (p.loc, fun () : Env { 
+                              def (env, d) = env.add_local (p.name, D_fun_parm (), p.ty);
+                              p.decl <- d;
+                              env
+                           });
+      def env' = List.fold_left (add_parm, ctx.env, h.parms);
+      match b with [
+        | FB_parsed_expr (e) => 
+          def e' = ty_expr (ctx.with_env (env'), e);
+          if type_of (e') >> h.ret_type then ()
+          else
+            Message.error (e.loc, "function return type was declared to be " +
+                                  h.ret_type.as_string() + " while it is " +
+                                  (type_of (e')).as_string ());
+          FB_typed_expr (e')
+        | FB_typed_expr => Util.ice ()
+        | FB_extern => b
+        | FB_abstract => b
+      ]
+    }
+    
+  ty_function (ctx : CTX, h : Fun_header, b : PT.Expr) : Expr =
+    match ty_function (ctx, h, FB_parsed_expr (b)) with [
+      | FB_typed_expr (e) => e
+      | _ => Util.ice ()
+    ];
+
+  bind_impl (env : Env, f : M_function, name : string) : Decl
+    {
+      def is_method (d : Decl) : bool = 
+        match d.kind with [
+          | D_class_member (M_function {kind = FK_iface_method}) => true
+          | _ => false
+        ];
+        
+      def is_correct_method (d : Decl) : bool =
+        match d.kind with [
+          | D_class_member (M_function f') =>
+            def ti' = Tyinfo.lookup (f'.id);
+            def ti = Tyinfo.lookup (f.id);
+            def s = ti.subtyping_subst (ti');
+            Tyutil.fun_type (f.header) >> (d.ty /- s)
+          | _ => Util.ice ()
+        ];
+
+      match List.filter (is_method, env.bare_lookup (name)) with [
+        | Nil =>
+          Message.fatal_error ("unbound interface method `" + name + "'")
+        | syms =>
+          match List.filter (is_correct_method, syms) with [
+            | Nil =>
+              Message.fatal_error ("none of type signatures of interface method `" + 
+                                   name + "' matches `" + f.name + "'")
+            | Cons (x, Nil) => x
+            | _ =>
+              // FIXME: not quite sure
+              Message.fatal_error ("more then one type signature of interface method `" + 
+                                   name + "' matches `" + f.name + "'")
+          ]
+      ]
+    }
+ 
+  handle_tyinfo_members (ti : Tyinfo) : void 
+    {
+      def handle_decl (decl : Class_member) : void =
+        match decl with [
+          | M_function f =>
+            def in_ctor = match f.kind with [ FK_ctor => true | _ => false ];
+            def is_method = match f.kind with [ FK_ctor => true | FK_method => true | _ => false ];
+            def our_decl = Env.global_by_id (f.id);
+            def ctx = CTX (in_ctor = in_ctor, 
+                           this_ptr_decl = 
+                             if is_method then 
+                               Some (Decl ("_N_this", D_closurised_this_ptr (), 
+                                           ti.generic_type (), our_decl))
+                             else None (),
+                           env = ti.env.copy (),
+                           tenv = f.header.tenv);
+
+            match f.kind with [
+              | FK_method (impl) =>
+                f.kind <- FK_bound_method (List.map (fun (s : string) : Decl => 
+                                                             bind_impl (ti.env, f, s), impl))
+              | _ => ()
+            ];
+            ctx.env.parent_fun <- Some (our_decl);
+            try
+              f.body <- ty_function (ctx, f.header, f.body)
+            with x : Recovery => ()
+          | _ => ()
+        ];
+      List.iter (handle_decl, ti.member_list);
+    }
+    
+  run () : void =
+    Tyinfo.iter (handle_tyinfo_members);
+}
   
 } // end ns

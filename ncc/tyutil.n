@@ -26,10 +26,11 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *)
 
-open Nemerle.Compiler;
-open Nemerle.Compiler.Tyutil;
-open Nemerle.Compiler.Tyops;
 open Nemerle.Collections;
+
+open Nemerle.Compiler;
+open Nemerle.Compiler.Tyops;
+open Nemerle.Compiler.Typedtree;
 
 namespace Nemerle.Compiler {
 
@@ -51,63 +52,31 @@ class Tyutil
         | T_fun (tl, t) => T_fun (self (tl), self (t))
         | T_void => t
         | T_prod (tl) => T_prod (List.map (self, tl))
-        | T_app (tc, args, ref_to) =>
-          T_app (tc, List.map (self, args), ref_to)
-        | T_var (_, id) =>
-          {
-             match s.find(id) with [
-               | Some (T_var (_, id2)) => 
-                 if id == id2 then Util.ice ()
-                 else ()
-               | _ => ()
-             ];
-             match s.find(id) with [
-               | Some (t') => self (t') // fixpoint
-               | None => t
-             ] 
-          }
+        | T_app (ti, args) =>
+          T_app (ti, List.map (self, args))
+        | T_var (tv) =>
+           match s.find (tv.id) with [
+             | Some (T_var (tv2)) => 
+               if tv.id == tv2.id then Util.ice ()
+               else ()
+             | _ => ()
+           ];
+           match s.find (tv.id) with [
+             | Some (t') => self (t') // fixpoint
+             | None => t
+           ] 
       ];
     
-    static make_subst (ini : Subst, parms : list (int), args : list (Type)) : Subst =
-      match (parms, args) with [
-        | (Cons (p, ps), Cons (a, args)) =>
-          match a with [
-            | T_var (_, p') =>
-              if p == p' then ini
-              else
-                make_subst (ini.add (p, a), ps, args)
-            | _ =>
-              make_subst (ini.add (p, a), ps, args)
-          ]
-        | (Nil, Nil) => ini
-        | _ => Util.ice ()
-      ];
-      
-    static make_subst (parms : list (int), args : list (Type)) : Subst =
-       make_subst (Map.int_map (), parms, args);
-    
-    static make_subst (td : Type_decl, args : list (Type)) : Subst =
-       make_subst (Map.int_map (), Tyvars.get_parms(td.id), args);
-
-    static fresh_vars (parms : list (int), t : Type) : Type =
-      let sub = Tyvars.fresh_subst (parms) in
-      t /- sub;
-      
-    static fresh_vars (td : Type_decl, t : Type) : Type =
-      fresh_vars (Tyvars.get_parms(td.id), t);
-
     static subst_of_app (t : Type) : Subst * Tyinfo =
       match t with [
-        | T_app (_, args, ref_to) =>
-          let ti = Tyinfo.lookup(ref_to) in
-          (make_subst (ti.tydecl, args), ti)
+        | T_app (ti, args) => (ti.make_subst (args), ti)
         | _ => Util.ice ()
       ];
 
     static top_expand (t : Type) : Type =
       letfun f (t : Type) : Type =
         match t with [
-          | T_app  =>
+          | T_app =>
             let (sub, ti) = subst_of_app (t) in
             match ti.tydecl with [
               | TD_alias (t) =>
@@ -115,15 +84,15 @@ class Tyutil
               | _ => t
             ]
           | _ => t
-        ] in f (Tyvars.global_expand (t));
+        ] in f (Tyvar.global_expand (t));
 
-    // t1 :> t2 (or t1 =? t2) XXX
+    // t1 :> t2 (or t1 =? t2)
     static unify (s : Subst, t1 : Type, t2 : Type, allow_subtyping : bool) : option (Subst) =
       letfun sub1 (t : Type) : Type =
         let t = top_expand (t) in
         match t with [
-          | T_var (_, id) =>
-            match s.find(id) with [
+          | T_var (tv) =>
+            match s.find (tv.id) with [
               | Some (t') => sub1 (t')
               | None => t
             ]
@@ -134,8 +103,8 @@ class Tyutil
       //let _ = Message.debug ("unify " + string_of_type (t1) + sign + string_of_type (t2)) in
       let (t1, t2) = 
         match (t1, t2) with [
-          | (T_var (_, id1), T_var (_, id2)) =>
-            if id1 == id2 then (t1, t2)
+          | (T_var (tv1), T_var (tv2)) =>
+            if tv1.id == tv2.id then (t1, t2)
             else (sub1 (t1), sub1 (t2))
           | _ => (sub1 (t1), sub1 (t2))
         ]
@@ -155,14 +124,14 @@ class Tyutil
       in
       letfun unify_with_tyvar (t1 : Type, t2 : Type) : option (Subst) =
         match t1 with [
-          | T_var (_, id1) =>
-            if Tyvars.is_free (id1) then 
+          | T_var (tv) =>
+            if Tyvar.is_free (tv) then 
               letfun check_constraint (s : option (Subst), c : Type) : option (Subst) =
                 match s with [
                   | None => None ()
                   | Some (s) => unify (s, t2, c, true)
                 ]
-              in List.fold_left (check_constraint, Some (s.add (id1, t2)), Tyvars.constraints (id1))
+              in List.fold_left (check_constraint, Some (s.add (tv.id, t2)), Tyvar.constraints (tv))
             else None ()
           | _ => None ()
         ]
@@ -189,32 +158,30 @@ class Tyutil
             | None => None ()
           ]
 
-        | (T_app (_, a1, tc1), T_app (tn, a2, tc2)) =>
-          if tc1 == tc2 then 
+        | (T_app (ti1, a1), T_app (ti2, a2)) =>
+          if ti1.id == ti2.id then 
             unify_lists (s, a1, a2, false)
           else
-            if allow_subtyping then
-              let (s1, ti1) = subst_of_app (t1) in
-              let ti2 = Tyinfo.lookup (tc2) in
-              match ti1.how_subtypes (ti2.tydecl) with [
+            if allow_subtyping then {
+              def s1 = ti1.make_subst (a1);
+              match ti1.how_subtypes (ti2) with [
                 | Some (l) =>
-                  letfun f (t : option (Type)) : Type =
+                  def f (t : option (Type)) : Type =
                     match t with [
-                      | None => Tyvars.free_variable ()
+                      | None => Tyvar.free_variable ()
                       | Some (t) => t /- s1
-                    ]
-                  in let a1' = List.map (f, l) in
-                  unify (s, T_app (tn, a1', tc2), t2, true)
+                    ];
+                  unify (s, T_app (ti2, List.map (f, l)), t2, true)
                 | None => None ()
               ]
-            else 
+            } else 
               None ()
             
-        | (T_var (_, id1), T_var (_, id2)) =>
-          if id1 == id2 then Some (s)
+        | (T_var (tv1), T_var (tv2)) =>
+          if tv1.id == tv2.id then Some (s)
           else fallback (t1, t2)
         
-        | (T_var (_, id1), _) =>
+        | (T_var (tv), _) =>
           if allow_subtyping then
             // check to see if any of our constraints is enough
             letfun check_constraints (cs : list (Type)) : option (Subst) =
@@ -226,7 +193,7 @@ class Tyutil
                      | None => check_constraints (cs)
                    ]
                ]
-             in check_constraints (Tyvars.constraints (id1))
+             in check_constraints (Tyvar.constraints (tv))
           else fallback (t1, t2)
         
         | _ => 
@@ -251,7 +218,7 @@ class Tyutil
     // global context
     static subtypes (a : Type, b : Type) : bool =
       match unify (a, b, true) with [
-        | Some (s) => { Tyvars.global_store (s); true }
+        | Some (s) => { Tyvar.global_store (s); true }
         | None => false
       ];
 
@@ -260,22 +227,14 @@ class Tyutil
         Util.concat_strings(sep, List.map (string_of_type, args))
       in
       match t with [
-        | T_app (tc, args, ref_to) =>
-          let name =
-            if ref_to == 0 then tc
-            else
-              // be as fault tolerant as possible, this is for debug
-              // and error messages.
-              try (Tyinfo.lookup(ref_to)).fullname() 
-              with x : ICE => tc
-          in
+        | T_app (ti, args) =>
+          def name = ti.fullname ();
           match args with [
             | Nil => name
-            | _ =>
-              name + " (" + map (", ", args) + ")"
+            | _ => name + " (" + map (", ", args) + ")"
           ]
-        | T_var (n, id) => 
-          "'" + n + "_" + string_of_int (id) + if Tyvars.is_free (id) then "*" else ""
+        | T_var (tv) => 
+          "'" + tv.name + "_" + string_of_int (tv.id) + if Tyvar.is_free (tv) then "*" else ""
         | T_ref (t) => "ref " + string_of_type (t)
         | T_out (t) => "out " + string_of_type (t)
         | T_void => "void"
@@ -294,8 +253,7 @@ class Tyutil
       ];
 
     static make_tapp (env : Env, n : string) : Type =
-      let td = env.lookup_type (n) in
-      T_app (n, Nil (), td.id);
+      T_app (env.lookup_type (n), Nil ());
 
     static fun_args (from : Type) : list (Type) =
       match top_expand (from) with [
