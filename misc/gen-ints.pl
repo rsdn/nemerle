@@ -51,23 +51,25 @@ print <<EOF
       def y = (y :> System.$long);
       if (is_checked)
         match (name) {
-          | "+" => (x + y) :> object
-          | "-" => (x - y) :> object
-          | "*" => (x * y) :> object
-          | "/" => (x / y) :> object
-          | "%" => (x % y) :> object
+          | "+" => (x + y) : object
+          | "-" => x - y
+          | "*" => x * y
+          | "/" => x / y
+          | "%" => x % y
 EOF
 ;
+$maybecast = ($short eq 'Int') ? "" : ":> int";
+#$maybecast=":> int";
 if ($int) {
 print <<EOF
-          | "&" => (x %& y) :> object
-          | "|" => (x %| y) :> object
-          | "^" => (x %^ y) :> object
-          | "%&" => (x %& y) :> object
-          | "%|" => (x %| y) :> object
-          | "%^" => (x %^ y) :> object
-          | "<<" => (x << (y :> int)) :> object
-          | ">>" => (x >> (y :> int)) :> object
+          | "&" => x %& y
+          | "|" => x %| y
+          | "^" => x %^ y
+          | "%&" => x %& y
+          | "%|" => x %| y
+          | "%^" => x %^ y
+          | "<<" => x << (y$maybecast)
+          | ">>" => x >> (y$maybecast)
 EOF
 ;
 }
@@ -79,23 +81,23 @@ print <<EOF
       else
         unchecked {
           match (name) {
-            | "+" => (x + y) :> object
-            | "-" => (x - y) :> object
-            | "*" => (x * y) :> object
-            | "/" => (x / y) :> object
-            | "%" => (x % y) :> object
+            | "+" => (x + y) : object
+            | "-" => x - y
+            | "*" => x * y
+            | "/" => x / y
+            | "%" => x % y
 EOF
 ;
 if ($int) {
 print <<EOF
-            | "%&" => (x %& y) :> object
-            | "%|" => (x %| y) :> object
-            | "%^" => (x %^ y) :> object
-            | "&" => (x %& y) :> object
-            | "|" => (x %| y) :> object
-            | "^" => (x %^ y) :> object
-            | "<<" => (x << (y :> int)) :> object
-            | ">>" => (x >> (y :> int)) :> object
+            | "%&" => x %& y
+            | "%|" => x %| y
+            | "%^" => x %^ y
+            | "&" => x %& y
+            | "|" => x %| y
+            | "^" => x %^ y
+            | "<<" => x << (y$maybecast)
+            | ">>" => x >> (y$maybecast)
 EOF
 ;
 }
@@ -112,12 +114,12 @@ print <<EOF
       def x = x :> System.$long;
       if (is_checked)
         match (name) {
-          | "+" => +x :> object
+          | "+" => +x : object
 EOF
 ;
 
-print "        | \"-\" => -x :> object\n" if ($signed);
-print "        | \"~\" => ~x :> object\n" if ($int);
+print "        | \"-\" => -x\n" if ($signed);
+print "        | \"~\" => ~x\n" if ($int);
 print <<EOF
           | _ =>
             null
@@ -126,12 +128,12 @@ print <<EOF
       else
         unchecked {
           match (name) {
-            | "+" => +x :> object
+            | "+" => +x : object
 EOF
 ;
 
-print "        | \"-\" => -x :> object\n" if ($signed);
-print "        | \"~\" => ~x :> object\n" if ($int);
+print "        | \"-\" => -x\n" if ($signed);
+print "        | \"~\" => ~x\n" if ($int);
 print <<EOF
             | _ =>
               null
@@ -151,7 +153,7 @@ print <<EOF
       Literal.$short (x :> System.$long)
     }
 
-    public GetNemerleType () : Typedtree.TType
+    public GetNemerleType () : MType
     {
       InternalType.$long
     }
