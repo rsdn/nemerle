@@ -114,8 +114,7 @@ dist-cleaner:
 
 install:
 	$(Q)$(MAKE) -C doc install
-	$(Q)if test -f ncc/out.stage3/ncc.exe ; then $(MAKE) -C ncc install; \
-            else $(MAKE) -C boot install; fi
+	$(Q)$(MAKE) -C ncc install
 	$(Q)if test -f tools/cs2n/cs2n.exe ; then \
 	  $(MAKE) -C tools/cs2n install; fi
 	$(INST) $(PKGCONFIGDIR)/nemerle.pc
