@@ -70,10 +70,13 @@ public class Lexer : ILexer
 {
   file : System.IO.FileStream;
   reader : System.IO.TextReader;
-  file_name : string;
+  mutable file_name : string;
+  file_real : string;           // real filename to revert after `#line 4 "bla"'
   comment_store : StringBuilder;
   mutable line : int;
   mutable col : int;
+  mutable line_stack : int; // real line number at moment of `#line 3' occurence
+  mutable line_start : int; // how to compute real line after `#line default' occurence
   mutable putback : bool;
   mutable putbackVal : char;
   mutable isPendingChar : bool;  // is there already some first char
@@ -86,6 +89,7 @@ public class Lexer : ILexer
   mutable last_col : int;
 
   defines : Hashtable <string, bool>;
+  static command_defines : Hashtable <string, bool>;
   
   static keywords : Hashtable <string, int>;
 
@@ -118,11 +122,14 @@ public class Lexer : ILexer
   public this (fn : string)
   {
     file_name <- fn;
+    file_real <- fn;
     file <- IO.FileStream (fn, IO.FileMode.Open, IO.FileAccess.Read);
     reader <- IO.StreamReader (file, Text.Encoding.UTF8);
     when (Flags.pedantic_lexer)
       check_last_line_for_lf ();
     line <- 1;
+    line_stack <- -1;
+    file_real <- null;
     col <- 1;
     putback <- false;
     isPendingChar <- false;
@@ -130,6 +137,7 @@ public class Lexer : ILexer
     negated_literal <- false;
     white_beginning <- true;
     defines <- Hashtable (100);
+    foreach (el in command_defines) defines.Add (el, true)
   }
 
   do_read () : char
@@ -661,6 +669,117 @@ public class Lexer : ILexer
 
   parse_preprocessor () : void
   {
+    def read_to_the_end_of_line () {
+      mutable c <- ' ';
+      def line = StringBuilder (80);
+      while (c != '\n') {
+        ignore (line.Append (c));
+        try c <- read ()
+        catch { _ : Error => c <- '\n' }
+      };
+      line.ToString ()
+    };
+    // eof isn't checked, because we are eating and expecting something
+    // not white before end of line
+    def eat_spaces () : char {
+      mutable c <- ' ';
+      while (Char.IsWhiteSpace (c) && c != '\n') 
+        c <- read ();
+      c
+    };
+    def read_word () : string {
+      mutable c <- eat_spaces ();
+      def word = StringBuilder (10);
+      while (Char.IsLetter (c)) {
+        ignore (word.Append (c));
+        try c <- read ()
+        catch { _ : Error => c <- ' ' }          
+      };
+      word.ToString ()
+    };
+
+    def directive = read_word ();
+    when (directive == "")
+      throw Error ("expected preprocessing directive after `#'");
+      
+    match (directive) {
+      | "if" =>
+        def _ = evaluate_preprocessing_expr (read_to_the_end_of_line ().Trim ());
+        ()
+
+      | "elif" =>
+        def _ = evaluate_preprocessing_expr (read_to_the_end_of_line ().Trim ());
+        ()
+
+      | "else" => ignore (read_to_the_end_of_line ())
+      | "endif" => ignore (read_to_the_end_of_line ())
+        
+      | "line" =>
+        def num = StringBuilder ();
+        mutable c <- eat_spaces ();
+        def (new_line, new_file) =
+          if (c == 'd') {
+            if (read_word () == "efault") {
+              ignore (read_to_the_end_of_line ());
+              (-1, null)
+            }
+            else
+              throw Error ("expecting line number or `default' indicator")
+          }
+          else {
+            while (Char.IsDigit (c)) {
+              ignore (num.Append (c));
+              try c <- read () catch { _ : Error => c <- ' ' }
+            };
+            (Int32.Parse (num.ToString ()), 
+             read_to_the_end_of_line ().Trim ())
+          };
+        if (new_line == -1) {
+          line <- line - line_start + line_stack;
+          file_name <- file_real;
+          line_stack <- -1;
+        }
+        else {
+          // if there is already something on stack, bring real line first
+          when (line_stack != -1)
+            line <- line - line_start + line_stack;
+          line_start <- new_line;
+          line_stack <- line;
+          line <- new_line;
+          file_name <- new_file
+        }
+
+      | "error" => 
+        Message.error (read_to_the_end_of_line ().Trim ());
+        
+      | "warning" =>
+        Message.warning (read_to_the_end_of_line ().Trim ());
+
+      | "region" =>
+        def line = read_to_the_end_of_line ().Trim ();
+        ignore (comment_store.Append ("<region>").Append (line).
+                Append ("</region>"));
+        
+      | "endregion" =>
+        def line = read_to_the_end_of_line ();
+        ignore (comment_store.Append ("<endregion>").Append (line).
+                Append ("</endregion>"));
+
+      | "define" =>
+        defines.Set (read_word (), true);
+        ignore (read_to_the_end_of_line ())
+
+      | "undef" =>
+        defines.Set (read_word (), false);
+        ignore (read_to_the_end_of_line ())
+        
+      | x => throw Error ("unsupported preprocessing directive `" + x + "'")
+    }
+  }
+
+  evaluate_preprocessing_expr (_str : string) : bool {
+    // FIXME
+    true
   }
   
   do_get_token (ch : char) : Token
@@ -797,8 +916,9 @@ public class Lexer : ILexer
         "where", "event", "delegate", "enum", "postscan", "preadd", "postadd"
     ];
     keywords <- Hashtable ();
-    for (mutable i <- 0; i < tab.Length; ++i)
-      keywords.Add (tab[i], 1)
+    foreach (el in tab) keywords.Add (el, 1);
+          
+    command_defines <- Hashtable ();
   }
 
   public static AddKeyword (str : string) : void 
