@@ -28,7 +28,6 @@
 TOP_LEVEL = ../..
 
 include $(TOP_LEVEL)/config.mak
-include config.cs2n.mak
 
 ######################################################
 #VARIABLES
