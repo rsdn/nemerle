@@ -114,12 +114,12 @@ DISTFILES = \
 	Makefile                    \
 	$(NEMERLE_COMPILER_DLL_SRC) \
 	$(NCC_EXE_SRC)              \
-	$(STDMACROS_DLL_SRC)        \
 
 LIBDISTFILES = \
 	../lib/ChangeLog   \
 	../lib/STDLIB      \
 	../lib/TODO        \
+	../lib/Makefile    \
 	$(NEMERLE_DLL_SRC) \
 
 
@@ -338,6 +338,8 @@ dist:
 	$(Q)cp $(DISTFILES) $(DIR)/ncc
 	$(CP) '../lib/*.n'
 	$(Q)cp $(LIBDISTFILES) $(DIR)/lib
+	$(Q)mkdir $(DIR)/lib/tests
+	$(Q)cp ../lib/tests/*.n $(DIR)/lib/tests
 	$(Q)$(MAKE) -C testsuite dist DIR=../$(DIR)/ncc/testsuite
 
 clean:
