@@ -174,12 +174,20 @@ out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll: \
 		-reference:out.$(STAGE)/Nemerle.$(STAGE).dll \
 		$(GENERIC_SRC) $(NEMERLE_COMPILER_DLL_SRC)
 
-out.$(STAGE)/stdmacros.dll: $(COMPILER) out.$(STAGE)/Nemerle.$(STAGE).dll \
-		out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll $(STDMACROS_DLL_SRC)
+out.stage1/stdmacros.dll: $(COMPILER) out.stage1/Nemerle.stage1.dll \
+		out.stage1/Nemerle.Compiler.stage1.dll $(STDMACROS_DLL_SRC)
 	$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:$(DLL_PATH)System \
-		-reference:out.$(STAGE)/Nemerle.$(STAGE).dll \
-		-reference:out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll \
+		-reference:out.stage1/Nemerle.stage1.dll \
+		-reference:out.stage1/Nemerle.Compiler.stage1.dll \
+		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
+
+out.stage2/stdmacros.dll: $(COMPILER) out.stage2/Nemerle.stage2.dll \
+		out.stage2/Nemerle.Compiler.stage2.dll $(STDMACROS_DLL_SRC)
+	$(RUN_COMPILER) -target-library -out:$@ \
+		-reference:$(DLL_PATH)System \
+		-reference:out.stage2/Nemerle.stage2.dll \
+		-reference:out.stage2/Nemerle.Compiler.stage2.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
 
 out.stage3/stdmacros.dll: $(COMPILER) out.$(STAGE)/Nemerle.dll \
@@ -190,11 +198,18 @@ out.stage3/stdmacros.dll: $(COMPILER) out.$(STAGE)/Nemerle.dll \
 		-reference:out.$(STAGE)/Nemerle.Compiler.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
 
-out.$(STAGE)/ncc.exe: $(COMPILER) out.$(STAGE)/Nemerle.$(STAGE).dll \
-		out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll $(NCC_EXE_SRC)
+out.stage1/ncc.exe: $(COMPILER) out.stage1/Nemerle.stage1.dll \
+		out.stage1/Nemerle.Compiler.stage1.dll $(NCC_EXE_SRC)
 	$(RUN_COMPILER) -target-exe -out:$@ \
-		-reference:out.$(STAGE)/Nemerle.$(STAGE).dll \
-		-reference:out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll \
+		-reference:out.stage1/Nemerle.stage1.dll \
+		-reference:out.stage1/Nemerle.Compiler.stage1.dll \
+		$(GENERIC_SRC) $(NCC_EXE_SRC)
+
+out.stage2/ncc.exe: $(COMPILER) out.stage2/Nemerle.stage2.dll \
+		out.stage2/Nemerle.Compiler.stage2.dll $(NCC_EXE_SRC)
+	$(RUN_COMPILER) -target-exe -out:$@ \
+		-reference:out.stage2/Nemerle.stage2.dll \
+		-reference:out.stage2/Nemerle.Compiler.stage2.dll \
 		$(GENERIC_SRC) $(NCC_EXE_SRC)
 
 out.stage3/ncc.exe: $(COMPILER) out.$(STAGE)/Nemerle.dll \
