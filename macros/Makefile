@@ -37,6 +37,18 @@ export MONO_PATH = $(shell echo $$MONO_PATH):$(shell pwd)/../boot/
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 
+DISTFILES = \
+	Makefile	\
+	core.n		\
+	io.n		\
+	operators.n	\
+	dataNpgsql.n	\
+
+############################################################
+# OUTPUT
+############################################################
+
+CP = @echo CP      $1
 
 ############################################################
 # TARGETS
@@ -44,3 +56,9 @@ EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 
 sql:
 	$(EXECUTE) ../boot/ncc.exe -r Npgsql -r Nemerle.Compiler -tdll dataNpgsql.n -o Nemerle.Data.Npgsql.dll
+	
+# This target is used to build the tarball.  It is passed the
+# directory name, where all files should be copied.
+dist:
+	$(CP) macros
+	$(Q)cp $(DISTFILES) $(DIR)
