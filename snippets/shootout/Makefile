@@ -53,7 +53,7 @@ all:
 	cp ../../ncc/out.stage3/Nemerle.dll .
 	$(EXECUTE) ../../ncc/out.stage3/ncc.exe -out test.exe ../../ncc/testsuite/test.n
 	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -verify "$(VERIFY)" -n "../../ncc/out.stage3/ncc.exe"
-	rm -f out.dll out.exe out.netmodule ext_test.out Nemerle.dll
+	rm -f *.dll *.exe *.netmodule *.pdb ext_test.out
 
 clean:
 	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]*
