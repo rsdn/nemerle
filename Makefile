@@ -20,7 +20,10 @@ send-www:
 
 name = nemerle
 
-dist:
+changelog:
+	svn log --xml -v | python aux/svn2log.py > ChangeLog
+
+dist: changelog
 	if svn status 2>&1 | grep -qv '^?' ; then \
 	  echo "Some files modified"; \
 	  false; \
@@ -29,6 +32,7 @@ dist:
 	  ver=`svn info . | awk '/^Revision:/ { print $$2 }'`; \
 	  rm -rf $(name)-$$ver; \
 	  svn export . $(name)-$$ver; \
+	  cp ChangeLog $(name)-$$ver; \
 	  tar zcf $(name)-$$ver.tar.gz $(name)-$$ver; \
 	  rm -rf $(name)-$$ver; \
 	  ls -l $(name)-$$ver.tar.gz; \
