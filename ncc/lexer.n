@@ -136,7 +136,6 @@ public class Lexer : ILexer
   {
     def inp = reader.Read ();
     if (inp >= 0) {
-//      def ch = Convert.ToChar (inp);
       def ch = (inp :> char);
       match (ch) {
         | '\n' =>
@@ -216,6 +215,14 @@ public class Lexer : ILexer
     }
   }
 
+  variant NumberMode {
+    | MD_Float
+    | MD_Decimal
+    | MD_Octal
+    | MD_Hex
+    | MD_Binary
+  }
+  
   get_number (first_ch : char) : Token
   {
     def buf = Text.StringBuilder (10);
@@ -223,8 +230,24 @@ public class Lexer : ILexer
       ignore (buf.Append ('-'));
       negated_literal <- false;
     };
-    mutable float_mode <- 
-      if (first_ch == '.') true else false;
+    mutable already_seen_type <- false;  // for the case 0b0 vs 0b
+    
+    mutable mode <-
+      match (first_ch) {
+        | '.' => MD_Float ()
+        | '0' =>
+          match (peek ()) {
+            | 'x' | 'X' => ignore (read ()); MD_Hex ()
+            | 'o' | 'O' => ignore (read ()); MD_Octal ()
+            | 'b' | 'B' =>
+              ignore (read ());
+              unless (Char.IsDigit (peek ())) already_seen_type <- true;
+              MD_Binary ()
+            | _ =>
+              MD_Decimal ()
+          }
+        | _ => MD_Decimal ()
+      };
     mutable last_was_digit <- true;
 
     ignore (buf.Append (first_ch));
@@ -233,20 +256,32 @@ public class Lexer : ILexer
     def loop () {
       match (peek ()) {
         | '.' => 
-          unless (float_mode) {
-            float_mode <- true;
-            ignore (read ());
-            if (Char.IsDigit (peek ())) {
-              ignore (buf.Append ('.'));
-              loop ()
-            }
-            else {
-              isPendingChar <- true;
-              pendingChar <- '.';
-              last_was_digit <- false;
-              float_mode <- false;
-            }
+          match (mode) {
+            | MD_Decimal =>
+              mode <- MD_Float ();
+              ignore (read ());
+              if (Char.IsDigit (peek ())) {
+                ignore (buf.Append ('.'));
+                loop ()
+              }
+              else {
+                isPendingChar <- true;
+                pendingChar <- '.';
+                last_was_digit <- false;
+                mode <- MD_Decimal ();
+              }
+            | _ => ()
           }
+
+        | 'a' | 'A' | 'b' | 'B' | 'c' | 'C' | 'd' | 'D'
+        | 'e' | 'E' | 'f' | 'F' =>
+          match (mode) {
+            | MD_Hex =>
+              ignore (buf.Append (read ()));
+              loop ()
+            | _ => ()
+          }
+
         | x when Char.IsDigit (x) =>
           ignore (buf.Append (read ()));
           loop ()
@@ -254,7 +289,7 @@ public class Lexer : ILexer
       }
     };
     loop ();
-
+    
     def exponent_part (only_realsuf) {
       when (!only_realsuf) {
         match (peek ()) {
@@ -293,91 +328,126 @@ public class Lexer : ILexer
       }
     };
 
-    try {
-      if (float_mode)
-        match (peek ()) {
-          | 'E' | 'e' => 
-            exponent_part (false)
-          | _ =>
-            exponent_part (true)
-        }
-      else
-        if (last_was_digit)
-          match (Char.ToLower (peek (), CultureInfo.InvariantCulture)) {
-            | 'e' =>
-              exponent_part (false)
-            | 'f' | 'd' | 'm' =>
-              exponent_part (true)
-            | _ =>
-              /// we should have integer number here
+    // convert given object to appropriate integer value according to type suffix
+    def check_type_suffix (val : object) {
+      /// we should have integer number here
 
-              def special (c) {
-                | 'l' | 's' | 'b' | 'u' =>
-                  true
-                | _ =>
-                  false
-              };
+      def special (c) {
+        | 'l' | 's' | 'b' | 'u' =>
+          true
+        | _ =>
+          false
+      };
 
-              // take read value as string
-              def val = buf.ToString ();
-
-              // check suffixes to make special types conversions
-              mutable ch <- Char.ToLower (peek (), CultureInfo.InvariantCulture);
-              if (special (ch)) {
-                ignore (read ());
-                mutable unsigned <- ch == 'u';
-
-                // we can have two letter suffixes
-                def ch' = Char.ToLower (peek (), CultureInfo.InvariantCulture);
-                if (special (ch')) {
-                  ignore (read ());
-                  if (ch' == 'u') {
-                    when (unsigned)
-                      throw Error ("bad integer suffix (unsigned twice)");
-                    unsigned <- true;
-                  }
-                  else {
-                    // both chars can be different than 'u' and than they must be 'bs'
-                    match ((ch, ch')) {
-                      | ('s', 'b') | ('b', 's') =>
-                        ch <- 'b'
-                      | _ =>
-                        unless (unsigned)
-                          throw Error ("bad integer suffix (type contraint twice)");
-                        ch <- ch';
-                    }
-                  }
-                }
-                else
-                  // only 'b' suffix, so it is unsigned byte
-                  when (ch == 'b') unsigned <- true;
-
-                // [ch] now contains type meaning or 'u' (then it is uint for sure)
-                match (ch) {
-                  | 'b' =>
-                    if (unsigned)
-                      Tok_byte_literal (Convert.ToByte (val))
-                    else
-                      Tok_sbyte_literal (Convert.ToSByte (val))
-                  | 's' =>
-                    if (unsigned)
-                      Tok_ushort_literal (Convert.ToUInt16 (val))
-                    else
-                      Tok_short_literal (Convert.ToInt16 (val))
-                  | 'l' =>
-                    if (unsigned)
-                      Tok_ulong_literal (Convert.ToUInt64 (val))
-                    else
-                      Tok_long_literal (Convert.ToInt64 (val))
-                  | _ =>
-                    Tok_uinteger_literal (Convert.ToUInt32 (val))
-                }
-              }
-              else
-                Tok_integer_literal (Convert.ToInt32 (val))
-          }
+      // check suffixes to make special types conversions
+      mutable ch <-
+        if (already_seen_type)
+          'b'
         else
-          Tok_integer_literal (Convert.ToInt32 (buf.ToString ()))
+          Char.ToLower (peek (), CultureInfo.InvariantCulture);
+      if (special (ch)) {
+        unless (already_seen_type) ignore (read ());
+        mutable unsigned <- ch == 'u';
+
+        // we can have two letter suffixes
+        def ch' = Char.ToLower (peek (), CultureInfo.InvariantCulture);
+        if (special (ch')) {
+          ignore (read ());
+          if (ch' == 'u') {
+            when (unsigned)
+              throw Error ("bad integer suffix (unsigned twice)");
+            unsigned <- true;
+          }
+          else {
+            // both chars can be different than 'u' and than they must be 'bs'
+            match ((ch, ch')) {
+              | ('s', 'b') | ('b', 's') =>
+                ch <- 'b'
+              | _ =>
+                unless (unsigned)
+                  throw Error ("bad integer suffix (type contraint twice)");
+                ch <- ch';
+            }
+          }
+        }
+        else
+          // only 'b' suffix, so it is unsigned byte
+          when (ch == 'b') unsigned <- true;
+
+        // [ch] now contains type meaning or 'u' (then it is uint for sure)
+        match (ch) {
+          | 'b' =>
+            if (unsigned)
+              Tok_byte_literal (Convert.ToByte (val, CultureInfo.InvariantCulture))
+            else
+              Tok_sbyte_literal (Convert.ToSByte (val, CultureInfo.InvariantCulture))
+          | 's' =>
+            if (unsigned)
+              Tok_ushort_literal (Convert.ToUInt16 (val, CultureInfo.InvariantCulture))
+            else
+              Tok_short_literal (Convert.ToInt16 (val, CultureInfo.InvariantCulture))
+          | 'l' =>
+            if (unsigned)
+              Tok_ulong_literal (Convert.ToUInt64 (val, CultureInfo.InvariantCulture))
+            else
+              Tok_long_literal (Convert.ToInt64 (val, CultureInfo.InvariantCulture))
+          | _ =>
+            Tok_uinteger_literal (Convert.ToUInt32 (val, CultureInfo.InvariantCulture))
+        }
+      }
+      else
+        Tok_integer_literal (Convert.ToInt32 (val, CultureInfo.InvariantCulture))
+    };
+    
+    try {
+      match (mode) {
+        | MD_Float =>
+          match (peek ()) {
+            | 'E' | 'e' => 
+              exponent_part (false)
+            | _ =>
+              exponent_part (true)
+          }
+        | MD_Decimal =>
+          if (last_was_digit)
+            match (Char.ToLower (peek (), CultureInfo.InvariantCulture)) {
+              | 'e' =>
+                exponent_part (false)
+              | 'f' | 'd' | 'm' =>
+                exponent_part (true)
+              | _ =>
+                check_type_suffix (buf.ToString ())
+            }
+          else
+            Tok_integer_literal (Convert.ToInt32 (buf.ToString ()))
+
+        | MD_Hex =>
+          def val = UInt64.Parse (buf.ToString (), Globalization.NumberStyles.HexNumber,
+                                  CultureInfo.InvariantCulture);
+          check_type_suffix (val)
+
+        | MD_Binary =>
+          mutable value <- 0ul;
+          for (mutable i <- 0; i < buf.Length; ++i)
+            match (buf[i]) {
+              | '0' => value <<= 1
+              | '1' => value <<= 1; value += 1ul
+              | _ => throw Error ("binary literal numer must be composed of 1 and 0s")
+            };
+          check_type_suffix (value)
+
+        | MD_Octal =>
+          mutable value <- 0ul;
+          for (mutable i <- 0; i < buf.Length; ++i)
+            match (Convert.ToUInt64 (buf[i]) - 48ul) {
+              | x when 0ul <= x && x <= 7ul => value <<= 3; value += x;
+              | x =>
+                when (0ul <= x && x <= 7ul) Util.ice ("matching error");
+                throw Error ("octal literal number must be composed of 0 to 7 digits "
+                             + "while it has `" + x.ToString () + "'")
+            };
+          check_type_suffix (value)
+      }
     }
     catch {
       _ : System.OverflowException =>
