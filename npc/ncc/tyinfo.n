@@ -74,6 +74,13 @@ class Tyinfo
         | None => td#t_implements
       ];
 
+    // check if we can access D from THIS
+    // FIXME
+    method can_access (d : Class_member) : bool = true ;
+    
+    method can_access_any (ds : list (Class_member)) : bool = 
+      List.exists (fun (d : Class_member) : bool => this#can_access (d), ds);
+
     fun td_name (td : Type_decl) : string = (lookup(td#id))#fullname();
 
     value ref infos : Int_map(Tyinfo);
@@ -84,13 +91,25 @@ class Tyinfo
         | None => Util.ice()
       ];
 
-    fun lookup (td : Type_decl) : Tyinfo = lookup(td#id);
+    fun lookup (td : Decl_base) : Tyinfo = lookup(td#id);
     
     fun make (decls : list (Type_decl)) : void =
       letfun tydecl_f (par : option (Type_decl), d : Type_decl) : option (Type_decl) = {
-        infos <- infos#add(d#id, Tyinfo(par, d));
+        if infos#mem (d#id) then ()
+        else infos <- infos#add(d#id, Tyinfo(par, d));
         Some (d)
-      } and decl_f (_ : option (Type_decl), _ : Class_member) : void = () 
+      } and decl_f (par : option (Type_decl), d : Class_member) : void =
+        let ti =
+          match (d, par) with [
+            | (M_type (?td), _) =>
+              match infos#find (td#id) with [
+                | Some (?ti) => ti
+                | None => Tyinfo (par, td)
+              ]
+            | (_, Some (?td)) => Util.unsome (infos#find (td#id))
+            | _ => Util.ice ()
+          ]
+        in infos <- infos#add (d#id, ti)
       in {
         infos <- Map.int_map();
         Treeutil.decl_walk(tydecl_f, decl_f, None(), decls);
@@ -190,9 +209,126 @@ class Tyinfo
         in ti#subtypes <- List.fold_left (add_srs, Map.int_map (), ti#direct_supertypes ())
       in iter (make_srs);
 
+    method subtyping_subst (ti : Tyinfo) : Subst =
+      let td = ti#tydecl in
+      if td#id == this#tydecl#id then 
+        Map.int_map () // current type, no substitution
+      else
+        match this#how_subtypes (td) with [
+          | None => Util.ice ()
+          | Some (?args) =>
+            letfun f (t : option (Type)) : Type =
+              match t with [
+                | Some (?t) => t
+                | None => Tyvars.free_variable ()
+              ]
+            in 
+            let (?s, _) = Tyutil.subst_of_app (T_app ("", List.map (f, args), td#id)) in
+            s
+        ];
+    
+    // Return type of given member in this type (i.e. if type comes from
+    // supertype, substitute it). Only works for methods and fields.
+    method member_type (m : Class_member) : Type =
+      let t =
+        match m with [
+          | M_field ?f => f#ty
+          | M_function ?f => Tyutil.fun_type (f)
+        ]
+      in t /- this#subtyping_subst (lookup (m#id));
+      
+    fun make_member_list (ti : Tyinfo) : void =
+      let parent_members =
+        match ti#tydecl#t_extends with [
+          | Some (T_app ?a) =>
+            (lookup (a#ref_to))#members
+          | _ => Map.string_map ()
+        ]
+      in
+      letfun can_access (m : M_function) : bool = ti#can_access (m) in
+      let parent_members = 
+        letfun filter_accessible (ms : String_map (Member), n : string, 
+                                  m : Member) : String_map (Member) =
+          match m with [
+            | Mem_field (?f) =>
+              if ti#can_access (f) then ms#add (n, m)
+              else ms
+            | Mem_methods (?meths) =>
+              match List.filter (can_access, meths) with [
+                | Nil => ms
+                | ?meths => ms#add (n, Mem_methods (meths))
+              ]
+          ]
+        in
+        parent_members#fold (filter_accessible, Map.string_map ()) 
+      in
+      letfun process_decl (mem : String_map (Member), d : Class_member) : String_map (Member) =
+        Util.locate (d#loc, fun () : String_map (Member) =>
+          match d with [
+            | M_field ?f =>
+              {
+                match parent_members#find (f#name) with [
+                  | Some (Mem_field ?f') =>
+                    if Util.is_new (f) then ()
+                    else Message.error ("field `" + f#name + 
+                                        "' overrides field from parent, but no `new'")
+                  | Some (Mem_methods ?ms) =>
+                    Message.error ("name `" + f#name + 
+                                   "' used to be method, it cannot be field now")
+                  | None => ()
+                ];
+                mem#add (f#name, Mem_field (f))
+              }
+            | M_function ?f =>
+              let fun_ty = Tyutil.fun_type (f) in
+              letfun put_f_in (meths : list (M_function)) : String_map (Member) =
+                let ref replaced = false in
+                letfun replace (acc : list (M_function), old : M_function) : list (M_function) =
+                  if Tyutil.types_eq (ti#member_type (old), fun_ty) then {
+                    replaced <- true;
+                    Cons (f, acc)
+                  } else
+                    Cons (old, acc)
+                in
+                let meths = List.fold_left (replace, Nil (), meths) in
+                let meths = 
+                  if replaced then meths
+                  else Cons (f, meths)
+                in mem#add (f#name, Mem_methods (meths))
+              in
+              letfun store_f () : String_map (Member) =
+                match mem#find (f#name) with [
+                  | Some (Mem_field) =>
+                    {
+                      Message.error ("name `" + f#name + 
+                                     "' used to be field, it cannot be method now");
+                      mem#add (f#name, Mem_methods (List.cons (f)))
+                    }
+                  | Some (Mem_methods (?meths)) => put_f_in (meths)
+                  | None => mem#add (f#name, Mem_methods (List.cons (f)))
+                ]
+              in
+              match f with [
+                | {fun_kind = FK_method (?impl)} => store_f ()
+                | {fun_kind = FK_ctor} => store_f ()
+                | _ => mem
+              ]
+            | _ => mem
+          ])
+      in
+      let decls =
+        match ti#tydecl with [
+          | TD_class (?decls) => decls
+          | TD_interface (?decls) => decls
+          | _ => Nil ()
+        ]
+      in
+      ti#members <- List.fold_left (process_decl, parent_members, decls);
+
     fun run (decls : list (Type_decl)) : void {
       make(decls);
       determine_subtyping();
+      iter (make_member_list);
     }
   }
 
