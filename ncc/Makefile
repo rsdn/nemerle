@@ -60,7 +60,8 @@ NEMERLE_DLL_SRC = \
 	../lib/idictionary.n		\
 	../lib/dictionaryentry.n	\
 	../lib/heap.n			\
-	../lib/icomparable.n
+	../lib/icomparable.n		\
+	../lib/narray.n			\
 
 
 NEMERLE_COMPILER_DLL_SRC = \
