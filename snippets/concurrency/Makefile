@@ -25,28 +25,13 @@
 # NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
-# Include configuration determined by configure script.
-include ../../config.mak
-
-############################################################
-# VARIABLES
-############################################################
-
-NPATH   = ../../ncc/out.stage3/
-EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
-COMPILE = $(NET_ENGINE) $(NET_FLAGS) $(NPATH)/ncc.exe
-VERIFY = $(shell if test $(NET_VERSION) = "2.0"; then cygpath -m $(PEVERIFY); else echo ""; fi)
-
 
 ############################################################
 # TARGETS
 ############################################################
 
 all:
-	cp $(NPATH)/Nemerle.dll .
-	$(EXECUTE) $(NPATH)/ncc.exe -out test.exe ../../ncc/testsuite/test.n
-	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -verify "$(VERIFY)" -n "$(NPATH)/ncc.exe"
-	rm -f *.dll *.exe *.netmodule *.pdb ext_test.out
+	$(MAKE) TEST_FILES=$(CURDIR)/*.n -C ../../ncc/testsuite/ test
 
 clean:
 	rm -f *.exe *.il *.dll *.pdb *.netmodule ext_test.out core core.[0-9]*

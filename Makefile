@@ -121,6 +121,7 @@ check:
 	$(Q)$(MAKE) -C snippets clean
 	$(Q)$(MAKE) -C snippets all
 	$(Q)$(MAKE) -C ncc/testsuite/frommcs all
+	$(Q)$(MAKE) -C ncc/testsuite/ clean
 
 clean:
 	$(MAKE) -C doc clean

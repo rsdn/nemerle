@@ -29,7 +29,6 @@
 TOP = ../..
 include $(TOP)/config.mak
 
-
 ############################################################
 # VARIABLES
 ############################################################
@@ -37,14 +36,13 @@ include $(TOP)/config.mak
 STAGE1    = $(TOP)/ncc/out.stage1
 STAGE3    = $(TOP)/ncc/out.stage3
 TESTN     = $(TOP)/ncc/testsuite/test.n
-
-export PATH = $(shell echo $$PATH):$(shell pwd)/$(STAGE3)/
-export MONO_PATH = $(shell echo $$MONO_PATH):$(shell pwd)/$(STAGE3)
+NEM_DLLS  = Nemerle.dll Nemerle.Compiler.dll Nemerle.Macros.dll
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 VERIFY = $(shell if test $(NET_VERSION) = "2.0"; then cygpath -m $(PEVERIFY); else echo ""; fi)
 
 TEST_FILES = positive/*.n negative/*.n
+ADDITIONAL_FLAGS = -nowarn:10003
 
 ############################################################
 # OUTPUT
@@ -56,14 +54,25 @@ CP = @echo CP      $1
 # TARGETS
 ############################################################
 
-all:
-	cp $(STAGE3)/Nemerle.dll .
-	cp $(STAGE3)/Nemerle.Macros.dll .
-	cp $(STAGE3)/Nemerle.Compiler.dll .
-	$(EXECUTE) $(STAGE3)/ncc.exe -r:Nemerle.Compiler -out test.exe $(TESTN)
-	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" -p "$(NEM_FLAGS) -nowarn:10003" \
-		-verify "$(VERIFY)" -n "$(STAGE3)/ncc.exe" $(TEST_FILES)
+all: test
 	rm -f *.dll *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
+
+test: test.exe $(NEM_DLLS)
+	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" -p "$(NEM_FLAGS) $(ADDITIONAL_FLAGS)" \
+		-verify "$(VERIFY)" -n "$(STAGE3)/ncc.exe" $(TEST_FILES)
+
+test.exe: test.n
+	$(EXECUTE) $(STAGE3)/ncc.exe -r:Nemerle.Compiler -out test.exe $(TESTN)
+
+Nemerle.dll:
+	cp $(STAGE3)/Nemerle.dll .
+
+Nemerle.Macros.dll:
+	cp $(STAGE3)/Nemerle.Macros.dll .
+
+Nemerle.Compiler.dll:
+	cp $(STAGE3)/Nemerle.Compiler.dll .
+
 
 test-stage1:
 	cp $(STAGE1)/Nemerle.stage1.dll .
@@ -76,11 +85,10 @@ test-stage1:
 		-verify "$(VERIFY)"  $(TEST_FILES)
 	rm -f *.dll *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
 
-all-mcs:
-	$(MAKE) all TEST_FILES=frommcs/*.n
-
 clean:
 	$(Q) cd positive && $(MAKE) clean
 	$(Q) cd negative && $(MAKE) clean
 	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]* xml-*.xml
 	rm -f test.err test_error.log a.out test_out.txt
+
+.PHONY: test
