@@ -35,7 +35,7 @@ include $(TOP_LEVEL)/config.mak
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
-NCC = $(NCC_DIR)/ncc.exe -q
+NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe -q
 MCS = mcs
 
 NEMERLE_DLLS = Nemerle.dll Nemerle.Macros.dll Nemerle.Compiler.dll
