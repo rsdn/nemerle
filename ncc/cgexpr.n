@@ -140,18 +140,41 @@ namespace Nemerle.Compiler {
              closure_ptrs = Map.int_map (),
              locals = Map.int_map ());
 
+      fun store_in_closure (ctx : CTX, d : Decl, val : CG_expr) : CG_expr =
+        let rf = CE_field_ref (CE_ref (Util.unsome (ctx#current_closure)),
+                               ctx#closure_fields#get (d#id)) in
+        CE_assign (rf, val);
+
+      fun store_local (ctx : CTX, d : Decl, val : CG_expr) : CTX * CG_val =
+        if d#in_closure then
+          let assign = store_in_closure (ctx, d, val) in
+          let cgv = CG_val (loc = d#loc, 
+                            name = "_N_dummy_" + string_of_int (Util.next_id ()), 
+                            ty = CT_void (), 
+                            val = assign) in
+          (copy_ctx (ctx), cgv)
+        else
+          let cgv = CG_val (loc = d#loc, name = d#name, ty = cg_type (d#ty), val = val) in
+          let ctx' = copy_ctx (ctx) in {
+            ctx'#locals <- ctx#locals#add (d#id, cgv);
+            (ctx', cgv)
+          };
+
+      fun closure_ref (ctx : CTX, fn : Decl) : CG_expr =
+        if ctx#current_fun#id == fn#id then
+          CE_ref (Util.unsome (ctx#current_closure))
+        else
+          CE_field_ref (CE_this (), ctx#closure_ptrs#get (fn#id));
+
       fun raw_cg_expr (ctx : CTX, inex : Expr) : CG_expr =
+        letfun self (e : Expr) : CG_expr = cg_expr (ctx, e) in
         let ex =
           match inex with [
             | E_ref (?d) =>
               if d#in_closure then
                 let defined_in = Util.unsome (d#parent_fun) in
-                if defined_in#id == ctx#current_fun#id then
-                  CE_field_ref (CE_ref (Util.unsome (ctx#current_closure)),
-                                ctx#closure_fields#get (d#id))
-                else
-                  CE_field_ref (CE_field_ref (CE_this (), ctx#closure_ptrs#get (defined_in#id)),
-                                ctx#closure_fields#get (d#id))
+                CE_field_ref (closure_ref (ctx, defined_in), 
+                              ctx#closure_fields#get (d#id))
               else
                 match d#kind with [
                   | D_class_member (M_value ?v) => 
@@ -163,9 +186,60 @@ namespace Nemerle.Compiler {
 
                   | D_class_member => Util.ice ()
 
-                  | _ => CE_ref (ctx#locals#get (d#id))
+                  | _ => 
+                    if ctx#locals#mem (d#id) then
+                      CE_ref (ctx#locals#get (d#id))
+                    else {
+                      Message.error ("blah, not finished");
+                      Util.ice ("ref to undef val " + d#name)
+                    }
                 ]
-                  
+
+            | E_field_ref (?o, ?f) =>
+              CE_field_ref (self (o), lookup_field (f))
+
+            | E_method_ref (?o, ?m) =>
+              CE_method_ref (self (o), lookup_function (m#fun_header))
+
+            | E_call (?f, ?p) =>
+              letfun mkp (p : Parm) : CG_expr = self (p#expr) in
+              CE_call (self (f), List.map (mkp, p))
+
+            | E_assign (?e1, ?e2) =>
+              CE_assign (self (e1), self (e2))
+
+            | E_let (?d, ?v, ?b) =>
+              let (?ctx', ?cgv) = store_local (ctx, d, self (v)) in
+              CE_let (cgv, cg_expr (ctx', b))
+
+            | E_letfun (?fs, ?body) =>
+              let ref l = Nil () in
+              letfun store (ctx : CTX, f : Function_decl) : CTX =
+                let cl = make_lambda_class (ctx, f#decl) in
+                let ct = make_lambda_ctor (ctx, f#decl, cl) in
+                let (?ctx, ?val) = store_local (ctx, f#decl, ct) in
+                let _ = l <- Cons ((val, cl), l) in
+                ctx
+              in
+
+              let ctx = List.fold_left (store, ctx, fs) in
+              
+              letfun fill (f : Function_decl, acc : CG_val * CM_class) : void =
+                let (?val, ?cl) = acc in {
+                  closures <- Cons ((cl : CG_member), closures);
+                  fill_lambda_class (ctx, f#decl, f#body, cl)
+                }
+              in
+
+              let _ = List.iter2 (fill, fs, List.rev (l)) in
+
+              letfun mklet (acc : CG_expr, x : CG_val * CM_class) : CG_expr =
+                let (?val, ?cl) = x in
+                CE_let (val, acc)
+              in
+
+              List.fold_left (mklet, cg_expr (ctx, body), l)
+
             | _ => CE_none ()
           ]
         in {
@@ -203,7 +277,7 @@ namespace Nemerle.Compiler {
       fun decl_uniq_name (d : Decl) : string =
         d#name + "_" + string_of_int (d#id);
 
-      fun cg_fun (ctx : CTX, fn : Decl, body : Expr) : CG_member =
+      fun prepare_ctx_for_fun (ctx : CTX, fn : Decl) : CTX =
         letfun mk_clo_fld (d : Decl) : CG_member =
           let f = CM_field (cg_type (d#ty)) in {
             f#name <- decl_uniq_name (d);
@@ -217,6 +291,7 @@ namespace Nemerle.Compiler {
         in
         
         let ctx = 
+          if fn#closure_vars == null then Util.ice () else
           match fn#closure_vars with [
             | Nil => 
               let ctx = copy_ctx (ctx) in {
@@ -242,14 +317,33 @@ namespace Nemerle.Compiler {
                 ctx
               }
           ]
-        in
-
-        let _ = {
+        in {
           ctx#closure_ptrs <- Map.int_map ();
           ctx#locals <- Map.int_map ();
           ctx#current_fun <- fn;
-        } in
+          ctx
+        };
 
+      fun make_lambda_class (ctx : CTX, fn : Decl) : CM_class =
+        match fn#kind with [
+          | D_local_fun (?h, _) =>
+            let funty = CT_fun (List.length (h#parms)) in
+            let lambdaclass = CM_class ("", CK_class (), List.cons (funty), Nil ()) in {
+              lambdaclass#name <- decl_uniq_name (fn);
+              (lambdaclass :> CM_class)
+            }
+          | _ => Util.ice ()
+        ];
+
+      fun make_lambda_ctor (ctx : CTX, fn : Decl, cl : CM_class) : CG_expr =
+        match fn#kind with [
+          | D_local_fun (_, ?pars) =>
+            letfun cloref (fn : Decl) : CG_expr = closure_ref (ctx, fn) in
+            CE_call (CE_ctor_ref (cl), List.map (cloref, pars))
+          | _ => Util.ice ()
+        ];
+
+      fun fill_lambda_class (ctx : CTX, fn : Decl, body : Expr, lambdaclass : CM_class) : void =
         letfun make_ctor (mems : list (CG_member)) : CG_member =
           letfun mkparm (f : CG_member) : CG_val =
             CG_val (loc = f#loc, name = f#name, ty = (f :> CM_field)#ty, val = CE_none ())
@@ -265,45 +359,48 @@ namespace Nemerle.Compiler {
             meth
           }
         in
-
-        let (?ret, ?meth) = 
+        let (?meth, ?pars) = 
           match fn#kind with [
-            | D_local_fun (?h, ?pars) =>
-              let meth = lookup_function (h) in
-              let funty = CT_fun (List.length (h#parms)) in
-              letfun mkcloptr (fn : Decl) : CG_member =
-                let clotype = CT_ref ("_N_cl_" + decl_uniq_name (fn)) in
-                let fld = CM_field (clotype) in {
-                  fld#name <- decl_uniq_name (fn);
-                  ctx#closure_ptrs <- ctx#closure_ptrs#add (fn#id, (fld :> CM_field));
-                  fld
-                }
-              in
-              let fields = List.map (mkcloptr, pars) in
-              let members = Cons (make_ctor (fields), Cons ((meth : CG_member), fields)) in
-              let lambdaclass = CM_class ("", CK_class (), List.cons (funty), members) in {
-                lambdaclass#name <- decl_uniq_name (fn);
-                (lambdaclass, meth)
-              }
-              
-            | D_class_member (M_function ?f) =>
-              let meth = fixup_function (f) in
-              (meth, meth)
+            | D_local_fun (?h, ?pars) => (lookup_function (h), pars)
             | _ => Util.ice ()
           ]
         in
-        
-        let body = cg_expr (ctx, body) in
-        let body =
-          match ctx#current_closure with [
-            | Some (?v) => CE_let (v, body)
-            | None => body
-          ]
-        in {
-          meth#body <- body;
-          ret
+        let ctx = prepare_ctx_for_fun (ctx, fn) in
+        letfun mkcloptr (fn : Decl) : CG_member =
+          let clotype = CT_ref ("_N_cl_" + decl_uniq_name (fn)) in
+          let fld = CM_field (clotype) in {
+            fld#name <- decl_uniq_name (fn);
+            ctx#closure_ptrs <- ctx#closure_ptrs#add (fn#id, (fld :> CM_field));
+            fld
+          }
+        in
+        let fields = List.map (mkcloptr, pars) in
+        let members = Cons (make_ctor (fields), Cons ((meth : CG_member), fields)) in {
+          lambdaclass#decls <- members;
+          meth#body <- cg_fun_body (ctx, body)
         };
 
+      fun cg_fun_body (ctx : CTX, body : Expr) : CG_expr =
+        let body = cg_expr (ctx, body) in
+        match ctx#current_closure with [
+          | Some (?v) => 
+            // FIXME load parms into closure
+            CE_let (v, body)
+          | None => body
+        ];
+
+      fun cg_global_fun (ctx : CTX, fn : Decl, body : Expr) : CG_member =
+        let ctx = prepare_ctx_for_fun (ctx, fn) in
+        let meth =
+          match fn#kind with [
+            | D_class_member (M_function ?f) => fixup_function (f)
+            | _ => Util.ice ()
+          ]
+        in {
+          meth#body <- cg_fun_body (ctx, body);
+          meth
+        };
+        
       // produce cast only if needed
       fun cast_expr (ex : CG_expr, t : CG_type) : CG_expr =
         letfun cast (ex : CG_expr) : CG_expr =
@@ -369,7 +466,7 @@ namespace Nemerle.Compiler {
                 | FB_typed_expr (?body) =>
                   let decl = Env.global_by_id (f#id) in
                   let _ = CGexpr.closures <- Nil () in
-                  let mem = cg_fun (empty_ctx (), decl, body) in
+                  let mem = cg_global_fun (empty_ctx (), decl, body) in
                   Cons (mem, CGexpr.closures)
                 | FB_abstract =>
                   List.cons ((fixup_function (f) :> CG_member))
