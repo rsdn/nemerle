@@ -364,10 +364,8 @@ returns [string return_string]
     return_string = "";
 }
     :   return_string = member_access_end 
-    |   d:DEC //{ return_string = d.getText (); }
-        { return_string = " -= 1"; }
-    |   i:INC //{ return_string = i.getText (); }
-        { return_string = " += 1"; }
+    |   d:DEC { return_string = d.getText (); }
+    |   i:INC { return_string = i.getText (); }
     |   return_string = invocation_expression_end
     ;
 
@@ -1123,7 +1121,6 @@ returns [string return_string]
 {
     string lvi = "";
     return_string = "";
-    string temp = "";
 }
     : (IDENTIFIER   ASSIGN NULL)=>
         id0:IDENTIFIER   a0:ASSIGN  nu:NULL
@@ -1156,10 +1153,10 @@ local_constant_declaration
 returns [string return_string]
 {
     return_string = "";
-    string [] t = new string[]{"",""};
+//    string [] t = new string[]{"",""};
     string temp = "";
 }
-    :   c:CONST   t = type   return_string = local_constant_declarator[ExtendedToken.getWhitespaces (c),""]
+    :   c:CONST   type   return_string = local_constant_declarator[ExtendedToken.getWhitespaces (c),""]
         (cm:COMMA  
             temp = local_constant_declarator[ExtendedToken.getWhitespaces (c),ExtendedToken.getWhitespaces (cm)]
             { return_string += temp; }
@@ -1684,7 +1681,6 @@ returns [StatementTree t]
 {
     t = new StatementTree() ;    
     LinkedList a = new LinkedList ();
-    string e = "";
 }
     :   u:USING                  {a.Add (new StatementTree(u));}
         lp:LPAREN                {a.Add (new StatementTree(lp));}
@@ -1982,7 +1978,7 @@ returns [bool is_readonly]
     |   fm4:INTERNAL       {Emit.EmitToken (fm4);}
     |   fm5:PRIVATE        {Emit.EmitToken (fm5);}
     |   fm6:STATIC         {Emit.EmitToken (fm6);}
-    |   fm7:READONLY       {is_readonly = true;}
+    |   READONLY           {is_readonly = true;}
     |   fm8:VOLATILE       {Emit.EmitToken (fm8);}
     ;
 
@@ -2153,7 +2149,7 @@ formal_parameter_list
                 c1:COMMA   { Emit.EmitToken (c1); }
                 fixed_parameter            
             )*   
-            COMMA   parameter_array
+            c3: COMMA { Emit.EmitToken (c3); }  parameter_array
     |   (fixed_parameter (COMMA   fixed_parameter)*) =>       
             fixed_parameter 
             (c2:COMMA   { Emit.EmitToken (c2); }
@@ -2183,11 +2179,12 @@ returns [string return_string]
     ;
 
 parameter_array
-returns [string return_string]
 {
-    return_string = "";
+    string[] ty = null;
 }
-    :   (attributes)?   PARAMS   array_type   IDENTIFIER
+    :   (attributes)?   p : PARAMS { Emit.EmitToken (p); }  ty = array_type   
+        i : IDENTIFIER { Emit.EmitToken (i); }
+        { Emit.EmitString (" :" + ty [0] + ty [1]); }
     ;
 
 property_declaration
