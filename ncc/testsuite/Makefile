@@ -36,7 +36,7 @@ EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 COMPILE = $(CSC) /debug+ $(CSCFLAGS)
 
 all:
-	$(EXECUTE) ../ncc2.exe -reference System.dll $(lib_src) test.n
+	$(EXECUTE) ../ncc2.exe -reference $(CSCDLLS)System.dll $(lib_src) test.n
 	$(COMPILE) $(OUTFLAG)test.exe out.cs
 	$(EXECUTE) ./test.exe -c $(CSC) -n ../ncc2.exe -r $(EXECUTE)
 
