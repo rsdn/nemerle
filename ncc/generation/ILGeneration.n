@@ -84,7 +84,7 @@ namespace Nemerle.Compiler
         _debug_emit = _module_builder.GetSymWriter ();
       }
 
-      when (!Options.TargetIsLibrary) {
+      unless (Options.TargetIsLibrary) {
         _need_entry_point = true;
         _entry_point = None ();
       };
@@ -93,10 +93,30 @@ namespace Nemerle.Compiler
     }
 
 
-    add_resources_to_assembly () : void {
+    add_resources_to_assembly () : void 
+    {
+      def escape_resource (x : string) {
+        def cp = x.IndexOf (',');
+        if (cp != -1)
+          (x.Substring (0, cp), x.Substring (cp + 1))
+        else
+          // change name from /bar/bar/file to bar.bar.file namespace  
+          (x, x.Replace ('/','.').Replace ('\\', '.'));
+      }
+
+      def escape_linked_resource (x : string) {
+        def cp = x.IndexOf (',');
+        if (cp != -1)
+          // change name from /bar/bar/file to bar.bar.file namespace          
+          (x.Substring (0, cp), x.Substring (cp + 1))
+        else
+          (x, x);
+      }
+
       /* we can embed resources only on mono or .NET 2.0 */
 #if _NET_2_0
-      foreach ((file, name : string) in _embedded_resources)
+      foreach (element in Options.EmbeddedResources) {
+        def (file, name) = escape_resource (element);
         try {
           def resource_builder = _module_builder.DefineResource (file, name);        
           if (File.Exists (file)) {
@@ -113,9 +133,11 @@ namespace Nemerle.Compiler
           | e : System.Exception =>
             Message.error ("Could not embed resource: " + e.Message);
         }
+      }
 #else      
       if (SystemType.AssemblyBuilder_EmbedResourceFile != null)
-        foreach ((file, name : string) in _embedded_resources)
+        foreach (element in Options.EmbeddedResources) {
+          def (file, name) = escape_resource (element);
           try {
             def margs = array [name : object, file : object];
             if (File.Exists (file))
@@ -128,12 +150,14 @@ namespace Nemerle.Compiler
             | e : System.Exception =>
               Message.error ("Could not embed resource: " + e.Message);
           }
+        }
       else
-        when (_embedded_resources matches _ :: _)
+        when (Options.EmbeddedResources matches _ :: _)
           Message.error ("Cannot embed resource on this runtime... use mono or .NET 2.0");
 #endif
 
-      foreach ((file, name) in _linked_resources)
+      foreach (element in Options.LinkedResources) {
+        def (file, name) = escape_linked_resource (element);
         try {
           _assembly_builder.AddResourceFile (name, file);
         }
@@ -143,6 +167,7 @@ namespace Nemerle.Compiler
           | e : System.ArgumentException =>
             Message.error ("Could not link resource: " + e.Message);
         }
+      }
     }
 
     /**
@@ -163,41 +188,6 @@ namespace Nemerle.Compiler
         _assembly_builder.SetCustomAttribute (x);
 
       compile_all_tyinfos (false)
-    }
-
-    /**
-     * Adds new resource to list of resources to be embedded into output
-     * assembly
-     */
-    public static AddResource (x : string) : void
-    {
-      def cp = x.IndexOf (',');
-
-      def element =
-        if (cp != -1)
-          (x.Substring (0, cp), x.Substring (cp + 1))
-        else
-          // change name from /bar/bar/file to bar.bar.file namespace  
-          (x, x.Replace ('/','.').Replace ('\\', '.'));
-
-      _embedded_resources = element :: _embedded_resources;
-    }
-
-    /**
-     * Adds new resource to list of resources to be linked in output
-     * assembly
-     */
-    public static AddLinkedResource (x : string) : void
-    {
-      def cp = x.IndexOf (',');
-      def element =
-        if (cp != -1)
-          // change name from /bar/bar/file to bar.bar.file namespace          
-          (x.Substring (0, cp), x.Substring (cp + 1))
-        else
-          (x, x);
-
-      _linked_resources = element :: _linked_resources;
     }
 
     /**
@@ -391,8 +381,12 @@ namespace Nemerle.Compiler
 
 
     /**
-     *
-     */
+     * - create S.R.E.TypeBuilders for entire hierarchy of program 
+     * - add members to those TypeBuilders (only stubs for methods)
+     * - emit bodies of methods
+     * - finalize value types
+     * - finalize all types
+     */  
     compile_all_tyinfos (aux_phase : bool) : void
     {
       def allow_it (ti : NC.TypeBuilder) {
@@ -417,20 +411,6 @@ namespace Nemerle.Compiler
           add_declarations (ti)
         }
       };
-      def emit_impl_iface (ti : NC.TypeBuilder) {
-        when (ti.IsInterface && allow_it (ti)) {
-          //Message.debug ("generating code for interface type " + ti.FullName);
-          Passes.MarkTypeBuilderCompiled ();
-          emit_implementation (ti)
-        }
-      };
-      def emit_impl_vt (ti : NC.TypeBuilder) {
-        when (ti.IsValueType && allow_it (ti)) {
-          //Message.debug ("generating code for value type " + ti.FullName);
-          Passes.MarkTypeBuilderCompiled ();
-          emit_implementation (ti)
-        }
-      };
       def emit_impl (ti : NC.TypeBuilder) {
         when (allow_it (ti)) {
           //Message.debug ("generating code for " + ti.FullName);
@@ -447,10 +427,16 @@ namespace Nemerle.Compiler
       when (!aux_phase) _cgil_phase = 2;
       NC.TypeBuilder.Iter (emit_decls);
 
-      //FIXME: need a better ordering of emissions here (bug 158)
       when (!aux_phase) _cgil_phase = 3;
-      NC.TypeBuilder.Iter (emit_impl_iface);
-      NC.TypeBuilder.Iter (emit_impl_vt);
+
+      // we first finalize value types, because MS.NET runtime requires so
+      // FIXME: MS.NET is limiting to the unbelivible degree - it requires
+      // finalizing value type BEFORE any type in which it is used
+      // cycles are probably unresolvable, but maybe we should try to 
+      // analyze such dependencies
+      NC.TypeBuilder.IterConditionally (emit_impl, fun (x : NC.TypeBuilder) { x.IsValueType });
+
+      // now we can finalize everything else
       NC.TypeBuilder.Iter (emit_impl);
 
       Message.maybe_bailout ();
@@ -458,7 +444,6 @@ namespace Nemerle.Compiler
       when (!aux_phase) _cgil_phase = 4;
       finalize_aux_types ();
     }
-
 
     internal MemberAdded (ti : NC.TypeBuilder, mem : IMember) : void
     {
@@ -483,13 +468,13 @@ namespace Nemerle.Compiler
     /**
      * Check if declaration is auxiliary, used internally etc.
      */
-    private is_aux_decl (ti : NC.TypeBuilder) : bool
+    private static is_aux_decl (ti : NC.TypeBuilder) : bool
     {
       ti.FullName.StartsWith ("Nemerle.Internal.")
     }
 
 
-    private make_string_attribute (attr_type : System.Type, value : string) : CustomAttributeBuilder
+    private static make_string_attribute (attr_type : System.Type, value : string) : CustomAttributeBuilder
     {
       def constructor_param_types = array [SystemType.String];
       def constructor_info = attr_type.GetConstructor (constructor_param_types);
@@ -499,7 +484,7 @@ namespace Nemerle.Compiler
     }
 
 
-    private make_void_attribute (attr_type : System.Type) : CustomAttributeBuilder
+    private static make_void_attribute (attr_type : System.Type) : CustomAttributeBuilder
     {
       def constructor_info = attr_type.GetConstructor (System.Type.EmptyTypes);
       CustomAttributeBuilder (constructor_info, array [])
@@ -509,7 +494,7 @@ namespace Nemerle.Compiler
     /**
      * Builds a Nemerle type attribute
      */
-    private make_nemerle_type_attr (encoded_type : string) : CustomAttributeBuilder
+    private static make_nemerle_type_attr (encoded_type : string) : CustomAttributeBuilder
     {
       make_string_attribute (SystemType.TypeAttribute, encoded_type)
     }
@@ -518,7 +503,7 @@ namespace Nemerle.Compiler
     /**
      * Builds a Nemerle variant attribute
      */
-    private make_nemerle_variant_attribute (decls : list [TypeInfo]) : CustomAttributeBuilder
+    private static make_nemerle_variant_attribute (decls : list [TypeInfo]) : CustomAttributeBuilder
     {
       def names = List.Map (decls, Tyutil.FrameworkTypeName);
       make_string_attribute (SystemType.VariantAttribute,
@@ -529,7 +514,7 @@ namespace Nemerle.Compiler
     /**
      * Builds a Nemerle type alias
      */
-    private make_nemerle_type_alias_attribute (t : TType) : CustomAttributeBuilder
+    private static make_nemerle_type_alias_attribute (t : TType) : CustomAttributeBuilder
     {
       make_string_attribute (SystemType.TypeAliasAttribute, TyCodec.EncodeType (t))
     }
@@ -538,7 +523,7 @@ namespace Nemerle.Compiler
     /**
      * Builds a Nemerle variant option attribute
      */
-    private make_nemerle_variant_option_attribute (is_const : bool) : CustomAttributeBuilder
+    private static make_nemerle_variant_option_attribute (is_const : bool) : CustomAttributeBuilder
     {
       make_void_attribute (if (is_const)
                              SystemType.ConstantVariantOptionAttribute
@@ -550,7 +535,7 @@ namespace Nemerle.Compiler
     /**
      * Converts Nemerle property modifiers to the CLI property attributes.
      */
-    private make_property_attributes (attrs : NemerleAttributes) : PropertyAttributes
+    private static make_property_attributes (attrs : NemerleAttributes) : PropertyAttributes
     {
       mutable result = PropertyAttributes.None;
 
@@ -564,7 +549,7 @@ namespace Nemerle.Compiler
     /**
      * Converts Nemerle field modifiers to the CLI field attributes.
      */
-    private make_field_attributes (attrs : NemerleAttributes) : FieldAttributes
+    private static make_field_attributes (attrs : NemerleAttributes) : FieldAttributes
     {
       mutable result = FieldAttributes.PrivateScope;
 
@@ -582,7 +567,7 @@ namespace Nemerle.Compiler
     /**
      * Converts Nemerle method modifiers to the CLI method attributes.
      */
-    private make_method_attributes (attrs : NemerleAttributes) : MethodAttributes
+    private static make_method_attributes (attrs : NemerleAttributes) : MethodAttributes
     {
       mutable result = MethodAttributes.HideBySig;
 
@@ -609,7 +594,7 @@ namespace Nemerle.Compiler
     /**
      * Converts Nemerle method modifiers to the Framework type attributes.
      */
-    private make_type_attributes (attrs : NemerleAttributes, is_nested : bool) : TypeAttributes
+    private static make_type_attributes (attrs : NemerleAttributes, is_nested : bool) : TypeAttributes
     {
       mutable result = TypeAttributes.AutoLayout;
       when (attrs %&& NemerleAttributes.Public)
@@ -635,7 +620,7 @@ namespace Nemerle.Compiler
      * Converts a System.Type list to a System.Type array.
      * FIXME: array [x] won't work here as the list's length is not know.
      */
-    internal type_list_to_type_array (x : list [System.Type]) : array [System.Type]
+    internal static type_list_to_type_array (x : list [System.Type]) : array [System.Type]
     {
       Nemerle.Utility.NArray.FromList (typeof (System.Type), x)
     }
@@ -645,7 +630,7 @@ namespace Nemerle.Compiler
      * Reads the inheritance list of a class and retrieves the base
      * type and builds the array of interfaces implemented by the class.
      */
-    private determine_inheritance (ti : NC.TypeBuilder) : (System.Type * array [System.Type])
+    private static determine_inheritance (ti : NC.TypeBuilder) : (System.Type * array [System.Type])
     {
       match (ti.GetTydecl ()) {
         | TypeDeclaration.Enum => (SystemType.Enum, array [])
@@ -1112,7 +1097,7 @@ namespace Nemerle.Compiler
     /**
      * Assigns an ordinal index to each of a method's parameter
      */
-    private assign_parameter_indexes (is_static : bool, cgm : CG_method) : void
+    private static assign_parameter_indexes (is_static : bool, cgm : CG_method) : void
     {
       def walk_parms (index : int, parms : list [CG_val]) : void {
         match (parms) {
@@ -1141,8 +1126,6 @@ namespace Nemerle.Compiler
     private _OutputFileName : string;
     private mutable _aux_types : list [Emit.TypeBuilder];
     private mutable _cgil_phase : int;
-    private static mutable _embedded_resources : list [string * string] = [];
-    private static mutable _linked_resources : list [string * string] = [];
   }
 
 
