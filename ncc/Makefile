@@ -110,4 +110,4 @@ install: ncc.exe
 
 clean:
 	$(MAKE) -C testsuite clean
-	rm -f *.exe *.exe.so *.dll.so ncc*.il cgil-test.dll
+	rm -f *.exe *.exe.so *.dll.so ncc*.il cgil-test.dll *.pdb core.[0-9]* core
