@@ -106,6 +106,8 @@ tests:
 
 install: ncc.exe
 	if test ! -d $(BINDIR) ; then mkdir -p $(BINDIR) ; fi
+	$(NGEN) ncc.exe
+	$(INSTALL) -m 644 ncc.exe.so $(BINDIR)/ncc.so
 	$(INSTALL) -m 755 ncc.exe $(BINDIR)/ncc
 
 clean:
