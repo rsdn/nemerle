@@ -53,6 +53,7 @@ namespace Nemerle.Compiler
       m_effect = effect;
     }
     
+    [Nemerle.Assertions.Ensures (value >= 0)]
     public GetIndex () : int
     {
       m_index
@@ -1252,14 +1253,18 @@ namespace Nemerle.Compiler
      */
     public static IsOrdinalLiteral (pattern : MatchPattern) : bool
     {
+      def is_good_literal (lit) {
+        | Literal.Int | Literal.Char => true
+        | Literal.Enum (l, _) => is_good_literal (l)
+        | _ => false
+      }
+
       match (pattern.GetPattern ()) {
         | Pattern.Wildcard => false
         | Pattern.As (Pattern.Wildcard, _) => false
-        | Pattern.As (Pattern.Literal (Literal.Int), _) => true
-        | Pattern.As (Pattern.Literal (Literal.Char), _) => true
-        | Pattern.Literal (Literal.Int) => true
-        | Pattern.Literal (Literal.Char) => true
-        | _ => Util.ice ("invalid pattern type")
+        | Pattern.As (Pattern.Literal (lit), _) => is_good_literal (lit)
+        | Pattern.Literal (lit) => is_good_literal (lit)
+        | z => Util.ice ("invalid pattern type: " + z.ToString ())
       }    
     }
 
@@ -1324,17 +1329,9 @@ namespace Nemerle.Compiler
         System.String.CompareOrdinal (get_literal (r), get_literal (l))
       }
       else {
-        def get_literal (pattern : MatchPattern) : int {        
-          match (pattern.GetPattern ()) {
-            | Pattern.Literal (Literal.Int (literal)) => literal
-            | Pattern.Literal (Literal.Char (literal)) => (literal :> int)
-            | Pattern.As (Pattern.Literal (Literal.Int (literal)), _) => literal
-            | Pattern.As (Pattern.Literal (Literal.Char (literal)), _) => (literal :> int)
-            | _ => Util.ice ("invalid pattern type")
-          }
-        };
-        
-        get_literal (l) - get_literal (r)
+        // compare instead of subtract, because of overflow possibility
+        MatchBinarySearch.get_int_from_pattern (l).CompareTo 
+          (MatchBinarySearch.get_int_from_pattern (r))
       }
     }
 
@@ -1823,6 +1820,22 @@ namespace Nemerle.Compiler
     }
 #endif
 
+    internal static get_int_from_pattern (pattern : MatchPattern) : int {        
+      def get_int_from_literal (_) {
+        | Literal.Int (literal) => literal
+        | Literal.Char (literal) => literal :> int
+        | Literal.Enum (l, _) => get_int_from_literal (l)
+        | z => Util.ice ("invalid literal: " + z.ToString ())
+      }
+
+      match (pattern.GetPattern ()) {
+        | Pattern.Literal (literal) 
+        | Pattern.As (Pattern.Literal (literal), _) => get_int_from_literal (literal)
+        | _ => Util.ice ("invalid pattern type")
+      }
+    }
+
+
     /* -- PRIVATE METHODS -------------------------------------------------- */
 
     private split_patterns (patterns : list [MatchPattern]) 
@@ -1876,29 +1889,33 @@ namespace Nemerle.Compiler
       }
     }
 
-
+    /** Create switch for given integer patterns.
+     *  Makes normalization of range in which patterns are contained.
+     *
+     * It is assumed, that this function will be called for small ranges
+     * (smallest and largest value are quite near)
+     */
     private make_switched_block (patterns : list [MatchPattern]) : CExpr 
     {
-      def get_literal (pattern : MatchPattern) : int {        
-        match (pattern.GetPattern ()) {
-          | Pattern.Literal (Literal.Int (literal)) => literal
-          | Pattern.Literal (Literal.Char (literal)) => (literal :> int)
-          | Pattern.As (Pattern.Literal (Literal.Int (literal)), _) => literal
-          | Pattern.As (Pattern.Literal (Literal.Char (literal)), _) => (literal :> int)
-          | _ => Util.ice ("invalid pattern type")
-        }
-      };
+      def head = get_int_from_pattern (List.Head (patterns));
+      def expr = 
+        if (head != 0) 
+          // unchecked subtraction of minimal possible value in the range
+          // results in all possible value mapped to [0..range_span] range
+          CExpr.Call (CExpr.Opcode ("-.f"), [matched_expr, CExpr.Literal (Literal.Int (head))])
+        else
+          matched_expr;
 
       def walk_patterns (patterns : list [MatchPattern]) : list [int * CExpr] {
         match (patterns) {
           | pattern :: rest =>
-            (get_literal (pattern), pattern.MakeGuardExpr (continuation))
-            :: walk_patterns (rest)
+            def idx = unchecked (get_int_from_pattern (pattern) - head);
+            (idx, pattern.MakeGuardExpr (continuation)) :: walk_patterns (rest)
+
           | [] => []
         }            
       };
-
-      CExpr.Switch (matched_expr, continuation, walk_patterns (patterns))
+      CExpr.Switch (expr, continuation, walk_patterns (patterns))
     }
 
     
@@ -1911,15 +1928,16 @@ namespace Nemerle.Compiler
           l.MakeMatchExpr (matched_expr, make_last_match (r))
                                    
         | patterns =>
-          def literal_span = 
-            - MatchPattern.Compare (List.Head (patterns), List.Last (patterns));
-
+          def literal_span = System.Math.Abs (unchecked {
+            MatchBinarySearch.get_int_from_pattern (List.Head (patterns)) -
+            MatchBinarySearch.get_int_from_pattern (List.Last (patterns))
+          });
           if (literal_span > 8 && literal_span / List.Length (patterns) > 3) {
             def (l, m, r) = split_patterns (patterns);
 
             CExpr.If (match_descriptor.GetResultType (),
-                   m.MakeLessThanCondition (matched_expr),
-                   make_binary_search (l), make_binary_search (m :: r))
+                      m.MakeLessThanCondition (matched_expr),
+                      make_binary_search (l), make_binary_search (m :: r))
           }
           else
             make_switched_block (patterns)
@@ -2053,8 +2071,7 @@ namespace Nemerle.Compiler
           : CExpr
       {
         def (literal_patterns, non_literal_patterns) = 
-          List.Partition (block.GetMatchPatterns (), 
-                          MatchPattern.IsOrdinalLiteral);
+          List.Partition (block.GetMatchPatterns (), MatchPattern.IsOrdinalLiteral);
 
         def continuation = combine_patterns (match_descriptor, continuation, 
                                              non_literal_patterns);
@@ -2470,6 +2487,8 @@ namespace Nemerle.Compiler
                 mcs : list [Match_case]) : CExpr
     {
       def valt = val.SystemType;
+      // here we choose whether to use some optimized matching algorithm or
+      // just most general one
       if (Options.ConstantBooleanMatchingOpt && valt.Equals (SystemType.Boolean))
         cg_match_over_booleans (t, ctx, val, mcs)
       else if (Options.ConstantOrdinalMatchingOpt && 
