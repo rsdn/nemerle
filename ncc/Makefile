@@ -34,10 +34,11 @@ include ../config.mak
 ############################################################
 
 COMPILER_PATH = ../boot/
+NCC_FLAGS     = -pedantic-lexer
 COMPILER      = $(COMPILER_PATH)ncc.exe
 COMPILER_DEP  = $(COMPILER_PATH)ncc.exe $(COMPILER_PATH)stdmacros.dll
 EXECUTE       = $(NET_ENGINE) $(NET_FLAGS)
-RUN_COMPILER  = $(Q)$(TIME) $(EXECUTE) $(COMPILER) -no-stdlib $(COMP_FLAGS)
+RUN_COMPILER  = $(Q)$(TIME) $(EXECUTE) $(COMPILER) -no-stdlib $(NCC_FLAGS)
 
 GENERIC_SRC =
 
