@@ -338,9 +338,9 @@ install:
 	$(Q)$(INSTALL) -m 644 out.stage3/Nemerle.Macros.dll $(DESTDIR)$(LIBDIR)/Nemerle.Macros.dll
 	$(INST) [$(BINDIR)] ncc
 	$(Q)if [ "$(NET_ENGINE)" = "" ] ; then \
-		$(INSTALL) -m 755 ncc.exe $(DESTDIR)$(BINDIR)/ncc ; \
+		$(INSTALL) -m 755 out.stage3/ncc.exe $(DESTDIR)$(BINDIR)/ncc ; \
 	else \
-		$(INSTALL) -m 755 ncc.exe $(DESTDIR)$(BINDIR)/ncc.exe && \
+		$(INSTALL) -m 755 out.stage3/ncc.exe $(DESTDIR)$(BINDIR)/ncc.exe && \
 		echo "#!/bin/sh" > $(DESTDIR)$(BINDIR)/ncc && \
 		echo '$(NET_ENGINE) $(BINDIR)/ncc.exe "$$@"' >> $(DESTDIR)$(BINDIR)/ncc ; \
 		chmod 755 $(DESTDIR)$(BINDIR)/ncc ; \
