@@ -52,6 +52,12 @@ class CS_glue {
 	
 	static public System.IO.StreamWriter output_file;
 
+	public static void close_file ()
+	{
+		if (output_file != null)
+		        output_file.Close ();
+	}
+	
 	public static void write_string(string s)
 	{
 		if (output_file == null)
@@ -152,7 +158,7 @@ class MainClass {
 				ret = new list.Cons(p.parse(new Lexer(argv[i])), ret);
 			}
 			Passes.run(ret);
-			CS_glue.output_file.Close();
+			CS_glue.close_file ();
 		} catch (yyParser.yyException e) {
 		    Message.maybe_bailout();
 			bomb(e, "got parsing exception, but no error seen");
