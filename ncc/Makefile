@@ -38,7 +38,7 @@ NCC_FLAGS     = -pedantic-lexer
 COMPILER      = $(COMPILER_PATH)ncc.exe
 COMPILER_DEP  = $(COMPILER_PATH)ncc.exe $(COMPILER_PATH)Nemerle.Macros.dll
 EXECUTE       = $(NET_ENGINE) $(NET_FLAGS)
-RUN_COMPILER  = $(Q)$(TIME) $(EXECUTE) $(COMPILER) -no-stdlib $(NCC_FLAGS)
+RUN_COMPILER  = $(Q)$(TIME) $(EXECUTE) $(COMPILER) -no-stdlib -r:mscorlib -r:System $(NCC_FLAGS)
 
 GENERIC_SRC =
 
