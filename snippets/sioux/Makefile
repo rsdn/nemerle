@@ -7,7 +7,7 @@ include ../../config.mak
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 NCC_DIR = ../../boot
 NCC = $(NCC_DIR)/ncc.exe
-DISTFILES = Makefile *.n *.xml httpd.conf
+DISTFILES = Makefile *.n *.xml httpd.conf compile.bat
 
 SIOUX_DLL_SOURCES = config.n logger.n httpd.n request.n response.n application.n
 SIOUX_EXE_SOURCES = sioux.n
