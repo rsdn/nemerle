@@ -62,7 +62,7 @@ let lookup e s =
     | r -> r
   else
     try
-      Smap.find s e.e_decls
+      Smap.find s' e.e_decls
     with Not_found ->
       error (xf "unbound symbol `%s' (expanded to `%s')" s s');
       raise Recovery
