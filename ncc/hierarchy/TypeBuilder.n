@@ -55,8 +55,8 @@ public class TypeBuilder : TypeInfo
   enclosing_type : TypeBuilder;  
   mutable parent_type : option [TType.Class];
   mutable t_implements : list [TType.Class];
-  mutable contained_types : list [TypeBuilder];
-  mutable variant_options : list [TypeBuilder];
+  mutable contained_types : list [TypeBuilder] = [];
+  mutable variant_options : list [TypeBuilder] = [];
   mutable supertypes : SystemMap [int, TypeInfo * list [TType]];
   mutable member_map : SystemMap [string, list [IMember]];
   mutable member_list : list [NemerleMember];
@@ -78,7 +78,8 @@ public class TypeBuilder : TypeInfo
   accessibility : Accessibility;
   
   mutable pt_tydecl : PT.TopDeclaration;
-  mutable additional_decls : list [PT.ClassMember];
+  mutable additional_decls : list [PT.ClassMember] = [];
+  mutable partial_parts : list [PT.TopDeclaration.Class] = [];
   
   is_enum : bool;
   mutable is_finalized : bool;
@@ -102,9 +103,6 @@ public class TypeBuilder : TypeInfo
 
   internal this (par : TypeBuilder, td : PT.TopDeclaration, ns_node : GlobalEnv.NamespaceND)
   {
-    variant_options = [];
-    contained_types = [];
-    
     this.pt_tydecl = td;
     this.pt_name = td.ParsedName;
     this.namespace_nd = ns_node;
@@ -164,8 +162,6 @@ public class TypeBuilder : TypeInfo
 
     when (enclosing_type != null)
       accessibility = Tyutil.AccessibilityIntersect (accessibility, enclosing_type.Accessibility);
-
-    additional_decls = [];
 
     CheckTypeAttributes ();
 
@@ -901,6 +897,25 @@ public class TypeBuilder : TypeInfo
       | PT.TopDeclaration.Alias (typarms = ps)
       | PT.TopDeclaration.Interface (typarms = ps)
       | PT.TopDeclaration.Variant (typarms = ps) =>
+        // we must merge type parameter constrains from partial parts of this class
+        def ps = 
+          List.FoldLeft (partial_parts, ps, fun (part : PT.TopDeclaration.Class, acc : PT.Typarms) {
+            mutable new_constr = acc.constraints;
+
+            foreach (constr in part.typarms.constraints) {
+              mutable should_add = true;
+              foreach (con in ps.constraints)
+                when (Pair.First (con.tyvar) == Pair.First (constr.tyvar))
+                  should_add = false;
+              when (should_add)
+                new_constr = constr :: new_constr; 
+            }
+            if (new_constr : object != acc.constraints)
+              PT.Typarms (acc.tyvars, new_constr)
+            else
+              acc
+          });
+        
         def (tenv, tyvars) = tenv.add_typarms (ps, this, check_parms = false);
         this.tenv = tenv;
         this.typarms = tyvars;
@@ -918,15 +933,15 @@ public class TypeBuilder : TypeInfo
         this.tenv = enclosing_type.tenv;
         this.typarms = enclosing_type.typarms;
        
-        foreach (d : PT.ClassMember in members)
-          d.Attributes |= NemerleAttributes.Public;
+        foreach (mem in members)
+          mem.Attributes |= NemerleAttributes.Public;
         
       | PT.TopDeclaration.Variant =>  attributes |= NemerleAttributes.Abstract
       | _ => ()
     };
 
-    foreach (x : TypeBuilder in this.contained_types)
-      Util.locate (x.loc, x.make_tyenvs ());
+    foreach (tb in this.contained_types)
+      Util.locate (tb.loc, tb.make_tyenvs ());
   }
 
 
@@ -958,37 +973,67 @@ public class TypeBuilder : TypeInfo
         | PT.TopDeclaration.Variant =>
           TypeDeclaration.Variant (List.Map (variant_options, fun (x : TypeBuilder) : TypeInfo { x }))
         | PT.TopDeclaration.VariantOption => TypeDeclaration.VariantOption ()
-
         | PT.TopDeclaration.Delegate | PT.TopDeclaration.Macro =>
           Util.ice ("this top declaration shouldn't survive to typing")        
       };
-      
+
+    def bind_to_class (t : PT.PExpr) {
+      this.tenv.bind (this, t, check_parms = false) :> TType.Class;
+    };
+
+    this.t_implements = [];    
     match (td) {
       | PT.TopDeclaration.VariantOption =>
         this.parent_type = Some (enclosing_type.GetMemType () :> TType.Class);
-        this.t_implements = [];
       | PT.TopDeclaration.Class (t_extends = hd :: tl)
       | PT.TopDeclaration.Interface (t_extends = hd :: tl)
       | PT.TopDeclaration.Variant (t_extends = hd :: tl)
-      | PT.TopDeclaration.Enum (t_extends = hd :: tl) =>        
-        def bind_to_class (t : PT.PExpr) {
-          this.tenv.bind (this, t, check_parms = false) :> TType.Class;
-        };
+      | PT.TopDeclaration.Enum (t_extends = hd :: tl) =>
         def hd' = bind_to_class (hd);
         if (Tyutil.unalias (hd'.tycon).IsInterface) {
-          this.t_implements = hd' :: List.RevMap (tl, bind_to_class);
+          this.t_implements = [hd'];
           this.parent_type = None ()
         }
-        else {
+        else
           this.parent_type = Some (hd'); 
-          this.t_implements = List.RevMap (tl, bind_to_class);
-        }  
-
-      | _ =>
-        this.t_implements = [];
-        this.parent_type = None ()
+        this.t_implements = this.t_implements + List.RevMap (tl, bind_to_class)
+        
+      | _ => this.parent_type = None ()
     };
 
+    // merge types implemented by partial parts of this class into this TypeBuilder
+    foreach (part in partial_parts) {
+      match (part.t_extends) {
+        | hd :: tail =>
+          def hd' = bind_to_class (hd);
+          def added_ifaces = 
+            if (Tyutil.unalias (hd'.tycon).IsInterface)
+              [hd']
+            else {
+              // if base class exists in both parts, it must be the same
+              match (parent_type) {
+                | Some (t) =>
+                  unless (t.tycon.Equals (hd'.tycon))
+                    Message.error (part.Location, $"Partial declarations of"
+                                   " `$(FullName)' must not specify different base classes")
+
+                | None => parent_type = Some (hd')
+              }
+              [];
+            }
+          // here we merge new interface, removing already declared ones (no errors here)
+          foreach (iface in added_ifaces + List.RevMap (tail, bind_to_class)) {
+            mutable should_add = true;
+            foreach (existing in t_implements)
+              when (existing.tycon.Equals (iface.tycon)) should_add = false;
+
+            when (should_add) t_implements = iface :: t_implements;
+          }
+
+        | [] => ()
+      }
+    }
+    
     when (is_enum)  handle_underlying_enum_type ();
     
     when (IsStruct)
@@ -1155,7 +1200,6 @@ public class TypeBuilder : TypeInfo
       when (additional.Attributes != attributes)
         Message.error (additional.loc, $"joined partial classes `$(FullName)' "
                        "must have compatible modifiers");
-      
     }
     else {
       Message.error (additional.loc, "you must specify `partial' modifier on all"
@@ -1164,7 +1208,9 @@ public class TypeBuilder : TypeInfo
     }
 
     match (additional) {
-      | PT.TopDeclaration.Class (decls = ds) =>
+      | PT.TopDeclaration.Class (decls = ds) as add =>
+        partial_parts = add :: partial_parts;
+        
         foreach (x : PT.ClassMember in ds)
           match (x) {
             | PT.ClassMember.TypeDeclaration =>
@@ -1475,7 +1521,7 @@ public class TypeBuilder : TypeInfo
       null
     };
    
-    match (Tyutil.top_expand (underlying_enum_type)) {
+    match (underlying_enum_type) {
       | TType.Class (tc, []) =>
         match (NumericType.ByName (tc.FullName)) {
           | Some (t) when t.IsInteger => t
@@ -1659,6 +1705,7 @@ public class TypeBuilder : TypeInfo
 
     // we no longer need it, let GC kill it
     pt_tydecl = null;
+    partial_parts = null;
     additional_decls = null;
   }
 
@@ -2276,9 +2323,7 @@ public class TypeBuilder : TypeInfo
       Util.locate (x.loc, x.process_macro_attributes (MacroPhase.BeforeInheritance));
 
     run_phase = 1;
-    SourceTopIter (fun (x : TypeBuilder) { 
-                      x.make_tyenvs () 
-                    });
+    SourceTopIter (fun (x : TypeBuilder) { x.make_tyenvs () });
     
     run_phase = 2;
 
