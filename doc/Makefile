@@ -159,9 +159,10 @@ www: nemerle-web.tar.gz
 nemerle-web.tar.gz: $(normal_docs) $(wildcard styles/*.css styles/*.png styles/*.jpg) poll1.html
 	$(MAKE) verify-html
 	rm -rf www
-	mkdir -p www/{styles,course/styles}
-	cp styles/*.{css,png,jpg} www/styles/
-	cp styles/*.{css,png,jpg} www/course/styles/
+	mkdir -p www/{styles,course/styles,images}
+	cp styles/*.{css,png} www/styles/
+	cp styles/*.{css,png} www/course/styles/
+	cp images/*.* images/
 	cp *.{html,ps,pdf} www/
 	cp course/*.html www/course/
 	for f in www/*.pdf www/*.ps ; do gzip <$$f > $$f.gz ; done
