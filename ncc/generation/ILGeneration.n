@@ -1260,8 +1260,8 @@ namespace Nemerle.Compiler
     /** Marks the point in source file for currently emmited opcode */
     Mark (loc : Location) : void
     {
-      //Message.debug (loc, $"loc: $(loc.Line):$(loc.Column) $(loc.EndLine):$(loc.EndColumn)");  
-      when (_debug_doc != null && loc != Location.Default) 
+      // Message.debug (loc, $"loc: $(loc.Line):$(loc.Column) $(loc.EndLine):$(loc.EndColumn)");  
+      when (Options.EmitDebug != null && loc.Line != 0) 
         _ilg.MarkSequencePoint (_debug_doc, loc.Line, loc.Column, loc.EndLine, loc.EndColumn);
     } 
 
@@ -1271,50 +1271,56 @@ namespace Nemerle.Compiler
     private emit (expr : CExpr) : void
     {
       // Message.debug (expr.loc, "emit: " + pretty_print (expr));
-      Mark (expr.loc);
       match (expr) {
 
         /* -- SEQUENCING --------------------------------------------------- */
 
         /* emits a sequence of expressions */
         | CExpr.Sequence (expr_seq) => 
-          //_ = CGIL._debug_emit.OpenScope (0);
           foreach (e in expr_seq) emit (e);
-          //_ = CGIL._debug_emit.CloseScope (0);
 
         /* emits a local value definition */
         | CExpr.Define (let_val, let_in) =>
+          def newscope = 
           match (let_val.val) {
-            | CExpr.Nop =>
-              unless (SystemType.Void.Equals (let_val.ty))
+            | CExpr.Nop => 
+              if (SystemType.Void.Equals (let_val.ty))
+                false
+              else {
                 _ = declare_val_local_slot (let_val);
-              emit (let_in)
+                true
+              }
 
             | CExpr.InitValueType (t) =>
               def slot = declare_val_local_slot (let_val);
+              Mark (let_val.loc);
               _ilg.Emit (OpCodes.Ldloca, slot);
               _ilg.Emit (OpCodes.Initobj, t);
-
-              emit (let_in)
-
+              true
+                            
             | _ =>
               emit (let_val.val);
-              unless (SystemType.Void.Equals (let_val.ty)) {
+              if (SystemType.Void.Equals (let_val.ty)) 
+                false
+              else {
                 def local_slot = declare_val_local_slot (let_val);
-                _ilg.Emit (OpCodes.Stloc, local_slot)
+                Mark (let_val.loc);
+                _ilg.Emit (OpCodes.Stloc, local_slot);
+                true
               };
-
-              emit (let_in)
           };
+          emit (let_in);
+          when (Options.EmitDebug && newscope) _ilg.EndScope ();
 
 
         /* ignores the results of a computation */
-        | CExpr.Ignore (expr) =>
+        | CExpr.Ignore (ignored) =>
           // a little trickery, so emit can be tail called sometimes
-          if (SystemType.Void.Equals (type_of (expr)))
-            emit (expr)
+          if (SystemType.Void.Equals (type_of (ignored)))
+            emit (ignored)
           else {
-            emit (expr);
+            emit (ignored);
+            Mark (expr.loc);
             _ilg.Emit (OpCodes.Pop);
           }
 
@@ -1353,10 +1359,12 @@ namespace Nemerle.Compiler
                     | _ => Util.ice ("invalid opcode '" + opcode +
                                      "' in optimized CExpr.If pattern")
                   };
+                Mark (expr.loc);
                 _ilg.Emit (opcode, else_label);
 
-              | CExpr.HasType (expr, ty) =>
-                emit (expr);
+              | CExpr.HasType (val, ty) =>
+                emit (val);
+                Mark (expr.loc);
                 _ilg.Emit (OpCodes.Isinst, ty);
                 _ilg.Emit (OpCodes.Brfalse, else_label);
 
@@ -1373,12 +1381,14 @@ namespace Nemerle.Compiler
 
               | e when is_always_true (e) => ()
               | e when is_always_false (e) =>
+                Mark (e.loc);
                 _ilg.Emit (OpCodes.Br, else_label);                
 
-              | e =>
+              | _ =>
                 //Message.debug (e.loc, pretty_print (e));
                 // most of other expressions here are CExpr.Ref
-                emit (e);
+                emit (expr);
+                Mark (cond_expr.loc);
                 _ilg.Emit (OpCodes.Brfalse, else_label);                
             }
           }
@@ -1420,10 +1430,11 @@ namespace Nemerle.Compiler
 
 
         /* emit a nullness check construction */
-        | CExpr.NotNull (expr) =>
-          emit (expr);
+        | CExpr.NotNull (val) =>
+          emit (val);
           def label_condition_not_null = _ilg.DefineLabel ();
 
+          Mark (expr.loc);
           _ilg.Emit (OpCodes.Brtrue_S, label_condition_not_null);
 
           _ilg.ThrowException (SystemType.NullMatchException);
@@ -1433,6 +1444,7 @@ namespace Nemerle.Compiler
 
         /* load runtime representation of given type */
         | CExpr.TypeOf (t) =>
+          Mark (expr.loc);
           _ilg.Emit (OpCodes.Ldtoken, t);
           _ilg.Emit (OpCodes.Call, SystemType.Type_GetTypeFromHandle);
 
@@ -1458,6 +1470,7 @@ namespace Nemerle.Compiler
 
         /* branch to loop beginning. */
         | CExpr.ContinueLoop (which) =>
+          Mark (expr.loc);
           _ilg.Emit (OpCodes.Br, Option.UnSome (which.label));
 
 
@@ -1483,9 +1496,10 @@ namespace Nemerle.Compiler
 
 
         /* unbox value types or perform value type conversion */
-        | CExpr.Cast (expr, cast_to_type, is_checked) when cast_to_type.IsValueType =>
-          emit (expr);
-          def type_of_expr = type_of (expr);
+        | CExpr.Cast (val, cast_to_type, is_checked) when cast_to_type.IsValueType =>
+          emit (val);
+          Mark (expr.loc);
+          def type_of_expr = type_of (val);
 
           if (type_of_expr.IsValueType) {
             /* perform conversion of value types */
@@ -1495,7 +1509,7 @@ namespace Nemerle.Compiler
             /* unboxing returns a pointer to a value */
             _ilg.Emit (OpCodes.Unbox, cast_to_type);
 
-            maybe_volatile (expr);
+            maybe_volatile (val);
 
             emit_ldind_for_value_type (cast_to_type)
           }
@@ -1507,9 +1521,10 @@ namespace Nemerle.Compiler
 
 
         /* upcast / downcast non-value types */
-        | CExpr.Cast (expr, cast_to_type, _) =>
-          emit (expr);
+        | CExpr.Cast (val, cast_to_type, _) =>
+          emit (val);
           /* upcasting / downcasting */
+          Mark (expr.loc);
           _ilg.Emit (OpCodes.Castclass, cast_to_type);
 
 
@@ -1555,6 +1570,7 @@ namespace Nemerle.Compiler
           def element_type = type_of (array_obj).GetElementType ();
           assert (element_type != null, "non-array in CExpr.ArrayAccess");
 
+          Mark (expr.loc);
           if (wish_address (expr))
             _ilg.Emit (OpCodes.Ldelema, element_type)
           else
@@ -1564,6 +1580,7 @@ namespace Nemerle.Compiler
         | CExpr.ArrayAccess (array_obj, indexes) =>
           emit (array_obj);
           List.Iter (indexes, emit);
+          Mark (expr.loc);
           def method =
             if (wish_address (expr)) array_addr_method (array_obj)
             else array_get_method (array_obj);
@@ -1575,13 +1592,15 @@ namespace Nemerle.Compiler
         // FIXME? move it a bit down and see no redundant warning?
         /* special case these assignments for performance */
         | CExpr.Assign (CExpr.Ref (decl), CExpr.InitValueType (t)) =>
+          Mark (expr.loc);
           emit_ce_ref (decl, get_address_for_value_types = true);
           _ilg.Emit (OpCodes.Initobj, t);
 
      
         /* assignment to a local variable */
         | CExpr.Assign (CExpr.Ref (local_var), val) =>
-          emit (val);          
+          emit (val);
+          Mark (expr.loc);          
           match (local_var.local_slot) {
             | Some (local_slot) =>
               _ilg.Emit (OpCodes.Stloc, local_slot);
@@ -1596,6 +1615,7 @@ namespace Nemerle.Compiler
         | CExpr.Assign (CExpr.Indirect (CExpr.Ref ({ parm_index = Some (parm_index) })), val) =>
           emit_ldarg (parm_index);
           emit (val);
+          Mark (expr.loc);
           def ty = type_of (val);
           if (ty.IsValueType)
             _ilg.Emit (OpCodes.Stobj, ty)
@@ -1608,6 +1628,7 @@ namespace Nemerle.Compiler
         | CExpr.Assign (CExpr.FieldRef (base_object, field), val) =>
           emit (base_object);
           emit (val);
+          Mark (expr.loc);
           maybe_volatile ((expr :> CExpr.Assign).target);
           _ilg.Emit (OpCodes.Stfld, field);
 
@@ -1616,6 +1637,7 @@ namespace Nemerle.Compiler
         | CExpr.Assign (CExpr.VolatileGlobalRef (mi), val) when member_is_field (mi)
         | CExpr.Assign (CExpr.GlobalRef (mi), val) when member_is_field (mi) =>
           emit (val);
+          Mark (expr.loc);
           maybe_volatile ((expr :> CExpr.Assign).target);
           _ilg.Emit (OpCodes.Stsfld, (mi :> FieldInfo));
 
@@ -1626,6 +1648,7 @@ namespace Nemerle.Compiler
 
           emit (array_obj);
           emit (index);
+          Mark (expr.loc);
           when (type_of_val.IsValueType && !type_of_val.IsPrimitive)
             _ilg.Emit (OpCodes.Ldelema, type_of_val);
 
@@ -1636,11 +1659,13 @@ namespace Nemerle.Compiler
           emit (array_obj);
           List.Iter (indexes, emit);
           emit (val);
+          Mark (expr.loc);
           def method = array_set_method (array_obj);
           emit_method_call (expr, true, method);
 
         | CExpr.MultipleAssign (assigns) =>
           def emit_store (local_var : CG_val, _) {
+            Mark (local_var.loc);
             match (local_var.local_slot) {
               | Some (local_slot) =>
                 _ilg.Emit (OpCodes.Stloc, local_slot);
@@ -1658,13 +1683,15 @@ namespace Nemerle.Compiler
         | CExpr.TailCall (CExpr.BaseCtorRef (base_ctor), ctor_params)
         | CExpr.Call (CExpr.BaseCtorRef (base_ctor), ctor_params) =>
           _ilg.Emit (OpCodes.Ldarg_0);
-          foreach (parm in ctor_params) emit (parm);          
+          foreach (parm in ctor_params) emit (parm);
+          Mark (expr.loc);          
           _ilg.Emit (OpCodes.Call, base_ctor);
 
         /* create a new object */
         | CExpr.TailCall (CExpr.ConstructorRef (ctor), ctor_params)
         | CExpr.Call (CExpr.ConstructorRef (ctor), ctor_params) =>
           foreach (parm in ctor_params) emit (parm);
+          Mark (expr.loc);
           _ilg.Emit (OpCodes.Newobj, ctor);
 
 
@@ -1678,12 +1705,15 @@ namespace Nemerle.Compiler
             // this is our method and we may call it this way
             _ilg.Emit (OpCodes.Ldarg_0);
             foreach (parm in method_params) emit (parm);
+            Mark (expr.loc);
             emit_method_call (expr, true, method)
-          } else {
+          } 
+          else {
             _ilg.Emit (OpCodes.Ldarg_0);
             _ilg.Emit (OpCodes.Ldobj, _type_of_this);
             _ilg.Emit (OpCodes.Box, _type_of_this);
-            foreach (parm in method_params) emit (parm);            
+            foreach (parm in method_params) emit (parm);
+            Mark (expr.loc);            
             emit_method_call (expr, false, method)
           }
 
@@ -1699,6 +1729,7 @@ namespace Nemerle.Compiler
             _ilg.Emit (OpCodes.Ldloca, local_slot);
           };
           foreach (parm in method_params) emit (parm);
+          Mark (expr.loc);
           emit_method_call (expr, is_value_type || notvirt, method)
 
 
@@ -1709,7 +1740,8 @@ namespace Nemerle.Compiler
 
           assert (method_info.IsStatic, "Call CExpr.GlobalRef to a non-static field");
 
-          foreach (parm in method_parms) emit (parm);          
+          foreach (parm in method_parms) emit (parm);
+          Mark (expr.loc);          
           emit_method_call (expr, true, method_info)
 
 
@@ -1718,6 +1750,7 @@ namespace Nemerle.Compiler
         | CExpr.Call (CExpr.Opcode (opcode), parms) =>
           // FIXME: seperate out
           foreach (parm in parms) emit (parm);
+          Mark (expr.loc);
           match (opcode) {
             | "+.s" =>  _ilg.Emit (OpCodes.Add_Ovf)
             | "+.u" => _ilg.Emit (OpCodes.Add_Ovf_Un)
@@ -1797,6 +1830,7 @@ namespace Nemerle.Compiler
               store_argument (p.parm_index);
           }
           store_arguments (_cg_method.parms);
+          Mark (expr.loc);
           _ilg.Emit (OpCodes.Br, _method_start_label);
 
 
@@ -1805,6 +1839,7 @@ namespace Nemerle.Compiler
         /* throw an exception */
         | CExpr.Throw (exc) =>
           emit (exc);
+          Mark (expr.loc);
           _ilg.Emit (OpCodes.Throw);
 
 
@@ -1831,6 +1866,8 @@ namespace Nemerle.Compiler
           _ilg.Emit (OpCodes.Stloc, catch_val_local_slot);
 
           emit (catch_expr);
+          // close scope opened by declare_val_local_slot
+          when (Options.EmitDebug) _ilg.EndScope ();
 
           unless (throws (catch_expr) || ignore_try_with_result)
             _ilg.Emit (OpCodes.Stloc, try_result);
@@ -1872,7 +1909,6 @@ namespace Nemerle.Compiler
         /* loads the 'this' pointer on the evaluation stack */
         | CExpr.This =>
           assert (!_method_is_static, "This is a static method");
-
           _ilg.Emit (OpCodes.Ldarg_0);
 
 
@@ -1883,20 +1919,25 @@ namespace Nemerle.Compiler
 
         /* loads address of given method */
         | CExpr.MethodAddress (meth) =>
+          Mark (expr.loc);
           _ilg.Emit (OpCodes.Ldftn, meth);
 
 
         /* creates object of value type using implicit ctor */
         | CExpr.InitValueType (t) =>
+          Mark (expr.loc);
+          when (Options.EmitDebug) _ilg.BeginScope ();
           def local_slot = _ilg.DeclareLocal (t);
           _ilg.Emit (OpCodes.Ldloca, local_slot);
           _ilg.Emit (OpCodes.Initobj, t);
           _ilg.Emit (OpCodes.Ldloc, local_slot);
+          when (Options.EmitDebug) _ilg.EndScope ();
 
 
         /* creates a new array, given a list of initializers */
         | CExpr.Array (element_type, initializers, [size]) =>
           emit (size);
+          Mark (expr.loc);
           _ilg.Emit (OpCodes.Newarr, element_type);
 
           def load_elements (index : int, elements : list [CExpr]) {
@@ -1927,6 +1968,7 @@ namespace Nemerle.Compiler
           for (mutable i = 0; i < size; ++i) arg_types [i] = SystemType.Int32;
           def method = _module_builder.GetArrayMethod (expr.ty, ".ctor", CallingConventions.HasThis,
                                                        null, arg_types);
+          Mark (expr.loc);                                                       
           _ilg.Emit (OpCodes.Newobj, method);
 
           unless (initializers matches []) {
@@ -2380,6 +2422,7 @@ namespace Nemerle.Compiler
      */
     private declare_val_local_slot (val : CG_val) : LocalBuilder
     {
+      when (Options.EmitDebug) _ilg.BeginScope ();              
       def local_slot = _ilg.DeclareLocal (val.ty);
       when (Options.EmitDebug) local_slot.SetLocalSymInfo (val.name);
       val.local_slot = Some (local_slot);
@@ -2610,6 +2653,7 @@ namespace Nemerle.Compiler
      */
     public static pretty_print (ex : CExpr) : string
     {
+      ex.loc.ToString () + (
       match (ex) {
         | CExpr.Ref (decl) =>
           "Ref (" + decl.name + ")"
@@ -2683,7 +2727,7 @@ namespace Nemerle.Compiler
           pretty_print_list (args, "") + "]"
         | CExpr.Switch (indexer, _, _) =>
           "Switch ( " + pretty_print (indexer) + " )"
-      }
+      })
     }
 
 
