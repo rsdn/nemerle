@@ -161,12 +161,12 @@
     </ul>
   </xsl:template>
   
-  <xsl:template match="enumerate2">
-    <table align="center" width="90%" border="0" cellspacing="0" class="code">
-      <xsl:apply-templates select="enum2" />
-    </table>  
+  <xsl:template match="ul2">
+    <ul class="square">	
+       <xsl:copy-of select="*" />
+    </ul>
   </xsl:template>
-	
+
   <xsl:template match="enumerate">
     <table align="center" width="80%" border="0" cellspacing="0" class="code">
       <xsl:apply-templates select="enum" />
@@ -177,15 +177,6 @@
       <xsl:apply-templates select="ul" />
   </xsl:template>
 
-  <xsl:template match="enum2">
-    <tr>
-      <td width="10%" class="realtable"><xsl:value-of select="@qual" /></td>
-      <td width="20%" class="realtable"><b><xsl:value-of select="@name" /></b></td>
-      <td width="25%" class="realtable"> <xsl:apply-templates select="args" /></td>	
-      <td width="*" class="realtable"><xsl:apply-templates select="desc"/></td>
-    </tr>
-  </xsl:template>
-  
   <xsl:template match="enum">
     <tr>
       <td width="40%" class="realtable"><xsl:value-of select="@title" /></td>
