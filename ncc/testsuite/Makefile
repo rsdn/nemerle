@@ -36,7 +36,7 @@ EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 
 all:
 	$(EXECUTE) ../ncc2.exe -texe -out test.exe -reference $(CSCDLLS)System.dll $(lib_src) test.n
-	$(EXECUTE) ./test.exe -p "../../" -n "../ncc2.exe" -r "$(EXECUTE)"
+	$(EXECUTE) ./test.exe -p "../../" -n "../ncc2.exe" -r "$(EXECUTE)" -dll "$(CSCDLLS)"
 	rm -f out.dll out.exe out.netmodule ext_test.out
 
 clean:
