@@ -246,7 +246,9 @@ let sub_unify ?(subst = Ty_env.empty) t1 t2 =
       | T_fun (a1, r1), T_fun (a2, r2) ->
         x_for_all2 sub subst ([a1; r1], [a2; r2])
       | T_prod l1, T_prod l2 ->
-        x_for_all2 sub subst (l1, l2)
+        if List.length l1 <> List.length l2 then None
+        else
+          x_for_all2 sub subst (l1, l2)
       | T_ref t1, T_ref t2
       | T_out t1, T_out t2 -> 
         sub subst t1 t2
