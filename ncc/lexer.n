@@ -71,25 +71,39 @@ public class Lexer : ILexer
   file : System.IO.FileStream;
   reader : System.IO.TextReader;
   mutable file_name : string;
-  file_real : string;           // real filename to revert after `#line 4 "bla"'
+
   comment_store : StringBuilder;
   mutable line : int;
   mutable col : int;
-  mutable line_stack : int; // real line number at moment of `#line 3' occurence
-  mutable line_start : int; // how to compute real line after `#line default' occurence
   mutable putback : bool;
   mutable putbackVal : char;
   mutable isPendingChar : bool;  // is there already some first char
   mutable pendingChar : char;
   mutable negated_literal : bool;
-  /** if there was only white chars from beginnig of line */
-  mutable white_beginning : bool;  
   
   mutable last_line : int;
   mutable last_col : int;
 
+ #region PREPROCESSOR VARIABLES
+  /** if there was only white chars from beginnig of line */
+  mutable white_beginning : bool;  
+
+  mutable eating_stack : list<int>; // stack of nested #if
+
+  /** -1 = now inside true preprocessing section
+       0 = no preprocessing currently in action
+       1 = there were no true preprocessing sections in this set
+       2 = there already was true preprocessing section in this set
+       3 = we are now inside #else section, but it is not analyzed   */
+  mutable eating_now : int;
+  mutable line_stack : int; // real line number at moment of `#line 3' occurence
+  mutable line_start : int; // how to compute real line after `#line default' occurence
+  file_real : string;           // real filename to revert after `#line 4 "bla"'
+  
   defines : Hashtable <string, bool>;
+
   static command_defines : Hashtable <string, bool>;
+ #endregion PREPROCESSOR VARIABLES
   
   static keywords : Hashtable <string, int>;
 
@@ -136,7 +150,9 @@ public class Lexer : ILexer
     negated_literal <- false;
     white_beginning <- true;
     defines <- Hashtable (100);
-    foreach (el in command_defines) defines.Add (el, true)
+    foreach (el in command_defines) defines.Add (el, true);
+    eating_stack <- [];
+    eating_now <- 0;
   }
 
   do_read () : char
@@ -695,24 +711,54 @@ public class Lexer : ILexer
       catch { _ : Error => () };
       word.ToString ()
     };
-//    def oblivious_eating (
 
     def directive = read_word ();
     when (directive == "")
       throw Error ("expected preprocessing directive after `#'");
-      
+
     match (directive) {
       | "if" =>
-        def _ = evaluate_preprocessing_expr (read_to_the_end_of_line ().Trim ());
-        ()
+        eating_stack <- eating_now :: eating_stack;
+        if (evaluate_preprocessing_expr (read_to_the_end_of_line ().Trim ()))
+          unless (eating_now > 0)          
+            eating_now <- -1
+        else
+          eating_now <- 1
 
       | "elif" =>
-        def _ = evaluate_preprocessing_expr (read_to_the_end_of_line ().Trim ());
-        ()
+        def now = evaluate_preprocessing_expr (read_to_the_end_of_line ().Trim ());
+        match (eating_stack) {
+          | x :: _ =>
+            unless (x > 0)
+              match (eating_now) {
+                | 1 => when (now) eating_now <- -1
+                | -1 | 2 => eating_now <- 2
+                | _ => throw Error ("unbalanced preprocessing directives")
+              }
+          | [] => throw Error ("unbalanced #else");
+        }
 
-      | "else" => ignore (read_to_the_end_of_line ())
-      | "endif" => ignore (read_to_the_end_of_line ())
+      | "else" =>
+        ignore (read_to_the_end_of_line ());
+        match (eating_stack) {
+          | x :: _ =>
+            unless (x > 0)
+              match (eating_now) {
+                | 1 => eating_now <- -1
+                | -1 | 2 => eating_now <- 3
+                | _ => throw Error ("unbalanced preprocessing directives")
+              }
+          | [] => throw Error ("unbalanced #else");
+        }
         
+      | "endif" =>
+        ignore (read_to_the_end_of_line ());
+        match (eating_stack) {
+          | x :: xs =>
+            eating_now <- x; eating_stack <- xs
+          | [] => throw Error ("unbalanced #endif");
+        }
+
       | "line" =>
         mutable c <- eat_spaces ();
         def (new_line, new_file) =
@@ -774,106 +820,101 @@ public class Lexer : ILexer
         ignore (read_to_the_end_of_line ())
         
       | x => throw Error ("unsupported preprocessing directive `" + x + "'")
-    }
+    };
   }
 
   evaluate_preprocessing_expr (str : string) : bool {
-    def traverse (line, acc) {
-      Nemerle.Text.@regexp (match (line) {
-        | "&&(?<rest>.*)" => traverse (rest, (null, 1) :: acc)
-        | "||(?<rest>.*)" => traverse (rest, (null, 2) :: acc)
-        | "==(?<rest>.*)" => traverse (rest, (null, 3) :: acc)
-        | "!=(?<rest>.*)" => traverse (rest, (null, 4) :: acc)
-        | @"\((?<rest>.*)" => traverse (rest, (null, 5) :: acc)
-        | @"\)(?<rest>.*)" => traverse (rest, (null, 6) :: acc)
-        | "!(?<rest>.*)" => traverse (rest, (null, 7) :: acc)
-        | "true(?<rest>.*)" => traverse (rest, (null, 8) :: acc)
-        | "false(?<rest>.*)" => traverse (rest, (null, 9) :: acc)         
-        | @"(?<word>\w+)(?<rest>.*)" => traverse (rest, (word, 0) :: acc)
-        | @"\s+(?<rest>.*)" => traverse (rest, acc)
+    def traverse (line : string, acc) {
+      mutable i <- 0;
+      while (i < line.Length && Char.IsWhiteSpace (line [i])) ++i;
+      def line = line.Substring (i);
+      
+      match (line) {
+        | x when x.StartsWith ("false") =>
+          traverse (x.Substring (5), "false" :: acc)
+        | x when x.StartsWith ("true") =>
+          traverse (x.Substring (4), "true" :: acc)
+        | x when x.StartsWith ("||") =>
+          traverse (x.Substring (2), "||" :: acc)
+        | x when x.StartsWith ("&&") =>
+          traverse (x.Substring (2), "&&" :: acc)
+        | x when x.StartsWith ("==") =>
+          traverse (x.Substring (2), "==" :: acc)
+        | x when x.StartsWith ("!=") =>
+          traverse (x.Substring (2), "!=" :: acc)
+        | x when x.StartsWith ("(") =>
+          traverse (x.Substring (1), "(" :: acc)
+        | x when x.StartsWith (")") =>
+          traverse (x.Substring (1), ")" :: acc)
+        | x when x.StartsWith ("!") =>
+          traverse (x.Substring (1), "!" :: acc)
         | "" => List.Rev (acc)
-        | _ =>
-          throw Error ("bad preprocessing condition format")
-      });
-    };
-    mutable eval_stack <- [];
-    def onp (value, kind) {
-      eval_stack <- (value, kind) :: eval_stack;
-      match (eval_stack) {
-        | (_, 1) :: (v1, _) :: (v2, _) :: rest =>
-          eval_stack <- rest; onp (v1 && v2, 0)
-        | (_, 2) :: (v1, _) :: (v2, _) :: rest =>
-          eval_stack <- rest; onp (v1 || v2, 0)
-        | (_, 3) :: (v1, _) :: (v2, _) :: rest =>
-          eval_stack <- rest; onp (v1 == v2, 0)
-        | (_, 4) :: (v1, _) :: (v2, _) :: rest =>
-          eval_stack <- rest; onp (v1 != v2, 0)
-        | (_, 7) :: (v, _) :: rest =>
-          eval_stack <- rest; onp (!v, 0)
-        | _ => ()
+        | x =>
+          mutable i <- 0;
+          while (i < x.Length && Char.IsLetter (x[i])) ++i;
+          when (i == 0)
+            throw Error ("bad preprocessing condition format");
+          def val = 
+            match (defines.Get (x.Substring (0, i))) {
+              | Some (v) => v
+              | None => false
+            };
+          if (val) traverse (x.Substring (i), "true" :: acc)
+          else traverse (x.Substring (i), "false" :: acc)
       }
     };
-        
     mutable tokens <- traverse (str, []);
 
-    mutable stack <- [5];
-    mutable go <- true;
-    mutable balance <- 0;
-    mutable interlace <- 0;
-    mutable top <- -1;
-    mutable outkind <- -1;
-    mutable outval <- false;
-    def rank = array [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    def stack_prio = array [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    def enter_prio = array [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];    
-
-    while (go) {
-      def (val, kind) = 
+    def lowest () {
+      match (tokens) {
+        | "(" :: xs =>
+          tokens <- xs;
+          def res = highest ();
+          match (tokens) {
+            | ")" :: xs => tokens <- xs
+            | _ =>
+              throw Error ("unbalanced parenthesis in preprocessing expression")
+          };
+          res
+        | "!" :: xs => tokens <- xs; !lowest (); 
+        | "false" :: xs => tokens <- xs; false
+        | "true" :: xs => tokens <- xs; true
+        | _ => throw Error ("bad expression")
+      }
+    }
+    and low () {
+      mutable res <- lowest ();
+      def loop () {
         match (tokens) {
-          | [] => go <- false; (null, 6)
-          | (v, k) :: xs => tokens <- xs; (v, k)
-        };
-      interlace += rank [kind];
-      when (interlace != 0 && interlace != 1)
-        throw Error ("Bad preprocessing condition expression");
-
-      match (stack) {
-        | [] => throw Error ("Bad preprocessing condition expression");
-        | k :: _ => top <- k
+          | "&&" :: xs =>
+            tokens <- xs; res <- lowest () && res; loop ()
+          | _ => ()
+        }
       };
-
-      while (enter_prio[kind] < stack_prio[top]) {
-        balance += rank[top];
-        when (balance < 1)
-          throw Error ("Bad preprocessing condition expression");
-        stack <- List.Tail (stack);
-        outkind <- top;
-        onp (outval, outkind);
-        match (stack) {
-          | [] => throw Error ("Bad preprocessing condition expression");
-          | k :: _ => top <- k
-        };
+      loop ();
+      res
+    }
+    and high () {
+      mutable res <- low ();
+      def loop () {
+        match (tokens) {
+          | "||" :: xs =>
+            tokens <- xs; res <- low () || res; loop ()
+          | _ => ()
+        }
       };
-      match (kind) {
-        | 8 => outval <- true;
-        | 9 => outval <- true;
-        | 0 =>
-          match (defines.Get (val)) {
-            | Some (v) => outval <- v
-            | None => outval <- false
-          }
-        | _ => ()
-      };
-      if (kind == 6 && top == 5)
-        stack <- List.Tail (stack)
-      else
-        stack <- kind :: stack;
+      loop ();
+      res
+    }
+    and highest () {
+      def h = high ();
+      match (tokens) {
+        | "==" :: xs => tokens <- xs; h == high ();
+        | "!=" :: xs => tokens <- xs; h != high ();
+        | _ => h
+      }
     };
-    match ((stack, balance)) {
-      | ([], 1) => ()
-      | _ => throw Error ("Bad preprocessing condition expression")
-    };
-    true
+    highest ()
   }
   
   do_get_token (ch : char) : Token
@@ -965,7 +1006,7 @@ public class Lexer : ILexer
     }      
   }
 
-  get_token () : Token implements ILexer.get_token
+  take_token () : Token
   {
     def ch = 
       if (isPendingChar) {
@@ -985,6 +1026,23 @@ public class Lexer : ILexer
     }
     else
       do_get_token (ch)
+  }
+  
+  get_token () : Token implements ILexer.get_token
+  {
+    mutable result <- null;
+    do {
+      match (take_token ()) {
+        | Tok_EOF =>
+          if (eating_now > 0)
+            throw Error ("unexpected end of file before finishing preprocessor"
+                         " directive")
+          else
+            result <- Tok_EOF ()
+        | x => result <- x
+      };
+    } while (eating_now > 0);
+    result
   }
 
   get_location () : Location implements ILexer.get_location
