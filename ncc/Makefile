@@ -76,7 +76,6 @@ NEMERLE_COMPILER_DLL_SRC = \
 	members.n \
 	tyinfo.n \
 	ast.n \
-	tree.n \
 	parsetree.n \
 	typedtree.n \
 	util.n \
