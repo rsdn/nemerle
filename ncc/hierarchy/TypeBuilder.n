@@ -26,7 +26,7 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-using Nemerle.IO;
+using Nemerle;
 using Nemerle.Utility;
 using Nemerle.Collections;
 
@@ -45,6 +45,8 @@ namespace Nemerle.Compiler {
  */
 public class TypeBuilder : TypeInfo
 {
+  type Subinfo = SystemMap [int, TypeInfo * list [TType]];
+
   public enclosing_type : option [TypeBuilder];
   variant_option_parent : TypeBuilder;
 
@@ -62,6 +64,7 @@ public class TypeBuilder : TypeInfo
   is_enum : bool;
   is_interface : bool;
 
+  mutable is_finalized : bool;
   mutable cannot_finalize : bool;
   name : string;
   public env : GlobalEnv;
@@ -77,9 +80,9 @@ public class TypeBuilder : TypeInfo
   /// if it doesn't, we must add implicit empty constructor
   mutable instance_ctor_occured : bool;
 
-  public mutable is_finalized : bool;
+//  public mutable is_finalized : bool;
 
-  // the list of additional method overrides, see check_method_implements
+  // the list of additional method overrides, see resolve_method_implements
   // (listed as pairs of implementation method / interface method)
   private mutable m_additional_method_overrides : list [IMethod * IMethod];
   
@@ -104,11 +107,100 @@ public class TypeBuilder : TypeInfo
    */
   mutable iterate_first : list [TypeBuilder];
 
+  mutable underlying_enum_type_iface : INumericType;
+  mutable underlying_enum_type : TType;
+
   static mutable infos : list [TypeBuilder];
 
   static mutable run_phase : int;
 
-  
+
+  public this (par : option [TypeBuilder], vop : option [TypeBuilder], 
+               env : GlobalEnv, td : PT.TopDeclaration)
+  {
+    variant_options = [];
+    contained_types = [];
+    m_additional_method_overrides = [];    
+    
+    this.pt_tydecl = td;
+    this.pt_name = td.name.GetName ();
+    this.env = env;
+    this.enclosing_type = par;    
+    match (par) {
+      | Some (p) => p.contained_types = this :: p.contained_types;
+      | _ => ()
+    };
+    this.name = pt_name.Id;
+    this.loc = td.loc;
+    modifiers = td.modifiers;
+    attributes = modifiers.mods;
+
+    instance_ctor_occured = td is PT.TopDeclaration.Alias;
+    match (td) {
+      | PT.TopDeclaration.VariantOption =>
+        instance_ctor_occured = true;
+        match (vop) {
+          | Some (ti) =>
+            ti.variant_options = this :: ti.variant_options;
+            attributes |= NemerleAttributes.Sealed;
+            modifiers.macro_attrs = (":type:postadd", <[ Record ]>) :: modifiers.macro_attrs;
+            if (ti.IsPublic)
+              attributes |= NemerleAttributes.Public
+            else
+              attributes |= NemerleAttributes.Internal;
+
+          | None => assert (false)
+        }
+      | PT.TopDeclaration.Enum => is_enum = true;
+      | _ => ()
+    };
+
+    ++Passes.tyinfo_counter;
+    infos = this :: infos;
+
+    is_interface = (this.pt_tydecl is PT.TopDeclaration.Interface);
+    instance_ctor_occured = (attributes %&& (NemerleAttributes.Struct %| NemerleAttributes.Static))
+                            || IsModule || instance_ctor_occured || is_interface || is_enum;
+    
+    unless (attributes %&& NemerleAttributes.AccessModifiers)
+      match (enclosing_type) {
+        | Some => attributes |= NemerleAttributes.Private;
+        | None => attributes |= NemerleAttributes.Internal;
+      }
+
+    accessibility = 
+      match (attributes %& NemerleAttributes.AccessModifiers) {
+        | NemerleAttributes.Private => Accessibility.Private
+        | NemerleAttributes.Protected => Accessibility.Protected
+        | NemerleAttributes.Internal => Accessibility.Internal
+        | _ =>
+          if (attributes %&& (NemerleAttributes.Protected %| NemerleAttributes.Internal))
+            Accessibility.ProtectedOrInternal
+          else
+            Accessibility.Public
+      }
+
+    match (enclosing_type) {
+      | Some (tc) =>
+        accessibility = 
+          Tyutil.AccessibilityIntersect (accessibility, tc.Accessibility)
+      | None => ()
+    }
+
+    match ((vop, pt_tydecl)) {
+      | (Some (x), PT.TopDeclaration.VariantOption) => variant_option_parent = x
+      | (None, PT.TopDeclaration.VariantOption) => Util.ice ()
+      | (Some, _) => Util.ice ()
+      | (None, _) => ()
+    };
+
+    additional_decls = [];
+
+    CheckTypeAttributes ();
+
+    m_has_been_used = IsExternallyAccessible
+  }
+
   /**
    * Return list of type parameters under which we subtype given type.
    *
@@ -240,9 +332,12 @@ public class TypeBuilder : TypeInfo
   
   public override Accessibility : Accessibility
   {
-    get {
-      accessibility
-    }
+    get { accessibility }
+  }
+
+  public override Attributes : NemerleAttributes
+  {
+    get { attributes }
   }
 
   public override IsExternallyAccessible : bool
@@ -258,6 +353,11 @@ public class TypeBuilder : TypeInfo
     }
   }
 
+  public override Location : Location
+  {
+    get { loc }
+  }
+
   public override HasBeenUsed : bool
   {
     get { m_has_been_used }
@@ -266,13 +366,145 @@ public class TypeBuilder : TypeInfo
       match (enclosing_type) {
         | Some (enclosing_type) =>
           enclosing_type.HasBeenUsed = value
-
-        | _ =>
-          ()
+        | _ => ()
       }
     }
   }
     
+  public override CanAccess (source : TypeInfo) : bool
+  {
+    IsPublic ||
+    (IsInternal &&
+      (match (source.GetTypeInfoKind ()) {
+        | TypeInfoKind.NemerleType => true
+        | _ => false
+      })) ||
+    (IsProtected &&
+        (match (enclosing_type) {
+          | Some (tc) => Option.IsSome (source.SuperType (tc))
+          | None => false
+        })) ||
+    (match (enclosing_type) {
+          | Some (declaring_type) =>
+            def walk_declaring (tc : TypeInfo) {
+              tc.Equals (declaring_type) ||
+              (tc.DeclaringType != null && walk_declaring (tc.DeclaringType))
+            };
+            walk_declaring (source)
+          | None => false
+        })
+  }
+
+  public IsFinalized : bool {
+    get { is_finalized }
+    set { is_finalized = value }
+  }
+
+  public AddImplementedInterface (t : PT.PType) : void
+  {
+    match (pt_tydecl) {
+      | (PT.TopDeclaration.Class) as td => td.t_extends += [t]
+      | (PT.TopDeclaration.Interface) as td => td.t_extends += [t]
+      | (PT.TopDeclaration.Variant) as td => td.t_extends += [t]
+      | _ => Message.error ("cannot add interface to this kind of type")
+    }
+  }
+  
+  public DefineNestedType (td : PT.ClassMember) : TypeBuilder
+  {
+    | PT.ClassMember.TypeDeclaration (td) =>
+      def tyinfo = GlobalEnv.AddType (Some (this), None (), env, td);
+      tyinfo.FixupDefinedClass ();
+      tyinfo
+    | _ =>
+      Message.error ("expected declaration of nested type");
+      null
+  }
+
+
+  /**
+   * Adds a definition and returns the new NemerleMember, if available
+   */
+  public DefineAndReturn (f : PT.ClassMember) : option [NemerleMember]
+  {
+    if (member_map == null) {
+      additional_decls = f :: additional_decls;
+      None ()
+    }
+    else {
+      try {
+        def mem = bind_and_add_member (f);
+        Passes.ILGenerator.MemberAdded (this, mem);
+        Some (mem :> NemerleMember)
+      } catch {
+        | _ : Recovery => None ()
+      }
+    }
+  }
+
+
+  /**
+   * Adds a definition to this type
+   */
+  public Define (f : PT.ClassMember) : void
+  {
+    | PT.ClassMember.TypeDeclaration (td) =>
+      def tyinfo = GlobalEnv.AddType (Some (this), None (), env, td);
+      tyinfo.FixupDefinedClass ();
+
+    | _ => ignore (DefineAndReturn (f))
+  }
+
+
+  /**
+   * Builds this type
+   */
+  public Compile () : void
+  { 
+    cannot_finalize = false;
+    when (type_builder != null) {
+      this.FinalizeType ();
+      Passes.MarkTypeBuilderCompiled ();
+    }
+  }
+
+
+  public FindAttribute (looking_for : TypeInfo) : option [PT.PExpr]
+  {
+    mutable result = None ();
+    
+    // find our attribute
+    foreach (expr in GetModifiers ().custom_attrs)
+      match (AttributeCompiler.ResolveAttribute (this.env, expr)) {
+        | Some ((t, _)) =>
+          when (looking_for.Equals (t))
+            result = Some (expr)
+            
+        | _ => ()
+      }
+
+    result
+  }
+
+  public override HasAttribute (attribute : TypeInfo) : bool
+  {
+     Option.IsSome (FindAttribute (attribute))
+  }
+
+  public DisableImplicitConstructor () : void
+  {
+    instance_ctor_occured = true;
+  }
+  
+  /**
+   * Marks this with the SpecialName attribute, the attribute will
+   * be propagated to members and contained types at a later stage.
+   */
+  public MarkWithSpecialName () : void
+  {
+    attributes |= NemerleAttributes.SpecialName
+  }
+
   /**
    * Return list of types that we directly subtype.
    *
@@ -315,9 +547,250 @@ public class TypeBuilder : TypeInfo
       def make_tv (tv : Tyvar.T) : TType { TType.Variable (tv) };
       self_type = TType.Class (this, List.Map (typarms, make_tv)) :> TType.Class;
     }
-
     self_type
   }
+
+  public override GetTypeInfoKind () : TypeInfoKind
+  {
+    TypeInfoKind.NemerleType (this)
+  }
+
+  public override GetTydecl () : TypeDeclaration
+  {
+    tydecl
+  }
+
+  public override LookupMember (name : string) : list [IMember]
+  {
+    match (member_map.Find (name)) {
+      | None =>
+        match (tydecl) {
+          | TypeDeclaration.Interface =>
+            InternalType.Object_tc.LookupMember (name)
+          | _ => []
+        }
+      | Some (mems) => mems
+    }
+  }
+
+  /** Searches for the members defined for the current TypeInfo, using the specified
+      binding constraints.
+      
+      <remarks>
+        Members include properties, methods, fields, events, and so on.
+
+        The following BindingFlags filter flags can be used to define which members to
+        include in the search: 
+        <ul>
+          <li>
+            You must specify either BindingFlags.Instance or BindingFlags.Static in order to
+            get a return.
+          </li>
+          <li>
+            Specify BindingFlags.Public to include public members in the search.
+          </li>
+          <li>
+            Specify BindingFlags.NonPublic to include non-public members (that is, private
+            and protected members) in the search.
+          </li>
+        </ul>
+
+        The following BindingFlags modifier flags can be used to change how the search
+        works: 
+
+        BindingFlags.DeclaredOnly to search only the members declared on the TType,
+        not members that were simply inherited.
+
+        Calling this method with only the Public flag or only the NonPublic flag will
+        return the specified members and does not require any other flags.
+
+        See Nemerle.Compiler.BindingFlags for more information.
+      </remarks>
+   */
+  public override GetMembers (bindingAttr : BindingFlags) : list [IMember]
+  {
+    get_members (bindingAttr, fun (m : IMember) {
+      constrain_member (m, bindingAttr)
+    })
+  }
+  
+  public override GetMembers () : list [IMember]
+  {
+    get_members ((0 :> BindingFlags), fun (_) { true })
+  }
+
+  public override GetFields (bindingAttr : BindingFlags) : list [IField]
+  {
+    def mems = get_members (bindingAttr, fun (x : IMember) {
+      match (x.GetKind ()) {
+        | MemberKind.Field => constrain_member (x, bindingAttr)
+        | _ => false
+      }
+    });
+    (mems :> list [IField])
+  }
+    
+  public GetFields () : list [IField]
+  {
+    def mems = get_members ((0 :> BindingFlags), fun (x : IMember) {
+      match (x.GetKind ()) {
+        | MemberKind.Field => true
+        | _ => false
+      }
+    });
+    (mems :> list [IField])
+  }
+
+
+  /** Searches for the methods defined for the current TypeInfo, using the
+      specified binding constraints.
+  */
+  public GetMethods (bindingAttr : BindingFlags) : list [IMethod]
+  {
+    def mems = get_members (bindingAttr, fun (x : IMember) {
+      if (x.MemberType == MemberTypes.Method)
+        constrain_member (x, bindingAttr)
+      else
+        false
+    });
+    (mems :> list [IMethod])
+  }
+
+  public GetMethods () : list [IMethod]
+  {
+    GetMethods (BindingFlags.Static %| BindingFlags.Instance %|
+                BindingFlags.Public %| BindingFlags.NonPublic)
+  }
+
+  /** Searches for the constructors defined for the current TypeBuilder, using the
+      specified BindingFlags.
+  */
+  public override GetConstructors (bindingAttr : BindingFlags) : list [IMethod]
+  {
+    def mems = get_members (bindingAttr, fun (x : IMember) {
+      if (x.MemberType == MemberTypes.Constructor)
+        constrain_member (x, bindingAttr)
+      else
+        false
+    });
+    (mems :> list [IMethod])
+  }
+
+  public GetConstructors () : list [IMethod]
+  {
+    GetConstructors (BindingFlags.Static %| BindingFlags.Instance %|
+                     BindingFlags.Public %| BindingFlags.NonPublic)
+  }
+
+  /** Searches for the types defined for the current TypeInfo, using the
+      specified BindingFlags.
+  */
+  public GetNestedTypes (bindingAttr : BindingFlags) : list [TypeInfo]
+  {
+    def mems = get_members (bindingAttr, fun (x : IMember) {
+      match (x.GetKind ()) {
+        | MemberKind.Type (t) =>
+          constrain_member (t, bindingAttr %| BindingFlags.Static %|
+                            BindingFlags.Instance)
+        | _ => false
+      }
+    });
+    (mems :> list [TypeInfo])
+  }
+
+  public GetNestedTypes () : list [TypeInfo]
+  {
+    GetNestedTypes (BindingFlags.Static %| BindingFlags.Instance %|
+                    BindingFlags.Public %| BindingFlags.NonPublic)
+  }
+
+  public GetProperties (bindingAttr : BindingFlags) : list [IProperty]
+  {
+    def mems = get_members (bindingAttr, fun (x : IMember) {
+      match (x.GetKind ()) {
+        | MemberKind.Property => constrain_member (x, bindingAttr)
+        | _ => false
+      }
+    });
+    (mems :> list [IProperty])
+  }
+    
+  public GetProperties () : list [IProperty]
+  {
+    def mems = get_members ((0 :> BindingFlags), fun (x : IMember) {
+      match (x.GetKind ()) { | MemberKind.Property => true | _ => false }
+    });
+    (mems :> list [IProperty])
+  }
+
+  public GetEvents (bindingAttr : BindingFlags) : list [IEvent]
+  {
+    def mems = get_members (bindingAttr, fun (x : IMember) {
+      match (x.GetKind ()) {
+        | MemberKind.Event => constrain_member (x, bindingAttr)
+        | _ => false
+      }
+    });
+    (mems :> list [IEvent])
+  }
+    
+  public GetEvents () : list [IEvent]
+  {
+    def mems = get_members ((0 :> BindingFlags), fun (x : IMember) {
+      match (x.GetKind ()) { | MemberKind.Event => true | _ => false }
+    });
+    (mems :> list [IEvent])
+  }
+
+  /** Return list of all members defined in this very type. */
+  public GetDirectMembers () : list [IMember]
+  {
+    member_list
+  }
+
+  public GetTypeBuilder () : System.Reflection.Emit.TypeBuilder
+  {
+    assert (type_builder != null);
+    type_builder
+  }
+
+  public GetVariantOptionParent () : TypeBuilder
+  {
+    assert (variant_option_parent != null);
+    variant_option_parent
+  }
+  
+  public GetVariantOptions () : list [TypeBuilder]
+  {
+    variant_options
+  }
+
+  /** Return interfaces [this] needs to implement (that is it says it will
+      implement them, but they are not implemented in base class). */
+  public InterfacesToImplement () : list [TypeInfo] 
+  {
+    def base_class =
+      match (SuperClass ()) {
+        | Some (tc) => tc
+        | None => InternalType.Object_tc
+      };
+
+    def collect (t : TType.Class, acc) {
+      def tc = t.tycon;
+      match (tc.GetTydecl ()) {
+        | TypeDeclaration.Interface =>
+          match (base_class.SuperType (tc)) {
+            | Some => acc
+            | None => tc :: acc
+          }
+        | _ => acc
+      }
+    };
+    
+    List.FoldLeft (GetSuperTypes (), [], collect);
+  }
+
+  //------------ METHODS FOR TYPING --------------------------------------  
 
   /**
    * Return substitution replacing each of our type parameters with fresh
@@ -367,9 +840,9 @@ public class TypeBuilder : TypeInfo
       List.Iter2 (typarms, args, check_constraints);
 
       sub
-    } else {
-      Message.error (sprintf ("type `%s' takes %d argument(s) while %d were supplied",
-                              tc.FullName, len_tp, len_ac));
+    } 
+    else {
+      Message.error ($"type `$(tc.FullName)' takes $len_tp argument(s) while $len_ac were supplied");
       SystemMap ()
     }
   }
@@ -384,70 +857,6 @@ public class TypeBuilder : TypeInfo
   public override MakeSubst (args : list [TType]) : Subst
   {
     ConstructSubst (this, typarms, args)
-  }
-
-  type Subinfo = SystemMap [int, TypeInfo * list [TType]];
-
-  public override GetTypeInfoKind () : TypeInfoKind
-  {
-    TypeInfoKind.NemerleType (this)
-  }
-
-  public override GetTydecl () : TypeDeclaration
-  {
-    tydecl
-  }
-
-  public override Attributes : NemerleAttributes
-  {
-    get { attributes }
-  }
-
-  public override LookupMember (name : string) : list [IMember]
-  {
-    match (member_map.Find (name)) {
-      | None =>
-        match (tydecl) {
-          | TypeDeclaration.Interface =>
-            InternalType.Object_tc.LookupMember (name)
-          | _ => []
-        }
-      | Some (mems) => mems
-    }
-  }
-
-  internal ReverseChildren () : void {
-    contained_types = List.Rev (contained_types);
-    variant_options = List.Rev (variant_options);
-  }
-
-  
-  /**
-   * Iterate over all types defined in source code.
-   *
-   * Supertypes are always processed before subtypes otherwise
-   * source code order is retained.
-   */
-  public static Iter (f : TypeBuilder -> void) : void
-  {
-    def working_on = Util.next_id ();
-    def done = Util.next_id ();
-
-    def maybe_f (ti : TypeBuilder) {
-      if (ti.phase == done) ()
-      else if (ti.phase == working_on)
-        Message.error(ti.loc, "type definition for `" + ti.FullName + "' is cyclic")
-      else {
-        ti.phase = working_on;
-        Util.locate (ti.loc, {
-          List.Iter (ti.iterate_first, maybe_f);
-          f (ti)
-        });
-        ti.phase = done
-      }
-    }
-
-    List.Iter (List.Rev (infos), maybe_f)
   }
 
   /**
@@ -473,171 +882,12 @@ public class TypeBuilder : TypeInfo
       tc.MakeSubst (Option.UnSome (SuperType (tc)));
   }
 
-  /**
-   * Iterate over top level types in source code order.
-   */
-  public static SourceTopIter (f : TypeBuilder -> void) : void
-  {
-    foreach (x : TypeBuilder in List.Rev (infos))
-      when (x.enclosing_type matches None)
-        Util.locate (x.loc, f (x))
-  }
-
-  /**
-   * Iterate over top level types in inheritance order.
-   */
-  public static TopIter (f : TypeBuilder -> void) : void
-  {
-    def wrap (x : TypeBuilder) : void {
-      match (x.enclosing_type) {
-        | Some => ()
-        | None => Util.locate (x.loc, f (x))
-      }
-    };
-
-    Iter (wrap);
-  }
-
-  public this (par : option [TypeBuilder], vop : option [TypeBuilder], 
-               env : GlobalEnv, td : PT.TopDeclaration)
-  {
-    variant_options = [];
-    contained_types = [];
-    m_additional_method_overrides = [];    
-    
-    this.pt_tydecl = td;
-    this.pt_name = td.name.GetName ();
-    this.env = env;
-    this.enclosing_type = par;    
-    match (par) {
-      | Some (p) => p.contained_types = this :: p.contained_types;
-      | _ => ()
-    };
-    this.name = pt_name.Id;
-    this.loc = td.loc;
-    modifiers = td.modifiers;
-    attributes = modifiers.mods;
-
-    instance_ctor_occured = td is PT.TopDeclaration.Alias;
-    match (td) {
-      | PT.TopDeclaration.VariantOption =>
-        instance_ctor_occured = true;
-        match (vop) {
-          | Some (ti) =>
-            ti.variant_options = this :: ti.variant_options;
-            attributes |= NemerleAttributes.Sealed;
-            modifiers.macro_attrs = (":type:postadd", <[ Record ]>) :: modifiers.macro_attrs;
-            if (ti.IsPublic)
-              attributes |= NemerleAttributes.Public
-            else
-              attributes |= NemerleAttributes.Internal;
-
-          | None => assert (false)
-        }
-      | PT.TopDeclaration.Enum => is_enum = true;
-      | _ => ()
-    };
-
-    ++Passes.tyinfo_counter;
-    infos = this :: infos;
-
-    is_interface = (this.pt_tydecl is PT.TopDeclaration.Interface);
-    instance_ctor_occured = (attributes %&& (NemerleAttributes.Struct %| NemerleAttributes.Static))
-                            || IsModule || instance_ctor_occured || is_interface || is_enum;
-    
-    unless (attributes %&& NemerleAttributes.AccessModifiers)
-      match (enclosing_type) {
-        | Some => attributes |= NemerleAttributes.Private;
-        | None => attributes |= NemerleAttributes.Internal;
-      }
-
-    accessibility = 
-      match (attributes %& NemerleAttributes.AccessModifiers) {
-        | NemerleAttributes.Private => Accessibility.Private
-        | NemerleAttributes.Protected => Accessibility.Protected
-        | NemerleAttributes.Internal => Accessibility.Internal
-        | _ =>
-          if (attributes %&& (NemerleAttributes.Protected %| NemerleAttributes.Internal))
-            Accessibility.ProtectedOrInternal
-          else
-            Accessibility.Public
-      }
-
-    match (enclosing_type) {
-      | Some (tc) =>
-        accessibility = 
-          Tyutil.AccessibilityIntersect (accessibility, tc.Accessibility)
-      | None => ()
-    }
-
-    match ((vop, pt_tydecl)) {
-      | (Some (x), PT.TopDeclaration.VariantOption) => variant_option_parent = x
-      | (None, PT.TopDeclaration.VariantOption) => Util.ice ()
-      | (Some, _) => Util.ice ()
-      | (None, _) => ()
-    };
-
-    additional_decls = [];
-
-    CheckTypeAttributes ();
-
-    m_has_been_used = IsExternallyAccessible
-  }
-
-  internal ExtendPartialClass (additional : PT.TopDeclaration) : void
-  {
-    if ((Attributes %& additional.Attributes) %&& NemerleAttributes.Partial) {
-      unless (additional.Attributes %&& NemerleAttributes.AccessModifiers)
-        match (enclosing_type) {
-          | Some => additional.Attributes |= NemerleAttributes.Private;
-          | None => additional.Attributes |= NemerleAttributes.Internal;
-        }
-      when (additional.Attributes != attributes)
-        Message.error (additional.loc, $"joined partial classes `$(FullName)' "
-                       "must have compatible modifiers");
-      
-    }
-    else {
-      Message.error (additional.loc, "you must specify `partial' modifier on all"
-                     " declarations of type `" + FullName + "'");
-      Message.error (this.Location, "first defined here");
-    }
-
-    match (additional) {
-      | PT.TopDeclaration.Class { decls = ds } =>
-        foreach (x : PT.ClassMember in ds) Define (x);
-      | _ =>
-        Message.error (additional.loc, "`partial' modifier cannot be used with this type")
-    }
-    
-    modifiers.custom_attrs += additional.GetCustomAttributes ();
-    modifiers.macro_attrs += additional.modifiers.macro_attrs;    
+  
+  internal ReverseChildren () : void {
+    contained_types = List.Rev (contained_types);
+    variant_options = List.Rev (variant_options);
   }
   
-  public override CanAccess (source : TypeInfo) : bool
-  {
-    IsPublic ||
-    (IsInternal &&
-      (match (source.GetTypeInfoKind ()) {
-        | TypeInfoKind.NemerleType => true
-        | _ => false
-      })) ||
-    (IsProtected &&
-        (match (enclosing_type) {
-          | Some (tc) => Option.IsSome (source.SuperType (tc))
-          | None => false
-        })) ||
-    (match (enclosing_type) {
-          | Some (declaring_type) =>
-            def walk_declaring (tc : TypeInfo) {
-              tc.Equals (declaring_type) ||
-              (tc.DeclaringType != null && walk_declaring (tc.DeclaringType))
-            };
-            walk_declaring (source)
-          | None => false
-        })
-  }
-
   /**
    * Construct typing environments for each declaration.
    *
@@ -841,27 +1091,6 @@ public class TypeBuilder : TypeInfo
     this.iterate_first = iterate_first.Fold ([], fun (_, ti, acc) { ti :: acc });
   }
 
-  /**
-   * Construct datastructures we use to check subtyping relations.
-   *
-   * <remarks>
-   *   This probably the hardest part of processing type declarations.
-   *
-   *   Each type directly subtypes types it extends or implements.  This
-   *   pass computes transitive closure of direct subtyping relation
-   *   and stores it [TypeBuilder.supertypes] map.  .NET generics doesn't allow
-   *   same type to be subtyped under different instantiations, so we
-   *   use map from (id of) subtyped TypeBuilder object to actual parameters
-   *   of subtyped type.
-   * </remarks>
-   */
-  static determine_subtyping () : void
-  {
-    Iter (fun (ti : TypeBuilder) { 
-            ti.construct_subtyping_map () 
-          });
-  }
-
   construct_subtyping_map () : void
   {
     def add_srs (t : TType.Class, s : Subinfo) {
@@ -956,6 +1185,37 @@ public class TypeBuilder : TypeInfo
     member_list = []
   }
 
+  internal ExtendPartialClass (additional : PT.TopDeclaration) : void
+  {
+    if ((Attributes %& additional.Attributes) %&& NemerleAttributes.Partial) {
+      unless (additional.Attributes %&& NemerleAttributes.AccessModifiers)
+        match (enclosing_type) {
+          | Some => additional.Attributes |= NemerleAttributes.Private;
+          | None => additional.Attributes |= NemerleAttributes.Internal;
+        }
+      when (additional.Attributes != attributes)
+        Message.error (additional.loc, $"joined partial classes `$(FullName)' "
+                       "must have compatible modifiers");
+      
+    }
+    else {
+      Message.error (additional.loc, "you must specify `partial' modifier on all"
+                     " declarations of type `" + FullName + "'");
+      Message.error (this.Location, "first defined here");
+    }
+
+    match (additional) {
+      | PT.TopDeclaration.Class { decls = ds } =>
+        foreach (x : PT.ClassMember in ds) Define (x);
+      | _ =>
+        Message.error (additional.loc, "`partial' modifier cannot be used with this type")
+    }
+    
+    modifiers.custom_attrs += additional.GetCustomAttributes ();
+    modifiers.macro_attrs += additional.modifiers.macro_attrs;    
+  }
+
+
   internal static constrain_member (m : IMember, flags : BindingFlags) : bool
   {
     def is_public = m.Attributes %&& NemerleAttributes.Public;
@@ -986,175 +1246,7 @@ public class TypeBuilder : TypeInfo
     else
       member_map.Fold (add_few, [])
   }
-  
-  /** Searches for the members defined for the current TypeInfo, using the specified
-      binding constraints.
-      
-      <remarks>
-        Members include properties, methods, fields, events, and so on.
 
-        The following BindingFlags filter flags can be used to define which members to
-        include in the search: 
-        <ul>
-          <li>
-            You must specify either BindingFlags.Instance or BindingFlags.Static in order to
-            get a return.
-          </li>
-          <li>
-            Specify BindingFlags.Public to include public members in the search.
-          </li>
-          <li>
-            Specify BindingFlags.NonPublic to include non-public members (that is, private
-            and protected members) in the search.
-          </li>
-        </ul>
-
-        The following BindingFlags modifier flags can be used to change how the search
-        works: 
-
-        BindingFlags.DeclaredOnly to search only the members declared on the TType,
-        not members that were simply inherited.
-
-        Calling this method with only the Public flag or only the NonPublic flag will
-        return the specified members and does not require any other flags.
-
-        See Nemerle.Compiler.BindingFlags for more information.
-      </remarks>
-   */
-  public override GetMembers (bindingAttr : BindingFlags) : list [IMember]
-  {
-    get_members (bindingAttr, fun (m : IMember) {
-      constrain_member (m, bindingAttr)
-    })
-  }
-  
-  public override GetMembers () : list [IMember]
-  {
-    get_members ((0 :> BindingFlags), fun (_) { true })
-  }
-
-  public override GetFields (bindingAttr : BindingFlags) : list [IField]
-  {
-    def mems = get_members (bindingAttr, fun (x : IMember) {
-      match (x.GetKind ()) {
-        | MemberKind.Field => constrain_member (x, bindingAttr)
-        | _ => false
-      }
-    });
-    (mems :> list [IField])
-  }
-    
-  public GetFields () : list [IField]
-  {
-    def mems = get_members ((0 :> BindingFlags), fun (x : IMember) {
-      match (x.GetKind ()) {
-        | MemberKind.Field => true
-        | _ => false
-      }
-    });
-    (mems :> list [IField])
-  }
-
-
-  /** Searches for the methods defined for the current TypeInfo, using the
-      specified binding constraints.
-  */
-  public GetMethods (bindingAttr : BindingFlags) : list [IMethod]
-  {
-    def mems = get_members (bindingAttr, fun (x : IMember) {
-      if (x.MemberType == MemberTypes.Method)
-        constrain_member (x, bindingAttr)
-      else
-        false
-    });
-    (mems :> list [IMethod])
-  }
-
-  public GetMethods () : list [IMethod]
-  {
-    GetMethods (BindingFlags.Static %| BindingFlags.Instance %|
-                BindingFlags.Public %| BindingFlags.NonPublic)
-  }
-
-  /** Searches for the constructors defined for the current TypeBuilder, using the
-      specified BindingFlags.
-  */
-  public override GetConstructors (bindingAttr : BindingFlags) : list [IMethod]
-  {
-    def mems = get_members (bindingAttr, fun (x : IMember) {
-      if (x.MemberType == MemberTypes.Constructor)
-        constrain_member (x, bindingAttr)
-      else
-        false
-    });
-    (mems :> list [IMethod])
-  }
-
-  public GetConstructors () : list [IMethod]
-  {
-    GetConstructors (BindingFlags.Static %| BindingFlags.Instance %|
-                     BindingFlags.Public %| BindingFlags.NonPublic)
-  }
-
-  /** Searches for the types defined for the current TypeInfo, using the
-      specified BindingFlags.
-  */
-  public GetNestedTypes (bindingAttr : BindingFlags) : list [TypeInfo]
-  {
-    def mems = get_members (bindingAttr, fun (x : IMember) {
-      match (x.GetKind ()) {
-        | MemberKind.Type (t) =>
-          constrain_member (t, bindingAttr %| BindingFlags.Static %|
-                            BindingFlags.Instance)
-        | _ => false
-      }
-    });
-    (mems :> list [TypeInfo])
-  }
-
-  public GetNestedTypes () : list [TypeInfo]
-  {
-    GetNestedTypes (BindingFlags.Static %| BindingFlags.Instance %|
-                    BindingFlags.Public %| BindingFlags.NonPublic)
-  }
-
-  public GetProperties (bindingAttr : BindingFlags) : list [IProperty]
-  {
-    def mems = get_members (bindingAttr, fun (x : IMember) {
-      match (x.GetKind ()) {
-        | MemberKind.Property => constrain_member (x, bindingAttr)
-        | _ => false
-      }
-    });
-    (mems :> list [IProperty])
-  }
-    
-  public GetProperties () : list [IProperty]
-  {
-    def mems = get_members ((0 :> BindingFlags), fun (x : IMember) {
-      match (x.GetKind ()) { | MemberKind.Property => true | _ => false }
-    });
-    (mems :> list [IProperty])
-  }
-
-  public GetEvents (bindingAttr : BindingFlags) : list [IEvent]
-  {
-    def mems = get_members (bindingAttr, fun (x : IMember) {
-      match (x.GetKind ()) {
-        | MemberKind.Event => constrain_member (x, bindingAttr)
-        | _ => false
-      }
-    });
-    (mems :> list [IEvent])
-  }
-    
-  public GetEvents () : list [IEvent]
-  {
-    def mems = get_members ((0 :> BindingFlags), fun (x : IMember) {
-      match (x.GetKind ()) { | MemberKind.Event => true | _ => false }
-    });
-    (mems :> list [IEvent])
-  }
 
   [Nemerle.Assertions.Ensures (value != null)]
   public BindType (t : PT.PType) : TType
@@ -1179,56 +1271,6 @@ public class TypeBuilder : TypeInfo
     other_tenv.add_typarms (env, tp, this, check_parms = true)
   }
 
-  /**
-      Check if types that are already bound are correctly applied.
-      Check accessibility.
-   */
-  check_bound_types () : void
-  {
-    def check_type (t) {
-      | TType.ByRef (t) => check_type (t)
-      | TType.Out (t) => check_type (t)
-      | TType.Array (t, _) => check_type (t)
-      | TType.Function (ts, t) => check_type (ts); check_type (t)
-      | TType.Void => ()
-      | TType.Product (ts) => List.Iter (ts, check_type)
-      | TType.Variable => ()
-      | TType.Class (ti, args) =>
-        List.Iter (args, check_type);
-        _ = ti.MakeSubst (args);
-    };
-
-    // check accessibility of type we are aliasing
-    match (tydecl) {
-      | TypeDeclaration.Alias (t) =>
-        Tyutil.CheckAccessibility (this, accessibility, t);
-        check_type (t);
-      | _ => ()
-    };
-
-    // types we are deriving from should be at least as accessible as we
-    foreach (deriv_t : TType.Class in GetDirectSuperTypes ()) {
-      def is_iface = deriv_t.tycon.IsInterface;
-
-      // access check with exception of interfaces derived / implemented by class
-      // which case is not mentioned by http://www.jaggersoft.com/csharp_standard/10.5.4.htm
-      when (is_interface || !is_iface)
-        Tyutil.CheckAccessibility (this, accessibility, deriv_t);
-      check_type (deriv_t);
-    }
-    
-    foreach (tv in typarms)
-      foreach (t in Tyvar.constraints (tv)) {
-        Tyutil.CheckAccessibility (this, accessibility, t);
-        check_type (t);
-      }
-  }
-
-  public override Location : Location
-  {
-    get { loc }
-  }
-
   public BindAndAddMember (class_member : PT.ClassMember) : void
   {
     try { 
@@ -1236,60 +1278,6 @@ public class TypeBuilder : TypeInfo
     } catch {
       | _ : Recovery => ()
     }
-  }
-  
-  bind_and_add_member (class_member : PT.ClassMember) : IMember
-  {
-    Util.locate (class_member.loc, {
-      // if current class is static (it's a module) then sign its members to static
-      when (IsModule)
-        class_member.Attributes |= NemerleAttributes.Static;      
-        
-      when (is_interface) {
-        when (class_member.Attributes != NemerleAttributes.None)
-          Message.error ("interface members are not allowed"
-                         " to have any attributes specified");
-        class_member.Attributes = NemerleAttributes.Virtual %|
-          NemerleAttributes.Abstract %| NemerleAttributes.Public;
-      }
-      
-      match (class_member) {
-        | PT.ClassMember.EnumOption
-        | PT.ClassMember.TypeDeclaration => null
-          
-        | (PT.ClassMember.Field) as f =>
-          def r = NemerleField (this, f);
-          CheckFieldAttributes (r);
-          AddMember (r);
-          r : NemerleMember
-          
-        | (PT.ClassMember.Function) as f =>          
-          def r = NemerleMethod (this, f);
-          CheckMethodAttributes (r);
-          unless (instance_ctor_occured)
-            when (r.GetFunKind () matches FunKind.Constructor) instance_ctor_occured = true;
-
-          AddMember (r);
-          r
-          
-        | (PT.ClassMember.Property) as p =>
-          def r = NemerleProperty (this, p);
-          when (r.IsIndexer && r.Name == "Item") {
-            default_indexer = Some ("Item");
-            modifiers.AddCustomAttribute (System.AttributeTargets.Class,
-                                          <[ System.Reflection.DefaultMemberAttribute ("Item") ]>);
-          }
-          CheckPropertyAttributes (r);
-          AddMember (r);
-          r
-          
-        | (PT.ClassMember.Event) as e =>
-          def r = NemerleEvent (this, e);
-          CheckEventAttributes (r);
-          AddMember (r);
-          r
-      }
-    })
   }
 
   public AddMember (mem : IMember) : void
@@ -1411,32 +1399,78 @@ public class TypeBuilder : TypeInfo
     member_list = mem :: member_list;
   }
 
-  /** Return list of all members defined in this very type. */
-  public GetDirectMembers () : list [IMember]
+
+  public ConstructTypeBuilder () : void
   {
-    member_list
+    when (system_type == null) {
+      type_builder = Passes.ILGenerator.ConstructTypeBuilder (this);
+      system_type = type_builder;
+    }
   }
 
-  public GetTypeBuilder () : System.Reflection.Emit.TypeBuilder
+  public FinalizeType () : void
   {
-    assert (type_builder != null);
-    type_builder
-  }
+    when (!cannot_finalize && type_builder != null) {
+      define_additional_method_overrides ();
 
-  public GetVariantOptionParent () : TypeBuilder
-  {
-    assert (variant_option_parent != null);
-    variant_option_parent
+      system_type = type_builder.CreateType ();
+      type_builder = null;
+    }
   }
   
-  public GetVariantOptions () : list [TypeBuilder]
+  bind_and_add_member (class_member : PT.ClassMember) : IMember
   {
-    variant_options
+    Util.locate (class_member.loc, {
+      // if current class is static (it's a module) then sign its members to static
+      when (IsModule)
+        class_member.Attributes |= NemerleAttributes.Static;      
+        
+      when (is_interface) {
+        when (class_member.Attributes != NemerleAttributes.None)
+          Message.error ("interface members are not allowed"
+                         " to have any attributes specified");
+        class_member.Attributes = NemerleAttributes.Virtual %|
+          NemerleAttributes.Abstract %| NemerleAttributes.Public;
+      }
+      
+      match (class_member) {
+        | PT.ClassMember.EnumOption
+        | PT.ClassMember.TypeDeclaration => null
+          
+        | (PT.ClassMember.Field) as f =>
+          def r = NemerleField (this, f);
+          r.CheckAttributes ();
+          AddMember (r);
+          r : NemerleMember
+          
+        | (PT.ClassMember.Function) as f =>          
+          def r = NemerleMethod (this, f);
+          r.CheckAttributes ();
+          unless (instance_ctor_occured)
+            when (r.GetFunKind () matches FunKind.Constructor) instance_ctor_occured = true;
+          AddMember (r);
+          r
+          
+        | (PT.ClassMember.Property) as p =>
+          def r = NemerleProperty (this, p);
+          when (r.IsIndexer && r.Name == "Item") {
+            default_indexer = Some ("Item");
+            modifiers.AddCustomAttribute (System.AttributeTargets.Class,
+                                          <[ System.Reflection.DefaultMemberAttribute ("Item") ]>);
+          }
+          r.CheckAttributes ();
+          AddMember (r);
+          r
+          
+        | (PT.ClassMember.Event) as e =>
+          def r = NemerleEvent (this, e);
+          r.CheckAttributes ();
+          AddMember (r);
+          r
+      }
+    })
   }
 
-  mutable underlying_enum_type_iface : INumericType;
-  mutable underlying_enum_type : TType;
-  
   handle_underlying_enum_type () : void
   {
     match (parent_type) {
@@ -1726,227 +1760,58 @@ public class TypeBuilder : TypeInfo
     }        
   }
   
-  public static Init () : void
-  {
-    infos = [];
-  }
-
-  public ConstructTypeBuilder () : void
-  {
-    when (system_type == null) {
-      type_builder = Passes.ILGenerator.ConstructTypeBuilder (this);
-      system_type = type_builder;
-    }
-  }
-
-  
-  /*
-   * This method emits the warnings about unused global symbols.
-   */
-  private static check_for_unused_global_symbols (tb : TypeBuilder) : void
-  {
-    unless (tb.IsDelegate)
-    {
-      def is_variant = !(tb.variant_options matches []);
-      def is_alias = tb.tydecl is TypeDeclaration.Alias;
-      
-      // first, check if this type has ever been referenced
-      when (!(tb.HasBeenUsed || is_variant || is_alias))
-        Message.warning (tb.loc, $ "`$(tb)' is not externally visible and has never been referenced");
-
-      // then, proceed with the members of this type
-      foreach (member : IMember in tb.member_list)
-        when (!(member.HasBeenUsed || (member is TypeInfo) || (is_variant && member.Name == ".ctor")))
-        {
-          Message.warning (member.Location,
-                           $"$member is not externally visible and has never been referenced")
-        }
-    }
-  }
-
-  
-  public FinalizeType () : void
-  {
-    when (!cannot_finalize && type_builder != null) {
-      define_additional_method_overrides ();
-
-      system_type = type_builder.CreateType ();
-      type_builder = null;
-    }
-  }
-
-
-  /** Called at the end of the finialization. */
-  public static CheckFinalization () : void
-  {
-    Iter (fun (x : TypeBuilder) {
-      when (x.type_builder != null)
-        Message.fatal_error ($ "the type $(x) was not finalized, forgot the "
-                               "TypeBuilder.Compile () on it?")
-    });
-  }
-
-
   internal GetTyparms () : list [Tyvar.T]
   {
     typarms
   }
 
-  /** Return interfaces [this] needs to implement (that is it says it will
-      implement them, but they are not implemented in base class). */
-  public InterfacesToImplement () : list [TypeInfo] 
+  internal FixupDefinedClass () : void
   {
-    def base_class =
-      match (SuperClass ()) {
-        | Some (tc) => tc
-        | None => InternalType.Object_tc
-      };
-
-    def collect (t : TType.Class, acc) {
-      def tc = t.tycon;
-      match (tc.GetTydecl ()) {
-        | TypeDeclaration.Interface =>
-          match (base_class.SuperType (tc)) {
-            | Some => acc
-            | None => tc :: acc
-          }
-        | _ => acc
-      }
-    };
+    // finalization is blocked until call to Compile
+    this.cannot_finalize = true;
+    this.constant_object = None ();
     
-    List.FoldLeft (GetSuperTypes (), [], collect);
-  }
-
-  check_ctor_constraints () : void
-  {
-    def check_ctors (ty : TypeInfo) {
-      def check_ctor (member : IMember, acc) {
-        match (member.GetKind ()) {
-          | MemberKind.Method (meth) when meth.DeclaringType.Equals (ty) =>
-            match (meth.GetFunKind ()) {
-              | FunKind.Constructor =>
-                def is_default = List.IsEmpty (meth.GetHeader ().parms);
-                match (acc) {
-                  | (true, _) => (true, true)
-                  | _ => (is_default, true)
-                }
-              | _ => acc
-            }
-          | _ => acc
-        }
-      };
-
-      List.FoldLeft (ty.GetMembers (), (false, false), check_ctor)
-    };
-
-    match (parent_type) {
-      | Some (parent) =>
-        def (_, has_ctor) = check_ctors (this);
-        def (par_has_default, par_has_ctor) = check_ctors (parent.tycon);
-        when (!has_ctor && !par_has_default && par_has_ctor)
-          Message.error ("the type `" + FullName + 
-                         "' has no constructors and the parent type `" + 
-                         parent.tycon.FullName + "' has no default constructor")
-      | _ => ()
-    }
-  }
-
-
-  /**
-   * Checks for abstract method in non-abstract class errors.
-   * Marks abstract declaration/implementation pairs as used.
-   *
-   * FIXME: we should store information about abstract overrides
-   *        the same way we store information about interfaces,
-   *        this way this code would be linear instead of n^2
-   */
-  check_abstract () : void
-  {
-    def override_methods = Hashtable (30);
-    def type_members = GetMembers ();
-
-    // first, check for the abstract method/non-abstract class errors
-    foreach (m : IMember in type_members)
-      match (m.GetKind ()) {
-        | MemberKind.Method when m.Attributes %&& NemerleAttributes.Abstract =>
-          unless (Attributes %&& NemerleAttributes.Abstract)
-          {
-            attributes |= NemerleAttributes.Abstract;
-            Message.error ($"$m is abstract, but the parent class `$(FullName)' is not");
-          }
-            
-        | _ => ()
-      }
-
-    // find all the `override' methods in this type
-    foreach (m : IMember in type_members)
-      match (m.GetKind ()) {
-        | MemberKind.Method when m.Attributes %&& NemerleAttributes.Override =>
-          def previous_methods =
-            match (override_methods.Get (m.Name)) {
-              | Some (methods) => methods
-              | _ => []
-            }
-            
-          override_methods.Set (m.Name, (m :> IMethod) :: previous_methods);
-          m.HasBeenUsed = true
+    Util.locate (loc, process_macro_attributes (MacroPhase.BeforeInheritance));
     
-        | _ => ()
-      }
-
-    // then, mark abstract declaration/implementation pair as used
-    def walk_hierarchy (tycon : TypeInfo)
-    {
-      // FIXME: this should be defined on Fun_header -- IsCompatible () (?)
-      def fun_parms_agree (abstract_parms : list [Fun_parm], impl_parms : list [Fun_parm])
-      {          
-        | ([], []) => true
-          
-        | (abstract_parm :: rest_abstract_parms, impl_parm :: rest_impl_parms) =>
-          abstract_parm.name == impl_parm.name &&
-          Tyutil.types_eq (abstract_parm.ty, impl_parm.ty) &&
-          fun_parms_agree (rest_abstract_parms, rest_impl_parms)
-          
-        | _ => false
-      }
-      
-      override_methods.Iter (fun (name : string, meths : list [IMethod]) {
-        foreach (meth : IMethod in meths) 
-        {
-          def meth_parms = meth.GetHeader ().parms;
-        
-          def possible_abstract_meths =
-            List.Filter (tycon.LookupMember (name), fun (mem : IMember) {            
-              mem.Attributes %&& NemerleAttributes.Abstract
-            });
-
-          foreach (abstract_meth : IMember in possible_abstract_meths) {
-            def abstract_meth = abstract_meth :> IMethod;
-
-            when (fun_parms_agree (abstract_meth.GetHeader ().parms, meth_parms)) {
-              abstract_meth.HasBeenUsed = true;
-              meth.HasBeenUsed = true
-            }
-          }
-        }
-      })
+    when (run_phase >= 1)
+      match (enclosing_type) {
+        | Some (ti) =>
+          make_tyenvs (ti.tenv)
+        | None =>
+          make_tyenvs (Tyvar.TEnv ())
+      };
+    when (run_phase >= 2)
+      Util.locate (loc, bind_types ());
+    when (run_phase >= 3)
+      construct_subtyping_map ();
+    when (run_phase >= 4)
+      check_bound_types ();
+    when (run_phase >= 5) {
+      process_macro_attributes (MacroPhase.BeforeTypedMembers);
+      add_members ();
+      process_macro_attributes (MacroPhase.WithTypedMembers)
     }
-    and recurse (supertypes : list [TType.Class])
-    {
-      | ty :: rest =>
-        walk_hierarchy (ty.tycon);
-        recurse (rest)
-
-      | [] => ()
-    }
-
-    recurse (GetDirectSuperTypes ())
   }
-
   
   /**
+   * Propagates the SpecialName mark throughout the member hierarchy
+   */
+  private mark_members_with_special_name () : void
+  {
+    foreach (member : IMember in member_list)
+      match (member) {
+        | nm : NemerleMember =>  nm.MarkWithSpecialName ()
+        | _ => ()
+      }
+
+    foreach (tb : TypeBuilder in contained_types)
+      tb.MarkWithSpecialName ();
+  }
+  
+
+  /**
    * Defines additional method overrides that have been gathered
-   * in check_method_implements from this type's parent types.
+   * in resolve_method_implements from this type's parent types.
    */
   private define_additional_method_overrides () : void
   {
@@ -1964,7 +1829,7 @@ public class TypeBuilder : TypeInfo
   /**
    * Resolves overrides for the required interface methods
    */
-  check_method_implements () : void
+  resolve_method_implements () : void
   {
     check_abstract ();
 
@@ -2196,7 +2061,7 @@ public class TypeBuilder : TypeInfo
   }
 
 
-  process_macro_attributes (stage : int) : void
+  process_macro_attributes (stage : MacroPhase) : void
   {
     def process_attributes (self_parm, suff, mods : Modifiers, meth : IMethod) {
       mutable macro_attrs = mods.macro_attrs;
@@ -2246,7 +2111,6 @@ public class TypeBuilder : TypeInfo
             TypingContext.PopColor ();
 
             assert (res == null);
-            ()
         }
       };
       mods.macro_attrs = macro_attrs;
@@ -2327,22 +2191,103 @@ public class TypeBuilder : TypeInfo
     };
 
     match (stage) {
-      | 1 =>
+      | MacroPhase.BeforeInheritance =>
         process_attributes ([PT.SyntaxElement.TypeBuilder (this)], ":type:postscan", modifiers, null);
         iter_decls (":postscan");
 
-      | 2 =>
+      | MacroPhase.BeforeTypedMembers =>
         process_attributes ([PT.SyntaxElement.TypeBuilder (this)], ":type:preadd", modifiers, null);
         iter_decls (":preadd");
         
-      | 3 =>
+      | MacroPhase.WithTypedMembers =>
         process_attributes ([PT.SyntaxElement.TypeBuilder (this)], ":type:postadd", modifiers, null);
         List.Iter (GetDirectMembers (), process_typed_member);
 
-      | _ => assert (false)
+      | _ => Util.ice ("cannot run macros processing with none phase")
     }
   }
 
+  /* ---------------------------------------------------------------------- */
+  /* -- GLOBAL PROCESSING OF ALL TYPEBUILDERS------------------------------ */
+  /* ---------------------------------------------------------------------- */
+
+  public static Init () : void
+  {
+    infos = [];
+  }
+
+  /**
+   * Construct datastructures we use to check subtyping relations.
+   *
+   * <remarks>
+   *   This probably the hardest part of processing type declarations.
+   *
+   *   Each type directly subtypes types it extends or implements.  This
+   *   pass computes transitive closure of direct subtyping relation
+   *   and stores it [TypeBuilder.supertypes] map.  .NET generics doesn't allow
+   *   same type to be subtyped under different instantiations, so we
+   *   use map from (id of) subtyped TypeBuilder object to actual parameters
+   *   of subtyped type.
+   * </remarks>
+   */
+  static determine_subtyping () : void
+  {
+    Iter (fun (ti : TypeBuilder) { 
+            ti.construct_subtyping_map () 
+          });
+  }
+
+  /**
+   * Iterate over all types defined in source code.
+   *
+   * Supertypes are always processed before subtypes otherwise
+   * source code order is retained.
+   */
+  public static Iter (f : TypeBuilder -> void) : void
+  {
+    def working_on = Util.next_id ();
+    def done = Util.next_id ();
+
+    def maybe_f (ti : TypeBuilder) {
+      if (ti.phase == done) ()
+      else if (ti.phase == working_on)
+        Message.error(ti.loc, "type definition for `" + ti.FullName + "' is cyclic")
+      else {
+        ti.phase = working_on;
+        Util.locate (ti.loc, {
+          List.Iter (ti.iterate_first, maybe_f);
+          f (ti)
+        });
+        ti.phase = done
+      }
+    }
+
+    List.Iter (List.Rev (infos), maybe_f)
+  }
+
+  /**
+   * Iterate over top level types in source code order.
+   */
+  public static SourceTopIter (f : TypeBuilder -> void) : void
+  {
+    foreach (x : TypeBuilder in List.Rev (infos))
+      when (x.enclosing_type matches None)
+        Util.locate (x.loc, f (x))
+  }
+
+  /**
+   * Iterate over top level types in inheritance order.
+   */
+  public static TopIter (f : TypeBuilder -> void) : void
+  {
+    def wrap (x : TypeBuilder) : void {
+      match (x.enclosing_type) {
+        | Some => ()
+        | None => Util.locate (x.loc, f (x))
+      }
+    };
+    Iter (wrap);
+  }
   
   /**
    * Main function of type declaration handling pass.
@@ -2360,7 +2305,7 @@ public class TypeBuilder : TypeInfo
   public static Run () : void
   {
     foreach (x : TypeBuilder in List.Rev (infos))
-      Util.locate (x.loc, x.process_macro_attributes (1));
+      Util.locate (x.loc, x.process_macro_attributes (MacroPhase.BeforeInheritance));
 
     run_phase = 1;
     SourceTopIter (fun (x : TypeBuilder) { 
@@ -2383,11 +2328,11 @@ public class TypeBuilder : TypeInfo
 
     run_phase = 5;
     
-    Iter (fun (x : TypeBuilder) { x.process_macro_attributes (2) });
+    Iter (fun (x : TypeBuilder) { x.process_macro_attributes (MacroPhase.BeforeTypedMembers) });
 
     Iter (fun (x : TypeBuilder) { x.add_members () });
 
-    Iter (fun (x : TypeBuilder) { x.process_macro_attributes (3) });
+    Iter (fun (x : TypeBuilder) { x.process_macro_attributes (MacroPhase.WithTypedMembers) });
 
     // add constant object constructors for constant variant options
     Iter (fun (x : TypeBuilder) { x.add_constant_variant_ctors () });
@@ -2401,7 +2346,7 @@ public class TypeBuilder : TypeInfo
     def check_method_implements (ti : TypeBuilder) {
       match (ti.GetTydecl ()) {
         | TypeDeclaration.Interface => ()
-        | _ => ti.check_method_implements ()
+        | _ => ti.resolve_method_implements ()
       }
     };
 
@@ -2411,6 +2356,123 @@ public class TypeBuilder : TypeInfo
   }
 
 
+  /* ---------------------------------------------------------------------- */
+  /* -- VALIDITY CHECKS --------------------------------------------------- */
+  /* ---------------------------------------------------------------------- */
+
+  /**
+      Check if types that are already bound are correctly applied.
+      Check accessibility.
+   */
+  check_bound_types () : void
+  {
+    def check_type (t) {
+      | TType.ByRef (t) => check_type (t)
+      | TType.Out (t) => check_type (t)
+      | TType.Array (t, _) => check_type (t)
+      | TType.Function (ts, t) => check_type (ts); check_type (t)
+      | TType.Void => ()
+      | TType.Product (ts) => List.Iter (ts, check_type)
+      | TType.Variable => ()
+      | TType.Class (ti, args) =>
+        List.Iter (args, check_type);
+        _ = ti.MakeSubst (args);
+    };
+
+    // check accessibility of type we are aliasing
+    match (tydecl) {
+      | TypeDeclaration.Alias (t) =>
+        Tyutil.CheckAccessibility (this, accessibility, t);
+        check_type (t);
+      | _ => ()
+    };
+
+    // types we are deriving from should be at least as accessible as we
+    foreach (deriv_t : TType.Class in GetDirectSuperTypes ()) {
+      def is_iface = deriv_t.tycon.IsInterface;
+
+      // access check with exception of interfaces derived / implemented by class
+      // which case is not mentioned by http://www.jaggersoft.com/csharp_standard/10.5.4.htm
+      when (is_interface || !is_iface)
+        Tyutil.CheckAccessibility (this, accessibility, deriv_t);
+      check_type (deriv_t);
+    }
+    
+    foreach (tv in typarms)
+      foreach (t in Tyvar.constraints (tv)) {
+        Tyutil.CheckAccessibility (this, accessibility, t);
+        check_type (t);
+      }
+  }
+
+  /*
+   * This method emits the warnings about unused global symbols.
+   */
+  private static check_for_unused_global_symbols (tb : TypeBuilder) : void
+  {
+    unless (tb.IsDelegate)
+    {
+      def is_variant = !(tb.variant_options matches []);
+      def is_alias = tb.tydecl is TypeDeclaration.Alias;
+      
+      // first, check if this type has ever been referenced
+      when (!(tb.HasBeenUsed || is_variant || is_alias))
+        Message.warning (tb.loc, $ "`$(tb)' is not externally visible and has never been referenced");
+
+      // then, proceed with the members of this type
+      foreach (member : IMember in tb.member_list)
+        when (!(member.HasBeenUsed || (member is TypeInfo) || (is_variant && member.Name == ".ctor")))
+        {
+          Message.warning (member.Location,
+                           $"$member is not externally visible and has never been referenced")
+        }
+    }
+  }
+
+  /** Called at the end of the finialization. */
+  public static CheckFinalization () : void
+  {
+    Iter (fun (x : TypeBuilder) {
+      when (x.type_builder != null)
+        Message.fatal_error ($ "the type $(x) was not finalized, forgot the "
+                               "TypeBuilder.Compile () on it?")
+    });
+  }
+
+  check_ctor_constraints () : void
+  {
+    def check_ctors (ty : TypeInfo) {
+      def check_ctor (member : IMember, acc) {
+        match (member.GetKind ()) {
+          | MemberKind.Method (meth) when meth.DeclaringType.Equals (ty) =>
+            match (meth.GetFunKind ()) {
+              | FunKind.Constructor =>
+                def is_default = List.IsEmpty (meth.GetHeader ().parms);
+                match (acc) {
+                  | (true, _) => (true, true)
+                  | _ => (is_default, true)
+                }
+              | _ => acc
+            }
+          | _ => acc
+        }
+      };
+
+      List.FoldLeft (ty.GetMembers (), (false, false), check_ctor)
+    };
+
+    match (parent_type) {
+      | Some (parent) =>
+        def (_, has_ctor) = check_ctors (this);
+        def (par_has_default, par_has_ctor) = check_ctors (parent.tycon);
+        when (!has_ctor && !par_has_default && par_has_ctor)
+          Message.error ("the type `" + FullName + 
+                         "' has no constructors and the parent type `" + 
+                         parent.tycon.FullName + "' has no default constructor")
+      | _ => ()
+    }
+  }
+  
   /**
    * This method iterates through all the known type builders,
    * looking for unused global symbols.
@@ -2421,124 +2483,96 @@ public class TypeBuilder : TypeInfo
       Iter (check_for_unused_global_symbols)
   }
 
-  
-  internal FixupDefinedClass () : void
-  {
-    // finalization is blocked until call to Compile
-    this.cannot_finalize = true;
-    this.constant_object = None ();
-    when (run_phase >= 1)
-      match (enclosing_type) {
-        | Some (ti) =>
-          make_tyenvs (ti.tenv)
-        | None =>
-          make_tyenvs (Tyvar.TEnv ())
-      };
-    when (run_phase >= 2)
-      Util.locate (loc, bind_types ());
-    when (run_phase >= 3)
-      construct_subtyping_map ();
-    when (run_phase >= 4)
-      check_bound_types ();
-    when (run_phase >= 5)
-      add_derived_members ();
-  }
-
-
-  public AddImplementedInterface (t : PT.PType) : void
-  {
-    match (pt_tydecl) {
-      | (PT.TopDeclaration.Class) as td => td.t_extends += [t]
-      | (PT.TopDeclaration.Interface) as td => td.t_extends += [t]
-      | (PT.TopDeclaration.Variant) as td => td.t_extends += [t]
-      | _ => Message.error ("cannot add interface to this kind of type")
-    }
-  }
-  
-  public DefineNestedType (td : PT.ClassMember) : TypeBuilder
-  {
-    | PT.ClassMember.TypeDeclaration (td) =>
-      def tyinfo = GlobalEnv.AddType (Some (this), None (), env, td);
-      tyinfo.FixupDefinedClass ();
-      tyinfo
-    | _ =>
-      Message.error ("expected declaration of nested type");
-      null
-  }
-
-
   /**
-   * Adds a definition and returns the new NemerleMember, if available
+   * Checks for abstract method in non-abstract class errors.
+   * Marks abstract declaration/implementation pairs as used.
+   *
+   * FIXME: we should store information about abstract overrides
+   *        the same way we store information about interfaces,
+   *        this way this code would be linear instead of n^2
    */
-  public DefineAndReturn (f : PT.ClassMember) : option [NemerleMember]
+  check_abstract () : void
   {
-    if (member_map == null) {
-      additional_decls = f :: additional_decls;
-      None ()
-    }
-    else {
-      try {
-        def mem = bind_and_add_member (f);
-        Passes.ILGenerator.MemberAdded (this, mem);
-        Some (mem :> NemerleMember)
-      } catch {
-        | _ : Recovery => None ()
-      }
-    }
-  }
+    def override_methods = Hashtable (30);
+    def type_members = GetMembers ();
 
-
-  /**
-   * Adds a definition to this type
-   */
-  public Define (f : PT.ClassMember) : void
-  {
-    ignore (DefineAndReturn (f))
-  }
-
-
-  /**
-   * Builds this type
-   */
-  public Compile () : void
-  { 
-    cannot_finalize = false;
-    when (type_builder != null) {
-      this.FinalizeType ();
-      Passes.MarkTypeBuilderCompiled ();
-    }
-  }
-
-
-  public FindAttribute (looking_for : TypeInfo) : option [PT.PExpr]
-  {
-    mutable result = None ();
-    
-    // find our attribute
-    foreach (expr in GetModifiers ().custom_attrs)
-      match (AttributeCompiler.ResolveAttribute (this.env, expr)) {
-        | Some ((t, _)) =>
-          when (looking_for.Equals (t))
-            result = Some (expr)
+    // first, check for the abstract method/non-abstract class errors
+    foreach (m : IMember in type_members)
+      match (m.GetKind ()) {
+        | MemberKind.Method when m.Attributes %&& NemerleAttributes.Abstract =>
+          unless (Attributes %&& NemerleAttributes.Abstract)
+          {
+            attributes |= NemerleAttributes.Abstract;
+            Message.error ($"$m is abstract, but the parent class `$(FullName)' is not");
+          }
             
         | _ => ()
       }
 
-    result
+    // find all the `override' methods in this type
+    foreach (m : IMember in type_members)
+      match (m.GetKind ()) {
+        | MemberKind.Method when m.Attributes %&& NemerleAttributes.Override =>
+          def previous_methods =
+            match (override_methods.Get (m.Name)) {
+              | Some (methods) => methods
+              | _ => []
+            }
+            
+          override_methods.Set (m.Name, (m :> IMethod) :: previous_methods);
+          m.HasBeenUsed = true
+    
+        | _ => ()
+      }
+
+    // then, mark abstract declaration/implementation pair as used
+    def walk_hierarchy (tycon : TypeInfo)
+    {
+      // FIXME: this should be defined on Fun_header -- IsCompatible () (?)
+      def fun_parms_agree (abstract_parms : list [Fun_parm], impl_parms : list [Fun_parm])
+      {          
+        | ([], []) => true
+          
+        | (abstract_parm :: rest_abstract_parms, impl_parm :: rest_impl_parms) =>
+          abstract_parm.name == impl_parm.name &&
+          Tyutil.types_eq (abstract_parm.ty, impl_parm.ty) &&
+          fun_parms_agree (rest_abstract_parms, rest_impl_parms)
+          
+        | _ => false
+      }
+      
+      override_methods.Iter (fun (name : string, meths : list [IMethod]) {
+        foreach (meth : IMethod in meths) 
+        {
+          def meth_parms = meth.GetHeader ().parms;
+        
+          def possible_abstract_meths =
+            List.Filter (tycon.LookupMember (name), fun (mem : IMember) {            
+              mem.Attributes %&& NemerleAttributes.Abstract
+            });
+
+          foreach (abstract_meth : IMember in possible_abstract_meths) {
+            def abstract_meth = abstract_meth :> IMethod;
+
+            when (fun_parms_agree (abstract_meth.GetHeader ().parms, meth_parms)) {
+              abstract_meth.HasBeenUsed = true;
+              meth.HasBeenUsed = true
+            }
+          }
+        }
+      })
+    }
+    and recurse (supertypes : list [TType.Class])
+    {
+      | ty :: rest =>
+        walk_hierarchy (ty.tycon);
+        recurse (rest)
+
+      | [] => ()
+    }
+
+    recurse (GetDirectSuperTypes ())
   }
-
-
-  public override HasAttribute (attribute : TypeInfo) : bool
-  {
-     Option.IsSome (FindAttribute (attribute))
-  }
-  
-  /** Nemerle.Reflection  interfaces */
-
-
-  /* ---------------------------------------------------------------------- */
-  /* -- VALIDITY CHECKS --------------------------------------------------- */
-  /* ---------------------------------------------------------------------- */
 
   /**
    * Performs access attributes related checks. Returns an optional
@@ -2562,233 +2596,7 @@ public class TypeBuilder : TypeInfo
     else
       Some ("inconsistent access attributes specified")
   }
-
-
-  /**
-   * Performs attributes checks for method definitions.
-   */
-  internal CheckMethodAttributes (meth : NemerleMethod) : void
-  {
-    def attrs = meth.Attributes;
-    def loc = meth.Location;
-
-    when (is_interface) {
-      unless (meth.HasAbstractBody)
-        Message.error (loc, "interface method cannot have body");
-      match (meth.GetFunKind ()) {
-        | FunKind.Method (_ :: _) =>
-          Message.error (loc, "interface method cannot implement anything");
-        | _ => ()
-      }
-    }
-    
-    // only allow static methods to be extern
-    def meth_is_instance =
-      !(attrs %&& NemerleAttributes.Static);
-            
-    when (meth_is_instance && meth.HasExternBody)
-      Message.fatal_error (loc, "only static methods are allowed to be extern: " +
-                           meth.ToString ());      
-
-    // only allow abstract methods to have abstract bodies
-    def meth_is_abstract =
-      attrs %&& NemerleAttributes.Abstract;
-
-    when (meth.HasAbstractBody && !meth_is_abstract)
-      Message.fatal_error (loc, "missing body of a non-abstract method: " +
-                           meth.ToString ());
-                           
-    // most of the checks are common with the properties and events:
-    check_method_like_attributes (meth :> IMember, "method", "methods")
-  }
-
-
-  /**
-   * Performs attributes checks for properties definitions.
-   */
-  internal CheckPropertyAttributes (prop : NemerleProperty) : void
-  {
-    def attrs = prop.Attributes;
-    def loc = prop.Location;
-
-    // make sure no static indexers get defined
-    def prop_is_static =
-      attrs %&& NemerleAttributes.Static;
-    
-    when (prop_is_static && prop.IsIndexer)
-      Message.fatal_error (loc, "indexer properties are not allowed to be static: " +
-                           prop.ToString ());
-    
-    // most of the checks are common with the methods and events:
-    check_method_like_attributes (prop :> IMember, "property", "properties")
-  }
   
-
-  /**
-   * Performs attributes checks for events definitions.
-   */
-  internal CheckEventAttributes (evt : NemerleEvent) : void
-  {
-    // most of the checks are common with the properties and methods:
-    check_method_like_attributes ((evt :> IMember), "event", "events")
-  }
-
-  
-  /**
-   * Performs the attributes checks that are common to methods and properties
-   */
-  private check_method_like_attributes (mem : IMember, title : string,
-                                        title_plural : string) : void
-  {                                               
-    def attrs = mem.Attributes;
-    def loc = mem.Location;
-    
-    // make sure only a valid subset of NemerleAttributes has been used
-    def check_for_invalid_attr (attr : NemerleAttributes, attr_name : string)
-    {
-      when (attrs %&& attr)
-        Message.fatal_error (loc, $"invalid attribute `$(attr_name)' specified"
-                             "for $title: $mem")
-    }
-
-    check_for_invalid_attr (NemerleAttributes.Mutable, "mutable");
-    check_for_invalid_attr (NemerleAttributes.Struct, "struct");
-    check_for_invalid_attr (NemerleAttributes.Macro, "macro");
-    check_for_invalid_attr (NemerleAttributes.Volatile, "volatile");
-
-    // check the access attributes for consistency
-    match (CheckAccessAttributes (attrs)) {
-      | Some (msg) => Message.fatal_error (loc, $"$msg for $title: $mem")
-      | _ => ()
-    }
-    
-    // make sure 'virtual', 'new' and 'override' never appear at once 
-    def mem_is_virtual =
-      attrs %&& NemerleAttributes.Virtual;
-
-    def mem_is_new =
-      attrs %&& NemerleAttributes.New;
-
-    def mem_is_override =
-      attrs %&& NemerleAttributes.Override;
-
-    when (mem_is_override && mem_is_new)
-      Message.fatal_error (loc, $"both `override' and `new' attributes specified"
-                           " for $title: $mem");
-
-    // only allow 'override' methods/properties/events to be 'sealed'
-    def mem_is_sealed =
-      attrs %&& NemerleAttributes.Sealed;
-
-    when (mem_is_sealed && !mem_is_override)
-      Message.fatal_error (loc, $"only `override' $title are allowed to be `sealed': $mem");
-                           
-    // do not allow new virtual methods/properties/events in sealed clases
-    when (IsSealed && mem_is_virtual && !mem_is_override && !IsDelegate)
-      Message.fatal_error (loc, mem.Name +
-                           " is a new virtual member in a sealed class " +
-                           this.FullName);
-
-    // do not allow private abstract methods
-    def mem_is_private =
-      attrs %&& NemerleAttributes.Private;
-
-    def mem_is_abstract =
-      attrs %&& NemerleAttributes.Abstract;
-            
-    when (mem_is_abstract && mem_is_private)
-      Message.fatal_error (loc, "abstract " + title_plural + " are not allowed to be private: " +
-                           mem.ToString ());      
-
-    // do not allow private 'virtual' or 'override' methods/properties/events
-    when (mem_is_virtual && mem_is_private)
-      Message.fatal_error (loc, "virtual " + title_plural + " are not allowed to be private: " +
-                           mem.ToString ());      
-    
-    when (mem_is_override && mem_is_private)
-      Message.fatal_error (loc, $"override $title_plural are not allowed to be private: $mem");
-                           
-    // do not allow to mix abstract with the 'override' modifier
-    when (mem_is_abstract && mem_is_override)
-      Message.fatal_error (loc, $"abstract $title_plural are not allowed to have the "
-                           "'override' modifier: $mem");      
-
-    // static methods/properties cannot be abstract, virtual or override
-    def mem_is_static =
-      attrs %&& NemerleAttributes.Static;
-      
-    when ((mem_is_abstract || mem_is_virtual || mem_is_override) && mem_is_static)
-      Message.fatal_error (loc, $"static $title_plural are not allowed to have the "
-                           "`virtual' or `override' modifier: $mem");      
-
-    // do not allow protected and protected internal methods in structures
-    when (IsStruct && (attrs %&& NemerleAttributes.Protected))
-    {
-      def msg =
-        if (attrs %&& NemerleAttributes.Internal)
-          "protected internal"
-        else
-          "protected";
-          
-      Message.fatal_error (loc, $"$title_plural defined in a struct are not"
-                           " allowed to be $msg: $mem")
-    }
-  }
-
-
-  /**
-   * Performs attributes checks for field definitions.
-   */
-  internal CheckFieldAttributes (fld : NemerleField) : void
-  {
-    def attrs = fld.Attributes;
-    def loc = fld.Location;
-    
-    // make sure only a valid subset of NemerleAttributes has been used
-    def check_for_invalid_attr (attr : NemerleAttributes, attr_name : string)
-    {
-      when (attrs %&& attr)
-        Message.fatal_error (loc, "invalid attribute `" + attr_name +
-                             "' specified for field: " + fld.ToString ())                           
-    }
-
-    check_for_invalid_attr (NemerleAttributes.Abstract, "abstract");
-    check_for_invalid_attr (NemerleAttributes.Virtual, "virtual");
-    check_for_invalid_attr (NemerleAttributes.Sealed, "sealed");
-    check_for_invalid_attr (NemerleAttributes.Override, "override");
-    check_for_invalid_attr (NemerleAttributes.Struct, "struct");
-    check_for_invalid_attr (NemerleAttributes.Macro, "macro");
-    
-    // check the access attributes for consistency
-    match (CheckAccessAttributes (attrs)) {
-      | Some (msg) =>
-        Message.fatal_error (loc, $"$msg for field: $fld")
-      | _ => ()
-    }
-
-    // check for non-mutable / volatile consistency
-    def is_mutable = attrs %&& NemerleAttributes.Mutable;
-
-    def is_volatile = attrs %&& NemerleAttributes.Volatile;
-
-    when (!is_mutable && is_volatile)
-      Message.fatal_error (loc, $"only mutable fields are allowed to be volatile: $fld");
-
-    // do not allow protected and protected internal methods in structures
-    when (IsStruct && (attrs %&& NemerleAttributes.Protected))
-    {
-      def msg =
-        if (attrs %&& NemerleAttributes.Internal)
-          "protected internal"
-        else
-          "protected";
-          
-      Message.fatal_error (loc, "fields defined in a struct are not allowed to be " +
-                           msg + ": " + fld.ToString ())
-    }
-  }
-
-
   /**
    * Performs attributes checks for type definitions.
    */
@@ -2851,36 +2659,6 @@ public class TypeBuilder : TypeInfo
     when (IsAbstract && IsSealed)
       Message.fatal_error (loc, title () + "s are not allowed to be abstract and sealed at the same time: " +
                            FullName)
-  }
-
-  public DisableImplicitConstructor () : void
-  {
-    instance_ctor_occured = true;
-  }
-  
-  /**
-   * Marks this with the SpecialName attribute, the attribute will
-   * be propagated to members and contained types at a later stage.
-   */
-  public MarkWithSpecialName () : void
-  {
-    attributes |= NemerleAttributes.SpecialName
-  }
-
-  
-  /**
-   * Propagates the SpecialName mark throughout the member hierarchy
-   */
-  private mark_members_with_special_name () : void
-  {
-    foreach (member : IMember in member_list)
-      match (member) {
-        | nm : NemerleMember =>  nm.MarkWithSpecialName ()
-        | _ => ()
-      }
-
-    foreach (tb : TypeBuilder in contained_types)
-      tb.MarkWithSpecialName ();
   }
 }
 
