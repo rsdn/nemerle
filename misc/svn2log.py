@@ -33,6 +33,7 @@ import time
 import re
 import getopt
 import string
+import codecs
 
 from xml.utils import qp_xml
 
@@ -213,7 +214,10 @@ Please send bug reports and comments to author:
   Michal Moskal <malekith@pld-linux.org>
 
 """ % (sys.argv[0], sys.argv[0]))
-  
+
+def utf_open(name, mode):
+  return codecs.open(name, mode, encoding="utf-8", errors="replace")
+
 def process_opts():
   try:
     opts, args = getopt.gnu_getopt(sys.argv[1:], "o:u:p:x:d:r:d:h", 
@@ -238,7 +242,7 @@ def process_opts():
     elif o in ("--domain", "-d"):
       default_domain = a
     elif o in ("--users", "-u"):
-      f = open(a)
+      f = utf_open(a, "r")
       for line in f.xreadlines():
         w = line.split()
         if len(line) < 1 or line[0] == '#' or len(w) < 2: 
@@ -256,9 +260,9 @@ def process_opts():
     usage()
     sys.exit(2)
   if len(args) == 1:
-    fin = open(args[0])
+    fin = open(args[0], "r")
   if fout == None:
-    fout = open("ChangeLog", "w")
+    fout = utf_open("ChangeLog", "w")
   process(fin, fout)
 
 if __name__ == "__main__":
