@@ -5,7 +5,7 @@
 include ../../config.mak
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
-NCC_DIR = ../../boot
+NCC_DIR = ../../ncc/out.stage3
 NCC = $(NCC_DIR)/ncc.exe -q
 APP_DIR = webapps
 
