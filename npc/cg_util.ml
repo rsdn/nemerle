@@ -65,10 +65,24 @@ let begin_ns name =
 let end_ns name =
   if String.contains name '.' then out "} // end ns \n" else ()
 
+let mangle s =
+  let r = String.copy s in
+  for i = 0 to String.length s - 1 do
+    let ch =
+      match s.[i] with
+      | 'a' .. 'z' 
+      | 'A' .. 'Z' 
+      | '0' .. '9' -> s.[i]
+      | _ -> '_'
+    in
+    r.[i] <- ch
+  done;
+  r
+  
 let val_name v =
   match v.val_kind with
   | Val_parm when v.val_in_closure ->
-    xf "__N__var_%d_%s" v.val_id v.val_name
+    xf "__N__var_%d_%s" v.val_id (mangle v.val_name)
   | Val_parm -> v.val_name
   | Val_global -> 
     begin
@@ -80,7 +94,7 @@ let val_name v =
   | Val_pattern
   | Val_exn
   | Val_local _ ->
-    xf "__N__var_%d_%s" v.val_id v.val_name
+    xf "__N__var_%d_%s" v.val_id (mangle v.val_name)
   
 let fun_name f =
   match f.fun_defined_in_fun with
