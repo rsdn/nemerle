@@ -155,12 +155,12 @@ clean:
 
 www: nemerle-web.tar.gz
 
-nemerle-web.tar.gz: $(normal_docs) $(wildcard styles/*.css styles/*.png)
+nemerle-web.tar.gz: $(normal_docs) $(wildcard styles/*.css styles/*.png styles/*.jpg)
 	$(MAKE) verify-html
 	rm -rf www
 	mkdir -p www/{styles,course/styles}
-	cp styles/*.{css,png} www/styles/
-	cp styles/*.{css,png} www/course/styles/
+	cp styles/*.{css,png,jpg} www/styles/
+	cp styles/*.{css,png,jpg} www/course/styles/
 	cp *.{html,ps,pdf} www/
 	cp course/*.html www/course/
 	for f in www/*.pdf www/*.ps ; do gzip <$$f > $$f.gz ; done
@@ -183,6 +183,6 @@ dist: $(html-no-course)
 	$(CP) html
 	$(Q)cp $(html-no-course) $(DIR)/html
 	$(CP) css
-	$(Q)cp styles/*.{css,png} $(DIR)/html/styles
+	$(Q)cp styles/*.{css,png,jpg} $(DIR)/html/styles
 	$(CP)
 	$(Q)cp $(DISTFILES) $(DIR)
