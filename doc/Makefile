@@ -162,7 +162,7 @@ nemerle-web.tar.gz: $(normal_docs) $(wildcard styles/*.css styles/*.png styles/*
 	mkdir -p www/{styles,course/styles,images}
 	cp styles/*.{css,png} www/styles/
 	cp styles/*.{css,png} www/course/styles/
-	cp images/*.* images/
+	cp images/* www/images/
 	cp *.{html,ps,pdf} www/
 	cp course/*.html www/course/
 	for f in www/*.pdf www/*.ps ; do gzip <$$f > $$f.gz ; done
