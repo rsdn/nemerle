@@ -35,6 +35,7 @@ include ../config.mak
 
 COMPILER_PATH = ../boot/
 COMPILER      = $(COMPILER_PATH)ncc.exe
+EXECUTE       = $(NET_ENGINE) $(NET_FLAGS)
 RUN_COMPILER  = $(Q)$(TIME) $(EXECUTE) $(COMPILER) -no-stdlib $(COMP_FLAGS)
 
 GENERIC_SRC =
@@ -103,6 +104,12 @@ DISTFILES = \
 	$(NEMERLE_COMPILER_DLL_SRC) \
 	$(NCC_EXE_SRC)              \
 	$(STDMACROS_DLL_SRC)        \
+
+LIBDISTFILES = \
+	../lib/ChangeLog   \
+	../lib/STDLIB      \
+	../lib/TODO        \
+	$(NEMERLE_DLL_SRC) \
 
 
 ############################################################
@@ -301,11 +308,20 @@ t test: tests
 tests:
 	cd testsuite && $(MAKE)
 
-install: ncc.exe
-	if test ! -d $(BINDIR) ; then mkdir -p $(BINDIR) ; fi
-	$(NGEN) ncc.exe
-	$(INSTALL) -m 644 ncc.exe.so $(BINDIR)/ncc.so
-	$(INSTALL) -m 755 ncc.exe $(BINDIR)/ncc
+# This target is used to build the tarball.  It is passed the
+# directory name, where all files should be copied.
+dist:
+	$(MKDIR) $(DIR)/ncc
+	$(MKDIR) $(DIR)/ncc/testsuite
+	$(Q)mkdir $(DIR)/ncc/testsuite
+	$(MKDIR) $(DIR)/ncc/macros
+	$(Q)mkdir $(DIR)/ncc/macros
+	$(CP) '*.n'
+	$(Q)cp $(DISTFILES) $(DIR)/ncc
+	$(CP) '../lib/*.n'
+	$(Q)cp $(LIBDISTFILES) $(DIR)/lib
+	$(Q)$(MAKE) -C macros    dist DIR=../$(DIR)/ncc/macros
+	$(Q)$(MAKE) -C testsuite dist DIR=../$(DIR)/ncc/testsuite
 
 clean:
 	cd testsuite && $(MAKE) clean
