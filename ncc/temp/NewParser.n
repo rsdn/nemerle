@@ -374,14 +374,56 @@ namespace Nemerle.Compiler
       null
     }
 
-    FatalError['a] (tok : Token, msg : string) : 'a {
-      Message.fatal_error (tok.Location, "parse error near " + tok.ToString (true) + ": " + msg)      
-    }
-
     Error (tok : Token, msg : string) : void {
       Message.error (tok.Location, "parse error near " + tok.ToString (true) + ": " + msg)
     }
 
+    get_token () : Token {
+      match (stream) {
+        | x :: xs => stream = xs; x
+        | _ => Util.ice ("there is no token to take")
+      }
+    } 
+    
+    get_splicable_id () : Splicable {
+      def tok = get_token ();
+      def loc = tok.Location;
+      match (stream) {
+        | Token.Identifier (n) :: rest =>
+          stream = rest;
+          Splicable.Name (loc, Name ([n]))
+          
+        | Token.Operator ("$", _) :: (Token.Identifier (id) as second) :: rest =>
+          stream = rest;
+          Splicable.Expression (loc + second.Location,
+                                PExpr.Ref (second.Location, Name ([id])))
+
+        | Token.Operator ("$", _) :: (Token.RoundGroup (_, [expr]) as second) :: rest =>
+          def loc = loc + second.Location;
+          def expr = parse_expr (expr);
+          def result = 
+            match (expr) {
+              | PExpr.TypeEnforcement =>
+                Splicable.Expression (loc, PExpr.Spliced (second.Location, expr))
+
+              | x => Splicable.Expression (loc, x); 
+            }
+          stream = rest;
+          result
+
+        | Token.Operator ("$", _) :: (Token.Keyword ("_") as second) :: rest =>
+          stream = rest;
+          Splicable.Expression (loc + second.Location, PExpr.Wildcard (second.Location))
+
+        | Token.Keyword ("_") :: rest =>
+          stream = rest;
+          Splicable.Name (loc, Name ([Util.tmpname ("u")]))
+          
+        | _ =>
+          Message.error (loc, "expecting identifier");
+          Splicable.Name (Name (["error"]))
+      }
+    }
     
     GetQid () : list [string]
     {
@@ -408,6 +450,14 @@ namespace Nemerle.Compiler
       }
     }
 
+    expect_operator (op : string) : void {
+      match (stream) {
+        | Token.Operator (o, _) :: rest when o == op => stream = rest;
+        | x :: _ => Error (x, $"expecting operator `$(op)'")
+        | [] => ()
+      }
+    }
+    
     /** This function parses top level group updating global environment
         when entering into new namespace, using directive, class, etc.
      */
@@ -461,14 +511,9 @@ namespace Nemerle.Compiler
             stream = body1;
             AttributeCompiler.AddAssemblyAttribute (env, parse_expr ());
             
-            foreach (tok in body2) {
-              match (tok) {
-                | Token.LooseGroup (body) =>
-                  stream = body;
-                  AttributeCompiler.AddAssemblyAttribute (env, parse_expr ());
-                | _ => Util.ice ("wrong token group in assembly attribute")
-              }
-            }
+            foreach (tok in body2)
+              AttributeCompiler.AddAssemblyAttribute (env, parse_expr (tok));
+
             // [assembly: .. ] [assembly : ..] ..
             unless (body3 matches []) ParseTopLevel (Token.LooseGroup (body3))
 
@@ -483,141 +528,115 @@ namespace Nemerle.Compiler
       | _ => Util.ice ("wrong token group at toplevel")
     }
 
+    /** Parses toplevel type (like class, interface, etc.)
+     */
     ParseType (toks : list [Token]) : TopDeclaration
     {
       stream = toks;
-      def customs = get_customs ();
-      def mods = get_modifiers ();
+      mutable customs_token = get_customs ();
+      def customs = take_attributes_out (ref customs_token, System.AttributeTargets.Class, true);      
+      def mods = Modifiers (get_modifiers (), customs);
      
-      def parse_members () { collect_braced_list (parse_type_member) };
-
       def res =
         match (stream) {
-          | Token.Keyword (key) :: header =>
+          | (Token.Keyword (key) as firsttok) :: header =>
+            stream = header;            
             match (key) {
-              | "class" 
-              | "struct"
-              | "module"
-              | "interface"
-              | "enum"
+              | "type" | "class" | "struct" | "module" | "interface" | "enum"
               | "variant" =>
-                stream = header;
-                def parse_header () {
-                  def header_expr = parse_expr ();
-                  match (header_expr) {
-                  }
-                  
-/*                  
+                /// first get name of this declartion
+                def name = get_splicable_id ();
+                // now generic type parameters
+                def tyvars = parse_tyvars ();                  
+                def t_extends =
                   match (stream) {
-                    | Token.Identifier :: _
-                    | Token.Operator ("$", _) :: _ =>
-                      def name = get_splicable_id ();
-                      def tyvars = parse_tyvars ();
+                    | Token.Operator (":", _) :: Token.Operator (".", _)
+                      :: Token.Operator (".", _) :: rest =>
+                      stream = rest;
+                      match (get_splicable_id ()) {
+                        | Splicable.Expression (e) =>
+                          [PExpr.Ellipsis (PExpr.Spliced (e))]
 
-                      def t_extends =
-                        match (stream) {
-                          | Token.Operator (":", _) :: Token.Operator (".", _)
-                            :: Token.Operator (".", _) :: rest =>
-                            stream = rest;
-                            match (get_splicable_id ()) {
-                              | Splicable.Expression (e) =>
-                                [PExpr.Ellipsis (PExpr.Spliced (e))]
+                        | x => Message.error (x.Location, "expected spliced expression"); []
+                      }
+                    | Token.Operator (":", _) :: rest =>
+                      stream = rest;
+                      // parse , separated sequence as one expression
+                      match (parse_expr ()) {
+                        | PExpr.Call (PExpr.Ref ({ idl = [","] }), parms) => parms
+                        | e => [e]
+                      }
+                    | _ => []
+                  };
+                // where constraints for specified generic type parameters
+                def typarms = parse_where_constraints (tyvars);
 
-                              | x => Message.error (x.Location, "expected spliced expression")
-                            }
-                          | Token.Operator (":", _) :: rest =>
-                            stream = rest;
-                            operator_separated_list (",", parse_expr)
+                def members =
+                  if (key == "type") []
+                  else
+                    match (stream) {
+                      | [Token.BracesGroup (children)] =>
+                        List.Map (children, parse_class_member);
+                      | x :: _ => Error (x, "expecting type body"); []
+                      | [] => Error (firsttok, "expecting type with body"); []
+                    }
 
-                          | _ => []
-                        };
-                      def typarms = parse_where_constraints (tyvars);
-
-                      (name, typarms, t_extends)
-
-                    | x :: _ => Error (x, "expecting type name")
-                    | [] => Error (List.Head (toks), "expecting type with name")
-                  }
-                };
-*/                
-                def (name, typarms, t_extends) = parse_header ();
                 def td =
                   match (key) {
-                    | "class" =>
-                      TopDeclaration.Class (typarms, t_extends, parse_members ())
-
+                    | "class" => TopDeclaration.Class (typarms, t_extends, members)
                     | "struct" =>
-                      attrs.mods |= NemerleAttributes.Struct;
-                      TopDeclaration.Class (typarms, t_extends, parse_members ())
+                      mods.mods |= NemerleAttributes.Struct;
+                      TopDeclaration.Class (typarms, t_extends, members)
 
                     | "module" =>
-                      attrs.mods |= NemerleAttributes.Static;
-                      TopDeclaration.Class (typarms, t_extends, parse_members ())
+                      mods.mods |= NemerleAttributes.Static;
+                      TopDeclaration.Class (typarms, t_extends, members)
 
                     | "type" =>
                       expect_operator ("=");
                       def t = parse_expr ();
-                      expect_operator (";");
+                      expect_empty ("type alias declaration");
                       TopDeclaration.Alias (typarms, t)
 
-                    | "interface" =>
-                      TopDeclaration.Interface (typarms, t_extends, parse_members ())
-
-                    | "variant" =>
-                      TopDeclaration.Variant (typarms, t_extends, parse_members ())
-
-                    | "enum" =>
-                      TopDeclaration.Enum (t_extends, parse_members ())
+                    | "interface" => TopDeclaration.Interface (typarms, t_extends, members)
+                    | "variant" => TopDeclaration.Variant (typarms, t_extends, members)
+                    | "enum" => TopDeclaration.Enum (t_extends, members)
 
                     | _ => Util.ice ()
                   };
+                td.name = name;
+                td.loc = firsttok.Location + name.Location;                
+                td
 
-            attrs.custom_attrs += take_attributes_out (other_attrs, System.AttributeTargets.Class, true);
-            td.modifiers = attrs;
+              | "delegate" =>
+                def (h, _) = parse_fun_header (false, false, false, None ());
+                def td = TopDeclaration.Delegate (h);
+                expect_empty ("delegate declaraion");
+                td.loc = firsttok.Location + h.Location;
+                td
 
-            td.name = name;
-            td
+              | "macro" => 
+                def (header, _) = parse_fun_header (true, false, false, None ());
+                def synt = 
+                  match (stream) {
+                    | Token.Keyword ("syntax") :: Token.RoundGroup (TokenSeparator.Comma, syns) :: body =>
+                      // FIXME: use parse_expr directly
+                      def exprs = List.Map (syns, fun (x) { parse_expr (x) });
+                      stream = body;
+                      exprs
+                    | _ => []
+                  }
+                def expr = parse_block ([]);
+                def res = TopDeclaration.Macro (header, synt, expr);
+                res.loc = firsttok.Location + header.Location;
+                res
 
-          | Token.Keyword ("delegate") =>
-            attrs.custom_attrs += take_attributes_out (other_attrs, System.AttributeTargets.Class, true);
-            def (h, _) = parse_fun_header (false, false, false, None ());
-            def td = TopDeclaration.Delegate (h);
-            expect_operator (";");
-            td.modifiers = attrs;
-            td
-
-          | Token.Keyword ("macro") => 
-            def (header, _) = parse_fun_header (true, false, false, None ());
-            def synt = 
-              match (peek_token ()) {
-                | Token.Keyword ("syntax") =>
-                  shift ();
-                  expect_operator ("(");
-                  def parse_elems (acc) {
-                    match (peek_token ()) {
-                      | Token.Operator (")", _) =>
-                        shift ();
-                        List.Rev (acc)
-                      | Token.Operator (",", _) =>
-                        shift ();
-                        parse_elems (parse_prim_expr (parse_closed_prim_expr ()) :: acc)
-                      | _ =>
-                        fatal_error ("expected comma separated expressions in "
-                                     + "syntax description")
-                    }
-                  };
-                  parse_elems ([parse_closed_prim_expr ()])
-                | _ => []
-              };
-            def expr = parse_block ([]);
-            def res = TopDeclaration.Macro (header, synt, expr);
-            res.modifiers = attrs;
-            res
-
-          | _ => fatal_error ("expecting type declaration")
+              | _ => Error (firsttok, "expecting type declaration"); TopDeclaration.Delegate (null);
+            }
+          | x :: _ => Error (x, "expecting type declaration"); TopDeclaration.Delegate (null);
+          | [] => Message.fatal_error ("expecting type declaration")
         };
-
-      res.loc = loc + res.loc;
+      res.modifiers = mods;                
       res
     }
 
@@ -640,10 +659,10 @@ namespace Nemerle.Compiler
         match (stream) {
           | (Token.Keyword (key) as tok) :: rest =>
             def add_and_loop (attr : NemerleAttributes) {
-              when (attr %&& result)
+              when (attr %&& acc)
                 Message.error (tok.Location, "attribute '" + key + "' specified more than once");
               stream = rest;
-              loop (attr %| acc, attrs)
+              loop (attr %| acc)
             }
             match (key) {
               | "mutable" => add_and_loop (NemerleAttributes.Mutable)
@@ -661,18 +680,93 @@ namespace Nemerle.Compiler
               | "partial" => add_and_loop (NemerleAttributes.Partial)
               | _ => acc
             }
-          | _ => acc
+          | _ =>
+            // perform some sanity checks on the declared attributes
+            when (acc %&& NemerleAttributes.Virtual &&
+                  acc %&& NemerleAttributes.Override)
+              Message.warning ("the `virtual' attribute is redundant, `override' implies `virtual'");
+            acc
         }
       }
       loop (NemerleAttributes.None)
     }
    
-    
-    parse_expr () : PExpr {
-      null
+    [Nemerle.NotImplemented]
+    parse_expr () : PExpr;
+
+    [Nemerle.NotImplemented]
+    parse_expr (group_token : Token) : PExpr;
+
+    [Nemerle.NotImplemented]
+    parse_tyvars () : list [Fun_parm];
+
+    [Nemerle.NotImplemented]    
+    parse_where_constraints (tyvars : list [Fun_parm]) : Typarms;
+
+    [Nemerle.NotImplemented]
+    parse_class_member (tok : Token) : ClassMember;
+
+    [Nemerle.NotImplemented]    
+    parse_fun_header (allow_inference : bool, 
+                    allow_ctor : bool,
+                    is_lambda : bool, 
+                    knownname : option [Splicable]) : Fun_header * bool;
+
+    [Nemerle.NotImplemented]
+    parse_block (parms : list [Fun_parm]) : PExpr;                    
+                    
+    take_attributes_out (from : ref list [Token.SquareGroup], 
+                         what : System.AttributeTargets,
+                         comply_on_other : bool) : list [PExpr]
+    {
+      mutable result = [];      
+      from = List.Filter (from, fun (x : Token.SquareGroup) {
+        mutable removed = false;
+        match (x.Elements) {
+          | Token.LooseGroup (first :: Token.Operator (":", _) :: body1) :: body2
+          | Token.LooseGroup ((first :: _) as body1) :: body2 =>
+            def target = 
+              match (first) {
+                | Token.Identifier ("assembly") => System.AttributeTargets.Assembly
+                | Token.Identifier ("field") => System.AttributeTargets.Field
+                | Token.Keyword ("event") => System.AttributeTargets.Event
+                | Token.Identifier ("method") => System.AttributeTargets.Method
+                | Token.Keyword ("module") => System.AttributeTargets.Module
+                | Token.Identifier ("param") => System.AttributeTargets.Parameter
+                | Token.Identifier ("property") => System.AttributeTargets.Property
+                | Token.Identifier ("return") => System.AttributeTargets.ReturnValue
+                | Token.Keyword ("type") => System.AttributeTargets.Class
+                // a little hack, because we cannot introduce default value in patterns
+                // if there were no `:', then accept any identifier
+                | Token.Identifier when List.Head (body1) == (first : object) =>
+                  System.AttributeTargets.All
+                | _ =>
+                  Error (first, "wrong attribute target");
+                  System.AttributeTargets.All
+              }
+            if (target %&& what || target == System.AttributeTargets.All) {
+              removed = true;
+              // parse body of first element in this [ , , ]
+              stream = body1;
+              result = parse_expr () :: result;
+              // parse all remaining in current bracket group [ , , , ]
+              foreach (tok in body2)
+                result = parse_expr (tok) :: result;
+            }
+            else  
+              when (comply_on_other)
+                Error (first, $"unexpected attribute target `$(first)'");
+              
+          | [] | Token.LooseGroup :: _ => Error (x, "empty cutom attribute")
+          | _ => Util.ice ("broken brackets in attribute")
+        }
+        removed;
+      });
+      List.Rev (result);
     }
-  }
-}
+
+  } // end MainParser
+} // end namespace
 
  
 
