@@ -26,7 +26,7 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 # Include configuration determined by configure script.
-TOP=../..
+TOP=../../..
 include $(TOP)/config.mak
 
 
@@ -34,10 +34,19 @@ include $(TOP)/config.mak
 # VARIABLES
 ############################################################
 
+STAGE3=$(TOP)/ncc/out.stage3
+TESTN=$(TOP)/ncc/testsuite/positive/test.n
+
 DISTFILES = \
 	Makefile \
 	README   \
 	run      \
+	*.n      \
+
+EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
+
+export PATH = $(shell echo $$PATH):$(shell pwd)/$(STAGE3)/
+export MONO_PATH = $(shell echo $$MONO_PATH):$(shell pwd)/$(STAGE3)
 
 
 ############################################################
@@ -51,8 +60,10 @@ CP = @echo CP      $1
 ############################################################
 
 all:
-	$(Q) cd positive && $(MAKE)
-	$(Q) cd negative && $(MAKE)
+	cp $(STAGE3)/Nemerle.dll .
+	$(EXECUTE) $(STAGE3)/ncc.exe -out test.exe $(TESTN)
+	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -n "$(STAGE3)/ncc.exe"
+	rm -f out.dll out.exe out.netmodule ext_test.out Nemerle.dll test.exe
 
 dist:
 	$(CP) '*.n'
@@ -63,7 +74,5 @@ dist:
 	$(Q)cp todo/*.n $(DIR)/todo
 
 clean:
-	$(Q) cd positive && $(MAKE) clean
-	$(Q) cd negative && $(MAKE) clean
 	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]*
 	rm -f test.err test_error.log a.out
