@@ -1,0 +1,420 @@
+(*
+ * Copyright (c) 2003 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *)
+
+open Nemerle.Collections;
+
+open Nemerle.Compiler;
+open Nemerle.Compiler.CGflat;
+open Nemerle.Compiler.Tyops;
+open Nemerle.Compiler.Typedtree;
+
+namespace Nemerle.Compiler {
+
+  class CGflat
+    {
+      // string in tree for fast concatenation
+      variant String_tree = [
+        | ST_leaf { data : string; }
+        | ST_node { left : String_tree; right : String_tree; }
+      ]
+
+      variant CS_code = [
+        | CS_simple { val : String_tree; }
+        | CS_complex { pre : String_tree; val : String_tree; }
+      ]
+
+      static is_complex (c : CS_code) : bool = 
+        match c with [ CS_complex => true | _ => false ];
+
+      static add_st (s1 : String_tree, s2 : String_tree) : String_tree =
+        ST_node (s1, s2);
+      
+      static add_st (s1 : string, s2 : String_tree) : String_tree =
+        ST_node (ST_leaf (s1), s2);
+      
+      static add_st (s1 : String_tree, s2 : string) : String_tree =
+        ST_node (s1, ST_leaf (s2));
+      
+      static `++` (s1 : String_tree, s2 : String_tree) : String_tree = 
+        extern "Nemerle.Compiler.CGflat.add_st";
+
+      static `++` (s1 : string, s2 : String_tree) : String_tree =
+        extern "Nemerle.Compiler.CGflat.add_st";
+
+      static `++` (s1 : String_tree, s2 : string) : String_tree =
+        extern "Nemerle.Compiler.CGflat.add_st";
+
+      // produce cast only if needed
+      (*
+      static cast_expr (ex : CG_expr, t : CG_type) : CG_expr =
+        letfun cast (ex : CG_expr) : CG_expr =
+          fixup (CE_cast (ex, t), t)
+        in
+        match (type_of (ex), t) with [
+          | (CT_void, CT_void) => ex
+          | (CT_void, _) => Util.ice ()
+          | (CT_object, CT_object) => ex
+          | (CT_tuple (?l1), CT_tuple (?l2)) =>
+            if l1 == l2 then ex
+            else Util.ice ()
+          | (CT_fun (?l1), CT_fun (?l2)) =>
+            if l1 == l2 then ex
+            else Util.ice ()
+          | (_, CT_object) => 
+            // not strictly needed, but we'll better have this
+            cast (ex) 
+          | (CT_object, _) => 
+            cast (ex)
+          | (CT_ref (?n1), CT_ref (?n2)) =>
+            if n1 == n2 then ex
+            else cast (ex)
+          | _ => Util.ice ()
+        ];
+        *)
+
+      static class_type (c : CM_class) : CG_type =
+        CT_ref (c#ns + c#name);
+
+      static csref (c : CS_code) : String_tree =
+        match c with [
+          | CS_simple (?s) => s
+          | CS_complex (_, ?s) => s
+        ];
+
+      static mono (e : CS_code, rf : String_tree) : CS_code =
+        match e with [
+          | CS_simple (_) => CS_simple (rf)
+          | CS_complex (?p, _) => CS_complex (p, rf)
+        ];
+
+      static tmp () : string =
+        "_N_t" + string_of_int (Util.next_id ());
+
+      static st_concat (sep : string, nodes : list (String_tree)) : String_tree =
+        match nodes with [
+          | Nil => ST_leaf ("")
+          | Cons (?x, ?xs) => x ++ sep ++ st_concat (sep, xs)
+        ];
+      
+      static s_concat (sep : string, nodes : list (string)) : String_tree =
+        match nodes with [
+          | Nil => ST_leaf ("")
+          | Cons (?x, ?xs) => ST_leaf (x) ++ sep ++ s_concat (sep, xs)
+        ];
+      
+      static flat_ty (t : CG_type) : String_tree =
+        let s =
+          match t with [
+            | CT_ref (?n) => n
+            | CT_void => "void"
+            | CT_object => "object"
+            | CT_bool => "bool"
+            | CT_unreached => "?unreached?"
+            | CT_tuple (?n) => "Nemerle.Tuple" + string_of_int (n)
+            | CT_fun (?n) => "Nemerle.Func" + string_of_int (n)
+          ]
+        in ST_leaf (s);
+
+      static flat_call (pref : String_tree, es : list (CG_expr)) : CS_code =
+        let (?pre, ?es) =
+          let es' = List.map (flat, es) in
+          if List.exists (is_complex, es') then
+            let ref pre = ST_leaf ("") in
+            letfun f (x : CG_expr, fx : CS_code) : CS_code =
+              let (?p, ?r) = make_complex (fx) in
+              let n = tmp () in
+              let df = flat_ty (type_of (x)) ++ " " ++ n ++ " = " ++ r ++ ";\n" in {
+                pre <- pre ++ p ++ df;
+                CS_simple (ST_leaf (n))
+              }
+            in 
+            let r = List.map2 (f, es, es') in
+            (Some (pre), r)
+          else (None (), es')
+        in
+        let body = "(" ++ pref ++ "(" ++ st_concat (", ", List.map (csref, es)) ++ "))" in
+        match pre with [
+          | None => CS_simple (body)
+          | Some (?x) => CS_complex (x, body)
+        ];
+
+      static make_complex (ex : CS_code) : String_tree * String_tree =
+        match ex with [
+          | CS_complex (?x, ?y) => (x, y)
+          | CS_simple (?x) => (ST_leaf (""), x)
+        ];
+
+      static flat (ex : CG_expr) : CS_code =
+        match ex with [
+          | CE_ref (?d) => CS_simple (ST_leaf (d#name))
+          | CE_global_ref (?m) => CS_simple (ST_leaf (m#name))
+          | CE_field_ref (?e, ?f) =>
+            let e = flat (e) in 
+            mono (e, "(" ++ csref (e) ++ "." ++ f#name ++ ")")
+
+          | CE_tuple_ref (?e, ?n) => 
+            let e = flat (e) in 
+            mono (e, "(" ++ csref (e) ++ ".field" ++ string_of_int (n) ++ ")")
+
+          | CE_call (?e, ?es) => 
+            match flat (e) with [
+              | CS_simple (?s) => flat_call (s, es)
+              | _ => Util.ice ()
+            ]
+              
+          | CE_assign (?e1, ?e2) =>
+            let (?p1, ?r1) = make_complex (flat (e1)) in
+            let (?p2, ?r2) = make_complex (flat (e2)) in
+            CS_complex (p1 ++ p2 ++ r1 ++ " = " ++ r2 ++ ";\n", ST_leaf ("?VOID_assign"))
+            
+          | CE_let (?v, ?e) =>
+            match v#val with [
+              | CE_none =>
+                let (?p, ?r) = make_complex (flat (e)) in
+                CS_complex (flat_ty (v#ty) ++ " " ++ v#name ++ ";\n" ++ p, r)
+              | _ =>
+                let (?p, ?r) = make_complex (flat (v#val)) in
+                let pref = p ++ flat_ty (v#ty) ++ " " ++ v#name ++ " = " ++ r ++ ";\n" in
+                let (?p, ?r) = make_complex (flat (e)) in
+                CS_complex (pref ++ p, r)
+            ]
+            
+          | CE_has_type (?e, ?t) =>
+            let e = flat (e) in 
+            mono (e, "(" ++ csref (e) ++ " is " ++ flat_ty (t) ++ ")")
+            
+          | CE_raise (?x) =>
+            let (?p, ?r) = make_complex (flat (x)) in
+            CS_complex (p ++ "throw " ++ r ++ ";\n", ST_leaf ("null"))
+            
+          | CE_if (?c, ?e1', ?e2') =>
+            let (?p1, ?c) = make_complex (flat (c)) in
+            let (?p2, ?e1) = make_complex (flat (e1')) in
+            let (?p3, ?e2) = make_complex (flat (e2')) in
+            let tmpname = tmp () in
+            let df = flat_ty (type_of (e1')) ++ " " ++ tmpname ++ ";\n" in
+            CS_complex (p1 ++ df ++ 
+                        "if (" ++ c ++ ") {\n" ++
+                          p2 ++
+                          tmpname ++ " = " ++ e1 ++ ";\n" ++
+                        "} else {\n" ++
+                          p3 ++
+                          tmpname ++ " = " ++ e2 ++ ";\n" ++
+                        "}\n", ST_leaf (tmpname))
+            
+          | CE_true => CS_simple (ST_leaf ("true"))
+
+          | CE_false => CS_simple (ST_leaf ("false"))
+          
+          | CE_try_with (?e1', ?v, ?e2') =>
+            let (?p1, ?e1) = make_complex (flat (e1')) in
+            let (?p2, ?e2) = make_complex (flat (e2')) in
+            let tmpname = tmp () in
+            let df = flat_ty (type_of (e1')) ++ " " ++ tmpname ++ ";\n" in
+            CS_complex (df ++
+                        "try {\n" ++
+                          p1 ++
+                          tmpname ++ " = " ++ e1 ++ ";\n" ++
+                        "} catch (" ++ flat_ty (v#ty) ++ " " ++ v#name ++ ") {\n" ++
+                          p2 ++
+                          tmpname ++ " = " ++ e2 ++ ";\n" ++
+                        "}\n", ST_leaf (tmpname))
+                        
+          | CE_try_finally (?e1', ?e2') =>
+            let (?p1, ?e1) = make_complex (flat (e1')) in
+            let (?p2, ?e2) = make_complex (flat (e2')) in
+            let tmpname = tmp () in
+            let df = flat_ty (type_of (e1')) ++ " " ++ tmpname ++ ";\n" in
+            CS_complex (df ++
+                        "try {\n" ++
+                          p1 ++
+                          tmpname ++ " = " ++ e1 ++ ";\n" ++
+                        "} finally {\n" ++
+                          p2 ++
+                        "}\n", ST_leaf (tmpname))
+                        
+          | CE_literal (?l) =>
+            let s =
+              match l with [
+                | L_void => "null"
+                | L_null => "null"
+                | L_int (?k) => string_of_int (k)
+                | L_string (?s) => "\"" + s + "\"" // FIXME: quote
+                | L_float (?v) => Util.ice ("FIXME: cgfloat")
+              ]
+            in CS_simple (ST_leaf (s))
+            
+          | CE_this => CS_simple (ST_leaf ("this"))
+          | CE_skip => CS_simple (ST_leaf ("null"))
+          | CE_cast (?e, ?t) =>
+            let e = flat (e) in 
+            mono (e, "((" ++ flat_ty (t) ++ ")" ++ csref (e) ++ ")")
+            
+          | CE_sequence (Nil) => CS_simple (ST_leaf ("null"))
+
+          | CE_sequence (?e) =>
+            letfun serialize (e : CG_expr) : String_tree =
+              let (?pre, ?r) = make_complex (flat (e)) in
+              let tmpname = tmp () in
+              pre ++
+              flat_ty (type_of (e)) ++ " " ++ tmpname ++ 
+                " = " ++ r ++ ";\n"
+            in
+            letfun concat (acc : String_tree, es : list (CG_expr)) : CS_code =
+              match es with [
+                | Cons (?x, Nil) => 
+                  let (?pre, ?r) = make_complex (flat (x)) in
+                  CS_complex (acc ++ pre, r)
+                | Cons (?x, ?xs) =>
+                  concat (acc ++ serialize (x), xs)
+              ]
+            in concat (ST_leaf (""), e)
+          
+          | CE_tuple_ctor (?es) =>
+            flat_call (ST_leaf ("new Nemerle.Tuple") ++ string_of_int (List.length (es)), es)
+          
+          | CE_ctor_ref (?c) => CS_simple (ST_leaf ("new " + c#name))
+          
+          | CE_method_ref (?e, ?f) => 
+            let e = flat (e) in 
+            mono (e, "(" ++ csref (e) ++ "." ++ f#name ++ ")")
+
+          | CE_none => Util.ice ()
+        ];
+
+        (*
+      static need_split (ex : CG_expr) : bool =
+        match ex with [
+          | CE_ref => false
+          | CE_global_ref => false
+          | CE_field_ref (?e, _) => need_split (e)
+          | CE_tuple_ref (?e, _) => need_split (e)
+          | CE_call (?e, ?es) => List.exists (need_split, Cons (e, es))
+          | CE_assign (_, _) => true
+          | CE_let (_, _) => true
+          | CE_has_type (?e, _) => need_split (e)
+          | CE_raise (_) => true
+          | CE_if (_, _, _) => true
+          | CE_true => false
+          | CE_false => false
+          | CE_try_with (_, _, _) => true
+          | CE_try_finally (_, _) => true
+          | CE_literal (_) => false
+          | CE_this => false
+          | CE_skip => false
+          | CE_cast (?e, _) => need_split (e)
+          | CE_sequence (_) => true
+          | CE_tuple_ctor (?es) => List.exists (need_split, es)
+          | CE_ctor_ref (_) => false
+          | CE_method_ref (?e, _) => need_split (e)
+          | CE_none => Util.ice ()
+        ];
+         *)
+
+      static type_of (ex : CG_expr) : CG_type = 
+        match ex with [
+          | CE_ref (?d) => d#ty
+          | CE_global_ref (CM_field ?f) => f#ty
+          | CE_field_ref (_, ?f) => f#ty
+          | CE_tuple_ref => CT_object ()
+          | CE_call (CE_global_ref (CM_method ?m), _) => m#ret_type
+          | CE_call (CE_method_ref (_, ?m), _) => m#ret_type
+          | CE_call (CE_ctor_ref (?c), _) => class_type (c)
+          | CE_call => Util.ice ()
+          | CE_assign => CT_void ()
+          | CE_let (_, ?b) => type_of (b)
+          | CE_has_type => CT_bool ()
+          | CE_raise => CT_unreached ()
+          | CE_if (_, ?e1, ?e2) => type_of (e1)
+          | CE_true => CT_bool ()
+          | CE_false => CT_bool ()
+          | CE_try_with (?e, _, _) => type_of (e)
+          | CE_try_finally (?e, _) => type_of (e)
+          | CE_literal (?l) => 
+            match l with [
+              | L_void => CT_void ()
+              | L_null => CT_object ()
+              | L_int => CT_ref ("Nemerle.Core.int")
+              | L_string => CT_ref ("Nemerle.Core.string")
+              | L_float => CT_ref ("Nemerle.Core.float")
+            ]
+          | CE_this => CT_object () // cheat a bit
+          | CE_skip => CT_void ()
+          | CE_cast (_, ?t) => t
+          | CE_sequence (?b) => type_of (List.last (b))
+          | CE_tuple_ctor (?es) => CT_tuple (List.length (es))
+          // can't tell
+          | CE_none => Util.ice ()
+          // these are supported only as part of call
+          | CE_global_ref (CM_method) => Util.ice ()
+          | CE_ctor_ref => Util.ice ()
+          | CE_method_ref => Util.ice ()
+        ];
+
+      static print_st (s : String_tree) : void = ();
+
+      static flat_member (m : CG_member) : void =
+        match m with [
+          | CM_class ?m =>
+            let k = 
+              match m#kind with [ 
+                | CK_class => "class" 
+                | CK_struct => "struct" 
+                | CK_interface => "interface"
+              ]
+            in {
+              print_st (s_concat (" ", m#attrs) ++ " " ++ k ++ 
+                        " " ++ m#name ++ " {\n");
+              List.iter (flat_member, m#decls);
+              print_st (ST_leaf ("} // end of ") ++ k ++ " " ++ m#name ++ "\n")
+            }
+         | CM_field ?m =>
+           print_st (s_concat (" ", m#attrs) ++ " " ++ flat_ty (m#ty) ++ 
+                     " " ++ m#name ++ ";\n")
+         | CM_method ?m =>
+           letfun mkparm (v : CG_val) : String_tree =
+             flat_ty (v#ty) ++ " " ++ v#name
+           in {
+             print_st (s_concat (" ", m#attrs) ++ " " ++ flat_ty (m#ret_type) ++ "\n" ++ 
+                       m#name ++ "(" ++ st_concat (", ", List.map (mkparm, m#parms)) ++ ")");
+             match m#body with [
+               | CE_none => print_st (ST_leaf (";\n"))
+               | _ =>
+                 let (?pref, ?r) = make_complex (flat (m#body)) in
+                 let res = "\n{\n" ++ pref ++ "return " ++ r ++ ";\n" ++ 
+                             "} // end of fun " ++ m#name ++ "\n" in
+                 print_st (res)
+             ]
+           }
+       ];
+      
+      static run (decls : list (CM_class)) : void =
+        List.iter ((flat_member : CM_class -> void), decls);
+    }
+
+}
