@@ -56,15 +56,15 @@ all:
 install:
 	$(Q)true
 else
-all: Nemerle.NAnt.Task.dll
+all: Nemerle.NAnt.Tasks.dll
 
 install: all
-	$(INST) Nemerle.NAnt.Task.dll
+	$(INST) Nemerle.NAnt.Tasks.dll
 	$(Q)install -d $(DESTDIR)$(NANT_DIR)
-	$(Q)install -m755 Nemerle.NAnt.Task.dll $(DESTDIR)$(NANT_DIR)
+	$(Q)install -m755 Nemerle.NAnt.Tasks.dll $(DESTDIR)$(NANT_DIR)
 endif
 
-Nemerle.NAnt.Task.dll: NantTask.n
+Nemerle.NAnt.Tasks.dll: NantTask.n
 	$(EXECUTE) $(TOP)/ncc/out.stage3/ncc.exe -L:$(NANT_DIR) -q -greedy- -r NAnt.DotNetTasks.dll -r NAnt.Core.dll -out $@ -t:library NantTask.n
 
 clean:
