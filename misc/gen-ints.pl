@@ -45,50 +45,93 @@ print <<EOF
       get { Nemerle.Compiler.SystemType.$long }
     }
     
-    public Binary (name : string, x : object, y : object) : object
+    public Binary (is_checked : bool, name : string, x : object, y : object) : object
     {
       def x = (x :> System.$long);
       def y = (y :> System.$long);
-      match (name) {
-        | "+" => x + y :> object
-        | "-" => x - y :> object
-        | "*" => x * y :> object
-        | "/" => x / y :> object
-        | "%" => x % y :> object
+      if (is_checked)
+        match (name) {
+          | "+" => x + y :> object
+          | "-" => x - y :> object
+          | "*" => x * y :> object
+          | "/" => x / y :> object
+          | "%" => x % y :> object
 EOF
 ;
 if ($int) {
 print <<EOF
-        | "%&" => x %& y :> object
-        | "%|" => x %| y :> object
-        | "%^" => x %^ y :> object
-        | "<<" => x << (y :> int) :> object
-        | ">>" => x >> (y :> int) :> object
+          | "%&" => x %& y :> object
+          | "%|" => x %| y :> object
+          | "%^" => x %^ y :> object
+          | "<<" => x << (y :> int) :> object
+          | ">>" => x >> (y :> int) :> object
 EOF
 ;
 }
 print <<EOF
-        | _ => 
-          null
-          // Util.ice ("invalid $short operator `" + name + "'")
-      }
+          | _ => 
+            null
+            // Util.ice ("invalid $short operator `" + name + "'")
+        }
+      else
+        unchecked {
+          match (name) {
+            | "+" => x + y :> object
+            | "-" => x - y :> object
+            | "*" => x * y :> object
+            | "/" => x / y :> object
+            | "%" => x % y :> object
+EOF
+;
+if ($int) {
+print <<EOF
+            | "%&" => x %& y :> object
+            | "%|" => x %| y :> object
+            | "%^" => x %^ y :> object
+            | "<<" => x << (y :> int) :> object
+            | ">>" => x >> (y :> int) :> object
+EOF
+;
+}
+print <<EOF
+            | _ => 
+              null
+              // Util.ice ("invalid $short operator `" + name + "'")
+          }
+        }
     }
 
-    public Unary (name : string, x : object) : object
+    public Unary (is_checked : bool, name : string, x : object) : object
     {
       def x = x :> System.$long;
-      match (name) {
-        | "+" => +x :> object
+      if (is_checked)
+        match (name) {
+          | "+" => +x :> object
 EOF
 ;
 
 print "        | \"-\" => -x :> object\n" if ($signed);
 print "        | \"~\" => ~x :> object\n" if ($int);
 print <<EOF
-        | _ =>
-          null
-          // Util.ice ("invalid $short operator `" + name + "'")
-      }
+          | _ =>
+            null
+            // Util.ice ("invalid $short operator `" + name + "'")
+        }
+      else
+        unchecked {
+          match (name) {
+            | "+" => +x :> object
+EOF
+;
+
+print "        | \"-\" => -x :> object\n" if ($signed);
+print "        | \"~\" => ~x :> object\n" if ($int);
+print <<EOF
+            | _ =>
+              null
+              // Util.ice ("invalid $short operator `" + name + "'")
+          }
+        }
     }
 
     public FromLiteral (lit : Literal) : object

@@ -37,7 +37,7 @@ namespace Nemerle.Compiler
 {
   module ConstantFolder
   {
-    is_known_operator (name : string) : bool
+    internal is_known_operator (name : string) : bool
     {
       | "+"
       | "-"
@@ -50,6 +50,8 @@ namespace Nemerle.Compiler
       | "&&"
       | "||"
       | "!"
+      | ">>"
+      | "<<"
       | "~" => true
       | _ => false
     }
@@ -63,21 +65,19 @@ namespace Nemerle.Compiler
                            "that has [Flags] attribute");
     }
 
+    [Nemerle.Assertions.Ensures (value != null)]
     underlying_enum_type (t : Tycon) : Tycon
     {
       def flds = t.GetFields (BindingFlags.Public %|
                               BindingFlags.NonPublic %|
                               BindingFlags.Instance);
-      def res =
-        List.FoldLeft (flds, null, fun (elt : IField, acc) {
-          assert (acc == null);
-          match (elt.GetMemType ()) {
-            | TT.T_app (tc, []) => tc
-            | _ => assert (false)
-          }
-        });
-      assert (res != null);
-      res
+      List.FoldLeft (flds, null, fun (elt : IField, acc) {
+        assert (acc == null);
+        match (elt.GetMemType ()) {
+          | TT.T_app (tc, []) => tc
+          | _ => assert (false)
+        }
+      });
     }
 
     internal FieldValueAsLiteral (field : IField) : option <Literal>
@@ -142,22 +142,21 @@ namespace Nemerle.Compiler
        | _ => None ()
     }
     
-    fold_unary_operator (name : string, 
+    fold_unary_operator (is_checked : bool, name : string, 
                          e1 : Expr, expr : Expr) : Expr
     {
       match (literal_of_expr (e1)) {
-        | Some (L_enum (lit, enum_ty)) 
-          when name == "~" =>
+        | Some (L_enum (lit, enum_ty)) when name == "~" =>
           emit_flag_warning (enum_ty);
           def t = Option.UnSome (NumericType.ByLiteral (lit));
-          def res = t.Unary (name, t.FromLiteral (lit));
+          def res = t.Unary (is_checked, name, t.FromLiteral (lit));
           assert (res != null);
           E_literal (expr.loc, L_enum (t.ToLiteral (res), enum_ty))
 
         | Some (lit) =>
           match (NumericType.ByLiteral (lit)) {
             | Some (t) =>
-              def res = t.Unary (name, t.FromLiteral (lit));
+              def res = t.Unary (is_checked, name, t.FromLiteral (lit));
               if (res == null)
                 expr
               else
@@ -168,7 +167,7 @@ namespace Nemerle.Compiler
       }
     }
 
-    fold_binary_operator (name : string, e1 : Expr, e2 : Expr, 
+    fold_binary_operator (is_checked : bool, name : string, e1 : Expr, e2 : Expr, 
                           expr : Expr) : Expr
     {
       match ((literal_of_expr (e1), literal_of_expr (e2))) {
@@ -182,7 +181,7 @@ namespace Nemerle.Compiler
             };
           match ((NumericType.ByLiteral (l1), NumericType.ByLiteral (l2))) {
             | (Some (t1), Some (t2)) when (t1 : object) == (t2 : object) =>
-              def res = t1.Binary (name, t1.FromLiteral (l1), 
+              def res = t1.Binary (is_checked, name, t1.FromLiteral (l1), 
                                    t1.FromLiteral (l2));
               def lit = t1.ToLiteral (res);
               if (res != null)
@@ -206,41 +205,53 @@ namespace Nemerle.Compiler
       }
     }
     
-    fold_constants (env : GlobalEnv, expr : Expr, recurse : bool) : Expr
+    fold_constants (is_checked : bool, env : GlobalEnv, expr : Expr, recurse : bool) : Expr
     {
-      match (expr) {
-        | <[ $(name : dyn) ($e1, $e2) ]> when is_known_operator (name) =>
-          if (recurse)
-            fold_binary_operator (name, 
-                                  fold_constants (env, e1, true), 
-                                  fold_constants (env, e2, true), 
-                                  expr)
-          else
-            fold_binary_operator (name, e1, e2, expr)
+      try {
+        match (expr) {
+          | <[ $(name : dyn) ($e1, $e2) ]> when is_known_operator (name) =>
+            if (recurse)
+              fold_binary_operator (is_checked,
+                                    name, 
+                                    fold_constants (is_checked, env, e1, true), 
+                                    fold_constants (is_checked, env, e2, true), 
+                                    expr)
+            else
+              fold_binary_operator (is_checked, name, e1, e2, expr)
 
-        | <[ $(name : dyn) ($e1) ]> when is_known_operator (name) =>
-          if (recurse)
-            fold_unary_operator (name, fold_constants (env, e1, true), expr)
-          else
-            fold_unary_operator (name, e1, expr)
-  
-        | <[ $_o . $_f ]>
-        | <[ $(_ : name) ]> => 
-          literal_field_value (env, expr)
+          | <[ $(name : dyn) ($e1) ]> when is_known_operator (name) =>
+            if (recurse)
+              fold_unary_operator (is_checked, name, fold_constants (is_checked, env, e1, true), expr)
+            else
+              fold_unary_operator (is_checked, name, e1, expr)
 
-        | _ => expr
+          | <[ $_o . $_f ]>
+          | <[ $(_ : name) ]> => 
+            literal_field_value (env, expr)
+
+          | _ => expr
+        }
+      }
+      catch {
+        | _ : System.OverflowException => // FIXME: use guards in catching
+          if (is_checked) {
+            Message.error ("The operation overflows at compile-time during"
+                           " constants folding in checked mode");
+            expr
+          }
+          else
+            Util.ice ("overflow exception")
       }
     }
 
     internal FoldConstants (env : GlobalEnv, expr : Expr) : Expr
     {
-      fold_constants (env, expr, true)
+      fold_constants (false, env, expr, true)
     }
     
-    internal FoldTopConstants (env : GlobalEnv, expr : Expr) : Expr
+    internal FoldTopConstants (is_checked : bool, env : GlobalEnv, expr : Expr) : Expr
     {
-      fold_constants (env, expr, false)
+      fold_constants (is_checked, env, expr, false)
     }
-
   }
 }

@@ -647,10 +647,17 @@ public class TypeBuilder : Tycon, ITypeModifier
   make_tyenvs (tenv : Tyvar.TEnv) : void
   {
     assert (this.tenv == null);
-    def (tenv, tyvars) = tenv.add_typarms (this.env, this.pt_tydecl.typarms,
-                                           this, check_parms = false);
-    this.tenv = tenv;
-    this.typarms = tyvars;
+    match (this.pt_tydecl) {
+      | PT.TD_class { typarms = ps; } | PT.TD_alias { typarms = ps; }
+      | PT.TD_interface { typarms = ps; } | PT.TD_variant { typarms = ps; } =>
+        def (tenv, tyvars) = tenv.add_typarms (this.env, ps,
+                                               this, check_parms = false);
+        this.tenv = tenv;
+        this.typarms = tyvars;
+      | _ =>
+        this.tenv = tenv;
+        this.typarms = [];
+    }
 
     match (pt_tydecl) {
       | PT.TD_variant_option (members) =>
@@ -699,7 +706,7 @@ public class TypeBuilder : Tycon, ITypeModifier
     this.tydecl =
       match (td) {
         | PT.TD_class => TD_class ()
-        | PT.TD_alias (t) => TD_alias (bind (t))
+        | PT.TD_alias (_, t) => TD_alias (bind (t))
         | PT.TD_interface => TD_interface ()
         | PT.TD_delegate => Util.ice ("delegates shouldn't survive to typing")
         | PT.TD_enum => TD_enum ()
@@ -713,34 +720,34 @@ public class TypeBuilder : Tycon, ITypeModifier
       | PT.TD_variant_option =>
         this.t_extends = Some (variant_option_parent.GetMemType ());
         this.t_implements = [];
-      | _ =>
-        match (td.t_extends) {
-          | hd :: tl =>
-            def is_interface (tc : Tycon) {
-              if (tc.GetTydecl () == null)
-                match ((tc :> TypeBuilder).pt_tydecl) {
-                  | PT.TD_interface => true
-                  | _ => false
-                }
-              else
-                match (tc.GetTydecl ()) {
-                  | TD_interface => true
-                  | _ => false
-                }
-            };
-            def hd' = bind (hd);
-            match (hd') {
-              | T_app (tc, _) when !is_interface (tc) =>
-                this.t_extends = Some (hd'); 
-                this.t_implements = List.Map (tl, bind);
-              | _ =>
-                this.t_implements = hd' :: List.Map (tl, bind);
-                this.t_extends = None ()
+      | PT.TD_class { t_extends = hd :: tl }
+      | PT.TD_interface { t_extends = hd :: tl }
+      | PT.TD_variant { t_extends = hd :: tl } 
+      | PT.TD_enum { t_extends = hd :: tl } =>        
+        def is_interface (tc : Tycon) {
+          if (tc.GetTydecl () == null)
+            match ((tc :> TypeBuilder).pt_tydecl) {
+              | PT.TD_interface => true
+              | _ => false
             }
-          | [] =>
-            this.t_implements = [];
+          else
+            match (tc.GetTydecl ()) {
+              | TD_interface => true
+              | _ => false
+            }
+        };
+        def hd' = bind (hd);
+        match (hd') {
+          | T_app (tc, _) when !is_interface (tc) =>
+            this.t_extends = Some (hd'); 
+            this.t_implements = List.Map (tl, bind);
+          | _ =>
+            this.t_implements = hd' :: List.Map (tl, bind);
             this.t_extends = None ()
         }
+      | _ =>
+        this.t_implements = [];
+        this.t_extends = None ()
     };
 
     when (pt_tydecl is PT.TD_enum)
@@ -1523,84 +1530,80 @@ public class TypeBuilder : Tycon, ITypeModifier
   {
     def enum_type = underlying_enum_type_iface;
 
-    def eval (expr) : object
-    {
-      match (expr) {
-        | PT.E_literal (lit) =>
-          def have_good_literal_type =
-            match (lit) {
-              | L_byte
-              | L_sbyte
-              | L_short
-              | L_ushort
-              | L_int
-              | L_uint
-              | L_long
-              | L_ulong =>
-                true
-
+    def resolve_ref (is_post, e) {
+      if (is_post) 
+        match (e) {
+          | <[ $(n : name) ]> when resolved_values.Contains (n.Id) =>
+            def val = resolved_values [n.Id];
+            match (NumericType.ByName (val.GetType ().FullName)) {
+              | Some (nt) =>
+                PT.E_literal (nt.ToLiteral (val))
               | _ =>
-                false
+                Util.ice ("resolved_values holds nonnumeric type?")
             }
 
-          if (have_good_literal_type)
-          {            
-            def val = enum_type.FromLiteral (lit);
-        
-            if (val == null)
-            {
-              Message.error ($ "underlying type of enum `$(FullName)' "
-                               " is $(underlying_enum_type), so enum literal "
-                               "need to have this type");
-              default_value
-            }
-            else
-              val
+          | <[ $(n : name) ]> when ConstantFolder.is_known_operator (n.Id) => e
+            
+          | <[ $(n : name) ]> =>
+            Message.fatal_error ($"references are allowed only to this enum's fields preceding "
+                                 "this one in the source code, while `$(n.Id)' occured");
+            null
+
+          | _ => e    
+        }
+      else e
+    }
+    def no_refs = 
+      Util.locate (expr.loc, {
+        Macros.TraverseExpr (None (), expr, resolve_ref, fun (_, p) { p })
+      });
+    
+    match (ConstantFolder.FoldConstants (env, no_refs)) {
+      | PT.E_literal (lit) =>
+        def have_good_literal_type =
+          match (lit) {
+            | L_byte
+            | L_sbyte
+            | L_short
+            | L_ushort
+            | L_int
+            | L_uint
+            | L_long
+            | L_ulong =>
+              true
+
+            | _ =>
+              false
           }
-          else
+
+        if (have_good_literal_type)
+        {            
+          def val = enum_type.FromLiteral (lit);
+        
+          if (val == null)
           {
-            Message.error ("only 8, 16, 32 and 64-bit, signed and unsigned integer "
-                           "types are allowed as enum values");
+            Message.error ($ "underlying type of enum `$(FullName)' "
+                           " is $(underlying_enum_type), so enum literal "
+                           "need to have this type");
             default_value
           }
-          
-        | PT.E_ref (name) =>
-          match (resolved_values.Get (name.Id)) {
-            | Some (value) => value
-            | _ =>
-              Message.error ("references are allowed only to this enum's fields preceding "
-                             "this one in the source code");
-              default_value
-          }
-            
-        | <[ ~ $p ]> =>
-          enum_type.Unary ("~", eval (p))
-          
-        | <[ $p + $q ]> =>
-          enum_type.Binary ("+", eval (p), eval (q))
-
-        | <[ $p - $q ]> =>
-          enum_type.Binary ("-", eval (p), eval (q))
-          
-        | <[ $p %| $q ]> =>
-          enum_type.Binary ("%|", eval (p), eval (q))
-
-        | <[ $p %& $q ]> =>
-          enum_type.Binary ("%&", eval (p), eval (q))
-
-        | <[ $p %^ $q ]> =>
-          enum_type.Binary ("%^", eval (p), eval (q))
-          
-        | _ =>
-          Message.error ("enum definition expression is too complex");
-          Message.hint ("  enum definitions are allowed to be expressions taking constants,");
-          Message.hint ("  references to this enum's fields preceding this field, checked ");
-          Message.hint ("  operations + and -, bit-wise operations %|, %&, %^ and negation");          
+          else
+            val
+        }
+        else
+        {
+          Message.error ("only 8, 16, 32 and 64-bit, signed and unsigned integer "
+                         "types are allowed as enum values");
           default_value
-      }
+        }
+          
+      | _ =>
+        Message.error ("enum definition expression is too complex");
+        Message.hint ("  enum definitions are allowed to be expressions taking constants,");
+        Message.hint ("  references to this enum's fields preceding this field, checked ");
+        Message.hint ("  operations +, <<, >> and -, bit-wise operations %|, %&, %^ and negation");          
+        default_value
     }
-
-    eval (expr)
   }
   
   add_enum_members (decls : list <PT.Class_member>) : void
@@ -1627,7 +1630,7 @@ public class TypeBuilder : Tycon, ITypeModifier
       def field = bind_and_add_member (field);
       (field :> NemerleField).enum_value = current_value;
       resolved_values.Add (Macros.StringOfSString (ef.name), current_value);
-      enum_type.Binary ("+", current_value, enum_type.One)
+      enum_type.Binary (false, "+", current_value, enum_type.One)
     };
 
     BindAndAddMember (<[ decl: public value__ : $(PT.T_typed (underlying_enum_type)); ]>);
@@ -1650,12 +1653,11 @@ public class TypeBuilder : Tycon, ITypeModifier
     begin_adding_members ();
     def decls =
       match (pt_tydecl) {
-        | PT.TD_class (ds)
-        | PT.TD_interface (ds)
-        | PT.TD_variant (ds)
+        | PT.TD_class { decls = ds }
+        | PT.TD_interface { methods = ds }
+        | PT.TD_variant { decls = ds }
         | PT.TD_variant_option (ds) => ds
-        | PT.TD_enum (ds) =>
-          add_enum_members (ds); []
+        | PT.TD_enum { decls = ds } => add_enum_members (ds); []
         | _ => []
       };
 
@@ -2343,9 +2345,9 @@ public class TypeBuilder : Tycon, ITypeModifier
     def iter_decls (stage_suff) {
       def decls =
         match (pt_tydecl) {
-          | PT.TD_class (ds)
-          | PT.TD_interface (ds)
-          | PT.TD_variant (ds)
+          | PT.TD_class { decls = ds }
+          | PT.TD_interface { methods = ds }
+          | PT.TD_variant { decls = ds }
           | PT.TD_variant_option (ds) => ds
           | _ => []
         };      
@@ -2509,7 +2511,12 @@ public class TypeBuilder : Tycon, ITypeModifier
 
   public AddImplementedInterface (t : PT.Type) : void
   {
-    pt_tydecl.t_extends = List.Append (pt_tydecl.t_extends, [t])
+    match (pt_tydecl) {
+      | (PT.TD_class) as td => td.t_extends += [t]
+      | (PT.TD_interface) as td => td.t_extends += [t]
+      | (PT.TD_variant) as td => td.t_extends += [t]
+      | _ => Message.error ("cannot add interface to this kind of type")
+    }
   }
   
   public DefineNestedType (td : PT.Class_member) : ITypeModifier
@@ -2525,8 +2532,8 @@ public class TypeBuilder : Tycon, ITypeModifier
       GlobalEnv.AddType (fullns, tyinfo);
       tyinfo.FixupDefinedClass ();
       match (td) {
-        | PT.TD_class (decls) =>
-          foreach (x : PT.Class_member in decls) tyinfo.Define (x);
+        | PT.TD_class { decls = ds } =>
+          foreach (x : PT.Class_member in ds) tyinfo.Define (x);
         | _ => ()
       };
       tyinfo
