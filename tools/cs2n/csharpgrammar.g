@@ -2320,13 +2320,14 @@ accessor_declarations[string tp]
 
 get_accessor_declaration[string tp]
     :   (attributes)?   (constant_modifier)*
-        g:GET    {Emit.EmitToken(g);}
+	g:IDENTIFIER {ExtendedToken.getTextOnly(g)=="get" }?  
         accessor_body[tp]
     ;
 
 set_accessor_declaration[string tp]
     :   (attributes)?   (constant_modifier)*
-        s:SET    {Emit.EmitToken(s);}
+	s:IDENTIFIER {ExtendedToken.getTextOnly(s)=="set" }?  
+	{Emit.EmitToken(s);}
         accessor_body[tp]
     ;
 
@@ -2944,29 +2945,59 @@ interface_property_declaration
         rb:RBRACE            {Emit.EmitToken(rb);} 
     ;
 
+
 interface_accessors
-    :   ((attributes)?   GET   SEMI   (attributes)?   SET   SEMI)=>
+{
+    bool first_get = true;    
+}
+    :   ((attributes)?   IDENTIFIER   SEMI   (attributes)?   IDENTIFIER   SEMI)=>
             (attributes)?   
-            get1:GET       {Emit.EmitToken(get1);} 
+            get1:IDENTIFIER 
+		{
+		    if(ExtendedToken.getTextOnly(get1)=="get")
+			;
+		    else if(ExtendedToken.getTextOnly(get1)=="set")
+			first_get = false;
+		    else
+			throw new RecognitionException ("line " + get1.getLine () + ":" + get1.getColumn ()
+			    + ": unexpected token: " + get1.ToString ());		    
+		
+		    Emit.EmitToken(get1);
+		} 
+
             s11:SEMI       {Emit.EmitToken(s11);} 
-            (attributes)?   
-            set1:SET       {Emit.EmitToken(set1);} 
+            (attributes)?  
+	    
+            set1:IDENTIFIER 
+		{
+		    if(first_get && ExtendedToken.getTextOnly(set1)=="set")
+			;
+		    else if(!first_get && ExtendedToken.getTextOnly(set1)=="get")
+			;
+		    else
+			throw new RecognitionException (set1.ToString ());
+		    		
+		    Emit.EmitToken(set1);
+		} 
+		
             s21:SEMI       {Emit.EmitToken(s21);} 
-    |   ((attributes)?   SET   SEMI   (attributes)?   GET   SEMI)=>
+	    
+    |   ((attributes)?   IDENTIFIER)=>
             (attributes)?   
-            set2:SET       {Emit.EmitToken(set2);} 
-            s12:SEMI       {Emit.EmitToken(s12);} 
-            (attributes)?   
-            get2:GET       {Emit.EmitToken(get2);} 
-            s22:SEMI       {Emit.EmitToken(s22);} 
-    |   ((attributes)?   SET)=>
-            (attributes)?   
-            set3:SET       {Emit.EmitToken(set3);} 
+            set3:IDENTIFIER 
+		{
+		    if(ExtendedToken.getTextOnly(set3)=="set" || ExtendedToken.getTextOnly(set3)=="get")
+			;
+		    else
+			throw new RecognitionException ("line " + get1.getLine () + ":" + get1.getColumn ()
+			    + ": unexpected token: " + set3.ToString ());
+		    
+		    Emit.EmitToken(set3);
+		} 
+		
             s3:SEMI        {Emit.EmitToken(s3);} 
-    |   (attributes)?   
-        get4:GET           {Emit.EmitToken(get4);} 
-        s4:SEMI            {Emit.EmitToken(s4);} 
     ;
+
 
 interface_event_declaration
 {
@@ -3248,7 +3279,6 @@ tokens
     INTERNAL    =   "internal";         VIRTUAL     =   "virtual";
     IS          =   "is";               VOID        =   "void";
     LOCK        =   "lock";             WHILE       =   "while";
-    GET         =   "get";              SET         =   "set";
     PARTIAL     =   "partial";          WHERE       =   "where"; 
     YIELD       =   "yield";            VOLATILE    =   "volatile";
 }
