@@ -31,14 +31,14 @@ let add_val c v =
     let c = unsome c in
     c.cl_values <- v :: c.cl_values
   else
-    out (xf "%s %s;" (ty (unsome v.val_type)) (val_name v))
+    out_local_var (unsome v.val_type) (val_name v)
     
 let add_fun_val c v =
   if v.fun_in_closure then
     let c = unsome c in
     c.cl_funvals <- v :: c.cl_funvals
   else
-    out (xf "%s %s;" (ty v.fun_type) (fun_name v))
+    out_local_var v.fun_type (fun_name v)
 
 let push c =
   out (xf "class __N__closure_class_%d {" c.cl_fun.fun_id);

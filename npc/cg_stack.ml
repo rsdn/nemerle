@@ -15,7 +15,7 @@ let slots = Stack.create ()
 let create_slot t =
   let id = next_id () in
   let s = { id = id; ty = t; name = xf "__N__stackslot_%d" id; assigned = false } in
-  out (xf "%s %s;" (ty t) s.name);
+  out_local_var t s.name;
   Stack.push s slots;
   s
   

@@ -15,3 +15,4 @@ val fun_name : function_decl -> string
 val proxy_name : function_decl -> string
 
 val get_proxies : unit -> function_decl list
+val out_local_var : ty -> string -> unit

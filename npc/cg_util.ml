@@ -121,3 +121,14 @@ let proxy_name f =
   match f.fun_defined_in_fun with
   | 0 -> xf "__N__proxy_%d_%s" f.fun_id (chop_ns f.fun_name)
   | _ -> assert false
+
+let out_local_var t n =
+  let tt = ty t in
+  let ini =
+    match tt with
+    | "int" -> "0"
+    | "bool" -> "false"
+    | "float" -> "0.0f"
+    | _ -> "null"
+  in
+  out (xf "%s %s = %s;" tt n ini)
