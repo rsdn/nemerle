@@ -692,7 +692,7 @@ namespace Nemerle.Compiler
       CGopt.Optimize (cgm);
       
       /* emit the constructor's body */
-      def _ = CodeGenerator (cb, cgm);
+      def _ = CodeGenerator (cb, _module_builder, cgm);
       
       ()
     }
@@ -808,7 +808,7 @@ namespace Nemerle.Compiler
       List.Iter (cgm.implemented_methods, update_override);
       
       /* emit the method body */
-      def _ = CodeGenerator (mb, cgm);
+      def _ = CodeGenerator (mb, _module_builder, cgm);
       
       ()
     }
@@ -1001,6 +1001,7 @@ namespace Nemerle.Compiler
   {
     private mutable _cg_method : CG_method;
     private mutable _ilg : ILGenerator;
+    private mutable _module_builder : ModuleBuilder;
 
     private mutable _method_name : string;
     private mutable _method_is_static : bool;
@@ -1019,13 +1020,14 @@ namespace Nemerle.Compiler
     /**
      * Creates and executes a code generator for a method
      */
-    internal this (method_builder : MethodBuilder, cg_method : CG_method)
+    internal this (method_builder : MethodBuilder, module_builder : ModuleBuilder, cg_method : CG_method)
     {
       init ();
       
       _cg_method = cg_method;
       
       _ilg = method_builder.GetILGenerator ();
+      _module_builder = module_builder;
       
       _method_name = method_builder.DeclaringType.FullName + "::" + method_builder.Name;
       _method_is_static = method_builder.IsStatic;
@@ -1041,13 +1043,14 @@ namespace Nemerle.Compiler
     /**
      * Creates and executes a code generator for a method
      */
-    internal this (constructor_builder : ConstructorBuilder, cg_method : CG_method)
+    internal this (constructor_builder : ConstructorBuilder, module_builder : ModuleBuilder, cg_method : CG_method)
     {
       init ();
 
       _cg_method = cg_method;
       
       _ilg = constructor_builder.GetILGenerator ();
+      _module_builder = module_builder;
       
       _method_name = constructor_builder.DeclaringType.FullName + "::"
                       + constructor_builder.Name;
@@ -1500,11 +1503,19 @@ namespace Nemerle.Compiler
               false
             }
           }
-        
-        | CE_array_indexer => 
-          Util.ice (_method_name + ": multidimensional arrays should be"
-                    " accessed by means of properties")
 
+        | CE_array_indexer (array_obj, indexes) =>
+          if (emit (array_obj)) true
+          else if (List.FoldLeft (indexes, false, 
+                                  fun (idx, b)
+                                  {
+                                    if (b) true
+                                    else emit (idx)
+                                  })) true
+          else {
+            def method = array_get_method (array_obj);
+            emit_method_call (expr, true, method);
+          }
 
         /* -- ASSIGNMENTS -------------------------------------------------- */
 
@@ -1578,12 +1589,23 @@ namespace Nemerle.Compiler
               false
             }
           }
-                  
-        | CE_assign (CE_array_indexer, _) => 
-          Util.ice (_method_name + ": multidimensional arrays should be"
-                    " accessed by means of properties")
 
-          
+        | CE_assign (CE_array_indexer (array_obj, indexes), val) =>
+          if (emit (array_obj)) true
+          else if (List.FoldLeft (indexes, false, 
+                                  fun (idx, b)
+                                  {
+                                    if (b) true
+                                    else emit (idx)
+                                  })) true
+          else {
+            if (emit (val)) true
+            else {
+              def method = array_set_method (array_obj);
+              emit_method_call (expr, true, method);
+            }
+          }
+
         | CE_multiple_assign (assigns) =>
           def emit_values (lst) {
             | (_, v) :: xs =>
@@ -1914,12 +1936,11 @@ namespace Nemerle.Compiler
           _ilg.Emit (OpCodes.Ldftn, meth);
           false
 
-
         /* creates a new array, given a list of initializers */
-        | CE_mkarray (element_type, initializers) =>
+        | CE_mkarray (element_type, initializers, [size]) =>
           def local_slot = _ilg.DeclareLocal (type_of (expr));
                     
-          _ilg.Emit (OpCodes.Ldc_I4, List.Length (initializers));
+          _ilg.Emit (OpCodes.Ldc_I4, size);
           _ilg.Emit (OpCodes.Newarr, element_type);
 
           _ilg.Emit (OpCodes.Stloc, local_slot);
@@ -1945,6 +1966,72 @@ namespace Nemerle.Compiler
 
           def cutoff = load_elements (0, initializers);          
           unless (cutoff) _ilg.Emit (OpCodes.Ldloc, local_slot);          
+          cutoff
+
+        | CE_mkarray (element_type, initializers, dimensions) =>
+          def local_slot_dimensions = _ilg.DeclareLocal (typeof (array <System.Int32>));
+          def local_slot_array = _ilg.DeclareLocal (type_of (expr));
+                    
+          _ilg.Emit (OpCodes.Ldc_I4, List.Length (dimensions));
+          _ilg.Emit (OpCodes.Newarr, typeof (System.Int32));
+          _ilg.Emit (OpCodes.Stloc, local_slot_dimensions);
+
+          def load_dimensions (index : int, dimensions : list <int>) {
+            match (dimensions) {
+              | [] => ()
+              | element :: rest =>
+                _ilg.Emit (OpCodes.Ldloc, local_slot_dimensions);
+                _ilg.Emit (OpCodes.Ldc_I4, index);
+
+                emit_literal (L_int (element));
+                _ilg.Emit (OpCodes.Stelem_I4);
+                load_dimensions (index + 1, rest)
+            }
+          }
+
+          load_dimensions (0, dimensions);
+          _ilg.Emit (OpCodes.Ldtoken, element_type);
+          _ilg.Emit (OpCodes.Call, 
+                     SystemType.Type.GetMethod ("GetTypeFromHandle"));
+          _ilg.Emit (OpCodes.Ldloc, local_slot_dimensions);
+          def method = typeof (System.Array).GetMethod ("CreateInstance", array [typeof (System.Type), typeof (array <int>)]);
+          _ilg.Emit (OpCodes.Call, method);
+          _ilg.Emit (OpCodes.Stloc, local_slot_array);
+
+          def method = array_set_method (type_of (expr));
+          
+          def dimensions_array = array (dimensions.Length ());
+          mutable i = 0;
+          List.Iter (dimensions, fun (it) { dimensions_array [i] = it; ++i});
+
+          def load_elements (index : array <int>, elements : list <CG_expr>) : bool {
+            match (elements) {
+              | [] => false
+              | element :: rest =>
+                _ilg.Emit (OpCodes.Ldloc, local_slot_array);
+                for (mutable i = 0; i < index.Length; ++i)
+                  emit_literal (L_int (index [i]));
+                if (emit (element)) true
+                else {
+                  def next (index : array <int>)
+                  {
+                    index [index.Length - 1] = index [index.Length - 1] + 1;
+                    for (mutable i = index.Length - 1; index [i] == dimensions_array [i] && i > 0; --i)
+                    {
+                      def j = i - 1; // FIXME: workaround for weird bug in compiler
+                      index [i] = 0;
+                      index [j] = index [j] + 1;
+                    }
+                    index
+                  }
+                  if (emit_method_call (expr, true, method)) true
+                  else load_elements (next (index), rest)
+                }
+            }
+          }
+
+          def cutoff = load_elements (array (dimensions_array.Length), initializers);
+          unless (cutoff) _ilg.Emit (OpCodes.Ldloc, local_slot_array);          
           cutoff
 
 
@@ -1988,7 +2075,9 @@ namespace Nemerle.Compiler
             }
           }
           
-
+        | CE_addr (CE_array_indexer (_array_obj, _indexes)) =>
+          //// FIXME: todo
+          Message.fatal_error ("not implemented yet");
 
         /* load value by pointer */
         | CE_indirect (expr) =>
@@ -2015,6 +2104,46 @@ namespace Nemerle.Compiler
       }
     }
 
+    private array_set_method (t : System.Type) : MethodInfo
+    {
+        def rank = t.GetArrayRank ();
+
+        def args = array (rank + 1);
+        for (mutable i = 0; i < rank; ++i)
+        {
+            args [i] = typeof (System.Int32);
+        }
+        args [rank] = t.GetElementType ();
+
+        def ret = _module_builder.GetArrayMethod (t, "Set",
+                                                  CallingConventions.HasThis %| CallingConventions.Standard,
+                                                  typeof (void), args);
+        ret
+    }
+    
+
+    private array_set_method (arr : CG_expr) : MethodInfo
+    {
+        def t = type_of (arr);
+        array_set_method (t);
+    }
+
+    private array_get_method (arr : CG_expr) : MethodInfo
+    {
+        def t = type_of (arr);
+        def rank = t.GetArrayRank ();
+
+        def args = array (rank);
+        for (mutable i = 0; i < rank; ++i)
+        {
+            args [i] = typeof (System.Int32);
+        }
+
+        def ret = _module_builder.GetArrayMethod (t, "Get",
+                                                  CallingConventions.HasThis %| CallingConventions.Standard,
+                                                  t.GetElementType (), args);
+        ret
+    }
     
     /**
      * Emits the CE_switch instruction
@@ -2658,10 +2787,10 @@ namespace Nemerle.Compiler
           + " to " + pretty_print_type (ty) + "> "
         | CE_sequence (body) => "{ " + pretty_print_list (body, "") + " }; "
         | CE_none => "CE_none"
-        | CE_mkarray (_, initializers) =>
-          "CE_mkarray { " + pretty_print_list (initializers, "") + " }; "
+        | CE_mkarray (_, initializers, dimensions) =>
+          "CE_mkarray { " + pretty_print_list (initializers, "") + " } {"+ List.FoldLeft (dimensions, "", fun (i, acc) { acc + i.ToString () + "; " }) +"}; "
         | CE_array_indexer (obj, args) =>
-          "CE_indexer " + pretty_print (obj) + "[" +
+          "CE_mindexer " + pretty_print (obj) + "[" +
           pretty_print_list (args, "") + "]" + "; "
         | CE_switch (indexer, _, _) =>
           "CE_switch ( " + pretty_print (indexer) + " ); "

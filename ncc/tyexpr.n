@@ -1010,7 +1010,7 @@ public module Tyexpr {
       | E_type_enforcement => "a type enforcement (:)"
       | E_sequence => "a sequence"
       | E_tuple => "a tuple constructor"
-      | E_mkarray => "a array constructor"
+      | E_mkarray => "an array constructor"
       | E_array_indexer => "an array indexer reference"
       | E_typeof => "an typeof expression"
       | E_opcode => "an operator reference"
@@ -1187,13 +1187,43 @@ public module Tyexpr {
       | _ => false
     }
   }
-  
 
-  ty_mkarray (ctx : CTX, lst : list <PT.Expr>) : Expr * Type
+  ty_mkarray (ctx : CTX, rank : int, args : PT.E_mkarray_args) : Expr * Type
   {
+    def dimensions (args)
+    {
+        | PT.E_A_leaf (l) => 
+          [l.Length ()]
+        | PT.E_A_branch ((h::_) as l) => 
+          l.Length () :: dimensions (h)
+        | PT.E_A_branch ([]) =>
+          Util.ice ("array initializer parsed incorrectly");
+    }
+    /* Flattens the initializers and checks that there are the correct number of them */
+    def flatten (args, dims)
+    {
+        | (PT.E_A_leaf (l), [d]) => 
+          if (l.Length () == d)
+            l;
+          else
+            Message.fatal_error ("incorrectly structured array initializer");
+        | (PT.E_A_leaf (_), _) => 
+            Message.fatal_error ("incorrectly structured array initializer")
+        | (PT.E_A_branch (l), h::t) => 
+          if (l.Length () == h)
+            List.FoldLeft (l, [], fun (i, a) {List.Concat ([a, flatten (i, t)])})
+          else
+            Message.fatal_error ("incorrectly structured array initializer")
+        | (PT.E_A_branch (_), []) =>
+          Util.ice ("array initializer parsed incorrectly");
+    }
+
+    def dimensions = dimensions (args);
+    def lst = flatten (args, dimensions);
+
     def (typed_initializers, array_type) =
       match (lst) {
-        | [] => Util.ice ()
+        | [] => Util.ice ("empty list of initializers")
         | head :: _ =>
           def typed_head = ty_expr (ctx, head);
           def array_type = type_of (typed_head);
@@ -1206,8 +1236,9 @@ public module Tyexpr {
                 typed_initializer :: type_array_initializers (rest)
             }
           };
-          (E_mkarray (type_array_initializers (lst)), T_array (array_type))
+          (E_mkarray (type_array_initializers (lst), dimensions), T_array (array_type, rank))
       };
+
     typed_initializers.expr_ty = array_type;
     typed_initializers.loc = Location_stack.top ();
     def fresh_name = Util.tmpname ("array_initializer");
@@ -1215,7 +1246,6 @@ public module Tyexpr {
     def array_as_let = E_let (decl, typed_initializers, E_local_ref (decl));
     (array_as_let, array_type)
   }
-
 
   ty_indexer (ctx : CTX, obj : PT.Expr, args : list <PT.Expr>) : Expr * Type
   {
@@ -1228,20 +1258,22 @@ public module Tyexpr {
     };
 
     match (Tyutil.top_expand (typed_obj.expr_ty)) {
-      | T_array (indexer_over_type) =>
+      | T_array (indexer_over_type, rank) =>
         /* indexers over arrays */
-        def typed_index =
-        match (typed_args) {
-          | [index] => index
-          | [] =>
-            Message.fatal_error ("empty indexer applied to indexer type")
-          // FIXME: allow for multi-dimensional indexers
-          | _ => Message.fatal_error ("multi-dimensional indexers not"
-                                      " supported yet")
-        };
-        expect_type ("indexer type", typed_index,
-                     InternalType.Int32);
-        (E_array_indexer (indexer_over_type, typed_obj, [typed_index]),
+
+        when (typed_args.Length () != rank)
+          Message.fatal_error ("Wrong number of index parameters");
+          
+        def typed_indexes = List.Map (typed_args, 
+                                      fun (index) 
+                                      {
+                                          expect_type ("indexer type", index, 
+            
+                                           InternalType.Int32);
+                                          index;
+                                      });
+
+        (E_array_indexer (indexer_over_type, typed_obj, typed_indexes),
          indexer_over_type)
 
       | T_app (tc, _) =>
@@ -1324,10 +1356,11 @@ public module Tyexpr {
           sq.loc = expr.loc;
           restart (sq)
 
-        | PT.E_mkarray ([]) => restart (<[ array (0) ]>)
+        | PT.E_mkarray (1, PT.E_A_leaf ([])) => //// FIXME: should not be limited to rank 1
+          restart (<[ array (0) ]>)
 
-        | PT.E_mkarray (lst) =>
-          ty_mkarray (ctx, lst)
+        | PT.E_mkarray (rank, args) =>
+          ty_mkarray (ctx, rank, args)
 
         | PT.E_empty_array (sizes) =>
           match (sizes) {
@@ -1338,13 +1371,38 @@ public module Tyexpr {
               def call_expr =
                 <[ System.Array.CreateInstance ($(type_of_expr : typed), $size) ]>;
               def ex = ty_expr (ctx, call_expr);
-              def ex_ty = T_array (fv);
+              def ex_ty = T_array (fv, 1);
               (E_type_conversion (ex, ex_ty), ex_ty)
-            | _ =>
-              Message.fatal_error ("multi-dimensional arrays not supported yet")
+            | [size1, size2] =>
+              def fv = Tyvar.free_variable ();
+              def type_of_expr = E_typeof (expr.loc,
+                                           InternalType.Type, fv);
+              def call_expr =
+                <[ System.Array.CreateInstance ($(type_of_expr : typed), $size1, $size2) ]>;
+              def ex = ty_expr (ctx, call_expr);
+              def ex_ty = T_array (fv, 2);
+              (E_type_conversion (ex, ex_ty), ex_ty)
+            | [size1, size2, size3] =>
+              def fv = Tyvar.free_variable ();
+              def type_of_expr = E_typeof (expr.loc,
+                                           InternalType.Type, fv);
+              def call_expr =
+                <[ System.Array.CreateInstance ($(type_of_expr : typed), $size1, $size2, $size3) ]>;
+              def ex = ty_expr (ctx, call_expr);
+              def ex_ty = T_array (fv, 3);
+              (E_type_conversion (ex, ex_ty), ex_ty)
+            | sizes =>
+              def fv = Tyvar.free_variable ();
+              def type_of_expr = E_typeof (expr.loc,
+                                           InternalType.Type, fv);
+              def sizes_arr = <[ array [ ..$sizes ] ]>;
+              def call_expr =
+                <[ System.Array.CreateInstance ($(type_of_expr : typed), $sizes_arr) ]>;
+              def ex = ty_expr (ctx, call_expr);
+              def ex_ty = T_array (fv, sizes.Length ());
+              (E_type_conversion (ex, ex_ty), ex_ty)
           }
 
-        // FIXME: allow for multi-dimensional indexers
         | PT.E_indexer (obj, args) =>
           ty_indexer (ctx, obj, args)
 
