@@ -160,6 +160,7 @@ class Lexer : yyParser.yyInput
 		case "=":
 		case "?":
 		case "|":
+		case "$":
 			return s[0];
 
 		case "<-":
@@ -170,6 +171,12 @@ class Lexer : yyParser.yyInput
 
 		case "=>":
 			return Token.EQ_MORE;
+			
+		case "<[":
+			return Token.LESS_SQBRAC;
+			
+		case "]>":
+			return Token.SQBRAC_MORE;
 
 		default:
 			return tok;
