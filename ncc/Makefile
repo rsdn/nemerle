@@ -86,15 +86,13 @@ NEMERLE_COMPILER_DLL_SRC = \
         external/Codec.n		 \
         misc/PrettyPrint.n		 \
         misc/AssemblyInfo.n		 \
-        typing/ExpressionTyping.n	 \
         typing/PatternsTyping.n		 \
-        typing/LocalValues.n		 \
         typing/TypedTree.n		 \
-        typing/TypingContext.n		 \
         typing/TypeVariables.n		 \
         typing/Utility.n		 \
         typing/Macros.n			 \
         typing/MacroRegistry.n		 \
+        typing/TypingContext.n		 \
         typing/ConstantFolder.n		 \
         codedom/NemerleCodeGenerator.n	 \
         codedom/NemerleCodeCompiler.n	 \
@@ -118,6 +116,15 @@ NEMERLE_COMPILER_DLL_SRC = \
         hierarchy/XmlDump.n		 \
         passes.n			 \
 
+ifeq ($(NTE),1)
+NEMERLE_COMPILER_DLL_SRC += $(wildcard temp/typing/*.n)
+NCC_FLAGS += -D:NTE
+else
+NEMERLE_COMPILER_DLL_SRC += \
+        typing/ExpressionTyping.n	 \
+        typing/LocalValues.n		 \
+
+endif
 
 NCC_EXE_SRC       = main.n
 
@@ -158,6 +165,10 @@ INST	= @echo INSTALL $1
 # make boot, or have it invoked from the top-level make.
 all: stage1
 
+.PHONY: nte
+nte:
+	$(MAKE) NTE=1 stage1
+	
 # This is necessary to make sure, that configuration file
 # has been generated, and it is up to date.
 ../config.mak:
