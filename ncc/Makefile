@@ -54,7 +54,8 @@ n_src = \
 	typattern.n \
 	external.n \
 	cgopt.n \
-	macroregistry.n
+	macroregistry.n \
+	cgil.n
 #	lexer.n
 
 
