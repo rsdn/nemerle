@@ -47,3 +47,6 @@ EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 
 sql:
 	$(EXECUTE) ../boot/ncc.exe -r Npgsql -r Nemerle.Compiler -tdll dataNpgsql.n -o Nemerle.Data.Npgsql.dll
+	
+sqlclient:
+	$(EXECUTE) ../boot/ncc.exe -r System.Data -r Nemerle.Compiler -tdll dataSqlClient.n -o Nemerle.Data.SqlClient.dll	
