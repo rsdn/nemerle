@@ -11,10 +11,10 @@ all: $(target) test
 # here we just test if new-built compiler is capable of builing
 # itself, run make t to check testsuite
 test:
-	mono --debug ./$(target) ../lib/core.n $(n_src)
+	mono --debug ./$(target) ../npc/lib/core.n $(n_src)
 
 $(target): $(all_src)
-	../npc.opt $(n_src)
+	../npc/npc.opt $(n_src)
 	mcs -debug+ -o $@ $(all_cs)
 
 t:

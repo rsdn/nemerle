@@ -25,7 +25,7 @@ changelog:
 	svn log -v --xml > changelog.xml
 	$(svn2log) -p /nemerle/trunk -x npc -x doc
 	$(svn2log) -p /nemerle/trunk/npc -o npc/ChangeLog -x ncc
-	$(svn2log) -p /nemerle/trunk/npc/ncc -o npc/ncc/ChangeLog
+	$(svn2log) -p /nemerle/trunk/ncc -o ncc/ChangeLog -r npc/ncc=ncc
 	$(svn2log) -p /nemerle/trunk/doc -o doc/ChangeLog
 	rm -f changelog.xml
 
@@ -37,7 +37,7 @@ dist: changelog
 	  ver=`svn info . | awk '/^Revision:/ { print $$2 }'`; \
 	  rm -rf $(name)-$$ver; \
 	  svn export . $(name)-$$ver; \
-	  for f in . npc npc/ncc doc ; do \
+	  for f in . npc ncc doc ; do \
 	    cp $$f/ChangeLog $(name)-$$ver/$$f; \
 	  done; \
 	  tar zcf $(name)-$$ver.tar.gz $(name)-$$ver; \
@@ -58,3 +58,4 @@ send-dist:
 clean:
 	$(MAKE) -C doc clean
 	$(MAKE) -C npc clean
+	$(MAKE) -C ncc clean
