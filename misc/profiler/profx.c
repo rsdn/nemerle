@@ -56,7 +56,7 @@ method_get_name (MonoMethod* method)
 static void
 output_method (MonoMethod *meth, struct method_descriptor *desc, MonoProfiler *prof)
 {
-	assert (desc->used_times == 0);
+  	assert (desc->used_times == 0);
 
 	printf("%10lld %10lld %7d  %s %s\n", 
 	       (desc->cumulative_time - desc->children_time) / (prof->total_time / 100000),

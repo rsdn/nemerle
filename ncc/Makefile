@@ -34,7 +34,7 @@ include ../config.mak
 ############################################################
 
 COMPILER_PATH = ../boot/
-NCC_FLAGS     = -pedantic-lexer
+NCC_FLAGS     = -pedantic-lexer $(NEM_FLAGS)
 COMPILER      = $(COMPILER_PATH)ncc.exe
 COMPILER_DEP  = $(COMPILER_PATH)ncc.exe $(COMPILER_PATH)Nemerle.Macros.dll
 EXECUTE       = $(NET_ENGINE) $(NET_FLAGS)
@@ -318,6 +318,11 @@ tests:
 
 profile:
 	../misc/profiler/runprof
+
+halfboot:
+	touch out.stage1/*
+	touch out.stage2/Nemerle.stage2.dll
+	$(Q)$(MAKE) boot
 
 install:
 	$(Q)if test ! -d $(DESTDIR)$(LIBDIR); then $(INSTALL) -d $(DESTDIR)$(LIBDIR); fi
