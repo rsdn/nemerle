@@ -49,6 +49,15 @@ class CS_glue {
 		int idx = s.LastIndexOf('.');
 		return s.Substring(idx + 1);
 	}
+	
+	static System.IO.StreamWriter output_file;
+
+	public static void write_string(string s)
+	{
+		if (output_file == null)
+			output_file = new System.IO.StreamWriter("out.cs");
+		output_file.Write(s);
+	}
 }
 
 class XParser : Parser {
