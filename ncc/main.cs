@@ -111,7 +111,8 @@ class CS_glue {
 
 	public static bool is_capitalized(string s)
 	{
-		return s[0] >= 'A' && s[0] <= 'Z';
+		int idx = s.LastIndexOf('.');
+		return s[idx + 1] >= 'A' && s[idx + 1] <= 'Z';
 	}
 }
 
