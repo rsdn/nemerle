@@ -53,6 +53,11 @@ def die(msg):
 def attr(e, n):
   return e.attrs[("", n)]
 
+def has_child(e, n):
+  for c in e.children:
+    if c.name == n: return 1
+  return 0
+
 def child(e, n):
   for c in e.children:
     if c.name == n: return c
@@ -133,7 +138,10 @@ class Entry:
 
 def process_entry(e):
   rev = attr(e, "revision")
-  author = child(e, "author").textof()
+  if has_child(e, "author"):
+    author = child(e, "author").textof()
+  else:
+    author = "anonymous"
   m = date_rx.search(child(e, "date").textof())
   msg = child(e, "msg").textof()
   if m:
