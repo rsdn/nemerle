@@ -327,7 +327,7 @@ public module Parser {
   }
 
   parse_funparm (allow_inference : bool) : Fun_parm {
-    def (atts, _) = get_attrs (System.AttributeTargets.Parameter);
+    def (atts, _) = get_attrs (System.AttributeTargets.Parameter, System.AttributeTargets.Parameter);
     match (peek_token ()) {
       | Tok_keyword ("params") =>
         shift ();
@@ -1425,7 +1425,7 @@ public module Parser {
   /** allowed targets are:
         assembly: assembly 
         module:  module   (not supprted currently)
-        class, struc, interface, enum: type 
+        class, struct, interface, enum: type 
         delegate: type, return
         method: method, return
         parameter: param 
@@ -1438,7 +1438,7 @@ public module Parser {
         event — add: method, param
         event — remove: method, param
   */
-  get_attrs (main_target : System.AttributeTargets) 
+  get_attrs (main_target : System.AttributeTargets, allowed_targets : System.AttributeTargets) 
   : Modifiers * Hashtable <System.AttributeTargets, list <Expr>> 
   {
     mutable other_atts = null;
@@ -1447,6 +1447,30 @@ public module Parser {
           current_target == main_target)
         exps
       else {
+        unless (current_target %&& allowed_targets)
+        // FIXME: change to enum matching 
+          match ((main_target :> int)) {
+            | /* Assembly */ 0x00000001 => 
+              error ("[assembly: ...] custom attribute not allowed here");
+            | /* Module */ 0x00000002 => 
+              error ("[module: ...] custom attribute not allowed here");
+            | /* Class */ 0x00000004 =>
+              error ("`type' target is here forbidden")     
+            | /* Method */ 0x00000040 => 
+              error ("`method' target is here forbidden")     
+            | /* Property */ 0x00000080 => 
+              error ("`property' target is here forbidden")     
+            | /* Field */ 0x00000100 => 
+              error ("`field' target is here forbidden")     
+            | /* Event */ 0x00000200 => 
+              error ("`event' target is here forbidden")     
+            | /* Parameter */ 0x00000800 => 
+              error ("`param' target is here forbidden")     
+            | /* ReturnValue */ 0x00002000 => 
+              error ("`return' target is here forbidden")     
+            | _ => Util.ice ("who set complex attribute?")
+          }
+
         when (other_atts == null) other_atts = Hashtable ();
         match (other_atts.Get (current_target)) {
           | Some (l) => other_atts.Set (current_target, l + exps)
@@ -1493,8 +1517,6 @@ public module Parser {
                 push_back ();
                 System.AttributeTargets.All
             };
-          when (target == System.AttributeTargets.Assembly)
-            error ("[assembly: ...] custom attribute not allowed here");
           when (target != System.AttributeTargets.All)
             expect_operator (":");
 
@@ -1533,6 +1555,25 @@ public module Parser {
     };
 
     (mods, other_atts)
+  }
+
+  take_attributes_out (from : Hashtable <System.AttributeTargets, list <Expr>>, 
+                       what : System.AttributeTargets,
+                       comply_on_other : bool) : list <Expr>
+  { 
+    if (from != null) {
+      def result = 
+        match (from.Get (what)) {
+          | Some (l) =>
+            from.Remove (what);
+            l
+          | None => []
+        };
+      when (comply_on_other && from.Count () > 0)
+        error ("unexpected attribute target");
+      result
+    }
+    else []
   }
   
   operator_separated_list<'a> (op : string, f : void -> 'a) : list <'a> {
@@ -1596,47 +1637,69 @@ public module Parser {
       };
     };
 
+    mutable valid_targets = System.AttributeTargets.Method %| System.AttributeTargets.Field %|
+      System.AttributeTargets.Parameter %| System.AttributeTargets.ReturnValue;
+    mutable default_attrs = null;
+    mutable other_attrs = null;
+
+    def collect_attrs (main) {
+      def (x, y) = get_attrs (main, valid_targets);
+      default_attrs = x;
+      other_attrs = y;
+    }
+
     def plain_name = match (name) { | SS_string (n) => n.GetHead () | _ => "" };
     
     mutable set = None (); mutable get = None ();
     def loc = location_here ();
     
     // parse embedded fields and add PropertyEmbeddedField macros to attributes
-    mutable inner_attrs = Nemerle.Utility.Pair.First (get_attrs (System.AttributeTargets.Method));    
+    collect_attrs (0 :> System.AttributeTargets);
     while (match (peek_token ()) { 
       | Tok_identifier (i) when i != "set" && i != "get" => true 
       | _ => false }) 
     {
       def nm = get_splicable_id ();
-      match (parse_field (loc, nm, inner_attrs, false, None ())) {
-        | M_field { loc = loc; modifiers = att; ty = t} =>
-          def funparm = [Fun_parm (loc, nm, t, att)];
+      match (parse_field (loc, nm, default_attrs, false, None ())) {
+        | M_field { loc = loc; ty = t} =>
+          def targeted = take_attributes_out (other_attrs, System.AttributeTargets.Field, true);
+          default_attrs.custom_attrs = targeted + default_attrs.custom_attrs;
+          def funparm = [Fun_parm (loc, nm, t, default_attrs)];
           attrs.custom_attrs = <[ PropertyEmbeddedField (fun (..$funparm) {}) ]> 
-          :: attrs.custom_attrs;
+            :: attrs.custom_attrs;
         | _ =>
           fatal_error ("only plain fields can be embedded into the property")
       }
-      inner_attrs = Nemerle.Utility.Pair.First (get_attrs (System.AttributeTargets.Method));
+      collect_attrs (0 :> System.AttributeTargets);
     }
+
+    valid_targets &= ~System.AttributeTargets.Field;
     
     def take_get () {
       def (kind, bd) = parse_bd (dims);
       def name = SS_string (Name ("get_" + plain_name));
       def fh = Fun_header (loc, name, ret_ty, dims);
-      get = Some (M_function (loc, fh.name, inner_attrs, fh, kind, bd));
+      def targeted = take_attributes_out (other_attrs, System.AttributeTargets.Method, true);
+      default_attrs.custom_attrs = targeted + default_attrs.custom_attrs;
+      get = Some (M_function (loc, fh.name, default_attrs, fh, kind, bd));
     }
     def take_set () {
-      def setter_parms = dims + [Fun_parm (SS_string (Name (["value"])), ret_ty, Modifiers.Empty)];
+      def par_atts = Modifiers (NemerleAttributes.None, 
+        take_attributes_out (other_attrs, System.AttributeTargets.Parameter, false));
+      def setter_parms = dims + [Fun_parm (SS_string (Name (["value"])), ret_ty, par_atts)];
       def (kind, bd) = parse_bd (setter_parms);
       def name = SS_string (Name ("set_" + plain_name));
       def fh = Fun_header (loc, name, T_void (), setter_parms);
-      set = Some (M_function (loc, fh.name, inner_attrs, fh, kind, bd));
+      def targeted = take_attributes_out (other_attrs, System.AttributeTargets.Method, true);
+      default_attrs.custom_attrs = targeted + default_attrs.custom_attrs;
+      set = Some (M_function (loc, fh.name, default_attrs, fh, kind, bd));
+      valid_targets &= ~System.AttributeTargets.Parameter;
     }
 
     match (get_token ()) {
       | Tok_identifier ("get") =>
         take_get ();
-        inner_attrs = Nemerle.Utility.Pair.First (get_attrs (System.AttributeTargets.Method));
+        collect_attrs (System.AttributeTargets.Method);
 
         match (get_token ()) {
           | Tok_identifier ("set") =>
@@ -1649,7 +1712,7 @@ public module Parser {
 
       | Tok_identifier ("set") =>
         take_set ();
-        inner_attrs = Nemerle.Utility.Pair.First (get_attrs (System.AttributeTargets.Method));
+        collect_attrs (System.AttributeTargets.Method);   
         match (get_token ()) {
           | Tok_identifier ("get") =>
             take_get ();
@@ -1679,47 +1742,69 @@ public module Parser {
       };
     };
 
+    mutable valid_targets = System.AttributeTargets.Method %| System.AttributeTargets.Field %|
+      System.AttributeTargets.Parameter %| System.AttributeTargets.ReturnValue;
+    mutable default_attrs = null;
+    mutable other_attrs = null;
+
+    def collect_attrs (main) {
+      def (x, y) = get_attrs (main, valid_targets);
+      default_attrs = x;
+      other_attrs = y;
+    }
+
     def plain_name = match (name) { | SS_string (n) => n.GetHead () | _ => "" };
     mutable add = None (); mutable remove = None ();
     def loc = location_here ();
 
     // parse embedded fields and add EventEmbeddedField macros to attributes
-    mutable inner_attrs = Nemerle.Utility.Pair.First (get_attrs (System.AttributeTargets.Method));    
+    collect_attrs (0 :> System.AttributeTargets);
     while (match (peek_token ()) { 
       | Tok_identifier (i) when i != "remove" && i != "add" => true 
       | _ => false }) 
     {
       def nm = get_splicable_id ();
-      match (parse_field (loc, nm, inner_attrs, false, None ())) {
-        | M_field { loc = loc; modifiers = att; ty = t} =>
-          def funparm = [Fun_parm (loc, nm, t, att)];
+      match (parse_field (loc, nm, default_attrs, false, None ())) {
+        | M_field { loc = loc; ty = t} =>
+          def targeted = take_attributes_out (other_attrs, System.AttributeTargets.Field, true);
+          default_attrs.custom_attrs = targeted + default_attrs.custom_attrs;
+          def funparm = [Fun_parm (loc, nm, t, default_attrs)];
           attrs.custom_attrs = <[ EventEmbeddedField (fun (..$funparm) {}) ]> 
-          :: attrs.custom_attrs;
+            :: attrs.custom_attrs;
         | _ =>
           fatal_error ("only plain fields can be embedded into the event")
       }
-      inner_attrs = Nemerle.Utility.Pair.First (get_attrs (System.AttributeTargets.Method));
+      collect_attrs (0 :> System.AttributeTargets);
     }
 
-    def value_parm = [Fun_parm (SS_string (Name (["value"])), t, Modifiers.Empty)];
+    valid_targets &= ~System.AttributeTargets.Field;
+    def value_parm = Fun_parm (SS_string (Name (["value"])), t, Modifiers.Empty);
 
     def take_remove () {
-      def (kind, bd) = parse_bd (value_parm);
+      def (kind, bd) = parse_bd ([value_parm]);
       def name = SS_string (Name ("remove_" + plain_name));
-      def fh = Fun_header (loc, name, T_void (), value_parm);
-      remove = Some (M_function (loc, name, inner_attrs, fh, kind, bd));
+      def fh = Fun_header (loc, name, T_void (), [value_parm]);
+      value_parm.modifiers = Modifiers (NemerleAttributes.None, 
+        take_attributes_out (other_attrs, System.AttributeTargets.Parameter, false));
+      def targeted = take_attributes_out (other_attrs, System.AttributeTargets.Method, true);
+      default_attrs.custom_attrs = targeted + default_attrs.custom_attrs;
+      remove = Some (M_function (loc, name, default_attrs, fh, kind, bd));
     }
     def take_add () {
-      def (kind, bd) = parse_bd (value_parm);
+      def (kind, bd) = parse_bd ([value_parm]);
       def name = SS_string (Name ("add_" + plain_name));
-      def fh = Fun_header (loc, name, T_void (), value_parm);
-      add = Some (M_function (loc, name, inner_attrs, fh, kind, bd));
+      def fh = Fun_header (loc, name, T_void (), [value_parm]);
+      value_parm.modifiers = Modifiers (NemerleAttributes.None, 
+        take_attributes_out (other_attrs, System.AttributeTargets.Parameter, false));
+      def targeted = take_attributes_out (other_attrs, System.AttributeTargets.Method, true);
+      default_attrs.custom_attrs = targeted + default_attrs.custom_attrs;
+      add = Some (M_function (loc, name, default_attrs, fh, kind, bd));
     }
     
     match (get_token ()) {
       | Tok_identifier ("remove") =>
         take_remove ();
-        inner_attrs = Nemerle.Utility.Pair.First (get_attrs (System.AttributeTargets.Method));
+        collect_attrs (System.AttributeTargets.Method);
 
         match (get_token ()) {
           | Tok_identifier ("add") =>
@@ -1732,7 +1817,8 @@ public module Parser {
 
       | Tok_identifier ("add") =>
         take_add ();
-        inner_attrs = Nemerle.Utility.Pair.First (get_attrs (System.AttributeTargets.Method));
+        collect_attrs (System.AttributeTargets.Method);
+
         match (get_token ()) {
           | Tok_identifier ("remove") =>
             take_remove ();
@@ -1929,7 +2015,7 @@ public module Parser {
         def parse_field () {
           ignore (peek_token ());
           locate (fun () {
-            def (attrs, _) = get_attrs (System.AttributeTargets.Field);
+            def (attrs, _) = get_attrs (System.AttributeTargets.Field, System.AttributeTargets.Field);
             def id = get_splicable_id ();
             expect_operator (":");
             def ty = parse_type ();
@@ -1964,7 +2050,9 @@ public module Parser {
   
   parse_type_member (is_iface : bool) : Class_member {
     def loc = location_here ();
-    def (attrs, _) = get_attrs (System.AttributeTargets.Method);
+    def (attrs, other_atts) = get_attrs (0 :> System.AttributeTargets, System.AttributeTargets.Method %|
+      System.AttributeTargets.Field %| System.AttributeTargets.Property %| System.AttributeTargets.Event %|
+      System.AttributeTargets.Class);
     
     match (peek_token ()) {
       | Tok_operator ("$", _) | Tok_identifier =>
@@ -1972,27 +2060,33 @@ public module Parser {
         match (peek_token ()) {
           | Tok_operator ("(", _)
           | Tok_operator ("<", _) => 
+            attrs.custom_attrs += take_attributes_out (other_atts, System.AttributeTargets.Method, true);
             parse_method (loc, Some (id), attrs, is_iface)
           | Tok_operator ("[", _) =>
+            attrs.custom_attrs += take_attributes_out (other_atts, System.AttributeTargets.Property, true);
             parse_indexer (loc, id, attrs)            
           | _ =>
             parse_field (loc, id, attrs, false, None ())
         }
         
       | Tok_keyword ("this") =>
+        attrs.custom_attrs += take_attributes_out (other_atts, System.AttributeTargets.Method, true);
         parse_method (loc, None (), attrs, is_iface)
 
       | Tok_keyword ("event") =>
         shift ();
+        attrs.custom_attrs += take_attributes_out (other_atts, System.AttributeTargets.Event, true);
         def id = get_splicable_id ();
         parse_field (loc, id, attrs, true, None ())
 
       | Tok_operator ("|", _) =>
         shift ();
+        when (other_atts != null) error ("custom attributes not allowed on options");
         parse_option (loc, attrs)
         
       | _ =>
         def td = parse_type_decl ();
+        attrs.custom_attrs += take_attributes_out (other_atts, System.AttributeTargets.Class, true);
         td.modifiers.mods |= attrs.mods;
         td.modifiers.custom_attrs += attrs.custom_attrs;
         M_type (loc = loc, 
@@ -2053,7 +2147,8 @@ public module Parser {
       collect_braced_list (fun () { parse_type_member (is_iface) })
     };
     
-    def (attrs, _) = get_attrs (System.AttributeTargets.Class);
+    def (attrs, other_attrs) = get_attrs (System.AttributeTargets.Class, 
+                                          System.AttributeTargets.Class);
     def tok = get_token ();
     
     locate (fun () {
@@ -2102,6 +2197,7 @@ public module Parser {
               | _ => Util.ice ()
             };
             
+          attrs.custom_attrs += take_attributes_out (other_attrs, System.AttributeTargets.Class, true);          
           td.modifiers = attrs;
           
           td.name = name;
