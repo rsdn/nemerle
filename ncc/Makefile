@@ -120,6 +120,7 @@ STDMACROS_DLL_SRC = \
         ../macros/assertions.n \
 	../macros/operators.n \
         ../macros/io.n \
+        ../macros/text.n \
 	../macros/AssemblyInfo.n \
 	../macros/xml.n \
 	../macros/concurrency.n \
