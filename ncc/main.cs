@@ -76,6 +76,38 @@ class CS_glue {
 				p[i] = '_';
 		return new string(p);
 	}
+
+	public static string quote(string s)
+	{
+		char [] o = new char [s.Length * 2];
+		int i, p = 0;
+
+		for (i = 0; i < s.Length; i++)
+			switch (s[i]) {
+			case '\n':
+				o[p++] = '\\';
+				o[p++] = 'n';
+				break;
+
+			case '\t':
+				o[p++] = '\\';
+				o[p++] = 't';
+				break;
+
+			case '\"':
+			case '\'':
+			case '\\':
+				o[p++] = '\\';
+				o[p++] = s[i];
+				break;
+
+			default:
+				o[p++] = s[i];
+				break;
+			}
+			
+		return new string(o, 0, p);
+	}
 }
 
 class XParser : Parser {
