@@ -33,10 +33,9 @@ COMPILER = $(COMPILER_PATH)ncc.exe
 
 RUN_COMPILER = $(TIME) $(EXECUTE) $(COMPILER) -no-stdlib $(COMP_FLAGS)
 
-GENERIC_SRC = ../lib/aliases.n
+GENERIC_SRC =
 
 NEMERLE_DLL_SRC = \
-	../lib/aliases.n		\
 	../lib/core.n			\
 	../lib/getopt.n			\
 	../lib/hashtable.n		\
@@ -110,6 +109,7 @@ aux-stage:
 	$(MAKE) aux-stage-files
 
 aux-stage-files: \
+		out.$(STAGE)/aliases.n		\
 		out.$(STAGE)/Nemerle.$(STAGE).dll \
 		out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll \
 		out.$(STAGE)/stdmacros.dll \
@@ -120,6 +120,7 @@ last-stage:
 	$(MAKE) last-stage-files
 
 last-stage-files: \
+		out.$(STAGE)/aliases.n		\
 		out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll \
 		out.$(STAGE)/stdmacros.dll \
@@ -159,8 +160,15 @@ compare-one-with-stage:
 	diff -u -w $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 	rm -f $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 
-out.$(STAGE)/Nemerle.dll out.$(STAGE)/Nemerle.$(STAGE).dll: $(COMPILER) $(NEMERLE_DLL_SRC)
-	$(RUN_COMPILER) -target-library -out:$@ $(NEMERLE_DLL_SRC)
+../boot/aliases.n: ../lib/aliases.n
+	cp -f $< $@
+
+out.%/aliases.n: ../lib/aliases.n
+	cp -f $< $@
+
+out.$(STAGE)/Nemerle.dll out.$(STAGE)/Nemerle.$(STAGE).dll: \
+		$(COMPILER) $(COMPILER_PATH)aliases.n $(NEMERLE_DLL_SRC)
+	$(RUN_COMPILER) -target-library -out:$@ $(GENERIC_SRC) $(NEMERLE_DLL_SRC)
 
 out.$(STAGE)/Nemerle.Compiler.dll: \
 		$(COMPILER) out.$(STAGE)/Nemerle.dll $(NEMERLE_COMPILER_DLL_SRC)
