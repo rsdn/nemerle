@@ -120,7 +120,7 @@ syn match	nemerleNumber "[0-9]\+\((\.[0-9]*)\)\?\([eE]\([+-]\)\?[0-9]*\)\?"
 syn match	nemerleTyVar	"'[a-zA-Z_][a-zA-Z_0-9]*"
 syn match	nemerleChar	"'\(.\|\\.\|\\x\x\x\)'"
 
-syn match	nemerlePreCondit "^[ 	]*#\(region\|endregio\|if\|endif\).*$"
+syn match	nemerlePreCondit "^[ 	]*#\(region\|endregio\|if\|else\|endif\).*$"
 
 " syn match	nemerleUIdentifier	"[A-Z][a-zA-Z_0-9]*"
 syn match	nemerleIdentifier	"[a-z_][a-zA-Z_0-9]*"
