@@ -39,7 +39,7 @@ if ($cs_complier == "mcs") {
     $runtime = "mono --debug ";
 }
 
-$compiler = $RUNTIME . "../$nem_comp.exe ../lib/core.n";
+$compiler = $runtime . "../$nem_comp.exe ../lib/core.n";
 
 sub xgrep($$)
 {
