@@ -381,8 +381,8 @@
   </with>
 
   \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ <postscript|<tuple|<raw_data|%!PS-Adobe-2.0
-  EPSF-2.0\n%%Title: Diagram1.dia\n%%Creator: Dia v0.92-pre5\n%%CreationDate:
-  Sun Nov \ 2 12:32:50 2003\n%%For: malekith\n%%Orientation:
+  EPSF-2.0\n%%Title: arrow.dia\n%%Creator: Dia v0.92-pre5\n%%CreationDate:
+  Mon Nov \ 3 16:13:42 2003\n%%For: malekith\n%%Orientation:
   Portrait\n%%Magnification: 1.0000\n%%BoundingBox: 0 0 121
   117\n%%BeginSetup\n%%EndSetup\n%%EndComments\n%%BeginProlog\n[ /.notdef
   /.notdef /.notdef /.notdef /.notdef /.notdef /.notdef /.notdef /.notdef
@@ -539,13 +539,13 @@
   pop\n/ZapfDingbats-latin1\n \ \ \ /ZapfDingbats findfont\n \ \ \ dup length
   dict begin\n\t{1 index /FID ne {def} {pop pop} ifelse} forall\n\t/Encoding
   isolatin1encoding def\n \ \ \ currentdict end\ndefinefont pop\n28.346000
-  -28.346000 scale\n-7.879289 -7.070711 translate\n%%EndProlog\n\n\n0.100000
-  slw\n[] 0 sd\n[] 0 sd\n0 slj\n0 slc\n0.358175 0.598062 0.769604 srgb\nn
-  9.000000 3.000000 m 11.000000 3.000000 l 11.000000 5.000000 l 12.000000
-  5.000000 l 10.000000 7.000000 l 8.000000 5.000000 l 9.000000 5.000000 l
-  f\n0.000000 0.000000 0.000000 srgb\nn 9.000000 3.000000 m 11.000000
-  3.000000 l 11.000000 5.000000 l 12.000000 5.000000 l 10.000000 7.000000 l
-  8.000000 5.000000 l 9.000000 5.000000 l cp s\nshowpage\n>|eps>||||||>
+  -28.346000 scale\n-12.879289 -9.070711 translate\n%%EndProlog\n\n\n0.100000
+  slw\n[] 0 sd\n[] 0 sd\n0 slj\n0 slc\n0.945495 0.684703 0.206592 srgb\nn
+  14.000000 5.000000 m 16.000000 5.000000 l 16.000000 7.000000 l 17.000000
+  7.000000 l 15.000000 9.000000 l 13.000000 7.000000 l 14.000000 7.000000 l
+  f\n0.000000 0.000000 0.000000 srgb\nn 14.000000 5.000000 m 16.000000
+  5.000000 l 16.000000 7.000000 l 17.000000 7.000000 l 15.000000 9.000000 l
+  13.000000 7.000000 l 14.000000 7.000000 l cp s\nshowpage\n>|eps>||||||>
 
   <\with|font size|0.84>
     <\code>
@@ -601,9 +601,9 @@
     \ \ \ \ \ \ \ \ \ )
   </code>>
 
-  \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ <postscript|<tuple|<raw_data|%!PS-Adobe-2.0
-  EPSF-2.0\n%%Title: Diagram1.dia\n%%Creator: Dia v0.92-pre5\n%%CreationDate:
-  Sun Nov \ 2 12:32:50 2003\n%%For: malekith\n%%Orientation:
+  \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ <postscript|<tuple|<raw_data|%!PS-Adobe-2.0
+  EPSF-2.0\n%%Title: arrow.dia\n%%Creator: Dia v0.92-pre5\n%%CreationDate:
+  Mon Nov \ 3 16:13:42 2003\n%%For: malekith\n%%Orientation:
   Portrait\n%%Magnification: 1.0000\n%%BoundingBox: 0 0 121
   117\n%%BeginSetup\n%%EndSetup\n%%EndComments\n%%BeginProlog\n[ /.notdef
   /.notdef /.notdef /.notdef /.notdef /.notdef /.notdef /.notdef /.notdef
@@ -760,13 +760,13 @@
   pop\n/ZapfDingbats-latin1\n \ \ \ /ZapfDingbats findfont\n \ \ \ dup length
   dict begin\n\t{1 index /FID ne {def} {pop pop} ifelse} forall\n\t/Encoding
   isolatin1encoding def\n \ \ \ currentdict end\ndefinefont pop\n28.346000
-  -28.346000 scale\n-7.879289 -7.070711 translate\n%%EndProlog\n\n\n0.100000
-  slw\n[] 0 sd\n[] 0 sd\n0 slj\n0 slc\n0.358175 0.598062 0.769604 srgb\nn
-  9.000000 3.000000 m 11.000000 3.000000 l 11.000000 5.000000 l 12.000000
-  5.000000 l 10.000000 7.000000 l 8.000000 5.000000 l 9.000000 5.000000 l
-  f\n0.000000 0.000000 0.000000 srgb\nn 9.000000 3.000000 m 11.000000
-  3.000000 l 11.000000 5.000000 l 12.000000 5.000000 l 10.000000 7.000000 l
-  8.000000 5.000000 l 9.000000 5.000000 l cp s\nshowpage\n>|eps>||||||>
+  -28.346000 scale\n-12.879289 -9.070711 translate\n%%EndProlog\n\n\n0.100000
+  slw\n[] 0 sd\n[] 0 sd\n0 slj\n0 slc\n0.945495 0.684703 0.206592 srgb\nn
+  14.000000 5.000000 m 16.000000 5.000000 l 16.000000 7.000000 l 17.000000
+  7.000000 l 15.000000 9.000000 l 13.000000 7.000000 l 14.000000 7.000000 l
+  f\n0.000000 0.000000 0.000000 srgb\nn 14.000000 5.000000 m 16.000000
+  5.000000 l 16.000000 7.000000 l 17.000000 7.000000 l 15.000000 9.000000 l
+  13.000000 7.000000 l 14.000000 7.000000 l cp s\nshowpage\n>|eps>||||||>
 
   <with|font size|0.84|<\code>
     <with|font size|0.84|>def q = sql_query (<with|color|magenta|"SELECT
@@ -964,8 +964,8 @@
 
 <\references>
   <\collection>
-    <associate|toc-20|<tuple|<uninit>|11>>
     <associate|toc-10|<tuple|<uninit>|5>>
+    <associate|toc-20|<tuple|<uninit>|11>>
     <associate|gly-1|<tuple|1|?>>
     <associate|toc-11|<tuple|<uninit>|6>>
     <associate|toc-12|<tuple|<uninit>|7>>
