@@ -83,14 +83,13 @@ public class TypeBuilder : TypeInfo
   // (listed as pairs of implementation method / interface method)
   private mutable m_additional_method_overrides : list [IMethod * IMethod];
   
-  mutable subtypes : SystemMap [int, TypeInfo * list [TType]];
+  mutable supertypes : SystemMap [int, TypeInfo * list [TType]];
   mutable member_map : SystemMap [string, list [IMember]];
   mutable member_list : list [IMember];
 
   mutable type_builder : System.Reflection.Emit.TypeBuilder;
 
   mutable constant_object : option [IField];
-  mutable has_fields : bool;
   mutable self_type : TType.Class;
   
   /**
@@ -113,7 +112,7 @@ public class TypeBuilder : TypeInfo
   /**
    * Return list of type parameters under which we subtype given type.
    *
-   * For example if [A ('a) :> B (int)], then ["A".SuperType ("B")]
+   * For example if [A ['a] :> B [int]], then ["A".SuperType ("B")]
    * returns [[int]].
    *
    * This information can be also fetched from [GetDirectSuperTypes()]
@@ -121,7 +120,7 @@ public class TypeBuilder : TypeInfo
    */
   public override SuperType (ti : TypeInfo) : option [list [TType]]
   {
-    match (subtypes.Find (ti.GetId ())) {
+    match (supertypes.Find (ti.GetId ())) {
       | Some ((_, x)) => Some (x)
       | None =>
         if (ti.Equals (InternalType.Object_tc))
@@ -453,10 +452,10 @@ public class TypeBuilder : TypeInfo
    *
    * <remarks>
    *    For example consider:
-   *    [[[
-   *      class A ('a) { f : 'a; }
-   *      class B : A (int) { }
-   *    ]]]
+   *    <code>
+   *      class A ['a] { f : 'a; }
+   *      class B : A [int] { }
+   *    </code>
    *    Now ["B".SubtypingSubst ("A")] would return { 'a := int }, so
    *    it can be applied to type of [A.f] which is ['a], to obtain type
    *    of [B.f] which is [int].
@@ -844,7 +843,7 @@ public class TypeBuilder : TypeInfo
    *
    *   Each type directly subtypes types it extends or implements.  This
    *   pass computes transitive closure of direct subtyping relation
-   *   and stores it [TypeBuilder.subtypes] map.  .NET generics doesn't allow
+   *   and stores it [TypeBuilder.supertypes] map.  .NET generics doesn't allow
    *   same type to be subtyped under different instantiations, so we
    *   use map from (id of) subtyped TypeBuilder object to actual parameters
    *   of subtyped type.
@@ -862,7 +861,7 @@ public class TypeBuilder : TypeInfo
     def add_srs (t : TType.Class, s : Subinfo) {
       add_subtyping_of (s, t.tycon, t.args)
     };
-    subtypes = List.FoldLeft (GetDirectSuperTypes (), SystemMap (), add_srs)
+    supertypes = List.FoldLeft (GetDirectSuperTypes (), SystemMap (), add_srs)
   }
 
   add_subtyping_of (subinfo : Subinfo, tc : TypeInfo, args : list [TType]) : Subinfo
@@ -907,26 +906,23 @@ public class TypeBuilder : TypeInfo
 
   public override GetSuperTypes () : list [TType.Class]
   {
-    if (subtypes == null) []
+    if (supertypes == null) []
     else
-      subtypes.Fold (fun (_, x, acc) {
-                        def (tc, args) = x;
-                        (TType.Class (tc, args) :> TType.Class) :: acc },
-                     [])
+      supertypes.Fold (fun (_, x, acc) {
+                         def (tc, args) = x;
+                         (TType.Class (tc, args) :> TType.Class) :: acc
+                       }, [])
   }
 
-  begin_adding_members () : void
+  add_derived_members () : void
   {
-    def get_members (t) {
-      match (t) {
-        | TType.Class (tc, _) => tc.GetMembers ()
-        | _ => []
-      }
+    def get_members (t : TType.Class) {
+      t.tycon.GetMembers ()
     };
     def members = 
       match (GetTydecl ()) {
         | TypeDeclaration.Interface =>
-          List.Concat (List.Map (GetDirectSuperTypes (), get_members))
+          List.Concat (List.RevMap (GetDirectSuperTypes (), get_members))
         | _ =>
           match (parent_type) {
             | Some (t) => get_members (t)
@@ -935,24 +931,8 @@ public class TypeBuilder : TypeInfo
       };
       
     def inherit_it (mem : IMember) {
-      def kind_is_ok =
-        match (mem.GetKind ()) {
-          | MemberKind.Method (mem) =>
-            match (mem.GetFunKind ()) {
-              | FunKind.Constructor
-              | FunKind.StaticConstructor => false
-              | _ => true
-            }
-           
-          | MemberKind.Field =>
-            has_fields = true;
-            true
-          
-          | _ =>
-            true
-        }
-
-      kind_is_ok && !(mem.Attributes %&& NemerleAttributes.Private)
+      !(mem.MemberType %&& MemberTypes.Constructor ||
+        mem.Attributes %&& NemerleAttributes.Private)
     };
 
     def add (mem : IMember, map : SystemMap [string, list [IMember]]) {
@@ -962,8 +942,8 @@ public class TypeBuilder : TypeInfo
           | Some (l) => map.Replace (n, mem :: l)
           | None => map.Add (n, [mem])
         }
-      } else
-        map
+      }
+      else map
     };
 
     member_map = List.FoldLeft (members, SystemMap (), add);
@@ -1076,14 +1056,10 @@ public class TypeBuilder : TypeInfo
   public GetMethods (bindingAttr : BindingFlags) : list [IMethod]
   {
     def mems = get_members (bindingAttr, fun (x : IMember) {
-      match (x.GetKind ()) {
-        | MemberKind.Method (m) =>
-          match (m.GetFunKind ()) {
-            | FunKind.Constructor | FunKind.StaticConstructor => false
-            | _ => constrain_member (m, bindingAttr)
-          }
-        | _ => false
-      }
+      if (x.MemberType == MemberTypes.Method)
+        constrain_member (x, bindingAttr)
+      else
+        false
     });
     (mems :> list [IMethod])
   }
@@ -1100,15 +1076,10 @@ public class TypeBuilder : TypeInfo
   public override GetConstructors (bindingAttr : BindingFlags) : list [IMethod]
   {
     def mems = get_members (bindingAttr, fun (x : IMember) {
-      match (x.GetKind ()) {
-        | MemberKind.Method (m) =>
-          match (m.GetFunKind ()) {
-            | FunKind.Constructor | FunKind.StaticConstructor =>
-              constrain_member (m, bindingAttr)
-            | _ => false
-          }
-        | _ => false
-      }
+      if (x.MemberType == MemberTypes.Constructor)
+        constrain_member (x, bindingAttr)
+      else
+        false
     });
     (mems :> list [IMethod])
   }
@@ -1368,7 +1339,11 @@ public class TypeBuilder : TypeInfo
           }
       }
     };
-
+/*
+    def _meths = GetMethods ();
+    Message.debug (FullName);
+    foreach (meth in _meths) Message.debug (meth.ToString ());
+  */  
     def new_mems =
       match (member_map.Find (mem.Name)) {
         | Some ([]) => Util.ice ()
@@ -1582,7 +1557,7 @@ public class TypeBuilder : TypeInfo
 
     assert (underlying_enum_type != null);
     BindAndAddMember (<[ decl: public value__ : $(underlying_enum_type : typed); ]>);
-    ignore (List.FoldLeft (decls, underlying_enum_type_iface.Zero, add_field));
+    _ = List.FoldLeft (decls, underlying_enum_type_iface.Zero, add_field);
   }
   
 
@@ -1598,7 +1573,7 @@ public class TypeBuilder : TypeInfo
    */
   add_members () : void
   {
-    begin_adding_members ();
+    add_derived_members ();
     def decls =
       match (pt_tydecl) {
         | PT.TopDeclaration.Class { decls = ds }
@@ -1640,7 +1615,7 @@ public class TypeBuilder : TypeInfo
         def typed_field = NemerleField (this, (field :> PT.ClassMember.Field));
         typed_field.MarkWithSpecialName ();
         typed_field.ty = variant_option_parent.GetMemType ();
-        ctor.modifiers.mods = NemerleAttributes.Private;
+        ctor.Attributes = NemerleAttributes.Private;
         AddMember (typed_field);
         
         constant_object = Some ((typed_field : IField));
@@ -1695,9 +1670,9 @@ public class TypeBuilder : TypeInfo
       | TypeDeclaration.VariantOption =>
         mutable my_index = 0;
                        
-        ignore (List.Find (variant_option_parent.GetVariantOptions (), fun (x) {
+        _ = List.Find (variant_option_parent.GetVariantOptions (), fun (x) {
           (x : object) == (this : object) || ({ ++my_index; false })
-        }));
+        });
 
         def gvc = <[ decl:
           public override _N_GetVariantCode () : int {
@@ -2044,7 +2019,7 @@ public class TypeBuilder : TypeInfo
           foreach (impl : IMember in impl')
             impl.HasBeenUsed = true;
 
-          meth.fun_kind = FunKind.BoundMethod (impl')
+          meth.SetFunKind (FunKind.BoundMethod (impl'))
         | _ => ()
       }
     };
@@ -2088,8 +2063,8 @@ public class TypeBuilder : TypeInfo
               foreach (impl : IMethod in new_impls)
                 impl.HasBeenUsed = true;
 
-              meth.fun_kind = FunKind.BoundMethod (new_impls);
-              meth.modifiers.mods |= NemerleAttributes.Virtual;
+              meth.SetFunKind (FunKind.BoundMethod (new_impls));
+              meth.Attributes |= NemerleAttributes.Virtual;
           }
         | _ => ()
       }
@@ -2144,7 +2119,6 @@ public class TypeBuilder : TypeInfo
             ]>);
 
             // unpack the new method definition
-            assert (Option.IsSome (wrapper));
             def wrapper = Option.UnSome (wrapper);
 
             wrapper.MarkWithSpecialName ();
@@ -2298,16 +2272,15 @@ public class TypeBuilder : TypeInfo
     };
 
     def process_typed_member (mem : IMember) {
-      def mods () { (mem :> NemerleMember).modifiers };
       match (mem.GetKind ()) {
         | MemberKind.Field (f) =>
           process_attributes ([PT.SyntaxElement.TypeBuilder (this),
-                                PT.SyntaxElement.FieldBuilder ((f :> NemerleField))],
-                                     ":field:postadd", mods (), null)
+                               PT.SyntaxElement.FieldBuilder ((f :> NemerleField))],
+                               ":field:postadd", f.GetModifiers (), null)
         | MemberKind.Method (f) =>
           process_attributes ([PT.SyntaxElement.TypeBuilder (this),
-                                PT.SyntaxElement.MethodBuilder ((f :> NemerleMethod))],
-                               ":method:postadd", mods (), f);
+                               PT.SyntaxElement.MethodBuilder ((f :> NemerleMethod))],
+                               ":method:postadd", f.GetModifiers (), f);
 
           foreach (p : Fun_parm in f.GetHeader ().parms)
             process_attributes ([PT.SyntaxElement.TypeBuilder (this),
@@ -2317,13 +2290,13 @@ public class TypeBuilder : TypeInfo
                               
         | MemberKind.Property (f) =>
           process_attributes ([PT.SyntaxElement.TypeBuilder (this),
-                                PT.SyntaxElement.PropertyBuilder ((f :> NemerleProperty))],
-                               ":property:postadd", mods (), null)
+                               PT.SyntaxElement.PropertyBuilder ((f :> NemerleProperty))],
+                               ":property:postadd", f.GetModifiers (), null)
 
         | MemberKind.Event (f) =>
           process_attributes ([PT.SyntaxElement.TypeBuilder (this),
-                                PT.SyntaxElement.EventBuilder ((f :> NemerleEvent))],
-                               ":event:postadd", mods (), null)
+                               PT.SyntaxElement.EventBuilder ((f :> NemerleEvent))],
+                               ":event:postadd", f.GetModifiers (), null)
 
         | MemberKind.Type => ()
       }
@@ -2444,7 +2417,7 @@ public class TypeBuilder : TypeInfo
     when (run_phase >= 4)
       check_bound_types ();
     when (run_phase >= 5)
-      begin_adding_members ();
+      add_derived_members ();
   }
 
 

@@ -40,19 +40,17 @@ namespace Nemerle.Compiler {
 
 public class NemerleMember : IMember
 {
-  loc : Location;
+  protected loc : Location;
   protected mutable name : string;
   protected accessibility : Accessibility;
-  internal modifiers : Modifiers;
-  declaring_type : TypeBuilder;
+  protected modifiers : Modifiers;
+  protected declaring_type : TypeBuilder;
   id : int;
   protected mutable kind : MemberKind;
   internal mutable ty : TType;
   protected mutable handle : MemberInfo;
 
-  mutable is_protected : bool;
-  mutable is_public : bool;
-  mutable is_internal : bool;
+  protected mutable attributes : NemerleAttributes;
 
   protected mutable m_has_been_used : bool;
   
@@ -64,20 +62,22 @@ public class NemerleMember : IMember
     declaring_type = par;
     id = Util.next_id ();
 
-    is_public = modifiers.mods %&& NemerleAttributes.Public;
-    is_internal = modifiers.mods %&& NemerleAttributes.Internal;
-    is_protected = modifiers.mods %&& NemerleAttributes.Protected;
+    attributes = modifiers.mods;
 
-    if (is_public)
-      accessibility = Accessibility.Public
-    else if (is_protected && is_internal)
-      accessibility = Accessibility.ProtectedOrInternal
-    else if (is_protected)
-      accessibility = Accessibility.Protected
-    else if (is_internal)
-      accessibility = Accessibility.Internal
-    else
-      accessibility = Accessibility.Private;
+    unless (attributes %&& NemerleAttributes.AccessModifiers)
+      attributes |= NemerleAttributes.Private;
+
+    accessibility = 
+      match (attributes %& NemerleAttributes.AccessModifiers) {
+        | NemerleAttributes.Private => Accessibility.Private
+        | NemerleAttributes.Protected => Accessibility.Protected
+        | NemerleAttributes.Internal => Accessibility.Internal
+        | _ =>
+          if (attributes %&& (NemerleAttributes.Protected %| NemerleAttributes.Internal))
+            Accessibility.ProtectedOrInternal
+          else
+            Accessibility.Public
+      }
 
     match ((par.Accessibility, accessibility)) {
       | (Accessibility.Private, _) =>
@@ -93,7 +93,7 @@ public class NemerleMember : IMember
 
     // mark public and protected members explicitly used
     m_has_been_used =
-      (is_public || is_protected) && declaring_type.IsExternallyAccessible ||
+      (IsPublic || IsProtected) && declaring_type.IsExternallyAccessible ||
       name.StartsWith ("_") || declaring_type.Name.StartsWith ("_") ||
       name == "value__"
   }
@@ -105,14 +105,14 @@ public class NemerleMember : IMember
         (tc.DeclaringType != null && walk_declaring (tc.DeclaringType))
     };
 
-    is_public
+    IsPublic
     || declaring_type.Equals (source)
-    || (is_internal && 
+    || (IsInternal && 
         (match (source.GetTypeInfoKind ()) { 
           | TypeInfoKind.NemerleType => true 
           | _ => false 
         }))
-    || (is_protected && Option.IsSome (source.SuperType (declaring_type)))
+    || (IsProtected && Option.IsSome (source.SuperType (declaring_type)))
     || walk_declaring (source)
   }
 
@@ -135,7 +135,12 @@ public class NemerleMember : IMember
     get {
       match (kind) {
         | MemberKind.Field => MemberTypes.Field
-        | MemberKind.Method => MemberTypes.Method
+        | MemberKind.Method (meth) =>
+            match (meth.GetFunKind ()) {
+              | FunKind.Constructor
+              | FunKind.StaticConstructor => MemberTypes.Constructor
+              | _ => MemberTypes.Method
+            }
         | MemberKind.Property => MemberTypes.Property
         | MemberKind.Type => MemberTypes.NestedType
         | MemberKind.Event => MemberTypes.Event
@@ -151,7 +156,7 @@ public class NemerleMember : IMember
   [Nemerle.OverrideObjectEquals]
   public Equals (o : IMember) : bool
   {
-    GetId () == o.GetId ()
+    id == o.GetId ()
   }
 
   public GetKind () : MemberKind
@@ -166,7 +171,8 @@ public class NemerleMember : IMember
   
   public Attributes : NemerleAttributes
   {
-    get { modifiers.mods }
+    get { attributes }
+    set { attributes = value }
   }
 
   public GetModifiers () : Modifiers
@@ -176,7 +182,27 @@ public class NemerleMember : IMember
   
   public IsStatic : bool
   {
-    get { Attributes %&& NemerleAttributes.Static }
+    get { attributes %&& NemerleAttributes.Static }
+  }
+
+  public IsPublic : bool
+  {
+    get { attributes %&& NemerleAttributes.Public }
+  }
+
+  public IsPrivate : bool
+  {
+    get { attributes %&& NemerleAttributes.Private }
+  }
+
+  public IsProtected : bool
+  {
+    get { attributes %&& NemerleAttributes.Protected }
+  }
+
+  public IsInternal : bool
+  {
+    get { attributes %&& NemerleAttributes.Internal }
   }
   
   public HasBeenUsed : bool
@@ -204,19 +230,20 @@ public class NemerleMember : IMember
 
   public MarkWithSpecialName () : void
   {
-    modifiers.mods = modifiers.mods %| NemerleAttributes.SpecialName
+    attributes |= NemerleAttributes.SpecialName
   }
 
-  protected UpdateEmbeddedModifiers (parent : Modifiers, child : Modifiers) : void
+  protected UpdateEmbeddedModifiers (parent : NemerleAttributes, child : ref NemerleAttributes) : void
   {
-    def copied_mods = 
-    if (child.mods %&& NemerleAttributes.AccessModifiers)
-      parent.mods %& ~NemerleAttributes.AccessModifiers;
-    else
-      parent.mods;
-    when (child.mods %&& NemerleAttributes.Static && !(parent.mods %&& NemerleAttributes.Static))
+    when (child %&& NemerleAttributes.Static && !(parent %&& NemerleAttributes.Static))
       Message.error ("accessor cannot be static if containing entity isn't");
-    child.mods |= copied_mods;
+
+    // copy access modifiers only if child has none
+    child |=
+      (if (child %&& NemerleAttributes.AccessModifiers)
+        parent %& ~NemerleAttributes.AccessModifiers;
+      else
+        parent)
   }
 
   public override ToString () : string
@@ -259,19 +286,13 @@ public class NemerleMember : IMember
 
 public class NemerleField : NemerleMember, IField
 {
-  private is_mutable : bool;
-  private is_volatile : bool;
-  
   public mutable field_builder : Emit.FieldBuilder;
   public mutable enum_value : object;
   
   public this (par : TypeBuilder, f : PT.ClassMember.Field) {
     base (par, f);
-    def is_static = Attributes %&& NemerleAttributes.Static;
-    is_mutable = Attributes %&& NemerleAttributes.Mutable;
-    is_volatile = Attributes %&& NemerleAttributes.Volatile;
     ty =
-      if (is_static)
+      if (IsStatic)
         par.BindType (Tyvar.TEnv (), f.ty)
       else
         par.BindType (f.ty);
@@ -281,12 +302,12 @@ public class NemerleField : NemerleMember, IField
 
   public IsMutable : bool
   {
-    get { is_mutable }
+    get { attributes %&& NemerleAttributes.Mutable }
   }
 
   public IsVolatile : bool
   {
-    get { is_volatile }
+    get { attributes %&& NemerleAttributes.Volatile }
   }
   
   public IsLiteral : bool
@@ -331,17 +352,14 @@ public class NemerleProperty : NemerleMember, IProperty
     base (par, f);
     is_mutable = Option.IsSome (f.set);
     
-    def is_static = Attributes %&& NemerleAttributes.Static;
     ty =
-      if (is_static)
+      if (IsStatic)
         par.BindType (Tyvar.TEnv (), f.prop_ty)
       else
         par.BindType (f.prop_ty);
 
     kind = MemberKind.Property (this);
 
-    def par = par;
-    
     parms = 
       List.Map (f.dims, fun (parm : PT.Fun_parm) {
         par.BindType (parm.ty)
@@ -349,19 +367,21 @@ public class NemerleProperty : NemerleMember, IProperty
 
     match (f.get) {
       | Some (fn : PT.ClassMember.Function) =>
-        UpdateEmbeddedModifiers (modifiers, fn.modifiers);
+        UpdateEmbeddedModifiers (attributes, ref fn.modifiers.mods);
         getter = NemerleMethod (par, fn, is_property = true);
         getter.MarkWithSpecialName ();        
-        par.AddMember (getter);
+        declaring_type.AddMember (getter);
+        
       | Some => Util.ice ("property getter was set to other class member than ClassMember.Function")
       | None => ()
     };
     match (f.set) {
       | Some (fn : PT.ClassMember.Function) =>
-        UpdateEmbeddedModifiers (modifiers, fn.modifiers);
-        setter = NemerleMethod (par, fn, is_property = true);
+        UpdateEmbeddedModifiers (attributes, ref fn.modifiers.mods);        
+        setter = NemerleMethod (declaring_type, fn, is_property = true);
         setter.MarkWithSpecialName ();
-        par.AddMember (setter);
+        declaring_type.AddMember (setter);
+        
       | Some => Util.ice ("property setter was set to other class member than ClassMember.Function")
       | None => ()
     };
@@ -381,7 +401,7 @@ public class NemerleProperty : NemerleMember, IProperty
   {
     get
     {
-      List.Length (parms) > 0
+      !(parms matches [])
     }
   }
   
@@ -420,7 +440,7 @@ public class NemerleProperty : NemerleMember, IProperty
 public class NemerleMethod : NemerleMember, IMethod
 {
   // FIXME: make these private
-  public mutable fun_kind : FunKind;
+  mutable fun_kind : FunKind;
   public mutable fun_body : FunBody;
   public mutable fun_header : Fun_header;
   
@@ -488,7 +508,7 @@ public class NemerleMethod : NemerleMember, IMethod
 
   public IsFinal : bool
   {
-    get { Attributes %&& NemerleAttributes.Sealed }
+    get { attributes %&& NemerleAttributes.Sealed }
   }
   
   public IsVarArgs : bool
@@ -511,21 +531,16 @@ public class NemerleMethod : NemerleMember, IMethod
       | None => ()
     };
     
-    def par = par; // hack, so previous par is not closurised
-    def accessibility = accessibility; // ditto, this
-
     // both override and abstract imply virtual
-    when (Attributes %&& (NemerleAttributes.Override 
+    when (attributes %&& (NemerleAttributes.Override 
                           %| NemerleAttributes.Abstract))
-      modifiers.mods |= NemerleAttributes.Virtual;
+      attributes |= NemerleAttributes.Virtual;
 
-    def is_static = Attributes %&& NemerleAttributes.Static;
- 
     def (tenv', typarms) =
-      if (is_static)
-        par.BindTyparms (Tyvar.TEnv (), f.header.typarms)
+      if (IsStatic)
+        declaring_type.BindTyparms (Tyvar.TEnv (), f.header.typarms)
       else
-        par.BindTyparms (f.header.typarms);
+        declaring_type.BindTyparms (f.header.typarms);
    
     mutable types_to_check = [];
 
@@ -599,8 +614,7 @@ public class NemerleMethod : NemerleMember, IMethod
       
       when (is_params (last)) {
         match (last.ty) {
-          | TType.Array (_, 1) =>
-            is_var_args = true
+          | TType.Array (_, 1) => is_var_args = true
           | _ =>
             Message.error ("only single-dimensional arrays are allowed in `params' parameters")
         }
@@ -612,22 +626,22 @@ public class NemerleMethod : NemerleMember, IMethod
 
     fun_kind =
       match ((f.kind, this.name)) {
-        | (FunKind.Method ([]), ".ctor") when is_static =>
+        | (FunKind.Method ([]), ".ctor") when IsStatic =>
           this.m_has_been_used = true;
           this.name = ".cctor";
           FunKind.StaticConstructor ()
         | (FunKind.Method ([]), ".ctor") =>
           FunKind.Constructor ()
-        | (FunKind.Method ([]), _) when is_static =>
+        | (FunKind.Method ([]), _) when IsStatic =>
           FunKind.Function ()
-        | (FunKind.Constructor, _) when is_static =>
+        | (FunKind.Constructor, _) when IsStatic =>
           this.m_has_been_used = true;
           this.name = ".cctor";
           FunKind.StaticConstructor ()
         | (FunKind.Method (_ :: _), ".ctor") =>
           Message.error ("constructor cannot implement anything");
           FunKind.Constructor ()
-        | (FunKind.Method (_ :: _), _) when is_static =>
+        | (FunKind.Method (_ :: _), _) when IsStatic =>
           Message.error ("static function cannot implement anything");
           FunKind.Function ()
         | (x, _) => x
@@ -651,7 +665,7 @@ public class NemerleMethod : NemerleMember, IMethod
       Tyutil.CheckAccessibility (this, accessibility, t);
 
     // don't warn about the unused `Main' methods...
-    when (is_static && name == "Main")
+    when (IsStatic && name == "Main")
       HasBeenUsed = true
   }
 
@@ -673,6 +687,9 @@ public class NemerleMethod : NemerleMember, IMethod
   public GetFunKind () : FunKind
   { fun_kind }
 
+  public SetFunKind (kind : FunKind) : void
+  { fun_kind = kind }
+  
   static OperatorLongName (op : string, params_amount : int) : option [string]
   {
     if (params_amount == 2) {
@@ -739,17 +756,14 @@ public class NemerleEvent : NemerleMember, IEvent
   public this (par : TypeBuilder, f : PT.ClassMember.Event) {
     base (par, f);
     
-    def is_static = Attributes %&& NemerleAttributes.Static; 
     ty =
-      if (is_static)
+      if (IsStatic)
         par.BindType (Tyvar.TEnv (), f.ty)
       else
         par.BindType (f.ty);
 
     kind = MemberKind.Event (this);
 
-    def loc = f.loc;
-    def par = par;
     def self = this;
 
     mutable meth_attrs = [];
@@ -762,20 +776,23 @@ public class NemerleEvent : NemerleMember, IEvent
       | <[ ("field", $x) ]> => field_attrs = x :: field_attrs; false
       | _ => true;
     }
-    f.modifiers.custom_attrs = List.Filter (f.modifiers.custom_attrs, hacking_remove_meth_attrs);
-    f.modifiers.custom_attrs = List.Filter (f.modifiers.custom_attrs, hacking_remove_field_attrs);
+    modifiers.custom_attrs = List.Filter (modifiers.custom_attrs, hacking_remove_meth_attrs);
+    modifiers.custom_attrs = List.Filter (modifiers.custom_attrs, hacking_remove_field_attrs);
     meth_attrs = List.Rev (meth_attrs);
     field_attrs = List.Rev (field_attrs);
 
-    def is_iface = (par.GetTydecl () matches TypeDeclaration.Interface);
+    def is_iface = declaring_type.IsInterface;
 
     def make_mfunction (pref, meth) {
-      def name = PT.Splicable.Name (PT.Name (pref + self.Name));
-      def value_parm = PT.Fun_parm (loc, PT.Splicable.Name (PT.Name ("value")), 
-                                    f.ty, Modifiers.Empty);
-      def fh = PT.Fun_header (loc, name, PT.PType.Void (), [value_parm]);
-
-      PT.ClassMember.Function (loc, fh.name, Modifiers (f.modifiers.mods, meth_attrs), fh, FunKind.Method ([]), meth);
+      def attrs = Modifiers (attributes, meth_attrs);
+      def nm = PT.Name (pref + self.Name);
+      def f =
+        if (meth == null)
+          <[ decl: ..$attrs $(nm : name) (value : $(f.ty)) : void; ]>;
+        else
+          <[ decl: ..$attrs $(nm : name) (value : $(f.ty)) : void $meth ]>;
+      f.loc = loc;
+      f :> PT.ClassMember.Function
     };
 
     def (add, remove) =
@@ -784,42 +801,42 @@ public class NemerleEvent : NemerleMember, IEvent
           (add, remove)
         | (None, None) =>
           if (is_iface)
-            (make_mfunction ("add_", FunBody.Abstract ()),
-             make_mfunction ("remove_", FunBody.Abstract ()))
+            (make_mfunction ("add_", null),
+             make_mfunction ("remove_", null))
           else {
             def mods = 
               NemerleAttributes.Private %| NemerleAttributes.Mutable %|
-              (if (is_static) NemerleAttributes.Static
-               else NemerleAttributes.None);
+              (attributes %& NemerleAttributes.Static);
+              
             def field_name = PT.Name (Util.tmpname (f.name.GetName ().Id));
 
             def field = PT.ClassMember.Field (f.loc, PT.Splicable.Name (field_name),
-                                    Modifiers (mods, field_attrs), f.ty);
+                                              Modifiers (mods, field_attrs), f.ty);
             storage_field = NemerleField (par, (field :> PT.ClassMember.Field));
-            par.AddMember (storage_field);
+            declaring_type.AddMember (storage_field);
             def lock_expr =
-              if (is_static) <[
-                typeof ($(PT.Name (NString.Split (par.FullName, array ['.'])) : name))
+              if (IsStatic) <[
+                typeof ($(PT.Name (NString.Split (declaring_type.FullName, array ['.'])) : name))
               ]>
               else <[ this ]>;
 
             // according to C# spec, we have to add locks
             // http://www.jaggersoft.com/csharp_standard/17.7.1.htm
-            (make_mfunction ("add_", FunBody.Parsed (<[
+            (make_mfunction ("add_", <[
                lock ($lock_expr) { $(field_name : name) += $("value" : dyn) }
-             ]>)),
-             make_mfunction ("remove_", FunBody.Parsed (<[
+             ]>),
+             make_mfunction ("remove_", <[
                lock ($lock_expr) { $(field_name : name) -= $("value" : dyn) }
-             ]>)))
+             ]>))
           }
         | _ =>
           Message.fatal_error ("events must have both `add' and `remove' methods")
       };
     
-    def make_method (mfunc : PT.ClassMember) {
-      UpdateEmbeddedModifiers (f.modifiers, mfunc.modifiers);
-      def meth' = NemerleMethod (par, (mfunc :> PT.ClassMember.Function));
-      par.AddMember (meth');
+    def make_method (mfunc : PT.ClassMember.Function) {
+      UpdateEmbeddedModifiers (attributes, ref mfunc.modifiers.mods);
+      def meth' = NemerleMethod (declaring_type, mfunc);
+      declaring_type.AddMember (meth');
       meth'
     };
 
