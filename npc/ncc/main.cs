@@ -39,7 +39,8 @@ class MainClass {
 			Passes.run(ret);
 		} catch (yyParser.yyException e) {
 		} catch (ICE i) {
-			System.Console.WriteLine("internal compiler error: " + i.msg);
+			System.Console.WriteLine("internal compiler error: " + i.msg + "\n" + i.StackTrace);
+			
 		}
 	}
 }
