@@ -152,7 +152,13 @@ nemerle-web.tar.gz: $(normal_docs) $(wildcard styles/*.css styles/*.png)
 	mkdir -p www/{styles,course/styles}
 	cp styles/*.{css,png} www/styles/
 	cp styles/*.{css,png} www/course/styles/
+	cp presentation/macros-gpce04/metaprogramming.tex presentation/macros-gpce04/llncs.cls ./
+	latex metaprogramming.tex
+	latex metaprogramming.tex
+	dvips metaprogramming.dvi -o metaprogramming.ps
+	ps2pdf metaprogramming.ps
 	cp *.{html,ps,pdf} www/
+	rm -f metaprogramming.* llncs.cls
 	cp course/*.html www/course/
 	for f in www/*.pdf www/*.ps ; do gzip <$$f > $$f.gz ; done
 	tar -C www -zcf $@ .
