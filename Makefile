@@ -55,7 +55,7 @@ dist: sync-boot changelog
 	  false; \
 	else \
 	  ver=`svn info . | awk '/^Revision:/ { print $$2 }'`; \
-	  set -e;
+	  set -e; \
 	  rm -rf $(name)-$$ver; \
 	  svn export . $(name)-$$ver; \
 	  for f in . ncc doc ; do \
