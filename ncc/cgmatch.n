@@ -129,6 +129,41 @@ namespace Nemerle.Compiler
       }
     }
 
+
+    /**
+     * Returns true if a pattern is an ordinal constant (an int 
+     * or a char) -- possibly hidden beyond the 'as' construct.
+     */
+    public static IsOrdinalLiteral (pattern : MatchPattern) : bool
+    {
+      match (pattern.GetPattern ()) {
+        | P_underscore => false
+        | P_as (P_underscore, _) => false
+        | P_as (P_literal (L_int), _) => true
+        | P_as (P_literal (L_char), _) => true
+        | P_literal (L_int) => true
+        | P_literal (L_char) => true
+        | _ => Util.ice ("invalid pattern type")
+      }    
+    }
+
+
+    /**
+     * Returns true if a pattern is a string constant 
+     * (possibly hidden beyond the 'as' construct).
+     */
+    public static IsStringLiteral (pattern : MatchPattern) : bool
+    {
+      match (pattern.GetPattern ()) {
+        | P_underscore => false
+        | P_as (P_underscore, _) => false
+        | P_as (P_literal (L_string), _) => true
+        | P_literal (L_string) => true
+        | _ => Util.ice ("invalid pattern type")
+      }    
+    }
+
+
     public MakeGuardExpr (continuation : option (CG_expr)) : CG_expr
     {
       match (match_descriptor.GetGuard (guard)) {
@@ -148,17 +183,37 @@ namespace Nemerle.Compiler
      */
     public static Compare (l : MatchPattern, r : MatchPattern) : int
     {
-      def get_literal (pattern : MatchPattern) : int {        
-        match (pattern.GetPattern ()) {
-          | P_literal (L_int (literal)) => literal
-          | P_literal (L_char (literal)) => (literal :> int)
-          | P_as (P_literal (L_int (literal)), _) => literal
-          | P_as (P_literal (L_char (literal)), _) => (literal :> int)
-          | _ => Util.ice ("invalid pattern type")
-        }
-      };
-      
-      get_literal (r) - get_literal (l)
+      def is_string_pattern =
+        match (l.GetPattern ()) {
+          | P_literal (L_string)
+          | P_as (P_literal (L_string), _) => true
+          | _ => false
+        };
+        
+      if (is_string_pattern) {
+        def get_literal (pattern : MatchPattern) : string {
+          match (pattern.GetPattern ()) {
+            | P_literal (L_string (literal)) => literal
+            | P_as (P_literal (L_string (literal)), _) => literal
+            | _ => Util.ice ("invalid pattern type")
+          }
+        };
+        
+        System.String.Compare (get_literal (l), get_literal (r))
+      }
+      else {
+        def get_literal (pattern : MatchPattern) : int {        
+          match (pattern.GetPattern ()) {
+            | P_literal (L_int (literal)) => literal
+            | P_literal (L_char (literal)) => (literal :> int)
+            | P_as (P_literal (L_int (literal)), _) => literal
+            | P_as (P_literal (L_char (literal)), _) => (literal :> int)
+            | _ => Util.ice ("invalid pattern type")
+          }
+        };
+        
+        get_literal (r) - get_literal (l)
+      }
     }
 
 
@@ -491,6 +546,11 @@ namespace Nemerle.Compiler
       matched_expr
     }
 
+    public GetContext () : CTX
+    {
+      context
+    }
+
     public GetEffect (index : int) : CG_expr
     {
       effects.Get (index)
@@ -744,7 +804,7 @@ namespace Nemerle.Compiler
           def literal_span = 
             MatchPattern.Compare (List.Head (patterns), List.Last (patterns));
 
-          if (literal_span > 24) {
+          if (literal_span > 8 && literal_span / List.Length (patterns) > 3) {
             def (l, m, r) = split_patterns (patterns);
 
             CE_if (match_descriptor.GetResultType (), m.MakeLessThanCondition (matched_expr),
@@ -805,6 +865,50 @@ namespace Nemerle.Compiler
   module CGmatch 
   {
     /**
+     * Creates an expression that will raise the MatchFailureException
+     */
+    private raise_match_failure_exception_expr (match_descriptor : MatchDescriptor) : CG_expr
+    {
+      def tc = 
+        GlobalEnv.LookupInternalType ("Nemerle.Core.MatchFailureException");
+      def match_failure = get_default_ctor (match_descriptor.GetContext (), tc);
+      CE_raise (CE_call (CE_ctor_ref (match_failure), []))
+    }
+
+
+    /**
+     * Creates a series of CE_if checking if any of the patterns matches.
+     */
+    private combine_patterns (match_descriptor : MatchDescriptor, 
+                              continuation : option (CG_expr),
+                              patterns : list (MatchPattern)) : option (CG_expr)
+    {             
+      def match_failure_expr =
+        raise_match_failure_exception_expr (match_descriptor);
+
+      def walk_patterns (continuation : option (CG_expr),
+                         patterns : list (MatchPattern)) : option (CG_expr) {      
+        match (patterns) {
+          | [] => continuation
+          | pattern :: rest =>            
+            def continuation =
+              match (continuation) {
+                | Some (continuation) =>
+                  pattern.MakeMatchExpr (match_descriptor.GetMatchedExpr (), 
+                                         continuation)
+                | None =>
+                  pattern.MakeMatchExpr (match_descriptor.GetMatchedExpr (), 
+                                         match_failure_expr)
+              };
+            walk_patterns (Some (continuation), rest)
+        }
+      };
+
+      walk_patterns (continuation, List.Rev (patterns))
+    }    
+    
+    
+    /**
      * Matching over ordinal types (integers, chars, etc.)
      */
     cg_match_over_ordinals (match_over_type : System.Type, 
@@ -814,47 +918,13 @@ namespace Nemerle.Compiler
     {
       def match_descriptor = 
         MatchDescriptor (context, match_over_type, matched_expr, match_cases);
-      
-      def literal_pattern (pattern : MatchPattern) : bool {
-        match (pattern.GetPattern ()) {
-          | P_underscore => false
-          | P_as (P_underscore, _) => false
-          | P_as (P_literal (L_int), _) => true
-          | P_as (P_literal (L_char), _) => true
-          | P_literal (L_int) => true
-          | P_literal (L_char) => true
-          | _ => Util.ice ("invalid pattern type")
-        }
-      };
-            
-      def match_failure_expr = {
-        def tc = GlobalEnv.LookupInternalType ("Nemerle.Core.MatchFailureException");
-        def match_failure = get_default_ctor (context, tc);
-        CE_raise (CE_call (CE_ctor_ref (match_failure), []))
-      };      
-              
-      def make_continuation (continuation : option (CG_expr), patterns : list (MatchPattern)) : option (CG_expr) {      
-        match (patterns) {
-          | [] => continuation
-          | pattern :: rest =>
-            // Message.debug (pattern.GetLocation (), "make_continuation");
-            
-            def continuation =
-              match (continuation) {
-                | Some (continuation) =>
-                  pattern.MakeMatchExpr (matched_expr, continuation)
-                | None =>
-                  pattern.MakeMatchExpr (matched_expr, match_failure_expr)
-              };
-            make_continuation (Some (continuation), rest)
-        }
-      };
-      
+
       def process_block (block : MatchBlock, continuation : option (CG_expr)) : CG_expr {
         def (literal_patterns, non_literal_patterns) = 
-          List.Partition (literal_pattern, block.GetMatchPatterns ());
+          List.Partition (MatchPattern.IsOrdinalLiteral, block.GetMatchPatterns ());
 
-        def continuation = make_continuation (continuation, List.Rev (non_literal_patterns));
+        def continuation = combine_patterns (match_descriptor, continuation, 
+                                             non_literal_patterns);
 
         match (literal_patterns) {
           | [] => Option.UnSome (continuation)
@@ -883,6 +953,51 @@ namespace Nemerle.Compiler
     
       walk_blocks (match_descriptor.GetMatchBlocks ())
     }  
+
+
+    /**
+     * Matching over constant string
+     */
+    cg_match_over_strings (match_over_type : System.Type, 
+                           context : CTX, 
+                           matched_expr : CG_expr, 
+                           match_cases : list (Match_case)) : CG_expr
+    {
+      def match_descriptor = 
+        MatchDescriptor (context, match_over_type, matched_expr, match_cases);
+    
+      def process_block (block : MatchBlock, continuation : option (CG_expr)) : CG_expr {
+        def (literal_patterns, non_literal_patterns) = 
+          List.Partition (MatchPattern.IsStringLiteral, block.GetMatchPatterns ());
+
+        def continuation = combine_patterns (match_descriptor, continuation, 
+                                             non_literal_patterns);
+
+        match (literal_patterns) {
+          | [] => Option.UnSome (continuation)
+          | _ =>
+            def sorted_literal_patterns = 
+              List.Sort (MatchPattern.Compare, literal_patterns);
+  
+            // FIXME
+            Option.UnSome (combine_patterns (match_descriptor, continuation, sorted_literal_patterns))
+        }
+      };
+    
+      def walk_blocks (blocks : list (MatchBlock)) : CG_expr {
+        match (blocks) {
+          | [block] =>
+            process_block (block, None ())
+          | block :: rest =>            
+            def continuation = walk_blocks (rest);
+            process_block (block, Some (continuation))
+          | _ => 
+            Util.ice ("no blocks in match descriptor")
+        }
+      };
+    
+      walk_blocks (match_descriptor.GetMatchBlocks ())
+    }
   
   
     cg_pattern (ctx : CTX, val : CG_expr, pats : list (Pattern * Expr)) : CG_expr * bool * CTX * list (CG_val)
@@ -1155,6 +1270,8 @@ namespace Nemerle.Compiler
         | "System.Char"
         | "System.Int32" when Flags.constant_ordinal_matching_opt => 
           cg_match_over_ordinals (t, ctx, val, mcs)
+        | "System.String" when Flags.constant_string_matching_opt =>
+          cg_match_over_strings (t, ctx, val, mcs)
         | _ => cg_match_over_any_type (t, ctx, val, mcs)
       }
     }
