@@ -894,17 +894,54 @@ namespace Nemerle.Compiler
     
     private class ExternalNemerleType extends NetType
     {
+      tenv : Int_map (Tyvar.T);
+      typarms : list (Tyvar.T);
+      direct_supertypes : list (Type);
+      supertypes : list (Type);
+      supertype_map : Int_map (Type);
+      tydecl : Type_decl;
+      
       public this (lib : LibraryReference, h : System.Type)
       {
         base (lib, h);
-        def _ = get_encoded_type (h.GetCustomAttributes (false));
-        ()
+        
+        def tenv =
+          if (handle.DeclaringType != null)
+            (library.TyconOfType (handle.DeclaringType) :> ExternalNemerleType).tenv
+          else Map.int_map ();
+
+        def type_attrs = h.GetCustomAttributes (false);
+
+        def attr_str = get_encoded_type (type_attrs); 
+        def (typarms, tenv, dst, st) = TyCodec.DecodeTyinfo (tenv, attr_str);
+
+        this.typarms <- typarms;
+        this.tenv <- tenv;
+        direct_supertypes <- dst;
+        supertypes <- st;
+
+        def add (m : Int_map (Type), t) {
+          match (t) {
+            | T_app (tc, _) => m.add (tc.GetId (), t)
+            | _ => Util.ice ("invalid supertype")
+          }
+        };
+
+        supertype_map <- List.FoldLeft (add, Map.int_map (), supertypes);
+
+        if (has_attribute ("Nemerle.VariantAttribute", type_attrs))
+          tydecl <- TD_variant ()
+        else if (has_attribute ("Nemerle.VariantOptionAttribute", type_attrs))
+          tydecl <- TD_variant_option ()
+        else if (handle.IsInterface)
+          tydecl <- TD_interface ()
+        else
+          tydecl <- TD_class ()
       }
       
       public override GetMemType () : Type
       {
-        // FIXME
-        T_app (this, [])
+        T_app (this, List.Map (fun (tv) { T_var (tv) }, typarms))
       }
 
       public override GetTyconKind () : TyconKind
@@ -914,33 +951,25 @@ namespace Nemerle.Compiler
 
       public override GetTydecl () : Type_decl
       {
-        if (handle.IsInterface)
-          TD_interface ()
-        else
-          TD_class ()
+        tydecl
       }
 
       public override MakeSubst (parms : list (Type)) : Subst
       {
-        match (parms) {
-          | [] => ()
-          | _ =>
-            Message.error ("framework type `" + GetFullName () + "' supplied with type arguments")
-        };
-        Map.int_map ()
+        Tyinfo.ConstructSubst (this, typarms, parms)
       }
 
       public override FreshSubst () : Subst
       {
-        Map.int_map ()
+        Tyvar.fresh_subst (typarms)
       }
 
       public override SuperType (tc : Tycon) : option (list (Type))
       {
-        match (tc.GetTyconKind ()) {
-          | TK_ExternalNetType (t) when t.IsAssignableFrom (handle)
-          | TK_ExternalNemerleType (t) when t.IsAssignableFrom (handle) => Some ([])
-          | _ => None ()
+        match (supertype_map.find (tc.GetId ())) {
+          | Some (T_app (_, args)) => Some (args)
+          | Some => Util.ice ()
+          | None => None ()
         }
       }
 
@@ -951,33 +980,12 @@ namespace Nemerle.Compiler
 
       public override GetSuperTypes () : list (Type)
       {
-        def supertypes = Hashtable (30);
-        def add_bt (t : Type) {
-          match (t) {
-            | T_app (tc, []) =>
-              if (supertypes.Contains (tc.GetId ())) ()
-              else {
-                supertypes.Add (tc.GetId (), t);
-                match (tc.SuperClass ()) {
-                  | Some (tc) => add_bt (T_app (tc, []))
-                  | None => ()
-                }
-              }
-            | _ => Util.ice ()
-          }
-        };
-        List.iter (add_bt, GetDirectSuperTypes ());
-        supertypes.Fold (fun (_, tc, acc) { tc :: acc }, [])
+        supertypes
       }
 
       public override GetDirectSuperTypes () : list (Type)
       {
-        def ifaces = List.map (library.TypeOfType, 
-                               List.from_array (handle.GetInterfaces ()));
-        match (SuperClass ()) {
-          | Some (r) => T_app (r, []) :: ifaces
-          | None => ifaces
-        }
+        direct_supertypes
       }
 
       protected override imember_of_memberinfo (m : MemberInfo) : option (IMember)
@@ -988,9 +996,9 @@ namespace Nemerle.Compiler
         def ret (x : IMember) { Some (x) };
         
         if (is_a (MemberTypes.Constructor) || is_a (MemberTypes.Method))
-          ret (ExternalNemerleMethod (library, (m :> MethodBase)))
+          ret (ExternalNemerleMethod (tenv, library, (m :> MethodBase)))
         else if (is_a (MemberTypes.Field))
-          ret (ExternalNemerleField (library, (m :> FieldInfo)))
+          ret (ExternalNemerleField (tenv, library, (m :> FieldInfo)))
         else if (is_a (MemberTypes.Property))
           Util.ice ("property in external nemerle type")
         else if (is_a (MemberTypes.NestedType))
@@ -1003,23 +1011,30 @@ namespace Nemerle.Compiler
     
     private class ExternalNemerleField extends NetField
     {
-      public this (lib : LibraryReference, h : FieldInfo)
+      real_type : Type;
+      
+      public this (tenv : Int_map (Tyvar.T), lib : LibraryReference, h : FieldInfo)
       {
         base (lib, h);
+        def type_attrs = h.GetCustomAttributes (false);
+        def attr_str = get_encoded_type (type_attrs); 
+        real_type <- TyCodec.DecodeType (tenv, attr_str);
       }
 
       public override GetMemType () : Type
       {
-        library.TypeOfType (handle.FieldType);
+        real_type
       }
     }
     
     class ExternalNemerleMethod extends NetMethod
     {
-      public this (lib : LibraryReference, h : MethodBase)
+      public this (tenv : Int_map (Tyvar.T), lib : LibraryReference, h : MethodBase)
       {
         base (lib, h);
-        // set fun_header
+        def type_attrs = h.GetCustomAttributes (false);
+        def attr_str = get_encoded_type (type_attrs); 
+        TyCodec.FixupFunctionHeader (tenv, fun_header, attr_str);
       }
       
       public override GetExternName () : string
