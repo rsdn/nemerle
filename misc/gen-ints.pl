@@ -41,7 +41,7 @@ print <<EOF
     }
     
     public SystemType : System.Type {
-      get { typeof (System.$long) }
+      get { Nemerle.Compiler.SystemType.$long }
     }
     
     public Binary (name : string, x : object, y : object) : object
