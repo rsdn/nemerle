@@ -64,8 +64,8 @@ endif
 syn keyword nemerleType int bool string void option list char float object
 
 syn keyword nemerleKeyword abstract const extern internal new private protected sealed volatile
-syn keyword nemerleKeyword class enum extends finally in method null out public raise ref struct
-syn keyword nemerleKeyword variant interface implements namespace where field value type let
+syn keyword nemerleKeyword class enum extends finally in null out public raise ref struct
+syn keyword nemerleKeyword variant interface implements namespace where type let static
 syn keyword nemerleKeyword in fun and tymatch with try open void base if then else variant letfun
 syn keyword nemerleKeyword match as record
 
