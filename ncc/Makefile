@@ -65,6 +65,7 @@ src = \
 	external.n \
 	xmldump.n \
 	cgil.n \
+	cgmatch.n \
 
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
