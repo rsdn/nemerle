@@ -62,6 +62,10 @@
 
 ;;; Change Log:
 
+;; 2004-04-27
+;;   * further coloring improvements
+;;   * fixed syntax table
+
 ;; 2004-01-24
 ;;   * fixed coloring
 
@@ -135,49 +139,36 @@ buffer created.  This is a good place to put your customizations.")
 
 	 ;; one-line comments
 	 '("//.*" 0 font-lock-comment-face)
-	 ;; old-style multiline comments
-	 '("(\\*+\\(\\([^\\*]\\)\\|\\(\\*[^)]\\)\\)+\\*+)" 
-	   0 font-lock-comment-face)
-	 ;; new-style multiline comments
-	 '("/\\*+\\(\\([^\\*]\\)\\|\\(\\*[^/]\\)\\)+\\*+/"
-	   0 font-lock-comment-face)
 	 
 	 ;; keywords
-	 '("\\<\\(_\\|abstract\\|and\\|as\\|base\\|const\\|def\\|else\\|enum\\|extends\\|extern\\|finally\\|fun\\|implements\\|in\\|interface\\|internal\\|macro\\|match\\|mkarray\\|mutable\\|new\\|null\\|out\\|override\\|params\\|private\\|protected\\|public\\|raise\\|ref\\|sealed\\|static\\|struct\\|syntax\\|this\\|try\\|tymatch\\|type\\|typeof\\|virtual\\|volatile\\|when\\|where\\|with\\)\\>"
+	 '("\\<\\(_\\|abstract\\|and\\|as\\|base\\|catch\\|const\\|def\\|enum\\|extends\\|extern\\|finally\\|fun\\|implements\\|interface\\|internal\\|macro\\|match\\|mutable\\|new\\|out\\|override\\|params\\|private\\|protected\\|public\\|ref\\|sealed\\|static\\|struct\\|syntax\\|this\\|throw\\|try\\|tymatch\\|type\\|typeof\\|virtual\\|where\\|with\\)\\>"
 	   0 font-lock-keyword-face)
 	 ;; these aren't really keywords but we set them so
-	 '("\\<\\(do\\|for\\|if\\|regexp\\|repeat\\|then\\|unless\\|until\\|using\\|while\\)\\>"
+	 '("\\<\\(do\\|else\\|for\\|if\\|regexp\\|repeat\\|then\\|unless\\|until\\|while\\|when\\)\\>"
 	   0 font-lock-keyword-face)
+	 '("=>\\||" 0 font-lock-keyword-face)
 
-	 '("\\<\\(open\\|variant\\|class\\|module\\|namespace\\)\\s +\\(\\(\\w\\|\\.\\)*\\)"
+	 '("\\<\\(variant\\|class\\|module\\|namespace\\|using\\)\\s +\\(\\(\\w\\|\\.\\)*\\)"
 	   (1 font-lock-keyword-face) (2 font-lock-function-name-face))
 	 
 	 ;; types
-	 '("\\<list\\s *([^)]*)" 0 font-lock-type-face)
-	 '("\\<option\\s *([^)]*)" 0 font-lock-type-face)
-	 '("\\<array\\s *([^)]*)" 0 font-lock-type-face)
+	 '("\\<list\\s *<[^>]*>+" 0 font-lock-type-face t)
+	 '("\\<option\\s *<[^>]*>+" 0 font-lock-type-face t)
+	 '("\\<array\\s *<[^>]*>+" 0 font-lock-type-face t)
 	 '("->" 0 font-lock-type-face)
-	 '("\\('\\w+\\)[^']" 0 font-lock-type-face)
 	 '("\\<\\(void\\|int\\|char\\|float\\|bool\\|string\\|object\\)\\>"
 	   0 font-lock-type-face)
 	 
 	 ;; constants
          '("\\<[0-9]+\\>" 0 font-lock-constant-face)
-         '("\\[\\]" 0 font-lock-constant-face)
-	 '("\\<\\(false\\|true\\)\\>" 0 font-lock-constant-face))))
+	 '("\\<Nil\\>" 0 font-lock-constant-face)
+	 '("\\<\\(false\\|true\\|null\\)\\>" 0 font-lock-constant-face))))
 
 
 (unless nemerle-mode-syntax-table
   (setq nemerle-mode-syntax-table (copy-syntax-table c-mode-syntax-table))
-  
-  (modify-syntax-entry ?\( "()1"  nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\) ")(4"  nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\/ ". 14" nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\* ". 23" nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\' "."    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\" ".\""  nemerle-mode-syntax-table)
-  (modify-syntax-entry ?_  "w"    nemerle-mode-syntax-table))
-
+  (modify-syntax-entry ?< "(>" nemerle-mode-syntax-table)
+  (modify-syntax-entry ?> ")<" nemerle-mode-syntax-table))
 
 
 (defun nemerle-syntax ()
@@ -185,8 +176,8 @@ buffer created.  This is a good place to put your customizations.")
     (beginning-of-line)
     (cond ((looking-at "[ \t]*\\<try\\>")
 	   'try)
-	  ((looking-at "[ \t]*\\<with\\>")
-	   'with)
+	  ((looking-at "[ \t]*\\<catch\\>")
+	   'catch)
 	  ((looking-at "[ \t]*|")
 	   'match-case)
 	  ((looking-at "[ \t]*$")
@@ -243,10 +234,10 @@ buffer created.  This is a good place to put your customizations.")
 	  ((eq prev-syntax 'try)	; try
 	   (cond ((eq cur-syntax 'block-beg)
 		  prev-indent)
-		 ((eq cur-syntax 'with)
+		 ((eq cur-syntax 'catch)
 		  prev-indent)
 		 (t (+ prev-indent nemerle-basic-offset))))
-	  ((eq prev-syntax 'with)
+	  ((eq prev-syntax 'catch)
 	   (+ prev-indent nemerle-basic-offset))
 	  ((eq prev-syntax 'block-beg)	; beginning of block
 	   (+ prev-indent nemerle-basic-offset))
@@ -264,7 +255,7 @@ buffer created.  This is a good place to put your customizations.")
 		   (- prev-indent nemerle-basic-offset))
 		  ((eq cur-syntax 'else)
 		   (- prev-indent nemerle-basic-offset))
-		  ((eq cur-syntax 'with)
+		  ((eq cur-syntax 'catch)
 		   (- prev-indent nemerle-basic-offset))
 		  (t
 		   prev-indent))))))
@@ -348,13 +339,15 @@ Mode map
   (set-syntax-table nemerle-mode-syntax-table)
 
   (make-local-variable 'font-lock-defaults)
-  (setq font-lock-defaults '(nemerle-font-lock-keywords nil t))
+  (setq font-lock-defaults '(nemerle-font-lock-keywords nil nil
+			     ((?_ . "w") (?. . "w") (?\/ . ". 14b")
+			      (?* . ". 23") (?\" . ".") (?\' . "."))))
   
   (make-local-variable 'indent-line-function)
   (setq indent-line-function 'nemerle-indent-line)
 
   (make-local-variable 'comment-indent-function)
-  (setq comment-indent-function 'nemerle-comment-indent)
+  (setq comment-indent-function 'c-comment-indent)
 
   (make-local-variable 'comment-start)
   (setq comment-start "/* ")
