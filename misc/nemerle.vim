@@ -91,6 +91,7 @@ syn keyword nemerleTodo	contained	XXX TODO FIXME
 syn cluster nemerleCommentGroup	contains=nemerleTodo
 syn match nemerleComment	"//.*$"	contains=@nemerleCommentGroup
 syn region nemerleComment start="(\*" end="\*)" contains=@nemerleCommentGroup
+syn region nemerleComment start="/\*" end="\*/" contains=@nemerleCommentGroup
 
 syn match	nemerleModPrefix	"[A-Z_][a-zA-Z_0-9]*\."
 
