@@ -30,6 +30,7 @@ using Nemerle.Collections;
 using Nemerle.Utility;
 
 namespace PT = Nemerle.Compiler.Parsetree;
+namespace SR = System.Reflection;
 using Nemerle.Compiler.Typedtree;
 
 namespace Nemerle.Compiler 
@@ -37,28 +38,28 @@ namespace Nemerle.Compiler
   module AttributeCompiler
   {
 
-    compile_expr (ti : TypeBuilder, allow_rec : bool, expr : PT.Expr) : object * System.Type
+    compile_expr (ti : TypeBuilder, allow_rec : bool, expr : PT.Expr) : object * Type
     {
       def expr = ConstantFolder.FoldConstants (ti.env, expr);
 
       match (expr) {
-        | <[ $(x : string) ]> => ((x : object), SystemType.String)
-        | <[ $(x : bool) ]> => ((x : object), SystemType.Boolean)
-        | <[ $(x : char) ]> => ((x : object), SystemType.Char)
+        | <[ $(x : string) ]> => ((x : object), InternalType.String)
+        | <[ $(x : bool) ]> => ((x : object), InternalType.Boolean)
+        | <[ $(x : char) ]> => ((x : object), InternalType.Char)
         | PT.E_literal (L_enum (lval, ty)) =>
           def (val, _) = compile_expr (ti, allow_rec, PT.E_literal (lval));
-          (val, ty.GetSystemType ())
-        | <[ null ]> => (null, SystemType.Object)
+          (val, T_app (ty, []))
+        | <[ null ]> => (null, InternalType.Object)
         | PT.E_literal (lit) =>
           match (NumericType.ByLiteral (lit)) {
             | Some (t) => 
-              (t.FromLiteral (lit), t.SystemType)
+              (t.FromLiteral (lit), t.GetNemerleType ())
             | None => assert (false)
           }
         | <[ typeof ($t) ]> =>
           match (ti.BindType (t)) {
             | T_app (tc, []) =>
-              (tc.GetSystemType (), SystemType.Type)
+              (tc.GetSystemType (), InternalType.Type)
             | _ =>
               def bld = System.Text.StringBuilder ("");
               Macros.SprintType (t, bld);
@@ -68,31 +69,30 @@ namespace Nemerle.Compiler
 
         | <[ array [ .. $elems ] ]> when allow_rec =>
           def exprs = List.Map (elems, fun (e) { compile_expr (ti, false, e) });
-          def obj = SystemType.Object;
           def array_tc =
-            List.FoldLeft (exprs, obj, fun (et, curty) {
+            List.FoldLeft (exprs, InternalType.Object_tc, fun (et, curty) {
               match (et) {
-                | (_, st) when !(st : System.Type).Equals (obj) => st
+                | (_, T_app (tc, _)) when tc.SameAs (InternalType.Object_tc) => tc
                 | _ => curty
               }
             });
           def allow_null = 
-            array_tc.Equals (SystemType.String) ||
-            array_tc.Equals (SystemType.Type);
+            array_tc.SameAs (InternalType.String_tc) ||
+            array_tc.SameAs (InternalType.Type_tc);
           def objects =
             List.Map (exprs, fun (_) {
-              | (e, tc) when (tc : System.Type).Equals (array_tc) => e
+              | (e, T_app (tc, _)) when tc.SameAs (array_tc) => e
               | (x, _) when allow_null && x == null => null
               | (_, t) =>
                 Message.fatal_error ("custom attribute array shall have type " + 
-                                     array_tc.ToString () + 
+                                     array_tc.GetFullName () + 
                                      " while the element has type " +
-                                     t.ToString ())
+                                     t.as_string ())
             });
           
           // FIXME: this seems wrong, what if there are two mscorlibs?
-          def arr = NArray.FromList (array_tc, objects);
-          (arr, arr.GetType ())
+          def arr = NArray.FromList (array_tc.GetSystemType (), objects);
+          (arr, T_array (T_app (array_tc, [])))
 
         | _ =>
           Message.fatal_error ("complex expressions are not allowed in attributes")
@@ -101,17 +101,8 @@ namespace Nemerle.Compiler
 
 
     do_compile (ti : TypeBuilder, attr : Tycon, parms : list <PT.Expr>) 
-        : System.Reflection.Emit.CustomAttributeBuilder
+        : SR.Emit.CustomAttributeBuilder
     {
-      match (attr.GetTyconKind ()) {
-        | TK_ExternalNetType
-        | TK_ExternalNemerleType => ()
-        | TK_NemerleType =>
-          Message.fatal_error ("cannot define and use attribute `" + 
-                               attr.GetFullName () + 
-                               "' in the same compilation")
-      };
-
       when (Option.IsNone (attr.SuperType (InternalType.Attribute_tc)))
         Message.fatal_error ("`" + attr.GetFullName () + 
                              "' is not an attribute class");
@@ -126,40 +117,39 @@ namespace Nemerle.Compiler
       def compile_parm (parm : PT.Expr) {
         | <[ $(n : name) = $expr ]> =>
           def name = n.GetHead ();
-          def (obj, ty) = compile_expr (ti, true, expr);              
-          def prop = attr.GetSystemType ().GetProperty (name);
-          if (prop != null) {
-            if (prop.PropertyType.IsAssignableFrom (ty)) {
-              property_infos = prop :: property_infos;
+          def (obj, ty) = compile_expr (ti, true, expr);
+          def problem () {
+            Message.fatal_error ("the type " + attr.GetFullName () + 
+                                 " has no field nor property named `" + name + "'")
+          };
+          def (is_prop, mem) =
+            match (attr.LookupMember (name)) {
+              | [mem] =>
+                match (mem.GetKind ()) {
+                  | MK_field => (false, mem)
+                  | MK_property => (true, mem)
+                  | _ => problem ()
+                }
+              | _ => problem ()
+            };
+          def handle = mem.GetHandle ();
+          assert (handle != null);
+          if (Tyutil.types_eq (mem.GetMemType (), ty))
+            if (is_prop) {
+              property_infos = (handle :> SR.PropertyInfo) :: property_infos;
               properties = obj :: properties;
             } else {
-              Message.fatal_error ("the property `" + name + 
-                                   "' has type " + 
-                                   prop.PropertyType.ToString () +
-                                   " while the value assigned has type " +
-                                   ty.ToString ())
+              field_infos = (handle :> SR.FieldInfo) :: field_infos;
+              fields = obj :: fields;
             }
-          } else {
-            def field = attr.GetSystemType ().GetField (name);
-            if (field != null) {
-              if (field.FieldType.IsAssignableFrom (ty)) {
-                field_infos = field :: field_infos;
-                fields = obj :: fields;
-              } else {
-                Message.fatal_error ("the field `" + name + 
-                                     "' has type " + 
-                                     field.FieldType.ToString () +
-                                     " while the value assigned has type " +
-                                     ty.ToString ())
-              }
-            } else {
-              Message.fatal_error ("the type " + attr.GetFullName () + 
-                                   " has no field named `" + name + "'")
-            }
-          }
-
+          else
+            Message.fatal_error ("the member `" + name + "' has type " +
+                                 mem.GetMemType ().as_string () + 
+                                 " while the value assigned has type " +
+                                 ty.as_string ())
+                                 
         | _ =>
-          def (obj, ty) = compile_expr (ti, true, parm);              
+          def (obj, ty) = compile_expr (ti, true, parm);
           ctor_parm_types = ty :: ctor_parm_types;
           ctor_parms = obj :: ctor_parms;
       };
@@ -167,24 +157,46 @@ namespace Nemerle.Compiler
       List.Iter (parms, compile_parm);
 
       def arr<'a> (t, lst : list <'a>) { NArray.FromList (t, List.Rev (lst)) };
+
+      mutable proper_ctor = null;
+
+      ctor_parm_types = List.Rev (ctor_parm_types);
+
+      def check_ctor (mem : IMember) {
+        match (mem.GetKind ()) {
+          | MK_method (meth) =>
+            def parms = meth.GetHeader ().parms;
+            def check_parm (ty, parm : Fun_parm) {
+              Tyutil.types_eq (parm.ty, ty)
+            }
+            when (ctor_parm_types.Length () == parms.Length () &&
+                  List.ForAll2 (ctor_parm_types, parms, check_parm)) 
+            {
+              assert (proper_ctor == null);
+              proper_ctor = meth.GetConstructorInfo ();
+            }
+          | _ => ()
+        }
+      }
+
+      List.Iter (attr.LookupMember (".ctor"), check_ctor);
       
-      def ctor = attr.GetSystemType ().GetConstructor (arr (SystemType.Type, ctor_parm_types));
-      when (ctor == null) 
+      when (proper_ctor == null) 
         Message.fatal_error ("none of the constructors of `" + attr.GetFullName () + 
                              "' matches positional argument types");
                              
-      System.Reflection.Emit.CustomAttributeBuilder 
-          (ctor, 
+      SR.Emit.CustomAttributeBuilder 
+          (proper_ctor, 
            arr (typeof (System.Object), ctor_parms), 
-           arr (typeof (System.Reflection.PropertyInfo), property_infos), 
+           arr (typeof (SR.PropertyInfo), property_infos), 
            arr (typeof (System.Object), properties), 
-           arr (typeof (System.Reflection.FieldInfo), field_infos), 
+           arr (typeof (SR.FieldInfo), field_infos), 
            arr (typeof (System.Object), fields))
     }
 
     
     internal static CompileAttribute (ti : TypeBuilder, expr : PT.Expr)
-        : System.Reflection.Emit.CustomAttributeBuilder
+        : SR.Emit.CustomAttributeBuilder
     {
       def add_end (l, suff : string) {
         match (l) {
@@ -193,7 +205,7 @@ namespace Nemerle.Compiler
           | _ => Util.ice ("empty")
         }
       };
-      
+
       Util.locate (expr.loc,
         match (expr) {
           | <[ $(_ : name) ]>
