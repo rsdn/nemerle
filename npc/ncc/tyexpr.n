@@ -81,6 +81,7 @@ namespace Nemerle.Compiler {
             let (?errs, ?rets) = ctx in
             match Tyutil.top_expand (type_of (fn)) with [
               | T_fun (?args, ?ret) =>
+                // FIXME: named parameters
                 //let _ = Message.debug ((type_of (fn)) # as_string ()) in
                 if List.length (args) != List.length (parms) then
                   (Cons ("needed " + string_of_int (List.length (args)) + " parameters, got " +
@@ -129,7 +130,6 @@ namespace Nemerle.Compiler {
         letfun make_callables (env : Env, fnc : PT.Expr) : list (TT.Expr) =
           match fnc with [
             | PT.E_ref (?n) =>
-              // FIXME constructors
               match env#bare_lookup (n) with [
                 | Nil =>
                   Message.fatal_error ("unbound symbol `" + n + "'")
@@ -148,24 +148,67 @@ namespace Nemerle.Compiler {
                 
             | PT.E_member (?o, ?mem) =>
               let o = ty_expr (env, o) in
-              let (?subst, ?ti) = Tyutil.subst_of_app (Tyutil.top_expand (type_of (o))) in
-              letfun mem_ref (ex : TT.Expr, m : Class_member) : TT.Expr =
-                fixup (ex, fnc, ti#member_type (m) /- subst)
-              in
-              match ti#lookup_field (mem) with [
-                | Some (?f) => 
-                  List.cons (mem_ref (TT.E_field_ref (o, f), f))
-                 
-                | None =>
-                  match ti#lookup_method (mem) with [
-                    | Nil =>
-                      Message.fatal_error ("unbound member `" + mem + "' in type `" + 
-                                           ti#fullname () + "'")
-                    | ?l =>
-                      letfun make_meth (m : M_function) : TT.Expr =
-                        mem_ref (TT.E_method_ref (o, m), m)
-                      in List.map (make_meth, l)
-                  ]
+              let ref problem = "???" in
+              letfun collect_from (ctx : list (TT.Expr) * Int_map (int), t : Type) 
+                        : list (TT.Expr) * Int_map (int) =
+                let t' = Tyutil.top_expand (t) in
+                let (?acc, ?visited) = ctx in
+                match t' with [
+                  | T_app =>
+                    let (?subst, ?ti) = Tyutil.subst_of_app (t') in
+                    if visited#mem (ti#tydecl#id) then ctx
+                    else
+                      let visited = visited#add (ti#tydecl#id, 0) in
+                      letfun mem_ref (ex : TT.Expr, m : Class_member) : TT.Expr =
+                        fixup (ex, fnc, ti#member_type (m) /- subst)
+                      in
+                      match ti#lookup_field (mem) with [
+                        | Some (?f) => 
+                          (Cons (mem_ref (TT.E_field_ref (o, f), f), acc), visited)
+                         
+                        | None =>
+                          match ti#lookup_method (mem) with [
+                            | Nil =>
+                              { 
+                                problem <- "unbound member `" + mem + "' in type `" + 
+                                            ti#fullname () + "'";
+                                ctx
+                              }
+                              
+                            | ?l =>
+                              letfun make_meth (m : M_function) : TT.Expr =
+                                mem_ref (TT.E_method_ref (o, m), m)
+                              in (List.append (List.map (make_meth, l), acc), visited)
+                          ]
+                      ]
+
+                  | T_var (_, ?tv) =>
+                    if visited#mem (tv) then ctx
+                    else
+                      let visited = visited#add (tv, 0) in
+                      let types = Tyvars.constraints (tv) in
+                      let ctx = List.fold_left (collect_from, (acc, visited), types) in
+                      match ctx with [
+                        | (Nil, _) =>
+                          {
+                            problem <- "no constrain of " + t#as_string () + 
+                                       " provides member `" + mem + "'";
+                            ctx
+                          }
+                        | _ => ctx
+                      ]
+
+                  | _ =>
+                    {
+                      problem <- "type " + t#as_string () + " was expected to be class";
+                      ctx
+                    }
+                ]
+              in 
+              match collect_from ((Nil (), Map.int_map ()), type_of (o)) with [
+                | (Nil, _) =>
+                  Message.fatal_error (problem)
+                | (?x, _) => x
               ]
 
             | ?x =>
@@ -176,6 +219,7 @@ namespace Nemerle.Compiler {
           letfun do_case (ctx : option (Type) * list (TT.Match_case), 
                           c : PT.Match_case) : option (Type) * list (TT.Match_case) =
             let ref pat_env = env in
+            let ref vars = Map.string_map () in
             letfun f (p : PT.Pattern) : TT.Pattern =
               match p with [
                 | PT.P_variable (?n) =>
@@ -312,6 +356,7 @@ namespace Nemerle.Compiler {
               | PT.E_member (_, ?fld) => 
                 match make_callables (env, expr) with [
                   | Cons (TT.E_field_ref ?x, Nil) => (x, type_of (x))
+                  // FIXME: better error message when is it for example multibound field
                   | _ => 
                     Message.fatal_error ("member `" + fld + 
                                          "' was expected to be a field, not method")
