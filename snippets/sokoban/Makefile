@@ -8,7 +8,7 @@ NPATH   = ../../ncc/out.stage3
 MONO    = $(NET_ENGINE) $(NET_FLAGS)
 COMPILE = $(MONO) $(NPATH)/ncc.exe
 
-SOURCES = sokoban.n main.n treesearch.n 
+SOURCES = sokoban.n main.n treesearch.n splayheap.n
 MACROS = macros.n
 
 all: sokoban.exe
