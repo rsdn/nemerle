@@ -35,7 +35,7 @@ MAKE_GRAMMAR = perl scripts/grammar-txt-2-xml.pl $< | xmllint -o $@ --format -
 course_docs = index
 
 root_docs = 	index grammar coreNemCompiler coreNemDesc \
-		TRSideas faq license hacking macros ncc
+		TRSideas faq license hacking macros
 
 docs = $(root_docs) $(addprefix course/, $(course_docs))
 
