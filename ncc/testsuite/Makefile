@@ -26,7 +26,7 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 # Include configuration determined by configure script.
-TOP=../..
+TOP = ../..
 include $(TOP)/config.mak
 
 
@@ -38,7 +38,16 @@ DISTFILES = \
 	Makefile \
 	README   \
 	run      \
+	
+STAGE3    = $(TOP)/ncc/out.stage3
+TESTN     = $(TOP)/ncc/testsuite/test.n
 
+export PATH = $(shell echo $$PATH):$(shell pwd)/$(STAGE3)/
+export MONO_PATH = $(shell echo $$MONO_PATH):$(shell pwd)/$(STAGE3)
+
+EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
+
+TEST_FILES = positive/*.n negative/*.n
 
 ############################################################
 # OUTPUT
@@ -51,8 +60,10 @@ CP = @echo CP      $1
 ############################################################
 
 all:
-	$(Q) cd positive && $(MAKE)
-	$(Q) cd negative && $(MAKE)
+	cp $(STAGE3)/Nemerle.dll .
+	$(EXECUTE) $(STAGE3)/ncc.exe -out test.exe $(TESTN)
+	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" -n "$(STAGE3)/ncc.exe" $(TEST_FILES)
+	rm -f out.dll out.exe out.netmodule ext_test.out Nemerle.dll test.exe
 
 dist:
 	$(CP) '*.n'
