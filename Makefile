@@ -26,6 +26,8 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
+include config.mak
+
 all:
 	$(MAKE) -C ncc boot
 
@@ -44,7 +46,7 @@ changelog:
 
 sync-boot:
 	$(MAKE) -C ncc boot sync
-	
+
 dist: sync-boot changelog
 	if svn status 2>&1 | grep -qv '^?' ; then \
 	  echo "Some files modified"; \
@@ -74,6 +76,10 @@ send-dist:
 		lilith:/home/services/httpd/html/download/nemerle-latest.tar.gz
 	mv `find -maxdepth 1 -mindepth 1 -name 'nemerle-[0-9]*.tar.gz'` ~/backup/nemerle/
 	scp boot/ncc.exe lilith:/home/services/httpd/html/download/ncc-boot.exe
+
+install:
+	$(MAKE) -C ncc install
+	$(MAKE) -C doc install
 
 clean:
 	$(MAKE) -C doc clean

@@ -26,6 +26,8 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
+include ../config.mak
+
 n_src = option.n list.n util.n parsetree.n tree.n scan_globals.n treeutil.n \
 	bind_types.n tyvars.n tyinfo.n tyutil.n check_constraints.n \
 	ast.n tyexpr.n typedtree.n extensions.n cgtree.n cgexpr.n \
@@ -33,7 +35,9 @@ n_src = option.n list.n util.n parsetree.n tree.n scan_globals.n treeutil.n \
 cs_src = lexer.cs main.cs parser.cs
 all_src = $(n_src) $(cs_src)
 all_cs = out.cs $(cs_src)
-MCS = mcs -nowarn:162
+
+CSFLAGS = -nowarn:162
+COMPILE = $(CSC) $(CSFLAGS)
 
 all: ncc.exe
 
@@ -41,22 +45,22 @@ all: ncc.exe
 # generate ncc3.exe binary to be put in release for bootstrap.
 # Finally run testsuite.
 boot: ncc.exe
-	mono --debug ncc.exe $(n_src)
-	$(MCS) -debug+ -o ncc2.exe $(all_cs)
+	$(NET_ENGINE) --debug ncc.exe $(n_src)
+	$(COMPILE) -debug+ -o ncc2.exe $(all_cs)
 	mv out.cs out2.cs
-	mono --debug ncc2.exe $(n_src)
+	$(NET_ENGINE) --debug ncc2.exe $(n_src)
 	cmp -s out2.cs out.cs
-	$(MCS) -o ncc3.exe $(all_cs)
+	$(COMPILE) -o ncc3.exe $(all_cs)
 	mv out.cs out3.cs
 	$(MAKE) testsuite
 
 sync:
 	mv ../boot/ncc.exe ../boot/ncc-old.exe
 	cp ncc3.exe ../boot/ncc.exe
-	
+
 ncc.exe: $(all_src)
-	mono ../boot/ncc.exe $(n_src)
-	$(MCS) -debug+ -o $@ $(all_cs)
+	$(NET_ENGINE) ../boot/ncc.exe $(n_src)
+	$(COMPILE) -debug+ -o $@ $(all_cs)
 
 .PHONY: t
 
@@ -68,6 +72,13 @@ testsuite:
 parser.cs: parser.jay
 	jay -v -t -c parser.jay < `jay -p`/skeleton.cs > parser.cs
 	perl -p -i -e 's/(public void yyerror )/virtual $$1/' parser.cs
+
+
+install: ncc.exe
+	if test ! -d $(BINDIR) ; then mkdir -p $(BINDIR) ; fi
+	$(INSTALL) -m 755 ncc.exe $(BINDIR)/ncc.exe
+	$(INSTALL) -m 755 ncc $(BINDIR)/ncc
+
 
 clean:
 	rm -f out.cs out[0-9].cs parser.cs *.exe y.output

@@ -26,6 +26,8 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
+include ../config.mak
+
 XSPP = xspp
 XSLT = xsltproc --xinclude
 MAKE_GRAMMAR = perl scripts/grammar-txt-2-xml.pl $< | xmllint -o $@ --format -
@@ -63,13 +65,13 @@ course/%.html: course-src/%.xml mainStyle.xsl
 
 %.docb: src/%.xml docb.xsl
 	$(XSLT) -o - docb.xsl $< | xmllint --format - > $@
-	
+
 %.xsl: styles/%.xspp
 	$(XSPP) $< > $@
-	
+
 %.xsl: tex/%.xspp
 	$(XSPP) $< > $@
-	
+
 nemerleGrammar.tex nemerleGrammar.html: nemerleGrammar.xml
 coreNemGrammar.tex coreNemGrammar.html: coreNemGrammar.xml
 absNemGrammar.tex absNemGrammar.html: absNemGrammar.xml
@@ -82,7 +84,7 @@ absNemGrammar.xml: src/absNemGrammar.txt scripts/grammar-txt-2-xml.pl
 
 coreNemGrammar.xml: src/coreNemGrammar.txt scripts/grammar-txt-2-xml.pl
 	$(MAKE_GRAMMAR)
-	
+
 %.ps: %.dvi
 	dvips -o $@ $<
 
@@ -91,7 +93,7 @@ coreNemGrammar.xml: src/coreNemGrammar.txt scripts/grammar-txt-2-xml.pl
 
 %.dvi: src/%.tex
 	latex $< < /dev/null
-	
+
 %.dvi: %.tex
 	latex $< < /dev/null
 
@@ -102,9 +104,11 @@ v: verify-html
 
 verify-html:
 	set -xe; for f in *.html course/*.html ; do xmllint --noout --valid $$f ; done
-	
+
 verify-docb:
 	set -xe; for f in *.docb ; do xmllint --noout --valid $$f ; done
+
+install: $(html)
 
 clean:
 	rm -f *.xsl *.html *.ps *.pdf *.aux *.log *.xml *.tex *.docb
