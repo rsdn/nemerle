@@ -34,9 +34,8 @@ MAKE_GRAMMAR = perl scripts/grammar-txt-2-xml.pl $< | xmllint -o $@ --format -
 
 course_docs = index
 
-root_docs = index \
-	coreNemExamples coreNemGrammar coreNemCompiler coreNemDesc \
-	TRSideas faq license hacking nemerleMacros ncc
+root_docs = 	index grammar coreNemCompiler coreNemDesc \
+		TRSideas faq license hacking macros ncc
 
 docs = $(root_docs) $(addprefix course/, $(course_docs))
 
@@ -71,9 +70,9 @@ course/%.html: course-src/%.xml mainStyle.xsl
 %.xsl: tex/%.xspp
 	$(XSPP) $< > $@
 
-coreNemGrammar.tex coreNemGrammar.html: coreNemGrammar.xml
+grammar.tex grammar.html: grammar.xml
 
-coreNemGrammar.xml: src/coreNemGrammar.txt scripts/grammar-txt-2-xml.pl
+grammar.xml: src/grammar.txt scripts/grammar-txt-2-xml.pl
 	$(MAKE_GRAMMAR)
 
 %.ps: %.dvi
