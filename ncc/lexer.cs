@@ -543,6 +543,8 @@ class Lexer : yyParser.yyInput
 		keywords["record"] = Token.KW_RECORD;
 		keywords["match"] = Token.KW_MATCH;
 		keywords["static"] = Token.KW_STATIC;
+		keywords["mutable"] = Token.KW_MUTABLE;
+		keywords["def"] = Token.KW_DEF;
 	}
 }
 
