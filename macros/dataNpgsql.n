@@ -34,12 +34,209 @@ using NpgsqlTypes;
 
 using Nemerle.Compiler;
 
-namespace Nemerle.Data 
+namespace Nemerle.Data.Npgsql
 {
-  module Npgsql {
-    private connections : Hashtable [string, NpgsqlConnection] = Hashtable ();
+  using Helper;
+  
+  /**
+    Define connection string, which will be used by application
+    (also for compile-time verification of SQL queries by compiler)
+   */
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
+                       Nemerle.MacroTargets.Class,
+                       Inherited = false, AllowMultiple = true)]
+  macro ConfigureConnection (_ : TypeBuilder, con_str : string, name : string = "")
+  {
+    if (connections.Contains (name))
+      Message.FatalError ("Connection with name `" + name + "' is already defined")
+    else {
+      try {
+        def connection = NpgsqlConnection (con_str);
+        connection.Open ();
+        connections.Add (name, connection);
+      }
+      catch {
+        | e : System.Exception =>
+          Message.FatalError ($"connecting to database failed: $e")
+      }
+    };
+  }
 
-    get_connection (name : string) : NpgsqlConnection
+  macro ExecuteNonQuery (query : string, conn, con_name : string = "")
+  {
+    def (query, tpars, pars_init) =
+      Tools.ExtractParameters (Nemerle.Macros.ImplicitCTX (), query, ':');
+
+    // create compile-time query to check syntax and types in query
+    def mytran = get_connection (con_name).BeginTransaction ();        
+    def mycmd = NpgsqlCommand (query, get_connection (con_name), mytran);    
+
+    try { 
+      tpars.Iter (fun (name, tvar : Typedtree.TExpr) {
+        def (dbtype, dbvalue) = type_representant (tvar.ty.Fix ());
+        mycmd.Parameters.Add (name, dbtype).Value = dbvalue;
+      });
+      // try to execute query chcecking its syntax and typecorrectness
+      _ = mycmd.ExecuteNonQuery ()
+    }
+    catch {
+      | e : NpgsqlException =>
+        Message.FatalError ("sql query error: " + e.Message)
+    }
+    finally {
+      mytran.Rollback ();
+      mycmd.Dispose ();
+    };
+
+    <[
+      using (querycmd = NpgsqlCommand ($(query : string), $conn))
+      {
+        { .. $pars_init };
+        querycmd.ExecuteNonQuery ();
+      }
+    ]>
+  }
+
+  macro ExecuteScalar (query : string, conn, con_name : string = "")
+  {
+    def (query, tpars, pars_init) =
+      Tools.ExtractParameters (Nemerle.Macros.ImplicitCTX (), query, ':');
+
+    // create compile-time query to check syntax and types in query
+    def mytran = get_connection (con_name).BeginTransaction ();          
+    def mycmd = NpgsqlCommand (query, get_connection (con_name), mytran);
+
+    mutable col_type = null;
+    try {
+      tpars.Iter (fun (name, tvar : Typedtree.TExpr) {
+        def (dbtype, dbvalue) = type_representant (tvar.ty.Fix ());
+        mycmd.Parameters.Add (name, dbtype).Value = dbvalue;
+      });
+
+      // try to execute query chcecking its syntax and aquiring names of columns
+      def myreader = mycmd.ExecuteReader(CommandBehavior.SchemaOnly);
+      def table = myreader.GetSchemaTable ();
+      if (table.Rows.Count < 1)
+        Message.FatalError ("this query doesn't return any value")
+      else 
+        col_type = Macros.UseSiteSymbol (table.Rows[0]["DataType"].ToString ());
+      myreader.Close ();
+    }
+    catch {
+      | e : NpgsqlException =>
+        Message.FatalError ("sql query error: " + e.Message)
+    }
+    finally {
+      mytran.Rollback ();
+      mycmd.Dispose ();
+    };
+
+    /// final code for entire sql loop
+    <[
+      using (querycmd = NpgsqlCommand ($(query : string), $conn))
+      {
+        { .. $pars_init };
+        (querycmd.ExecuteScalar () :> $(col_type : name));
+      }
+    ]>
+  }
+
+  macro ExecuteReader (query : string, conn, con_name : string = "")
+  {
+    def (query, tpars, pars_init) =
+      Tools.ExtractParameters (Nemerle.Macros.ImplicitCTX (), query, ':');
+
+    // create compile-time query to check syntax and types in query
+    def mytran = get_connection (con_name).BeginTransaction ();                
+    def mycmd = NpgsqlCommand (query, get_connection (con_name), mytran);
+    try {
+      tpars.Iter (fun (name, tvar : Typedtree.TExpr) {
+        def (dbtype, dbvalue) = type_representant (tvar.ty.Fix ());
+        mycmd.Parameters.Add (name, dbtype).Value = dbvalue;
+      });
+      // try to execute query chcecking its syntax
+      _ = mycmd.ExecuteNonQuery ();
+    }
+    catch {
+      | e : NpgsqlException =>
+        Message.FatalError ("sql query error: " + e.Message)
+    }
+    finally {
+      mytran.Rollback ();
+      mycmd.Dispose ();
+    };
+
+    /// final code for entire sql loop
+    <[
+      using (querycmd = NpgsqlCommand ($(query : string), $conn)) 
+      {
+        { .. $pars_init };
+        querycmd.ExecuteReader ();
+      }
+    ]>
+  }
+
+  macro ExecuteReaderLoop (query : string, conn, body)
+  {
+    def (query, tpars, pars_init) =
+      Tools.ExtractParameters (Nemerle.Macros.ImplicitCTX (), query, ':');
+
+    // list of definitions of query results inside loop body
+    mutable bodyseq = [body];
+
+    // create compile-time query to check syntax and types in query
+    def mytran = get_connection ("").BeginTransaction ();
+    def mycmd = NpgsqlCommand (query, get_connection (""), mytran);
+    try {
+      tpars.Iter (fun (name, tvar : Typedtree.TExpr) {
+        def (dbtype, dbvalue) = type_representant (tvar.ty.Fix ());
+        mycmd.Parameters.Add (name, dbtype).Value = dbvalue;
+      });
+
+      // try to execute query chcecking its syntax and aquiring names of columns
+      def myreader = mycmd.ExecuteReader(CommandBehavior.SchemaOnly %|
+                                         CommandBehavior.SingleRow);
+      def table = myreader.GetSchemaTable ();
+      mutable col_num = 0;
+      foreach (myRow :> DataRow in table.Rows){
+        def col_type = Macros.UseSiteSymbol (myRow["DataType"].ToString ());
+        def col_name = Macros.UseSiteSymbol (myRow["ColumnName"].ToString ());
+        def type_suff = col_type.Id;
+
+        // create runtime variables definition according to extracted types
+        bodyseq = <[ def $(col_name : name) =
+                        reader.$("Get" + type_suff : usesite) ($(col_num : int)) ]>
+                    :: bodyseq;
+        ++col_num;
+      };
+
+      myreader.Close ();
+    }
+    catch {
+      | e : NpgsqlException =>
+        Message.FatalError ("sql query error: " + e.Message)
+    }
+    finally {
+      mytran.Rollback ();
+      mycmd.Dispose ();
+    };
+
+    /// final code for entire sql loop
+    <[
+      using (querycmd = NpgsqlCommand ($(query : string), $conn)) 
+      {
+        { .. $pars_init };
+        def reader = querycmd.ExecuteReader ();
+        while (reader.Read ()) { ..$bodyseq };
+        reader.Close ();
+      }
+    ]>
+  }
+
+  module Helper {
+    internal connections : Hashtable [string, NpgsqlConnection] = Hashtable ();
+
+    internal get_connection (name : string) : NpgsqlConnection
     {
       match (connections.Get (name)) {
         | Some (c) => c
@@ -51,10 +248,10 @@ namespace Nemerle.Data
       }
     }
 
-    type_representant (t : Typedtree.TType) : NpgsqlDbType * object
+    internal type_representant (t : MType) : NpgsqlDbType * object
     {
       match (t) {
-        | Typedtree.TType.Class (tc, []) =>
+        | MType.Class (tc, []) =>
           match (tc.FullName) {
             | "System.String" | "Nemerle.Core.string" =>
               (NpgsqlDbType.Text, ("string parameter" : object))
@@ -94,201 +291,6 @@ namespace Nemerle.Data
         | _ =>
           Message.FatalError ("only basic types supported in sql query")
       }
-    }
-
-    /**
-      Define connection string, which will be used by application
-      (also for compile-time verification of SQL queries by compiler)
-     */
-    [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                         Nemerle.MacroTargets.Class,
-                         Inherited = false, AllowMultiple = true)]
-    macro ConfigureConnection (_ : TypeBuilder, con_str : string, name : string = "")
-    {
-      if (connections.Contains (name))
-        Message.FatalError ("Connection with name `" + name + "' is already defined")
-      else {
-        try {
-          def connection = NpgsqlConnection (con_str);
-          connection.Open ();
-          connections.Add (name, connection);
-        }
-        catch {
-          | e : System.Exception =>
-            Message.FatalError ($"connecting to database failed: $e")
-        }
-      };
-    }
-
-    macro ExecuteNonQuery (query : string, conn, con_name : string = "")
-    {
-      def (query, tpars, pars_init) =
-        Tools.ExtractParameters (Nemerle.Macros.ImplicitCTX (), query, ':');
-
-      // create compile-time query to check syntax and types in query
-      def mytran = get_connection (con_name).BeginTransaction ();        
-      def mycmd = NpgsqlCommand (query, get_connection (con_name), mytran);    
-
-      try { 
-        tpars.Iter (fun (name, tvar : Typedtree.TExpr) {
-          def (dbtype, dbvalue) = type_representant (tvar.ty);
-          mycmd.Parameters.Add (name, dbtype).Value = dbvalue;
-        });
-        // try to execute query chcecking its syntax and typecorrectness
-        _ = mycmd.ExecuteNonQuery ()
-      }
-      catch {
-        | e : NpgsqlException =>
-          Message.FatalError ("sql query error: " + e.Message)
-      }
-      finally {
-        mytran.Rollback ();
-        mycmd.Dispose ();
-      };
-
-      <[
-        using (querycmd = NpgsqlCommand ($(query : string), $conn))
-        {
-          { .. $pars_init };
-          querycmd.ExecuteNonQuery ();
-        }
-      ]>
-    }
-
-    macro ExecuteScalar (query : string, conn, con_name : string = "")
-    {
-      def (query, tpars, pars_init) =
-        Tools.ExtractParameters (Nemerle.Macros.ImplicitCTX (), query, ':');
-
-      // create compile-time query to check syntax and types in query
-      def mytran = get_connection (con_name).BeginTransaction ();          
-      def mycmd = NpgsqlCommand (query, get_connection (con_name), mytran);
-
-      mutable col_type = null;
-      try {
-        tpars.Iter (fun (name, tvar : Typedtree.TExpr) {
-          def (dbtype, dbvalue) = type_representant (tvar.ty);
-          mycmd.Parameters.Add (name, dbtype).Value = dbvalue;
-        });
-
-        // try to execute query chcecking its syntax and aquiring names of columns
-        def myreader = mycmd.ExecuteReader(CommandBehavior.SchemaOnly);
-        def table = myreader.GetSchemaTable ();
-        if (table.Rows.Count < 1)
-          Message.FatalError ("this query doesn't return any value")
-        else 
-          col_type = Macros.UseSiteSymbol (table.Rows[0]["DataType"].ToString ());
-        myreader.Close ();
-      }
-      catch {
-        | e : NpgsqlException =>
-          Message.FatalError ("sql query error: " + e.Message)
-      }
-      finally {
-        mytran.Rollback ();
-        mycmd.Dispose ();
-      };
-
-      /// final code for entire sql loop
-      <[
-        using (querycmd = NpgsqlCommand ($(query : string), $conn))
-        {
-          { .. $pars_init };
-          (querycmd.ExecuteScalar () :> $(col_type : name));
-        }
-      ]>
-    }
-
-    macro ExecuteReader (query : string, conn, con_name : string = "")
-    {
-      def (query, tpars, pars_init) =
-        Tools.ExtractParameters (Nemerle.Macros.ImplicitCTX (), query, ':');
-
-      // create compile-time query to check syntax and types in query
-      def mytran = get_connection (con_name).BeginTransaction ();                
-      def mycmd = NpgsqlCommand (query, get_connection (con_name), mytran);
-      try {
-        tpars.Iter (fun (name, tvar : Typedtree.TExpr) {
-          def (dbtype, dbvalue) = type_representant (tvar.ty);
-          mycmd.Parameters.Add (name, dbtype).Value = dbvalue;
-        });
-        // try to execute query chcecking its syntax
-        _ = mycmd.ExecuteNonQuery ();
-      }
-      catch {
-        | e : NpgsqlException =>
-          Message.FatalError ("sql query error: " + e.Message)
-      }
-      finally {
-        mytran.Rollback ();
-        mycmd.Dispose ();
-      };
-
-      /// final code for entire sql loop
-      <[
-        using (querycmd = NpgsqlCommand ($(query : string), $conn)) 
-        {
-          { .. $pars_init };
-          querycmd.ExecuteReader ();
-        }
-      ]>
-    }
-
-    macro ExecuteReaderLoop (query : string, conn, body)
-    {
-      def (query, tpars, pars_init) =
-        Tools.ExtractParameters (Nemerle.Macros.ImplicitCTX (), query, ':');
-
-      // list of definitions of query results inside loop body
-      mutable bodyseq = [body];
-
-      // create compile-time query to check syntax and types in query
-      def mytran = get_connection ("").BeginTransaction ();
-      def mycmd = NpgsqlCommand (query, get_connection (""), mytran);
-      try {
-        tpars.Iter (fun (name, tvar : Typedtree.TExpr) {
-          def (dbtype, dbvalue) = type_representant (tvar.ty);
-          mycmd.Parameters.Add (name, dbtype).Value = dbvalue;
-        });
-
-        // try to execute query chcecking its syntax and aquiring names of columns
-        def myreader = mycmd.ExecuteReader(CommandBehavior.SchemaOnly %|
-                                           CommandBehavior.SingleRow);
-        def table = myreader.GetSchemaTable ();
-        mutable col_num = 0;
-        foreach (myRow : DataRow in table.Rows){
-          def col_type = Macros.UseSiteSymbol (myRow["DataType"].ToString ());
-          def col_name = Macros.UseSiteSymbol (myRow["ColumnName"].ToString ());
-          def type_suff = List.Last (col_type.idl);
-
-          // create runtime variables definition according to extracted types
-          bodyseq = <[ def $(col_name : name) =
-                          reader.$("Get" + type_suff : usesite) ($(col_num : int)) ]>
-                      :: bodyseq;
-          ++col_num;
-        };
-
-        myreader.Close ();
-      }
-      catch {
-        | e : NpgsqlException =>
-          Message.FatalError ("sql query error: " + e.Message)
-      }
-      finally {
-        mytran.Rollback ();
-        mycmd.Dispose ();
-      };
-
-      /// final code for entire sql loop
-      <[
-        using (querycmd = NpgsqlCommand ($(query : string), $conn)) 
-        {
-          { .. $pars_init };
-          def reader = querycmd.ExecuteReader ();
-          while (reader.Read ()) { ..$bodyseq };
-          reader.Close ();
-        }
-      ]>
     }
   }
 }
