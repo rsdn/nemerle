@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2003 The University of Wroclaw.
+# Copyright (c) 2003, 2004 The University of Wroclaw.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -26,10 +26,12 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
+# Include configuration determined by configure script.
 include ../config.mak
 
-XSPP = xspp
-XSLT = xsltproc --xinclude
+############################################################
+# VARIABLES
+############################################################
 
 course_docs = index
 
@@ -41,32 +43,57 @@ tex_docs = intro
 
 normal_docs = $(html) $(addsuffix .ps, $(tex_docs)) $(addsuffix .pdf, $(tex_docs))
 
+html-no-course = $(addsuffix .html, $(root_docs))
 html = $(addsuffix .html, $(docs))
 ps = $(addsuffix .ps, $(docs)) $(addsuffix .ps, $(tex_docs))
 pdf = $(addsuffix .pdf, $(docs)) $(addsuffix .pdf, $(tex_docs))
 docb = $(addsuffix .docb, $(docs))
+
+############################################################
+# OUTPUT
+############################################################
+
+XSPP_ = @echo XSPP  $1
+XSLT_ = @echo XSLT  $1
+MKDIR = @echo MKDIR $1
+TAR   = @echo TAR   $1
+CP    = @echo CP    $1
+
+############################################################
+# TARGETS
+############################################################
 
 .DELETE_ON_ERROR:
 .SECONDARY: mainStyle.xsl latex.xsl xml2tex.xsl docb.xsl $(addsuffix .tex, $(docs))
 
 all: $(normal_docs)
 
+# This is necessary to make sure, that configuration file
+# has been generated, and it is up to date.
+../config.mak:
+	$(MAKE) -C .. config.mak
+
 pdf: $(ps) $(pdf)
 
 %.html: src/%.xml mainStyle.xsl
-	$(XSLT) -o $@ mainStyle.xsl $<
+	$(XSLT_) $@
+	$(Q)$(XSLT) -o $@ mainStyle.xsl $<
 
 course/%.html: course-src/%.xml mainStyle.xsl
-	$(XSLT) -o $@ mainStyle.xsl $<
+	$(XSLT_) $@
+	$(Q)$(XSLT) -o $@ mainStyle.xsl $<
 
 %.docb: src/%.xml docb.xsl
-	$(XSLT) -o - docb.xsl $< | xmllint --format - > $@
+	$(XSLT_) $@
+	$(Q)$(XSLT) -o - docb.xsl $< | xmllint --format - > $@
 
 %.xsl: styles/%.xspp
-	$(XSPP) $< > $@
+	$(XSPP_) $@
+	$(Q)$(XSPP) $< > $@
 
 %.xsl: tex/%.xspp
-	$(XSPP) $< > $@
+	$(XSPP_) $@
+	$(Q)$(XSPP) $< > $@
 
 %.ps: %.dvi
 	dvips -o $@ $<
@@ -83,7 +110,8 @@ course/%.html: course-src/%.xml mainStyle.xsl
 	latex $< < /dev/null
 
 %.tex: %.docb styles/docb2latex.xsl
-	$(XSLT) -o $@ styles/docb2latex.xsl $<
+	$(XSLT_)
+	$(Q)$(XSLT) -o $@ styles/docb2latex.xsl $<
 
 v: verify-html
 
@@ -93,11 +121,9 @@ verify-html:
 verify-docb:
 	set -xe; for f in *.docb ; do xmllint --noout --valid $$f ; done
 
-install: $(html) ncc.1
-	$(INSTALL) -m 644 ncc.1 $(MANDIR)/ncc.1
-
-../config.mak:
-	$(MAKE) -C .. config.mak
+install:
+	$(INST) ncc.1
+	$(Q)$(INSTALL) -m 644 ncc.1 $(MANDIR)/ncc.1
 
 clean:
 	rm -f *.xsl *.html *.ps *.pdf *.aux *.log *.xml *.tex *.docb
@@ -126,3 +152,9 @@ publish-stamp: nemerle-web.tar.gz
 	cp nemerle-web.tar.gz /home/services/httpd/html
 	(cd /home/services/httpd/html; tar zxf nemerle-web.tar.gz)
 	touch publish-stamp
+
+# This target is used to build the tarball.  It is passed the
+# directory name, where all files should be copied.
+dist: $(html-no-course)
+	$(CP)
+	$(Q)cp $(html-no-course) $(DIR)
