@@ -36,18 +36,11 @@ export MONO_PATH = $(shell echo $$MONO_PATH):$(shell pwd)/../boot/
 # VARIABLES
 ############################################################
 
-DISTFILES = \
-	Makefile \
-	README   \
-	*.n      \
-
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 
 ############################################################
 # OUTPUT
 ############################################################
-
-CP = @echo CP      $1
 
 ############################################################
 # TARGETS
@@ -64,12 +57,6 @@ myPoll.exe: myPoll.n
 
 sql: sql.n
 	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r Npgsql -r ../macros/Nemerle.Data.Npgsql.dll sql.n -o sql.exe
-
-dist:
-	@echo export...
-	@rm -rf $(DIR)
-	@svn export . $(DIR)
-	@rm -rf $(DIR)/sioux/fit
 
 clean:
 	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]*

@@ -33,14 +33,6 @@ include ../config.mak
 # VARIABLES
 ############################################################
 
-DISTFILES = \
-	Makefile             \
-	Nemerle.Compiler.dll \
-	Nemerle.dll          \
-	ncc.exe              \
-	true.exe             \
-	Nemerle.Macros.dll   \
-
 ############################################################
 # OUTPUT
 ############################################################
@@ -62,10 +54,6 @@ all:
 ../config.mak:
 	$(Q)cd .. && $(MAKE) config.mak
 
-
-dist:
-	$(CP)
-	$(Q)cp $(DISTFILES) $(DIR)
 
 install:
 	$(Q)if test ! -d $(DESTDIR)$(BINDIR); then $(INSTALL) -d $(DESTDIR)$(BINDIR); fi

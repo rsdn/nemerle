@@ -33,15 +33,9 @@ include $(TOP)/config.mak
 # VARIABLES
 ############################################################
 
-DISTFILES = \
-	Makefile \
-	*.n      \
-
 ############################################################
 # OUTPUT
 ############################################################
-
-CP = @echo CP      $1
 
 ############################################################
 # TARGETS
@@ -49,10 +43,6 @@ CP = @echo CP      $1
 
 all:
 	cd .. ; $(MAKE) 'TEST_FILES=positive/*.n'
-
-dist:
-	$(CP) '*.n'
-	$(Q)cp $(DISTFILES) $(DIR)
 
 clean:
 	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]*

@@ -33,11 +33,6 @@ include ../config.mak
 # VARIABLES
 ############################################################
 
-DISTFILES = \
-	nemerle.vim      \
-	nemerle.el       \
-	nemerle-fortunes \
-
 ############################################################
 # OUTPUT
 ############################################################
@@ -57,13 +52,6 @@ all:
 # has been generated, and it is up to date.
 ../config.mak:
 	$(Q)$(MAKE) -C .. config.mak
-
-
-# This target is used to build the tarball.  It is passed the
-# directory name, where all files should be copied.
-dist:
-	$(CP) modes
-	$(Q)cp $(DISTFILES) $(DIR)
 
 
 nemerle-fortunes.dat: nemerle-fortunes

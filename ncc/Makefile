@@ -121,18 +121,6 @@ STDMACROS_DLL_SRC = \
 	../macros/xml.n \
 	../macros/concurrency.n \
 
-DISTFILES = \
-	Makefile                    \
-	$(NEMERLE_COMPILER_DLL_SRC) \
-	$(NCC_EXE_SRC)              \
-
-LIBDISTFILES = \
-	../lib/STDLIB      \
-	../lib/TODO        \
-	../lib/Makefile    \
-	$(NEMERLE_DLL_SRC) \
-
-
 ############################################################
 # OUTPUT
 ############################################################
@@ -347,20 +335,6 @@ install:
 		echo '$(NET_ENGINE) $(BINDIR)/ncc.exe "$$@"' >> $(DESTDIR)$(BINDIR)/ncc ; \
 		chmod 755 $(DESTDIR)$(BINDIR)/ncc ; \
 	fi
-
-# This target is used to build the tarball.  It is passed the
-# directory name, where all files should be copied.
-dist:
-	$(MKDIR) $(DIR)/ncc
-	$(MKDIR) $(DIR)/ncc/testsuite
-	$(Q)mkdir $(DIR)/ncc/testsuite
-	$(CP) '*.n'
-	$(Q)cp $(DISTFILES) $(DIR)/ncc
-	$(CP) '../lib/*.n'
-	$(Q)cp $(LIBDISTFILES) $(DIR)/lib
-	$(Q)mkdir $(DIR)/lib/tests
-	$(Q)cp ../lib/tests/*.n $(DIR)/lib/tests
-	$(Q)$(MAKE) -C testsuite dist DIR=../$(DIR)/ncc/testsuite
 
 clean:
 	cd testsuite && $(MAKE) clean

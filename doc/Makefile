@@ -51,10 +51,6 @@ ps = $(addsuffix .ps, $(docs)) $(addsuffix .ps, $(tex_docs))
 pdf = $(addsuffix .pdf, $(docs)) $(addsuffix .pdf, $(tex_docs))
 docb = $(addsuffix .docb, $(docs))
 
-DISTFILES = \
-	ncc.1 \
-	Makefile
-
 ############################################################
 # OUTPUT
 ############################################################
@@ -175,15 +171,11 @@ publish-stamp: nemerle-web.tar.gz
 	(cd /home/services/httpd/html; tar zxf nemerle-web.tar.gz)
 	touch publish-stamp
 
-# This target is used to build the tarball.  It is passed the
-# directory name, where all files should be copied.
-dist: $(html-no-course)
-	$(MKDIR) $(DIR)/html
-	$(Q)mkdir -p $(DIR)/html
-	$(Q)mkdir -p $(DIR)/html/styles
+dist-cleaner: all
+	$(MKDIR) html
+	$(Q)mkdir -p html
+	$(Q)mkdir -p html/styles
 	$(CP) html
-	$(Q)cp $(html-no-course) $(DIR)/html
+	$(Q)cp $(html-no-course) *.pdf html
 	$(CP) css
-	$(Q)cp styles/*.{css,png,js} $(DIR)/html/styles
-	$(CP)
-	$(Q)cp $(DISTFILES) $(DIR)
+	$(Q)cp styles/*.{css,png,js} html/styles

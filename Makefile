@@ -33,16 +33,6 @@ include config.mak
 # VARIABLES
 ############################################################
 
-DISTFILES = \
-	AUTHORS   \
-	COPYRIGHT \
-	ChangeLog \
-	INSTALL   \
-	Makefile  \
-	README    \
-	NEWS	  \
-	configure \
-
 svn2log = LC_ALL=pl_PL.utf-8 $(PYTHON) misc/svn2log.py changelog.xml -u misc/users
 nemroot = /nemerle/(trunk|(branches|tags)/[^/]+)
 
@@ -84,34 +74,19 @@ dist: changelog tarball
 
 tarball:
 	$(Q)rm -rf $(PACKAGE)-$(VERSION).*
-	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)/...
-	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)
-	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/ncc
-	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/doc
-	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/misc
-	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/boot
-	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/lib
-	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/snippets
-	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/macros
-	$(CP)
-	$(Q)cp $(DISTFILES) $(PACKAGE)-$(VERSION).$(REVISION)
-	$(Q)$(MAKE) -C ncc  dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)
-	$(Q)$(MAKE) -C doc  dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/doc
-	$(Q)$(MAKE) -C misc dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/misc
-	$(Q)$(MAKE) -C boot dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/boot
-	$(Q)$(MAKE) -C macros dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/macros
-	$(Q)$(MAKE) -C snippets dist DIR=$(shell pwd)/$(PACKAGE)-$(VERSION).$(REVISION)/snippets
+	svn export . $(PACKAGE)-$(VERSION).$(REVISION)
+	$(Q)$(MAKE) -C $(PACKAGE)-$(VERSION).$(REVISION) dist-cleaner
 	$(TAR) $(PACKAGE)-$(VERSION).$(REVISION).tar.gz 
 	@tar zcf $(PACKAGE)-$(VERSION).$(REVISION).tar.gz $(PACKAGE)-$(VERSION).$(REVISION)
-	@echo "Looking for missing files."
-	svn export . $(PACKAGE)-$(VERSION).$(REVISION).svn
-	@rm -rf $(PACKAGE)-$(VERSION).$(REVISION).svn/{doc,boot/lock.txt,misc,snippets/sioux/fit}
-	@cd $(PACKAGE)-$(VERSION).$(REVISION).svn ; find . | sed -e 's/^\.\///' | sort > ../files.svn
-	@cd $(PACKAGE)-$(VERSION).$(REVISION) ; find . | sed -e 's/^\.\///' | sort > ../files.tar
-	@diff -u files.{svn,tar} | grep '^-[^-]' | sed -e 's/^-//' || echo "No files missing."
-	@rm -f files.{svn,tar}
-	@rm -rf $(PACKAGE)-$(VERSION).$(REVISION)
-	@rm -rf $(PACKAGE)-$(VERSION).$(REVISION).svn
+
+dist-cleaner:
+	@echo Setting up html doc.
+	$(Q)$(MAKE) -C doc dist-cleaner
+	@echo Cleaning non-dist junk.
+	$(Q)$(MAKE) clean
+	$(Q)rm -rf doc/course{,-src} doc/images
+	$(Q)rm -rf doc/presentation
+	$(Q)rm -f config.mak configure.log
 
 install:
 	$(Q)$(MAKE) -C doc install
