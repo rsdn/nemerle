@@ -118,16 +118,11 @@ namespace Nemerle.Compiler
     public static Dump (tok : Token, ident : string) : string {
       def (open, close, sepstr, elements) =
         match (tok) {
-          | Token.RoundGroup (separator, elements) =>    // ( ... )
-            ("(", ")", separator.ToString (), elements)
-          | Token.BracesGroup (elements) =>
-            ("{\n" + ident, "}", ";\n" + ident, elements)
-          | Token.SquareGroup (elements) =>
-            ("[", "]", ", ", elements)
-          | Token.QuoteGroup (elements) =>
-            ("<[\n", "]>", "; ", elements)
-          | Token.LooseGroup (elements)   =>
-            ("", "", " ", elements)
+          | Token.RoundGroup (separator, _) => ("(", ")", separator.ToString (), tok)
+          | Token.BracesGroup => ("{\n" + ident, "}", ";\n" + ident, tok)
+          | Token.SquareGroup => ("[", "]", ", ", tok)
+          | Token.QuoteGroup  => ("<[\n", "]>", "; ", tok)
+          | Token.LooseGroup  => ("", "", " ", tok)
 
           | _ => ("", tok.ToString (false), "", null)
         }
@@ -144,7 +139,7 @@ namespace Nemerle.Compiler
       finish_current (current_begin);
       def parent_group = 
         if (parent_begin == parent_pos)
-          Token.EndOfFile () // case of `(` `)`
+          null // case of `(` `)`
         else
           make_list (parent_stream, parent_begin, parent_pos);
       parent_pos = parent_begin;
@@ -533,12 +528,12 @@ namespace Nemerle.Compiler
 
             // body of namespace must be { ... } 
             match (get_token ()) {
-              | Token.BracesGroup (children) =>
+              | Token.BracesGroup as group =>
                 def begin_env = env;
                 // update current environment
                 env = env.EnterIntoNamespace (name);
                 // parse elements of namespace with new environment enabled
-                foreach (child : Token in children)
+                foreach (child : Token in group)
                   ParseTopLevel (child);
 
                 // bring env from outside of namespace
@@ -565,12 +560,20 @@ namespace Nemerle.Compiler
             }
 
           // assembly attribute
-          | Token.SquareGroup (Token.LooseGroup (Token.Identifier ("assembly"))) as square =>
-            mutable assembly_custom = [square];
-            def customs = take_attributes_out (ref assembly_custom, System.AttributeTargets.Assembly, true);      
+          | Token.SquareGroup (children) as square =>
+            if (children != null)
+              match (children) {
+                | Token.LooseGroup (Token.Identifier ("assembly")) =>
+                  mutable assembly_custom = [square];
+                  def customs = take_attributes_out (ref assembly_custom,
+                                                     System.AttributeTargets.Assembly, true);
 
-            foreach (cust in customs)
-              AttributeCompiler.AddAssemblyAttribute (env, cust);
+                  foreach (cust in customs)
+                    AttributeCompiler.AddAssemblyAttribute (env, cust);
+                | _ => () // FIXME
+              }
+            else
+              Error (square, "empty custom attribute");
 
           | _ =>
             def _tydecl = ParseTypeDeclaration (tokens);
@@ -693,9 +696,9 @@ namespace Nemerle.Compiler
                     | Token.Keyword ("syntax") =>
                       shift ();
                       match (get_token ()) {
-                        | Token.RoundGroup (TokenSeparator.Comma, syns) =>
+                        | Token.RoundGroup (TokenSeparator.Comma, _) as group =>
                           // FIXME: use parse_expr directly
-                          TokenMap (syns, fun (x) { parse_expr (x) });
+                          TokenMap (group, fun (x) { parse_expr (x) });
 
                         | t => Error (t, "expecting comma sperated list of syntax specifiers in `()'"); []
                       }
@@ -809,7 +812,7 @@ namespace Nemerle.Compiler
     {
      // FIXME:       | Token.Keyword ("implements") => null      
       match (get_token ()) {
-        | Token.BracesGroup (group) =>
+        | Token.BracesGroup as group =>
           mutable pcustoms = take_attributes_out (ref customs, System.AttributeTargets.Property, true);
           mutable setter = None ();
           mutable getter = None ();
@@ -989,7 +992,7 @@ namespace Nemerle.Compiler
       def id = get_splicable_id ();
       def ret_type = parse_return_type (false);
       match (get_token ()) {
-        | Token.BracesGroup (group) =>
+        | Token.BracesGroup as group =>
           mutable ecustoms = take_attributes_out (ref customs, System.AttributeTargets.Event, true);
           mutable remove = None ();
           mutable add = None ();
@@ -1159,19 +1162,26 @@ namespace Nemerle.Compiler
     parse_tyvars () : list [string * int] * PExpr
     {
       match (peek_token ()) {
-        | Token.SquareGroup (Token.LooseGroup (body) as groups) =>
-          push_stream (body);          
-          match (maybe_parse_ellipsis ()) {
-            | Some (e) =>
-              pop_stream ("type variables");
-              expect_empty ("type variables");
-              ([], PExpr.Spliced (e.Location, e))
+        | Token.SquareGroup (children) as group =>
+          if (children != null) {
+            push_stream ((children :> Token.LooseGroup).Child);          
+            match (maybe_parse_ellipsis ()) {
+              | Some (e) =>
+                pop_stream ("type variables");
+                expect_empty ("type variables");
+                ([], PExpr.Spliced (e.Location, e))
 
-            | _ =>
-              pop_stream ("type variables");
-              shift (); // now we are after whole '[..]' group
-              (TokenMap (groups, get_tyvar), PExpr.Void ())
+              | _ =>
+                pop_stream ("type variables");
+                shift (); // now we are after whole '[..]' group
+                (TokenMap (group, get_tyvar), PExpr.Void ())
+            }
           }
+          else {
+            Error (group, "expecting type variables");
+            (null, null)
+          }
+         
         | _ => (null, null)
       };
     }
@@ -1266,24 +1276,25 @@ namespace Nemerle.Compiler
     }
 
     parse_parameters () : list [Fun_parm] {
-      match (get_token ()) {
-        | Token.RoundGroup (TokenSeparator.Comma, group)
-        | Token.SquareGroup (group) =>
-          match (group) {
-            | Token.EndOfFile => []
-            | Token.LooseGroup (Token.Operator (".", _) as dot) =>
-              push_stream (dot);
-              match (maybe_parse_ellipsis ()) {
-                | Some (e) =>
-                  pop_stream ("ellipsis spliced expression");
-                  [Fun_parm (e.loc, Splicable.Name (Name ([])), PExpr.Void (), 
-                             Modifiers (NemerleAttributes.None, [PExpr.Spliced (e)]))]
-
-                | _ => pop_stream (); []
-              }
-            | _ => TokenMap (group, parse_parameter);
-          }
-        | x => Error (x, "expecting function parameters"); []
+      def group = get_token ();
+      match (group) {
+        | Token.RoundGroup (TokenSeparator.Comma, child)
+        | Token.SquareGroup (child) =>
+          if (child == null) []
+          else
+            match (child) {
+              | Token.LooseGroup (Token.Operator (".", _) as dot) =>
+                push_stream (dot);
+                match (maybe_parse_ellipsis ()) {
+                  | Some (e) =>
+                    pop_stream ("ellipsis spliced expression");
+                    [Fun_parm (e.loc, Splicable.Name (Name ([])), PExpr.Void (), 
+                               Modifiers (NemerleAttributes.None, [PExpr.Spliced (e)]))]
+                  | _ => pop_stream (); []
+                }
+              | _ => TokenMap (group, parse_parameter);
+            }
+        | _ => Error (group, "expecting function parameters"); []
       }
     }
 
@@ -1329,11 +1340,10 @@ namespace Nemerle.Compiler
               // parse body of first element in this [ , , ]
               result = parse_expr () :: result;
               // parse all remaining in current bracket group [ , , , ]
-              match (x.Child.Next) {
-                | null => ()
-                | rest =>
-                  foreach (group : Token in rest)
-                    result = parse_expr (group) :: result;
+              when (x.Child.Next != null) {
+                x.Child = x.Child.Next;
+                foreach (group : Token in x)
+                  result = parse_expr (group) :: result;
               }
             }
             else  
