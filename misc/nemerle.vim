@@ -91,7 +91,7 @@ function! NemOutlineToggle()
   execute "normal! ".OldCol."|"
   unlet OldLine
   unlet OldCol
-  execute "normal! zv"
+  " execute "normal! zv"
 endfunction
 
 syn keyword nemerleType int bool string void option list char float object
