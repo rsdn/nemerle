@@ -26,34 +26,15 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 # Include configuration determined by configure script.
-include ../../../config.mak
 
-export PATH = $(shell echo $$PATH):$(shell pwd)/../boot/
-export MONO_PATH = $(shell echo $$MONO_PATH):$(shell pwd)/../boot/
-
-
-############################################################
-# VARIABLES
-############################################################
-
-EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
-VERIFY = $(shell if test $(NET_VERSION) = "2.0"; then cygpath -m $(PEVERIFY); else echo ""; fi)
-
-############################################################
-# OUTPUT
-############################################################
-
-CP = @echo CP      $1
+THISDIR = $(shell if cygpath --help 2>/dev/null 1>&2; then echo `cygpath -m $(CURDIR)`; else echo $(CURDIR); fi)
 
 ############################################################
 # TARGETS
 ############################################################
 
 all:
-	cp ../../../ncc/out.stage3/Nemerle.dll .
-	$(EXECUTE) ../../../ncc/out.stage3/ncc.exe -out test.exe ../../../ncc/testsuite/test.n
-	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -verify "$(VERIFY)" -p "-nowarn:10002" -n "../../../ncc/out.stage3/ncc.exe"
-	rm -f *.dll *.exe *.netmodule *.pdb ext_test.out *.xml
+	@$(MAKE) TEST_FILES=$(THISDIR)/*.n ADDITIONAL_FLAGS=-nowarn:10003 -C ../../../ncc/testsuite test
 
 clean:
 	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]* *xml
