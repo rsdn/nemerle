@@ -1222,15 +1222,9 @@ public class TypeBuilder : Tycon, ITypeModifier {
           AddMember (r);
           r
           
-        | (PT.M_function) as f =>
-          // only allow static methods to be extern
-          def is_instance =
-            class_member.modifiers.mods %& NemerleAttributes.Static == (0 :> NemerleAttributes);
-            
-          when (is_instance && (f.body is FB_extern))
-            Message.fatal_error (f.loc, "only static methods are allowed to be extern");
-                
+        | (PT.M_function) as f =>          
           def r = NemerleMethod (this, f);
+          CheckMethodModifiers (r);
           AddMember (r);
           r
           
@@ -1559,27 +1553,8 @@ public class TypeBuilder : Tycon, ITypeModifier {
    * a single CE_switch statement to identify a variant options instead of 
    * a series of CE_if/CE_has_type instructions.
    *
-   * Also add constant fields with single instance of parameter-less 
-   * variant options.
    */
-  add_special_variant_methods () : void
-  {
-    constant_object = None ();
-
-    match (tydecl) {
-      | TD_variant_option when !has_fields =>
-        add_constant_object_ctor ();
-        add_special_variant_methods_aux ()
-
-      | TD_variant
-      | TD_variant_option => 
-        add_special_variant_methods_aux ()
-      
-      | _ => ()
-    }        
-  }
-  
-  add_special_variant_methods_aux () : void
+  private add_special_variant_methods () : void
   {
     match (tydecl) {
       | TD_variant =>           
@@ -1595,14 +1570,32 @@ public class TypeBuilder : Tycon, ITypeModifier {
         }));
 
         Define (<[ decl:
-          public virtual _N_GetVariantCode () : int {
+          public override _N_GetVariantCode () : int {
             $(my_index : int)
           }
         ]>);
 
-      | _ => Util.ice ("add_special_variant_methods: not a variant")
-    };
+      | _ =>
+        ()
+    }
   }
+
+  /**
+   * Add constant fields with single instance of parameter-less 
+   * variant options.
+   */
+  private add_constant_variant_ctors () : void
+  {
+    constant_object = None ();
+
+    match (tydecl) {
+      | TD_variant_option when !has_fields =>
+        add_constant_object_ctor ()
+      | _ =>
+        ()
+    }        
+  }
+  
 
   static this ()
   {
@@ -1726,7 +1719,10 @@ public class TypeBuilder : Tycon, ITypeModifier {
     List.Iter (m_additional_method_overrides, define_override)
   }
 
-  
+
+  /**
+   * Resolves overrides for the required interface methods
+   */
   check_method_implements () : void
   {
     check_abstract ();
@@ -1855,6 +1851,7 @@ public class TypeBuilder : Tycon, ITypeModifier {
         
           def is_correct (iface_meth : IMethod) {
             (meth.Attributes %&& NemerleAttributes.Public) &&
+            (meth.Attributes %&& NemerleAttributes.Virtual) &&
             (meth.GetMemType () >:> Tyutil.TypeOfMethodIn (iface_meth, this))
           };
 
@@ -2124,6 +2121,9 @@ public class TypeBuilder : Tycon, ITypeModifier {
     run_phase = 2;
     List.Iter (List.Rev (infos), bind_types);
 
+    // add the _N_GetVariantCode methods to variants and variant options
+    Iter (fun (x : TypeBuilder) { x.add_special_variant_methods () });
+    
     run_phase = 3;
     determine_subtyping ();
     
@@ -2137,9 +2137,10 @@ public class TypeBuilder : Tycon, ITypeModifier {
     Iter (fun (x : TypeBuilder) { x.add_members () });
 
     Iter (fun (x : TypeBuilder) { x.process_macro_attributes (3) });
-    
-    Iter (fun (x : TypeBuilder) { x.add_special_variant_methods () });
 
+    // add constant object constructors for constant variant options
+    Iter (fun (x : TypeBuilder) { x.add_constant_variant_ctors () });
+    
     def check_method_implements (ti : TypeBuilder) {
       match (ti.GetTydecl ()) {
         | TD_interface => ()
@@ -2285,7 +2286,120 @@ public class TypeBuilder : Tycon, ITypeModifier {
   }
   
   /** Nemerle.Reflection  interfaces */
-  
+
+
+  /* ---------------------------------------------------------------------- */
+  /* -- VALIDITY CHECKS --------------------------------------------------- */
+  /* ---------------------------------------------------------------------- */
+
+  /**
+   * Performs access attributes related checks. Returns an optional
+   * description of the problem.
+   */
+  internal CheckAccessAttributes (attrs : NemerleAttributes) : option <string>
+  {
+    def access_attrs_count =
+      (if (attrs %&& NemerleAttributes.Public)    1 else 0) +
+      (if (attrs %&& NemerleAttributes.Internal)  1 else 0) +
+      (if (attrs %&& NemerleAttributes.Protected) 1 else 0) +
+      (if (attrs %&& NemerleAttributes.Private)   1 else 0);
+      
+    if (access_attrs_count <= 1) None ()
+    else Some ("inconsistent access attributes specified")
+  }
+
+
+  /**
+   * Performs modifiers checks for method definitions.
+   */
+  internal CheckMethodModifiers (meth : NemerleMethod) : void
+  {
+    def attributes = meth.Attributes;
+    def loc = meth.GetLocation ();
+    
+    // make sure only a valid subset of NemerleAttributes has been used
+    def check_for_invalid_attr (attr : NemerleAttributes, attr_name : string)
+    {
+      when (attributes %&& attr)
+        Message.fatal_error (loc, "invalid attribute " + attr_name +
+                             " specified for method " +
+                             this.GetFullName () + "." + meth.Name)
+                           
+    }
+
+    check_for_invalid_attr (NemerleAttributes.Sealed, "sealed");
+    check_for_invalid_attr (NemerleAttributes.Mutable, "mutable");
+    check_for_invalid_attr (NemerleAttributes.Module, "module");
+    check_for_invalid_attr (NemerleAttributes.Struct, "struct");
+    check_for_invalid_attr (NemerleAttributes.Macro, "macro");
+    check_for_invalid_attr (NemerleAttributes.Volatile, "volatile");
+
+    // check the access attributes for consistency
+    match (CheckAccessAttributes (attributes)) {
+      | Some (msg) =>
+        Message.fatal_error (loc, msg + " for method " +
+                             this.GetFullName () + "." + meth.Name)
+      | _ => ()
+    }
+    
+    // only allow static methods to be extern
+    def meth_is_instance =
+      !(attributes %&& NemerleAttributes.Static);
+            
+    when (meth_is_instance && meth.HasExternBody)
+      Message.fatal_error (loc, "only static methods are allowed to be extern");
+
+    // make sure 'virtual', 'new' and 'override' never appear at once 
+    def meth_is_virtual =
+      attributes %&& NemerleAttributes.Virtual;
+
+    def meth_is_new =
+      attributes %&& NemerleAttributes.New;
+
+    def meth_is_override =
+      attributes %&& NemerleAttributes.Override;
+
+    when (meth_is_virtual && meth_is_new)
+      Message.fatal_error (loc, "both 'virtual' and 'new' attributes specified for method: " +
+                           this.GetFullName () + "." + meth.Name);      
+
+    when (meth_is_override && meth_is_new)
+      Message.fatal_error (loc, "both 'override' and 'new' attributes specified for method: " +
+                           this.GetFullName () + "." + meth.Name);      
+                           
+    // do not allow new virtual methods in sealed clases
+    def type_is_sealed =
+      this.modifiers.mods %&& NemerleAttributes.Sealed;
+
+    when (type_is_sealed && meth_is_virtual && !meth_is_override && !IsDelegate ())
+      Message.fatal_error (loc, meth.Name +
+                           " is a new virtual member in a sealed class " +
+                           this.GetFullName ());
+
+    // do not allow private abstract methods
+    def meth_is_abstract =
+      attributes %&& NemerleAttributes.Abstract;
+
+    def meth_is_private =
+      attributes %&& NemerleAttributes.Private;
+            
+    when (meth_is_abstract && meth_is_private)
+      Message.fatal_error (loc, "abstract methods are not allowed to be private");
+
+    // do not allow to mix abstract with the 'override' modifier
+    when (meth_is_abstract && meth_is_override)
+      Message.fatal_error (loc, "abstract methods are not allowed to have the " +
+                           "'override' modifier");
+
+    // only allow abstract methods to have abstract bodies
+    when (meth.HasAbstractBody && !meth_is_abstract)
+      Message.fatal_error (loc, "missing body of a non-abstract method " +
+                           this.GetFullName () + "." + meth.Name);
+
+    // static methods cannot be abstract
+    when (meth_is_abstract && !meth_is_instance)
+      Message.fatal_error (loc, "static method are not allowed to be abstract")
+  }
 }
 
 } // ns
