@@ -50,7 +50,7 @@ class CS_glue {
 		return s.Substring(idx + 1);
 	}
 	
-	static System.IO.StreamWriter output_file;
+	static public System.IO.StreamWriter output_file;
 
 	public static void write_string(string s)
 	{
@@ -103,6 +103,7 @@ class MainClass {
 				ret = new list.Cons(p.parse(new Lexer(argv[i])), ret);
 			}
 			Passes.run(ret);
+			CS_glue.output_file.Close();
 		} catch (yyParser.yyException e) {
 		    Message.maybe_bailout();
 			bomb(e, "got parsing exception, but no error seen");
