@@ -67,6 +67,7 @@
 ;;   * changed syntax table
 ;;   * disabled tab-indent
 ;;   * switched to new grammar
+;;   * electric-bar and electric-brace
 
 ;; 2003-11-17 rzyjontko <rzyj@plusnet.pl>
 ;;   * updated copyright disclaimer
@@ -115,6 +116,8 @@ buffer created.  This is a good place to put your customizations.")
 (unless nemerle-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map "\C-c\C-c" 'comment-region)
+    (define-key map "|" 'nemerle-electric-bar)
+    (define-key map "}" 'nemerle-electric-brace)
     (setq nemerle-mode-map map)))
 
 (unless nemerle-font-lock-keywords
@@ -173,11 +176,7 @@ buffer created.  This is a good place to put your customizations.")
   "Returns syntactic information."
   (save-excursion
     (beginning-of-line)
-    (cond ((looking-at "[^\n]*}")
-	   'block-end)
-	  ((looking-at "[^\n]*{")
-	   'block-beg)
-	  ((looking-at "[ \t]*\\<try\\>")
+    (cond ((looking-at "[ \t]*\\<try\\>")
 	   'try)
 	  ((looking-at "[ \t]*\\<with\\>")
 	   'with)
@@ -189,6 +188,10 @@ buffer created.  This is a good place to put your customizations.")
 	   'if)
 	  ((looking-at "[ \t]*\\<else\\>")
 	   'else)
+	  ((looking-at "[^\n{]*}")
+	   'block-end)
+	  ((looking-at "[^\n]*{[^\n}]*$")
+	   'block-beg)
 	  (t 
 	   'other))))
 
@@ -226,6 +229,8 @@ its syntatctic information."
 		 ((eq cur-syntax 'with)
 		  prev-indent)
 		 (t (+ prev-indent nemerle-basic-offset))))
+	  ((eq prev-syntax 'with)
+	   (+ prev-indent nemerle-basic-offset))
 	  ((eq prev-syntax 'block-beg)	; beginning of block
 	   (+ prev-indent nemerle-basic-offset))
 	  ((eq prev-syntax 'block-end) 	; end of block
@@ -242,23 +247,64 @@ its syntatctic information."
 		   (- prev-indent nemerle-basic-offset))
 		  ((eq cur-syntax 'else)
 		   (- prev-indent nemerle-basic-offset))
+		  ((eq cur-syntax 'with)
+		   (- prev-indent nemerle-basic-offset))
 		  (t
 		   prev-indent))))))
 
+
+(defun nemerle-indent-to (level)
+  "Indent to given column."
+  (save-excursion
+    (beginning-of-line)
+    (skip-chars-forward " \t")
+    (if (< level (current-indentation))
+	(delete-horizontal-space))
+    (indent-to level))
+  (if (< (current-column) (current-indentation))
+      (skip-chars-forward " \t")))
+  
 
 (defun nemerle-indent-line ()
   "Indent current line of nemerle code."
   (interactive)
   (let ((level (nemerle-calculate-indentation)))
-    (save-excursion
-      (beginning-of-line)
-      (skip-chars-forward " \t")
-      (if (< level (current-indentation))
-	  (delete-horizontal-space))
-      (indent-to level))
-    (if (< (current-column) (current-indentation))
-	(skip-chars-forward " \t"))))
-		   
+    (nemerle-indent-to level)))
+
+
+(defun nemerle-electric-bar (arg)
+  "Insert a bar.
+
+Also, the line is re-indented unless a numeric ARG is supplied 
+or there are some non-blank symbols on the line."
+  (interactive "p")
+  (if (or (not (eq (nemerle-syntax) 'empty)) (and arg (> arg 1)))
+      (self-insert-command (or arg 1))
+    (message "ok")
+    (let* ((prev-info (nemerle-prev-line))
+	   (prev-indent (car prev-info))
+	   (prev-syntax (cdr prev-info))
+	   (level prev-indent))
+      (if (eq prev-syntax 'block-beg)
+	  (setq level (+ prev-indent nemerle-basic-offset)))
+      (nemerle-indent-to level)
+      (insert-char ?| 1))))
+	
+
+(defun nemerle-electric-brace (arg)
+  "Insert a brace.
+
+Also, the line is re-indented unless a numeric ARG is supplied
+or there are some non-blank symbols on the line."
+  (interactive "p")
+  (if (or (not (eq (nemerle-syntax) 'empty)) (and arg (> arg 1)))
+      (self-insert-command (or arg 1))
+    (let* ((prev-info (nemerle-prev-line))
+	   (prev-indent (car prev-info))
+	   (prev-syntax (cdr prev-info))
+	   (level prev-indent))
+      (nemerle-indent-to (- prev-indent nemerle-basic-offset))
+      (insert-char ?} 1))))
 
 
 (defun nemerle-comment-indent ()
