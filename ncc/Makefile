@@ -161,8 +161,9 @@ aux-stage-files: \
 		out.$(STAGE)/ncc.exe
 
 last-stage:
-	mkdir -p out.$(STAGE)
-	$(MAKE) last-stage-files
+	$(MKDIR) out.$(STAGE)
+	$(Q)mkdir -p out.$(STAGE)
+	$(Q)$(MAKE) last-stage-files
 
 last-stage-files: \
 		out.$(STAGE)/aliases.n		\
