@@ -35,42 +35,143 @@ namespace PT = Nemerle.Compiler.Parsetree;
 
 namespace Nemerle.Compiler {
 
-public variant Symbol
-{
-  | Sym_type { tycon : Tycon; }
-  | Sym_type_member { member : IMember; }
-}
-
-public class GlobalEnv 
+  public variant Symbol
   {
-    static mutable types : Hashtable <string, Tycon>;
+    | Sym_type { tycon : Tycon; }
+    | Sym_type_member { member : IMember; }
+  }
+
+ 
+  public class GlobalEnv 
+  {
+    public class NamespaceND {
+      public Name : string;
+      public mutable Value : option<Tycon>;
+      children : Hashtable <string, NamespaceND>;
+      
+      public this (n : string, v : option <Tycon>) {
+        Name <- n;
+        Value <- v;
+        children <- Hashtable (10, 1.0f);
+      }
+
+      public Path (n : string) : NamespaceND {
+        mutable cur_node <- this;
+        mutable last <- 0;
+        for (mutable i <- 0; i < n.Length; ++i) {
+          when (n[i] == '.') {
+            cur_node <- cur_node.Child (n.Substring (last, i - last), None ());
+            last <- i + 1;
+          }
+        };
+        when (n.Length > 0 && !n.EndsWith ("."))
+          cur_node <- cur_node.Child (n.Substring (last, n.Length - last), None ());
+        cur_node
+      }
+
+      public TryPath (n : array <string>) : option <Tycon> {
+        def loop (i, cur_node : NamespaceND) {
+          match (cur_node.children.Get (n[i])) {
+            | Some (nd) =>
+              def i' = i + 1;
+              if (i' < n.Length)
+                loop (i', nd)
+              else
+                nd.Value;
+            | _ =>
+              None ()
+          }
+        };
+        loop (0, this)
+      }
+
+      public LookupType (tname : string, split : array<string>) : option <Tycon>
+      {
+//        Nemerle.IO.printf ("looking %s in %s\n", tname, Name);
+        match (TryPath (split)) {
+          // FIXME: make three outcomes: None, Some, Never
+          | (Some) as t => t
+          | None =>
+            // this is just a speed cache
+            def full = Name + "." + tname;
+            match (LibraryReferenceManager.LookupType (full)) {
+              | (Some (tc)) as res =>
+                AddType (full, tc);
+                res
+              | None => None ()
+            }
+        }
+      }
+
+      public SetChild (name : string, v : option <Tycon>) : void {
+        match (children.Get (name)) {
+          | None =>
+            def nn = if (Name == "") name else Name + "." + name;            
+            children.Add (name, NamespaceND (nn, v))
+          | Some (nd) =>
+            nd.Value <- v
+        }
+      }
+
+      public Child (name : string, ifadded : option <Tycon>) : NamespaceND {
+        match (children.Get (name)) {
+          | None =>
+            def nn = if (Name == "") name else Name + "." + name;
+            def result = NamespaceND (nn, ifadded);
+            children.Add (name, result);
+            result
+
+          | Some (r) => r
+        }
+      }
+
+      public override ToString () : string {
+        def s = System.Text.StringBuilder ("( ");
+        children.Iter (fun (x, y : NamespaceND) {
+          ignore (s.Append (x + "-" + y.ToString () + ", "))
+        });
+        ignore (s.Append (")\n"));
+        s.ToString ();
+      }
+    }
+    
+    static types : Hashtable <string, Tycon>;
     static mutable macro_context : int;
     static macro_contexts : Hashtable <string, int>;
-    static mutable imported_contexts : array <GlobalEnv>;
+    static imported_contexts : array <GlobalEnv>;
     static mutable macro_context_class : ITypeModifier;
+    static types_tr : NamespaceND;
 
     static this () {
       types <- Hashtable (2000);
       macro_context <- 0;
       macro_contexts <- Hashtable (100);
       imported_contexts <- null;
+      types_tr <- NamespaceND ("", None ());
+
       Empty <- GlobalEnv ();
       Core <- Empty.AddOpenNamespace ("Nemerle.Core")
                    .AddOpenNamespace ("Nemerle.Core.Aliases");
     }
 
-    open_namespaces : list <string>;
-    current_namespace : string;
-    namespace_aliases : SystemMap <string, string>;
+    open_namespaces : list <NamespaceND>;
+    current_namespace : NamespaceND;
+    namespace_aliases : SystemMap <string, NamespaceND>;
     mutable macro_ctx_cache : int;
 
     public static AddType (name : string, t : Tycon) : void {
+      def pos = name.LastIndexOf ('.');
+      def type_node =
+        if (pos < 0) types_tr
+        else types_tr.Path (name.Substring (0, pos));
+      
       match (types.Get (name)) {
         | Some (t') when t'.SameAs (t) => ()
         | Some (t') =>
           Message.error (t.GetLocation (), "redefinition of type `" + name + "'");
           Message.error (t'.GetLocation (), "first defined here")
-        | None => 
+        | None =>
+          type_node.SetChild (name.Substring (pos + 1, name.Length - pos - 1), Some (t));
           types.Add (name, t)
       }
     }
@@ -80,7 +181,7 @@ public class GlobalEnv
       if (ns == "") sym
       else
         match (namespace_aliases.Find (ns)) {
-          | Some (r) => r + "." + sym.Substring (sym.LastIndexOf ('.') + 1)
+          | Some (r) => r.Name + "." + sym.Substring (sym.LastIndexOf ('.') + 1)
           | None => sym
         }
     }
@@ -92,7 +193,7 @@ public class GlobalEnv
                           typarms : PT.Typarms,
                           extends_list : list <PT.Type>) : ITypeModifier
     {
-      def fullname = current_namespace + name;
+      def fullname = GetCurrentNamespace () + name;
       def idx = name.LastIndexOf ('.');
       def (namesp, name) = 
         if (idx == -1)
@@ -110,7 +211,7 @@ public class GlobalEnv
           | None when namesp == "" => 
             this
           | None => 
-            this.EnterIntoNamespace (current_namespace + namesp)
+            this.EnterIntoNamespace (GetCurrentNamespace () + namesp)
         };
       def tyinfo = Tyinfo (parent, None (), env.AddOpenNamespace (fullname), decl);
       AddType (fullname, tyinfo);
@@ -154,6 +255,7 @@ public class GlobalEnv
       }
     }
 
+  
     public GetType (name : string, from : Tycon) : Tycon
     {
       match (LookupType (name, from)) {
@@ -174,7 +276,7 @@ public class GlobalEnv
       match (LookupExactType (name)) {
         | (Some (t)) as r when from == null || t.CanAccess (from) => r
         | _ =>
-          def non_public_exteral (t : Tycon) {
+          def non_public_external (t : Tycon) {
             match (t.GetTyconKind ()) {
               | TK_NemerleType => false
               | TK_ExternalNemerleType
@@ -183,12 +285,13 @@ public class GlobalEnv
             }
           };
           def check_access (x) {
-            | Some (t) when non_public_exteral (t) => None ()
+            | Some (t) when non_public_external (t) => None ()
             | Some (t) when from == null || (t : Tycon).CanAccess (from) => x
             | _ => None ()
           };
-          def collect (pref, res) {
-            match ((res, check_access (LookupExactType (pref + "." + name)))) {
+          def split = name.Split (array ['.']);
+          def collect (pref : NamespaceND, res) {
+            match ((res, check_access (pref.LookupType (name, split)))) {  
               | (x, None) | (None, x) => x
               | (Some (x), Some (y)) when x.SameAs (y) => res
               | (Some (x), Some (y)) =>
@@ -198,14 +301,17 @@ public class GlobalEnv
                 res
             }
           };
+//          match (
           List.FoldLeft (open_namespaces, None (), collect)
+//          ) {
+//            | None => Nemerle.IO.printf ("%s\n", types_tr.ToString ()); None () | x => x }
       }
     }
     
     public LookupSymbol (name : string) : list <Symbol> {
       def visited = Hashtable (10);
-      def lookup_members (pref, acc) {
-        match (LookupExactType (pref)) {
+      def lookup_members (pref : NamespaceND, acc) {
+        match (LookupExactType (pref.Name)) {
           | Some (t) when ! visited.Contains (t.GetId ()) => 
             def encapsulate (m : IMember, acc) {
               match (m.GetKind ()) {
@@ -232,39 +338,53 @@ public class GlobalEnv
     {
       def name' = expand_namespace_aliases (name);
       if (name' == name)
-        name :: List.Map (open_namespaces, fun (ns) { ns + "." + name })
+        name :: List.Map (open_namespaces, fun (ns : NamespaceND) {
+          ns.Name + "." + name
+        })
       else
         [name']
     }
 
     public AddOpenNamespace (ns : string) : GlobalEnv
     {
-      GlobalEnv (List.Append (open_namespaces, [ns]),
+      GlobalEnv (List.Append (open_namespaces, [types_tr.Path (ns)]),
                  current_namespace, namespace_aliases)
     }
 
     public AddNamespaceAlias (short_name : string, long_name : string) : GlobalEnv
     {
       GlobalEnv (open_namespaces, current_namespace,
-                 namespace_aliases.Add (short_name, long_name))
+                 namespace_aliases.Add (short_name, types_tr.Path (long_name)))
     }
+
+    public AddOpenNamespace (ns : NamespaceND) : GlobalEnv
+    {
+      GlobalEnv (List.Append (open_namespaces, [ns]),
+                 current_namespace, namespace_aliases)
+    }
+
+    public AddNamespaceAlias (short_name : string, ns : NamespaceND) : GlobalEnv
+    {
+      GlobalEnv (open_namespaces, current_namespace,
+                 namespace_aliases.Add (short_name, ns))
+    }
+
     
     public EnterIntoNamespace (pref : string) : GlobalEnv
     {
-      def new_name = current_namespace + pref;
-      GlobalEnv (List.Append (open_namespaces, [new_name]), new_name + ".",
-                 namespace_aliases)
+      def ns = current_namespace.Path (pref);
+      GlobalEnv (List.Append (open_namespaces, [ns]), ns, namespace_aliases)
     }
 
     this () 
     {
-      current_namespace <- "";
+      current_namespace <- types_tr;
       open_namespaces <- [];
       namespace_aliases <- SystemMap ();
       macro_ctx_cache <- -1;
     }
 
-    this (o : list <string>, c : string, n : SystemMap <string, string>)
+    this (o : list <NamespaceND>, c : NamespaceND, n : SystemMap <string, NamespaceND>)
     {
       current_namespace <- c;
       open_namespaces <- o;
@@ -280,7 +400,7 @@ public class GlobalEnv
       mutable last <- 0;
       mutable short <- "";
       
-      current_namespace <- "";
+      current_namespace <- types_tr;
       open_namespaces <- [];
       namespace_aliases <- SystemMap ();
       macro_ctx_cache <- -1;
@@ -288,22 +408,24 @@ public class GlobalEnv
       for (mutable i <- 0; i < coded.Length; ++i) {
         match ((state, coded[i])) {
           | (0, '&') =>
-            current_namespace <- coded.Substring (0, i);
+            current_namespace <- types_tr.Path (coded.Substring (0, i));
             state <- 1;
             last <- i + 1;
            
           | (1, '#') =>
-            open_namespaces <- coded.Substring (last, i - last) :: open_namespaces;
+            open_namespaces <- types_tr.Path (coded.Substring (last, i - last))
+                               :: open_namespaces;
             last <- i + 1;
             
           | (1, '&') =>
-            open_namespaces <- coded.Substring (last, i - last) :: open_namespaces;
+            open_namespaces <- types_tr.Path (coded.Substring (last, i - last))
+                               :: open_namespaces;
             state <- 2;
             last <- i + 1;
 
           | (2, '#') | (2, '&') =>
             namespace_aliases <- namespace_aliases.
-              Add (short, coded.Substring (last, i - last));
+              Add (short, types_tr.Path (coded.Substring (last, i - last)));
             last <- i + 1;
 
           | (2, '=') =>
@@ -314,10 +436,16 @@ public class GlobalEnv
         }
       }
     }
+
+    public GetCurrentNamespaceND () : NamespaceND {
+      current_namespace
+    }
     
     public GetCurrentNamespace () : string
     {
-      current_namespace
+      if (current_namespace.Name == "") ""
+      else
+        current_namespace.Name + "."
     }
 
     // the format is Current.Namespace.&open.ns1#open.ns2&al1=alias.one#al2=alias.two&
@@ -327,14 +455,15 @@ public class GlobalEnv
         when (macro_context_class == null)
           prepare_macro_context_class ();
         
-        def cmp (x, y) { System.String.CompareOrdinal (x,y) };
-        def collect (k, v, acc) { k + "=" + v :: acc };
+        def cmp (x, y) { System.String.CompareOrdinal (x, y) };
+        def collect (k, v : NamespaceND, acc) { k + "=" + v.Name :: acc };
+        def extract (x : NamespaceND) { x.Name };
 
         def aliases = List.Sort (namespace_aliases.Fold (collect, []), cmp);
-        def spaces = List.Sort (open_namespaces, cmp);
+        def spaces = List.Sort (List.Map (open_namespaces, extract), cmp);
         def coded_al = NString.Concat ("#", aliases);
         def coded_ns = NString.Concat ("#", spaces);
-        def coded = System.Text.StringBuilder (current_namespace + "&");
+        def coded = System.Text.StringBuilder (current_namespace.Name + "&");
         ignore (coded.Append (coded_ns + "&"));
         ignore (coded.Append (coded_al + "&"));
         match (macro_contexts.Get (coded.ToString ())) {
@@ -395,9 +524,12 @@ public class GlobalEnv
 
     public override ToString () : string
     {
-      def aliases = namespace_aliases.Fold (fun (k, v, a) { k + "=" + v :: a }, []);
-      "GlobalEnv(" + current_namespace + ": " +
-                     NString.Concat (", ", List.Append (open_namespaces, aliases)) + ")"
+      def aliases = namespace_aliases.Fold (fun (k, v : NamespaceND, a) {
+        k + "=" + v.Name :: a
+      }, []);
+      def openns = List.Map (open_namespaces, fun (x : NamespaceND) { x.Name });
+      "GlobalEnv(" + current_namespace.Name + ": " +
+                     NString.Concat (", ", List.Append (openns, aliases)) + ")"
     }
 
     public static Empty : GlobalEnv;
