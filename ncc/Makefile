@@ -42,6 +42,10 @@ all: $(target)
 self-test: all
 	mono --debug ./$(target) lib/core.n $(n_src)
 	mcs -debug+ -o ncc2.exe $(cs_src) out.cs 2>&1 | grep -v CS0162
+	mcs -o ncc2nd.exe $(cs_src) out.cs 2>&1 | grep -v CS0162
+	mv out.cs out2.cs
+	mono --debug ./ncc2.exe lib/core.n $(n_src)
+	diff -u out.cs out2.cs
 
 $(target): $(all_src)
 	../npc/npc.opt $(n_src)
