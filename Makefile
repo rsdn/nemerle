@@ -34,7 +34,7 @@ all:
 send: dist send-dist
 
 name    = nemerle
-svn2log = $(PYTHON) aux/svn2log.py changelog.xml -u aux/users
+svn2log = $(PYTHON) misc/svn2log.py changelog.xml -u misc/users
 
 config.mak: configure
 	./configure
