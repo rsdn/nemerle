@@ -192,7 +192,7 @@ Options:
   -u, --users=FILE     read logins from specified file
   -r, --relocate=X=Y   before doing any other operations on paths, replace
                        X with Y (useful for directory moves)
-  -d, --delta=SECS     when log entries differ by less then SECS seconds and
+  -D, --delta=SECS     when log entries differ by less then SECS seconds and
                        have the same author -- they are merged, it defaults
                        to 180 seconds
   -h, --help           print this information
@@ -246,7 +246,7 @@ def process_opts():
     elif o in ("--relocate", "-r"):
       (src, target) = a.split("=")
       reloc[src] = target
-    elif o in ("--delta", "-d"):
+    elif o in ("--delta", "-D"):
       max_join_delta = int(a)
     else:
       usage()
