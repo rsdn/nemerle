@@ -1365,6 +1365,156 @@ public class Tyinfo : Tycon, ITypeModifier {
     iface_methods.Iter (scream_about_unimplemented);
   }
 
+
+  process_macro_attributes (stage : int) : void
+  {
+    def lookup_macro (expr, suff) {
+      match (expr) {
+        | <[ $(_ : name) ]>
+        | <[ $_x . $_y ]> =>
+          lookup_macro (<[ $expr () ]>, suff)
+        | <[ $name ( .. $parms ) ]> =>
+            match (Util.qidl_of_expr (name)) {
+              | Some ((id, name)) =>
+                def ctx = name.GetEnv (this.env);
+                def id =
+                  match (List.Rev (id)) {
+                    | x :: xs => List.Rev (x + suff :: xs)
+                    | [] => assert (false)
+                  };
+                match (ctx.LookupMacro (id)) {
+                  | Some (m) => Some ((name, m, parms))
+                  | None => None ()
+                };
+              | None => None ()
+            }
+        | _ => None ()
+      }
+    };
+
+    def process_attributes (self_parm, suff, attrs, meth : IMethod) {
+      List.Iter (attrs, fun (attr) {
+        | (Mod_attribute) as attr =>
+          attr.attrs <-
+            List.Filter (attr.attrs, fun (expr) {
+              match (lookup_macro (expr, suff)) {
+                | None => true
+                | Some =>
+                  attr.macro_attrs <- expr :: attr.macro_attrs;
+                  false
+              }
+            });
+          List.Iter (attr.macro_attrs, fun (expr) {
+            match (lookup_macro (expr, suff)) {
+              | None => ()
+              | Some ((name, imacro, exprs)) =>
+                def meth_header =
+                  if (meth == null) null else meth.GetHeader ();
+                def tenv = 
+                  if (meth_header == null) this.tenv else meth_header.tenv;
+                def in_ctor =
+                  meth != null && 
+                    match (meth.GetFunKind ()) {
+                      | FK_ctor => true 
+                      | _ => false
+                    };
+                def ctx =
+                  TypingContext (in_ctor = in_ctor,
+                                 this_ptr_decl = None (),
+                                 env = this.env,
+                                 tenv = tenv,
+                                 current_fun = meth_header,
+                                 locals = null,
+                                 parent_type = this,
+                                 in_tail_position = false);
+                                 
+                TypingContext.PushNewColor (name.color, name.GetEnv (null));
+                def parms = 
+                  List.Append (self_parm, imacro.CallTransform (exprs));
+                def res = imacro.Run (ctx, parms);
+                TypingContext.PopColor ();
+                
+                assert (res == null);
+                ()
+            }
+          });
+        | _ => ()
+      })
+    };
+
+    def process_member (mem, stage_suff) {
+      match (mem) {
+        | PT.M_field =>
+          process_attributes ([PT.SyntaxTTycon (this), PT.SyntaxField (mem)],
+                              ":field" + stage_suff, mem.modifiers, null)
+        | PT.M_function (h, _, b) =>
+          def body =
+            match (b) {
+              | FB_parsed_expr (b) => b
+              | FB_extern
+              | FB_abstract => <[ () ]>
+              | _ => assert (false)
+            };
+          process_attributes ([PT.SyntaxTTycon (this), 
+                               PT.SyntaxFunDecl (PT.Function_decl (h, body))],
+                              ":method" + stage_suff, mem.modifiers, null)
+        | PT.M_type => ()
+
+        | PT.M_property => Util.ice ("properties not supported yet")
+      }
+    };
+
+    def iter_decls (stage_suff) {
+      def decls =
+        match (pt_tydecl) {
+          | PT.TD_class (ds) => ds
+          | PT.TD_interface (ds) => ds
+          | PT.TD_variant_option (ds) => ds
+          | _ => []
+        };
+      def f (x) { process_member (x, stage_suff) };
+      List.Iter (decls, f);
+      List.Iter (additional_decls, f);
+    };
+
+    def process_typed_member (mem : IMember) {
+      match (mem.GetKind ()) {
+        | MK_field (f) =>
+          process_attributes ([PT.SyntaxTTycon (this), PT.SyntaxTField (f)],
+                              ":field:postadd", f.GetModifiers (), null)
+        | MK_method (f) =>
+          process_attributes ([PT.SyntaxTTycon (this), PT.SyntaxTMethod (f)],
+                              ":method:postadd", f.GetModifiers (), f)
+                              
+        | MK_property (f) =>
+          process_attributes ([PT.SyntaxTTycon (this), PT.SyntaxTProperty (f)],
+                              ":method:postadd", f.GetModifiers (), null)
+
+        | MK_type => ()
+      }
+    };
+
+    match (stage) {
+      | 1 =>
+        process_attributes ([PT.SyntaxTTycon (this)], 
+                            ":type:postscan", modifiers, null);
+        iter_decls (":postscan");
+
+      | 2 =>
+        process_attributes ([PT.SyntaxTTycon (this)], 
+                            ":type:preadd", modifiers, null);
+        iter_decls (":preadd");
+        
+      | 3 =>
+        process_attributes ([PT.SyntaxTTycon (this)], 
+                            ":type:postadd", modifiers, null);
+        List.Iter (GetDirectMembers (), process_typed_member);
+
+      | _ => assert (false)
+    }
+  }
+
+
   /**
    * Main function of type declaration handling pass.
    *
@@ -1381,8 +1531,12 @@ public class Tyinfo : Tycon, ITypeModifier {
   public static Run () : void
   {
     infos <- List.Rev (infos);
-
     run_phase <- 1;
+
+    List.Iter (infos, fun (x : Tyinfo) {
+      Util.locate (x.loc, fun () { x.process_macro_attributes (1) })
+    });
+
     SourceTopIter (fun (x : Tyinfo) { 
                       x.make_tyenvs (Tyvar.TEnv ()) 
                     });
@@ -1400,8 +1554,13 @@ public class Tyinfo : Tycon, ITypeModifier {
     Iter (fun (x : Tyinfo) { x.check_bound_types () });
 
     run_phase <- 5;
+    
+    Iter (fun (x : Tyinfo) { x.process_macro_attributes (2) });
+
     Iter (fun (x : Tyinfo) { x.add_members () });
 
+    Iter (fun (x : Tyinfo) { x.process_macro_attributes (3) });
+    
     Iter (fun (x : Tyinfo) { x.add_implicit_ctor () });
 
     def check_method_implements (ti : Tyinfo) {
