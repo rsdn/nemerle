@@ -49,6 +49,7 @@ NEMERLE_DLL_SRC = \
 	../lib/macros.n			\
 	../lib/getopt.n			\
 	../lib/hashtable.n		\
+	../lib/icloneable.n		\
 	../lib/icollection.n		\
 	../lib/ienumerable.n		\
 	../lib/ienumerator.n		\
