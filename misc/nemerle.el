@@ -141,7 +141,7 @@ buffer created.  This is a good place to put your customizations.")
 	 '("//.*" 0 font-lock-comment-face)
 	 
 	 ;; keywords
-	 '("\\<\\(_\\|abstract\\|and\\|as\\|base\\|catch\\|const\\|def\\|delegate\\|enum\\|extends\\|extern\\|finally\\|fun\\|implements\\|interface\\|internal\\|is\\|macro\\|match\\|matches\\|mutable\\|new\\|out\\|override\\|params\\|private\\|protected\\|public\\|ref\\|sealed\\|static\\|struct\\|syntax\\|this\\|throw\\|try\\|tymatch\\|type\\|typeof\\|virtual\\|where\\|with\\)\\>"
+	 '("\\<\\(_\\|abstract\\|and\\|as\\|base\\|catch\\|const\\|def\\|delegate\\|enum\\|extends\\|extern\\|finally\\|fun\\|implements\\|interface\\|internal\\|is\\|macro\\|match\\|matches\\|mutable\\|new\\|out\\|override\\|params\\|private\\|protected\\|public\\|ref\\|sealed\\|static\\|struct\\|syntax\\|this\\|throw\\|try\\|tymatch\\|type\\|typeof\\|virtual\\|where\\|partial\\)\\>"
 	   0 font-lock-keyword-face)
 	 ;; these aren't really keywords but we set them so
 	 '("\\<\\(do\\|else\\|for\\|if\\|regexp\\|unless\\|while\\|when\\|in\\|foreach\\)\\>"

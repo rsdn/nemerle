@@ -851,9 +851,14 @@ conditional_expression
 returns [string return_string]
 {
     return_string = "";
+    string e1, e2;
 }
-    :   return_string = conditional_or_expression //  (QUESTION   expression   COLON   expression)? // TODO ------------------------
-    ;
+  : return_string = conditional_or_expression
+    (QUESTION e1 = expression COLON
+              e2 = expression
+       { return_string = "if (" + return_string + ")" + e1 + " else" + e2; }
+    )?
+  ;
 
 assignment_operator 
 returns [string return_string]
@@ -1658,7 +1663,8 @@ class_modifier
     |   cm5:PRIVATE      { Emit.EmitToken(cm5);}
     |   cm6:SEALED       { Emit.EmitToken(cm6);}
     |   cm7:ABSTRACT     { Emit.EmitToken(cm7);}
-
+    |   cm8:STATIC       { Emit.EmitToken(cm8);}
+    |   cm9:PARTIAL      { Emit.EmitToken(cm9);}
     ;
 
 class_base
@@ -2834,6 +2840,7 @@ tokens
     IS          =   "is";               VOID        =   "void";
     LOCK        =   "lock";             WHILE       =   "while";
     GET         =   "get";              SET         =   "set";
+    PARTIAL     =   "partial";
 }
 
 //----------------------
