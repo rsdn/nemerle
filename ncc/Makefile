@@ -31,7 +31,7 @@ include ../config.mak
 COMPILER_PATH = ../boot/
 COMPILER = $(COMPILER_PATH)ncc.exe
 
-RUN_COMPILER = $(TIME) $(EXECUTE) $(COMPILER) $(COMP_FLAGS)
+RUN_COMPILER = $(TIME) $(EXECUTE) $(COMPILER) -no-stdlib $(COMP_FLAGS)
 
 GENERIC_SRC = ../lib/aliases.n
 
