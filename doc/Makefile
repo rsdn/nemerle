@@ -40,7 +40,7 @@ root_docs = index faq license hacking macros reference tutorial download \
 
 docs = $(root_docs) $(addprefix course/, $(course_docs))
 
-tex_docs = intro
+tex_docs = metaprogramming intro
 
 normal_docs = $(html) $(addsuffix .ps, $(tex_docs)) $(addsuffix .pdf, $(tex_docs))
 
@@ -117,6 +117,14 @@ course/%.html: course-src/%.xml mainStyle.xsl
 	latex $< < /dev/null
 	latex $< < /dev/null
 
+%.dvi: presentation/net-workshop-2004/%.tex
+	TEXINPUTS=.:presentation/net-workshop-2004: latex $< < /dev/null
+	TEXINPUTS=.:presentation/net-workshop-2004: latex $< < /dev/null
+
+%.dvi: presentation/macros-gpce04/%.tex
+	TEXINPUTS=.:presentation/macros-gpce04: latex $< < /dev/null
+	TEXINPUTS=.:presentation/macros-gpce04: latex $< < /dev/null
+
 %.tex: %.docb styles/docb2latex.xsl
 	$(XSLT_)
 	$(Q)$(XSLT) -o $@ styles/docb2latex.xsl $<
@@ -153,13 +161,7 @@ nemerle-web.tar.gz: $(normal_docs) $(wildcard styles/*.css styles/*.png)
 	mkdir -p www/{styles,course/styles}
 	cp styles/*.{css,png} www/styles/
 	cp styles/*.{css,png} www/course/styles/
-	cp presentation/macros-gpce04/metaprogramming.tex presentation/macros-gpce04/llncs.cls ./
-	latex metaprogramming.tex
-	latex metaprogramming.tex
-	dvips metaprogramming.dvi -o metaprogramming.ps
-	ps2pdf metaprogramming.ps
 	cp *.{html,ps,pdf} www/
-	rm -f metaprogramming.* llncs.cls
 	cp course/*.html www/course/
 	for f in www/*.pdf www/*.ps ; do gzip <$$f > $$f.gz ; done
 	tar -C www -zcf $@ .
