@@ -3,7 +3,8 @@
 sub inttype {
 my ($long, $short, $signed, $int, $suff) = @_;
 print <<EOF
-  class $long : INumericType {
+  public class $long : INumericType
+  {
     public Zero : object
     {
       get { 0$suff } 
@@ -49,17 +50,20 @@ print <<EOF
       def x = (x :> System.$long);
       def y = (y :> System.$long);
       match (name) {
-        | "+" => (x + y :> object)
-        | "-" => (x - y :> object)
-        | "*" => (x * y :> object)
-        | "/" => (x / y :> object)
-        | "%" => (x % y :> object)
+        | "+" => x + y :> object
+        | "-" => x - y :> object
+        | "*" => x * y :> object
+        | "/" => x / y :> object
+        | "%" => x % y :> object
 EOF
 ;
 if ($int) {
 print <<EOF
-        | "%&" => (x %& y :> object)
-        | "%|" => (x %| y :> object)
+        | "%&" => x %& y :> object
+        | "%|" => x %| y :> object
+        | "%^" => x %^ y :> object
+        | "<<" => x << (y :> int) :> object
+        | ">>" => x >> (y :> int) :> object
 EOF
 ;
 }
@@ -72,15 +76,15 @@ print <<EOF
 
     public Unary (name : string, x : object) : object
     {
-      def x = (x :> System.$long);
+      def x = x :> System.$long;
       match (name) {
-        | "+" => (+x :> object)
+        | "+" => +x :> object
 EOF
 ;
 
-print "        | \"-\" => (-x :> object)\n" if ($signed);
+print "        | \"-\" => -x :> object\n" if ($signed);
+print "        | \"~\" => ~x :> object\n" if ($int);
 print <<EOF
-        //| "~" => (~x :> object)
         | _ =>
           null
           // Util.ice ("invalid $short operator `" + name + "'")
@@ -89,13 +93,13 @@ print <<EOF
 
     public FromLiteral (lit : Literal) : object
     {
-      | L_$short (x) => (x :> object) // HACK! HACK! HACK! this is a bug in the compiler
+      | L_$short (x) => x : object
       | _ => null
     }
 
     public ToLiteral (x : object) : Literal
     {
-      L_$short ((x :> System.$long))
+      L_$short (x :> System.$long)
     }
 
     public GetNemerleType () : Typedtree.Type
@@ -116,6 +120,7 @@ EOF
 ;}
 
 print "// Begin generated code\n";
+print "// Please edit ../misc/gen-ints.n, and not this file\n";
 inttype ("SByte", "sbyte", 1, 1, "B");
 inttype ("Byte", "byte", 0, 1, "UB");
 inttype ("Int16", "short", 1, 1, "S");
