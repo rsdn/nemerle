@@ -17,7 +17,7 @@
                   <tbody>
                     <tr>
                       <td align="left">
-                        <a href="register.xml">Main registration page</a> :: 
+                        <a href="EncodeUrl(register.xml)" encode="true">Main registration page</a> :: 
                       </td>
                       <td align="right">
                         <a href="#top-of-page">Top</a> :: <a href="#bottom-of-page">Bottom</a>

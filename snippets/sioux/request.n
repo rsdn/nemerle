@@ -31,6 +31,7 @@ namespace Sioux
   using Nemerle.Collections;
   using Nemerle.Xml;
 
+  using System;
   using System.Net.Sockets;
   
 
@@ -42,6 +43,7 @@ namespace Sioux
     | StaticGet { url : string; }
     | DynamicGet { url : string; get_params : list <string * string>; }
     | Post { url : string; post_params : list <string * string>; }
+//    | Other
     | Invalid    
   }
   
@@ -58,34 +60,121 @@ namespace Sioux
      */
     internal this (stream : NetworkStream)
     {
+      request_time = DateTime.Now;
       request_stream = stream;
       logger = Httpd.GetLogger ();
+      cookies = [];
       
       parse_request_data ()
     }
-    
-    
-    /* -- PUBLIC METHODS --------------------------------------------------- */
+
+    /* -- PUBLIC PROPERTIES --------------------------------------------------- */
     
     /**
      * Returns the request info associated with this instance
      */
-    public GetRequestInfo () : RequestInfo
+    public RequestInfo : RequestInfo
     {
-      request_info
+        get { request_info }
     }
-
-
+    
+    
     /**
      * Returns a list of headers. The ordering is the same
      * as sent by the client.
      */
-    public GetHeaders () : list <string * string>
+    public Headers : list <string * string>
     {
-      headers
+        get { headers }
+    }
+
+
+    /**
+     * Return time of the request as DateTime struct
+     */
+    public RequestTime : DateTime
+    {
+        get  {request_time }
     }
     
+    /**
+     * Returns requested url as a string
+     */
+    public RequestUri : string
+    {
+        get { request_uri }
+    }
+
+    /**
+     * Returns cookies sent with this request
+     */
+    public Cookies : list<Cookie>
+    {
+        get { cookies }
+    }
     
+    /* -- PUBLIC METHODS --------------------------------------------------- */
+
+    /**
+     *  Returns Some(Cookie) if browser sent a cookie with given name, else None
+     */
+    public GetCookie (name : string) : option <Cookie>
+    {
+        def loop(lst : list <Cookie>) : option <Cookie>
+        {
+            match(lst)
+            {
+                | [] => None ()
+                | c :: rest =>
+                  if(c.Name == name)
+                      Some(c)
+                  else
+                      loop(rest)
+            }
+        }
+        loop(Cookies)
+    }
+
+    /**
+     * Returns session assosciated with this request
+     */
+    public GetSession () : Session
+    {
+        session
+    }
+
+    /**
+     * Returns session assosciated with this request, if create is true creates new session
+     */
+    public GetSession (create : bool) : Session
+    {
+        when(create)
+        {
+            Httpd.RemoveSession(session.SessionID);
+            session = Session ();
+            Httpd.AddSession(session);
+        }
+        session
+    }
+    
+    /**
+     *  Returns value of specified header
+     */
+    public GetHeader ( name : string ) : option <string>
+    {
+        def loop(list ) : option <string>
+        {
+            match(list)
+            {
+                | [] => None ()
+                | (h_name,value) :: rest => if(h_name==name)
+                                                Some(value)
+                                            else
+                                                loop(rest)
+            }
+        }
+        loop (headers);
+    }
     
     /* -- INTERNAL METHODS ------------------------------------------------- */
     
@@ -112,9 +201,36 @@ namespace Sioux
       sb.ToString ()
     }
     
-    
-    
-    
+    /**
+     * cuts the "/webapps/app_name" part from request url
+     */
+    internal CutRequestUrl () : void
+    {
+        match(request_info)
+        {
+            | Post(url,request_params) =>
+              when(url.StartsWith("/webapp/"))
+              {
+                  def url = url.Substring(8);
+                  def (_,url,_) = split_unique_at('/',url);
+                  request_info = Post("/" + url,request_params)
+              }
+            | DynamicGet(url,request_params) =>
+              when(url.StartsWith("/webapp/"))
+              {
+                  def url = url.Substring(8);
+                  def (_,url,_) = split_unique_at('/',url);
+                  if(url == "")
+                  {
+                      request_info = DynamicGet("/index.xml",request_params);
+                  }
+                  else 
+                      request_info = DynamicGet( "/" +  url,request_params)
+              }
+            | _ => ()
+        }
+    }
+
     /* -- PRIVATE METHODS -------------------------------------------------- */
 
     /**
@@ -260,6 +376,8 @@ namespace Sioux
 
       read_headers ();
 
+      put_cookies_into_list();
+      
       if (split.Length >= 2)
       {
         def request_type = (split [0]).ToUpper ();
@@ -267,7 +385,9 @@ namespace Sioux
         
         def (request_url, request_params, request_params_validity) =
           parse_get_params (request_url);
-        
+
+        this.request_uri = request_url;
+          
         match (request_type) {
           | "GET" =>            
             if (split.Length > 3)
@@ -275,22 +395,22 @@ namespace Sioux
             else if (!request_params_validity)
               logger.Log ("invalid GET parameters")
             else {
-              if (request_url == "/")
-                request_info = DynamicGet ("index.xml", request_params)                
-              else if (request_url.EndsWith (".xml"))
-                request_info = DynamicGet (request_url, request_params)
-              else {
-                if (List.Length (request_params) > 0)
-                  logger.Log ("static GET request had GET parameters")
+                if (request_url.StartsWith("/webapp/"))
+                    request_info = DynamicGet (request_url , request_params)
                 else
-                  request_info = StaticGet (request_url)
-              }
+                {
+                    if (List.Length (request_params) > 0)
+                        logger.Log ("static GET request had GET parameters")
+                    else
+                        request_info = StaticGet (request_url)
+                }    
             }
+            construct_session();
 
           | "POST" =>
             if (List.Length (request_params) > 0)
               logger.Log ("POST request had GET parameters")
-            else if (!request_url.EndsWith (".xml"))
+            else if (!request_url.StartsWith ("/webapp/") || !request_url.EndsWith(".xml"))
               logger.Log ("POST request to an invalid URL")
             else {
               def (post_params, post_validity) = parse_post_data ();
@@ -300,7 +420,15 @@ namespace Sioux
               else
                 request_info = Post (request_url, post_params)
             }
+            construct_session();
 
+
+/*        | "HEAD"
+          | "PUT"
+          | "TRACE"
+          | "DELETE"
+          | "OPTIONS" =>
+                request_info = Other*/
           | _ =>
             logger.Log ("unknown request type")
         }
@@ -323,7 +451,7 @@ namespace Sioux
           | line =>
             def (name, val) = split_at (':', line);
             def (name, val) = (name.ToLower ().Trim (), val.Trim ()); 
-
+            result = (name,val) :: result;
             when (name == "content-length")            
               content_length = Some (System.Int32.Parse (val));
  
@@ -336,11 +464,95 @@ namespace Sioux
       headers = List.Rev (result)
     }
 
+    
+    /**
+     * Puts all cookies sent with this request into list
+     */
+    private put_cookies_into_list () : void
+    {
+        def cookie_header = GetHeader("cookie");
+        match(cookie_header)
+        {
+            | None => ()
+            | Some(header) => 
+              def delimiter1 = array[';'];
+              def delimiter2 = array['='];
+              
+              def split1 = header.Split(delimiter1);
+              foreach(s : string in split1)
+              {
+                  def split2 = s.Split(delimiter2);
+                  def name = split2[0];
+                  def value = split2[1];
+                  cookies = Cookie(name,value) :: cookies
+              }
+        }
+    }
+
+    
+    /**
+     * Checks, if there is session id in request, loads session, otherwise creates new
+     */
+    private construct_session() : void
+    {
+        def si = GetCookie("SIOUXSESSIONID");
+        mutable sid = "";
+        match(si)
+        {
+            | None =>
+              {
+                  match(request_info)
+                  {
+                      | Post (_,parms)
+                      | DynamicGet(_,parms) =>
+                        match(List.Find(parms,(fun (name,_) {name=="SIOUXSESSIONID"})))
+                        {
+                            | None  => ()
+                            | Some ((_,id)) => sid = id
+                        }
+                      | _ => ()
+                  }
+              }
+            | Some(id) =>
+              {
+                  sid = id.Value;
+              }
+        }
+        
+        def sess = Httpd.GetSession(sid);
+        match(sess)
+        {
+            | None  =>
+              {
+                  session = Session();
+                  Httpd.AddSession(session);
+              }
+            | Some (s) =>
+              {
+                  if((s.Timeout == -1 || s.LastAccesedTime.AddMinutes((s.Timeout :> double)) > DateTime.Now) && s.IsValid)
+                  {    
+                      session = s;
+                      session.SetIsNotNew();
+                      session.SetAccesTime()
+                  }
+                  else 
+                  {
+                      Httpd.RemoveSession(s.SessionID);
+                      session = Session();
+                      Httpd.AddSession(session);
+                  }
+              }
+        }
+    }
 
     /* -- PRIVATE FIELDS --------------------------------------------------- */
 
+    private mutable session : Session;
+    private mutable cookies : list <Cookie> ;
     private mutable request_stream : NetworkStream;
     private mutable request_info : RequestInfo;
+    private mutable request_uri  : string;
+    private mutable request_time : DateTime;
     private mutable headers : list <string * string>;
     private mutable content_length : option <int>;
     private mutable logger : Logger;
