@@ -1,0 +1,178 @@
+/*
+ * Copyright (c) 2003, 2004 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Collections;
+using Nemerle.Utility;
+
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+namespace Nemerle.Compiler
+{
+  public class TyVarEnv
+  {
+    tyvars : NemerleMap <Name, StaticTyVar>;
+    solver : Solver;
+    
+    private this (tv : NemerleMap <Name, StaticTyVar>)
+    {
+      tyvars = tv;
+    }
+
+    public this ()
+    {
+      tyvars = NemerleMap ();
+    }
+
+    public MonoBind (env : GlobalEnv,
+                     curtc : TypeInfo,
+                     t : PType,
+                     check_parms : bool) : MType
+    {
+      def t = Bind (env, curtc, t, 
+                    allow_tyvars = false, 
+                    check_parms = check_parms);
+      assert (t.IsFixed);
+      t.LowerBound
+    }
+    
+    /** Perform typing of Parsetree type to Typedtree type, looking up
+        type constructors in given global environment (with accessibility
+        information implied by given current TypeInfo) and type variables
+        in current instance.
+
+        If [check_parms] is true, then we check if type substituted for
+        a given type variable conforms to all of its constraints. It
+        should be true in general, but is false when we don't know the
+        subtyping relations yet (during scanning of global types).
+     */
+    public Bind (env : GlobalEnv,
+                 curtc : TypeInfo,
+                 t : PType,
+                 allow_tyvars : bool,
+                 check_parms : bool) : TyVar
+    {
+      def f (t) {
+        | PType.ByRef
+        | PType.Out =>
+          Message.fatal_error ("nested ref/out type found")
+          
+        | PType.Array (t, Splicable.Int (rank)) =>
+          solver.MonoType (MType.Array (f (t), rank))
+          
+        | PType.Function (x, y) =>
+          solver.MonoType (MType.Fun (f (x), f (y)))
+          
+        | PType.Void =>
+          solver.MonoType (MType.Void ())
+          
+        | PType.Product (a) =>
+          solver.MonoType (MType.Tuple (List.Map (a, f)))
+          
+        | PType.Class (Splicable.Name (nm), args) =>
+          match (tyvars.Find (nm)) {
+            | Some (tv) =>
+              when (!args.IsEmpty ())
+                Message.error ("type variable `" + Util.qid_of_list (nm.idl) + 
+                               "' supplied with arguments");
+              solver.MonoType (MType.TyVar (tv))
+            | None =>
+              def env = nm.GetEnv (env);
+              def ti = env.GetType (nm.idl, curtc);
+              def args = List.Map (args, f);
+
+              when (check_parms)
+                _ = ti.MakeSubst (args);
+              
+              solver.MonoType (TType.Class (ti, args))
+          }
+
+        | PType.Typed (body) => body
+          
+        | PType.Infer =>
+          when (!allow_tyvars)
+            Message.error ("type inference not allowed here");
+          solver.FreshTyVar ()
+
+        | PType.Class (_, _) =>
+          Util.ice ("Spliced string survived to typing")
+        | PType.Spliced =>
+          Util.ice ("Spliced type survived to typying.")
+        | PType.Array => Message.fatal_error ("$ splice outside of <[ .. quotation ]>")
+        | PType.Ellipsis =>
+          Util.ice ("Type arguments list survived to typying.")
+      }
+
+      f (t)
+    }
+    
+    
+    public AddTyparms (env : GlobalEnv, tp : Typarms,
+                       curtc : TypeInfo,
+                       check_parms : bool) : TyVarEnv * list <StaticTyVar>
+    {
+      def name_of_tv (tv) {
+        def (name, color) = tv;
+        Name ([name], color, null)
+      }
+      def loop (tv : string * int, acc) {
+        def (map, the_list) = acc;
+        def tv_obj = T (Pair.First (tv));
+        ((map : NemerleMap <Name, StaticTyVar>).Replace (name_of_tv (tv), tv_obj),
+         tv_obj :: the_list)
+      }
+      def (m, l) = List.FoldLeft (tp.tyvars, (this.tyvars, []), loop);
+      def tenv = TyVarEnv (m);
+
+      def constraints = Hashtable ();
+      def get (id) {
+        if (constraints.Contains (id))
+          constraints [id]
+        else []
+      }
+      def add_constraint (c : Parsetree.Constraint) {
+        match (m.Find (name_of_tv (c.tyvar))) {
+          | Some (tv) =>
+            def t = tenv.MonoBind (env, curtc, c.ty, check_parms);
+            constraints [tv.id] = t :: get (tv.id);
+          | None =>
+            Message.error ("unbound type variable `" + Pair.First (c.tyvar) + "' in constraint")
+        }
+      };
+      List.Iter (tp.constraints, add_constraint);
+      
+      foreach (tv : StaticTyVar in l) {
+        // FIXME: check Intersection invariants and flag error
+        // to the user, otherwise we'll get an ICE
+        tv.Constraints = get (tv.id); 
+      }
+      
+      (tenv, List.Rev (l))
+    }
+  }
+}
