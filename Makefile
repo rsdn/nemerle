@@ -36,6 +36,13 @@ include config.mak
 svn2log = LC_ALL=pl_PL.utf-8 $(PYTHON) misc/svn2log.py changelog.xml -u misc/users
 nemroot = /nemerle/(trunk|(branches|tags)/[^/]+)
 
+# files that contain System.Reflection.AssemblyVersion attribute
+version_files = \
+	ncc/AssemblyInfo.n \
+	macros/AssemblyInfo.n \
+	lib/AssemblyInfo.n \
+	ncc/main.n
+
 ############################################################
 # OUTPUT
 ############################################################
@@ -111,6 +118,26 @@ clean:
 	$(MAKE) -C ncc clean
 	$(MAKE) -C snippets clean
 	rm -f config.mak configure.log
+
+set-version: config.mak
+	@echo -n "Setting version to $(VERSION).$(REVISION) "
+	$(Q)perl -p -i -e 's/(\"Nemerle Compiler \(ncc\) version) [0-9.]+ \([^\)]+\)\\n"/$$1 $(VERSION).$(REVISION) (MARK-SET-VER)\\n"/' ncc/main.n
+	$(Q)[ `grep -c MARK-SET-VER ncc/main.n` = 1 ] || \
+		{ echo "Failed to set text version on ncc/main.n"; exit 1; }
+	$(Q)kind=`if echo $(REVISION) | grep -q 99 ; then echo SVN ; else echo release ; fi` ; \
+	    echo -n "($$kind) " ; \
+	    perl -p -i -e "s/MARK-SET-VER/$$kind/" ncc/main.n
+	$(Q)for f in $(version_files) ; do \
+		echo -n "."; \
+		perl -p -i -e \
+		 's/AssemblyVersion\("[^"]+"\)/AssemblyVersion("$(VERSION).$(REVISION)")MARK-SET-VER/' \
+		 $$f ; \
+		: check if we succeed ; \
+		grep -q MARK-SET-VER $$f || { echo "Failed to set version on $$f"; exit 1; } ; \
+		: clean up ; \
+		perl -p -i -e 's/MARK-SET-VER//' $$f ; \
+	done
+	@echo .
 
 snapshot:
 	$(MAKE) tarball REVISION=$(REVISION).`svn info | grep 'Revision:'|sed -e 's/.*://'|xargs`
