@@ -72,6 +72,8 @@ dist:
 	$(Q)$(MAKE) -C sioux dist DIR=$(DIR)/sioux
 	$(Q)mkdir -p $(DIR)/ntrace
 	$(Q)$(MAKE) -C ntrace dist DIR=$(DIR)/ntrace
+	$(Q)mkdir -p $(DIR)/shootout
+	$(Q)$(MAKE) -C shootout dist DIR=$(DIR)/shootout
 
 
 clean:
