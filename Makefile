@@ -19,10 +19,16 @@ send-www:
 	rm -rf www
 
 name = nemerle
+svn2log = python aux/svn2log.py changelog.xml -u aux/users
 
 changelog:
 	svn up
-	svn log --xml -v | python aux/svn2log.py > ChangeLog
+	svn log -v --xml > changelog.xml
+	$(svn2log) -p /nemerle/trunk -x npc -x doc
+	$(svn2log) -p /nemerle/trunk/npc -o npc/ChangeLog -x ncc
+	$(svn2log) -p /nemerle/trunk/npc/ncc -o npc/ncc/ChangeLog
+	$(svn2log) -p /nemerle/trunk/doc -o doc/ChangeLog
+	rm -f changelog.xml
 
 dist: changelog
 	if svn status 2>&1 | grep -qv '^?' ; then \
@@ -32,7 +38,9 @@ dist: changelog
 	  ver=`svn info . | awk '/^Revision:/ { print $$2 }'`; \
 	  rm -rf $(name)-$$ver; \
 	  svn export . $(name)-$$ver; \
-	  cp ChangeLog $(name)-$$ver; \
+	  for f in . npc npc/ncc doc ; do \
+	    cp $f/ChangeLog $(name)-$$ver/$f; \
+	  done; \
 	  tar zcf $(name)-$$ver.tar.gz $(name)-$$ver; \
 	  rm -rf $(name)-$$ver; \
 	  ls -l $(name)-$$ver.tar.gz; \
