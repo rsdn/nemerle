@@ -174,7 +174,8 @@ last-stage-files: \
 		out.$(STAGE)/stdmacros.dll \
 		out.$(STAGE)/ncc.exe
 
-lib: out.stage1/Nemerle.stage1.dll
+lib:
+	$(MAKE) STAGE=stage1 out.stage1/Nemerle.stage1.dll
 
 boot: stage1 stage2 stage3 compare ngen-stage3
 
