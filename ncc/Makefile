@@ -54,7 +54,7 @@ all_src = $(n_src) $(cs_src)
 all_cs  = out.cs $(cs_src)
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
-COMPILE = $(CSC) $(CSFLAGS)
+COMPILE = $(CSC) $(CSCFLAGS)
 
 
 all: ncc.exe
