@@ -140,13 +140,13 @@ module CGexpr {
     }
   }
 
-  class CTX
+  internal class CTX
   {
     public mutable current_fun : Fun_header;
     public mutable current_closure : option <CG_val>;
-    public mutable closure_fields : Int_map <FieldInfo>;
-    public mutable closure_ptrs : Int_map <FieldInfo>;
-    public mutable locals : Int_map <CG_val>;
+    public mutable closure_fields : SystemMap <int, FieldInfo>;
+    public mutable closure_ptrs : SystemMap <int, FieldInfo>;
+    public mutable locals : SystemMap <int, CG_val>;
     public mutable current_type : Tyinfo;
   }
 
@@ -164,16 +164,16 @@ module CGexpr {
   {
     CTX (current_fun = null,
          current_closure = None (),
-         closure_fields = Map.int_map (),
-         closure_ptrs = Map.int_map (),
-         locals = Map.int_map (),
+         closure_fields = SystemMap (),
+         closure_ptrs = SystemMap (),
+         locals = SystemMap (),
          current_type = ti)
   }
 
   store_in_closure (ctx : CTX, d : LocalValue, val : CG_expr) : CG_expr
   {
     def rf = CE_field_ref (CE_ref (Option.UnSome (ctx.current_closure)),
-                           ctx.closure_fields.get (d.id));
+                           ctx.closure_fields.Get (d.id));
     CE_assign (rf, val);
   }
 
@@ -192,7 +192,7 @@ module CGexpr {
                         ty = cg_type (ctx, d.ty), 
                         val = val);
       def ctx' = copy_ctx (ctx);
-      ctx'.locals <- ctx.locals.add (d.id, cgv);
+      ctx'.locals <- ctx.locals.Add (d.id, cgv);
       (ctx', cgv)
     }
   }
@@ -202,7 +202,7 @@ module CGexpr {
     if (ctx.current_fun.id == fn.id)
       CE_ref (Option.UnSome (ctx.current_closure))
     else
-      CE_field_ref (CE_this (), ctx.closure_ptrs.get (fn.id))
+      CE_field_ref (CE_this (), ctx.closure_ptrs.Get (fn.id))
   }
 
   public is_dummy_type (t : System.Type) : bool
@@ -301,6 +301,14 @@ module CGexpr {
         CE_cast (body, typeof (System.Object))
       else
         body
+  }
+
+  unbox_value (body : CG_expr, ty : System.Type) : CG_expr 
+  {
+    if (is_dummy_type (ty))
+      CE_ignore (body)
+    else
+      CE_cast (body, ty)
   }
 
 
@@ -495,9 +503,9 @@ module CGexpr {
     if (d.in_closure) {
       def defined_in = Option.UnSome (d.parent_fun);
       CE_field_ref (closure_ref (ctx, defined_in), 
-                    ctx.closure_fields.get (d.id))
-    } else if (ctx.locals.mem (d.id)) {
-      CE_ref (ctx.locals.get (d.id))
+                    ctx.closure_fields.Get (d.id))
+    } else if (ctx.locals.Member (d.id)) {
+      CE_ref (ctx.locals.Get (d.id))
     } else {
       Message.debug ("undef " + d.name + " = " + d.id.ToString ());
       Util.ice ("ref to undef val " + d.name)
@@ -537,6 +545,68 @@ module CGexpr {
     List.Map2 (do_cast, formals, parms)
   }
 
+  emit_delegate_proxy (ctx : CTX, ctor : IMethod) : ConstructorInfo * CG_method
+  {
+    def fh = ctor.GetHeader ();
+    match (fh.parms) {
+      | [{ty = (T_fun (parms, ret_type)) as fun_type}] =>
+        def loc = fh.loc; // FIXME
+        def parms = Tyutil.fun_args (parms);
+        def tb = ctx.current_type.GetTypeBuilder ().
+                  DefineNestedType (Util.tmpname ("delegate_proxy"),
+                                    TypeAttributes.NestedAssembly, 
+                                    typeof (System.Object), array []);
+                                    
+        Passes.cgil.RegisterAuxType (tb);
+
+        def fptr = tb.DefineField ("funptr", cg_type (ctx, fun_type), 
+                                   FieldAttributes.Assembly);
+        def mkparm (ty) { 
+          CG_val (loc = loc,
+                  name = Util.tmpname ("dp"),
+                  ty = cg_type (ctx, ty),
+                  val = CE_none ())
+        };
+        
+        def m = CG_method ();
+        m.name <- "InvokeDelegate";
+        m.ret_type <- cg_type (ctx, ret_type);
+        m.parms <- List.Map (mkparm, parms);
+        m.modifiers <- [Mod_internal ()];
+        m.implemented_methods <- [];
+
+        def apply = get_apply_method (List.Length (parms)).GetMethodInfo ();
+        def meth = CE_method_ref (CE_field_ref (CE_this (), fptr), apply);
+        def mkparmref (v) { CE_cast (CE_ref (v), typeof (System.Object)) };
+        def parms' = List.Map (mkparmref, m.parms);
+        m.body <- unbox_value (CE_call (meth, parms'), m.ret_type);
+      
+        Passes.cgil.AddMethod (m, tb);
+
+        def invoke_cgm = m;
+
+        def m = CG_method ();
+        m.name <- ".ctor";
+        m.ret_type <- typeof (System.Void);
+        def ctor_parm =
+          CG_val (loc = loc,
+                  name = Util.tmpname ("dp"),
+                  ty = fptr.FieldType,
+                  val = CE_none ());
+        m.parms <- [ctor_parm];
+        m.modifiers <- [Mod_internal ()];
+        m.implemented_methods <- [];
+        m.body <- CE_assign (CE_field_ref (CE_this (), fptr), CE_ref (ctor_parm));
+        
+        Passes.cgil.AddConstructorBuilder (m, tb);
+        Passes.cgil.EmitConstructor (m);
+
+        ((m.constructor_builder : ConstructorInfo), invoke_cgm)
+        
+      | _ => assert (false)
+    }
+  }
+
   emit_delegate_ctor (ctx : CTX, m : IMethod, ps : list <Parm>) : CG_expr
   {
     def the_problem () {
@@ -555,9 +625,9 @@ module CGexpr {
         | [{expr = E_method_ref (obj, mem)}] =>
           (CE_cast (cg_expr (ctx, obj), typeof (System.Object)), GetCgMethod (mem))
           
-        | [{expr = (E_local_ref ({kind = D_local_fun (h, _)})) as parm}] =>
-          def cgm = get_cg_method (ctx, h);
-          (CE_cast (cg_expr (ctx, parm), cgm.lambda_type_builder), cgm)
+        | [parm] =>
+          def (ctor, invoke_cgm) = emit_delegate_proxy (ctx, m);
+          (CE_call (CE_ctor_ref (ctor), [cg_expr (ctx, parm.expr)]), invoke_cgm)
           
         | _ => the_problem ()
       };
@@ -784,9 +854,9 @@ module CGexpr {
     Passes.cgil.RegisterAuxType (tb);
     def ctor = Passes.cgil.AddImplicitCtor (tb);
     
-    def mk_clo_fld (acc : Int_map <FieldInfo>, d : LocalValue) {
+    def mk_clo_fld (acc : SystemMap <int, FieldInfo>, d : LocalValue) {
       def fi = tb.DefineField (decl_uniq_name (d), cg_type (ctx, d.ty), FieldAttributes.FamORAssem);
-      acc.add (d.id, fi)
+      acc.Add (d.id, fi)
     };
     def closure_fields = List.FoldLeft (mk_clo_fld, ctx.closure_fields, h.closure_vars);
     def cloexpr = CE_call (CE_ctor_ref (ctor), []);
@@ -814,7 +884,7 @@ module CGexpr {
    
     def cgm = get_cg_method (ctx, h);
     ctx.closure_ptrs <- cgm.closure_pointers;
-    ctx.locals <- Map.int_map ();
+    ctx.locals <- SystemMap ();
     ctx.current_fun <- h;
     ctx
   }
@@ -882,11 +952,11 @@ module CGexpr {
         def assign =
           CE_assign (CE_field_ref (CE_this (), fld), CE_ref (val));
 
-        (assign :: assigns, val :: vals, (ptrs : Int_map <FieldInfo>).add (fh.id, fld))
+        (assign :: assigns, val :: vals, (ptrs : SystemMap <int, FieldInfo>).Add (fh.id, fld))
       };
 
       def (assigns, vals, ptrs) = 
-        List.FoldLeft (mkparm, ([], [], Map.int_map ()), 
+        List.FoldLeft (mkparm, ([], [], SystemMap ()), 
                         get_parents_with_closures (ctx, h));
 
       def ctor_cgm = CG_method ();
@@ -959,7 +1029,7 @@ module CGexpr {
             vals <- v :: vals;
             v
           };
-        ctx'.locals <- ctx'.locals.add (parm.id, v)
+        ctx'.locals <- ctx'.locals.Add (parm.id, v)
       }
     };
 
