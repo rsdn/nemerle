@@ -42,11 +42,13 @@ namespace Nemerle.Compiler
     private this (tv : NemerleMap [Name, StaticTyVar])
     {
       tyvars = tv;
+      solver = Passes.Solver;
     }
 
     public this ()
     {
       tyvars = NemerleMap ();
+      solver = Passes.Solver;
     }
 
     public MonoBind (env : GlobalEnv,
@@ -57,8 +59,7 @@ namespace Nemerle.Compiler
       def t = Bind (env, curtc, t, 
                     allow_tyvars = false, 
                     check_parms = check_parms);
-      assert (t.IsFixed);
-      Option.UnSome (t.LowerBound)
+      t.FixedValue
     }
     
     /** Perform typing of Parsetree type to Typedtree type, looking up
@@ -78,59 +79,61 @@ namespace Nemerle.Compiler
                  check_parms : bool) : TyVar
     {
       def f (t) {
-        | PExpr.ParmByRef
-        | PExpr.ParmOut =>
-          Message.fatal_error ("nested ref/out type found")
+        f2 (t, false)
+      } and f2 (t, allow_ref) {
+        match (t) {
+          | <[ ref $t ]> when allow_ref =>
+            MType.Ref (f (t))
           
-        | <[ array [$(rank : int), $t] ]> =>
-          solver.MonoType (MType.Array (f (t), rank))
-
-        | <[ $x -> $y ]> =>
-          solver.MonoType (MType.Fun (f (x), f (y)))
-
-        | <[ $arg1 * $arg2 ]> =>
-          // FIXME: this is utterly WRONG - we cannot distinguish (int * int) * int
-          //        from int * int * int
-          def loop (leftside, acc) {
-            match (leftside) {
-              | <[ $a1 * $a2 ]> =>
-                loop (a1, f (a2) :: acc)
-              | _ => f (leftside) :: acc
-            }
-          }
-          solver.MonoType (MType.Tuple (loop (arg1, [f (arg2)])))
+          | <[ out $t ]> when allow_ref =>
+            MType.Out (f (t))
           
-        | PExpr.Void =>
-          solver.MonoType (MType.Void ())
+          | <[ ref $_ ]>
+          | <[ out $_ ]> =>
+            Message.fatal_error ("nested ref/out type found")
+            
+          | <[ array [$t] ]> =>
+            MType.Array (f (t), 1)
 
-        | PExpr.Member
-        | PExpr.Ref =>
-          type_class (t, [])
+          | <[ array [$(rank : int), $t] ]> =>
+            MType.Array (f (t), rank)
 
-        | PExpr.Indexer (t, args) =>
-          type_class (t, args)
+          | <[ $x -> $y ]> =>
+            MType.Fun (f2 (x, true), f (y))
 
-        | PExpr.TypedType (body) =>
-          // FIXME :>
-          body :> TyVar
-          
-        | PExpr.Wildcard =>
-          when (!allow_tyvars)
-            Message.error ("type inference not allowed here");
-          solver.FreshTyVar ()
+          | <[ @* (.. $args) ]> =>
+            MType.Tuple (List.Map (args, fun (t) { f2 (t, allow_ref) }))
+            
+          | PExpr.Void => InternalType.Void
 
-        | PExpr.Spliced =>
-          Util.ice ("Spliced type survived to typying.")
+          | PExpr.Member
+          | PExpr.Ref =>
+            type_class (t, [])
 
-        | PExpr.Array =>
-          Message.fatal_error ("array type must take form `array [T]' or `array [rank, T]'")
-          
-        | PExpr.Ellipsis =>
-          Util.ice ("Type arguments list survived to typying.")
-          
-        | x => Message.fatal_error (t.loc, "it isn't a legal type expression: " +
-                                              PrettyPrint.SprintExpr (None (), x))
-      } and type_class (name, args : list [_]) {
+          | PExpr.Indexer (t, args) =>
+            type_class (t, args)
+
+          | PExpr.TypedType (body) =>
+            body
+            
+          | PExpr.Wildcard =>
+            when (!allow_tyvars)
+              Message.error ("type inference not allowed here");
+            solver.FreshTyVar ()
+
+          | PExpr.Spliced =>
+            Util.ice ("Spliced type survived to typying.")
+
+          | PExpr.Array =>
+            Message.fatal_error ("array type must take form `array [T]' or `array [rank, T]'")
+            
+          | PExpr.Ellipsis =>
+            Util.ice ("Type arguments list survived to typying.")
+            
+          | x => Message.fatal_error (t.loc, "it isn't a legal type expression: " +
+                                                PrettyPrint.SprintExpr (None (), x))
+        }
+      } and type_class (name, args : list [_]) : TyVar {
         match (Util.QidOfExpr (name)) {
           | Some ((idl, nm)) =>
             match (tyvars.Find (nm)) {
@@ -139,17 +142,22 @@ namespace Nemerle.Compiler
                   Message.error ($ "type variable `$(nm.Id)' supplied with "
                                    "arguments");
 
-                solver.MonoType (MType.TyVarRef (tv))
+                MType.TyVarRef (tv)
               | None =>
-                // FIXME: expand type aliases here
                 def env = nm.GetEnv (env);
                 def ti = env.GetType (idl, curtc);
                 def args = List.Map (args, f);
 
-                when (check_parms)
-                  _ = ti.MakeSubst (args);
-                
-                solver.MonoType (MType.Class (ti, args))
+                match (ti.GetTydecl ()) {
+                  | Typedtree.TypeDeclaration.Alias (t) =>
+                    def subst = ti.MakeSubst (args);
+                    subst.Apply (t)
+
+                  | _ =>
+                    when (check_parms)
+                      _ = ti.MakeSubst (args);
+                    MType.Class (ti, args)
+                }
             }
           | None =>
             Message.fatal_error (name.loc, "expected qualified identifier in type")

@@ -29,7 +29,6 @@
 using Nemerle.Collections;
 
 using Nemerle.Compiler;
-using Nemerle.Compiler.Tyexpr;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Compiler.SolverMacros;
 
@@ -94,10 +93,7 @@ namespace Nemerle.Compiler
                 | Some (expr) => expr
               }
 
-            def bool_ty =
-              typer.MonoType (typer.FIXME (InternalType.Boolean), "when guard type");
-              
-            def typed_expr = typer.TypeExpr (expr, bool_ty);
+            def typed_expr = typer.TypeExpr (expr, InternalType.Boolean);
           typer.PopLocals ();
 
           result = (typed_pattern, typed_expr) :: result;
@@ -108,7 +104,7 @@ namespace Nemerle.Compiler
                                });
         common_variables.Iter (typer.AddLocal);
 
-        result
+        List.Rev (result)
       }
 
 
@@ -121,7 +117,7 @@ namespace Nemerle.Compiler
 
         if (List.Exists (pats, is_assignment)) {
           if (List.ForAll (pats, is_assignment)) {
-              match (matched_value_type.LowerBound) {
+              match (matched_value_type.Hint) {
                 | Some (MType.Class (ti, _)) when matched_value_type.IsFixed =>
                   def is_instance_field (_ : IMember) {
                     | field : IField => !field.IsStatic
@@ -138,7 +134,7 @@ namespace Nemerle.Compiler
                           (null, Pattern.Error ())
 
                         | [field : IField] =>
-                          def ty = matched_value_type.TypeOfMember (field);
+                          def ty = matched_value_type.FixedValue.TypeOfMember (field);
                           (field, TypePattern (ty, pat))
 
                         | _ =>
@@ -168,7 +164,7 @@ namespace Nemerle.Compiler
             Pattern.Error ()
           }
         } else {
-          match (matched_value_type.LowerBound) {
+          match (matched_value_type.Hint) {
             // if we expecte to match on a class, transform the pattern
             // to include field names
             | Some (MType.Class (ti, _)) =>
@@ -200,7 +196,7 @@ namespace Nemerle.Compiler
               
             | _ =>
               def types =
-                List.Map (pats, fun (_) { typer.FreshTyVar ("") });
+                List.Map (pats, fun (_) { typer.FreshTyVar () });
               if (matched_value_type.Unify (MType.Tuple (types))) {
                 def typed_pats = List.Map2 (types, pats, TypePattern);
                 Pattern.Tuple (typed_pats)
@@ -219,7 +215,7 @@ namespace Nemerle.Compiler
         Util.locate (pattern.loc, {
           def typed = DoTypePattern (matched_value_type, pattern);
           when (typed.ty == null)
-            typed.ty = typer.FIXME (matched_value_type);
+            typed.ty = matched_value_type;
           typed
         })
       }
@@ -232,13 +228,13 @@ namespace Nemerle.Compiler
           | Some ((idl, name)) =>
             if (System.Char.IsUpper (List.Last (idl) [0])) {
               def env = name.GetEnv (typer.env);
-              def is_proper_symbol (sym) {
-                | Symbol.TypeMember (fld : IField) =>
+              def is_proper_symbol (sym : IMember) {
+                | fld : IField =>
                   fld.CanAccess (typer.current_type) &&
                   fld.IsLiteral && 
                   (fld.DeclaringType.GetTydecl () matches TypeDeclaration.Enum)
 
-                | Symbol.Type (ti) =>
+                | ti : TypeInfo =>
                   ti.CanAccess (typer.current_type)
 
                 | _ => false
@@ -246,9 +242,9 @@ namespace Nemerle.Compiler
 
               match (List.Filter (env.LookupSymbol (idl, typer.current_type), 
                                   is_proper_symbol)) {
-                | [Symbol.TypeMember (fld : IField)]  =>
+                | [fld : IField]  =>
                   if (pattern matches PT.PExpr.Wildcard) {
-                    if (matched_value_type.Require (typer.FIXME (fld.GetMemType ()) : MType)) {
+                    if (matched_value_type.Require (fld.GetMemType () : MType)) {
                       def val = Option.UnSome (ConstantFolder.FieldValueAsLiteral (fld));
                       Pattern.Enum (fld, val)
                     } else {
@@ -264,12 +260,13 @@ namespace Nemerle.Compiler
                     Pattern.Error ()
                   }
 
-                | [Symbol.Type (ti)] =>
+                | [ti : TypeInfo] =>
                   def lookup (ti : TypeInfo) {
                     match (ti.GetTydecl ()) {
                       | TypeDeclaration.VariantOption =>
                         // def parent_tycon = Option.UnSome (ti.SuperClass ());
-                        def option_type = ti.FreshSubst ().ApplyTv (typer.FIXME (ti.GetMemType ()));
+                        def option_type = ti.FreshSubst ().Apply (ti.GetMemType ());
+                        // Message.debug ($ "$matched_value_type Provide $option_type");
                         if (matched_value_type.Provide (option_type))
                           Pattern.Application (ti, TypePattern (option_type, pattern));
                         else {
@@ -284,23 +281,22 @@ namespace Nemerle.Compiler
                         //  Message.warning ($ "matching of $t with $option_type is redundant");
                         //  Message.hint_once ("refer to fields of this variant option without matching");
 
-                        
-                      | TypeDeclaration.Alias (TType.Class (tc, _)) =>
+                      | TypeDeclaration.Alias (MType.Class (tc, _)) =>
                         lookup (tc)
 
                       | _ =>
-                        ReportError (messenger, "`$(idl)' is not a variant option");
+                        ReportError (messenger, $ "`$(idl)' is not a variant option");
                         Pattern.Wildcard ()
                     }
                   }
-
                   lookup (ti)
                   
                 | [] =>
                   ReportError (messenger, $ "unbound variant $idl");
                   Pattern.Error ()
 
-                | _ =>
+                | x =>
+                  Message.debug (x.ToString ());
                   ReportError (messenger, $ "overloading ambiguity $idl");
                   Pattern.Error ()
               }
@@ -326,12 +322,15 @@ namespace Nemerle.Compiler
       DoTypePattern (matched_value_type : TyVar, pattern : PT.PExpr) : Pattern
       {
         match (pattern) {
+          | PT.PExpr.ListLiteral (l) =>
+            TypePattern (matched_value_type, Macros.Lift (l))
+
           | PT.PExpr.As (pat, PT.Splicable.Name (name)) =>
-            def typed_pattern = TypePattern (matched_value_type, pattern);
+            def typed_pattern = TypePattern (matched_value_type, pat);
             def fixed_type =
               match (typed_pattern) {
                 | Pattern.Application (ti, _) =>
-                  def raw_type = ti.FreshSubst ().Apply (typer.FIXME (ti.GetMemType ()));
+                  def raw_type = ti.FreshSubst ().Apply (ti.GetMemType ());
                   when (!raw_type.Require (matched_value_type))
                     ReportError (messenger,
                                  $ "the matched value type "
@@ -378,27 +377,20 @@ namespace Nemerle.Compiler
             
 
           | PT.PExpr.TypeEnforcement (nested, needed_type) =>
-            def needed_type = typer.BindType (needed_type);
-            assert (needed_type.IsFixed);
-            def needed_type = Option.UnSome (needed_type.LowerBound);
-            
-            solver.PushState ();
-            def just_a_hint = matched_value_type.Require (needed_type);
-            solver.PopState ();
+            def needed_type = typer.BindType (needed_type).FixedValue;
+            def just_a_hint = matched_value_type.TryRequire (needed_type);
 
             if (just_a_hint) {
               _ = matched_value_type.Require (needed_type);
               TypePattern (matched_value_type, nested)
             } else {
-              solver.PushState ();
-              def properly_subtypes = matched_value_type.Provide (needed_type);
-              solver.PopState ();
+              def properly_subtypes = matched_value_type.TryProvide (needed_type);
 
               if (properly_subtypes) {
                 _ = matched_value_type.Provide (needed_type);
               } else {
                 if (needed_type.IsInterface ||
-                    Option.UnSome (matched_value_type.UpperBound).IsInterface) {
+                    Option.UnSome (matched_value_type.Hint).IsInterface) {
                   // ok, we allow interfaces here
                 } else
                   ReportError (messenger,
@@ -409,8 +401,8 @@ namespace Nemerle.Compiler
               match (needed_type) {
                 | MType.Class (ti, _) =>
                   def typed_pattern =
-                    Pattern.HasType (pattern.loc, typer.FIXME (matched_value_type), ti);
-                  match (TypePattern (typer.MonoType (needed_type), nested)) {
+                    Pattern.HasType (pattern.loc, matched_value_type, ti);
+                  match (TypePattern (needed_type, nested)) {
                     | Pattern.As (Pattern.Wildcard, decl) =>
                       Pattern.As (pattern.loc, matched_value_type, 
                                   typed_pattern, decl)
@@ -434,36 +426,51 @@ namespace Nemerle.Compiler
 
 
           | PT.PExpr.Literal (lit) =>
-            Expect (matched_value_type, typer.TypeOfLiteral (lit),
-                    "matched value");
+            _ = typer.Expect (matched_value_type, typer.TypeOfLiteral (lit),
+                              "matched value");
             Pattern.Literal (lit)
 
 
           | PT.PExpr.Tuple (pats) =>
             TypeTuplePattern (matched_value_type, pats)
+
+
+          | PT.PExpr.Sequence (pats) => 
+            TypeTuplePattern (matched_value_type, pats)
             
 
           | PT.PExpr.Ref
           | PT.PExpr.Member => 
-            TypeApplication (pattern, PT.PExpr.Wildcard ())
+            TypeApplication (matched_value_type, pattern, PT.PExpr.Wildcard ())
 
              
           | PT.PExpr.Call (PT.PExpr.Ref (n), _) when ConstantFolder.is_known_operator (n.Id) => 
-            TypePattern (matched_value_type, 
-                         ConstantFolder.FoldConstants (typer, pattern))
+
+          def folded = ConstantFolder.FoldConstants (typer.env, pattern);
+          // constant folder will return the same object if it didn't do anything
+          if ((folded : object) == pattern) {
+            ReportError (messenger,
+                         "couldn't fold arithmetic expression in pattern "
+                         "to a constant");
+            when (messenger.NeedMessage)
+              Message.hint ("you can use `| x when x == complex expression =>' "
+                            " to do such things");
+            Pattern.Error ()
+          } else
+            TypePattern (matched_value_type, folded)
                          
 
-          | PT.PExpr.Application (f, PT.PExpr.Wildcard)
+          // | PT.PExpr.Application (f, PT.PExpr.Wildcard)
           | PT.PExpr.Call (f, []) =>
-            TypeApplication (f, PT.PExpr.Wildcard ())
+            TypeApplication (matched_value_type, f, PT.PExpr.Wildcard ())
 
 
-          | PT.PExpr.Application (f, pa) => 
-            TypeApplication (f, PT.PExpr.Tuple ([pa]))
+          // | PT.PExpr.Application (f, pa) => 
+          //  TypeApplication (matched_value_type, f, PT.PExpr.Tuple ([pa]))
 
           
           | PT.PExpr.Call (f, args) =>
-            TypeApplication (f, PT.PExpr.Tuple (args))
+            TypeApplication (matched_value_type, f, PT.PExpr.Tuple (args))
             
 
           | PT.PExpr.TypedPattern (body) => body
@@ -474,14 +481,14 @@ namespace Nemerle.Compiler
             Macros.in_pattern = true;          
             def lifted = 
               match (parse_element) {
-                | PT.SyntaxElement.Expression (e) => Macros.quoted_expr (ctx, e)
-                | PT.SyntaxElement.MatchCase (e) => Macros.QuotedMatchCase (ctx, e)
-                | PT.SyntaxElement.MatchCaseGuard (a, b) => Macros.QuotedCaseGuard (ctx, (a, b))
-                | PT.SyntaxElement.Function (e) => Macros.quoted_fundecl (ctx, e)
-                | PT.SyntaxElement.Parameter (e) => Macros.quoted_fparam (ctx, e)
-                | PT.SyntaxElement.ClassMember (e) => Macros.quoted_member (ctx, e)                
+                | PT.SyntaxElement.Expression (e) => Macros.quoted_expr (e)
+                | PT.SyntaxElement.MatchCase (e) => Macros.QuotedMatchCase (e)
+                | PT.SyntaxElement.Function (e) => Macros.quoted_fundecl (e)
+                | PT.SyntaxElement.Parameter (e) => Macros.quoted_fparam (e)
+                | PT.SyntaxElement.ClassMember (e) => Macros.quoted_member (e)                
                 | PT.SyntaxElement.TType =>
                   Message.fatal_error ("matching over typed types not supported")
+                | PT.SyntaxElement.RawToken
                 | PT.SyntaxElement.TypeBuilder
                 | PT.SyntaxElement.MethodBuilder
                 | PT.SyntaxElement.EventBuilder

@@ -1,0 +1,2124 @@
+/*
+ * Copyright (c) 2003-2005 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Collections;
+using Nemerle.Utility;
+
+using Nemerle.Compiler;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Compiler.SolverMacros;
+
+using PT = Nemerle.Compiler.Parsetree;
+
+namespace Nemerle.Compiler
+{
+  /** A class responsible for typing a single (global or local) function.  */
+  public partial class Typer
+  {
+    is_instance_ctor : bool;
+    is_method : bool;
+    env : GlobalEnv;
+    tenv : TyVarEnv;
+    current_fun : Fun_header;
+    current_type : TypeBuilder;
+    parent_typer : option [Typer];
+    mutable local_context : LocalContext;
+    messenger : Messenger;
+    solver : Solver;
+    locals_stack : Stack [LocalContext];
+    
+    #region Toplevel typing
+    // FIXME: copy doc from TypeMethod
+    /** Walk through method body typing it. */
+    public this (m : NemerleMethod)
+    {
+      solver = Passes.Solver;
+      current_type = m.DeclaringType :> TypeBuilder;
+      parent_typer = None ();
+      env = current_type.GlobalEnv;
+      current_fun = m.GetHeader ();
+      tenv = current_fun.tenv;
+      messenger = solver.CurrentMessenger;
+      locals_stack = Stack ();
+
+      local_context = LocalContext.Empty;
+
+      assert (solver.IsTopLevel);
+      solver.dt_store = NemerleMap ();
+
+      match (m.GetFunKind ()) {
+        | FunKind.Constructor =>
+          is_instance_ctor = true;
+          is_method = true;
+        | FunKind.Method | FunKind.BoundMethod =>
+          is_method = true;
+        | _ => ()
+      }
+
+      try {
+        Util.locate (m.Location, {
+          MaybeAddBaseCall (m);
+
+          mutable typer_done = false;
+          assert (messenger.IsTopLevel);
+
+          try {
+            messenger.Cleanup ();
+            messenger.InErrorMode = false;
+            RunTyper ();
+            MaybeDumpTypedTree ();
+            typer_done = true;
+            
+            assert (!messenger.SeenError);
+            RunDelayedTypings ();
+            MaybeDumpTypedTree ();
+            
+            assert (!messenger.SeenError);
+            messenger.InErrorMode = true;
+            RunSecondPass ();
+            MaybeDumpTypedTree ();
+          } catch {
+            | _ : RestartInErrorMode =>
+              solver.Unwind ();
+              messenger.Cleanup ();
+              assert (!messenger.InErrorMode);
+              assert (messenger.IsTopLevel);
+              messenger.InErrorMode = true;
+              local_context = LocalContext.Empty;
+
+              unless (typer_done)
+                RunTyper ();
+              unless (messenger.SeenError)
+                RunDelayedTypings ();
+              when (messenger.SeenError)
+                ReportError (messenger, $ "there were errors compiling $m");
+          }
+        })
+      } finally {
+        messenger.InErrorMode = true;
+      }
+    }
+    
+
+    internal static Fake (tb : TypeBuilder, tenv : TyVarEnv, fn : Fun_header) : Typer
+    {
+      Typer (tb, tenv, fn)
+    }
+    
+
+    this (tb : TypeBuilder, tenv : TyVarEnv, fn : Fun_header)
+    {
+      solver = Passes.Solver;
+      current_type = tb;
+      parent_typer = None ();
+      env = current_type.GlobalEnv;
+      current_fun = fn;
+      this.tenv = tenv;
+      messenger = solver.CurrentMessenger;
+
+      locals_stack = Stack ();
+      local_context = LocalContext.Empty;
+      assert (solver.IsTopLevel);
+    }
+
+    /** Walk through a local function body typing it. */
+    public this (parent : Typer, fn : Fun_header)
+    {
+      parent_typer = Some (parent);
+
+      // copy from parent
+      solver = parent.solver;
+      current_type = parent.current_type;
+      local_context = parent.local_context;
+      is_method = parent.is_method;
+      is_instance_ctor = parent.is_instance_ctor;
+      env = parent.env;
+      messenger = parent.messenger;
+      locals_stack = Stack ();
+      
+      current_fun = fn;
+      tenv = current_fun.tenv;
+
+      RunTyper ();
+    }
+
+
+    MaybeAddBaseCall (m : NemerleMethod) : void
+    {
+      when (is_instance_ctor && !m.DeclaringType.IsValueType)
+        match (current_fun.body) {
+          | FunBody.Parsed (expr) =>
+            match (expr) {
+              | PT.PExpr.Sequence (<[ base (.. $_) ]> :: _) => ()
+              | PT.PExpr.Sequence (<[ this (.. $_) ]> :: _) => ()
+              | PT.PExpr.Sequence =>
+                Util.locate (expr.loc,
+                  current_fun.body = FunBody.Parsed (<[ { base (); $expr } ]>)
+                )
+              | _ => assert (false)
+            }
+          | _ => ()
+        }
+    }
+
+
+    MaybeDumpTypedTree () : void
+    {
+      when (Options.DumpTypedTree) {
+        match (current_fun.body) {
+          | FunBody.Typed (expr) =>
+            Message.debug (expr.loc, $ "$current_type.$(current_fun.name) -> "
+                                       "$(current_fun.ret_type) : " +
+                                     PrettyPrint.SprintTyExpr (None (), expr) + "\n")
+          | _ => ()
+        }
+      }
+    }
+
+
+    RunTyper () : void
+    {
+      foreach (p : Fun_parm in current_fun.parms) {
+        Util.locate (p.loc, {
+          when (p.kind != ParmKind.Normal && !IsTopLevel)
+            ReportError (messenger, "ref/out parameters are not supported in local methods");
+          def is_mutable =
+            p.modifiers.mods %&& NemerleAttributes.Mutable ||
+            p.kind != ParmKind.Normal;
+          def l = LocalValue (current_fun, p.name, StripRefOut (p.ty),
+                              LocalValue.Kind.FunParm (p.kind),
+                              is_mutable = is_mutable);
+          AddLocal (PT.Name (p.name, p.color, null), l);
+          p.decl = l;
+        })
+      }
+
+      match (current_fun.body) {
+        | FunBody.Parsed (e) =>
+          def e' = TypeExpr (e);
+          messenger.CleanLocalError ();
+          _ = Expect (AtLeast (current_fun.ret_type), e'.Type, "function return type");
+          current_fun.body = FunBody.Typed (e');
+        | FunBody.Typed => assert (false)
+        | FunBody.Compiled => assert (false)
+        | FunBody.Abstract => ()
+      }
+    }
+
+
+    RunSecondPass () : void
+    {
+      def t2 = Typer2 (current_type, current_fun);
+      t2.Run ();
+    }
+    #endregion
+
+
+    #region Delayed typing queues
+    RunDelayedTypings () : void
+    {
+      mutable seen_unresolved = false;
+      mutable did_something = false;
+      
+      solver.dt_store.Iter (fun (dt : DelayedTyping, _) {
+        unless (dt.IsResolved) {
+          dt.Resolve ();
+          if (dt.IsResolved)
+            did_something = true;
+          else
+            seen_unresolved = true;
+        }
+      });
+
+      when (seen_unresolved)
+        if (did_something)
+          RunDelayedTypings ();
+        else {
+          mutable error_dt = null;
+          
+          solver.dt_store.Iter (fun (dt : DelayedTyping, _) {
+            unless (dt.IsResolved && error_dt == null)
+              error_dt = dt;
+          });
+          assert (error_dt != null);
+
+          Util.locate (error_dt.loc, ReportError (messenger, $ "typing fails on $error_dt"))
+        }
+    }
+    #endregion
+
+
+    #region Utilities
+    internal CurrentFunction : Fun_header
+    {
+      get { current_fun }
+    }
+
+
+    public Env : GlobalEnv
+    {
+      get { env }
+    }
+
+
+    IsTopLevel : bool
+    {
+      get { ! (parent_typer matches Some) }
+    }
+
+    AddLocal (name : PT.Name, local : LocalValue) : void
+    {
+      local_context = local_context.WithLocal (name, local);
+    }
+
+
+    TypeOf (expr : TExpr) : TyVar
+    {
+      expr.Type
+    }
+
+
+    DefineLocal (name : PT.Name, ty : TyVar,
+                 kind : LocalValue.Kind, is_mutable : bool) : LocalValue
+    {
+       LocalValue (current_fun, name.Id, ty, kind, is_mutable)
+    }
+
+
+    public BindType (t : PT.PExpr) : TyVar
+    {
+      tenv.Bind (env, current_type, t, 
+                 allow_tyvars = true, 
+                 check_parms = true)
+    }
+
+
+    public MonoBindType (t : PT.PExpr) : MType
+    {
+      tenv.MonoBind (env, current_type, t, 
+                     check_parms = true)
+    }
+
+
+    Delay (kind : DelayedTyping.Kind, expected : TyVar) : TExpr
+    {
+      TExpr.Delayed (expected, DelayedTyping (this, kind, expected))
+    }
+
+
+    /** Filter out wrong nodes, and if more then one left -- make the
+        [Overloaded] node, and register it.  Removes duplicates.
+
+        Wrong node is not [StillPossible] node, or one type of which
+        cannot unify with [expected].  
+      */
+    MakeOverloadedNode (overloads : list [OverloadPossibility], expected : TyVar) : TExpr
+    {
+      def res = OverloadPossibility.Unique (overloads);
+      match (OverloadPossibility.OnlyPossible (res, expected)) {
+        | [] => TExpr.Error ()
+
+        | [o] =>
+          def expr = o.Compile ();
+          _ = Expect (expected, expr.Type, "overloaded symbol");
+          expr
+        
+        | lst =>
+          Delay (DelayedTyping.Kind.Overloaded (lst), expected)
+      }
+    }
+
+
+    /** Run given typing action, without possiblity of any error messages. */
+    TryTyping (fn : void -> TExpr) : TExpr
+    {
+      TryTyping (IsError, fn)
+    }
+
+
+    /** Run given typing action, without possiblity of any error messages. */
+    TryTyping['a] (is_error : 'a -> bool,
+                   fn : void -> 'a) : 'a
+    {
+      solver.PushState ();
+      def res = fn ();
+      def is_wrong = is_error (res);
+      solver.PopState ();
+      if (is_wrong) res
+      else
+        // we cannot reuse the previous result, since it's has been
+        // popped off the stack
+        fn ()
+    }
+
+
+    IsError (expr : TExpr) : bool
+    {
+      expr matches TExpr.Error
+    }
+
+
+    /** Check if [e] is an l-value, and if not display an error message
+        mentioning [desc]. Additionally is [need_ref] require location of
+        the expression to be known (i.e. no properties and indexers).
+      */
+    CheckLValue (e : TExpr, need_ref : bool, desc : string) : void
+    {
+      def is_lvalue =
+        match (e) {
+          | TExpr.LocalRef (d) => d.IsMutable
+          | TExpr.StaticRef (m) =>
+            match (m.GetKind ()) {
+              | MemberKind.Field (f) =>
+                f.IsMutable || (current_fun.name == ".cctor" &&
+                                f.DeclaringType.Equals (current_type))
+              | MemberKind.Property (p) when !need_ref => p.IsMutable
+              | _ => false
+            }
+          | TExpr.StaticPropertyRef (p) when !need_ref => p.IsMutable
+          | TExpr.FieldMember (TExpr.This, _) when is_instance_ctor => true
+          | TExpr.FieldMember (_, mem) => mem.IsMutable
+          | TExpr.PropertyMember (_, p) when !need_ref => p.IsMutable
+          | TExpr.Call (TExpr.PropertyMember (_, p), _) when !need_ref => p.IsMutable
+          | TExpr.Call (TExpr.Delayed (dt), _) when !need_ref => dt.IsMutableIndexer
+          | TExpr.This when current_type.IsValueType
+          | TExpr.ArrayIndexer => true
+          | TExpr.EventMember
+          | TExpr.StaticEventRef =>
+            // this is for add/remove
+            // should we do some stricter checking here?
+            true
+          | _ => false
+        }
+      
+      unless (is_lvalue || e is TExpr.Error) {
+        ReportError (messenger, $ "needed a writable location for $desc, "
+                                  "got $(DescribeExpression (e)), which "
+                                  "is read-only");
+        messenger.CleanLocalError ();
+      }
+    }
+
+    LookupStaticMethod (ti : TypeInfo, name : string) : list [IMethod]
+    {
+      mutable res = [];
+      foreach (mem : IMember in ti.LookupMember (name)) { 
+        match (mem) {
+          | meth : IMethod when meth.IsStatic =>
+            res = meth :: res;
+          | _ => {}
+        }
+      }
+      match (ti.SuperClass ()) {
+        | Some (ti) =>
+          res + LookupStaticMethod (ti, name)
+        | None => res
+      }
+    }
+
+    
+    LookupStaticMethod (ty : MType, name : string) : list [IMethod]
+    {
+      match (ty) {
+        | MType.Class (ti, _) =>
+          LookupStaticMethod (ti, name)
+        | _ => []
+      }
+    }
+
+
+    SquashDuplicates['a] (lst : list ['a]) : list ['a]
+      where 'a : IMember
+    {
+      def seen = Hashtable ();
+      mutable res = [];
+      foreach (elem : IMember in lst) {
+        if (seen.Contains (elem.GetId ())) {}
+        else {
+          seen [elem.GetId ()] = null;
+          res = elem :: res;
+        }
+      }
+      res
+    }
+
+
+    MinimalTypes['a] (tyvars : list [TyVar * 'a]) : list [TyVar * 'a]
+    {
+      // a <= b
+      def le (a : TyVar, b : TyVar) {
+        a.TryRequire (b)
+      }
+      def less (a, b) {
+        le (a, b) && ! le (b, a)
+      }
+      
+      List.FoldLeft (tyvars, [], fun (elem, minimal) {
+        def (tv, _) = elem;
+        if (List.Exists (minimal, fun (min, _) { less (min, tv) }))
+          minimal
+        else
+          elem :: List.Filter (minimal, fun (min, _) { ! less (tv, min) })
+      })
+    }
+    
+    // FIXME! it won't work with named parameters
+    GetBestOverloads (parms : list [IMethod]) : list [IMethod]
+    {
+      def pairs =
+        List.Map (parms, fun (meth : IMethod) {
+            match (meth.GetFreshType ()) {
+              | MType.Fun (from, _) => (from, meth)
+              | _ => assert (false)
+            }
+          });
+    
+      List.Map (MinimalTypes (pairs), Pair.Second)
+    }
+
+
+    GetBestOverloads (parms : list [OverloadPossibility]) : list [OverloadPossibility]
+    {
+      def pairs =
+        List.Map (parms, fun (o : OverloadPossibility) {
+          match (o.Type) {
+            | MType.Fun (from, _) => (from, o)
+            | _ => (InternalType.Void, o)
+          }
+        });
+
+      def res = List.Map (MinimalTypes (pairs), Pair.Second);
+      def aint_var_args (op : OverloadPossibility) { !op.VarArgs }
+      if (List.Exists (res, aint_var_args))
+        List.Filter (res, aint_var_args)
+      else
+        res
+    }
+
+
+    This () : TExpr
+    {
+      TExpr.This (current_type.GetMemType ())
+    }
+
+
+    VoidLiteral () : TExpr
+    {
+      TExpr.Literal (InternalType.Void, Literal.Void ())
+    }
+
+
+    StripRefOut (t : TyVar) : TyVar
+    {
+      if (t.IsFixed)
+        match (t.FixedValue) {
+          | MType.Ref (t)
+          | MType.Out (t) => t
+          | _ => t
+        }
+      else t
+    }
+    #endregion
+
+
+    #region Solver interaction
+    FreshTyVar () : TyVar
+    {
+      solver.FreshTyVar ()
+    }
+
+
+    ConstructFunctionType (parms : list [TyVar], res : TyVar) : TyVar
+    {
+      MType.ConstructFunctionType (parms, res)
+    }
+
+   
+    AtLeast (m : TyVar) : TyVar
+    {
+      def tv = solver.FreshTyVar ();
+      _ = tv.Require (m);
+      tv
+    }
+
+
+    PushLocals () : void
+    {
+      locals_stack.Push (local_context)
+    }
+
+
+    PopLocals () : void
+    {
+      local_context = locals_stack.Pop ()
+    }
+    #endregion
+
+
+    #region Expressions in general
+    public TypeExpr (e : PT.PExpr) : TExpr
+    {
+      TypeExpr (e, FreshTyVar ())
+    }
+
+    
+    public TypeExpr (e : PT.PExpr, expected : TyVar) : TExpr
+    {
+      def dump = false;
+      when (dump)
+        Message.debug (e.loc, $ "typing expression: $e, exp=$expected");
+      Util.locate (e.loc, {
+        def e' = InterceptSpecialMacros (e, expected);
+        def e' = 
+          try {
+            if (e' != null) {
+              when (dump)
+                Message.debug (e.loc, $ "intercepted: $e'");
+              e'
+            } else {
+              when (dump)
+                Message.debug (e.loc, $ "running expand with: $e");
+              def e = MacroRegistry.expand_macro (this, e);
+              when (dump)
+                Message.debug (e.loc, $ "after expansion: $e");
+              def folded = ConstantFolder.FoldConstants (env, e, local_context.IsChecked);
+              def res = DoType (folded, expected);
+              when (dump)
+                Message.debug (e.loc, $ "done typing: $e --> $res");
+              res
+            }
+          } catch {
+            | _ : Recovery =>
+              messenger.SeenError = true;
+              TExpr.Error ()
+          }
+
+        e'.ty = expected;
+        e'
+      })
+    }
+
+
+    DoExpect (expected : TyVar, actual : TyVar, place : string, is_subtyping : bool) : bool
+    {
+      if (messenger.InErrorMode) {
+        def exp_s = expected.ToString ();
+        def act_s = actual.ToString ();
+        if (if (is_subtyping) actual.Require (expected) else expected.Unify (actual))
+          true
+        else {
+          ReportError (messenger, $ "expected $exp_s, got $act_s in $place");
+          false
+        }
+      } else {
+        if (if (is_subtyping) actual.Require (expected) else expected.Unify (actual))
+          true
+        else {
+          // the message is not going to be used anyway
+          ReportError (messenger, null);
+          false
+        }
+      }
+    }
+
+   
+    Expect (expected : TyVar, actual : TyVar, place : string) : bool
+    {
+      DoExpect (expected, actual, place, false)
+    }
+
+   
+    ExpectSubtyping (expected : TyVar, actual : TyVar, place : string) : bool
+    {
+      DoExpect (expected, actual, place, true)
+    }
+
+   
+    DoType (expression : PT.PExpr, expected : TyVar) : TExpr
+    {
+      match (expression) {
+        | PT.PExpr.ParmByRef
+        | PT.PExpr.ParmOut =>
+          ReportFatal (messenger, 
+                       "ref and out parameters are only allowed in function calls")
+
+        | PT.PExpr.Define (is_mutable, PT.Splicable.Name (name), val) =>
+          if (Expect (expected, InternalType.Void, "definition ``result''"))
+            TypeLocalDefinition (is_mutable, name, val)
+          else
+            TExpr.Error ()
+
+
+        | PT.PExpr.Define =>
+          ReportFatal (messenger,
+                       "$ operator used outside quotation <[ ... ]> context")
+                       
+
+        | PT.PExpr.DefPattern (pat, expr) =>
+          if (Expect (expected, InternalType.Void, "definition ``result''"))
+            TypeDefPattern (pat, expr);
+          else
+            TExpr.Error ()
+          
+
+        | PT.PExpr.DefFunctions (functions) =>
+          if (Expect (expected, InternalType.Void, "definition ``result''"))
+            TypeLocalFunction (functions)
+          else
+            TExpr.Error ()
+
+
+        // FIXME: this should be a macro
+        | PT.PExpr.Lambda (d) =>
+          def newname = d.header.ParsedName.NewName (Util.tmpname ("l"));
+          d.header.name = PT.Splicable.Name (newname);
+          def rf = PT.PExpr.Ref (newname);
+          def sq = PT.PExpr.Sequence ([PT.PExpr.DefFunctions ([d]), rf]);
+          TypeExpr (sq, expected)
+
+
+        // array [...]
+        | PT.PExpr.Array (<[ $(r : int) ]>, PT.PExpr.ListLiteral ([])) =>
+          def list_of_zeros (r) {
+            | 1 => [ <[ 0 ]> ]
+            | _ => <[ 0 ]> :: list_of_zeros (r - 1)
+          }
+          TypeExpr (<[ array (..$(list_of_zeros (r))) ]>, expected)
+
+
+        | PT.PExpr.Array (<[ $(rank : int) ]>, args) =>
+          TypeArray (rank, args, expected)
+
+
+        | PT.PExpr.Array (PT.PExpr.Spliced, _) =>
+          ReportFatal (messenger, "$ splicing outside of <[ quotation ]>")
+
+
+        | PT.PExpr.Array => Util.ice ("wrongly parsed array initializer")
+
+
+        | PT.PExpr.EmptyArray (sizes) =>
+          mutable size = 0;
+          def tsizes = List.Map (sizes, fun (x) {
+            ++size;
+            TypeExpr (x, InternalType.Int32)
+          });
+          def arty = MType.Array (FreshTyVar (), size);
+          _ = Expect (expected, arty, "empty array initializer");
+          TExpr.Array ([], tsizes)
+
+
+        | PT.PExpr.Indexer (obj, args) =>
+          TypeIndexer (obj, args, expected)
+
+
+        | (PT.PExpr.TryWith) as x =>
+          def body = TypeExpr (x.body);
+          if (ExpectSubtyping (expected, body.Type, "try body"))
+            match (x.exn) {
+              | PT.Splicable.Name (exn) =>
+                def decl = DefineLocal (exn, BindType (x.exn_ty),
+                                        LocalValue.Kind.ExceptionValue (), false);
+                PushLocals ();
+                def handler = 
+                  try {
+                    AddLocal (exn, decl);
+                    TypeExpr (x.handler);
+                  } finally {
+                    PopLocals ();
+                  }
+
+                _ = ExpectSubtyping (expected, handler.Type, "catch body");
+                TExpr.TryWith (body, decl, handler)
+
+              | _ =>
+                ReportFatal (messenger, 
+                             "$ operator used outside quotation <[ ... ]> context")
+            }
+          else TExpr.Error ()
+
+
+        | PT.PExpr.TryFinally (e1, e2) =>
+          def body = TypeExpr (e1, expected);
+          def tv = FreshTyVar ();
+          def handler = TypeExpr (e2, tv);
+          TExpr.TryFinally (body, handler)
+
+
+        | PT.PExpr.Typeof (t) =>
+          _ = Expect (expected, InternalType.Type, "typeof result");
+          TExpr.TypeOf (BindType (t))
+
+
+        | PT.PExpr.TypeConversion (e, t) =>
+          def t = MonoBindType (t);
+          if (Expect (expected, t, "type-conversion result")) {
+            def e' = TypeExpr (e);
+            def fv = e'.Type;
+
+            match (fv.Hint) {
+              | None =>
+                _ = Expect (t, fv, "type-converted expression");
+              | Some =>
+                fv.Fixate ();
+            }
+
+            TypeConversion (e', t)
+          } else
+            TExpr.Error ()
+
+
+        | PT.PExpr.TypeEnforcement (e, t) =>
+          def t = MonoBindType (t);
+          if (Expect (expected, t, "type-enforcement body")) {
+            def e = TypeExpr (e);
+            _ = Expect (AtLeast (t), e.Type, "type-enforced expression");
+            TExpr.TypeEnforcement (e, t)
+          } else
+            TExpr.Error ()
+
+
+        | PT.PExpr.Ref (name) =>
+          def idl = [name.Id];
+          match (TypeLocal (idl, name, expected)) {
+            | Some (e) => e
+            | None =>
+              TypeName (idl, name, expected)
+          }
+
+          
+        | PT.PExpr.Member (obj, PT.Splicable.Name (name)) =>
+          def mem_name = name.Id;
+          match (Util.qidl_of_expr (expression)) {
+            | Some ((idl, name)) =>
+              match (TryTyping (fun () { TypeName (idl, name, expected) })) {
+                | TExpr.Error =>
+                  // XXX this is a proper place to employ some heuristic
+                  // for example see if obj is uppercase identifier
+                  if (messenger.InErrorMode) {
+                    def obj = TypeExpr (obj);
+                    match (TryTyping (fun () { TypeMemberExpr (obj, mem_name, expected) })) {
+                      | TExpr.Error =>
+                        match (obj.Type.Hint) {
+                          | Some (MType.Fun) =>
+                            TypeName (idl, name, expected)
+                          | _ =>
+                            TypeMemberExpr (obj, mem_name, expected)
+                        }
+                      | e => e
+                    }
+                  } else
+                    TypeMemberExpr (TypeExpr (obj), mem_name, expected)
+                     
+                | e => e
+              }
+
+            | None =>
+              TypeMemberExpr (TypeExpr (obj), mem_name, expected)
+          }
+
+
+        | PT.PExpr.Member (_, _) =>
+          ReportFatal (messenger,
+                       "$ operator outside quotation <[ ... ]> context")
+
+
+        // 2 * 3 * 4 is Call(*,[2,3,4]), we need to transform it
+        | PT.PExpr.Call (PT.PExpr.Ref ({ idl = "*" }) as star_ref, parms)
+          when parms.Length > 2 =>
+          def loop (_) {
+            | [p1, p2] =>
+              PT.PExpr.Call (star_ref, [p2, p1])
+            | p :: ps =>
+              PT.PExpr.Call (star_ref, [loop (ps), p])
+            | [] => assert (false)
+          }
+          TypeExpr (loop (List.Rev (parms)), expected)
+          
+
+        | PT.PExpr.Call (fnc, parms) =>
+          TypeCall (fnc, parms, expected, is_property = false)
+
+
+        | PT.PExpr.Assign (PT.PExpr.Tuple (vars), e2) =>
+          if (Expect (expected, InternalType.Void, "assignment ``result''")) {
+            def tempnames = List.Map (vars, fun (_) { <[ $(Macros.NewSymbol () : name) ]> });
+            def assigns = List.Map2 (vars, tempnames, fun (x, y) { <[ $x = $y ]> });
+            def expr = <[
+              def (..$tempnames) = $e2;
+              {..$assigns }
+            ]>;
+            TypeExpr (expr, expected)
+          } else 
+            TExpr.Error ()
+
+
+        | PT.PExpr.Assign (PT.PExpr.Wildcard, e2) =>
+          if (Expect (expected, InternalType.Void, "assignment ``result''"))
+            TypeExpr (<[ def _ = $e2 ]>, expected)
+          else
+            TExpr.Error ()
+
+
+        | PT.PExpr.Assign (e1, e2) =>
+          if (Expect (expected, InternalType.Void, "assignment ``result''")) {
+            def target_type = FreshTyVar ();
+            def source_type = FreshTyVar ();
+            def e1 = TypeExpr (e1, target_type);
+            CheckLValue (e1, need_ref = false, desc = "assignment target");
+            def e2 = TypeExpr (e2, source_type);
+            if (ExpectSubtyping (target_type, source_type, "assignment"))
+              TExpr.Assign (e1, e2)
+            else
+              TExpr.Error ()
+          } else
+            TExpr.Error ()
+            
+
+        | PT.PExpr.GenericSpecifier (fnc, _) =>
+          TypeExpr (fnc, expected)
+
+
+        | PT.PExpr.ListLiteral (elems) =>
+          TypeExpr (Macros.Lift (elems), expected)
+
+
+        | PT.PExpr.Throw (null) =>
+          TExpr.Throw (null)
+
+
+        | PT.PExpr.Throw (e) =>
+          def e = TypeExpr (e);
+          _ = ExpectSubtyping (InternalType.Exception, e.Type, "thrown value");
+          TExpr.Throw (e)
+
+
+        | PT.PExpr.Literal (l) =>
+          _ = Expect (expected, TypeOfLiteral (l), "literal");
+          TExpr.Literal (l)
+
+
+        | PT.PExpr.This =>
+          if (is_method) {
+            _ = Expect (expected, current_type.GetMemType (), "`this'");
+            TExpr.This ()
+          } else
+            ReportFatal (messenger, "`this' used outside method");
+
+
+        | PT.PExpr.Base =>
+          if (is_method) {
+            def baseti = Option.UnSome (current_type.SuperClass ());
+            def parms = Option.UnSome (current_type.SuperType (baseti));
+            def parms = Solver.MonoTypes (parms);
+            def ty = MType.Class (baseti, parms);
+            _ = Expect (expected, ty, "`base'");
+            TExpr.This ()
+          } else
+            ReportFatal (messenger, "`base' used outside method");
+
+
+        | PT.PExpr.Sequence ([]) =>
+          _ = Expect (expected, InternalType.Void, "empty sequence");
+          TExpr.Literal (Literal.Void ())
+
+
+        | PT.PExpr.Sequence (l) =>
+          def loop (res, lst) {
+            match (lst) {
+              | [e] =>
+                def e' = TypeExpr (e, expected);
+                FixupSequence (e' :: res)
+              | x :: xs =>
+                def x' = TypeExpr (x, FreshTyVar ());
+                messenger.CleanLocalError ();
+                loop (x' :: res, xs)
+              | [] => assert (false)
+            }
+          }
+
+          PushLocals ();
+          def res = loop ([], l);
+          PopLocals ();
+          res
+
+
+        | PT.PExpr.Tuple (l) =>
+          mutable res_exprs = [];
+          mutable res_types = [];
+          foreach (e in l) {
+            def tv1 = FreshTyVar ();
+            def tv2 = FreshTyVar ();
+            _ = tv1.Require (tv2);
+            def e = TypeExpr (e, tv1);
+            res_exprs = e :: res_exprs;
+            res_types = tv2 :: res_types;
+          }
+          res_exprs = List.Rev (res_exprs);
+          res_types = List.Rev (res_types);
+          _ = Expect (expected, MType.Tuple (res_types), "tuple constructor");
+          TExpr.Tuple (res_exprs)
+
+
+        | (PT.PExpr.Match) as m =>
+          TypeMatch (m, expected)
+
+
+        | PT.PExpr.Typed (tytree) =>
+          _ = Expect (expected, TypeOf (tytree), "typed expression");
+          tytree
+
+
+        | PT.PExpr.Quoted (parse_element) =>
+          def lifted =
+            match (parse_element) {
+              | PT.SyntaxElement.Expression (e) => Macros.quoted_expr (e)
+              | PT.SyntaxElement.MatchCase (e) => Macros.QuotedMatchCase (e)
+              | PT.SyntaxElement.Function (e) => Macros.quoted_fundecl (e)
+              | PT.SyntaxElement.Parameter (e) => Macros.quoted_fparam (e)
+              | PT.SyntaxElement.ClassMember (e) => Macros.quoted_member (e)
+              | PT.SyntaxElement.TType (e) => Macros.quoted_ttype (e)
+
+              | PT.SyntaxElement.RawToken
+              | PT.SyntaxElement.TypeBuilder
+              | PT.SyntaxElement.MethodBuilder
+              | PT.SyntaxElement.FieldBuilder
+              | PT.SyntaxElement.EventBuilder
+              | PT.SyntaxElement.PropertyBuilder
+              | PT.SyntaxElement.ParameterBuilder =>
+                Util.ice ("strange syntax element appeared in quotation")
+            };
+          TypeExpr (lifted, expected)
+
+
+        | PT.PExpr.Spliced =>
+          ReportFatal (messenger, "$ macro keyword used in regular expression")
+          
+
+        | PT.PExpr.TypedType
+        | PT.PExpr.Wildcard 
+        | PT.PExpr.As =>
+          ReportFatal (messenger, "found pattern expression inside a raw expression")
+
+          
+        | PT.PExpr.Void =>
+          ReportFatal (messenger, "found type expression inside a raw expression")
+
+
+        | PT.PExpr.Error =>
+          ReportFatal (messenger, "parse error")
+          
+
+        | PT.PExpr.Ellipsis =>
+          Util.ice ("List of expression parameters out of any construct")
+          
+
+        | PT.PExpr.MacroCall  =>
+          Util.ice ("Macrocalls should have been expanded already")
+
+
+        | PT.PExpr.TypedPattern  =>
+          Util.ice ("typed pattern in raw expr")
+      }
+    }
+    #endregion
+
+       
+    #region ,,def''
+    TypeLocalDefinition (is_mutable : bool, name : PT.Name, val : PT.PExpr) : TExpr
+    {
+      // check for mutable symbol redefinitions
+      match (local_context.FindLocal (name)) {
+        | Some (l) =>
+          def warn (was_of_kind, is_of_kind) {
+              Message.warning ($ "redefinition of a local $was_of_kind "
+                                 "value `$(l.Name)' $is_of_kind");
+              Message.warning (l.loc, "  <-- previously seen here")
+          }
+
+          match ((is_mutable, l.IsMutable)) {
+            | (true, true) =>
+              warn ("mutable", "")
+            | (false, true) =>
+              warn ("mutable", "as non-mutable")
+            | (true, false) =>
+              warn ("non-mutable", "as mutable")
+            | _ => {}
+          }
+        | _ => {}
+      }
+      
+      def tv = FreshTyVar ();
+      def val = TypeExpr (val, tv);
+      def decl_ty =
+        if (is_mutable) {
+          def tv' = FreshTyVar ();
+          _ = tv'.Provide (tv);
+          tv'
+        } else tv;
+      def decl = DefineLocal (name, decl_ty, 
+                              LocalValue.Kind.Plain (), 
+                              is_mutable);
+      AddLocal (name, decl);
+      TExpr.DefValIn (decl, val, null)
+    }
+
+   
+    TypeDefPattern (pattern : PT.PExpr, value : PT.PExpr) : TExpr
+    {
+      def res = FreshTyVar ();
+      def matched_value = TypeExpr (value, res);
+      def pats = TypePatterns (res, [pattern]);
+      def case = Match_case (pats, null);
+
+      PatternTyping.check_matching ([case]);
+      FixupMatchCase (case);
+      TExpr.Match (matched_value, [case])
+    }
+
+
+    TypeLocalFunction (functions : list [PT.Function_decl]) : TExpr
+    {
+      mutable headers = [];
+
+      foreach (fn in functions) {
+        def (tenv, typarms) =
+          current_type.BindTyparms (tenv, fn.header.typarms);
+        def parms = List.Map (fn.header.parms,
+          fun (p : PT.Fun_parm) {
+            def name = p.name.GetName ();
+            Fun_parm (loc = p.loc,
+                      name = name.Id,
+                      color = name.color,
+                      ty = current_type.BindType (tenv, p.ty),
+                      decl = null,
+                      kind = ParmKind.Normal,
+                      modifiers = p.modifiers)
+          });
+        def name_obj = fn.header.name.GetName ();
+        def header = Fun_header (
+           ret_type = current_type.BindType (tenv, fn.header.ret_type),
+           typarms = typarms,
+           name = name_obj.Id,
+           parms = parms,
+           tenv = tenv,
+           loc = fn.header.loc);
+        def parm_types = List.Map (parms, fun (p : Fun_parm) { p.ty });
+        def fun_type = ConstructFunctionType (parm_types, header.ret_type);
+        def parents = current_fun :: current_fun.GetParents ();
+        def local = 
+          DefineLocal (name_obj, 
+                       fun_type, 
+                       LocalValue.Kind.Function (header, parents),
+                       is_mutable = false);
+        header.decl = local;
+        header.body = FunBody.Parsed (fn.body);
+        AddLocal (name_obj, local);
+        headers = header :: headers;
+      }
+
+      headers = List.Rev (headers);
+
+      foreach (hd in headers) {
+        _ = Typer (this, hd);
+      }
+
+      TExpr.DefFunctionsIn (headers, null)
+    }
+
+
+    /** Given a sequence of expression in a sequence (in reverse order),
+        reverse them and nest properly (def ... => let ... in ...).  */
+    FixupSequence (exprs : list [TExpr]) : TExpr
+    {
+      def loop (acc, lst) {
+        match (lst) {
+          | x :: xs =>
+            def acc =
+              match (x) {
+                | TExpr.DefValIn (_, _, body) as dv when body == null =>
+                  if (acc == null) dv.body = VoidLiteral ();
+                  else dv.body = acc;
+                  dv.ty = dv.body.Type;
+                  x
+
+                | TExpr.DefFunctionsIn (_, body) as dv when body == null =>
+                  if (acc == null) dv.body = VoidLiteral ();
+                  else dv.body = acc;
+                  dv.ty = dv.body.Type;
+                  x
+                  
+                | TExpr.Match (_, [case]) when case.body == null =>
+                  if (acc == null) case.body = VoidLiteral ();
+                  else case.body = acc;
+                  x.ty = case.body.Type;
+                  x
+
+                | x =>
+                  if (acc == null) x
+                  else TExpr.Sequence (acc.Type, x, acc);
+              }
+            loop (acc, xs)
+
+          | [] => acc
+        }
+      }
+
+      assert (!exprs.IsEmpty);
+
+      loop (null, exprs)
+    }
+    #endregion
+
+
+    #region Arrays, literals, indexers
+    // FIXME: make this tail rec
+    TypeArray (rank : int, args : PT.PExpr, expected : TyVar) : TExpr
+    {
+      def expr_list_flatten_and_count (e, remaining) {
+        match (e) {
+          | PT.PExpr.ListLiteral (elems) =>
+            when (List.Length (elems) != remaining)
+              ReportError (messenger, 
+                           "incorrectly structured array initializer");
+            elems
+          | _ =>
+            ReportError (messenger,
+                         "array initializer must be of form "
+                         "`array .[rank] [ [..], .., [..] ]'");
+            []
+        }
+      }
+
+      def dimensions (args, remaining_rank) {
+        if (remaining_rank == 0) []
+        else
+          match (args) {
+            | PT.PExpr.ListLiteral ((head :: _) as elems) =>
+              List.Length (elems) :: dimensions (head, remaining_rank - 1)
+            | _ =>
+              ReportError (messenger, 
+                           "array initializer must be of form "
+                           "`array [rank] [ [..], .., [..] ]'");
+              []
+          }
+      }
+      
+      /* Flattens the initializers and checks that there are the correct
+         number of them */
+      def flatten (args, dims) {
+        | (elem, []) => [elem]
+        | (l, h::t) => 
+          def flat = expr_list_flatten_and_count (l, h);
+          List.FoldLeft (flat, [], 
+                         fun (i, a) {
+                           List.Concat ([a, flatten (i, t)])
+                         })
+      }
+
+      def dimensions = dimensions (args, rank);
+      def lst = flatten (args, dimensions);
+
+      def dimensions =
+        List.Map (dimensions,
+                  fun (x) { TExpr.Literal (Literal.Int (x)) });
+      def element_type = FreshTyVar ();
+
+      def initializers =
+        List.Map (lst,
+                  fun (expr) {
+                    def tv = AtLeast (element_type);
+                    TypeExpr (expr, tv)
+                  });
+
+      _ = Expect (expected, MType.Array (element_type, rank), 
+                  "array initializer");
+
+      TExpr.Array (initializers, dimensions)
+    }
+
+
+    TypeOfLiteral (l : Literal) : TyVar
+    {
+      def mono_type =
+        match (l) {
+          | Literal.Null => null
+          | Literal.Void => InternalType.Void
+          | Literal.Byte => InternalType.Byte
+          | Literal.SByte => InternalType.SByte
+          | Literal.Short => InternalType.Int16
+          | Literal.UShort => InternalType.UInt16
+          | Literal.Int => InternalType.Int32
+          | Literal.UInt => InternalType.UInt32
+          | Literal.Long => InternalType.Int64
+          | Literal.ULong => InternalType.UInt64
+          | Literal.Char => InternalType.Char
+          | Literal.String => InternalType.String
+          | Literal.Float => InternalType.Single
+          | Literal.Double => InternalType.Double
+          | Literal.Decimal => InternalType.Decimal
+          | Literal.Bool => InternalType.Boolean
+          | Literal.Enum (_, tc) => MType.Class (tc, [])
+        }
+
+      if (mono_type == null) {
+        def tv = FreshTyVar ();
+        _ = tv.Require (InternalType.Object);
+        tv.IsFromNull = true;
+        tv
+      } else {
+        mono_type
+      }
+    }
+
+
+    TypeIndexer (obj : PT.PExpr, args : list [PT.PExpr], expected : TyVar) : TExpr
+    {
+      def obj = TypeExpr (obj);
+      
+      match (obj) {
+        | TExpr.PropertyMember (_, prop) when prop.IsIndexer
+        | TExpr.StaticPropertyRef (prop) when prop.IsIndexer
+        | TExpr.Delayed =>
+          TypeCall (<[ $(obj : typed) ]>, args, expected, is_property = true)
+        
+        | _ =>
+          match (obj.Type.Hint) {
+            | Some (MType.Class (ti, _))
+              when Option.IsSome (ti.DefaultIndexerName) =>
+              // Message.debug ($ "using $(ti.DefaultIndexerName) for $ti");
+              def idx = Option.UnSome (ti.DefaultIndexerName);
+              TypeIndexer (<[ $(obj : typed) . $(idx : dyn) ]>, args, expected)
+              
+            | Some (MType.Array (indexer_over_type, rank) as arty) =>
+              // indexers over arrays
+              def typed_args = List.Map (args, fun (x) { TypeExpr (x) });
+
+              _ = TypeOf (obj).Require (arty);
+              
+              mutable args_amount = rank;
+              foreach (index in typed_args) {
+                _ = Expect (TypeOf (index), InternalType.Int32, "array index");
+                --args_amount;
+              }
+
+              _ = Expect (expected, indexer_over_type, "array indexer");
+
+              if (args_amount != 0) {
+                ReportError (messenger, "wrong number of indexes");
+                TExpr.Error ()
+              } else {
+                TExpr.ArrayIndexer (indexer_over_type, obj, typed_args)
+              }
+            | _ =>
+              ReportError (messenger, 
+                           $ "cannot find any suitable indexer in "
+                             "$(TypeOf (obj))");
+              TExpr.Error ()
+          }
+      }
+    }
+    #endregion
+
+
+    #region Member access
+    TypeToConstructor (t : TypeInfo) : list [OverloadPossibility]
+    {
+      match (t.GetTydecl ()) {
+        | TypeDeclaration.Alias (MType.Class (t, _)) => TypeToConstructor (t)
+        | _ =>
+          if (t.Attributes %&& NemerleAttributes.Abstract) {
+            ReportError (messenger, 
+                         $ "  the type `$(t)' is abstract and cannot "
+                           "be constructed");
+            []
+          } else
+            match (t.GetConstantObject ()) {
+              | null =>
+                mutable seen_empty_ctor = false;
+                mutable res = [];
+
+                foreach (meth : IMethod in t.LookupMember (".ctor")) {
+                  match (meth.GetFunKind ()) {
+                    | FunKind.Constructor 
+                      when meth.CanAccess (current_type) =>
+                      when (meth.GetHeader ().parms.IsEmpty)
+                        seen_empty_ctor = true;
+                      def from =
+                        match (meth.GetMemType ()) {
+                          | MType.Fun (from, _) => from
+                          | _ => assert (false)
+                        }
+                      // XXX if we want variant ctor to be of variant type
+                      // here is the place
+                      def mt = MType.Fun (from, t.GetMemType ());
+                      def ty = t.FreshSubst ().Apply (mt);
+                      res = OverloadPossibility (solver, ty, null, meth) :: res;
+                      when (meth.IsVarArgs) {
+                        def op = OverloadPossibility (solver, ty, null, meth);
+                        op.VarArgs = true;
+                        res = op :: res;
+                      }
+                    | _ => {}
+                  }
+                }
+
+                when (t.IsValueType && !seen_empty_ctor) {
+                  def res_ty = t.FreshSubst ().Apply (t.GetMemType ());
+                  def ty = ConstructFunctionType ([], res_ty);
+                  def op = OverloadPossibility (solver, ty, null, t);
+                  res = op :: res;
+                }
+
+                when (res.IsEmpty)
+                  ReportError (messenger, 
+                               $ "  the type `$(t)' has no accessible constructors");
+
+                res
+
+              | f =>
+                def res = t.FreshSubst ().Apply (f.GetMemType ());
+                def ty = ConstructFunctionType ([], res);
+                def op = OverloadPossibility (solver, ty, null, f);
+                op.IsConstantObject = true;
+                [op]
+            }
+       }
+    }
+
+
+    InterpretGlobal (symbol : IMember) : list [OverloadPossibility]
+    {
+      def single (ty, mem) {
+         [OverloadPossibility (solver, ty, null, mem)]
+      }
+      
+      match (symbol) {
+        | t : TypeInfo =>
+          if (!t.CanAccess (current_type)) {
+            ReportError (messenger, $ "  cannot access type `$(t)'");
+            []
+          } else {
+            TypeToConstructor (t)
+          }
+        
+        | mem when !mem.IsStatic =>
+          when (!is_method)
+            ReportError (messenger,
+                         $ "  trying to access an instance member "
+                         "$(mem.DeclaringType).$(mem.Name) from a static "
+                         "method");
+          []
+
+        | mem when !mem.CanAccess (current_type) =>
+          ReportError (messenger,
+                       $ "  cannot access `$(mem.DeclaringType).$(mem.Name)'");
+          []
+
+        | mem =>
+          match (mem.GetKind ()) {
+            | MemberKind.Type (t) =>
+              TypeToConstructor (t)
+
+            | MemberKind.Method (m) =>
+              if (m.IsVarArgs) {
+                def o =
+                  OverloadPossibility (solver, m.GetFreshType (), null, m);
+                def o' =
+                  OverloadPossibility (solver, m.GetFreshType (), null, m);
+                o'.VarArgs = true;
+                [o, o']
+              } else
+                single (m.GetFreshType (), m)
+
+            | MemberKind.Property
+            | MemberKind.Field =>
+              single (mem.GetMemType (), mem)
+
+            | MemberKind.Event (e) =>
+              if (e.DeclaringType.Equals (current_type)) {
+                def field = (e :> NemerleEvent).storage_field;
+                if (field == null)
+                  [] // XXX how?
+                else
+                  single (field.GetMemType (), field)
+              } else
+                single (e.GetMemType (), e)
+          }
+      }
+    }
+
+
+    InterpretGlobals (symbols : list [IMember], 
+                      expected : TyVar, 
+                      dump_errors : bool) 
+                              : list [OverloadPossibility]
+    {
+      mutable res = [];
+
+      foreach (symbol in symbols) {
+        if (dump_errors) {
+          foreach (op in InterpretGlobal (symbol)) {
+            solver.PushState ();
+            messenger.NeedMessage = true;
+            _ = Expect (op.Type, expected, op.ToString ());
+            solver.PopState ();
+          }
+        } else {
+          solver.PushState ();
+          def not_ok = InterpretGlobal (symbol).IsEmpty;
+          solver.PopState ();
+          unless (not_ok)
+            foreach (op in InterpretGlobal (symbol)) {
+              solver.PushState ();
+              def ok = op.Type.Unify (expected);
+              solver.PopState ();
+              when (ok)
+                res = op :: res;
+            }
+        }
+      }
+
+      res
+    }
+
+
+    TypeMemberExpr (obj : TExpr, mem_name : string, expected : TyVar) : TExpr
+    {
+      match (TypeMember (obj, mem_name, expected)) {
+        | Some ([]) =>
+          ReportError (messenger, $ "there is no member named `$(mem_name)' "
+                                    "in $(TypeOf (obj)) with type $expected");
+          TExpr.Error ()
+
+        | Some (lst) =>
+          MakeOverloadedNode (lst, expected)
+        | None =>
+          Delay (DelayedTyping.Kind.MemberAccess (obj, mem_name), expected)
+      }
+    }
+
+                    
+    TypeMember (obj : TExpr, mem_name : string, expected : TyVar) 
+                    : option [list [OverloadPossibility]]
+    {
+      // XXX we should add a bound here, that the type should have the
+      // field mem_name
+      def possible_type =
+        match (obj.Type.AnyHint) {
+          | Some (t) => t
+          | None => null
+        }
+      if (possible_type != null) {
+        def mems = Hashtable ();
+        def visited = Hashtable ();
+        mutable res = [];
+        mutable print_errors = false;
+
+        def lookup (t) {
+          | MType.Class (tc, _) when (! visited.Contains (tc.GetId ())) =>
+            visited [tc.GetId ()] = null;
+            foreach (mem : IMember in tc.LookupMember (mem_name))
+              when (!mems.Contains (mem.GetId ())) {
+                mems [mem.GetId ()] = null;
+                if (mem.IsStatic)
+                  when (print_errors)
+                    ReportError (messenger, 
+                                 $ "trying to access static member ($mem) "
+                                   "through an instance")
+                else if (!mem.CanAccess (current_type))
+                  when (print_errors)
+                    ReportError (messenger,
+                                 $ "$mem is not accessible")
+                else {
+                  def ty =
+                    match (mem) {
+                      | meth : IMethod => t.TypeOfMethod (meth)
+                      | _ => t.TypeOfMember (mem)
+                    }
+                  def allowed = expected.TryUnify (ty);
+                  if (!allowed)
+                    when (print_errors) {
+                      solver.PushState ();
+                      messenger.NeedMessage = true;
+                      def allowed = expected.Unify (ty);
+                      assert (!allowed);
+                      ReportError (messenger, 
+                                   $ "$mem has invalid type (expected $expected)")
+                    }
+                  else {
+                    res = OverloadPossibility (solver, ty, obj, mem) :: res;
+                    match (mem) {
+                      | meth : IMethod when meth.IsVarArgs =>
+                        def op = OverloadPossibility (solver, ty, obj, mem);
+                        op.VarArgs = true;
+                        res = op :: res;
+                      | _ => {}
+                    }
+                  }
+                }
+              }
+          | MType.TyVarRef (tv) =>
+            List.Iter (InternalType.Object :: tv.Constraints, lookup)
+          | MType.Array =>
+            lookup (InternalType.Array)
+          | MType.Intersection (lst) =>
+            List.Iter (lst, lookup)
+          | MType.Tuple
+          | MType.Fun =>
+            lookup (InternalType.Object)
+          | _ => ()
+        }
+
+        lookup (possible_type);
+        when (res.IsEmpty) {
+          print_errors = true;
+          visited.Clear ();
+          mems.Clear ();
+          lookup (possible_type);
+        }
+        
+        Some (res)
+      } else if (IsError (obj)) {
+        Some ([])
+      } else {
+        // FIXME: here we should traverse all type paths from lower to
+        // upper bound and look how this field is defined there, and finally
+        // add maybe-more-specific lower bound
+        None ()
+      }
+    }
+
+
+    TypeLocal (idl : list [string], name : PT.Name, expected : TyVar) : option [TExpr]
+    {
+      match (idl) {
+        | [_] when local_context.FindLocal (name) matches Some =>
+          def local = Option.UnSome (local_context.FindLocal (name));
+          def ty =
+            match (local.ValKind) {
+              | LocalValue.Kind.Function (fun_header, _) =>
+                if (fun_header.typarms.IsEmpty)
+                  local.Type
+                else
+                  // XXX this fixes entire type, but we cannot do any better
+                  // I guess
+                  Subst.Fresh (solver, fun_header.typarms).Apply (local.Type.Fix ())
+              | _ => local.Type
+            }
+          // Message.debug ($ "type local: $idl : $ty");
+          _ = Expect (expected, ty, "value reference");
+          Some (TExpr.LocalRef (local))
+        | _ => None ()
+      }
+    }
+
+
+    TypeName (idl : list [string], name : PT.Name, expected : TyVar) : TExpr
+    {
+      // Message.debug ($ "type name: $idl");
+      def from_this =
+        match (idl) {
+          | [name] when is_method =>
+            solver.PushState ();
+            def res = Option.UnSome (TypeMember (This (), name, expected));
+            solver.PopState ();
+            if (res.IsEmpty) []
+            else Option.UnSome (TypeMember (This (), name, expected))
+          | _ => []
+        };
+      def globals = name.GetEnv (env).LookupSymbol (idl, current_type);
+      def from_global = InterpretGlobals (globals, expected, dump_errors = false);
+      // Message.debug ($ "type name g: $globals $from_global");
+
+      match (from_this + from_global) {
+        | [] =>
+          if (globals.IsEmpty) {
+            ReportError (messenger,
+                         $ "unbound name `$(idl.ToString (\".\"))'");
+          } else {
+            ReportError (messenger, 
+                         $ "none of the meanings of "
+                           "`$(idl.ToString (\".\"))' meets the type "
+                           "$expected:");
+            _ = InterpretGlobals (globals, expected, dump_errors = true);
+          }
+          TExpr.Error ()
+        | overloads =>
+          MakeOverloadedNode (overloads, expected)
+      }
+    }
+    #endregion
+
+
+    #region Operators
+    static binary_operators : Hashtable [string, string];
+    static unary_operators : Hashtable [string, string];
+    
+    static this ()
+    {
+      def binary = [
+        ("+", "op_Addition"),
+        ("&", "op_BitwiseAnd"),
+        ("%&", "op_BitwiseAnd"),
+        ("|", "op_BitwiseOr"),
+        ("%|", "op_BitwiseOr"),
+        ("/", "op_Division"),
+        ("==", "op_Equality"),
+        ("^", "op_ExclusiveOr"),
+        ("%^", "op_ExclusiveOr"),
+        (">", "op_GreaterThan"),
+        (">=", "op_GreaterThanOrEqual"),
+        ("!=", "op_Inequality"),
+        ("<<", "op_LeftShift"),
+        ("<", "op_LessThan"),
+        ("<=", "op_LessThanOrEqual"),
+        ("%", "op_Modulus"),
+        ("*", "op_Multiply"),
+        (">>", "op_RightShift"),
+        ("-", "op_Subtraction")
+      ];
+
+      def unary = [
+      /*
+        ("--", "op_Decrement"),
+        ("++", "op_Increment"),
+       */
+        ("!", "op_LogicalNot"),
+        ("~", "op_UnaryBitwiseNot"),
+        ("-", "op_UnaryMinus"),
+        ("+", "op_UnaryPlus")
+      ];
+
+      binary_operators = Hashtable ();
+      unary_operators = Hashtable ();
+
+      List.Iter (binary, binary_operators.Add);
+      List.Iter (unary, unary_operators.Add);
+    }
+    #endregion
+    
+
+    #region Function calls
+    TryTypeCall (fnc : TExpr, parms : list [Parm], expected : TyVar,
+                 var_args : bool) : TExpr
+    {
+      def ct = CallTyper (this, fnc, parms, expected);
+      ct.is_var_args = var_args;
+      ct.Run ();
+      if (ct.result == null)
+        TExpr.Error ()
+      else
+        ct.result
+    }
+
+
+    GetBaseOverloads (is_base : bool) : TExpr
+    {
+      def name = if (is_base) "base" else "this";
+      if (!is_instance_ctor)
+        ReportFatal (messenger, $ "$name (...) used outside constructor")
+      else {
+        def lookup_in =
+          if (is_base)
+            Option.UnSome (current_type.SuperClass ())
+          else current_type;
+        
+        def sub = current_type.SubtypingSubst (lookup_in);
+        
+        mutable res = [];
+        foreach (meth : IMethod in lookup_in.LookupMember (".ctor"))
+          when (meth.CanAccess (current_type) && 
+                meth.GetFunKind () matches FunKind.Constructor) {
+            def ty = sub.Apply (meth.GetMemType ());
+            def o = OverloadPossibility (solver, ty, null, meth);
+            o.IsBaseCall = true;
+            res = o :: res;
+            when (meth.IsVarArgs) {
+              def op = OverloadPossibility (solver, ty, null, meth);
+              op.VarArgs = true;
+              res = op :: res;
+            }
+          }
+
+        match (res) {
+          | [] =>
+            ReportFatal (messenger, 
+                         $ "the type `$(lookup_in)' provides no accessible "
+                           "constructor for $name (...)")
+          | lst =>
+            MakeOverloadedNode (lst, FreshTyVar ())
+        }
+      }
+    }
+
+
+    TypeCall (fnc : PT.PExpr,
+              parms : list [PT.PExpr], 
+              expected : TyVar, 
+              is_property : bool) : TExpr
+    {
+      def refout (name, expr) {
+        def tv = FreshTyVar ();
+        match (expr) {
+          | PT.PExpr.ParmByRef (ex)
+          | PT.PExpr.ParmOut (ex) =>
+            def ex = TypeExpr (ex, tv);
+            CheckLValue (ex, need_ref = true, desc = "ref/out parameter");
+            def kind =
+              match (expr) {
+                | PT.PExpr.ParmByRef => ParmKind.Ref
+                | _ => ParmKind.Out
+              };
+            Parm (kind, ex, name)
+          | ex =>
+            def ex = TypeExpr (ex, tv);
+            Parm (ParmKind.Normal, ex, name)
+        }
+      }
+
+      def compile_parm (p : PT.PExpr) {
+        | <[ $(name : name) = $e ]> => refout (name.Id, e)
+        | e => refout ("", e)
+      };
+
+      def parms = List.Map (parms, compile_parm);
+
+      // catch foo == null as a special case to avoid
+      // infinite recursion on overloaded operators
+      match ((fnc, parms)) {
+        | (PT.PExpr.Ref (name), [parm1, parm2]) 
+          when name.Id == "==" || name.Id == "!=" =>
+          match (parm1.expr) {
+            | TExpr.Literal (Literal.Null) =>
+              parm1.expr = TypeExpr (<[ (null : object) ]>)
+            | _ => {}
+          }
+          match (parm2.expr) {
+            | TExpr.Literal (Literal.Null) =>
+              parm2.expr = TypeExpr (<[ (null : object) ]>)
+            | _ => {}
+          }
+        | _ => {}
+      }
+
+      def fnc =
+        match ((fnc, parms)) {
+          | (PT.PExpr.Ref (name), [parm1, parm2]) 
+            when binary_operators.Contains (name.Id) =>
+            // hack: fun -> delegate conversion
+            when ((name.Id == "+" || name.Id == "-") &&
+                   parm2.expr.Type.Hint matches Some (MType.Fun))
+              match (parm1.expr.Type.Hint) {
+                | Some (MType.Class (tc, _)) when tc.IsDelegate =>
+                  def name = Util.ExprOfQid (tc.FullName);
+                  parm2.expr = TypeExpr (<[ $name ($(parm2.expr : typed)) ]>);
+                | _ => {}
+              }
+                
+            def kind =
+              DelayedTyping.Kind.Operator (TypeOf (parm1.expr), 
+                                           TypeOf (parm2.expr), 
+                                           binary_operators [name.Id]);
+            when (parm1.kind != ParmKind.Normal ||
+                  parm2.kind != ParmKind.Normal)
+              ReportError (messenger, 
+                           $ "ref/out parameters not supported in "
+                             "`$(name)' operands");
+            
+            Delay (kind, FreshTyVar ())
+
+          
+          | (PT.PExpr.Ref (name), [parm1]) 
+            when unary_operators.Contains (name.Id) =>
+            def kind =
+              DelayedTyping.Kind.Operator (TypeOf (parm1.expr), null,
+                                           unary_operators [name.Id]);
+            when (parm1.kind != ParmKind.Normal)
+              ReportError (messenger, 
+                           $ "ref/out parameters not supported in "
+                             "`$(name)' operand");
+            
+            Delay (kind, FreshTyVar ())
+
+          | (<[ this ]>, _) => GetBaseOverloads (is_base = false)
+
+          | (<[ base ]>, _) => GetBaseOverloads (is_base = true)
+
+          | _ =>
+            def ex = TypeExpr (fnc, FreshTyVar ());
+            match (ex.Type.Hint) {
+              | Some (MType.Class (tc, _)) when tc.IsDelegate =>
+                TypeExpr (<[ $(ex : typed).Invoke ]>)
+              | _ => ex
+            }
+        }
+       
+      def res =
+        match (fnc) {
+          | (TExpr.Delayed (dt)) as expr =>
+            def expr = TExpr.Call (expected, expr, parms);
+            dt.SetCallExpr (expr :> TExpr.Call);
+            dt.Resolve (); // just try
+            expr
+
+          | fnc =>
+            def res = TryTypeCall (fnc, parms, expected, var_args = false);
+            when (IsError (res))
+              ReportError (messenger, $ "typing error in call");
+            res
+        }
+      
+      match (res) {
+        | TExpr.Call (TExpr.PropertyMember (_, prop), _) when prop.IsIndexer =>
+          if (is_property) {}
+          else
+            ReportError (messenger, 
+                         $ "attempt to call an indexer property `$(prop.Name)'");
+        // it fails for overloaded indexers
+        // | expr when is_property =>
+        //  ReportError (messenger, 
+        //               $ "the thing indexed isn't property, it is $(expr)");
+        | _ => ()
+      }
+
+      res
+    }
+    #endregion
+
+
+    #region Type conversions
+    TypeConversion (expr : TExpr, to : MType) : TExpr
+    {
+      def from = expr.Type.FixedValue;
+
+      def no_check_needed = from.TryRequire (to);
+
+      if (no_check_needed) {
+        // FIXME enable this some time in the future
+        // Message.warning ($ "there is no check needed to cast $from to $to");
+        // Message.hint_once ("consider using : instead of :>");
+        TExpr.TypeEnforcement (expr, to)
+      } else {
+        def just_subtyping = to.TryRequire (from);
+
+        if (just_subtyping) {
+          TExpr.TypeConversion (expr, to, is_checked = local_context.IsChecked);
+        } else {
+          def operators = SquashDuplicates (
+            LookupStaticMethod (from, "op_Explicit") +
+            LookupStaticMethod (to, "op_Explicit") +
+            LookupStaticMethod (from, "op_Implicit") +
+            LookupStaticMethod (to, "op_Implicit"));
+          def needed = ConstructFunctionType ([from : TyVar], to);
+          def operators = List.Filter (operators, fun (op : IMethod) {
+            op.GetFreshType ().TryRequire (needed);
+          });
+
+          def operators = GetBestOverloads (operators);
+
+          match (operators) {
+            | [single] =>
+              TExpr.Call (TExpr.StaticRef (single), [Parm (expr)])
+            | [] =>
+              if (from.IsValueType && to.IsValueType)
+                // FIXME: stricter checking here
+                TExpr.TypeConversion (expr, to, is_checked = local_context.IsChecked)
+              else {
+                // FIXME enable after fixing sources
+                // ReportError (messenger, $ "cannot convert $from to $to");
+                // Message.warning ($ "cannot convert $from to $to");
+                TExpr.TypeConversion (expr, to, is_checked = local_context.IsChecked)
+                // TExpr.Error ()
+              }
+            | lst =>
+              // FIXME: included method list
+              ReportError (messenger, $"overload ambiguity in type conversion $lst");
+              TExpr.Error ()
+          }
+        }
+      }
+    }
+    #endregion
+
+
+    #region Matching typing
+    TypePatterns (matched_value_type : TyVar, 
+                  patterns : list [PT.PExpr]) 
+                  : list [Pattern * TExpr]
+    {
+      def patterns = List.Map (patterns, fun (_) {
+        | <[ @when ($pat, $expr) ]> => (pat, Some (expr))
+        | <[ $pat ]> => (pat, None ())
+      });
+      def typer = PatternTyper (this, matched_value_type, patterns);
+      typer.Run ()
+    }
+
+
+    FixupMatchCase (case : Match_case) : void
+    {
+      case.patterns = 
+        List.Map (case.patterns, 
+                  fun (p, e) { 
+                     (PatternTyping.strip_enums (p), e) 
+                  });
+      // case.body = TExpr.TypeEnforcement (case.body, t);
+    }
+
+    
+    TypeMatch (mtch : PT.PExpr.Match, expected : TyVar) : TExpr
+    {
+      def matched_value_type = FreshTyVar ();
+      def matched_value = TypeExpr (mtch.expr, matched_value_type);
+      mutable disable_warnings = false;
+      mutable res = [];
+
+      foreach (case in mtch.cases) {
+        when (case.disable_warnings)
+          disable_warnings = true;
+
+        PushLocals ();
+        def pats = TypePatterns (matched_value_type, case.patterns);
+        messenger.CleanLocalError ();
+        def res_ty = AtLeast (expected);
+        // Message.debug ($ "body: res_ty=$res_ty expected=$expected");
+        def body = TypeExpr (case.body, res_ty);
+        // Message.debug ($ "after-body: res_ty=$res_ty expected=$expected");
+        messenger.CleanLocalError ();
+        PopLocals ();
+
+        res = Match_case (pats, body) :: res;
+      }
+
+      if (res.IsEmpty) {
+        ReportError (messenger, "cannot have an empty match construct");
+        TExpr.Error ()
+      } else {
+        res = List.Rev (res);
+
+        unless (disable_warnings)
+          PatternTyping.check_matching (res);
+        List.Iter (res, FixupMatchCase);
+
+        TExpr.Match (matched_value, res)
+      }
+    }
+    #endregion
+
+
+    #region Special macros
+    mutable checked_macro : GlobalEnv.NamespaceND;
+    mutable unchecked_macro : GlobalEnv.NamespaceND;
+    
+    InterceptSpecialMacros (expr : PT.PExpr, expected : TyVar) : TExpr
+    {
+      when (checked_macro == null) {
+        checked_macro = GlobalEnv.ExactPath (["Nemerle", "Core", "checked"]);
+        unchecked_macro = GlobalEnv.ExactPath (["Nemerle", "Core", "unchecked"]);
+      }
+      
+      match (expr) {
+        | PT.PExpr.MacroCall (_, ns, [PT.SyntaxElement.Expression (expr)]) =>
+          if (ns.Equals (checked_macro) ||
+              ns.Equals (unchecked_macro)) {
+            PushLocals ();
+            try {
+              local_context = local_context.WithChecked (ns.Equals (checked_macro));
+              TypeExpr (expr, expected);
+            } finally {
+              PopLocals ();
+            }
+          } else null
+
+        | _ => null
+      }
+    }
+    #endregion
+
+
+    #region Pretty printing
+    DescribeExpression (expr : TExpr) : string
+    {
+      match (expr) {
+        | TExpr.LocalRef (d) =>
+          $ "a reference to local symbol `$(d)'"
+        | TExpr.StaticRef (m) =>
+          def tyname =
+            if (m.DeclaringType == null)
+              ""
+            else
+              m.DeclaringType.FullName + ".";
+          "a reference to global symbol `" + tyname + m.Name + "'"
+        | TExpr.FieldMember (_, f) =>
+          "a reference to field `" + f.Name + "'"
+        | TExpr.ConstantObjectRef (m) =>
+          "a reference to constant constructor of `" +
+          m.DeclaringType.FullName + "'"
+        | TExpr.ImplicitValueTypeCtor (t) =>
+          "a reference to implicit constructor of `" +
+          t.FullName + "'"
+        | TExpr.StaticPropertyRef (p)
+        | TExpr.PropertyMember (_, p) =>
+          "a reference to property `" + p.Name + "'"
+        | TExpr.StaticEventRef (p)
+        | TExpr.EventMember (_, p) =>
+          "a reference to event `" + p.Name + "'"
+        | TExpr.MethodRef (_, m, _) =>
+          "a reference to method `" + m.Name + "'"
+        | TExpr.TailCall (f, _)
+        | TExpr.Call (f, _) =>
+          "a function call to " + DescribeExpression (f)
+        | TExpr.SelfTailCall =>
+          "self-recursive function call"
+        | TExpr.Assign => "an assignment"
+        | TExpr.DefValIn => "a value binding"
+        | TExpr.DefFunctionsIn => "a function binding"
+        | TExpr.Match => "a `match' expression"
+        | TExpr.Throw => "a throw expression"
+        | TExpr.TryWith => "a try...with expression"
+        | TExpr.TryFinally => "a try...finally expression"
+        | TExpr.Literal => "a literal value"
+        | TExpr.This => "a this pointer reference"
+        | TExpr.Base => "a base class reference"
+        | TExpr.TypeConversion => "a type conversion (:>)"
+        | TExpr.TypeEnforcement => "a type enforcement (:)"
+        | TExpr.Sequence => "a sequence"
+        | TExpr.Tuple => "a tuple constructor"
+        | TExpr.Array => "an array constructor"
+        | TExpr.ArrayIndexer => "an array indexer reference"
+        | TExpr.TypeOf => "a typeof expression"
+        | TExpr.OpCode => "an operator reference"
+        
+        | TExpr.Error => "an erroneous expression"
+        | TExpr.Delayed => "a yet-untyped expression"
+      }
+    }
+    #endregion
+  }
+}

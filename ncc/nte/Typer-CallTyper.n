@@ -30,7 +30,6 @@ using Nemerle.Collections;
 using Nemerle.Utility;
 
 using Nemerle.Compiler;
-using Nemerle.Compiler.Tyexpr;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Compiler.SolverMacros;
 
@@ -48,6 +47,7 @@ namespace Nemerle.Compiler
       expected_type : TyVar;
       typer : Typer;
       messenger : Messenger;
+      solver : Solver;
 
       mutable result_type : TyVar;
       mutable formals_types : list [TyVar];
@@ -55,14 +55,13 @@ namespace Nemerle.Compiler
       mutable argument_number : int;
 
       public mutable is_var_args : bool;
-
-      // FIXME assign something here
       public mutable result : TExpr;
 
 
       public this (typer : Typer, fnc : TExpr, parms : list [Parm], expected : TyVar)
       {
         this.typer = typer;
+        solver = typer.solver;
         messenger = typer.messenger;
 
         function_called = fnc;
@@ -94,57 +93,55 @@ namespace Nemerle.Compiler
 
       DeduceFunctionType () : void
       {
-        // FIXME: special cases for this(...) and base(...)
-
         // check if we are dealing with a delegate constructor
-        def is_delegate_constructor =
+        is_delegate_constructor =
           imethod != null && 
           imethod.DeclaringType.IsDelegate &&
           imethod.GetFunKind () matches FunKind.Constructor;
 
         def fun_ty = typer.TypeOf (function_called);
 
-        assert (!messenger.SeenError);
+        assert (!messenger.LocalError);
           
-        match (fun_ty.UpperBound) {
+        match (fun_ty.Hint) {
           | Some (MType.Fun (from, res)) =>
             result_type = res;
             formals_types =
-              match (from.UpperBound) {
+              match (from.Hint) {
                 | Some (MType.Tuple (lst)) => lst
                 | Some (MType.Void) => []
                 | _ when List.Length (call_parms) > 1 =>
                   def formals_types =
                     List.Map (call_parms, fun (_) { 
-                        typer.FreshTyVar ("function parameter") 
+                        typer.FreshTyVar () 
                     });
                   def fun_ty = typer.ConstructFunctionType (formals_types, result_type);
 
-                  solver.PushState ();
-                  def err = !typer.TypeOf (function_called).Require (fun_ty);
-                  solver.PopState ();
+                  def err = !function_called.Type.TryRequire (fun_ty);
                   
                   if (err) {
                     [from]
                   } else {
-                    _ = typer.TypeOf (function_called).Require (fun_ty);
+                    // Message.debug ($ "fun_ty: $fun_ty REQ $(function_called.Type)");
+                    def ok = function_called.Type.Require (fun_ty);
+                    // Message.debug ($ "fun_ty-->: $fun_ty");
+                    assert (ok); 
                     formals_types
                   }
 
                 | _ => [from]
               }
           
-          | _ when Option.IsSome (fun_ty.UpperBound) ||
-                   Option.IsSome (fun_ty.LowerBound) =>
+          | _ when Option.IsSome (fun_ty.Hint) =>
             ReportError (messenger, 
                          $ "the value called has non-functional type $fun_ty")
           
           | _ =>
             formals_types =
               List.Map (call_parms, fun (_) { 
-                  typer.FreshTyVar ("function parameter") 
+                  typer.FreshTyVar () 
               });
-            result_type = typer.FreshTyVar ("function result");
+            result_type = typer.FreshTyVar ();
             def fun_ty = typer.ConstructFunctionType (formals_types, result_type);
             def real_fun_ty = typer.TypeOf (function_called);
             unless (real_fun_ty.Require (fun_ty))
@@ -157,7 +154,7 @@ namespace Nemerle.Compiler
           // get the arguments for delegate constructor from the Invoke method
           match (imethod.DeclaringType.LookupMember ("Invoke")) {
             | [invoke : IMethod] =>
-              formals_types = [typer.FIXME (invoke.GetMemType ())];
+              formals_types = [invoke.GetMemType () : TyVar];
             | _ => assert (false)
           }
         }
@@ -166,7 +163,13 @@ namespace Nemerle.Compiler
 
       RequireType (fparm : Fun_parm, ftype : TyVar, parm : Parm) : void
       {
-        unless (typer.TypeOf (parm.expr).Require (ftype)) {
+        // Message.debug ($ "$(parm.expr.Type) <<< $ftype");
+        def msg =
+          if (messenger.NeedMessage)
+            $ "needed a $ftype, got $(parm.expr.Type)"
+          else "";
+
+        unless (parm.expr.Type.Require (ftype)) {
           def name =
             if (messenger.NeedMessage)
               if (fparm == null)
@@ -175,9 +178,7 @@ namespace Nemerle.Compiler
                 $ "argument #$argument_number ($(fparm.name))"
             else "";
               
-          ReportError (messenger,
-                       $ "in $name, needed a "
-                         "$ftype, got $(typer.TypeOf (parm.expr))")
+          ReportError (messenger, $ "in $name, $msg")
         }
       }
       
@@ -187,7 +188,7 @@ namespace Nemerle.Compiler
         def regular_parms = call_parms.FirstN (argument_number - 1);
 
         def tv = 
-          match (arrayty.UpperBound) {
+          match (arrayty.Hint) {
             | Some (MType.Array (tv, 1)) => tv
             | _ => assert (false)
           }
@@ -195,7 +196,7 @@ namespace Nemerle.Compiler
         mutable expr_list = [];
               
         foreach (aparm in aparms) {
-          when (!messenger.SeenError) {
+          when (!messenger.LocalError) {
             when (aparm.kind != ParmKind.Normal)
               ReportError (messenger,
                            "ref/out parameters are not allowed with `parms'");
@@ -209,16 +210,16 @@ namespace Nemerle.Compiler
           }
         }
 
-        unless (messenger.SeenError) {
+        unless (messenger.LocalError) {
           def dimensions =
             [TExpr.Literal (Literal.Int (List.Length (expr_list)))];
           def mkarray = 
-            TExpr.Array (function_called.loc, typer.FIXME (arrayty), expr_list, dimensions);
+            TExpr.Array (function_called.loc, arrayty, List.Rev (expr_list), dimensions);
           call_parms = regular_parms + [Parm (mkarray)];
         }
       }
 
-
+      
       LoopWithHeader () : void
       {
         def loop (fparms, ftypes, aparms) {
@@ -229,16 +230,18 @@ namespace Nemerle.Compiler
 
           | ((fparm : Fun_parm) :: fparms, ftype :: ftypes, (aparm : Parm) :: aparms) =>
             if (fparm.kind == aparm.kind) {
-              RequireType (fparm, ftype, aparm);
+              RequireType (fparm, typer.StripRefOut (ftype), aparm);
               ++argument_number;
-              unless (messenger.SeenError)
+              unless (messenger.LocalError)
                 loop (fparms, ftypes, aparms);
             } else 
               ReportError (messenger,
-                           $ "in argument #$argument_number ($fparm.name), needed a "
+                           $ "in argument #$argument_number ($(fparm.name)), needed a "
                              "$(fparm.kind) parameter, got $(aparm.kind)")
             
-          | _ => assert (false)
+          | x =>
+            Message.warning ("oops");
+            assert (false, x.ToString ())
         }
 
         loop (header.parms, formals_types, call_parms)
@@ -254,7 +257,7 @@ namespace Nemerle.Compiler
             if (aparm.kind == ParmKind.Normal) {
               RequireType (null, ftype, aparm);
               ++argument_number;
-              unless (messenger.SeenError)
+              unless (messenger.LocalError)
                 loop (ftypes, aparms);
             } else 
               ReportError (messenger,
@@ -271,18 +274,29 @@ namespace Nemerle.Compiler
 
       LoopOverArgs () : void
       {
-        when (List.Length (header.parms) != List.Length (formals_types))
+        when (header != null &&
+              List.Length (header.parms) != List.Length (formals_types))
           header = null;
+
+        argument_number = 1;
 
         if (header == null)
           LoopWithoutHeader ()
         else
-          LoopWithHeader ()
+          LoopWithHeader ();
+
+        unless (messenger.LocalError) {
+          _ = typer.Expect (expected_type, result_type, "call result");
+          unless (messenger.LocalError)
+            result = TExpr.Call (result_type, function_called, call_parms);
+        }
       }
 
 
       public Run () : void
       {
+        messenger.CleanLocalError ();
+
         when (is_var_args)
           assert (imethod != null && imethod.IsVarArgs);
 
@@ -300,14 +314,14 @@ namespace Nemerle.Compiler
             ReorderNamedParms (names)
           }
 
-        unless (messenger.SeenError) {
+        unless (messenger.LocalError) {
           DeduceFunctionType ();
-          unless (messenger.SeenError) {
+          unless (messenger.LocalError) {
             def formal_count = List.Length (formals_types);
             def actual_count = List.Length (call_parms);
 
             if (is_var_args) {
-              if (formal_count + 1 < actual_count)
+              if (formal_count > actual_count + 1)
                 ReportError (messenger, "not enough parameters")
               else {
                 LoopOverArgs ();
@@ -316,7 +330,7 @@ namespace Nemerle.Compiler
               if (formal_count == actual_count) {
                 LoopOverArgs ();
               } else if (formal_count > 1 && actual_count == 1) {
-                formals_types = [typer.MonoType (MType.Tuple (formals_types), "")];
+                formals_types = [MType.Tuple (formals_types) : TyVar];
                 LoopOverArgs ();
               } else {
                 // the case formal_count == 1 && actual_count > 1 has been
@@ -419,8 +433,9 @@ namespace Nemerle.Compiler
               check_names_and_parms (rest_of_names, rest_of_parms)
             }
 
-          | _ =>
-            Util.ice ("reorder_named_parms: walk")
+          | ([], parm :: _) =>
+            fail ($ "too much parameters specified, first one causing "
+                    "the problem is `$(parm.name)'")
         }
 
         // reordering is a matter of simple names list walk now:

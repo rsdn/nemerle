@@ -1,0 +1,244 @@
+/*
+ * Copyright (c) 2005 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Collections;
+using Nemerle.Compiler.SolverMacros;
+
+namespace Nemerle.Compiler 
+{
+  /** Represents a single possibility in the overloading resulution process.
+      It is used in the TExpr.Overloaded node.  */
+  public class OverloadPossibility : Located
+  {
+    /** Tell if this overload is still possible in the current solver.  */
+    public StillPossible : bool
+    {
+      get {
+        def solver = Passes.Solver;
+        solver.PushState ();
+        def was_error = Compile () matches TExpr.Error;
+        solver.PopState ();
+        !was_error
+      }
+    }
+    
+
+    /** Enforce this particular overloading possibility in the current
+        solver.  */
+    public Compile () : TExpr
+    {
+      Util.locate (loc, {
+        def is_ok = 
+          is_static || {
+            def ti = member.DeclaringType;
+            def ft = ti.FreshSubst ().Apply (ti.GetMemType ());
+            expr.Type.Require (ft)
+          }
+
+        def expr =
+          match (member) {
+            | _ when !is_ok =>
+              // XXX see when this happens and invent some better
+              // error message
+              ReportError (Passes.Solver.CurrentMessenger,
+                           $ "  $(member) is no longer present in $(ty) "
+                             "after constraining");
+              TExpr.Error ()
+
+            | ti : TypeInfo =>
+              assert (ti.IsValueType);
+              TExpr.ImplicitValueTypeCtor (ti)
+              
+            | fld : IField =>
+              if (fld.IsStatic)
+                if (IsConstantObject)
+                  TExpr.ConstantObjectRef (fld)
+                else
+                  TExpr.StaticRef (fld)
+              else
+                TExpr.FieldMember (expr, fld)
+                
+            | prop : IProperty =>
+              if (prop.IsStatic)
+                TExpr.StaticPropertyRef (prop)
+              else
+                TExpr.PropertyMember (expr, prop)
+
+            | meth : IMethod =>
+              if (IsBaseCall)
+                TExpr.Base (meth)
+              else if (is_static)
+                TExpr.StaticRef (meth)
+              else
+                TExpr.MethodRef (expr, meth, notvirtual = false)
+
+            | ev : IEvent =>
+              if (ev.IsStatic)
+                TExpr.StaticEventRef (ev)
+              else
+                TExpr.EventMember (expr, ev)
+
+            | _ =>
+              Message.warning ($ "evil member $(member)");
+              assert (false)
+          }
+          
+        expr.ty = ty;
+        expr
+      })
+    }
+
+
+    public Type : TyVar
+    {
+      get { ty }
+    }
+
+
+    public Member : IMember
+    {
+      get { member }
+    }
+    
+
+    public override ToString () : string
+    {
+      member.ToString () +
+      if (VarArgs) " [parms]" else ""
+    }
+    
+
+    public this (solver : Solver, ty : TyVar, expr : TExpr, member : IMember)
+    {
+      if (member.IsStatic)
+        is_static = true
+      else
+        match (member) {
+          | meth : IMethod => 
+            is_static =
+              meth.GetFunKind () matches FunKind.Constructor
+          | _ => {}
+        }
+
+      assert ((expr == null) == is_static, 
+              $ "expr/IsStatic $member $(member.IsStatic) $is_static");
+
+      this.expr = expr;
+      this.member = member;
+      this.solver = solver;
+      this.ty = ty;
+    }
+
+
+    [Nemerle.OverrideObjectEquals]
+    public Equals (o : OverloadPossibility) : bool
+    {
+      member.Equals (o.member) &&
+      this.expr : object == o.expr : object &&
+      o.VarArgs == VarArgs
+    }
+    
+  
+    expr : TExpr;
+    ty : TyVar;
+    member : IMember;
+    solver : Solver;
+    is_static : bool;
+    public mutable IsBaseCall : bool;
+    public mutable VarArgs : bool;
+    public mutable IsConstantObject : bool;
+
+    static public Unique (overloads : list [OverloadPossibility]) : list [OverloadPossibility]
+    {
+      def ht = Hashtable ();
+      mutable res = [];
+      
+      foreach (overload in overloads) {
+        def id = 2 * overload.Member.GetId () + if (overload.VarArgs) 1 else 0;
+        if (ht.Contains (id)) {
+          assert (overload.Equals (ht [id]))
+        } else {
+          ht [id] = overload;
+          res = overload :: res;
+        }
+      }
+
+      res
+    }
+    
+
+    /** Filter out impossible overloads from the list.  If there are no 
+        possible overloads and we are in the error reporting mode, present
+        an appropriate error message.  */
+    static public OnlyPossible (overloads : list [OverloadPossibility], expected : TyVar) 
+                                          : list [OverloadPossibility]
+    {
+      assert (!overloads.IsEmpty);
+
+      def solver = Passes.Solver;
+      def res = List.Filter (overloads, 
+                                fun (o : OverloadPossibility) { 
+                                  solver.PushState ();
+                                  def expr = o.Compile ();
+                                  def was_error = 
+                                    expr matches TExpr.Error ||
+                                    (expected != null && 
+                                     !expected.Unify (expr.Type));
+                                  solver.PopState ();
+                                  !was_error
+                                });
+      
+      when (res.IsEmpty) {
+        def hd = List.Hd (overloads);
+        def solver = Passes.Solver;
+        def messenger = solver.CurrentMessenger;
+        ReportError (messenger,
+                     $ "none of the overloads of $(hd.member.Name) is "
+                       "possible:");
+          foreach (overload in overloads) {
+            solver.PushState ();
+            messenger.NeedMessage = true;
+            def res = overload.Compile ();
+            unless (res matches TExpr.Error) {
+              if (expected.Unify (res.Type))
+                assert (false)
+              else
+                ReportError (messenger, 
+                             $ "  $(overload.Member) was expected to have "
+                               "type $expected, while it has got $(res.Type)");
+            }
+            solver.PopState ();
+          }
+      }
+      
+      res
+    }
+
+  }
+}

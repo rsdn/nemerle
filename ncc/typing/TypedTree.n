@@ -31,120 +31,14 @@ using Nemerle.Compiler.Typedtree;
 
 namespace Nemerle.Compiler.Typedtree
 {
-  [Record]
-  public class Constraint
-  {
-    public tyvar : string;
-    public ty : TType;
-  }
-
   public variant TypeDeclaration
   {
     | Class
-    | Alias         { ty : TType; }
+    | Alias         { ty : MType; }
     | Interface
     | Variant       { members : list [TypeInfo]; }
     | VariantOption
     | Enum
-  }
-
-  public variant TType
-  {
-    | Class    { tycon : TypeInfo; args : list [TType]; }
-    | Variable { tyvar : Tyvar.T; }
-    | ByRef    { t : TType; }
-    | Out      { t : TType; }
-    | Function { from : TType; to : TType; }
-    | Void
-    | Product  { args : list [TType]; }    
-    | Array    { t : TType; rank : int; }
-
-    public override ToString () : string
-    {
-      Tyutil.string_of_type (this)
-    }
-
-    public IsValueType : bool
-    {
-      get {
-        match (this) {
-          | TType.Class (tc, _) =>
-            match (tc.GetTypeInfoKind ()) {
-              | TypeInfoKind.ExternalNemerleType (st) =>
-                st.IsValueType || st.Equals (SystemType.Void)
-              | TypeInfoKind.ExternalNetType (st) => st.IsValueType 
-              | TypeInfoKind.NemerleType (exact) => exact.IsValueType 
-            }
-          | TType.Void => true
-          | _ => false
-        }
-      }
-    }
- 
-    public IsFromNull : bool
-    {
-      get {
-        match (this) {
-          | Variable (var) => var.value is TvValue.FreeFromNull
-          | _ => false
-        }
-      }
-    }
-    
-    public GetSystemType () : System.Type {
-      match (Tyutil.top_expand (this)) {
-        | TType.Void => SystemType.Void
-        | TType.Product (l) => CompileTypedMethod.tuple_type (l.Length)
-        | TType.Function (args, _) => 
-          CompileTypedMethod.function_type (Tyutil.fun_args (args).Length)
-      
-        | TType.Variable (tv) => tv.GetSystemType ()
-
-#if _GENERICS
-        | TType.Class (ti, []) => ti.GetSystemType ();
-
-        | TType.Class (ti, args) =>
-          def tconstructor = ti.GetSystemType ();
-          def typedargs = array (args.Length);
-          mutable idx = 0;
-          foreach (arg in args) {
-            typedargs [idx] = arg.GetSystemType ();
-            ++idx;
-          }
-          tconstructor.BindGenericParameters (typedargs);  
-#else
-        | TType.Class (ti, _) => 
-          def ret = ti.GetSystemType ();
-          assert (ret != null);
-          ret
-#endif
-        
-        | TType.ByRef (et) | TType.Out (et) => 
-#if _NET_2_0
-          et.GetSystemType ().MakeByRefType ()
-#else        
-          CompileTypedTree.make_ref_type (et.GetSystemType ())
-#endif         
-        
-        | TType.Array (et, rank) =>
-#if _NET_2_0
-          if (rank == 1)
-            et.GetSystemType ().MakeArrayType ()
-          else            
-            et.GetSystemType ().MakeArrayType (rank)
-#else        
-          def et = et.GetSystemType ();
-          def rankstr = "[" + System.String (',', rank - 1) + "]";
-          def ty = Passes.Emitter._module_builder.GetType (et.FullName + rankstr);
-          if (ty == null) {
-            def arr = System.Array.CreateInstance (et, (array (rank) : array [int]));
-            assert (arr != null, "unbound array type " + et.FullName + rankstr);
-            arr.GetType ()
-          } 
-          else ty
-#endif          
-      }
-    }
   }
 
   [Record]
@@ -152,12 +46,17 @@ namespace Nemerle.Compiler.Typedtree
   {
     public name : string;
     public color : int;
-    public mutable ty : TType;
+    public mutable ty : TyVar;
     public mutable decl : LocalValue;
     public modifiers : Modifiers;
-#if NTE
     public kind : ParmKind;
-#endif
+
+    public SystemType : System.Type
+    {
+      get {
+        ty.Fix ().GetSystemType ();
+      }
+    }
   }
 
   public enum FunctionUsage 
@@ -172,18 +71,13 @@ namespace Nemerle.Compiler.Typedtree
   {
     public mutable name : string;
     public id : int;
-    public mutable ret_type : TType;
+    public mutable ret_type : TyVar;
     public mutable parms : list [Fun_parm];
-    public mutable typarms : list [Tyvar.T];
-    public tenv : Tyvar.TEnv;
+    public mutable typarms : list [StaticTyVar];
+    public tenv : TyVarEnv;
 
     public mutable usage : FunctionUsage;
-    #if NTE
     public mutable body : FunBody;
-    #else
-    // used for loop generation
-    public mutable body : TExpr;
-    #endif
 
     /// local values defined in this function, which are closurised (used by children) 
     public mutable closure_vars : list [LocalValue] = [];
@@ -201,10 +95,10 @@ namespace Nemerle.Compiler.Typedtree
 
     public this (loc : Location, 
                  name : string, 
-                 ret_type : TType, 
+                 ret_type : TyVar, 
                  parms : list [Fun_parm], 
-                 typarms : list [Tyvar.T], 
-                 tenv : Tyvar.TEnv)
+                 typarms : list [StaticTyVar], 
+                 tenv : TyVarEnv)
     {
       base (loc);
       this.name = name;
@@ -221,16 +115,18 @@ namespace Nemerle.Compiler.Typedtree
      *  Retrieves functions in which current function is nested. Empty list if
      *  this is a plain method of some class.
      */
-    public GetParents () : list [Fun_header] {
+    public GetParents () : list [Fun_header]
+    {
       if (decl != null)
-        match (decl.kind) {
-          | LocalValueKind.Function (_, pars) => pars
+        match (decl.ValKind) {
+          | LocalValue.Kind.Function (_, pars) => pars
           | _ => Util.ice ("invalid value kind for function")
         }
       else []
     }
     
-    public override ToString () : string {
+    public override ToString () : string 
+    {
       name
     }
   }
@@ -247,13 +143,11 @@ namespace Nemerle.Compiler.Typedtree
     | Application { name : TypeInfo; arg : Pattern; }
     | Enum        { fld : IField; val : Nemerle.Compiler.Literal; }
     | Literal     { lit : Nemerle.Compiler.Literal; }
-#if NTE
     | Error
-#endif
 
+    public mutable ty : TyVar;
+    
     public this () { }
-
-    public mutable ty : TType;      
   }
 
   [Record]
@@ -273,13 +167,15 @@ namespace Nemerle.Compiler.Typedtree
     | ConstantObjectRef     { mem : IField; }
     | PropertyMember        { obj : TExpr; prop : IProperty; }
     | StaticPropertyRef     { prop : IProperty; }
+    | EventMember           { obj : TExpr; ev : IEvent; }
+    | StaticEventRef        { ev : IEvent; }
     | MethodRef             { obj : TExpr; meth : IMethod; notvirtual : bool; }
-    | Call                  { func : TExpr; parms : list [Parm]; }
+    | Call                  { mutable func : TExpr; mutable parms : list [Parm]; }
     | TailCall              { func : TExpr; parms : list [Parm]; }
     | SelfTailCall          { parms : list [Parm]; }
     | Assign                { target : TExpr; source : TExpr; }
-    | DefValIn              { name : LocalValue; val : TExpr; body : TExpr; }
-    | DefFunctionsIn        { funs : list [Fun_header]; body : TExpr; }
+    | DefValIn              { name : LocalValue; val : TExpr; mutable body : TExpr; }
+    | DefFunctionsIn        { funs : list [Fun_header]; mutable body : TExpr; }
     | Match                 { expr : TExpr; cases : list [Match_case]; }
     | Throw                 { exn : TExpr; }
     | TryWith               { body : TExpr; exn : LocalValue; handler : TExpr; }
@@ -287,24 +183,26 @@ namespace Nemerle.Compiler.Typedtree
     | Literal               { val : Nemerle.Compiler.Literal; }
     | This
     | Base                  { base_ctor : IMethod; }
-    | TypeConversion        { expr : TExpr; target_type : TType; is_checked : bool; }  // (expr :> ty)
-    | TypeEnforcement       { expr : TExpr; target_type : TType; } // (expr : ty)
+    | TypeConversion        { expr : TExpr; target_type : MType; is_checked : bool; }  // (expr :> ty)
+    | TypeEnforcement       { expr : TExpr; target_type : MType; } // (expr : ty)
     | Sequence              { e1 : TExpr; e2 : TExpr; }
     | Tuple                 { args : list [TExpr]; }
     | Array                 { args : list [TExpr]; dimensions : list [TExpr]; }
-    | TypeOf                { target_type : TType; }
-    | ArrayIndexer          { over_type : TType; obj : TExpr; args : list [TExpr]; }
+    | TypeOf                { target_type : TyVar; }
+    | ArrayIndexer          { over_type : TyVar; obj : TExpr; args : list [TExpr]; }
     | OpCode                { name : string; }
     
-#if NTE
-    | Delayed               { }
-    | Overloaded            { mutable possibilities : list [OverloadPossibility]; }
+    | Delayed               { susp : Typer.DelayedTyping; }
     | Error
-#endif // NTE
+
+    public mutable ty : TyVar;
+
+    public Type : TyVar
+    {
+      get { assert (ty != null); ty }
+    }
 
     public this () { }
-
-    public mutable ty : TType;
   }
 
   public enum ParmKind {
@@ -317,7 +215,7 @@ namespace Nemerle.Compiler.Typedtree
   public class Parm
   {
     public kind : ParmKind;
-    public expr : TExpr;
+    public mutable expr : TExpr;
     public name : string;  // "" if no name given
 
     public this (expr : TExpr)

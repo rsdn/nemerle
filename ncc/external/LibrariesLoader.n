@@ -34,9 +34,9 @@ namespace Nemerle.Compiler
   using System.IO;
 
   using Nemerle.Compiler.Typedtree;
-  using Nemerle.Compiler.Tyops;
 
   using SR = System.Reflection;
+  using SRE = System.Reflection.Emit;
   using PT = Nemerle.Compiler.Parsetree;  
 
   /**
@@ -458,6 +458,9 @@ namespace Nemerle.Compiler
      */
     private mutable _is_generated_by_nemerle : bool;
 
+    private solver : Solver;
+    
+
     /**
      * Load an assembly. Extracts and processes the custom attributes array.
      */
@@ -466,6 +469,7 @@ namespace Nemerle.Compiler
       _library = assembly;
       _location = Location (Location.GetFileIndex (assembly.Location), 0, 0);
       _assembly_attributes = List.FromArray (_library.GetCustomAttributes (true));
+      solver = Passes.Solver;
       process_assembly_attributes ();
 
       LibraryReferenceManager.LoadTypesFrom (this);
@@ -500,36 +504,37 @@ namespace Nemerle.Compiler
     /**
      * Turns a Framework type into something edible by Nemerle's type system
      */
-    private TypeOfType (framework_type : System.Type) : TType
+    private TypeOfType (framework_type : System.Type) : MType
     {
       if (framework_type.Name == "Void" && framework_type.Namespace == "System")
-        TType.Void ()
+        InternalType.Void
       else
         if (framework_type.IsArray)
-          TType.Array (TypeOfType (framework_type.GetElementType ()),
-                   framework_type.GetArrayRank ())
+          MType.Array (TypeOfType (framework_type.GetElementType ()),
+                       framework_type.GetArrayRank ())
         else 
-          if (framework_type.IsByRef)
-            // FIXME: out types, anyone?
-            TType.ByRef (TypeOfType (framework_type.GetElementType ()))
+          if (framework_type.IsByRef) {
+            Message.error ($ "ref type referenced $framework_type");
+            TypeOfType (framework_type.GetElementType ())
+          }
 #if _NET_2_0            
           else if (framework_type.IsGenericParameter)
-            TType.Void ()
+            InternalType.Void
 #endif                      
           else {
             def (ns_node, path_to_type) =
               LibraryReferenceManager.framework_nesting (framework_type);
 
             match (ns_node.LookupType (path_to_type)) {
-              | Some (tc) => TType.Class (tc, [])
+              | Some (tc) => MType.Class (tc, [])
               | None =>
                 def full = framework_type.FullName;
                 match (LookupInternalType (full)) {
-                  | Some (tc) => TType.Class (tc, [])
+                  | Some (tc) => MType.Class (tc, [])
                   | None =>
                     def path = NString.Split (full, array ['.', '+']);
                     match (GlobalEnv.LookupExactType (path)) {
-                      | Some (tc) => TType.Class (tc, [])
+                      | Some (tc) => MType.Class (tc, [])
                       | None =>
                         Message.fatal_error ("unbound external type `" +
                                              framework_type.FullName + 
@@ -544,7 +549,7 @@ namespace Nemerle.Compiler
     private TypeInfoOfType (framework_type : System.Type) : TypeInfo
     {
       match (TypeOfType (framework_type)) {
-        | TType.Class (tc, []) => tc
+        | MType.Class (tc, []) => tc
         | _ => Util.ice ()
       }
     } 
@@ -591,6 +596,8 @@ namespace Nemerle.Compiler
           | _ => NetMethod (this, meth)
         }
     }
+
+
 
     /* -----------------------------------------------------------------
      * .NET types
@@ -677,7 +684,162 @@ namespace Nemerle.Compiler
             def dma = attrs [0] :> System.Reflection.DefaultMemberAttribute;
             Some (dma.MemberName)
           } else None ();
+
+        AddBuiltins ();
       }
+
+      #region Special numeric overloads
+      variant NumericKind
+      {
+        | Signed
+        | Unsigned
+        | Float
+        | Char
+      }
+
+      static numeric_types : Hashtable [string, NumericKind];
+      
+      static this ()
+      {
+        numeric_types = Hashtable ();
+        numeric_types.Add ("SByte", NumericKind.Signed ());
+        numeric_types.Add ("Int16", NumericKind.Signed ());
+        numeric_types.Add ("Int32", NumericKind.Signed ());
+        numeric_types.Add ("Int64", NumericKind.Signed ());
+        numeric_types.Add ("Byte", NumericKind.Unsigned ());
+        numeric_types.Add ("UInt16", NumericKind.Unsigned ());
+        numeric_types.Add ("UInt32", NumericKind.Unsigned ());
+        numeric_types.Add ("UInt64", NumericKind.Unsigned ());
+        numeric_types.Add ("Single", NumericKind.Float ());
+        numeric_types.Add ("Double", NumericKind.Float ());
+        numeric_types.Add ("Char", NumericKind.Char ()); 
+      }
+
+      FixupEquality (name : string) : void
+      {
+        FixupCompare (name);
+        #if 0
+        match (special_members [name]) {
+          | [elem : IMethod] =>
+            def tv = StaticTyVar ("'a");
+            tv.Constraints = [];
+            def hd = elem.GetHeader ();
+            hd.typarms = [tv];
+            match (hd.parms) {
+              | [parm1, parm2] =>
+                parm1.ty = MType.TyVarRef (tv);
+                parm2.ty = MType.TyVarRef (tv);
+              | _ => assert (false)
+            }
+          | _ => assert (false)
+        }
+        #endif
+      }
+
+      FixupShift (name : string) : void
+      {
+        match (special_members [name]) {
+          | [elem : IMethod] =>
+            def hd = elem.GetHeader ();
+            match (hd.parms) {
+              | [_, parm2] =>
+                assert (InternalType.Int32 != null);
+                parm2.ty = InternalType.Int32;
+              | _ => assert (false)
+            }
+          | _ => assert (false)
+        }
+      }
+
+      AddBuiltins () : void
+      {
+        InitBuiltinMembers ();
+        when (system_type.DeclaringType == null &&
+              system_type.Namespace == "System") {
+          def name = system_type.Name;
+          if (name == "String") {
+            // == and != are surprisingly properly overloaded
+            // and this is done in LookupMemberImpl, because otherwise
+            // we would use uninitialized InternalType.String_Concat
+            // AddBuiltin ("op_Addition", InternalType.String_Concat);
+          } else if (name == "Boolean") {
+            AddBuiltin ("op_LogicalNot", "bool.!");
+            MakeSingleParm ("op_LogicalNot");
+            AddBuiltin ("op_Equality", "==");
+            AddBuiltin ("op_Inequality", "!=");
+            // FixupEquality not needed here -- return type is already correct
+            // and InternalType.Boolean is here null
+          } else if (name == "Object") {
+            AddBuiltin ("op_Equality", "==.ref");
+            AddBuiltin ("op_Inequality", "!=.ref");
+            FixupEquality ("op_Equality");
+            FixupEquality ("op_Inequality");
+          } else if (numeric_types.Contains (name)) {
+            def kind = numeric_types [name];
+            def suff =
+              match (kind) {
+                | NumericKind.Float => ".f"
+                | NumericKind.Char
+                | NumericKind.Signed => ".s"
+                | NumericKind.Unsigned => ".u"
+              }
+
+            unless (kind matches NumericKind.Char) {
+              // checked/unchecked:
+              AddBuiltin ("op_Addition", "+" + suff, "+.f");
+              AddBuiltin ("op_Subtraction", "-" + suff, "-.f");
+              AddBuiltin ("op_Multiply", "*" + suff, "*.f");
+              
+              // no checked version:
+              AddBuiltin ("op_Division", "/" + suff);
+              AddBuiltin ("op_Modulus", "%" + suff);
+
+              // unary
+              AddBuiltin ("op_UnaryPlus", "unary.+" + suff);
+              MakeSingleParm ("op_UnaryPlus");
+            }
+
+            when (kind matches NumericKind.Signed ||
+                  kind matches NumericKind.Unsigned) {
+              AddBuiltin ("op_BitwiseAnd", "&" + suff);
+              AddBuiltin ("op_BitwiseOr", "|" + suff);
+              AddBuiltin ("op_ExclusiveOr", "^" + suff);
+              
+              AddBuiltin ("op_LeftShift", "<<" + suff);
+              AddBuiltin ("op_RightShift", ">>" + suff);
+              when (Name != "Int32") {
+                FixupShift ("op_LeftShift");
+                FixupShift ("op_RightShift");
+              }
+              
+              AddBuiltin ("op_UnaryBitwiseNot", "unary.~" + suff);
+              MakeSingleParm ("op_UnaryBitwiseNot");
+            }
+
+            unless (kind matches NumericKind.Unsigned ||
+                    kind matches NumericKind.Char) {
+              AddBuiltin ("op_UnaryMinus", "unary.-" + suff, "unary.-.f");
+              MakeSingleParm ("op_UnaryMinus");
+            }
+
+            // comparisions
+            AddBuiltin ("op_Equality", "==");
+            AddBuiltin ("op_Inequality", "!=");
+            AddBuiltin ("op_LessThan", "<" + suff);
+            AddBuiltin ("op_LessThanOrEqual", "<=" + suff);
+            AddBuiltin ("op_GreaterThan", ">" + suff);
+            AddBuiltin ("op_GreaterThanOrEqual", ">=" + suff);
+
+            FixupCompare ("op_Equality");
+            FixupCompare ("op_Inequality");
+            FixupCompare ("op_LessThan");
+            FixupCompare ("op_LessThanOrEqual");
+            FixupCompare ("op_GreaterThan");
+            FixupCompare ("op_GreaterThanOrEqual");
+          } else {}
+        }
+      }
+      #endregion
 
       /** Checks if underlying .NET type is value type */
       public override IsValueType : bool {
@@ -705,14 +867,14 @@ namespace Nemerle.Compiler
         get { system_type.IsSubclassOf (SystemType.MulticastDelegate) }
       }
 
-      public override GetMemType () : TType
+      public override GetMemType () : MType
       {
-        TType.Class (this, [])
+        MType.Class (this, [])
       }
 
-      public override GetConstantObject () : option [IField]
+      public override GetConstantObject () : IField
       {
-        None ()
+        null
       }
 
       public override DeclaringType : TypeInfo {
@@ -794,31 +956,23 @@ namespace Nemerle.Compiler
           TypeDeclaration.Class ()
       }
 
-#if NTE
       internal override MakeSubst (parms : list [TyVar]) : Subst
-#else
-      internal override MakeSubst (parms : list [TType]) : Subst
-#endif
       {
         match (parms) {
           | [] => ()
           | _ =>
             Message.error ("framework type `" + FullName +
                            "' supplied with type arguments")
-        };
-        SystemMap ()
+        }
+        Subst ()
       }
 
       internal override FreshSubst () : Subst
       {
-        SystemMap ()
+        Subst ()
       }
 
-#if NTE
       public override SuperType (tc : TypeInfo) : option [list [MType]]
-#else
-      public override SuperType (tc : TypeInfo) : option [list [TType]]
-#endif
       {
         match (tc.GetTypeInfoKind ()) {
           | TypeInfoKind.ExternalNetType (t) when t.IsAssignableFrom (system_type)
@@ -829,7 +983,7 @@ namespace Nemerle.Compiler
 
       internal override SubtypingSubst (_ : TypeInfo) : Subst
       {
-        SystemMap ()
+        Subst ()
       }
 
       public override SuperClass () : option [TypeInfo]
@@ -840,21 +994,16 @@ namespace Nemerle.Compiler
           Some (library.TypeInfoOfType (system_type.BaseType))
       }
 
-#if NTE
-      [Nemerle.NotImplemented]
       public override GetSuperTypes () : list [MType.Class]
-#else
-      public override GetSuperTypes () : list [TType.Class]
-#endif
       {
         def supertypes = Hashtable (30);
-        def add_bt (t : TType.Class) {
+        def add_bt (t : MType.Class) {
           def tc = t.tycon;
           if (supertypes.Contains (tc.GetId ())) ()
           else {
             supertypes.Add (tc.GetId (), t);
             match (tc.SuperClass ()) {
-              | Some (tc) => add_bt (TType.Class (tc, []) :> TType.Class)
+              | Some (tc) => add_bt (MType.Class (tc, []) :> MType.Class)
               | None => ()
             }
           }
@@ -863,18 +1012,13 @@ namespace Nemerle.Compiler
         supertypes.Fold ([], fun (_, tc, acc) { tc :: acc })
       }
 
-#if NTE
-      [Nemerle.NotImplemented]
       public override GetDirectSuperTypes () : list [MType.Class]
-#else
-      public override GetDirectSuperTypes () : list [TType.Class]
-#endif
       {
         def ifaces = List.MapFromArray (system_type.GetInterfaces (), fun (ty) {
-          library.TypeOfType (ty) :> TType.Class
+          library.TypeOfType (ty) :> MType.Class
         });
         match (SuperClass ()) {
-          | Some (r) => (TType.Class (r, []) :> TType.Class) :: ifaces
+          | Some (r) => (MType.Class (r, []) :> MType.Class) :: ifaces
           | None => ifaces
         }
       }
@@ -1078,18 +1222,25 @@ namespace Nemerle.Compiler
           List.Iter (fields_from_parents, store_by_name);
       }
 
-      public override LookupMember (name : string) : list [IMember] 
+      public override LookupMemberImpl (name : string) : list [IMember] 
       {
-        match (members.Get (name)) {
-          | Some (r) => r
-          | None =>
-            collect_members (name);
-            if (members.Contains (name))
-              members [name]
-            else {
-              members [name] = [];
-              []
-            }
+        if (this.Equals (InternalType.String_tc) && 
+            name == "op_Addition") {
+          assert (InternalType.String_Concat != null);
+          AddBuiltin ("op_Addition", InternalType.String_Concat);
+          LookupMember (name)
+        } else {
+          match (members.Get (name)) {
+            | Some (r) => r
+            | None =>
+              collect_members (name);
+              if (members.Contains (name))
+                members [name]
+              else {
+                members [name] = [];
+                []
+              }
+          }
         }
       }
 
@@ -1107,7 +1258,7 @@ namespace Nemerle.Compiler
       protected handle : SR.FieldInfo;
       protected library : LibraryReference;
       protected id : int;
-      protected mutable tt_type : TType;
+      protected mutable tt_type : MType;
       protected mutable attributes : NemerleAttributes;
 
       public this (lib : LibraryReference, h : SR.FieldInfo)
@@ -1119,7 +1270,7 @@ namespace Nemerle.Compiler
         set_attributes ();
       }
 
-      public this (tenv : SystemMap [int, Tyvar.T], lib : LibraryReference,
+      public this (tenv : SystemMap [int, StaticTyVar], lib : LibraryReference,
                    h : SR.FieldInfo)
       {
         id = Util.next_id ();
@@ -1182,7 +1333,7 @@ namespace Nemerle.Compiler
         handle
       }
 
-      public GetMemType () : TType
+      public GetMemType () : MType
       {
         when (tt_type == null)
           tt_type = library.TypeOfType (handle.FieldType);
@@ -1278,7 +1429,7 @@ namespace Nemerle.Compiler
       protected is_static : bool;
       protected adder : NetMethod;
       protected remover : NetMethod;
-      protected mutable mem_type : TType;
+      protected mutable mem_type : MType;
 
       public this (lib : LibraryReference, h : SR.EventInfo)
       {
@@ -1300,7 +1451,7 @@ namespace Nemerle.Compiler
         assert (remover != null);
 
         match (adder.GetMemType ()) {
-          | TType.Function (t, _) => mem_type = t
+          | MType.Fun (t, _) => mem_type = t.FixedValue
           | _ => assert (false)
         }
       }
@@ -1352,7 +1503,7 @@ namespace Nemerle.Compiler
         handle
       }
 
-      public GetMemType () : TType
+      public GetMemType () : MType
       {
         mem_type
       }
@@ -1415,7 +1566,7 @@ namespace Nemerle.Compiler
       protected getter : NetMethod;
       protected setter : NetMethod;
       protected any_method : NetMethod;
-      protected mutable mem_type : TType;
+      protected mutable mem_type : MType;
       protected overload_name : string;
 
       public this (lib : LibraryReference, h : SR.PropertyInfo)
@@ -1444,26 +1595,24 @@ namespace Nemerle.Compiler
         def (args, ret_type) =
           if (getter != null)
             match (getter.GetMemType ()) {
-              | TType.Function (t, r) =>
-                (Tyutil.fun_args (t), r)
+              | MType.Fun (t, r) =>
+                (t.FixedValue.GetFunctionArguments (), r.FixedValue)
               | _ => assert (false)
             }
           else if (setter != null)
             match (setter.GetMemType ()) {
-              | TType.Function (t, _) =>
-                def (args, r) = List.DivideLast (Tyutil.fun_args (t));
+              | MType.Fun (t, _) =>
+                def (args, r) = List.DivideLast (t.FixedValue.GetFunctionArguments ());
                 (args, r)
               | _ => assert (false)
             }
           else
             ([], ret_type);
 
-        mem_type =
-          match (args) {
-            | [] => ret_type
-            | [x] => TType.Function (x, ret_type)
-            | lst => TType.Function (TType.Product (lst), ret_type)
-          };
+        if (args.IsEmpty)
+          mem_type = ret_type
+        else
+          mem_type = MType.ConstructFunctionType (args, ret_type);
           
         overload_name =
           if (args.IsEmpty) Name
@@ -1517,7 +1666,7 @@ namespace Nemerle.Compiler
         handle
       }
 
-      public GetMemType () : TType
+      public GetMemType () : MType
       {
         mem_type
       }
@@ -1600,23 +1749,28 @@ namespace Nemerle.Compiler
         library = lib;
         handle = h;
         def mkparm (p : SR.ParameterInfo) {
-          def ty =
-            match (lib.TypeOfType (p.ParameterType)) {
-              | TType.ByRef (t) when p.IsOut => TType.Out (t)
-              | t => t
-            };
+          def (parmkind, ty) =
+            if (p.ParameterType.IsByRef) {
+              def ty = lib.TypeOfType (p.ParameterType.GetElementType ());
+              if (p.IsOut)
+                (ParmKind.Out, MType.Out (ty))
+              else
+                (ParmKind.Ref, MType.Ref (ty))
+            } else
+              (ParmKind.Normal, lib.TypeOfType (p.ParameterType));
           Fun_parm (
             loc = lib._location,
             name = p.Name,
             color = 0,
             ty = ty,
             decl = null,
+            kind = parmkind,
             modifiers = Modifiers.Empty // FIXME?
           )
         };
         def ret_type =
           if (handle.Name == ".ctor" || handle.Name == ".cctor")
-            TType.Void ()
+            InternalType.Void
           else
             library.TypeOfType ((handle :> SR.MethodInfo).ReturnType);
         
@@ -1690,12 +1844,6 @@ namespace Nemerle.Compiler
         get { is_var_args }
       }
 
-      // FIXME: there should be an error here -- it's supposed to be 'override' or 'new'
-      public virtual GetExternName () : option [string]
-      {
-        None ()
-      }
-
       public GetMethodBase () : SR.MethodBase
       {
         handle
@@ -1706,9 +1854,9 @@ namespace Nemerle.Compiler
         handle
       }
 
-      public GetMemType () : TType
+      public GetMemType () : MType
       {
-        Tyutil.fun_type (GetHeader ())
+        MType.ConstructFunctionType (GetHeader ())
       }
 
       [Nemerle.OverrideObjectEquals]
@@ -1756,7 +1904,7 @@ namespace Nemerle.Compiler
         id
       }
 
-      public virtual GetFreshType () : TType
+      public virtual GetFreshType () : MType
       {
         GetMemType ()
       }
@@ -1797,6 +1945,11 @@ namespace Nemerle.Compiler
         handle.IsPublic || 
           (Option.IsSome (source.SuperType (DeclaringType)) &&
            (handle.IsFamily || handle.IsFamilyOrAssembly))
+      }
+      
+      public BuiltinKind : BuiltinMethodKind
+      {
+        get { BuiltinMethodKind.NotBuiltin () }
       }
     }
    
@@ -1850,13 +2003,13 @@ namespace Nemerle.Compiler
     
     private class NetTypeInfo : NetType
     {
-      internal tenv : SystemMap [int, Tyvar.T];
-      typarms : list [Tyvar.T];
-      direct_supertypes : list [TType.Class];
-      supertypes : list [TType.Class];
-      supertype_map : SystemMap [int, TType];
+      internal tenv : SystemMap [int, StaticTyVar];
+      typarms : list [StaticTyVar];
+      direct_supertypes : list [MType.Class];
+      supertypes : list [MType.Class];
+      supertype_map : SystemMap [int, MType];
       tydecl : TypeDeclaration;
-      constant_object : option [IField];
+      constant_object : IField;
       
       public this (lib : LibraryReference, h : System.Type)
       {
@@ -1877,15 +2030,14 @@ namespace Nemerle.Compiler
 
         this.typarms = typarms;
         this.tenv = tenv;
-        direct_supertypes = dst :> list [TType.Class];
-        supertypes = st :> list [TType.Class];
+        direct_supertypes = dst :> list [MType.Class];
+        supertypes = st :> list [MType.Class];
 
-        def add (t : TType.Class, m : SystemMap [int, TType]) {
+        def add (t : MType.Class, m : SystemMap [int, MType]) {
           m.Add (t.tycon.GetId (), t)
         };
 
         supertype_map = List.FoldLeft (supertypes, SystemMap (), add);
-        constant_object = None ();
 
         if (has_attribute ("Nemerle.Internal.VariantAttribute", type_attrs)) {
           def names = get_variant_options (type_attrs);
@@ -1907,8 +2059,7 @@ namespace Nemerle.Compiler
                                 type_attrs)) {
           tydecl = TypeDeclaration.VariantOption ();
           match (LookupMember ("_N_constant_object")) {
-            | [fld] =>
-              constant_object = Some ((fld :> IField))
+            | [fld] => constant_object = fld :> IField
             | _ => Util.ice ("cannot find _N_constant_object")
           }
         } 
@@ -1926,12 +2077,17 @@ namespace Nemerle.Compiler
           tydecl = TypeDeclaration.Class ();
       }
 
-      mutable self_type : TType.Class;
+      mutable self_type : MType.Class;
 
-      public override GetMemType () : TType
+      public override GetMemType () : MType
       {
-        when (self_type == null)
-          self_type = TType.Class (this, List.Map (typarms, fun (tv) { TType.Variable (tv) })) :> TType.Class;
+        when (self_type == null) {
+          def parms = 
+            List.Map (typarms, fun (tv) { 
+                                 MType.TyVarRef (tv)
+                               });
+          self_type = MType.Class (this, parms) :> MType.Class;
+        }
         self_type
       }
 
@@ -1945,39 +2101,29 @@ namespace Nemerle.Compiler
         tydecl
       }
 
-      public override GetConstantObject () : option [IField]
+      public override GetConstantObject () : IField
       {
         constant_object
       }
 
-#if NTE
-      [Nemerle.NotImplemented]
       internal override MakeSubst (parms : list [TyVar]) : Subst
-#else
-      internal override MakeSubst (parms : list [TType]) : Subst
-#endif
       {
-        TypeBuilder.ConstructSubst (this, typarms, parms)
+        TypeBuilder.ConstructSubst (this, typarms, parms, check_parms = true)
       }
 
       internal override FreshSubst () : Subst
       {
-        Tyvar.fresh_subst (typarms)
+        Subst.Fresh (Passes.Solver, typarms)
       }
 
-#if NTE
-      [Nemerle.NotImplemented]
       public override SuperType (tc : TypeInfo) : option [list [MType]]
-#else
-      public override SuperType (tc : TypeInfo) : option [list [TType]]
-#endif
       {
         match (supertype_map.Find (tc.GetId ())) {
-          | Some (TType.Class (_, args)) => Some (args)
+          | Some (MType.Class (_, args)) => Some (Solver.FixedValues (args))
           | Some => Util.ice ()
           | None when tc.Equals (this) =>
             match (GetMemType ()) {
-              | TType.Class (_, parms) => Some (parms)
+              | MType.Class (_, parms) => Some (Solver.FixedValues (parms))
               | _ => assert (false)
             }
           | None when tc.Equals (InternalType.Object_tc) => Some ([])
@@ -1988,27 +2134,17 @@ namespace Nemerle.Compiler
       internal override SubtypingSubst (tc : TypeInfo) : Subst
       {
         if (this.Equals (tc))
-          SystemMap () // current type, no substitution
+          Subst () // current type, no substitution
         else
           tc.MakeSubst (Option.UnSome (SuperType (tc)));
       }
 
-#if NTE
-      [Nemerle.NotImplemented]
       public override GetSuperTypes () : list [MType.Class]
-#else
-      public override GetSuperTypes () : list [TType.Class]
-#endif
       {
         supertypes
       }
 
-#if NTE
-      [Nemerle.NotImplemented]
       public override GetDirectSuperTypes () : list [MType.Class]
-#else
-      public override GetDirectSuperTypes () : list [TType.Class]
-#endif
       {
         direct_supertypes
       }
@@ -2042,7 +2178,7 @@ namespace Nemerle.Compiler
     
     class MethodInfo : NetMethod
     {
-      public this (tenv : SystemMap [int, Tyvar.T], lib : LibraryReference,
+      public this (tenv : SystemMap [int, StaticTyVar], lib : LibraryReference,
                    h : SR.MethodBase)
       {
         base (lib, h);
@@ -2052,14 +2188,10 @@ namespace Nemerle.Compiler
           TyCodec.FixupFunctionHeader (lib, tenv, fun_header, attr_str);
       }
       
-      public override GetExternName () : option [string]
+      public override GetFreshType () : MType
       {
-        None ()
-      }
-
-      public override GetFreshType () : TType
-      {
-        GetMemType () /- Tyvar.fresh_subst (fun_header.typarms)
+        def subst = Subst.Fresh (Passes.Solver, fun_header.typarms);
+        subst.MonoApply (GetMemType ())
       }
     }
   }

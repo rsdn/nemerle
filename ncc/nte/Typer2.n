@@ -1,0 +1,763 @@
+/*
+ * Copyright (c) 2005 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Collections;
+using Nemerle.Utility;
+
+using Nemerle.Compiler;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Compiler.SolverMacros;
+
+namespace Nemerle.Compiler
+{
+  internal class Typer2
+  {
+    top_level_fun : Fun_header;
+    mutable this_ptr_decl : LocalValue;
+    mutable current_fun : Fun_header;
+    current_type : TypeBuilder;
+    messenger : Messenger;
+
+    [System.Flags]
+    enum Context {
+      | Clean         = 0x0000
+      | IsTail        = 0x0001
+      | NeedLValue    = 0x0002
+      | IsCalledValue = 0x0004
+      | IsIndexerRef  = 0x0008
+    }
+    
+    public this (ty : TypeBuilder, fn : Fun_header)
+    {
+      current_fun = fn;
+      top_level_fun = fn;
+      current_type = ty;
+
+      messenger = Passes.Solver.CurrentMessenger;
+    }
+    
+
+    public Run () : void
+    {
+      foreach (parm in current_fun.parms)
+        parm.decl.Register ();
+
+      match (current_fun.body) {
+        | FunBody.Typed (expr) =>
+          current_fun.body = FunBody.Typed (Walk (Context.IsTail, expr));
+          FixupCurrentFunction ();
+        | _ => {}
+      }
+    }
+
+
+    Walk (expr : TExpr) : TExpr
+    {
+      Walk (Context.Clean, expr)
+    }
+
+
+    Walks (exprs : list [TExpr]) : list [TExpr]
+    {
+      List.Map (exprs, fun (x) { Walk (x) })
+    }
+
+    
+    Walk (ctx : Context, expr : TExpr) : TExpr
+    {
+      assert (expr != null);
+      Util.locate (expr.loc, {
+        messenger.CleanLocalError ();
+        def res = DoWalk (ctx, expr);
+        def res =
+          if (res == null)
+            expr
+          else {
+            res.ty = expr.ty;
+            res
+          }
+        if (ctx %&& Context.IsTail)
+          match (res) {
+            | TExpr.Call (fn, parms) =>
+              TExpr.TailCall (res.loc, res.ty, fn, parms)
+            | _ => res
+          }
+        else res
+      })
+    }
+    
+
+    IsSelfCall (func : TExpr) : bool
+    {
+      match (Unfold (func)) {
+        | TExpr.LocalRef (decl) =>
+          match (decl.ValKind) {
+            | LocalValue.Kind.Function (hd, _) =>
+              hd.id == current_fun.id
+            | _ => false
+          }
+        | TExpr.StaticRef (meth : IMethod) =>
+          meth.GetHeader ().id == current_fun.id
+        | TExpr.MethodRef (th, meth : IMethod, _) =>
+          meth.GetHeader ().id == current_fun.id &&
+          Unfold (th) matches TExpr.This
+        | _ => false
+      }
+    }
+
+
+    Unfold (expr : TExpr) : TExpr
+    {
+      match (expr) {
+        | TExpr.Delayed (dt) =>
+          match (dt.DtKind) {
+            | Typer.DelayedTyping.Kind.Resolved (expr) =>
+              Unfold (expr)
+            | _ => assert (false)
+                 //  TExpr.Error ()
+          }
+        | _ => expr
+      }
+    }
+
+
+    IsOperator (expr : TExpr) : bool
+    {
+      match (Unfold (expr)) {
+        | TExpr.StaticRef (meth : IMethod) =>
+          ! (meth.BuiltinKind matches BuiltinMethodKind.NotBuiltin)
+        | _ => false
+      }
+    }
+
+    OperatorKind (expr : TExpr) : BuiltinMethodKind
+    {
+      match (Unfold (expr)) {
+        | TExpr.StaticRef (meth : IMethod) =>
+          meth.BuiltinKind
+        | _ => assert (false)
+      }
+    }
+
+
+    IsCurrentType (tv : TyVar) : bool
+    {
+      match (tv.Fix ()) {
+        | MType.Class (ti, _) =>
+          ti.Equals (current_type)
+        | _ => false
+      }
+    }
+
+
+    GetEventObj (expr : TExpr) : option [IEvent * TExpr]
+    {
+      match (Unfold (expr)) {
+        | TExpr.StaticEventRef (ev) => Some ((ev, null))
+        | TExpr.EventMember (obj, ev) => Some ((ev, obj))
+        | _ => None ()
+      }
+    }
+
+
+
+    TheSame (e1 : TExpr, e2 : TExpr) : bool
+    {
+      e1 : object == e2 : object ||
+      match ((Unfold (e1), Unfold (e2))) {
+        | (TExpr.LocalRef (d1), TExpr.LocalRef (d2)) =>
+          d1.Equals (d2)
+        | (TExpr.StaticRef (m1), TExpr.StaticRef (m2)) =>
+          m1.Equals (m2)
+        | _ => false
+      }
+    }
+
+
+    ConvertEventExpr (target : TExpr, source : TExpr) : TExpr
+    {
+      match (GetEventObj (target)) {
+        | Some ((ev1, obj1)) =>
+          match (Unfold (source)) {
+            | TExpr.Call (meth, [p1, p2]) 
+              when IsOperator (meth) =>
+              match (OperatorKind (meth)) {
+                | BuiltinMethodKind.CallWithCast (meth)
+                  when meth.Equals (InternalType.Delegate_Combine) ||
+                       meth.Equals (InternalType.Delegate_Remove) =>
+                  match (GetEventObj (p1.expr)) {
+                    | Some ((ev2, obj2))
+                      when ev1.Equals (ev2) && TheSame (obj1, obj2) =>
+                      def ev_meth =
+                        if (meth.Equals (InternalType.Delegate_Combine))
+                          ev1.GetAdder ()
+                        else
+                          ev2.GetRemover ();
+                      assert (ev_meth != null);
+                      def ev_meth_ref =
+                      // XXX possibly wrong type here
+                        if (obj1 == null)
+                          TExpr.StaticRef (ev_meth.GetFreshType (), ev_meth)
+                        else {
+                          def obj1 = Walk (obj1); 
+                          TExpr.MethodRef (ev_meth.GetFreshType (), 
+                                           obj1, ev_meth, IsBaseRef (obj1));
+                        }
+                      p2.expr = Walk (p2.expr);
+                      TExpr.Call (ev_meth_ref, [p2])
+                    | _ => null
+                  }
+                | _ => null
+              }
+            | _ => null
+          }
+        | _ => null
+      }
+    }
+
+
+    WalkPattern (pat : Pattern) : void
+    {
+      match (pat) {
+        | Pattern.Enum 
+        | Pattern.Literal
+        | Pattern.Error
+        | Pattern.HasType
+        | Pattern.Wildcard => {}
+        
+        | Pattern.As (pat, decl) =>
+          unless (decl.IsRegistered)
+            decl.Register ();
+          WalkPattern (pat)
+
+        | Pattern.Tuple (args) =>
+          foreach (a in args) WalkPattern (a);
+          
+        | Pattern.Record (args) =>
+          foreach ((_, a) in args) WalkPattern (a);
+          
+        | Pattern.Application (_, a) =>
+          WalkPattern (a)
+      }
+    }
+
+
+    FixupCurrentFunction () : void
+    {
+      def warned = Hashtable (50);
+      
+      def locals = List.Rev (current_fun.all_locals);
+      current_fun.all_locals = null; // GC it
+
+      unless (current_type.IsDelegate)
+        foreach (v in locals)
+          when (!v.EverUsed && v.Name[0] != '_' && !warned.Contains (v.Id)) {
+            Message.warning (v.loc, $ "$(v) was never used");
+            Message.hint_once (v.loc, "replace name with `_' or prefix it like"
+                               " `_bar' to avoid the warning");
+            warned.Set (v.Id, null)
+          }
+
+      foreach (v in locals)
+        match (v.ValKind) {
+          | LocalValue.Kind.Function (h, _) when !h.closure_vars.IsEmpty =>
+            // we cannot yet deal with expanding these to loops
+            h.usage = FunctionUsage.UsedAsFirstClass
+          | _ => ()
+        }
+
+      foreach (v in locals) {
+        mutable in_clo = false;
+
+        v.UsedIn.Iter (fun (h : Fun_header) {
+          unless (in_clo) {
+            // check if all functions from h to current_fun are used_just_once
+            def find_defining (header : Fun_header) {
+              match (header.usage) {
+                | _ when header.id == current_fun.id => {}
+                | FunctionUsage.UsedJustOnce =>
+                  find_defining (header.decl.DefinedIn)
+                | _ =>
+                  in_clo = true;
+              }
+            }
+            find_defining (h)
+          }
+        });
+
+        when (in_clo) {
+          // check if we are not closuring some invalid things
+          match (v.ValKind) {
+            | LocalValue.Kind.FunParm (k) when k != ParmKind.Normal =>
+              Message.error (v.loc, $ "cannot store ref/out parameters in"
+                                      " closures ($v)");
+            | _ => ()
+          };
+          v.InClosure = true;
+          v.DefinedIn.closure_vars = v :: v.DefinedIn.closure_vars;
+        }
+      }
+    }
+
+
+    LambdaTransform (expr : TExpr, obj : TExpr, meth : IMethod, notvirt : bool) : TExpr
+    {
+      def obj_cache = 
+        LocalValue (current_fun, "_N_obj_cache", obj.Type,
+                    LocalValue.Kind.Plain (), is_mutable = false);
+      def (ret_type, parms_types) =
+        match (expr.Type.Fix ()) {
+          | MType.Fun (from, to) =>
+            (to, from.Fix ().GetFunctionArguments ())
+          | _ => assert (false)
+        }
+      def parms = 
+        List.Map (parms_types, fun (ty : TyVar) {
+          Fun_parm ("fp", 0, ty, null, Modifiers.Empty, ParmKind.Normal)
+        });
+      def lambda_header = 
+        Fun_header (obj.loc, "_N_method_lambda", ret_type, parms,
+                    [], current_fun.tenv);
+      def parms_refs =
+        List.Map (parms, fun (fp : Fun_parm) {
+          fp.decl =
+            LocalValue (lambda_header, fp.name, fp.ty,
+                        LocalValue.Kind.FunParm (ParmKind.Normal), 
+                        is_mutable = false);
+          Parm (TExpr.LocalRef (fp.ty, fp.decl))
+        });
+      def lambda_body =
+        TExpr.Call (ret_type, 
+           TExpr.MethodRef (expr.Type,
+              TExpr.LocalRef (obj_cache.Type, obj_cache),
+              meth,
+              notvirt), parms_refs);
+      def parents = current_fun :: current_fun.GetParents ();
+      def lambda_value =
+        LocalValue (current_fun, lambda_header.name, expr.Type,
+                    LocalValue.Kind.Function (lambda_header, parents),
+                    is_mutable = false);
+      lambda_header.body = FunBody.Typed (lambda_body);
+      lambda_header.decl = lambda_value;
+
+      def res =
+        TExpr.DefFunctionsIn (expr.Type, [lambda_header], 
+                              TExpr.LocalRef (expr.Type, lambda_value));
+      def res = TExpr.DefValIn (expr.Type, obj_cache, obj, res);
+
+      Walk (res)
+    }
+
+
+    VoidIfNull (expr : TExpr) : TExpr
+    {
+      if (expr == null)
+        TExpr.Literal (Literal.Void ())
+      else
+        expr
+    }
+
+
+    IsBaseRef (expr : TExpr) : bool
+    {
+      match (Unfold (expr)) {
+        | TExpr.This as ex =>
+          ! IsCurrentType (ex.Type)
+        | TExpr.LocalRef (decl) as ex =>
+          ! IsCurrentType (ex.Type) &&
+          decl.ValKind matches LocalValue.Kind.ClosurisedThisPointer
+        | _ => false
+      }
+    }
+
+
+    IgnoreExpr (expr : TExpr) : TExpr
+    {
+      def solver = Passes.Solver;
+      solver.PushState ();
+      def ok = expr.Type.Unify (InternalType.Void);
+      solver.PopState ();
+      if (ok) {
+        def res = expr.Type.Unify (InternalType.Void);
+        assert (res);
+        expr
+      } else {
+        when (Options.IgnoredValueWarnings) {
+          Message.warning (expr.Location, $ "ignored computed value of type $(expr.Type)");
+          Message.hint_once (expr.Location, "use _ = ...; or -Wno-ignore to avoid the warning");
+        }
+        TExpr.TypeConversion (InternalType.Void, expr, InternalType.Void, false)
+      }
+    }
+
+
+    DoWalk (ctx : Context, expr : TExpr) : TExpr
+    {
+      // Message.debug ($ "dowalk: $expr");
+      match (expr) {
+        | TExpr.LocalRef (decl) =>
+          assert (decl.IsRegistered, $ "unregistered local $decl");
+          decl.UseFrom (current_fun);
+
+          match (decl.ValKind) {
+            | LocalValue.Kind.Function (hd, _) =>
+              if (ctx %&& Context.IsCalledValue) {
+                match (hd.usage) {
+                  | FunctionUsage.NotUsed =>
+                    // we may set just-once flag only if referencing
+                    // from the outer function
+                    if (decl.DefinedIn.id == current_fun.id)
+                      hd.usage = FunctionUsage.UsedJustOnce
+                    else
+                      hd.usage = FunctionUsage.Used
+                  | FunctionUsage.UsedJustOnce =>
+                    hd.usage = FunctionUsage.Used
+                  | FunctionUsage.Used | FunctionUsage.UsedAsFirstClass => ()
+                }
+              } else
+                hd.usage = FunctionUsage.UsedAsFirstClass;
+            | _ => {}
+          }
+          null
+          
+          
+        | TExpr.StaticRef (mem) =>
+          mem.HasBeenUsed = true;
+          null
+          
+          
+        | TExpr.DefFunctionsIn (funs, body) =>
+          foreach (fn in funs)
+            fn.decl.Register ();
+          foreach (fn in funs) {
+            def last_fun = current_fun;
+            current_fun = fn;
+            foreach (parm in fn.parms)
+              parm.decl.Register ();
+            match (fn.body) {
+              | FunBody.Typed (expr) =>
+                fn.body = FunBody.Typed (Walk (Context.IsTail, expr))
+              | _ => assert (false)
+            }
+            FixupCurrentFunction ();
+            current_fun = last_fun;
+          }
+          TExpr.DefFunctionsIn (funs, Walk (ctx, VoidIfNull (body)))
+          
+          
+        | TExpr.ImplicitValueTypeCtor (tc) =>
+          tc.HasBeenUsed = true;
+          null
+          
+
+        | TExpr.FieldMember (obj, fld) =>
+          fld.HasBeenUsed = true;
+          TExpr.FieldMember (Walk (obj), fld)
+          
+          
+        | TExpr.ConstantObjectRef (mem) =>
+          mem.HasBeenUsed = true;
+          null
+          
+          
+        | TExpr.PropertyMember (obj, prop) =>
+          prop.HasBeenUsed = true;
+          def obj = Walk (obj);
+          def meth =
+            if (ctx %&& Context.NeedLValue) prop.GetSetter ()
+            else prop.GetGetter ();
+          when (meth == null)
+            if (ctx %&& Context.NeedLValue)
+              assert (false); // should be rejected by Typer
+            else
+              ReportError (messenger, $ "the get accessor is unavailable for $prop");
+          // for setters the argument list is fixed later
+          // XXX possibly wrong type here
+          // Message.debug ($ "prop $meth $obj $(IsBaseRef (obj))");
+          def the_ref = TExpr.MethodRef (meth.GetFreshType (), obj, meth, IsBaseRef (obj));
+          if (ctx %&& Context.IsIndexerRef)
+            the_ref
+          else if (prop.IsIndexer) {
+            ReportError (messenger, $ "$prop was used as a first class value");
+            the_ref
+          } else
+            TExpr.Call (the_ref, [])
+
+        
+        | TExpr.StaticPropertyRef (prop) =>
+          prop.HasBeenUsed = true;
+          def meth =
+            if (ctx %&& Context.NeedLValue) prop.GetSetter ()
+            else prop.GetGetter ();
+          assert (meth != null);
+          // XXX possibly wrong type here
+          def the_ref = TExpr.StaticRef (meth.GetFreshType (), meth); 
+          if (ctx %&& Context.IsIndexerRef)
+            the_ref
+          else if (prop.IsIndexer) {
+            ReportError (messenger, $ "$prop was used as a first class value");
+            the_ref
+          } else
+            TExpr.Call (the_ref, [])
+          
+        
+        | TExpr.EventMember (obj, ev) =>
+          ev.HasBeenUsed = true;
+          def obj = Walk (obj);
+          if (IsCurrentType (obj.Type)) {
+            def field = (ev :> NemerleEvent).storage_field;
+            assert (field != null);
+            TExpr.FieldMember (obj, field)
+          } else {
+            ReportError (messenger, $ "$(ev) was referenced outside its class");
+            TExpr.Error ()
+          }
+
+          
+        | TExpr.StaticEventRef (ev) =>
+          ev.HasBeenUsed = true;
+          if (ev.DeclaringType.Equals (current_type)) {
+            def field = (ev :> NemerleEvent).storage_field;
+            assert (field != null);
+            TExpr.StaticRef (field)
+          } else {
+            ReportError (messenger, $ "$(ev) was referenced outside its class");
+            TExpr.Error ()
+          }
+          
+
+        | TExpr.MethodRef (obj, meth, notvirt) =>
+          meth.HasBeenUsed = true;
+          def notvirt = notvirt || IsBaseRef (obj);
+
+          if (ctx %&& Context.IsCalledValue)
+            TExpr.MethodRef (Walk (obj), meth, notvirt)
+          else
+            LambdaTransform (expr, obj, meth, notvirt)
+          
+
+        | TExpr.Call (func, parms) =>
+          foreach (p in parms)
+            p.expr = Walk (p.expr);
+
+          if (IsOperator (func))
+            match (OperatorKind (func)) {
+              | BuiltinMethodKind.CallWithCast (meth') =>
+                assert (meth' != null);
+                // XXX possibly wrong type
+                TExpr.TypeConversion (
+                  TExpr.Call (meth'.GetHeader ().ret_type, 
+                              TExpr.StaticRef (meth'.GetFreshType (), meth'), parms),
+                  expr.Type.Fix (), true)
+                
+              | _ => assert (false)
+            }
+          else
+            match (Unfold (func)) {
+              | TExpr.PropertyMember (_, prop) when prop.IsIndexer
+              | TExpr.StaticPropertyRef (prop) when prop.IsIndexer => 
+                def ctx =
+                  Context.IsCalledValue %| 
+                  Context.IsIndexerRef  %|
+                  (ctx & Context.NeedLValue);
+                TExpr.Call (Walk (ctx, func), parms)
+              | TExpr.ConstantObjectRef (mem) =>
+                TExpr.StaticRef (mem) // skip the call
+              | TExpr.ImplicitValueTypeCtor as ivtc =>
+                ivtc
+
+              | TExpr.OpCode ("==.ref")
+              | TExpr.OpCode ("!=.ref") =>
+                match (parms) {
+                  | [p1, p2] =>
+                    def t1 = p1.expr.Type.Fix ();
+                    def t2 = p2.expr.Type.Fix ();
+                    def prob =
+                      if (t1.IsSystemObject && t2.IsValueType) t2
+                      else if (t2.IsSystemObject && t1.IsValueType) t1
+                      else null;
+
+                    if (prob != null)
+                      ReportError (messenger, 
+                                   $ "comparing a value type $prob to "
+                                     "System.Object (a `null' literal?) "
+                                     "with reference equality");
+                    else if (!t1.IsSystemObject && !t2.IsSystemObject) {
+                      ReportError (messenger, 
+                                   $ "comparing values of types $t1 and $t2 "
+                                     "with reference equality");
+                      Message.hint ("upcast one of the values to object if "
+                                    "this is desired");
+                    } else {}
+
+                    TExpr.Call (Unfold (func), parms)
+                  | _ => assert (false)
+                }
+
+              | _ =>
+                if ((ctx %&& Context.IsTail) && IsSelfCall (func))
+                  TExpr.SelfTailCall (parms)
+                else
+                  TExpr.Call (Walk (Context.IsCalledValue, func), parms)
+            }
+              
+        
+        | TExpr.TailCall
+        | TExpr.SelfTailCall => assert (false)
+        
+
+        | TExpr.Assign (target, source) =>
+          def event_expr = ConvertEventExpr (target, source);
+          if (event_expr != null)
+            event_expr
+          else {
+            def transform_call =
+              match (target) {
+                | TExpr.PropertyMember
+                | TExpr.StaticPropertyRef
+                | TExpr.Call => true
+                | _ => false
+              }
+            
+            def target = Walk (Context.NeedLValue, target);
+            def source = Walk (source);
+
+            match (target) {
+              | TExpr.Call (expr, parms) when transform_call =>
+                TExpr.Call (expr, parms + [Parm (source)])
+              | _ when transform_call => assert (false)
+              | _ =>
+                TExpr.Assign (target, source)
+            }
+          }
+          
+   
+        | TExpr.DefValIn (name, val, body) =>
+          name.Register ();
+          def val = Walk (val);
+          def body = Walk (ctx, VoidIfNull (body));
+          TExpr.DefValIn (name, val, body)
+          
+          
+        | TExpr.Match (matched_value, cases) =>
+          def cast_to = expr.Type.Fix ();
+          foreach (case in cases) {
+            mutable pats = [];
+            foreach ((pat, expr) in case.patterns) {
+              WalkPattern (pat);
+              pats = (pat, Walk (expr)) :: pats
+            }
+            case.patterns = List.Rev (pats);
+            case.body = 
+              TExpr.TypeEnforcement (cast_to,
+                                     Walk (ctx, VoidIfNull (case.body)), 
+                                     cast_to);
+          }
+          TExpr.Match (Walk (matched_value), cases)
+          
+
+        | TExpr.Throw (exn) =>
+          // exception can be null for `throw;' rethrow expression
+          if (exn != null)
+            TExpr.Throw (Walk (exn))
+          else
+            expr
+
+        | TExpr.TryWith (body, exn, handler) =>
+          exn.Register ();
+          TExpr.TryWith (Walk (body), exn, Walk (handler))
+          
+          
+        | TExpr.TryFinally (body, handler) =>
+          TExpr.TryFinally (Walk (body), IgnoreExpr (Walk (handler)))
+          
+
+        | TExpr.Literal =>
+          null
+          
+        
+        | TExpr.This =>
+          when (this_ptr_decl == null) {
+            this_ptr_decl = 
+              LocalValue (
+                top_level_fun, 
+                "_N_closurised_this_ptr",
+                expr.Type, 
+                LocalValue.Kind.ClosurisedThisPointer (),
+                is_mutable = false);
+            this_ptr_decl.Register ();
+          }
+          this_ptr_decl.UseFrom (current_fun);
+          TExpr.LocalRef (this_ptr_decl);
+          
+          
+        | TExpr.Base (meth) =>
+          meth.HasBeenUsed = true;
+          null
+          
+
+        | TExpr.TypeConversion (expr, t, ic) =>
+          TExpr.TypeConversion (Walk (expr), t, ic)
+          
+          
+        | TExpr.TypeEnforcement (expr, t) =>
+          TExpr.TypeEnforcement (Walk (ctx, expr), t)
+          
+
+        | TExpr.Sequence (e1, e2) =>
+          def e1 = IgnoreExpr (Walk (e1));
+          TExpr.Sequence (e1, Walk (ctx, e2))
+          
+          
+        | TExpr.Tuple (args) =>
+          TExpr.Tuple (Walks (args))
+          
+          
+        | TExpr.Array (args, dimensions) =>
+          TExpr.Array (Walks (args), Walks (dimensions))
+          
+          
+        | TExpr.TypeOf => null
+          
+          
+        | TExpr.ArrayIndexer (t, obj, args) =>
+          TExpr.ArrayIndexer (t, Walk (obj), Walks (args))
+          
+        
+        | TExpr.OpCode => null
+        
+        | TExpr.Delayed =>
+          Walk (ctx, Unfold (expr))
+
+
+        | TExpr.Error =>
+          null
+      }
+    }
+  }
+}

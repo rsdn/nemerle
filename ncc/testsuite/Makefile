@@ -34,6 +34,7 @@ include $(TOP)/config.mak
 # VARIABLES
 ############################################################
 
+STAGE1    = $(TOP)/ncc/out.stage1
 STAGE3    = $(TOP)/ncc/out.stage3
 TESTN     = $(TOP)/ncc/testsuite/test.n
 
@@ -60,10 +61,22 @@ all:
 	cp $(STAGE3)/Nemerle.Compiler.dll .
 	$(EXECUTE) $(STAGE3)/ncc.exe -out test.exe $(TESTN)
 	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" -n "$(STAGE3)/ncc.exe" -p "$(NEM_FLAGS)" -verify "$(VERIFY)" $(TEST_FILES)
-	rm -f *.dll *.exe *.netmodule ext_test.out
+	rm -f *.dll *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
 
+test-stage1:
+	cp $(STAGE1)/Nemerle.stage1.dll .
+	cp $(STAGE1)/Nemerle.Compiler.stage1.dll .
+	$(EXECUTE) ../../boot/ncc.exe -no-stdlib -r:Nemerle.stage1 -r:System -out test.exe $(TESTN)
+	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" -n "$(STAGE1)/ncc.exe" \
+		-p "-no-stdlib -r:Nemerle.stage1 -r:System $(NEM_FLAGS)" \
+		-verify "$(VERIFY)" $(TEST_FILES)
+	rm -f *.dll *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
+
+all-mcs:
+	$(MAKE) all TEST_FILES=frommcs/*.n
+	
 clean:
 	$(Q) cd positive && $(MAKE) clean
 	$(Q) cd negative && $(MAKE) clean
-	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]*
-	rm -f test.err test_error.log a.out
+	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]* xml-*.xml
+	rm -f test.err test_error.log a.out test_out.txt

@@ -1,0 +1,455 @@
+/*
+ * Copyright (c) 2005 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Collections;
+using Nemerle.Utility;
+
+using Nemerle.Compiler;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Compiler.SolverMacros;
+
+using PT = Nemerle.Compiler.Parsetree;
+
+namespace Nemerle.Compiler
+{
+  public partial class Typer
+  {
+    public class DelayedTyping : Located, Nemerle.IComparable [DelayedTyping]
+    {
+      id : int;
+      typer : Typer;
+      local_context : LocalContext;
+      expected : TyVar;
+      static mutable current_id : int;
+
+      [Record]
+      public variant Kind
+      {
+        | MemberAccess { expr : TExpr; name : string; }
+        | Overloaded { overloads : list [OverloadPossibility]; }
+        | Operator { t1 : TyVar; t2 : TyVar; name : string; }
+        | Resolved { expr : TExpr; }
+        | Error
+
+        public mutable filtering_expression : TExpr.Call;
+        public this () {}
+      }
+      
+
+      public CompareTo (o : DelayedTyping) : int
+      {
+        id - o.id
+      }
+
+      
+      public DtKind : Kind
+      {
+        get {
+          typer.solver.dt_store.Get (this)
+        }
+      }
+      
+
+      SetKind (k : Kind) : void
+      {
+        match (k) {
+          | Kind.Resolved (expr) =>
+            _ = typer.Expect (expected, expr.Type, "resolved overload");
+          | _ => {}
+        }
+
+        def k =
+          match (k) {
+            | Kind.Resolved ((TExpr.StaticRef (meth : IMethod)) as expr) =>
+              match (meth.BuiltinKind) {
+                | BuiltinMethodKind.OpCode (ch, unch) =>
+                  def opcode = if (local_context.IsChecked) ch else unch;
+                  Kind.Resolved (TExpr.OpCode (expr.loc, expr.ty, opcode))
+                | _ => k
+              }
+            | Kind.Overloaded (lst) =>
+              Kind.Overloaded (OverloadPossibility.Unique (lst))
+            | _ => k
+          }
+
+        def solver = Passes.Solver;
+        when (k.filtering_expression == null)
+          match (solver.dt_store.Find (this)) {
+            | Some (k') =>
+              k.filtering_expression = k'.filtering_expression
+            | None => {}
+          }
+        solver.dt_store = solver.dt_store.Replace (this, k);
+      }
+      
+      
+      public this (t : Typer, k : Kind, e : TyVar)
+      {
+        typer = t;
+        local_context = t.local_context;
+        current_id++;
+        id = current_id;
+        expected = e;
+        SetKind (k)
+      }
+
+
+      public IsMutableIndexer : bool
+      { 
+        get {
+          match (DtKind) {
+            | Kind.Overloaded (lst) =>
+              List.ForAll (lst, fun (op : OverloadPossibility) {
+                match (op.Member) {
+                  | p : IProperty => p.IsMutable && p.IsIndexer
+                  | _ => false
+                }
+              })
+
+            | Kind.Resolved (TExpr.PropertyMember (_, p))
+            | Kind.Resolved (TExpr.StaticPropertyRef (p)) =>
+              p.IsIndexer && p.IsMutable
+            
+            | _ => false
+          }
+        }
+      }
+      
+
+      public IsResolved : bool
+      {
+        get {
+          match (DtKind) {
+            | Kind.Resolved
+            | Kind.Error => true
+            | _ => false
+          }
+        }
+      }
+
+
+      public ResolutionResult : TExpr
+      {
+        get {
+          match (DtKind) {
+            | Kind.Resolved (e) => e
+            | Kind.Error => TExpr.Error ()
+            | _ => assert (false)
+          }
+        }
+      }
+
+
+      public override ToString () : string
+      {
+        match (DtKind) {
+          | Kind.Resolved => "resolved expression"
+          | Kind.Error => "an error"
+          | Kind.Overloaded (overloads) =>
+            "ambiguity between overloads:\n  " + overloads.ToString ("\n  ")
+          | Kind.MemberAccess (expr, name) =>
+            $ "member access of `$(name)' on $(expr.Type) [$expr]"
+          | Kind.Operator (t1, t2, name) =>
+            $ "operator `$(name)' on $(t1)"
+            + (if (t2 == null) "" else $ " and $(t2)")
+        }
+      }
+
+
+      public IsOverloaded : bool
+      {
+        get { DtKind matches Kind.Overloaded }
+      }
+
+
+      public Context : LocalContext
+      {
+        get { local_context }
+      }
+      
+
+      public SetCallExpr (e : TExpr.Call) : void
+      {
+        def kind = DtKind;
+        if (kind.filtering_expression == null)
+          kind.filtering_expression = e;
+        else
+          assert (kind.filtering_expression : object == e : object);
+      }
+
+
+      /*
+        A side, future implementation, note:
+          [Resolve] should have [badness] parameter. It would tell [Resolve]
+          what kind of bad things it can do, for example:
+            0 -- nothing bad
+            1 -- choose a better overload, even when it is not sure it will
+                 be possible to enforce
+            2 -- invoke macros taking typed arguments
+
+          Now, after we are done with typing a function:
+
+          start:
+            foreach (e in yet untyped)
+              e.Resolve(0)
+            if (something changed) goto start
+            foreach (e in yet untyped)
+              if (e.Resolve(1) succeeded) goto start
+            foreach (e in yet untyped)
+              if (e.Resolve(2) succeeded) goto start
+            if (yet untyped.IsEmpty) ok
+            else error
+      */
+
+
+      ResolveOverload (overloads : list [OverloadPossibility], 
+                       parms : list [Parm], expected : TyVar)
+                       : list [OverloadPossibility]
+      {
+        def solver = typer.solver;
+        def messenger = solver.CurrentMessenger;
+
+        def try_type (overload : OverloadPossibility)
+        {
+          typer.TryTypeCall (overload.Compile (), 
+                             parms, 
+                             expected, 
+                             var_args = overload.VarArgs);
+        }
+
+        def print_error_message (overload : OverloadPossibility) {
+          solver.PushState ();
+          messenger.NeedMessage = true;
+          _ = try_type (overload);
+          solver.PopState ();
+        }
+
+        match (OverloadPossibility.OnlyPossible (overloads, null)) {
+          | [] => []
+
+          | overloads =>
+            mutable ok = [];
+
+            // Message.debug ($ "try type: $overloads");
+            foreach (overload in overloads) {
+              solver.PushState ();
+              unless (typer.IsError (try_type (overload)))
+                ok = overload :: ok;
+              solver.PopState ();
+            }
+            // Message.debug ($ "res: $ok");
+
+            match (typer.GetBestOverloads (ok)) {
+              | [] =>
+                when (messenger.NeedMessage) {
+                  match (overloads) {
+                    | [o] =>
+                      print_error_message (o);
+                    | _ =>
+                      ReportError (messenger, "each overload has an error during call:");
+                      mutable cnt = 1;
+                      foreach (o in overloads) {
+                        ReportError (messenger, $ "  overload #$cnt, $o");
+                        print_error_message (o);
+                        ++cnt;
+                      }
+                  }
+                }
+                []
+
+              | [one] =>
+                match (try_type (one)) {
+                  | TExpr.Call (_func, parms) =>
+                    def expr = DtKind.filtering_expression;
+                    // XXX this shouldn't be needed
+                    // expr.func = _func;
+                    expr.parms = parms;
+                  | _ => assert (false)
+                }
+                [one]
+              
+              // This is important -- we only drop the clearly evil
+              // solutions. We leave the less general ones (dropped by 
+              // GetBestOverloads), as it is possible we will need them 
+              // later.
+              | _ => ok
+            }
+        }
+      }
+
+
+      LookupOperatorIn (bound : MType, name : string) : list [OverloadPossibility]
+      {
+        mutable res = [];
+        
+        def loop (ti : TypeInfo) {
+          foreach (meth : IMethod in ti.LookupMember (name))
+            when (meth.IsStatic) {
+              def pos = 
+                OverloadPossibility (Passes.Solver, 
+                                     bound.TypeOfMethod (meth),
+                                     null, meth);
+              res = pos :: res;
+            }
+          match (ti.GetTydecl ()) {
+            | TypeDeclaration.Interface =>
+              loop (InternalType.Object_tc)
+            | _ =>
+              Option.Iter (ti.SuperClass (), loop)
+          }
+        }
+
+        match (bound) {
+          | MType.Class (ti, _) =>
+            loop (ti);
+            res
+          | _ => assert (false)
+        }
+      }
+
+
+      LookupOperator (t : TyVar, name : string) : option [list [OverloadPossibility]]
+      {
+        assert (name != null);
+        if (t == null)
+          None ()
+        else {
+          match (t.AnyHint) {
+            | Some (MType.Class as bound) =>
+              Some (LookupOperatorIn (bound, name))
+              
+            | Some (MType.Array) =>
+              Some (LookupOperatorIn (InternalType.Array, name))
+
+            | Some (MType.TyVarRef (a)) =>
+              LookupOperator (a.LowerBound, name)
+
+            | Some (MType.Intersection (lst)) =>
+              mutable res = [];
+              foreach (MType.Class as t in lst) {
+                res = LookupOperatorIn (t, name) + res
+              }
+              Some (res)
+              
+            | Some (MType.Fun) =>
+              Some (LookupOperatorIn (InternalType.Object, name))
+
+            | _ => None ()
+          }
+        }
+      }
+
+      
+      public Resolve () : void
+      {
+        Util.locate (loc, {
+          def solver = typer.solver;
+          def messenger = solver.CurrentMessenger;
+          match (DtKind) {
+            | Kind.MemberAccess (e, name) =>
+              match (typer.TypeMember (e, name, expected)) {
+                | Some ([]) =>
+                  ReportError (messenger,
+                               $ "there is no member named `$(name)' "
+                                 "in $(typer.TypeOf (e)) with type $expected");
+                  SetKind (Kind.Error ())
+                  
+                | Some ([one]) =>
+                  if (typer.Expect (expected, one.Type, "overloaded symbol"))
+                    SetKind (Kind.Resolved (one.Compile ()))
+                  else
+                    SetKind (Kind.Error ())
+                  
+                | Some (lst) =>
+                  SetKind (Kind.Overloaded (lst));
+                  // restart with more information
+                  Resolve ()
+                  
+                | None => {}
+              }
+            
+            | Kind.Overloaded (overloads) =>
+              def expr = DtKind.filtering_expression;
+              def o' =
+                if (expr == null) {
+                  OverloadPossibility.OnlyPossible (overloads, expected)
+                } else {
+                  if (typer.Expect (expected, expr.func.Type, 
+                                    "overloaded function call"))
+                    ResolveOverload (overloads, expr.parms, expr.Type)
+                  else
+                    []
+                }
+              
+              when (o'.Length != overloads.Length || o'.Length == 1)
+                match (o') {
+                  | [] =>
+                    SetKind (Kind.Error ())
+                    
+                  | [one] =>
+                    SetKind (Kind.Resolved (one.Compile ()))
+
+                  | lst =>
+                    SetKind (Kind.Overloaded (lst))
+                }
+              
+            | Kind.Operator (t1, t2, name) =>
+              def operators =
+                match ((LookupOperator (t1, name), LookupOperator (t2, name))) {
+                  | (Some (l1), Some (l2)) =>
+                    Some (l1 + l2)
+                  | (Some as s, None)
+                  | (None, Some as s) => s
+                  | (None, None) => None ()
+                }
+              match (operators) {
+                | Some ([]) =>
+                  ReportError (messenger, 
+                               $ "cannot find the operator `$(name)' in "
+                                 "neither $t1 nor $t2");
+                  SetKind (Kind.Error ())
+                  
+                | Some (lst) =>
+                  SetKind (Kind.Overloaded (lst));
+                  Resolve ()
+                  
+                | None => {}
+              }
+            
+            | Kind.Resolved (expr) =>
+              unless (typer.Expect (expected, expr.Type, 
+                                    "already resolved overload"))
+                SetKind (Kind.Error ())
+             
+            | Kind.Error => {}
+          }
+        })
+      }
+    }
+  }
+}

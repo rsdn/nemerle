@@ -29,7 +29,6 @@
 using Nemerle.Collections;
 
 using Nemerle.Compiler;
-using Nemerle.Compiler.Tyops;
 using Nemerle.Compiler.Typedtree;
 
 using SRE = System.Reflection.Emit;
@@ -83,46 +82,50 @@ module TyCodec
   }
   
 
-  decode (lib : LibraryReference, tenv : SystemMap [int, Tyvar.T], t : Term) : TType
+  decode (lib : LibraryReference, tenv : SystemMap [int, StaticTyVar], t : Term) : MType
   {
-    def self (t) { decode (lib, tenv, t) };
+    def self (t) { decode (lib, tenv, t) : TyVar };
     match (t) {
       | Term.App (name, args) when name[0] != '.' =>
         match (GlobalEnv.LookupExactType (Nemerle.Utility.NString.Split (name, array ['.', '+']))) {
           | Some (tc) =>
-            if (tc.FullName == "System.Void") TType.Void ()
+            if (tc.FullName == "System.Void") InternalType.Void
             else
-              TType.Class (tc, List.Map (args, self))
+              MType.Class (tc, List.Map (args, self)).Expand ()
           | None =>
             match (lib.LookupInternalType (name)) {
               | Some (tc) =>
-                TType.Class (tc, List.Map (args, self))
+                MType.Class (tc, List.Map (args, self)).Expand ()
               | None => Util.ice ("unbound encoded type " + name)
             }
         }
-      | Term.App (".r", [t]) => TType.ByRef (decode (lib, tenv, t))
-      | Term.App (".o", [t]) => TType.Out (decode (lib, tenv, t))
-      | Term.App (".a", [Term.App (srank, []), t]) => TType.Array (decode (lib, tenv, t), System.Int32.Parse (srank))
-      | Term.App (".f", [t1, t2]) => TType.Function (decode (lib, tenv, t1), decode (lib, tenv, t2))
+      | Term.App (".a", [Term.App (srank, []), t]) =>
+        MType.Array (decode (lib, tenv, t), System.Int32.Parse (srank))
+      | Term.App (".r", [t]) =>
+        MType.Ref (decode (lib, tenv, t))
+      | Term.App (".o", [t]) =>
+        MType.Out (decode (lib, tenv, t))
+      | Term.App (".f", [t1, t2]) =>
+        MType.Fun (decode (lib, tenv, t1), decode (lib, tenv, t2))
       | Term.App (".v", [Term.App (no, [])]) =>
         match (tenv.Find (System.Int32.Parse (no))) {
-          | Some (tv) => TType.Variable (tv)
+          | Some (tv) => MType.TyVarRef (tv)
           | None => Util.ice ("unboud type variable in encoded type " + no)
         }
-      | Term.App (".p", types) => TType.Product (List.Map (types, self))
+      | Term.App (".p", types) => MType.Tuple (List.Map (types, self))
       | Term.App (name, _) => Util.ice ("invalid encoded type opcode " + name)
     }
   }
 
   decode_typarms (lib : LibraryReference, 
-                  tenv : SystemMap [int, Tyvar.T], 
-                  t : Term) : list [Tyvar.T] * SystemMap [int, Tyvar.T]
+                  tenv : SystemMap [int, StaticTyVar], 
+                  t : Term) : list [StaticTyVar] * SystemMap [int, StaticTyVar]
   {
     mutable tyvars = [];
-    def decode_tyvar (t, acc : SystemMap [int, Tyvar.T]) {
+    def decode_tyvar (t, acc : SystemMap [int, StaticTyVar]) {
       match (t) {
         | Term.App (_, [Term.App (no, []), Term.App (name, []), _]) =>
-          def tv = Tyvar.T (name);
+          def tv = StaticTyVar (name);
           tyvars = tv :: tyvars;
           acc.Replace (System.Int32.Parse (no), tv)
         | _ => Util.ice ("evil encoded tyvar")
@@ -137,11 +140,11 @@ module TyCodec
       
     def tenv = List.FoldLeft (vars, tenv, decode_tyvar);
     
-    def set_constraints (t, tv : Tyvar.T) {
+    def set_constraints (t, tv : StaticTyVar) {
       match (t) {
         | Term.App (_, [_, _, Term.App (_, constraints)]) =>
-          def add_constraint (t) { tv.add_constraint (decode (lib, tenv, t)) };
-          List.Iter (constraints, add_constraint);
+          tv.Constraints = 
+            List.Map (constraints, fun (t) { decode (lib, tenv, t) });
         | _ => Util.ice ("evil encoded tyvar")
       }
     };
@@ -155,15 +158,15 @@ module TyCodec
   /**
    * Used to decode Nemerle types extracted from assembly metadata
    */
-  public DecodeType (lib : LibraryReference, tenv : SystemMap [int, Tyvar.T], tokens : string) : TType
+  public DecodeType (lib : LibraryReference, tenv : SystemMap [int, StaticTyVar], tokens : string) : MType
   {
     decode (lib, tenv, ParseTerm (tokens))
   }
 
   public DecodeTypeBuilder (lib : LibraryReference, 
-                       tenv : SystemMap [int, Tyvar.T], 
+                       tenv : SystemMap [int, StaticTyVar], 
                        s : string) 
-    : list [Tyvar.T] * SystemMap [int, Tyvar.T] * list [TType] * list [TType]
+    : list [StaticTyVar] * SystemMap [int, StaticTyVar] * list [MType] * list [MType]
   {
     match (ParseTerm (s)) {
       | Term.App (".ti", [tp, Term.App (_, dst), Term.App (_, st)]) =>
@@ -176,7 +179,7 @@ module TyCodec
 
 
   public FixupFunctionHeader (lib : LibraryReference,
-                              tenv : SystemMap [int, Tyvar.T], 
+                              tenv : SystemMap [int, StaticTyVar], 
                               fh : Fun_header, 
                               [Nemerle.Assertions.NotNull] tokens : string) : void
   {
@@ -185,9 +188,9 @@ module TyCodec
         def (tyvars, tenv) = decode_typarms (lib, tenv, tp);
         fh.typarms = tyvars;
         match (decode (lib, tenv, ty)) {
-          | TType.Function (arg, rt) =>
+          | MType.Fun (arg, rt) =>
             fh.ret_type = rt;
-            def arg_types = Tyutil.fun_args (arg);
+            def arg_types = arg.FixedValue.GetFunctionArguments ();
             def set_type (p : Fun_parm, t) {
               p.ty = t;
             };
@@ -215,38 +218,50 @@ module TyCodec
     ret.ToString ()
   }
 
-  needs_encoding (t : TType) : bool
+  needs_encoding (t : TyVar) : bool
   {
-    match (t) {
-      | TType.ByRef (t) 
-      | TType.Out (t) 
-      | TType.Array (t, _) => needs_encoding (t)
-      | TType.Void 
-      | TType.Class (_, []) => false
-      | TType.Variable | TType.Function | TType.Product
-      | TType.Class => true
+    match (t.FixedValue) {
+      | MType.Ref (t)
+      | MType.Out (t)
+      | MType.Array (t, _) => needs_encoding (t)
+      | MType.Void 
+      | MType.Class (_, []) => false
+      | MType.TyVarRef | MType.Fun | MType.Tuple
+      | MType.Class => true
+      | MType.Intersection => assert (false)
     }
   } 
 
 
-  encode (t : TType) : Term
+  encode_tvs (t : list [TyVar]) : list [Term]
   {
-    | TType.ByRef (t) => 
-      Term.App (".r", [encode (t)])
-    | TType.Out (t) =>
-      Term.App (".o", [encode (t)])
-    | TType.Array (t, rank) =>
-      Term.App (".a", [Term.App (rank.ToString (), []), encode (t)])
-    | TType.Variable (tv) =>
-      Term.App (".v", [Term.App (tv.id.ToString (), [])])
-    | TType.Void =>
+    List.Map (t, encode_tv)
+  }
+  
+  encode_tv (t : TyVar) : Term
+  {
+    encode (t.FixedValue)
+  }
+  
+  encode (t : MType) : Term
+  {
+    | MType.Array (t, rank) =>
+      Term.App (".a", [Term.App (rank.ToString (), []), encode_tv (t)])
+    | MType.TyVarRef (tv) =>
+      Term.App (".v", [Term.App (tv.Id.ToString (), [])])
+    | MType.Void =>
       Term.App ("System.Void", [])
-    | TType.Function (arg, rt) =>
-      Term.App (".f", [encode (arg), encode (rt)])
-    | TType.Product (args) =>
-      Term.App (".p", List.Map (args, encode))
-    | TType.Class (ti, args) =>
-      Term.App (Tyutil.FrameworkTypeName (ti), List.Map (args, encode))
+    | MType.Fun (arg, rt) =>
+      Term.App (".f", [encode_tv (arg), encode_tv (rt)])
+    | MType.Tuple (args) =>
+      Term.App (".p", encode_tvs (args))
+    | MType.Class (ti, args) =>
+      Term.App (ti.FrameworkTypeName, encode_tvs (args))
+    | MType.Ref (t) =>
+      Term.App (".r", [encode_tv (t)])
+    | MType.Out (t) =>
+      Term.App (".o", [encode_tv (t)])
+    | MType.Intersection => assert (false)
   }
     
   /**
@@ -256,17 +271,17 @@ module TyCodec
    *   The type tree is converted to prefix, term-like notation.
    * </remarks>
    */
-  public EncodeType (t : TType) : string
+  public EncodeType (t : MType) : string
   {
     FlattenTerm (encode (t))
   }
 
-  encode_typarms (tyvars : list [Tyvar.T]) : Term
+  encode_typarms (tyvars : list [StaticTyVar]) : Term
   {
-    def encode_tyvar (tv : Tyvar.T) {
-      Term.App ("", [Term.App (tv.id.ToString (), []),
-                Term.App (tv.name, []),
-                Term.App ("", List.Map (tv.GetConstraints (), encode))])
+    def encode_tyvar (tv : StaticTyVar) {
+      Term.App ("", [Term.App (tv.Id.ToString (), []),
+                Term.App (tv.Name, []),
+                Term.App ("", List.Map (tv.Constraints, encode))])
     };
     
     Term.App (".tp", List.Map (tyvars, encode_tyvar))
@@ -320,9 +335,9 @@ module TyCodec
     def mem_type = m.GetMemType ();
     def need_enc = 
       match (mem_type) {
-        | TType.Function (TType.Product (parms), to) =>
+        | MType.Fun (MType.Tuple (parms), to) =>
           List.Exists (to :: parms, needs_encoding)
-        | TType.Function (from, to) =>
+        | MType.Fun (from, to) =>
           needs_encoding (from) || needs_encoding (to)
         | _ => Util.ice ("method of non -> type")
       }

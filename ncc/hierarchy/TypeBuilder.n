@@ -30,7 +30,7 @@ using Nemerle;
 using Nemerle.Utility;
 using Nemerle.Collections;
 
-using Nemerle.Compiler.Tyops;
+using Nemerle.Compiler.SolverMacros;
 using Nemerle.Compiler.Typedtree;
 
 using PT = Nemerle.Compiler.Parsetree;
@@ -45,26 +45,26 @@ namespace Nemerle.Compiler {
  */
 public class TypeBuilder : TypeInfo
 {
-  type Subinfo = SystemMap [int, TypeInfo * list [TType]];
+  type Subinfo = SystemMap [int, TypeInfo * list [MType]];
 
   mutable contains_nemerle_specifics : bool = false;
 
   mutable tydecl : TypeDeclaration;
-  mutable self_type : TType.Class;  // memoized by GetMemType ()
+  mutable self_type : MType.Class;  // memoized by GetMemType ()
 
-  enclosing_type : TypeBuilder;  
-  mutable parent_type : option [TType.Class];
-  mutable t_implements : list [TType.Class];
+  enclosing_type : TypeBuilder;
+  mutable parent_type : option [MType.Class];
+  mutable t_implements : list [MType.Class];
   mutable contained_types : list [TypeBuilder] = [];
   mutable variant_options : list [TypeBuilder] = [];
-  mutable supertypes : SystemMap [int, TypeInfo * list [TType]];
+  mutable supertypes : SystemMap [int, TypeInfo * list [MType]];
   mutable member_map : SystemMap [string, list [IMember]];
   mutable member_list : list [NemerleMember];
-  mutable constant_object : option [IField];
-  mutable underlying_enum_type : TType;
+  mutable constant_object : IField;
+  mutable underlying_enum_type : MType;
 
-  mutable typarms : list [Tyvar.T];
-  mutable tenv : Tyvar.TEnv;
+  mutable typarms : list [StaticTyVar];
+  mutable tenv : TyVarEnv;
 
   mutable type_builder : System.Reflection.Emit.TypeBuilder;
 
@@ -161,7 +161,7 @@ public class TypeBuilder : TypeInfo
       }
 
     when (enclosing_type != null)
-      accessibility = Tyutil.AccessibilityIntersect (accessibility, enclosing_type.Accessibility);
+      accessibility = MType.AccessibilityIntersect (accessibility, enclosing_type.Accessibility);
 
     CheckTypeAttributes ();
 
@@ -177,14 +177,11 @@ public class TypeBuilder : TypeInfo
    * This information can be also fetched from [GetDirectSuperTypes()]
    * method but this function is transitive.
    */
-#if NTE
-  [Nemerle.NotImplemented]
   public override SuperType (ti : TypeInfo) : option [list [MType]]
-#else
-  public override SuperType (ti : TypeInfo) : option [list [TType]]
-#endif
   {
-//    if (supertypes == null)
+    assert (ti != null);
+    assert (supertypes != null);
+
     match (supertypes.Find (ti.GetId ())) {
       | Some ((_, x)) => Some (x)
       | None =>
@@ -192,7 +189,7 @@ public class TypeBuilder : TypeInfo
           Some ([])
         else if (ti.Equals (this))
           match (GetMemType ()) {
-            | TType.Class (_, parms) => Some (parms)
+            | MType.Class (_, parms) => Some (Solver.FixedValues (parms))
             | _ => assert (false)
           }
         else
@@ -283,8 +280,8 @@ public class TypeBuilder : TypeInfo
   {
     get { pt_name.context }
   }
-  
-  public ParsedName : PT.Name 
+
+  public ParsedName : PT.Name
   {
     get { pt_name }
   }
@@ -494,12 +491,7 @@ public class TypeBuilder : TypeInfo
    *   type for variant options.
    * </remarks>
    */
-#if NTE
-  [Nemerle.NotImplemented]
   public override GetDirectSuperTypes () : list [MType.Class]
-#else
-  public override GetDirectSuperTypes () : list [TType.Class]
-#endif
   {
     match (parent_type) {
       | Some (t) => t :: t_implements
@@ -507,7 +499,7 @@ public class TypeBuilder : TypeInfo
     }
   }
 
-  public override GetConstantObject () : option [IField]
+  public override GetConstantObject () : IField
   {
     constant_object
   }
@@ -527,11 +519,11 @@ public class TypeBuilder : TypeInfo
    *
    * Used mainly with [FreshSubst ()] or [MakeSubst ()].
    */
-  public override GetMemType () : TType
+  public override GetMemType () : MType
   {
     when (self_type == null) {
-      def make_tv (tv : Tyvar.T) : TType { TType.Variable (tv) };
-      self_type = TType.Class (this, List.Map (typarms, make_tv)) :> TType.Class;
+      def make_tv (tv) { MType.TyVarRef (tv) };
+      self_type = MType.Class (this, List.Map (typarms, make_tv)) :> MType.Class;
     }
     self_type
   }
@@ -546,7 +538,7 @@ public class TypeBuilder : TypeInfo
     tydecl
   }
 
-  public override LookupMember (name : string) : list [IMember]
+  public override LookupMemberImpl (name : string) : list [IMember]
   {
     match (member_map.Find (name)) {
       | None =>
@@ -758,7 +750,7 @@ public class TypeBuilder : TypeInfo
         | None => InternalType.Object_tc
       };
 
-    def collect (t : TType.Class, acc) {
+    def collect (t : MType.Class, acc) {
       def tc = t.tycon;
       if (tc.IsInterface) {
         match (base_class.SuperType (tc)) {
@@ -781,53 +773,43 @@ public class TypeBuilder : TypeInfo
    */
   internal override FreshSubst () : Subst
   {
-    Tyvar.fresh_subst (this.typarms)
+    Subst.Fresh (Passes.Solver, typarms)
   }
+
 
   /**
    * Helper used also in ExternalNemerleType.
    */
-  internal static ConstructSubst (tc : TypeInfo, typarms : list [Tyvar.T],
-                                  args : list [TType]) : Subst
+  internal static ConstructSubst (tc : TypeInfo, typarms : list [StaticTyVar],
+                                  args : list [TyVar], check_parms : bool) : Subst
   {
-    def loop (ini : Subst, parms : list [Tyvar.T], args : list [TType]) : Subst {
-      match ((parms, args)) {
-        | (p :: ps, a :: args) =>
-          match (a) {
-            | TType.Variable (p') =>
-              if (p.id == p'.id) ini
-              else loop (ini.Add (p.id, TvValue.Exactly (a)), ps, args)
-            | _ => loop (ini.Add (p.id, TvValue.Exactly (a)), ps, args)
-          }
-        | ([], []) => ini
-        | _ => Util.ice ()
-      }
-    };
-
+    def res = Subst ();
+    
     def len_tp = typarms.Length;
     def len_ac = args.Length;
 
     if (len_tp == len_ac) {
-      def sub = loop (SystemMap (), typarms, args);
+      List.Iter2 (typarms, args, fun (tp, val : TyVar) {
+        res.Add (tp, val);
+      });
 
-      def check_constraints (tv : Tyvar.T, t : TType) : void {
-        foreach (c in tv.GetConstraints ()) 
-        {
-          unless (t >:> (c /- sub)) {
-            Message.error ($ "typing constraint $(tv.name) :> $c is not "
-                             "satisfied by $t :> $(c /- sub)");
-            Message.error (tc.Location, "upon instantiation of " + tc.FullName)
+      when (check_parms)
+        List.Iter2 (typarms, args, fun (tp : StaticTyVar, val : TyVar) {
+          unless (val.Require (res.Apply (tp.LowerBound))) {
+            ReportError (messenger,
+                         $ "typing constraint on $(tp.Name) not satisfied, "
+                           "upon instantiation of $tc");
           }
-        };
-      };
-      List.Iter2 (typarms, args, check_constraints);
-
-      sub
-    } 
-    else {
-      Message.error ($"type `$(tc.FullName)' takes $len_tp argument(s) while $len_ac were supplied");
-      SystemMap ()
+        });
+    } else {
+      ReportError (messenger,
+                   $ "type `$(tc.FullName)' takes $len_tp argument(s) "
+                     "while $len_ac were supplied");
     }
+
+    messenger.Cleanup ();
+
+    res
   }
 
   /**
@@ -837,14 +819,15 @@ public class TypeBuilder : TypeInfo
    * For example assuming our type parameters are are ('a, 'b), then
    * [MakeSubst ([t1, t2])] produces substitution { 'a := t1; 'b := t2 }.
    */
-#if NTE
-  [Nemerle.NotImplemented]
   internal override MakeSubst (args : list [TyVar]) : Subst
-#else
-  internal override MakeSubst (args : list [TType]) : Subst
-#endif
   {
-    ConstructSubst (this, typarms, args)
+    ConstructSubst (this, typarms, args, check_parms = true)
+  }
+
+  
+  internal MakeUncheckedSubst (args : list [TyVar]) : Subst
+  {
+    ConstructSubst (this, typarms, args, check_parms = false)
   }
 
   /**
@@ -865,7 +848,7 @@ public class TypeBuilder : TypeInfo
   internal override SubtypingSubst (tc : TypeInfo) : Subst
   {
     if (this.Equals (tc))
-      SystemMap () // current type, no substitution
+      Subst () // current type, no substitution
     else
       tc.MakeSubst (Option.UnSome (SuperType (tc)));
   }
@@ -892,14 +875,14 @@ public class TypeBuilder : TypeInfo
   make_tyenvs () : void
   {
     assert (this.tenv == null);
-    def tenv = Tyvar.TEnv ();
+    def tenv = TyVarEnv ();
     match (this.pt_tydecl) {
-      | PT.TopDeclaration.Class ( typarms = ps)
+      | PT.TopDeclaration.Class (typarms = ps)
       | PT.TopDeclaration.Alias (typarms = ps)
       | PT.TopDeclaration.Interface (typarms = ps)
       | PT.TopDeclaration.Variant (typarms = ps) =>
         // we must merge type parameter constrains from partial parts of this class
-        def ps = 
+        def ps =
           List.FoldLeft (partial_parts, ps, fun (part : PT.TopDeclaration.Class, acc : PT.Typarms) {
             mutable new_constr = acc.constraints;
 
@@ -909,15 +892,16 @@ public class TypeBuilder : TypeInfo
                 when (Pair.First (con.tyvar) == Pair.First (constr.tyvar))
                   should_add = false;
               when (should_add)
-                new_constr = constr :: new_constr; 
+                new_constr = constr :: new_constr;
             }
             if (new_constr : object != acc.constraints)
               PT.Typarms (acc.tyvars, new_constr)
             else
               acc
           });
-        
-        def (tenv, tyvars) = tenv.add_typarms (ps, this, check_parms = false);
+
+        def (tenv, tyvars) =
+          tenv.AddTyparms (this.GlobalEnv, ps, this, check_parms = false);
         this.tenv = tenv;
         this.typarms = tyvars;
       | _ =>
@@ -966,9 +950,9 @@ public class TypeBuilder : TypeInfo
       match (td) {
         | PT.TopDeclaration.Class => TypeDeclaration.Class ()
         | PT.TopDeclaration.Alias (_, t) =>
-          def ttype = this.tenv.bind (this, t, check_parms = false);
+          def ttype = this.tenv.MonoBind (this.GlobalEnv, this, t, check_parms = false);
           TypeDeclaration.Alias (ttype)
-          
+
         | PT.TopDeclaration.Interface => TypeDeclaration.Interface ()
         | PT.TopDeclaration.Enum => TypeDeclaration.Enum ()
         | PT.TopDeclaration.Variant =>
@@ -979,29 +963,29 @@ public class TypeBuilder : TypeInfo
       };
 
     def bind_to_class (t : PT.PExpr) {
-      match (this.tenv.bind (this, t, check_parms = false)) {
-        | TType.Class as tcl => tcl
+      match (this.tenv.MonoBind (this.GlobalEnv, this, t, check_parms = false)) {
+        | MType.Class as tcl => tcl
         | _ => Message.fatal_error (t.Location, "derived or implemented type must be a class");
       };
     }
 
-    this.t_implements = [];    
+    this.t_implements = [];
     match (td) {
       | PT.TopDeclaration.VariantOption =>
-        this.parent_type = Some (enclosing_type.GetMemType () :> TType.Class);
+        this.parent_type = Some (enclosing_type.GetMemType () :> MType.Class);
       | PT.TopDeclaration.Class (t_extends = hd :: tl)
       | PT.TopDeclaration.Interface (t_extends = hd :: tl)
       | PT.TopDeclaration.Variant (t_extends = hd :: tl)
       | PT.TopDeclaration.Enum (t_extends = hd :: tl) =>
         def hd' = bind_to_class (hd);
-        if (Tyutil.unalias (hd'.tycon).IsInterface) {
+        if (hd'.tycon.IsInterface) {
           this.t_implements = [hd'];
           this.parent_type = None ()
         }
         else
           this.parent_type = Some (hd'); 
         this.t_implements = this.t_implements + List.RevMap (tl, bind_to_class)
-        
+
       | _ => this.parent_type = None ()
     };
 
@@ -1010,8 +994,8 @@ public class TypeBuilder : TypeInfo
       match (part.t_extends) {
         | hd :: tail =>
           def hd' = bind_to_class (hd);
-          def added_ifaces = 
-            if (Tyutil.unalias (hd'.tycon).IsInterface)
+          def added_ifaces =
+            if (hd'.tycon.IsInterface)
               [hd']
             else {
               // if base class exists in both parts, it must be the same
@@ -1037,7 +1021,7 @@ public class TypeBuilder : TypeInfo
         | [] => ()
       }
     }
-    
+
     when (is_enum)  handle_underlying_enum_type ();
     
     when (IsStruct)
@@ -1082,7 +1066,7 @@ public class TypeBuilder : TypeInfo
     // construct this.iterate_first - enclosing type plus transitive closure of all base types
     def iterate_first = Hashtable ();
 
-    foreach (ty : TType.Class in GetDirectSuperTypes ()) {
+    foreach (ty : MType.Class in GetDirectSuperTypes ()) {
       when (ty.tycon != null) {
         match (ty.tycon.GetTypeInfoKind ()) {
           | TypeInfoKind.NemerleType (ti) => iterate_first.Set (ti.GetId (), ti)
@@ -1098,20 +1082,20 @@ public class TypeBuilder : TypeInfo
 
   construct_subtyping_map () : void
   {
-    def add_srs (t : TType.Class, s : Subinfo) {
+    def add_srs (t : MType.Class, s : Subinfo) {
       add_subtyping_of (s, t.tycon, t.args)
     };
     supertypes = List.FoldLeft (GetDirectSuperTypes (), SystemMap (), add_srs)
   }
 
-  add_subtyping_of (subinfo : Subinfo, tc : TypeInfo, args : list [TType]) : Subinfo
+  add_subtyping_of (subinfo : Subinfo, tc : TypeInfo, args : list [TyVar]) : Subinfo
   {
-    def add_sr (subinfo : Subinfo, subtyped : TypeInfo, args : list [TType]) {
+    def add_sr (subinfo : Subinfo, subtyped : TypeInfo, args : list [MType]) {
       match (subinfo.Find (subtyped.GetId ())) {
         | Some ((_, args')) =>
           mutable problem = "";
-          def check_eq (t1 : TType, t2 : TType) : bool {
-            if (Tyutil.types_eq (t1, t2)) true
+          def check_eq (t1 : MType, t2 : MType) : bool {
+            if (t1.Equals (t2)) true
             else {
               problem = $ "types $t1 and $t2 are not compatible";
               false
@@ -1133,35 +1117,39 @@ public class TypeBuilder : TypeInfo
       }
     };
 
-    def sub = tc.MakeSubst (args);
+    def sub =
+      match (tc) {
+        | tb : TypeBuilder => tb.MakeUncheckedSubst (args)
+        | tc => tc.MakeSubst (args)
+      }
 
-    def add_srt (t : TType.Class, subinfo : Subinfo) {
-      add_sr (subinfo, t.tycon, List.Map (t.args, fun (t) { t /- sub }))
+    def add_srt (t : MType.Class, subinfo : Subinfo) {
+      add_sr (subinfo, t.tycon, 
+              List.Map (t.args, 
+                        fun (t : TyVar) { 
+                             sub.Apply (t.Fix ()).Fix () 
+                        })
+             )
     };
 
     def subinfo = List.FoldLeft (tc.GetSuperTypes (), subinfo, add_srt);
-    def subinfo = add_sr (subinfo, tc, args);
+    def subinfo = add_sr (subinfo, tc, Solver.FixedValues (args));
     subinfo
   }
 
-#if NTE
-  [Nemerle.NotImplemented]
   public override GetSuperTypes () : list [MType.Class]
-#else
-  public override GetSuperTypes () : list [TType.Class]
-#endif
   {
     if (supertypes == null) []
     else
       supertypes.Fold (fun (_, x, acc) {
                          def (tc, args) = x;
-                         (TType.Class (tc, args) :> TType.Class) :: acc
+                         (MType.Class (tc, Solver.MonoTypes (args)) :> MType.Class) :: acc
                        }, [])
   }
 
   add_derived_members () : void
   {
-    def get_members (t : TType.Class) {
+    def get_members (t : MType.Class) {
       t.tycon.GetMembers ()
     };
     def members = 
@@ -1198,7 +1186,7 @@ public class TypeBuilder : TypeInfo
     if ((Attributes %& additional.Attributes) %&& NemerleAttributes.Partial) {
       unless (additional.Attributes %&& NemerleAttributes.AccessModifiers)
         match (enclosing_type) {
-          | null => additional.Attributes |= NemerleAttributes.Internal;          
+          | null => additional.Attributes |= NemerleAttributes.Internal;
           | _ => additional.Attributes |= NemerleAttributes.Private;
         }
       when (additional.Attributes != attributes)
@@ -1214,7 +1202,7 @@ public class TypeBuilder : TypeInfo
     match (additional) {
       | PT.TopDeclaration.Class (decls = ds) as add =>
         partial_parts = add :: partial_parts;
-        
+
         foreach (x : PT.ClassMember in ds)
           match (x) {
             | PT.ClassMember.TypeDeclaration =>
@@ -1262,27 +1250,27 @@ public class TypeBuilder : TypeInfo
       member_map.Fold (add_few, [])
   }
 
-  internal BindType (t : PT.PExpr) : TType
+  internal BindType (t : PT.PExpr) : TyVar
   {
     BindType (tenv, t)
   }
 
   [Nemerle.Assertions.Requires (t != null)]
   [Nemerle.Assertions.Ensures (value != null)]
-  internal BindType (other_tenv : Tyvar.TEnv, t : PT.PExpr) : TType
+  internal BindType (other_tenv : TyVarEnv, t : PT.PExpr) : TyVar
   {
-    other_tenv.bind (this, t, check_parms = true)
+    other_tenv.Bind (this.GlobalEnv, this, t, allow_tyvars = true, check_parms = true)
   }
 
-  internal BindTyparms (tp : PT.Typarms) : Tyvar.TEnv * list [Tyvar.T]
+  internal BindTyparms (tp : PT.Typarms) : TyVarEnv * list [StaticTyVar]
   {
     BindTyparms (tenv, tp)
   }
 
-  internal BindTyparms (other_tenv : Tyvar.TEnv, tp : PT.Typarms)
-  : Tyvar.TEnv * list [Tyvar.T]
+  internal BindTyparms (other_tenv : TyVarEnv, tp : PT.Typarms)
+  : TyVarEnv * list [StaticTyVar]
   {
-    other_tenv.add_typarms (tp, this, check_parms = true)
+    other_tenv.AddTyparms (this.GlobalEnv, tp, this, check_parms = true)
   }
 
   BindAndAddMember (class_member : PT.ClassMember) : void
@@ -1319,16 +1307,16 @@ public class TypeBuilder : TypeInfo
               def sub = SubtypingSubst (m.DeclaringType);
 
               when (m.DeclaringType.Equals (this))
-                match ((m.GetMemType () /- sub, meth.GetMemType ())) {
-                  | (TType.Function (t1, r1), TType.Function (t2, r2))
-                    when Tyutil.types_eq (t1, t2) && ! Tyutil.types_eq (r1, r2) =>
+                match ((sub.MonoApply (m.GetMemType ()), meth.GetMemType ())) {
+                  | (MType.Fun (t1, r1), MType.Fun (t2, r2))
+                    when t1.Fix ().Equals (t2.Fix ()) && ! r1.Fix ().Equals (r2.Fix ()) =>
                     Message.error (meth.Location, 
                                    $"attempted return type overload on $meth and $m")
                   | _ => ()
                 };
 
               // if signature of existing method matches the new one
-              if (Tyutil.types_eq (m.GetMemType () /- sub, mem.GetMemType ())) {
+              if (sub.MonoApply (m.GetMemType ()).Equals (mem.GetMemType ())) {
                 // check if new method does not hide or conflict with
                 // existing methods in this and base type
                 match (m.GetFunKind ()) {
@@ -1379,7 +1367,7 @@ public class TypeBuilder : TypeInfo
         | fld : IField =>
           match (fld.GetMemType ()) {
             // enum structs have this special __value field, which is cyclic
-            | TType.Class ((tc : TypeBuilder), _) when tc.IsValueType =>
+            | MType.Class ((tc : TypeBuilder), _) when tc.IsValueType =>
               iterate_first = tc :: iterate_first;
             | _ => ()
           }
@@ -1508,7 +1496,7 @@ public class TypeBuilder : TypeInfo
   handle_underlying_enum_type () : void
   {
     match (parent_type) {
-      | Some (t) => underlying_enum_type = Tyutil.top_expand (t);
+      | Some (t) => underlying_enum_type = t;
       | None => underlying_enum_type = InternalType.Int32;
     };
     parent_type = Some (InternalType.Enum);
@@ -1523,16 +1511,17 @@ public class TypeBuilder : TypeInfo
       Message.error ($ "`$(underlying_enum_type)' is not a valid underlying enum type");
       null
     };
-   
+
+    
     match (underlying_enum_type) {
-      | TType.Class (tc, []) =>
+      | MType.Class (tc, []) =>
         match (NumericType.ByName (tc.FullName)) {
           | Some (t) when t.IsInteger => t
           | _ => oops ()
         }
       | _ => oops ()
     }
-  }  
+  }
 
   /*
    * This methods calculates an enum's field values. We allow constants,
@@ -1729,16 +1718,16 @@ public class TypeBuilder : TypeInfo
         field.loc = loc;
         def typed_field = NemerleField (this, (field :> PT.ClassMember.Field));
         typed_field.MarkWithSpecialName ();
-        typed_field.ty = enclosing_type.GetMemType ();
+        typed_field.ty = GetMemType ();
         ctor.Attributes = NemerleAttributes.Private;
         AddMember (typed_field);
         
-        constant_object = Some ((typed_field : IField));
+        constant_object = typed_field : IField;
         
         def ttf = typed_field.ty;
         
         // use typed trees here to avoid problems during actual typing
-        def tbody = TExpr.Assign (loc, TType.Void (),
+        def tbody = TExpr.Assign (loc, InternalType.Void,
                               TExpr.StaticRef (loc, ttf, typed_field), 
                               TExpr.Call (loc, ttf,
                                       TExpr.StaticRef (loc, ctor.GetMemType (), ctor), []));
@@ -1805,14 +1794,13 @@ public class TypeBuilder : TypeInfo
    */
   private add_constant_variant_ctors () : void
   {
-    constant_object = None ();
     match (tydecl) {
       | TypeDeclaration.VariantOption => add_constant_object_ctor ()
       | _ => ()
     }        
   }
   
-  internal GetTyparms () : list [Tyvar.T]
+  internal GetTyparms () : list [StaticTyVar]
   {
     typarms
   }
@@ -1826,7 +1814,6 @@ public class TypeBuilder : TypeInfo
   {
     // finalization is blocked until call to Compile
     this.cannot_finalize = true;
-    this.constant_object = None ();
     
     Util.locate (loc, process_macro_attributes (MacroPhase.BeforeInheritance));
     
@@ -1900,7 +1887,7 @@ public class TypeBuilder : TypeInfo
               | Some (meths) =>
                 def is_correct (iface_meth : IMethod) {
                   iface_meth.DeclaringType.Equals (ty) &&
-                    meth.GetMemType () >:> Tyutil.TypeOfMethodIn (iface_meth, this)
+                    meth.GetMemType ().TryRequire (GetMemType ().TypeOfMethod (iface_meth))
                 };
                 def (correct, notcorrect) = List.Partition (meths, is_correct);
                 match (correct) {
@@ -1953,7 +1940,10 @@ public class TypeBuilder : TypeInfo
         match (iface_methods.Get (meth.Name)) {
           | Some (meths) =>
             def is_correct (iface_meth : IMethod) {
-              if (meth.GetMemType () >:> Tyutil.TypeOfMethodIn (iface_meth, this))
+              // Message.debug ( $ "try req: $meth req $iface_meth --- "
+              //                   "$(meth.GetMemType ()) req "
+              //                   "$(GetMemType ().TypeOfMethod (iface_meth))");
+              if (meth.GetMemType ().TryRequire (GetMemType ().TypeOfMethod (iface_meth)))
                 if (meth.Attributes %&& NemerleAttributes.Public &&
                     !(meth.Attributes %&& NemerleAttributes.Static)) 
                   true
@@ -2010,8 +2000,8 @@ public class TypeBuilder : TypeInfo
         foreach (meth : IMethod in possible_impls) {
           def is_correct (iface_meth : IMethod)
           {
-            (meth.Attributes %&& NemerleAttributes.Public) &&
-            (meth.GetMemType () >:> Tyutil.TypeOfMethodIn (iface_meth, this))
+            meth.Attributes %&& NemerleAttributes.Public &&
+            meth.GetMemType ().TryRequire (GetMemType ().TypeOfMethod (iface_meth))
           };
 
           match (List.Partition (meths, is_correct)) {
@@ -2062,10 +2052,8 @@ public class TypeBuilder : TypeInfo
     def scream_about_unimplemented (_, meths : list [IMethod])
     {
       foreach (meth in meths)
-        Message.error ("unimplemented interface method `" + 
-                       meth.DeclaringType.FullName + 
-                       "." + meth.Name + "' with signature " +
-                       Tyutil.fun_type (meth.GetHeader ()).ToString ())
+        // the word method comes from meth.ToString
+        Message.error ($ "unimplemented interface $(meth)")
     }
     
     iface_methods.Iter (scream_about_unimplemented)
@@ -2095,29 +2083,12 @@ public class TypeBuilder : TypeInfo
               if (meth == null) null else meth.GetHeader ();
             def tenv = 
               if (meth_header == null) this.tenv else meth_header.tenv;
-            def in_ctor =
-              if (meth != null)
-                match (meth.GetFunKind ()) {
-                  | FunKind.Constructor => true 
-                  | _ => false
-                }
-              else
-                false;
-            def ctx =
-              TypingContext (in_ctor = in_ctor,
-                             this_ptr_decl = None (),
-                             env = this.GlobalEnv,
-                             tenv = tenv,
-                             current_fun = meth_header,
-                             locals = null,
-                             parent_type = this,
-                             in_tail_position = false,
-                             is_checked = true);
-            TypingContext.PushNewColor (name.color, name.GetEnv (this.GlobalEnv));
-
+              
+            MacroColorizer.PushNewColor (name.color, name.GetEnv (this.GlobalEnv));
             def parms = List.Append (self_parm, exprs);
-            def res = imacro.Run (ctx, parms);
-            TypingContext.PopColor ();
+            Passes.Typer = Typer.Fake (this, tenv, meth_header);
+            def res = imacro.Run (null, parms);
+            MacroColorizer.PopColor ();
 
             assert (res == null);
         }
@@ -2300,7 +2271,7 @@ public class TypeBuilder : TypeInfo
   public static TopIter (f : TypeBuilder -> void) : void
   {
     def wrap (x : TypeBuilder) : void {
-      when (x.enclosing_type == null) 
+      when (x.enclosing_type == null)
         Util.locate (x.loc, f (x))
     };
     Iter (wrap);
@@ -2378,40 +2349,43 @@ public class TypeBuilder : TypeInfo
   check_bound_types () : void
   {
     def check_type (t) {
-      | TType.ByRef (t) => check_type (t)
-      | TType.Out (t) => check_type (t)
-      | TType.Array (t, _) => check_type (t)
-      | TType.Function (ts, t) => check_type (ts); check_type (t)
-      | TType.Void => ()
-      | TType.Product (ts) => List.Iter (ts, check_type)
-      | TType.Variable => ()
-      | TType.Class (ti, args) =>
-        List.Iter (args, check_type);
+      | MType.Out (t)
+      | MType.Ref (t)
+      | MType.Array (t, _) => check_tv (t)
+      | MType.Fun (ts, t) => check_tv (ts); check_tv (t)
+      | MType.Void => ()
+      | MType.Tuple (ts) => List.Iter (ts, check_tv)
+      | MType.TyVarRef => {}
+      | MType.Class (ti, args) =>
+        List.Iter (args, check_tv);
         _ = ti.MakeSubst (args);
-    };
+      | MType.Intersection (lst) =>
+        List.Iter (lst, check_type)
+    } 
+    and check_tv (t : TyVar) { check_type (t.Fix ()) }
 
     // check accessibility of type we are aliasing
     match (tydecl) {
       | TypeDeclaration.Alias (t) =>
-        Tyutil.CheckAccessibility (this, accessibility, t);
+        t.CheckAccessibility (this, accessibility);
         check_type (t);
       | _ => ()
     };
 
     // types we are deriving from should be at least as accessible as we
-    foreach (deriv_t : TType.Class in GetDirectSuperTypes ()) {
+    foreach (deriv_t : MType.Class in GetDirectSuperTypes ()) {
       def is_iface = deriv_t.tycon.IsInterface;
 
       // access check with exception of interfaces derived / implemented by class
       // which case is not mentioned by http://www.jaggersoft.com/csharp_standard/10.5.4.htm
       when (this.IsInterface || !is_iface)
-        Tyutil.CheckAccessibility (this, accessibility, deriv_t);
+        deriv_t.CheckAccessibility (this, accessibility);
       check_type (deriv_t);
     }
     
     foreach (tv in typarms)
-      foreach (t in tv.GetConstraints ()) {
-        Tyutil.CheckAccessibility (this, accessibility, t);
+      foreach (t in tv.Constraints) {
+        t.CheckAccessibility (this, accessibility);
         check_type (t);
       }
   }
@@ -2548,7 +2522,7 @@ public class TypeBuilder : TypeInfo
           
         | (abstract_parm :: rest_abstract_parms, impl_parm :: rest_impl_parms) =>
           abstract_parm.name == impl_parm.name &&
-          Tyutil.types_eq (abstract_parm.ty, impl_parm.ty) &&
+          abstract_parm.ty.Fix ().Equals (impl_parm.ty.Fix ()) &&
           fun_parms_agree (rest_abstract_parms, rest_impl_parms)
           
         | _ => false
@@ -2575,7 +2549,7 @@ public class TypeBuilder : TypeInfo
         }
       })
     }
-    and recurse (supertypes : list [TType.Class])
+    and recurse (supertypes : list [MType.Class])
     {
       | ty :: rest =>
         walk_hierarchy (ty.tycon);
@@ -2673,6 +2647,13 @@ public class TypeBuilder : TypeInfo
       Message.fatal_error (loc, title () + "s are not allowed to be abstract and sealed at the same time: " +
                            FullName)
   }
+
+
+  static messenger : Messenger
+  {
+    get { Passes.Solver.CurrentMessenger }
+  }
+
 }
 
 } // ns

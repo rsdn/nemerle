@@ -75,60 +75,65 @@ NEMERLE_DLL_SRC = \
 	../lib/AssemblyInfo.n
 
 NEMERLE_COMPILER_DLL_SRC = \
-	$(NTE_SOURCES)			 \
-        parsing/AST.n			 \
-        parsing/ParseTree.n		 \
-        parsing/MainParser.n		 \
-        parsing/MainParser-Extensions.n  \
-        parsing/PreParser.n		 \
-        parsing/Lexer.n			 \
-        parsing/Utility.n                \
-        CompilationOptions.n             \
-        external/LibrariesLoader.n	 \
-        external/InternalTypes.n	 \
-        external/Codec.n		 \
-        misc/PrettyPrint.n		 \
-        misc/AssemblyInfo.n		 \
-        typing/PatternsTyping.n		 \
-        typing/TypedTree.n		 \
-        typing/TypeVariables.n		 \
-        typing/Utility.n		 \
-        typing/Macros.n			 \
-        typing/MacroRegistry.n		 \
-        typing/TypingContext.n		 \
-        typing/ConstantFolder.n		 \
-        codedom/NemerleCodeGenerator.n	 \
-        codedom/NemerleCodeCompiler.n	 \
-        codedom/NemerleCodeProvider.n	 \
-        generation/CompileTypedTree.n	 \
+	CompilationOptions.n		 \
+	passes.n			 \
+	codedom/NemerleCodeCompiler.n	 \
+	codedom/NemerleCodeGenerator.n	 \
+	codedom/NemerleCodeProvider.n	 \
+	external/Codec.n		 \
+	external/InternalTypes.n	 \
+	external/LibrariesLoader.n	 \
 	generation/CompileTypedMethod.n  \
-        generation/Postprocessing.n	 \
-        generation/Optimizer.n		 \
-        generation/CompiledTree.n	 \
-        generation/MatchingCompiler.n	 \
-        generation/ILEmitter.n	         \
-        generation/HierarchyEmitter.n	 \
-        hierarchy/NamespaceTree.n	 \
-        hierarchy/ScanTypeHierarchy.n	 \
-        hierarchy/ClassMembers.n	 \
-        hierarchy/TypeInfo.n		 \
-        hierarchy/TypeBuilder.n		 \
-        hierarchy/DelegateClassGen.n	 \
-        hierarchy/NumericTypes.n	 \
-        hierarchy/CustomAttribute.n	 \
-        hierarchy/XmlDump.n		 \
-        hierarchy/MacroClassGen.n        \
-        passes.n			 \
-
-ifeq ($(NTE),1)
-NTE_SOURCES = $(wildcard temp/typing/*.n)
-NCC_FLAGS += -D:NTE
-else
-NEMERLE_COMPILER_DLL_SRC += \
-        typing/ExpressionTyping.n	 \
-        typing/LocalValues.n		 \
-
-endif
+	generation/CompileTypedTree.n	 \
+	generation/CompiledTree.n	 \
+	generation/HierarchyEmitter.n	 \
+	generation/ILEmitter.n		 \
+	generation/MatchingCompiler.n	 \
+	generation/Optimizer.n		 \
+	generation/Postprocessing.n	 \
+	hierarchy/BuiltinMethod.n        \
+	hierarchy/ClassMembers.n	 \
+	hierarchy/CustomAttribute.n	 \
+	hierarchy/DelegateClassGen.n	 \
+	hierarchy/MacroClassGen.n	 \
+	hierarchy/NamespaceTree.n	 \
+	hierarchy/NumericTypes.n	 \
+	hierarchy/ScanTypeHierarchy.n	 \
+	hierarchy/TypeBuilder.n		 \
+	hierarchy/TypeInfo.n		 \
+	hierarchy/XmlDump.n		 \
+	misc/AssemblyInfo.n		 \
+	misc/PrettyPrint.n		 \
+	nte/ErrorMessage.n		 \
+	nte/LocalContext.n		 \
+	nte/LocalValue.n		 \
+	nte/MType.n			 \
+	nte/MacroColorizer.n		 \
+	nte/Messenger.n			 \
+	nte/OverloadPossibility.n	 \
+	nte/RestartInErrorMode.n	 \
+	nte/Solver.n			 \
+	nte/StaticTyVar.n		 \
+	nte/Subst.n			 \
+	nte/TyVar.n			 \
+	nte/TyVarEnv.n			 \
+	nte/Typer-CallTyper.n		 \
+	nte/Typer-DelayedTyping.n	 \
+	nte/Typer-PatternTyper.n	 \
+	nte/Typer.n			 \
+	nte/Typer2.n			 \
+	parsing/AST.n			 \
+	parsing/Lexer.n			 \
+	parsing/MainParser.n		 \
+	parsing/MainParser-Extensions.n  \
+	parsing/ParseTree.n		 \
+	parsing/PreParser.n		 \
+	parsing/Utility.n		 \
+	typing/ConstantFolder.n		 \
+	typing/MacroRegistry.n		 \
+	typing/Macros.n			 \
+	typing/PatternsTyping.n		 \
+	typing/TypedTree.n		 \
 
 NCC_EXE_SRC       = main.n
 
@@ -168,10 +173,6 @@ INST	= @echo INSTALL $1
 # inside this directory.  All other people should invoke
 # make boot, or have it invoked from the top-level make.
 all: stage1
-
-.PHONY: nte
-nte:
-	$(MAKE) NTE=1 stage1
 
 # This is necessary to make sure, that configuration file
 # has been generated, and it is up to date.
@@ -243,55 +244,55 @@ compare:
 compare-one:
 	$(Q)test -f out.stage2/$(CMP_TARGET)
 	$(Q)test -f out.stage3/$(CMP_TARGET) 
-	$(DEAS) [stage2] $(CMP_TARGET)
+	$(DEAS) "[stage2]" $(CMP_TARGET)
 	$(Q)$(DASM) out.stage2/$(CMP_TARGET) | \
 		grep -v -E '(^//|// GUID|MVID)' \
 		| sed -e 's/\.stage2//g' > $(CMP_TARGET)2.il
-	$(DEAS) [stage3] $(CMP_TARGET)
+	$(DEAS) "[stage3]" $(CMP_TARGET)
 	$(Q)$(DASM) out.stage3/$(CMP_TARGET) | \
 		grep -v -E '(^//|// GUID|MVID)' \
 		| sed -e 's/\.stage2//g' > $(CMP_TARGET)3.il
-	$(COMPARE) [stage2] [stage3] $(CMP_TARGET)
+	$(COMPARE) "[stage2]" "[stage3]" $(CMP_TARGET)
 	$(Q)diff -u -w $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 	$(Q)rm -f $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 
 compare-one-with-stage:
 	$(Q)test -f out.stage2/$(CMP_TARGET).stage2.dll
 	$(Q)test -f out.stage3/$(CMP_TARGET).dll
-	$(DEAS) [stage2] $(CMP_TARGET)
+	$(DEAS) "[stage2]" $(CMP_TARGET)
 	$(Q)$(DASM) out.stage2/$(CMP_TARGET).stage2.dll | \
 		grep -v -E '(^//|// GUID|MVID)' \
 		| sed -e 's/\.stage2//g' > $(CMP_TARGET)2.il
-	$(DEAS) [stage3] $(CMP_TARGET)
+	$(DEAS) "[stage3]" $(CMP_TARGET)
 	$(Q)$(DASM) out.stage3/$(CMP_TARGET).dll | \
 		grep -v -E '(^//|// GUID|MVID)' \
 		| sed -e 's/\.stage2//g' > $(CMP_TARGET)3.il
-	$(COMPARE) [stage2] [stage3] $(CMP_TARGET)
+	$(COMPARE) "[stage2] [stage3]" $(CMP_TARGET)
 	$(Q)diff -u -w $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 	$(Q)rm -f $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 
 out.$(STAGE)/Nemerle.dll out.$(STAGE)/Nemerle.$(STAGE).dll: \
 		$(COMPILER_DEP) $(NEMERLE_DLL_SRC)
-	$(COMP) [$(STAGE)] Nemerle.dll
+	$(COMP) "[$(STAGE)]" Nemerle.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ $(GENERIC_SRC) $(NEMERLE_DLL_SRC)
 
 out.$(STAGE)/Nemerle.Compiler.dll: \
 		$(COMPILER_DEP) out.$(STAGE)/Nemerle.dll $(NEMERLE_COMPILER_DLL_SRC)
-	$(COMP) [$(STAGE)] Nemerle.Compiler.dll
+	$(COMP) "[$(STAGE)]" Nemerle.Compiler.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:out.$(STAGE)/Nemerle.dll \
 		$(GENERIC_SRC) $(NEMERLE_COMPILER_DLL_SRC)
 
 out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll: \
 		$(COMPILER_DEP) out.$(STAGE)/Nemerle.$(STAGE).dll $(NEMERLE_COMPILER_DLL_SRC)
-	$(COMP) [$(STAGE)] Nemerle.Compiler.dll
+	$(COMP) "[$(STAGE)]" Nemerle.Compiler.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:out.$(STAGE)/Nemerle.$(STAGE).dll \
 		$(GENERIC_SRC) $(NEMERLE_COMPILER_DLL_SRC)
 
 out.stage1/Nemerle.Macros.dll: $(COMPILER_DEP) out.stage1/Nemerle.stage1.dll \
 		out.stage1/Nemerle.Compiler.stage1.dll $(STDMACROS_DLL_SRC)
-	$(COMP) [stage1] Nemerle.Macros.dll
+	$(COMP) "[stage1]" Nemerle.Macros.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:out.stage1/Nemerle.stage1.dll \
 		-reference:out.stage1/Nemerle.Compiler.stage1.dll \
@@ -299,7 +300,7 @@ out.stage1/Nemerle.Macros.dll: $(COMPILER_DEP) out.stage1/Nemerle.stage1.dll \
 
 out.stage2/Nemerle.Macros.dll: $(COMPILER_DEP) out.stage2/Nemerle.stage2.dll \
 		out.stage2/Nemerle.Compiler.stage2.dll $(STDMACROS_DLL_SRC)
-	$(COMP) [stage2] Nemerle.Macros.dll
+	$(COMP) "[stage2]" Nemerle.Macros.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:out.stage2/Nemerle.stage2.dll \
 		-reference:out.stage2/Nemerle.Compiler.stage2.dll \
@@ -307,7 +308,7 @@ out.stage2/Nemerle.Macros.dll: $(COMPILER_DEP) out.stage2/Nemerle.stage2.dll \
 
 out.stage3/Nemerle.Macros.dll: $(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll $(STDMACROS_DLL_SRC)
-	$(COMP) [stage3] Nemerle.Macros.dll
+	$(COMP) "[stage3]" Nemerle.Macros.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
 		-reference:out.$(STAGE)/Nemerle.dll \
 		-reference:out.$(STAGE)/Nemerle.Compiler.dll \
@@ -315,7 +316,7 @@ out.stage3/Nemerle.Macros.dll: $(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
 
 out.stage1/ncc.exe: $(COMPILER_DEP) out.stage1/Nemerle.stage1.dll \
 		out.stage1/Nemerle.Compiler.stage1.dll $(NCC_EXE_SRC)
-	$(COMP) [stage1] ncc.exe
+	$(COMP) "[stage1]" ncc.exe
 	$(Q)$(RUN_COMPILER) -target-exe -out:$@ \
 		-reference:out.stage1/Nemerle.stage1.dll \
 		-reference:out.stage1/Nemerle.Compiler.stage1.dll \
@@ -323,7 +324,7 @@ out.stage1/ncc.exe: $(COMPILER_DEP) out.stage1/Nemerle.stage1.dll \
 
 out.stage2/ncc.exe: $(COMPILER_DEP) out.stage2/Nemerle.stage2.dll \
 		out.stage2/Nemerle.Compiler.stage2.dll $(NCC_EXE_SRC)
-	$(COMP) [stage2] ncc.exe
+	$(COMP) "[stage2]" ncc.exe
 	$(Q)$(RUN_COMPILER) -target-exe -out:$@ \
 		-reference:out.stage2/Nemerle.stage2.dll \
 		-reference:out.stage2/Nemerle.Compiler.stage2.dll \
@@ -331,7 +332,7 @@ out.stage2/ncc.exe: $(COMPILER_DEP) out.stage2/Nemerle.stage2.dll \
 
 out.stage3/ncc.exe: $(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll $(NCC_EXE_SRC)
-	$(COMP) [stage3] ncc.exe
+	$(COMP) "[stage3]" ncc.exe
 	$(Q)$(RUN_COMPILER) -target-exe -out:$@ \
 		-reference:out.$(STAGE)/Nemerle.dll \
 		-reference:out.$(STAGE)/Nemerle.Compiler.dll \
@@ -341,13 +342,13 @@ doc:
 	$(Q)$(MAKE) doc-xml COMPILER_PATH=out.stage3/  
 
 doc-xml: 
-	$(COMP) [with xml doc generation] Nemerle.xml
+	$(COMP) "[with xml doc generation]" Nemerle.xml
 	$(Q)$(RUN_COMPILER) -target-library -out:temp.dll $(NEMERLE_DLL_SRC) \
 	-doc Nemerle.xml
-	$(COMP) [with xml doc generation] Nemerle.Compiler.xml
+	$(COMP) "[with xml doc generation]" Nemerle.Compiler.xml
 	$(Q)$(RUN_COMPILER) -target-library -out:temp.dll $(NEMERLE_COMPILER_DLL_SRC) \
 	-ref:out.stage3/Nemerle.dll -doc Nemerle.Compiler.xml
-	$(COMP) [with xml doc generation] Nemerle.Macros.xml
+	$(COMP) "[with xml doc generation]" Nemerle.Macros.xml
 	$(Q)$(RUN_COMPILER) -target-library -out:temp.dll $(STDMACROS_DLL_SRC) \
 	-ref:out.stage3/Nemerle.dll -ref:out.stage3/Nemerle.Compiler.dll -doc Nemerle.Macros.xml
 	$(Q)rm temp.dll
@@ -357,16 +358,18 @@ sync:
 	cd out.stage3 ; \
 	for x in *.dll *.exe ; do \
 		mv -vf ../../boot/$$x ../../boot/$$x.old ; \
-		cp -vf $$x.so ../../boot/$$x.so ; \
 		cp -vf $$x ../../boot/$$x ; \
 	done
 
 .PHONY: boot all tests t test
 
 t test: tests
-
 tests:
 	$(Q)cd testsuite && $(MAKE)
+	
+t-mcs test-mcs: tests-mcs
+tests-mcs:
+	$(Q)cd testsuite && $(MAKE) all-mcs
 
 profile:
 	$(Q)../misc/profiler/runprof $(COMPILER) -no-stdlib -t:dll \
@@ -389,7 +392,7 @@ install:
 	$(Q)$(GACUTIL_COMMAND) out.stage3/Nemerle.Compiler.dll
 	$(Q)$(GACUTIL_COMMAND) out.stage3/Nemerle.Macros.dll
 	export MONO_PATH=$$MONO_PATH:$$PWD/out.stage3 ; $(NGEN_GAC)
-	$(INST) [$(BINDIR)] ncc.exe
+	$(INST) "[$(BINDIR)]" ncc.exe
 	$(Q)$(INSTALL) -m 755 out.stage3/ncc.exe $(DESTDIR)$(BINDIR)/ncc.exe
 	$(Q)if [ "$(NET_ENGINE)" != "" ] ; then \
 		echo "#!/bin/sh" > $(DESTDIR)$(BINDIR)/ncc && \

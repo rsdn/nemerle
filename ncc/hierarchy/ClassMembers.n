@@ -27,7 +27,6 @@
  */
 
 using Nemerle.Compiler;
-using Nemerle.Compiler.Tyops;
 using Nemerle.Collections;
 using Nemerle.Utility;
 using Nemerle.Compiler.Typedtree;
@@ -46,8 +45,8 @@ public abstract class NemerleMember : IMember
   protected modifiers : Modifiers;
   protected declaring_type : TypeBuilder;
   id : int;
-  protected mutable kind : MemberKind;
-  internal mutable ty : TType;
+  protected kind : MemberKind;
+  internal mutable ty : MType;
   protected mutable handle : MemberInfo;
 
   protected mutable attributes : NemerleAttributes;
@@ -147,7 +146,7 @@ public abstract class NemerleMember : IMember
     }
   }
 
-  public GetMemType () : TType
+  public GetMemType () : MType
   {
     ty
   }
@@ -250,24 +249,28 @@ public abstract class NemerleMember : IMember
     DescribeMember (this)
   }
 
-  public static DescribeMember (m : IMember) : string
+  internal static DescribeMember (m : IMember) : string
   {
-    if (m.GetKind () == null)
-      m.GetType ().ToString ()
+    def declaring = m.DeclaringType;
+    
+    if (declaring != null &&
+        declaring.GetConstantObject () : object == m)
+      "constructor of constant variant " + declaring.FullName
     else {
-      def kind =
-        match (m.GetKind ()) {
-          | MemberKind.Field => "a field"
-          | MemberKind.Method => "a method"
-          | MemberKind.Property => "a property"
-          | MemberKind.Type => "a type"
-          | MemberKind.Event => "an event"
-        };
       def full_name =
-        if (m.DeclaringType == null)
+        if (declaring == null)
           m.Name
         else
-          m.DeclaringType.FullName + "." + m.Name;
+          declaring.FullName + "." + m.Name;
+      
+      def kind =
+        match (m.GetKind ()) {
+          | MemberKind.Field => "field"
+          | MemberKind.Method => "method"
+          | MemberKind.Property => "property"
+          | MemberKind.Type => "type"
+          | MemberKind.Event => "event"
+        };
       match (m.GetKind ()) {
         | MemberKind.Method (m) =>
           def parms = List.Map (m.GetHeader ().parms, 
@@ -374,11 +377,11 @@ public class NemerleField : NemerleMember, IField
     base (par, f);
     ty =
       if (IsStatic)
-        par.BindType (Tyvar.TEnv (), f.ty)
+        par.BindType (TyVarEnv (), f.ty).Fix ()
       else
-        par.BindType (f.ty);
+        par.BindType (f.ty).Fix ();
     kind = MemberKind.Field (this);
-    Tyutil.CheckAccessibility (this, accessibility, ty);
+    ty.CheckAccessibility (this, accessibility);
   }
 
   public IsMutable : bool
@@ -458,7 +461,7 @@ public class NemerleProperty : NemerleMember, IProperty
   is_mutable : bool;
   getter : NemerleMethod;
   setter : NemerleMethod;
-  internal parms : list [TType];
+  internal parms : list [MType];
   mutable parent_property : IProperty = null;
   
   internal mutable property_builder : Emit.PropertyBuilder;
@@ -469,15 +472,15 @@ public class NemerleProperty : NemerleMember, IProperty
 
     ty =
       if (IsStatic)
-        par.BindType (Tyvar.TEnv (), f.prop_ty)
+        par.BindType (TyVarEnv (), f.prop_ty).Fix ()
       else
-        par.BindType (f.prop_ty);
+        par.BindType (f.prop_ty).Fix ();
 
     kind = MemberKind.Property (this);
 
     parms = 
       List.Map (f.dims, fun (parm : PT.Fun_parm) {
-        par.BindType (parm.ty)
+        par.BindType (parm.ty).Fix ()
       });
 
     def process_accessor (_ : option [PT.ClassMember]) {
@@ -493,7 +496,7 @@ public class NemerleProperty : NemerleMember, IProperty
     getter = process_accessor (f.get);
     setter = process_accessor (f.set);
 
-    Tyutil.CheckAccessibility (this, accessibility, ty);
+    ty.CheckAccessibility (this, accessibility);
 
     // we'll check for the get/set usage methods instead
     m_has_been_used = true
@@ -574,7 +577,6 @@ public class NemerleMethod : NemerleMember, IMethod
 {
   // FIXME: make these private
   mutable fun_kind : FunKind;
-  public mutable fun_body : FunBody;
   public mutable fun_header : Fun_header;
   
   public mutable method_builder : System.Reflection.Emit.MethodBuilder;
@@ -611,34 +613,21 @@ public class NemerleMethod : NemerleMember, IMethod
     method_builder
   }
 
-  public GetExternName () : option [string]
-  {
-    match (fun_body) {
-      | FunBody.Extern (name) => Some (name)
-      | _ => None ()
-    }
-  }
-
-  public HasExternBody : bool
-  {
-    get { (fun_body is FunBody.Extern) }
-  }
-
   public HasAbstractBody : bool
   {
-    get { (fun_body is FunBody.Abstract) }
+    get { (fun_header.body is FunBody.Abstract) }
   }
   
   public Body : PT.PExpr {
     get {
-      match (fun_body) {
+      match (fun_header.body) {
         | FunBody.Parsed (e) => e
         | _ =>
           Message.fatal_error ("No parsetree body accessible")
       }
     }
     
-    set { fun_body = FunBody.Parsed (value) }
+    set { fun_header.body = FunBody.Parsed (value) }
   }
 
   public IsFinal : bool
@@ -673,27 +662,41 @@ public class NemerleMethod : NemerleMember, IMethod
 
     def (tenv', typarms) =
       if (IsStatic)
-        declaring_type.BindTyparms (Tyvar.TEnv (), f.header.typarms)
+        declaring_type.BindTyparms (TyVarEnv (), f.header.typarms)
       else
         declaring_type.BindTyparms (f.header.typarms);
    
     mutable types_to_check = [];
 
     foreach (tv in typarms)
-      foreach (t in tv.GetConstraints ())
+      foreach (t in tv.Constraints)
         types_to_check = t :: types_to_check;
         
     def bind (t : PT.PExpr) {
       def ty = par.BindType (tenv', t);
-      types_to_check = ty :: types_to_check;
+      types_to_check = ty.Fix () :: types_to_check;
       ty
-    };
+    }
+
     def mkparm (p : PT.Fun_parm) : Fun_parm {
       def name = p.ParsedName;
-      Fun_parm (loc = p.loc, name = name.Id, color = name.color, ty = bind (p.ty), 
-                decl = null, modifiers = p.modifiers)
-    };
-    fun_body = f.body;
+      def (kind, ty) =
+        match (p.ty) {
+          | <[ ref $t ]> => (ParmKind.Ref, MType.Ref (bind (t)))
+          | <[ out $t ]> => (ParmKind.Out, MType.Out (bind (t)))
+          | <[ $t ]> => (ParmKind.Normal, bind (t))
+        }
+      Fun_parm (loc = p.loc, name = name.Id, color = name.color, ty = ty, 
+                decl = null, modifiers = p.modifiers, kind = kind)
+    }
+
+    def is_refout (t) {
+      | <[ ref $_ ]>
+      | <[ out $_ ]> => true
+      | _ => false
+    }
+
+    mutable fun_body = f.body;
     
    /* We need to convert things like:
         foo (x : int * int) : int { bar }
@@ -703,17 +706,18 @@ public class NemerleMethod : NemerleMember, IMethod
 
     def parms =
       match (f.header.parms) {
-        | [parm] when ! is_property =>
-          match (Tyutil.top_expand (par.BindType (tenv', parm.ty))) {
-            | TType.Product (types) =>
+        | [parm] when !is_property && !is_refout (parm.ty) =>
+          match (par.BindType (tenv', parm.ty).Hint) {
+            | Some (MType.Tuple (types)) =>
               mutable modifiers = parm.modifiers;
-              def mkdummyparm (t : TType) {
+              def mkdummyparm (t : TyVar) {
                 // make the first argument intercept custom attributes
                 def mods = modifiers;
                 modifiers = Modifiers.Empty;
                 Fun_parm (loc = parm.loc, 
                           name = Util.tmpname ("tupled"),
-                          color = TypingContext.MacroColor,
+                          color = MacroColorizer.MacroColor,
+                          kind = ParmKind.Normal,
                           ty = t, 
                           decl = null,
                           modifiers = mods)
@@ -748,8 +752,8 @@ public class NemerleMethod : NemerleMember, IMethod
       def (till_last, last) = List.DivideLast (parms);
       
       when (is_params (last)) {
-        match (last.ty) {
-          | TType.Array (_, 1) => is_var_args = true
+        match (last.ty.Fix ()) {
+          | MType.Array (_, 1) => is_var_args = true
           | _ =>
             Message.error ("only single-dimensional arrays are allowed in `params' parameters")
         }
@@ -803,15 +807,17 @@ public class NemerleMethod : NemerleMember, IMethod
       parms = parms,
       tenv = tenv',
       loc = f.header.loc);
+
+    fun_header.body = fun_body;
       
-    ty = Tyutil.fun_type (fun_header);
+    ty = MType.ConstructFunctionType (fun_header);
     
     kind = MemberKind.Method (this);
 
     // check it at the end, since error reporting routine there
     // needs us to be initialized to name us
     foreach (t in types_to_check)
-      Tyutil.CheckAccessibility (this, accessibility, t);
+      t.CheckAccessibility (this, accessibility);
 
     // don't warn about the unused `Main' methods...
     when (IsStatic && name == "Main")
@@ -820,7 +826,7 @@ public class NemerleMethod : NemerleMember, IMethod
 
   public SetHeader (h : Fun_header) : void {
     fun_header = h;
-    ty = Tyutil.fun_type (fun_header);
+    ty = MType.ConstructFunctionType (fun_header);
   }
 
   public GetHeader () : Fun_header
@@ -831,18 +837,25 @@ public class NemerleMethod : NemerleMember, IMethod
     fun_header.parms
   }
 
-  public ReturnType : TType {
+  public ReturnType : TyVar
+  {
     get { fun_header.ret_type }
   }
   
-  public GetFreshType () : TType
-  { GetMemType () /- Tyvar.fresh_subst (fun_header.typarms) }
+  public GetFreshType () : MType
+  {
+    Subst.Fresh (Passes.Solver, fun_header.typarms).MonoApply (GetMemType ())
+  }
 
   public GetFunKind () : FunKind
-  { fun_kind }
+  {
+    fun_kind
+  }
 
   public SetFunKind (kind : FunKind) : void
-  { fun_kind = kind }
+  {
+    fun_kind = kind
+  }
   
   static OperatorLongName (op : string, params_amount : int) : option [string]
   {
@@ -913,11 +926,6 @@ public class NemerleMethod : NemerleMember, IMethod
         Message.error (loc, "interface method cannot implement anything");
     }
 
-    // only allow static methods to be extern
-    when (!IsStatic && HasExternBody)
-      Message.fatal_error (loc, "only static methods are allowed to be extern in " +
-                           ToString ());      
-
     // only allow abstract methods to have abstract bodies
     def meth_is_abstract = attributes %&& NemerleAttributes.Abstract;
 
@@ -927,6 +935,12 @@ public class NemerleMethod : NemerleMember, IMethod
                            
     // most of the checks are common with the properties and events:
     check_method_like_attributes ("method", "methods");
+  }
+      
+      
+  public BuiltinKind : BuiltinMethodKind
+  {
+    get { BuiltinMethodKind.NotBuiltin () }
   }
 }
 
@@ -942,9 +956,9 @@ public class NemerleEvent : NemerleMember, IEvent
     base (par, f);
     
     if (IsStatic)
-      ty = par.BindType (Tyvar.TEnv (), f.ty)
+      ty = par.BindType (TyVarEnv (), f.ty).Fix ()
     else
-      ty = par.BindType (f.ty);
+      ty = par.BindType (f.ty).Fix ();
 
     kind = MemberKind.Event (this);
 
@@ -994,7 +1008,7 @@ public class NemerleEvent : NemerleMember, IEvent
     adder = make_method (f.add);
     remover = make_method (f.remove);
 
-    Tyutil.CheckAccessibility (this, accessibility, ty);
+    ty.CheckAccessibility (this, accessibility);
   }
 
   public GetEventInfo () : EventInfo

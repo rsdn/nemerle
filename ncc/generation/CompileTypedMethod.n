@@ -28,7 +28,6 @@
 
 using Nemerle.Collections;
 
-using Nemerle.Compiler.Tyops;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Compiler.CompileTypedTree;
 
@@ -70,8 +69,8 @@ module CompileTypedMethod
   build_cg_method (header : Fun_header) : CG_method
   {
     def mkparm (p : Fun_parm) : CG_val {
-      match (p.ty) {
-        | TType.Void =>
+      match (p.ty.Fix ()) {
+        | MType.Void =>
           // FIXME: do something about it
           Message.fatal_error (header.loc, "method `" + header.name + "' has void argument")
         | _ => ()
@@ -79,12 +78,12 @@ module CompileTypedMethod
       set_parm_info (p, 
         CG_val (loc = header.loc,
                 name = p.name, 
-                ty = p.ty.GetSystemType (),
+                ty = p.SystemType,
                 val = CExpr.Nop ()))
     };
     def m = CG_method ();
     m.name = header.name;
-    m.ret_type = header.ret_type.GetSystemType ();
+    m.ret_type = header.ret_type.Fix ().GetSystemType ();
     m.parms = List.Map (header.parms, mkparm);
     m.implemented_methods = [];
     m
@@ -234,20 +233,25 @@ module CompileTypedMethod
   {
     def fh = ctor.GetHeader ();
     match (fh.parms) {
-      | [{ty = (TType.Function (parms, ret_type)) as fun_type}] =>
+      | [{ty = fun_type}] =>
+        def (parms, ret_type) =
+          match (fun_type.Fix ()) {
+            | MType.Fun (parms, ret_type) => (parms, ret_type)
+            | _ => assert (false)
+          }
+        // FIXME: what about ref/out delegates?!
         def loc = fh.loc; // FIXME
-        def parms = Tyutil.fun_args (parms);
+        def parms = parms.Fix ().GetFunctionArguments ();
         def tb = ctx.current_type.GetTypeBuilder ().
                   DefineNestedType (Util.tmpname ("delegate_proxy"),
                                     TypeAttributes.SpecialName %| TypeAttributes.NestedAssembly, 
                                     SystemType.Object, array []);    
         Passes.Emitter.RegisterAuxType (tb);
 
-        def fptr = tb.DefineField ("funptr", fun_type.GetSystemType (), 
+        def fptr = tb.DefineField ("funptr", fun_type.Fix ().GetSystemType (), 
                                    FieldAttributes.SpecialName %| FieldAttributes.Assembly);
-        def mkparm (ty : TType) { 
-          set_parm_info (ty,
-                         CG_val (loc = loc,
+        def mkparm (ty : MType) { 
+          set_parm_info (CG_val (loc = loc,
                                  name = Util.tmpname ("dp"),
                                  ty = ty.GetSystemType (),
                                  val = CExpr.Nop ()))
@@ -255,7 +259,7 @@ module CompileTypedMethod
         
         def m = CG_method ();
         m.name = "InvokeDelegate";
-        m.ret_type = ret_type.GetSystemType ();
+        m.ret_type = ret_type.Fix ().GetSystemType ();
         m.parms = List.Map (parms, mkparm);
         m.modifiers = NemerleAttributes.Internal;
         m.implemented_methods = [];
@@ -274,7 +278,7 @@ module CompileTypedMethod
         m.name = ".ctor";
         m.ret_type = SystemType.Void;
         def ctor_parm =
-          set_parm_info (TType.Void (),
+          set_parm_info (
             CG_val (loc = loc,
                     name = Util.tmpname ("dp"),
                     ty = fptr.FieldType,
@@ -344,10 +348,10 @@ module CompileTypedMethod
     def ctor = Passes.Emitter.AddImplicitCtor (tb);
     
     def mk_clo_fld (d : LocalValue, acc : SystemMap [int, FieldInfo]) {
-      def fi = tb.DefineField (d.name + d.id.ToString (), d.ty.GetSystemType (),
+      def fi = tb.DefineField (d.Name + d.Id.ToString (), d.Type.Fix ().GetSystemType (),
                                FieldAttributes.SpecialName %| FieldAttributes.FamORAssem);
       //Message.debug ("add " + d.name + " / " + d.parent_fun.name);
-      acc.Add (d.id, fi)
+      acc.Add (d.Id, fi)
     };
     def closure_fields = List.FoldLeft (h.closure_vars, ctx.closure_fields, mk_clo_fld);
     def cloexpr = CExpr.Call (CExpr.ConstructorRef (ctor), []);
@@ -390,14 +394,23 @@ module CompileTypedMethod
           if (List.Exists (vars, fun (var : LocalValue) {
               // FIXME: doesn't work, because function have to be removed from external closures
               //var.id != h.decl.id && // call to our function shouldn't be closurised
-              List.Exists (h :: h.children_funs, fun (child : Fun_header) { var.used_in.Member (child.id) }); 
+              def res = List.Exists (h :: h.children_funs, 
+                           fun (child : Fun_header) { var.UsedIn.Contains (child) }); 
+              // when (var.Name == "_N_obj_cache")
+              //   Message.debug ($ "from $(var.Id) $h $res");
+              res
             })) 
             fh :: acc
           else
             acc
       }
-    };
-    List.FoldLeft (h.GetParents (), [], loop)
+    }
+    def res = List.FoldLeft (h.GetParents (), [], loop);
+    
+    // def names = List.Map (res, fun (h : Fun_header) { h.name });
+    // Message.debug ($ "get_parents_with_closures: $(h.name) --> $names");
+
+    res
   }
 
   call_object_ctor () : CExpr
@@ -448,10 +461,11 @@ module CompileTypedMethod
           cg_method.name = name;
          
         | _ =>
+          // FIXME what's wrong with List.Length (h.parms)? tupling/untupling?
           def virtual_parm_cnt =
-            match (Tyutil.fun_type (h)) {
-              | TType.Function (args, _) => 
-                List.Length (Tyutil.fun_args (args))
+            match (MType.ConstructFunctionType (h)) {
+              | MType.Fun (args, _) => 
+                List.Length (args.FixedValue.GetFunctionArguments ())
               | _ => Util.ice ()
             };
              
@@ -487,7 +501,7 @@ module CompileTypedMethod
                               FieldAttributes.SpecialName %| FieldAttributes.Private);
               
             def val =
-              set_parm_info (TType.Void (),
+              set_parm_info (
                 CG_val (loc = fh.loc, name = name, ty = cgm.closure_type,
                         val = CExpr.Nop ()));
             
@@ -566,9 +580,9 @@ module CompileTypedMethod
 
     def loadparm (parm_val : CG_val, fp : Fun_parm) {
       def parm = fp.decl;
-      def needed_type = parm.ty.GetSystemType ();
+      def needed_type = fp.SystemType;
 
-      if (parm.in_closure) {
+      if (parm.InClosure) {
         def a =
           CExpr.Assign (local_ref (ctx, parm, true), 
                      maybe_cast (ctx, needed_type, CExpr.Ref (parm_val)));
@@ -585,7 +599,7 @@ module CompileTypedMethod
             vals = v :: vals;
             v
           };
-        ctx'.locals = ctx'.locals.Add (parm.id, v)
+        ctx'.locals = ctx'.locals.Add (parm.Id, v)
       }
     };
 
@@ -611,14 +625,15 @@ module CompileTypedMethod
         | TExpr.Call | TExpr.TailCall => ()
           
         | x =>
-          Message.debug (body.loc, body.ToString ());
+          Message.warning (body.loc, body.ToString ());
           Util.ice (" constructor body has: " + PrettyPrint.SprintTyExpr (None (), x))
       }
 
     // store 'this' into closure object
-    foreach (((((kind = LocalValueKind.ClosurisedThis, in_closure = true)) : LocalValue) as d)
-             in ctx.current_fun.closure_vars) 
-      initializers = CExpr.Assign (local_ref (ctx, d, true), CExpr.This ()) :: initializers;
+    foreach (d in ctx.current_fun.closure_vars) 
+      when (d.InClosure && 
+            d.ValKind matches LocalValue.Kind.ClosurisedThisPointer)
+        initializers = CExpr.Assign (local_ref (ctx, d, true), CExpr.This ()) :: initializers;
     
     // compile raw body of method
     mutable cbody = cg_expr (ctx', body);
@@ -649,10 +664,11 @@ module CompileTypedMethod
     hd.body = null;
   }
 
-  internal CompileMethod (meth : NemerleMethod) : void
+  do_compile_method (meth : NemerleMethod) : void
   {
-    match (meth.fun_body) {
-      | FunBody.Parsed => Tyexpr.TypeMethod (meth)
+    match (meth.GetHeader ().body) {
+      | FunBody.Parsed => 
+        _ = Typer (meth)
       | _ => ()
     };
     def current_type = meth.DeclaringType :> TypeBuilder;
@@ -666,9 +682,9 @@ module CompileTypedMethod
               
         def make_impl_wrapper (impl_meth : IMethod, acc) {
           def mkparm (ifp : CG_val, methp : Fun_parm) : CExpr {
-            maybe_cast (ctx, methp.ty.GetSystemType (), CExpr.Ref (ifp))
+            maybe_cast (ctx, methp.SystemType, CExpr.Ref (ifp))
           };
-          if (Tyutil.types_eq (impl_meth.GetMemType (), meth.GetMemType ())
+          if (impl_meth.GetMemType ().Equals (meth.GetMemType ())
               && meth.IsPublic) 
             impl_meth :: acc
           else {
@@ -693,18 +709,17 @@ module CompileTypedMethod
     }
     
     Util.locate (meth.Location, {
-      match (meth.fun_body) {
-        | FunBody.Extern => ()
+      match (meth.GetHeader ().body) {
         | FunBody.Compiled | FunBody.Parsed => Util.ice ()
 
         | FunBody.Typed when Message.seen_error () =>
           // just skip it
-          meth.fun_body = FunBody.Compiled ()
+          meth.GetHeader ().body = FunBody.Compiled ()
           
         | FunBody.Typed (body) =>
           cg_global_fun (ctx, meth, body);
           // release memory for GC
-          meth.fun_body = FunBody.Compiled ();
+          meth.GetHeader ().body = FunBody.Compiled ();
 
           def cgm = GetCgMethod (meth);
           match (meth.GetFunKind ()) {
@@ -722,6 +737,12 @@ module CompileTypedMethod
     
     when (Options.EarlyExit)
       Message.maybe_bailout ();
+  }
+
+  internal CompileMethod (meth : NemerleMethod) : void
+  {
+    // Message.debug ($"compile: $meth");
+    Passes.Solver.Enqueue (fun () { do_compile_method (meth) });
   }
 } // end module
 } // end ns

@@ -58,7 +58,7 @@ and subtyping relations (edges).  The graph follows several invariants:
      subtyping relation.
 
   5. If t :> A and A :> t', then t :> t' (that is upper bound has to be
-     bigger then lower bound). If t = t', then the type t is substituted
+     bigger than lower bound). If t = t', then the type t is substituted
      for the variable A (that is A gets fixed), since it is the only
      type to fulfill both upper and lower limits. To maintain 1., it's
      then removed from the graph.
@@ -89,10 +89,12 @@ namespace Nemerle.Compiler
         overload resolution. */
     public PushState () : void
     {
-      if (state.IsEmpty)
-        state.Push (SystemMap ())
-      else
-        state.Push (state.Top);
+      ++serial_stack_top;
+      ++last_serial;
+      top_serial = last_serial;
+      serial_stack [serial_stack_top] = top_serial;
+
+      dt_stack.Push (dt_store);
 
       messenger.PushState ();
     }
@@ -104,18 +106,26 @@ namespace Nemerle.Compiler
         and also clear the error state if it was in */
     public PopState () : void
     {
-      _ = state.Pop ();
+      --serial_stack_top;
+      top_serial = serial_stack [serial_stack_top];
+      
+      dt_store = dt_stack.Pop ();
       messenger.PopState ();
+    }
+
+
+    public Unwind () : void
+    {
+      while (!IsTopLevel)
+        PopState ()
     }
 
 
     /** Make sure all TyVars created so far won't go anywhere.
         
         Called when the type checking process for a method is finished (or
-        for a class, if we decide to go with inferred private types).
-
-        XXX it is not clear if it will be needed. */
-    [Nemerle.NotImplemented]
+        for a class, if we decide to go with inferred private types).  */
+    [Nemerle.NotImplemented] // XXX it is not clear if it will be needed.
     public FixateAll () : void
     {
     }
@@ -124,22 +134,25 @@ namespace Nemerle.Compiler
     /** Generate a new type variable. */
     public FreshTyVar () : TyVar
     {
-      TyVar (this)
+      TyVar ()
     }
 
 
-    /** Generate a fresh instance of given static type variable. */
-    public FreshCopy (of : StaticTyVar) : TyVar
+    public static MonoTypes (m : list [MType]) : list [TyVar]
     {
-      def tv = TyVar (this);
-      _ = tv.Require (MType.Intersection (of.Constraints));
-      tv
+      List.Map (m, fun (x : MType) { x : TyVar })
     }
 
 
-    public MonoType (m : MType) : TyVar
+    public static FixedValues (m : list [TyVar]) : list [MType]
     {
-      TyVar (this, m)
+      List.Map (m, fun (x : TyVar) { x.FixedValue })
+    }
+    
+
+    public static Fix (m : list [TyVar]) : list [MType]
+    {
+      List.Map (m, fun (x : TyVar) { x.Fix () })
     }
 
 
@@ -159,6 +172,31 @@ namespace Nemerle.Compiler
     {
       --current_rank;
     }
+
+
+    #region Anti dead lock queue
+    public Enqueue (action : void -> void) : void
+    {
+      if (locked) {
+        comp_queue.Push (action);
+      } else {
+        try {
+          locked = true;
+          action ();
+          while (!comp_queue.IsEmpty) {
+            def action = comp_queue.Pop ();
+            action ()
+          }
+        } finally {
+          locked = false;
+          comp_queue.Clear ();
+        }
+      }
+    }
+
+    comp_queue : Queue [void -> void] = Queue ();
+    mutable locked : bool;
+    #endregion
 
 
     /** Return the biggest type [t] such that [t <: t1] and [t <: t2]. 
@@ -188,8 +226,8 @@ namespace Nemerle.Compiler
             }
           | Some =>
             // tc1 : tc2(args)
-            _ = t1.Require (this, t2);
-            [t2]
+            _ = t1.Require (t2);
+            [t1]
         }
       }
 
@@ -200,6 +238,28 @@ namespace Nemerle.Compiler
         t2.Validate ();
         def result =
           match ((t1, t2)) {
+            | _ when t1.Equals (t2) => [t1]
+
+            | (MType.Class (tc, []), t) when tc.Equals (InternalType.Object_tc)
+            | (t, MType.Class (tc, [])) when tc.Equals (InternalType.Object_tc) =>
+              [t]
+
+            | ((MType.TyVarRef (tv)) as tvr, (MType.Class (tc, _)) as t)
+            | ((MType.Class (tc, _)) as t, (MType.TyVarRef (tv)) as tvr) =>
+              mutable res = true;
+              mutable seen = false;
+              foreach (MType.Class (tc', _) as t' in tv.Constraints)
+                when (!seen && tc'.SuperType (tc) matches Some) {
+                  res = t'.Require (t);
+                  // Message.debug ($ "$(t') vs $t : $res");
+                  seen = true;
+                }
+              unless (seen && res)
+                SaveError (messenger, 
+                           $ "types $t1 and $t2 are not compatible "
+                             "[during intersection, tyvar]");
+              [tvr : MType]
+
             | (MType.Class (tc, args), MType.Intersection (lst))
             | (MType.Intersection (lst), MType.Class (tc, args)) =>
               def loop (res, tc, args, lst) {
@@ -222,14 +282,14 @@ namespace Nemerle.Compiler
               }
               loop ([], tc, args, lst)
               
-              
             | (MType.Class (tc1, args1), MType.Class (tc2, args2)) =>
               intersect_classes (MType.Class (tc1, args1), 
                                  MType.Class (tc2, args2))
+
             | _ => 
               SaveError (messenger, 
-                           $ "types $t1 and $t2 are not compatible "
-                             "[during intersection]");
+                         $ "types $t1 and $t2 are not compatible "
+                           "[during intersection]");
               [t1]
           }
         match (result) {
@@ -255,12 +315,12 @@ namespace Nemerle.Compiler
               when (tc.Equals (InternalType.Object_tc))
                 seen_object = true;
               def s =
-                List.FoldLeft (tc.GetSuperTypes (), 
+                List.FoldLeft (InternalType.Object :: tc.GetSuperTypes (), 
                   Set.Singleton (tc),
                   fun (e, s : Set [TypeInfo]) {
                     match (e) {
                       | MType.Class (tc, _) =>
-                        s.Add (tc)
+                        s.Replace (tc)
                       | _ => assert (false)
                     }
                   });
@@ -268,7 +328,7 @@ namespace Nemerle.Compiler
                 supertypes = s
               else
                 supertypes = supertypes.Intersect (s);
-            | _ => assert (false)
+            | _ => assert (false, $ "wrong type in Sum: $t")
           }
         }
 
@@ -276,16 +336,18 @@ namespace Nemerle.Compiler
 
         def maximal =
           supertypes.Fold ([], fun (t, lst) {
-            def loop (res, t, lst) {
-              match (lst) {
-                | x :: xs =>
-                  if ((x : TypeInfo).SuperType (t) matches Some) loop (res, x, xs)
-                  else if (t.SuperType (x) matches Some) loop (res, t, xs)
-                  else loop (x :: res, t, xs)
-                | [] => res
-              }
-            }
-            loop ([], t, lst)
+            mutable seen_better = false;
+            def lst = List.Filter (lst, fun (l : TypeInfo) {
+              if (l.SuperType (t) matches Some) {
+                seen_better = true;
+                true
+              } else if (t.SuperType (l) matches Some) {
+                assert (!seen_better);
+                false
+              } else true
+            });
+
+            if (seen_better) lst else t :: lst
           });
 
         match (maximal) {
@@ -297,20 +359,33 @@ namespace Nemerle.Compiler
           | _ => ()
         }
 
-        def res =
+        def maximal =
           List.Map (maximal, fun (tc : TypeInfo) {
-            // FIXME :>
-            def ty = tc.FreshSubst ().MonoApply (tc.GetMemType () :> MType);
+            // reuse existing type if possible
+            mutable res = null;
+            foreach (x in lst)
+              match (x) {
+                | MType.Class (tc', _) when tc'.Equals (tc) =>
+                  res = x
+                | _ => {}
+              }
+            // and create fresh substitution if not
+            when (res == null)
+              res = tc.FreshSubst ().MonoApply (tc.GetMemType ());
+              
             foreach (x : MType in lst)
-              _ = x.Require (this, ty);
-            ty
+              _ = x.Require (res);
+
+            res
           });
 
-
-        match (res) {
+        match (maximal) {
           | [x] => x
-          | lst =>
-            def res = MType.Intersection (lst);
+          | lst' =>
+            SaveError (messenger, 
+                         $ "common super type of types $lst is a set of "
+                           "interfaces $lst'. This is not supported");
+            def res = MType.Intersection (lst');
             res.Validate ();
             res
         }
@@ -327,6 +402,16 @@ namespace Nemerle.Compiler
           | (t, MType.Intersection (l))
           | (MType.Intersection (l), t) =>
             sum_list (t :: l)
+          // a little special case, for better speed
+          | (MType.Class (tc1, []), MType.Class (tc2, [])) =>
+            if (tc1.Equals (tc2))
+              t1
+            else if (tc1.SuperType (tc2) matches Some)
+              t2
+            else if (tc2.SuperType (tc1) matches Some)
+              t1
+            else
+              sum_list ([t1, t2])
           | (t1, t2) =>
             sum_list ([t1, t2])
         }
@@ -334,89 +419,45 @@ namespace Nemerle.Compiler
     }
     
 
-    /** Any usage of [t2] is from now on replaced by usage of [t1]. */
-    public AddLink (t1 : TyVar, t2 : TyVar) : void
-    {
-      def t1 = Copy (t1);
-      def t2 = Copy (t2);
-      t1.AddSources (t2.Sources);
-      t2.AddSources (t1.Sources);
-      when ((t1 : object) != t2)
-        t2.state = TyVar.State.Alias (t1);
-    }
-
-
-    Unalias (tv : TyVar) : TyVar
-    {
-      match (tv.state) {
-        | TyVar.State.Alias (tv') =>
-          def res = Unalias (tv');
-          when (res != (tv' : object))
-            tv.state = TyVar.State.Alias (res);
-          res
-        | _ => tv
-      }
-    }
-    
-
-    public Find (tv : TyVar) : TyVar
-    {
-      def tv = Unalias (tv);
-      if (state.IsEmpty)
-        tv
-      else
-        match (state.Top.Find (tv.id)) {
-          | Some (({ state = TyVar.State.Alias }) as x) =>
-            Find (Unalias (x))
-          | Some (x) => x
-          | None => tv
-        }
-    }
-
-
-    public Copy (tv : TyVar) : TyVar
-    {
-      def tv = Unalias (tv);
-      if (state.IsEmpty)
-        tv
-      else
-        match (state.Top.Find (tv.id)) {
-          | Some (({ state = TyVar.State.Alias }) as x) =>
-            Copy (Unalias (x))
-          | Some (x) => x
-          | None =>
-            def tv' = TyVar (tv);
-            state.Top = state.Top.Add (tv.id, tv');
-            tv'
-        }
-    }
-
-    
     public CurrentMessenger : Messenger
     {
       get { messenger }
     }
 
     
-    public SeenError : bool
+    public IsTopLevel : bool
     {
-      get { messenger.SeenError }
+      get { serial_stack_top == 0 }
     }
+    
     
     public this ()
     {
-      state = Stack ();
-      error_state_stack = Stack ();
+      dt_stack = Stack ();
       
       messenger = Messenger ();
       messenger.NeedMessage = true;
-      messenger.InErrorMode = false;
+      messenger.InErrorMode = true;
+
+      serial_stack = array (4);
+      last_serial = 1;
+      top_serial = 1;
+      serial_stack [0] = 1;
+      serial_stack_top = 0;
     }
 
 
-    mutable in_error_state : bool;
-    state : Stack [SystemMap [int, TyVar]];
-    error_state_stack : Stack [bool];
+    #region Interface for DelayedTyping
+    internal mutable dt_store : NemerleMap [Typer.DelayedTyping, Typer.DelayedTyping.Kind];
+    dt_stack : Stack [NemerleMap [Typer.DelayedTyping, Typer.DelayedTyping.Kind]];
+    #endregion
+
+
+    internal serial_stack : array [int];
+    internal mutable serial_stack_top : int;
+    internal mutable top_serial : int;
+    private mutable last_serial : int;
+
     mutable current_rank : int;
     messenger : Messenger;
   }
