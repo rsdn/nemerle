@@ -112,7 +112,7 @@ dist-cleaner:
 	$(Q)rm -rf doc/presentation
 	$(Q)rm -f config.mak configure.log
 
-install:
+install: all
 	$(Q)$(MAKE) -C doc install
 	$(Q)$(MAKE) -C ncc install
 	$(Q)if test -f tools/cs2n/cs2n.exe ; then \
