@@ -28,11 +28,11 @@ var keywordNemArray =
 
 function paintColors ()
 {
-  	var keywordsCS = "(";
+  	keywordsCS = "(";
   	for (n=0; n<keywordArray.length; n++)
   		keywordsCS += "\\b" + keywordArray[n] + "\\b|";
   	keywordsCS += "string)";	
-        var keywordsNem = "(";
+        keywordsNem = "(";
 	for (n=0; n<keywordNemArray.length; n++)
 		keywordsNem += "\\b" + keywordNemArray[n] + "\\b|";
 	keywordsNem += "string)";
