@@ -12,7 +12,7 @@
   <xsl:template match="submission">
     <tr>
       <td>
-        <a href="{/submissions/@secret}/edit?id={id}">
+        <a href="{/submissions/@secret}/edit.xml?id={id}">
           <xsl:value-of select="first_name" />
           <xsl:text> </xsl:text>
           <xsl:value-of select="last_name" />
@@ -22,14 +22,14 @@
         <xsl:value-of select="email" />
       </td>
       <td>
-        <xsl:value-of select="account" />
+        <xsl:value-of select="acc_name" />
+        <xsl:text> </xsl:text>
+        <xsl:value-of select="acc_address" />
+        <xsl:text> </xsl:text>
+        <xsl:value-of select="acc_nip" />
       </td>
       <td>
         <xsl:value-of select="university" />
-        <xsl:text> </xsl:text>
-        <xsl:value-of select="department" />
-        <xsl:text> </xsl:text>
-        <xsl:value-of select="institute" />
       </td>
       <td>
         <xsl:if test="normalize-space(vega)">wegetarianiec, </xsl:if>

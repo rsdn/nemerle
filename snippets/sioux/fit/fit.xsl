@@ -49,7 +49,7 @@
                 <div class="copyright">
                   Powered by <a href="http://www.nemerle.org">Nemerle</a>.
                   <br />
-                  <a href="http://www.nemerle.org/license.html">Copyright © 2004 University of Wrocław</a>
+                  Copyright © 2004 University of Wrocław
                   <a name="bottom-of-page" id="bottom-of-page"></a>
                 </div>
               </td>
@@ -119,6 +119,12 @@
     </input>
   </xsl:template>
 
+  <xsl:template match="textarea">
+    <textarea name="{@name}" cols="{@cols}" rows="{@rows}">
+      <xsl:apply-templates />  
+    </textarea>
+  </xsl:template>
+
   <xsl:template match="br">
     <br />
   </xsl:template>
@@ -139,9 +145,15 @@
       <td width="*" class="realtable"><xsl:apply-templates /></td>
     </tr>
   </xsl:template>
+  
+  <xsl:template match="pre">
+    <pre>
+      <xsl:apply-templates />
+    </pre>
+  </xsl:template>
 
   <xsl:template match="a">
-    <a href="{@ref}"><xsl:value-of select="."/></a>
+    <a href="{@href}"><xsl:value-of select="."/></a>
   </xsl:template>
 
 
