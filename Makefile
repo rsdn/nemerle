@@ -73,6 +73,7 @@ send-dist:
 	scp `find -maxdepth 1 -mindepth 1 -name 'nemerle-[0-9]*.tar.gz' | sort | tail -1` \
 		lilith:/home/services/httpd/html/download/nemerle-latest.tar.gz
 	mv `find -maxdepth 1 -mindepth 1 -name 'nemerle-[0-9]*.tar.gz'` ~/backup/nemerle/
+	scp boot/ncc.exe lilith:/home/services/httpd/html/download/ncc-boot.exe
 
 clean:
 	$(MAKE) -C doc clean
