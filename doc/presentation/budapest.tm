@@ -52,12 +52,12 @@
   <section|Reasons -- why new language?>
 
   <\itemize>
-    <item>we wanted functional language (yes, this a matter of taste)
+    <item>we wanted functional language (yes, this is a matter of taste)
 
     <item><verbatim|.NET> (with generics) provides best environment for high
     level, statically typed languages we have seen so far
 
-    <item>ports of existing functional languages to <verbatim|.NET> didn't
+    <item>ports of existing functional languages to <verbatim|.NET> did not
     provide full integration
   </itemize>
 
@@ -577,7 +577,7 @@
 
   <with|font size|0.84|<\code>
     <with|font size|0.84|>sql_loop (<with|color|magenta|"SELECT
-    <with|color|red|salary>, LOWER (name) \\"<with|color|red|lname>\\">
+    <with|color|red|salary>, LOWER (name) <with|color|red|lname>>
 
     \ \ \ \ \ \ \ \ \ \ \ \ \ <with|color|magenta|FROM employees >
 
@@ -789,8 +789,9 @@
   <\itemize>
     <item>this extension requires SQL parser aware of SQL functions types
 
-    <item>but it knows and uses the correct type of <verbatim|salary> and
-    <verbatim|lname> variables
+    <item>but it knows and uses the correct type of
+    <verbatim|<with|color|red|salary>> and <verbatim|<with|color|red|lname>>
+    variables
   </itemize>
 </body>
 
