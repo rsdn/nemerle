@@ -27,6 +27,7 @@
  *)
 
 open Nemerle.Collections;
+open System.Text.RegularExpressions;
 
 open Nemerle.Compiler;
 open Nemerle.Compiler.Tyexpr;
@@ -162,12 +163,31 @@ module Extensions {
         mutable default <- None ();
 
         def create_regpattern (cass : list (Parsetree.Match_case)) {
+          mutable patnames <- [];
+
           def walk_guards (gs, acc) {
             match (gs) {
               | <[ caseguard: $(str : string) ]> :: xs =>
+                // take names of named groupd
+                def namesreg = Regex (@"\(\?\<(\w+)\s*(:\s*(\w+))?");
+                mutable m <- namesreg.Match (str); 
+                while (m.Success) {
+//                  printf ("%s\n", m.Groups[i].ToString ());
+                  match ((m.Groups[1].Success, m.Groups[3].Success)) {
+                    | (true, false) =>
+                      patnames <- (m.Groups[1].ToString (), None ()) :: patnames
+                    | (true, true) =>
+                      patnames <- (m.Groups[1].ToString (), 
+                                   Some (m.Groups[3].ToString ())) :: patnames;
+                    | _ => ()
+                  };
+                  m <- m.NextMatch ();
+                };
                 def newsymb = Util.tmpname ("g");
+                // add | if it is not first alternative in our pattern
                 unless (first) pat <- pat.Append ("|");
                 first <- false;
+                // add current alternative to our pattern
                 pat <- pat.Append("(?<" + newsymb + ">^" + str + "$)");
                 walk_guards (xs, newsymb :: acc)
 
@@ -180,11 +200,10 @@ module Extensions {
             }
           };
           match (cass) {
-            | [ <[ case: _ => $expr ]> ] =>
-              default <- Some (expr)
+            | [ <[ case: _ => $expr ]> ] => default <- Some (expr)
 
             | <[ case: | ..$guards => $expr ]> :: xs =>
-              alternatives <- (walk_guards (guards, []), expr) :: alternatives;
+              alternatives <- (walk_guards (guards, []), patnames, expr) :: alternatives;
               create_regpattern (xs)
 
             | [] => ()
@@ -212,17 +231,35 @@ module Extensions {
               | [] => Message.fatal_error ("empty list of guards?")
             }
           };
+          def build_bindings (patnames, acc) {
+            match (patnames) {
+              | (nam, None) :: xs =>
+                build_bindings (xs, 
+                  <[ def $(nam : var) = 
+                       $(mname : var).Groups[$(nam : string)].ToString () 
+                  ]> :: acc)
+              | (nam, Some (ty)) :: xs =>
+                build_bindings (xs, 
+                  <[ def $(nam : var) = 
+                       $(ty : var).Parse ($(mname : var).Groups[$(nam : string)]
+                                            .ToString ()) 
+                  ]> :: acc)
+              | [] => acc
+            }
+          };
           match (cass) {
-            | [(grds, expr)] =>
-              match (default) {
-                | None =>
-                  Message.warning ("this pattern might be not exhaustive");
-                  <[ when ($(build_alts (grds))) $expr ]>
-                | Some (defexpr) =>
-                  <[ if ($(build_alts (grds))) $expr else $defexpr ]>
-              }
-            | (grds, expr) :: xs =>
-              <[ if ($(build_alts (grds))) $expr else $(build_checking (xs)) ]>
+            | [(grds, patnames, expr)] =>
+              <[ if ($(build_alts (grds))) {
+                   .. $(List.append (build_bindings (patnames, []), [expr])) 
+                 }
+                 else raise Nemerle.Core.Match_failure () 
+              ]>
+            | (grds, patnames, expr) :: xs =>
+              <[ if ($(build_alts (grds))) {
+                   .. $(List.append (build_bindings (patnames, []), [expr])) 
+                 }
+                 else $(build_checking (xs)) 
+              ]>
             
             | [] => Message.fatal_error ("empty list of guards?")
           }
@@ -236,7 +273,8 @@ module Extensions {
           };              
 
         <[ { def _N_regge = System.Text.RegularExpressions.Regex 
-                              ($(pat.ToString () : string));
+                              ($(pat.ToString () : string), 
+                               System.Text.RegularExpressions.RegexOptions.ExplicitCapture);
              def $(mname : var) = _N_regge.Match ($val);
              if ($(mname : var).Success)
                $(build_checking (alternatives))
