@@ -75,9 +75,11 @@ dist: changelog tarball
 tarball:
 	$(Q)rm -rf $(PACKAGE)-$(VERSION).*
 	svn export . $(PACKAGE)-$(VERSION).$(REVISION)
+	-cp ChangeLog $(PACKAGE)-$(VERSION).$(REVISION)
 	$(Q)$(MAKE) -C $(PACKAGE)-$(VERSION).$(REVISION) dist-cleaner
 	$(TAR) $(PACKAGE)-$(VERSION).$(REVISION).tar.gz 
 	@tar zcf $(PACKAGE)-$(VERSION).$(REVISION).tar.gz $(PACKAGE)-$(VERSION).$(REVISION)
+	$(Q)rm -rf $(PACKAGE)-$(VERSION).$(REVISION)
 
 dist-cleaner:
 	@echo Setting up html doc.
