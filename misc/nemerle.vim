@@ -66,7 +66,7 @@ syn keyword nemerleType int bool string void option list char float object
 syn keyword nemerleKeyword abstract const extern internal new private protected sealed volatile
 syn keyword nemerleKeyword class enum extends finally in null out public throw ref struct
 syn keyword nemerleKeyword variant interface implements namespace where type static
-syn keyword nemerleKeyword in fun and tymatch with try open void base if then else variant
+syn keyword nemerleKeyword in fun and tymatch with try void base if then else variant
 syn keyword nemerleKeyword match as mutable def module when for while array
 syn keyword nemerleKeyword macro unless using override catch
 
