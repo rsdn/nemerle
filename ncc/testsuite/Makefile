@@ -59,7 +59,7 @@ all: test
 
 test: test.exe $(NEM_DLLS)
 	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" -p "$(NEM_FLAGS) $(ADDITIONAL_FLAGS)" \
-		-verify "$(VERIFY)" -n "$(STAGE3)/ncc.exe" $(TEST_FILES)
+		-verify "$(VERIFY)" $(TEST_FILES)
 
 test.exe: test.n
 	$(EXECUTE) $(STAGE3)/ncc.exe -r:Nemerle.Compiler -out test.exe $(TESTN)
