@@ -60,7 +60,7 @@ public module Macros
   public class QuotationContext 
   {
     public bound : Hashtable (string, list (string * int));
-    public level : int;
+    public mutable level : int;
 
     public this () { bound <- Hashtable () }
   }
@@ -76,7 +76,7 @@ public module Macros
 
   // QUOTATION HANDLING SECTION
 
-  add_new_name (qctx : QCTX, name : Splicable_string) : QCTX
+  add_new_name (qctx : QCTX, name : Splicable_string) : void
   {
     match (name) {
       | SS_string (id) =>
@@ -87,17 +87,18 @@ public module Macros
             qctx.bound.Add (id, [(NewSymbol (), qctx.level)]);
         }
       | _ => ()
-    };
-    qctx
+    }
   }
 
-  remove_old_names (qctx : QCTX) : QCTX
+  remove_old_names (qctx : QCTX) : void
   {
+    qctx.level <- qctx.level - 1;
+    mutable for_removal <- [];
     def remove (x) {
       def (nam, lis) = x;
       def remove_iter (li) {
         | [] =>
-          qctx.bound.Remove (nam)
+          for_removal <- nam :: for_removal;
         | (_, lev) :: ns =>
           if (lev > qctx.level)
             remove_iter (ns)
@@ -107,7 +108,7 @@ public module Macros
       remove_iter (lis)
     };
     qctx.bound.Iter (remove);
-    qctx
+    List.Iter (fun (x) { qctx.bound.Remove (x) }, for_removal);
   }
 
   /** create tree, which constructs list of given elements,
@@ -188,7 +189,7 @@ public module Macros
           | SS_spliced_expr (e) => e
         };
         def findtyco = <[
-          match (_N_ctx.env.LookupType ($tyco)) {
+          match ($("_N_ctx" : var).env.LookupType ($tyco)) {
             | Some (x) => x
             | None => Message.fatal_error ("unbound type " + $tyco)
           }
@@ -347,17 +348,17 @@ public module Macros
   {
     match (p) {
       | <[ funparm: $name : $ty ]> =>
-        def qctx = add_new_name (qctx, name);
+        add_new_name (qctx, name);
         <[ Nemerle.Compiler.Parsetree.Fun_parm ($(quoted_sstring (name)),
                                                 $(quoted_type (ctx, qctx, ty)),
                                                 Nemerle.Compiler.Parsetree.FP_normal ()) ]>
       | <[ funparm: params $name : $ty ]> =>
-        def qctx = add_new_name (qctx, name);
+        add_new_name (qctx, name);
         <[ Nemerle.Compiler.Parsetree.Fun_parm ($(quoted_sstring (name)),
                                                 $(quoted_type (ctx, qctx, ty)),
                                                 Nemerle.Compiler.Parsetree.FP_params ()) ]>
       | <[ funparm: $name : $ty = $expr ]> =>
-        def qctx = add_new_name (qctx, name);
+        add_new_name (qctx, name);
         <[ Nemerle.Compiler.Parsetree.Fun_parm ($(quoted_sstring (name)),
              $(quoted_type (ctx, qctx, ty)),
              Nemerle.Compiler.Parsetree.FP_default ($(quoted_expr (ctx, qctx, expr)))) ]>
@@ -382,22 +383,21 @@ public module Macros
 
     match (d) {
       | <[ fundecl: $name (..$fparms) : $ty { ..$bodyseq } ]> =>
-        def qctx = add_new_name (qctx, name);
+        add_new_name (qctx, name);
+        def parms =
+          match (fparms) {
+            | [{ name = SS_string (""); ty = <[ type: void ]>; attr = FP_default (e); }] =>
+              decompose_list (quotedc_expr, e)
+
+            | _ =>
+              make_quoted_list (quotedc_fparam, fparms)
+          };
         def body = quoted_expr (ctx, qctx, <[ {..$bodyseq} ]>);
-        match (fparms) {
-          | [{ name = SS_string (""); ty = <[ type: void ]>; attr = FP_default (e); }] =>
-            <[ Nemerle.Compiler.Parsetree.Function_decl 
-                (Nemerle.Compiler.Parsetree.Fun_header ($(quoted_tparms (d.header.typarms)),
-                 $(quoted_sstring (name)), $(quoted_type (ctx, qctx, ty)),
-                 $(decompose_list (quotedc_expr, e))),
-                 $body) ]>
-          | _ =>
-              <[ Nemerle.Compiler.Parsetree.Function_decl 
-                 (Nemerle.Compiler.Parsetree.Fun_header ($(quoted_tparms (d.header.typarms)),
-                    $(quoted_sstring (name)), $(quoted_type (ctx, qctx, ty)),
-                    $(make_quoted_list (quotedc_fparam, fparms))),
-                  $body) ]>
-        }
+        <[ Nemerle.Compiler.Parsetree.Function_decl 
+           (Nemerle.Compiler.Parsetree.Fun_header ($(quoted_tparms (d.header.typarms)),
+             $(quoted_sstring (name)), $(quoted_type (ctx, qctx, ty)),
+              $parms), $body) ]>
+
       | _ => Message.fatal_error ("such quoted function declaration is not supported")
     }
   }
@@ -405,34 +405,54 @@ public module Macros
   public quoted_expr (ctx : CTX, qctx : QCTX, expr : Expr) : Expr 
   {
     def quotedc_expr (x) { quoted_expr (ctx, qctx, x) };
-
+    qctx.level <- qctx.level + 1;
+    
+    def ret =
     match (expr) {
       | <[ $(id : var) ]> =>
+        def _get_name (m : IMember) : string { 
+          match (m.GetKind ()) { 
+            | MK_type (tc) => tc.GetFullName () 
+            | _ => 
+              def decl = m.GetDeclaringTycon();
+              if (decl != null) 
+                decl.GetFullName () + "." 
+              else 
+                "" + m.GetName ()
+          }
+        };
         // preliminary code for variables renaming and expanding namespaces
-/*
+
         match (ctx.env.LookupType (id)) {
-          | Some (_c) => printf ("looked %s\n", id); 
+          | Some (_c) => () // printf ("looked %s %s\n", id, get_name (_c)); 
           | None => 
             match (ctx.env.LookupSymbol (id)) {
               | [_s] => 
-                printf ("looked symbol %s\n", id);
+                () // printf ("looked symbol %s\n", id);
               | [] =>
                 match (ctx.locals.find (id)) {
                   | Some => 
                     printf ("warning, local meta-variable in quotation\n")
                   | None =>
-                    match (qctx.bound.Get (id)) {
-                      | Some (renamed) =>
-                        <[ Nemerle.Compiler.Parsetree.E_ref ($(renamed : string)) ]>
-                      | None =>
-                        printf ("unbound variable %s\n", id);
-                    }
+                    if (MacroRegistry.macros.Contains (id))
+                      ()
+                    else
+                      match (qctx.bound.Get (id)) {
+                        | Some ((_renamed, _) :: _) =>
+                         // <[ Nemerle.Compiler.Parsetree.E_ref ($(renamed : string)) ]>
+                         () // printf ("renamed %s is %s\n", id, renamed);
+                        | None =>
+                          () //printf ("%s:%d:%d:unbound variable %s\n", expr.loc.file,
+                               //   expr.loc.line, expr.loc.column, id);
+                        | _ => 
+                          Util.ice ("empty list in quotation context") 
+                      }
                 }
               | _ =>
                 printf ("looked ambigous %s\n", id)
             }
         };
-*/
+
         <[ Nemerle.Compiler.Parsetree.E_ref ($(id : string)) ]>
 
       | <[ $obj . $mem ]> => 
@@ -454,48 +474,62 @@ public module Macros
                                                 $(quoted_expr (ctx, qctx, source))) ]>
 
       | <[ def $name = $val ]> =>
-        def qctx = add_new_name (qctx, name);
+        qctx.level <- qctx.level - 1;
+        add_new_name (qctx, name);
+        qctx.level <- qctx.level + 1;
         <[ Nemerle.Compiler.Parsetree.E_let ($(false : bool), 
                                              $(quoted_sstring (name)), 
                                              $(quoted_expr (ctx, qctx, val))) ]>
 
       | <[ mutable $name <- $val ]> =>
-        def qctx = add_new_name (qctx, name);
+        qctx.level <- qctx.level - 1;
+        add_new_name (qctx, name);
+        qctx.level <- qctx.level + 1;
         <[ Nemerle.Compiler.Parsetree.E_let ($(true : bool),
                                              $(quoted_sstring (name)),
                                              $(quoted_expr (ctx, qctx, val))) ]>
 
       | <[ def (.. $elems) = $val ]> =>
+        qctx.level <- qctx.level - 1;
+        def ret =
         <[ Nemerle.Compiler.Parsetree.E_letpat ($(quoted_pattern (ctx, qctx, 
                                                                   P_tuple (elems))), 
-                                                $(quoted_expr (ctx, qctx, val))) ]>
+                                                $(quoted_expr (ctx, qctx, val))) ]>;
+        qctx.level <- qctx.level + 1;
+        ret
 
       | <[ def .. $funs ]> =>
+        qctx.level <- qctx.level - 1;
+        def ret =
         match (funs) {
           | [(_, E_expr_list (args))] =>
             <[ Nemerle.Compiler.Parsetree.E_letfun ($(decompose_list (quotedc_expr, args))) ]>
           | _ =>
             <[ Nemerle.Compiler.Parsetree.E_letfun (
-                $(make_quoted_list (fun (x) { quoted_fundecl (ctx, qctx, x) }, funs))) ]>
-        }
+              $(make_quoted_list (fun (x) { 
+                quoted_fundecl (ctx, qctx, x) }, funs))) ]>
+        };
+        qctx.level <- qctx.level + 1;
+        ret
 
       | <[ fun (..$args) : $ty { ..$bodyseq } ]> =>
+        def parms =
+          match (args) {
+            | [{ name = SS_string (""); ty = <[ type: void ]>; 
+                 attr = FP_default (e); }] =>
+              decompose_list (quotedc_expr, e)
+            | _ =>
+              make_quoted_list (fun (x) { quoted_fparam (ctx, qctx, x) }, args)
+          };
         // we have to rebuild sequence, which is here decomposed
         def body = quoted_expr (ctx, qctx, <[ {..$bodyseq} ]>);
-        match (args) {
-          | [{ name = SS_string (""); ty = <[ type: void ]>; attr = FP_default (e); }] =>
-            <[ Nemerle.Compiler.Parsetree.E_lambda (Nemerle.Compiler.Parsetree.Function_decl 
-            (Nemerle.Compiler.Parsetree.Fun_header (Nemerle.Compiler.Parsetree.Typarms([],[]),
-                Nemerle.Compiler.Parsetree.SS_string (""), $(quoted_type (ctx, qctx, ty)),
-                  $(decompose_list (quotedc_expr, e))),
-                 $body)) ]>
-          | _ =>
-            <[ Nemerle.Compiler.Parsetree.E_lambda (Nemerle.Compiler.Parsetree.Function_decl 
-               (Nemerle.Compiler.Parsetree.Fun_header (Nemerle.Compiler.Parsetree.Typarms([],[]),
-                  Nemerle.Compiler.Parsetree.SS_string (""), $(quoted_type (ctx, qctx, ty)),
-                  $(make_quoted_list (fun (x) { quoted_fparam (ctx, qctx, x) }, args))),
-                $body)) ]>
-        };
+        <[ Nemerle.Compiler.Parsetree.E_lambda 
+            (Nemerle.Compiler.Parsetree.Function_decl 
+            (Nemerle.Compiler.Parsetree.Fun_header 
+             (Nemerle.Compiler.Parsetree.Typarms([],[]),
+              Nemerle.Compiler.Parsetree.SS_string (""), 
+              $(quoted_type (ctx, qctx, ty)), $parms), 
+             $body)) ]>
 
       | <[ match ($expr) {.. $cases } ]> =>
         match (cases) {
@@ -518,7 +552,7 @@ public module Macros
 
       | <[ try $body catch { $exn : $exn_ty => $handler } ]> => 
         def qbody = quoted_expr (ctx, qctx, body);
-        def qctx = add_new_name (qctx, exn);
+        add_new_name (qctx, exn);
         <[ Nemerle.Compiler.Parsetree.E_try_with ($qbody, 
                                                   $(quoted_sstring (exn)),
                                                   $(quoted_type (ctx, qctx, exn_ty)), 
@@ -678,6 +712,8 @@ public module Macros
       | E_letpat => Util.ice ("Bad construction of E_letpat")
       | E_lambda => Util.ice ("Bad construction of E_lambda")
     };
+    remove_old_names (qctx);
+    ret
   } // end quoted_expr
 
   /** transforms syntax tree of quoted pattern to its construction
@@ -691,11 +727,11 @@ public module Macros
         | <[ pattern: _ ]> => <[ Nemerle.Compiler.Parsetree.P_underscore () ]>
 
         | <[ pattern: $(name : var) ]> =>
-          def _qctx = add_new_name (qctx, SS_string (name));
+          add_new_name (qctx, SS_string (name));
           <[ Nemerle.Compiler.Parsetree.P_variable ($(name : string)) ]>
 
         | <[ pattern: ($pat) as $name ]> => 
-          def qctx = add_new_name (qctx, name);
+          add_new_name (qctx, name);
           <[ Nemerle.Compiler.Parsetree.P_as ($(quoted_pattern (ctx, qctx, pat)), 
                                               $(quoted_sstring (name))) ]>
 
@@ -745,6 +781,10 @@ public module Macros
           }
 
         | <[ pattern: $name (.. []) ]> =>
+          match (name) {
+              | SS_string (s) => printf ("empty args %s\n", s);
+              | _ => ()
+          };
           <[ Nemerle.Compiler.Parsetree.P_cons ($(quoted_sstring (name)), 
                          Nemerle.Compiler.Parsetree.P_underscore ()) ]>
 
@@ -780,12 +820,13 @@ public module Macros
           <[ Nemerle.Compiler.Parsetree.P_literal (Nemerle.Compiler.L_null ()) ]>
 
         | <[ pattern: $name _ ]> =>
+          add_new_name (qctx, name);
           <[ Nemerle.Compiler.Parsetree.P_cons ($(quoted_sstring (name)), 
              Nemerle.Compiler.Parsetree.P_underscore ()) ]>
 
         // rest of constructs must be in not quoted form, because they define
         // internal data structures
-  | P_spliced (e) => e
+        | P_spliced (e) => e
 
         | P_spliced_special (ty, val) =>
           match (ty) {
@@ -1196,7 +1237,7 @@ public module Macros
                    Fun_parm (header.loc, SS_string ("_N_parms"), 
                              <[ type: list (Nemerle.Compiler.Parsetree.SyntaxElement) ]>,
                              FP_normal ())]);
-    def runBody = <[ match (_N_parms) { ..$macro_cases } ]>;
+    def runBody = <[ match ($("_N_parms" : var)) { ..$macro_cases } ]>;
     def runFunc = M_function (header = runHeader, 
                               name = "Run",
                               modifiers = [],
