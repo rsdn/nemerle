@@ -26,6 +26,8 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+using System.Reflection;
+
 [assembly: System.Reflection.AssemblyTitle("C# to Nemerle converter")]
 [assembly: System.Reflection.AssemblyDescription("C# to Nemerle (http://nemerle.org) converter tool")]
 [assembly: System.Reflection.AssemblyCompany("University of Wroclaw")]
@@ -33,5 +35,5 @@
 [assembly: System.Reflection.AssemblyCopyright("Copyright @ University of Wroclaw 2003-2005")]
 
 [assembly: System.Reflection.AssemblyVersion("0.2.9")]
-[assembly: System.Reflection.AssemblyKeyFile("../../misc/keys/Nemerle.Compiler.snk")]
+[assembly: AssemblyKeyFile("../../misc/keys/Nemerle.Compiler.snk")]
 
