@@ -43,7 +43,7 @@ DISTFILES = \
 	NEWS	  \
 	configure \
 
-svn2log = $(PYTHON) misc/svn2log.py changelog.xml -u misc/users
+svn2log = LC_ALL=pl_PL.utf-8 $(PYTHON) misc/svn2log.py changelog.xml -u misc/users
 nemroot = /nemerle/(trunk|(branches|tags)/[^/]+)
 
 ############################################################
