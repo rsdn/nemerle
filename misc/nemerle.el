@@ -1,6 +1,6 @@
 ;;; nemerle.el -- major mode for editing nemerle programs
 
-;; Copyright (C) 2003 The University of Wroclaw
+;; Copyright (C) 2003, 2004 The University of Wroclaw
 ;; All rights reserved.
 
 ;; Author: Jacek Sliwerski (rzyjontko) <rzyj@plusnet.pl>
@@ -62,6 +62,12 @@
 
 ;;; Change Log:
 
+;; 2004-01-21 rzyjontko <rzyj@plusnet.pl>
+;;   * improved indentation
+;;   * changed syntax table
+;;   * disabled tab-indent
+;;   * switched to new grammar
+
 ;; 2003-11-17 rzyjontko <rzyj@plusnet.pl>
 ;;   * updated copyright disclaimer
 ;;   * basic indentation engine
@@ -81,6 +87,7 @@
 
 ;; - further indentation improvements
 ;; - imenu (with ncc execution)
+;; - make _ be a special symbol (write matcher functions)
 
 
 
@@ -113,99 +120,130 @@ buffer created.  This is a good place to put your customizations.")
 (unless nemerle-font-lock-keywords
   (setq nemerle-font-lock-keywords
 	(list
-	 ;; comments
+	 ;; one-line comments
 	 '("//.*" 0 font-lock-comment-face)
+	 ;; old-style multiline comments
 	 '("(\\*+\\(\\([^\\*]\\)\\|\\(\\*[^)]\\)\\)+\\*+)" 
+	   0 font-lock-comment-face)
+	 ;; new-style multiline comments
+	 '("/\\*+\\(\\([^\\*]\\)\\|\\(\\*[^/]\\)\\)+\\*+/"
 	   0 font-lock-comment-face)
 	 
 	 ;; strings
+	 '("'[^\\']'\\|'\\\\.'" 0 font-lock-string-face)
 	 '("\"[^\"]*\"" 0 font-lock-string-face)
 
 	 ;; keywords
-	 '("\\b\\(_\\|abstract\\|and\\|as\\|base\\|class\\|const\\|def\\|else\\|enum\\|extends\\|extern\\|finally\\|fun\\|if\\|implements\\|in\\|interface\\|internal\\|let\\|letfun\\|match\\|module\\|mutable\\|namespace\\|new\\|null\\|open\\|out\\|private\\|protected\\|public\\|raise\\|ref\\|sealed\\|static\\|struct\\|then\\|this\\|try\\|tymatch\\|type\\|variant\\|void\\|volatile\\|where\\|when\\|unless\\|while\\|using\\|with\\)\\b"
+	 '("\\<\\(_\\|abstract\\|and\\|as\\|base\\|const\\|def\\|else\\|enum\\|extends\\|extern\\|finally\\|fun\\|implements\\|in\\|interface\\|internal\\|macro\\|match\\|mkarray\\|mutable\\|new\\|null\\|out\\|override\\|params\\|private\\|protected\\|public\\|raise\\|ref\\|sealed\\|static\\|struct\\|syntax\\|this\\|try\\|tymatch\\|type\\|typeof\\|virtual\\|volatile\\|when\\|where\\|with\\)\\>"
+	   0 font-lock-keyword-face)
+	 ;; these aren't really keywords but we set them so
+	 '("\\<\\(do\\|for\\|if\\|regexp\\|repeat\\|then\\|unless\\|until\\|using\\|while\\)\\>"
 	   0 font-lock-keyword-face)
 
+	 '("\\<\\(open\\|variant\\|class\\|module\\|namespace\\)\\s +\\(\\(\\w\\|\\.\\)*\\)"
+	   (1 font-lock-keyword-face) (2 font-lock-function-name-face))
+	 
 	 ;; types
-	 '("\\b\\(void\\|int\\|char\\|float\\|bool\\|string\\|option\\|array\\|list\\|object\\)\\b"
+	 '("\\<\\(void\\|int\\|char\\|float\\|bool\\|string\\|object\\)\\>"
 	   0 font-lock-type-face)
-	 '("\\btype\\s +\\(\\w+\\)" 1 font-lock-type-face)
-	 '("'\\w+" 0 font-lock-type-face)
-
+	 '("\\<list\\s *([^)]*)" 0 font-lock-type-face t)
+	 '("\\<option\\s *([^)]*)" 0 font-lock-type-face t)
+	 '("\\<array\\s *([^)]*)" 0 font-lock-type-face t)
+	 '("'\\w+" 0 font-lock-type-face t)
+	 
 	 ;; constants
-	 '("\\b\\(false\\|true\\)\\b" 0 font-lock-constant-face)
-	 '("\\[\\([^]]\\)*\\]" 0 font-lock-constant-face)
-	 '("\\(\\w::\\)+\\w" 0 font-lock-constant-face)
+         '("\\[\\]" 0 font-lock-constant-face)
+	 '("\\<\\(false\\|true\\)\\>" 0 font-lock-constant-face))))
 
-	 ;; variables
-	 '("``\\w+``" 0 font-lock-variable-name-face)
-	 '("\\b\\(\\w+\\)\\ *:" 1 font-lock-variable-name-face)
-	 '("\\bmatch\\s +\\(\\w+\\)" 1 font-lock-variable-name-face)
-	 '("\\blet\\s +\\(\\w+\\)" 1 font-lock-variable-name-face)
 
-	 ;; functions
-	 '("\\b\\(class\\|variant\\|open\\|interface\\|namespace\\|extends\\|implements\\)\\s +\\(\\w+\\)" 
-	   2 font-lock-function-name-face)
-	 '("\\b\\(\\(let\\)?fun\\|method\\)\\b\\s *\\(([^)]*)\\s *\\)?\\(\\w+\\)" 
-	   4 font-lock-function-name-face))))
 
 (unless nemerle-mode-syntax-table
   (setq nemerle-mode-syntax-table (copy-syntax-table c-mode-syntax-table))
   
-  (modify-syntax-entry ?\{ "(}"   nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\} "){"   nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\[ "(]"   nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\] ")["   nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\" ".\""  nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\, "."    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\` "."    nemerle-mode-syntax-table)
   (modify-syntax-entry ?\( "()1"  nemerle-mode-syntax-table)
   (modify-syntax-entry ?\) ")(4"  nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\* "w 23" nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\? "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\= "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\< "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\> "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\@ "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\^ "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\| "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\& "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\+ "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\- "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\/ "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\$ "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\% "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\! "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\~ "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\. "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\: "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\_ "w"    nemerle-mode-syntax-table)
-  (modify-syntax-entry ?\' "w"    nemerle-mode-syntax-table))
+  (modify-syntax-entry ?\* ". 23" nemerle-mode-syntax-table)
+  (modify-syntax-entry ?\/ ". 14" nemerle-mode-syntax-table)
+  (modify-syntax-entry ?_  "w"    nemerle-mode-syntax-table)
+  (modify-syntax-entry ?\' "_"    nemerle-mode-syntax-table))
 
+
+
+(defun nemerle-syntax ()
+  "Returns syntactic information."
+  (save-excursion
+    (beginning-of-line)
+    (cond ((looking-at "[^\n]*}")
+	   'block-end)
+	  ((looking-at "[^\n]*{")
+	   'block-beg)
+	  ((looking-at "[ \t]*\\<try\\>")
+	   'try)
+	  ((looking-at "[ \t]*\\<with\\>")
+	   'with)
+	  ((looking-at "[ \t]*|")
+	   'match-case)
+	  ((looking-at "[ \t]*$")
+	   'empty)
+	  ((looking-at "[ \t]*\\<if\\>")
+	   'if)
+	  ((looking-at "[ \t]*\\<else\\>")
+	   'else)
+	  (t 
+	   'other))))
+
+
+(defun nemerle-prev-line ()
+  "Calculates indentation level for the previous line, and checks
+its syntatctic information."
+  (save-excursion
+    (beginning-of-line)
+    (if (bobp)
+	0
+      (skip-chars-backward " \t\n")
+      (beginning-of-line)
+      (let ((syntax (nemerle-syntax))
+	    (indent (current-indentation)))
+	(cons indent syntax)))))
 
 
 (defun nemerle-calculate-indentation ()
   "Calculates indentation level for the current line."
-  (save-excursion
-    (beginning-of-line)
-    (let ((modifier 0)
-	  (cur-indent (current-indentation))
-	  (prev-indent 0))
-      (if (bobp)
-	  0
-	(save-excursion
-	  (skip-chars-backward " \t\n")
-	  (beginning-of-line)
-	  (setq prev-indent (current-indentation))
-	  (cond ((looking-at "[^\n}]*{[^}]*$")
-		 (setq modifier nemerle-basic-offset))
-		(t 0))))
-      (cond ((looking-at "[ \t]*{")
-	     (+ nemerle-basic-offset modifier prev-indent))
-	    ((looking-at "[ \t]*}")
-	     (- (+ prev-indent modifier) nemerle-basic-offset))
-	    (t (+ modifier prev-indent))))))
-
-
+  (let* ((prev-info (nemerle-prev-line))
+	 (prev-indent (car prev-info))
+	 (prev-syntax (cdr prev-info))
+	 (cur-syntax (nemerle-syntax)))
+    (cond ((eq prev-syntax 'match-case)	; match-case
+	   (cond ((eq cur-syntax 'match-case)
+		  prev-indent)
+		 ((eq cur-syntax 'block-end)
+		  (- prev-indent nemerle-basic-offset))
+		 (t
+		  (+ prev-indent 2))))
+	  ((eq prev-syntax 'try)	; try
+	   (cond ((eq cur-syntax 'block-beg)
+		  prev-indent)
+		 ((eq cur-syntax 'with)
+		  prev-indent)
+		 (t (+ prev-indent nemerle-basic-offset))))
+	  ((eq prev-syntax 'block-beg)	; beginning of block
+	   (+ prev-indent nemerle-basic-offset))
+	  ((eq prev-syntax 'block-end) 	; end of block
+	   (cond ((eq cur-syntax 'block-end)
+		  (- prev-indent nemerle-basic-offset))
+		 (t
+		  prev-indent)))
+	  ((eq prev-syntax 'if)		; if
+	   (+ prev-indent nemerle-basic-offset))
+	  ((eq prev-syntax 'else)	; else
+	   (+ prev-indent nemerle-basic-offset))
+	  (t
+	    (cond ((eq cur-syntax 'block-end)
+		   (- prev-indent nemerle-basic-offset))
+		  ((eq cur-syntax 'else)
+		   (- prev-indent nemerle-basic-offset))
+		  (t
+		   prev-indent))))))
 
 
 (defun nemerle-indent-line ()
@@ -246,7 +284,7 @@ Mode map
   (set-syntax-table nemerle-mode-syntax-table)
 
   (make-local-variable 'font-lock-defaults)
-  (setq font-lock-defaults (list 'nemerle-font-lock-keywords nil t))
+  (setq font-lock-defaults '(nemerle-font-lock-keywords nil t))
   
   (make-local-variable 'indent-line-function)
   (setq indent-line-function 'nemerle-indent-line)
@@ -255,15 +293,16 @@ Mode map
   (setq comment-indent-function 'nemerle-comment-indent)
 
   (make-local-variable 'comment-start)
-  (setq comment-start "(* ")
+  (setq comment-start "/* ")
 
   (make-local-variable 'comment-end)
-  (setq comment-end " *)")
+  (setq comment-end " */")
 
   (make-local-variable 'comment-start-skip)
-  (setq comment-start-skip "(\\*+[ \t]*\\|//+ *")
+  (setq comment-start-skip "/\\*+[ \t]*\\|//+ *")
 
   (setq buffer-file-coding-system 'utf-8)
+  (setq indent-tabs-mode nil)
   
   (run-hooks 'nemerle-mode-hook))
 
