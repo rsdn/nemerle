@@ -62,6 +62,9 @@
 
 ;;; Change Log:
 
+;; 2004-01-24
+;;   * fixed coloring
+
 ;; 2004-01-23
 ;;   * indent to open parenthesis
 
@@ -126,6 +129,10 @@ buffer created.  This is a good place to put your customizations.")
 (unless nemerle-font-lock-keywords
   (setq nemerle-font-lock-keywords
 	(list
+	 ;; strings
+	 '("[^']\\(\"[^\"]*\"\\)" 1 font-lock-string-face)
+	 '("'[^\\']'\\|'\\\\.'" 0 font-lock-string-face)
+
 	 ;; one-line comments
 	 '("//.*" 0 font-lock-comment-face)
 	 ;; old-style multiline comments
@@ -135,10 +142,6 @@ buffer created.  This is a good place to put your customizations.")
 	 '("/\\*+\\(\\([^\\*]\\)\\|\\(\\*[^/]\\)\\)+\\*+/"
 	   0 font-lock-comment-face)
 	 
-	 ;; strings
-	 '("'[^\\']'\\|'\\\\.'" 0 font-lock-string-face)
-	 '("\"[^\"]*\"" 0 font-lock-string-face)
-
 	 ;; keywords
 	 '("\\<\\(_\\|abstract\\|and\\|as\\|base\\|const\\|def\\|else\\|enum\\|extends\\|extern\\|finally\\|fun\\|implements\\|in\\|interface\\|internal\\|macro\\|match\\|mkarray\\|mutable\\|new\\|null\\|out\\|override\\|params\\|private\\|protected\\|public\\|raise\\|ref\\|sealed\\|static\\|struct\\|syntax\\|this\\|try\\|tymatch\\|type\\|typeof\\|virtual\\|volatile\\|when\\|where\\|with\\)\\>"
 	   0 font-lock-keyword-face)
@@ -150,12 +153,13 @@ buffer created.  This is a good place to put your customizations.")
 	   (1 font-lock-keyword-face) (2 font-lock-function-name-face))
 	 
 	 ;; types
+	 '("\\<list\\s *([^)]*)" 0 font-lock-type-face)
+	 '("\\<option\\s *([^)]*)" 0 font-lock-type-face)
+	 '("\\<array\\s *([^)]*)" 0 font-lock-type-face)
+	 '("->" 0 font-lock-type-face)
+	 '("\\('\\w+\\)[^']" 0 font-lock-type-face)
 	 '("\\<\\(void\\|int\\|char\\|float\\|bool\\|string\\|object\\)\\>"
 	   0 font-lock-type-face)
-	 '("\\<list\\s *([^)]*)" 0 font-lock-type-face t)
-	 '("\\<option\\s *([^)]*)" 0 font-lock-type-face t)
-	 '("\\<array\\s *([^)]*)" 0 font-lock-type-face t)
-	 '("'\\w+" 0 font-lock-type-face t)
 	 
 	 ;; constants
          '("\\[\\]" 0 font-lock-constant-face)
@@ -168,6 +172,10 @@ buffer created.  This is a good place to put your customizations.")
   
   (modify-syntax-entry ?\( "()1"  nemerle-mode-syntax-table)
   (modify-syntax-entry ?\) ")(4"  nemerle-mode-syntax-table)
+  (modify-syntax-entry ?\/ ". 14" nemerle-mode-syntax-table)
+  (modify-syntax-entry ?\* ". 23" nemerle-mode-syntax-table)
+  (modify-syntax-entry ?\' "."    nemerle-mode-syntax-table)
+  (modify-syntax-entry ?\" ".\""  nemerle-mode-syntax-table)
   (modify-syntax-entry ?_  "w"    nemerle-mode-syntax-table))
 
 
