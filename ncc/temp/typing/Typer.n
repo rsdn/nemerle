@@ -315,6 +315,14 @@ namespace Nemerle.Compiler
         ReportError (messenger, $ "needed an l-value for $desc, "
                                   "got $(DescribeExpression (e))");
     }
+
+    IsIndexerProperty (prop : IProperty) : bool
+    {
+      def getter = prop.GetGetter ();
+      def setter = prop.GetSetter ();
+      (getter != null && (getter.GetHeader ().parms matches _ :: _)) ||
+      (setter != null && !(setter.GetHeader ().parms matches [_]))
+    }
     #endregion
 
 
@@ -769,193 +777,6 @@ namespace Nemerle.Compiler
     #endregion
 
 
-#region Old call typing
-
-  // check if FN can be called with PARMS
-  check_call_to (ctx : CTX, parms : list [Parm], fn : TExpr,
-                 do_throw : bool, is_var_args : bool) : CallResult
-  {
-    def check_arg (parm : Parm, ty : TType, arg_no, sub) : int * Subst {
-      if (arg_no < 0) (arg_no, sub)
-      else {
-        def expr_ty = type_of (parm.expr);
-        def parm_ty =
-          match (ty) {
-            | TType.ByRef (t) when parm.kind == ParmKind.Ref => t
-            | TType.Out (t) when parm.kind == ParmKind.Out => t
-            | TType.Out =>
-              if (do_throw)
-                throw Typing_error ($ "needed `out' in argument #$arg_no")
-              else null
-            | TType.ByRef =>
-              if (do_throw)
-                throw Typing_error ($ "needed `ref' in argument #$arg_no")
-              else null
-            | _ when parm.kind != ParmKind.Normal =>
-              if (do_throw)
-                throw Typing_error ($ "argument #$arg_no was passed as ref/out")
-              else null
-            | _ => ty
-          };
-        if (parm_ty == null)
-          (-1, sub)
-        else
-          match (Tyutil.unify (sub, expr_ty, parm_ty, true)) {
-            | Some (u) =>
-              (arg_no + 1, u)
-            | None when do_throw =>
-              throw Typing_error ($ "in arg #$arg_no needed $(ty /- sub) "
-                                    "got $(expr_ty /- sub)")
-            | None => (-1, sub)
-          }
-      }
-    };
-
-    def formal_names = {
-      def from_header (h : Fun_header) : list [string] {
-        List.Map (h.parms, fun (p : Fun_parm) : string { p.name })
-      };
-      match (fn) {
-        | TExpr.LocalRef ({kind = LocalValueKind.Function (h, _)}) =>
-          from_header (h)
-        | TExpr.MethodRef (_, meth, _)
-        | TExpr.StaticRef (meth : IMethod) =>
-          from_header (meth.GetHeader ())
-        | _ => []
-      }
-    };
-
-    match (Tyutil.top_expand (type_of (fn))) {
-      | TType.Function (from, ret) =>
-        // check if we are dealing with a delegate constructor
-        def delegate_tycon =
-          match (fn) {
-            | TExpr.StaticRef (meth : IMethod) when (meth.DeclaringType.IsDelegate &&
-                                                 (meth.GetFunKind () matches FunKind.Constructor)) =>
-              Some (meth.DeclaringType)
-            | _ =>
-              None ()
-          }
-
-        // get the arguments for delegate constructor from the Invoke method
-        def args =
-          match (delegate_tycon) {
-            | Some (delegate_tycon) =>
-              match (delegate_tycon.LookupMember ("Invoke")) {
-                | [invoke] =>
-                  def invoke_ty = (invoke :> IMethod).GetMemType ();
-                  [invoke_ty]
-                | _ =>
-                  Message.fatal_error ("cannot decide upon delegate ctor parameters")
-              }
-            | _ =>
-              Tyutil.fun_args (from)
-          }
-
-        def wrong_args_cnt (extra_message) {
-          if (do_throw)
-            throw Typing_error ("needed " + (List.Length (args)).ToString () +
-                                " parameters, got " + (List.Length (parms)).ToString () +
-                                extra_message)
-          else
-            null
-        };
-
-        try {
-          def args =
-            match ((parms, args)) {
-              | ([parm], _ :: _ :: _) when ! is_var_args =>
-                // FIXME: it doesn't work when parm : 'a, where 'a is unconstrained
-                match (Tyutil.top_expand (type_of (parm.expr))) {
-                  | TType.Product (types) when List.Length (types) == List.Length (args) =>
-                    [TType.Product (args)]
-                  | _ => wrong_args_cnt ("")
-                }
-              | _ =>
-                if (List.Length (args) == List.Length (parms) ||
-                    (is_var_args && List.Length (args) <= List.Length (parms) + 1))
-                  args
-                else if (List.Length (args) > List.Length (parms) && !is_var_args)
-                {
-                  def named_parms_message =
-                    try {
-                      ignore (reorder_named_parms (formal_names, parms, false));
-                      ""
-                    }
-                    catch { e : Typing_error => " (" + e.msg + ")" }
-
-                  wrong_args_cnt (named_parms_message)
-                }
-                else
-                  wrong_args_cnt ("")
-            };
-          def parms =
-            if (args == null) null
-            else reorder_named_parms (formal_names, parms, do_throw);
-          def (argno, sub) =
-            if (parms == null || args == null) (-1, null)
-            else {
-              def loop (arg_no, map, parms, args) {
-                match ((parms, args)) {
-                  | (parm :: parms, [TType.Array (t, 1)]) when is_var_args =>
-                    def (arg_no, map) = check_arg (parm, t, arg_no, map);
-                    loop (arg_no, map, parms, args) // args doesn't change
-                  | ([], [_]) when is_var_args => (arg_no, map)
-                  | (parm :: parms, arg :: args) =>
-                    def (arg_no, map) = check_arg (parm, arg, arg_no, map);
-                    loop (arg_no, map, parms, args)
-                  | ([], []) => (arg_no, map)
-                  | _ => assert (false)
-                }
-              }
-              loop (1, SystemMap (), parms, args)
-            }
-          if (argno < 0)
-            CallResult.Unspecified_error ()
-          else {
-            def parms =
-              if (is_var_args) {
-                def split (_, _, _) {
-                  | (acc, [_], lst) =>
-                    def get_expr (parm : Parm) {
-                      when (parm.kind != ParmKind.Normal)
-                        Message.error ("ref/out parameters are not allowed with `parms'");
-                      when (parm.name != "")
-                        Message.error ("named parameters are not allowed with `parms'");
-                      parm.expr
-                    }
-                    (acc, List.Map (lst, get_expr))
-                  | (acc, _ :: args, x :: xs) =>
-                    split (x :: acc, args, xs)
-                  | _ => assert (false)
-                }
-                def (regular_parms, for_array) = split ([], args, parms);
-                def mkarray = TExpr.Array (fn.loc, List.Last (args),
-                                         for_array, [TExpr.Literal (Literal.Int (List.Length (for_array)))]);
-                List.Rev (Parm (mkarray) :: regular_parms)
-              } else parms;
-            def res_expr =
-              match (fn) {
-                | TExpr.ConstantObjectRef (mem) =>
-                  assert (parms.IsEmpty ());
-                  TExpr.StaticRef (fn.loc, ret /- sub, mem)
-                | TExpr.ImplicitValueTypeCtor =>
-                  assert (parms.IsEmpty ());
-                  fn.ty = ret /- sub;
-                  fn
-                | _ =>
-                  TExpr.Call (fn.loc, ret /- sub, fn, parms)
-              };
-            CallResult.Ok (res_expr, sub)
-          }
-        }
-        catch { x : Typing_error => CallResult.Error (x.msg) }
-
-        CallResult.Unspecified_error ()
-    }
-  }
-#endregion
-
     #region Function call typing
     TryTypeCall (fnc : TExpr, parms : list [Parm], expected : TyVar,
                  var_args : bool) : TExpr
@@ -1069,7 +890,7 @@ namespace Nemerle.Compiler
       
       // XXX what's that?
       match (res) {
-        | TExpr.Call (TExpr.PropertyMember (_, prop), _) when is_indexer_property (prop) =>
+        | TExpr.Call (TExpr.PropertyMember (_, prop), _) when IsIndexerProperty (prop) =>
           ReportError (messenger, "attempt to call an indexer property `$(prop.Name)'");
         | _ => ()
       };
@@ -1932,14 +1753,6 @@ namespace Nemerle.Compiler
     }
   }
 
-  is_indexer_property (prop : IProperty) : bool
-  {
-    def getter = prop.GetGetter ();
-    def setter = prop.GetSetter ();
-    (getter != null && (getter.GetHeader ().parms matches _ :: _)) ||
-    (setter != null && !(setter.GetHeader ().parms matches [_]))
-  }
-
   make_first_class (ctx : CTX, expr : TExpr) : TExpr
   {
     match (expr) {
@@ -1980,68 +1793,6 @@ namespace Nemerle.Compiler
                              "' used as first class value")
       | _ => expr
     }
-  }
-
-  public ty_expr (ctx : CTX, expr : PT.PExpr) : TExpr
-  {
-    def expr = ty_expr_with_no_properties_conversion (ctx, expr);
-    def make_getter (obj, prop : IProperty, args) {
-      def meth = prop.GetGetter ();
-      TExpr.Call (expr.loc, expr.ty,
-              TExpr.MethodRef (expr.loc, meth.GetMemType (), obj, meth, false),
-              args)
-    };
-    def make_static_getter (prop : IProperty, args) {
-      def meth = prop.GetGetter ();
-      TExpr.Call (expr.loc, expr.ty,
-              TExpr.StaticRef (expr.loc, meth.GetMemType (), meth),
-              args)
-    };
-    match (expr) {
-      | TExpr.PropertyMember (obj, prop) => make_getter (obj, prop, [])
-      | TExpr.Call (TExpr.PropertyMember (obj, prop), args) => make_getter (obj, prop, args)
-      | TExpr.StaticPropertyRef (prop) => make_static_getter (prop, [])
-      | TExpr.Call (TExpr.StaticPropertyRef (prop), args) => make_static_getter (prop, args)
-      | expr => expr
-    }
-  }
-
-
-  convert_setter_property (_ctx : CTX, expr : TExpr, val : TExpr) : TExpr * TType
-  {
-    def make_setter (obj, prop : IProperty, args)
-    {
-      def meth = prop.GetSetter ();
-      TExpr.Call (expr.loc, TType.Void (),
-              TExpr.MethodRef (expr.loc, meth.GetMemType (), obj, meth, false),
-              List.Append (args, [Parm (val)]))
-    }
-
-    def make_static_setter (prop : IProperty, args)
-    {
-      def meth = prop.GetSetter ();
-      TExpr.Call (expr.loc, TType.Void (),
-              TExpr.StaticRef (expr.loc, meth.GetMemType (), meth),
-              List.Append (args, [Parm (val)]))
-    }
-
-    expect_type ("assigned value", val, type_of (expr));
-
-    def res =
-      match (expr) {
-        | TExpr.PropertyMember (obj, prop) =>
-          make_setter (obj, prop, [])
-        | TExpr.Call (TExpr.PropertyMember (obj, prop), args) =>
-          make_setter (obj, prop, args)
-        | TExpr.StaticPropertyRef (prop) =>
-          make_static_setter (prop, [])
-        | TExpr.Call (TExpr.StaticPropertyRef (prop), args) =>
-          make_static_setter (prop, args)
-        | expr =>
-          TExpr.Assign (expr.loc, TType.Void (), expr, val)
-      };
-
-    (res, TType.Void ())
   }
 
 
