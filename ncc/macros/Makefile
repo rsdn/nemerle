@@ -26,83 +26,46 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-include ../config.mak
+include ../../config.mak
 
-lib_src = lib/core.n option.n list.n tree.n
+lib_src = ../lib/core.n ../option.n ../list.n ../tree.n
 
 n_src = \
 	$(lib_src) \
-	ast.n \
-	parsetree.n \
-	typedtree.n \
-	util.n \
-	csglue.n \
-	env.n \
-	passes.n \
-	scan_globals.n \
-	tyvars.n \
-	tyinfo.n \
-	tyutil.n \
-	extensions.n \
-	tyexpr.n \
-	macros.n \
-	cgtree.n \
-	cgexpr.n \
-	cgflat.n 
-#	t/todo/ok-macro.n
+	../ast.n \
+	../parsetree.n \
+	../typedtree.n \
+	../util.n \
+	../csglue.n \
+	../env.n \
+	../passes.n \
+	../scan_globals.n \
+	../tyvars.n \
+	../tyinfo.n \
+	../tyutil.n \
+	../extensions.n \
+	../tyexpr.n \
+	../macros.n \
+	../cgtree.n \
+	../cgexpr.n \
+	../cgflat.n 
 
-cs_src  = lexer.cs main.cs parser.cs
-all_src = $(n_src) $(cs_src)
-all_cs  = out.cs $(cs_src)
+m_src = \
+	ok-macro.n
+
+all_src = $(n_src) $(m_src)
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 COMPILE = $(CSC) $(CSCFLAGS)
 
 
-all: ncc.exe
+all: test
 
-# Do compiler bootstrap, compare results from stage2 and stage3,
-# generate ncc3.exe binary to be put in release for bootstrap.
-# Finally run testsuite.
-boot: ncc.exe
-	rm -f out.cs
-	$(EXECUTE) ./ncc.exe $(n_src)
-	$(COMPILE) $(OUTFLAG)ncc2.exe $(all_cs)
-	mv out.cs out2.cs
-	$(EXECUTE) ./ncc2.exe $(n_src)
-	cmp -s out2.cs out.cs
-	$(COMPILE) $(OUTFLAG)ncc3.exe $(all_cs)
-	mv out.cs out3.cs
-	$(MAKE) testsuite
-
-sync:
-	mv ../boot/ncc.exe ../boot/ncc-old.exe
-	cp ncc3.exe ../boot/ncc.exe
-
-ncc.exe: $(all_src)
-	$(EXECUTE) ../boot/ncc.exe $(n_src)
-	$(COMPILE) $(OUTFLAG)$@ $(all_cs)
-	mv -f out.cs out1.cs
+test: $(all_src)
+	$(EXECUTE) ../ncc.exe $(all_src)
 
 ../config.mak:
 	$(MAKE) -C .. config.mak
 
-.PHONY: t
-
-t: testsuite
-
-testsuite:
-	$(MAKE) -C t
-
-parser.cs: parser.jay
-	jay -v -t -c parser.jay < `jay -p`/skeleton.cs > parser.cs
-	perl -p -i -e 's/(public void yyerror )/virtual $$1/' parser.cs
-
-
-install: ncc.exe
-	if test ! -d $(BINDIR) ; then mkdir -p $(BINDIR) ; fi
-	$(INSTALL) -m 755 ncc.exe $(BINDIR)/ncc
-
-
 clean:
-	rm -f out.cs out[0-9].cs parser.cs *.exe y.output
+	rm -f out.cs
