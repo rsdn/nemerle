@@ -108,6 +108,7 @@ verify-docb:
 
 clean:
 	rm -f *.xsl *.html *.ps *.pdf *.aux *.log *.xml *.tex *.docb
+	rm -f course/*.html
 	$(MAKE) -C tex clean
 
 .PHONY: www publish
