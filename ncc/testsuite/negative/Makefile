@@ -35,7 +35,7 @@ include $(TOP)/config.mak
 ############################################################
 
 STAGE3=$(TOP)/ncc/out.stage3
-TESTN=$(TOP)/ncc/testsuite/positive/test.n
+TESTN=$(TOP)/ncc/testsuite/test.n
 
 DISTFILES = \
 	Makefile \
