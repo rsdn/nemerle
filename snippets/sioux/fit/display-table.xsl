@@ -35,6 +35,7 @@
         <xsl:if test="normalize-space(vega)">wegetarianiec, </xsl:if>
         <xsl:if test="normalize-space(single_room)">1-osobowiec, </xsl:if>
         <xsl:if test="normalize-space(treking)">czwartkowiec, </xsl:if>
+        <xsl:if test="normalize-space(ref_title)">referat, </xsl:if>
       </td>
       <td>
         <xsl:value-of select="remarks" />
