@@ -157,34 +157,41 @@ class Lexer : yyParser.yyInput
 		
 		val = (object)s;
 
-		switch (s) {
-		case "*":
-		case "=":
-		case "?":
-		case "|":
-		case "$":
-		case "]":
-			return s[0];
+    switch (s) 
+    {
+      case "*":
+      case "=":
+      case "?":
+      case "|":
+      case "$":
+      case "]":
+        return s[0];
 
-		case "<-":
-			return Token.LESS_MINUS;
+      case "<-":
+        return Token.LESS_MINUS;
 
-		case "->":
-			return Token.MINUS_MORE;
+      case "->":
+        return Token.MINUS_MORE;
 
-		case "=>":
-                        return Token.EQ_MORE;
+      case "=>":
+        return Token.EQ_MORE;
 			
-		case "<[":
-			return Token.LESS_SQBRAC;
+      case "<[":
+        return Token.LESS_SQBRAC;
 			
-		case "]>":
-			return Token.SQBRAC_MORE;
+      case "]>":
+        return Token.SQBRAC_MORE;
 
-		default:
-			return tok;
-		}
-	}
+      case "&&":
+        return Token.LAZY_AND;
+
+      case "||":
+        return Token.LAZY_OR;
+
+      default:
+        return tok;
+    }
+  }
 
 	int get_number(int first_ch)
 	{
