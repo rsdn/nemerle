@@ -13,7 +13,7 @@
 #    3. The name of the University may not be used to endorse or promote
 #       products derived from this software without specific prior
 #       written permission.
-# 
+#
 # THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
 # IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
 # OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
@@ -41,6 +41,7 @@ export PATH = $(shell echo $$PATH):$(shell pwd)/$(STAGE3)/
 export MONO_PATH = $(shell echo $$MONO_PATH):$(shell pwd)/$(STAGE3)
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
+VERIFY = $(shell cygpath -m $(PEVERIFY))
 
 TEST_FILES = positive/*.n negative/*.n
 
@@ -58,6 +59,7 @@ all:
 	cp $(STAGE3)/Nemerle.dll .
 	cp $(STAGE3)/Nemerle.Compiler.dll .
 	$(EXECUTE) $(STAGE3)/ncc.exe -out test.exe $(TESTN)
+#	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" -n "$(STAGE3)/ncc.exe" -p "$(NEM_FLAGS)" -verify "$(VERIFY)" $(TEST_FILES)
 	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" -n "$(STAGE3)/ncc.exe" -p "$(NEM_FLAGS)" $(TEST_FILES)
 	rm -f out.dll out.exe out.netmodule ext_test.out Nemerle.dll Nemerle.Compiler.dll test.exe
 
