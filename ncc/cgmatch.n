@@ -143,6 +143,25 @@ namespace Nemerle.Compiler
     }
 
 
+    /**
+     * Comparison function that can be used by the List.Sort function
+     */
+    public static Compare (l : MatchPattern, r : MatchPattern) : int
+    {
+      def get_literal (pattern : MatchPattern) : int {        
+        match (pattern.GetPattern ()) {
+          | P_literal (L_int (literal)) => literal
+          | P_literal (L_char (literal)) => (literal :> int)
+          | P_as (P_literal (L_int (literal)), _) => literal
+          | P_as (P_literal (L_char (literal)), _) => (literal :> int)
+          | _ => Util.ice ("invalid pattern type")
+        }
+      };
+      
+      get_literal (r) - get_literal (l)
+    }
+
+
     public MakeMatchExpr (compare_to : CG_expr, continuation : CG_expr) : CG_expr
     {
       match (pattern) {
@@ -606,7 +625,7 @@ namespace Nemerle.Compiler
       this.matched_expr <- match_descriptor.GetMatchedExpr ();
       this.continuation <- continuation;
       
-      binary_search_expr <- make_binary_search (patterns)
+      binary_search_expr <- make_binary_search_top_level (patterns)
     }
 
 
@@ -650,6 +669,28 @@ namespace Nemerle.Compiler
     }
 
 
+    private split_patterns_by_sign (patterns : list (MatchPattern)) 
+      : list (MatchPattern) * list (MatchPattern)
+    {
+      def split (patterns : list (MatchPattern), acc_neg : list (MatchPattern),
+                 acc_pos : list (MatchPattern)) : list (MatchPattern) * list (MatchPattern)
+      {
+        match (patterns) {
+          | [] => (List.Rev (acc_neg), List.Rev (acc_pos))
+          | pattern :: rest =>
+            match (pattern.GetPattern ()) {
+              | P_literal (L_int (k)) =>
+                if (k < 0) split (rest, pattern :: acc_neg, acc_pos)
+                else split (rest, acc_neg, pattern :: acc_pos)
+              | _ => Util.ice ("split_patterns_by_sign: expected P_literal L_int patterns only")
+            };
+        }            
+      };
+      
+      split (patterns, [], [])
+    }
+
+
     private get_effect (pattern : MatchPattern) : CG_expr
     {
       match_descriptor.GetEffect (pattern.GetEffectIndex ())
@@ -666,6 +707,30 @@ namespace Nemerle.Compiler
       }
     }
 
+
+    private make_switched_block (patterns : list (MatchPattern)) : CG_expr 
+    {
+      def get_literal (pattern : MatchPattern) : int {        
+        match (pattern.GetPattern ()) {
+          | P_literal (L_int (literal)) => literal
+          | P_literal (L_char (literal)) => (literal :> int)
+          | P_as (P_literal (L_int (literal)), _) => literal
+          | P_as (P_literal (L_char (literal)), _) => (literal :> int)
+          | _ => Util.ice ("invalid pattern type")
+        }
+      };
+
+      def walk_patterns (patterns : list (MatchPattern)) : list (int * CG_expr) {
+        match (patterns) {
+          | pattern :: rest =>
+            (get_literal (pattern), pattern.MakeGuardExpr (continuation)) :: walk_patterns (rest)
+          | [] => []
+        }            
+      };
+
+      CE_switch (matched_expr, continuation, walk_patterns (patterns))
+    }
+
     
     private make_binary_search (patterns : list (MatchPattern)) : CG_expr
     {
@@ -676,16 +741,51 @@ namespace Nemerle.Compiler
           l.MakeMatchExpr (matched_expr, make_last_match (r))
                                    
         | patterns =>
-          def (l, m, r) = split_patterns (patterns);
+          def literal_span = 
+            MatchPattern.Compare (List.Head (patterns), List.Last (patterns));
 
-          // Message.debug ("make_binary_search: " + (List.Length (patterns)).ToString ());
-          // DumpMatchPatterns (l);
-          // DumpMatchPatterns ([m]);
-          // DumpMatchPatterns (r);
+          if (literal_span > 24) {
+            def (l, m, r) = split_patterns (patterns);
 
-          CE_if (match_descriptor.GetResultType (), m.MakeLessThanCondition (matched_expr),
-                 make_binary_search (l), make_binary_search (m :: r))
+            CE_if (match_descriptor.GetResultType (), m.MakeLessThanCondition (matched_expr),
+                   make_binary_search (l), make_binary_search (m :: r))
+          }
+          else
+            make_switched_block (patterns)
       }          
+    }
+
+
+    /**
+     * Handle the special case when some of the patterns have negative
+     * literals and some positive -- it could disrupt the CE_switch emitter
+     */
+    private make_binary_search_top_level (patterns : list (MatchPattern)) : CG_expr
+    {      
+      def can_be_negative =
+        match (List.Head (patterns).GetPattern ()) {
+          | P_literal (L_int) => true
+          | _ => false
+        };
+
+      if (can_be_negative) {        
+        def (negative, positive) = split_patterns_by_sign (patterns);
+
+        if (List.Length (negative) == 0) 
+          make_binary_search (positive)
+        else if (List.Length (positive) == 0) 
+          make_binary_search (negative)
+        else {
+          def less_than_zero_expr = 
+            CE_call (typeof (System.Boolean), CE_opcode ("<"),
+                    [matched_expr, CE_literal (L_int (0))]);
+
+          CE_if (match_descriptor.GetResultType (), less_than_zero_expr,
+                 make_binary_search (negative), make_binary_search (positive))
+        }
+      }
+      else
+        make_binary_search (patterns)
     }
 
 
@@ -726,21 +826,7 @@ namespace Nemerle.Compiler
           | _ => Util.ice ("invalid pattern type")
         }
       };
-      
-      def compare_literal_patterns (l : MatchPattern, r : MatchPattern) : int {
-        def get_literal (pattern : MatchPattern) : int {        
-          match (pattern.GetPattern ()) {
-            | P_literal (L_int (literal)) => literal
-            | P_literal (L_char (literal)) => (literal :> int)
-            | P_as (P_literal (L_int (literal)), _) => literal
-            | P_as (P_literal (L_char (literal)), _) => (literal :> int)
-            | _ => Util.ice ("invalid pattern type")
-          }
-        };
-        
-        get_literal (r) - get_literal (l)
-      };
-      
+            
       def match_failure_expr = {
         def tc = GlobalEnv.LookupInternalType ("Nemerle.Core.MatchFailureException");
         def match_failure = get_default_ctor (context, tc);
@@ -763,28 +849,6 @@ namespace Nemerle.Compiler
             make_continuation (Some (continuation), rest)
         }
       };
-            
-      def make_switched_block (patterns : list (MatchPattern), continuation : option (CG_expr)) : CG_expr {
-        def get_literal (pattern : MatchPattern) : int {        
-          match (pattern.GetPattern ()) {
-            | P_literal (L_int (literal)) => literal
-            | P_literal (L_char (literal)) => (literal :> int)
-            | P_as (P_literal (L_int (literal)), _) => literal
-            | P_as (P_literal (L_char (literal)), _) => (literal :> int)
-            | _ => Util.ice ("invalid pattern type")
-          }
-        };
-
-        def walk_patterns (patterns : list (MatchPattern)) : list (int * CG_expr) {
-          match (patterns) {
-            | pattern :: rest =>
-              (get_literal (pattern), pattern.MakeGuardExpr (continuation)) :: walk_patterns (rest)
-            | [] => []
-          }            
-        };
-
-        CE_switch (matched_expr, continuation, walk_patterns (patterns))
-      };
       
       def process_block (block : MatchBlock, continuation : option (CG_expr)) : CG_expr {
         def (literal_patterns, non_literal_patterns) = 
@@ -796,21 +860,12 @@ namespace Nemerle.Compiler
           | [] => Option.UnSome (continuation)
           | _ =>
             def sorted_literal_patterns = 
-              List.Sort (compare_literal_patterns, literal_patterns);
+              List.Sort (MatchPattern.Compare, literal_patterns);
   
-            def literal_span = 
-              compare_literal_patterns (List.Head (sorted_literal_patterns),
-                                        List.Last (sorted_literal_patterns));
+            def binary_search = 
+              MatchBinarySearch (match_descriptor, sorted_literal_patterns, continuation);
 
-            if (List.Length (sorted_literal_patterns) < 3 || literal_span > 16) {            
-              def binary_search = 
-                MatchBinarySearch (match_descriptor, sorted_literal_patterns, continuation);
-
-              binary_search.GetBinarySearchExpr ()
-            }
-            else {
-              make_switched_block (sorted_literal_patterns, continuation)            
-            }
+            binary_search.GetBinarySearchExpr ()
         }
       };
     
