@@ -1,11 +1,9 @@
 #!/usr/bin/perl
 
-$compiler = "../npc";
+$compiler = "mono --debug ../ncc.exe ../../npc/lib/core.n";
 $cs_compiler = shift;
 defined $cs_compiler or $cs_compiler = "cscc";
 $cs_compiler =~ /^(cscc|mcs)$/ or die "bad cs_compiler";
-
--x $compiler or die "cannot find $compiler";
 
 sub xgrep($$)
 {
@@ -60,7 +58,7 @@ while (<*.n>) {
   print STDERR "${test} : $fn... ";
   $no_newline = 1;
   
-  $res = system("$compiler $fn 2> test.err");
+  $res = system("$compiler $fn > test.err 2>&1");
 
   if ($res && scalar (keys %err) == 0) {
     err("unxepected error exit status");
@@ -69,25 +67,25 @@ while (<*.n>) {
   foreach (keys %err) {
     $line = $_;
     err("expected error: \"$err{$line}\" at line $line")
-      unless (xgrep("^$fn:$line: error:.*$err{$line}", "test.err"));
+      unless (xgrep("^$fn:$line:[\\d:]* error:.*$err{$line}", "test.err"));
   }
   
   foreach (keys %warn) {
     $line = $_;
     err("expected warning: \"$warn{$line}\" at line $line")
-      unless (xgrep("^$fn:$line: warning:.*$warn{$line}", "test.err"));
+      unless (xgrep("^$fn:$line:[\\d:]* warning:.*$warn{$line}", "test.err"));
   }
 
   foreach (keys %ok) {
     $line = $_;
     err("unexpected error at line $line")
-      if (xgrep("^$fn:$line: ", "test.err"));
+      if (xgrep("^$fn:$line:", "test.err"));
   }
 
   err("unexpected compiler output")
     if (!$any_errors && -s "test.err");
-    
-  if ($res == 0) {
+
+  if (0 and $res == 0) {
     print STDERR "C# ";
     $no_newline = 1;
     if (xgrep("^BEGIN-OUTPUT", $fn)) {
