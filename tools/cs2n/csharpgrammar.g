@@ -1312,7 +1312,7 @@ returns [StatementTree t]
     LinkedList a = new LinkedList ();
 }
     :   r:RETURN               {a.Add (new StatementTree(r));}
-        (exp = expression)?    {a.Add (new StatementTree(exp));}
+        (exp = expression      {a.Add (new StatementTree(exp));})?    
         s:SEMI                 {a.Add (new StatementTree(s));}
         { t = new StatementTree("RETURN",a); }
     ;
@@ -1714,13 +1714,17 @@ field_declaration
 }
     :   { Emit.BeginBuffer ();}
         (attributes)?   (ret = field_modifier {is_readonly = is_readonly || ret;} )*   
+        t = type
         { 
+            Emit.EmitString(t[0]);
             if (!is_readonly)
-                Emit.EmitString(" mutable ");
+            {
+                Emit.EmitString(" mutable ");                
+            }   
             Emit.EndBuffer () ;
         } 
-        t=type   variable_declarator[false,Emit.Buffer,t[0]+t[1]] 
-        (c:COMMA variable_declarator[true,Emit.Buffer + ExtendedToken.getWhitespaces (c) ,t[0]+t[1]])*  s:SEMI
+        variable_declarator[false,""," " +t[1]] 
+        (c:COMMA variable_declarator[true,Emit.Buffer + ExtendedToken.getWhitespaces (c) ," " + t[1]])*  s:SEMI
         { Emit.EmitString(ExtendedToken.getWhitespaces (s)); }
     ;
 
@@ -1747,7 +1751,7 @@ variable_declarator [bool emit_prefix,string prefix,string t]
         id:IDENTIFIER 
         {
             Emit.EmitToken (id);
-            Emit.EmitString (" : ");
+            Emit.EmitString (" :");
             Emit.EmitString (t);
         }
         (a:ASSIGN {Emit.EmitToken (a);}
@@ -1770,16 +1774,24 @@ method_declaration
 
 method_header
 {
-    string rt = "";
+    string [] rt =  new string[]{"",""};
+    bool mod = false;
 }
-    :   (attributes)?   (method_modifier)*  rt = return_type  member_name   
+    :   (attributes)?   (method_modifier {mod = true;})*  rt = return_type_array  
+        { 
+            if(!mod)
+                Emit.EmitString(rt[0]);
+        }
+        member_name           
         lp:LPAREN   {Emit.EmitToken (lp);}
         (formal_parameter_list)? 
         rp:RPAREN   
         {
             Emit.EmitToken (rp);
-            Emit.EmitString (" :");
-            Emit.EmitString (rt);
+            Emit.EmitString (" : ");         
+            if(mod)
+                Emit.EmitString(rt[0]);
+            Emit.EmitString (rt[1]);
         }
         
         
@@ -1890,10 +1902,19 @@ returns [string return_string]
 property_declaration
 {
     string [] t= new string[]{"",""};
+    bool mod = false;
 }
-    :   (attributes)?   (property_modifier)*   t=type   member_name   
+    :   (attributes)?   (property_modifier {mod = true;})*   t = type   
         {
-            Emit.EmitString(" : " + t[0]+t[1]);
+            if(!mod)
+                Emit.EmitString(t[0]);
+        }
+        member_name   
+        {
+            if(mod)
+                Emit.EmitString(" :" + t[0]+t[1]);
+            else
+                Emit.EmitString(" : " + t[1]);
         }
 
         lb:LBRACE   
@@ -2002,7 +2023,14 @@ returns [string return_string]
     ;
 
 indexer_declaration
-    :   (attributes)?   (indexer_modifier)*   indexer_declarator   LBRACE   accessor_declarations   RBRACE
+{
+    bool mod = false;
+}
+    :   (attributes)?   (indexer_modifier {mod = true;})*   
+        indexer_declarator[mod]   
+        lb:LBRACE              {Emit.EmitToken (lb);}
+        accessor_declarations   
+        rb:RBRACE              {Emit.EmitToken (rb);}
     ;
 
 indexer_modifier
@@ -2019,38 +2047,59 @@ indexer_modifier
     |   cm11:EXTERN    {Emit.EmitToken (cm11);}
     ;
 
-indexer_declarator
-returns [string return_string]
+indexer_declarator[bool mod]
 {
-    return_string = "";
+    string [] tp = new string[] {"",""};
+    string [] tn = new string[] {"",""};
 }
-    :   (type   THIS)=> type THIS   LBRACK   formal_parameter_list   RBRACK
-    |   type   type_name   DOT   THIS   LBRACK   formal_parameter_list   RBRACK
+    :   (type   THIS)=> 
+        tp = type 
+        {
+            if(!mod)
+                Emit.EmitString(tp[0]);
+        }
+        t1:THIS        {Emit.EmitString (ExtendedToken.getWhitespaces(t1) + "Item");}
+        lb1:LBRACK     {Emit.EmitToken (lb1);}
+        formal_parameter_list   
+        rb1:RBRACK     {Emit.EmitToken (rb1);}
+        {
+            if(mod)
+                Emit.EmitString (" :" + tp[0] + tp[1]);
+            else
+                Emit.EmitString (" : " + tp[1]);
+        }
+    |   tp = type   
+        {
+            if(!mod)
+                Emit.EmitString(tp[0]);
+        }
+        tn = type_name   {Emit.EmitString (tn[0] + tn[1]);}
+        d:DOT            {Emit.EmitToken (d);}
+        t2:THIS          {Emit.EmitString (ExtendedToken.getWhitespaces(t2) + "Item");}
+        lb2:LBRACK       {Emit.EmitToken (lb2);}
+        formal_parameter_list   
+        rb2:RBRACK       {Emit.EmitToken (rb2);}        
+        {
+            if(mod)
+                Emit.EmitString (" :" + tp[0] + tp[1]);
+            else
+                Emit.EmitString (" :" + tp[1]);
+        }
     ;
 
 operator_declaration
-returns [string return_string]
-{
-    return_string = "";
-}
-    :   (attributes)?   (operator_modifier)+   operator_declarator   operator_body
+    :   (attributes)?   (operator_modifier)+   
+        operator_declarator   
+        operator_body
     ;
 
 operator_modifier
-returns [string return_string]
-{
-    return_string = "";
-}
-    :   PUBLIC
-    |   STATIC
-    |   EXTERN
+    :   om1:PUBLIC   {Emit.EmitToken (om1);}
+    |   om2:STATIC   {Emit.EmitToken (om2);}
+    |   om3:EXTERN   {Emit.EmitToken (om3);}
     ;
 
 operator_declarator
-returns [string return_string]
-{
-    return_string = "";
-}
     :   (type   OPERATOR   overloadable_unary_operator   LPAREN   type   IDENTIFIER   RPAREN)=>
             unary_operator_declarator
     |   binary_operator_declarator
@@ -2058,80 +2107,88 @@ returns [string return_string]
     ;
 
 unary_operator_declarator
-returns [string return_string]
 {
-    return_string = "";
+    string [] tp1 = new string []{"",""};
+    string [] tp2 = new string []{"",""};
 }
-    :   type   OPERATOR   overloadable_unary_operator   LPAREN   type   IDENTIFIER   RPAREN
+    :   tp1 = type        
+        op:OPERATOR      {Emit.EmitString (ExtendedToken.getWhitespaces (op) + "@");}
+        overloadable_unary_operator   
+        lp:LPAREN        {Emit.EmitToken (lp);}
+        tp2 = type       
+        id:IDENTIFIER    {Emit.EmitToken (id);}
+                         {Emit.EmitString (" : " + tp2[0] + tp2[1]);}
+        rp:RPAREN        {Emit.EmitToken (rp);}
+                         {Emit.EmitString (" : " + tp1[0] + tp1[1]);}
     ;
 
 overloadable_unary_operator
-returns [string return_string]
-{
-    return_string = "";
-}
-    :   PLUS
-    |   MINUS
-    |   LNOT  
-    |   BNOT 
-    |   INC   
-    |   DEC 
-    |   TRUE
-    |   FALSE
+    :   oun1:PLUS    {Emit.EmitToken (oun1);}
+    |   oun2:MINUS   {Emit.EmitToken (oun2);}
+    |   oun3:LNOT    {Emit.EmitToken (oun3);}
+    |   oun4:BNOT    {Emit.EmitToken (oun4);}
+    |   oun5:INC     {Emit.EmitToken (oun5);}
+    |   oun6:DEC     {Emit.EmitToken (oun6);}
+    |   oun7:TRUE    {Emit.EmitToken (oun7);}
+    |   oun8:FALSE   {Emit.EmitToken (oun8);}
     ;
 
 binary_operator_declarator
-returns [string return_string]
 {
-    return_string = "";
+    string [] tp1 = new string []{"",""};
+    string [] tp2 = new string []{"",""};
+    string [] tp3 = new string []{"",""};
 }
-    :   type   OPERATOR   overloadable_binary_operator   LPAREN   type   IDENTIFIER   COMMA   type IDENTIFIER  RPAREN
+    :   tp1 = type   
+        op:OPERATOR                  {Emit.EmitString (ExtendedToken.getWhitespaces (op) + "@");}
+        overloadable_binary_operator   
+        lp:LPAREN                    {Emit.EmitToken (lp);}
+        tp2 = type           
+        id1: IDENTIFIER              {Emit.EmitToken (id1);}
+                                     {Emit.EmitString (" : " + tp2[0] + tp2[1]);}
+        cm:COMMA                     {Emit.EmitToken (cm);}
+        tp3 = type 
+        id2:IDENTIFIER               {Emit.EmitToken (id2);}
+                                     {Emit.EmitString (" : " + tp3[0] + tp3[1]);}
+        rp:RPAREN                    {Emit.EmitToken (rp);}
+                                     {Emit.EmitString (" : " + tp1[0] + tp1[1]);}
     ;
 
 overloadable_binary_operator
-returns [string return_string]
-{
-    return_string = "";
-}
-    :   PLUS
-    |   MINUS
-    |   STAR
-    |   DIV
-    |   MOD 
-    |   BAND 
-    |   BOR   
-    |   BXOR 
-    |   SL
-    |   SR   
-    |   EQUAL
-    |   NOT_EQUAL 
-    |   GTHAN 
-    |   LTHAN   
-    |   LE
-    |   GE
+    :   obn1:PLUS       {Emit.EmitToken (obn1);}
+    |   obn2:MINUS      {Emit.EmitToken (obn2);}
+    |   obn3:STAR       {Emit.EmitToken (obn3);}
+    |   obn4:DIV        {Emit.EmitToken (obn4);}
+    |   obn5:MOD        {Emit.EmitToken (obn5);}
+    |   obn6:BAND       {Emit.EmitToken (obn6);}
+    |   obn7:BOR        {Emit.EmitToken (obn7);}
+    |   obn8:BXOR       {Emit.EmitToken (obn8);}
+    |   obn9:SL         {Emit.EmitToken (obn9);}
+    |   obn10:SR        {Emit.EmitToken (obn10);}
+    |   obn11:EQUAL     {Emit.EmitToken (obn11);}
+    |   obn12:NOT_EQUAL {Emit.EmitToken (obn12);}
+    |   obn13:GTHAN     {Emit.EmitToken (obn13);}
+    |   obn14:LTHAN     {Emit.EmitToken (obn14);}
+    |   obn15:LE        {Emit.EmitToken (obn15);}
+    |   obn16:GE        {Emit.EmitToken (obn16);}
     ;
 
 conversion_operator_declarator
-returns [string return_string]
-{
-    return_string = "";
-}
     :   (IMPLICIT)=> IMPLICIT   OPERATOR   type   LPAREN   type   IDENTIFIER   RPAREN
     |   EXPLICIT   OPERATOR   type   LPAREN   type   IDENTIFIER   RPAREN
     ;
 
 operator_body
-returns [string return_string]
 {
-    return_string = "";
+    StatementTree t = new StatementTree();
 }
-    :   block 
-    |   SEMI
+    :   t = block {Emit.EmitString ( t.ToString () );}
+    |   s:SEMI    {Emit.EmitToken (s);}
     ;
 
 constructor_declaration
 {
-    string cd = "";
+    string cd = "";    
 }
     :   (attributes)?   (constructor_modifier)*   cd = constructor_declarator   constructor_body[cd]
     ;
@@ -2181,18 +2238,24 @@ returns [string return_string]
     ;
 
 constructor_body[string ctor_initializer]
-    :   lb:LBRACE  
-        {Emit.EmitToken (lb);}
+{
+    StatementTree t = new StatementTree();
+    LinkedList a = new LinkedList ();
+}
+    :   lb:LBRACE    {a.Add (new StatementTree(lb));}
         
         {
             if(ctor_initializer != "")
-                Emit.EmitString(ctor_initializer + ";");
+                a.Add (new StatementTree(ctor_initializer + ";"));
         }
 
-        (statement)*   
+        (t = statement {a.Add (t);})*   
 
-        rb:RBRACE
-        {Emit.EmitToken (rb);}
+        rb:RBRACE    {a.Add (new StatementTree(rb));}
+        {
+            t = new StatementTree("BLOCK",a);
+            Emit.EmitString( t.ToString ());
+        }
     |   s:SEMI
         {
             if(ctor_initializer != "")
@@ -2203,46 +2266,42 @@ constructor_body[string ctor_initializer]
     ;
 
 static_constructor_declaration
-returns [string return_string]
-{
-    return_string = "";
-}
-    :   (attributes)?   static_constructor_modifiers   IDENTIFIER LPAREN RPAREN   static_constructor_body
+    :   (attributes)?   
+        static_constructor_modifiers   
+        id:IDENTIFIER            {Emit.EmitString (ExtendedToken.getWhitespaces(id) + "this");}
+        lp:LPAREN                {Emit.EmitToken (lp);}
+        rp:RPAREN                {Emit.EmitToken (rp);}
+        static_constructor_body
     ;
 
 static_constructor_modifiers
-returns [string return_string]
-{
-    return_string = "";
-}
-    :   (STATIC)=> STATIC (EXTERN)?
-    |   (EXTERN)?  STATIC
+    :   (STATIC)=> s1:STATIC {Emit.EmitToken (s1);} (e1:EXTERN {Emit.EmitToken (e1);})?
+    |   (e2:EXTERN {Emit.EmitToken (e2);})?  s2:STATIC {Emit.EmitToken (s2);}
     ;
 
 static_constructor_body
-returns [string return_string]
 {
-    return_string = "";
+    StatementTree t = new StatementTree();
 }
-    :   block
-    |   SEMI
+    :   t = block  {Emit.EmitString ( t.ToString () );}
+    |   s:SEMI {Emit.EmitToken (s);}
     ;
 
 destructor_declaration
-returns [string return_string]
-{
-    return_string = "";
-}
-    :   (attributes)?   (EXTERN)?   BNOT   IDENTIFIER   LPAREN   RPAREN    destructor_body
+    :   (attributes)?   (e:EXTERN {Emit.EmitToken (e);})?   
+        b:BNOT            {Emit.EmitToken (b);}
+        id:IDENTIFIER     {Emit.EmitString (ExtendedToken.getWhitespaces(id) + "this");}
+        lp:LPAREN         {Emit.EmitToken (lp);}
+        rp:RPAREN         {Emit.EmitToken (rp);}
+        destructor_body
     ;
 
 destructor_body
-returns [string return_string]
 {
-    return_string = "";
+    StatementTree t = new StatementTree();
 }
-    :   block 
-    |   SEMI
+    :   t = block {Emit.EmitString ( t.ToString () );}
+    |   s:SEMI    {Emit.EmitToken (s);}
     ;
 
 //-------------
@@ -2250,22 +2309,39 @@ returns [string return_string]
 //-------------
 
 struct_declaration
-    :   (attributes)?   (struct_modifier)*   STRUCT   IDENTIFIER   (struct_interfaces)?   struct_body   (SEMI)?
+    :   (attributes)?   (struct_modifier)*   
+        s:STRUCT              {Emit.EmitToken(s);}
+        id:IDENTIFIER         {Emit.EmitToken(id);}
+        (struct_interfaces)?   
+        struct_body   
+        (sm:SEMI              {Emit.EmitToken (sm);})?
     ;
 
 struct_modifier
-    :   NEW
-    |   PUBLIC
-    |   PROTECTED
-    |   INTERNAL
-    |   PRIVATE
+    :   sm1:NEW       {Emit.EmitToken(sm1);}
+    |   sm2:PUBLIC    {Emit.EmitToken(sm2);}
+    |   sm3:PROTECTED {Emit.EmitToken(sm3);}
+    |   sm4:INTERNAL  {Emit.EmitToken(sm4);}
+    |   sm5:PRIVATE   {Emit.EmitToken(sm5);}
     ;
 
 struct_interfaces
-    :   COLON type_name (COMMA   type_name)*
+{
+    string [] tp = new string []{"",""};
+}
+    :   c1:COLON        {Emit.EmitToken(c1);}
+        tp = type_name  {Emit.EmitString(tp[0]+tp[1]);}
+        (cm:COMMA   tp = type_name
+            {Emit.EmitToken(cm);
+             Emit.EmitString(tp[0]+tp[1]);}
+        )*
     ;
 struct_body
-    :   LBRACE   (struct_member_declaration)*   RBRACE
+    :   lb:LBRACE    {Emit.EmitToken(lb);}
+
+        (struct_member_declaration)*   
+
+        rb:RBRACE    {Emit.EmitToken(rb);}
     ;
 
 struct_member_declaration
@@ -2279,7 +2355,7 @@ struct_member_declaration
             property_declaration
     |   ((attributes)?   (event_modifier)*   EVENT )=>
             event_declaration
-    |   ((attributes)?   (indexer_modifier)*   indexer_declarator   RBRACE)=>
+    |   (indexer_declaration)=>
             indexer_declaration
     |   ((attributes)?   (operator_modifier)+   operator_declarator   operator_body)=>
             operator_declaration
@@ -2435,7 +2511,7 @@ interface_indexer_declaration
 }
     :   (attributes)?   (n:NEW {Emit.EmitToken(n);})?  
         tp = type              {Emit.EmitString(tp[0]);}
-        t:THIS                 {Emit.EmitToken(t);} 
+        t:THIS                 {Emit.EmitString(ExtendedToken.getWhitespaces (t) + "Item");}
         lb:LBRACK              {Emit.EmitToken(lb);} 
         formal_parameter_list  
         rb:RBRACK              {Emit.EmitToken(rb);} 
