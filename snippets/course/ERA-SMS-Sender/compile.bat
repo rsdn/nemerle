@@ -1,0 +1,1 @@
+D:\ncc\ncc Main.n Person.n Parser.n HeaderParameter.n MailParser.n ContentType.n Attachment.n Encoder.n MailInfo.n MailInfoArray.n MailHeader.n Informer.n Message.n NakedNetwork.n CommandException.n POP3Naked.n POP3Client.n POP3EraClient.n EraHTTP.n AccountDatabase.n EraSMSSender.n -o SMS.exe -r System.Drawing.dll -r System.Windows.Forms.dll
