@@ -49,6 +49,11 @@ ps = $(addsuffix .ps, $(docs)) $(addsuffix .ps, $(tex_docs))
 pdf = $(addsuffix .pdf, $(docs)) $(addsuffix .pdf, $(tex_docs))
 docb = $(addsuffix .docb, $(docs))
 
+DISTFILES = \
+	ncc.1 \
+	Makefile \
+	ChangeLog
+
 ############################################################
 # OUTPUT
 ############################################################
@@ -124,8 +129,9 @@ verify-docb:
 	set -xe; for f in *.docb ; do xmllint --noout --valid $$f ; done
 
 install:
+	$(Q)if test ! -d $(DESTDIR)$(MANDIR); then $(INSTALL) -d $(DESTDIR)$(MANDIR); fi
 	$(INST) [$(MANDIR)] ncc.1
-	$(Q)$(INSTALL) -m 644 ncc.1 $(MANDIR)/ncc.1
+	$(Q)$(INSTALL) -m 644 ncc.1 $(DESTDIR)$(MANDIR)/ncc.1
 
 uninstall:
 	$(RM) $(MANDIR)/ncc.1
@@ -164,5 +170,7 @@ publish-stamp: nemerle-web.tar.gz
 dist: $(html-no-course)
 	$(MKDIR) $(DIR)/html
 	$(Q)mkdir -p $(DIR)/html
-	$(CP)
+	$(CP) html
 	$(Q)cp $(html-no-course) $(DIR)/html
+	$(CP)
+	$(Q)cp $(DISTFILES) $(DIR)

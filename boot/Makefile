@@ -67,16 +67,16 @@ dist:
 	$(Q)cp $(DISTFILES) $(DIR)
 
 install:
-	$(Q)if test ! -d $(LIBDIR); then mkdir $(LIBDIR); fi
-	$(Q)if test ! -d $(BINDIR); then mkdir $(BINDIR); fi
+	$(Q)if test ! -d $(DESTDIR)$(LIBDIR); then $(INSTALL) -d $(DESTDIR)$(LIBDIR); fi
+	$(Q)if test ! -d $(DESTDIR)$(BINDIR); then $(INSTALL) -d $(DESTDIR)$(BINDIR); fi
 	$(INST) [$(LIBDIR)] Nemerle.Compiler.dll
-	$(Q)$(INSTALL) -m 644 Nemerle.Compiler.dll $(LIBDIR)/Nemerle.Compiler.dll
+	$(Q)$(INSTALL) -m 644 Nemerle.Compiler.dll $(DESTDIR)$(LIBDIR)/Nemerle.Compiler.dll
 	$(INST) [$(LIBDIR)] Nemerle.dll
-	$(Q)$(INSTALL) -m 644 Nemerle.dll $(LIBDIR)/Nemerle.dll
+	$(Q)$(INSTALL) -m 644 Nemerle.dll $(DESTDIR)$(LIBDIR)/Nemerle.dll
 	$(INST) [$(BINDIR)] ncc
-	$(Q)$(INSTALL) -m 755 ncc.exe $(BINDIR)/ncc
+	$(Q)$(INSTALL) -m 755 ncc.exe $(DESTDIR)$(BINDIR)/ncc
 	$(INST) [$(LIBDIR)] stdmacros.dll
-	$(Q)$(INSTALL) -m 644 stdmacros.dll $(LIBDIR)/stdmacros.dll
+	$(Q)$(INSTALL) -m 644 stdmacros.dll $(DESTDIR)$(LIBDIR)/stdmacros.dll
 
 uninstall:
 	$(RM) $(LIBDIR)/Nemerle.Compiler.dll
