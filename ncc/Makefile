@@ -75,8 +75,47 @@ NEMERLE_DLL_SRC = \
 	../lib/AssemblyInfo.n
 
 NEMERLE_COMPILER_DLL_SRC = \
-	CompilationOptions.n		 \
-	passes.n			 \
+	hierarchy/BuiltinMethod.n        \
+	hierarchy/ClassMembers.n	 \
+	hierarchy/CustomAttribute.n	 \
+	hierarchy/DelegateClassGen.n	 \
+	hierarchy/MacroClassGen.n	 \
+	hierarchy/NamespaceTree.n	 \
+	hierarchy/NumericTypes.n	 \
+	hierarchy/ScanTypeHierarchy.n	 \
+	hierarchy/TypeBuilder.n		 \
+	hierarchy/TypeInfo.n		 \
+	hierarchy/XmlDump.n		 \
+	parsing/AST.n			 \
+	parsing/Lexer.n			 \
+	parsing/MainParser.n		 \
+	parsing/MainParser-Extensions.n  \
+	parsing/ParseTree.n		 \
+	parsing/PreParser.n		 \
+	parsing/Utility.n		 \
+	typing/ConstantFolder.n		 \
+	typing/MacroRegistry.n		 \
+	typing/Macros.n			 \
+	typing/PatternsTyping.n		 \
+	typing/TypedTree.n		 \
+	typing/ErrorMessage.n		 \
+	typing/LocalContext.n		 \
+	typing/LocalValue.n		 \
+	typing/MType.n			 \
+	typing/MacroColorizer.n		 \
+	typing/Messenger.n	         \
+	typing/OverloadPossibility.n	 \
+	typing/RestartInErrorMode.n	 \
+	typing/Solver.n			 \
+	typing/StaticTyVar.n		 \
+	typing/Subst.n			 \
+	typing/TyVar.n			 \
+	typing/TyVarEnv.n		 \
+	typing/Typer-CallTyper.n	 \
+	typing/Typer-DelayedTyping.n	 \
+	typing/Typer-PatternTyper.n	 \
+	typing/Typer.n			 \
+	typing/Typer2.n			 \
 	codedom/NemerleCodeCompiler.n	 \
 	codedom/NemerleCodeGenerator.n	 \
 	codedom/NemerleCodeProvider.n	 \
@@ -91,49 +130,11 @@ NEMERLE_COMPILER_DLL_SRC = \
 	generation/MatchingCompiler.n	 \
 	generation/Optimizer.n		 \
 	generation/Postprocessing.n	 \
-	hierarchy/BuiltinMethod.n        \
-	hierarchy/ClassMembers.n	 \
-	hierarchy/CustomAttribute.n	 \
-	hierarchy/DelegateClassGen.n	 \
-	hierarchy/MacroClassGen.n	 \
-	hierarchy/NamespaceTree.n	 \
-	hierarchy/NumericTypes.n	 \
-	hierarchy/ScanTypeHierarchy.n	 \
-	hierarchy/TypeBuilder.n		 \
-	hierarchy/TypeInfo.n		 \
-	hierarchy/XmlDump.n		 \
 	misc/AssemblyInfo.n		 \
 	misc/PrettyPrint.n		 \
-	nte/ErrorMessage.n		 \
-	nte/LocalContext.n		 \
-	nte/LocalValue.n		 \
-	nte/MType.n			 \
-	nte/MacroColorizer.n		 \
-	nte/Messenger.n			 \
-	nte/OverloadPossibility.n	 \
-	nte/RestartInErrorMode.n	 \
-	nte/Solver.n			 \
-	nte/StaticTyVar.n		 \
-	nte/Subst.n			 \
-	nte/TyVar.n			 \
-	nte/TyVarEnv.n			 \
-	nte/Typer-CallTyper.n		 \
-	nte/Typer-DelayedTyping.n	 \
-	nte/Typer-PatternTyper.n	 \
-	nte/Typer.n			 \
-	nte/Typer2.n			 \
-	parsing/AST.n			 \
-	parsing/Lexer.n			 \
-	parsing/MainParser.n		 \
-	parsing/MainParser-Extensions.n  \
-	parsing/ParseTree.n		 \
-	parsing/PreParser.n		 \
-	parsing/Utility.n		 \
-	typing/ConstantFolder.n		 \
-	typing/MacroRegistry.n		 \
-	typing/Macros.n			 \
-	typing/PatternsTyping.n		 \
-	typing/TypedTree.n		 \
+	CompilationOptions.n		 \
+	passes.n			 \
+
 
 NCC_EXE_SRC       = main.n
 
@@ -366,7 +367,7 @@ sync:
 t test: tests
 tests:
 	$(Q)cd testsuite && $(MAKE)
-	
+
 t-mcs test-mcs: tests-mcs
 tests-mcs:
 	$(Q)cd testsuite && $(MAKE) all-mcs
