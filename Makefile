@@ -106,7 +106,7 @@ dist: changelog
 	@rm -rf $(PACKAGE)-$(VERSION).$(REVISION)
 
 install:
-	$(Q)$(MAKE) -C boot install
+	$(Q)$(MAKE) -C doc install
 	$(Q)if test -f ncc/out.stage3/ncc.exe ; then $(MAKE) -C ncc install; \
             else $(MAKE) -C boot install; fi
 
