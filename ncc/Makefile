@@ -43,6 +43,8 @@ RUN_COMPILER  = $(Q)$(TIME) $(EXECUTE) $(COMPILER) -no-stdlib -r:mscorlib -r:Sys
 GENERIC_SRC =
 
 NEMERLE_DLL_SRC = \
+	../lib/internal-numbered.n	\
+	../lib/internal.n		\
 	../lib/core.n			\
 	../lib/getopt.n			\
 	../lib/hashtable.n		\
