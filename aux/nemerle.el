@@ -185,19 +185,24 @@ buffer created.  This is a good place to put your customizations.")
   "Calculates indentation level for the current line."
   (save-excursion
     (beginning-of-line)
-    (let ((modifier 0))
-      (cond ((looking-at "[^{\n]*}[ \t]*$")
-	     (setq modifier (- nemerle-basic-offset)))
-	    ((looking-at ".*{[ \t]*$")
-	     (setq modifier nemerle-basic-offset))
-	    (t nil))
+    (let ((modifier 0)
+	  (cur-indent (current-indentation))
+	  (prev-indent 0))
       (if (bobp)
-	  nil
-	(forward-line -1)
-	(cond ((looking-at ".*{[ \t]*$")
-	       (setq modifier (+ modifier nemerle-basic-offset)))
-	      (t nil)))
-      (+ (current-indentation) modifier))))
+	  0
+	(save-excursion
+	  (skip-chars-backward " \t\n")
+	  (beginning-of-line)
+	  (setq prev-indent (current-indentation))
+	  (cond ((looking-at "[^\n}]*{")
+		 (setq modifier nemerle-basic-offset))
+		(t 0))))
+      (cond ((looking-at "\\s *{")
+	     (+ nemerle-basic-offset modifier prev-indent))
+	    ((looking-at "\\s *}")
+	     (- (+ prev-indent modifier) nemerle-basic-offset))
+	    (t (+ modifier prev-indent))))))
+
 
 
 
