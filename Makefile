@@ -82,32 +82,37 @@ sync-boot:
 	$(MAKE) -C ncc boot sync
 	svn commit -m "Sync for release." boot/
 
-dist: changelog
+dist: changelog tarball
+
+tarball:
 	$(Q)rm -rf $(PACKAGE)-$(VERSION).*
-	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)
+	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)/...
 	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)
-	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)/ncc
 	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/ncc
-	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)/doc
 	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/doc
-	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)/misc
 	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/misc
-	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)/boot
 	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/boot
-	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)/lib
 	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/lib
-	$(MKDIR) $(PACKAGE)-$(VERSION).$(REVISION)/snippets
 	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/snippets
+	$(Q)mkdir $(PACKAGE)-$(VERSION).$(REVISION)/macros
 	$(CP)
 	$(Q)cp $(DISTFILES) $(PACKAGE)-$(VERSION).$(REVISION)
 	$(Q)$(MAKE) -C ncc  dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)
 	$(Q)$(MAKE) -C doc  dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/doc
 	$(Q)$(MAKE) -C misc dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/misc
 	$(Q)$(MAKE) -C boot dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/boot
+	$(Q)$(MAKE) -C macros dist DIR=../$(PACKAGE)-$(VERSION).$(REVISION)/macros
 	$(Q)$(MAKE) -C snippets dist DIR=$(shell pwd)/$(PACKAGE)-$(VERSION).$(REVISION)/snippets
 	$(TAR) $(PACKAGE)-$(VERSION).$(REVISION).tar.gz 
 	@tar zcf $(PACKAGE)-$(VERSION).$(REVISION).tar.gz $(PACKAGE)-$(VERSION).$(REVISION)
+	@echo "Looking for missing files."
+	svn export . $(PACKAGE)-$(VERSION).$(REVISION).svn
+	@rm -rf $(PACKAGE)-$(VERSION).$(REVISION).svn/{doc,boot/lock.txt,misc}
+	@cd $(PACKAGE)-$(VERSION).$(REVISION).svn ; find . | sed -e 's/^\.\///' | sort > ../files.svn
+	@cd $(PACKAGE)-$(VERSION).$(REVISION) ; find . | sed -e 's/^\.\///' | sort > ../files.tar
+	@diff -u files.{svn,tar} | grep '^-[^-]' | sed -e 's/^-//' || true
 	@rm -rf $(PACKAGE)-$(VERSION).$(REVISION)
+	@rm -rf $(PACKAGE)-$(VERSION).$(REVISION).svn
 
 install:
 	$(Q)$(MAKE) -C doc install
