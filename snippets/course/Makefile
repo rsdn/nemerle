@@ -2,7 +2,7 @@ include ../../config.mak
 
 NPATH   = ../../ncc/out.stage3
 MONO    = $(NET_ENGINE) $(NET_FLAGS)
-COMPILE = $(MONO) $(NPATH)/ncc.exe -pedantic-lexer -global-unused-symbols-warnings
+COMPILE = $(MONO) $(NPATH)/ncc.exe -pedantic-lexer
 
 
 all: swf-calculator.exe backup-tool.exe getmxbyname.exe

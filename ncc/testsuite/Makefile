@@ -60,7 +60,7 @@ all:
 	cp $(STAGE3)/Nemerle.dll .
 	cp $(STAGE3)/Nemerle.Compiler.dll .
 	$(EXECUTE) $(STAGE3)/ncc.exe -out test.exe $(TESTN)
-	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" -n "$(STAGE3)/ncc.exe" -p "$(NEM_FLAGS)" -verify "$(VERIFY)" $(TEST_FILES)
+	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" -n "$(STAGE3)/ncc.exe" -p "$(NEM_FLAGS) -nowarn:10003" -verify "$(VERIFY)" $(TEST_FILES)
 	rm -f *.dll *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
 
 test-stage1:
@@ -74,7 +74,7 @@ test-stage1:
 
 all-mcs:
 	$(MAKE) all TEST_FILES=frommcs/*.n
-	
+
 clean:
 	$(Q) cd positive && $(MAKE) clean
 	$(Q) cd negative && $(MAKE) clean
