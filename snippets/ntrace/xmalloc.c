@@ -139,7 +139,7 @@ dump_info (char **strings, int cnt, char c, void *ptr, size_t n)
                 }
                 fprintf (fp, "] ");
                 
-                if (n)
+                if (c == '+' || c == '>')
                         fprintf (fp, "%c %p 0x%x\n", c, ptr, n);
                 else
                         fprintf (fp, "%c %p\n", c, ptr);
