@@ -53,8 +53,6 @@ class Lexer : yyParser.yyInput
 	public Lexer(string fn)
 	{
 		file_name = fn;
-                p((int)FileMode.Open);
-                System.Console.WriteLine("file mode {0}", FileMode.Open+1);
 		file = new FileStream(fn, FileMode.Open);
 		line = 1;
 		col = 1;
