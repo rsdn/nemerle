@@ -58,9 +58,9 @@ CS2N_EXE_SOURCES = cs2n.n
 # TARGETS
 ######################################################
 
-all: $(NEMERLE_DLLS) $(ANTLR_DLL) cs2n.exe
+all: cs2n.exe
 
-cs2n.exe: Nemerle.CSharp.CS.dll  $(CS2N_EXE_SOURCES)
+cs2n.exe: $(NEMERLE_DLLS) $(ANTLR_DLL) Nemerle.CSharp.CS.dll  $(CS2N_EXE_SOURCES)
 	$(NCC) -texe -r:Nemerle.CSharp.CS.dll -o:$@ $(CS2N_EXE_SOURCES)
 
 Nemerle.CSharp.CS.dll : Nemerle.CSharp.dll $(GENERATED_SOURCES_PARSER) $(ANTLR_DLL)
