@@ -49,7 +49,7 @@ print <<EOF
       def x = (x :> System.$long);
       def y = (y :> System.$long);
       match (name) {
-        | "+" => x + y
+        | "+" => (x + y :> object)
         | "-" => x - y
         | "*" => x * y
         | "/" => x / y
@@ -65,8 +65,8 @@ EOF
 }
 print <<EOF
         | _ => 
-	  null
-	  // Util.ice ("invalid $short operator `" + name + "'")
+          null
+          // Util.ice ("invalid $short operator `" + name + "'")
       }
     }
 
@@ -74,7 +74,7 @@ print <<EOF
     {
       def x = (x :> System.$long);
       match (name) {
-        | "+" => +x
+        | "+" => (+x : object)
 EOF
 ;
 
@@ -82,14 +82,14 @@ print "        | \"-\" => -x\n" if ($signed);
 print <<EOF
         //| "~" => ~x
         | _ =>
-	  null
-	  // Util.ice ("invalid $short operator `" + name + "'")
+          null
+          // Util.ice ("invalid $short operator `" + name + "'")
       }
     }
 
     public FromLiteral (lit : Literal) : object
     {
-      | L_$short (x) => (x : object)
+      | L_$short (x) => (x :> object) // HACK! HACK! HACK! this is a bug in the compiler
       | _ => null
     }
 
@@ -118,3 +118,6 @@ inttype ("UInt64", "ulong", 0, 1, "UL");
 inttype ("Single", "float", 1, 0, ".0F");
 inttype ("Double", "double", 1, 0, ".0");
 print "// End generated code\n";
+
+
+# vim: expandtab
