@@ -66,7 +66,7 @@ src = \
 
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
-COMPILE = $(CSC) /optimize+ $(CSCFLAGS)
+COMPILE = $(CSC) /debug+ $(CSCFLAGS)
 NEMFLAG = -self
 
 all: ncc.exe
