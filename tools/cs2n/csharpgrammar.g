@@ -1501,7 +1501,7 @@ returns [StatementTree t]
         l:LPAREN        {a.Add (new StatementTree(l));}
         tp = type   
         id:IDENTIFIER   {a.Add (new StatementTree(id));}
-                        {a.Add (new StatementTree(" : "));}
+                        {a.Add (new StatementTree(" :> "));}
                         {a.Add (new StatementTree(tp[0]+tp[1]));}
         i:IN            {a.Add (new StatementTree(i));}
         e = expression  {a.Add (new StatementTree(e));}
