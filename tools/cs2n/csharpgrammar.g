@@ -124,13 +124,23 @@ returns [string [] return_strings]
 //C.2.2 Types
 //-----------
 
+
 type
 returns [string [] return_strings]
 {
     return_strings = new string[]{"",""};
 }
+    :  return_strings = maybe_generic_type [true]
+    ;
+
+
+maybe_generic_type [bool can_generic] 
+returns [string [] return_strings]
+{
+    return_strings = new string[]{"",""};
+}
     :   (array_type)=> return_strings = array_type
-    |   (generic_type)=> return_strings = generic_type
+    |   ({ can_generic }?  generic_type)=> return_strings = generic_type
     |   o:OBJECT 
         {return_strings[0] = ExtendedToken.getWhitespaces (o);
          return_strings[1] = ExtendedToken.getTextOnly (o);}
@@ -140,6 +150,22 @@ returns [string [] return_strings]
     |   return_strings = type_name
     |   return_strings = simple_type
     ;
+
+
+
+generic_type
+returns [string [] return_strings]
+{
+    return_strings = new string[] {"",""};
+    string [] nat  = new string[] {"",""};
+    string parms  = "";
+}
+    :   nat = type_name   parms = generic_parameters
+        { return_strings[1] = nat[1] + parms;
+          return_strings[0] = nat[0];
+         }
+    ;
+
 
 simple_type
 returns [string [] return_strings]
@@ -235,19 +261,6 @@ returns [string [] return_strings]
         {   return_strings[1] += nat[1];
             return_strings[1] += end;
         }
-    ; 
-
-generic_type
-returns [string [] return_strings]
-{
-    return_strings = new string[] {"",""};
-    string [] nat  = new string[] {"",""};
-    string parms  = "";
-}
-    :   nat = type_name   parms = generic_parameters
-        { return_strings[1] = nat[1] + parms; 
-          return_strings[0] = nat[0];
-         }
     ; 
 
 generic_parameters
@@ -395,6 +408,7 @@ returns [string return_string]
             return_string = object_creation_expression
     |   return_string = delegate_creation_expression
     |   return_string = typeof_expression
+    |   return_string = default_value
     |   return_string = checked_expression
     |   return_string = unchecked_expression
     |   return_string = anonymous_method_expression
@@ -459,7 +473,10 @@ returns [string return_string]
     string exp = "";
     return_string = "";
 }
-    :   n:NEW   tp = type   lp:LPAREN   exp = expression rp:RPAREN
+    :   n:NEW   
+        tp = maybe_generic_type [false]
+        (generic_parameters)? // we will emit something here when nemerle syntax will change
+        lp:LPAREN   exp = expression rp:RPAREN
         {
             return_string = ExtendedToken.getWhitespaces (n)  + tp[0]+tp[1] + lp.getText () + exp + rp.getText ();
         }
@@ -472,7 +489,10 @@ returns [string return_string]
     string al = "";
     return_string = "";
 }
-    :   n:NEW   tp = type  lp:LPAREN   (al = argument_list)?   rp:RPAREN
+    :   n:NEW   
+        tp = maybe_generic_type [false]
+        (generic_parameters)? // we will emit something here when nemerle syntax will change
+        lp:LPAREN   (al = argument_list)?   rp:RPAREN
         {
             return_string = ExtendedToken.getWhitespaces (n) + tp[0]+tp[1] + lp.getText () + al + rp.getText ();
         }
@@ -526,14 +546,6 @@ returns [string return_string]
     |   pt13:ULONG   {return_string = pt13.getText();}
     |   pt14:USHORT  {return_string = pt14.getText();}
     ;
-
-//invocation_expression
-//returns [string return_string]
-//{
-//    return_string = "";
-//}
-//    :   primary_expression  LPAREN   (argument_list)?   RPAREN 
-//    ;
 
 invocation_expression_end
 returns [string return_string]
@@ -824,11 +836,12 @@ returns [string return_string]
             )+
     |   (shift_expression   AS)=> 
             return_string = shift_expression   
-            (tas:AS   se = type
+            (AS   se = type
                 {
-                    return_string += (tas.getText () + se[0]+se[1]);
+                    return_string = "(match (" + return_string + ") { _tmp : " + se[0] + se[1] + " => _tmp | _ => null })";
                 }
-            )+
+            )
+
     |   return_string = shift_expression
     ;
 
@@ -1038,7 +1051,6 @@ returns [StatementTree t]
     |   t = jump_statement
     |   t = try_statement
     |   YIELD { System.Console.WriteLine ("'yield' is not supported in nemerle yet"); } t = jump_statement
-    |   t = default_value
 
     //<unchecked statement>
     |   (UNCHECKED   block)=> t = unchecked_statement
@@ -1059,13 +1071,13 @@ returns [StatementTree t]
     ;
 
 default_value
-returns [StatementTree t]
+returns [string t]
 { 
   t = null;
   string [] ty = new string[] { "", ""}; 
 }
-  :    d : DEFAULT  lp : LPAREN ty = type rp : RPAREN
-   { t = new StatementTree (d.getText () + lp.getText () + ty[0] + ty[1] + rp.getText ()); }
+  :    DEFAULT  lp : LPAREN ty = type rp : RPAREN
+   { t = "Nemerle.Extensions.DefaultValue" + lp.getText () + ty[0] + ty[1] + rp.getText (); }
   ;
 
 block
@@ -1136,7 +1148,7 @@ returns [string return_string]
         }
     |   id2:IDENTIFIER
         {	    
-            return_string = t[0] + "mutable " + id2.getText () + " = " + "Nemerle.Extensions.DefaultValue (" + t[1] + ") :" + t[1] + ";";
+            return_string = t[0] + "mutable " + id2.getText () + " = " + "Nemerle.Extensions.DefaultValue (" + t[1] + ");";
         }
 ;
 
@@ -1199,15 +1211,6 @@ returns [string return_string]
             return_string = assignment
     |   return_string = primary_expression
      
-//    |   (invocation_expression)=>
-//            invocation_expression
-//    |   (post_decrement_expression)=>
-//            post_decrement_expression     
-//    |   (post_decrement_expression)=>
-//            post_decrement_expression
-//    
-//    |   object_creation_expression
-
     |   return_string = pre_increment_expression
     |   return_string = pre_decrement_expression
     ;
@@ -2271,32 +2274,26 @@ returns [string return_string]
 {
     return_string = "";
     string rt = "";
-    string rt1 = "";
     string [] mem_name = null;
 }
-    :  ((attributes)?   (event_modifier)*   EVENT  return_type   member_name RBRACE)=>
-        (attributes)?   (event_modifier)*   
+    :  (attributes)?   (event_modifier)*   
         e1:EVENT                 { Emit.EmitToken (e1); }
         rt = return_type   
         mem_name = member_name           
         { Emit.EmitString (mem_name [0]);
           Emit.EmitString (mem_name [1]);
-        }
-        lb1:LBRACE               { Emit.EmitString(" : " + rt);
-                                   Emit.EmitToken (lb1); }
-        event_accessor_declarations   
-        rb1:RBRACE               { Emit.EmitToken (rb1); }
-        
-    |   (attributes)?   (event_modifier)*   
-        e2:EVENT                 { Emit.EmitToken (e2); }
-        rt1 = return_type   
-        mem_name = member_name           
-        { Emit.EmitString (mem_name [0]);
-          Emit.EmitString (mem_name [1]);
+          Emit.EmitString(" : " + rt);
         }
 
-        s:SEMI                   { Emit.EmitString (" : " + rt1);
-                                   Emit.EmitToken (s); }
+        (
+          ( s:SEMI                   { Emit.EmitToken (s); } )
+           |
+
+         ( lb1:LBRACE               { Emit.EmitToken (lb1); }
+          event_accessor_declarations   
+          rb1:RBRACE               { Emit.EmitToken (rb1); } )
+
+        )
     ;
 
 event_modifier
@@ -2318,29 +2315,21 @@ returns [string return_string]
     ;
 
 event_accessor_declarations
-returns [string return_string]
 {
-    return_string = "";
+    string kind_of_first = "";
 }
-    :   ((attributes)?  ADD)=>
-            add_accessor_declaration   remove_accessor_declaration
-    |   remove_accessor_declaration   add_accessor_declaration
+    :   kind_of_first = event_accessor_declaration[""]   event_accessor_declaration [kind_of_first]
     ;
 
-add_accessor_declaration
-returns [string return_string]
+event_accessor_declaration [string kind]
+returns [string result_kind]
 {
-    return_string = "";
+  result_kind = "";
+  StatementTree b = new StatementTree();
 }
-    :   (attributes)? (constant_modifier)* idaad:IDENTIFIER {idaad.getText()=="add"}?    block 
-    ;
-
-remove_accessor_declaration
-returns [string return_string]
-{
-    return_string = "";
-}
-    :   (attributes)? (constant_modifier)* idrad:IDENTIFIER {idrad.getText()=="remove"}?  block 
+    :   (attributes)? (constant_modifier)* id:IDENTIFIER {id.getText()!=kind}? 
+       { result_kind = id.getText (); Emit.EmitToken (id); }
+       b = block {Emit.EmitString ( b.ToString () );}
     ;
 
 indexer_declaration
