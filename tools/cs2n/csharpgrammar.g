@@ -877,7 +877,7 @@ returns [StatementTree t]
     |   t = empty_statement        
 
     //<checked statement>
-    |   (CHECKED   block)=> CHECKED   block
+    |   (CHECKED   block)=> t = checked_statement
     //</checked statement>
 
     |   t = selection_statement
@@ -886,12 +886,12 @@ returns [StatementTree t]
     |   t = try_statement
 
     //<unchecked statement>
-    |   (UNCHECKED   block)=> UNCHECKED   block
+    |   (UNCHECKED   block)=> t = unchecked_statement
     //</unchecked statement>
 
     |   t = expression_statement
-    |   lock_statement
-    |   using_statement
+    |   t = lock_statement
+    |   t = using_statement
     ;
 
 empty_statement
@@ -1258,19 +1258,35 @@ returns [StatementTree t]
 {
     t = new StatementTree();
 }
-    :   break_statement 
-    |   continue_statement 
+    :   t = break_statement 
+    |   t = continue_statement 
     |   t = goto_statement  
     |   t = return_statement  
-    |   throw_statement
+    |   t = throw_statement
     ;
 
 break_statement
-    :   BREAK SEMI
+returns [StatementTree t]
+{
+    t = new StatementTree();
+    LinkedList a = new LinkedList ();
+}
+    :   b:BREAK s:SEMI
+        {a.Add (new StatementTree(b));}
+        {a.Add (new StatementTree(s));}
+        { t = new StatementTree("BREAK",a); }
     ;
 
 continue_statement
-    :   CONTINUE SEMI
+returns [StatementTree t]
+{
+    t = new StatementTree();
+    LinkedList a = new LinkedList ();
+}
+    :   c:CONTINUE s:SEMI
+        {a.Add (new StatementTree(c));}
+        {a.Add (new StatementTree(s));}
+        { t = new StatementTree("CONTINUE",a); }
     ;
 
 goto_statement
@@ -1305,100 +1321,156 @@ throw_statement
 returns [StatementTree t]
 {
     t = new StatementTree();
+    string e = "";
+    LinkedList a = new LinkedList ();
 }
-    :   THROW   (expression)?   SEMI
+    :   th:THROW          {a.Add (new StatementTree(th));}
+        (e = expression)? {a.Add (new StatementTree(e));}
+        s:SEMI            {a.Add (new StatementTree(s));}
+        { t = new StatementTree("THROW",a); }
     ;
 
 try_statement
 returns [StatementTree t]
 {
     t = new StatementTree();
+    StatementTree temp = new StatementTree();
+    LinkedList a = new LinkedList ();
 }
-    :   TRY   block   end_of_try_statement
-    ;
-
-end_of_try_statement
-returns [StatementTree t]
-{
-    t = new StatementTree();
-}
-    :   (catch_clauses) => catch_clauses   (finally_clause)?
-    |   finally_clause
+    :   tr:TRY       {a.Add (new StatementTree(tr));}
+        temp = block {a.Add (temp);}  
+        {a.Add (new StatementTree ( ExtendedToken.getWhitespaces (tr) + "catch {"));}
+        (    temp = catch_clauses {a.Add (temp);}    
+             {a.Add (new StatementTree ( ExtendedToken.getWhitespaces (tr) + "}"));}
+            (temp = finally_clause {a.Add (temp);}  )? 
+            
+            | temp = finally_clause {a.Add (temp);})        
+            
+        { t = new StatementTree("TRY",a); }
     ;
 
 catch_clauses
 returns [StatementTree t]
 {
     t = new StatementTree();
+    StatementTree temp = new StatementTree();
+    LinkedList a = new LinkedList ();
 }
     :   ( specific_catch_clause )=>
-            (options {greedy=true;}: specific_catch_clause)+   (general_catch_clause)?
-    |   general_catch_clause
+            (options {greedy=true;}: temp = specific_catch_clause {a.Add (temp);}
+            )+   
+            (temp = general_catch_clause {a.Add (temp);})?
+        { t = new StatementTree("CATCH_CLAUSES",a); }
+    |   temp = general_catch_clause {a.Add (temp);}
+        { t = new StatementTree("CATCH_CLAUSES",a); }
     ;
 
 specific_catch_clause
 returns [StatementTree t]
 {
     t = new StatementTree();
+    string ids = "_";
+    string [] tp = new string[]{"",""};
+    string catched_type = "";
+    LinkedList a = new LinkedList ();
 }
-    :   (CATCH   LPAREN   STRING)=>
-            CATCH   LPAREN   STRING   (IDENTIFIER)?   RPAREN   block
-    |   (CATCH   LPAREN   OBJECT)=>
-            CATCH   LPAREN   OBJECT   (IDENTIFIER)?   RPAREN   block
-    |   CATCH   LPAREN   type_name   (IDENTIFIER)?   RPAREN   block    
-    ;
+    :       c:CATCH         
+            lp:LPAREN       
+            (     s:STRING {catched_type = s.getText ();}
+                | o:OBJECT {catched_type = o.getText ();} 
+                | tp = type_name {catched_type = tp[0] + tp[1];}
+            )          
+            (id:IDENTIFIER {ids = id.getText ();})?   
+            rp:RPAREN   {a.Add (new StatementTree(ExtendedToken.getWhitespaces(c) + "| " 
+                                                    + ExtendedToken.getWhitespaces(lp) + ids + " : " 
+                                                    + catched_type
+                                                    + ExtendedToken.getWhitespaces(rp) + " => " ));}
+            t = block    {a.Add (t);}        
+            { t = new StatementTree("SPECIFIC_CATCH",a); }
+    ;   
 
 general_catch_clause
 returns [StatementTree t]
 {
     t = new StatementTree();
+    LinkedList a = new LinkedList ();
 }
-    :   CATCH   block
+    :   c:CATCH   {a.Add (new StatementTree(ExtendedToken.getWhitespaces(c) + "| _ : System.Exception => " ));}
+        t = block {a.Add (t);}
+        { t = new StatementTree("GENERAL_CATCH",a); }
     ;
 
 finally_clause
 returns [StatementTree t]
 {
     t = new StatementTree();
+    LinkedList a = new LinkedList ();
 }
-    :   FINALLY   block
+    :   f:FINALLY   {a.Add (new StatementTree(f));}
+        t = block   {a.Add (t);}
+        { t = new StatementTree("FINALLY",a); }
     ;
 
 checked_statement
 returns [StatementTree t]
 {
     t = new StatementTree();
+    LinkedList a = new LinkedList ();
 }
-    :   CHECKED   block
+    :   c:CHECKED   {a.Add (new StatementTree(c));}
+        t = block   {a.Add (t);}
+        { t = new StatementTree("CHECKED",a); }
     ;
 
 unchecked_statement
 returns [StatementTree t]
 {
     t = new StatementTree();
+    LinkedList a = new LinkedList ();
 }
-    :   UNCHECKED   block
+    :   u:UNCHECKED  {a.Add (new StatementTree(u));}
+        t = block    {a.Add (t);}
+        { t = new StatementTree("UNCHECKED",a); }
     ;
 
 lock_statement
 returns [StatementTree t]
 {
     t = new StatementTree();
+    string e = "";
+    LinkedList a = new LinkedList ();
 }
-    :   LOCK   LPAREN   expression   RPAREN   embedded_statement
+    :   l:LOCK                  {a.Add (new StatementTree(l));}
+        lp:LPAREN               {a.Add (new StatementTree(lp));}
+        e = expression          {a.Add (new StatementTree(e));}
+        rp:RPAREN               {a.Add (new StatementTree(rp));}
+        t = embedded_statement  {a.Add (t);}
+        { t = new StatementTree("LOCK",a); }
     ;
 
 using_statement
 returns [StatementTree t]
 {
-    t = new StatementTree() ;
+    t = new StatementTree() ;    
+    LinkedList a = new LinkedList ();
+    string e = "";
 }
-    :   USING   LPAREN    resource_acquisition   RPAREN    embedded_statement
+    :   u:USING                  {a.Add (new StatementTree(u));}
+        lp:LPAREN                {a.Add (new StatementTree(lp));}
+        t = resource_acquisition {a.Add (t);}
+        rp:RPAREN                {a.Add (new StatementTree(rp));}
+        t = embedded_statement   {a.Add (t);}  
+        { t = new StatementTree("USING_STATEMENT",a); }
     ;
 
 resource_acquisition
-    :   (type)=> local_variable_declaration
-    |   expression
+returns [StatementTree t]
+{
+    t = new StatementTree() ;
+    string e = "";
+}
+    :   (type)=> e = local_variable_declaration { t = new StatementTree(e);}
+    |   e = expression { t = new StatementTree(e);}
     ;
 
 //----------------
@@ -1736,6 +1808,17 @@ returns [string return_string]
     :   temp = type
         { return_string = temp[0] + temp[1]; }
     |   v:VOID {return_string = v.getText();}
+    ;
+
+return_type_array
+returns [string [] return_strings]
+{
+    return_strings = new string[] {"",""};
+}
+    :   return_strings = type
+    |   v:VOID 
+        { return_strings[0] = ExtendedToken.getWhitespaces (v); 
+          return_strings[1] = ExtendedToken.getTextOnly (v); }
     ;
 
 member_name
@@ -2226,23 +2309,50 @@ variable_initializer_list
 //-----------------
 
 interface_declaration
-    :   (attributes)?   (interface_modifier)*   INTERFACE  IDENTIFIER   (interface_base)?   interface_body   (SEMI)?
+    :   (attributes)?   (interface_modifier)*   
+        i:INTERFACE  id:IDENTIFIER   
+        {
+            Emit.EmitToken (i);
+            Emit.EmitToken (id);
+        }
+        (interface_base)?   interface_body   (s:SEMI {Emit.EmitToken (s);})?
     ;
 
 interface_modifier
-    :   NEW
-    |   PUBLIC
-    |   PROTECTED
-    |   INTERNAL
-    |   PRIVATE
+    :   im1:NEW       {Emit.EmitToken(im1);}
+    |   im2:PUBLIC    {Emit.EmitToken(im2);}
+    |   im3:PROTECTED {Emit.EmitToken(im3);}
+    |   im4:INTERNAL  {Emit.EmitToken(im4);}
+    |   im5:PRIVATE   {Emit.EmitToken(im5);}
     ;
     
 interface_base
-    :   COLON type_name (COMMA   type_name)*
+{
+    string [] t1 = new string[]{"",""};
+}
+    :   c1:COLON 
+        {
+            Emit.EmitToken (c1);
+        }  
+        t1 = type_name 
+        {
+            Emit.EmitString (t1[0]+t1[1]);
+        }
+            (cm:COMMA  {Emit.EmitToken (cm);}  t1 = type_name {Emit.EmitString (t1[0]+t1[1]);})*
     ;
 
 interface_body
-    :   LBRACE   (interface_member_declaration)*   RBRACE
+    :   lb:LBRACE
+        {
+            Emit.EmitToken (lb);
+        }
+        
+        (interface_member_declaration)*   
+        
+        rb:RBRACE
+        {
+            Emit.EmitToken (rb);
+        }
     ;
 
 interface_member_declaration
@@ -2256,29 +2366,83 @@ interface_member_declaration
     ;
 
 interface_method_declaration
-    :   (attributes)?   (NEW)?   return_type   IDENTIFIER  LPAREN   (formal_parameter_list)?   RPAREN   SEMI
+{
+    string [] tp = new string []{"",""};
+}
+    :   (attributes)?   (n:NEW {Emit.EmitToken(n);})?   
+        tp = return_type_array
+                          {Emit.EmitString(tp[0]);}
+        id:IDENTIFIER     {Emit.EmitToken(id);} 
+        lp:LPAREN         {Emit.EmitToken(lp);}
+        (formal_parameter_list)?   
+        rp:RPAREN         {Emit.EmitToken(rp);}
+                          {Emit.EmitString(" : " + tp[1]);}
+        s:SEMI            {Emit.EmitToken(s);}
     ;
 
 interface_property_declaration
-    :   (attributes)?   (NEW)?   type   IDENTIFIER LBRACE  interface_accessors   RBRACE
+{
+    string [] tp = new string []{"",""};
+}
+    :   (attributes)?   (n:NEW {Emit.EmitToken(n);})?   
+        tp = type            {Emit.EmitString(tp[0]);}
+        id:IDENTIFIER        {Emit.EmitToken(id);} 
+                             {Emit.EmitString(" : " + tp[1]);}
+        lb:LBRACE            {Emit.EmitToken(lb);} 
+        interface_accessors   
+        rb:RBRACE            {Emit.EmitToken(rb);} 
     ;
 
 interface_accessors
     :   ((attributes)?   GET   SEMI   (attributes)?   SET   SEMI)=>
-            (attributes)?   GET   SEMI   (attributes)?   SET   SEMI
+            (attributes)?   
+            get1:GET       {Emit.EmitToken(get1);} 
+            s11:SEMI       {Emit.EmitToken(s11);} 
+            (attributes)?   
+            set1:SET       {Emit.EmitToken(set1);} 
+            s21:SEMI       {Emit.EmitToken(s21);} 
     |   ((attributes)?   SET   SEMI   (attributes)?   GET   SEMI)=>
-            (attributes)?   SET   SEMI   (attributes)?   GET   SEMI
+            (attributes)?   
+            set2:SET       {Emit.EmitToken(set2);} 
+            s12:SEMI       {Emit.EmitToken(s12);} 
+            (attributes)?   
+            get2:GET       {Emit.EmitToken(get2);} 
+            s22:SEMI       {Emit.EmitToken(s22);} 
     |   ((attributes)?   SET)=>
-            (attributes)?   SET SEMI
-    |   (attributes)?   GET   SEMI   
+            (attributes)?   
+            set3:SET       {Emit.EmitToken(set3);} 
+            s3:SEMI        {Emit.EmitToken(s3);} 
+    |   (attributes)?   
+        get4:GET           {Emit.EmitToken(get4);} 
+        s4:SEMI            {Emit.EmitToken(s4);} 
     ;
 
 interface_event_declaration
-    :   (attributes)?   (NEW)?  EVENT   type   IDENTIFIER   SEMI
+{
+    string [] tp = new string []{"",""};
+}
+    :   (attributes)?   (n:NEW {Emit.EmitToken(n);})?  
+        e:EVENT           {Emit.EmitToken(e);} 
+        tp = type         
+        id:IDENTIFIER     {Emit.EmitToken(id);} 
+                          {Emit.EmitString(" : " + tp[0] + tp[1] );}  
+        s:SEMI            {Emit.EmitToken(s);} 
     ;
 
 interface_indexer_declaration
-    :   (attributes)?   (NEW)?  type   THIS   LBRACK   formal_parameter_list   RBRACK   LBRACE   interface_accessors   RBRACE
+{
+    string [] tp = new string []{"",""};
+}
+    :   (attributes)?   (n:NEW {Emit.EmitToken(n);})?  
+        tp = type              {Emit.EmitString(tp[0]);}
+        t:THIS                 {Emit.EmitToken(t);} 
+        lb:LBRACK              {Emit.EmitToken(lb);} 
+        formal_parameter_list  
+        rb:RBRACK              {Emit.EmitToken(rb);} 
+                               {Emit.EmitString(" : " + tp[1]);}  
+        l:LBRACE               {Emit.EmitToken(l);} 
+        interface_accessors   
+        r:RBRACE               {Emit.EmitToken(r);} 
     ;
 
 //------------
@@ -2322,16 +2486,27 @@ enum_member_declaration
 //----------------
 
 delegate_declaration
-    :   (attributes)?   (delegate_modifier)*   DELEGATE   return_type   IDENTIFIER   LPAREN   (formal_parameter_list)? RPAREN SEMI
+{
+    string rt = "";
+}
+    :   (attributes)?   (delegate_modifier)*   
+        d:DELEGATE               {Emit.EmitToken(d);} 
+        rt = return_type        
+        id:IDENTIFIER            {Emit.EmitToken(id);} 
+        lp:LPAREN                {Emit.EmitToken(lp);} 
+        (formal_parameter_list)? 
+        rp:RPAREN                {Emit.EmitToken(rp);} 
+                                 {Emit.EmitString(" : " + rt);}
+        s:SEMI                   {Emit.EmitToken(s);} 
     ;
 
 
 delegate_modifier
-    :   NEW
-    |   PUBLIC
-    |   PROTECTED
-    |   INTERNAL
-    |   PRIVATE
+    :   dm1:NEW          {Emit.EmitToken(dm1);}
+    |   dm2:PUBLIC       {Emit.EmitToken(dm2);}
+    |   dm3:PROTECTED    {Emit.EmitToken(dm3);}
+    |   dm4:INTERNAL     {Emit.EmitToken(dm4);}
+    |   dm5:PRIVATE      {Emit.EmitToken(dm5);}
     ;
 
 //-----------------
