@@ -52,7 +52,7 @@ CP = @echo CP      $1
 all:
 	cp ../../../ncc/out.stage3/Nemerle.dll .
 	$(EXECUTE) ../../../ncc/out.stage3/ncc.exe -out test.exe ../../../ncc/testsuite/test.n
-	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -verify "$(VERIFY)" -n "../../../ncc/out.stage3/ncc.exe"
+	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -verify "$(VERIFY)" -p "$(NEM_FLAGS)" -n "../../../ncc/out.stage3/ncc.exe"
 	rm -f *.dll *.exe *.netmodule *.pdb ext_test.out
 
 clean:
