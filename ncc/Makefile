@@ -77,7 +77,6 @@ all: ncc.exe
 # generate ncc2.exe binary to be put in release for bootstrap.
 # Finally run testsuite.
 boot: ncc.exe
-	rm -f out.cs
 	time $(EXECUTE) ./ncc.exe $(NEMFLAG) -texe -out ncc2.exe $(src)
 	$(NGEN) ncc2.exe
 	time $(EXECUTE) ./ncc2.exe $(NEMFLAG) -texe -out ncc3.exe $(src)
