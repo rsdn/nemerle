@@ -1192,7 +1192,7 @@ returns [StatementTree t]
         t2 = embedded_statement   {a.Add (t2);}
         { t = new StatementTree("IF",a);}
 
-    |   i2:IF                     {a.Add (new StatementTree( ExtendedToken.getWhitespaces (i2) + "when"));}
+    |   i2:IF                     {a.Add (new StatementTree( new ExtendedToken(ExtendedToken.getWhitespaces (i2), "when")));}
         lp2:LPAREN                {a.Add (new StatementTree(lp2));}
         be = boolean_expression   {a.Add (new StatementTree(be));}
         rp2:RPAREN                {a.Add (new StatementTree(rp2));}
@@ -1697,7 +1697,7 @@ class_declaration
 {
     string semi = "";
 }
-    :   (attributes)?   (class_modifier)*   
+    :   (attributes)?   (class_modifier)*   (p:PARTIAL {Emit.EmitToken (p);})?
         c:CLASS id:IDENTIFIER  
         {
             Emit.EmitToken (c);
@@ -2437,7 +2437,7 @@ destructor_body
 //-------------
 
 struct_declaration
-    :   (attributes)?   (struct_modifier)*   
+    :   (attributes)?   (struct_modifier)*   (p:PARTIAL {Emit.EmitToken (p);})?
         s:STRUCT              {Emit.EmitToken(s);}
         id:IDENTIFIER         {Emit.EmitToken(id);}
         (struct_interfaces)?   
@@ -2536,7 +2536,7 @@ returns [string return_string]
 //-----------------
 
 interface_declaration
-    :   (attributes)?   (interface_modifier)*   
+    :   (attributes)?   (interface_modifier)*   (p:PARTIAL {Emit.EmitToken (p);})?
         i:INTERFACE  id:IDENTIFIER   
         {
             Emit.EmitToken (i);
