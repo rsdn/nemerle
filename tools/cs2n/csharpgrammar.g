@@ -852,7 +852,7 @@ returns [string return_string]
             return_string = shift_expression   
             (AS   se = type
                 {
-                    return_string = "(match (" + return_string + ") { _tmp : " + se[0] + se[1] + " => _tmp | _ => null })";
+                    return_string = "(match (" + return_string + ") { _tmp is " + se[0] + se[1] + " => _tmp | _ => null })";
                 }
             )
 
