@@ -300,6 +300,49 @@ namespace Nemerle.Compiler
                                   "got $(DescribeExpression (e))");
     }
 
+    LookupStaticMethod (ti : TypeInfo, name : string) : list [IMethod]
+    {
+      mutable res = [];
+      foreach (mem : IMember in ti.LookupMember (name)) { 
+        match (mem) {
+          | meth : IMethod when meth.IsStatic =>
+            res = meth :: res;
+          | _ => {}
+        }
+      }
+      match (ti.SuperClass ()) {
+        | Some (ti) =>
+          res + LookupStaticMethod (ti, name)
+        | None => res
+      }
+    }
+
+    
+    LookupStaticMethod (ty : MType, name : string) : list [IMethod]
+    {
+      match (ty) {
+        | MType.Class (ti, _) =>
+          LookupStaticMethod (ti, name)
+        | _ => []
+      }
+    }
+
+
+    SquashDuplicates<'a> (lst : list ['a]) : list ['a]
+      where 'a : IMember
+    {
+      def seen = Hashtable ();
+      mutable res = [];
+      foreach (elem : IMember in lst) {
+        if (seen.Member (elem.GetId ())) {}
+        else {
+          seen [elem.GetId ()] = null;
+          res = elem :: res;
+        }
+      }
+    }
+
+
     IsIndexerProperty (prop : IProperty) : bool
     {
       def getter = prop.GetGetter ();
@@ -362,7 +405,7 @@ namespace Nemerle.Compiler
     #endregion
 
 
-    #region Expression typing
+    #region Expressions in general
     TypeExpr (e : PT.PExpr, expected : TyVar) : TExpr
     {
       Util.locate (e.loc, {
@@ -712,7 +755,7 @@ namespace Nemerle.Compiler
     #endregion
 
        
-    #region def typing
+    #region ,,def''
     TypeLocalDefinition (is_mutable : bool, name : PT.Name, val : PT.PExpr) : TExpr
     {
       // check for mutable symbol redefinitions
@@ -815,7 +858,7 @@ namespace Nemerle.Compiler
     #endregion
 
 
-    #region Array, literal typing
+    #region Arrays, literals, indexers
     // FIXME: make this tail rec
     TypeArray (rank : int, args : list [PT.PExpr], expected : TyVar) : TExpr
     {
@@ -925,7 +968,7 @@ namespace Nemerle.Compiler
     #endregion
 
 
-    #region Member access typing
+    #region Member access
     TypeToConstructor (t : TypeInfo) : list [OverloadPossibility]
     {
       match (t.GetTydecl ()) {
@@ -1129,7 +1172,7 @@ namespace Nemerle.Compiler
     #endregion
 
 
-    #region Function call typing
+    #region Function calls
     TryTypeCall (fnc : TExpr, parms : list [Parm], expected : TyVar,
                  var_args : bool) : TExpr
     {
@@ -1252,54 +1295,64 @@ namespace Nemerle.Compiler
     #endregion
 
 
-    #region Type conversion typing
-    [Nemerle.NotImplemented]
-    TypeConversion (expr : TExpr, ty : MType) : TExpr
+    #region Type conversions
+    TypeConversion (expr : TExpr, to : MType) : TExpr
     {
-            def has_xpl =
-              match (t) {
-                | MType.Class (tinfo, _) =>
-                  !tinfo.LookupMember ("op_Explicit").IsEmpty ()
-                | _ => false
-              };
-          t = Tyutil.top_expand (bind_ty (t));
-          def val = ty_expr (ctx, e);
-          def valt = Tyutil.top_expand (val.ty);
-          def conv = match (valt) {
-            | TType.Class (tinfo, _) =>
-              def loop (mems : list [IMember]) {
-                | mem :: xs when mem.IsStatic =>
-                  match (mem.GetMemType ()) {
-                    | TType.Function (_, to) when Tyutil.types_eq (to, t) =>
-                      Some (TExpr.Call (TExpr.StaticRef (mem), [Parm (val)]))
-                    | _ => loop (xs)
-                  }
-                | _ :: xs => loop (xs)
-                | _ => None ()
-              }
-              loop (tinfo.LookupMember ("op_Explicit"))
+      assert (TypeOf (expr).IsFixed);
+      def from = Option.UnSome (TypeOf (expr).LowerBound);
 
-            | _ => None ()
+      solver.PushState ();
+      from.Require (to);
+      def no_check_needed = !messenger.SeenError;
+      solver.PopState ();
+
+      if (no_check_needed) {
+        Message.warning ($ "there is no check needed to cast $from to $to");
+        Message,hint_once ("consider using : instead of :>");
+        TExpr.TypeEnforcement (expr, MonoType (to, ""))
+      } else {
+        solver.PushState ();
+        to.Require (from);
+        def just_subtyping = !messenger.SeenError;
+        solver.PopState ();
+
+        if (just_subtyping) {
+          TExpr.TypeConversion (expr, MonoType (to, ""));
+        } else {
+          def operators = SquashDuplicates (
+            LookupStaticMethod ("op_Explicit", from) +
+            LookupStaticMethod ("op_Explicit", to) +
+            LookupStaticMethod ("op_Implicit", from) +
+            LookupStaticMethod ("op_Implicit", to));
+          def needed = ConstructFunctionType ([MonoType (from)], MonoType (to));
+          def operators = List.Filter (operators, fun (op : IMethod) {
+            solver.PushState ();
+            needed.Provide (op.GetFreshType ());
+            def is_wrong = messenger.SeenError;
+            solver.PopState ();
+            !is_wrong
+          });
+
+          def operators = GetBestOverloads (operators);
+
+          match (operators) {
+            | [single] =>
+              TExpr.Call (TExpr.StaticRef (single), [Parm (expr)])
+            | [] =>
+              if (from.IsValueType && to.IsValueType)
+                // FIXME: stricter checking here
+                TExpr.TypeConversion (expr, MonoType (to))
+              else {
+                ReportError (messenger, $ "cannot convert $from to $to");
+                TExpr.Error ()
+              }
+            | lst =>
+              // FIXME: included method list
+              ReportError (messenger, $"overload ambiguity in type conversion $lst");
+              TExpr.Error ()
           }
-          match (conv) {
-            | Some (x) => (x, t)
-            | None =>
-              if (Tyutil.is_value_type (t) || Tyutil.is_value_type (valt))
-                // FIXME: do more conservative checking
-                (TExpr.TypeConversion (val, t, ctx.IsChecked), t)
-              else
-                if (t >:> valt)
-                  (TExpr.TypeConversion (val, t, ctx.IsChecked), t)
-                else if (valt >:> t)
-                  (val, t) /// nothing to be done, warn about redundancy of cast?
-                else {
-                  // FIXME: unfortunately we use some forbidden casts in compiler
-                  // Message.error ($"cannot convert type `$(Tyutil.string_of_type (val.ty))'"
-                  //               " to `$(Tyutil.string_of_type (t))'");
-                  // (val, val.ty)
-                  (TExpr.TypeConversion (val, t, ctx.IsChecked), t)
-                }
-          }
+        }
+      }
     }
     #endregion
 
