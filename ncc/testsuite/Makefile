@@ -41,7 +41,7 @@ export PATH = $(shell echo $$PATH):$(shell pwd)/$(STAGE3)/
 export MONO_PATH = $(shell echo $$MONO_PATH):$(shell pwd)/$(STAGE3)
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
-VERIFY = $(shell cygpath -m $(PEVERIFY))
+VERIFY = $(shell if test $(NET_VERSION) = "2.0"; then cygpath -m $(PEVERIFY); else echo ""; fi)
 
 TEST_FILES = positive/*.n negative/*.n
 

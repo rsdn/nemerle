@@ -37,6 +37,7 @@ export MONO_PATH = $(shell echo $$MONO_PATH):$(shell pwd)/../boot/
 ############################################################
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
+VERIFY = $(shell if test $(NET_VERSION) = "2.0"; then cygpath -m $(PEVERIFY); else echo ""; fi)
 
 ############################################################
 # OUTPUT
@@ -51,7 +52,7 @@ CP = @echo CP      $1
 all:
 	cp ../../boot/Nemerle.dll .
 	$(EXECUTE) ../../boot/ncc.exe -out test.exe ../../ncc/testsuite/test.n
-	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -n "../../boot/ncc.exe"
+	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -verify "$(VERIFY)" -n "../../boot/ncc.exe"
 	rm -f out.dll out.exe out.netmodule ext_test.out Nemerle.dll
 
 clean:

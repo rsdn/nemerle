@@ -34,6 +34,7 @@ include ../config.mak
 ############################################################
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
+VERIFY = $(shell if test $(NET_VERSION) = "2.0"; then cygpath -m $(PEVERIFY); else echo ""; fi)
 
 ############################################################
 # OUTPUT
@@ -46,7 +47,7 @@ EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 all:
 	$(EXECUTE) ../ncc/out.stage3/ncc.exe -out test.exe ../ncc/testsuite/test.n
 	cp ../ncc/out.stage3/Nemerle.dll .
-	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -n "../ncc/out.stage3/ncc.exe"
+	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -verify "$(VERIFY)" -n "../ncc/out.stage3/ncc.exe"
 	rm -f out.dll out.exe out.netmodule ext_test.out Nemerle.dll
 	$(Q)$(MAKE) -C synq all
 	$(Q)$(MAKE) -C ants-icfp2004 all
