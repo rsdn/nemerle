@@ -66,6 +66,7 @@ NEMERLE_DLL_SRC = \
 
 
 NEMERLE_COMPILER_DLL_SRC = \
+	constantfolder.n \
 	integertype.n \
 	cgexpr.n \
 	cgopt.n \
@@ -98,7 +99,6 @@ NEMERLE_COMPILER_DLL_SRC = \
 	tyutil.n \
 	itypemodifier.n \
 	attribute.n \
-	constantfolder.n \
 
 
 
