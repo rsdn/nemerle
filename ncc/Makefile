@@ -103,8 +103,11 @@ NEMERLE_COMPILER_DLL_SRC = \
 
 
 NCC_EXE_SRC       = main.n
-STDMACROS_DLL_SRC = stdmacros.n \
-	stdoperators.n \
+
+STDMACROS_DLL_SRC = \
+        ../macros/core.n \
+	../macros/operators.n \
+        ../macros/io.n \
 
 DISTFILES = \
 	ChangeLog                   \

@@ -1,0 +1,291 @@
+/*
+ * Copyright (c) 2003, 2004 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Compiler;
+using Nemerle.Compiler.Tyexpr;
+using Nemerle.Compiler.Typedtree;
+
+using Nemerle.Collections;
+using System;
+
+namespace PT = Nemerle.Compiler.Parsetree;
+
+namespace Nemerle.Core {
+
+  /** MACROS EXTENDING SYNTAX OF LANGUAGE */
+
+  /** specialized macro for [if] condition with good warning messages,
+      it performs typing of given expressions to check their type
+      correctness
+   */
+  macro @if (cond, e1, e2)
+  syntax ("if", "(", cond, ")", e1, "else", e2) 
+  {
+    def tcond = ty_expr (_N_ctx, cond);
+    def bool_ty = <[ ttype: bool ]>;
+    Tyexpr.expect_type ("if condition", tcond, bool_ty);
+    
+    <[ 
+      match ($(tcond : typed)) { 
+        | true => $e1 
+        | _ => $e2
+      } 
+    ]>
+  }
+
+  /** this macro provides convenient way to write simple while loop,
+      which perform execution of [body] parameter as long as
+      [condition] is true
+    */
+  macro @while (cond, body)
+  syntax ("while", "(", cond, ")", body) 
+  {
+    <[ 
+      def loop () : void {
+        when ($cond) { $body; loop() }
+      }; 
+      loop (); 
+    ]>
+  }
+
+  /** shortcut for [if (cond) body else ()] */
+  macro @when (cond, body)
+  syntax ("when", "(", cond, ")", body) 
+  {
+    <[ match ($cond) { | true => $body | _ => () } ]>
+  }
+
+  macro @for (init, cond, change, body)
+  syntax ("for", "(", init, ";", cond, ";", change, ")", body) 
+  {
+    <[ 
+      $init;
+      def loop () : void {
+        when ($cond) { $body; $change; loop() }
+      }; 
+      loop (); 
+    ]>
+  }
+
+  /** shortcut for [if (cond) () else body] */
+  macro @unless (cond, body)
+  syntax ("unless", "(", cond, ")", body) 
+  {
+    <[ match ($cond) { | false => $body | _ => () } ]>
+  }
+
+  /** macro providing C# 'using' functionality
+      http://msdn.microsoft.com/library/default.asp?url=/library/en-us/csref/html/vclrfusingstatement.asp
+   */
+  macro @using (body, params args : array <parm>)
+  syntax ("using", "(", args, ")", body) 
+  {
+    def len = args.Length;
+    def store_exprs (i, preexprs, postexprs) {
+      if (i < len) 
+        match (args[i]) {
+          | <[ parameter: $ex ]> =>
+            store_exprs (i + 1, preexprs, 
+                         <[ when ($ex != null) $ex.Dispose () ]> :: postexprs)
+
+          | <[ parameter: $(str : var) = $ex ]> =>
+            store_exprs (i + 1, <[ def $(str : var) = $ex ]> :: preexprs, 
+                         <[ $(str : var).Dispose () ]> :: postexprs)
+                         
+          | _ => Message.fatal_error ("Invalid parameters in 'using' macro")
+        }
+      else
+        (List.Rev (preexprs), postexprs)
+    };
+
+    def (preexps, postexps) = store_exprs (0, [], []);
+    def entire = List.Append (preexps, 
+                              [ <[ try $body  finally {.. $postexps } ]> ]);
+    <[ {.. $entire } ]>
+  }
+
+  macro @lock (x, body)
+  syntax ("lock", "(", x, ")", body)
+  {
+    <[ 
+      Threading.Monitor.Enter ($x);
+      try 
+        $body
+      finally
+        Threading.Monitor.Exit ($x);
+    ]>
+  }
+
+  macro dowhile (cond, body) 
+  syntax ("do", body, "while", "(", cond, ")") 
+  {
+    <[ 
+      def loop () {
+        $body; 
+        when ($cond) loop ();
+      };
+      loop ()
+    ]>
+  }
+
+  macro @repeat (cond, body) 
+  syntax ("repeat", body, "until", "(", cond, ")") 
+  {
+    <[ do $body while (! $cond) ]>
+  }
+
+  macro @foreach (iter : funparm, collection, body)
+  syntax ("foreach", "(", iter, "in", collection, ")", body)
+  {
+    match (iter) {
+      | <[ funparm: $(iname : var) : $ty ]> =>
+        <[ 
+          def enumerator = $collection.GetEnumerator ();
+          def loop () {
+            when (enumerator.MoveNext ()) {
+              def $(iname : var) = (enumerator.Current :> $ty);
+              $body;
+              loop ();
+            }
+          };
+          loop ()
+        ]>
+      | _ =>
+        Message.fatal_error ("iterator in foreach must be identifier" +
+                             "with optional type")
+    }
+  }
+
+  macro ignore (e) 
+  {
+    <[ def _ = $e; () ]>
+  }
+
+  macro assert (cond, message = <[ "" ]>) 
+  {
+    match (cond) {
+      | <[ false ]> =>
+        // skip cond in this case so it gets 'a type
+        <[ throw AssertionException ($(cond.loc.file : string), 
+                                     $(cond.loc.line : int), $message) ]>
+      | _ =>
+        <[ unless ($cond) 
+             throw AssertionException ($(cond.loc.file : string), 
+                                       $(cond.loc.line : int), $message) ]>
+    }
+  }
+
+  macro abort (message = <[ "" ]>) 
+  {
+    <[ throw AssertionException ($(message.loc.file : string), 
+                                 $(message.loc.line : int), $message) ]>
+  }
+}
+
+namespace Nemerle.Macros {
+  /** creates new symbol with given id and current global context */
+  macro Symbol (id)
+  {
+    <[ Parsetree.Name.NameInCurrentColor ($id, 
+         $("_N_MacroContexts" : dyn).Get ($(_N_ctx.env.GetMacroContext () : int))) ]>
+  }
+
+  macro pretty_print_expr (exp, expand : bool)
+  {
+    def ctx = if (expand) Some (_N_ctx) else None ();
+    Macros.PrintExpr (ctx, exp);
+    <[ () ]>
+  }
+}
+
+
+namespace Nemerle.Extensions {
+  /** MACROS, WHICH WE CAN DO BETTER THAN HASKELL */
+
+  macro SelectFromTuple (k : int, n : int, tupl)
+  {
+    def symb = Macros.NewSymbol ();
+    mutable tup <- [];
+    for (mutable i <- n; i > 0; --i)
+      if (i == k)
+        tup <- <[ pattern: $(symb : var) ]> :: tup
+      else
+        tup <- <[ pattern: _ ]> :: tup;
+
+    <[ def (.. $tup) = $tupl; $(symb : var) ]>
+  }
+
+  macro TupleMap (f, tup)
+  {
+    match (tup) {
+      | <[ (.. $elms) ]> =>
+        def mapped = List.Map (elms, fun (e) { <[ $f ($e) ]> });
+        <[ (.. $mapped) ]>
+      | _ => 
+        Message.fatal_error ("'TupleMap' macro expects function and tuple")
+      }
+  }
+
+  macro PrintTuple (tup, size : int)
+  {
+    def symbols = array (size);
+    mutable pvars <- [];
+    for (mutable i <- size - 1; i >= 0; --i) {
+      symbols[i] <- Macros.NewSymbol ();
+      pvars <- <[ pattern: $(symbols[i] : var) ]> :: pvars;
+    };
+    mutable exps <- [];
+    for (mutable i <- size - 1; i >= 0; --i)
+      exps <- <[ Console.WriteLine ($(symbols[i] : var)) ]> :: exps;
+
+    exps <- <[ def (.. $pvars) = $tup ]> :: exps;
+    <[ {.. $exps } ]>
+  }
+
+  macro PrintTupleTyped (tup)
+  {
+    match (type_of (ty_expr (_N_ctx, tup))) {
+      | T_prod (args) =>
+        def size = List.Length (args);
+        def symbols = array (size);
+        mutable pvars <- [];
+        for (mutable i <- size - 1; i >= 0; --i) {
+          symbols[i] <- Macros.NewSymbol ();
+          pvars <- <[ pattern: $(symbols[i] : var) ]> :: pvars;
+        };
+        mutable exps <- [];
+        for (mutable i <- size - 1; i >= 0; --i)
+          exps <- <[ Console.WriteLine ($(symbols[i] : var)) ]> :: exps;
+          
+        exps <- <[ def (.. $pvars) = $tup ]> :: exps;
+        <[ {.. $exps } ]>
+      | _ => 
+        Message.fatal_error ("expected tuple")
+    }
+  }
+} // end ns
