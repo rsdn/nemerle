@@ -96,6 +96,7 @@ NEMERLE_COMPILER_DLL_SRC = \
 	tycodec.n \
 	tyvars.n \
 	tyutil.n \
+	itypemodifier.n \
 
 
 

@@ -41,7 +41,7 @@ namespace Nemerle.Compiler {
     already created, but most fields are empty.  The main function of
     this pass is [Tyinfo.run].  */
 
-public class Tyinfo : Tycon {
+public class Tyinfo : Tycon, ITypeModifier {
 
   enclosing_type : option <Tyinfo>;
   variant_option_parent : Tyinfo;
@@ -61,6 +61,7 @@ public class Tyinfo : Tycon {
   mutable variant_options : list <Tyinfo>;
   mutable typarms : list <Tyvar.T>;
   public mutable tenv : Tyvar.TEnv;
+  mutable additional_decls : list <PT.Class_member>;
 
   mutable subtypes : SystemMap <int, Tycon * list <Type>>;
   mutable member_map : SystemMap <string, list <IMember>>;
@@ -90,6 +91,8 @@ public class Tyinfo : Tycon {
   mutable is_private : bool;
 
   static mutable infos : list <Tyinfo>;
+
+  static mutable run_phase : int;
 
   /**
    * Return list of type parameters under which we subtype given type.
@@ -441,6 +444,8 @@ public class Tyinfo : Tycon {
       | (Some, _) => Util.ice ()
       | (None, _) => ()
     };
+
+    additional_decls <- [];
   }
 
   public CanAccess (source : Tycon) : bool
@@ -505,8 +510,8 @@ public class Tyinfo : Tycon {
       | _ => ()
     };
 
-    def bind_child (x : Tyinfo) : void {
-      Util.locate (x.loc, fun () : void { x.make_tyenvs (tenv) });
+    def bind_child (x : Tyinfo) {
+      Util.locate (x.loc, fun () { x.make_tyenvs (tenv) });
     };
     List.Iter (this.contained_types, bind_child);
   }
@@ -632,18 +637,22 @@ public class Tyinfo : Tycon {
    */
   static determine_subtyping () : void
   {
-    def make_srs (ti : Tyinfo) : void {
-      def add_srs (t, s : Subinfo) {
-        match (t) {
-          | T_app (ti', args) => ti.add_subtyping_of (s, ti', args)
-          | _ =>
-            Message.error("cannot implement nor extend non-class type");
-            s
-        }
-      };
-      ti.subtypes <- List.FoldLeft (ti.GetDirectSuperTypes (), SystemMap (), add_srs)
+    Iter (fun (ti : Tyinfo) { 
+            ti.construct_subtyping_map () 
+          });
+  }
+
+  construct_subtyping_map () : void
+  {
+    def add_srs (t, s : Subinfo) {
+      match (t) {
+        | T_app (ti', args) => add_subtyping_of (s, ti', args)
+        | _ =>
+          Message.error (loc, "cannot implement nor extend non-class type");
+          s
+      }
     };
-    Iter (make_srs);
+    subtypes <- List.FoldLeft (GetDirectSuperTypes (), SystemMap (), add_srs)
   }
 
   add_subtyping_of (subinfo : Subinfo, tc : Tycon, args : list <Type>) : Subinfo
@@ -961,6 +970,7 @@ public class Tyinfo : Tycon {
         | _ => []
       };
     List.Iter (decls, BindAndAddMember);
+    List.Iter (additional_decls, BindAndAddMember);
 
     contained_types <- List.Rev (contained_types);
     List.Iter (contained_types, AddMember);
@@ -969,6 +979,7 @@ public class Tyinfo : Tycon {
 
     // we no longer need it, let GC kill it
     pt_tydecl <- null;
+    additional_decls <- null;
   }
 
   add_constant_object_ctor () : void
@@ -1248,15 +1259,27 @@ public class Tyinfo : Tycon {
   public static Run () : void
   {
     infos <- List.Rev (infos);
-    SourceTopIter (fun (x : Tyinfo) { x.make_tyenvs (Tyvar.TEnv ()) });
-    def bind_types (x : Tyinfo) : void {
-      Util.locate (x.loc, fun () : void { x.bind_types () })
+
+    run_phase <- 1;
+    SourceTopIter (fun (x : Tyinfo) { 
+                      x.make_tyenvs (Tyvar.TEnv ()) 
+                    });
+    def bind_types (x : Tyinfo) {
+      Util.locate (x.loc, fun () { x.bind_types () })
     };
+    
+    run_phase <- 2;
     List.Iter (List.Rev (infos), bind_types);
 
+    run_phase <- 3;
     determine_subtyping ();
+    
+    run_phase <- 4;
     Iter (fun (x : Tyinfo) { x.check_bound_types () });
+
+    run_phase <- 5;
     Iter (fun (x : Tyinfo) { x.add_members () });
+
     Iter (fun (x : Tyinfo) { x.add_implicit_ctor () });
 
     def check_method_implements (ti : Tyinfo) {
@@ -1267,6 +1290,72 @@ public class Tyinfo : Tycon {
     };
 
     Iter (check_method_implements);
+  }
+
+  internal FixupDefinedClass () : void
+  {
+    when (run_phase >= 1)
+      match (enclosing_type) {
+        | Some (ti) =>
+          make_tyenvs (ti.tenv)
+        | None =>
+          make_tyenvs (Tyvar.TEnv ())
+      };
+    when (run_phase >= 2)
+      Util.locate (loc, bind_types);
+    when (run_phase >= 3)
+      construct_subtyping_map ();
+    when (run_phase >= 4)
+      check_bound_types ();
+    when (run_phase >= 5)
+      begin_adding_members ();
+  }
+
+
+  public DefineNestedClass (attrs : list <Modifier>,
+                            name : string,
+                            typarms : PT.Typarms,
+                            extends_list : list <PT.Type>) : ITypeModifier
+  {
+    env.DefineClass (Some (this), attrs, name, typarms, extends_list)
+  }
+
+  public DefineField (attrs : list <Modifier>, name : string, field_type : PT.Type) : void
+  {
+    def f = PT.M_field (name, attrs, field_type);
+    if (member_map == null)
+      additional_decls <- f :: additional_decls
+    else
+      BindAndAddMember (f)
+  }
+
+  public DefineMethod (attrs : list <Modifier>,
+                       header : PT.Fun_header,
+                       body : PT.Expr,
+                       implemented_methods : list <string>) : void
+  {
+    def kind =
+      if (Macros.UnSString (header.name) == ".ctor")
+        FK_ctor ()
+      else
+        FK_method (implemented_methods);
+    def f = PT.M_function (Macros.UnSString (header.name), attrs, header, kind, FB_parsed_expr (body));
+    if (member_map == null)
+      additional_decls <- f :: additional_decls
+    else
+      BindAndAddMember (f)
+  }
+
+  public DefineMethod (attrs : list <Modifier>, expr : PT.Expr) : void
+  {
+    match (expr) {
+      | PT.E_sequence ([expr]) =>
+        DefineMethod (attrs, expr)
+      | PT.E_letfun ([{header = h; body = b}]) =>
+        DefineMethod (attrs, h, b, [])
+      | _ => 
+        assert (false)
+    }
   }
 
 }
