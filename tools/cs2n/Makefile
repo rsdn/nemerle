@@ -84,6 +84,9 @@ config.cs2n.mak: configure
 dist-clean: clean
 	rm -f  config.cs2n.mak
 
+# put the antlr-generated stuff in tarball so it will build without it
+dist: $(GENERATED_SOURCES_PARSER)
+
 tests-clean:
 	rm -f tests/*.n tests/*.exe tests/*.log
 

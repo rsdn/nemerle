@@ -97,6 +97,7 @@ tarball:
 dist-cleaner:
 	@echo Setting up html doc.
 	$(Q)$(MAKE) -C doc dist-cleaner
+	$(Q)$(MAKE) -C tools/cs2n dist
 	@echo Cleaning non-dist junk.
 	$(Q)$(MAKE) clean
 	$(Q)rm -rf doc/course{,-src} doc/images
