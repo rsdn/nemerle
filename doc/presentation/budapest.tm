@@ -109,6 +109,29 @@
 
   <new_page>
 
+  <section|TRS and automatic tests>
+
+  <\itemize>
+    <item>formal semantics of the language will be described using term
+    rewriting systems
+
+    <item>assertions in code
+
+    <\itemize-minus>
+      <item>design by contract
+
+      <item>help in automatic test data generation
+
+      <item>help in proving program properties at TRS level
+    </itemize-minus>
+
+    <item>FIXME!
+
+    \;
+  </itemize>
+
+  <new_page>
+
   <section|Hello world><subsubsection|>
 
   <\itemize>
@@ -775,6 +798,143 @@
     <verbatim|<with|color|red|salary>> and <verbatim|<with|color|red|lname>>
     variables
   </itemize>
+
+  <section|Big example: red-black trees>
+
+  <with|font size|0.84|<\code>
+    <em|module> RB_tree {
+
+    \ \ <em|variant> <with|color|brown|color> = [ R \| B ]
+
+    \ \ <em|variant> <with|color|brown|node ('a)>\ 
+
+    \ \ \ \ <em|where> <with|color|brown|'a> :\<gtr\>
+    <with|color|brown|IComparable ('a)> =
+
+    \ \ [
+
+    \ \ \ \ \| T { c : <with|color|brown|color>; \ \ \ \ 
+
+    \ \ \ \ \ \ \ \ \ \ l : <with|color|brown|node ('a)>; \ \ \ \ \ \ 
+
+    \ \ \ \ \ \ \ \ \ \ e : <with|color|brown|'a>; \ \ \ \ \ \ 
+
+    \ \ \ \ \ \ \ \ \ \ r : <with|color|brown|node ('a)>;
+
+    \ \ \ \ \ \ \ \ }
+
+    \ \ \ \ \| E
+
+    \ \ ]
+
+    \;
+
+    \ \ <with|color|brown|'a> <em|where> <with|color|brown|'a> :\<gtr\>
+    <with|color|brown|IComparable ('a)>\ 
+
+    \ \ balance (c : <with|color|brown|color>, l : <with|color|brown|node
+    ('a)>,\ 
+
+    \ \ \ \ \ \ \ \ \ \ \ e : <with|color|brown|'a>, r :
+    <with|color|brown|node ('a)>) : <with|color|brown|node ('a)>
+
+    \ \ \ \ <em|match> (c, l, e, r) <em|with> [
+
+    \ \ \ \ \ \ \| (B, T (R, T (R, a, x, b), y, c), z, d) =\<gtr\>
+
+    \ \ \ \ \ \ \ \ T (R (), T (B (), a, x, b), y,\ 
+
+    \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ T (B (), c, z, d))
+
+    \ \ \ \ \ \ \| (B, T (R, a, x, T (R, b, y, c)), z, d) =\<gtr\>
+
+    \ \ \ \ \ \ \ \ T (R (), T (B (), a, x, b), y,\ 
+
+    \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ T (B (), c, z, d))
+
+    \ \ \ \ \ \ \| (B, a, x, T (R, T (R, b, y, c), z, d)) =\<gtr\>
+
+    \ \ \ \ \ \ \ \ T (R (), T (B (), a, x, b), y,\ 
+
+    \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ T (B (), c, z, d))
+
+    \ \ \ \ \ \ \| (B, a, x, T (R, b, y, T (R, c, z, d))) =\<gtr\>
+
+    \ \ \ \ \ \ \ \ T (R (), T (B (), a, x, b), y,\ 
+
+    \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ T (B (), c, z, d))
+
+    \ \ \ \ \ \ \| (a, b, c, d) =\<gtr\> T (a, b, c, d)
+
+    \ \ \ \ ];
+
+    \;
+
+    \ \ <with|color|brown|'a> <em|where> <with|color|brown|'a> :\<gtr\>
+    <with|color|brown|IComparable ('a)> \ 
+
+    \ \ insert (t : <with|color|brown|node ('a)>, x : <with|color|brown|'a>)
+    : <with|color|brown|node ('a)>
+
+    \ \ \ \ {
+
+    \ \ \ \ \ \ <em|def> loop (t : <with|color|brown|node ('a)>)
+    :<with|color|brown| node ('a)> =
+
+    \ \ \ \ \ \ \ \ <em|match> t <em|with> [
+
+    \ \ \ \ \ \ \ \ \ \ \| E =\<gtr\> T (R (), E (), x, E ())
+
+    \ \ \ \ \ \ \ \ \ \ \| T (c, a, y, b) =\<gtr\>
+
+    \ \ \ \ \ \ \ \ \ \ \ \ <em|def> res = y.Compare (x);
+
+    \ \ \ \ \ \ \ \ \ \ \ \ <em|if> res \<gtr\> 0 <em|then>\ 
+
+    \ \ \ \ \ \ \ \ \ \ \ \ \ \ balance (c, loop (a), y, b)
+
+    \ \ \ \ \ \ \ \ \ \ \ \ <em|else> <em|if> res \<less\> 0 <em|then>\ 
+
+    \ \ \ \ \ \ \ \ \ \ \ \ \ \ balance (c, a, y, loop (b))
+
+    \ \ \ \ \ \ \ \ \ \ \ \ <em|else> T (c, a, x, b)
+
+    \ \ \ \ \ \ \ \ ];
+
+    \ \ \ \ \ \ <em|match> loop (t) <em|with> [
+
+    \ \ \ \ \ \ \ \ \| T (_, a, y, b) =\<gtr\> T (B (), a, y, b)
+
+    \ \ \ \ \ \ ];
+
+    \ \ \ \ }
+
+    \;
+
+    \ \ <with|color|brown|'a> <em|where> <with|color|brown|'a> :\<gtr\>
+    <with|color|brown|IComparable ('a)> \ 
+
+    \ \ find (t : <with|color|brown|node ('a)>, x : <with|color|brown|'a>) :
+    <with|color|brown|option ('a)> =
+
+    \ \ \ \ <em|match> t <em|with> [
+
+    \ \ \ \ \ \ \| T (_, a, y, b) =\<gtr\>
+
+    \ \ \ \ \ \ \ \ <em|def> res = y.Compare (x);
+
+    \ \ \ \ \ \ \ \ <em|if> res \<less\> 0 <em|then> member (a, x)
+
+    \ \ \ \ \ \ \ \ <em|else if> res \<gtr\> 0 <em|then> member (b, x)
+
+    \ \ \ \ \ \ \ \ <em|else> Some (y)
+
+    \ \ \ \ \ \ \| E =\<gtr\> None ()
+
+    \ \ \ \ ];
+
+    }
+  </code>>
 </body>
 
 <\initial>
@@ -801,21 +961,23 @@
   <\collection>
     <associate|toc-10|<tuple|<uninit>|6>>
     <associate|gly-1|<tuple|1|?>>
-    <associate|toc-11|<tuple|<uninit>|6>>
+    <associate|toc-11|<tuple|<uninit>|7>>
     <associate|toc-12|<tuple|<uninit>|7>>
-    <associate|toc-13|<tuple|<uninit>|7>>
+    <associate|toc-13|<tuple|<uninit>|8>>
     <associate|toc-14|<tuple|<uninit>|8>>
-    <associate|toc-15|<tuple|<uninit>|8>>
+    <associate|toc-15|<tuple|<uninit>|9>>
     <associate|toc-16|<tuple|<uninit>|9>>
-    <associate|toc-17|<tuple|<uninit>|9>>
+    <associate|toc-17|<tuple|<uninit>|10>>
+    <associate|toc-18|<tuple|<uninit>|10>>
+    <associate|toc-19|<tuple|<uninit>|11>>
     <associate|toc-1|<tuple|<uninit>|2>>
     <associate|toc-2|<tuple|<uninit>|2>>
     <associate|toc-3|<tuple|<uninit>|3>>
     <associate|toc-4|<tuple|<uninit>|3>>
     <associate|toc-5|<tuple|<uninit>|3>>
     <associate|toc-6|<tuple|<uninit>|4>>
-    <associate|toc-7|<tuple|<uninit>|4>>
-    <associate|toc-8|<tuple|<uninit>|4>>
+    <associate|toc-7|<tuple|<uninit>|5>>
+    <associate|toc-8|<tuple|<uninit>|5>>
     <associate|toc-9|<tuple|<uninit>|5>>
   </collection>
 </references>
@@ -834,30 +996,34 @@
 
       And the Result<value|toc-dots><pageref|toc-5>
 
-      Hello world<value|toc-dots><pageref|toc-6>
+      TRS and automatic tests<value|toc-dots><pageref|toc-6>
 
-      <with|left margin|<quote|3fn>|<value|toc-dots><pageref|toc-7>>
+      Hello world<value|toc-dots><pageref|toc-7>
 
-      Factorial<value|toc-dots><pageref|toc-8>
+      <with|left margin|<quote|3fn>|<value|toc-dots><pageref|toc-8>>
 
-      Variants<value|toc-dots><pageref|toc-9>
+      Factorial<value|toc-dots><pageref|toc-9>
 
-      Functional values<value|toc-dots><pageref|toc-10>
+      Variants<value|toc-dots><pageref|toc-10>
 
-      Binary search tree insertion<value|toc-dots><pageref|toc-11>
+      Functional values<value|toc-dots><pageref|toc-11>
 
-      Language extensions<value|toc-dots><pageref|toc-12>
+      Binary search tree insertion<value|toc-dots><pageref|toc-12>
+
+      Language extensions<value|toc-dots><pageref|toc-13>
 
       <with|left margin|<quote|3fn>|Example
-      uses<value|toc-dots><pageref|toc-13>>
+      uses<value|toc-dots><pageref|toc-14>>
 
-      Regular expression extension<value|toc-dots><pageref|toc-14>
+      Regular expression extension<value|toc-dots><pageref|toc-15>
 
-      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-15>>
+      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-16>>
 
-      SQL queries extension<value|toc-dots><pageref|toc-16>
+      SQL queries extension<value|toc-dots><pageref|toc-17>
 
-      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-17>>
+      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-18>>
+
+      Big example: red-black trees<value|toc-dots><pageref|toc-19>
     </associate>
   </collection>
 </auxiliary>
