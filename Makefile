@@ -21,6 +21,7 @@ send-www:
 name = nemerle
 
 changelog:
+	svn up
 	svn log --xml -v | python aux/svn2log.py > ChangeLog
 
 dist: changelog
@@ -28,7 +29,6 @@ dist: changelog
 	  echo "Some files modified"; \
 	  false; \
 	else \
-	  svn up; \
 	  ver=`svn info . | awk '/^Revision:/ { print $$2 }'`; \
 	  rm -rf $(name)-$$ver; \
 	  svn export . $(name)-$$ver; \
