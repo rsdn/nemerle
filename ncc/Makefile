@@ -34,6 +34,8 @@ lib_src = ../lib/aliases.n ../lib/core.n ../lib/option.n ../lib/list.n \
 
 src = \
 	env.n \
+	localvalue.n \
+	typingcontext.n \
 	macros.n \
 	macroregistry.n \
 	typattern.n \
