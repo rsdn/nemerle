@@ -60,6 +60,40 @@ elseif exists("b:current_syntax")
   finish
 endif
 
+" copy this to your ~/.vimrc to enable outline mode (folding regions) on <F8>
+" map <F8> <ESC>:call NemOutlineToggle()<CR>
+" imap <F8> <ESC>:call NemOutlineToggle()<CR>a
+
+" based on http://vim.sourceforge.net/tips/tip.php?tip_id=333
+function! NemOutlineToggle()
+  let OldLine = line(".")
+  let OldCol = virtcol(".")
+
+  if (! exists ("b:outline_mode"))
+     let b:outline_mode = 0
+     let b:OldMarker = &foldmarker
+  endif
+
+  if (b:outline_mode == 0)
+    let b:outline_mode = 1
+    set foldmethod=marker
+    set foldmarker=#region,#endregion
+    " set foldcolumn=4
+    set foldcolumn=0
+  else
+    let b:outline_mode = 0
+    set foldmethod=marker
+    let &foldmarker=b:OldMarker
+    set foldcolumn=0
+  endif
+  
+  execute "normal! ".OldLine."G"
+  execute "normal! ".OldCol."|"
+  unlet OldLine
+  unlet OldCol
+  execute "normal! zv"
+endfunction
+
 syn keyword nemerleType int bool string void option list char float object
 
 syn keyword nemerleModifier abstract extern internal new private protected
@@ -85,6 +119,8 @@ syn match	nemerleNumber "[0-9]\+\((\.[0-9]*)\)\?\([eE]\([+-]\)\?[0-9]*\)\?"
 
 syn match	nemerleTyVar	"'[a-zA-Z_][a-zA-Z_0-9]*"
 syn match	nemerleChar	"'\(.\|\\.\|\\x\x\x\)'"
+
+syn match	nemerlePreCondit "^[ 	]*#\(region\|endregio\|if\|endif\).*$"
 
 " syn match	nemerleUIdentifier	"[A-Z][a-zA-Z_0-9]*"
 syn match	nemerleIdentifier	"[a-z_][a-zA-Z_0-9]*"
@@ -128,6 +164,7 @@ if version >= 508 || !exists("did_nemerle_syntax_inits")
   HiLink nemerleNumber	Number
   HiLink nemerleConst	Constant
   HiLink nemerleTodo	Todo
+  HiLink nemerlePreCondit	PreCondit
   
   HiLink nemerleTyArg	Type
 
