@@ -42,10 +42,10 @@ namespace Nemerle.Compiler
     GetNamespace () : string;  
     Run (ctx : TypingContext, args : list [SyntaxElement]) : PExpr;
     CallTransform (_ : list [PExpr]) : list [SyntaxElement];
-    SyntaxExtension () : string * list [GrammarElement] * 
-                         (list [SyntaxElement] -> list [SyntaxElement]);        
+    SyntaxExtension () : GrammarElement * (list [SyntaxElement] -> list [SyntaxElement]);
     IsTailRecursionTransparent : bool { get; }
     IsInherited : bool { get; }
+    Keywords : list [string] { get; }
     Usage : MacroUsageAttribute { get; }
   } 
 
@@ -443,20 +443,6 @@ namespace Nemerle.Compiler
             Util.ice ("wrong Splicable in macro params")
         }
       };
-      // lift grammar element
-      def lift_ge (x) {
-        | GrammarElement.Operator (name) => <[ GrammarElement.Operator ($(name : string)) ]>
-        | GrammarElement.Keyword (name) => <[ GrammarElement.Keyword ($(name : string)) ]>
-        | GrammarElement.Expression => <[ GrammarElement.Expression () ]>
-        | GrammarElement.ExpressionList => <[ GrammarElement.ExpressionList () ]>
-        | GrammarElement.RawToken => <[ GrammarElement.RawToken () ]>        
-
-        | GrammarElement.Parameter => <[ GrammarElement.Parameter () ]>
-        | GrammarElement.Optional (g) => <[ GrammarElement.Optional ($(lift_ge (g))) ]>
-        | GrammarElement.Branch (li) => <[ GrammarElement.Branch ($(Macros.Lift (li, lift_ge))) ]>
-        | GrammarElement.End => Util.ice ("invalid node")
-      };
-
 
       // this also checkes parameters to infer target type of macro
       def (macro_patts, macro_exprs, macro_parms) = 
@@ -479,25 +465,27 @@ namespace Nemerle.Compiler
                                  " declaration parts")
         else
           name;
-
+          
       // build macro class
       Util.locate (expr.loc, {
         attrs.mods |= NemerleAttributes.Macro %| NemerleAttributes.Public %| 
                       NemerleAttributes.Sealed;
 
         def paramsmap = mapparams (header.parms, 0, SystemMap ());
-        def (key, rules, positions) = analyze_syntax (synt, paramsmap);
+        def (keys, rules, positions) = analyze_syntax (synt, paramsmap);
                       
         def macro_class_name = header.ParsedName.NewName (convert_to_valid_type_name (retname) + "Macro");
         def td = 
           env.Define (<[ decl:
             ..$attrs class $(macro_class_name : name) : IMacro {
               static mutable my_usage : MacroUsageAttribute;
+              static keywords : list [string];
 
               static this () {
                 def customs = typeof ($(macro_class_name : name)).GetCustomAttributes (false);
                 foreach (x : MacroUsageAttribute in customs)
                   my_usage = x;
+                keywords = [..$(List.Map (keys, fun (x) { <[ $(x : string) ]> }))];
               }
               
               public IsInherited : bool
@@ -505,6 +493,11 @@ namespace Nemerle.Compiler
                 get { my_usage != null && my_usage.Inherited } 
               }
 
+              public Keywords : list [string]
+              {
+                get { keywords }
+              }
+              
               public Usage : MacroUsageAttribute
               {
                 get { my_usage }
@@ -591,11 +584,10 @@ namespace Nemerle.Compiler
         ]>);
 
         td.Define (<[ decl:
-          public SyntaxExtension () : string * list[GrammarElement] 
-            * (list [SyntaxElement] -> list [SyntaxElement])
+          public SyntaxExtension () : GrammarElement * (list [SyntaxElement] -> list [SyntaxElement])
           {
-            ($(key : string), $(Macros.Lift (rules, lift_ge)),
-             $(MacroClasses.CreatePermutingFunction (List.Rev (positions))))
+            ($(lift_ge (rules)),
+             $(MacroClasses.CreatePermutingFunction (positions)))
           }
         ]>);
         
@@ -618,30 +610,54 @@ namespace Nemerle.Compiler
         build.ToString ()        
     }
 
+    // lift grammar element, also propagating Next field
+    private lift_ge (x : GrammarElement) : PExpr
+    {
+      if (x == null) <[ null ]>
+      else {
+        def next = lift_ge (x.Next);
+        match (x) {
+          | GrammarElement.Operator (name) => <[ GrammarElement.Operator ($next, $(name : string)) ]>
+          | GrammarElement.Keyword (name) => <[ GrammarElement.Keyword ($next, $(name : string)) ]>
+          | GrammarElement.Expression => <[ GrammarElement.Expression ($next) ]>
+          | GrammarElement.ExpressionList => <[ GrammarElement.ExpressionList ($next) ]>
+          | GrammarElement.RawToken => <[ GrammarElement.RawToken ($next) ]>        
+
+          | GrammarElement.Parameter => <[ GrammarElement.Parameter ($next) ]>
+          | GrammarElement.Optional (g) => <[ GrammarElement.Optional ($next, $(lift_ge (g))) ]>
+          | GrammarElement.Branch (li) => <[ GrammarElement.Branch ($next, $(Macros.Lift (li, lift_ge))) ]>
+          | GrammarElement.End => Util.ice ("invalid node")
+        }
+      }
+    };
+
     // if syntax extending section of macro exists, analyze all tokens and
     // permutation of parameters in its definition
     analyze_syntax (toks : list [PExpr],
                     mutable paramsmap : SystemMap [string, int * PExpr])
-    : string * list [GrammarElement] * list [int]
+    : list [string] * GrammarElement * list [int]
     {
+      mutable keywords = [];
+      mutable positions = [];
+      
       def analyze_one (tok, acc) {
-        def (elements, positions) = acc;
         match (tok) {
           | <[ $(x : string) ]> when LexerBase.HasKeywordChars (x) =>
-            (GrammarElement.Keyword (x) :: elements, positions)
+            keywords = x :: keywords;
+            GrammarElement.Keyword (acc, x)
 
           | <[ $(x : string) ]> when LexerBase.IsOperator (x) =>
-            (GrammarElement.Operator (x) :: elements, positions)
+            GrammarElement.Operator (acc, x)
 
-          | <[ Optional ($x) ]> =>
-            match (analyze_one (x, acc)) {
-              | (GrammarElement.Optional :: _, _) =>
+          | <[ Optional (..$els) ]> =>
+            // we pass null to the inside of Optional, as it will end opt block            
+            def inside = List.FoldRight (els, null, analyze_one);
+            match (inside) {
+              | GrammarElement.Optional =>
                 Message.fatal_error (tok.Location, "nested Optional tokens not allowed in"
                                      " syntax definition")
 
-              | (tok :: rest, pos) => (GrammarElement.Optional (tok) :: rest, pos)
-
-              | _ => Util.ice ("analyze_one returned empty list")
+              | tok => GrammarElement.Optional (acc, tok)
             }
 
           | <[ $(x : dyn) ]> =>
@@ -650,14 +666,16 @@ namespace Nemerle.Compiler
                 paramsmap = paramsmap.Remove (x);
                 def grammar_token =
                   match (ty) {
-                    | <[ parameter ]> => GrammarElement.Parameter ()
+                    | <[ parameter ]> => GrammarElement.Parameter (acc)
                     | <[ list [PExpr] ]>                       
                     | <[ array [PExpr] ]> 
-                    | <[ array [expr] ]> => GrammarElement.ExpressionList ()
-                    | <[ Token ]> => GrammarElement.RawToken ()
-                    | _ => GrammarElement.Expression ()
+                    | <[ array [expr] ]> => GrammarElement.ExpressionList (acc)
+                    | <[ Token ]> => GrammarElement.RawToken (acc)
+                    | _ => GrammarElement.Expression (acc)
                   };
-                (grammar_token :: elements, pos :: positions)
+                positions = pos :: positions;
+                grammar_token
+                
               | None =>
                 Message.fatal_error (tok.loc, "parameters from syntax description doesn't"
                                      " match macro's")
@@ -665,17 +683,8 @@ namespace Nemerle.Compiler
           | _ => Message.fatal_error (tok.loc, "unsupported syntax token")
         }
       };
-      def (elements, positions) = List.FoldLeft (toks, ([], []), analyze_one);
-      // we have reached end of syntax definition, reverse accumulator
-      // and return stored tokens and parameters' positions
-      match (List.Rev (elements)) {
-        | GrammarElement.Keyword (key) :: rules => (key, rules, positions)
-        | GrammarElement.Operator (op) :: rules => (op, rules, positions)            
-
-        // if there was no syntax definition
-        | [] => ("", [], [])
-        | _ => Message.fatal_error ("first token of syntax definition must be keyword")
-      }
+      def rule = List.FoldRight (toks, null, analyze_one);
+      (keywords, rule, positions)
     };
     
     public CreatePermutingFunction (positions : list [int]) : PExpr
