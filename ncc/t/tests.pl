@@ -29,10 +29,17 @@
 
 $nem_comp = shift;
 defined $nem_comp or $nem_comp = "ncc2";
-$compiler = "mono --debug ../$nem_comp.exe ../lib/core.n";
+
 $cs_compiler = shift;
 defined $cs_compiler or $cs_compiler = "mcs";
-$cs_compiler =~ /^(cscc|mcs)$/ or die "bad cs_compiler";
+$cs_compiler =~ /^(csc|cscc|mcs)$/ or die "bad cs_compiler";
+
+$runtime = "";
+if ($cs_complier == "mcs") {
+    $runtime = "mono --debug ";
+}
+
+$compiler = $RUNTIME . "../$nem_comp.exe ../lib/core.n";
 
 sub xgrep($$)
 {
@@ -130,6 +137,7 @@ while (<*.n>) {
       $copy_mode = 0;
       open (F, "< $fn");
       while (<F>) {
+        s/\r\n/\n/g;
         /^END-OUTPUT/ and $copy_mode = 0;
         $exp_out .= $_ if $copy_mode;
         /^BEGIN-OUTPUT/ and $copy_mode = 1;
@@ -138,22 +146,27 @@ while (<*.n>) {
       if ($cs_compiler eq "cscc") {
         $res = system("cscc -o t.exe out.cs >/dev/null 2>&1");
 	err("cscc failed on $fn (out.cs)") if $res;
-        $il_run = "ilrun";
+        $il_run = "ilrun ";
       } elsif ($cs_compiler eq "mcs") {
         $res = system("mcs -out:t.exe -target:exe out.cs >/dev/null 2>&1");
 	err("mcs failed on $fn (out.cs)") if $res;
-        $il_run = "mono";
+        $il_run = "mono ";
+      } elsif ($cs_compiler eq "csc") {
+        $res = system("csc /out:t.exe /target:exe out.cs >/dev/null 2>&1");
+	err("csc failed on $fn (out.cs)") if $res;
+        $il_run = "";
       } else { die }
       $out = "";
-      open(F, "$il_run t.exe 2>&1 |");
+      open(F, $il_run . "t.exe 2>&1 |");
       while (<F>) {
+        s/\r\n/\n/g;
         $out .= $_;
       }
       close(F);
       unlink("t.exe");
       if ($out ne $exp_out) {
         err("bad testcase output");
-	print STDERR "\nneeded:\n$exp_out\ngot:$out\n\n";
+	print STDERR "\nneeded:\n'$exp_out'\ngot:\n'$out'\n\n";
       }
     } else {
       if ($cs_compiler eq "cscc") {
@@ -162,6 +175,10 @@ while (<*.n>) {
       } elsif ($cs_compiler eq "mcs") {
         $res = system("mcs -out:dev_null.o -target:module out.cs >/dev/null 2>&1");
 	err("mcs failed on $fn (out.cs))") if $res;
+	unlink("dev_null.o");
+      } elsif ($cs_compiler eq "csc") {
+        $res = system("csc /out:dev_null.o /target:module out.cs >/dev/null 2>&1");
+	err("csc failed on $fn (out.cs))") if $res;
 	unlink("dev_null.o");
       } else { die }
     }
