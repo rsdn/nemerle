@@ -186,12 +186,6 @@ class Lexer : yyParser.yyInput
       case "]>":
         return Token.SQBRAC_MORE;
 
-      case "&&":
-        return Token.LAZY_AND;
-
-      case "||":
-        return Token.LAZY_OR;
-
       default:
         return tok;
     }
