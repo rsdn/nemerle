@@ -115,19 +115,21 @@ let strip_quotes s =
 
 let unescape s =
   let buf = Buffer.create (String.length s) in
-  for i = 0 to String.length s - 1 do
-    match s.[i] with
-      | '\\' ->
-        let c =
-          match s.[i + 1] with
-          | 'n' -> '\n'
-          | 'r' -> '\r'
-          | 't' -> '\t'
-          | c -> c
-        in Buffer.add_char buf c
-      | c -> Buffer.add_char buf c
-  done;
-  Buffer.contents buf
+  let rec loop i =
+    if i >= String.length s then Buffer.contents buf
+    else
+      match s.[i] with
+        | '\\' ->
+          let c =
+            match s.[i + 1] with
+            | 'n' -> '\n'
+            | 'r' -> '\r'
+            | 't' -> '\t'
+            | c -> c
+          in Buffer.add_char buf c; loop (i + 2)
+        | c -> Buffer.add_char buf c; loop (i + 1)
+  in loop 0
+  
 }
 
 let nl = ('\r' '\n' | '\n' | '\r')
