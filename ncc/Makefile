@@ -74,7 +74,7 @@ NEMERLE_DLL_SRC = \
 	../lib/AssemblyInfo.n
 
 NEMERLE_COMPILER_DLL_SRC = \
-        flags.n                          \
+        CompilationOptions.n             \
         external/LibrariesLoader.n	 \
         external/InternalTypes.n	 \
         external/Codec.n		 \
