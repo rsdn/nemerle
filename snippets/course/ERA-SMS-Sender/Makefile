@@ -10,7 +10,7 @@ MONO    = $(NET_ENGINE) $(NET_FLAGS)
 COMPILE = $(MONO) $(NPATH)/ncc.exe
 
 all: $(SOURCES)
-	$(COMPILE) $(SOURCES) -o SMS.exe -r System.Windows.Forms
+	$(COMPILE) $(SOURCES) -o SMS.exe -r System.Windows.Forms -r System.Data
 
 clean:
 	rm -f SMS.exe
