@@ -118,10 +118,11 @@ module Extensions {
   {
     def store_exprs (args : list(PT.Parm), preexprs, postexprs) {
       match (args) {
-        | [] => (List.rev (preexprs), List.rev (postexprs))
+        | [] => (List.rev (preexprs), postexprs)
 
         | <[ parameter: $ex ]> :: xs =>
-            store_exprs (xs, preexprs, <[ $ex . Dispose () ]> :: postexprs)
+            store_exprs (xs, preexprs, 
+                         <[ when ($ex != null) $ex.Dispose () ]> :: postexprs)
 
         | <[ parameter: $(str : var) = $ex ]> :: xs =>
           store_exprs (xs, <[ def $(str : var) = $ex ]> :: preexprs, 
@@ -132,8 +133,22 @@ module Extensions {
     };
 
     def (preexps, postexps) = store_exprs (args, [], []);
-    def all_exps = List.append (preexps, body :: postexps);
-    <[ {.. $all_exps } ]>
+    def entire = List.Append (preexps, 
+                              [ <[ try $body  finally {.. $postexps } ]> ]);
+    <[ {.. $entire } ]>
+  }
+
+
+  macro @lock (x, body)
+  syntax ("lock", "(", x, ")", body)
+  {
+    <[ 
+      System.Threading.Monitor.Enter ($x);
+      try 
+        $body
+      finally
+        System.Threading.Monitor.Exit ($x);
+    ]>
   }
 
   macro dowhile (cond, body) 
@@ -205,7 +220,6 @@ module Extensions {
                 mutable m <- namesreg.Match (str); 
                 // find all occurrenceces of existing gropus inside
                 while (m.Success) {
-//                  printf ("%s\n", m.Groups[i].ToString ());
                   mutable end <- false;
                   mutable paren <- 0;
                   mutable optional <- false;
@@ -229,7 +243,8 @@ module Extensions {
                   // - [(?<name : type>..)?]
                   match ((m.Groups[1].Success, m.Groups[3].Success)) {
                     | (true, false) =>
-                      patnames <- (m.Groups[1].ToString (), optional, None ()) :: patnames
+                      patnames <- (m.Groups[1].ToString (), optional, 
+                                   None ()) :: patnames
                     | (true, true) =>
                       patnames <- (m.Groups[1].ToString (), optional,
                                    Some (m.Groups[3].ToString ())) :: patnames;
@@ -237,14 +252,14 @@ module Extensions {
                   };
                   m <- m.NextMatch ();
                 };
-                def newsymb = Util.tmpname ("g");
+                def nsymb = Macros.NewSymbol ();
                 // add | if it is not first alternative in our pattern
                 unless (first) pat <- pat.Append ("|");
                 first <- false;
                 def newstr = namesreg.Replace (str, "(?<$1");
                 // add current alternative to our pattern
-                pat <- pat.Append("(?<" + newsymb + ">^" + newstr + "$)");
-                walk_guards (xs, newsymb :: acc)
+                pat <- pat.Append("(?<" + nsymb + ">^" + newstr + "$)");
+                walk_guards (xs, nsymb :: acc)
 
               | [] => acc
 
@@ -268,10 +283,7 @@ module Extensions {
         };
         create_regpattern (cases);
 
-//        def myreg =  System.Text.RegularExpressions.Regex (pat.ToString ());
-//        printf ("pat = %s\n", pat.ToString());
-
-        def mname = Util.tmpname ("match");
+        def mname = Macros.NewSymbol ();
 
         // build decision tree, which checks created groups one by one and if
         // some has matched executes corresponding expression
@@ -280,11 +292,8 @@ module Extensions {
           def build_alts (alts) {
             match (alts) {
               | [str] => 
-//                printf ("%s %d\n", str, myreg.GroupNumberFromName (str));
-//                <[ $(mname : var).Groups[$(myreg.GroupNumberFromName (str) : int)]
                 <[ $(mname : var).Groups[$(str : string)].Success ]>
               | x::xs =>
-//                printf ("%s %d\n", x, myreg.GroupNumberFromName (x));
                 <[ 
                   $(mname : var).Groups[$(x : string)].Success || 
                   $(build_alts (xs)) 
@@ -344,20 +353,21 @@ module Extensions {
             | Some (defexpr) => defexpr
           };              
 
-//        def ret =
         // generation of final code for building regular expression and
         // extracting its groups
+        def regge = Macros.NewSymbol ();
         <[ 
-          def _N_regge = System.Text.RegularExpressions.Regex 
+          def $(regge : var) = System.Text.RegularExpressions.Regex 
             ($(pat.ToString () : string), 
              System.Text.RegularExpressions.RegexOptions.ExplicitCapture);
-          def $(mname : var) = _N_regge.Match ($val);
+
+          def $(mname : var) = $(regge : var).Match ($val);
+
           match ($(mname : var).Success) {
             | true => $(build_checking (alternatives))
             | _ => $defexpr 
           }
         ]>
-//        ; Macros.PrintExpr (_N_ctx, ret, "", true); printf ("\n"); ret
       | _ =>
         Message.fatal_error ("regexp macro expects match construct")
     }
@@ -388,6 +398,15 @@ module Extensions {
             | _ => false
           }
       }
+    ]>
+  }
+
+  macro @<-> (e1, e2)
+  {
+    <[
+      def _N_tmp = $e1;
+      $e1 <- $e2;
+      $e2 <- _N_tmp;
     ]>
   }
   
@@ -545,55 +564,59 @@ module Extensions {
       }
     };
 
-    def seq = <[ Nemerle.Input.EatWhiteSpace () ]> ::
-      make_expressions (parse_format (format), List.rev (parms), []);
-    <[ {.. $seq } ]>
+    def seq = make_expressions (parse_format (format), List.rev (parms), []);
+    <[ 
+      Nemerle.Input.EatWhiteSpace ();
+      {.. $seq } 
+    ]>
   }
 
-  macro sprintf (target, format : string, params parms : array(expr))
+  macro sprintf (format : string, params parms : array(expr))
   {
-    match (target) {
-      | <[ $(_ : var) ]> =>
-        def make_expressions (toks, parms, acc) {
-          match ((toks, parms)) {
-            | ([], []) => acc
-            | (Text (t) :: xs, _) => 
-              make_expressions (xs, parms, 
-                <[ def _ = _N_sb.Append ($(t : string)) ]> :: acc)
-            | (TextNewline (t) :: xs, _) => 
-              make_expressions (xs, parms, 
-                <[ def _ = _N_sb.Append ($(t : string)) ]> :: 
-                <[ def _ = _N_sb.Append ("\n") ]> :: acc)
+    def nsymb = Macros.NewSymbol ();
+    def make_exprs (toks, parms, acc) {
+      match ((toks, parms)) {
+        | ([], []) => acc
+        | (Text (t) :: xs, _) => 
+          make_exprs (xs, parms, 
+                      <[ ignore ($(nsymb : var).Append ($(t : string))) ]> :: acc)
 
-            | (Number :: xs, p :: ps) =>
-              make_expressions (xs, ps, <[ def _ = _N_sb.Append (($p : int)) ]> :: acc)
+        | (TextNewline (t) :: xs, _) => 
+          make_exprs (xs, parms, 
+                      <[ ignore ($(nsymb : var).Append ($(t : string))) ]> ::
+                      <[ ignore ($(nsymb : var).Append ("\n")) ]> :: acc)
 
-            | (NumberFloat :: xs, p :: ps) =>
-              make_expressions (xs, ps, <[ def _ = _N_sb.Append (($p : float)) ]> :: acc)
+        | (Number :: xs, p :: ps) =>
+          make_exprs (xs, ps, 
+                      <[ ignore ($(nsymb : var).Append (($p : int))) ]> :: acc)
 
-            | (Str :: xs, p :: ps) =>
-              make_expressions (xs, ps, <[ def _ = _N_sb.Append (($p : string)) ]> :: acc)
+        | (NumberFloat :: xs, p :: ps) =>
+          make_exprs (xs, ps, 
+                      <[ ignore ($(nsymb : var).Append (($p : float))) ]> :: acc)
 
-            | (Chr :: xs, p :: ps) =>
-              make_expressions (xs, ps, <[ def _ = _N_sb.Append (($p : char)) ]> :: acc)
+        | (Str :: xs, p :: ps) =>
+          make_exprs (xs, ps, 
+                      <[ ignore ($(nsymb : var).Append (($p : string))) ]> :: acc)
 
-            | (_, _ :: _) =>
-              Message.error ("too many arguments for sprintf macro");
-              acc
-            | (_ :: _, _) =>
-              Message.error ("not enough arguments for sprintf macro");
-              acc
-          }
-        };
+        | (Chr :: xs, p :: ps) =>
+          make_exprs (xs, ps, 
+                      <[ ignore ($(nsymb : var).Append (($p : char))) ]> :: acc)
 
-        def seq = <[ def _N_sb = System.Text.StringBuilder () ]> ::
-          make_expressions (parse_format (format), List.rev (parms), 
-                            [ <[ $target <- _N_sb.ToString () ]>; 
-                              (target : PT.Expr) ]);
-        <[ {.. $seq } ]>
-      | _ => 
-        Message.fatal_error ("sprintf macro expects variable of type string as first argument")
-    }
+        | (_, _ :: _) =>
+          Message.error ("too many arguments for sprintf macro");
+          acc
+        | (_ :: _, _) =>
+          Message.error ("not enough arguments for sprintf macro");
+          acc
+        }
+      };
+
+    def seq = make_exprs (parse_format (format), List.rev (parms), 
+                          [ <[ $(nsymb : var).ToString () ]> ]);
+    <[ 
+      def $(nsymb : var) = System.Text.StringBuilder ();
+      {.. $seq } 
+    ]>
   }
 /*
   public class SscanfMacro implements IMacro 
@@ -656,6 +679,7 @@ module Extensions {
     public this () {}
   }
 */
+
   macro pretty_print_expr (exp, expand : bool)
   {
     Macros.PrintExpr (_N_ctx, exp, "", expand);
@@ -682,10 +706,11 @@ module Extensions {
   macro selectFromTuple (k : int, n : int, tupl)
   {
     mutable tup <- [];
+    def prefixsymb = Macros.NewSymbol ();
     for (mutable i <- n; i > 0; i <- i - 1)
-      tup <- <[ pattern: $("_N_tp" + i.ToString () : var) ]> :: tup;
+      tup <- <[ pattern: $(prefixsymb + i.ToString () : var) ]> :: tup;
 
-    <[ def (.. $tup) = $tupl; $("_N_tp" + k.ToString () : var) ]>
+    <[ def (.. $tup) = $tupl; $(prefixsymb + k.ToString () : var) ]>
   }
 
   macro tupleMap (f : expr, tup : expr)
@@ -698,8 +723,6 @@ module Extensions {
         Message.fatal_error ("'tupleMap' macro expects function and tuple")
       }
   }
-
-
   
 } // end module Extensions
 } // end ns
