@@ -45,6 +45,7 @@ n_src = \
 	tyutil.n \
 	extensions.n \
 	tyexpr.n \
+	macros.n \
 	cgtree.n \
 	cgexpr.n \
 	cgflat.n 
