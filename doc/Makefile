@@ -2,10 +2,13 @@ XSPP = xspp
 XSLT = xsltproc --xinclude
 MAKE_GRAMMAR = perl scripts/grammar-txt-2-xml.pl $< | xmllint -o $@ --format -
 
+course_docs = index
+
 docs =  index nemerlePlanned \
 	coreNemExamples coreNemGrammar coreNemCompiler coreNemDesc \
 	TRSideas faq \
-	absNem absNemSemantics absNemGrammar
+	absNem absNemSemantics absNemGrammar \
+	$(addprefix course/, $(course_docs))
 
 tex_docs = absNemOperationalSem
 
@@ -23,7 +26,10 @@ pdf: $(ps) $(pdf)
 
 %.html: src/%.xml mainStyle.xsl
 	$(XSLT) -o $@ mainStyle.xsl $<
-	
+
+course/%.html: course-src/%.xml mainStyle.xsl
+	$(XSLT) -o $@ mainStyle.xsl $<
+
 %.docb: src/%.xml docb.xsl
 	$(XSLT) -o - docb.xsl $< | xmllint --format - > $@
 	
@@ -64,7 +70,7 @@ coreNemGrammar.xml: src/coreNemGrammar.txt scripts/grammar-txt-2-xml.pl
 v: verify-html
 
 verify-html:
-	set -xe; for f in *.html ; do xmllint --noout --valid $$f ; done
+	set -xe; for f in *.html course/*.html ; do xmllint --noout --valid $$f ; done
 	
 verify-docb:
 	set -xe; for f in *.docb ; do xmllint --noout --valid $$f ; done
