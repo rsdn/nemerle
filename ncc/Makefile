@@ -39,8 +39,9 @@ all: $(target)
 
 # here we just test if new-built compiler is capable of builing
 # itself, run make t to check testsuite
-self-test:
+self-test: all
 	mono --debug ./$(target) lib/core.n $(n_src)
+	mcs -debug+ -o ncc2.exe $(cs_src) out.cs 2>&1 | grep -v CS0162
 
 $(target): $(all_src)
 	../npc/npc.opt $(n_src)
