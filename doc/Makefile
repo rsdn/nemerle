@@ -53,11 +53,13 @@ docb = $(addsuffix .docb, $(docs))
 # OUTPUT
 ############################################################
 
-XSPP_ = @echo XSPP  $1
-XSLT_ = @echo XSLT  $1
-MKDIR = @echo MKDIR $1
-TAR   = @echo TAR   $1
-CP    = @echo CP    $1
+INST  = @echo INSTALL $1
+XSPP_ = @echo XSPP    $1
+XSLT_ = @echo XSLT    $1
+MKDIR = @echo MKDIR   $1
+TAR   = @echo TAR     $1
+CP    = @echo CP      $1
+RM    = @echo RM      $1
 
 ############################################################
 # TARGETS
@@ -122,8 +124,12 @@ verify-docb:
 	set -xe; for f in *.docb ; do xmllint --noout --valid $$f ; done
 
 install:
-	$(INST) ncc.1
+	$(INST) [$(MANDIR)] ncc.1
 	$(Q)$(INSTALL) -m 644 ncc.1 $(MANDIR)/ncc.1
+
+uninstall:
+	$(RM) $(MANDIR)/ncc.1
+	$(Q)rm -f $(MANDIR)/ncc.1
 
 clean:
 	rm -f *.xsl *.html *.ps *.pdf *.aux *.log *.xml *.tex *.docb
