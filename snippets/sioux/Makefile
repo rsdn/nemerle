@@ -2,10 +2,10 @@
 # Sioux Makefile
 #
 
-include ~/nemerle/trunk/config.mak
+include ../../config.mak
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
-NCC_DIR = ~/nemerle/trunk/ncc/out.stage3
+NCC_DIR = ../../ncc/out.stage3
 NCC = $(NCC_DIR)/ncc.exe -q
 APP_DIR = webapps
 
