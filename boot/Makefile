@@ -38,7 +38,8 @@ DISTFILES = \
 	Nemerle.Compiler.dll \
 	Nemerle.dll          \
 	ncc.exe              \
-	Nemerle.Macros.dll        \
+	true.exe             \
+	Nemerle.Macros.dll   \
 
 ############################################################
 # OUTPUT
