@@ -1,0 +1,221 @@
+/*
+ * Copyright (c) 2004 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+ 
+using Nemerle.Collections;
+using Nemerle.Utility;
+
+namespace PT = Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+
+namespace Nemerle.Compiler 
+{
+  module AttributeCompiler
+  {
+
+    compile_expr (ti : Tyinfo, allow_rec : bool, expr : PT.Expr) : object * System.Type
+    {
+      match (expr) {
+        | <[ $(x : int) ]> => ((x : object), typeof (int))
+        | <[ $(x : string) ]> => ((x : object), typeof (string))
+        | <[ $(x : bool) ]> => ((x : object), typeof (bool))
+        | <[ $(x : byte) ]> => ((x : object), typeof (byte))
+        | <[ $(x : char) ]> => ((x : object), typeof (char))
+        | <[ $(x : double) ]> => ((x : object), typeof (double))
+        | <[ $(x : float) ]> => ((x : object), typeof (float))
+        | <[ $(x : long) ]> => ((x : object), typeof (long))
+        | <[ $(x : short) ]> => ((x : object), typeof (short))
+        | <[ null ]> => (null, typeof (object))
+        | <[ typeof ($t) ]> =>
+          match (ti.BindType (t)) {
+            | T_app (tc, []) =>
+              (tc.GetSystemType (), typeof (System.Type))
+            | t =>
+              Message.fatal_error ("complex type expressions are not allowed in attributes: " + 
+                                   t.as_string ())
+          }
+
+        | <[ array [ .. $elems ] ]> when allow_rec =>
+          def exprs = List.Map (elems, fun (e) { compile_expr (ti, false, e) });
+          def obj = typeof (object);
+          def array_tc =
+            List.FoldLeft (exprs, obj, fun (et, curty) {
+              match (et) {
+                | (_, st) when !(st : System.Type).Equals (obj) => st
+                | _ => curty
+              }
+            });
+          def allow_null = 
+            array_tc.Equals (typeof (string)) ||
+            array_tc.Equals (typeof (System.Type));
+          def objects =
+            List.Map (exprs, fun (_) {
+              | (e, tc) when (tc : System.Type).Equals (array_tc) => e
+              | (x, _) when allow_null && x == null => null
+              | (_, t) =>
+                Message.fatal_error ("custom attribute array shall have type " + 
+                                     array_tc.ToString () + 
+                                     " while the element has type " +
+                                     t.ToString ())
+            });
+          
+          def array_type = System.Type.GetType (array_tc.ToString () + "[]");
+          assert (array_type != null);
+          (NArray.FromList (objects), array_type)
+
+        | _ =>
+          Message.fatal_error ("complex expressions are not allowed in attributes")
+      }
+    }
+
+
+    do_compile (ti : Tyinfo, attr : Tycon, parms : list <PT.Parm>) 
+        : System.Reflection.Emit.CustomAttributeBuilder
+    {
+      match (attr.GetTyconKind ()) {
+        | TK_ExternalNetType
+        | TK_ExternalNemerleType => ()
+        | TK_NemerleType =>
+          Message.fatal_error ("cannot define and use attribute `" + 
+                               attr.GetFullName () + 
+                               "' in the same compilation")
+      };
+
+      def system_attr = GlobalEnv.LookupInternalType ("System.Attribute");
+      when (Option.IsNone (attr.SuperType (system_attr)))
+        Message.fatal_error ("`" + attr.GetFullName () + 
+                             "' is not an attribute class");
+
+      mutable ctor_parm_types <- [];
+      mutable ctor_parms <- [];
+      mutable field_infos <- [];
+      mutable fields <- [];
+      mutable property_infos <- [];
+      mutable properties <- [];
+      
+      def compile_parm (parm : PT.Parm) {
+        | { name = PT.SS_string ({ id = name }) } =>
+          def (obj, ty) = compile_expr (ti, true, parm.expr);
+          if (name == "") {
+            ctor_parm_types <- ty :: ctor_parm_types;
+            ctor_parms <- obj :: ctor_parms;
+          } else {
+            def prop = attr.GetSystemType ().GetProperty (name);
+            if (prop != null) {
+              if (prop.PropertyType.IsAssignableFrom (ty)) {
+                property_infos <- prop :: property_infos;
+                properties <- obj :: properties;
+              } else {
+                Message.fatal_error ("the property `" + name + 
+                                     "' has type " + 
+                                     prop.PropertyType.ToString () +
+                                     " while the value assigned has type " +
+                                     ty.ToString ())
+              }
+            } else {
+              def field = attr.GetSystemType ().GetField (name);
+              if (field != null) {
+                if (field.FieldType.IsAssignableFrom (ty)) {
+                  field_infos <- field :: field_infos;
+                  fields <- obj :: fields;
+                } else {
+                  Message.fatal_error ("the field `" + name + 
+                                       "' has type " + 
+                                       field.FieldType.ToString () +
+                                       " while the value assigned has type " +
+                                       ty.ToString ())
+                }
+              } else {
+                Message.fatal_error ("the type " + attr.GetFullName () + 
+                                     " has no field named `" + name + "'")
+              }
+            }
+          }
+        | _ => assert (false)
+      };
+
+      List.Iter (parms, compile_parm);
+
+      def arr<'a> (lst : list <'a>) { NArray.FromList (List.Rev (lst)) };
+
+      def ctor = attr.GetSystemType ().GetConstructor (arr (ctor_parm_types));
+      when (ctor == null) 
+        Message.fatal_error ("none of the constructors of `" + attr.GetFullName () + 
+                             "' matches positional argument types");
+
+      System.Reflection.Emit.CustomAttributeBuilder 
+          (ctor, arr (ctor_parms), 
+           arr (property_infos), arr (properties), 
+           arr (field_infos), arr (fields))
+    }
+    
+    internal static CompileAttribute (ti : Tyinfo, expr : PT.Expr)
+        : System.Reflection.Emit.CustomAttributeBuilder
+    {
+      def get_qid (_) {
+        | <[ $(x : var) ]> => Some ((x.id, x.GetEnv (ti.env)))
+        | <[ $obj . $(fld : dyn) ]> =>
+          match (get_qid (obj)) {
+            // FIXME, remove second + and see parser error!
+            | Some ((name, ctx)) => Some ((name + "." + fld, ctx))
+            | None => None ()
+          }
+        | _ => None ()
+      };
+
+      Util.locate (expr.loc, fun () {
+        match (expr) {
+          | <[ $(_ : var) ]>
+          | <[ $_x . $_y ]> =>
+            CompileAttribute (ti, <[ $expr () ]>)
+            
+          | <[ $name ( .. $parms ) ]> =>
+            match (get_qid (name)) {
+              | Some ((name, ctx)) =>
+                def tc =
+                  match (ctx.LookupType (name)) {
+                    | Some (t) => t
+                    | None =>
+                      match (ctx.LookupType (name + "Attribute")) {
+                        | Some (t) => t
+                        | None =>
+                          Message.fatal_error ("the custom attribute type `" + 
+                                               name + "' could not be found")
+                      }
+                  };
+                do_compile (ti, tc, parms)
+              | None =>
+                Message.fatal_error ("this expression is not valid custom attribute name")
+            }
+
+          | _ => 
+            Message.fatal_error ("this expression is not valid custom attribute")
+        }})
+    }
+
+  }
+}
