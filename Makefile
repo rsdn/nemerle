@@ -116,6 +116,7 @@ check:
 	$(Q)$(MAKE) -C ncc  tests
 	$(Q)$(MAKE) -C snippets clean
 	$(Q)$(MAKE) -C snippets all
+	$(Q)$(MAKE) -C ncc/testsuite/frommcs all
 
 clean:
 	$(MAKE) -C doc clean
