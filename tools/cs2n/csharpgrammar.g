@@ -1011,11 +1011,19 @@ returns [string return_string]
     string lvi = "";
     return_string = "";
 }
-    :   (IDENTIFIER   ASSIGN)=>
+    :   (IDENTIFIER ASSIGN NULL) =>
+        id3:IDENTIFIER   a1:ASSIGN n:NULL
+        {
+            return_string = t[0] + "mutable " + id3.getText () + a1.getText () +
+                            n.getText () + " : " + t[1] + ";";
+        }
+
+    |   (IDENTIFIER   ASSIGN)=>
         id1:IDENTIFIER   a:ASSIGN lvi = local_variable_initializer
         {
             return_string = t[0] + "mutable " + id1.getText () + a.getText () + lvi + ";";
         }
+
     |   id2:IDENTIFIER
         {
             return_string = t[0] + "mutable " + id2.getText () + " = Nemerle.Extensions.DefaultValue ( _ :" + t[1] + ");";
@@ -2228,9 +2236,9 @@ overloadable_binary_operator
     |   obn3:STAR       {Emit.EmitToken (obn3);}
     |   obn4:DIV        {Emit.EmitToken (obn4);}
     |   obn5:MOD        {Emit.EmitToken (obn5);}
-    |   obn6:BAND       {Emit.EmitToken (obn6);}
-    |   obn7:BOR        {Emit.EmitToken (obn7);}
-    |   obn8:BXOR       {Emit.EmitToken (obn8);}
+    |   obn6:BAND       {Emit.EmitString ("%"); Emit.EmitToken (obn6);}
+    |   obn7:BOR        {Emit.EmitString ("%"); Emit.EmitToken (obn7);}
+    |   obn8:BXOR       {Emit.EmitString ("%"); Emit.EmitToken (obn8);}
     |   obn9:SL         {Emit.EmitToken (obn9);}
     |   obn10:SR        {Emit.EmitToken (obn10);}
     |   obn11:EQUAL     {Emit.EmitToken (obn11);}
@@ -2643,7 +2651,10 @@ enum_body
             enum_member_declarations   
             c:COMMA     {Emit.EmitString (ExtendedToken.getWhitespaces (c));}
             rb:RBRACE   {Emit.EmitToken(rb);} 
-    |   LBRACE   (enum_member_declarations)?   RBRACE
+    |   (LBRACE   (enum_member_declarations)?   RBRACE) =>
+            lb1:LBRACE   {Emit.EmitToken(lb1);} 
+            enum_member_declarations   
+            rb1:RBRACE   {Emit.EmitToken(rb1);} 
     ;
 
 enum_modifier
