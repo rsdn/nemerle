@@ -107,11 +107,15 @@ dist: changelog
 
 install:
 	$(Q)$(MAKE) -C boot install
-	$(Q)$(MAKE) -C doc  install
+	$(Q)if test -f ncc/out.stage3/ncc.exe ; then $(MAKE) -C ncc install; \
+            else $(MAKE) -C boot install; fi
 
 uninstall:
 	$(Q)$(MAKE) -C boot uninstall
 	$(Q)$(MAKE) -C doc  uninstall
+
+check:
+	$(Q)$(MAKE) -C ncc  tests
 
 clean:
 	$(MAKE) -C doc clean
