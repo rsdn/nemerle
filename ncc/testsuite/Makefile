@@ -28,16 +28,16 @@
 
 include ../../config.mak
 
-#lib_src = ../../lib/aliases.n ../../lib/core.n ../../lib/option.n ../../lib/list.n \
+lib_src = ../../lib/aliases.n ../../lib/core.n ../../lib/option.n ../../lib/list.n \
 	  ../tree.n ../../lib/hashtable.n ../../lib/stack.n ../../lib/queue.n ../../lib/input.n \
 	  ../../lib/getopt.n
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
-#COMPILE = $(CSC) /debug+ $(CSCFLAGS)
+COMPILE = $(CSC) /debug+ $(CSCFLAGS)
 
 all:
-#	$(EXECUTE) ../ncc2.exe -reference System.dll $(lib_src) test.n
-#	$(COMPILE) $(OUTFLAG)test.exe out.cs
+	$(EXECUTE) ../ncc2.exe -reference System.dll $(lib_src) test.n
+	$(COMPILE) $(OUTFLAG)test.exe out.cs
 	$(EXECUTE) ./test.exe -c $(CSC) -n ../ncc2.exe -r $(EXECUTE)
 
 clean:
