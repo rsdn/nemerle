@@ -17,7 +17,7 @@
                   <tbody>
                     <tr>
                       <td align="left">
-                        <a href="index.xml">Strona główna</a> :: 
+                        <a href="http://www.ii.uni.wroc.pl/~fit18/">Strona główna</a> :: 
                         <a href="register.xml">Rejestracja</a>
                       </td>
                       <td align="right">

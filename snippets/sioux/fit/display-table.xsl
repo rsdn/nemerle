@@ -36,6 +36,7 @@
         <xsl:if test="normalize-space(single_room)">1-osobowiec, </xsl:if>
         <xsl:if test="normalize-space(treking)">czwartkowiec, </xsl:if>
         <xsl:if test="normalize-space(ref_title)">referat, </xsl:if>
+        <xsl:if test="normalize-space(bus)">autokar, </xsl:if>
       </td>
       <td>
         <xsl:value-of select="remarks" />
