@@ -35,8 +35,6 @@ include $(TOP)/config.mak
 
 DISTFILES = \
 	Makefile \
-	README   \
-	run      \
 	*.n      \
 
 ############################################################
@@ -55,10 +53,6 @@ all:
 dist:
 	$(CP) '*.n'
 	$(Q)cp $(DISTFILES) $(DIR)
-	$(Q)mkdir $(DIR)/misc
-	$(Q)cp misc/*.n $(DIR)/misc
-	$(Q)mkdir $(DIR)/todo
-	$(Q)cp todo/*.n $(DIR)/todo
 
 clean:
 	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]*

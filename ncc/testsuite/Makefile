@@ -38,6 +38,7 @@ DISTFILES = \
 	Makefile \
 	README   \
 	run      \
+	test.n	 \
 
 STAGE3    = $(TOP)/ncc/out.stage3
 TESTN     = $(TOP)/ncc/testsuite/test.n
@@ -73,6 +74,10 @@ dist:
 	$(Q)cp misc/*.n $(DIR)/misc
 	$(Q)mkdir $(DIR)/todo
 	$(Q)cp todo/*.n $(DIR)/todo
+	$(Q)mkdir $(DIR)/positive
+	$(Q)mkdir $(DIR)/negative
+	$(Q)$(MAKE) -C positive dist DIR=../$(DIR)/positive
+	$(Q)$(MAKE) -C negative dist DIR=../$(DIR)/negative
 
 clean:
 	$(Q) cd positive && $(MAKE) clean
