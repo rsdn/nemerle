@@ -54,7 +54,7 @@ CP = @echo CP      $1
 # TARGETS
 ############################################################
 
-all: test
+all: clean test
 	rm -f *.dll *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
 
 test: test.exe $(NEM_DLLS)
