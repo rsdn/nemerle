@@ -46,7 +46,7 @@
 ;; ~/.emacs file:
 
 ;; (setq load-path (cons "/path/to/dir/where/this/file/resides" load-path))
-;; (autoload 'nemerle-mode "nemerle-mode"
+;; (autoload 'nemerle-mode "nemerle.el"
 ;;   "Major mode for editing nemerle programs." t)
 ;; (setq auto-mode-alist (cons '("\\.n$" . nemerle-mode) auto-mode-alist))
 
@@ -56,7 +56,7 @@
 ;; (defun my-nemerle-mode-hook ()
 ;;   (setq nemerle-basic-offset 2)
 ;;   (define-key nemerle-mode-map "\C-m" 'newline-and-indent))
-
+;; (add-hook 'nemerle-mode-hook 'my-nemerle-mode-hook)
 
 
 
@@ -188,12 +188,14 @@ buffer created.  This is a good place to put your customizations.")
     (let ((modifier 0))
       (cond ((looking-at "[^{\n]*}[ \t]*$")
 	     (setq modifier (- nemerle-basic-offset)))
+	    ((looking-at ".*{[ \t]*$")
+	     (setq modifier nemerle-basic-offset))
 	    (t nil))
       (if (bobp)
 	  nil
 	(forward-line -1)
 	(cond ((looking-at ".*{[ \t]*$")
-	       (setq modifier nemerle-basic-offset))
+	       (setq modifier (+ modifier nemerle-basic-offset)))
 	      (t nil)))
       (+ (current-indentation) modifier))))
 
