@@ -140,7 +140,7 @@
     \ \ \ \ \ \ \| Node { l : <with|color|brown|t ('a)>; d :
     <with|color|brown|'a>; r : <with|color|brown|t ('a)>; }
 
-    \ \ \ \ \ \ \| Tip
+    \ \ \ \ \ \ \| Tip {}
 
     \ \ \ \ ]
 
@@ -179,144 +179,79 @@
 
   <new_page>
 
-  <subsubsection|Red-black trees>
+  <subsubsection|Lists>
 
-  <with|font size|0.84|<\code>
-    <em|module> RB_tree {
+  <\with|font size|0.84>
+    <\code>
+      <em|module> List {
 
-    \ \ <em|variant> <with|color|brown|color> = [ R \| B ]
+      \ \ <em|variant> <with|color|brown|list ('a)> = [
 
-    \ \ <em|variant> <with|color|brown|node ('a)>\ 
+      \ \ \ \ \| Cons { hd : <with|color|brown|'a>; tl :<with|color|brown|
+      list ('a)>; }
 
-    \ \ \ \ <em|where> <with|color|brown|'a> :\<gtr\>
-    <with|color|brown|IComparable ('a)> =
+      \ \ \ \ \| Nil
 
-    \ \ [
+      \ \ ]
 
-    \ \ \ \ \| T { c : <with|color|brown|color>; \ \ \ \ 
+      \;
 
-    \ \ \ \ \ \ \ \ \ \ l : <with|color|brown|node ('a)>; \ \ \ \ \ \ 
+      \ \ <with|color|brown|'a> invalid_arg (msg : <with|color|brown|string>)
+      : <with|color|brown|'a> =
 
-    \ \ \ \ \ \ \ \ \ \ e : <with|color|brown|'a>; \ \ \ \ \ \ 
+      \ \ \ \ \ <em|raise> Invalid_argument (msg);
 
-    \ \ \ \ \ \ \ \ \ \ r : <with|color|brown|node ('a)>;
+      \;
 
-    \ \ \ \ \ \ \ \ }
+      \ \ <with|color|brown|'a> head (l : <with|color|brown|list ('a)>) :
+      <with|color|brown|'a> =
 
-    \ \ \ \ \| E
+      \ \ \ \ <em|match> l <em|with> [
 
-    \ \ ]
+      \ \ \ \ \ \ \| Cons (x, _) =\<gtr\> x
 
-    \;
+      \ \ \ \ \ \ \| Nil =\<gtr\> invalid_arg ("List.head")
 
-    \ \ <with|color|brown|'a> <em|where> <with|color|brown|'a> :\<gtr\>
-    <with|color|brown|IComparable ('a)>\ 
+      \ \ \ \ ];
 
-    \ \ balance (c : <with|color|brown|color>, l : <with|color|brown|node
-    ('a)>,\ 
+      \;
 
-    \ \ \ \ \ \ \ \ \ \ \ e : <with|color|brown|'a>, r :
-    <with|color|brown|node ('a)>) : <with|color|brown|node ('a)>
+      \ \ <with|color|brown|'a>, <with|color|brown|'b> map (f :
+      <with|color|brown|'a -\<gtr\> 'b>, x : <with|color|brown|list ('a)>)\ 
 
-    \ \ \ \ <em|match> (c, l, e, r) <em|with> [
+      \ \ \ \ \ \ \ \ \ \ \ \ \ : <with|color|brown|list ('b)> =\ 
 
-    \ \ \ \ \ \ \| (B, T (R, T (R, a, x, b), y, c), z, d) =\<gtr\>
+      \ \ \ \ <em|match> x <em|with> [
 
-    \ \ \ \ \ \ \ \ T (R (), T (B (), a, x, b), y,\ 
+      \ \ \ \ \ \ \| Nil =\<gtr\> Nil ()
 
-    \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ T (B (), c, z, d))
+      \ \ \ \ \ \ \| Cons x =\<gtr\> Cons (f (x.hd), map (f, x.tl))
 
-    \ \ \ \ \ \ \| (B, T (R, a, x, T (R, b, y, c)), z, d) =\<gtr\>
+      \ \ \ \ ];
 
-    \ \ \ \ \ \ \ \ T (R (), T (B (), a, x, b), y,\ 
+      \;
 
-    \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ T (B (), c, z, d))
+      \ \ <with|color|brown|'a> length (x :<with|color|brown| list ('a)>) :
+      <with|color|brown|int> {
 
-    \ \ \ \ \ \ \| (B, a, x, T (R, T (R, b, y, c), z, d)) =\<gtr\>
+      \ \ \ \ <em|def> loop (acc : <with|color|brown|int>, x :
+      <with|color|brown|list ('a)>) : <with|color|brown|int> =
 
-    \ \ \ \ \ \ \ \ T (R (), T (B (), a, x, b), y,\ 
+      \ \ \ \ \ \ <em|match> x <em|with> [
 
-    \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ T (B (), c, z, d))
+      \ \ \ \ \ \ \ \ \| Cons x =\<gtr\> loop (acc + 1, x.tl)
 
-    \ \ \ \ \ \ \| (B, a, x, T (R, b, y, T (R, c, z, d))) =\<gtr\>
+      \ \ \ \ \ \ \ \ \| _ =\<gtr\> acc
 
-    \ \ \ \ \ \ \ \ T (R (), T (B (), a, x, b), y,\ 
+      \ \ \ \ \ \ ];
 
-    \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ T (B (), c, z, d))
+      \ \ \ \ loop (0, x);
 
-    \ \ \ \ \ \ \| (a, b, c, d) =\<gtr\> T (a, b, c, d)
+      \ \ }
 
-    \ \ \ \ ];
-
-    \;
-
-    \ \ <with|color|brown|'a> <em|where> <with|color|brown|'a> :\<gtr\>
-    <with|color|brown|IComparable ('a)> \ 
-
-    \ \ insert (t : <with|color|brown|node ('a)>, x : <with|color|brown|'a>)
-    : <with|color|brown|node ('a)>
-
-    \ \ \ \ {
-
-    \ \ \ \ \ \ <em|def> loop (t : <with|color|brown|node ('a)>)
-    :<with|color|brown| node ('a)> =
-
-    \ \ \ \ \ \ \ \ <em|match> t <em|with> [
-
-    \ \ \ \ \ \ \ \ \ \ \| E =\<gtr\> T (R (), E (), x, E ())
-
-    \ \ \ \ \ \ \ \ \ \ \| T (c, a, y, b) =\<gtr\>
-
-    \ \ \ \ \ \ \ \ \ \ \ \ <em|def> res = y.Compare (x);
-
-    \ \ \ \ \ \ \ \ \ \ \ \ <em|if> res \<gtr\> 0 <em|then>\ 
-
-    \ \ \ \ \ \ \ \ \ \ \ \ \ \ balance (c, loop (a), y, b)
-
-    \ \ \ \ \ \ \ \ \ \ \ \ <em|else> <em|if> res \<less\> 0 <em|then>\ 
-
-    \ \ \ \ \ \ \ \ \ \ \ \ \ \ balance (c, a, y, loop (b))
-
-    \ \ \ \ \ \ \ \ \ \ \ \ <em|else> T (c, a, x, b)
-
-    \ \ \ \ \ \ \ \ ];
-
-    \ \ \ \ \ \ <em|match> loop (t) <em|with> [
-
-    \ \ \ \ \ \ \ \ \| T (_, a, y, b) =\<gtr\> T (B (), a, y, b)
-
-    \ \ \ \ \ \ ];
-
-    \ \ \ \ }
-
-    \;
-
-    \ \ <with|color|brown|'a> <em|where> <with|color|brown|'a> :\<gtr\>
-    <with|color|brown|IComparable ('a)> \ 
-
-    \ \ find (t : <with|color|brown|node ('a)>, x : <with|color|brown|'a>) :
-    <with|color|brown|option ('a)> =
-
-    \ \ \ \ <em|match> t <em|with> [
-
-    \ \ \ \ \ \ \| T (_, a, y, b) =\<gtr\>
-
-    \ \ \ \ \ \ \ \ <em|def> res = y.Compare (x);
-
-    \ \ \ \ \ \ \ \ <em|if> res \<less\> 0 <em|then> member (a, x)
-
-    \ \ \ \ \ \ \ \ <em|else if> res \<gtr\> 0 <em|then> member (b, x)
-
-    \ \ \ \ \ \ \ \ <em|else> Some (y)
-
-    \ \ \ \ \ \ \| E =\<gtr\> None ()
-
-    \ \ \ \ ];
-
-    }
-  </code>>
-
-  <new_page>
+      }
+    </code>
+  </with>
 
   <section|Language extensions>
 
@@ -817,17 +752,17 @@
 <\references>
   <\collection>
     <associate|toc-10|<tuple|<uninit>|7>>
-    <associate|toc-11|<tuple|<uninit>|7>>
-    <associate|toc-1|<tuple|<uninit>|2>>
     <associate|gly-1|<tuple|1|?>>
+    <associate|toc-1|<tuple|<uninit>|2>>
+    <associate|toc-11|<tuple|<uninit>|7>>
     <associate|toc-12|<tuple|<uninit>|8>>
     <associate|toc-2|<tuple|<uninit>|2>>
     <associate|toc-13|<tuple|<uninit>|8>>
     <associate|toc-3|<tuple|<uninit>|3>>
-    <associate|toc-14|<tuple|<uninit>|9>>
     <associate|toc-4|<tuple|<uninit>|3>>
-    <associate|toc-15|<tuple|<uninit>|9>>
+    <associate|toc-14|<tuple|<uninit>|9>>
     <associate|toc-5|<tuple|<uninit>|3>>
+    <associate|toc-15|<tuple|<uninit>|9>>
     <associate|toc-6|<tuple|<uninit>|4>>
     <associate|toc-7|<tuple|<uninit>|4>>
     <associate|toc-8|<tuple|<uninit>|4>>
@@ -857,8 +792,7 @@
       <with|left margin|<quote|3fn>|Binary tree
       insertion<value|toc-dots><pageref|toc-8>>
 
-      <with|left margin|<quote|3fn>|Red-black
-      trees<value|toc-dots><pageref|toc-9>>
+      <with|left margin|<quote|3fn>|Lists<value|toc-dots><pageref|toc-9>>
 
       Language extensions<value|toc-dots><pageref|toc-10>
 
