@@ -141,4 +141,9 @@ endif
 
 let b:current_syntax = "nemerle"
 
+setlocal errorformat ^=
+	\%f:%l:%c:\ %*[[0-9;m]%trror%*[[0-9;m]:\ %m,
+	\%f:%l:%c:\ %*[[0-9;m]%tarning%*[[0-9;m]:\ %m,
+	\%f:%l:%c:\ %*[[0-9;m]%tint%*[[0-9;m]:\ %m
+
 " vim: nowrap
