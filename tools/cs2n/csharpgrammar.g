@@ -130,6 +130,7 @@ returns [string [] return_strings]
     return_strings = new string[]{"",""};
 }
     :   (array_type)=> return_strings = array_type
+    |   (generic_type)=> return_strings = generic_type
     |   o:OBJECT 
         {return_strings[0] = ExtendedToken.getWhitespaces (o);
          return_strings[1] = ExtendedToken.getTextOnly (o);}
@@ -235,6 +236,42 @@ returns [string [] return_strings]
             return_strings[1] += end;
         }
     ; 
+
+generic_type
+returns [string [] return_strings]
+{
+    return_strings = new string[] {"",""};
+    string [] nat  = new string[] {"",""};
+    string parms  = "";
+}
+    :   nat = type_name   parms = generic_parameters
+        { return_strings[1] = nat[1] + parms; 
+          return_strings[0] = nat[0];
+         }
+    ; 
+
+generic_parameters
+returns [string return_string]
+{
+   return_string = "";
+   string [] ty = new string[] {"",""};
+}
+    :    lb:LTHAN 
+        { return_string = ExtendedToken.getWhitespaces (lb) + "["; }
+       
+        ( ty = type 
+          { return_string += ty [0] + ty [1]; } )?
+
+        ( c : COMMA ty = type
+          { return_string += c.getText () + ty [0] + ty [1]; }
+        )*
+
+        (  rb:GTHAN 
+           { return_string += ExtendedToken.getWhitespaces (rb) + "]"; }
+         | rb1 : SR
+           { return_string += ExtendedToken.getWhitespaces (rb1) + "]]"; }
+        )?
+  ;
 
 non_array_type
 returns [string [] return_strings]
@@ -1002,6 +1039,8 @@ returns [StatementTree t]
     |   t = iteration_statement
     |   t = jump_statement
     |   t = try_statement
+    |   YIELD { System.Console.WriteLine ("'yield' is not supported in nemerle yet"); } t = jump_statement
+    |   t = default_value
 
     //<unchecked statement>
     |   (UNCHECKED   block)=> t = unchecked_statement
@@ -1020,6 +1059,16 @@ returns [StatementTree t]
     :   s:SEMI
         {t = new StatementTree (ExtendedToken.getWhitespaces(s) + "();");}
     ;
+
+default_value
+returns [StatementTree t]
+{ 
+  t = null;
+  string [] ty = new string[] { "", ""}; 
+}
+  :    d : DEFAULT  lp : LPAREN ty = type rp : RPAREN
+   { t = new StatementTree (d.getText () + lp.getText () + ty[0] + ty[1] + rp.getText ()); }
+  ;
 
 block
 returns [StatementTree t]
@@ -1755,6 +1804,7 @@ type_declaration
 class_declaration
 {
     string semi = "";
+    string parms = "";
 }
     :   (attributes)?   (class_modifier)* 
         c:CLASS id:IDENTIFIER  
@@ -1762,7 +1812,12 @@ class_declaration
             Emit.EmitToken (c);
             Emit.EmitToken (id);
         }
-        (class_base)?   class_body   (s:SEMI {semi = s.getText();})?
+        ( parms = generic_parameters { Emit.EmitString (parms); } )?
+        (class_base)? 
+
+        (parms = where_constraints { Emit.EmitString (parms); })?
+
+        class_body   (s:SEMI {semi = s.getText();})?
         {
             Emit.EmitString (semi);
         }
@@ -1788,12 +1843,12 @@ class_base
         {
             Emit.EmitToken (cl);
         }  
-        t1 = type_name  
+        t1 = type  
         {
             Emit.EmitString (t1[0]+t1[1]);
         }
         (cm:COMMA {Emit.EmitToken (cm);} 
-            t1 = type_name {Emit.EmitString (t1[0]+t1[1]);})*
+            t1 = type {Emit.EmitString (t1[0]+t1[1]);})*
     ;
 
 class_body
@@ -1944,6 +1999,22 @@ returns [string return_string]
     |   return_string = expression       
     ;
 
+where_constraints
+returns [string return_string]
+{
+  return_string = "";
+  string[] ty = new string[] {"", ""};
+}
+  : (w:WHERE 
+    { return_string += w.getText (); }
+    i1:IDENTIFIER c1:COLON ty = type
+      { return_string += i1.getText () + c1.getText () + ty [0] + ty[1]; }
+    ( com : COMMA  ty = type
+      { return_string += com.getText () + ty [0] + ty[1]; }
+    )*
+    )+
+  ;
+
 method_declaration
 {
     string tp = "";
@@ -1957,6 +2028,7 @@ returns [string return_string]
     string [] rt =  new string[]{"",""};
     bool mod = false;
     return_string = "";
+    string parms;
 }
     :   (attributes)?   (method_modifier {mod = true;})*  rt = return_type_array  
         { 
@@ -1964,6 +2036,11 @@ returns [string return_string]
                 Emit.EmitString(rt[0]);
         }
         member_name           
+
+        ( parms = generic_parameters
+         { Emit.EmitString (parms); }
+        )?
+
         lp:LPAREN   {Emit.EmitToken (lp);}
         (formal_parameter_list)? 
         rp:RPAREN   
@@ -1975,6 +2052,8 @@ returns [string return_string]
             Emit.EmitString (rt[1]);
 	    return_string = rt[1];
         }	                
+        (parms = where_constraints { return_string += parms; })?
+
     ;
 
 method_modifier
@@ -2017,7 +2096,7 @@ member_name
 {
     string [] mn = new string[]{"",""};
 }
-    :   mn = type_name 
+    :   mn = type_name
         {
             Emit.EmitString (mn[0]+mn[1]);
         }
@@ -2126,13 +2205,13 @@ accessor_declarations[string tp]
     ;
 
 get_accessor_declaration[string tp]
-    :   (attributes)?   
+    :   (attributes)?   (constant_modifier)*
         g:GET    {Emit.EmitToken(g);}
         accessor_body[tp]
     ;
 
 set_accessor_declaration[string tp]
-    :   (attributes)?   
+    :   (attributes)?   (constant_modifier)*
         s:SET    {Emit.EmitToken(s);}
         accessor_body[tp]
     ;
@@ -2196,7 +2275,7 @@ returns [string return_string]
 {
     return_string = "";
 }
-    :   ((attributes)?   ADD)=>
+    :   ((attributes)?  ADD)=>
             add_accessor_declaration   remove_accessor_declaration
     |   remove_accessor_declaration   add_accessor_declaration
     ;
@@ -2206,7 +2285,7 @@ returns [string return_string]
 {
     return_string = "";
 }
-    :   (attributes)?  idaad:IDENTIFIER {idaad.getText()=="add"}?    block 
+    :   (attributes)? (constant_modifier)* idaad:IDENTIFIER {idaad.getText()=="add"}?    block 
     ;
 
 remove_accessor_declaration
@@ -2214,7 +2293,7 @@ returns [string return_string]
 {
     return_string = "";
 }
-    :   (attributes)?  idrad:IDENTIFIER {idrad.getText()=="remove"}?  block 
+    :   (attributes)? (constant_modifier)* idrad:IDENTIFIER {idrad.getText()=="remove"}?  block 
     ;
 
 indexer_declaration
@@ -2504,10 +2583,16 @@ destructor_body
 //-------------
 
 struct_declaration
+{ string parms = ""; }
     :   (attributes)?   (struct_modifier)*   
         s:STRUCT              {Emit.EmitToken(s);}
         id:IDENTIFIER         {Emit.EmitToken(id);}
+        ( parms = generic_parameters { Emit.EmitString (parms); } )?
+
         (struct_interfaces)?   
+
+        (parms = where_constraints { Emit.EmitString (parms); })?
+
         struct_body   
         (sm:SEMI              {Emit.EmitToken (sm);})?
     ;
@@ -2526,7 +2611,7 @@ struct_interfaces
     string [] tp = new string []{"",""};
 }
     :   c1:COLON        {Emit.EmitToken(c1);}
-        tp = type_name  {Emit.EmitString(tp[0]+tp[1]);}
+        tp = type  {Emit.EmitString(tp[0]+tp[1]);}
         (cm:COMMA   tp = type_name
             {Emit.EmitToken(cm);
              Emit.EmitString(tp[0]+tp[1]);}
@@ -2604,13 +2689,18 @@ returns [string return_string]
 //-----------------
 
 interface_declaration
+{ string parms = ""; }
     :   (attributes)?   (interface_modifier)*  
         i:INTERFACE  id:IDENTIFIER   
         {
             Emit.EmitToken (i);
             Emit.EmitToken (id);
         }
-        (interface_base)?   interface_body   (s:SEMI {Emit.EmitToken (s);})?
+        ( parms = generic_parameters { Emit.EmitString (parms); } )?
+        (interface_base)?
+        (parms = where_constraints { Emit.EmitString (parms); })?
+
+           interface_body   (s:SEMI {Emit.EmitToken (s);})?
     ;
 
 interface_modifier
@@ -2638,21 +2728,15 @@ interface_base
     ;
 
 interface_body
-    :   lb:LBRACE
-        {
-            Emit.EmitToken (lb);
-        }
+    :   lb:LBRACE    {  Emit.EmitToken (lb); }
         
         (interface_member_declaration)*   
         
-        rb:RBRACE
-        {
-            Emit.EmitToken (rb);
-        }
+        rb:RBRACE   {   Emit.EmitToken (rb); }
     ;
 
 interface_member_declaration
-    :   ((attributes)?   (NEW)?   return_type   IDENTIFIER  LPAREN)=>
+    :   ((attributes)?   (NEW)?   return_type   IDENTIFIER  (LTHAN | LPAREN)) =>
             interface_method_declaration
     |   ((attributes)?   (NEW)?   type   IDENTIFIER LBRACE)=>
             interface_property_declaration
@@ -2664,15 +2748,19 @@ interface_member_declaration
 interface_method_declaration
 {
     string [] tp = new string []{"",""};
+    string parms; 
 }
     :   (attributes)?   (n:NEW {Emit.EmitToken(n);})?   
         tp = return_type_array
                           {Emit.EmitString(tp[0]);}
         id:IDENTIFIER     {Emit.EmitToken(id);} 
+        ( parms = generic_parameters { Emit.EmitString (parms); } )?
         lp:LPAREN         {Emit.EmitToken(lp);}
         (formal_parameter_list)?   
         rp:RPAREN         {Emit.EmitToken(rp);}
                           {Emit.EmitString(" : " + tp[1]);}
+
+        (parms = where_constraints { Emit.EmitString (parms); })?
         s:SEMI            {Emit.EmitToken(s);}
     ;
 
@@ -2684,6 +2772,7 @@ interface_property_declaration
         tp = type            {Emit.EmitString(tp[0]);}
         id:IDENTIFIER        {Emit.EmitToken(id);} 
                              {Emit.EmitString(" : " + tp[1]);}
+
         lb:LBRACE            {Emit.EmitToken(lb);} 
         interface_accessors   
         rb:RBRACE            {Emit.EmitToken(rb);} 
@@ -2814,15 +2903,19 @@ enum_member_declaration
 delegate_declaration
 {
     string rt = "";
+    string parms = "";
 }
     :   (attributes)?   (delegate_modifier)*   
         d:DELEGATE               {Emit.EmitToken(d);} 
         rt = return_type        
         id:IDENTIFIER            {Emit.EmitToken(id);} 
+        ( parms = generic_parameters { Emit.EmitString (parms); } )?
         lp:LPAREN                {Emit.EmitToken(lp);} 
         (formal_parameter_list)? 
         rp:RPAREN                {Emit.EmitToken(rp);} 
                                  {Emit.EmitString(" : " + rt);}
+        (parms = where_constraints { Emit.EmitString (parms); })?
+
         s:SEMI                   {Emit.EmitToken(s);} 
     ;
 
@@ -2991,7 +3084,8 @@ tokens
     IS          =   "is";               VOID        =   "void";
     LOCK        =   "lock";             WHILE       =   "while";
     GET         =   "get";              SET         =   "set";
-    PARTIAL     =   "partial";
+    PARTIAL     =   "partial";          WHERE       =   "where"; 
+    YIELD       =   "yield";
 }
 
 //----------------------
