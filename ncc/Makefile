@@ -77,13 +77,8 @@ NEMERLE_COMPILER_DLL_SRC = \
 	internaltypes.n \
 	constantfolder.n \
 	numerictype.n \
-	cgexpr.n \
-	cgpost.n \
-	cgopt.n \
 	external.n \
 	xmldump.n \
-	cgil.n \
-	cgmatch.n \
 	globalenv.n \
 	localvalue.n \
 	macros.n \
@@ -93,7 +88,6 @@ NEMERLE_COMPILER_DLL_SRC = \
 	scan_globals.n \
 	flags.n \
 	lexer.n \
-	cgtree.n \
 	passes.n \
 	TypeInfo.n \
 	typingcontext.n \
@@ -111,6 +105,12 @@ NEMERLE_COMPILER_DLL_SRC = \
 	AssemblyInfo.n \
 	pretty-print.n \
 	delegates.n \
+	generation/CompiledTree.n \
+	generation/CompileTypedTree.n \
+	generation/ILGeneration.n \
+	generation/MatchingCompiler.n \
+	generation/Optimizer.n \
+	generation/Postprocessing.n \
 	codedom/NemerleCodeCompiler.n \
 	codedom/NemerleCodeProvider.n \
 	codedom/NemerleCodeGenerator.n
@@ -322,7 +322,7 @@ out.stage3/ncc.exe: $(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
 doc:
 	$(COMP) [stage3] bla  
         $(Q)$(MAKE) doc-sub COMPILER_PATH=out.stage3/  
-	
+
 doc-sub:
 	$(Q)$(RUN_COMPILER) -target-library -out:temp.dll $(NEMERLE_DLL_SRC) \
 	-doc Nemerle.xml
@@ -331,7 +331,7 @@ doc-sub:
 	$(Q)$(RUN_COMPILER) -target-library -out:temp.dll $(STDMACROS_DLL_SRC) \
 	-ref:out.stage3/Nemerle.dll -ref:out.stage3/Nemerle.Compiler.dll -doc Nemerle.Macros.xml
 	rm temp.dll
-		
+
 
 sync:
 	cd out.stage3 ; \
