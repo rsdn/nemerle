@@ -28,10 +28,6 @@
 # Include configuration determined by configure script.
 include ../../config.mak
 
-export PATH = $(shell echo $$PATH):$(shell pwd)/../boot/
-export MONO_PATH = $(shell echo $$MONO_PATH):$(shell pwd)/../boot/
-
-
 ############################################################
 # VARIABLES
 ############################################################
@@ -39,11 +35,6 @@ export MONO_PATH = $(shell echo $$MONO_PATH):$(shell pwd)/../boot/
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 VERIFY = $(shell if test $(NET_VERSION) = "2.0"; then cygpath -m $(PEVERIFY); else echo ""; fi)
 
-############################################################
-# OUTPUT
-############################################################
-
-CP = @echo CP      $1
 
 ############################################################
 # TARGETS
@@ -56,5 +47,5 @@ all:
 	rm -f *.dll *.exe *.netmodule *.pdb ext_test.out
 
 clean:
-	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]*
+	rm -f *.exe *.il *.dll *.pdb *.netmodule ext_test.out core core.[0-9]*
 	rm -f test.err test_error.log a.out
