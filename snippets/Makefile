@@ -54,9 +54,9 @@ CP = @echo CP      $1
 ############################################################
 
 all:
-	cp ../ncc/out.stage3/Nemerle.dll .
 	$(EXECUTE) ../ncc/out.stage3/ncc.exe -out test.exe ../ncc/testsuite/test.n
-	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -n "../boot/ncc.exe"
+	cp ../ncc/out.stage3/Nemerle.dll .
+	$(EXECUTE) ./test.exe -r "$(EXECUTE)" -n "../ncc/out.stage3/ncc.exe"
 	rm -f out.dll out.exe out.netmodule ext_test.out Nemerle.dll
 
 myPoll.exe: myPoll.n
