@@ -244,7 +244,7 @@ let sub_unify ?(subst = Ty_env.empty) t1 t2 =
            other type, except for 'a :> 'a handled above. *)
         None
       | T_fun (a1, r1), T_fun (a2, r2) ->
-        x_for_all2 sub subst ([a1; r1], [a2; r2])
+        x_for_all2 sub subst ([a2; r1], [a1; r2])
       | T_prod l1, T_prod l2 ->
         if List.length l1 <> List.length l2 then None
         else
