@@ -1,4 +1,4 @@
-# Copyright (c) 2003, 2004 The University of Wroclaw.
+# Copyright (c) 2003-2005 The University of Wroclaw.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
