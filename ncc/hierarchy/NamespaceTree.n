@@ -66,7 +66,11 @@ namespace Nemerle.Compiler {
 
       public Name : list [string]
       {
-        get { GetNameWithSuffix ([]) }
+        get {
+          if (name == null) ["alias"]
+          else
+            GetNameWithSuffix ([])
+        }
       }
 
       public GetNameWithSuffix (mutable suffix : list [string]) : list [string]
@@ -79,6 +83,11 @@ namespace Nemerle.Compiler {
         suffix
       }
 
+      // some namespace nodes are faked for the need of namespace aliases
+      internal IsFromAlias : bool {
+        get { name == null }
+      }
+      
       public Clear () : void
       {
         unless (children == null) children.Clear ();
@@ -527,7 +536,8 @@ namespace Nemerle.Compiler {
       
       // we will warn when none of created namespace parts exists as real namespaces
       referenced_namespace_nodes = (all_opened, loc) :: referenced_namespace_nodes;
-      GlobalEnv (List.RevAppend (open_namespaces, all_opened),
+      // we will warn if some of those namespace are already open
+      GlobalEnv (add_open_nodes (open_namespaces, all_opened, loc, true),
                  current_namespace, namespace_aliases)
     }
     
@@ -540,8 +550,9 @@ namespace Nemerle.Compiler {
       });
       referenced_namespace_nodes = (entered, loc) :: referenced_namespace_nodes;
                                   
-      GlobalEnv (List.RevAppend (open_namespaces, nodes_with_prefix),
-                 current_namespace, (short_name, NString.Concat (".", long_name)) :: namespace_aliases)
+      GlobalEnv (List.RevAppend (nodes_with_prefix, open_namespaces),
+                 current_namespace,
+                 (short_name, NString.Concat (".", long_name)) :: namespace_aliases)
     }
 
     internal EnterIntoNamespace (qid : list [string]) : GlobalEnv
@@ -563,14 +574,8 @@ namespace Nemerle.Compiler {
       when (full.Value is TypeInfoCache.No)
         full.Value = TypeInfoCache.NamespaceReference ();
 
-      if (List.ContainsRef (open_namespaces, full))
-        GlobalEnv (open_namespaces, full, namespace_aliases)
-      else
-        GlobalEnv (List.Append (open_namespaces, [full]), full, namespace_aliases)
-    }
-
-    internal OpenNamespacesEqual (other : GlobalEnv) : bool {
-      open_namespaces.Equals (other.open_namespaces)       
+      def new_opened = add_open_nodes (open_namespaces, [full], Location.Default, false);
+      GlobalEnv (new_opened, full, namespace_aliases)
     }
 
     internal ContainsOpenNamespace (ns : list [string]) : bool {
@@ -579,6 +584,51 @@ namespace Nemerle.Compiler {
       })
     }
 
+    /** this is the auxiliary function for making set of opened namespaces
+        unique and warn if namespaces are opened multiple times by user
+     */
+    add_open_nodes (old : list [NamespaceND], added : list [NamespaceND],
+                    loc : Location, should_warn : bool) : list [NamespaceND]
+    {
+      List.FoldLeft (added, old, fun (x : NamespaceND, acc) {
+        if (List.ContainsRef (old, x)) {
+          when (should_warn)
+            Message.warning (loc, $"namespace `$(Util.QidOfList (x.Name))' is already open");
+          acc
+        }
+        else
+          x :: acc
+      })
+    }
+    
+    /** We substitute
+        using Y = X.Z;
+        by
+        _tmp1.Y.pointed_by_X_Z // for each part in current namespace
+        using _tmp1;
+     */
+    [Nemerle.Assertions.Requires (short_name != "")]
+    add_alias_nodes (short_name : string, long_name : list [string]) : list [NamespaceND]
+    {
+      mutable all_opened = [];
+      // in case we are inside some namespace, we must open every namespace path
+      // composed of current namespace's parts suffixed with opened one
+      def open_nested (curr) {
+        unless (curr == null) {
+          // this is the faked namespace node, to simulate forwarding of access to SHORT
+          // into FULL's node
+          def node_with_prefix = NamespaceND (curr, null, TypeInfoCache.No ());
+          def full_node = curr.Path (long_name);
+          node_with_prefix.AddChild (short_name, full_node);
+
+          all_opened = node_with_prefix :: all_opened;
+          open_nested (curr.Parent)
+        }
+      }
+      open_nested (current_namespace);
+      all_opened;
+    }
+    
     this () 
     {
       current_namespace = namespace_tree;
@@ -589,15 +639,6 @@ namespace Nemerle.Compiler {
 
     this (o : list [NamespaceND], c : NamespaceND, n : list [string * string])
     {
-      def op = Hashtable ();
-      foreach (x in o)
-        if (op.Contains (x.Name.ToString ())) {
-          Message.fatal_error ("opening twice: " + x.Name.ToString ())
-        }
-        else  
-          op.Add (x.Name.ToString (), null); 
-    
-    
       open_namespaces = o;
       current_namespace = c;      
       namespace_aliases = n;
@@ -636,15 +677,18 @@ namespace Nemerle.Compiler {
             state = 2;
             last = i + 1;
 
-          | (2, '#') | (2, '&') =>
+          | (_, '=') =>
+            short = coded.Substring (last, i - last);
+            // we may be here in state == 2, when this is the first '='
+            state = 3;
+            last = i + 1;
+
+          // we should add aliases only if the first 'short =' occured
+          | (3, '#') | (3, '&') =>
             def long_name = coded.Substring (last, i - last);
             def nodes_with_prefix = add_alias_nodes (short, NString.Split (long_name, array ['.']));
             open_namespaces = List.RevAppend (nodes_with_prefix, open_namespaces);
             namespace_aliases = (short, long_name) :: namespace_aliases;
-            last = i + 1;
-
-          | (2, '=') =>
-            short = coded.Substring (last, i - last);
             last = i + 1;
 
           | _ => ()
@@ -652,31 +696,6 @@ namespace Nemerle.Compiler {
       }
     }
 
-    /** We substitute
-        using Y = X.Z;
-        by
-        _tmp1.Y.pointed_by_X_Z // for each part in current namespace
-        using _tmp1;
-     */
-    add_alias_nodes (short_name : string, long_name : list [string]) : list [NamespaceND]
-    {
-      mutable all_opened = [];
-      // in case we are inside some namespace, we must open every namespace path
-      // composed of current namespace's parts suffixed with opened one
-      def open_nested (curr) {
-        unless (curr == null) {
-          def node_with_prefix = NamespaceND (curr, short_name, TypeInfoCache.No ());
-          def full_node = curr.Path (long_name);
-          node_with_prefix.AddChild (short_name, full_node);
-
-          all_opened = node_with_prefix :: all_opened;
-          open_nested (curr.Parent)
-        }
-      }
-      open_nested (current_namespace);
-      all_opened;
-    }
-   
     
     public static CheckReferencedNamespaces () : void
     {
@@ -705,14 +724,21 @@ namespace Nemerle.Compiler {
           prepare_macro_context_class ();
         
         def cmp (x, y) { System.String.CompareOrdinal (x, y) };
-        def collect (k, v) { k + "=" + v };
-        def extract (x : NamespaceND) { Util.qid_of_list (x.Name) };
+        def collect (k, v) {
+          k + "=" + v
+        };
+        def extract (x : NamespaceND, acc) {
+          if (x.IsFromAlias)
+            acc
+          else
+            Util.qid_of_list (x.Name) :: acc
+        };
 
-        def aliases = List.Sort (List.Map (namespace_aliases, collect), cmp);
-        def spaces = List.Sort (List.Map (open_namespaces, extract), cmp);
+        def aliases = List.Sort (List.RevMap (namespace_aliases, collect), cmp);
+        def spaces = List.Sort (List.FoldLeft (open_namespaces, [], extract), cmp);
         def coded_al = NString.Concat ("#", aliases);
         def coded_ns = NString.Concat ("#", spaces);
-        def coded = System.Text.StringBuilder (Util.qid_of_list
+        def coded = System.Text.StringBuilder (Util.QidOfList
                                                (current_namespace.Name) + "&");
         ignore (coded.Append (coded_ns + "&"));
         ignore (coded.Append (coded_al + "&"));
