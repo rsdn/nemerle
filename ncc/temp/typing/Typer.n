@@ -328,7 +328,7 @@ namespace Nemerle.Compiler
         // upper bound and look how this field is defined there, and finally
         // add maybe-more-specific lower bound
         if (cannot_delay) {
-          Message.error ($ "cannot find determine proper type for `$(tv)', "
+          Message.error ($ "cannot determine proper type for `$(tv)', "
                            "to find member `$(mem_name)'");
           TExpr.Error ()
         } else
@@ -365,6 +365,110 @@ namespace Nemerle.Compiler
     }
 
     
+    TypeCall (fnc : PT.PExpr, parms : list [PT.PExpr], expected : TyVar) : TExpr
+    {
+      def refout (name, expr) {
+        def tv = FreshTyVar ("call parameter");
+        match (expr) {
+          | PT.PExpr.ParmByRef (ex)
+          | PT.PExpr.ParmOut (ex) =>
+            def ex = TypeExpr (ex, tv);
+            CheckLValue (ex, need_ref = true, desc = "ref/out parameter");
+            def kind =
+              match (expr) {
+                | PT.PExpr.ParmByRef => ParmKind.Ref
+                | _ => ParmKind.Out
+              };
+            Parm (kind, ex, name)
+          | ex =>
+            def ex = TypeExpr (ex, tv);
+            Parm (ParmKind.Normal, ex, name)
+        }
+      }
+
+      def compile_parm (p : PT.PExpr) {
+        | <[ $(name : name) = $e ]> => refout (name.Id, e)
+        | e => refout ("", e)
+      };
+
+      def parms = List.Map (parms, compile_parm);
+
+      def tv = FreshTyVar ("called value");
+      def fnc = TypeExpr (fnc, tv);
+
+      match (fnc) {
+        | TExpr.Overloaded (lst) =>
+          mutable res = [];
+          
+          foreach ((expr, constraints) in lst) {
+            solver.PushState ();
+            constraints ();
+            def is_wrong = IsError (TryTypeCall (expr, parms, expected));
+            solver.PopState ();
+            when (!is_wrong)
+              res = (expr, constraints) :: res;
+          }
+
+          if (res.IsEmpty) {
+            
+          } else {
+          }
+
+        | TExpr.Error =>
+          fnc
+
+        | _ =>
+          TryTypeCall (fnc, parms, expected)
+      }
+      
+      
+      def fncs = make_value_reference (ctx, fnc, fallback = true);
+      def ex = resolve_overloaded_call (ctx, in_tail_pos, fncs, parms);
+
+      // XXX what's that?
+      match (ex) {
+        | TExpr.Call (TExpr.PropertyMember (_, prop), _) when is_indexer_property (prop) =>
+          Message.error ("attempt to call an indexer property `" +
+                         prop.Name + "'");
+        | _ => ()
+      };
+
+      ex
+    }
+
+
+    /** Check if [e] is an l-value, and if not display an error message
+        mentioning [desc]. Additionally is [need_ref] require location of
+        the expression to be known (i.e. no properties and indexers).
+      */
+    CheckLValue (e : TExpr, need_ref : bool, desc : string) : void
+    {
+      def is_lvalue =
+        match (e) {
+          | TExpr.LocalRef (d) => d.is_ref
+          | TExpr.StaticRef (m) =>
+            match (m.GetKind ()) {
+              | MemberKind.Field (f) =>
+                f.IsMutable || (current_fun.name == ".cctor" &&
+                                f.DeclaringType.SameAs (current_type))
+              | MemberKind.Property (p) when !need_ref => p.IsMutable
+              | _ => false
+            }
+          | TExpr.StaticPropertyRef (p) when !need_ref => p.IsMutable
+          | TExpr.FieldMember (TExpr.This, _) when is_instance_ctor => true
+          | TExpr.FieldMember (_, mem) => mem.IsMutable
+          | TExpr.PropertyMember (_, p) when !need_ref => p.IsMutable
+          | TExpr.Call (TExpr.PropertyMember (_, p), _) when !need_ref => p.IsMutable
+          | TExpr.ArrayIndexer => true
+          | _ => false
+        }
+      
+      when (!is_lvalue)
+        Message.error ($ "needed an l-value for $desc, "
+                         "got $(DescribeExpression (e))");
+    }
+
+
     DoType (expression : PT.PExpr, expected : TyVar) : TExpr
     {
       match (expression) {
@@ -482,6 +586,7 @@ namespace Nemerle.Compiler
 
         | PT.PExpr.Ref (name) =>
           TypeName (name, expected)
+
           
         | PT.PExpr.Member (obj, PT.Splicable.Name (name)) =>
           assert (List.Length (name.idl) == 1);
@@ -536,7 +641,8 @@ namespace Nemerle.Compiler
           def target_type = FreshTyVar ("assignment target");
           def source_type = FreshTyVar ("assignment source");
           source_type.Require (target_type);
-          def e1 = TypeLValue (e1, target_type, need_ref = false);
+          def e1 = TypeExpr (e1, target_type);
+          CheckLValue (e1, need_ref = false, desc = "assignment target");
           def e2 = TypeExpr (e2, source_type);
           TExpr.Assign (e1, e2)
 
@@ -694,6 +800,58 @@ namespace Nemerle.Compiler
                   (TExpr.TypeConversion (val, t, ctx.IsChecked), t)
                 }
           }
+    }
+
+
+    DescribeExpression (expr : TExpr) : string
+    {
+      match (expr) {
+        | TExpr.LocalRef (d) =>
+          $ "a reference to local symbol `$(d)'"
+        | TExpr.StaticRef (m) =>
+          def tyname =
+            if (m.DeclaringType == null)
+              ""
+            else
+              m.DeclaringType.FullName + ".";
+          "a reference to global symbol `" + tyname + m.Name + "'"
+        | TExpr.FieldMember (_, f) =>
+          "a reference to field `" + f.Name + "'"
+        | TExpr.ConstantObjectRef (m) =>
+          "a reference to constant constructor of `" +
+          m.DeclaringType.FullName + "'"
+        | TExpr.ImplicitValueTypeCtor (t) =>
+          "a reference to implicit constructor of `" +
+          t.FullName + "'"
+        | TExpr.StaticPropertyRef (p)
+        | TExpr.PropertyMember (_, p) =>
+          "a reference to property `" + p.Name + "'"
+        | TExpr.MethodRef (_, m, _) =>
+          "a reference to method `" + m.Name + "'"
+        | TExpr.TailCall (f, _)
+        | TExpr.Call (f, _) =>
+          "a function call to " + describe_expression (f)
+        | TExpr.SelfTailCall =>
+          "self-recursive function call"
+        | TExpr.Assign => "an assignment"
+        | TExpr.DefValIn => "a value binding"
+        | TExpr.DefFunctionsIn => "a function binding"
+        | TExpr.Match => "a `match' expression"
+        | TExpr.Throw => "a throw expression"
+        | TExpr.TryWith => "a try...with expression"
+        | TExpr.TryFinally => "a try...finally expression"
+        | TExpr.Literal => "a literal value"
+        | TExpr.This => "a this pointer reference"
+        | TExpr.Base => "a base class reference"
+        | TExpr.TypeConversion => "a type conversion (:>)"
+        | TExpr.TypeEnforcement => "a type enforcement (:)"
+        | TExpr.Sequence => "a sequence"
+        | TExpr.Tuple => "a tuple constructor"
+        | TExpr.Array => "an array constructor"
+        | TExpr.ArrayIndexer => "an array indexer reference"
+        | TExpr.TypeOf => "a typeof expression"
+        | TExpr.OpCode => "an operator reference"
+      }
     }
 
 
@@ -1886,57 +2044,6 @@ namespace Nemerle.Compiler
     }
   }
 
-  describe_expression (expr : TExpr) : string
-  {
-    match (expr) {
-      | TExpr.LocalRef (d) =>
-        "a reference to local symbol `" + d.name + "'"
-      | TExpr.StaticRef (m) =>
-        def tyname =
-          if (m.DeclaringType == null)
-            ""
-          else
-            m.DeclaringType.FullName + ".";
-        "a reference to global symbol `" + tyname + m.Name + "'"
-      | TExpr.FieldMember (_, f) =>
-        "a reference to field `" + f.Name + "'"
-      | TExpr.ConstantObjectRef (m) =>
-        "a reference to constant constructor of `" +
-        m.DeclaringType.FullName + "'"
-      | TExpr.ImplicitValueTypeCtor (t) =>
-        "a reference to implicit constructor of `" +
-        t.FullName + "'"
-      | TExpr.StaticPropertyRef (p)
-      | TExpr.PropertyMember (_, p) =>
-        "a reference to property `" + p.Name + "'"
-      | TExpr.MethodRef (_, m, _) =>
-        "a reference to method `" + m.Name + "'"
-      | TExpr.TailCall (f, _)
-      | TExpr.Call (f, _) =>
-        "a function call to " + describe_expression (f)
-      | TExpr.SelfTailCall =>
-        "self-recursive function call"
-      | TExpr.Assign => "an assignment"
-      | TExpr.DefValIn => "a value binding"
-      | TExpr.DefFunctionsIn => "a function binding"
-      | TExpr.Match => "a `match' expression"
-      | TExpr.Throw => "a throw expression"
-      | TExpr.TryWith => "a try...with expression"
-      | TExpr.TryFinally => "a try...finally expression"
-      | TExpr.Literal => "a literal value"
-      | TExpr.This => "a this pointer reference"
-      | TExpr.Base => "a base class reference"
-      | TExpr.TypeConversion => "a type conversion (:>)"
-      | TExpr.TypeEnforcement => "a type enforcement (:)"
-      | TExpr.Sequence => "a sequence"
-      | TExpr.Tuple => "a tuple constructor"
-      | TExpr.Array => "an array constructor"
-      | TExpr.ArrayIndexer => "an array indexer reference"
-      | TExpr.TypeOf => "a typeof expression"
-      | TExpr.OpCode => "an operator reference"
-    }
-  }
-
   is_indexer_property (prop : IProperty) : bool
   {
     def getter = prop.GetGetter ();
@@ -2049,69 +2156,6 @@ namespace Nemerle.Compiler
     (res, TType.Void ())
   }
 
-
-  ty_call (ctx : CTX, in_tail_pos : bool, fnc : PT.PExpr, parms : list [PT.PExpr]) : TExpr
-  {
-    def refout (name, expr) {
-      match (expr) {
-        | PT.PExpr.ParmByRef (ex)
-        | PT.PExpr.ParmOut (ex) =>
-          def ex = ty_expr (ctx, ex);
-          unless (is_lvalue (ctx, ex, need_ref = true))
-            Message.error ("ref/out parameters need lvalue but " +
-                           describe_expression (ex) +
-                           " was passed");
-          def kind =
-            match (expr) {
-              | PT.PExpr.ParmByRef => ParmKind.Ref
-              | _ => ParmKind.Out
-            };
-          Parm (kind, ex, name)
-        | ex =>
-          Parm (ParmKind.Normal, ty_expr (ctx, ex), name)
-      }
-    };
-    def fp (p : PT.PExpr) {
-      | <[ $(name : name) = $e ]> => refout (name.Id, e)
-      | e => refout ("", e)
-    };
-
-    def parms = List.Map (parms, fp);
-    def fncs = make_value_reference (ctx, fnc, fallback = true);
-    def ex = resolve_overloaded_call (ctx, in_tail_pos, fncs, parms);
-    match (ex) {
-      | TExpr.Call (TExpr.PropertyMember (_, prop), _) when is_indexer_property (prop) =>
-        Message.error ("attempt to call an indexer property `" +
-                       prop.Name + "'");
-      | _ => ()
-    };
-
-    ex
-  }
-
-
-  is_lvalue (ctx : CTX, e : TExpr, need_ref : bool) : bool
-  {
-    match (e) {
-      | TExpr.LocalRef (d) => d.is_ref
-      | TExpr.StaticRef (m) =>
-        match (m.GetKind ()) {
-          | MemberKind.Field (f) =>
-            f.IsMutable || (ctx.current_fun.name == ".cctor" &&
-                            f.DeclaringType.SameAs (ctx.parent_type))
-          | MemberKind.Property (p) when !need_ref => p.IsMutable
-          | _ => false
-        }
-      | TExpr.StaticPropertyRef (p) when !need_ref => p.IsMutable
-      | TExpr.FieldMember (TExpr.LocalRef ({kind = LocalValueKind.ClosurisedThis}), _)
-        when ctx.in_ctor => true
-      | TExpr.FieldMember (_, mem) => mem.IsMutable
-      | TExpr.PropertyMember (_, p) when !need_ref => p.IsMutable
-      | TExpr.Call (TExpr.PropertyMember (_, p), _) when !need_ref => p.IsMutable
-      | TExpr.ArrayIndexer => true
-      | _ => false
-    }
-  }
 
   ty_mkarray (ctx : CTX, rank : int, args : PT.PExpr) : TExpr * TType
   {
