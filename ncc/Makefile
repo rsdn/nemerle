@@ -155,8 +155,11 @@ out.$(STAGE)/ncc.exe: $(COMPILER) out.$(STAGE)/Nemerle.dll \
 		$(GENERIC_SRC) $(NCC_EXE_SRC)
 
 sync:
-	mv ../boot/ncc.exe ../boot/ncc-old.exe
-	cp ncc2.exe ../boot/ncc.exe
+	cd out.stage2 ; \
+	for x in * ; do \
+		mv -vf ../../boot/$$x ../../boot/$$x.old ; \
+		cp -vf $$x ../../boot/$$x ; \
+	done
 
 ../config.mak:
 	$(MAKE) -C .. config.mak
