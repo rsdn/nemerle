@@ -55,7 +55,10 @@ NEMERLE_DLL_SRC = \
 	../lib/tree.n			\
 	../lib/idictionaryenumerator.n	\
 	../lib/idictionary.n		\
-	../lib/dictionaryentry.n
+	../lib/dictionaryentry.n	\
+	../lib/heap.n			\
+	../lib/icomparable.n
+
 
 NEMERLE_COMPILER_DLL_SRC = \
 	extensions.n \

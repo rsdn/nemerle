@@ -42,7 +42,12 @@ src = \
 	option.n		\
 	queue.n			\
 	stack.n			\
-	tree.n
+	tree.n			\
+	idictionaryenumerator.n \
+	idictionary.n		\
+	dictionaryentry.n	\
+	heap.n			\
+	icomparable.n
 
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
