@@ -66,7 +66,6 @@ public module Parser {
     public mutable last_token2 : Token; // one token before
     public mutable last_token3 : Token; // two tokens before
     public mutable push_back : int; // position in last_token{1,2} or 0
-    public mutable in_pattern : bool;
     public parens : Hashtable <string, ParenCallback>;
     public closing_parens : Hashtable <string, int>;
     public keywords : Hashtable <string, KeywordCallback>;
@@ -83,7 +82,6 @@ public module Parser {
                 last_token2 = null, 
                 last_token3 = null,
                 push_back = 0,
-                in_pattern = false,
                 keywords = Hashtable (),
                 parens = Hashtable (),
                 closing_parens = Hashtable ());
@@ -247,37 +245,22 @@ public module Parser {
       | Tok_operator ("$", _) =>
         match (get_token ()) {
           | Tok_identifier (id) =>
-            if (ctx.in_pattern)
-              SS_spliced_expr (loc, E_spliced_patt (P_variable (location (),
-                                                                Name ([id]))))
-            else
               SS_spliced_expr (loc, E_ref (location (), Name ([id])))
+              
           | Tok_operator ("(", _) =>
-            if (ctx.in_pattern) {
-              def pattr = parse_pattern ();
-              expect_operator (")");
-              match (pattr) {
-                | P_has_type (pat, ty) =>
-                  SS_spliced_expr (loc, E_spliced (E_type_enforcement (E_spliced_patt (pat), ty)))
-                | x => 
-                  SS_spliced_expr (loc, E_spliced_patt (x))
-              }
-            }
-            else {
-              def expr = parse_expr ();
-              expect_operator (")");
-              match (expr) {
-                | E_type_enforcement =>
-                  SS_spliced_expr (loc, E_spliced (expr))
+            def expr = parse_expr ();
+            expect_operator (")");
+            match (expr) {
+              | E_type_enforcement =>
+                SS_spliced_expr (loc, E_spliced (expr))
 
-                | x => SS_spliced_expr (loc, x); 
-              }
+              | x => SS_spliced_expr (loc, x); 
             }
 
           | Tok_keyword ("_") =>
-            SS_spliced_expr (loc, E_spliced_patt (P_underscore (location ())))
-          | _ =>
-            fatal_error ("expecting identifier or '(' after '$'")
+              SS_spliced_expr (loc, E_Underscore (location ()))
+              
+          | _ => fatal_error ("expecting identifier or '(' after '$'")
         }
       | Tok_keyword ("_") => 
         SS_string (loc, Name ([Util.tmpname ("u")]))
@@ -468,17 +451,17 @@ public module Parser {
   build_match_for_is (loc : Location, expr : Expr, ty : Type) : Expr
   {
     def id = SS_string (Name ("_N_is"));
-    def pat = P_as (loc, P_has_type (loc, P_underscore (loc), ty), id);
+    def pat = E_As (loc, E_type_enforcement (loc, E_Underscore (loc), ty), id);
     
     build_match_for_isp (loc, expr, pat)
   }
   
   // builds an E_match expression for the 'isp' keyword
-  build_match_for_isp (loc : Location, expr : Expr, pat : Pattern) : Expr
+  build_match_for_isp (loc : Location, expr : Expr, pat : Expr) : Expr
   {
-    E_match (loc, expr,
-             [Match_case ([(pat, None ())], E_literal (loc, L_bool (true))),
-              Match_case ([(P_underscore (loc), None ())], E_literal (loc, L_bool (false)))])
+    E_Match (loc, expr,
+             [MatchCase ([(pat, None ())], E_literal (loc, L_bool (true))),
+              MatchCase ([(E_Underscore (loc), None ())], E_literal (loc, L_bool (false)))])
   }
   
   parse_closed_prim_expr () : Expr {
@@ -493,6 +476,7 @@ public module Parser {
         match (get_token ()) {
           | Tok_keyword ("this") => E_this (loc)
           | Tok_keyword ("base") => E_base (loc)
+          | Tok_keyword ("_") => E_Underscore (loc)
           | Tok_keyword ("typeof") => 
             expect_operator ("(");
             def type_expr = parse_type ();
@@ -583,50 +567,49 @@ public module Parser {
       | SS_spliced_expr (e) =>
         match (e) {
           | E_spliced (E_type_enforcement) => e
-          | _ =>
-            if (ctx.in_pattern)
-              e
-            else
-              E_spliced (e)
+          | _ => E_spliced (e)
         }
       | SS_string => Util.ice ("expected spliced expression")
     }
   }
 
-  parse_prim_expr () : Expr {
-    def loop (expr : Expr) {
-      match (get_token ()) {
-        | Tok_operator ("[", _) =>
-          def exprs = operator_separated_list (",", parse_expr);
-          expect_operator ("]");
-          loop (E_indexer (expr.loc, expr, exprs))
+  parse_prim_expr (expr : Expr) : Expr {
+    match (get_token ()) {
+      | Tok_operator ("[", _) =>
+        def exprs = operator_separated_list (",", parse_expr);
+        expect_operator ("]");
+        parse_prim_expr (E_indexer (expr.loc, expr, exprs))
           
-        | Tok_operator (".", _) => 
-          def id = get_splicable_id ();
-          loop (E_member (expr.loc, expr, id))
+      | Tok_operator (".", _) => 
+        def id = get_splicable_id ();
+        parse_prim_expr (E_member (expr.loc, expr, id))
           
-        | Tok_operator ("(", _) =>
-          def parms =
-            match (peek_token ()) {
-              | Tok_operator (")", _) => shift (); []
-              | _ => 
-                def parms = operator_separated_list (",", parse_expr);
-                expect_operator (")");
-                parms
-            };
-          loop (E_call (expr.loc, expr, parms))
+      | Tok_operator ("(", _) =>
+        def parms =
+          match (peek_token ()) {
+            | Tok_operator (")", _) => shift (); []
+            | _ => 
+              def parms = operator_separated_list (",", parse_expr);
+              expect_operator (")");
+              parms
+          };
+        parse_prim_expr (E_call (expr.loc, expr, parms))
 
-        | _ => push_back (); expr
-      }
-    };
+      | Tok_operator ("{", _) =>
+        push_back ();
+        E_Application (expr.loc, expr, parse_expr ())
 
-    loop (parse_closed_prim_expr ())
+      | Tok_keyword ("_") =>
+        E_Application (expr.loc, expr, E_Underscore ())
+
+      | _ => push_back (); expr
+    }
   }
 
   parse_unary_expr () : Expr {
     match (peek_token ()) {
       | Tok_operator ("(", _)
-      | Tok_operator ("$", _) => parse_prim_expr ()
+      | Tok_operator ("$", _) => parse_prim_expr (parse_closed_prim_expr ())
 
       | Tok_operator (".", _) =>
         expect_operator ("..");
@@ -648,7 +631,7 @@ public module Parser {
         };
         
         if (ctx.parens.Contains (o))
-          parse_prim_expr ()
+          parse_prim_expr (parse_closed_prim_expr ())
         else {
           shift ();
           def tok = peek_token ();
@@ -656,235 +639,24 @@ public module Parser {
           match (tok) {
             | Tok_operator (o', _) =>
               if (ctx.parens.Contains (o + o'))
-                parse_prim_expr ()
+                parse_prim_expr (parse_closed_prim_expr ())
               else unary ()
             | _ => unary ()
           }
         }
-      | _ => parse_prim_expr ()
+      | _ => parse_prim_expr (parse_closed_prim_expr ())
     }
   }
 
-  parse_pattern () : Pattern {
-    def loop () {
-      def loc = location_here ();
-      def pat = parse_closed_pattern ();
-      match (peek_token ()) {
-        | Tok_operator ("::", _) => 
-          shift (); 
-          P_cons (loc, SS_string (Name (["Cons"])), P_tuple (loc, [pat, loop ()]))
-        | Tok_operator (":", _) =>
-          shift ();
-          def ty = parse_type ();
-          P_has_type (loc, pat, ty)
-
-        | _ => pat
-      }
-    };
-
-    loop ()
-  }
-
-  parse_pattern_after_id (id : Splicable_string) : Pattern {
-    def id = 
-      match (peek_token ()) {
-        | Tok_operator (".", _) =>
-          shift ();
-          match (id) {
-            | SS_string ({ idl = n }) => SS_string (Name (get_qid (n)))
-            | _ =>
-              fatal_error ("mixing spliced names with regular ids isn't allowed")
-          }
-        | _ => id;
-      };
-    def loc = location ();
-    match (peek_token ()) {
-      | Tok_operator ("{", _)
-      | Tok_operator ("(", _) => 
-        P_cons (loc, id, tuple_or_record ()) 
-      | Tok_keyword ("_") => 
-        shift ();
-        P_cons (loc, id, P_underscore (loc))
-      | _ =>
-        match (id) {
-          | SS_string => P_cons (loc, id, P_underscore (loc))
-          | SS_spliced_expr (E_spliced ((E_type_enforcement) as tenf)) =>
-            P_spliced (loc, tenf)
-          | SS_spliced_expr (expr) =>
-            P_spliced (loc, expr)
-        }
-    }
-  }
-
-  /** this function expects first '{' to be already shifted, starting
-      its scanning routine from inside of record;
-      but it shifts the ending '}'
-   */
-  parse_record () : Pattern {
-    def loop (acc) {
-      match (get_token ()) {
-        | Tok_operator ("}", _) => List.Rev (acc)
-        | Tok_identifier (n) =>
-          expect_operator ("=");
-          def pat = parse_pattern ();
-          def res = (n, pat);
-          match (get_token ()) {
-            | Tok_operator (";", _) => ()
-            | Tok_operator ("}", _) => push_back ()
-            | _ => fatal_error ("found junk after pattern in record")
-          };
-          loop (res :: acc)
-        | _ => fatal_error ("expecting named pattern")
-      }
-    };
-    def loc = location ();
-    match (peek_token ()) {
-      | Tok_operator (".", _) =>
-        expect_operator ("..");
-        match (get_splicable_id ()) {
-          | SS_spliced_expr (e) =>
-            expect_operator ("}");
-            P_record ([("", P_patt_list (loc, P_spliced (e)))]);
-          | SS_string =>
-            fatal_error ("expected spliced expression")
-        }
-      | _ =>
-        P_record (loc, loop ([]))
-    }
-  }
-
-  tuple_or_record () : Pattern {
-    match (get_token ()) {
-      | Tok_operator ("(", _) =>
-        def pats = operator_separated_list (",", parse_pattern);
-        expect_operator (")");
-        P_tuple (location_here (), pats)
-      | Tok_operator ("{", _) => parse_record ()
-      | _ => fatal_error ("expecting tuple or record pattern")
-    }
-  }
-    
-  parse_closed_pattern () : Pattern {
-    def loc = location_here ();
-  
-    match (parse_literal ()) {
-      | Some (l) => P_literal (loc, l)
-      | None =>
-        match (get_token ()) {
-          | Tok_operator ("-", _) =>
-            match (parse_literal ()) {
-              | Some (L_int (v)) => P_literal (loc, L_int (-v))
-              | _ => 
-                fatal_error ("expecting integer literal")
-            }          
-         
-          | Tok_operator ("+", _) =>
-            match (parse_literal ()) {
-              | Some (L_int (v)) => P_literal (loc, L_int (v))
-              | _ => 
-                fatal_error ("expecting integer literal")
-            }
-            
-          | Tok_operator ("$", _) 
-          | Tok_identifier =>
-            push_back ();
-            def id = get_splicable_id ();
-            parse_pattern_after_id (id)
-            
-          | Tok_operator ("{", _) =>
-            parse_record ()
-
-          | Tok_operator (".", _) =>
-            expect_operator (".");
-            match (get_splicable_id ()) {
-              | SS_spliced_expr (e) =>
-                P_patt_list (e.loc, P_spliced (e))
-              | SS_string =>
-                fatal_error ("expected spliced expression")
-            }
-            
-          | Tok_operator ("(", _) =>
-            def pat = parse_pattern ();
-            match (get_token ()) {
-              | Tok_operator (",", _) =>
-                def pats = pat :: operator_separated_list (",", parse_pattern);
-                expect_operator (")");
-                P_tuple (loc, pats)
-              | Tok_operator (")", _) =>
-                match (peek_token ()) {
-                  | Tok_keyword ("as") =>
-                    shift ();
-                    def id = get_splicable_id ();
-                    P_as (loc, pat, id)
-                    
-                  | _ => 
-                    match (pat) {
-                      | P_patt_list => P_tuple (loc, [pat])
-                      | _ => pat
-                    }
-                }
-                
-              | _ =>
-                fatal_error ("expecting `,' or ')' in tuple pattern")
-            }
-
-          | Tok_keyword ("_") =>
-            P_underscore (loc)
-
-          | Tok_operator ("[", _) =>
-            def loop () {
-              match (get_token ()) {
-                | Tok_operator (",", _) =>
-                  match (peek_token ()) {
-                    | Tok_operator ("]", _) => 
-                      P_cons (SS_string (Name (["Nil"])), P_underscore ())
-                    | _ => 
-                      def p = parse_pattern ();
-                      P_cons (p.loc, SS_string (Name (["Cons"])),
-                              P_tuple (p.loc, [p, loop ()]))
-                  }
-                | Tok_operator ("]", _) =>
-                  P_cons (SS_string (Name (["Nil"])), P_underscore ())
-                | _ => fatal_error ("expecting pattern in list")
-              }
-            };
-
-            match (peek_token ()) {
-              | Tok_operator ("]", _) => shift (); 
-                P_cons (SS_string (Name (["Nil"])), P_underscore ())
-              | _ =>
-                def p = parse_pattern ();
-                P_cons (p.loc, SS_string (Name (["Cons"])), P_tuple (p.loc, [p, loop ()]))
-            }
-            
-          | Tok_operator ("<", _) =>
-            match (get_token ()) {
-              | Tok_operator ("[", _) => ()
-              | _ => fatal_error ("expecting '[' after '<' in pattern");
-            };
-            def back = ctx.in_pattern;
-            ctx.in_pattern = true;
-            def expr = parse_quotation ();
-            expect_operator ("]>");
-            ctx.in_pattern = back;
-            match (expr) {
-              | E_quoted (el) => P_quoted (loc, el)
-              | _ => Util.ice ("parse_quoted returned sth strange")
-            }
-            
-          | _ => fatal_error ("expecting pattern")
-        }
-    }
-  }
-
-  parse_case_guard () : Pattern * option <Expr> {
-    def pat = parse_pattern ();
+  parse_case_guard () : Expr * option <Expr> {
+    def pat = parse_expr ();
     if (flag_keyword ("when"))
       (pat, Some (parse_expr ()))
     else (pat, None ());
   }
 
-  parse_match_case () : Match_case {
+
+  parse_match_case () : MatchCase {
     def loop2 (acc) {
       def res = parse_case_guard ();
       match (get_token ()) {
@@ -905,7 +677,7 @@ public module Parser {
               match (get_splicable_id ()) {
                 | SS_spliced_expr (e) =>
                   expect_operator ("=>");
-                  [(P_patt_list (e.loc, P_spliced (e)), None ())]                  
+                  [(E_expr_list (e.loc, E_spliced (e)), None ())]                  
                 | SS_string =>
                   fatal_error ("expected spliced expression")
               }
@@ -921,7 +693,7 @@ public module Parser {
         | l => E_sequence (loc', l)
       };
 
-    Match_case (pats, expr)
+    MatchCase (pats, expr)
   }
 
   parse_toplevel_expr () : Expr
@@ -958,19 +730,20 @@ public module Parser {
                 match (get_splicable_id ()) {
                   | SS_spliced_expr (e) =>
                     expect_operator ("}");                  
-                    E_match (loc, expr, 
-                             [Match_case ([], E_expr_list (e.loc, E_spliced (e)))]);
+                    E_Match (loc, expr, 
+                             [MatchCase ([], E_expr_list (e.loc, E_spliced (e)))]);
                   | SS_string =>
                     fatal_error ("expected spliced expression")
                 }
               | _ =>
                 push_back ();
                 def cases = collect_braced_list (parse_match_case);
-                E_match (loc, expr, cases)
+                E_Match (loc, expr, cases)
             }
           | _ =>
             fatal_error ("expecting '{' after 'match (e)'")
         }
+        
       | Tok_keyword ("throw") =>
         E_raise (loc, parse_expr ())
 
@@ -1079,13 +852,13 @@ public module Parser {
         def parse_pat (idopt) {
           def pat =
             match (idopt) {
-              | None => parse_pattern ()
-              | Some (id) =>
-                parse_pattern_after_id (id);
+              | None => parse_closed_prim_expr ()
+              | Some (SS_string (id)) => parse_prim_expr (E_ref (loc, id))
+              | Some (SS_spliced_expr (e)) => parse_prim_expr (E_spliced (e.loc, e))
             };
           expect_operator ("=");
           def expr = parse_expr ();
-          E_letpat (loc, pat, expr)
+          E_DefPattern (loc, pat, expr)
         };
         def parse_funs (acc, idopt) {
           def h = parse_fun_header (allow_ctor = false, 
@@ -1169,8 +942,12 @@ public module Parser {
             loop_left (build_match_for_is (loc, expr, ty))
             
           | Tok_keyword ("matches") when pri == 9 =>
-            def pat = parse_pattern ();
+            def pat = parse_expr ();
             loop_left (build_match_for_isp (loc, expr, pat))
+
+          | Tok_keyword ("as") when pri == 9 =>
+            def id = get_splicable_id ();
+            loop_left (E_As (expr, id))
             
           | Tok_operator (s, 9) when 9 == pri =>
             def ty' = parse_type ();
@@ -1209,7 +986,11 @@ public module Parser {
   {
     def expr = parse_toplevel_expr ();
     match (get_token ()) {
-      | Tok_operator ("<-", _)
+      | Tok_operator ("<-", _) =>
+        Message.warning ("<- assignment operator is obsolete");
+        def expr' = parse_toplevel_expr ();
+        E_assign (expr.loc, expr, expr')
+                
       | Tok_operator ("=", _) =>
         def expr' = parse_toplevel_expr ();
         E_assign (expr.loc, expr, expr')
@@ -1274,7 +1055,7 @@ public module Parser {
             def parms_to_tupl (prs : list <Fun_parm>, acc) {
               match (prs) {
                 | [] => E_tuple (List.Rev (acc))
-                | {name = SS_string (x); loc = l} :: xs => 
+                | ({name = SS_string (x); loc = l}) :: xs => 
                   parms_to_tupl (xs, E_ref (l, x) :: acc)
                 | _ => fatal_error ("illegal spliced parameter?")
               }
@@ -1283,11 +1064,11 @@ public module Parser {
             def cases = collect_braced_list (parse_match_case);
             match (parms) {
               | [{name = SS_string (x)}] => 
-                E_match (loc, E_ref (loc, x), cases)
+                E_Match (loc, E_ref (loc, x), cases)
               | _::_::_ => 
                 def tup = parms_to_tupl (parms, []);
                 tup.loc = loc;
-                E_match (loc, tup, cases)
+                E_Match (loc, tup, cases)
               | [] =>             
                 fatal_error ("functions with direct matching must have parameters")
               | _ => fatal_error ("illegal spliced parameter?")
@@ -2098,7 +1879,7 @@ public module Parser {
     }
   }
 
-  parse_type_decl () : Type_decl {
+  parse_type_decl () : TopDeclaration {
     def parse_header () {
       match (peek_token ()) {
         | Tok_identifier
@@ -2208,7 +1989,7 @@ public module Parser {
                       List.Rev (acc)
                     | Tok_operator (",", _) =>
                       shift ();
-                      parse_elems (parse_prim_expr () :: acc)
+                      parse_elems (parse_prim_expr (parse_closed_prim_expr ()) :: acc)
                     | _ =>
                       fatal_error ("expected comma separated expressions in "
                                    + "syntax description")
@@ -2229,58 +2010,64 @@ public module Parser {
     res
   }
   
-  parse_topdecl () : Top_decl {
+  parse_topdecl () : TopDeclaration {
     def tok = get_token ();
     def loc = location_here ();
     def res =
       match (tok) {
         | Tok_keyword ("using") =>
-          def id = get_qid ([]);
+          def id = get_splicable_qid ();
           match (get_token ()) {
             | Tok_operator ("=", _) =>
               def id = 
                 match (id) {
-                  | [x] => x
-                  | x :: _ =>
+                  | SS_string ({ idl = [x] }) => x
+                  | SS_string ({ idl = x :: _ }) =>
                     Message.error ("namespace alias cannot contain dots");
                     x
-                  | [] => Util.ice ("empty list")
+                  | SS_spliced_expr =>
+                    Message.fatal_error ("namespace alias cannot contain spliced expr");
+                  | _ => Util.ice ("empty list")
                 };
-              def id' = get_qid ([]);
+              def id' = get_splicable_qid ();
               expect_operator (";");
-              TD_namespace_alias (id, id')
+              TD_namespace_alias (id', Modifiers.Empty, id)
            
             | Tok_operator (";", _) =>
               /// FIXME: pass list
-              MacroRegistry.LoadSyntaxExtensions (Nemerle.Utility.NString.Concat (".", id));
-              TD_open (id)
+              MacroRegistry.LoadSyntaxExtensions (Nemerle.Utility.NString
+                                                    .Concat (".", Macros.UnSString (id)));
+              TD_open (id, Modifiers.Empty)
 
             | _ => fatal_error ("expecting `;' or `='")
           }
           
         | Tok_keyword ("namespace") =>
-          def id = get_qid ([]);
+          def id = get_splicable_qid ();
           match (get_token ()) {
             | Tok_operator ("=", _) =>
               Message.warning ("`namespace ID = QID;' construct is obsolete, use `using ID = QID'");
               def id = 
                 match (id) {
-                  | [x] => x
-                  | x :: _ =>
+                  | SS_string ({ idl = [x] }) => x
+                  | SS_string ({ idl = x :: _ }) =>
                     Message.error ("namespace alias cannot contain dots");
                     x
-                  | [] => Util.ice ("empty list")
+                  | SS_spliced_expr =>
+                    Message.fatal_error ("namespace alias cannot contain spliced expr");
+                  | _ => Util.ice ("empty list")
                 };
-              def id' = get_qid ([]);
+              def id' = get_splicable_qid ();
               expect_operator (";");
-              TD_namespace_alias (id, id')
+              TD_namespace_alias (id', Modifiers.Empty, id)
               
             | Tok_operator ("{", _) =>
               // FIXME: pass list
-              MacroRegistry.LoadSyntaxExtensions (Nemerle.Utility.NString.Concat (".", id));
+              MacroRegistry.LoadSyntaxExtensions (Nemerle.Utility.NString
+                                                    .Concat (".", Macros.UnSString (id)));
               push_back ();
               def decls = collect_braced_list (parse_topdecl);
-              TD_namespace (id, decls)
+              TD_namespace (id, Modifiers.Empty, decls)
 
             | _ => fatal_error ("expecting '}'")
           }
@@ -2292,15 +2079,15 @@ public module Parser {
               expect_operator (":");
               def body = parse_expr ();
               expect_operator ("]");
-              TD_attribute (body)
+              TD_attribute (null, Modifiers.Empty, body)
             | _ =>
               push_back ();
-              TD_type (parse_type_decl ())
+              parse_type_decl ()
           }
 
         | _ =>
           push_back ();
-          TD_type (parse_type_decl ())
+          parse_type_decl ()
       };
 
     res.loc = loc;
@@ -2321,14 +2108,11 @@ public module Parser {
             | Tok_identifier ("ttype") =>
               SyntaxTType (parse_type ())
             
-            | Tok_identifier ("pattern") =>
-              SyntaxPattern (parse_pattern ())
-
             | Tok_identifier ("case") =>
-              SyntaxCase (parse_match_case ())
+              SyntaxCase1 (parse_match_case ())
 
             | Tok_identifier ("caseguard") =>
-              SyntaxCaseGuard (parse_case_guard ())
+              SyntaxCaseGuard1 (parse_case_guard ())
 
             | Tok_identifier ("fundecl") =>
               def h = parse_fun_header (allow_ctor = false, 
@@ -2380,7 +2164,6 @@ public module Parser {
     | GE_operator { name : string; }
     | GE_keyword { name : string; }
     | GE_expression
-    | GE_pattern
     | GE_funparm
     | GE_expression_list { separator : string; }
     | GE_optional { body : GrammarElement; }
@@ -2401,10 +2184,6 @@ public module Parser {
           def expr = parse_expr ();
           loop (SyntaxExpr (expr) :: acc, xs)
 
-        | GE_pattern :: xs =>
-          def pat = parse_pattern ();
-          loop (SyntaxPattern (pat) :: acc, xs)
-          
         | GE_expression_list (sep) :: xs =>
           def exprs = operator_separated_list (sep, parse_expr);
           loop (List.RevAppend (List.Map (exprs, fun (e) { SyntaxExpr (e) }), 
@@ -2512,13 +2291,12 @@ public module Parser {
     });
   }
 
-  public parse (lexer : LexerBase) : list <Top_decl>
+  public parse (lexer : LexerBase) : list <TopDeclaration>
   {
     ctx.lexer = lexer;
     ctx.last_token1 = null;
     ctx.last_token2 = null;
     ctx.push_back = 0;
-    ctx.in_pattern = false;
     MacroRegistry.RemoveSyntaxExtensions ();
     Location_stack.push_fn (location_here);
     def r = collect_list (parse_topdecl);
@@ -2535,7 +2313,6 @@ public module Parser {
     ctx.last_token1 = null;
     ctx.last_token2 = null;
     ctx.push_back = 0;
-    ctx.in_pattern = false;
     MacroRegistry.RemoveSyntaxExtensions ();
     def r = parse_expr ();
     match (peek_token ()) {
