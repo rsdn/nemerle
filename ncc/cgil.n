@@ -38,7 +38,7 @@ namespace Nemerle.Compiler
 
 
   (**
-   *
+   * The CGIL tree holds information about types and their members.
    *)
   variant CGIL_tree {
     | CGIL_class { type_builder : TypeBuilder; subtree : list (CGIL_tree); }
@@ -76,24 +76,34 @@ namespace Nemerle.Compiler
       this._module_builder <- 
         this._assembly_builder.DefineDynamicModule ("CGILTest", "cgil-test.dll"); // FIXME
 
-      (* create the assembly skeleton *)
+      (* select the classes that have to be generated separately *)
+      def (aux_decls, standard_decls) =
+        this.select_aux_and_standard_decls (decls);
+
+      (* process the declarations *)
       def add_classes (decl) { this.make_class (decl, null) };
-      def classes_tree = List.map (add_classes, decls);
-            
-      (* fill in the member declarations *)
       def add_declarations (tree) { this.add_declarations (tree, null) }; // FIXME: aargh
-      def declarations_tree = List.map (add_declarations, classes_tree);
-            
-      (* add the method implementations *)
       def add_implementations (tree) { this.add_implementations (tree) }; // FIXME: aargh
+
+      (* emit the auxiliary declarations *)
+      this._emit_nemerle_attributes <- false;
+
+      def aux_classes_tree = List.map (add_classes, aux_decls);
+      def aux_declarations_tree = List.map (add_declarations, aux_classes_tree);
+      def aux_implementations_tree = List.map (add_implementations, aux_declarations_tree);
+
+      (* execute the type builder queue *)
+      create_types_in_queue ();
+
+      (* emit all the other declarations *)
+      this._emit_nemerle_attributes <- true;
+      
+      def classes_tree = List.map (add_classes, standard_decls);
+      def declarations_tree = List.map (add_declarations, classes_tree);
       def implementations_tree = List.map (add_implementations, declarations_tree);
             
       (* execute the type builder queue *)
-      def create_type (tb : TypeBuilder) : void {
-        def _ = tb.CreateType ();
-        ()
-      };      
-      this._type_builder_queue.iter (create_type);
+      create_types_in_queue ();
             
       (* save the assembly *)
       this._assembly_builder.Save ("cgil-test.dll"); // FIXME
@@ -102,14 +112,49 @@ namespace Nemerle.Compiler
 
 
     (* -- PRIVATE METHODS -------------------------------------------------- *)
+
+    (**
+     * Calls the CreateType method for all the elements in the queue.
+     * The queue is cleared after the types have been created.
+     *)
+    private create_types_in_queue () : void
+    {
+      def create_type (tb : TypeBuilder) : void {
+        def _ = tb.CreateType ();
+        ()
+      };      
+    
+      _type_builder_queue.iter (create_type);
+      _type_builder_queue.clear ();
+    }
+    
+    (**
+     * Splits the declarations into two separate lists. The first list
+     * will be processed in the first order (typically you'll want to
+     * put all the auxiliary definitions there).
+     *)
+    private select_aux_and_standard_decls (decls : list (CM_class)) : list (CM_class) * list (CM_class)
+    {
+      def is_aux (decl : CM_class) : bool {
+        match (decl.ns + decl.name) {
+          | "Nemerle.TypeAttribute"
+          | "Nemerle.VariantAttribute"
+          | "Nemerle.VariantOptionAttribute" => true
+          | _ => false
+        }
+      };
+      
+      List.partition (is_aux, decls)
+    }
+    
     
     (**
      * Builds a Nemerle type attribute
      *)
     private make_nemerle_type_attr (encoded_type : string) : CustomAttributeBuilder
     {
-      def attr_type = typeof (Nemerle.TypeAttribute);
-      def constructor_param_types = mkarray [typeof (System.String)];
+      def attr_type = reflect_type ("Nemerle.TypeAttribute", false, false);
+      def constructor_param_types = mkarray [reflect_type ("System.String")];
       def constructor_info = attr_type.GetConstructor (constructor_param_types);
       def constructor_params = mkarray [encoded_type];
       def attr_builder = CustomAttributeBuilder (constructor_info, (constructor_params :> array (System.Object)));
@@ -122,7 +167,7 @@ namespace Nemerle.Compiler
      *)
     private make_nemerle_variant_attribute () : CustomAttributeBuilder
     {
-      def attr_type = typeof (Nemerle.VariantAttribute);
+      def attr_type = reflect_type ("Nemerle.VariantAttribute", false, false);
       def constructor_info = attr_type.GetConstructor (mkarray []);
       def attr_builder = CustomAttributeBuilder (constructor_info, (mkarray [] :> array (System.Object)));
       attr_builder
@@ -134,8 +179,8 @@ namespace Nemerle.Compiler
      *)
     private make_nemerle_variant_option_attribute (encoded_type : string) : CustomAttributeBuilder
     {
-      def attr_type = typeof (Nemerle.VariantOptionAttribute);
-      def constructor_param_types = mkarray [typeof (System.String)];
+      def attr_type = reflect_type ("Nemerle.VariantOptionAttribute", false, false);
+      def constructor_param_types = mkarray [reflect_type ("System.String")];
       def constructor_info = attr_type.GetConstructor (constructor_param_types);
       def constructor_params = mkarray [encoded_type];
       def attr_builder = CustomAttributeBuilder (constructor_info, (constructor_params :> array (System.Object)));
@@ -143,37 +188,59 @@ namespace Nemerle.Compiler
     }
 
 
+
     (**
-     *
+     * A search for a (possibly partial) type of a given name is executed.
+     * The partial types in the local module builder are always searched.
+     * If specified, the external declarations and the currently loaded
+     * types are scanned, too.
      *)
-    private nemerle_to_framework_type (ty : CG_type) : System.Type
+    private reflect_type (type_name : string, scan_externals : bool, scan_system : bool) : System.Type
+    {
+      def ty = this._module_builder.GetType (type_name);
+      if (ty != null) ty
+      else {
+        def ty = null; // FIXME: search in Env.externals here!
+        if (ty != null && scan_externals) ty
+        else {
+          def ty = System.Type.GetType (type_name);
+          if (ty != null && scan_system) ty
+          else {
+            (* Message.warning ("CGIL: unable to reflect type: " + type_name); *)
+            typeof (System.Object)
+          }
+        }
+      }    
+    }
+
+
+    (**
+     * Same as above, but always searches in externals and System.
+     *)
+    private reflect_type (type_name : string) : System.Type
+    {
+      reflect_type (type_name, true, true)
+    }
+
+
+    (**
+     * Converts a CG type to it's closest approximation as a System.Type
+     *)
+    private reflect_nemerle_type (ty : CG_type) : System.Type
     {
       match (ty) {
-        | CT_array (t) =>
-          def internal_type = this.nemerle_to_framework_type (t);
-          
-          def array_type = this._module_builder.GetType (internal_type.FullName + "[]");
-          if (array_type != null) array_type 
-          else {
-            def array_type = System.Type.GetType (internal_type.FullName + "[]");
-            if (array_type != null) array_type else typeof (System.Array)
-          }
+        | CT_array (t) => 
+          def internal_type = reflect_nemerle_type (t);          
+          this.reflect_type (internal_type.FullName + "[]", true, true)
 
-        | CT_ref (name) =>
-          def ref_type = this._module_builder.GetType (name);
-          if (ref_type != null) ref_type 
-          else {
-            def ref_type = System.Type.GetType (name);
-            if (ref_type != null) ref_type else typeof (System.Object)
-          }
-
+        | CT_ref (name) => 
+          this.reflect_type (name, true, true)
+        
         | CT_tuple (arity) =>
-          def tuple_type = this._module_builder.GetType ("Nemerle.Tuple" + string_of_int (arity)); // FIXME
-          if (tuple_type != null) tuple_type else typeof (System.Object)
+          this.reflect_type ("Nemerle.Tuple" + string_of_int (arity), false, false)
           
         | CT_fun (arity) =>
-          def fun_type = this._module_builder.GetType ("Nemerle.Func" + string_of_int (arity)); // FIXME
-          if (fun_type != null) fun_type else typeof (System.Object)
+          this.reflect_type ("Nemerle.Func" + string_of_int (arity), false, false)
           
         | CT_void => typeof(System.Void)
         | CT_object => typeof(System.Object)
@@ -185,9 +252,9 @@ namespace Nemerle.Compiler
     
     
     (**
-     *
+     * Converts Nemerle field modifiers to the CLI field attributes.
      *)
-    private nemerle_field_modifiers_to_framework_attrs (attrs : list (Modifier)) : FieldAttributes
+    private make_field_attributes (attrs : list (Modifier)) : FieldAttributes
     {
       def process_modifier (modifier : Modifier) : FieldAttributes {
         match (modifier) {
@@ -207,7 +274,7 @@ namespace Nemerle.Compiler
         
       match (attrs) {
         | modifier :: rest =>
-          process_modifier (modifier) + this.nemerle_field_modifiers_to_framework_attrs (rest)
+          process_modifier (modifier) + this.make_field_attributes (rest)
         | [] =>
           FieldAttributes.PrivateScope
       }
@@ -215,7 +282,7 @@ namespace Nemerle.Compiler
 
 
     (**
-     *
+     * Converts Nemerle method modifiers to the CLI method attributes.
      *)
     private make_method_attributes (attrs : list (Modifier)) : MethodAttributes
     {
@@ -328,7 +395,7 @@ namespace Nemerle.Compiler
         else
           type_builder.DefineNestedType (m.name, TypeAttributes.NestedPublic + attrs);
 
-      when (custom_attribute != null) {
+      when (custom_attribute != null && this._emit_nemerle_attributes) {
         new_type_builder.SetCustomAttribute (custom_attribute);
       };
 
@@ -399,10 +466,13 @@ namespace Nemerle.Compiler
           
           def field_builder = 
             type_builder.DefineField (field.name, 
-                                      this.nemerle_to_framework_type (field.ty), 
-                                      this.nemerle_field_modifiers_to_framework_attrs (field.modifiers));
-          field_builder.SetCustomAttribute (this.make_nemerle_type_attr (field.encoded_type));
+                                      this.reflect_nemerle_type (field.ty), 
+                                      this.make_field_attributes (field.modifiers));
 
+          when (this._emit_nemerle_attributes) {
+            field_builder.SetCustomAttribute (this.make_nemerle_type_attr (field.encoded_type));
+          };
+          
           CGIL_field (field, field_builder)
                             
         | CGIL_constructor (constructor, _) =>
@@ -446,7 +516,7 @@ namespace Nemerle.Compiler
     {
       (* build the parameter types array *)      
       def mkparm (v : CG_val) : System.Type {
-        this.nemerle_to_framework_type (v.ty)
+        this.reflect_nemerle_type (v.ty)
       };
                     
       def parameter_types = this.type_list_to_type_array (List.map (mkparm, m.parms));
@@ -480,10 +550,10 @@ namespace Nemerle.Compiler
     {
       (* build the return type and parameter types *)      
       def mkparm (v : CG_val) : System.Type {
-        this.nemerle_to_framework_type (v.ty)
+        this.reflect_nemerle_type (v.ty)
       };
       
-      def return_type = this.nemerle_to_framework_type (m.ret_type);
+      def return_type = this.reflect_nemerle_type (m.ret_type);
               
       def parameter_types = this.type_list_to_type_array (List.map (mkparm, m.parms));
 
@@ -536,6 +606,7 @@ namespace Nemerle.Compiler
     private mutable _assembly_builder : AssemblyBuilder;
     private mutable _module_builder : ModuleBuilder;
     private mutable _type_builder_queue : Queue (TypeBuilder);
+    private mutable _emit_nemerle_attributes : bool;
     
   } (* end of the module *)
   
