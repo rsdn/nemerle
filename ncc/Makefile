@@ -69,6 +69,7 @@ NEMERLE_DLL_SRC = \
 	../lib/nstring.n                \
 	../lib/pair.n			\
 	../lib/set.n			\
+	../lib/vector.n			\
 	../lib/AssemblyInfo.n
 
 NEMERLE_COMPILER_DLL_SRC = \
