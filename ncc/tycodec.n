@@ -1,0 +1,226 @@
+(*
+ * Copyright (c) 2004 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *)
+
+open Nemerle.Collections;
+
+open Nemerle.Compiler;
+open Nemerle.Compiler.Tyops;
+open Nemerle.Compiler.Typedtree;
+
+namespace Nemerle.Compiler {
+
+
+module TyCodec 
+{
+
+  variant Term
+  {
+    | App { name : string; args : list (Term); }
+  }
+  
+
+  ParseTerm (s : string) : Term
+  {
+    def get_name (pos) {
+      def idx = s.IndexOf ('(', pos);
+      assert (idx != -1);
+      (idx + 1, s.Substring (pos, idx - pos))
+    };
+    
+    def maybe_get (pos) {
+      if (s[pos] == ')') (pos + 1, None ())
+      else {
+        def (pos, name) = get_name (pos);
+        def (pos, args) = get_list ([], pos);
+        (pos, Some (App (name, args)))
+      }
+    } 
+    and get_list (acc, pos) {
+      match (maybe_get (pos)) {
+        | (pos, None) => (pos, List.rev (acc))
+        | (pos, Some (x)) => get_list (x :: acc, pos)
+      }
+    };
+    
+    match (maybe_get (0)) {
+      | (pos, Some (ret)) =>
+        assert (pos == s.Length);
+        ret
+      | (_, None) =>
+        assert (false);
+        App ("", []) // dummy
+    }
+  }
+  
+
+  FlattenTerm (t : Term) : string
+  {
+    def ret = System.Text.StringBuilder ();
+    def walk (t) {
+      | App (name, args) =>
+        ignore (ret.Append (name));
+        ignore (ret.Append ('('));
+        List.Iter (walk, args);
+        ignore (ret.Append (')'));
+    };
+    walk (t);
+    ret.ToString ()
+  }
+
+  
+  encode (t : Type) : Term
+  {
+    match (t) {
+      | T_ref (t) => 
+        App (".ref", [encode (t)])
+      | T_out (t) =>
+        App (".out", [encode (t)])
+      | T_array (t) =>
+        App (".array", [App ("1", []); encode (t)])
+      | T_var (tv) =>
+        App (".var", [App (string_of_int (tv.id), [])])
+      | T_void =>
+        App ("System.Void", [])
+      | T_fun (arg, rt) =>
+        App (".fun", [encode (arg); encode (rt)])
+      | T_prod (args) =>
+        App (".prod", List.Map (encode, args))
+      | T_app (ti, args) =>
+        App (ti.GetFullName (), List.Map (encode, args))
+    }
+  }
+    
+  (**
+   * Used to emit Nemerle types in assembly metadata
+   *
+   * <remarks>
+   *   The type tree is converted to prefix, term-like notation.
+   * </remarks>
+   *)
+  public EncodeType (t : Type) : string
+  {
+    FlattenTerm (encode (t))
+  }
+
+  decode (tenv : Int_map (Tyvar.T), t : Term) : Type
+  {
+    def self (t) { decode (tenv, t) };
+    match (t) {
+      | App (name, args) when name[0] != '.' =>
+        match (GlobalEnv.LookupExactType (name)) {
+          | Some (tc) =>
+            if (tc.GetFullName () == "System.Void") T_void ()
+            else
+              T_app (tc, List.Map (self, args))
+          | None => Util.ice ("unbound encoded type " + name)
+        }
+      | App (".ref", [t]) => T_ref (decode (tenv, t))
+      | App (".out", [t]) => T_out (decode (tenv, t))
+      | App (".array", [App ("1", []); t]) => T_array (decode (tenv, t))
+      | App (".fun", [t1; t2]) => T_fun (decode (tenv, t1), decode (tenv, t2))
+      | App (".var", [App (no, [])]) =>
+        match (tenv.find (System.Int32.Parse (no))) {
+          | Some (tv) => T_var (tv)
+          | None => Util.ice ("unboud type variable in encoded type " + no)
+        }
+      | App (".prod", types) => T_prod (List.Map (self, types))
+      | App (name, _) => Util.ice ("invalid encoded type opcode " + name)
+    }
+  }
+
+
+  (**
+   * Used to decode Nemerle types extracted from assembly metadata
+   *)
+  public DecodeType (tenv : Int_map (Tyvar.T), tokens : string) : Type
+  {
+    decode (tenv, ParseTerm (tokens))
+  }
+  
+
+  encode_typarms (tyvars : list (Tyvar.T)) : Term
+  {
+    def encode_tyvar (tv : Tyvar.T) {
+      App (".tyvar", [App (string_of_int (tv.id), []); 
+                      App (tv.name, []);
+                      App (".constraints", List.Map (encode, tv.constraints))])
+    };
+    
+    App (".typarms", List.Map (encode_tyvar, tyvars))
+  }
+  
+   
+  decode_typarms (tenv : Int_map (Tyvar.T), t : Term) : list (Tyvar.T) * Int_map (Tyvar.T)
+  {
+    mutable tyvars <- [];
+    def decode_tyvar (acc : Int_map (Tyvar.T), t) {
+      match (t) {
+        | App (".tyvar", [App (no, []);
+                          App (name, []);
+                          App (".constraints", constraints)]) =>
+          def tv = Tyvar.T (name);
+          def add_constraint (t) {
+            tv.add_constraint (decode (tenv, t))
+          };
+          List.Iter (add_constraint, constraints);
+          tyvars <- tv :: tyvars;
+          acc.replace (System.Int32.Parse (no), tv)
+        | _ => Util.ice ("evil encoded tyvar")
+      }
+    };
+    
+    match (t) {
+      | App (".typarms", vars) => 
+        def ret = List.FoldLeft (decode_tyvar, tenv, vars);
+        (List.Rev (tyvars), ret)
+
+      | App (name, _) => Util.ice ("invalid typarms in encoded type " + name)
+    }
+  }
+  
+  
+  public EncodeMemberType (m : IMember) : string
+  {
+    match (m.GetKind ()) {
+      | MK_field (m) => EncodeType (m.GetMemType ())
+      | MK_method (m) =>
+        def tp = encode_typarms (m.GetHeader ().typarms);
+        def mt = encode (m.GetMemType ());
+        FlattenTerm (App (".method", [tp; mt]))
+      | MK_property => Util.ice ()
+      | MK_type (t) =>
+        match (t.GetTyconKind ()) {
+          | TK_NemerleType (ti) =>
+            FlattenTerm (encode_typarms (ti.GetTyparms ()))
+          | _ => Util.ice ()
+        }
+    }
+  }
+}
+
+} // ns

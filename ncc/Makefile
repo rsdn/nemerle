@@ -61,6 +61,7 @@ src = \
 	cgtree.n \
 	cgexpr.n \
 	cgopt.n \
+	tycodec.n \
 	external.n \
 	xmldump.n \
 	cgil.n \
