@@ -98,7 +98,9 @@ tarball:
 	$(Q)rm -rf $(PACKAGE)-$(VERSION).*
 	svn export . $(PACKAGE)-$(VERSION).$(REVISION)
 	-cp ChangeLog $(PACKAGE)-$(VERSION).$(REVISION)
+	$(Q)$(MAKE) -C tools/cs2n dist
 	$(Q)$(MAKE) -C $(PACKAGE)-$(VERSION).$(REVISION) dist-cleaner
+	$(Q)cp tools/cs2n/*.cs $(PACKAGE)-$(VERSION).$(REVISION)/tools/cs2n/
 	$(TAR) $(PACKAGE)-$(VERSION).$(REVISION).tar.gz 
 	@tar zcf $(PACKAGE)-$(VERSION).$(REVISION).tar.gz $(PACKAGE)-$(VERSION).$(REVISION)
 	$(Q)rm -rf $(PACKAGE)-$(VERSION).$(REVISION)
@@ -106,7 +108,6 @@ tarball:
 dist-cleaner:
 	@echo Setting up html doc.
 	$(Q)$(MAKE) -C doc dist-cleaner
-	$(Q)$(MAKE) -C tools/cs2n dist
 	@echo Cleaning non-dist junk.
 	$(Q)$(MAKE) clean
 	$(Q)rm -rf doc/course{,-src} doc/images
