@@ -51,6 +51,7 @@ sync-boot:
 	$(MAKE) -C ncc boot sync
 
 dist: sync-boot changelog
+	svn commit -m "Sync for release." boot/ncc.exe
 	if svn status 2>&1 | grep -qv '^?' ; then \
 	  echo "Some files modified"; \
 	  false; \
