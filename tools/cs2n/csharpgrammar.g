@@ -786,7 +786,7 @@ returns [string return_string]
     :   return_string = equality_expression   
         ( b:BAND   ee = equality_expression
             {
-                return_string += (b.getText () + ee);
+                return_string += (((ExtendedToken)b).GetWhitespaces () + "%" +  ExtendedToken.getTextOnly (b) + ee);
             }
         )*
     ;
@@ -800,7 +800,7 @@ returns [string return_string]
     :   return_string = and_expression   
         (b:BXOR   ae = and_expression
             {
-                return_string += (b.getText () + ae);
+                return_string += (((ExtendedToken)b).GetWhitespaces () + "%" +  ExtendedToken.getTextOnly (b) + ae);
             }
         )*
     ;
@@ -814,7 +814,7 @@ returns [string return_string]
     :   return_string = exclusive_or_expression   
         (b:BOR   eoe = exclusive_or_expression
             {
-                return_string += (b.getText () + eoe);
+                return_string += (((ExtendedToken)b).GetWhitespaces () + "%" + ExtendedToken.getTextOnly (b) + eoe);
             }
         )*
     ;
@@ -828,7 +828,7 @@ returns [string return_string]
     :   return_string = inclusive_or_expression   
         (l:LAND   ioe = inclusive_or_expression
             {
-                return_string += (l.getText () + ioe);
+                return_string += (((ExtendedToken)l).GetWhitespaces () + "%" +  ExtendedToken.getTextOnly (l) + ioe);
             }
         )*
     ;
@@ -1927,7 +1927,7 @@ formal_parameter_list
                 c1:COMMA   { Emit.EmitToken (c1); }
                 fixed_parameter            
             )*   
-            COMMA   parameter_array
+            c3:COMMA  { Emit.EmitToken (c3); } parameter_array
     |   (fixed_parameter (COMMA   fixed_parameter)*) =>       
             fixed_parameter 
             (c2:COMMA   { Emit.EmitToken (c2); }
@@ -1957,11 +1957,13 @@ returns [string return_string]
     ;
 
 parameter_array
-returns [string return_string]
 {
-    return_string = "";
+    string [] t = new string[]{"",""};
 }
-    :   (attributes)?   PARAMS   array_type   IDENTIFIER
+    :   (attributes)?   p:PARAMS   t = array_type  id:IDENTIFIER
+        {
+            Emit.EmitString ( p.getText () + id.getText () + " :" + t[0]+t[1] );
+        }        
     ;
 
 property_declaration
