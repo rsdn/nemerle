@@ -156,7 +156,6 @@ aux-stage:
 	$(Q)$(MAKE) aux-stage-files
 
 aux-stage-files: \
-		out.$(STAGE)/aliases.n		\
 		out.$(STAGE)/Nemerle.$(STAGE).dll \
 		out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll \
 		out.$(STAGE)/stdmacros.dll \
@@ -168,7 +167,6 @@ last-stage:
 	$(Q)$(MAKE) last-stage-files
 
 last-stage-files: \
-		out.$(STAGE)/aliases.n		\
 		out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll \
 		out.$(STAGE)/stdmacros.dll \
@@ -224,14 +222,8 @@ compare-one-with-stage:
 	$(Q)diff -u -w $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 	$(Q)rm -f $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 
-../boot/aliases.n: ../lib/aliases.n
-	$(Q)cp -f $< $@
-
-out.%/aliases.n: ../lib/aliases.n
-	$(Q)cp -f $< $@
-
 out.$(STAGE)/Nemerle.dll out.$(STAGE)/Nemerle.$(STAGE).dll: \
-		$(COMPILER_DEP) $(COMPILER_PATH)aliases.n $(NEMERLE_DLL_SRC)
+		$(COMPILER_DEP) $(NEMERLE_DLL_SRC)
 	$(COMP) [$(STAGE)] Nemerle.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ $(GENERIC_SRC) $(NEMERLE_DLL_SRC)
 
