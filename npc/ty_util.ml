@@ -105,69 +105,6 @@ let types_eq t1 t2 =
   let t2 = expand_type t2 in
   type_cmp t1 t2 == 0
 
-let unify ?(subst = Ty_env.empty) t1 t2 =
-  let rec unify subst (t1, t2) =
-    let rec unify_lists subst = function
-      | x :: xs, y :: ys ->
-        unify_lists (unify subst (x, y)) (xs, ys)
-      | [], [] -> subst
-      | _ -> raise Error
-    in
-    let no tv = (binding tv).tv_id in
-    match (Ty_env.expand subst t1, Ty_env.expand subst t2) with
-    | T_var v1, T_var v2 when no v1 == no v2 ->
-      subst
-    | T_var v1, t2 when (binding v1).tv_is_free ->
-      Ty_env.add subst (binding v1) t2
-    | t1, T_var v2 when (binding v2).tv_is_free ->
-      Ty_env.add subst (binding v2) t1
-    | T_app (td1, tp1), T_app (td2, tp2) 
-         when (binding td1).td_id == (binding td2).td_id ->
-      unify_lists subst (tp1, tp2)
-    | T_fun (a, b), T_fun (c, d) ->
-      unify_lists subst ([a; b], [c; d])
-    | T_prod l1, T_prod l2 ->
-      unify_lists subst (l1, l2)
-    | T_ref t1, T_ref t2 
-    | T_out t1, T_out t2 -> 
-      unify subst (t1, t2)
-    | T_array (n1, t1), T_array (n2, t2) when n1 == n2 ->
-      unify subst (t1, t2)
-    | T_void, T_void -> 
-      subst
-    | _ -> raise Error
-  in
-  try
-    Some (unify subst (t1, t2))
-  with Error -> 
-    None
-    
-let rec x_exists f ini = function
-  | [] -> None
-  | x :: xs ->
-    match f ini x with
-    | Some _ as r -> r
-    | None -> x_exists f ini xs
-    
-let rec x_for_all f ini = function
-  | [] -> Some ini
-  | x :: xs ->
-    match f ini x with
-    | Some s -> x_for_all f s xs
-    | None -> None
-
-let rec x_for_all2 f ini = function
-  | x :: xs, y :: ys ->
-    begin
-      match f ini x y with
-      | Some s -> x_for_all2 f s (xs, ys)
-      | None -> None
-    end
-  | [], [] -> Some ini
-  | _ -> assert false
-  
-let no tv = (binding tv).tv_id
-
 let string_of_type t =
   let cnt = ref 0 in
   let used_tyvars = Hashtbl.create 16 in
@@ -206,6 +143,76 @@ let string_of_type t =
       f (T_array (n - 1, t)) ^ "[]"
     | T_void -> "void"
   in f (Ty_env.expand !Ty_env.global t)
+
+let unify ?(subst = Ty_env.empty) t1 t2 =
+  let rec unify subst (t1, t2) =
+    let rec unify_lists subst = function
+      | x :: xs, y :: ys ->
+        unify_lists (unify subst (x, y)) (xs, ys)
+      | [], [] -> subst
+      | _ -> raise Error
+    in
+    let no tv = (binding tv).tv_id in
+    debug (xf "uu: %s %s" (string_of_type t1) (string_of_type t2));
+    match (Ty_env.expand subst t1, Ty_env.expand subst t2) with
+    | T_var v1, T_var v2 when no v1 == no v2 ->
+      subst
+    | T_var v1, t2 when (binding v1).tv_is_free ->
+      debug (xf "addtv: %d -> %s" (no v1) (string_of_type t2));
+      Ty_env.add subst (binding v1) t2
+    | t1, T_var v2 when (binding v2).tv_is_free ->
+      debug (xf "addtv(r): %d -> %s" (no v2) (string_of_type t1));
+      Ty_env.add subst (binding v2) t1
+    | T_app (td1, tp1), T_app (td2, tp2) 
+         when (binding td1).td_id == (binding td2).td_id ->
+      unify_lists subst (tp1, tp2)
+    | T_fun (a, b), T_fun (c, d) ->
+      unify_lists subst ([a; b], [c; d])
+    | T_prod l1, T_prod l2 ->
+      unify_lists subst (l1, l2)
+    | T_ref t1, T_ref t2 
+    | T_out t1, T_out t2 -> 
+      unify subst (t1, t2)
+    | T_array (n1, t1), T_array (n2, t2) when n1 == n2 ->
+      unify subst (t1, t2)
+    | T_void, T_void -> 
+      subst
+    | _ -> raise Error
+  in
+  try
+    debug (xf "[u: %s %s" (string_of_type t1) (string_of_type t2));
+    let r = Some (unify subst (t1, t2)) in
+    debug (xf "ok]");
+    r
+  with Error -> 
+    debug (xf "err]");
+    None
+    
+let rec x_exists f ini = function
+  | [] -> None
+  | x :: xs ->
+    match f ini x with
+    | Some _ as r -> r
+    | None -> x_exists f ini xs
+    
+let rec x_for_all f ini = function
+  | [] -> Some ini
+  | x :: xs ->
+    match f ini x with
+    | Some s -> x_for_all f s xs
+    | None -> None
+
+let rec x_for_all2 f ini = function
+  | x :: xs, y :: ys ->
+    begin
+      match f ini x y with
+      | Some s -> x_for_all2 f s (xs, ys)
+      | None -> None
+    end
+  | [], [] -> Some ini
+  | _ -> assert false
+  
+let no tv = (binding tv).tv_id
 
 (* Check if t1 :> t2 *)
 let sub_unify ?(subst = Ty_env.empty) t1 t2 =
