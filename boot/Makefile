@@ -82,16 +82,16 @@ install:
 	fi
 
 uninstall:
-	$(RM) $(LIBDIR)/Nemerle.Compiler.dll
-	$(Q)rm -f $(LIBDIR)/Nemerle.Compiler.dll
-	$(RM) $(LIBDIR)/Nemerle.dll
-	$(Q)rm -f $(LIBDIR)/Nemerle.dll
+	$(RM) Nemerle.Macros
+	$(GACUTIL_UNINSTALL_COMMAND) Nemerle.Macros
+	$(RM) Nemerle.Compiler
+	$(GACUTIL_UNINSTALL_COMMAND) Nemerle.Compiler
+	$(RM) Nemerle
+	$(GACUTIL_UNINSTALL_COMMAND) Nemerle
 	$(RM) $(BINDIR)/ncc
 	$(Q)rm -f $(BINDIR)/ncc
 	$(RM) $(BINDIR)/ncc.exe
 	$(Q)rm -f $(BINDIR)/ncc.exe
-	$(RM) $(LIBDIR)/Nemerle.Macros.dll
-	$(Q)rm -f $(LIBDIR)/Nemerle.Macros.dll
 
 ngen aot:
 	$(NGEN) Nemerle.dll
