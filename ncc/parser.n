@@ -49,6 +49,7 @@ module Parser {
     public mutable last_token1 : Token; // most recent token
     public mutable last_token2 : Token; // one token before
     public mutable push_back : int; // position in last_token{1,2} or 0
+    public mutable in_pattern : bool;
     public parens : Hashtable (string, ParenCallback);
     public keywords : Hashtable (string, KeywordCallback);
   }
@@ -99,6 +100,15 @@ module Parser {
       | 2 => Util.ice ()
       | _ => ctx.push_back <- 1
     }
+  }
+
+  shift (ctx : CTX) : void {
+    ignore (get_token (ctx)) 
+  }
+
+  location_here (ctx : CTX) : Location {
+    ignore (peek_token (ctx));
+    location (ctx)
   }
 
   location (ctx : CTX) : Location {
@@ -241,8 +251,7 @@ module Parser {
   }
 
   parse_closed_prim_expr (ctx : CTX) : Expr {
-    ignore (peek_token (ctx));
-    def loc = location (ctx);
+    def loc = location_here (ctx);
     match (parse_literal (ctx)) {
       | Some (l) => E_literal (loc, l)
       | None =>
@@ -287,7 +296,11 @@ module Parser {
 
           | Tok_operator ("$", _) when is_id (peek_token (ctx)) =>
             match (get_token (ctx)) {
-              | Tok_identifier (n) => E_unquoted (loc, E_ref (location (ctx), n))
+              | Tok_identifier (n) =>
+                if (ctx.in_pattern)
+                  E_unquoted_patt (loc, P_variable (location (ctx), n))
+                else
+                  E_unquoted (loc, E_ref (location (ctx), n))
               | _ => Util.ice ()
             }
 
@@ -387,14 +400,14 @@ module Parser {
       | Tok_operator (o, _) =>
         def loc = location (ctx);
         def unary () {
-          ignore (get_token (ctx)); // shift
+          shift (ctx);
           E_call (loc, E_ref (loc, o), [Parm (parse_unary_expr (ctx))])
         };
         
         if (ctx.parens.Contains (o))
           parse_prim_expr (ctx)
         else {
-          ignore (get_token (ctx));
+          shift (ctx);
           def tok = peek_token (ctx);
           push_back (ctx);
           match (tok) {
@@ -406,6 +419,161 @@ module Parser {
           }
         }
       | _ => parse_prim_expr (ctx)
+    }
+  }
+
+  get_splicable_id (ctx : CTX) : Splicable_string {
+    def loc = location_here (ctx);
+    match (get_token (ctx)) {
+      | Tok_identifier (n) => SS_string (loc, n)
+      | Tok_operator ("$", _) =>
+        match (get_token (ctx)) {
+          | Tok_identifier (n) => SS_spliced_expr (loc, E_ref (location (ctx), n))
+          | _ => fatal_error (ctx, "expecting identifier after `$' in spliced string")
+        }
+      | _ => fatal_error (ctx, "expecting identifier")
+    }
+  }
+
+  parse_pattern (ctx : CTX) : Pattern {
+    def loop () {
+      def loc = location_here (ctx);
+      def pat = parse_closed_pattern (ctx);
+      match (peek_token (ctx)) {
+        | Tok_operator ("::", _) => 
+          shift (ctx); 
+          P_list_cons (loc, pat, loop ())
+        | _ => pat
+      }
+    };
+
+    loop ()
+  }
+  
+  parse_closed_pattern (ctx : CTX) : Pattern {
+    def loc = location_here (ctx);
+
+    def parse_record () {
+      def loop (acc) {
+        match (get_token (ctx)) {
+          | Tok_operator ("}", _) => List.rev (acc)
+          | Tok_identifier (n) =>
+            expect_operator (ctx, "=");
+            def pat = parse_pattern (ctx);
+            def res = Named_pattern (n, pat);
+            match (get_token (ctx)) {
+              | Tok_operator (";", _) => ()
+              | Tok_operator ("}", _) => push_back (ctx)
+              | _ => fatal_error (ctx, "found junk after pattern in record")
+            };
+            loop (res :: acc)
+          | _ => fatal_error (ctx, "expecting named pattern")
+        }
+      };
+      
+      P_record (loc, loop ([]))
+    };
+
+    def tuple_or_record () {
+      match (get_token (ctx)) {
+        | Tok_operator ("(", _) =>
+          P_tuple (loc, operator_separated_list (ctx, ",", parse_pattern))
+        | Tok_operator ("{", _) => parse_record ()
+        | _ => fatal_error (ctx, "expecting tuple or record pattern")
+      }
+    };
+    
+    match (parse_literal (ctx)) {
+      | Some (l) => P_literal (loc, l)
+      | None =>
+        match (get_token (ctx)) {
+          | Tok_operator ("$", _) =>
+            match (get_token (ctx)) {
+              | Tok_identifier (n) =>
+                def pat = tuple_or_record ();
+                P_cons (loc, SS_spliced_expr (loc, E_ref (loc, n)), pat)
+              | _ =>
+                fatal_error (ctx, "expecting identifier after `$' in pattern")
+            }
+            
+          | Tok_operator ("{", _) =>
+            parse_record ()
+            
+          | Tok_operator ("(", _) =>
+            def pat = parse_pattern (ctx);
+            match (get_token (ctx)) {
+              | Tok_operator (",", _) =>
+                P_tuple (loc, pat :: operator_separated_list (ctx, ",", parse_pattern))
+              | Tok_operator (")", _) =>
+                match (peek_token (ctx)) {
+                  | Tok_keyword ("as") =>
+                    shift (ctx);
+                    def id = get_splicable_id (ctx);
+                    P_as (loc, pat, id)
+                    
+                  | _ =>
+                    P_tuple (loc, [pat])
+                }
+              | _ =>
+                fatal_error (ctx, "expecting `,' or ')' in tuple pattern")
+            }
+
+          | Tok_identifier (n) =>
+            push_back (ctx);
+            def id = get_qid (ctx);
+            match (peek_token (ctx)) {
+              | Tok_operator ("{", _)
+              | Tok_operator ("(", _) => tuple_or_record ()
+              | _ => P_cons (loc, SS_string (id), P_underscore (loc))
+            }
+
+          | Tok_keyword ("_") =>
+            P_underscore (loc)
+
+          | Tok_operator ("[", _) =>
+            def loop (acc) {
+              match (get_token (ctx)) {
+                | Tok_operator (";", _) =>
+                  match (peek_token (ctx)) {
+                    | Tok_operator ("]", _) => List.rev (acc)
+                    | _ => loop (parse_pattern (ctx) :: acc)
+                  }
+                | Tok_operator ("]", _) => List.rev (acc)
+                | _ => fatal_error (ctx, "expecting pattern in list")
+              }
+            };
+
+            match (peek_token (ctx)) {
+              | Tok_operator ("]", _) => shift (ctx); P_list (loc, [])
+              | _ =>
+                P_list (loc, loop ([parse_pattern (ctx)]))
+            }
+
+          | Tok_operator ("<[", _) =>
+            def back = ctx.in_pattern;
+            ctx.in_pattern <- true;
+            def expr = parse_quotation (ctx);
+            expect_operator (ctx, "]>");
+            ctx.in_pattern <- back;
+            match (expr) {
+              | E_quoted_type (t) => P_quoted_type (loc, t)
+              | E_quoted_patt (t) => P_quoted_patt (loc, t)
+              | E_quoted_expr (t) => P_quoted_expr (loc, t)
+              | _ => Util.ice ("parse_quoted returned sth strange")
+            }
+
+          | Tok_operator ("$", _) =>
+            match (get_token (ctx)) {
+              | Tok_identifier (k) => P_unquoted (loc, E_ref (location (ctx), k))
+              | Tok_operator ("(", _) => 
+                def expr = parse_quotation (ctx);
+                expect_operator (ctx, ")");
+                P_unquoted (loc, expr)
+              | _ => fatal_error (ctx, "expecting unquotation after `$' in pattern")
+            }
+
+          | _ => fatal_error (ctx, "expecting pattern")
+        }
     }
   }
   
@@ -456,8 +624,7 @@ module Parser {
   }
   
   parse_type_member (ctx : CTX) : Class_member {
-    ignore (peek_token (ctx));
-    def loc = location (ctx);
+    def loc = location_here (ctx);
     def attrs = get_attrs (ctx);
 
     def parse_extern () {
@@ -483,7 +650,7 @@ module Parser {
       def body =
         match (peek_token (ctx)) {
           | Tok_operator ("=", _) =>
-            ignore (get_token (ctx));
+            shift (ctx);
             FB_extern (parse_extern ())
           | Tok_operator ("{", _) =>
             FB_parsed_expr (parse_block (ctx))
@@ -879,8 +1046,37 @@ module Parser {
     })
   }
 
-  parse_quotation (ctx : CTX) : Expr { null } // FIXME
-  parse_unquoted (ctx : CTX) : Expr { null } // FIXME
+  parse_quotation (ctx : CTX) : Expr {
+    def tok = get_token (ctx);
+    def loc = location (ctx);
+    
+    match (get_token (ctx)) {
+      | Tok_operator (":", _) =>
+        match (tok) {
+          | Tok_keyword ("type") =>
+            E_quoted_type (loc, parse_type (ctx))
+            
+          | Tok_keyword ("match")
+          | Tok_identifier ("pattern") =>
+            E_quoted_patt (loc, parse_pattern (ctx))
+
+          | _ =>
+            fatal_error (ctx, "bad quotation type")
+        }
+      | _ =>
+        push_back (ctx); 
+        push_back (ctx);
+        E_quoted_expr (parse_expr (ctx))
+    }
+  }
+  
+  parse_unquoted (ctx : CTX) : Expr {
+    def loc = location_here (ctx);
+    if (ctx.in_pattern)
+      E_unquoted_patt (loc, parse_pattern (ctx))
+    else
+      E_unquoted (loc, parse_expr (ctx))
+  }
 
   'a collect_braced_list (ctx : CTX, f : CTX -> 'a) : list ('a) {
     expect_operator (ctx, "{");
@@ -997,6 +1193,7 @@ module Parser {
                    last_token1 = null, 
                    last_token2 = null, 
                    push_back = 0,
+                   in_pattern = false,
                    keywords = Hashtable (),
                    parens = Hashtable ());
     init_parens (ctx);
