@@ -41,6 +41,7 @@ version_files = \
 	ncc/misc/AssemblyInfo.n \
 	macros/AssemblyInfo.n \
 	lib/AssemblyInfo.n \
+	tools/cs2n/AssemblyInfo.{n,cs} \
 	ncc/main.n
 
 ############################################################
