@@ -47,7 +47,7 @@ class CSharpParser extends Parser;
 
 options 
 {   
-    k = 2;
+    k = 3;
 }
 
 //--------------------------
