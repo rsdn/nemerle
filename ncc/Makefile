@@ -137,6 +137,7 @@ STDMACROS_DLL_SRC = \
 COMPARE = @echo COMPARE $1 $2 $3
 DEAS    = @echo DASM    $1 $2
 AOT     = @echo NGEN    $1
+VERIFY  = @echo VERIFY  $1
 COMP    = @echo COMPILE $1
 MKDIR   = @echo MKDIR   $1
 TAR     = @echo TAR     $1
@@ -197,13 +198,23 @@ boot: stage1 stage2 stage3 compare ngen-stage3
 
 ngen-stage3:
 	$(AOT) Nemerle.dll
-	$(Q)$(NGEN) out.stage3/Nemerle.dll
+	$(Q)cd out.stage3; $(NGEN) Nemerle.dll
 	$(AOT) Nemerle.Compiler.dll
-	$(Q)$(NGEN) out.stage3/Nemerle.Compiler.dll
+	$(Q)cd out.stage3; $(NGEN) Nemerle.Compiler.dll
 	$(AOT) Nemerle.Macros.dll
-	$(Q)$(NGEN) out.stage3/Nemerle.Macros.dll
+	$(Q)cd out.stage3; $(NGEN) Nemerle.Macros.dll
 	$(AOT) ncc.exe
-	$(Q)$(NGEN) out.stage3/ncc.exe
+	$(Q)cd out.stage3; $(NGEN) ncc.exe
+
+verify:
+	$(VERIFY) Nemerle.dll
+	$(Q)$(PEVERIFY) out.stage3/Nemerle.dll
+	$(VERIFY) Nemerle.Compiler.dll
+	$(Q)$(PEVERIFY) out.stage3/Nemerle.Compiler.dll
+	$(VERIFY) Nemerle.Macros.dll
+	$(Q)$(PEVERIFY) out.stage3/Nemerle.Macros.dll
+	$(VERIFY) ncc.exe
+	$(Q)$(PEVERIFY) out.stage3/ncc.exe
 
 compare:
 	$(Q)$(MAKE) compare-one-with-stage CMP_TARGET=Nemerle
