@@ -109,7 +109,6 @@ public class TypeBuilder : TypeInfo
   mutable underlying_enum_type : TType;
 
   static mutable infos : list [TypeBuilder];
-
   static mutable run_phase : int;
 
 
@@ -1802,18 +1801,8 @@ public class TypeBuilder : TypeInfo
   {
     check_abstract ();
 
-    def collect (mem : IMember, acc) {
-      match (mem.GetKind ()) {
-        | MemberKind.Method (m) =>
-          match (m.GetFunKind ()) {
-            | FunKind.Method =>
-              (m :> NemerleMethod) :: acc
-            | _ => acc
-          }
-        | _ => acc
-      }
-    };
-    def methods = List.FoldLeft (this.GetDirectMembers (), [], collect);
+    def methods = GetMethods (BindingFlags.DeclaredOnly %| BindingFlags.Public %|
+                              BindingFlags.Instance %| BindingFlags.NonPublic) :> list [NemerleMethod];
     
     // FIXME: in fact we should only mark some methods as implemented and scream
     // when signature match is ambigious
@@ -1882,7 +1871,9 @@ public class TypeBuilder : TypeInfo
       }
     };
     List.Iter (methods, bind_explicit_implements);
-    
+
+    // now we can see which methods defined in current class directly match
+    // to some of the yet unimlemented interfaces methods
     def bind_implicit_implements (meth : NemerleMethod) {
       def lookup_iface_members () {
         match (iface_methods.Get (meth.Name)) {
@@ -1890,21 +1881,19 @@ public class TypeBuilder : TypeInfo
             def is_correct (iface_meth : IMethod) {
               if (meth.GetMemType () >:> Tyutil.TypeOfMethodIn (iface_meth, this))
                 if (meth.Attributes %&& NemerleAttributes.Public &&
-                    !(meth.Attributes %&& NemerleAttributes.Static))
+                    !(meth.Attributes %&& NemerleAttributes.Static)) 
                   true
                 else {
                   Message.error (meth.Location, "method implementing interface"
                                  " member must be public and nonstatic");
                   false
                 }
-              else
-                false                 
-            };
-            match (List.Filter (meths, is_correct)) {
-              | [] => []
-              | lst =>
-                iface_methods.Set (meth.Name, 
-                                   List.Filter (meths, fun (x) { ! is_correct (x) }));
+              else false
+           };
+            match (List.Partition (meths, is_correct)) {
+              | ([], _) => [] // none were correct
+              | (lst, notcorrect) =>
+                iface_methods.Set (meth.Name, notcorrect);
                 meth.HasBeenUsed = true;
                 lst
             }
@@ -1918,7 +1907,7 @@ public class TypeBuilder : TypeInfo
             | impl' =>
               def new_impls = impl' + impl;
 
-              foreach (impl : IMethod in new_impls)
+              foreach (impl in new_impls)
                 impl.HasBeenUsed = true;
 
               meth.SetFunKind (FunKind.BoundMethod (new_impls));
@@ -1930,18 +1919,18 @@ public class TypeBuilder : TypeInfo
     List.Iter (methods, bind_implicit_implements);
 
     // create the additional overrides for unresolved interface methods
-    mutable resolved_overrides = [];
-    
-    def create_additional_overrides (name : string, meths : list [IMethod])
+    // we check if methods derived from base class are actually proper
+    // implementators of some unresolved interface methods
+    mutable resolved_additionals = [];
+
+    def create_additional_overrides (name : string, mutable meths : list [IMethod])
     {
-      def possible_impls = LookupMember (name);
+      unless (meths matches []) {
+        // possible implementators from existing methods
+        def possible_impls = LookupMember (name);
 
-      def check_possible_impl (member : IMember)
-      {
-        when (member is IMethod)
-        {
-          def meth = (member :> IMethod);
-
+        // choose only methods from within possible implementors
+        foreach (meth : IMethod in possible_impls) {
           def is_correct (iface_meth : IMethod)
           {
             (meth.Attributes %&& NemerleAttributes.Public) &&
@@ -1949,73 +1938,56 @@ public class TypeBuilder : TypeInfo
             (meth.GetMemType () >:> Tyutil.TypeOfMethodIn (iface_meth, this))
           };
 
-          def iface_meths = List.Filter (meths, is_correct);
+          match (List.Partition (meths, is_correct)) {
+            | ([], _) => ()
+            | (correct, notcorrect) =>
+              meths = notcorrect;
 
-          unless (iface_meths matches [])
-          {
-            resolved_overrides = List.Append (resolved_overrides, iface_meths);
+              // create a wrapper in the current type
+              def meth_header = meth.GetHeader ();
+              def meth_name = Macros.UseSiteSymbol (meth_header.name);
+              def meth_ret_type = meth_header.ret_type;
 
-            // create a wrapper in the current type
-            def meth_header = meth.GetHeader ();
-            def meth_name = Macros.UseSiteSymbol (meth_header.name);
-            def meth_ret_type = meth_header.ret_type;
-            
-            def meth_parms =
-              List.Map (meth_header.parms, fun (fp : Fun_parm) {
-                <[ funparm: $(fp.name : usesite) : $(fp.ty : typed) ]>
+              def meth_parms =
+                List.Map (meth_header.parms, fun (fp : Fun_parm) {
+                  <[ funparm: $(fp.name : usesite) : $(fp.ty : typed) ]>
+                });
+
+              def meth_call_parms = List.Map (meth_header.parms, fun (fp : Fun_parm) {
+                <[ $(fp.name : usesite) ]>
               });
 
-            def meth_call_parms = List.Map (meth_header.parms, fun (fp : Fun_parm) {
-              <[ $(fp.name : usesite) ]>
-            });
+              def wrapper = DefineAndReturn (<[ decl:
+                public override $(meth_name : name) (..$meth_parms) : $(meth_ret_type : typed)
+                {
+                  base.$(meth_name : name) (..$meth_call_parms)
+                }
+              ]>);
 
-            def wrapper = DefineAndReturn (<[ decl:
-              public override $(meth_name : name) (..$meth_parms) : $(meth_ret_type : typed)
-              {
-                base.$(meth_name : name) (..$meth_call_parms)
-              }
-            ]>);
+              // unpack the new method definition
+              def wrapper = Option.UnSome (wrapper);
 
-            // unpack the new method definition
-            def wrapper = Option.UnSome (wrapper);
+              wrapper.MarkWithSpecialName ();
 
-            wrapper.MarkWithSpecialName ();
-            
-            assert ((wrapper is IMethod));
-            def wrapper = (wrapper :> IMethod);
-            
-            // add the new overrides
-            def new_overrides =
-              List.Map (iface_meths, fun (iface_meth : IMethod) {
-                iface_meth.HasBeenUsed = true;
-                (wrapper, iface_meth)
-              });
-            
-            m_additional_method_overrides =
-              List.Append (new_overrides, m_additional_method_overrides);
+              def wrapper = (wrapper :> IMethod);
+
+              // add the new overrides
+              def new_overrides =
+                List.Map (correct, fun (iface_meth : IMethod) {
+                  iface_meth.HasBeenUsed = true;
+                  (wrapper, iface_meth)
+                });
+
+              m_additional_method_overrides =
+                List.Append (new_overrides, m_additional_method_overrides);
           }
         }
+        resolved_additionals = (name, meths) :: resolved_additionals;
       }
-
-      unless (meths matches [])
-        List.Iter (possible_impls, check_possible_impl)
     }
-
     iface_methods.Iter (create_additional_overrides);
+    foreach ((name, meths) in resolved_additionals) iface_methods.Set (name, meths);
 
-    foreach (iface_meth : IMethod in resolved_overrides)
-    {
-      def iface_meths = iface_methods.Get (iface_meth.Name);
-
-      when (Option.IsSome (iface_meths)) {
-        iface_methods.Set (iface_meth.Name, 
-                           List.Filter (Option.UnSome (iface_meths), 
-                                        fun (x) { 
-                                          (x : object) != (iface_meth : object)
-                                        }))
-      }
-    };               
-    
     // emit error messages for any unbound interface method
     def scream_about_unimplemented (_, meths : list [IMethod])
     {
