@@ -88,3 +88,8 @@ uninstall:
 	$(RM) $(LIBDIR)/stdmacros.dll
 	$(Q)rm -f $(LIBDIR)/stdmacros.dll
 
+ngen aot:
+	$(NGEN) Nemerle.dll
+	$(NGEN) Nemerle.Compiler.dll
+	$(NGEN) stdmacros.dll
+	$(NGEN) ncc.exe
