@@ -41,6 +41,456 @@ namespace Nemerle.Compiler
   using System.Reflection;
   using System.Reflection.Emit;
 
+
+  /**
+   * A match effect
+   */
+  internal class MatchEffect
+  {
+    public this (index : int, effect : Expr)
+    {
+      m_index <- index;
+      m_effect <- effect;
+    }
+    
+    public GetIndex () : int
+    {
+      m_index
+    }
+    
+    public GetEffect () : Expr
+    {
+      m_effect
+    }
+    
+    public Dump () : void
+    {
+      Message.debug ("MatchEffect::Dump: " + m_index.ToString ());
+    }
+            
+    private mutable m_index : int;
+    private mutable m_effect : Expr;
+  }
+  
+  
+  /**
+   * Top-level pattern with a guard and effect index
+   */
+  internal class MatchClause
+  {
+    public this (pattern : Pattern, guard : Expr, effect : int)
+    {
+      m_pattern <- pattern;
+
+      if (guard_is_always_true (guard))
+        m_guard <- None ()
+      else
+        m_guard <- Some (guard);
+
+      m_effect <- effect;
+    }
+        
+    public GetPattern () : Pattern
+    {
+      m_pattern
+    }
+    
+    public IsGuarded () : bool
+    {
+      Option.IsSome (m_guard)
+    }
+    
+    public GetGuard () : Expr
+    {
+      assert (IsGuarded ());
+
+      Option.UnSome (m_guard)
+    }
+        
+    public GetEffect () : int
+    {
+      m_effect
+    }      
+
+    private guard_is_always_true (guard : Expr) : bool
+    {
+      match (guard) {
+        | E_literal (L_bool (true)) => 
+          true
+          
+        | _ =>
+          false
+      }
+    }
+
+    public Dump () : void
+    {
+      def dump_pattern (pattern : Pattern) 
+      {      
+        match (pattern) {
+          | P_underscore => 
+            "P_underscore"
+
+          | P_as (as_pattern, decl) => 
+            "P_as (" + dump_pattern (as_pattern) + ", '" + decl.name + "')"
+
+          | P_tuple (args) =>
+            "P_tuple {" + List.FoldLeft (
+              args, "", 
+              fun (tuple_pattern, desc : string) { 
+                (if (desc.Length > 0) desc + ", " else "") + dump_pattern (tuple_pattern)
+              }
+            ) + "}"
+
+          | P_record (args) =>
+            "P_record {" + List.FoldLeft (
+              args, "", 
+              fun (field_and_tuple_pattern : IField * Pattern, desc : string) {
+                def (field, tuple_pattern) = field_and_tuple_pattern;
+                                                
+                (if (desc.Length > 0) desc + ", " else "") + field.GetName () + ":" + dump_pattern (tuple_pattern)
+              }
+            ) + "}"
+
+          | P_cons (name, arg) =>
+            "P_cons (" + name.GetFullName () + ", " + dump_pattern (arg) + ")"
+            
+          | P_literal =>
+            "P_literal"
+        }
+      };
+    
+      Message.debug ("MatchClause::Dump: " + dump_pattern (m_pattern))
+    }
+
+
+    /**
+     * Builds a pattern-matcher expression
+     */
+    public BuildMatchExpr (ctx : CTX, 
+                           vals : SystemMap <int, CG_val>, 
+                           val : CG_expr) : CTX * SystemMap <int, CG_val> * CG_expr 
+    {
+      m_vals <- vals;
+      m_ctx <- ctx;
+      
+      def pattern_expr =
+        build_pattern_expr (val, m_pattern, true);
+
+      def guarded_expr =
+        if (Option.IsSome (m_guard))
+          CE_if (typeof (System.Boolean),
+                 pattern_expr,
+                 cg_expr (m_ctx, Option.UnSome (m_guard)),
+                 CE_literal (L_bool (false)))
+        else
+          pattern_expr;
+        
+      (m_ctx, m_vals, guarded_expr)
+    }
+    
+    
+    /**
+     * Builds an expression that evaluates to true if the pattern matches a value
+     */
+    private build_pattern_expr (val : CG_expr, pattern : Pattern, is_top_level : bool) : CG_expr
+    {
+      match (pattern) {
+        | P_underscore => 
+          //FIXME: check for non-nullness of non-value types
+          CE_literal (L_bool (true))
+
+        | P_literal (lit) =>
+          CGmatch.emit_compare_with (CE_cast (val, type_of (CE_literal (lit))), lit)
+
+        | P_cons (cons_name, P_underscore) =>
+          if (is_top_level) {
+            // no nullness check is required here -- it is guaranteed by the effects switch
+            CE_literal (L_bool (true))
+          }
+          else {
+            def tyname = cons_name.GetSystemType ();          
+            CE_has_type (val, tyname)
+          }
+          
+        | P_cons (cons_name, subpattern) =>
+          def tyname = cons_name.GetSystemType ();
+          def cast_expr = CE_cast (val, tyname);
+
+          if (is_top_level) {
+            // no nullness check is required here -- it is guaranteed by the effects switch
+            build_pattern_expr (cast_expr, subpattern, false)
+          }
+          else {
+            def has_type_expr = CE_has_type (val, tyname);
+                    
+            CE_if (typeof (System.Boolean),          
+                   has_type_expr,
+                   build_pattern_expr (cast_expr, subpattern, false),
+                   CE_literal (L_bool (false)))
+          }
+
+        | P_as (subpattern, decl) =>
+          unless (decl.in_closure)
+            match (m_vals.Find (decl.id)) {
+              | Some => ()
+              | None =>
+                def (new_ctx, v) = store_local (m_ctx, decl, CE_none ());
+                m_ctx <- new_ctx;
+                m_vals <- m_vals.Add (decl.id, v);
+            };
+              
+          def assign_expr = 
+            CE_assign (local_ref (m_ctx, decl),
+                       maybe_cast (m_ctx, cg_type (m_ctx, decl.ty), val));
+
+          match (subpattern) {
+            | P_cons =>
+              match (build_pattern_expr (val, subpattern, false)) {
+                | (CE_if (c, e_then, e_else)) as e =>
+                  CE_if (e.ty, c, CE_sequence ([assign_expr, e_then]), e_else)
+                | expr =>
+                  CE_sequence ([assign_expr, expr])
+              }
+            | _ =>
+              CE_sequence ([assign_expr, build_pattern_expr (val, subpattern, false)])
+          }
+            
+        | P_tuple (args) =>
+          def len = List.Length (args);
+
+          def f (arg, acc)
+          {
+            def (pos, ex) = acc;
+            def cond = 
+              build_pattern_expr (
+                tuple_ref (CE_cast (val, tuple_type (len)), pos, len), 
+                arg, 
+                false
+              );
+                                  
+            (pos - 1, CE_if (typeof (System.Boolean), 
+                             cond, ex,
+                             CE_literal (L_bool (false))))
+          };
+
+          def ini = (len, CE_literal (L_bool (true)));            
+          def (_, ex) = List.FoldLeft (List.Rev (args), ini, f);
+          ex
+            
+        | P_record (args) =>
+          def val = 
+            CE_cast (val, cg_type (m_ctx, pattern.ty));
+            
+          def f (np, ex) 
+          {
+            def (name, pat) = np;
+            def cond = 
+              build_pattern_expr (CE_field_ref (val, (name : IField).GetFieldInfo ()), pat, false);
+              
+            CE_if (typeof (System.Boolean), cond, ex, CE_literal (L_bool (false)))
+          };
+          
+          List.FoldLeft (List.Rev (args), CE_literal (L_bool (true)), f)
+      }
+    }
+
+
+/*
+      mutable global_always_matches <- false;
+
+      def loop (pats) {
+        match (pats) {
+          | (pat, expr) :: rest =>
+            always_matches <- true;
+            def cond = cgpat (val, pat);
+            def cond =
+              match (expr) {
+                | E_literal (L_bool (true)) => cond
+                | _ =>
+                  always_matches <- false;
+                  CE_if (typeof (System.Boolean), cond, cg_expr (rctx, expr),
+                         CE_literal (L_bool (false)))
+              };
+            global_always_matches <- global_always_matches || always_matches;
+            CE_if (typeof (System.Boolean), cond, CE_literal (L_bool (true)),
+                   loop (rest))
+          | [] =>
+            CE_literal (L_bool (false))
+        }
+      };
+
+      def r = loop (pats);
+      def collect_vals (_ : int, v : CG_val, acc : list <CG_val>) : list <CG_val> { 
+        v :: acc };
+      (r, global_always_matches, rctx, vals.Fold (collect_vals, []))
+    }
+*/
+    
+    private mutable m_pattern : Pattern;
+    private mutable m_guard : option <Expr>;
+    private mutable m_effect : int;
+
+    private mutable m_vals : SystemMap <int, CG_val>;
+    private mutable m_ctx : CTX;
+  }
+
+
+
+  /* -- MATCH COLLECTOR ---------------------------------------------------- */
+  
+  /**
+   * Collects match effects and clauses
+   */
+  internal class MatchCollector
+  {
+    public this (matchType : System.Type, ctx : CTX, cases : list <Match_case>)
+    {
+      m_ctx <- ctx;
+      m_vals <- SystemMap ();
+      m_matchType <- matchType;
+      
+      collect_cases (cases, [], 0, [])
+    }
+  
+    public GetEffects () : list <MatchEffect>
+    {
+      m_effects
+    }
+    
+    public GetClauses () : list <MatchClause>
+    {
+      m_clauses
+    }
+
+    public IsTopLevelMatchingOverCons () : bool
+    {
+      def walk_clauses (clauses : list <MatchClause>) 
+      {
+        match (clauses) {
+          | [] => false            
+          | clause :: rest =>
+            match (clause.GetPattern ()) {
+              | P_cons => true
+              | _ => walk_clauses (rest)
+            } 
+        }
+      };
+      
+      walk_clauses (m_clauses)
+    }
+  
+    public GetTopLevelConsName () : Tycon
+    {
+      assert (IsTopLevelMatchingOverCons ());
+
+      def walk_clauses (clauses : list <MatchClause>) 
+      {
+        match (clauses) {
+          | [] => 
+            Util.ice ("MatchCollector::GetTopLevelConsName")
+            
+          | clause :: rest =>
+            match (clause.GetPattern ()) {
+              | P_cons (name, _) => name
+              | _ => walk_clauses (rest)
+            } 
+        }
+      };
+      
+      walk_clauses (m_clauses)
+    }
+
+    public BuildEffectsSwitch (ctx : CTX, matching_expr : CG_expr) : CG_expr
+    {
+      def walk_effects (effects : list <MatchEffect>) : list <int * CG_expr>
+      {
+        match (effects) {
+          | [] => []
+          | effect :: rest =>
+            def effect_expr =
+              cg_expr (ctx, effect.GetEffect ());
+
+            (effect.GetIndex (), effect_expr) :: walk_effects (rest)
+        }
+      };
+
+      def tc = GlobalEnv.LookupInternalType ("Nemerle.Core.MatchFailureException");
+      def match_failure = get_default_ctor (ctx, tc);
+
+      def match_failure_expr =
+        CE_raise (CE_call (CE_ctor_ref (match_failure), []));
+      
+      CE_switch (
+        m_matchType,
+        matching_expr,
+        Some (match_failure_expr),
+        walk_effects (m_effects)
+      )
+    }
+
+
+    private collect_cases (cases : list <Match_case>, 
+                           effects : list <MatchEffect>, 
+                           effects_counter : int,
+                           clauses : list <MatchClause>) : void
+    {
+      match (cases) {
+        | [] =>
+          m_effects <- List.Rev (effects);
+          m_clauses <- List.Rev (clauses)
+          
+        | case :: rest =>
+          def walk_patterns (patterns : list <Pattern * Expr>, 
+                             new_clauses : list <MatchClause>) {
+            match (patterns) {
+              | [] =>
+                List.Rev (new_clauses)
+                
+              | (pattern, guard) :: rest =>
+                //TODO: tutaj trzeba przejœæ przez pattern i wyci¹gn¹æ
+                // wszystkie zmienne lokalne chyba...
+              
+                def new_clause =
+                  MatchClause (
+                    pattern, 
+                    guard, 
+                    effects_counter
+                  );
+
+                // new_clause.Dump ();
+                          
+                walk_patterns (rest, new_clause :: new_clauses) 
+            }                             
+          };
+    
+          def new_effect =
+            MatchEffect (
+              effects_counter, 
+              case.body
+            );
+            
+          def new_clauses =
+            walk_patterns (case.patterns, []);
+                  
+          collect_cases (
+            rest, 
+            new_effect :: effects, 
+            effects_counter + 1, 
+            List.Append (new_clauses, clauses)
+          )
+      }
+    }
+  
+    private mutable m_effects : list <MatchEffect>;
+    private mutable m_clauses : list <MatchClause>;
+
+    private mutable m_vals : SystemMap <int, CG_val>;
+    private mutable m_matchType : System.Type;
+    private mutable m_ctx : CTX;
+  }
+
+
   /**
    * Description of a match pattern:
    *
@@ -1131,9 +1581,9 @@ namespace Nemerle.Compiler
     
     /**
      * Matching over arbitrary types
-     */
-    cg_match_over_any_type (t : System.Type, ctx : CTX, val : CG_expr,
-                            mcs : list <Match_case>) : CG_expr 
+     */    
+    cg_match_general (t : System.Type, ctx : CTX, val : CG_expr,
+                      mcs : list <Match_case>) : CG_expr 
     {
       match (mcs) {
         | [] =>
@@ -1147,8 +1597,166 @@ namespace Nemerle.Compiler
           def (cond, _always_matches, ctx', vals) = cg_pattern (ctx, val, m.patterns);
           def mklet (v : CG_val, acc : CG_expr) : CG_expr { CE_let (v, acc) };
           def then_part = cg_expr (ctx', m.body);
-          def else_part = cg_match (t, ctx, val, ms);
+          def else_part = cg_match_general (t, ctx, val, ms);
           List.FoldLeft (vals, CE_if (t, cond, then_part, else_part), mklet)
+      }
+    }
+
+   
+    cg_match_over_cons (t : System.Type, ctx : CTX, val : CG_expr,
+                        mcs : list <Match_case>) : CG_expr
+    {
+      def get_variant_code_method (variant_tyinfo : Tyinfo) : System.Reflection.MethodInfo {
+        def members = variant_tyinfo.LookupMember ("_N_GetVariantCode");
+        
+        match (members) {
+          | [variant_code_method] =>
+            def variant_code_method = (variant_code_method :> IMethod);
+            
+            variant_code_method.GetMethodInfo ()
+          
+          | _ =>
+            Util.ice ("cg_match_over_cons: expected exactly one _N_GetVariantCode method")
+        }      
+      };        
+
+      def match_collector = MatchCollector (t, ctx, mcs);
+
+      mutable m_ctx <- ctx;
+      mutable m_vals <- SystemMap ();
+
+      def name = match_collector.GetTopLevelConsName ();
+                    
+      match (name.GetTyconKind ()) {
+        | TK_NemerleType (exact_variant_option) =>
+          def variant_tyinfo = 
+            exact_variant_option.GetVariantOptionParent ();
+
+          def variant_options =
+            variant_tyinfo.GetVariantOptions ();
+
+          def variant_code_call_expr = 
+            CE_call (typeof (System.Int32), 
+                     CE_method_ref (val, get_variant_code_method (variant_tyinfo)), 
+                     []);
+
+          def collect_patterns (variant_option : Tyinfo, 
+                                clauses : list <MatchClause>, 
+                                acc : list <MatchClause>) : list <MatchClause>
+          {
+            match (clauses) {
+              | [] =>
+                List.Rev (acc)
+                
+              | clause :: rest =>
+                match (clause.GetPattern ()) {
+                  | P_as (P_cons (name, _), _)
+                  | P_cons (name, _) =>
+                    if (name.GetFullName () == variant_option.GetFullName ()) {
+                      // Message.debug ("collecting P_cons " + name.GetFullName ());
+                      collect_patterns (variant_option, rest, clause :: acc)
+                    }
+                    else
+                      collect_patterns (variant_option, rest, acc);
+
+                  | P_as (P_underscore, _)
+                  | P_underscore =>
+                    // Message.debug ("collecting P_underscore");
+                    collect_patterns (variant_option, rest, clause :: acc)
+                      
+                  | _ =>
+                    clause.Dump ();
+                    Util.ice ("cg_match_over_cons::collect_patterns: wrong pattern (see the dump above)")
+                };
+            }
+          };
+
+          def bind_clauses (clauses : list <MatchClause>) : CG_expr
+          {
+            match (clauses) {
+              | [] => 
+                CE_literal (L_int (-1))
+                
+              | clause :: rest =>
+                def (new_ctx, new_vals, clause_expr) =
+                  clause.BuildMatchExpr (m_ctx, m_vals, val);
+                  
+                m_ctx <- new_ctx;
+                m_vals <- new_vals;
+                  
+                CE_if (typeof (System.Boolean),          
+                       clause_expr,
+                       CE_literal (L_int (clause.GetEffect ())),
+                       bind_clauses (rest))
+            }          
+          };
+
+          def walk_variant_options (index : int, variant_options : list <Tyinfo>) : list <int * CG_expr>
+          {
+            match (variant_options) {
+              | variant_option :: rest =>
+                // Message.debug (index.ToString () + ": " + variant_option.GetFullName ());
+                
+                def patterns =
+                  collect_patterns (variant_option, match_collector.GetClauses (), []);
+
+                def effect_expr =
+                  bind_clauses (patterns);
+                
+                (index, effect_expr) :: walk_variant_options (index + 1, rest)
+                
+              | [] => []
+            }
+          };
+          
+          // Message.debug ("walking variant options of type " + variant_tyinfo.GetFullName ());
+          
+          def cons_switch_cases =
+            walk_variant_options (0, variant_options);
+            
+          def cons_switch =
+            CE_switch (
+              typeof (System.Int32),
+              variant_code_call_expr,
+              Some (CE_literal (L_int (-1))),
+              cons_switch_cases
+            );
+            
+          def effects_switch = 
+            match_collector.BuildEffectsSwitch (m_ctx, cons_switch);
+  
+          def guarded_effects_switch =
+            CE_sequence ([CE_not_null (val), effects_switch]);
+  
+          def mklet (_ : int, v : CG_val, acc : CG_expr) : CG_expr { CE_let (v, acc) };
+          m_vals.Fold (mklet, guarded_effects_switch)
+
+        | _ =>
+          Util.ice ("cg_match_over_cons: not a Nemerle type")
+      }
+    }
+
+
+    cg_match_over_any_type (t : System.Type, ctx : CTX, val : CG_expr,
+                            mcs : list <Match_case>) : CG_expr 
+    {
+      match (mcs) {
+        | head :: _ =>
+          match (head.patterns) {
+            | (P_cons (name, _), _) :: _ =>
+              match (name.GetTyconKind ()) {
+                | TK_NemerleType =>
+                  cg_match_over_cons (t, ctx, val, mcs)
+                | _ =>
+                  cg_match_general (t, ctx, val, mcs)
+              }
+        
+            | _ =>
+              cg_match_general (t, ctx, val, mcs)
+          }
+
+        | _ =>
+            cg_match_general (t, ctx, val, mcs)        
       }
     }
 
