@@ -58,6 +58,13 @@ class CS_glue {
 			output_file = new System.IO.StreamWriter("out.cs");
 		output_file.Write(s);
 	}
+	
+	public static string operator_name(string s)
+	{
+		if (s.StartsWith("%op"))
+			return s.Substring(3, s.Length - 3);
+		return "";
+	}
 }
 
 class XParser : Parser {

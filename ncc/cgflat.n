@@ -118,6 +118,7 @@ namespace Nemerle.Compiler {
       static st_concat (sep : string, nodes : list (String_tree)) : String_tree =
         match nodes with [
           | Nil => ST_leaf ("")
+          | Cons (?x, Nil) => x
           | Cons (?x, ?xs) => x ++ sep ++ st_concat (sep, xs)
         ];
       
@@ -140,6 +141,16 @@ namespace Nemerle.Compiler {
           ]
         in ST_leaf (s);
 
+      static operator_name (_ : string) : string =
+        extern "Nemerle.Compiler.CS_glue.operator_name";
+
+      // only for short strings (like function name)
+      static st_flatten (s : String_tree) : string =
+        match s with [
+          | ST_leaf (?x) => x
+          | ST_node (?l, ?r) => st_flatten (l) + st_flatten (r)
+        ];
+
       static flat_call (pref : String_tree, es : list (CG_expr)) : CS_code =
         let (?pre, ?es) =
           let es' = List.map (flat, es) in
@@ -157,7 +168,19 @@ namespace Nemerle.Compiler {
             (Some (pre), r)
           else (None (), es')
         in
-        let body = "(" ++ pref ++ "(" ++ st_concat (", ", List.map (csref, es)) ++ "))" in
+        let opname = operator_name (st_flatten (pref)) in
+        let body = 
+          if opname == "" then
+            pref ++ "(" ++ st_concat (", ", List.map (csref, es)) ++ ")"
+          else
+            match List.map (csref, es) with [
+              | Cons (?e1, Cons (?e2, Nil)) =>
+                "(" ++ e1 ++ " " ++ opname ++ " " ++ e2 ++ ")"
+              | Cons (?e, Nil) =>
+                "(" + opname + " " ++ e ++ ")"
+              | _ => Util.ice ()
+            ]
+        in
         match pre with [
           | None => CS_simple (body)
           | Some (?x) => CS_complex (x, body)
@@ -172,14 +195,16 @@ namespace Nemerle.Compiler {
       static flat (ex : CG_expr) : CS_code =
         match ex with [
           | CE_ref (?d) => CS_simple (ST_leaf (d#name))
-          | CE_global_ref (?m) => CS_simple (ST_leaf (m#name))
+          | CE_global_ref (?m) =>
+            let n = if m#extern_name != "" then m#extern_name else m#name in
+            CS_simple (ST_leaf (n))
           | CE_field_ref (?e, ?f) =>
             let e = flat (e) in 
-            mono (e, "(" ++ csref (e) ++ "." ++ f#name ++ ")")
+            mono (e, csref (e) ++ "." ++ f#name)
 
           | CE_tuple_ref (?e, ?n) => 
             let e = flat (e) in 
-            mono (e, "(" ++ csref (e) ++ ".field" ++ string_of_int (n) ++ ")")
+            mono (e, csref (e) ++ ".field" ++ string_of_int (n))
 
           | CE_call (?e, ?es) => 
             match flat (e) with [
@@ -190,7 +215,7 @@ namespace Nemerle.Compiler {
           | CE_assign (?e1, ?e2) =>
             let (?p1, ?r1) = make_complex (flat (e1)) in
             let (?p2, ?r2) = make_complex (flat (e2)) in
-            CS_complex (p1 ++ p2 ++ r1 ++ " = " ++ r2 ++ ";\n", ST_leaf ("?VOID_assign"))
+            CS_complex (p1 ++ p2, r1 ++ " = " ++ r2)
             
           | CE_let (?v, ?e) =>
             match v#val with [
@@ -199,7 +224,14 @@ namespace Nemerle.Compiler {
                 CS_complex (flat_ty (v#ty) ++ " " ++ v#name ++ ";\n" ++ p, r)
               | _ =>
                 let (?p, ?r) = make_complex (flat (v#val)) in
-                let pref = p ++ flat_ty (v#ty) ++ " " ++ v#name ++ " = " ++ r ++ ";\n" in
+                let pref = 
+                  match v#ty with [
+                    | CT_void => 
+                      p ++ r ++ ";\n"
+                    | _ =>
+                      p ++ flat_ty (v#ty) ++ " " ++ v#name ++ " = " ++ r ++ ";\n"
+                  ]
+                in
                 let (?p, ?r) = make_complex (flat (e)) in
                 CS_complex (pref ++ p, r)
             ]
@@ -212,6 +244,9 @@ namespace Nemerle.Compiler {
             let (?p, ?r) = make_complex (flat (x)) in
             CS_complex (p ++ "throw " ++ r ++ ";\n", ST_leaf ("null"))
             
+          | CE_if (CE_true, ?e, _) => flat (e)
+          | CE_if (CE_false, _, ?e) => flat (e)
+          
           | CE_if (?c, ?e1', ?e2') =>
             let (?p1, ?c) = make_complex (flat (c)) in
             let (?p2, ?e1) = make_complex (flat (e1')) in
@@ -280,16 +315,15 @@ namespace Nemerle.Compiler {
           | CE_sequence (?e) =>
             letfun serialize (e : CG_expr) : String_tree =
               let (?pre, ?r) = make_complex (flat (e)) in
-              let tmpname = tmp () in
-              pre ++
-              flat_ty (type_of (e)) ++ " " ++ tmpname ++ 
-                " = " ++ r ++ ";\n"
+              pre ++ r ++ ";\n"
             in
             letfun concat (acc : String_tree, es : list (CG_expr)) : CS_code =
               match es with [
                 | Cons (?x, Nil) => 
                   let (?pre, ?r) = make_complex (flat (x)) in
                   CS_complex (acc ++ pre, r)
+                | Cons (CE_skip, ?xs) =>
+                  concat (acc, xs)
                 | Cons (?x, ?xs) =>
                   concat (acc ++ serialize (x), xs)
               ]
@@ -302,7 +336,7 @@ namespace Nemerle.Compiler {
           
           | CE_method_ref (?e, ?f) => 
             let e = flat (e) in 
-            mono (e, "(" ++ csref (e) ++ "." ++ f#name ++ ")")
+            mono (e, csref (e) ++ "." ++ f#name)
 
           | CE_none => Util.ice ()
         ];
@@ -412,15 +446,25 @@ namespace Nemerle.Compiler {
                | CE_none => print_st (ST_leaf (";\n"))
                | _ =>
                  let (?pref, ?r) = make_complex (flat (m#body)) in
-                 let res = "\n{\n" ++ pref ++ "return " ++ r ++ ";\n" ++ 
-                             "} // end of fun " ++ m#name ++ "\n" in
-                 print_st (res)
+                 let res =
+                   match m#ret_type with [
+                     | CT_void => "\n{\n" ++ pref ++ r ++ ";\n"
+                     | _ => "\n{\n" ++ pref ++ "return " ++ r ++ ";\n"
+                   ] ++ "} // end of fun " ++ m#name ++ "\n"
+                 in print_st (res)
              ]
            }
        ];
       
       static run (decls : list (CM_class)) : void =
-        List.iter ((flat_member : CM_class -> void), decls);
+        letfun flat_top_member (x : CM_class) : void =
+          if x#ns != "" then {
+            print_st (ST_leaf ("namespace " + Env.get_ns (x#ns) + " {\n"));
+            flat_member (x);
+            print_st (ST_leaf ("} // end ns\n"))
+          } else flat_member (x)
+        in
+        List.iter (flat_top_member, decls);
     }
 
 }
