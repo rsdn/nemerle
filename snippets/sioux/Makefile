@@ -30,7 +30,11 @@
 # Sioux Makefile
 #
 
-include ../../config.mak
+include ~/nemerle/trunk/config.mak
+
+######################################################
+#VARIABLES
+######################################################
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 NCC_DIR = ../../ncc/out.stage3
@@ -44,6 +48,7 @@ SOURCES = $(SIOUX_DLL_SOURCES) $(SIOUX_EXE_SOURCES)
 
 NEMERLE_XML_DLL_SOURCES = xmltemplate.n xmlpipeline.n generators.n 
 
+NEMERLE_DLLS = Nemerle.dll Nemerle.Macros.dll Nemerle.Compiler.dll
 
 CSL_APPLICATION_SOURCES = csl04/csl.n csl04/submission.n
 CSL_APPLICATION_DLL = Fit.dll
@@ -82,7 +87,11 @@ EXAMPLES = HELLO_APPLICATION             \
 	REQUEST_PARAMS_APPLICATION       \
 	DIRGENERATOR_APPLICATION
 
-all: Nemerle.Xml.dll Sioux.dll httpd.exe Docs.dll $(EXAMPLES)
+######################################################
+# TARGETS
+######################################################
+
+all: $(NEMERLE_DLLS) Nemerle.Xml.dll Sioux.dll httpd.exe Docs.dll examples
 
 Nemerle.Xml.dll: $(NEMERLE_XML_DLL_SOURCES)
 	$(EXECUTE) $(NCC) -tdll -out:$@  $(NEMERLE_XML_DLL_SOURCES)
@@ -94,6 +103,8 @@ Docs.dll:  Nemerle.Xml.dll Sioux.dll $(DOCS_SOURCES)
 	$(EXECUTE) $(NCC) -tdll -r:System.Web -r:Nemerle.Xml -r:Sioux -out:$@ $(DOCS_SOURCES)
 	cp $@ $(APP_DIR)
 
+examples: $(EXAMPLES)
+
 $(EXAMPLES): Nemerle.Xml.dll Sioux.dll $($@_SOURCES)
 	$(EXECUTE) $(NCC) -tdll -r:System.Web -r:Nemerle.Xml -r:Sioux -out:$($@_DLL) $($@_SOURCES)
 	cp $($@_DLL) $(APP_DIR)
@@ -104,8 +115,8 @@ httpd.exe: $(SOURCES) Sioux.dll
 clean:
 	rm -f *.exe *.dll *.pdb *~ webapps/*.dll
 
-copy-dlls:
-	cp -f $(NCC_DIR)/*.dll .
+$(NEMERLE_DLLS): $(NCC_DIR)/$@
+	cp -f $(NCC_DIR)/$@ $@
 
 xml-check:
 	set -xe; for f in fit/*.xml ; do xmllint --noout --valid $$f; done
