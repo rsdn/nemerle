@@ -140,7 +140,7 @@ compare-one:
 		| sed -e 's/\.stage2//g' > $(CMP_TARGET)2.il
 	$(DASM) out.stage3/$(CMP_TARGET) | \
 		grep -v -E '(^//|// GUID|MVID)' \
-		> $(CMP_TARGET)3.il
+		| sed -e 's/\.stage2//g' > $(CMP_TARGET)3.il
 	diff -u $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 	rm -f $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 
@@ -152,7 +152,7 @@ compare-one-with-stage:
 		| sed -e 's/\.stage2//g' > $(CMP_TARGET)2.il
 	$(DASM) out.stage3/$(CMP_TARGET).dll | \
 		grep -v -E '(^//|// GUID|MVID)' \
-		> $(CMP_TARGET)3.il
+		| sed -e 's/\.stage2//g' > $(CMP_TARGET)3.il
 	diff -u $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 	rm -f $(CMP_TARGET)2.il $(CMP_TARGET)3.il
 
