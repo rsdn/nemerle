@@ -54,8 +54,8 @@ public class TypeBuilder : TypeInfo
   modifiers : Modifiers;
 
   mutable tydecl : TypeDeclaration;
-  mutable t_extends : option [TType];
-  mutable t_implements : list [TType];
+  mutable t_extends : option [TType.Class];
+  mutable t_implements : list [TType.Class];
 
   attributes : NemerleAttributes;
   
@@ -131,9 +131,9 @@ public class TypeBuilder : TypeInfo
     match (subtypes.Find (ti.GetId ())) {
       | Some ((_, x)) => Some (x)
       | None =>
-        if (ti.FullName == "System.Object")
+        if (ti.Equals (InternalType.Object_tc))
           Some ([])
-        else if (ti.SameAs (this))
+        else if (ti.Equals (this))
           match (GetMemType ()) {
             | TType.Class (_, parms) => Some (parms)
             | _ => assert (false)
@@ -159,7 +159,7 @@ public class TypeBuilder : TypeInfo
     get
     {
       match (t_extends) {
-        | Some (TType.Class (tycon, [])) =>
+        | Some ({ tycon = tycon; args = []}) =>
           tycon.FullName == "System.MulticastDelegate"
 
         | _ =>
@@ -248,7 +248,7 @@ public class TypeBuilder : TypeInfo
    *   type for variant options.
    * </remarks>
    */
-  public override GetDirectSuperTypes () : list [TType]
+  public override GetDirectSuperTypes () : list [TType.Class]
   {
     match (t_extends) {
       | Some (t) => t :: t_implements
@@ -265,7 +265,7 @@ public class TypeBuilder : TypeInfo
   public override SuperClass () : option [TypeInfo]
   {
     match (t_extends) {
-      | Some (TType.Class (ti, _)) => Some (ti)
+      | Some (tclass) => Some (tclass.tycon)
       | _ => None ()
     }
   }
@@ -435,7 +435,7 @@ public class TypeBuilder : TypeInfo
    */
   public override SubtypingSubst (tc : TypeInfo) : Subst
   {
-    if (SameAs (tc))
+    if (this.Equals (tc))
       SystemMap () // current type, no substitution
     else
       tc.MakeSubst (Option.UnSome (SuperType (tc)));
@@ -582,7 +582,7 @@ public class TypeBuilder : TypeInfo
     (match (enclosing_type) {
       | Some (declaring_type) =>
         def walk_declaring (tc : TypeInfo) {
-          tc.SameAs (declaring_type) || 
+          tc.Equals (declaring_type) || 
             (tc.DeclaringType != null && walk_declaring (tc.DeclaringType))
         };
         walk_declaring (source)
@@ -657,15 +657,14 @@ public class TypeBuilder : TypeInfo
    */
   bind_types () : void
   {
-    def bind (t : PT.PType) : TType {
-      this.tenv.bind (this.env, this, t, check_parms = false)
-    };
     def td = this.pt_tydecl;
     
     this.tydecl =
       match (td) {
         | PT.TopDeclaration.Class => TypeDeclaration.Class ()
-        | PT.TopDeclaration.Alias (_, t) => TypeDeclaration.Alias (bind (t))
+        | PT.TopDeclaration.Alias (_, t) =>
+          def ttype = this.tenv.bind (this.env, this, t, check_parms = false);
+          TypeDeclaration.Alias (ttype)
         | PT.TopDeclaration.Interface => TypeDeclaration.Interface ()
         | PT.TopDeclaration.Delegate => Util.ice ("delegates shouldn't survive to typing")
         | PT.TopDeclaration.Enum => TypeDeclaration.Enum ()
@@ -680,7 +679,7 @@ public class TypeBuilder : TypeInfo
       
     match (td) {
       | PT.TopDeclaration.VariantOption =>
-        this.t_extends = Some (variant_option_parent.GetMemType ());
+        this.t_extends = Some (variant_option_parent.GetMemType () :> TType.Class);
         this.t_implements = [];
       | PT.TopDeclaration.Class { t_extends = hd :: tl }
       | PT.TopDeclaration.Interface { t_extends = hd :: tl }
@@ -698,13 +697,16 @@ public class TypeBuilder : TypeInfo
               | _ => false
             }
         };
-        def hd' = bind (hd);
+        def bind_to_class (t : PT.PType) {
+          this.tenv.bind (this.env, this, t, check_parms = false) :> TType.Class;
+        };
+        def hd' = bind_to_class (hd);
         match (hd') {
-          | TType.Class (tc, _) when !is_interface (tc) =>
-            this.t_extends = Some (hd'); 
-            this.t_implements = List.Map (tl, bind);
+          | ttc when !is_interface (ttc.tycon) =>
+            this.t_extends = Some (ttc); 
+            this.t_implements = List.Map (tl, bind_to_class);
           | _ =>
-            this.t_implements = hd' :: List.Map (tl, bind);
+            this.t_implements = hd' :: List.Map (tl, bind_to_class);
             this.t_extends = None ()
         }
       | _ =>
@@ -744,7 +746,7 @@ public class TypeBuilder : TypeInfo
                 InternalType.Object
             )
         }
-      | Some (TType.Class (par, _)) =>
+      | Some (tclass) =>
         when (is_interface) {
           Message.error (loc, "interfaces are not allowed to inherit from other types");
           t_extends = None ();
@@ -753,20 +755,18 @@ public class TypeBuilder : TypeInfo
           Message.error (loc, "structures are not allowed to inherit from other types");
           t_extends = Some (InternalType.ValueType)
         }
-        when (par.IsSealed) {
+        when (tclass.tycon.IsSealed) {
           Message.error (loc, "cannot extend sealed class");
           t_extends = Some (InternalType.Object)
         }
-
-      | _ => Util.ice ("extending not class")
     }
        
     // construct this.iterate_first:
     def iterate_first = Hashtable ();
 
-    foreach (TType.Class (tc, _) in GetDirectSuperTypes ()) {
-      when (tc != null) {
-        match (tc.GetTypeInfoKind ()) {
+    foreach (ty : TType.Class in GetDirectSuperTypes ()) {
+      when (ty.tycon != null) {
+        match (ty.tycon.GetTypeInfoKind ()) {
           | TypeInfoKind.NemerleType (ti) => iterate_first.Set (ti.GetId (), ti)
           | _ => ()
         }
@@ -841,7 +841,7 @@ public class TypeBuilder : TypeInfo
             Message.error ($ "type `$(subtyped)' is implemented by type "
                              "`$(FullName)' twice under different "
                              "instantiations");
-            if (tc.SameAs (subtyped))
+            if (tc.Equals (subtyped))
               Message.error ("second one directly")
             else
               Message.error ("second one through `" + tc.FullName + "'");
@@ -868,13 +868,13 @@ public class TypeBuilder : TypeInfo
     subinfo
   }
 
-  public override GetSuperTypes () : list [TType]
+  public override GetSuperTypes () : list [TType.Class]
   {
     if (subtypes == null) []
     else
       subtypes.Fold (fun (_, x, acc) {
                         def (tc, args) = x;
-                        TType.Class (tc, args) :: acc },
+                        (TType.Class (tc, args) :> TType.Class) :: acc },
                      [])
   }
 
@@ -1181,20 +1181,18 @@ public class TypeBuilder : TypeInfo
         _ = ti.MakeSubst (args);
     };
 
-    // types we are deriving from      
-    def types =
-      match (tydecl) {
-        | TypeDeclaration.Alias (t) => t :: GetDirectSuperTypes ()
-        | _ => GetDirectSuperTypes ()
-      };
+    // check accessibility of type we are aliasing
+    match (tydecl) {
+      | TypeDeclaration.Alias (t) =>
+        Tyutil.CheckAccessibility (this, accessibility, t);
+        check_type (t);
+      | _ => ()
+    };
 
-    foreach (deriv_t in types) {
-      def is_iface =
-        match (deriv_t) {
-          | TType.Class (tinf, _) =>
-            tinf.IsInterface
-          | _ => false
-        }
+    // types we are deriving from should be at least as accessible as we
+    foreach (deriv_t : TType.Class in GetDirectSuperTypes ()) {
+      def is_iface = deriv_t.tycon.IsInterface;
+
       // access check with exception of interfaces derived / implemented by class
       // which case is not mentioned by http://www.jaggersoft.com/csharp_standard/10.5.4.htm
       when (is_interface || !is_iface)
@@ -1324,7 +1322,7 @@ public class TypeBuilder : TypeInfo
             | MemberKind.Method (m) =>
               def sub = SubtypingSubst (m.DeclaringType);
 
-              when (m.DeclaringType.SameAs (this))
+              when (m.DeclaringType.Equals (this))
                 match ((m.GetMemType () /- sub, mem.GetMemType ())) {
                   | (TType.Function (t1, r1), TType.Function (t2, r2))
                     when Tyutil.types_eq (t1, t2) && ! Tyutil.types_eq (r1, r2) =>
@@ -1337,7 +1335,7 @@ public class TypeBuilder : TypeInfo
                 
               if (Tyutil.types_eq (m.GetMemType () /- sub, mem.GetMemType ())) {
                 match (m.GetFunKind ()) {
-                  | _ when m.DeclaringType.SameAs (this) =>
+                  | _ when m.DeclaringType.Equals (this) =>
                     Message.error (mem.Location,
                                    "redefinition of " + describe_member (mem))
 
@@ -1377,7 +1375,7 @@ public class TypeBuilder : TypeInfo
       match (member_map.Find (mem.Name)) {
         | Some ([]) => Util.ice ()
         | Some ((x :: _) as old) =>
-          if (x.DeclaringType.SameAs (this))
+          if (x.DeclaringType.Equals (this))
             match ((mem.GetKind (), x.GetKind ())) {
               | (MemberKind.Method (m), MemberKind.Method) =>
                 replace_method ([], m, old)
@@ -1845,7 +1843,7 @@ public class TypeBuilder : TypeInfo
     def check_ctors (ty : TypeInfo) {
       def check_ctor (member : IMember, acc) {
         match (member.GetKind ()) {
-          | MemberKind.Method (meth) when meth.DeclaringType.SameAs (ty) =>
+          | MemberKind.Method (meth) when meth.DeclaringType.Equals (ty) =>
             match (meth.GetFunKind ()) {
               | FunKind.Constructor =>
                 def is_default = List.IsEmpty (meth.GetHeader ().parms);
@@ -1863,13 +1861,13 @@ public class TypeBuilder : TypeInfo
     };
 
     match (t_extends) {
-      | Some (TType.Class (par, _)) =>
+      | Some (parent) =>
         def (_, has_ctor) = check_ctors (this);
-        def (par_has_default, par_has_ctor) = check_ctors (par);
+        def (par_has_default, par_has_ctor) = check_ctors (parent.tycon);
         when (!has_ctor && !par_has_default && par_has_ctor)
           Message.error ("the type `" + FullName + 
                          "' has no constructors and the parent type `" + 
-                         par.FullName + "' has no default constructor")
+                         parent.tycon.FullName + "' has no default constructor")
       | _ => ()
     }
   }
@@ -1956,15 +1954,12 @@ public class TypeBuilder : TypeInfo
         }
       })
     }
-    and recurse (supertypes : list [TType])
+    and recurse (supertypes : list [TType.Class])
     {
-      | TType.Class (tycon, _) :: rest =>
-        walk_hierarchy (tycon);
+      | ty :: rest =>
+        walk_hierarchy (ty.tycon);
         recurse (rest)
 
-      | _ :: rest =>
-        recurse (rest)
-        
       | [] => ()
     }
 
@@ -2038,7 +2033,7 @@ public class TypeBuilder : TypeInfo
         match (iface_methods.Get (member)) {
           | Some (meths) =>
             def is_correct (iface_meth : IMethod) {
-              iface_meth.DeclaringType.SameAs (ty) &&
+              iface_meth.DeclaringType.Equals (ty) &&
                 meth.GetMemType () >:> Tyutil.TypeOfMethodIn (iface_meth, this)
             };
             match (List.Filter (meths, is_correct)) {
@@ -2561,7 +2556,7 @@ public class TypeBuilder : TypeInfo
     foreach (expr in GetModifiers ().custom_attrs)
       match (AttributeCompiler.ResolveAttribute (this.env, expr)) {
         | Some ((t, _)) =>
-          when (looking_for.SameAs (t))
+          when (looking_for.Equals (t))
             result = Some (expr)
             
         | _ => ()
