@@ -1,15 +1,22 @@
-MONO = /usr/bin/mono
-NCC = /usr/bin/ncc.exe
-GLOBAL_OPTS = -pedantic-lexer
-COMPILE = $(MONO) $(NCC) $(GLOBAL_OPTS)
+TOP_LEVEL = ../..
+
+include $(TOP_LEVEL)/config.mak
+
+######################################################
+#VARIABLES
+######################################################
+
+EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
+NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
+NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe -q -debug
 
 all:	evallib mainexe
 
 evallib:
-	$(COMPILE) -r Nemerle.Compiler.dll -t library -o eval.dll eval.n
+	$(NCC) -r Nemerle.Compiler.dll -t library -o eval.dll eval.n
 
 mainexe:
-	$(COMPILE) -r eval.dll main.n
+	$(NCC) -r eval.dll main.n
 
 clean:
 	rm *.dll *.exe *~
