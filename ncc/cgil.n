@@ -65,7 +65,6 @@ namespace Nemerle.Compiler
       
       (* create the member builders storage *)
       _classes <- Hashtable ();
-      _field_builders <- Hashtable ();
             
       (* create a weak assembly name and define a dynamic assembly *)
       this._assembly_name <- System.Reflection.AssemblyName ();
@@ -409,7 +408,24 @@ namespace Nemerle.Compiler
 
 
     (**
-     *
+     * Checks if the given field is static
+     *)
+    internal is_static_field (field : CM_field) : bool
+    {
+      def is_mod_static (modifier : Modifier) : bool {
+        match (modifier) {
+          | Mod_static => true
+          | _ => false
+        }
+      };
+
+      List.exists (is_mod_static, field.modifiers)
+    }
+
+
+    (**
+     * Converts a System.Type list to a System.Type array.
+     * FIXME: mkarray (x) won't work here as the list's length is not know.
      *)  
     internal type_list_to_type_array (x : list (System.Type)) : array (System.Type) {
 
@@ -712,8 +728,8 @@ namespace Nemerle.Compiler
             field_builder.SetCustomAttribute (this.make_nemerle_type_attr (field.encoded_type));
           };
           
-          _field_builders.Add (class_name + "." + field.name, field_builder);
-          
+          field.field_builder <- Some (field_builder);
+                    
           CGIL_field (class_name, field, field_builder)
                             
         | CGIL_constructor (class_name, constructor, _) =>
@@ -1010,60 +1026,64 @@ namespace Nemerle.Compiler
     }
 
 
-    (**
-     *
-     *)
-    internal get_field_builder (field_name : string) : option (FieldBuilder)
-    {
-      _field_builders.Get (plus_to_dot (field_name))
-    }
-
 
     (**
-     *
+     * Returns an internal or external field info
      *)
-    internal get_field_info (field_name : string) : option (FieldInfo)
+    internal get_field_info (field : CM_field) : FieldInfo
     {
-      def field_builder = get_field_builder (field_name);
-
-      match (field_builder) {
-        | Some (field_builder) => Some ((field_builder :> FieldInfo))
+      match (field.field_builder) {
+        | Some (field_builder) => (field_builder :> FieldInfo)
         | None =>
-          (* lookup the externals and the Framework *)
-          None () // FIXME
+          def (class_name, field_name) = split_global_ref (field.extern_name);
+
+          def class_type = reflect_type (class_name);
+
+          if (class_type != null) {
+
+            def binding_flags =
+              if (is_static_field (field)) BindingFlags.Static
+              else BindingFlags.Instance;
+ 
+            def field_info =
+              class_type.GetField (field_name, binding_flags %| BindingFlags.Public %|
+                                   BindingFlags.FlattenHierarchy);
+                                   
+            assert (field_info != null, "could not find field " + class_name + "." + field_name);
+            
+            field_info
+          }
+          else {
+          
+            Message.fatal_error ("could not find field " + class_name + "." + field_name)
+          }
       }
     }
 
-    (**
-     *
-     *)
-    private encode_ctor_name (class_name : string, parms : list (System.Type)) : string 
-    {
-      def iter_parms (parms : list (System.Type)) {
-        match (parms) {
-          | [] => ""
-          | parm :: rest =>
-            "%%" + parm.FullName + iter_parms (rest)
-        }
-      };
-
-      class_name + "<<" + iter_parms (parms) + ">>"
-    }
 
     (**
-     *
+     * Returns an internal (built in the current assembly) field info.
+     * This is used to access tuple fields.
      *)
-    private encode_method_name (class_name : string, method_name : string, parms : list (System.Type)) : string 
+    internal get_internal_field_info (class_name : string, field_name : string) : FieldInfo
     {
-      def iter_parms (parms : list (System.Type)) {
-        match (parms) {
-          | [] => ""
-          | parm :: rest =>
-            "%%" + parm.FullName + iter_parms (rest)
+      def incomplete_type = get_class_by_name (class_name);
+      assert (Option.is_some (incomplete_type), "class " + class_name + " not found amoung internal types");
+      
+      def decls = (Option.unsome (incomplete_type)).decls;
+      
+      def walk_decls (decls : list (CG_member)) : FieldInfo {
+        match (decls) {
+          | [] => Message.fatal_error ("could not find field " + class_name + "." + field_name)
+          | (CM_field) as decl :: rest when decl.name == field_name =>
+            assert (Option.is_some (decl.field_builder), "could not find field builder for " + 
+                                                          class_name + "." + field_name);
+            Option.unsome (decl.field_builder)
+          | _ :: rest => walk_decls (rest)
         }
       };
-
-      class_name + "::" + method_name + "<<" + iter_parms (parms) + ">>"
+      
+      walk_decls (decls)    
     }
 
 
@@ -1075,7 +1095,6 @@ namespace Nemerle.Compiler
     private mutable _type_builder_queue : Queue (TypeBuilder);
     private mutable _emit_nemerle_attributes : bool;
     private mutable _classes : Hashtable (string, CM_class);
-    private mutable _field_builders : Hashtable (string, FieldBuilder);
   }
 
 
@@ -1329,19 +1348,21 @@ namespace Nemerle.Compiler
         | CE_field_ref (base_object, field) =>
           if (emit (base_object)) true
           else {
-            def base_class_type = 
-              _cgil.reflect_nemerle_type (type_of (base_object));
-              
-            assert (base_class_type != null);
-
             def field_info = 
-              _cgil.get_field_info (base_class_type.FullName + "." + field.name);
+              _cgil.get_field_info (field);
               
-            assert (Option.is_some (field_info));
-
-            _ilg.Emit (OpCodes.Ldfld, Option.unsome (field_info));
+            _ilg.Emit (OpCodes.Ldfld, field_info);
             false
           }
+
+
+        (* load the value of a static field *)
+        | CE_global_ref ((CM_field) as field) =>
+          def field_info = 
+            _cgil.get_field_info (field);
+              
+          _ilg.Emit (OpCodes.Ldsfld, field_info);
+          false
 
 
         (* load the value of a property *)
@@ -1399,11 +1420,9 @@ namespace Nemerle.Compiler
             assert (tuple_type != null);
 
             def field_info = 
-              _cgil.get_field_info (tuple_type.FullName + ".field" + string_of_int (field_index + 1));
+              _cgil.get_internal_field_info (tuple_type.FullName, "field" + string_of_int (field_index + 1));
               
-            assert (Option.is_some (field_info));
-
-            _ilg.Emit (OpCodes.Ldfld, Option.unsome (field_info));
+            _ilg.Emit (OpCodes.Ldfld, field_info);
             false
           }
 
@@ -1442,20 +1461,25 @@ namespace Nemerle.Compiler
 
         (* assignment to a field *)
         | CE_assign (CE_field_ref (base_object, field), val) =>
-          def base_class_type = 
-            _cgil.reflect_nemerle_type (type_of (base_object));
-
-          assert (base_class_type != null);
-
           def field_info = 
-            _cgil.get_field_info (base_class_type.FullName + "." + field.name);
-
-          assert (Option.is_some (field_info));
+            _cgil.get_field_info (field);
 
           if (emit (base_object)) true
           else if (emit (val)) true
           else {
-            _ilg.Emit (OpCodes.Stfld, Option.unsome (field_info));
+            _ilg.Emit (OpCodes.Stfld, field_info);
+            false
+          }
+
+
+        (* assignment to a static field *)
+        | CE_assign (CE_global_ref ((CM_field) as field), val) =>
+          if (emit (val)) true
+          else {
+            def field_info = 
+              _cgil.get_field_info (field);
+          
+            _ilg.Emit (OpCodes.Stsfld, field_info);
             false
           }
 
