@@ -609,21 +609,6 @@ returns [string return_string]
         }
     ;
 
-//post_increment_expression
-//returns [string return_string]
-//{
-//    return_string = "";
-//}
-//    :   primary_expression   INC
-//    ;
-
-//post_decrement_expression
-//returns [string return_string]
-//{
-//    return_string = "";
-//}
-//    :   primary_expression   DEC
-//    ;
 
 array_creation_expression 
 returns [string return_string]
@@ -709,8 +694,8 @@ returns [string return_string]
     |   l:LNOT   return_string = unary_expression   {return_string = l.getText () + return_string ;  }
     |   b:BNOT   return_string = unary_expression   {return_string = b.getText () + return_string ;  }
     |   STAR return_string = unary_expression  // ------------- ?? -----------------------
-    |   return_string = pre_increment_expression
-    |   return_string = pre_decrement_expression
+    |   return_string = pre_increment_expression [true]
+    |   return_string = pre_decrement_expression [true]
     ;
 
 cast_expression
@@ -723,21 +708,33 @@ returns [string return_string]
         { return_string = lp.getText () + return_string + " :> " + t[0]+t[1] + rp.getText ()  ;  }
     ;
 
-pre_increment_expression
+pre_increment_expression [bool in_expr]
 returns [string return_string]
 {
     return_string = "";
 }
-    :   i:INC  return_string = unary_expression  {return_string = i.getText () + return_string ;  }
+    :   i:INC  return_string = unary_expression  
+       {  if (in_expr)
+            return_string = ExtendedToken.getWhitespaces(i) + "({ def _tmp = " + return_string 
+                            + "; " + ExtendedToken.getTextOnly (i) + return_string + "; _tmp })";
+          else 
+            return_string = i.getText () + return_string ;  
+       }
     ;
 
-pre_decrement_expression
+pre_decrement_expression [bool in_expr]
 returns [string return_string]
 {
     return_string = "";
 }
-    :   d:DEC   return_string = unary_expression  {return_string = d.getText () + return_string ;  }
-    ;
+    :   d:DEC   return_string = unary_expression  
+       {  if (in_expr)
+            return_string = ExtendedToken.getWhitespaces(d) + "({ def _tmp = " + return_string 
+                            + "; " + ExtendedToken.getTextOnly (d) + return_string + "; _tmp })";
+          else 
+            return_string = d.getText () + return_string ;  
+       }
+     ;
 
 multiplicative_expression
 returns [string return_string]
@@ -991,7 +988,7 @@ returns [string return_string]
     return_string = "";
 }
     :   (conditional_expression)=> return_string = conditional_expression
-    |   return_string = assignment
+    |   return_string = assignment [true]
     ;
 
 constant_expression
@@ -1207,23 +1204,29 @@ returns [string return_string]
 {
     return_string = "";
 }
-    :   (assignment)=>
-            return_string = assignment
+    :   (assignment [false])=>
+            return_string = assignment [false]
     |   return_string = primary_expression
      
-    |   return_string = pre_increment_expression
-    |   return_string = pre_decrement_expression
+    |   return_string = pre_increment_expression [false]
+    |   return_string = pre_decrement_expression [false]
     ;
 
-assignment
+assignment [bool in_expr]
 returns [string return_string]
 {
+    string assig = "";
     string temp = "";
     return_string = "";
 }
     :   return_string = unary_expression   
-        temp = assignment_operator   {return_string += temp;}
-        temp = expression            {return_string += temp;}
+        assig = assignment_operator   temp = expression            
+       {  if (in_expr)
+            return_string = "({ " + return_string + assig + temp + "; " + return_string + " })";
+          else 
+            return_string += assig + temp;  
+       }
+
     ;
 
 selection_statement
@@ -2301,17 +2304,17 @@ returns [string return_string]
 {
     return_string = "";
 }
-    :   NEW
-    |   PUBLIC
-    |   PROTECTED
-    |   INTERNAL
-    |   PRIVATE
-    |   STATIC
-    |   VIRTUAL
-    |   SEALED
-    |   OVERRIDE
-    |   ABSTARCT
-    |   EXTERN
+    :   cm1:NEW        {Emit.EmitToken (cm1);}
+    |   cm2:PUBLIC     {Emit.EmitToken (cm2);}
+    |   cm3:PROTECTED  {Emit.EmitToken (cm3);}
+    |   cm4:INTERNAL   {Emit.EmitToken (cm4);}
+    |   cm5:PRIVATE    {Emit.EmitToken (cm5);}
+    |   cm6:STATIC     {Emit.EmitToken (cm6);}
+    |   cm7:VIRTUAL    {Emit.EmitToken (cm7);}
+    |   cm8:SEALED     {Emit.EmitToken (cm8);}
+    |   cm9:OVERRIDE   {Emit.EmitToken (cm9);}
+    |   cm10:ABSTRACT  {Emit.EmitToken (cm10);}
+    |   cm11:EXTERN    {Emit.EmitToken (cm11);}
     ;
 
 event_accessor_declarations
@@ -3123,7 +3126,7 @@ tokens
     LOCK        =   "lock";             WHILE       =   "while";
     GET         =   "get";              SET         =   "set";
     PARTIAL     =   "partial";          WHERE       =   "where"; 
-    YIELD       =   "yield";
+    YIELD       =   "yield";            VOLATILE    =   "volatile";
 }
 
 //----------------------
