@@ -41,7 +41,7 @@ root_docs =  index nemerlePlanned \
 
 docs = $(root_docs) $(addprefix course/, $(course_docs))
 
-tex_docs = absNemOperationalSem
+tex_docs = absNemOperationalSem intro
 
 normal_docs = $(html) $(addsuffix .ps, $(tex_docs)) $(addsuffix .pdf, $(tex_docs))
 
