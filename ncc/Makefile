@@ -128,7 +128,13 @@ last-stage-files: \
 
 lib: out.stage1/Nemerle.stage1.dll
 
-boot: stage1 stage2 stage3 compare
+boot: stage1 stage2 stage3 compare ngen-stage3 tests
+
+ngen-stage3:
+	$(NGEN) out.stage3/Nemerle.dll
+	$(NGEN) out.stage3/Nemerle.Compiler.dll
+	$(NGEN) out.stage3/stdmacros.dll
+	$(NGEN) out.stage3/ncc.exe
 
 compare:
 	$(MAKE) compare-one-with-stage CMP_TARGET=Nemerle
