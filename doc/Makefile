@@ -35,7 +35,7 @@ include ../config.mak
 
 root_docs = index rationale license hacking macros reference tutorial download \
 	    csharp-diff wprowadzenie lecture grokking documentation contact \
-	    examples macrouse
+	    examples macrouse news-archive
 
 docs = $(root_docs)
 
