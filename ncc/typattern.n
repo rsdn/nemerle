@@ -44,6 +44,7 @@ module Typattern {
     | R_any_except { lits : list <Literal>; }
     | R_literal { l : Literal; }
     | R_variant_option { ti : Tycon; range : Range; }
+    | R_enum { fld : IField; }
     | R_tuple { ranges : list <Range>; }
     | R_record { ranges : list <IField * Range>; }
     
@@ -59,6 +60,7 @@ module Typattern {
         R_record (List.Map (args, fun (n, p) { (n, range_of_pattern (p)) }))
       | P_cons (ti, pat) =>
         R_variant_option (ti, range_of_pattern (pat))
+      | P_enum (f, _) => R_enum (f)
       | P_literal (l) => R_literal (l)
       | P_has_type => R_none ()
     }
@@ -73,6 +75,8 @@ module Typattern {
       | R_any_except (lst) => "(anything except " + lst.ToString () + ")"
       | R_variant_option (ti, r) =>
         ti.FullName + " (" + string_of_range (r) + ")"
+      | R_enum (f) =>
+        f.Name
       | R_tuple (ranges) =>
         def concat (r, acc) {
           if (acc == "") string_of_range (r)
@@ -113,6 +117,8 @@ module Typattern {
       | R_any_except (lst) => "(anything except " + lst.ToString () + ")"
       | R_variant_option (ti, r) =>
         ti.FullName + " (" + user_string_of_range (r) + ")"
+      | R_enum (f) =>
+        f.Name
       | R_tuple (ranges) =>
         def concat (r, acc) {
           if (acc == "") user_string_of_range (r)
@@ -219,6 +225,29 @@ module Typattern {
             R_variant_option (ti1, sub (r1, r2))
           else
             cur_r
+
+        | (R_enum (f1), R_enum (f2)) =>
+          if (f1.Equals (f2)) {
+            did_something = true;
+            R_none ()
+          } else cur_r
+
+        | (R_omega, R_enum (f)) =>
+          def t = f.DeclaringType;
+          if (t.HasAttribute (InternalType.FlagsAttribute_tc)) {
+            did_something = true;
+            R_omega ()
+          } else {
+            def ranges =
+              List.FoldLeft (t.GetMembers (), [], fun (mem : IMember, acc) {
+                match (mem) {
+                  | fld : IField when fld.IsLiteral && fld.DeclaringType.SameAs (t) =>
+                    R_enum (fld) :: acc
+                  | _ => acc
+                }
+              });
+            sub (R_or (ranges), new_r)
+          }
           
         | (cur, R_variant_option (ti, _)) =>
           def make_range (ti : Tycon) : Range {
@@ -300,15 +329,19 @@ module Typattern {
             r
           } else cur_r
 
-        | (R_variant_option, R_tuple) => Util.ice ()
-        | (R_variant_option, R_literal) => Util.ice ()
-        | (R_tuple, R_literal) => Util.ice ()
-        | (R_record, R_literal) => Util.ice ()
-        | (R_record, R_tuple) => Util.ice ()
-        | (R_tuple, R_record) => Util.ice ()
-        | (R_literal, _) => Util.ice ()
-        | (_, R_any_except) => Util.ice ()
-        | (_, R_or) => Util.ice ()
+        | (R_variant_option, R_tuple) => assert (false)
+        | (R_variant_option, R_literal) => assert (false)
+        | (R_tuple, R_literal) => assert (false)
+        | (R_record, R_literal) => assert (false)
+        | (R_record, R_tuple) => assert (false)
+        | (R_tuple, R_record) => assert (false)
+        | (R_literal, _) => assert (false)
+        | (_, R_any_except) => assert (false)
+        | (_, R_or) => assert (false)
+        | (R_enum, _) =>
+          Message.debug ("enum - " + string_of_range (new_r));
+          assert (false)
+        | (_, R_enum) => assert (false)
       }
     }
 
@@ -355,6 +388,29 @@ module Typattern {
         Message.warning ("this matching is not exhaustive, example unmatched value:");
         Message.warning (user_string_of_range (r))
     }
+  }
+
+
+  public strip_enums (p : Pattern) : Pattern
+  {
+    | P_enum (_, l) => 
+      P_literal (p.loc, p.ty, l)
+
+    | P_as (pat, decl) =>
+      P_as (p.loc, p.ty, strip_enums (pat), decl)
+      
+    | P_tuple (a) =>
+      P_tuple (p.loc, p.ty, List.Map (a, strip_enums))
+      
+    | P_record (a) =>
+      P_record (p.loc, p.ty, List.Map (a, fun (f, p) { (f, strip_enums (p)) }))
+      
+    | P_cons (name, arg) =>
+      P_cons (p.loc, p.ty, name, strip_enums (arg))
+      
+    | P_has_type
+    | P_underscore
+    | P_literal => p
   }
 
   
@@ -535,28 +591,39 @@ module Typattern {
 
           if (System.Char.IsUpper (List.Last (n.idl) [0])) {
             def env = n.GetEnv (ctx.env);
-            def ti = env.GetType (n.idl, ctx.parent_type);
-            match (ti.GetTydecl ()) {
-              | TD_variant_option =>
-                def parent_tycon = Option.UnSome (ti.SuperClass ());
-                def parent_type = parent_tycon.GetMemType () /- parent_tycon.FreshSubst ();
-                def option_type = ti.GetMemType () /- ti.FreshSubst ();
-                if (option_type >:> parent_type) () else Util.ice ();
-                // we use parent_type for subtyping in case matched value
-                // has yet undefined type
-                if (parent_type >:> t)
-                  // but option_type inside subpattern
-                  P_cons (ti, walk (option_type, p))
-                else if (option_type >:> t) {
-                  Message.warning ($ "matching of $t with $option_type is redundant");
-                  Message.hint_once ("refer to fields of this variant option without matching");
-                  P_cons (ti, walk (option_type, p))
-                } else
-                  Message.fatal_error ($ "variant option $option_type "
-                                         "doesn't subtype $t")
+            match (env.LookupSymbol (n.idl)) {
+              // FIXME: if there is type and enum field under the same name,
+              // the type wins, but there should be an error message
+              | [Sym_type_member (fld : IField)] 
+                when fld.IsLiteral && 
+                     (fld.DeclaringType.GetTydecl () matches TD_enum) =>
+                unless (p matches PT.P_underscore)
+                  Message.error ("a pattern was supplied after enum field name");
+                P_enum (fld, NumericType.LiteralOfObject (fld.GetValue ()))
               | _ =>
-                Message.error ("`" + Util.qid_of_list (n.idl) + "' isn't variant case");
-                P_underscore ()
+                def ti = env.GetType (n.idl, ctx.parent_type);
+                match (ti.GetTydecl ()) {
+                  | TD_variant_option =>
+                    def parent_tycon = Option.UnSome (ti.SuperClass ());
+                    def parent_type = parent_tycon.GetMemType () /- parent_tycon.FreshSubst ();
+                    def option_type = ti.GetMemType () /- ti.FreshSubst ();
+                    if (option_type >:> parent_type) () else Util.ice ();
+                    // we use parent_type for subtyping in case matched value
+                    // has yet undefined type
+                    if (parent_type >:> t)
+                      // but option_type inside subpattern
+                      P_cons (ti, walk (option_type, p))
+                    else if (option_type >:> t) {
+                      Message.warning ($ "matching of $t with $option_type is redundant");
+                      Message.hint_once ("refer to fields of this variant option without matching");
+                      P_cons (ti, walk (option_type, p))
+                    } else
+                      Message.fatal_error ($ "variant option $option_type "
+                                             "doesn't subtype $t")
+                  | _ =>
+                    Message.error ("`" + Util.qid_of_list (n.idl) + "' isn't variant case");
+                    P_underscore ()
+                }
             }
           } else
             match (p) {
