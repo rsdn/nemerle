@@ -683,6 +683,7 @@
      \begin{tabular}[t]{c}\@author
      \end{tabular}\par}
     \vskip 1.5em               % Vertical space after author.
+    \the\hack
    \end{center}}
  \dimen0=\ht\@acmtitlebox
  \advance\dimen0 by -12.75pc\relax % Increased space for title box -- KBT
@@ -1381,6 +1382,8 @@
 \twocolumn             % Double column.
 %\flushbottom           % Even bottom -- alas, does not balance columns at end of document
 \pagestyle{plain}
+
+\newtoks\hack
 
 % Need Copyright Year and Copyright Data to be user definable (in .tex file).
 % Gerry Nov. 30th. 1999
