@@ -60,17 +60,22 @@ elseif exists("b:current_syntax")
   finish
 endif
 
-" in fact char ain't keyword, nor option and list are... 
 syn keyword nemerleType int bool string void option list char float object
 
-syn keyword nemerleKeyword abstract const extern internal new private protected sealed volatile
-syn keyword nemerleKeyword class enum extends finally in null out public throw ref struct
-syn keyword nemerleKeyword variant interface implements namespace where type static
-syn keyword nemerleKeyword in fun and tymatch with try void base if then else variant
-syn keyword nemerleKeyword match as mutable def module when for while array
-syn keyword nemerleKeyword macro unless using override catch
+syn keyword nemerleModifier abstract extern internal new private protected
+syn keyword nemerleModifier public sealed virtual static override
 
-syn keyword nemerleConst null true false this
+syn keyword nemerleTopDecl class interface syntax module namespace type implements
+syn keyword nemerleTopDecl extends struct using macro
+
+syn keyword nemerleKeyword and as catch def finally fun match out params ref throw
+syn keyword nemerleKeyword try typeof variant when where array mutable
+
+" macros
+syn keyword nemerleKeyword if else while for unless lock do repeat until
+syn keyword nemerleKeyword regexp foreach assert ignore
+
+syn keyword nemerleConst null true false this base
 
 syn match	nemerleSpec	"[()\]\[]\|\*\["
 syn match	nemerleNumber "0[xX][0-9a-fA-F]\+"
@@ -92,7 +97,7 @@ syn cluster nemerleCommentGroup	contains=nemerleTodo
 syn match nemerleComment	"//.*$"	contains=@nemerleCommentGroup
 syn region nemerleComment start="/\*" end="\*/" contains=@nemerleCommentGroup
 
-syn match	nemerleModPrefix	"[A-Z_][a-zA-Z_0-9]*\."
+syn match	nemerleModPrefix	"[A-Z][a-zA-Z_0-9]*\."
 
 syn match	nemerleSpecial	display contained "\\\(x\x\x\|.\|$\)"
 syn region	nemerleString	start=+L\="+ skip=+\\\\\|\\"+ end=+"+ contains=nemerleSpecial
@@ -116,10 +121,11 @@ if version >= 508 || !exists("did_nemerle_syntax_inits")
   HiLink nemerleModPrefix	Include
   HiLink nemerleComment	Comment
   HiLink nemerleKeyword	Statement
+  HiLink nemerleTopDecl	Statement
   HiLink nemerleString	String
   HiLink nemerleChar	Character
-  HiLink nemerleType	Type
-  HiLink nemerleMacro	Macro
+  HiLink nemerleModifier	Type
+  HiLink nemerleType		Type
   HiLink nemerleSpec	Special
   HiLink nemerleTyVar	Special
   HiLink nemerleNumber	Number
