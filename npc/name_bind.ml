@@ -25,12 +25,16 @@ let bind_values decls =
   in
   let define_value ctx v = define_decl ctx v.val_name (D_value v) in
   
-  let need_val_from ctx f2_id =
+  let rec need_val_from ctx f2_id =
     let f1 = Ty_info.lookup_function ctx.c_fun_id in
     let f2 = Ty_info.lookup_function f2_id in
     if List.memq f2 f1.fun_needed_closures then ()
     else f1.fun_needed_closures <- f2 :: f1.fun_needed_closures;
-    f2.fun_has_closure <- true
+    f2.fun_has_closure <- true;
+    
+    if f1.fun_defined_in_fun <> f2_id then
+      need_val_from {ctx with c_fun_id = f1.fun_defined_in_fun} f2_id
+    else ()
   in
       
   let lookup ctx n =
