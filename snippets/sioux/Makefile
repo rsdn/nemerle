@@ -30,14 +30,16 @@
 # Sioux Makefile
 #
 
-include ~/nemerle/trunk/config.mak
+TOP_LEVEL = ../..
+
+include $(TOP_LEVEL)/config.mak
 
 ######################################################
 #VARIABLES
 ######################################################
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
-NCC_DIR = ../../ncc/out.stage3
+NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
 NCC = $(NCC_DIR)/ncc.exe -q
 APP_DIR = webapps
 
