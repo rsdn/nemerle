@@ -43,6 +43,7 @@ exclude = []
 users = { }
 reloc = { }
 max_join_delta = 3 * 60
+list_format = False
 
 date_rx = re.compile(r"^(\d+-\d+-\d+T\d+:\d+:\d+)")
 
@@ -84,29 +85,39 @@ def convert_user(u):
   else:
     return "%s <%s@%s>" % (u, u, default_domain)
 
-def wrap_text(str, pref, width):
-  ret = ""
-  line = ""
+def wrap_text_line(str, pref, width):
+  ret = u""
+  line = u""
   first_line = True
   for word in str.split():
-    if line == "":
+    if line == u"":
       line = word
     else:
-      if len(line + " " + word) > width:
+      if len(line + u" " + word) > width:
         if first_line:
-          ret += line + "\n"
+          ret += line + u"\n"
           first_line = False
           line = word
         else:
-          ret += pref + line + "\n"
+          ret += pref + line + u"\n"
           line = word
       else:
-        line += " " + word
+        line += u" " + word
   if first_line:
-    ret += line + "\n"
+    ret += line + u"\n"
   else:
-    ret += pref + line + "\n"
+    ret += pref + line + u"\n"
   return ret
+
+def wrap_text(str, pref, width):
+  if not list_format:
+    return wrap_text_line(str,pref,width)
+  else:
+    items = re.split(r"\-\s+",str)
+    ret = wrap_text_line(items[0],pref,width)
+    for item in items[1:]:
+      ret += pref + u"- " + wrap_text_line(item,pref+"  ",width)
+    return ret
 
 class Entry:
   def __init__(self, tm, rev, author, msg):
@@ -125,11 +136,11 @@ class Entry:
   def dump(self, out):
     if self.rev != self.beg_rev:
       out.write("%s [r%s-%s]  %s\n\n" % \
-                          (time.strftime("%Y-%m-%d %H:%M", time.gmtime(self.beg_tm)), \
+                          (time.strftime("%Y-%m-%d %H:%M +0000", time.localtime(self.beg_tm)), \
                            self.rev, self.beg_rev, convert_user(self.author)))
     else:
       out.write("%s [r%s]  %s\n\n" % \
-                          (time.strftime("%Y-%m-%d %H:%M", time.gmtime(self.beg_tm)), \
+                          (time.strftime("%Y-%m-%d %H:%M +0000", time.localtime(self.beg_tm)), \
                            self.rev, convert_user(self.author)))
     out.write(self.msg)
   
@@ -200,6 +211,8 @@ Options:
   -o, --output         set output file (defaults to 'ChangeLog')
   -d, --domain=DOMAIN  set default domain for logins not listed in users file
   -u, --users=FILE     read logins from specified file
+  -F, --list-format    format commit logs with enumerated change list (items
+                       prefixed by '- ')
   -r, --relocate=X=Y   before doing any other operations on paths, replace
                        X with Y (useful for directory moves)
   -D, --delta=SECS     when log entries differ by less then SECS seconds and
@@ -228,15 +241,16 @@ def utf_open(name, mode):
 
 def process_opts():
   try:
-    opts, args = getopt.gnu_getopt(sys.argv[1:], "o:u:p:x:d:r:d:h", 
+    opts, args = getopt.gnu_getopt(sys.argv[1:], "o:u:p:x:d:r:d:D:Fh", 
                                    ["users=", "prefix=", "domain=", "delta=",
-                                    "exclude=", "help", "output=", "relocate="])
+                                    "exclude=", "help", "output=", "relocate=",
+                                    "list-format"])
   except getopt.GetoptError:
     usage()
     sys.exit(2)
   fin = sys.stdin
   fout = None
-  global kill_prefix_rx, exclude, users, default_domain, reloc, max_join_delta
+  global kill_prefix_rx, exclude, users, default_domain, reloc, max_join_delta, list_format
   for o, a in opts:
     if o in ("--prefix", "-p"):
       kill_prefix_rx = re.compile("^" + a)
@@ -261,6 +275,8 @@ def process_opts():
       reloc[src] = target
     elif o in ("--delta", "-D"):
       max_join_delta = int(a)
+    elif o in ("--list-format", "-F"):
+      list_format = True
     else:
       usage()
       sys.exit(2)
