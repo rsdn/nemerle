@@ -1069,6 +1069,7 @@ public module Tyexpr {
     }
   }
 
+
   convert_setter_property (_ctx : CTX, expr : Expr, val : Expr) : Expr * Type
   {
     def make_setter (obj, prop : IProperty, args) {
@@ -1100,6 +1101,157 @@ public module Tyexpr {
 
     (res, T_void ())
   }
+  
+
+  ty_call (ctx : CTX, in_tail_pos : bool, fnc : PT.Expr, parms : list <PT.Expr>) : Expr
+  {
+    def refout (name, expr) {
+      match (expr) {
+        | PT.E_parm_by_ref (ex) =>
+          Parm (ParmKind.Ref, ty_expr (ctx, ex), name)
+        | PT.E_parm_out (ex) =>
+          Parm (ParmKind.Out, ty_expr (ctx, ex), name)
+        | ex =>
+          Parm (ParmKind.Normal, ty_expr (ctx, ex), name)
+      }
+    };
+    def fp (p : PT.Expr) {
+      | <[ $(name : name) = $e ]> => refout (name.GetHead (), e)
+      | e => refout ("", e)
+    };
+
+    def parms = List.Map (parms, fp);
+    def fncs = make_value_reference (ctx, fnc, fallback = true);
+    def ex = resolve_overloaded_call (ctx, in_tail_pos, fncs, parms);
+    match (ex) {
+      | E_call (E_property_ref (_, prop), _) when is_indexer_property (prop) =>
+        Message.error ("attempt to call an indexer property `" + 
+                       prop.Name + "'");
+      | _ => ()
+    };
+
+    ex
+  }
+  
+
+  is_lvalue (ctx : CTX, e : Expr, need_ref : bool) : bool
+  {
+    match (e) {
+      | E_local_ref (d) => d.is_ref
+      | E_static_ref (m) =>
+        match (m.GetKind ()) {
+          | MK_field (f) =>
+            f.IsMutable () || (ctx.current_fun.name == ".cctor" && 
+                               f.DeclaringType.SameAs (ctx.parent_type))
+          | MK_property (p) => p.IsMutable ()
+          | _ => false
+        }
+      | E_static_property_ref (p) when !need_ref => p.IsMutable ()
+      | E_field_ref (E_local_ref ({kind = D_closurised_this_ptr}), _)
+        when ctx.in_ctor => true
+      | E_field_ref (_, mem) => mem.IsMutable ()
+      | E_property_ref (_, p) when !need_ref => p.IsMutable ()
+      | E_call (E_property_ref (_, p), _) when !need_ref => p.IsMutable ()
+      | E_array_indexer => true
+      | _ => false
+    }
+  }
+  
+
+  ty_mkarray (ctx : CTX, lst : list <PT.Expr>) : Expr * Type
+  {
+    def (typed_initializers, array_type) =
+      match (lst) {
+        | [] => Util.ice ()
+        | head :: _ =>
+          def typed_head = ty_expr (ctx, head);
+          def array_type = type_of (typed_head);
+          def type_array_initializers (initializers) {
+            match (initializers) {
+              | [] => []
+              | initializer :: rest =>
+                def typed_initializer = ty_expr (ctx, initializer);
+                expect_type ("array initializer", typed_initializer, array_type);
+                typed_initializer :: type_array_initializers (rest)
+            }
+          };
+          (E_mkarray (type_array_initializers (lst)), T_array (array_type))
+      };
+    typed_initializers.expr_ty = array_type;
+    typed_initializers.loc = Location_stack.top ();
+    def fresh_name = Util.tmpname ("array_initializer");
+    def decl = ctx.DefineLocal (fresh_name, 1, D_local_value (), array_type);
+    decl.is_ref = false;
+    def array_as_let = E_let (decl, typed_initializers, E_local_ref (decl));
+    (array_as_let, array_type)
+  }
+
+
+  ty_indexer (ctx : CTX, obj : PT.Expr, args : list <PT.Expr>) : Expr * Type
+  {
+    def typed_obj = ty_expr (ctx, obj);
+    def typed_args = List.Map (args, fun (x) { ty_expr (ctx, x) });
+
+    def problem () {
+      Message.fatal_error (sprintf ("indexer applied to non-indexer type %s",
+                                    typed_obj.expr_ty.as_string ()))
+    };
+
+    match (Tyutil.top_expand (typed_obj.expr_ty)) {
+      | T_array (indexer_over_type) =>
+        /* indexers over arrays */
+        def typed_index =
+        match (typed_args) {
+          | [index] => index
+          | [] =>
+            Message.fatal_error ("empty indexer applied to indexer type")
+          // FIXME: allow for multi-dimensional indexers
+          | _ => Message.fatal_error ("multi-dimensional indexers not"
+                                      " supported yet")
+        };
+        expect_type ("indexer type", typed_index,
+                     InternalType.Int32);
+        (E_array_indexer (indexer_over_type, typed_obj, [typed_index]),
+         indexer_over_type)
+
+      | T_app (tc, _) =>
+        /* user-defined indexers */
+        match (tc.GetTyconKind ()) {
+          | TK_ExternalNetType (st) =>
+            def ht = Hashtable ();
+            def add_name (el : System.Reflection.MemberInfo) {
+              ht.Set (el.Name, null)
+            };
+            NArray.Iter (st.GetDefaultMembers (), add_name);
+            def check_for_indexer_property (prop_name, _, acc) {
+              match (acc) {
+                | Some => acc
+                | None =>
+                  def lst = lookup_member (ctx, Location_stack.top (), typed_obj, 
+                                           prop_name, 
+                                           error_when_not_found = false);
+                  match (lst) {
+                    | (E_property_ref :: _) as lst =>
+                      def args' = List.Map (typed_args, fun (x) {
+                        Parm (x)
+                      });
+                      def ex = resolve_overloaded_call (ctx, false, lst,
+                                                        args');
+                      Some ((ex, type_of (ex)))
+                    | _ => None ()
+                  }
+              }
+            };
+            match (ht.Fold (None (), check_for_indexer_property)) {
+              | Some (r) => r
+              | None => problem ()
+            }
+          | _ => problem ()
+        }
+      | _ => problem ()
+    }
+  }
+  
   
   ty_expr_with_no_properties_conversion (ctx : CTX, expr : PT.Expr) : Expr
   {
@@ -1145,31 +1297,7 @@ public module Tyexpr {
         | PT.E_mkarray ([]) => restart (<[ array (0) ]>)
 
         | PT.E_mkarray (lst) =>
-          def (typed_initializers, array_type) =
-          match (lst) {
-            | [] => Util.ice ()
-            | head :: _ =>
-              def typed_head = ty_expr (ctx, head);
-              def array_type = type_of (typed_head);
-              def type_array_initializers (initializers) {
-                match (initializers) {
-                  | [] => []
-                  | initializer :: rest =>
-                    def typed_initializer = ty_expr (ctx, initializer);
-                    expect_type ("array initializer", typed_initializer, array_type);
-                    typed_initializer :: type_array_initializers (rest)
-                }
-              };
-              (E_mkarray (type_array_initializers (lst)), T_array (array_type))
-          };
-          typed_initializers.expr_ty = array_type;
-          typed_initializers.loc = expr.loc;
-          def fresh_name = Util.tmpname ("array_initializer");
-          def decl = ctx.DefineLocal (fresh_name, 1, D_local_value (), array_type);
-          decl.is_ref = false;
-          def array_as_let = E_let (decl, typed_initializers, E_local_ref (decl));
-          array_as_let.loc = expr.loc;
-          (array_as_let, array_type)
+          ty_mkarray (ctx, lst)
 
         | PT.E_empty_array (sizes) =>
           match (sizes) {
@@ -1188,67 +1316,7 @@ public module Tyexpr {
 
         // FIXME: allow for multi-dimensional indexers
         | PT.E_indexer (obj, args) =>
-          def typed_obj = ty_expr (ctx, obj);
-          def typed_args = List.Map (args, fun (x) { ty_expr (ctx, x) });
-
-          def problem () {
-            Message.fatal_error (sprintf ("indexer applied to non-indexer type %s",
-                                          typed_obj.expr_ty.as_string ()))
-          };
-
-          match (Tyutil.top_expand (typed_obj.expr_ty)) {
-            | T_array (indexer_over_type) =>
-              /* indexers over arrays */
-              def typed_index =
-              match (typed_args) {
-                | [index] => index
-                | [] =>
-                  Message.fatal_error ("empty indexer applied to indexer type")
-                // FIXME: allow for multi-dimensional indexers
-                | _ => Message.fatal_error ("multi-dimensional indexers not"
-                                            " supported yet")
-              };
-              expect_type ("indexer type", typed_index,
-                           InternalType.Int32);
-              (E_array_indexer (indexer_over_type, typed_obj, [typed_index]),
-               indexer_over_type)
-
-            | T_app (tc, _) =>
-              /* user-defined indexers */
-              match (tc.GetTyconKind ()) {
-                | TK_ExternalNetType (st) =>
-                  def ht = Hashtable ();
-                  def add_name (el : System.Reflection.MemberInfo) {
-                    ht.Set (el.Name, null)
-                  };
-                  NArray.Iter (st.GetDefaultMembers (), add_name);
-                  def check_for_indexer_property (prop_name, _, acc) {
-                    match (acc) {
-                      | Some => acc
-                      | None =>
-                        def lst = lookup_member (ctx, expr.loc, typed_obj, 
-                                                 prop_name, 
-                                                 error_when_not_found = false);
-                        match (lst) {
-                          | (E_property_ref :: _) as lst =>
-                            def args' = List.Map (typed_args, fun (x) {
-                              Parm (x)
-                            });
-                            def ex = resolve_overloaded_call (ctx, false, lst,
-                                                              args');
-                            Some ((ex, type_of (ex)))
-                          | _ => None ()
-                        }
-                    }
-                  };
-                  match (ht.Fold (None (), check_for_indexer_property)) {
-                    | Some (r) => r
-                    | None => problem ()
-                  }
-                | _ => problem ()
-              }
-            | _ => problem ()
-          }
+          ty_indexer (ctx, obj, args)
 
         | (PT.E_try_with) as x =>
           def b = ty_expr (ctx, x.body);
@@ -1320,62 +1388,16 @@ public module Tyexpr {
           Message.fatal_error ("$ operator outside quotation <[ ... ]> context")
 
         | PT.E_call (fnc, parms) =>
-          def refout (name, expr) {
-            match (expr) {
-              | PT.E_parm_by_ref (ex) =>
-                Parm (ParmKind.Ref, ty_expr (ctx, ex), name)
-              | PT.E_parm_out (ex) =>
-                Parm (ParmKind.Out, ty_expr (ctx, ex), name)
-              | ex =>
-                Parm (ParmKind.Normal, ty_expr (ctx, ex), name)
-            }
-          };
-          def fp (p : PT.Expr) {
-            | <[ $(name : name) = $e ]> => refout (name.GetHead (), e)
-            | e => refout ("", e)
-          };
-
-          def parms = List.Map (parms, fp);
-          def fncs = make_value_reference (ctx, fnc, fallback = true);
-          def ex = resolve_overloaded_call (ctx, orig_ctx.in_tail_position,
-                                            fncs, parms);
-          match (ex) {
-            | E_call (E_property_ref (_, prop), _) when is_indexer_property (prop) =>
-              Message.error ("attempt to call an indexer property `" + 
-                             prop.Name + "'");
-            | _ => ()
-          };
-
+          def ex = ty_call (ctx, orig_ctx.in_tail_position, fnc, parms);
           (ex, type_of (ex))
 
         | PT.E_assign (e1, e2) =>
           def e1 = ty_expr_with_no_properties_conversion (ctx, e1);
           def e2 = ty_expr (ctx, e2);
           expect_type ("assigned value", e2, type_of (e1));
-          def is_lval =
-            match (e1) {
-              | E_local_ref (d) => d.is_ref
-              | E_static_ref (m) =>
-                match (m.GetKind ()) {
-                  | MK_field (f) =>
-                    f.IsMutable () || (ctx.current_fun.name == ".cctor" && 
-                                       f.DeclaringType.SameAs (ctx.parent_type))
-                  | MK_property (p) => p.IsMutable ()
-                  | _ => false
-                }
-              | E_static_property_ref (p) => p.IsMutable ()
-              | E_field_ref (E_local_ref ({kind = D_closurised_this_ptr}), _)
-                when ctx.in_ctor => true
-              | E_field_ref (_, mem) => mem.IsMutable ()
-              | E_property_ref (_, p) => p.IsMutable ()
-              | E_call (E_property_ref (_, p), _) => p.IsMutable ()
-              | E_array_indexer => true
-              | _ => false
-            };
-          unless (is_lval)
+          unless (is_lvalue (ctx, e1, need_ref = false))
             Message.error ("assignment to " + describe_expression (e1) +
                            " (which is read-only)");
-            
           convert_setter_property (ctx, e1, e2)
 
         | PT.E_raise (e) =>
