@@ -33,7 +33,7 @@ lib_src = ../lib/aliases.n ../lib/core.n ../lib/option.n ../lib/list.n \
 	  ../lib/getopt.n
 
 src = \
-	env.n \
+	globalenv.n \
 	localvalue.n \
 	typingcontext.n \
 	macros.n \
