@@ -75,7 +75,7 @@ changelog:
 	echo "Loggin from $$last."; \
 	svn log -r HEAD:$$last -v --xml > changelog.xml
 	$(svn2log) -o ChangeLog.new -p '$(nemroot)' -r npc/ncc=ncc
-	cat ChangeLog > ChangeLog.old 2>/dev/null
+	cat ChangeLog > ChangeLog.old 2>/dev/null || :
 	cat ChangeLog.new ChangeLog.old > ChangeLog
 	rm -f ChangeLog.old ChangeLog.new changelog.xml
 
