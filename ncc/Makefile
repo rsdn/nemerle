@@ -53,7 +53,8 @@ n_src = \
 	xmldump.n \
 	typattern.n \
 	external.n \
-	cgopt.n 
+	cgopt.n \
+	macroregistry.n
 #	lexer.n
 
 
