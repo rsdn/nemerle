@@ -177,7 +177,6 @@ out.$(STAGE)/Nemerle.Compiler.$(STAGE).dll: \
 out.stage1/stdmacros.dll: $(COMPILER) out.stage1/Nemerle.stage1.dll \
 		out.stage1/Nemerle.Compiler.stage1.dll $(STDMACROS_DLL_SRC)
 	$(RUN_COMPILER) -target-library -out:$@ \
-		-r:System.dll \
 		-reference:out.stage1/Nemerle.stage1.dll \
 		-reference:out.stage1/Nemerle.Compiler.stage1.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
