@@ -33,13 +33,11 @@ include ../config.mak
 # VARIABLES
 ############################################################
 
-course_docs = index
-
 root_docs = index rationale license hacking macros reference tutorial download \
 	    csharp-diff wprowadzenie lecture grokking documentation contact \
 	    examples macrouse
 
-docs = $(root_docs) $(addprefix course/, $(course_docs))
+docs = $(root_docs)
 
 tex_docs = metaprogramming intro
 
@@ -89,11 +87,6 @@ grokking.html:: src/nem-examples/grokking.n dumper
 dumper:
 	$(MAKE) -C ../misc/htmldumper all
 
-course/%.html: course-src/%.xml mainStyle.xsl
-	$(XSLT_) $@
-	$(Q)$(XSLT) -o $@ mainStyle.xsl $<
-	$(Q)perl styles/include-sources $@
-
 %.docb: src/%.xml docb.xsl
 	$(XSLT_) $@
 	$(Q)$(XSLT) -o - docb.xsl $< | xmllint --format - > $@
@@ -135,7 +128,7 @@ course/%.html: course-src/%.xml mainStyle.xsl
 v: verify-html
 
 verify-html:
-	set -xe; for f in *.html course/*.html ; do xmllint --noout --valid $$f ; done
+	set -xe; for f in *.html ; do xmllint --noout --valid $$f ; done
 
 verify-docb:
 	set -xe; for f in *.docb ; do xmllint --noout --valid $$f ; done
@@ -151,7 +144,6 @@ uninstall:
 
 clean:
 	rm -f *.xsl $(html) *.ps *.pdf *.aux *.log *.xml *.tex *.docb
-	rm -f course/*.html
 	$(MAKE) -C tex clean
 
 .PHONY: www publish
@@ -161,12 +153,10 @@ www: nemerle-web.tar.gz
 nemerle-web.tar.gz: $(normal_docs) $(wildcard styles/*.js styles/*.css styles/*.png styles/*.jpg) poll1.html
 	$(MAKE) verify-html
 	rm -rf www
-	mkdir -p www/{styles,course/styles,images}
+	mkdir -p www/{styles,images}
 	cp styles/*.{css,png,js} www/styles/
-	cp styles/*.{css,png,js} www/course/styles/
 	cp images/* www/images/
 	cp *.{html,ps,pdf} www/
-	cp course/*.html www/course/
 	for f in www/*.pdf www/*.ps ; do gzip <$$f > $$f.gz ; done
 	tar -C www -zcf $@ .
 	rm -rf www
