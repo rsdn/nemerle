@@ -28,10 +28,27 @@
 
 include ../config.mak
 
-n_src = option.n list.n util.n parsetree.n tree.n scan_globals.n treeutil.n \
-	bind_types.n tyvars.n tyinfo.n tyutil.n check_constraints.n \
-	ast.n tyexpr.n typedtree.n extensions.n cgtree.n cgexpr.n \
-	cgflat.n env.n lib/core.n
+lib_src = lib/core.n option.n list.n tree.n
+
+n_src = \
+	$(lib_src) \
+	ast.n \
+	parsetree.n \
+	typedtree.n \
+	util.n \
+	csglue.n \
+	env.n \
+	treeutil.n \
+	scan_globals.n \
+	tyvars.n \
+	tyinfo.n \
+	tyutil.n \
+	extensions.n \
+	tyexpr.n \
+	cgtree.n \
+	cgexpr.n \
+	cgflat.n 
+
 cs_src = lexer.cs main.cs parser.cs
 all_src = $(n_src) $(cs_src)
 all_cs = out.cs $(cs_src)
@@ -46,6 +63,7 @@ all: ncc.exe
 # generate ncc3.exe binary to be put in release for bootstrap.
 # Finally run testsuite.
 boot: ncc.exe
+	rm -f out.cs
 	$(NET_ENGINE) $(NEFLAGS) ncc.exe $(n_src)
 	$(COMPILE) -o ncc2.exe $(all_cs)
 	mv out.cs out2.cs
@@ -62,6 +80,7 @@ sync:
 ncc.exe: $(all_src)
 	$(NET_ENGINE) $(NEFLAGS) ../boot/ncc.exe $(n_src)
 	$(COMPILE) -o $@ $(all_cs)
+	mv -f out.cs out1.cs
 
 ../config.mak:
 	$(MAKE) -C .. config.mak
