@@ -1258,6 +1258,23 @@ namespace Nemerle.Compiler
       expr.flags %&& CgExprFlags.Throws
     }
 
+    private wish_address (expr : CG_expr) : bool
+    {
+      expr.flags %&& CgExprFlags.WishAddress || 
+      expr.flags %&& CgExprFlags.NeedAddress
+    }
+
+    /** Emit volatile prefix if needed. */
+    private maybe_volatile (expr : CG_expr) : void
+    {
+      match (expr) {
+       | CE_volatile_global_ref
+       | CE_volatile_field_ref =>
+         _ilg.Emit (OpCodes.Volatile)
+       | _ => ()
+      }
+    }
+
     /**
      * Emits an expression.
      */
@@ -1480,9 +1497,7 @@ namespace Nemerle.Compiler
             /* unboxing returns a pointer to a value */
             _ilg.Emit (OpCodes.Unbox, cast_to_type);
 
-            when ((expr matches CE_volatile_field_ref) ||
-                  (expr matches CE_volatile_global_ref))
-              _ilg.Emit (OpCodes.Volatile);
+            maybe_volatile (expr);
 
             emit_ldind_for_value_type (cast_to_type)
           }
@@ -1505,47 +1520,35 @@ namespace Nemerle.Compiler
 
         /* load the value of a local variable or a method parameter */
         | CE_ref (decl) =>
-          emit_ce_ref (decl, get_address_for_value_types = false)
+          emit_ce_ref (decl, 
+                       get_address_for_value_types = wish_address (expr))
 
         /* load the value of a field */
-        | CE_field_ref (base_object, field) =>
-          emit (base_object);
-          _ilg.Emit (OpCodes.Ldfld, field);
-
-        /* load the value of a volatile field */
+        | CE_field_ref (base_object, field) 
         | CE_volatile_field_ref (base_object, field) =>
           emit (base_object);
-          _ilg.Emit (OpCodes.Volatile);
-          _ilg.Emit (OpCodes.Ldfld, field);
+          maybe_volatile (expr);
+          if (wish_address (expr))
+            _ilg.Emit (OpCodes.Ldflda, field);
+          else
+            _ilg.Emit (OpCodes.Ldfld, field);
 
         /* load the value of a static field */
+        | CE_volatile_global_ref (mi) when member_is_field (mi)
         | CE_global_ref (mi) when member_is_field (mi) =>
           def field_info = (mi :> FieldInfo);
 
           assert (field_info.IsStatic, "CE_global_ref to a non-static field");
 
-          if (field_info.IsLiteral) {
+          when (field_info.IsLiteral)
             // should not happen
             Message.warning ("loading literal as field `" + field_info.ToString () + "'");
-          }
-          else {
+
+          maybe_volatile (expr);
+          if (wish_address (expr))
+            _ilg.Emit (OpCodes.Ldsflda, field_info);
+          else
             _ilg.Emit (OpCodes.Ldsfld, field_info);
-          }
-
-        /* load the value of a volatile static field */
-        | CE_volatile_global_ref (mi) when member_is_field (mi) =>
-          def field_info = (mi :> FieldInfo);
-
-          assert (field_info.IsStatic, "CE_volatile_global_ref to a non-static field");
-
-          if (field_info.IsLiteral) {
-            // should not happen
-            Message.warning ("loading literal as field `" + field_info.ToString () + "'")
-          }
-          else {
-            _ilg.Emit (OpCodes.Volatile);
-            _ilg.Emit (OpCodes.Ldsfld, field_info)
-          }
 
         /* load an array element */
         | CE_array_indexer (array_obj, [index]) =>
@@ -1554,17 +1557,28 @@ namespace Nemerle.Compiler
           def element_type = type_of (array_obj).GetElementType ();
           assert (element_type != null, "non-array in CE_array_indexer");
 
-          emit_array_load_opcode (element_type);
+          if (wish_address (expr))
+            _ilg.Emit (OpCodes.Ldelema, element_type)
+          else
+            emit_array_load_opcode (element_type);
           
 
         | CE_array_indexer (array_obj, indexes) =>
           emit (array_obj);
           List.Iter (indexes, emit);
-          def method = array_get_method (array_obj);
+          def method =
+            if (wish_address (expr)) array_addr_method (array_obj)
+            else array_get_method (array_obj);
           emit_method_call (expr, true, method);
 
 
         /* -- ASSIGNMENTS -------------------------------------------------- */
+
+        // FIXME? move it a bit down and see no redundant warning?
+        /* special case these assignments for performance */
+        | CE_assign (CE_ref (decl), CE_init_obj (t)) =>
+          emit_ce_ref (decl, get_address_for_value_types = true);
+          _ilg.Emit (OpCodes.Initobj, t);
 
         /* assignment to a local variable */
         | CE_assign (CE_ref (local_var), val) =>
@@ -1592,37 +1606,20 @@ namespace Nemerle.Compiler
             _ilg.Emit (OpCodes.Stind_Ref);
 
 
-        /* assignment to a field of a value type based on a local declaration */
-        | CE_assign (CE_field_ref (CE_ref (decl), field), val) when field.DeclaringType.IsValueType =>
-          emit_ce_ref (decl, get_address_for_value_types = true);
-          emit (val);
-          _ilg.Emit (OpCodes.Stfld, field);
-
-
         /* assignment to a field */
+        | CE_assign (CE_volatile_field_ref (base_object, field), val)
         | CE_assign (CE_field_ref (base_object, field), val) =>
           emit (base_object);
           emit (val);
-          _ilg.Emit (OpCodes.Stfld, field);
-
-
-        /* assignment to a volatile field */
-        | CE_assign (CE_volatile_field_ref (base_object, field), val) =>
-          emit (base_object);
-          emit (val);
-          _ilg.Emit (OpCodes.Volatile);
+          maybe_volatile ((expr :> CE_assign).target);
           _ilg.Emit (OpCodes.Stfld, field);
 
 
         /* assignment to a static field */
+        | CE_assign (CE_volatile_global_ref (mi), val) when member_is_field (mi)
         | CE_assign (CE_global_ref (mi), val) when member_is_field (mi) =>
           emit (val);
-          _ilg.Emit (OpCodes.Stsfld, (mi :> FieldInfo));
-
-        /* assignment to a static volatile field */
-        | CE_assign (CE_volatile_global_ref (mi), val) when member_is_field (mi) =>
-          emit (val);
-          _ilg.Emit (OpCodes.Volatile);
+          maybe_volatile ((expr :> CE_assign).target);
           _ilg.Emit (OpCodes.Stsfld, (mi :> FieldInfo));
 
 
@@ -1962,11 +1959,6 @@ namespace Nemerle.Compiler
           _ilg.Emit (OpCodes.Ldloc, local_slot);
 
 
-        /* special case these assignments for performance */
-        | CE_assign (CE_ref (decl), CE_init_obj (t)) =>
-          emit_ce_ref (decl, get_address_for_value_types = true);
-          _ilg.Emit (OpCodes.Initobj, t);
-
 
         /* creates a new array, given a list of initializers */
         | CE_mkarray (element_type, initializers, [size]) =>
@@ -2066,47 +2058,26 @@ namespace Nemerle.Compiler
         | CE_addr (CE_indirect (expr)) =>
           emit (expr)
 
-        | CE_indirect (CE_addr (expr)) =>
+        | CE_addr (expr) =>
+          assert (wish_address (expr));
+          match (expr) {
+            | CE_ref
+            | CE_field_ref
+            | CE_volatile_field_ref
+            | CE_volatile_global_ref
+            | CE_global_ref
+            | CE_array_indexer => ()
+            | _ => 
+              // should not happen
+              Message.error (expr.loc, 
+                             "failed to take address of this expression: " + 
+                             pretty_print (expr))
+          }
+          // if wish_address(expr), then emit should handle this
           emit (expr)
 
-        | CE_addr (CE_ref ({ local_slot = Some (local_slot) })) =>
-          _ilg.Emit (OpCodes.Ldloca, local_slot);
-
-        | CE_addr (CE_ref ({ parm_index = Some (parm_index) })) =>
-          emit_ldarga (parm_index);
-
-        | CE_addr (CE_global_ref (mi)) =>
-          def field_info = (mi :> FieldInfo);
-          assert (field_info.IsStatic, "CE_addr to a non-static field");
-          _ilg.Emit (OpCodes.Ldsflda, field_info);
-
-        | CE_addr (CE_volatile_global_ref (mi)) =>
-          def field_info = (mi :> FieldInfo);
-          assert (field_info.IsStatic, "CE_addr to a non-static field");
-          _ilg.Emit (OpCodes.Volatile);
-          _ilg.Emit (OpCodes.Ldsflda, field_info);
-
-        | CE_addr (CE_field_ref (obj, field_info)) =>
-          emit (obj);
-          _ilg.Emit (OpCodes.Ldflda, field_info);
-
-        | CE_addr (CE_volatile_field_ref (obj, field_info)) =>
-          emit (obj);
-          _ilg.Emit (OpCodes.Volatile);
-          _ilg.Emit (OpCodes.Ldflda, field_info);
-
-        | CE_addr (CE_array_indexer (array_obj, [index])) =>
-          emit (array_obj);
-          emit (index);
-          def element_type = type_of (array_obj).GetElementType ();
-          assert (element_type != null, "non-array in CE_addr(array_indexer)");
-          _ilg.Emit (OpCodes.Ldelema, element_type);
-
-        | CE_addr (CE_array_indexer (array_obj, indexes)) =>
-          emit (array_obj);
-          List.Iter (indexes, emit);
-          def method = array_addr_method (array_obj);
-          emit_method_call (expr, true, method);
+        | CE_indirect (CE_addr (expr)) =>
+          emit (expr)
 
         /* load value by pointer */
         | CE_indirect (expr) =>
@@ -2115,15 +2086,12 @@ namespace Nemerle.Compiler
           def el_ty = ty.GetElementType ();
           assert (ty.IsByRef && el_ty != null);
 
-          when ((expr matches CE_volatile_field_ref) ||
-                (expr matches CE_volatile_global_ref))
-            _ilg.Emit (OpCodes.Volatile);
+          maybe_volatile (expr);
 
           if (el_ty.IsValueType)
             emit_ldind_for_value_type (el_ty)
           else
             _ilg.Emit (OpCodes.Ldind_Ref);
-
 
 
         /* an interrupting NOP instruction */
@@ -2576,11 +2544,10 @@ namespace Nemerle.Compiler
     {
       assert (!is_system_void (ty), "tried to load a System.Void from an array");
 
-      if (ty.IsValueType) {
+      if (ty.IsValueType && !ty.IsPrimitive) {
         _ilg.Emit (OpCodes.Ldelema, ty);
         _ilg.Emit (OpCodes.Ldobj, ty);
-      }
-      else {
+      } else {
         def opcode =
           if (ty.IsPrimitive)
             match (ty.Name) {
