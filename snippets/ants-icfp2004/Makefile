@@ -1,6 +1,6 @@
 include ../../config.mak
 
-NPATH   = .
+NPATH   = ../../boot
 MONO    = $(NET_ENGINE) $(NET_FLAGS)
 COMPILE = $(MONO) $(NPATH)/ncc.exe
 
