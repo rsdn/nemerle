@@ -171,7 +171,7 @@
 
   <xsl:template match="args">
       <xsl:apply-templates select="ul" />
-  </xsl:template>	
+  </xsl:template>
 
   <xsl:template match="enum2">
     <tr>
