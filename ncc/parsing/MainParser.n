@@ -25,7 +25,6 @@
  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-#if NEWPARSER
  
 using Nemerle.Compiler;
 using Nemerle.Collections;
@@ -33,378 +32,6 @@ using Nemerle.Compiler.Parsetree;
 
 namespace Nemerle.Compiler
 {
-  class PreParserException : System.Exception { }
-
-  /** Transforms stream of tokens from given LexerBase to token tree
-      with matched brackets.
-   */
-  public class PreParser
-  {
-    lexer : LexerBase;
-    mutable last_token : Token = null;
-
-    mutable finished : bool = false;
-    
-    /** Parent stream is the stack of processed token nodes,
-        which are already assigned to be in currently build sequence.
-        For example:
-          a; b; c (); d e _we_are_here_
-        'a, b, c()', are alredy known to be in parent sequence,
-        while 'd e' are in current temporary sequence, which might
-        get added to parent_stream if separator (e.g. ';') occurs
-     */
-    mutable parent_stream : array [Token] = array (4000);
-    mutable parent_pos : int;
-
-    /** Currently builded stream of token nodes is an array of
-        loose tokens, which have occured after last separator.
-        It will probably form LooseGroup as an element of parent
-        sequence or all elements will constitue parent
-     */
-    mutable current_stream : array [Token] = array (2000);
-    mutable current_pos : int;
-
-    public this (lex : LexerBase) {
-      register_syntax_keywords (MacroRegistry.GetSyntaxExtensions (["Nemerle", "Core"]));
-      lexer = lex;
-    }
-
-    /** Fetch next token (from one token buffer or lexer if it's empty */
-    get_token () : Token {
-      if (last_token != null) {
-        def result = last_token;
-        last_token = null;
-        result;
-      }
-      else {
-        try {
-          lexer.GetToken ()
-        }
-        catch {
-          | e : LexerBase.Error =>
-            Message.error (lexer.Location, e.name);
-            get_token ()
-        }
-      }
-    }
-
-    /** Store token in our mini one token buffer */
-    push_back (tok : Token) : void {
-      assert (last_token == null);
-      last_token = tok;
-    }
-
-    static store (tokens : ref array [Token], idx : ref int, tok : Token) : void
-    {
-      tokens [idx] = tok;
-      ++idx;
-    }
-
-    /** links Tokens from specified subarray to form a list and return its head */
-    static make_list (tokens : array [Token], start : int, end : int) : Token
-    {
-      for (mutable i = end - 2; i >= start; --i) 
-        tokens [i].Next = tokens [i + 1];
-      tokens [start]
-    }
-
-    
-    public static Dump (tok : Token, ident : string) : string {
-      def (open, close, sepstr, elements) =
-        match (tok) {
-          | Token.RoundGroup => ("(", ")", ", ", tok)
-          | Token.BracesGroup => ("{\n" + ident, "}", ";\n" + ident, tok)
-          | Token.SquareGroup => ("[", "]", ", ", tok)
-          | Token.QuoteGroup  => ("<[\n", "]>", "; ", tok)
-          | Token.LooseGroup  => ("", "", " ", tok)
-
-          | _ => ("", tok.ToString (false), "", null)
-        }
-      def builder = System.Text.StringBuilder (open);
-      when (elements != null)
-        foreach (e : Token in elements) 
-          _ = builder.Append (Dump (e, ident + "  ")).Append (sepstr);
-      builder.Append (close).ToString ()
-    }
-
-    /** Closes both currently created LooseGroup and parent group.
-        Returns list of tokens composing parent group */
-    finish_parent (parent_begin : int, current_begin : int) : Token {
-      finish_current (current_begin);
-      def parent_group = 
-        if (parent_begin == parent_pos)
-          null // case of `(` `)`
-        else
-          make_list (parent_stream, parent_begin, parent_pos);
-      parent_pos = parent_begin;
-      parent_group
-    }
-
-    /** Closes currently created LooseGroup and adds it at the end of the
-        parent group. After that we are ready to make another LooseGroup.
-
-        It is called mainly when separator token occurs.
-     */   
-    finish_current (current_begin : int) : void {
-      unless (current_begin == current_pos) {
-        def loose_group = make_list (current_stream, current_begin, current_pos);
-        def loose = Token.LooseGroup (current_stream [current_begin].Location, loose_group);
-        store (ref parent_stream, ref parent_pos, loose);
-        current_pos = current_begin;
-      }
-    }
-
-    /** Handle standard situations when new bracket group is beginning
-        or there is erronous situation. Any non bracket token is
-        appended to current LooseGroup.
-
-        Throws PreParserException when there is unmatched end bracket.
-     */
-    handle_default_token (current_begin : int, tok : Token) : void {
-      match (tok) {
-        | Token.BeginBrace =>
-          def brace_group = parse_brace_group (tok.Location, parent_pos, current_pos);
-          store (ref current_stream, ref current_pos, brace_group);
-          finish_current (current_begin);
-
-        | Token.BeginRound =>
-          def round_group = parse_round_group (tok.Location, parent_pos, current_pos);
-          store (ref current_stream, ref current_pos, round_group);
-
-        | Token.BeginSquare =>
-          def square_group = parse_square_group (tok.Location, parent_pos, current_pos);
-          store (ref current_stream, ref current_pos, square_group);
-
-        | Token.BeginQuote =>
-          def quote_group = parse_quote_group (tok.Location, parent_pos, current_pos);
-          store (ref current_stream, ref current_pos, quote_group);
-
-        | Token.EndRound | Token.EndSquare | Token.EndQuote | Token.EndBrace =>
-          push_back (tok);
-          Message.error (tok.Location, "unexpected closing bracket: " + tok.ToString ());
-          throw PreParserException ();
-
-        | Token.EndOfFile =>
-          Message.error (tok.Location, "unexpected end of file");
-          throw PreParserException ();
-
-        | _ => store (ref current_stream, ref current_pos, tok);
-      }
-    }
-    
-    parse_brace_group (loc : Location, parent_begin : int, current_begin : int) : Token.BracesGroup
-    {
-      def loop () {
-        def tok = get_token ();
-        match (tok) {
-          // finish entire brace group
-          | Token.EndBrace =>
-            def brace_group = finish_parent (parent_begin, current_begin);
-            Token.BracesGroup (loc + tok.Location, brace_group);
-
-          // finish current loose group
-          | Token.Semicolon => finish_current (current_begin); loop ()
-
-          | Token.EndOfFile when parent_begin == 0 =>
-            def brace_group = finish_parent (parent_begin, current_begin);
-            finished = true;
-            Token.BracesGroup (loc + tok.Location, brace_group);
-            
-          | _ => handle_default_token (current_begin, tok); loop ()
-        }
-      }
-      try { loop () :> Token.BracesGroup }
-      catch { _ : PreParserException =>
-        def group = finish_parent (parent_begin, current_begin);
-        Token.BracesGroup (loc, group) :> Token.BracesGroup;
-      }
-    }
-
-    parse_round_group (loc : Location, parent_begin : int, current_begin : int) : Token.RoundGroup
-    {
-      def loop () {
-        def tok = get_token ();
-        match (tok) {
-          // finish entire round group
-          | Token.EndRound =>
-            def round_group = finish_parent (parent_begin, current_begin);
-            Token.RoundGroup (loc + tok.Location, round_group);
-
-          // finish current loose group
-          | Token.Comma =>
-            finish_current (current_begin);
-            loop ()
-
-          | _ => handle_default_token (current_begin, tok); loop ()
-        }
-      }
-      try { loop () :> Token.RoundGroup }
-      catch { _ : PreParserException =>
-        def group = finish_parent (parent_begin, current_begin);
-        Token.RoundGroup (loc, group) :> Token.RoundGroup;
-      }
-    }
-
-    parse_square_group (loc : Location, parent_begin : int, current_begin : int) : Token.SquareGroup
-    {
-      def loop () {
-        def tok = get_token ();
-        match (tok) {
-          // finish entire brace group
-          | Token.EndSquare =>
-            def group = finish_parent (parent_begin, current_begin);
-            Token.SquareGroup (loc + tok.Location, group);
-
-          // finish current loose group
-          | Token.Comma => finish_current (current_begin); loop ()
-
-          | _ => handle_default_token (current_begin, tok); loop ()
-        }
-      }
-      try { loop () :> Token.SquareGroup }
-      catch { _ : PreParserException =>
-        def group = finish_parent (parent_begin, current_begin);
-        Token.SquareGroup (loc, group) :> Token.SquareGroup;
-      }
-    }
-
-    parse_quote_group (loc : Location, parent_begin : int, current_begin : int) : Token.QuoteGroup
-    {
-      def loop () {
-        def tok = get_token ();
-        match (tok) {
-          // finish entire brace group
-          | Token.EndQuote =>
-            def group = finish_parent (parent_begin, current_begin);
-            Token.QuoteGroup (loc + tok.Location, group) :> Token.QuoteGroup;
-
-          // finish current loose group
-          | Token.Semicolon => finish_current (current_begin); loop ()
-
-          | _ => handle_default_token (current_begin, tok); loop ()
-        }
-      }
-      try { loop () :> Token.QuoteGroup }
-      catch { _ : PreParserException =>
-        def group = finish_parent (parent_begin, current_begin);
-        Token.QuoteGroup (loc, group) :> Token.QuoteGroup;
-      }
-    }
-
-
-    register_syntax_keywords (extensions : list [SyntaxDefinition]) : void {
-      foreach (x in extensions)
-        foreach (key in x.Keywords) LexerBase.AddKeyword (key);
-    }
-
-    remove_syntax_keywords (extensions : list [SyntaxDefinition]) : void {
-      foreach (x in extensions)
-        foreach (key in x.Keywords) LexerBase.RemoveKeyword (key);
-    }
-    
-    ParseTopLevel (parent_begin : int, current_begin : int) : Token
-    {
-      def get_qid () {
-        match (get_token ()) {
-          | Token.Identifier (x) =>
-            match (get_token ()) {
-              | Token.Operator (".", _) => x :: get_qid ()
-              | t => push_back (t); [x]
-            }
-          | t => Message.error (t.Location, "expected qualified identifier"); []
-        }
-      }
-      
-      mutable open_usings = [];
-      
-      def loop () {
-        def tok = get_token ();
-        match (tok) {
-          | Token.Keyword ("using") =>
-            finish_current (current_begin);
-            
-            def id = get_qid ();
-            match (get_token ()) {
-              | Token.Semicolon as st =>
-                def extensions = MacroRegistry.GetSyntaxExtensions (id);
-                register_syntax_keywords (extensions);
-                open_usings = extensions + open_usings;
-
-                def using_tok = Token.Using (tok.Location + st.Location, id, extensions);
-                store (ref current_stream, ref current_pos, using_tok);
-                
-              | Token.Operator ("=", _) =>
-                def id' = get_qid ();
-
-                def st = get_token ();
-                match (st) {
-                  | Token.Semicolon => ()
-                  | _ => Message.error (st.Location, "expecting `;' after using alias")
-                }
-                
-                def using_tok = Token.UsingAlias (tok.Location + st.Location, id, id');
-                store (ref current_stream, ref current_pos, using_tok);
-                
-              | x => Message.error (x.Location, "expecting `;' or `='")
-            }
-            finish_current (current_begin);
-            loop ()
-
-          | Token.Keyword ("namespace") =>
-            finish_current (current_begin);
-            
-            def id = get_qid ();
-            match (get_token ()) {
-              | Token.BeginBrace as br =>
-                def extensions = MacroRegistry.GetSyntaxExtensions (id);
-                register_syntax_keywords (extensions);
-
-                def decls = ParseTopLevel (parent_pos, current_pos);
-
-                remove_syntax_keywords (extensions);
-
-                def namespace_tok = Token.Namespace (tok.Location + br.Location, id, extensions, decls);
-                store (ref current_stream, ref current_pos, namespace_tok);                  
-
-              | x => Message.error (x.Location, "expecting `{' opening namespace scope")
-            }
-            finish_current (current_begin);            
-            loop ()
-          
-          // finish entire brace group
-          | Token.EndBrace =>
-            remove_syntax_keywords (open_usings);
-            finish_parent (parent_begin, current_begin);
-
-          // finish current loose group
-          | Token.Semicolon => finish_current (current_begin); loop ()
-
-          | Token.EndOfFile when parent_begin == 0 =>
-            def brace_group = finish_parent (parent_begin, current_begin);
-            finished = true;
-            brace_group;
-            
-          | _ => handle_default_token (current_begin, tok); loop ()
-        }
-      }
-      try { loop () }
-      catch { _ : PreParserException =>
-        finish_parent (parent_begin, current_begin);
-      }
-    }
-
-    public ParseTopLevel () : Token {
-      Token.BracesGroup (ParseTopLevel (0, 0))
-    }
-    
-    public PreParse () : Token {
-      def top = parse_brace_group (Location.Default, 0, 0);
-      unless (finished) Message.error (lexer.Location, "expected end of file, encountered closing brace");
-      top
-    }
-  }
-
-
   enum OpContext {
     | Prefix
     | Postfix
@@ -419,124 +46,132 @@ namespace Nemerle.Compiler
     | Arrow  = 0x0008 // =>
     | Colon  = 0x0010 // :
     | Dollar = 0x0020 // $
-    | All = Pipe %| Equal %| Braces
+    | All = Pipe %| Equal %| Braces %| Arrow
   }
-
+  
+  public variant GrammarElement {
+    | Operator { name : string; }
+    | Keyword { name : string; }
+    | Expression
+    | Parameter
+    | ExpressionList
+    | Optional { body : GrammarElement; }
+  }
+  
   [Record]
   public class SyntaxDefinition {
     public Start : string;
     public Keywords : list [string];
     public MacroNamespace : GlobalEnv.NamespaceND;
-    public Rules : list [Parser.GrammarElement];
+    public Rules : list [GrammarElement];
     public Permute : list [SyntaxElement] -> list [SyntaxElement];
   }
   
-  
-  /// Reverse Polish Notation token. It is used on the stack created during translation
-  /// of infix operator expression into RPN on the way to create appropriate PExpr.
-  [Record]
-  class OperatorInfo {
-    public Name : string;
-    public LeftPriority : int;
-    public RightPriority : int;
-
-    public static RoundInfo : OperatorInfo = OperatorInfo ("(", 290,291);
-    public static SquareInfo : OperatorInfo = OperatorInfo ("[", 290, 291);
-    public static ProductInfo : OperatorInfo = OperatorInfo ("*", 260, 261);    
-
-    public static PrefixInfos : Hashtable [string, OperatorInfo];    
-    public static Infos : Hashtable [string, OperatorInfo];
-
-    static this () {
-      PrefixInfos = Hashtable ();
-      PrefixInfos.Add ("-", UnaryOperatorInfo ("-", 281, 280));
-      PrefixInfos.Add ("+", UnaryOperatorInfo ("+", 281, 280));      
-      PrefixInfos.Add ("++", UnaryOperatorInfo ("++", 281, 280));
-      PrefixInfos.Add ("--", UnaryOperatorInfo ("--", 281, 280));
-      PrefixInfos.Add ("!", UnaryOperatorInfo ("!", 281, 280));
-      PrefixInfos.Add ("~", UnaryOperatorInfo ("~", 281, 280));      
-
-      Infos = Hashtable ();
-      Infos.Add (".", BinaryOperatorInfo (".", 285, 301));
-      Infos.Add ("++", UnaryOperatorInfo ("++", 283, 284));
-      Infos.Add ("--", UnaryOperatorInfo ("--", 283, 284));            
-      Infos.Add ("/", BinaryOperatorInfo ("/", 260, 261));
-      Infos.Add ("%", BinaryOperatorInfo ("%", 260, 261));
-      Infos.Add ("->", BinaryOperatorInfo ("->", 250, 251));      
-      Infos.Add (":", BinaryOperatorInfo (":", 245, 246));
-      Infos.Add (":>", BinaryOperatorInfo (":>", 245, 246));
-      Infos.Add ("+", BinaryOperatorInfo ("+", 240, 241));
-      Infos.Add ("-", BinaryOperatorInfo ("-", 240, 241));
-      Infos.Add ("<<", BinaryOperatorInfo ("<<", 230, 231));
-      Infos.Add (">>", BinaryOperatorInfo (">>", 230, 231));
-      Infos.Add ("::", BinaryOperatorInfo ("::", 221, 220));
-      Infos.Add ("as", BinaryOperatorInfo ("as", 215, 301));            
-      Infos.Add ("<", BinaryOperatorInfo ("<", 210, 211));
-      Infos.Add (">", BinaryOperatorInfo (">", 210, 211));
-      Infos.Add ("<=", BinaryOperatorInfo ("<=", 210, 211));
-      Infos.Add (">=", BinaryOperatorInfo (">=", 210, 211));
-      Infos.Add ("is", BinaryOperatorInfo ("is", 210, 211));
-      Infos.Add ("matches", BinaryOperatorInfo ("matches", 210, 211));
-      // FIXME: confront to C sharp
-      Infos.Add ("&", BinaryOperatorInfo ("&", 190, 191));
-      Infos.Add ("%&", BinaryOperatorInfo ("%&", 190, 191));
-      Infos.Add ("%&&", BinaryOperatorInfo ("%&&", 190, 191));
-      Infos.Add ("^", BinaryOperatorInfo ("^", 180, 181));
-      Infos.Add ("%^", BinaryOperatorInfo ("%^", 180, 181));
-      Infos.Add ("|", BinaryOperatorInfo ("|", 170, 171));
-      Infos.Add ("%|", BinaryOperatorInfo ("%|", 170, 171));
-      Infos.Add ("==", BinaryOperatorInfo ("==", 165, 166));
-      Infos.Add ("!=", BinaryOperatorInfo ("!=", 165, 166));
-      Infos.Add ("&&", BinaryOperatorInfo ("&&", 160, 161));
-      Infos.Add ("||", BinaryOperatorInfo ("||", 150, 151));
-      Infos.Add ("=", BinaryOperatorInfo ("=", 141, 140));
-      Infos.Add ("*=", BinaryOperatorInfo ("*=", 141, 140));
-      Infos.Add ("/=", BinaryOperatorInfo ("/=", 141, 140));
-      Infos.Add ("%=", BinaryOperatorInfo ("%=", 141, 140));
-      Infos.Add ("+=", BinaryOperatorInfo ("+=", 141, 140));      
-      Infos.Add ("-=", BinaryOperatorInfo ("-=", 141, 140));
-      Infos.Add ("<<=", BinaryOperatorInfo ("<<=", 141, 140));
-      Infos.Add (">>=", BinaryOperatorInfo (">>=", 141, 140));
-      Infos.Add ("&=", BinaryOperatorInfo ("&=", 141, 140));
-      Infos.Add ("^=", BinaryOperatorInfo ("^=", 141, 140));
-      Infos.Add ("|=", BinaryOperatorInfo ("|=", 141, 140));      
-      Infos.Add ("when", BinaryOperatorInfo ("when", 130, 131));
-    }
-
-    public static GetOrCreate (op : string) : OperatorInfo {
-      match (Infos.Get (op)) {
-        | Some (x) => x
-        | None =>
-          def newinfo = BinaryOperatorInfo (op, 200, 201);
-          Infos.Add (op, newinfo);
-          newinfo
-      }
-    }
-  }
-
-  class UnaryOperatorInfo : OperatorInfo {
-    public this (name : string, left : int, right : int) {
-      base (name, left, right);
-    }
-  }
-
-  class BinaryOperatorInfo : OperatorInfo {
-    public this (name : string, left : int, right : int) {
-      base (name, left, right);
-    }
-  }
-  
-  class NaryOperatorInfo : OperatorInfo {
-    public this (copy : OperatorInfo) {
-      base (copy.Name, copy.LeftPriority, copy.RightPriority);
-    }
-    
-    public mutable ExprsBegin : list [PExpr];
-  }
-    
- 
   public class MainParser
   {
+    /// Reverse Polish Notation token. It is used on the stack created during translation
+    /// of infix operator expression into RPN on the way to create appropriate PExpr.
+    [Record]
+    class OperatorInfo {
+      public Name : string;
+      public LeftPriority : int;
+      public RightPriority : int;
+
+      public static RoundInfo : OperatorInfo = OperatorInfo ("(", 290,291);
+      public static SquareInfo : OperatorInfo = OperatorInfo ("[", 290, 291);
+      public static ProductInfo : OperatorInfo = OperatorInfo ("*", 260, 261);    
+
+      public static PrefixInfos : Hashtable [string, OperatorInfo];    
+      public static Infos : Hashtable [string, OperatorInfo];
+
+      static this () {
+        PrefixInfos = Hashtable ();
+        PrefixInfos.Add ("-", UnaryOperatorInfo ("-", 281, 280));
+        PrefixInfos.Add ("+", UnaryOperatorInfo ("+", 281, 280));      
+        PrefixInfos.Add ("++", UnaryOperatorInfo ("++", 281, 280));
+        PrefixInfos.Add ("--", UnaryOperatorInfo ("--", 281, 280));
+        PrefixInfos.Add ("!", UnaryOperatorInfo ("!", 281, 280));
+        PrefixInfos.Add ("~", UnaryOperatorInfo ("~", 281, 280));      
+
+        Infos = Hashtable ();
+        Infos.Add (".", BinaryOperatorInfo (".", 285, 301));
+        Infos.Add ("++", UnaryOperatorInfo ("++", 283, 284));
+        Infos.Add ("--", UnaryOperatorInfo ("--", 283, 284));            
+        Infos.Add ("/", BinaryOperatorInfo ("/", 260, 261));
+        Infos.Add ("%", BinaryOperatorInfo ("%", 260, 261));
+        Infos.Add ("->", BinaryOperatorInfo ("->", 250, 251));      
+        Infos.Add (":", BinaryOperatorInfo (":", 245, 246));
+        Infos.Add (":>", BinaryOperatorInfo (":>", 245, 246));
+        Infos.Add ("+", BinaryOperatorInfo ("+", 240, 241));
+        Infos.Add ("-", BinaryOperatorInfo ("-", 240, 241));
+        Infos.Add ("<<", BinaryOperatorInfo ("<<", 230, 231));
+        Infos.Add (">>", BinaryOperatorInfo (">>", 230, 231));
+        Infos.Add ("::", BinaryOperatorInfo ("::", 221, 220));
+        Infos.Add ("as", BinaryOperatorInfo ("as", 215, 301));            
+        Infos.Add ("<", BinaryOperatorInfo ("<", 210, 211));
+        Infos.Add (">", BinaryOperatorInfo (">", 210, 211));
+        Infos.Add ("<=", BinaryOperatorInfo ("<=", 210, 211));
+        Infos.Add (">=", BinaryOperatorInfo (">=", 210, 211));
+        Infos.Add ("is", BinaryOperatorInfo ("is", 210, 211));
+        Infos.Add ("matches", BinaryOperatorInfo ("matches", 210, 211));
+        // FIXME: confront to C sharp
+        Infos.Add ("&", BinaryOperatorInfo ("&", 190, 191));
+        Infos.Add ("%&", BinaryOperatorInfo ("%&", 190, 191));
+        Infos.Add ("%&&", BinaryOperatorInfo ("%&&", 190, 191));
+        Infos.Add ("^", BinaryOperatorInfo ("^", 180, 181));
+        Infos.Add ("%^", BinaryOperatorInfo ("%^", 180, 181));
+        Infos.Add ("|", BinaryOperatorInfo ("|", 170, 171));
+        Infos.Add ("%|", BinaryOperatorInfo ("%|", 170, 171));
+        Infos.Add ("==", BinaryOperatorInfo ("==", 165, 166));
+        Infos.Add ("!=", BinaryOperatorInfo ("!=", 165, 166));
+        Infos.Add ("&&", BinaryOperatorInfo ("&&", 160, 161));
+        Infos.Add ("||", BinaryOperatorInfo ("||", 150, 151));
+        Infos.Add ("=", BinaryOperatorInfo ("=", 141, 140));
+        Infos.Add ("*=", BinaryOperatorInfo ("*=", 141, 140));
+        Infos.Add ("/=", BinaryOperatorInfo ("/=", 141, 140));
+        Infos.Add ("%=", BinaryOperatorInfo ("%=", 141, 140));
+        Infos.Add ("+=", BinaryOperatorInfo ("+=", 141, 140));      
+        Infos.Add ("-=", BinaryOperatorInfo ("-=", 141, 140));
+        Infos.Add ("<<=", BinaryOperatorInfo ("<<=", 141, 140));
+        Infos.Add (">>=", BinaryOperatorInfo (">>=", 141, 140));
+        Infos.Add ("&=", BinaryOperatorInfo ("&=", 141, 140));
+        Infos.Add ("^=", BinaryOperatorInfo ("^=", 141, 140));
+        Infos.Add ("|=", BinaryOperatorInfo ("|=", 141, 140));      
+        Infos.Add ("when", BinaryOperatorInfo ("when", 130, 131));
+      }
+
+      public static GetOrCreate (op : string) : OperatorInfo {
+        match (Infos.Get (op)) {
+          | Some (x) => x
+          | None =>
+            def newinfo = BinaryOperatorInfo (op, 200, 201);
+            Infos.Add (op, newinfo);
+            newinfo
+        }
+      }
+    }
+
+    class UnaryOperatorInfo : OperatorInfo {
+      public this (name : string, left : int, right : int) {
+        base (name, left, right);
+      }
+    }
+
+    class BinaryOperatorInfo : OperatorInfo {
+      public this (name : string, left : int, right : int) {
+        base (name, left, right);
+      }
+    }
+
+    class NaryOperatorInfo : OperatorInfo {
+      public this (copy : OperatorInfo) {
+        base (copy.Name, copy.LeftPriority, copy.RightPriority);
+      }
+
+      public mutable ExprsBegin : list [PExpr];
+    }
+
+    
     mutable env : GlobalEnv;
     mutable stream : Token;
     mutable last_tok : Token;
@@ -675,12 +310,8 @@ namespace Nemerle.Compiler
     }
     
     expect_empty (msg : string) : void {
-      expect_empty (stream, msg);
-    }
-
-    expect_empty (tok : Token, msg : string) : void {
-      when (tok != null)
-        Error (tok, "unexpected tokens after " + msg)
+      when (stream != null)
+        Error (stream, "unexpected tokens after " + msg)
     }
 
     expect_operator (op : string) : void {
@@ -716,16 +347,6 @@ namespace Nemerle.Compiler
         | _ => false
       }
     }
-    
-    comma_separated_list ['a] (f : void -> 'a) : list ['a] {
-      def loop (acc) {
-        match (peek_token ()) {
-          | Token.Comma => shift (); loop (f () :: acc)
-          | _ => List.Rev (acc)
-        }
-      };
-      loop ([f ()])
-    }
 
     should_stop (stop : TokenStoppers) : bool {
       if (stream == null) true
@@ -745,7 +366,27 @@ namespace Nemerle.Compiler
         }
       }
     }
-    
+
+    comma_separated_list ['a] (f : void -> 'a) : list ['a] {
+      def loop (acc) {
+        match (peek_token ()) {
+          | Token.Comma => shift (); loop (f () :: acc)
+          | _ => List.Rev (acc)
+        }
+      };
+      loop ([f ()])
+    }
+
+    process_groups ['a] (first : Token, name : string, f : void -> 'a) : list ['a] {
+      push_stream (first);
+      mutable members = [];
+      while (stream != null) {
+        def child = f ();
+        when (child != null) members = child :: members;
+      }
+      pop_stream (name);
+      List.Rev (members)
+    }
     #endregion Utility functions operating on current token stream
 
     Error (tok : Token, msg : string) : void {
@@ -947,18 +588,11 @@ namespace Nemerle.Compiler
                 // where constraints for specified generic type parameters
                 def typarms = parse_where_constraints (tyvars);
 
-                mutable members = [];
+                mutable members = null;
                 unless (key == "type")
                   match (get_token ()) {
                     | Token.BracesGroup (children) =>
-                      push_stream (children);
-                      
-                      while (stream != null) {
-                        def child = ParseClassMember ();
-                        when (child != null) members = child :: members;
-                      }
-                      members = List.Rev (members);
-                      pop_stream ("type body");
+                      members = process_groups (children, "type member", ParseClassMember)
                         
                     | x => Error (x, "expecting type body");
                   }
@@ -1116,6 +750,7 @@ namespace Nemerle.Compiler
                     id : Splicable, ret_type : PExpr, parms : list [Fun_parm],
                     typarms : Typarms) : ClassMember
     {
+      def loc = id.Location + ret_type.Location;      
      // FIXME:       | Token.Keyword ("implements") => null      
       match (peek_token ()) {
         | Token.BracesGroup as group =>
@@ -1125,8 +760,7 @@ namespace Nemerle.Compiler
           mutable getter = None ();
 
           def plain_name = match (id) { | Splicable.Name (n) => n.Id | _ => "" };
-
-          def loc = ret_type.Location;
+          
           def prop_ty =
             match (parms) {
               | [parm] => PExpr.Call (loc, PExpr.Ref (loc, Name (["->"])), [parm.ty, ret_type])
@@ -1200,8 +834,8 @@ namespace Nemerle.Compiler
             }
             pop_stream ("property member");
           }
-          ClassMember.Property (id.Location + ret_type.Location, id,
-                                Modifiers (mods, pcustoms), ret_type, prop_ty, parms, getter, setter)
+          ClassMember.Property (loc, id, Modifiers (mods, pcustoms), ret_type,
+                                prop_ty, parms, getter, setter)
 
 
         | Token.Operator ("=", _) =>
@@ -1210,13 +844,11 @@ namespace Nemerle.Compiler
           def initializer = <[ $(Name (["StaticInitializer"]) : name) ]>;
           def fcustoms = <[ $initializer ($val) ]> ::
                          take_attributes_out (ref customs, System.AttributeTargets.Field, true);
-          ClassMember.Field (id.Location + ret_type.Location, id,
-                             Modifiers (mods, fcustoms), ret_type)
+          ClassMember.Field (loc, id, Modifiers (mods, fcustoms), ret_type)
           
         | Token.EndOfFile =>
           def fcustoms = take_attributes_out (ref customs, System.AttributeTargets.Field, true);
-          ClassMember.Field (id.Location + ret_type.Location, id,
-                             Modifiers (mods, fcustoms), ret_type)
+          ClassMember.Field (loc, id, Modifiers (mods, fcustoms), ret_type)
           
         | t => Error (t, "expecting `;' or `{ }' in field / property declaration"); null
       }
@@ -1277,20 +909,13 @@ namespace Nemerle.Compiler
       match (peek_token ()) {
         | Token.BracesGroup (children) =>
           shift ();
-          push_stream (children);
-          mutable members = [];
-          while (stream != null) {
-            def child = ParseClassMember ();
-            when (child != null) members = child :: members;
-          }
-          members = List.Rev (members);
-          pop_stream ("elements of variant option");          
+          def members = process_groups (children, "elements of variant option",
+                                       ParseClassMember);
           def td = TopDeclaration.VariantOption (name = id, loc = id.loc,
                                                  modifiers = Modifiers (NemerleAttributes.None, []),
                                                  decls = members);
 
-          ClassMember.TypeDeclaration (loc = id.loc, name = id, 
-                                       modifiers = Modifiers.Empty, td = td)
+          ClassMember.TypeDeclaration (loc = id.loc, name = null, modifiers = null, td = td)
 
         | Token.EndOfFile =>
           ClassMember.EnumOption (id.Location, id, Modifiers (NemerleAttributes.None, []), None ());
@@ -1307,19 +932,21 @@ namespace Nemerle.Compiler
       }
     }
 
-    parse_event (loc : Location, mods : NemerleAttributes,
+    parse_event (mutable loc : Location, mods : NemerleAttributes,
                  mutable customs : list [Token.SquareGroup]) : ClassMember
     {
       def id = get_splicable_id ();
       def ret_type = parse_return_type (false);
+      loc += ret_type.Location;
+      def plain_name = match (id) { | Splicable.Name (n) => n.Id | _ => "" };      
+      def val_n = Splicable.Name (loc, Name.NameInCurrentColor ("value", env));
+      mutable remove = null;
+      mutable add = null;
+      
       match (peek_token ()) {
         | Token.BracesGroup as group =>
           shift ();
           mutable ecustoms = take_attributes_out (ref customs, System.AttributeTargets.Event, true);
-          mutable remove = None ();
-          mutable add = None ();
-
-          def plain_name = match (id) { | Splicable.Name (n) => n.Id | _ => "" };
 
           def parse_bd (p) {
             match (peek_token ()) {
@@ -1337,52 +964,40 @@ namespace Nemerle.Compiler
 
             match (get_token ()) {
               | Token.Identifier (i) as nametok =>
-                def loc = nametok.Location;
-                def val_n = Splicable.Name (loc, Name.NameInCurrentColor ("value", env));                
+                def mloc = nametok.Location;
                 match (i) {
-                  | "remove" =>
-                    unless (remove matches None)
-                      Message.error (loc, "event cannot have multiple remove methods");
+                  | "remove" | "add" =>
+                    if (i == "remove")
+                      unless (remove == null)
+                        Message.error (mloc, "event cannot have multiple remove methods");
+                    else
+                      unless (add == null)
+                        Message.error (mloc, "event cannot have multiple add methods");
 
                     def method_atts = take_attributes_out (ref mycustoms, System.AttributeTargets.Method, false);
                     def method_atts = Modifiers (mymods, method_atts);                    
 
                     def par_atts = Modifiers (NemerleAttributes.None,
                       take_attributes_out (ref mycustoms, System.AttributeTargets.Parameter, true));
-
                     def method_parms = [Fun_parm (val_n, ret_type, par_atts)];
                     
                     def (kind, bd) = parse_bd (method_parms);
-                    def name = Splicable.Name (loc, Name ("remove_" + plain_name));
-                    def fh = Fun_header (loc, name, PExpr.Void (), method_parms);
-                    remove = Some (ClassMember.Function (loc, fh.name, method_atts, fh, kind, bd) :>
-                                   ClassMember.Function);
-
-                  | "add" =>
-                    unless (add matches None)
-                      Message.error (loc, "event cannot have multiple add methods");
-                    
-                    def method_atts = take_attributes_out (ref mycustoms, System.AttributeTargets.Method, false);
-                    def method_atts = Modifiers (mymods, method_atts);                    
-
-                    def par_atts = Modifiers (NemerleAttributes.None,
-                      take_attributes_out (ref mycustoms, System.AttributeTargets.Parameter, true));
-                      
-                    def method_parms = [Fun_parm (val_n, ret_type, par_atts)];
-                    
-                    def (kind, bd) = parse_bd (method_parms);
-                    def name = Splicable.Name (loc, Name ("add_" + plain_name));
-                    def fh = Fun_header (loc, name, PExpr.Void (), method_parms);
-                    add = Some (ClassMember.Function (loc, fh.name, method_atts, fh, kind, bd) :>
-                                ClassMember.Function);
+                    def name = Splicable.Name (mloc, Name.NameInCurrentColor (i + "_" + plain_name, env));
+                    def fh = Fun_header (mloc, name, PExpr.Void (mloc), method_parms);
+                    def method = ClassMember.Function (loc, name, method_atts, fh, kind, bd) :>
+                                 ClassMember.Function;
+                    if (i == "remove")
+                      remove = method;
+                    else
+                      add = method;
 
                   | _ =>
                     def nm = Splicable.Name (loc, Name.NameInCurrentColor (i, env));
                     def t = parse_return_type (false);
                     def attrs = Modifiers (mymods, take_attributes_out
                                   (ref mycustoms, System.AttributeTargets.Field, true));
-                    def embed = PExpr.Quoted (loc, SyntaxElement.ClassMember (
-                                  ClassMember.Field (loc + t.Location, nm, attrs, t)));
+                    def f = ClassMember.Field (mloc + t.Location, nm, attrs, t);
+                    def embed = PExpr.Quoted (mloc, SyntaxElement.ClassMember (f));
                     ecustoms = <[ $(Name ("EventEmbeddedField") : name) ($embed) ]> :: ecustoms;
                 }
 
@@ -1390,15 +1005,36 @@ namespace Nemerle.Compiler
             }
             pop_stream ("property member");
           }
-          ClassMember.Event (loc + ret_type.Location, id, Modifiers (mods, ecustoms),
-                             ret_type, add, remove)
+          when (add == null || remove == null)
+            Message.error (loc, "both of event accessors `add' and 'remove' must be specified");
+          
+          ClassMember.Event (loc, id, Modifiers (mods, ecustoms), ret_type, null, add, remove)
           
         | Token.EndOfFile =>
-          // FIXME: take out also attributes for auto methods and field
-          def ecustoms = take_attributes_out (ref customs, System.AttributeTargets.Event, true);
-          /// FIXME: always provide add and remove                    
-          ClassMember.Event (loc + ret_type.Location, id, Modifiers (mods, ecustoms),
-                             ret_type, None (), None ())
+          // first take out event attributes (those without target also get here)
+          def ecustoms = take_attributes_out (ref customs, System.AttributeTargets.Event, false);
+          
+          /// auto-generated field
+          def fmods = NemerleAttributes.Private %| NemerleAttributes.Mutable;
+          def field_name = Name.NameInCurrentColor (Util.tmpname (plain_name), null);
+          def field_attrs = take_attributes_out (ref customs, System.AttributeTargets.Field, false);
+          def field = ClassMember.Field (loc, Splicable.Name (field_name),
+                                         Modifiers (fmods, field_attrs), ret_type) :> ClassMember.Field;
+
+          def method_atts = take_attributes_out (ref customs, System.AttributeTargets.Method, true);
+          def method_atts = Modifiers (mods, method_atts);
+          def method_parms = [Fun_parm (val_n, ret_type, Modifiers.Empty)];
+
+          def name = Splicable.Name (loc, Name.NameInCurrentColor ("add_" + plain_name, env));
+          def fh = Fun_header (loc, name, PExpr.Void (loc), method_parms);
+          add = ClassMember.Function (loc, name, method_atts, fh, FunKind.Method ([]), null) :>
+                ClassMember.Function;
+          def name = Splicable.Name (loc, Name.NameInCurrentColor ("remove_" + plain_name, env));
+          def fh = Fun_header (loc, name, PExpr.Void (loc), method_parms);
+          remove = ClassMember.Function (loc, name, method_atts, fh, FunKind.Method ([]), null) :>
+                   ClassMember.Function;
+
+          ClassMember.Event (loc, id, Modifiers (mods, ecustoms), ret_type, field, add, remove)
           
         | t => Error (t, "expecting `;' or `{ }' in event declaration"); null
       }
@@ -1449,7 +1085,23 @@ namespace Nemerle.Compiler
         | _ => loop ([])
       }
     }
-    
+
+    /** allowed targets are:
+          assembly: assembly 
+          module:  module   (not supprted currently)
+          class, struct, interface, enum: type 
+          delegate: type, return
+          method: method, return
+          parameter: param 
+          field: field 
+          property indexer: property 
+          property get accessor: method, return
+          property set accessor: method, param, return
+          event field: event, field, method
+          event property: event, property (what is this?)
+          event add: method, param
+          event remove: method, param
+    */
     take_attributes_out (from : ref list [Token.SquareGroup], 
                          what : System.AttributeTargets,
                          comply_on_other : bool) : list [PExpr]
@@ -1715,9 +1367,7 @@ namespace Nemerle.Compiler
               | x :: _  => Message.error (x.Location, "illegal spliced parameter?"); <[ () ]>
             }
           };
-          push_stream (group);          
-          def cases = parse_match_group ();
-          pop_stream ("function body");
+          def cases = process_groups (group, "function body", parse_match_case);
           match (parms) {
             | [{name = Splicable.Name (x)}] => PExpr.Match (loc, PExpr.Ref (loc, x), cases)
             | _::_::_ => 
@@ -2035,14 +1685,6 @@ namespace Nemerle.Compiler
       MatchCase (pats, expr)
     }
 
-    parse_match_group () : list [MatchCase]
-    {
-      mutable res = [];            
-      while (stream != null)
-        res = parse_match_case () :: res;
-      List.Rev (res);
-    }
-    
     parse_embedded_expr (stop : TokenStoppers) : PExpr
     {
       def lit = parse_literal ();
@@ -2180,15 +1822,16 @@ namespace Nemerle.Compiler
                 | x => Error (x, "expecting `(..)' after `match'"); <[ () ]>
               }
             match (get_token ()) {
-              | Token.BracesGroup (group) =>
+              | Token.BracesGroup (Token.LooseGroup (Token.Operator (".", _)) as group) =>
                 push_stream (group);
-                def result = 
-                  match (maybe_parse_ellipsis ()) {
-                    | Some (e) => PExpr.Match (loc, expr, [MatchCase ([], e)]);
-                    | _        => PExpr.Match (loc, expr, parse_match_group ())
-                  }
-                pop_stream ("match body");
-                result
+                match (maybe_parse_ellipsis ()) {
+                  | Some (e) =>
+                    pop_stream ("match body");
+                    PExpr.Match (loc, expr, [MatchCase ([], e)]);
+                  | _        => Util.ice ()
+                }
+              | Token.BracesGroup (group) =>
+                PExpr.Match (loc, expr, process_groups (group, "match body", parse_match_case))
                 
               | x => Error (x, "expecting '{' after 'match (e)'"); <[ () ]>
             }
@@ -2217,9 +1860,8 @@ namespace Nemerle.Compiler
               };
               match (get_token ()) {
                 | Token.BracesGroup (group) =>
-                  push_stream (group);
-                  body = List.FoldLeft (parse_match_group (), try_body, mktry);
-                  pop_stream ("exception handlers");
+                  body = List.FoldLeft (process_groups (group, "exception handlers", parse_match_case),
+                                        try_body, mktry);
 
                 | x => Error (x, "expecting handlers of exceptions")
               }
@@ -2395,16 +2037,18 @@ namespace Nemerle.Compiler
     parse_syntax_definition (definition : SyntaxDefinition, stop : TokenStoppers) : PExpr
     {
       def loc = last_tok.Location;
-      def parms = parse_wrt_rule (definition.Rules, stop);
+      def parms = parse_grammar_rule (definition.Rules, stop);
       PExpr.MacroCall (loc, Name ([]), definition.MacroNamespace, definition.Permute (parms))
     }
     
-    parse_wrt_rule (rule : list [Parser.GrammarElement], stop : TokenStoppers) : list [SyntaxElement] {
+    parse_grammar_rule (rule : list [GrammarElement], stop : TokenStoppers)
+      : list [SyntaxElement]
+    {
       def find_closing (li) {
         def loop (ac, l) {
           match (l) {
             | [] => Message.fatal_error ("syntax definition do not have `)' after '(");
-            | Parser.GrammarElement.GE_operator (")") :: xs =>
+            | GrammarElement.Operator (")") :: xs =>
               (List.Rev (ac), xs)
             | x :: xs => loop (x :: ac, xs)
           }
@@ -2423,20 +2067,20 @@ namespace Nemerle.Compiler
       
       def loop (acc, lst) {
         match (lst) {
-          | Parser.GrammarElement.GE_operator ("(") :: xs =>
+          | GrammarElement.Operator ("(") :: xs =>
             def (g_elements, rest) = find_closing (xs);
             
             match (get_token ()) {
               | Token.RoundGroup (Token.LooseGroup (first) as loose) =>
                 match (g_elements) {
-                  | [Parser.GrammarElement.GE_expression_list] =>
+                  | [GrammarElement.ExpressionList] =>
                     def exprs = parse_expr_sequence (loose);
                     loop (List.RevMap (exprs, fun (x) { SyntaxElement.Expression (x)}) + acc, rest)
 
                   | _ =>
                     push_stream (loose);
                     push_stream (first);
-                    def res = parse_wrt_rule (g_elements, TokenStoppers.None);
+                    def res = parse_grammar_rule (g_elements, TokenStoppers.None);
                     pop_stream ("inside `()'");
                     shift (); // shift the loose group, which just ended
                     pop_stream ("end of `()'");
@@ -2447,38 +2091,37 @@ namespace Nemerle.Compiler
               | x => Error (x, "expecting `(..)'"); loop (acc, rest);
             }
 
-          | Parser.GrammarElement.GE_operator (";") :: xs =>
+          | GrammarElement.Operator (";") :: xs =>
             expect_semicolon ();
             loop (acc, xs)
             
-          | Parser.GrammarElement.GE_operator (n) :: xs =>
+          | GrammarElement.Operator (n) :: xs =>
             expect_operator (n);
             loop (acc, xs)
 
-          | Parser.GrammarElement.GE_keyword (n) :: xs =>
+          | GrammarElement.Keyword (n) :: xs =>
             unless (flag_sibling_keyword (n)) 
               Error (peek_token (), $"expected `$(n)' keyword");
             loop (acc, xs)
 
-          | Parser.GrammarElement.GE_expression :: xs =>
+          | GrammarElement.Expression :: xs =>
             def expr = parse_expr (stop);
             loop (SyntaxElement.Expression (expr) :: acc, xs)
 
-          | Parser.GrammarElement.GE_expression_list (_) :: _ =>
-            Util.ice ("expr list?")
+          | GrammarElement.ExpressionList :: _ => Util.ice ("expr list?")
 
-          | Parser.GrammarElement.GE_funparm :: xs =>
+          | GrammarElement.Parameter :: xs =>
             def p = parse_parameter ();
             loop (SyntaxElement.Parameter (p) :: acc, xs)
 
-          | Parser.GrammarElement.GE_optional (Parser.GrammarElement.GE_operator (";")) :: xs =>
+          | GrammarElement.Optional (GrammarElement.Operator (";")) :: xs =>
             if (stream == null)
               jump_to_sibling ()
             else when (stream matches Token.Semicolon)
               shift ();
             loop (acc, xs)
             
-          | Parser.GrammarElement.GE_optional (Parser.GrammarElement.GE_operator (n)) :: xs =>
+          | GrammarElement.Optional (GrammarElement.Operator (n)) :: xs =>
             match (peek_token ()) {
               | Token.Operator (o, _) when n.StartsWith (o) || o.StartsWith (n) =>
                 expect_operator (n)
@@ -2486,12 +2129,11 @@ namespace Nemerle.Compiler
             };
             loop (acc, xs)
 
-          | Parser.GrammarElement.GE_optional (Parser.GrammarElement.GE_keyword (n)) :: xs =>
+          | GrammarElement.Optional (GrammarElement.Keyword (n)) :: xs =>
             ignore (flag_keyword (n));
             loop (acc, xs)
 
-          | Parser.GrammarElement.GE_optional (Parser.GrammarElement.GE_expression)
-            :: Parser.GrammarElement.GE_keyword (n) :: xs =>
+          | GrammarElement.Optional (GrammarElement.Expression) :: GrammarElement.Keyword (n) :: xs =>
             match (peek_token ()) {
               | Token.Keyword (o) when o == n =>
                 shift ();
@@ -2502,8 +2144,7 @@ namespace Nemerle.Compiler
                 loop (SyntaxElement.Expression (expr) :: acc, xs)
             };
 
-          | Parser.GrammarElement.GE_optional (Parser.GrammarElement.GE_expression)
-            :: Parser.GrammarElement.GE_operator (";") :: xs =>
+          | GrammarElement.Optional (GrammarElement.Expression) :: GrammarElement.Operator (";") :: xs =>
             if (stream == null) {
               jump_to_sibling ();
               loop (SyntaxElement.Expression (null) :: acc, xs)
@@ -2518,14 +2159,13 @@ namespace Nemerle.Compiler
               loop (SyntaxElement.Expression (expr) :: acc, xs)
             }
 
-          | [Parser.GrammarElement.GE_optional (Parser.GrammarElement.GE_expression)] =>
+          | [GrammarElement.Optional (GrammarElement.Expression)] =>
             if (stream == null)
               List.Rev (acc)
             else
               List.Rev (SyntaxElement.Expression (parse_expr ()) :: acc)
             
-          | Parser.GrammarElement.GE_optional (Parser.GrammarElement.GE_expression)
-            :: Parser.GrammarElement.GE_operator (n) :: xs =>
+          | GrammarElement.Optional (GrammarElement.Expression) :: GrammarElement.Operator (n) :: xs =>
             match (peek_token ()) {
               | Token.Operator (o, _) when n.StartsWith (o) || o.StartsWith (n) =>
                 shift ();
@@ -2547,6 +2187,3 @@ namespace Nemerle.Compiler
     }
   } // end MainParser
 } // end namespace
-
-
-#endif NEWPARSER
