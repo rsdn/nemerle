@@ -108,7 +108,11 @@ verify-html:
 verify-docb:
 	set -xe; for f in *.docb ; do xmllint --noout --valid $$f ; done
 
-install: $(html)
+install: $(html) ncc.1
+	$(INSTALL) -m 644 ncc.1 $(MANDIR)/ncc.1
+
+../config.mak:
+	$(MAKE) -C .. config.mak
 
 clean:
 	rm -f *.xsl *.html *.ps *.pdf *.aux *.log *.xml *.tex *.docb

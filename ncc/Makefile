@@ -36,7 +36,8 @@ cs_src = lexer.cs main.cs parser.cs
 all_src = $(n_src) $(cs_src)
 all_cs = out.cs $(cs_src)
 
-CSFLAGS = -nowarn:162
+NEFLAGS = --debug
+CSFLAGS = -nowarn:162 -debug+
 COMPILE = $(CSC) $(CSFLAGS)
 
 all: ncc.exe
@@ -45,10 +46,10 @@ all: ncc.exe
 # generate ncc3.exe binary to be put in release for bootstrap.
 # Finally run testsuite.
 boot: ncc.exe
-	$(NET_ENGINE) --debug ncc.exe $(n_src)
-	$(COMPILE) -debug+ -o ncc2.exe $(all_cs)
+	$(NET_ENGINE) $(NEFLAGS) ncc.exe $(n_src)
+	$(COMPILE) -o ncc2.exe $(all_cs)
 	mv out.cs out2.cs
-	$(NET_ENGINE) --debug ncc2.exe $(n_src)
+	$(NET_ENGINE) $(NEFLAGS) ncc2.exe $(n_src)
 	cmp -s out2.cs out.cs
 	$(COMPILE) -o ncc3.exe $(all_cs)
 	mv out.cs out3.cs
@@ -59,8 +60,11 @@ sync:
 	cp ncc3.exe ../boot/ncc.exe
 
 ncc.exe: $(all_src)
-	$(NET_ENGINE) ../boot/ncc.exe $(n_src)
-	$(COMPILE) -debug+ -o $@ $(all_cs)
+	$(NET_ENGINE) $(NEFLAGS) ../boot/ncc.exe $(n_src)
+	$(COMPILE) -o $@ $(all_cs)
+
+../config.mak:
+	$(MAKE) -C .. config.mak
 
 .PHONY: t
 

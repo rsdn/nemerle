@@ -36,6 +36,9 @@ send: dist send-dist
 name = nemerle
 svn2log = python aux/svn2log.py changelog.xml -u aux/users
 
+config.mak: configure
+	./configure
+
 changelog:
 	svn up
 	svn log -v --xml > changelog.xml
