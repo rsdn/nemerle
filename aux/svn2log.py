@@ -1,6 +1,8 @@
 #!/usr/bin/python
 
 import sys
+import os
+import time
 import re
 import getopt
 
@@ -11,7 +13,7 @@ default_domain = "localhost"
 exclude = []
 users = { }
 
-date_rx = re.compile(r"^(\d+-\d+-\d+)T(\d+:\d+:\d+)")
+date_rx = re.compile(r"^(\d+-\d+-\d+T\d+:\d+:\d+)")
 
 def die(msg):
   sys.stderr.write(msg + "\n")
@@ -67,14 +69,41 @@ def wrap_text(str, pref, width):
     ret += pref + line + "\n"
   return ret
 
-def process_entry(out, e):
+class Entry:
+  def __init__(self, tm, rev, author, msg):
+    self.tm = tm
+    self.rev = rev
+    self.author = author
+    self.msg = msg
+    self.beg_tm = tm
+    self.beg_rev = rev
+
+  def join(self, other):
+    self.tm = other.tm
+    self.rev = other.rev
+    self.msg += other.msg
+
+  def dump(self, out):
+    if self.rev != self.beg_rev:
+      out.write("%s [r%s-%s]  %s\n\n" % \
+                          (time.strftime("%Y-%m-%d %H:%M", time.gmtime(self.beg_tm)), \
+                           self.rev, self.beg_rev, convert_user(self.author)))
+    else:
+      out.write("%s [r%s]  %s\n\n" % \
+                          (time.strftime("%Y-%m-%d %H:%M", time.gmtime(self.beg_tm)), \
+                           self.rev, convert_user(self.author)))
+    out.write(self.msg)
+  
+  def can_join(self, other):
+    return self.author == other.author and abs(self.tm - other.tm) < 3 * 60
+
+def process_entry(e):
   rev = attr(e, "revision")
   author = child(e, "author").textof()
   m = date_rx.search(child(e, "date").textof())
   msg = child(e, "msg").textof()
   if m:
-    date = m.group(1)
-    time = m.group(2)
+    tm = time.mktime(time.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S"))
   else:
     die("evil date: %s" % child(e, "date").textof())
   paths = []
@@ -90,19 +119,31 @@ def process_entry(out, e):
         paths.append(nam)
  
   if paths != []:
-    out.write("%s %s [r%s]  %s\n\n" % \
-                          (date, time, rev, convert_user(author)))
-    out.write("\t* %s\n" % wrap_text(", ".join(paths) + ": " + msg, "\t  ", 65))
+    return Entry(tm, rev, author, "\t* %s\n" % wrap_text(", ".join(paths) + ": " + msg, "\t  ", 65))
+
+  return None
 
 def process(fin, fout):
   parser = qp_xml.Parser()
   root = parser.parse(fin)
 
   if root.name != "log": die("root is not <log>")
-    
+  
+  cur = None
+  
   for logentry in root.children:
     if logentry.name != "logentry": die("non <logentry> <log> child")
-    process_entry(fout, logentry)
+    e = process_entry(logentry)
+    if e != None:
+      if cur != None:
+        if cur.can_join(e):
+          cur.join(e)
+        else:
+          cur.dump(fout)
+          cur = e
+      else: cur = e
+        
+  if cur != None: cur.dump(fout)
 
 def usage():
   sys.stderr.write(\
@@ -178,4 +219,6 @@ def process_opts():
   process(fin, fout)
 
 if __name__ == "__main__":
+  os.environ['TZ'] = 'UTC'
+  time.tzset()
   process_opts()
