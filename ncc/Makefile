@@ -50,6 +50,9 @@ NEMERLE_DLL_SRC = \
 	../lib/queue.n			\
 	../lib/stack.n			\
 	../lib/tree.n			\
+	../lib/idictionaryenumerator.n	\
+	../lib/idictionary.n		\
+	../lib/dictionaryentry.n
 
 NEMERLE_COMPILER_DLL_SRC = \
 	extensions.n \
