@@ -18,13 +18,6 @@ t:
 		mono --debug ./$(target) ../lib/core.n $$f || exit 1 ; \
 	done
 
-test-tree: test.exe
-	mono --debug ./test.exe
-
-test.exe: option.n tree.n test.n
-	../npc $^
-	mcs -debug+ -o $@ test.n.cs
-
 parser.cs: parser.jay
 	jay -v -t -c parser.jay < `jay -p`/skeleton.cs > parser.cs
 	perl -p -i -e 's/(public void yyerror )/virtual $$1/' parser.cs
