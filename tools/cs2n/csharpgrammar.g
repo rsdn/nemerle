@@ -2442,9 +2442,12 @@ indexer_declarator[bool mod]
     ;
 
 operator_declaration
+{
+    string ty = "";    
+}
     :   (attributes)?   (operator_modifier)+   
-        operator_declarator   
-        operator_body
+        ty = operator_declarator   
+        operator_body [ty]
     ;
 
 operator_modifier
@@ -2454,18 +2457,24 @@ operator_modifier
     ;
 
 operator_declarator
+returns [string ty]
+{
+    ty = "";
+}
     :   (type   OPERATOR   overloadable_unary_operator   LPAREN   type   IDENTIFIER   RPAREN)=>
-            unary_operator_declarator
-    |   binary_operator_declarator
-    |   conversion_operator_declarator
+            ty = unary_operator_declarator
+    |   ty = binary_operator_declarator
+    |   ty = conversion_operator_declarator
     ;
 
 unary_operator_declarator
+returns [string tp]
 {
     string [] tp1 = new string []{"",""};
     string [] tp2 = new string []{"",""};
+    tp = "";
 }
-    :   tp1 = type        
+    :   tp1 = type  {tp = tp1[1];}
         op:OPERATOR      {Emit.EmitString (ExtendedToken.getWhitespaces (op) + "@");}
         overloadable_unary_operator   
         lp:LPAREN        {Emit.EmitToken (lp);}
@@ -2488,12 +2497,14 @@ overloadable_unary_operator
     ;
 
 binary_operator_declarator
+returns [string tp]
 {
     string [] tp1 = new string []{"",""};
     string [] tp2 = new string []{"",""};
     string [] tp3 = new string []{"",""};
+    tp = "";
 }
-    :   tp1 = type   
+    :   tp1 = type  {tp = tp1[1];}  
         op:OPERATOR                  {Emit.EmitString (ExtendedToken.getWhitespaces (op) + "@");}
         overloadable_binary_operator   
         lp:LPAREN                    {Emit.EmitToken (lp);}
@@ -2528,12 +2539,15 @@ overloadable_binary_operator
     ;
 
 conversion_operator_declarator
+returns [string tp]
 {      
   string [] ty = null;
   string [] pty = null;
+  tp = "";
 }
     :   (IMPLICIT)=> 
-        i : IMPLICIT   OPERATOR ty = type   lp : LPAREN  pty =  type  
+        i : IMPLICIT   OPERATOR ty = type  {tp = ty[1];}
+	lp : LPAREN  pty =  type  
         id : IDENTIFIER  rp : RPAREN
         { Emit.EmitString (ExtendedToken.getWhitespaces (i));
           Emit.EmitString ("@:");
@@ -2556,11 +2570,11 @@ conversion_operator_declarator
         }
     ;
 
-operator_body
+operator_body [string ty]
 {
     StatementTree t = new StatementTree();
 }
-    :   t = block {Emit.EmitString ( t.ToString () );}
+    :   t = block {Emit.EmitString ( t.ToString (ty) );}
     |   s:SEMI    {Emit.EmitToken (s);}
     ;
 
@@ -2661,7 +2675,7 @@ static_constructor_body
 {
     StatementTree t = new StatementTree();
 }
-    :   t = block  {Emit.EmitString ( t.ToString () );}
+    :   t = block  {Emit.EmitString ( t.ToString ("void") );}
     |   s:SEMI {Emit.EmitToken (s);}
     ;
 
@@ -2730,23 +2744,23 @@ struct_body
     ;
 
 struct_member_declaration
-    :   ((attributes)?   (constant_modifier)*   CONST)=> 
+    :   (constant_declaration)=>
             constant_declaration
-    |   ((attributes)?   (field_modifier)*   type   variable_declarator[false,"",""])=> 
+    |   (field_declaration) =>
             field_declaration
-    |   ((attributes)?   (method_modifier)*   return_type   member_name   LPAREN)=> 
+    |   (method_declaration) =>
             method_declaration
-    |   ((attributes)?   (property_modifier)*   type   member_name   LBRACE)=>
+    |   (property_declaration) =>
             property_declaration
-    |   ((attributes)?   (event_modifier)*   EVENT )=>
+    |   (event_declaration) =>
             event_declaration
     |   (indexer_declaration)=>
             indexer_declaration
-    |   ((attributes)?   (operator_modifier)+   operator_declarator   operator_body)=>
+    |   (operator_declaration) =>
             operator_declaration
     |   (constructor_declaration)=>
             constructor_declaration
-    |   ((attributes)?   static_constructor_modifiers)=>
+    |   (static_constructor_declaration) =>
             static_constructor_declaration
     |   type_declaration
     ;
