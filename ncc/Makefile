@@ -29,15 +29,15 @@
 include ../config.mak
 
 lib_src = ../lib/aliases.n ../lib/core.n ../lib/option.n ../lib/list.n \
-	  tree.n ../lib/hashtable.n ../lib/stack.n ../lib/queue.n ../lib/input.n
+	  tree.n ../lib/hashtable.n ../lib/stack.n ../lib/queue.n ../lib/input.n \
+	  ../lib/getopt.n
 
-n_src = \
+src = \
 	$(lib_src) \
 	ast.n \
 	parsetree.n \
 	typedtree.n \
 	util.n \
-	csglue.n \
 	env.n \
 	passes.n \
 	scan_globals.n \
@@ -57,18 +57,12 @@ n_src = \
 	macroregistry.n \
 	cgil.n \
 	parser.n \
+	main.n \
 	lexer.n
 
 
-cs_src  = main.cs
-#lexer.cs main.cs parser.cs
-#cs_src  = main.cs parser.cs
-all_src = $(n_src) $(cs_src)
-all_cs  = $(cs_src)
-
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 COMPILE = $(CSC) /debug+ $(CSCFLAGS)
-
 
 all: ncc.exe
 
@@ -77,11 +71,11 @@ all: ncc.exe
 # Finally run testsuite.
 boot: ncc.exe
 	rm -f out.cs
-	$(EXECUTE) ./ncc.exe $(n_src)
+	$(EXECUTE) ./ncc.exe $(src)
 	mv -f out.cs out2.cs
-	$(COMPILE) $(OUTFLAG)ncc2.exe $(all_cs) out2.cs
+	$(COMPILE) $(OUTFLAG)ncc2.exe out2.cs
 	$(NGEN) ncc2.exe
-	$(EXECUTE) ./ncc2.exe $(n_src)
+	$(EXECUTE) ./ncc2.exe $(src)
 	cmp -s out2.cs out.cs
 	rm -f out.cs
 	$(MAKE) tests
@@ -91,9 +85,9 @@ sync:
 	cp ncc2.exe ../boot/ncc.exe
 
 ncc.exe: $(all_src)
-	$(EXECUTE) ../boot/ncc.exe $(n_src)
+	$(EXECUTE) ../boot/ncc.exe $(src)
 	mv -f out.cs out1.cs
-	$(COMPILE) $(OUTFLAG)$@ $(all_cs) out1.cs
+	$(COMPILE) $(OUTFLAG)$@ out1.cs
 	$(NGEN) ncc.exe
 
 stdlib.dll: $(lib_src)
@@ -111,13 +105,10 @@ t test: tests
 tests:
 	$(MAKE) -C testsuite
 
-parser.cs: parser.jay
-	jay -v -t -c parser.jay < `jay -p`/skeleton.cs > parser.cs
-	perl -p -i -e 's/(public void yyerror )/virtual $$1/' parser.cs
-
 install: ncc.exe
 	if test ! -d $(BINDIR) ; then mkdir -p $(BINDIR) ; fi
 	$(INSTALL) -m 755 ncc.exe $(BINDIR)/ncc
 
 clean:
-	rm -f out.cs out[0-9].cs parser.cs *.exe y.output
+	$(MAKE) -C testsuite clean
+	rm -f out.cs out[0-9].cs *.exe *.exe.so *.dll.so cgil-test.dll

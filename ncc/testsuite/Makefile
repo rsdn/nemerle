@@ -32,4 +32,4 @@ all:
 	perl tests.pl ncc2 $(CSC)
 
 clean:
-	rm -f *.cs *.exe *.il
+	rm -f *.cs *.exe *.il *.dll ext_test.out
