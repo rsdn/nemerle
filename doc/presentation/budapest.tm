@@ -49,7 +49,34 @@
     \;
   </with>
 
-  <section|Combine>
+  <section|Reasons -- why new language?>
+
+  <\itemize>
+    <item>we wanted functional language (yes, this a matter of taste)
+
+    <item><verbatim|.NET> (with generics) provides best environment for high
+    level, statically typed languages we have seen so far
+
+    <item>ports of existing functional languages to <verbatim|.NET> didn't
+    provide full integration
+  </itemize>
+
+  \;
+
+  <with|font size|1.41|<\with|paragraph mode|center>
+    <subsection|The most important reason:>
+  </with>>
+
+  <\with|paragraph mode|center>
+    <with|font series|medium|<with|font size|1.19|<strong|Designing
+    programming languages is a lot of <em|<with|color|black|fun>>> :-)>>
+  </with>
+
+  <new_page>
+
+  <section|Method -- how to do it?>
+
+  <subsubsection|Combine>
 
   <\itemize>
     <item><verbatim|.NET> object-oriented type system with generics
@@ -69,7 +96,7 @@
 
   \;
 
-  <section|Result>
+  <section|And the Result>
 
   <\itemize>
     <item>full <verbatim|.NET> compatibility
@@ -789,51 +816,61 @@
 <\references>
   <\collection>
     <associate|toc-10|<tuple|<uninit>|7>>
-    <associate|gly-1|<tuple|1|?>>
+    <associate|toc-11|<tuple|<uninit>|7>>
     <associate|toc-1|<tuple|<uninit>|2>>
-    <associate|toc-11|<tuple|<uninit>|8>>
+    <associate|gly-1|<tuple|1|?>>
     <associate|toc-12|<tuple|<uninit>|8>>
     <associate|toc-2|<tuple|<uninit>|2>>
+    <associate|toc-13|<tuple|<uninit>|8>>
     <associate|toc-3|<tuple|<uninit>|3>>
+    <associate|toc-14|<tuple|<uninit>|9>>
     <associate|toc-4|<tuple|<uninit>|3>>
+    <associate|toc-15|<tuple|<uninit>|9>>
     <associate|toc-5|<tuple|<uninit>|3>>
     <associate|toc-6|<tuple|<uninit>|4>>
-    <associate|toc-7|<tuple|<uninit>|6>>
-    <associate|toc-8|<tuple|<uninit>|6>>
-    <associate|toc-9|<tuple|<uninit>|7>>
+    <associate|toc-7|<tuple|<uninit>|4>>
+    <associate|toc-8|<tuple|<uninit>|4>>
+    <associate|toc-9|<tuple|<uninit>|5>>
   </collection>
 </references>
 
 <\auxiliary>
   <\collection>
     <\associate|toc>
-      Combine<value|toc-dots><pageref|toc-1>
+      Reasons -- why new language?<value|toc-dots><pageref|toc-1>
 
-      Result<value|toc-dots><pageref|toc-2>
+      <with|left margin|<quote|1.5fn>|The most important
+      reason:<value|toc-dots><pageref|toc-2>>
 
-      Examples<value|toc-dots><pageref|toc-3>
+      Method -- how to do it?<value|toc-dots><pageref|toc-3>
+
+      <with|left margin|<quote|3fn>|Combine<value|toc-dots><pageref|toc-4>>
+
+      And the Result<value|toc-dots><pageref|toc-5>
+
+      Examples<value|toc-dots><pageref|toc-6>
 
       <with|left margin|<quote|3fn>|Hello
-      world<value|toc-dots><pageref|toc-4>>
+      world<value|toc-dots><pageref|toc-7>>
 
       <with|left margin|<quote|3fn>|Binary tree
-      insertion<value|toc-dots><pageref|toc-5>>
+      insertion<value|toc-dots><pageref|toc-8>>
 
       <with|left margin|<quote|3fn>|Red-black
-      trees<value|toc-dots><pageref|toc-6>>
+      trees<value|toc-dots><pageref|toc-9>>
 
-      Language extensions<value|toc-dots><pageref|toc-7>
+      Language extensions<value|toc-dots><pageref|toc-10>
 
       <with|left margin|<quote|3fn>|Example
-      uses<value|toc-dots><pageref|toc-8>>
+      uses<value|toc-dots><pageref|toc-11>>
 
-      Regular expression extension<value|toc-dots><pageref|toc-9>
+      Regular expression extension<value|toc-dots><pageref|toc-12>
 
-      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-10>>
+      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-13>>
 
-      SQL queries extension<value|toc-dots><pageref|toc-11>
+      SQL queries extension<value|toc-dots><pageref|toc-14>
 
-      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-12>>
+      <with|left margin|<quote|3fn>|Remarks<value|toc-dots><pageref|toc-15>>
     </associate>
   </collection>
 </auxiliary>
