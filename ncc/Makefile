@@ -50,6 +50,10 @@ boot: ncc.exe
 	mv out.cs out3.cs
 	$(MAKE) testsuite
 
+sync:
+	mv ../boot/ncc.exe ../boot/ncc-old.exe
+	cp ncc3.exe ../boot/ncc.exe
+	
 ncc.exe: $(all_src)
 	mono ../boot/ncc.exe $(n_src)
 	$(MCS) -debug+ -o $@ $(all_cs)
