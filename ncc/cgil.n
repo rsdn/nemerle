@@ -416,8 +416,8 @@ namespace Nemerle.Compiler
      * Converts a System.Type list to a System.Type array.
      * FIXME: array (x) won't work here as the list's length is not know.
      */  
-    internal type_list_to_type_array (x : list (System.Type)) : array (System.Type) {
-
+    internal type_list_to_type_array (x : list (System.Type)) : array (System.Type) 
+    {
       def result = 
         (System.Array.CreateInstance (typeof (System.Type), List.Length (x)) :> array (System.Type));
       
@@ -1096,12 +1096,25 @@ namespace Nemerle.Compiler
             false
           }
 
+
         /* load runtime representation of given type */
         | CE_typeof (t) =>
           _ilg.Emit (OpCodes.Ldtoken, t);
           _ilg.Emit (OpCodes.Call, reflect_type ("System.Type").GetMethod ("GetTypeFromHandle"));
           false
 
+  
+        /* emits the CE_switch instruction */
+        | CE_switch (indexing_expr, default_expr, cases) =>
+          match (cases) {
+            | [] => 
+              Message.warning ("empty CE_switch instruction");
+              false
+            | _ => 
+              if (emit (indexing_expr)) true
+              else emit_switch (default_expr, cases)
+          }
+            
 
         /* -- TYPE CONVERSIONS --------------------------------------------- */
 
@@ -1254,17 +1267,21 @@ namespace Nemerle.Compiler
 
         /* assignment to an array element */
         | CE_assign (CE_array_indexer (array_obj, [index]), val) =>
+          def type_of_val = type_of (val);
+          
           if (emit (array_obj)) true
           else if (emit (index)) true
-          else if (emit (val)) true
           else {
-            def element_type = type_of (array_obj).GetElementType ();
-            assert (element_type != null, "non-array in CE_array_indexer");
-
-            emit_array_store_opcode (element_type);
-            false
+            when (type_of_val.IsValueType && !is_known_primitive_value_type (type_of_val))
+              _ilg.Emit (OpCodes.Ldelema, type_of_val);
+          
+            if (emit (val)) true
+            else {
+              emit_array_store_opcode (type_of_val);
+              false
+            }
           }
-        
+                  
         | CE_assign (CE_array_indexer, _) => 
           Util.ice (_method_name + ": multidimensional arrays should be accessed by means of properties")
 
@@ -1442,8 +1459,8 @@ namespace Nemerle.Compiler
             def store_argument (cgv : CG_val) {
               match (cgv.parm_index) {
                 | Some (index) =>
-                  if (index < 250)
-                    _ilg.Emit (OpCodes.Starg_S, index)
+                  if (index < 256)
+                    _ilg.Emit (OpCodes.Starg_S, (index :> System.Byte))
                   else
                     _ilg.Emit (OpCodes.Starg, index);
                 | None => Util.ice ()
@@ -1558,7 +1575,11 @@ namespace Nemerle.Compiler
               | [] => false
               | element :: rest =>
                 _ilg.Emit (OpCodes.Ldloc, local_slot);
-                _ilg.Emit (OpCodes.Ldc_I4, index);                
+                _ilg.Emit (OpCodes.Ldc_I4, index);
+                
+                when (element_type.IsValueType && !is_known_primitive_value_type (element_type))
+                  _ilg.Emit (OpCodes.Ldelema, element_type);
+                  
                 if (emit (element)) true
                 else {
                   emit_array_store_opcode (element_type);
@@ -1581,6 +1602,109 @@ namespace Nemerle.Compiler
       }
     }
 
+    
+    /**
+     * Emits the CE_switch instruction
+     * 
+     * Asserts that the smallest of the case indices is positive. Quietly 
+     * asserts that the indexer is verified to be in a valid range -- i.e.
+     * that the rescaling substraction does not overflow and that we never 
+     * generate too long switch instructions -- assuring this should belong 
+     * to a higher level logic.
+     */
+    private emit_switch (default_expr : option (CG_expr), 
+                         cases : list (int * CG_expr)) : bool
+    {      
+      // step one: sort the cases increasingly
+      def compare_cases (l : int * CG_expr, r : int * CG_expr) : int {
+        def (l, _) = l; def (r, _) = r; r - l
+      };
+      
+      def cases = List.Sort (compare_cases, cases);
+      def (first_index, _) = List.Head (cases);
+
+      // step two: rescale, so that the first label has value zero
+      when (first_index != 0) {
+        // NOTE: see the assumptions in the method description
+        emit_literal (L_int (first_index));
+        _ilg.Emit (OpCodes.Sub_Ovf)
+      };
+
+      // step three: generate the jump labels for the switch cases      
+      mutable reversed_labels <- [];
+      
+      def make_labels (index : int, cases : list (int * CG_expr)) 
+                          : list (option (CG_expr) * Label) {
+        match (cases) {
+          | (case_index, case_expr) :: rest =>
+            assert (index <= case_index);
+            
+            def case_label = _ilg.DefineLabel ();
+            reversed_labels <- case_label :: reversed_labels;
+            
+            // insert jumps to the default expression where appropriate
+            if (case_index == index)
+              (Some (case_expr), case_label) :: make_labels (index + 1, rest)
+            else
+              (None (), case_label) :: make_labels (index + 1, cases)
+          | [] => []
+        }
+      };
+            
+      def labeled_cases = make_labels (first_index, cases);
+      def labels = List.Rev (reversed_labels);
+
+      def labels_array = label_list_to_array (labels);
+     
+      // step four: emit the switch instruction and the default expression
+      mutable switch_cutoff <- true;
+      
+      def label_default = _ilg.DefineLabel ();
+      def label_next_instruction = _ilg.DefineLabel ();
+                  
+      _ilg.Emit (OpCodes.Switch, labels_array);
+      _ilg.MarkLabel (label_default);
+
+      // only jump to the default expression if it's not empty
+      def default_jump_target =
+        match (default_expr) {
+          | Some (default_expr) =>
+            unless (emit (default_expr)) switch_cutoff <- false;
+            _ilg.Emit (OpCodes.Br, label_next_instruction);
+            label_default
+          | None =>
+            _ilg.Emit (OpCodes.Br, label_next_instruction);
+            switch_cutoff <- false;
+            label_next_instruction
+        };
+
+      // step five: emit the switch cases
+      def walk_cases (cases : list (option (CG_expr) * Label)) : void {
+        match (cases) {
+          | (expr, label) :: rest =>
+            _ilg.MarkLabel (label);
+            match (expr) {
+              | Some (expr) =>
+                unless (emit (expr)) {
+                  switch_cutoff <- false;
+                  _ilg.Emit (OpCodes.Br, label_next_instruction)
+                }
+              | None =>
+                _ilg.Emit (OpCodes.Br, default_jump_target)
+            };
+            walk_cases (rest)
+          | [] => ()
+        }
+      };
+
+      walk_cases (labeled_cases);
+
+      // step six: mark the next instruction after the switch
+      unless (switch_cutoff)
+        _ilg.MarkLabel (label_next_instruction);
+      switch_cutoff
+    }
+     
 
     /**
      * Check if a given expression is a call to an opcode
@@ -1675,7 +1799,7 @@ namespace Nemerle.Compiler
         | 1 => _ilg.Emit (OpCodes.Ldarg_1)
         | 2 => _ilg.Emit (OpCodes.Ldarg_2)
         | 3 => _ilg.Emit (OpCodes.Ldarg_3)
-        | n when n <= 255 => _ilg.Emit (OpCodes.Ldarg_S, index)
+        | n when n <= 255 => _ilg.Emit (OpCodes.Ldarg_S, (index :> System.Byte))
         | _ => _ilg.Emit (OpCodes.Ldarg, index)
       }
     }
@@ -1687,7 +1811,7 @@ namespace Nemerle.Compiler
     private emit_ldarga (index : int) : void
     {
       match (index) {
-        | n when n <= 255 => _ilg.Emit (OpCodes.Ldarga_S, index)
+        | n when n <= 255 => _ilg.Emit (OpCodes.Ldarga_S, (index :> System.Byte))
         | _ => _ilg.Emit (OpCodes.Ldarga, index)
       }
     }
@@ -1703,9 +1827,15 @@ namespace Nemerle.Compiler
       def conv_i8 = l.FullName == "System.Int32" && r.FullName == "System.Int64";
       def conv_ovf_u2 = l.FullName == "System.Int32" && r.FullName == "System.Char";
       def conv_skip = l.FullName == "System.Int32" && is_subclass_of_system_enum (r);
-              
+      def conv_ovf_u1 = l.FullName == "System.Int32" && r.FullName == "System.Byte";
+      def conv_ovf_u1_un = l.FullName == "System.Char" && r.FullName == "System.Byte";
+      def conv_ovf_i1 = l.FullName == "System.Int32" && r.FullName == "System.SByte";
+                    
       if (conv_i4) _ilg.Emit (OpCodes.Conv_I4)
       else if (conv_i8) _ilg.Emit (OpCodes.Conv_I8)
+      else if (conv_ovf_i1) _ilg.Emit (OpCodes.Conv_Ovf_I1)
+      else if (conv_ovf_u1) _ilg.Emit (OpCodes.Conv_Ovf_U1)
+      else if (conv_ovf_u1_un) _ilg.Emit (OpCodes.Conv_Ovf_U1_Un)
       else if (conv_ovf_u2) _ilg.Emit (OpCodes.Conv_Ovf_U2)
       else if (conv_skip) ()
       else {
@@ -1777,6 +1907,20 @@ namespace Nemerle.Compiler
 
 
     /**
+     * Checks if a given value type is a known primitive
+     */
+    private is_known_primitive_value_type (ty : System.Type) : bool
+    {
+      def tn = ty.FullName;
+
+      tn == "System.SByte" || tn == "System.Boolean" || tn == "System.Byte" ||
+      tn == "System.Char" || tn == "System.Int16" || tn == "System.UInt16" ||
+      tn == "System.Int32" || tn == "System.UInt32" || tn == "System.Int64" || 
+      tn == "System.UInt64" || tn == "System.Single" || tn == "System.Double"
+    }
+
+
+    /**
      * Emits a STELEM instruction for a given type
      *
      * NOTE: there is no Stelem_U* in System.Reflection.Emit.OpCodes.
@@ -1784,22 +1928,20 @@ namespace Nemerle.Compiler
     private emit_array_store_opcode (ty : System.Type) : void
     {
       assert (!is_system_void (ty), "tried to store a System.Void in an array");
-      
+
       def tn = ty.FullName;
 
-      def opcode =
-        if (tn == "System.SByte" || tn == "System.Boolean") OpCodes.Stelem_I1
-        else if (tn == "System.Byte") OpCodes.Stelem_I1
-        else if (tn == "System.Char" || tn == "System.Int16") OpCodes.Stelem_I2
-        else if (tn == "System.UInt16") OpCodes.Stelem_I2
-        else if (tn == "System.Int32") OpCodes.Stelem_I4
-        else if (tn == "System.UInt32") OpCodes.Stelem_I4
-        else if (tn == "System.Int64" || tn == "System.UInt64") OpCodes.Stelem_I8
-        else if (tn == "System.Single") OpCodes.Stelem_R4
-        else if (tn == "System.Double") OpCodes.Stelem_R8
-        else OpCodes.Stelem_Ref;
-        
-      _ilg.Emit (opcode)          
+      if (tn == "System.SByte" || tn == "System.Boolean") _ilg.Emit (OpCodes.Stelem_I1)
+      else if (tn == "System.Byte") _ilg.Emit (OpCodes.Stelem_I1)
+      else if (tn == "System.Char" || tn == "System.Int16") _ilg.Emit (OpCodes.Stelem_I2)
+      else if (tn == "System.UInt16") _ilg.Emit (OpCodes.Stelem_I2)
+      else if (tn == "System.Int32") _ilg.Emit (OpCodes.Stelem_I4)
+      else if (tn == "System.UInt32") _ilg.Emit (OpCodes.Stelem_I4)
+      else if (tn == "System.Int64" || tn == "System.UInt64") _ilg.Emit (OpCodes.Stelem_I8)
+      else if (tn == "System.Single") _ilg.Emit (OpCodes.Stelem_R4)
+      else if (tn == "System.Double") _ilg.Emit (OpCodes.Stelem_R8)
+      else if (ty.IsValueType) _ilg.Emit (OpCodes.Stobj, ty)
+      else _ilg.Emit (OpCodes.Stelem_Ref);
     }
 
 
@@ -1888,10 +2030,10 @@ namespace Nemerle.Compiler
         | L_int (6) => _ilg.Emit (OpCodes.Ldc_I4_6)
         | L_int (7) => _ilg.Emit (OpCodes.Ldc_I4_7)
         | L_int (8) => _ilg.Emit (OpCodes.Ldc_I4_8)
-//        | L_int (k) when k >= -128 && k <= 127 => _ilg.Emit (OpCodes.Ldc_I4_S, k) -- FIXME: this is doing something bad to the MSIL
+        | L_int (k) when k >= -128 && k <= 127 => _ilg.Emit (OpCodes.Ldc_I4_S, (k :> System.SByte))
         | L_int (k) => _ilg.Emit (OpCodes.Ldc_I4, k)
 
-        | L_char (k) when (k :> int) <= 127 => _ilg.Emit (OpCodes.Ldc_I4_S, (k :> int))          
+        | L_char (k) when (k :> int) <= 127 => _ilg.Emit (OpCodes.Ldc_I4_S, (k :> System.Byte))
         | L_char (k) => _ilg.Emit (OpCodes.Ldc_I4, (k :> int))
         
         | L_bool (true) => _ilg.Emit (OpCodes.Ldc_I4_1)
@@ -2023,6 +2165,7 @@ namespace Nemerle.Compiler
         | CE_none => "CE_none"
         | CE_mkarray (_, initializers) => "CE_mkarray { " + pretty_print_list (initializers, "") + " }; "
         | CE_array_indexer (obj, args) => "CE_indexer " + pretty_print (obj) + "[" + pretty_print_list (args, "") + "]" + "; "
+        | CE_switch (indexer, _, _) => "CE_switch ( " + pretty_print (indexer) + " ); "
       }
     }
 
@@ -2043,6 +2186,30 @@ namespace Nemerle.Compiler
     {
       mi.DeclaringType.FullName + "::" + mi.Name
     }
+
+    /**
+     * Converts a list (Label) into a array (Label)
+     * FIXME: this should work now?
+     */
+    private label_list_to_array (x : list (Label)) : array (Label) 
+    {
+      def result = 
+        (System.Array.CreateInstance (typeof (Label), List.Length (x)) :> array (Label));
+      
+      def loop (index : int, x : list (Label)) : void {        
+        match (x) {
+          | head :: tail =>
+            result [index] <- (head :> Label);
+            loop (index + 1, tail)
+          | [] => ()
+        }
+      };
+    
+      loop (0, x);
+      
+      result
+    }
+
   } /* end of the class */
   
 } /* end of the namespace */
