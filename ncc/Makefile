@@ -28,7 +28,7 @@
 
 include ../config.mak
 
-lib_src = ../lib/core.n ../lib/option.n ../lib/list.n tree.n
+lib_src = ../lib/core.n ../lib/option.n ../lib/list.n tree.n ../lib/hashtable.n ../lib/stack.n
 
 n_src = \
 	$(lib_src) \

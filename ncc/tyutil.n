@@ -276,6 +276,183 @@ module Tyutil {
         | T_array (t) => "array " + string_of_type (t)
       };
     }
+
+
+  (**
+   * Used to emit Nemerle types in assembly metadata
+   *
+   * <remarks>
+   *   The type tree is converted to reverse polish notation.
+   * </remarks>
+   *)
+  public type_to_string_list (t : Type) : list (string)
+  {
+    def concat (header : string, tokens : list (list (string))) : list (string) {    
+      match (tokens) {
+        | [] => []
+        | token :: rest =>
+          List.append (header :: token, concat (header, rest))
+      }
+    };
+    
+    def walk_type (t : Type) : list (string) {
+      match (t) {
+        | T_ref (t) => "T_ref" :: walk_type (t)
+        | T_out (t) => "T_out" :: walk_type (t)
+        | T_array (t) => "T_array" :: walk_type (t)
+        | T_var (tv) => ["T_var"; tv.name]
+        | T_void => ["T_void"]
+        | T_fun (args, rt) => 
+          "T_fun" :: "T_fun_args" :: List.append (walk_type (args),
+                                                  "T_fun_rt" :: walk_type (rt))
+        | T_prod ([]) =>
+          ["T_prod"; "T_prod_no_args"]
+        | T_prod (args) =>
+          "T_prod" :: concat ("T_prod_arg", List.map (walk_type, args))
+        | T_app (ti, []) =>
+          ["T_app"; ti.name; "T_app_no_args"]
+        | T_app (ti, args) =>
+          "T_app" :: ti.name :: 
+            concat ("T_app_arg", List.map (walk_type, args))
+      }
+    };
+    
+    List.rev (walk_type (t))
+  }
+
+
+  (**
+   * Used to decode Nemerle types extracted from assembly metadata
+   *)
+  public string_list_to_type (env : Env, tokens : list (string)) : Type {
+    
+    def type_stack = Nemerle.Collections.Stack ();
+    def token_stack = Nemerle.Collections.Stack ();
+
+    def fail (message : string) : void {
+      Message.error ("failed to build type from string list (" + message + ")")
+    };
+    
+    def walk_list (tokens : list (string)) : void {    
+      match (tokens) {
+        | token :: rest =>
+          def expect_type_stack_length (length : int) : void {
+            if (type_stack.length () < length)
+              fail ("the type stack was expected to have at least " + string_of_int (length) +
+                    "elements when processing symbol '" + token + "'")
+            else ()
+          };
+
+          def expect_token_stack_length (length : int) : void {          
+            if (token_stack.length () < length)
+              fail ("the token stack was expected to have at least " + string_of_int (length) +
+                    "elements when processing symbol '" + token + "'")
+            else ()
+          };
+
+          def expect_eq (l : string, r : string) : void {          
+            if (l != r) fail ("expected to find '" + r + "' on the stack, got '" + l + 
+                              "' while processing token '" + token + "'") else ();
+          };
+          
+          def new_type =
+            match (token) {
+              | "T_void" => Some (T_void ())
+              | "T_ref" =>
+                expect_type_stack_length (1);
+                Some (T_ref (type_stack.pop ()))
+              | "T_out" => 
+                expect_type_stack_length (1);
+                Some (T_out (type_stack.pop ()))
+              | "T_array" => 
+                expect_type_stack_length (1);
+                Some (T_array (type_stack.pop ()))
+              | "T_var" => 
+                expect_token_stack_length (1);
+                Some (T_var (Tyvar.T ((token_stack.pop () : string))))
+              | "T_fun" =>
+                expect_type_stack_length (2);
+                expect_token_stack_length (2);
+                                
+                def rt = type_stack.pop ();
+                def fr = token_stack.pop ();
+
+                expect_eq (fr, "T_fun_rt");
+                
+                def ft = type_stack.pop ();
+                def fa = token_stack.pop (); 
+
+                expect_eq (fa, "T_fun_fa");
+                
+                Some (T_fun (ft, rt))
+              | "T_prod" =>
+                expect_token_stack_length (1);
+                
+                if (token_stack.top () == "T_prod_noargs") {
+                  def _ = token_stack.pop ();
+                  Some (T_prod ([]))
+                }
+                else {
+                  def loop () : list (Type) {                  
+                    expect_token_stack_length (1);                  
+                    expect_type_stack_length (1);
+                  
+                    if (token_stack.top () == "T_prod_arg") {                    
+                      def _ = token_stack.pop ();
+                      type_stack.pop () :: loop ();
+                    }
+                    else []
+                  };
+                                    
+                  Some (T_prod (loop ()))  
+                }
+              | "T_app" =>
+                expect_token_stack_length (2);
+                
+                def ti_name = token_stack.pop ();
+                def ti = env.lookup_type (ti_name);
+                
+                if (token_stack.top () == "T_app_noargs") {                
+                  def _ = token_stack.pop ();
+                  Some (T_app (ti, []))
+                }
+                else {
+                
+                  def loop () : list (Type) {                  
+                    expect_token_stack_length (1);                  
+                    expect_type_stack_length (1);
+                  
+                    if (token_stack.top () == "T_app_arg") {                    
+                      def _ = token_stack.pop ();
+                      type_stack.pop () :: loop ();
+                    }
+                    else []
+                  };
+                                    
+                  Some (T_app (ti, loop ()))  
+                }
+              | token =>
+                token_stack.push (token);
+                None ()
+            };
+                    
+          match(new_type) {
+            | Some (new_type) => type_stack.push (new_type)
+            | _ => ()
+          };
+          
+          walk_list (rest)
+          
+        | [] =>
+          if (type_stack.length () != 1 || token_stack.length () != 0) 
+            fail ("stacks are not balanced") else ()
+      }
+    };
+    
+    walk_list (tokens);
+    type_stack.pop ()
+  }
+
   
   // Given function declaration, construct its type.
   public fun_type (h : Fun_header) : Type {
