@@ -29,7 +29,7 @@
 
 $compiler = "mono --debug ../ncc.exe ../lib/core.n";
 $cs_compiler = shift;
-defined $cs_compiler or $cs_compiler = "cscc";
+defined $cs_compiler or $cs_compiler = "mcs";
 $cs_compiler =~ /^(cscc|mcs)$/ or die "bad cs_compiler";
 
 sub xgrep($$)
@@ -114,7 +114,7 @@ while (<*.n>) {
   err("unexpected compiler output")
     if (!$any_errors && -s "test.err");
 
-  if (0 and $res == 0) {
+  if ($res == 0) {
     print STDERR "C# ";
     $no_newline = 1;
     if (xgrep("^BEGIN-OUTPUT", $fn)) {
@@ -128,12 +128,12 @@ while (<*.n>) {
       }
       close (F);
       if ($cs_compiler eq "cscc") {
-        $res = system("cscc -o t.exe $fn.cs >/dev/null 2>&1");
-	err("cscc failed on $fn.cs") if $res;
+        $res = system("cscc -o t.exe out.cs >/dev/null 2>&1");
+	err("cscc failed on $fn (out.cs)") if $res;
         $il_run = "ilrun";
       } elsif ($cs_compiler eq "mcs") {
-        $res = system("mcs -out:t.exe -target:exe $fn.cs >/dev/null 2>&1");
-	err("mcs failed on $fn.cs") if $res;
+        $res = system("mcs -out:t.exe -target:exe out.cs >/dev/null 2>&1");
+	err("mcs failed on $fn (out.cs)") if $res;
         $il_run = "mono";
       } else { die }
       $out = "";
@@ -149,18 +149,18 @@ while (<*.n>) {
       }
     } else {
       if ($cs_compiler eq "cscc") {
-        $res = system("cscc -c -o /dev/null $fn.cs >/dev/null 2>&1");
-	err("cscc failed on $fn.cs") if $res;
+        $res = system("cscc -c -o /dev/null out.cs >/dev/null 2>&1");
+	err("cscc failed on $fn (out.cs)") if $res;
       } elsif ($cs_compiler eq "mcs") {
-        $res = system("mcs -out:dev_null.o -target:module $fn.cs >/dev/null 2>&1");
-	err("mcs failed on $fn.cs") if $res;
+        $res = system("mcs -out:dev_null.o -target:module out.cs >/dev/null 2>&1");
+	err("mcs failed on $fn (out.cs))") if $res;
 	unlink("dev_null.o");
       } else { die }
     }
   }
 
   unlink("test.err");
-  unlink("$fn.cs");
+  unlink("out.cs");
     
   if ($oops) {
     print STDERR "FAIL\n";
