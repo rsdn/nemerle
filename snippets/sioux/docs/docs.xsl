@@ -17,10 +17,10 @@
                   <tbody>
                     <tr>
                       <td align="left">
-                        <a href="EncodeUrl(index.xml)">Main page</a> ::
-			<a href="EncodeUrl(tutorial.xml)">Tutorial</a> ::
-			<a href="EncodeUrl(examples.xml)">Examples</a> ::
-			<a href="EncodeUrl(reference.xml)">Reference manual</a> 
+                        <a href="index.xml">Main page</a> ::
+			<a href="tutorial.xml">Tutorial</a> ::
+			<a href="examples.xml">Examples</a> ::
+			<a href="reference.xml">Reference manual</a> 
 
                       </td>
                       <td align="right">
