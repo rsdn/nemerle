@@ -1516,7 +1516,7 @@ returns [StatementTree t]
              {a.Add (new StatementTree ( ExtendedToken.getWhitespaces (tr) + "}"));}
             (temp = finally_clause {a.Add (temp);}  )? 
             
-            | temp = finally_clause {a.Add (temp);})        
+            | temp = finally_clause {a.Add (temp);})      
             
         { t = new StatementTree("TRY",a); }
     ;
