@@ -536,7 +536,6 @@ class Lexer : yyParser.yyInput
 		keywords["if"] = Token.KW_IF;
 		keywords["then"] = Token.KW_THEN;
 		keywords["else"] = Token.KW_ELSE;
-		keywords["letfun"] = Token.KW_LETFUN;
 		keywords["as"] = Token.KW_AS;
 		keywords["match"] = Token.KW_MATCH;
 		keywords["static"] = Token.KW_STATIC;
