@@ -1125,7 +1125,14 @@ returns [string return_string]
     return_string = "";
     string temp = "";
 }
-    :   (IDENTIFIER   ASSIGN)=>
+    : (IDENTIFIER   ASSIGN NULL)=>
+        id0:IDENTIFIER   a0:ASSIGN  nu:NULL
+        {
+            return_string = t[0] + "mutable " + id0.getText () + a0.getText () + nu.getText () +
+                            " : " + t[1] + ";";
+        } 
+
+    |  (IDENTIFIER   ASSIGN)=>
         id1:IDENTIFIER   a:ASSIGN lvi = local_variable_initializer
         {
             return_string = t[0] + "mutable " + id1.getText () + a.getText () + lvi + ";";
@@ -1896,11 +1903,15 @@ constant_declaration
 {
     string [] t = new string[]{"",""};
 }
-    :   { Emit.BeginBuffer ();}
-        (attributes)?   (constant_modifier)*   
-        { Emit.EndBuffer () ;} 
-        c1:CONST   t=type   constant_declarator[false, Emit.Buffer + ExtendedToken.getWhitespaces(c1) ,t[0]+t[1]] 
-        (c2:COMMA constant_declarator[true, Emit.Buffer  + ExtendedToken.getWhitespaces(c2) ,t[0]+t[1]])*   s:SEMI
+    :   // we store what is outputed here, to paste it in all , separated fields
+        // public int x, y, z; --->  public x : int; public y : int; ...
+        { Emit.BeginBuffer ();}
+           (attributes)?   (constant_modifier)*   
+        { Emit.EndBuffer ();}
+
+        c1:CONST   t=type   constant_declarator[false, ExtendedToken.getWhitespaces(c1) ,t[0]+t[1]] 
+
+        (c2:COMMA constant_declarator[true, Emit.Buffer + ExtendedToken.getWhitespaces(c2) ,t[0]+t[1]])*   s:SEMI
         { Emit.EmitString(ExtendedToken.getWhitespaces (s));}
     ;
 
@@ -1945,6 +1956,7 @@ field_declaration
 }
     :   { Emit.BeginBuffer ();}
         (attributes)?   (ret = field_modifier {is_readonly = is_readonly || ret;} )*   
+
         t = type
         { 
             Emit.EmitString(t[0]);
@@ -1952,7 +1964,7 @@ field_declaration
             {
                 Emit.EmitString(" mutable ");                
             }   
-            Emit.EndBuffer () ;
+            { Emit.EndBuffer ();}
         } 
         variable_declarator[false,""," " +t[1]] 
         (c:COMMA variable_declarator[true,Emit.Buffer + ExtendedToken.getWhitespaces (c) ," " + t[1]])*  s:SEMI
@@ -3427,7 +3439,7 @@ QUOTE       :   "\""    ;   QUESTION    :   '?'     ;
 
 
 PP_DIRECTIVE
-    :   HASH (PP_WHITESPACE)?
+    :   h : HASH { Emit.EmitToken (h); } (PP_WHITESPACE)?
         ( PP_DECLARATION
         |  (PP_END_REGION) => PP_END_REGION 
         |  PP_CONDITIONAL
@@ -3439,10 +3451,10 @@ PP_DIRECTIVE
 
 protected   
 PP_WHITESPACE
-    :   ( options {greedy=true;}:  ' '
-        |   '\u0009' 
-        |   '\u000B' 
-        |   '\u000C' 
+    :   ( options {greedy=true;}:  ' ' { Emit.EmitChar (' '); }
+        |   '\u0009'                   { Emit.EmitChar ('\u0009'); }
+        |   '\u000B'                   { Emit.EmitChar ('\u000B'); }
+        |   '\u000C'                   { Emit.EmitChar ('\u000C'); } 
         )+
         { _ttype = Token.SKIP; }
     ;
@@ -3460,38 +3472,42 @@ PP_EXPRESSION
 
 protected
 PP_OR_EXPRESSION
-    :   PP_AND_EXPRESSION  (options {greedy=true;}: (PP_WHITESPACE)?   LOR   (PP_WHITESPACE)?   PP_AND_EXPRESSION )*
+    :   PP_AND_EXPRESSION  (options {greedy=true;}: (PP_WHITESPACE)?  
+         x :  LOR { Emit.EmitToken (x); }  (PP_WHITESPACE)?   PP_AND_EXPRESSION )*
     ;
 
 protected
 PP_AND_EXPRESSION
-    :   PP_EQUALITY_EXPRESSION  (options {greedy=true;}: (PP_WHITESPACE)?   LAND   (PP_WHITESPACE)?   PP_EQUALITY_EXPRESSION )*
+    :   PP_EQUALITY_EXPRESSION  (options {greedy=true;}: (PP_WHITESPACE)?   
+        x : LAND { Emit.EmitToken (x); }  (PP_WHITESPACE)?   PP_EQUALITY_EXPRESSION )*
     ;
 
 protected
 PP_EQUALITY_EXPRESSION
-    :   PP_UNARY_EXPRESSION  (options {greedy=true;}: (PP_WHITESPACE)?   EQUALITY_OP   (PP_WHITESPACE)?   PP_UNARY_EXPRESSION )*
+    :   PP_UNARY_EXPRESSION  (options {greedy=true;}: (PP_WHITESPACE)?   
+        x : EQUALITY_OP { Emit.EmitToken (x); }  (PP_WHITESPACE)?   PP_UNARY_EXPRESSION )*
     ;
 
 protected
 EQUALITY_OP
-    :   EQUAL
-    |   NOT_EQUAL
+    :   e : EQUAL { Emit.EmitToken (e); }
+    |   ne : NOT_EQUAL { Emit.EmitToken (ne); }
     ;
 
 protected
 PP_UNARY_EXPRESSION
     :   PP_PRIMARY_EXPRESSION
-    |   LNOT   (PP_WHITESPACE)?   PP_UNARY_EXPRESSION
+    |   n : LNOT { Emit.EmitToken (n); }   (PP_WHITESPACE)?   PP_UNARY_EXPRESSION
     ;
 
 
 protected
 PP_PRIMARY_EXPRESSION
-    :   ("true")=> "true"
-    |   ("false")=> "false"
+    :   ("true")=> "true" { Emit.EmitString ("true"); }
+    |   ("false")=> "false" { Emit.EmitString ("false"); }
     |   CONDITIONAL_SYMBOL
-    |   LPAREN   (PP_WHITESPACE)?   PP_EXPRESSION   (PP_WHITESPACE)?   RPAREN
+    |   lp : LPAREN { Emit.EmitToken (lp); }  (PP_WHITESPACE)?   PP_EXPRESSION   (PP_WHITESPACE)?   
+        rp : RPAREN { Emit.EmitToken (rp); }
     ;
 
 protected
@@ -3504,74 +3520,77 @@ PP_CONDITIONAL
 
 protected
 PP_IF_SECTION
-    :   "if"   PP_WHITESPACE   PP_EXPRESSION (PP_WHITESPACE)?  PP_NEW_LINE 
+    :  "if" { Emit.EmitString ("if"); }  PP_WHITESPACE   PP_EXPRESSION (PP_WHITESPACE)?  PP_NEW_LINE 
+       { Emit.EmitChar ('\n'); }
     ;
 
 protected
 PP_ELIF_SECTION
-    :   "elif"   PP_WHITESPACE   PP_EXPRESSION  (PP_WHITESPACE)? PP_NEW_LINE 
+    :   "elif" { Emit.EmitString ("elif"); }  PP_WHITESPACE   PP_EXPRESSION  (PP_WHITESPACE)? PP_NEW_LINE 
+         { Emit.EmitChar ('\n'); }
     ;
 
 protected
 PP_ELSE_SECTION
-    :    "else"  PP_NEW_LINE  
+    :   "else" { Emit.EmitString ("else"); } PP_NEW_LINE  { Emit.EmitChar ('\n'); }
     ;
 
 protected
 PP_ENDIF
-    :   "endif"   PP_NEW_LINE
+    :   "endif" { Emit.EmitString ("endif"); }  PP_NEW_LINE { Emit.EmitChar ('\n'); }
     ;
 
 protected
 PP_DECLARATION
-    :   "define"   PP_WHITESPACE   CONDITIONAL_SYMBOL   PP_NEW_LINE
-    |   "undef"   PP_WHITESPACE   CONDITIONAL_SYMBOL   PP_NEW_LINE
+    :   "define" { Emit.EmitString ("define"); }  PP_WHITESPACE   CONDITIONAL_SYMBOL   PP_NEW_LINE { Emit.EmitChar ('\n'); }
+       
+    |   "undef" { Emit.EmitString ("undef"); }  PP_WHITESPACE   CONDITIONAL_SYMBOL   PP_NEW_LINE { Emit.EmitChar ('\n'); }
     ;
 
 protected
 CONDITIONAL_SYMBOL
-    :   IDENTIFIER
+    :   i : IDENTIFIER { Emit.EmitToken (i); }
     ;
 
 protected
 PP_LINE
-    :   "line"   PP_WHITESPACE   LINE_INDICATOR   PP_NEW_LINE
+    :   "line" { Emit.EmitString ("line"); }  PP_WHITESPACE   LINE_INDICATOR   PP_NEW_LINE
     ;
 
 protected
 LINE_INDICATOR
-    :   (DECIMAL_DIGIT)+   ( PP_WHITESPACE   FILE_NAME )?
-    |   "default"
+    :   (x : DECIMAL_DIGIT { Emit.EmitToken (x); } )+   ( PP_WHITESPACE   FILE_NAME )?
+    |   "default" { Emit.EmitString ("default"); }
     ;
 
 protected
 FILE_NAME
-    :   "\""   (FILE_NAME_CHARACTER)+   "\""
+    :   "\"" { Emit.EmitChar ('\"'); }  (FILE_NAME_CHARACTER)+   "\"" { Emit.EmitChar ('\"'); }
     ;
 
 protected
 FILE_NAME_CHARACTER
-    :   ~('\"')
+    :   x : ~('\"') { Emit.EmitChar (x); }
     ;
 
 protected
 PP_DIAGNOSTIC
-    :   "error"   PP_MESSAGE
-    |   "warning"   PP_MESSAGE
+    :   "error" { Emit.EmitString ("error"); }  PP_MESSAGE
+    |   "warning" { Emit.EmitString ("warning"); }  PP_MESSAGE
     ;
 
 protected
 PP_START_REGION
-    :   "region"   PP_MESSAGE
+    :   "region" { Emit.EmitString ("region"); }  PP_MESSAGE
     ;
 
 protected
 PP_END_REGION
-    :   "endregion"   PP_MESSAGE
+    :   "endregion" { Emit.EmitString ("endregion"); }  PP_MESSAGE
     ;
 
 protected
 PP_MESSAGE
-    :   (NOT_NEW_LINE)*   NEW_LINE
+    :   (NOT_NEW_LINE)*   NEW_LINE { Emit.EmitChar ('\n'); }
     ;
 
