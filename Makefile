@@ -105,18 +105,6 @@ dist: changelog
 	@tar zcf $(PACKAGE)-$(VERSION).$(REVISION).tar.gz $(PACKAGE)-$(VERSION).$(REVISION)
 	@rm -rf $(PACKAGE)-$(VERSION).$(REVISION)
 
-
-send-dist:
-	if [ "X`find -maxdepth 1 -mindepth 1 -name 'nemerle-[0-9]*.tar.gz'`" = X ] ; then \
-		echo "No files available" ; \
-		false ; fi
-	scp `find -maxdepth 1 -mindepth 1 -name 'nemerle-[0-9]*.tar.gz'` \
-		lilith:/home/services/httpd/html/download/
-	scp `find -maxdepth 1 -mindepth 1 -name 'nemerle-[0-9]*.tar.gz' | sort | tail -1` \
-		lilith:/home/services/httpd/html/download/nemerle-latest.tar.gz
-	mv `find -maxdepth 1 -mindepth 1 -name 'nemerle-[0-9]*.tar.gz'` ~/backup/nemerle/
-	scp boot/ncc.exe lilith:/home/services/httpd/html/download/ncc-boot.exe
-
 install:
 	$(Q)$(MAKE) -C boot install
 	$(Q)$(MAKE) -C doc  install
