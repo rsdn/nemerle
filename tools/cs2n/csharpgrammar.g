@@ -164,6 +164,10 @@ returns [string [] return_strings]
         { return_strings[1] = nat[1] + parms;
           return_strings[0] = nat[0];
          }
+        ( d : DOT nat = generic_type
+          { return_strings [1] += d.getText () + nat [0] + nat [1];
+          }
+        )?
     ;
 
 
@@ -470,15 +474,20 @@ delegate_creation_expression
 returns [string return_string]
 {
     string [] tp = new string[]{"",""};
-    string exp = "";
+    string al = "";
     return_string = "";
+    string parms = null;
 }
     :   n:NEW   
         tp = maybe_generic_type [false]
-        (generic_parameters)? // we will emit something here when nemerle syntax will change
-        lp:LPAREN   exp = expression rp:RPAREN
+
+//        (parms = generic_parameters )? 
+        lp:LPAREN   (al = argument_list)?   rp:RPAREN
         {
-            return_string = ExtendedToken.getWhitespaces (n)  + tp[0]+tp[1] + lp.getText () + exp + rp.getText ();
+            return_string = ExtendedToken.getWhitespaces (n) + tp[0]+tp[1];
+            if (parms != null)
+              return_string += "." + parms;
+            return_string += lp.getText () + al + rp.getText ();
         }
     ;
 
@@ -488,13 +497,17 @@ returns [string return_string]
     string [] tp = new string[]{"",""};
     string al = "";
     return_string = "";
+    string parms = null;
 }
     :   n:NEW   
         tp = maybe_generic_type [false]
-        (generic_parameters)? // we will emit something here when nemerle syntax will change
+//        (parms = generic_parameters )? 
         lp:LPAREN   (al = argument_list)?   rp:RPAREN
         {
-            return_string = ExtendedToken.getWhitespaces (n) + tp[0]+tp[1] + lp.getText () + al + rp.getText ();
+            return_string = ExtendedToken.getWhitespaces (n) + tp[0]+tp[1];
+            if (parms != null)
+              return_string += "." + parms;
+            return_string += lp.getText () + al + rp.getText ();
         }
     ;
 
@@ -2132,7 +2145,7 @@ returns [string [] return_strings]
     return_strings = new string [] {"", "", null};
     string [] mn = new string[]{"",""};
 }
-    :   mn = type
+    :   mn = maybe_generic_type [true]
         {
             int dot = mn[1].LastIndexOf ('.');
             if (dot != -1) {
@@ -2496,8 +2509,32 @@ overloadable_binary_operator
     ;
 
 conversion_operator_declarator
-    :   (IMPLICIT)=> IMPLICIT   OPERATOR   type   LPAREN   type   IDENTIFIER   RPAREN
-    |   EXPLICIT   OPERATOR   type   LPAREN   type   IDENTIFIER   RPAREN
+{      
+  string [] ty = null;
+  string [] pty = null;
+}
+    :   (IMPLICIT)=> 
+        i : IMPLICIT   OPERATOR ty = type   lp : LPAREN  pty =  type  
+        id : IDENTIFIER  rp : RPAREN
+        { Emit.EmitString (ExtendedToken.getWhitespaces (i));
+          Emit.EmitString ("@:");
+          Emit.EmitToken (lp);
+          Emit.EmitToken (id);
+          Emit.EmitString (" : " + pty [0] + pty [1]);
+          Emit.EmitToken (rp);
+          Emit.EmitString (" : " + ty [0] + ty [1]);
+        }
+
+    |   e : EXPLICIT   OPERATOR   ty =type  lp1 : LPAREN pty = type  
+        id1: IDENTIFIER  rp1 : RPAREN
+        { Emit.EmitString (ExtendedToken.getWhitespaces (e));
+          Emit.EmitString ("@:>");
+          Emit.EmitToken (lp1);
+          Emit.EmitToken (id1);
+          Emit.EmitString (" : " + pty [0] + pty [1]);
+          Emit.EmitToken (rp1);
+          Emit.EmitString (" : " + ty [0] + ty [1]);
+        }
     ;
 
 operator_body
@@ -2904,12 +2941,14 @@ enum_base
     ;
 
 enum_body
-    :   (lb:LBRACE   enum_member_declarations[lb]   COMMA)=>
-            lb1:LBRACE   //{Emit.EmitToken(lb1);} 
-            enum_member_declarations[lb1]
+    :   (LBRACE   enum_member_declarations   COMMA)=>
+            lb1:LBRACE   {Emit.EmitToken(lb1);} 
+            enum_member_declarations
             c:COMMA     {Emit.EmitString (ExtendedToken.getWhitespaces (c));}
             rb1:RBRACE   {Emit.EmitToken(rb1);} 
-    |   lb2:LBRACE   (enum_member_declarations[lb2])?   rb2:RBRACE
+
+    |   lb2:LBRACE  {Emit.EmitToken(lb2);}
+         (enum_member_declarations)?   rb2:RBRACE
         {            
             Emit.EmitToken(rb2);
         }
@@ -2923,8 +2962,8 @@ enum_modifier
     |   em5:PRIVATE      {Emit.EmitToken(em5);} 
     ;
     
-enum_member_declarations[antlr.Token lb]
-    :   {Emit.EmitToken(lb);} 
+enum_member_declarations
+    :    
     	enum_member_declaration  (options {greedy=true;}: c:COMMA {Emit.EmitString (ExtendedToken.getWhitespaces (c));}  
             enum_member_declaration)*
     ;
@@ -3025,9 +3064,11 @@ attribute_target
         ExtendedToken.getTextOnly(idat)=="method"   || //METHOD
         ExtendedToken.getTextOnly(idat)=="param"    || //PARAM
         ExtendedToken.getTextOnly(idat)=="property" || //PROPERTY
-        ExtendedToken.getTextOnly(idat)=="return"   || //RETURN FIXME: there is no return target in Nemerle
 	ExtendedToken.getTextOnly(idat)=="type" }?     //TYPE
         {Emit.EmitToken(idat);}
+
+    |   ret : RETURN 
+        { Emit.EmitToken (ret); } 
     ;
 
 attribute_list
@@ -3175,7 +3216,8 @@ NOT_NEW_LINE
 //--------------
 
 SINGLE_LINE_COMMENT
-    :   "//"  (NOT_NEW_LINE /*| '`'*/)*  (NEW_LINE) 
+     // antlr is broken and do not accept ` as normal char
+    :   "//"  (NOT_NEW_LINE | '`')*  (NEW_LINE) 
         { 
             _ttype = Token.SKIP;
             ExtendedToken.AddToWhitespaces ($getText);
@@ -3186,7 +3228,8 @@ DELIMITED_COMMENT
     :   "/*"  
         (   { LA(2)!='/' }? '*'
         |   NEW_LINE 
-//	|   '`'
+     // antlr is broken and do not accept ` as normal char
+	|   '`'
         |   ~('*'|'\u000D'|'\u000A'|'\u2028'|'\u2029')
         )*
         "*/" 
