@@ -98,6 +98,7 @@ NEMERLE_COMPILER_DLL_SRC = \
 	tyutil.n \
 	itypemodifier.n \
 	attribute.n \
+	constantfolder.n \
 
 
 
