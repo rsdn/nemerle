@@ -54,6 +54,9 @@ all:
 
 myPoll.exe: myPoll.n
 	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r Npgsql myPoll.n -o myPoll.exe
+	
+nswiki.exe: nswiki.n
+	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r System.Web $< -o $@
 
 sql: sql.n
 	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r Npgsql -r ../macros/Nemerle.Data.Npgsql.dll sql.n -o sql.exe

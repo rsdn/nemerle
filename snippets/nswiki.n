@@ -1,0 +1,314 @@
+// NO-TEST
+
+using Nemerle.Collections;
+using Nemerle.Utility;
+using Nemerle.IO;
+using Nemerle.Text;
+
+
+module NSWiki  {
+    mutable post : Hashtable <string, string>;
+    mutable get : Hashtable <string, string>;
+
+    wiki_url : string = "http://localhost/svn/nswiki/";
+    working_dir : string = "/shm/nswiki";
+    this_url : string = "/cgi-bin/nswiki";
+
+    /**
+     * Splits a string given a separator character. Checks if the split was
+     * unique -- or, if the separator occured exactly once in the original 
+     * string.
+     */
+    split_unique_at (separator : char, str : string) 
+                               : string * string * bool
+    {
+      def pos = str.IndexOf (separator);
+      
+      def (l, r) =
+        if (pos != -1)
+          (str.Substring (0, pos), str.Substring (pos + 1))
+        else
+          (str, "");
+          
+      def validity =
+        l.IndexOf (separator) == -1 && r.IndexOf (separator) == -1;
+        
+      (l, r, validity)
+    }
+    
+    /**
+     * Parses a string of form: 
+     *
+     * param_1=val_1&param_2=val_2&...&param_k=val_k
+     *
+     * Checks the validity of such a request and throws exception in 
+     * case of error.
+     */
+    parse_get_params (get_parms : string) : list <string * string>
+    {
+      def decode (str : string) {
+        System.Web.HttpUtility.UrlDecode (str, System.Text.Encoding.UTF8)
+      };
+      NArray.Fold (get_parms.Split (array ['&']), [], 
+        fun (parm, acc) {
+          def (param, value, split_was_unique) = split_unique_at ('=', parm);
+
+          unless (split_was_unique)
+            throw System.ArgumentException ("invalid query string");
+
+          def param = decode (param);
+          def value = decode (value);
+
+          if (param.Length == 0)
+            acc
+          else
+            (param, value) :: acc
+        })
+    }
+
+
+    /**
+     * Retrieves the post data
+     */
+    parse_post_data () : list <string * string>
+    {
+      def buf = array (500000);
+      def count = System.Console.In.ReadBlock (buf, 0, buf.Length);
+      parse_get_params (System.String (buf, 0, count));
+    }
+
+    
+    hashtable_of_assoc_list (l : list <string * string>) : Hashtable <string, string>
+    {
+      def ht = Hashtable ();
+      List.Iter (l, ht.Set);
+      ht
+    }
+
+    getenv (name : string) : string
+    {
+      def ret = System.Environment.GetEnvironmentVariable (name);
+      if (ret == null) "" else ret
+    }
+
+    get_with_default (ht : Hashtable <string, string>, key : string) : string
+    {
+      match (ht.Get (key)) {
+        | Some (r) => r
+        | None => ""
+      }
+    }
+
+    display_headers () : void
+    {
+      printf ("Content-type: text/html; encoding=utf-8\n\n");
+      printf (@"
+        <html>
+          <head>
+            <title>Wiki</title>
+            <meta http-equiv='Content-Type' content='text/html; charset=UTF-8' />
+          </head>
+        <body>");
+    }
+
+    display_footers () : void
+    {
+      printf ("</body></html>\n");
+    }
+
+    quote (s : string) : string
+    {
+      s.Replace ("&", "&amp;")
+       .Replace ("<", "&lt;")
+       .Replace (">", "&gt;")
+    }
+
+    execute_command (filename : string, args : list <string>) : string * string
+    {
+      def p = System.Diagnostics.Process ();
+      def si = p.StartInfo;
+      si.RedirectStandardError = true;
+      si.RedirectStandardInput = true;
+      si.RedirectStandardOutput = true;
+      def args = List.Map (args, fun (s : string) {
+        s.Replace (" ", "\\ ")
+         .Replace ("\"", "\\\"")
+         .Replace ("\'", "\\\'")
+      });
+      si.Arguments = NString.Concat (" ", args);
+      si.FileName = filename;
+//  print ($ "running $(si.FileName) $(si.Arguments)\n");
+      si.UseShellExecute = false;
+      try {
+        _ = p.Start ();
+        // don't provide any input
+        p.StandardInput.Close ();
+        def stdout = p.StandardOutput.ReadToEnd ();
+        def stderr = p.StandardError.ReadToEnd ();
+        (stdout, stderr)
+      } catch {
+        | e : System.Exception => 
+          ("", e.ToString ())
+      }
+    }
+
+    inside_checkout<'a> (rev : int, f : string -> 'a) : 'a
+    {
+      def page = get_page_name ();
+      
+      def dir = make_tmpdir ();
+      try {
+        def (o, e) = execute_command ("svn", ["checkout", "--non-interactive", wiki_url + page, dir + "svn"]
+          + (if (rev == 0) [] else ["-r", rev.ToString ()]));
+        when (!System.IO.Directory.Exists (dir + "svn/.svn"))
+          fatal ("cannot checkout " + page + ": " + o + e);
+        f (dir + "svn/")
+      } finally {
+        // clean (dir);
+      }
+    }
+
+    fatal<'a> (msg : string) : 'a
+    {
+      throw System.Exception (msg)
+    }
+
+    get_page_name () : string
+    {
+      def page = get_with_default (get, "p");
+      def page =
+        if (page == "") get_with_default (post, "p")
+        else page;
+      regexp match (page) {
+        | "^[A-Za-z0-9_-]+$" => page
+        | _ => fatal ($ "'$(page)' is an invalid page name")
+      }
+    }
+
+    page_exists (page : string) : bool
+    {
+      def (o, _) = execute_command ("svn", ["ls", "--non-interactive", wiki_url + page + "/content"]);
+      o != ""
+    }
+
+    display_form () : void
+    {
+      def page = get_page_name ();
+      def (content, rev) = get_source ();
+      def content = quote (content);
+      display_headers ();
+      print (@"
+        <form method='POST' action='$(this_url)'>
+          <textarea name='text' rows='30' cols='80'>$(content)</textarea>
+          <br/>
+          <input type='hidden' name='p' value='$(page)' />
+          <input type='hidden' name='rev' value='$(rev)' />
+          <input type='hidden' name='submit' value='yes' />
+          <input type='submit' />
+        </form>
+      ");
+      display_footers ();
+    }
+
+    make_tmpdir () : string
+    {
+      def guid = System.Guid.NewGuid ().ToString ();
+      _ = System.IO.Directory.CreateDirectory (guid);
+      guid + "/"
+    }
+
+    clean (dir : string) : void
+    {
+      try {
+        System.IO.Directory.Delete (dir, true)
+      } catch {
+        _ : System.Exception => ()
+      }
+    }
+
+    get_source () : string * int
+    {
+      def page = get_page_name ();
+      // TODO: loggin?
+      def new_msg = "New wiki term added.";
+      _ = execute_command ("svn", ["mkdir", "--non-interactive", "-m", new_msg, wiki_url + page]);
+
+      inside_checkout (0, fun (fn) {
+        unless (System.IO.File.Exists (fn + "content")) {
+          using (f = System.IO.File.Create (fn + "content"))
+            ();
+          def (o, e) = execute_command ("svn", ["add", "--non-interactive", fn + "content"]);
+          when (e != "")
+            fatal ($ "failed to svn add empty $page: $o $e");
+          def (o, e) = execute_command ("svn", ["commit", "--non-interactive", "-m", new_msg, fn + "content"]);
+          // there is race possible here, if somebody adds this page, but we
+          // don't care, user will just get an error message, and no editing
+          // is lost
+          when (e != "")
+            fatal ($ "failed to svn commit empty $page: $o $e");
+          _ = execute_command ("svn", ["update", "--non-interactive", fn]); // just in case
+        }
+        
+        def (o, e) = execute_command ("svn", ["info", fn]);
+        def rev =
+          regexp match (o.Replace ('\n', ' ')) {
+            | @".*Revision: (?<n : int>[0-9]+).*" => n
+            | _ => fatal ($ "bad svn info format: $o [$e]")
+          };
+        def content =
+          using (f = System.IO.File.OpenText (fn + "content"))
+            f.ReadToEnd ();
+        (content, rev)
+      })
+    }
+
+    wikize (s : string) : string
+    {
+      quote (s)
+    }
+    
+
+    commit_form () : void
+    {
+      def page = get_page_name ();
+      def msg = "Wiki page edit.";
+
+      inside_checkout (int.Parse (get_with_default (post, "rev")), fun (fn) {
+        using (f = System.IO.File.CreateText (fn + "content"))
+          f.Write (get_with_default (post, "text"));
+        // merge any changes
+        _ = execute_command ("svn", ["update", "--non-interactive", fn]);
+        // just commit conflicts
+        _ = execute_command ("svn", ["resolved", fn + "content"]);
+        def (o, e) = execute_command ("svn", ["commit", "--non-interactive", "-m", msg, fn + "content"]);
+        when (e != "")
+          fatal ($ "cannot svn commit edited page $page: $o $e");
+        def f = System.IO.File.OpenText (fn + "content");
+
+        display_headers ();
+        print (wikize (f.ReadToEnd ()));
+        display_footers ();
+      })
+    }
+
+    public Main () : void
+    {
+      try {
+        System.IO.Directory.SetCurrentDirectory (working_dir);
+
+        def qs = getenv ("QUERY_STRING");
+        get = hashtable_of_assoc_list (parse_get_params (qs));
+        post = hashtable_of_assoc_list (parse_post_data ());
+        
+        if (get_with_default (post, "submit") != "") {
+          commit_form ();
+        } else {
+          display_form ();
+        };
+      } catch {
+        e : System.Exception =>
+          printf ("Content-type: text/plain; encoding=iso-8859-1\n\n%s\n%s\n", 
+                  e.ToString (), e.StackTrace)
+      }
+    }
+}
