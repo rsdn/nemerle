@@ -47,15 +47,12 @@ public class TypeBuilder : TypeInfo
 {
   type Subinfo = SystemMap [int, TypeInfo * list [TType]];
 
-  public env : GlobalEnv;
-
   mutable contains_nemerle_specifics : bool = false;
 
   mutable tydecl : TypeDeclaration;
   mutable self_type : TType.Class;  // memoized by GetMemType ()
 
-  namespace_nd : GlobalEnv.NamespaceND;
-  enclosing_type : option [TypeBuilder];  
+  enclosing_type : TypeBuilder;  
   mutable parent_type : option [TType.Class];
   mutable t_implements : list [TType.Class];
   mutable contained_types : list [TypeBuilder];
@@ -64,8 +61,6 @@ public class TypeBuilder : TypeInfo
   mutable member_map : SystemMap [string, list [IMember]];
   mutable member_list : list [NemerleMember];
   mutable constant_object : option [IField];
-  variant_option_parent : TypeBuilder;
-  mutable underlying_enum_type_iface : INumericType;
   mutable underlying_enum_type : TType;
 
   mutable typarms : list [Tyvar.T];
@@ -73,6 +68,7 @@ public class TypeBuilder : TypeInfo
 
   mutable type_builder : System.Reflection.Emit.TypeBuilder;
 
+  namespace_nd : GlobalEnv.NamespaceND;
   pt_name : PT.Name;
   name : string;
   fullname : string;
@@ -104,22 +100,19 @@ public class TypeBuilder : TypeInfo
   static mutable run_phase : int;
 
 
-  internal this (par : option [TypeBuilder], vop : option [TypeBuilder], 
-               env : GlobalEnv, td : PT.TopDeclaration, ns_node : GlobalEnv.NamespaceND)
+  internal this (par : TypeBuilder, td : PT.TopDeclaration, ns_node : GlobalEnv.NamespaceND)
   {
     variant_options = [];
     contained_types = [];
     
     this.pt_tydecl = td;
-    this.pt_name = td.name.GetName ();
+    this.pt_name = td.ParsedName;
     this.namespace_nd = ns_node;
     fullname = Util.qid_of_list (ns_node.Name);
-    this.env = env;
-    this.enclosing_type = par;    
-    match (par) {
-      | Some (p) => p.contained_types = this :: p.contained_types;
-      | _ => ()
-    };
+    this.enclosing_type = par;
+    when (par != null)
+      par.contained_types = this :: par.contained_types;
+
     this.name = pt_name.Id;
     this.loc = td.loc;
     modifiers = td.modifiers;
@@ -129,18 +122,14 @@ public class TypeBuilder : TypeInfo
     match (td) {
       | PT.TopDeclaration.VariantOption =>
         instance_ctor_occured = true;
-        match (vop) {
-          | Some (ti) =>
-            ti.variant_options = this :: ti.variant_options;
-            attributes |= NemerleAttributes.Sealed;
-            modifiers.macro_attrs = (":type:postadd", <[ Record ]>) :: modifiers.macro_attrs;
-            if (ti.IsPublic)
-              attributes |= NemerleAttributes.Public
-            else
-              attributes |= NemerleAttributes.Internal;
+        enclosing_type.variant_options = this :: enclosing_type.variant_options;
+        attributes |= NemerleAttributes.Sealed;
+        modifiers.macro_attrs = (":type:postadd", <[ Record ]>) :: modifiers.macro_attrs;
+        if (enclosing_type.IsPublic)
+          attributes |= NemerleAttributes.Public
+        else
+          attributes |= NemerleAttributes.Internal;
 
-          | None => assert (false)
-        }
       | PT.TopDeclaration.Enum => is_enum = true;
       | _ => ()
     };
@@ -156,10 +145,10 @@ public class TypeBuilder : TypeInfo
                             || IsModule || instance_ctor_occured || IsInterface || is_enum;
     
     unless (attributes %&& NemerleAttributes.AccessModifiers)
-      match (enclosing_type) {
-        | Some => attributes |= NemerleAttributes.Private;
-        | None => attributes |= NemerleAttributes.Internal;
-      }
+      if (enclosing_type != null)
+        attributes |= NemerleAttributes.Private;
+      else
+        attributes |= NemerleAttributes.Internal;
 
     accessibility = 
       match (attributes %& NemerleAttributes.AccessModifiers) {
@@ -173,18 +162,8 @@ public class TypeBuilder : TypeInfo
             Accessibility.Public
       }
 
-    match (enclosing_type) {
-      | Some (tc) =>
-        accessibility = Tyutil.AccessibilityIntersect (accessibility, tc.Accessibility)
-      | None => ()
-    }
-
-    match ((vop, pt_tydecl)) {
-      | (Some (x), PT.TopDeclaration.VariantOption) => variant_option_parent = x
-      | (None, PT.TopDeclaration.VariantOption) => Util.ice ()
-      | (Some, _) => Util.ice ()
-      | (None, _) => ()
-    };
+    when (enclosing_type != null)
+      accessibility = Tyutil.AccessibilityIntersect (accessibility, enclosing_type.Accessibility);
 
     additional_decls = [];
 
@@ -303,9 +282,14 @@ public class TypeBuilder : TypeInfo
     modifiers
   }
 
-  public GetParseName () : PT.Name 
+  public GlobalEnv : GlobalEnv
   {
-    pt_name
+    get { pt_name.context }
+  }
+  
+  public ParsedName : PT.Name 
+  {
+    get { pt_name }
   }
 
   public ParsedDeclaration : PT.TopDeclaration
@@ -320,12 +304,7 @@ public class TypeBuilder : TypeInfo
   
   /** Return type we were defined in (null for toplevel types). */
   public override DeclaringType : TypeInfo {
-    get {
-      match (enclosing_type) {
-        | Some (ti) => ti
-        | None => null
-      }
-    }
+    get { enclosing_type }
   }
 
   /** Return name without any dots. */  
@@ -370,11 +349,8 @@ public class TypeBuilder : TypeInfo
     get { m_has_been_used }
     set {
       m_has_been_used = m_has_been_used || value;
-      match (enclosing_type) {
-        | Some (enclosing_type) =>
-          enclosing_type.HasBeenUsed = value
-        | _ => ()
-      }
+      when (enclosing_type != null)
+        enclosing_type.HasBeenUsed = value
     }
   }
     
@@ -387,19 +363,18 @@ public class TypeBuilder : TypeInfo
         | _ => false
       })) ||
     (IsProtected &&
-        (match (enclosing_type) {
-          | Some (tc) => Option.IsSome (source.SuperType (tc))
-          | None => false
-        })) ||
-    (match (enclosing_type) {
-       | Some (declaring_type) =>
-         mutable result = false;
-         for (mutable tc = source; tc != null && !result; tc = tc.DeclaringType)
-           result = tc.Equals (declaring_type);
-         result
-        
-       | None => false
-     })
+        (if (enclosing_type != null)
+           Option.IsSome (source.SuperType (enclosing_type))
+         else false
+        )) ||
+    (if (enclosing_type != null) {
+       mutable result = false;
+       for (mutable tc = source; tc != null && !result; tc = tc.DeclaringType)
+         result = tc.Equals (enclosing_type);
+       result
+     }
+     else false
+    )
   }
 
   public IsFinalized : bool {
@@ -421,7 +396,7 @@ public class TypeBuilder : TypeInfo
   public DefineNestedType (td : PT.ClassMember) : TypeBuilder
   {
     | PT.ClassMember.TypeDeclaration (td) =>
-      def tyinfo = GlobalEnv.AddType (Some (this), None (), namespace_nd, td);
+      def tyinfo = GlobalEnv.AddType (this, namespace_nd, td);
       tyinfo.FixupDefinedClass ();
       tyinfo
     | _ =>
@@ -458,7 +433,7 @@ public class TypeBuilder : TypeInfo
   public Define (f : PT.ClassMember) : void
   {
     | PT.ClassMember.TypeDeclaration (td) =>
-      def tyinfo = GlobalEnv.AddType (Some (this), None (), namespace_nd, td);
+      def tyinfo = GlobalEnv.AddType (this, namespace_nd, td);
       tyinfo.FixupDefinedClass ();
 
     | _ => ignore (DefineAndReturn (f))
@@ -484,7 +459,7 @@ public class TypeBuilder : TypeInfo
     
     // find our attribute
     foreach (expr in GetModifiers ().custom_attrs)
-      match (AttributeCompiler.ResolveAttribute (this.env, expr)) {
+      match (AttributeCompiler.ResolveAttribute (this.GlobalEnv, expr)) {
         | Some ((t, _)) =>
           when (looking_for.Equals (t))
             result = Some (expr)
@@ -767,8 +742,8 @@ public class TypeBuilder : TypeInfo
 
   public GetVariantOptionParent () : TypeBuilder
   {
-    assert (variant_option_parent != null);
-    variant_option_parent
+    assert (enclosing_type != null);
+    enclosing_type
   }
   
   public GetVariantOptions () : list [TypeBuilder]
@@ -926,8 +901,7 @@ public class TypeBuilder : TypeInfo
       | PT.TopDeclaration.Alias (typarms = ps)
       | PT.TopDeclaration.Interface (typarms = ps)
       | PT.TopDeclaration.Variant (typarms = ps) =>
-        def (tenv, tyvars) = tenv.add_typarms (this.env, ps,
-                                               this, check_parms = false);
+        def (tenv, tyvars) = tenv.add_typarms (ps, this, check_parms = false);
         this.tenv = tenv;
         this.typarms = tyvars;
       | _ =>
@@ -940,9 +914,9 @@ public class TypeBuilder : TypeInfo
         unless (Util.is_capitalized (name)) {
           Message.error (loc, "variant options names must start with capital letters")
         };
-        assert (variant_option_parent.tenv != null);
-        this.tenv = variant_option_parent.tenv;
-        this.typarms = variant_option_parent.typarms;
+        assert (enclosing_type.tenv != null);
+        this.tenv = enclosing_type.tenv;
+        this.typarms = enclosing_type.typarms;
        
         foreach (d : PT.ClassMember in members)
           d.Attributes |= NemerleAttributes.Public;
@@ -976,8 +950,9 @@ public class TypeBuilder : TypeInfo
       match (td) {
         | PT.TopDeclaration.Class => TypeDeclaration.Class ()
         | PT.TopDeclaration.Alias (_, t) =>
-          def ttype = this.tenv.bind (this.env, this, t, check_parms = false);
+          def ttype = this.tenv.bind (this, t, check_parms = false);
           TypeDeclaration.Alias (ttype)
+          
         | PT.TopDeclaration.Interface => TypeDeclaration.Interface ()
         | PT.TopDeclaration.Enum => TypeDeclaration.Enum ()
         | PT.TopDeclaration.Variant =>
@@ -990,14 +965,14 @@ public class TypeBuilder : TypeInfo
       
     match (td) {
       | PT.TopDeclaration.VariantOption =>
-        this.parent_type = Some (variant_option_parent.GetMemType () :> TType.Class);
+        this.parent_type = Some (enclosing_type.GetMemType () :> TType.Class);
         this.t_implements = [];
       | PT.TopDeclaration.Class (t_extends = hd :: tl)
       | PT.TopDeclaration.Interface (t_extends = hd :: tl)
       | PT.TopDeclaration.Variant (t_extends = hd :: tl)
       | PT.TopDeclaration.Enum (t_extends = hd :: tl) =>        
         def bind_to_class (t : PT.PExpr) {
-          this.tenv.bind (this.env, this, t, check_parms = false) :> TType.Class;
+          this.tenv.bind (this, t, check_parms = false) :> TType.Class;
         };
         def hd' = bind_to_class (hd);
         if (Tyutil.unalias (hd'.tycon).IsInterface) {
@@ -1066,10 +1041,7 @@ public class TypeBuilder : TypeInfo
         }
       }
     }
-    def first = match (enclosing_type) {
-      | Some (x) => [x]
-      | _ => []
-    }
+    def first = if (enclosing_type != null) [enclosing_type] else [];
     this.iterate_first = iterate_first.Fold (first, fun (_, ti, acc) { ti :: acc });
 
     foreach (x in contained_types) Util.locate (x.loc, x.bind_types ());
@@ -1177,8 +1149,8 @@ public class TypeBuilder : TypeInfo
     if ((Attributes %& additional.Attributes) %&& NemerleAttributes.Partial) {
       unless (additional.Attributes %&& NemerleAttributes.AccessModifiers)
         match (enclosing_type) {
-          | Some => additional.Attributes |= NemerleAttributes.Private;
-          | None => additional.Attributes |= NemerleAttributes.Internal;
+          | null => additional.Attributes |= NemerleAttributes.Internal;          
+          | _ => additional.Attributes |= NemerleAttributes.Private;
         }
       when (additional.Attributes != attributes)
         Message.error (additional.loc, $"joined partial classes `$(FullName)' "
@@ -1249,7 +1221,7 @@ public class TypeBuilder : TypeInfo
   [Nemerle.Assertions.Ensures (value != null)]
   internal BindType (other_tenv : Tyvar.TEnv, t : PT.PExpr) : TType
   {
-    other_tenv.bind (env, this, t, check_parms = true)
+    other_tenv.bind (this, t, check_parms = true)
   }
 
   internal BindTyparms (tp : PT.Typarms) : Tyvar.TEnv * list [Tyvar.T]
@@ -1260,7 +1232,7 @@ public class TypeBuilder : TypeInfo
   internal BindTyparms (other_tenv : Tyvar.TEnv, tp : PT.Typarms)
   : Tyvar.TEnv * list [Tyvar.T]
   {
-    other_tenv.add_typarms (env, tp, this, check_parms = true)
+    other_tenv.add_typarms (tp, this, check_parms = true)
   }
 
   BindAndAddMember (class_member : PT.ClassMember) : void
@@ -1492,25 +1464,26 @@ public class TypeBuilder : TypeInfo
     };
     parent_type = Some (InternalType.Enum);
 
-    unless (t_implements matches [])
+    unless (t_implements.IsEmpty)
       Message.error ("enum cannot implement anything");
+  }
 
+  get_underlying_enum_type_iface () : INumericType
+  {
     def oops () {
-      Message.error ($ "`$(underlying_enum_type)' is not valid underlying enum type");
+      Message.error ($ "`$(underlying_enum_type)' is not a valid underlying enum type");
+      null
     };
-
-    
+   
     match (Tyutil.top_expand (underlying_enum_type)) {
       | TType.Class (tc, []) =>
         match (NumericType.ByName (tc.FullName)) {
-          | Some (t) when t.IsInteger =>
-            underlying_enum_type_iface = t
+          | Some (t) when t.IsInteger => t
           | _ => oops ()
         }
       | _ => oops ()
     }
-  }
-
+  }  
 
   /*
    * This methods calculates an enum's field values. We allow constants,
@@ -1520,7 +1493,7 @@ public class TypeBuilder : TypeInfo
   calculate_enum_value (expr : PT.PExpr, default_value : object,
                         resolved_values : Hashtable [string, object]) : object
   {
-    def enum_type = underlying_enum_type_iface;
+    def enum_type = get_underlying_enum_type_iface ();
 
     def resolve_ref (_, is_post, e) {
       if (is_post) 
@@ -1550,7 +1523,7 @@ public class TypeBuilder : TypeInfo
         Macros.TraverseExpr (None (), expr, false, resolve_ref)
       });
     
-    match (ConstantFolder.FoldConstants (env, no_refs)) {
+    match (ConstantFolder.FoldConstants (this.GlobalEnv, no_refs)) {
       | PT.PExpr.Literal (lit) =>
         def have_good_literal_type =
           match (lit) {
@@ -1601,7 +1574,7 @@ public class TypeBuilder : TypeInfo
   add_enum_members (decls : list [PT.ClassMember]) : void
   {
     def field_type = PT.PExpr.TypedType (GetMemType ());
-    def enum_type = underlying_enum_type_iface;
+    def enum_type = get_underlying_enum_type_iface ();
     def resolved_values = Hashtable (32);
     
     def add_field (ef : PT.ClassMember, default_value) {
@@ -1635,7 +1608,7 @@ public class TypeBuilder : TypeInfo
     assert (underlying_enum_type != null);
     def atrs = Modifiers (NemerleAttributes.Public %| NemerleAttributes.SpecialName, []);
     BindAndAddMember (<[ decl: ..$atrs value__ : $(underlying_enum_type : typed); ]>);
-    _ = List.FoldLeft (decls, underlying_enum_type_iface.Zero, add_field);
+    _ = List.FoldLeft (decls, enum_type.Zero, add_field);
   }
   
 
@@ -1706,7 +1679,7 @@ public class TypeBuilder : TypeInfo
         field.loc = loc;
         def typed_field = NemerleField (this, (field :> PT.ClassMember.Field));
         typed_field.MarkWithSpecialName ();
-        typed_field.ty = variant_option_parent.GetMemType ();
+        typed_field.ty = enclosing_type.GetMemType ();
         ctor.Attributes = NemerleAttributes.Private;
         AddMember (typed_field);
         
@@ -1759,7 +1732,7 @@ public class TypeBuilder : TypeInfo
       | TypeDeclaration.VariantOption =>
         mutable my_index = 0;
                        
-        _ = List.Find (variant_option_parent.GetVariantOptions (), fun (x) {
+        _ = List.Find (enclosing_type.GetVariantOptions (), fun (x) {
           (x : object) == (this : object) || ({ ++my_index; false })
         });
 
@@ -1869,7 +1842,7 @@ public class TypeBuilder : TypeInfo
       {
         match (Util.QidOfExpr (impl)) {
           | Some ((idl, name)) =>
-            def env = name.GetEnv (this.env);
+            def env = name.context;
             def (ns, member) = List.DivideLast (idl);
             def ty = env.GetType (ns, this);
 
@@ -2056,7 +2029,7 @@ public class TypeBuilder : TypeInfo
       // custom attribute
       mods.custom_attrs =
         List.Filter (mods.custom_attrs, fun (expr) {
-          match (MacroRegistry.lookup_macro (env, expr, suff)) {
+          match (MacroRegistry.lookup_macro (this.GlobalEnv, expr, suff)) {
             | None => true
             | Some =>
               macro_attrs = (suff, expr) :: macro_attrs;
@@ -2065,7 +2038,7 @@ public class TypeBuilder : TypeInfo
         });
       foreach ((_, expr) in macro_attrs)
       {
-        match (MacroRegistry.lookup_macro (env, expr, suff)) {
+        match (MacroRegistry.lookup_macro (this.GlobalEnv, expr, suff)) {
           | None => ()
           | Some ((name, imacro, exprs)) =>
             def meth_header =
@@ -2083,14 +2056,14 @@ public class TypeBuilder : TypeInfo
             def ctx =
               TypingContext (in_ctor = in_ctor,
                              this_ptr_decl = None (),
-                             env = this.env,
+                             env = this.GlobalEnv,
                              tenv = tenv,
                              current_fun = meth_header,
                              locals = null,
                              parent_type = this,
                              in_tail_position = false,
                              is_checked = true);
-            TypingContext.PushNewColor (name.color, name.GetEnv (env));
+            TypingContext.PushNewColor (name.color, name.GetEnv (this.GlobalEnv));
 
             def parms = 
               List.Append (self_parm, imacro.CallTransform (exprs));
@@ -2268,7 +2241,7 @@ public class TypeBuilder : TypeInfo
   public static SourceTopIter (f : TypeBuilder -> void) : void
   {
     foreach (x : TypeBuilder in List.Rev (infos))
-      when (x.enclosing_type matches None)
+      when (x.enclosing_type == null)
         Util.locate (x.loc, f (x))
   }
 
@@ -2278,7 +2251,7 @@ public class TypeBuilder : TypeInfo
   public static TopIter (f : TypeBuilder -> void) : void
   {
     def wrap (x : TypeBuilder) : void {
-      when (x.enclosing_type matches None) 
+      when (x.enclosing_type == null) 
         Util.locate (x.loc, f (x))
     };
     Iter (wrap);
@@ -2633,7 +2606,7 @@ public class TypeBuilder : TypeInfo
       | _ => ()
     }
 
-    def type_is_top_level = enclosing_type matches None;
+    def type_is_top_level = enclosing_type == null;
     
     // top-level classes can only be public or internal
     when (type_is_top_level && accessibility != Accessibility.Public &&
