@@ -323,10 +323,17 @@ install:
 	$(Q)$(INSTALL) -m 644 out.stage3/Nemerle.Compiler.dll $(DESTDIR)$(LIBDIR)/Nemerle.Compiler.dll
 	$(INST) [$(LIBDIR)] Nemerle.dll
 	$(Q)$(INSTALL) -m 644 out.stage3/Nemerle.dll $(DESTDIR)$(LIBDIR)/Nemerle.dll
-	$(INST) [$(BINDIR)] ncc
-	$(Q)$(INSTALL) -m 755 out.stage3/ncc.exe $(DESTDIR)$(BINDIR)/ncc
 	$(INST) [$(LIBDIR)] Nemerle.Macros.dll
 	$(Q)$(INSTALL) -m 644 out.stage3/Nemerle.Macros.dll $(DESTDIR)$(LIBDIR)/Nemerle.Macros.dll
+	$(INST) [$(BINDIR)] ncc
+	$(Q)if [ "$(NET_ENGINE)" = "" ] ; then \
+		$(INSTALL) -m 755 ncc.exe $(DESTDIR)$(BINDIR)/ncc ; \
+	else \
+		$(INSTALL) -m 755 ncc.exe $(DESTDIR)$(BINDIR)/ncc.exe && \
+		echo "#!/bin/sh" > $(DESTDIR)$(BINDIR)/ncc && \
+		echo '$(NET_ENGINE) $(BINDIR)/ncc.exe "$$@"' >> $(DESTDIR)$(BINDIR)/ncc ; \
+		chmod 755 $(DESTDIR)$(BINDIR)/ncc ; \
+	fi
 
 # This target is used to build the tarball.  It is passed the
 # directory name, where all files should be copied.
