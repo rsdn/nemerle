@@ -65,6 +65,7 @@ dist: sync-boot changelog
 	    cp $$f/ChangeLog $(name)-$$ver/$$f; \
 	  done; \
 	  cp boot/ncc.exe $(name)-$$ver/boot/; \
+	  rm -f $(name)-$$ver/doc/src/metaprogramming.tex; \
 	  tar zcf $(name)-$$ver.tar.gz $(name)-$$ver; \
 	  rm -rf $(name)-$$ver; \
 	  ls -l $(name)-$$ver.tar.gz; \
