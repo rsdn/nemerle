@@ -125,6 +125,7 @@ COMP    = @echo COMPILE $1
 MKDIR   = @echo MKDIR   $1
 TAR     = @echo TAR     $1
 CP      = @echo CP      $1
+INST	= @echo INSTALL $1
 
 ############################################################
 # TARGETS
