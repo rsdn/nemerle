@@ -5,6 +5,7 @@ import os
 import time
 import re
 import getopt
+import string
 
 from xml.utils import qp_xml
 
@@ -12,6 +13,8 @@ kill_prefix = ""
 default_domain = "localhost"
 exclude = []
 users = { }
+reloc = { }
+max_join_delta = 3 * 60
 
 date_rx = re.compile(r"^(\d+-\d+-\d+T\d+:\d+:\d+)")
 
@@ -28,6 +31,8 @@ def child(e, n):
   die("<%s> doesn't have <%s> child" % (e.name, n))
   
 def convert_path(n):
+  for src in reloc.keys():
+    n = string.replace(n, src, reloc[src])
   if n.startswith(kill_prefix):
     n = n[len(kill_prefix):]
   else:
@@ -95,7 +100,7 @@ class Entry:
     out.write(self.msg)
   
   def can_join(self, other):
-    return self.author == other.author and abs(self.tm - other.tm) < 3 * 60
+    return self.author == other.author and abs(self.tm - other.tm) < max_join_delta
 
 def process_entry(e):
   rev = attr(e, "revision")
@@ -158,6 +163,11 @@ Options:
   -o, --output         set output file (defaults to 'ChangeLog')
   -d, --domain=DOMAIN  set default domain for logins not listed in users file
   -u, --users=FILE     read logins from specified file
+  -r, --relocate=X=Y   before doing any other operations on paths, replace
+                       X with Y (useful for directory moves)
+  -d, --delta=SECS     when log entries differ by less then SECS seconds and
+                       have the same author -- they are merged, it defaults
+                       to 180 seconds
   -h, --help           print this information
 
 Users file is used to map svn logins to real names to appear in ChangeLog.
@@ -178,15 +188,15 @@ Please send bug reports and comments to author:
   
 def process_opts():
   try:
-    opts, args = getopt.gnu_getopt(sys.argv[1:], "o:u:p:x:d:h", 
-                                   ["users=", "prefix=", "domain=", 
-                                    "exclude=", "help", "output="])
+    opts, args = getopt.gnu_getopt(sys.argv[1:], "o:u:p:x:d:r:d:h", 
+                                   ["users=", "prefix=", "domain=", "delta=",
+                                    "exclude=", "help", "output=", "relocate="])
   except getopt.GetoptError:
     usage()
     sys.exit(2)
   fin = sys.stdin
   fout = None
-  global kill_prefix, exclude, users, default_domain
+  global kill_prefix, exclude, users, default_domain, reloc, max_join_delta
   for o, a in opts:
     if o in ("--prefix", "-p"):
       kill_prefix = a
@@ -206,6 +216,11 @@ def process_opts():
         if len(line) < 1 or line[0] == '#' or len(w) < 2: 
           continue
         users[w[0]] = " ".join(w[1:])
+    elif o in ("--relocate", "-r"):
+      (src, target) = a.split("=")
+      reloc[src] = target
+    elif o in ("--delta", "-d"):
+      max_join_delta = int(a)
     else:
       usage()
       sys.exit(2)
