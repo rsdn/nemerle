@@ -26,12 +26,14 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
+THISDIR = $(shell if test cygpath; then cygpath -m $(CURDIR); else $(CURDIR); fi)
+
 ############################################################
 # TARGETS
 ############################################################
 
 all:
-	@$(MAKE) TEST_FILES=$(CURDIR)/*.n ADDITIONAL_FLAGS=-nowarn:10001,10003 -C ../ test
+	@$(MAKE) TEST_FILES=$(THISDIR)/*.n ADDITIONAL_FLAGS=-nowarn:10001,10003 -C ../ test
 
 clean:
 	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]* *.xml

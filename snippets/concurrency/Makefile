@@ -26,12 +26,14 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
+THISDIR = $(shell if test cygpath; then cygpath -m $(CURDIR); else $(CURDIR); fi)
+
 ############################################################
 # TARGETS
 ############################################################
 
 all:
-	$(MAKE) TEST_FILES=$(CURDIR)/*.n -C ../../ncc/testsuite/ test
+	$(MAKE) TEST_FILES=$(THISDIR)/*.n -C ../../ncc/testsuite/ test
 
 clean:
 	rm -f *.exe *.il *.dll *.pdb *.netmodule ext_test.out core core.[0-9]*

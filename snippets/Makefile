@@ -34,13 +34,14 @@ include ../config.mak
 ############################################################
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
+THISDIR = $(shell if test cygpath; then cygpath -m $(CURDIR); else $(CURDIR); fi)
 
 ############################################################
 # TARGETS
 ############################################################
 
 all:
-	$(Q)$(MAKE) TEST_FILES=$(CURDIR)/*.n -C ../ncc/testsuite/ test
+	$(Q)$(MAKE) TEST_FILES=$(THISDIR)/*.n -C ../ncc/testsuite/ test
 	$(Q)$(MAKE) -C synq all
 	$(Q)$(MAKE) -C ants-icfp2004 all
 	$(Q)$(MAKE) -C ants-icfp2004/simulator all
