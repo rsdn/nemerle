@@ -59,6 +59,7 @@ n_src = \
 
 
 cs_src  = lexer.cs main.cs parser.cs
+#cs_src  = main.cs parser.cs
 all_src = $(n_src) $(cs_src)
 all_cs  = $(cs_src)
 
