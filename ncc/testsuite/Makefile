@@ -58,18 +58,22 @@ CP = @echo CP      $1
 
 all:
 	cp $(STAGE3)/Nemerle.dll .
+	cp $(STAGE3)/Nemerle.Macros.dll .
 	cp $(STAGE3)/Nemerle.Compiler.dll .
-	$(EXECUTE) $(STAGE3)/ncc.exe -out test.exe $(TESTN)
-	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" -n "$(STAGE3)/ncc.exe" -p "$(NEM_FLAGS) -nowarn:10003" -verify "$(VERIFY)" $(TEST_FILES)
+	$(EXECUTE) $(STAGE3)/ncc.exe -r:Nemerle.Compiler -out test.exe $(TESTN)
+	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" -p "$(NEM_FLAGS) -nowarn:10003" \
+		-verify "$(VERIFY)" -n "$(STAGE3)/ncc.exe" $(TEST_FILES)
 	rm -f *.dll *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
 
 test-stage1:
 	cp $(STAGE1)/Nemerle.stage1.dll .
 	cp $(STAGE1)/Nemerle.Compiler.stage1.dll .
-	$(EXECUTE) ../../boot/ncc.exe -no-stdlib -r:Nemerle.stage1 -r:System -out test.exe $(TESTN)
-	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" -n "$(STAGE1)/ncc.exe" \
-		-p "-no-stdlib -r:Nemerle.stage1 -r:System $(NEM_FLAGS)" \
-		-verify "$(VERIFY)" $(TEST_FILES)
+	cp $(STAGE1)/Nemerle.Macros.dll .
+	$(EXECUTE) ../../boot/ncc.exe -no-stdlib -r:Nemerle.stage1 \
+		-r:Nemerle.Compiler.stage1 -r:System -out test.exe $(TESTN)
+	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" \
+		-p "-no-stdlib -r:Nemerle.stage1 -r:System $(NEM_FLAGS) -nowarn:10003" \
+		-verify "$(VERIFY)"  $(TEST_FILES)
 	rm -f *.dll *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
 
 all-mcs:

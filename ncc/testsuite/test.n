@@ -40,6 +40,7 @@
   using Nemerle.Utility;
   using Nemerle.Text;
   using Nemerle.IO;
+  using Nemerle.Compiler;
 
   public class End_test : System.Exception
   {
@@ -56,6 +57,7 @@
     private nem_runtime : string;
     private verbose : int;
     private get_short_filename : Regex;
+    private external_compiler : bool;
     private mutable no_test : bool;
     private mutable filename : string;
     private mutable filename_short : string;
@@ -79,7 +81,8 @@
     mutable final_message : string;
 
     public this (dnet_runtime : string, parms : list [string],
-                 dlls : list [string], nem_comp : string, verbose : int)
+                 dlls : list [string], nem_comp : string, verbose : int,
+                 external_compiler : bool)
     {
 
       this.dnet_runtime = dnet_runtime;
@@ -87,6 +90,7 @@
       this.dlls = dlls;
       this.nem_runtime = nem_comp;
       this.verbose = verbose;
+      this.external_compiler = external_compiler;
       err_overall_count = 0;
       get_short_filename = Regex (@".*/(?<1>[\w\d-_]+)\.n$");
       error_log = null;
@@ -219,57 +223,93 @@
 
     private NemerleTest () : bool
     {
-      def nem_compile = Process ();
-      def args =
-        if (dnet_runtime.Length > 0)
-        {
-          nem_compile.StartInfo.FileName = dnet_runtime;
-          nem_runtime + " "
-        }
-        else
-        {
-          nem_compile.StartInfo.FileName = nem_runtime;
-          ""
-        };
-      def add_dll_ref (f, acc) {
-        acc + " -reference "+ f
-      };
+      mutable args = [];
 
-      def args = List.FoldLeft (dlls, args, add_dll_ref);
-      def args = List.FoldLeft (ref_dlls, args, add_dll_ref);
-      def args = List.FoldLeft (options, args, fun (x, acc) { acc + " " + x });
-      def args = List.FoldLeft (ref_pkgs, args, fun (f, acc) {
-        acc + " -pkg-config " + f
-      });
-      def add_parameter (f, acc)
-          {
-            acc + " " + f;
-          };
-      def args = List.FoldLeft (parameters, args, add_parameter);
+      foreach (dll in dlls)
+        args += ["-r:" + dll];
+      
+      foreach (dll in ref_dlls)
+        args += ["-r:" + dll];
+
+      args += options;
+      foreach (pkg in ref_pkgs)
+        args += ["-pkg-config:" + pkg];
+
+      args += parameters;
 
       // PWO: enable matching optimizations, disable coloring
-      def args = args + " -Obcm -Oocm -no-color " +
-        (if (was_output)
-           " -out:" + filename_short + ".exe -texe"
-         else
-           " -out:" + filename_short + ".dll -tdll");
-      nem_compile.StartInfo.Arguments = (args + " " + filename);
-      nem_compile.StartInfo.RedirectStandardOutput = true;
-      nem_compile.StartInfo.UseShellExecute = false;
+      args += ["-Obcm", "-Oocm", "-no-color"];
+
+      if (was_output)
+        args += ["-out:" + filename_short + ".exe", "-t:exe"]
+      else
+        args += ["-out:" + filename_short + ".dll", "-t:library"];
+
+      mutable nem_compile = null;
+
+      when (external_compiler) {
+        args += [filename];
+        nem_compile = Process ();
+        if (dnet_runtime.Length > 0) {
+          nem_compile.StartInfo.FileName = dnet_runtime;
+          args = nem_runtime :: args;
+        } else {
+          nem_compile.StartInfo.FileName = nem_runtime;
+        }
+
+        nem_compile.StartInfo.Arguments = (args.ToString (" "));
+        nem_compile.StartInfo.RedirectStandardOutput = true;
+        nem_compile.StartInfo.UseShellExecute = false;
+      }
+
       try
       {
         when (verbose > 0)
-          printf ("RUN: %s\n", nem_compile.StartInfo.Arguments);
-        ignore (nem_compile.Start ());
-        def read_output (acc) {
-          def line = nem_compile.StandardOutput.ReadLine ();
-          if (line == null) List.Rev (acc)
-          else read_output (line :: acc)
-        };
-        // gotta read output *first*, and then wait for process to exit
-        // otherwise pipe buffer overflows
-        def nem_output = read_output ([]);
-        nem_compile.WaitForExit ();
+          print ("RUN: $args on $filename\n");
+
+        mutable exit_code = 0;
+        mutable nem_output = [];
+
+        if (external_compiler) {
+          ignore (nem_compile.Start ());
+          def read_output (acc) {
+            def line = nem_compile.StandardOutput.ReadLine ();
+            if (line == null) List.Rev (acc)
+            else read_output (line :: acc)
+          };
+          // gotta read output *first*, and then wait for process to exit
+          // otherwise pipe buffer overflows
+          nem_output = read_output ([]);
+          nem_compile.WaitForExit ();
+          exit_code = nem_compile.ExitCode;
+        } else {
+          Options.Clear ();
+          Getopt.Parse (Getopt.Error, 
+                        Options.GetCommonOptions (), 
+                        args);
+          Options.IgnoreConfusion = true;
+          Options.ProgressBar = false;
+          Options.Sources = [filename];
+          Message.MessageOccured = fun (s) {
+            // FIXME, change + to :: and see
+            nem_output = NString.Split (s, array ['\n']) + nem_output
+          };
+          Message.InitOutput (System.IO.TextWriter.Null);
+          try {
+            Passes.Run ()
+          } catch {
+            | _ is System.IO.FileNotFoundException =>
+              exit_code = 1
+            | _ is AssemblyFindException =>
+              exit_code = 3
+            | _ =>
+              exit_code = 2
+          }
+          when (Message.SeenError && exit_code != 3)
+            exit_code = 1;
+          nem_output = List.Rev (nem_output);
+        }
+
         mutable is_ok = true;
 
         def Check_err (line : string, msg : Regex) {
@@ -292,7 +332,7 @@
           }
         };
 
-        when (nem_compile.ExitCode != 3) {
+        when (exit_code != 3) {
           foreach (output in nem_output) {
             when (this.verbose > 0)
               printf ("VERB-NEM : %s\n", output);
@@ -307,18 +347,18 @@
           warn_lines.Iter (Check_warn);
         }
 
-        if (nem_compile.ExitCode == 2) {
+        if (exit_code == 2) {
           HandleErrorMsg ("Nemerle compiler reported internal error");
           false
         }
         else {
-          if (nem_compile.ExitCode == 3) {
+          if (exit_code == 3) {
             was_output = false;
             no_verify = true;
             final_message = "\e[01;33munable to load library\e[0m";
           }
           else
-            when ((nem_compile.ExitCode == 0) != (err_lines.Count == 0))
+            when ((exit_code == 0) != (err_lines.Count == 0))
               is_ok = false;
 
           is_ok
@@ -604,11 +644,23 @@
       mutable test_files = [];
       mutable parms = [];
       mutable sort = false;
+      mutable external_compiler = false;
+
+      def split_opt (s) {
+        if (s == null)
+          []
+        else {
+          def split = NString.Split (s, array [' ', '\t', '\n', '\r']);
+          def split = List.Map (split, fun (x : string) { x.Trim () });
+          List.Filter (split, fun (x) { x != "" })
+        }
+      }
+      
       def opts = [
         Getopt.CliOption.String (name = "-n",
                        aliases = ["-ncc"],
-                       help = "use this Nemerle compiler (default : `ncc.exe') ",
-                       handler = fun (s) { nem_comp = s; }),
+                       help = "use this Nemerle compiler (default : internal) ",
+                       handler = fun (s) { nem_comp = s; external_compiler = true; }),
         Getopt.CliOption.String (name = "-reference",
                        aliases = ["-ref"],
                        help = "dll to be referenced during file(s)"
@@ -617,7 +669,7 @@
         Getopt.CliOption.String (name = "-parameters",
                        aliases = ["-parms", "-p"],
                        help = "parameters passed to the compiler (default : none) ",
-                       handler = fun (s) { parms = s :: parms }),
+                       handler = fun (s) { parms = parms + split_opt (s) }),
         Getopt.CliOption.String (name = "-verifier",
                        aliases = ["-verify"],
                        help = "command for executing PEVerify program (default : none) ",
@@ -646,7 +698,7 @@
       ];
       Getopt.Parse (opts);
 
-      def tester = Tester (dnet_env, parms, dlls, nem_comp, verbose);
+      def tester = Tester (dnet_env, parms, dlls, nem_comp, verbose, external_compiler);
       if (List.IsEmpty (test_files))
       {
         def str = Directory.GetFiles (Directory.GetCurrentDirectory (), "*.n");
