@@ -308,6 +308,20 @@ out.stage3/ncc.exe: $(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
 		-reference:out.$(STAGE)/Nemerle.Compiler.dll \
 		$(GENERIC_SRC) $(NCC_EXE_SRC)
 
+doc:
+	$(COMP) [stage3] bla  
+        $(Q)$(MAKE) doc-sub COMPILER_PATH=out.stage3/  
+	
+doc-sub:
+	$(Q)$(RUN_COMPILER) -target-library -out:temp.dll $(NEMERLE_DLL_SRC) \
+	-doc Nemerle.xml
+	$(Q)$(RUN_COMPILER) -target-library -out:temp.dll $(NEMERLE_COMPILER_DLL_SRC) \
+	-ref:out.stage3/Nemerle.dll -doc Nemerle.Compiler.xml
+	$(Q)$(RUN_COMPILER) -target-library -out:temp.dll $(STDMACROS_DLL_SRC) \
+	-ref:out.stage3/Nemerle.dll -ref:out.stage3/Nemerle.Compiler.dll -doc Nemerle.Macros.xml
+	rm temp.dll
+		
+
 sync:
 	cd out.stage3 ; \
 	for x in *.dll *.exe ; do \
