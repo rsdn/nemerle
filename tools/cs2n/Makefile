@@ -36,7 +36,7 @@ include config.cs2n.mak
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
-NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe -q
+NCC = $(NCC_DIR)/ncc.exe -q
 MCS = mcs
 
 NEMERLE_DLLS = Nemerle.dll Nemerle.Macros.dll Nemerle.Compiler.dll
@@ -68,18 +68,14 @@ Nemerle.CSharp.CS.dll : Nemerle.CSharp.dll $(GENERATED_SOURCES_PARSER)
 Nemerle.CSharp.dll : $(NEMERLE_CSHARP_DLL_SOURCES) 
 	$(NCC) -tdll -r:antlr.runtime.dll -o:$@ $(NEMERLE_CSHARP_DLL_SOURCES) 
 
-ifneq "$(classpath)" ""
-
 $(GENERATED_SOURCES_PARSER): $(GRAMMAR_FILE)
-	java -classpath $(classpath) antlr.Tool $(GRAMMAR_FILE) 2> error_log
-
-endif
+	antlr $(GRAMMAR_FILE) 2> error_log
 
 $(NEMERLE_DLLS): $(NCC_DIR)/$@
 	cp -f $(NCC_DIR)/$@ $@
 
-$(ANTLR_DLL): $(antlrhome)/lib/csharp/src/$@
-	cp -f $(antlrhome)/lib/csharp/src/$@ $@
+$(ANTLR_DLL): antlr/$@
+	cp -f antlr/$@ $@
 
 config.cs2n.mak: configure
 	./configure
@@ -87,14 +83,6 @@ config.cs2n.mak: configure
 dist-clean: clean
 	rm -f  config.cs2n.mak
 
-ifeq "$(classpath)" ""
-
-clean:
-	rm -f *.exe *.dll *.pdb *~ error_log
-
-else
-
 clean:
 	rm -f *.exe *.dll *.pdb *~ error_log $(GENERATED_SOURCES) $(GENERATED_TOKEN_DESCRIPTION)
 
-endif
