@@ -91,7 +91,7 @@ syn cluster nemerleCommentGroup	contains=nemerleTodo
 syn match nemerleComment	"//.*$"	contains=@nemerleCommentGroup
 syn region nemerleComment start="(\*" end="\*)" contains=@nemerleCommentGroup
 
-syn match	nemerleModPrefix	"[A-Za-z_][a-zA-Z_0-9]*\."
+syn match	nemerleModPrefix	"[A-Z_][a-zA-Z_0-9]*\."
 
 syn match	nemerleSpecial	display contained "\\\(x\x\x\|.\|$\)"
 syn region	nemerleString	start=+L\="+ skip=+\\\\\|\\"+ end=+"+ contains=nemerleSpecial
