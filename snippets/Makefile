@@ -50,6 +50,7 @@ all:
 	$(Q)$(MAKE) -C course all
 	$(Q)$(MAKE) -C sokoban all
 	$(Q)$(MAKE) -C concurrency all
+	$(Q)$(MAKE) -C designpatt all
 
 myPoll.exe: myPoll.n
 	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r Npgsql myPoll.n -o myPoll.exe
