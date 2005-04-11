@@ -93,6 +93,7 @@ namespace Nemerle.Compiler
       assert (expr != null);
       Util.locate (expr.loc, {
         messenger.CleanLocalError ();
+        def expr = PushConversionDown (expr);
         def res = DoWalk (ctx, expr);
         def res =
           if (res == null)
@@ -141,6 +142,8 @@ namespace Nemerle.Compiler
             | _ => assert (false)
                  //  TExpr.Error ()
           }
+        | TExpr.TypeConversion =>
+          PushConversionDown (expr)
         | _ => expr
       }
     }
@@ -196,6 +199,39 @@ namespace Nemerle.Compiler
           m1.Equals (m2)
         | (TExpr.This, TExpr.This) => true
         | _ => false
+      }
+    }
+
+    PushConversionDown (expr : TExpr) : TExpr
+    {
+      match (expr) {
+        | TExpr.Delayed =>
+          PushConversionDown (Unfold (expr))
+        | TExpr.TypeConversion (e, t, k) as conv =>
+          if (k is ConversionKind.Implicit && 
+              t.TryUnify (e.Type)) {
+            _ = t.Unify (e.Type);
+            e
+          } else
+            match (Unfold (e)) {
+              | TExpr.DefValIn as d =>
+                conv.expr = d.body;
+                d.body = PushConversionDown (conv);
+                e
+
+              | TExpr.DefFunctionsIn as d =>
+                conv.expr = d.body;
+                d.body = PushConversionDown (conv);
+                e
+
+              | TExpr.Sequence as d =>
+                conv.expr = d.e2;
+                d.e2 = PushConversionDown (conv);
+                e
+
+              | _ => expr
+            }
+        | _ => expr
       }
     }
 
@@ -424,34 +460,49 @@ namespace Nemerle.Compiler
     }
     
     
-    BuildConversion (expr : TExpr, target : MType, kind : ConversionKind) : TExpr
+    BuildConversion (expr : TExpr, target : TyVar, kind : ConversionKind) : TExpr
     {
+      def target = target.Fix ();
       def kind =
         match (target) {
           | MType.Void => ConversionKind.IL (true)
           | _ => kind
         }
-        
-      match (kind) {
-        | ConversionKind.MethodCall (meth) =>
-          TExpr.Call (target, TExpr.StaticRef (meth.GetFreshType (), meth), 
-                      [Parm (expr)])
-        | ConversionKind.DownCast =>
-          if (expr.Type.TryRequire (target)) {
-            _ = expr.Type.Require (target);
-            Message.Warning (10001, $"there is no check needed to cast $(expr.Type) to $target");
-            Message.HintOnce (10001, "consider using : instead of :>");
-            BuildEnforcement (expr, target)
-          } else
+
+      if (kind is ConversionKind.Implicit && 
+          target.TryUnify (expr.Type)) {
+        _ = target.Unify (expr.Type);
+        expr
+      } else
+        match (kind) {
+          | ConversionKind.MethodCall (meth) =>
+            TExpr.Call (target, TExpr.StaticRef (meth.GetFreshType (), meth), 
+                        [Parm (expr)])
+          | ConversionKind.DownCast =>
+            if (expr.Type.TryRequire (target)) {
+              _ = expr.Type.Require (target);
+              Message.Warning (10001, $"there is no check needed to cast $(expr.Type) to $target");
+              Message.HintOnce (10001, "consider using : instead of :>");
+              BuildEnforcement (expr, target)
+            } else
+              TExpr.TypeConversion (expr, target, kind)
+          | ConversionKind.Unspecified =>
+            if (expr.Type.TryRequire (target)) {
+              _ = expr.Type.Require (target);
+              BuildEnforcement (expr, target)
+            } else
+              TExpr.TypeConversion (expr, target, ConversionKind.DownCast ())
+          | _ =>
             TExpr.TypeConversion (expr, target, kind)
-        | ConversionKind.Unspecified =>
-          if (expr.Type.TryRequire (target)) {
-            _ = expr.Type.Require (target);
-            BuildEnforcement (expr, target)
-          } else
-            TExpr.TypeConversion (expr, target, ConversionKind.DownCast ())
-        | _ =>
-          TExpr.TypeConversion (expr, target, kind)
+        }
+    }
+
+
+    StripImplicitConversion (expr : TExpr) : TExpr
+    {
+      match (expr) {
+        | TExpr.TypeConversion (e, _, ConversionKind.Implicit) => e
+        | e => e
       }
     }
 
@@ -644,8 +695,11 @@ namespace Nemerle.Compiler
               | TExpr.OpCode ("!=.ref") =>
                 match (parms) {
                   | [p1, p2] =>
-                    def t1 = p1.expr.Type.Fix ();
-                    def t2 = p2.expr.Type.Fix ();
+                    def e1 = StripImplicitConversion (p1.expr);
+                    def e2 = StripImplicitConversion (p2.expr);
+
+                    def t1 = e1.Type.Fix ();
+                    def t2 = e2.Type.Fix ();
                     def prob =
                       if (t1.IsSystemObject && t2.IsValueType) t2
                       else if (t2.IsSystemObject && t1.IsValueType) t1
@@ -660,8 +714,8 @@ namespace Nemerle.Compiler
                       ReportError (messenger, 
                                    $ "comparing values of types $t1 and $t2 "
                                      "with reference equality");
-                      Message.Hint ("upcast one of the values to object if "
-                                    "this is desired");
+                      Message.HintOnce ("upcast one of the values to object if "
+                                        "this is desired");
                     } else {}
 
                     TExpr.Call (Unfold (func), parms)
