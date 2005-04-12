@@ -130,7 +130,7 @@ uninstall:
 	$(Q)$(MAKE) -C doc  uninstall
 	$(Q)rm -f $(PKGCONFIGDIR)/nemerle.pc
 
-check:
+check: all
 	$(Q)$(MAKE) -C ncc  tests
 	$(Q)$(MAKE) -C snippets clean
 	$(Q)$(MAKE) -C snippets all

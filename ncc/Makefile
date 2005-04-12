@@ -395,6 +395,9 @@ t-mcs test-mcs: tests-mcs
 tests-mcs:
 	$(Q)cd testsuite/frommcs && $(MAKE)
 
+check:
+	$(MAKE) -C .. check
+
 profile:
 	$(Q)../misc/profiler/runprof $(COMPILER) -no-stdlib -t:dll \
           -out:out.stage1/Nemerle.stage1.dll -r System.dll \
