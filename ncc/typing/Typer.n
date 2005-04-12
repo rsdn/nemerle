@@ -572,6 +572,102 @@ namespace Nemerle.Compiler
     #endregion
 
 
+    #region Implicit conversions
+    /** Return all possible implicit conversions [from] -> [to].
+        Assume not [from <: to].
+      */
+    LookupConversions (from : TypeInfo, to : TypeInfo) : list [IMethod]
+    {
+      def ids = (from.GetId (), to.GetId ());
+      if (implicit_conversions.Contains (ids))
+        implicit_conversions [ids]
+      else {
+        def lookup (acc, tc) {
+          def acc = tc.LookupMember ("op_Implicit") + acc;
+          match (tc.SuperClass ()) {
+            | Some (tc) => lookup (acc, tc)
+            | None => acc
+          }
+        }
+        def methods = SquashDuplicates (lookup (lookup ([], from), to));
+        mutable res = [];
+        def ty = 
+          MType.ConstructFunctionType ([from.GetFreshType () : TyVar], 
+                                       to.GetFreshType ());
+        foreach (meth is IMethod in methods : list [IMember]) {
+          when (meth.IsStatic && meth.GetFreshType ().TryRequire (ty))
+            res = meth :: res;
+        }
+
+        implicit_conversions [ids] = res;
+        res
+      }
+    }
+
+    SubtypingOrImplicitConv (from : TyVar, to : TyVar, method : out IMethod) : bool
+    {
+      method = null;
+      if (from.TryRequire (to)) {
+        from.Require (to)
+      } else {
+        // #define CONVERSIONS
+        #if !CONVERSIONS
+        false &&
+        #endif
+        match (from.Hint) {
+          | Some (MType.Class (from_tc, _)) =>
+            match (to.Hint) {
+              | Some (MType.Class (to_tc, _)) =>
+                def methods = LookupConversions (from_tc, to_tc);
+                if (methods.IsEmpty) false
+                else {
+                  mutable res = [];
+                  def ty = MType.ConstructFunctionType ([from], to);
+                  foreach (meth in methods) {
+                    when (meth.GetFreshType ().TryRequire (ty))
+                      res = meth :: res;
+                  }
+                  res = GetBestOverloads1 (res);
+                  match (res) {
+                    | [one] =>
+                      method = one;
+                      _ = method.GetFreshType ().Require (ty);
+                      true
+                    | [] => false
+                    | lst =>
+                      ReportError (messenger, 
+                                   $"ambiguity between implicit conversions $lst");
+                      false
+                  }
+                }
+              | _ => false
+            }
+          | _ => false
+        }
+      }
+    }
+
+
+    AddCastTo (expr : TExpr, target : TyVar) : TExpr
+    {
+      mutable meth = null;
+      if (SubtypingOrImplicitConv (expr.Type, target, out meth)) {
+        if (meth == null)
+          expr
+        else
+          match (meth.BuiltinKind) {
+            | BuiltinMethodKind.ValueTypeConversion =>
+              TExpr.TypeConversion (target, expr, target,
+                                    ConversionKind.IL (local_context.IsChecked))
+            | _ =>
+              TExpr.TypeConversion (target, expr, target,
+                                    ConversionKind.MethodCall (meth))
+          }
+      } else null
+    }
+    #endregion
+
+
     #region Solver interaction
     FreshTyVar () : TyVar
     {
@@ -1711,9 +1807,11 @@ namespace Nemerle.Compiler
     #endregion
 
 
-    #region Operators
-    static binary_operators : Hashtable [string, string];
-    static unary_operators : Hashtable [string, string];
+    #region Static caches -- operators and conversions
+    static binary_operators : Hashtable [string, string] = Hashtable ();
+    static unary_operators : Hashtable [string, string] = Hashtable ();
+    // a cache
+    static implicit_conversions : Hashtable [int * int, list [IMethod]] = Hashtable ();
     
     static this ()
     {
@@ -1750,11 +1848,15 @@ namespace Nemerle.Compiler
         ("+", "op_UnaryPlus")
       ];
 
-      binary_operators = Hashtable ();
-      unary_operators = Hashtable ();
-
       List.Iter (binary, binary_operators.Add);
       List.Iter (unary, unary_operators.Add);
+
+      Passes.OnInit += Clear;
+    }
+
+    static Clear () : void
+    {
+      implicit_conversions.Clear ();
     }
 
     IsOperator (name : string) : bool
@@ -2037,7 +2139,6 @@ namespace Nemerle.Compiler
               TExpr.TypeConversion (expr, to, ConversionKind.DownCast ())
             }
           | lst =>
-            // FIXME: included method list
             ReportError (messenger, $"overload ambiguity in type conversion $lst");
             TExpr.Error ()
         }
