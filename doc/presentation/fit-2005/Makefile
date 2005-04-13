@@ -2,7 +2,7 @@ all:
 	pdflatex parsing.tex</dev/null
 
 show:
-	kghostview main.pdf &
+	kghostview parsing.pdf &
 
 clean:
 	rm -f *.{aux,dvi,pdf,log,snm,out,toc,nav,ps}
