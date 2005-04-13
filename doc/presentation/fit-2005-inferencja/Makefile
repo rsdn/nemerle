@@ -1,6 +1,6 @@
 all:
 	pdflatex main.tex</dev/null
-	acroread main.pdf
+	gv main.pdf
 
 clean:
 	rm -f *.{aux,dvi,pdf,log,snm,out,toc,nav,ps}
