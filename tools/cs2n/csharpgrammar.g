@@ -1205,20 +1205,24 @@ returns [string return_string]
 	    if (Options.NemerlishDefaultValue)
 	    {
 		switch (t[1])
-		{
+		{		    
+		    case "int" :
+			return_string = t[0] + "mutable " + id2.getText () + " = 0;";
+			break;
 		    case "float" :
 		    case "double" :
-		    case "int" :
-		    case "uint" :		    
+		    case "uint" :	    
 		    case "long" :
 		    case "ulong" :
-		    case "byte" : 
-		    case "sbyte" : 
 		    case "short" :
 		    case "ushort" :
-		    case "char" :
 		    case "decimal":
-			return_string = t[0] + "mutable " + id2.getText () + " = " + "Nemerle.Extensions.DefaultValue (" + t[1] + ");";
+		    case "byte" : 
+		    case "sbyte" : 		    		    
+			return_string = t[0] + "mutable " + id2.getText () + " = 0 : " + t[1] + ";";
+			break;		    
+		    case "char" :
+			return_string = t[0] + "mutable " + id2.getText () + " = '\0';";
 			break;
 		    default:
 			return_string = t[0] + "mutable " + id2.getText () + " = null;";
