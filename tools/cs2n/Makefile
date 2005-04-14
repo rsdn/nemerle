@@ -51,8 +51,9 @@ GENERATED_TOKEN_DESCRIPTION = CSharpParserTokenTypes.txt
 
 GENERATED_SOURCES = $(GENERATED_SOURCES_LEXER) $(GENERATED_SOURCES_PARSER) $(GENERATED_SOURCES_TOKEN_TYPES) 
 
-NEMERLE_CSHARP_DLL_SOURCES = ExtendedToken.n Emit.n StatementTree.n GotoElimination.n AssemblyInfo.n
-CS2N_EXE_SOURCES = cs2n.n
+NEMERLE_CSHARP_DLL_SOURCES = ExtendedToken.n Emit.n StatementTree.n GotoElimination.n AssemblyInfo.n \
+				TranslationOptions.n
+CS2N_EXE_SOURCES = cs2n.n 
 
 ifeq ($(origin GOTO), command line)
 	override GOTO = -def:GOTO_ELIMINATION

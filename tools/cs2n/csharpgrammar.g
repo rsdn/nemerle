@@ -1201,8 +1201,32 @@ returns [string return_string]
             return_string = t[0] + "mutable " + id1.getText () + a.getText () + lvi + ";";
         }
     |   id2:IDENTIFIER
-        {	    
-            return_string = t[0] + "mutable " + id2.getText () + " = " + "Nemerle.Extensions.DefaultValue (" + t[1] + ");";
+        {   
+	    if (Options.NemerlishDefaultValue)
+	    {
+		switch (t[1])
+		{
+		    case "float" :
+		    case "double" :
+		    case "int" :
+		    case "uint" :		    
+		    case "long" :
+		    case "ulong" :
+		    case "byte" : 
+		    case "sbyte" : 
+		    case "short" :
+		    case "ushort" :
+		    case "char" :
+		    case "decimal":
+			return_string = t[0] + "mutable " + id2.getText () + " = " + "Nemerle.Extensions.DefaultValue (" + t[1] + ");";
+			break;
+		    default:
+			return_string = t[0] + "mutable " + id2.getText () + " = null;";
+			break;
+		}
+	    }
+	    else
+		return_string = t[0] + "mutable " + id2.getText () + " = " + "Nemerle.Extensions.DefaultValue (" + t[1] + ");";
         }
 ;
 
@@ -2240,7 +2264,10 @@ fixed_parameter
 }
     :   (attributes)?   (p = parameter_modifier)?   t = type  id:IDENTIFIER
         {
-            Emit.EmitString ( "mutable " + id.getText () + " : " + p + t[0]+t[1] );
+	    if ( Options.NemerlishFunctionParameters )
+		Emit.EmitString ( id.getText () + " : " + p + t[0]+t[1] );
+	    else
+		Emit.EmitString ( "mutable " + id.getText () + " : " + p + t[0]+t[1] );
         }        
     ;
 
