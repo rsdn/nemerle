@@ -34,7 +34,7 @@ THISDIR = $(shell if cygpath --help 2>/dev/null 1>&2; then echo `cygpath -m $(CU
 ############################################################
 
 all:
-	@$(MAKE) TEST_FILES=$(THISDIR)/*.n ADDITIONAL_FLAGS=-nowarn:10003 -C ../../../ncc/testsuite test
+	@$(MAKE) TEST_FILES=$(THISDIR)/*.n ADDITIONAL_FLAGS=-nowarn:10003,10001 -C ../../../ncc/testsuite test
 
 clean:
 	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]* *xml

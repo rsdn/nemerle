@@ -2561,7 +2561,6 @@ overloadable_unary_operator
     :   oun1:PLUS    {Emit.EmitString (ExtendedToken.getTextOnly (oun1));}
     |   oun2:MINUS   {Emit.EmitString (ExtendedToken.getTextOnly (oun2));}
     |   oun3:LNOT    {Emit.EmitString (ExtendedToken.getTextOnly (oun3));}
-    |   oun4:BNOT    {Emit.EmitString (ExtendedToken.getTextOnly (oun4));}
     |   oun5:INC     {Emit.EmitString (ExtendedToken.getTextOnly (oun5));}
     |   oun6:DEC     {Emit.EmitString (ExtendedToken.getTextOnly (oun6));}
     |   oun7:TRUE    {Emit.EmitString (ExtendedToken.getTextOnly (oun7));}
@@ -2753,8 +2752,11 @@ static_constructor_body
 
 destructor_declaration
     :   (attributes)?   (e:EXTERN {Emit.EmitToken (e);})?   
-        b:BNOT            {Emit.EmitToken (b);}
-        id:IDENTIFIER     {Emit.EmitString (ExtendedToken.getWhitespaces(id) + "this");}
+        b:BNOT            
+        id:IDENTIFIER     {
+          Emit.EmitString (ExtendedToken.getWhitespaces(b) + 
+                           "protected override Finalize ");
+        }
         lp:LPAREN         {Emit.EmitToken (lp);}
         rp:RPAREN         {Emit.EmitToken (rp);}
         destructor_body
@@ -2764,7 +2766,10 @@ destructor_body
 {
     StatementTree t = new StatementTree();
 }
-    :   t = block {Emit.EmitString ( t.ToString () );}
+    :   t = block {
+      Emit.EmitString ( " : void " );
+      Emit.EmitString ( t.ToString () );
+    }
     |   s:SEMI    {Emit.EmitToken (s);}
     ;
 
