@@ -1202,35 +1202,33 @@ returns [string return_string]
         }
     |   id2:IDENTIFIER
         {   
-	    if (Options.NemerlishDefaultValue)
-	    {
-		switch (t[1])
-		{		    
-		    case "int" :
-			return_string = t[0] + "mutable " + id2.getText () + " = 0;";
-			break;
-		    case "float" :
-		    case "double" :
-		    case "uint" :	    
-		    case "long" :
-		    case "ulong" :
-		    case "short" :
-		    case "ushort" :
-		    case "decimal":
-		    case "byte" : 
-		    case "sbyte" : 		    		    
-			return_string = t[0] + "mutable " + id2.getText () + " = 0 : " + t[1] + ";";
-			break;		    
-		    case "char" :
-			return_string = t[0] + "mutable " + id2.getText () + " = '\0';";
-			break;
-		    default:
-			return_string = t[0] + "mutable " + id2.getText () + " = null;";
-			break;
-		}
-	    }
-	    else
-		return_string = t[0] + "mutable " + id2.getText () + " = " + "Nemerle.Extensions.DefaultValue (" + t[1] + ");";
+	    switch (t[1])
+	    {		    
+	        case "int" :
+		   return_string = t[0] + "mutable " + id2.getText () + " = 0;";
+		    break;
+		case "float" :
+		case "double" :
+		case "uint" :	    
+		case "long" :
+		case "ulong" :
+		case "short" :
+		case "ushort" :
+		case "decimal":
+		case "byte" : 
+		case "sbyte" : 		    		    
+		    return_string = t[0] + "mutable " + id2.getText () + " = 0 : " + t[1] + ";";
+		    break;		    
+		case "char" :
+		    return_string = t[0] + "mutable " + id2.getText () + " = '\0';";
+		    break;
+		default:
+		if (Options.NemerlishDefaultValue)
+		    return_string = t[0] + "mutable " + id2.getText () + " = null;";
+		else
+		    return_string = t[0] + "mutable " + id2.getText () + " = " + "Nemerle.Extensions.DefaultValue (" + t[1] + ");";
+		    break;
+	    }	    
         }
 ;
 
