@@ -32,6 +32,7 @@ namespace Nemerle.Compiler
   using Nemerle.Utility;
   using Nemerle.IO;
   using System.IO;
+  using System.Text.RegularExpressions;
 
   using Nemerle.Compiler.Typedtree;
 
@@ -319,7 +320,7 @@ namespace Nemerle.Compiler
       for (; i < types.Length; ++i) {
         def t = types[i];
 #if _GENERICS        
-        def name = t.FullName.Replace ('+', '.').Replace ("`1", "");
+        def name = Regex.Replace (t.FullName.Replace ('+', '.'), "`", "_");
 #else
         def name = t.FullName.Replace ('+', '.');
 #endif        
@@ -436,7 +437,7 @@ namespace Nemerle.Compiler
         find_name ("", t)
       } else
 #if _GENERICS      
-        loop (t, [t.Name.Replace ("`1", "")])
+        loop (t, [Regex.Replace (t.Name, "`", "_")])
 #else
         loop (t, [t.Name])
 #endif
@@ -515,8 +516,14 @@ namespace Nemerle.Compiler
             TypeOfType (_tenv, framework_type.GetElementType ())
           }
 #if _NET_2_0            
-          else if (framework_type.IsGenericParameter)
+          else if (framework_type.IsGenericParameter) {
+#if _GENERICS            
+            def tv = Option.UnSome (_tenv.Find (framework_type.MetadataToken));
+            MType.TyVarRef (tv)
+#else
             InternalType.Void
+#endif
+          }
 #endif                      
           else {
             def (ns_node, path_to_type) =
@@ -547,11 +554,12 @@ namespace Nemerle.Compiler
      */
     internal ConstructTypeInfo (reflected_type : System.Type) : TypeInfo
     {
-      if (_is_generated_by_nemerle &&
+      if (
 #if _GENERICS
-          (reflected_type.IsGenericTypeDefinition ||
+          reflected_type.IsGenericTypeDefinition ||
+          _is_generated_by_nemerle &&
           has_attribute ("Nemerle.Internal.TypeAttribute",
-                         reflected_type.GetCustomAttributes (false))))
+                         reflected_type.GetCustomAttributes (false)))
 #else
           has_attribute ("Nemerle.Internal.TypeAttribute",
                          reflected_type.GetCustomAttributes (false)))
@@ -575,14 +583,14 @@ namespace Nemerle.Compiler
         Some (LibraryReferenceManager.GetInternalType (this, st))
     }
 
-    private MethodOfMethodInfo (self : IMember, meth : SR.MethodInfo) : NetMethod
+    private MethodOfMethodInfo (self : IMember, meth : SR.MethodInfo) : MethodInfo
     {
       if (meth == null)
         null
       else
         match (self.DeclaringType) {
           | ti is NetTypeInfo => MethodInfo (ti.tenv, this, meth)
-          | _ => NetMethod (this, meth)
+          | _ => MethodInfo (this, meth)
         }
     }
 
@@ -1070,6 +1078,7 @@ namespace Nemerle.Compiler
         def ifaces = List.MapFromArray (system_type.GetInterfaces (), fun (ty) {
           TypeOfType (null, ty) :> MType.Class
         });
+        Message.Debug ($"get dts in $system_type having $ifaces");        
         match (SuperClass ()) {
           | Some (r) => MType.Class (r, []) :: ifaces
           | None => ifaces
@@ -1164,9 +1173,9 @@ namespace Nemerle.Compiler
       {
         match (m.MemberType) {
           | MemberTypes.Constructor 
-          | MemberTypes.Method => NetMethod (library, m :> SR.MethodBase) : IMember
+          | MemberTypes.Method => MethodInfo (library, m :> SR.MethodBase) : IMember
           | MemberTypes.Field => FieldInfo (library, m :> SR.FieldInfo)
-          | MemberTypes.Property => NetProperty (library, m :> SR.PropertyInfo)
+          | MemberTypes.Property => NetProperty (null, library, m :> SR.PropertyInfo)
           | MemberTypes.Event => NetEvent (library, m :> SR.EventInfo)
           | MemberTypes.NestedType => TypeInfoOfType (m :> System.Type)
           | _ => null
@@ -1189,6 +1198,8 @@ namespace Nemerle.Compiler
         }
         
         def add_member (m : SR.MemberInfo, acc) {
+        //  Message.Debug ($"adding $m from $this");
+          
           if (!TypeInfoOfType (m.DeclaringType).Equals (this)) {
             acc
           } else if (is_internal (m) ||
@@ -1207,10 +1218,10 @@ namespace Nemerle.Compiler
           }
         }
         
-        def flags = SR.BindingFlags.Public     %|
-                    SR.BindingFlags.NonPublic  %|
-                    SR.BindingFlags.Static     %|
-                    SR.BindingFlags.Instance   %|
+        def flags = SR.BindingFlags.Public     |
+                    SR.BindingFlags.NonPublic  |
+                    SR.BindingFlags.Static     |
+                    SR.BindingFlags.Instance   |
                     SR.BindingFlags.DeclaredOnly;
 
         def member_array = 
@@ -1492,8 +1503,8 @@ namespace Nemerle.Compiler
       protected library : LibraryReference;
       protected id : int;
       protected is_static : bool;
-      protected adder : NetMethod;
-      protected remover : NetMethod;
+      protected adder : MethodInfo;
+      protected remover : MethodInfo;
       protected mutable mem_type : MType;
 
       public this (lib : LibraryReference, h : SR.EventInfo)
@@ -1628,13 +1639,13 @@ namespace Nemerle.Compiler
       protected library : LibraryReference;
       protected id : int;
       protected is_static : bool;
-      protected getter : NetMethod;
-      protected setter : NetMethod;
-      protected any_method : NetMethod;
+      protected getter : MethodInfo;
+      protected setter : MethodInfo;
+      protected any_method : MethodInfo;
       protected mutable mem_type : MType;
       protected overload_name : string;
 
-      public this (lib : LibraryReference, h : SR.PropertyInfo)
+      public this (tenv : SystemMap [int, StaticTyVar], lib : LibraryReference, h : SR.PropertyInfo)
       {
         id = Util.next_id ();
         library = lib;
@@ -1655,7 +1666,7 @@ namespace Nemerle.Compiler
 
         is_static = any_method.Attributes %&& NemerleAttributes.Static;
         
-        def ret_type = TypeOfType (null, handle.PropertyType);
+        def ret_type = TypeOfType (tenv, handle.PropertyType);
 
         def (args, ret_type) =
           if (getter != null)
@@ -1799,7 +1810,7 @@ namespace Nemerle.Compiler
       }
     }
     
-    class NetMethod : IMethod
+    class MethodInfo : IMethod
     {
       protected handle : SR.MethodBase;
       protected library : LibraryReference;
@@ -1811,18 +1822,23 @@ namespace Nemerle.Compiler
 
       public this (lib : LibraryReference, h : SR.MethodBase)
       {
+        this (null, lib, h)
+      }
+      
+      public this (tenv : SystemMap [int, StaticTyVar], lib : LibraryReference, h : SR.MethodBase)
+      {
         library = lib;
         handle = h;
         def mkparm (p : SR.ParameterInfo) {
           def (parmkind, ty) =
             if (p.ParameterType.IsByRef) {
-              def ty = TypeOfType (null, p.ParameterType.GetElementType ());
+              def ty = TypeOfType (tenv, p.ParameterType.GetElementType ());
               if (p.IsOut)
                 (ParmKind.Out, MType.Out (ty))
               else
                 (ParmKind.Ref, MType.Ref (ty))
             } else
-              (ParmKind.Normal, TypeOfType (null, p.ParameterType));
+              (ParmKind.Normal, TypeOfType (tenv, p.ParameterType));
           Fun_parm (
             loc = lib._location,
             name = p.Name,
@@ -1837,7 +1853,7 @@ namespace Nemerle.Compiler
           if (handle.Name == ".ctor" || handle.Name == ".cctor")
             InternalType.Void
           else
-            TypeOfType (null, (handle :> SR.MethodInfo).ReturnType);
+            TypeOfType (tenv, (handle :> SR.MethodInfo).ReturnType);
         
         def parms = handle.GetParameters ();
 
@@ -1872,6 +1888,13 @@ namespace Nemerle.Compiler
         when (handle.IsPrivate)  attributes |= NemerleAttributes.Private;
         when (handle.IsPublic)   attributes |= NemerleAttributes.Public;
         when (handle.IsFamily || handle.IsFamilyOrAssembly) attributes |= NemerleAttributes.Protected;
+
+        when (tenv != null) {
+          def type_attrs = h.GetCustomAttributes (false);
+          def attr_str = get_encoded_type (type_attrs); 
+          when (attr_str != null)
+            TyCodec.FixupFunctionHeader (lib, tenv, fun_header, attr_str);
+        }
       }
       
       public DeclaringType : TypeInfo
@@ -1966,9 +1989,14 @@ namespace Nemerle.Compiler
         id
       }
 
-      public virtual GetFreshType () : MType
+      public GetFreshType () : MType
       {
-        GetMemType ()
+        if (fun_header.typarms.IsEmpty)
+          GetMemType ()
+        else {
+          def subst = Subst.Fresh (Passes.Solver, fun_header.typarms);
+          subst.MonoApply (GetMemType ())
+        }
       }
 
       public GetFunKind () : FunKind
@@ -2088,7 +2116,7 @@ namespace Nemerle.Compiler
       public this (lib : LibraryReference, h : System.Type)
       {
         base (lib, h);
-        
+
         def tenv =
           if (system_type.DeclaringType != null)
             match (TypeInfoOfType (system_type.DeclaringType)) {
@@ -2234,6 +2262,9 @@ namespace Nemerle.Compiler
       protected override imember_of_memberinfo (m : SR.MemberInfo) : IMember
       {
         def is_nem (x : SR.MemberInfo) {
+#if _GENERICS
+          true ||
+#endif
           has_attribute ("Nemerle.Internal.TypeAttribute", x.GetCustomAttributes (false))
         };
         match (m.MemberType) {
@@ -2241,7 +2272,7 @@ namespace Nemerle.Compiler
             if (is_nem (m))
               MethodInfo (tenv, library, m :> SR.MethodBase) : IMember
             else
-              NetMethod (library, m :> SR.MethodBase)
+              MethodInfo (library, m :> SR.MethodBase)
 
           | MemberTypes.Field => 
             if (is_nem (m))
@@ -2249,31 +2280,12 @@ namespace Nemerle.Compiler
             else
               FieldInfo (library, m :> SR.FieldInfo)
 
-          | MemberTypes.Property => NetProperty (library, m :> SR.PropertyInfo)
+          | MemberTypes.Property => NetProperty (tenv, library, m :> SR.PropertyInfo)
           | MemberTypes.Event => NetEvent (library, m :> SR.EventInfo)
           | MemberTypes.NestedType => TypeInfoOfType (m :> System.Type)
           | _ => 
             Util.ice ("unknown object in nemerle type " + m.Name + " in " + FullName)
         }
-      }
-    }
-    
-    class MethodInfo : NetMethod
-    {
-      public this (tenv : SystemMap [int, StaticTyVar], lib : LibraryReference,
-                   h : SR.MethodBase)
-      {
-        base (lib, h);
-        def type_attrs = h.GetCustomAttributes (false);
-        def attr_str = get_encoded_type (type_attrs); 
-        when (attr_str != null)
-          TyCodec.FixupFunctionHeader (lib, tenv, fun_header, attr_str);
-      }
-      
-      public override GetFreshType () : MType
-      {
-        def subst = Subst.Fresh (Passes.Solver, fun_header.typarms);
-        subst.MonoApply (GetMemType ())
       }
     }
   }
