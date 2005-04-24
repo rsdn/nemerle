@@ -599,10 +599,10 @@ namespace Nemerle.Compiler
       protected library : LibraryReference;
       protected attributes : NemerleAttributes;
 
-      internal tenv : SystemMap [int, StaticTyVar] = SystemMap ();
-      protected direct_supertypes : list [MType.Class];
-      protected supertypes : list [MType.Class];
-      protected supertype_map : SystemMap [int, MType] = SystemMap ();
+      internal mutable tenv : SystemMap [int, StaticTyVar] = SystemMap ();
+      protected mutable direct_supertypes : list [MType.Class];
+      protected mutable supertypes : list [MType.Class];
+      protected mutable supertype_map : SystemMap [int, MType.Class] = SystemMap ();
 
       
       /** member_list is used to collect all members of given type
@@ -634,7 +634,9 @@ namespace Nemerle.Compiler
 
         when (system_type.DeclaringType != null)
           tenv = (lib.TypeInfoOfType (system_type.DeclaringType) :> NetType).tenv;
-        
+
+        Init (); // init typarms and self_type
+          
         // FIXME: get rid of this!
         when (IsDelegate) {
           def pref = "problem with delegate type `" + FullName + "': ";
@@ -684,7 +686,7 @@ namespace Nemerle.Compiler
             def dma = attrs [0] :> System.Reflection.DefaultMemberAttribute;
             Some (dma.MemberName)
           } else None ();
-
+          
         AddBuiltins ();
       }
 
@@ -715,6 +717,13 @@ namespace Nemerle.Compiler
         numeric_types.Add ("Char", NumericKind.Char ()); 
       }
 
+      // first NetTypeInfo.Init will be exectued (if present)
+      protected virtual Init () : void
+      {
+        def parms = List.Map (typarms, MType.TyVarRef);
+        self_type = MType.Class (this, parms);
+      }
+      
       FixupEquality (name : string) : void
       {
         FixupCompare (name);
@@ -918,15 +927,6 @@ namespace Nemerle.Compiler
         get { system_type.IsSubclassOf (SystemType.MulticastDelegate) }
       }
 
-      public override GetMemType () : MType
-      {
-        when (self_type == null) {
-          def parms = List.Map (typarms, MType.TyVarRef);
-          self_type = MType.Class (this, parms);
-        }
-        self_type
-      }
-
       public override GetConstantObject () : IField
       {
         null
@@ -1009,10 +1009,6 @@ namespace Nemerle.Compiler
         get { system_type.FullName.Replace ('+', '.') }
       }
 
-      public override GetTypeInfoKind () : TypeInfoKind
-      {
-        TypeInfoKind.ExternalNetType (system_type)
-      }
 
       public override GetTydecl () : TypeDeclaration
       {
@@ -1026,16 +1022,18 @@ namespace Nemerle.Compiler
 
       public override SuperType (tc : TypeInfo) : option [list [MType]]
       {
-        match (tc.GetTypeInfoKind ()) {
-          | TypeInfoKind.ExternalNetType (t) when t.IsAssignableFrom (system_type)
-          | TypeInfoKind.ExternalNemerleType (t) when t.IsAssignableFrom (system_type) => Some ([])
-          | _ => None ()
-        }
+        if (!(tc is TypeBuilder) &&
+            (tc.system_type.IsAssignableFrom (system_type))) Some ([])
+        else            
+          None ()            
       }
 
-      internal override SubtypingSubst (_ : TypeInfo) : Subst
+      internal override SubtypingSubst (tc : TypeInfo) : Subst
       {
-        Subst ()
+        if (this.Equals (tc))
+          Subst () // current type, no substitution
+        else
+          tc.MakeSubst1 (Option.UnSome (SuperType (tc)));
       }
 
       public override SuperClass () : option [TypeInfo]
@@ -1342,9 +1340,11 @@ namespace Nemerle.Compiler
         id = Util.next_id ();
         library = lib;
         handle = h;
+       
         def type_attrs = h.GetCustomAttributes (false);
         def attr_str = get_encoded_type (type_attrs); 
         tt_type = TyCodec.DecodeType (lib, tenv, attr_str);
+
         set_attributes ();
       }
 
@@ -2082,13 +2082,13 @@ namespace Nemerle.Compiler
     private static has_attribute (name : string, attributes : array [object]) : bool
     {
       def loop (i) {
-        if (i >= attributes.Length) false
-        else {
+        i < attributes.Length &&
+        ({
           def attr = attributes [i];
           def attr_ty = attr.GetType ();
           if (attr_ty.FullName == name) true
           else loop (i + 1)
-        }
+        })
       };
       loop (0)
     }
@@ -2097,29 +2097,36 @@ namespace Nemerle.Compiler
     {
       tydecl : TypeDeclaration;
       constant_object : IField;
-      
-      public this (lib : LibraryReference, h : System.Type)
-      {
-        base (lib, h);
 
-        def type_attrs = h.GetCustomAttributes (false);
+      protected override Init () : void
+      {
+        def type_attrs = system_type.GetCustomAttributes (false);
         def attr_str = get_encoded_type (type_attrs);         
             
 #if _GENERICS
         (typarms, tenv, direct_supertypes, supertypes) =
           if (has_attribute ("Nemerle.Internal.TypeAttribute",
                              type_attrs))
-            TyCodec.DecodeTypeBuilder (lib, tenv, attr_str)
+            TyCodec.DecodeTypeBuilder (library, tenv, attr_str)
           else
-            TyCodec.ReflectTypeBuilder (lib, tenv, h);
+            TyCodec.ReflectTypeBuilder (library, tenv, system_type);
 #else
         (typarms, tenv, direct_supertypes, supertypes) =
-          TyCodec.DecodeTypeBuilder (lib, tenv, attr_str);
+          TyCodec.DecodeTypeBuilder (library, tenv, attr_str);
 #endif
 
         foreach (t in supertypes)
           supertype_map = supertype_map.Add (t.tycon.GetId (), t);
 
+        base.Init ();
+      }
+      
+      public this (lib : LibraryReference, h : System.Type)
+      {
+        base (lib, h);
+
+        def type_attrs = system_type.GetCustomAttributes (false);        
+        
         if (has_attribute ("Nemerle.Internal.VariantAttribute", type_attrs)) {
           def names = get_variant_options (type_attrs);
           def get_opt (name : string) {
@@ -2158,11 +2165,6 @@ namespace Nemerle.Compiler
           tydecl = TypeDeclaration.Class ();
       }
 
-      public override GetTypeInfoKind () : TypeInfoKind
-      {
-        TypeInfoKind.ExternalNemerleType (system_type)
-      }
-
       public override GetTydecl () : TypeDeclaration
       {
         tydecl
@@ -2175,25 +2177,14 @@ namespace Nemerle.Compiler
 
       public override SuperType (tc : TypeInfo) : option [list [MType]]
       {
-        match (supertype_map.Find (tc.GetId ())) {
-          | Some (MType.Class (_, args)) => Some (Solver.FixedValues (args))
-          | Some => Util.ice ()
-          | None when tc.Equals (this) =>
-            match (GetMemType ()) {
-              | MType.Class (_, parms) => Some (Solver.FixedValues (parms))
-              | _ => assert (false)
-            }
-          | None when tc.Equals (InternalType.Object_tc) => Some ([])
-          | None => None ()
-        }
-      }
-
-      internal override SubtypingSubst (tc : TypeInfo) : Subst
-      {
-        if (this.Equals (tc))
-          Subst () // current type, no substitution
+        if (tc.Equals (this))
+          Some (Solver.FixedValues (self_type.args))
+        else if (tc.Equals (InternalType.Object_tc)) Some ([])
         else
-          tc.MakeSubst1 (Option.UnSome (SuperType (tc)));
+          match (supertype_map.Find (tc.GetId ())) {
+            | Some (ti) => Some (Solver.FixedValues (ti.args))
+            | None => None ()
+          }
       }
 
       public override GetSuperTypes () : list [MType.Class]
