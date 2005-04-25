@@ -52,7 +52,7 @@ GENERATED_TOKEN_DESCRIPTION = CSharpParserTokenTypes.txt
 GENERATED_SOURCES = $(GENERATED_SOURCES_LEXER) $(GENERATED_SOURCES_PARSER) $(GENERATED_SOURCES_TOKEN_TYPES) 
 
 NEMERLE_CSHARP_DLL_SOURCES = ExtendedToken.n Emit.n StatementTree.n GotoElimination.n AssemblyInfo.n \
-				TranslationOptions.n
+				TranslationOptions.n Message.n
 CS2N_EXE_SOURCES = cs2n.n 
 
 ifeq ($(origin GOTO), command line)
@@ -74,7 +74,7 @@ Nemerle.CSharp.CS.dll : Nemerle.CSharp.dll $(GENERATED_SOURCES_PARSER) $(ANTLR_D
 	$(MCS) /t:library /r:antlr.runtime.dll /r:Nemerle.CSharp.dll /r:Nemerle.dll -out:$@ $(GENERATED_SOURCES) AssemblyInfo.cs
 
 Nemerle.CSharp.dll : $(NEMERLE_CSHARP_DLL_SOURCES) $(ANTLR_DLL)
-	$(NCC) -tdll -r:antlr.runtime.dll -o:$@ $(NEMERLE_CSHARP_DLL_SOURCES) 
+	$(NCC) -tdll -r:antlr.runtime.dll -r:Nemerle.Compiler.dll -o:$@ $(NEMERLE_CSHARP_DLL_SOURCES) 
 
 $(GENERATED_SOURCES_PARSER): $(GRAMMAR_FILE)
 	$(ANTLR) $(GRAMMAR_FILE) 2> error_log

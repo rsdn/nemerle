@@ -50,6 +50,13 @@ options
     k = 2;
 }
 
+{
+    public override void reportError (RecognitionException ex)
+    {
+	Message.Error (ex.Message, ex.line, ex.column);
+    }
+}
+
 //--------------------------
 // C.0 Moved here from lexer
 //--------------------------
@@ -1066,7 +1073,11 @@ returns [StatementTree t]
 }
     //<labelled_statement>
     :   (IDENTIFIER   COLON)=> 
-        i:IDENTIFIER    {a.Add (new StatementTree(i));}
+        i:IDENTIFIER    
+	{
+	    a.Add (new StatementTree(i));
+	    Gotos.AddLabel (i);
+	}
         c:COLON         {a.Add (new StatementTree(c));}
         st = statement  {a.Add (st);}
         {t = new StatementTree ("LABEL",a);}
@@ -1093,7 +1104,7 @@ returns [StatementTree t]
     |   t = iteration_statement
     |   t = jump_statement
     |   t = try_statement
-    |   YIELD { System.Console.WriteLine ("'yield' is not supported in nemerle yet"); } t = jump_statement
+    |   y:YIELD { Message.Warning ("'yield' is not supported in nemerle yet" , y); } t = jump_statement
 
     //<unchecked statement>
     |   (UNCHECKED   block)=> t = unchecked_statement
@@ -1613,7 +1624,11 @@ returns [StatementTree t]
 }
     :   (GOTO IDENTIFIER)=> 
         g:GOTO       {a.Add (new StatementTree(g));}
-        i:IDENTIFIER {a.Add (new StatementTree(i));}
+        i:IDENTIFIER 
+	{
+	    a.Add (new StatementTree(i));
+	    Gotos.AddGoto (i);
+	}	
         s:SEMI       {a.Add (new StatementTree(s));}
         { t = new StatementTree("GOTO",a); }
     |   (GOTO CASE)=> GOTO CASE   constant_expression   SEMI
