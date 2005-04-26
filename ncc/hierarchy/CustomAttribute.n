@@ -386,5 +386,158 @@ namespace Nemerle.Compiler
           Message.FatalError (loc, "could not find file `" + name + "' with key pair for assembly")
       }
     }
+
+    internal CheckPInvoking (cgm : CG_method, tb : SR.Emit.TypeBuilder, m : NemerleMethod,
+                             attrs : SR.MethodAttributes,
+                             parm_types_array : array [SY.Type]) : SR.Emit.MethodBuilder
+    {
+      def loop (_) {
+        | expr :: rest =>
+          match (ResolveAttribute ((m.DeclaringType :> TypeBuilder).GlobalEnv, expr))
+          {
+            | Some ((tc, <[ $(dll_name : string) ]> :: parms))
+              when tc.Equals (InternalType.DllImport_tc) =>
+                
+              mutable callingconv = System.Runtime.InteropServices.CallingConvention.Winapi;
+              mutable charset = System.Runtime.InteropServices.CharSet.Auto;
+              mutable preserve_sig = true;
+              mutable entry_point = m.Name;
+              mutable best_fit_mapping = false;
+              mutable throw_on_unmappable = false;
+
+              mutable best_fit_mapping_set = false;
+              mutable throw_on_unmappable_set = false;
+
+              mutable set_best_fit = null;
+              mutable set_throw_on = null;
+
+              mutable char_set_extra = 0;
+              
+              foreach (p in parms) 
+                match (p) {
+                  | <[ $(target : dyn) = $val ]> =>
+                    match ((target, val)) {
+                      | ("BestFitMapping", <[ $(val : bool) ]>) =>
+                        best_fit_mapping = val;
+                        best_fit_mapping_set = true;
+
+                      | ("CallingConvention", _) =>
+                        Util.ice ("must fold");
+
+                      | ("CharSet", _) =>
+                        Util.ice ("must fold");                    
+
+                      | ("EntryPoint", <[ $(val : string) ]>) =>
+                        entry_point = val;
+                    
+                      | ("ExactSpelling", _) =>
+                        char_set_extra |= 0x01;
+
+                      | ("PreserveSig", <[ $(val : bool) ]>) =>
+                        preserve_sig = val;
+
+                      | ("SetLastError", _) =>
+                        char_set_extra |= 0x40;
+
+                      | ("ThrowOnUnmappableChar", <[ $(val : bool) ]>) =>
+                        throw_on_unmappable = val;
+                        throw_on_unmappable_set = true;
+
+                      | _ => Util.ice ("unknown DllImport pareter")
+                    }
+                  | _ => Util.ice ("unnamed DllImport pareter")
+                }
+                
+              charset |= (char_set_extra :> System.Runtime.InteropServices.CharSet);
+
+              when (throw_on_unmappable_set || best_fit_mapping_set) {
+                set_best_fit = typeof (SR.Emit.MethodBuilder).GetMethod ("set_BestFitMapping",
+                                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                set_throw_on = typeof (SR.Emit.MethodBuilder).GetMethod ("set_ThrowOnUnmappableChar",
+                                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+                when ((set_best_fit == null) || (set_throw_on == null)) {
+                  Message.Error ("The ThrowOnUnmappableChar and BestFitMapping"
+                                 " attributes can only be emitted when running on the mono runtime.");
+                }
+              }
+
+              def mb = tb.DefinePInvokeMethod (m.Name, dll_name, entry_point,
+                                               attrs | SR.MethodAttributes.HideBySig | SR.MethodAttributes.PinvokeImpl,
+                                               SR.CallingConventions.Standard, cgm.ret_type,
+                                               parm_types_array, callingconv, charset);
+
+              when (preserve_sig)
+                mb.SetImplementationFlags (SR.MethodImplAttributes.PreserveSig);
+
+              when (throw_on_unmappable_set)
+                _ = set_throw_on.Invoke (mb, SR.BindingFlags.Default, null,
+                                         array [ throw_on_unmappable : object], null);
+
+              when (best_fit_mapping_set)
+                _ = set_best_fit.Invoke (mb, SR.BindingFlags.Default, null,
+                                         array [ best_fit_mapping : object], null);
+
+              mb
+                          
+            | _ => loop (rest)
+          }
+        | [] => null
+      }
+      loop (m.GetModifiers ().GetCustomAttributes ())
+    }
+  }
+
+  public partial class Modifiers
+  {
+    internal SaveCustomAttributes (ti : TypeBuilder,
+                                   adder : SY.AttributeTargets * 
+                                           SR.Emit.CustomAttributeBuilder -> string) : void
+    {
+      foreach (expr in custom_attrs) {
+        try {
+          def error = adder (AttributeCompiler.CompileAttribute (ti.GlobalEnv, ti, expr));
+          when (error != null)
+            Message.Error ($"custom attribute $expr is not valid on " + error);
+        } catch {
+          | _ is Recovery => ()
+        }
+      };
+      foreach ((suff, expr) in macro_attrs) {
+        try {
+          def (m, parms) = 
+            match (MacroRegistry.lookup_macro (ti.GlobalEnv, expr, suff)) {
+              | Some ((_, m, parms)) => (m, parms)
+              | _ => Util.ice ("macro is not a macro?" +
+                               PrettyPrint.SprintExpr (None (), expr))
+            };
+
+          // check if macro needs to be saved in metadata
+          // it should be done only if it will be inherited in some derived class
+          def inherited = m.IsInherited && !ti.IsSealed;
+
+          when (inherited) {
+            def sparms = List.Map (parms, fun (x) { x.ToString () });
+            def concatenated = NString.Concat ("@", sparms);
+  //          def _x = ti.env.GetMacroContext ();
+            def name = m.GetNamespace () + "." + m.GetName ();
+            def serialized = <[ 
+              Nemerle.Internal.MacroAttribute ($(name : string),
+            //                                   $(ti.env.GetMacroContext () : int),
+                                               0,
+                                               $(concatenated : string)) 
+            ]>;
+            def error = adder (AttributeCompiler.CompileAttribute (ti.GlobalEnv, ti, serialized));
+            when (error != null)
+              Message.Error ($"macro attribute $name is not valid on " + error);
+          }
+            
+        } catch {
+          | _ is Recovery => ()
+        }
+      };
+    }
   }
 }
+
+
