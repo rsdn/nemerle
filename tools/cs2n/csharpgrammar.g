@@ -2578,6 +2578,7 @@ overloadable_unary_operator
     |   oun6:DEC     {Emit.EmitString (ExtendedToken.getTextOnly (oun6));}
     |   oun7:TRUE    {Emit.EmitString (ExtendedToken.getTextOnly (oun7));}
     |   oun8:FALSE   {Emit.EmitString (ExtendedToken.getTextOnly (oun8));}
+    |   oun9:BNOT    {Emit.EmitString (ExtendedToken.getTextOnly (oun9));}
     ;
 
 binary_operator_declarator
