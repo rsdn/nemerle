@@ -29,6 +29,7 @@
 using System.Globalization;
 using Nemerle.Collections;
 using Nemerle.Utility;
+using System.Math;
 
 namespace Nemerle.Compiler {
 
@@ -278,14 +279,11 @@ namespace Nemerle.Compiler {
     | Decimal { val : decimal; }
     | Char { val : char; }
     | Bool { val : bool; }
-    | SByte { val : sbyte; }
-    | Byte { val : byte; }
-    | Short { val : short; }
-    | UShort { val : ushort; }
-    | Int { val : int; }
-    | UInt { val : uint; }
-    | Long { val : long; }
-    | ULong { val : ulong; }
+    | Integer {
+        val : ulong; 
+        is_negative : bool; 
+        mutable treat_as : MType;
+      } 
 
     | Enum { val : Literal; ty : TypeInfo; }
 
@@ -305,41 +303,251 @@ namespace Nemerle.Compiler {
         | Literal.Decimal  (val) => val.ToString (NumberFormatInfo.InvariantInfo) + "m"
         | Literal.Char     (val) => "'" + val.ToString () + "'"
         | Literal.Bool     (val) => if (val) "true" else "false"
-        | Literal.SByte    (val) => val.ToString () + "sb"
-        | Literal.Byte     (val) => val.ToString () + "b"
-        | Literal.Short    (val) => val.ToString () + "s"
-        | Literal.UShort   (val) => val.ToString () + "us"
-        | Literal.Int      (val) => val.ToString ()
-        | Literal.UInt     (val) => val.ToString () + "u"
-        | Literal.Long     (val) => val.ToString () + "l"
-        | Literal.ULong    (val) => val.ToString () + "ul"
+        | Literal.Integer  (val, is_negative, _treat_as) =>
+          def s =
+            if (is_negative) "-" + val.ToString ()
+            else val.ToString ();
+          s
+          /*
+          if (treat_as == null) s
+          else $ "($s : $treat_as)";
+          */
           
         | Literal.Enum (val, ty) => "(" + val.ToString () + " :> " + ty.FullName + ")"
       }
     }
     
-    public GetSystemType () : System.Type {
+    public GetSystemType () : System.Type
+    {
+      GetInternalType ().GetSystemType ()
+    }
+
+    public GetInternalType () : MType
+    {
       match (this) {
-        | Literal.Void => SystemType.Void
-        | Literal.Null => SystemType.Object
-        | Literal.Byte => SystemType.Byte
-        | Literal.SByte => SystemType.SByte
-        | Literal.Short => SystemType.Int16
-        | Literal.UShort => SystemType.UInt16                
-        | Literal.Int => SystemType.Int32
-        | Literal.UInt => SystemType.UInt32                
-        | Literal.Long => SystemType.Int64
-        | Literal.ULong => SystemType.UInt64                
-        | Literal.Char => SystemType.Char
-        | Literal.String => SystemType.String
-        | Literal.Float => SystemType.Single
-        | Literal.Double => SystemType.Double
-        | Literal.Decimal => SystemType.Decimal                
-        | Literal.Bool => SystemType.Boolean
+        | Literal.Void => InternalType.Void
+        | Literal.Null => InternalType.Object
+        | Literal.Char => InternalType.Char
+        | Literal.String => InternalType.String
+        | Literal.Float => InternalType.Single
+        | Literal.Double => InternalType.Double
+        | Literal.Decimal => InternalType.Decimal                
+        | Literal.Bool => InternalType.Boolean
         // for enums we want to stay with original type
         // because e.g. ToString is called on enum not int
-        | Literal.Enum (_, ty) => ty.GetSystemType ()
+        | Literal.Enum (_, ty) => MType.Class (ty, [])
+        | Literal.Integer (_, _, t) => t
       }
+    }
+
+    public WithProperType () : Literal
+    {
+      match (this) {
+        | Literal.Integer (val, is_neg, _) =>
+          def t =
+            if (is_neg)
+              if (val - 1 <= int.MaxValue)
+                InternalType.Int32
+              else
+                InternalType.Int64
+            else
+              if (val <= int.MaxValue)
+                InternalType.Int32
+              else if (val <= uint.MaxValue)
+                InternalType.UInt32
+              else if (val <= System.Convert.ToUInt64 (long.MaxValue))
+                InternalType.Int64
+              else
+                InternalType.UInt64;
+          Literal.Integer (val, is_neg, t)
+        | _ => this
+      }
+    }
+
+    public AsObject () : object
+    {
+      match (this) {
+        | Literal.Void => assert (false)
+        | Literal.Null => null
+        | Literal.Char (c) => c : object
+        | Literal.String (s) => s
+        | Literal.Float (f) => f
+        | Literal.Double (d) => d
+        | Literal.Decimal (d) => d
+        | Literal.Bool (b) => b
+        | Literal.Enum (l, _) => l.AsObject ()
+        | Literal.Integer (val, is_neg, t) =>
+          def t = if (t == null) InternalType.Int32 else t;
+          
+          if (t.Equals (InternalType.UInt64)) {
+            assert (!is_neg);
+            val : object
+          } else if (val == 0x8000000000000000UL) {
+            assert (is_neg);
+            assert (t.Equals (InternalType.Int64));
+            long.MinValue : object
+          } else {
+            def val = 
+              if (is_neg) 
+                -System.Convert.ToInt64 (val)
+              else
+                System.Convert.ToInt64 (val);
+            def tc =
+              match (t) {
+                | MType.Class (tc, []) => tc
+                | _ => assert (false)
+              }
+            match (tc.FullName) {
+              | "System.UInt32" => (val :> uint) : object
+              | "System.Int32" => val :> int
+              | "System.Int16" => val :> short
+              | "System.UInt16" => val :> ushort
+              | "System.SByte" => val :> System.SByte
+              | "System.Byte" => val :> System.Byte
+              | _ => assert (false)
+            }
+          }
+      }
+    }
+
+    public AsInt : option [int]
+    {
+      get {
+        match (this) {
+          | Literal.Integer (0x80000000ul, true, _) => Some (int.MinValue)          
+          | Literal.Integer (x, neg, _) when x & 0x8FFFFFFFul == x =>
+            Some (if (neg) -(x :> int) else x :> int)
+          | _ => None ()
+        }
+      }
+    }
+
+    public AsSByte : option [sbyte]
+    {
+      get {
+        match (this) {
+          | Literal.Integer (0x80ul, true, _) => Some (sbyte.MinValue)          
+          | Literal.Integer (x, neg, _) when x & 0x8Ful == x =>
+            Some (if (neg) -(x :> sbyte) else x :> sbyte)
+          | _ => None ()
+        }
+      }
+    }
+
+    public AsByte : option [byte]
+    {
+      get {
+        match (this) {
+          | Literal.Integer (x, false, _) when x <= byte.MaxValue => Some (x :> byte)
+          | _ => None ()
+        }
+      }
+    }
+
+    public AsShort : option [short]
+    {
+      get {
+        match (this) {
+          | Literal.Integer (0x8000ul, true, _) => Some (short.MinValue)          
+          | Literal.Integer (x, neg, _) when x & 0x8FFFul == x =>
+            Some (if (neg) -(x :> short) else x :> short)
+          | _ => None ()
+        }
+      }
+    }
+
+    public AsUShort : option [ushort]
+    {
+      get {
+        match (this) {
+          | Literal.Integer (x, false, _) when x <= ushort.MaxValue => Some (x :> ushort)
+          | _ => None ()
+        }
+      }
+    }
+
+    public AsUInt : option [uint]
+    {
+      get {
+        match (this) {
+          | Literal.Integer (x, false, _) when x <= uint.MaxValue => Some (x :> uint)
+          | _ => None ()
+        }
+      }
+    }
+
+    public AsLong : option [long]
+    {
+      get {
+        match (this) {
+          | Literal.Integer (0x8000000000000000ul, true, _) => Some (long.MinValue)          
+          | Literal.Integer (x, neg, _) when x & 0x8000000000000000ul != 0ul =>
+            Some (if (neg) -(x :> long) else x :> long)
+          | _ => None ()
+        }
+      }
+    }
+
+    public AsULong : option [ulong]
+    {
+      get {
+        match (this) {
+          | Literal.Integer (x, false, _) => Some (x)
+          | _ => None ()
+        }
+      }
+    }
+
+    public static FromInt (x : int) : Literal.Integer
+    {
+      if (x == int.MinValue)
+        Literal.Integer (0x80000000UL, true, InternalType.Int32)
+      else
+        Literal.Integer (Abs (x) :> ulong, x < 0, InternalType.Int32)
+    }
+
+    public static FromSByte (x : sbyte) : Literal.Integer
+    {
+      if (x == sbyte.MinValue)
+        Literal.Integer (0x80UL, true, InternalType.SByte)
+      else
+        Literal.Integer (Abs (x) :> ulong, x < 0, InternalType.SByte)
+    }
+
+    public static FromByte (x : byte) : Literal.Integer
+    {
+      Literal.Integer (x, false, InternalType.Byte)
+    }
+
+    public static FromShort (x : short) : Literal.Integer
+    {
+      if (x == short.MinValue)
+        Literal.Integer (0x8000UL, true, InternalType.Int16)
+      else
+        Literal.Integer (Abs (x) :> ulong, x < 0, InternalType.Int16)
+    }
+
+    public static FromUShort (x : ushort) : Literal.Integer
+    {
+      Literal.Integer (x, false, InternalType.UInt16)
+    }
+
+    public static FromUInt (x : uint) : Literal.Integer
+    {
+      Literal.Integer (x, false, InternalType.UInt32)
+    }
+
+    public static FromLong (x : long) : Literal.Integer
+    {
+      if (x == long.MinValue)
+        Literal.Integer (0x8000000000000000UL, true, InternalType.Int64)
+      else
+        Literal.Integer (Abs (x) :> ulong, x < 0, InternalType.Int64)
+    }
+
+    public static FromULong (x : ulong) : Literal.Integer
+    {
+      Literal.Integer (x, false, InternalType.UInt64)
     }
   }
 
