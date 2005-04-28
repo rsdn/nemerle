@@ -95,7 +95,7 @@ NEMERLE_COMPILER_DLL_SRC = \
 	typing/ConstantFolder.n		 \
 	typing/MacroRegistry.n		 \
 	typing/Macros.n			 \
-	typing/PatternsTyping.n		 \
+	typing/ExhaustivenessChecker.n   \
 	typing/TypedTree.n		 \
 	typing/ErrorMessage.n		 \
 	typing/LocalContext.n		 \
