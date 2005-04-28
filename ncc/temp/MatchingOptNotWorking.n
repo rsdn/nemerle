@@ -1,0 +1,989 @@
+/*
+ * Copyright (c) 2004, 2005 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+/*
+ * Matching
+ */
+namespace Nemerle.Compiler 
+{
+  using Nemerle.Collections;
+
+  using Nemerle.Compiler.CompileTypedTree;
+  using Nemerle.Compiler.Typedtree;
+  using Nemerle.Compiler.MatchingCompiler;
+
+  using System.Reflection;
+  using System.Reflection.Emit;
+
+  /**
+   * Builds an expression that performs a binary search 
+   * over a value type (that'd mainly be ints and chars).
+   */
+  partial class MatchBinarySearch
+  {    
+    /* -- CONSTRUCTORS ----------------------------------------------------- */
+
+    public this (match_descriptor : MatchDescriptor, 
+                 patterns : list [MatchPattern],
+                 continuation : option [CExpr])
+    {
+      assert (List.Length (patterns) > 0);
+      
+      this.match_descriptor = match_descriptor;
+      this.patterns = patterns;
+      this.matched_expr = match_descriptor.GetMatchedExpr ();
+      this.continuation = continuation;
+      
+      binary_search_expr = make_binary_search_top_level (patterns)
+    }
+
+
+    /* -- PUBLIC METHODS --------------------------------------------------- */
+
+    public GetBinarySearchExpr () : CExpr
+    {
+      binary_search_expr
+    }
+    
+#if EXTRAMATCHINGDEBUG    
+    public DumpMatchPatterns (patterns : list [MatchPattern]) : void {
+      def walk_patterns (patterns : list [MatchPattern]) : void {
+        match (patterns) {
+          | [] => ()
+          | pattern :: rest =>
+            pattern.Dump ();
+            walk_patterns (rest)
+        }
+      };
+      
+      Message.Debug (" -- dumping " + (List.Length (patterns)).ToString ()
+                     + " patterns --");
+      walk_patterns (patterns)
+    }
+#endif
+
+    /* -- PRIVATE METHODS -------------------------------------------------- */
+
+    private split_patterns (patterns : list [MatchPattern]) 
+      : list [MatchPattern] * MatchPattern * list [MatchPattern]
+    {
+      assert (List.Length (patterns) > 2);
+      
+      def split (patterns : list [MatchPattern], acc : list [MatchPattern], length : int) 
+        : list [MatchPattern] * MatchPattern * list [MatchPattern]
+      {
+        if (length == 0) (List.Rev (acc), List.Head (patterns), List.Tail (patterns))
+        else split (List.Tail (patterns), List.Head (patterns) :: acc, length - 1)      
+      };
+      
+      split (patterns, [], List.Length (patterns) / 2)
+    }
+
+
+    private split_patterns_by_sign (patterns : list [MatchPattern]) 
+      : list [MatchPattern] * list [MatchPattern]
+    {
+      def split (patterns : list [MatchPattern], acc_neg : list [MatchPattern],
+                 acc_pos : list [MatchPattern])
+          : list [MatchPattern] * list [MatchPattern]
+      {
+        match (patterns) {
+          | [] => (List.Rev (acc_neg), List.Rev (acc_pos))
+          | pattern :: rest =>
+            match (pattern.GetPattern ()) {
+              | Pattern.Literal (Literal.Integer (_, true, _)) =>
+                split (rest, pattern :: acc_neg, acc_pos)
+
+              | _ => split (rest, acc_neg, pattern :: acc_pos)
+            };
+        }            
+      };
+      
+      split (patterns, [], [])
+    }
+
+
+    private make_last_match (pattern : MatchPattern) : CExpr
+    {
+      match (continuation) {
+        | Some (continuation) =>
+          pattern.MakeMatchExpr (matched_expr, continuation)          
+        | None => 
+          Util.ice ("last match case need to have continuation")
+      }
+    }
+
+    /** Create switch for given integer patterns.
+     *  Makes normalization of range in which patterns are contained.
+     *
+     * It is assumed, that this function will be called for small ranges
+     * (smallest and largest value are quite near)
+     */
+    private make_switched_block (patterns : list [MatchPattern]) : CExpr 
+    {
+      def head = get_int_from_pattern (List.Head (patterns));
+      def expr = 
+        if (head != 0) 
+          // unchecked subtraction of minimal possible value in the range
+          // results in all possible value mapped to [0..range_span] range
+          CExpr.Call (CExpr.Opcode ("-.f"), [matched_expr, CExpr.Literal (Literal.FromInt (head))])
+        else
+          matched_expr;
+
+      def walk_patterns (patterns : list [MatchPattern]) : list [int * CExpr] {
+        match (patterns) {
+          | pattern :: rest =>
+            def idx = unchecked (get_int_from_pattern (pattern) - head);
+            (idx, pattern.MakeGuardExpr (continuation)) :: walk_patterns (rest)
+
+          | [] => []
+        }            
+      };
+      CExpr.Switch (expr, continuation, walk_patterns (patterns))
+    }
+
+    
+    private make_binary_search (patterns : list [MatchPattern]) : CExpr
+    {
+      match (patterns) {
+        | [l] => make_last_match (l)
+
+        | [l, r] =>
+          l.MakeMatchExpr (matched_expr, make_last_match (r))
+                                   
+        | patterns =>
+          def literal_span = System.Math.Abs (unchecked {
+            MatchBinarySearch.get_int_from_pattern (List.Head (patterns)) -
+            MatchBinarySearch.get_int_from_pattern (List.Last (patterns))
+          });
+          if (literal_span > 8 && literal_span / List.Length (patterns) > 3) {
+            def (l, m, r) = split_patterns (patterns);
+
+            CExpr.If (match_descriptor.GetResultType (),
+                      m.MakeLessThanCondition (matched_expr),
+                      make_binary_search (l), make_binary_search (m :: r))
+          }
+          else
+            make_switched_block (patterns)
+      }          
+    }
+
+   
+    /**
+     * Handle the special case when some of the patterns have negative
+     * literals and some positive -- it could disrupt the CExpr.Switch emitter
+     */
+    private make_binary_search_top_level (patterns : list [MatchPattern]) : CExpr
+    {      
+      def can_be_negative =
+        match (List.Head (patterns).GetPattern ()) {
+          | Pattern.Literal (Literal.Integer) => true
+          | _ => false
+        };
+
+      if (can_be_negative) {        
+        def (negative, positive) = split_patterns_by_sign (patterns);
+
+        if (List.Length (negative) == 0) 
+          make_binary_search (positive)
+        else if (List.Length (positive) == 0) 
+          make_binary_search (negative)
+        else {
+          def less_than_zero_expr = 
+            CExpr.Call (SystemType.Boolean, CExpr.Opcode ("<.s"),
+                    [matched_expr, CExpr.Literal (Literal.Integer (0, false, InternalType.Int32))]);
+
+          CExpr.If (match_descriptor.GetResultType (), less_than_zero_expr,
+                 make_binary_search (negative), make_binary_search (positive))
+        }
+      }
+      else
+        make_binary_search (patterns)
+    }
+
+
+    /* -- PRIVATE FIELDS --------------------------------------------------- */
+
+    private mutable match_descriptor : MatchDescriptor;
+    private mutable patterns : list [MatchPattern];
+    private mutable continuation : option [CExpr];
+    private mutable matched_expr : CExpr;
+    private mutable binary_search_expr : CExpr;
+  }
+
+  
+  /**
+   * The matching module
+   */
+  partial module MatchingCompiler {
+    /**
+     * Matching over ordinal types (integers, chars, etc.)
+     */
+    cg_match_over_ordinals (match_over_type : System.Type, 
+                            context : CTX, 
+                            matched_expr : CExpr, 
+                            match_cases : list [Match_case]) : CExpr
+    {
+      def match_descriptor = 
+        MatchDescriptor (context, match_over_type, matched_expr, match_cases);
+
+      def process_block (block : MatchBlock, continuation : option [CExpr])
+          : CExpr
+      {
+        def (literal_patterns, non_literal_patterns) = 
+          List.Partition (block.GetMatchPatterns (), MatchPattern.IsOrdinalLiteral);
+
+        def continuation = combine_patterns (match_descriptor, continuation, 
+                                             non_literal_patterns);
+
+        match (literal_patterns) {
+          | [] => Option.UnSome (continuation)
+          | _ =>
+            def sorted_literal_patterns = 
+              List.Sort (literal_patterns, MatchPattern.Compare);
+  
+            def binary_search = 
+              MatchBinarySearch (match_descriptor, sorted_literal_patterns,
+                                 continuation);
+
+            binary_search.GetBinarySearchExpr ()
+        }
+      };
+    
+      def walk_blocks (blocks : list [MatchBlock]) : CExpr {
+        | [block] => process_block (block, None ())
+          
+        | block :: rest =>            
+          def continuation = walk_blocks (rest);
+          process_block (block, Some (continuation))
+          
+        | _ => Util.ice ("no blocks in match descriptor")
+      };
+    
+      walk_blocks (match_descriptor.GetMatchBlocks ())
+    }  
+
+
+    /**
+     * Matching over constant string
+     */
+    cg_match_over_strings (match_over_type : System.Type, 
+                           context : CTX, 
+                           matched_expr : CExpr, 
+                           match_cases : list [Match_case]) : CExpr
+    {
+      def match_descriptor = 
+        MatchDescriptor (context, match_over_type, matched_expr, match_cases);
+    
+      def process_block (block : MatchBlock, continuation : option [CExpr]) : CExpr {
+        def (literal_patterns, non_literal_patterns) = 
+          List.Partition (block.GetMatchPatterns (), MatchPattern.IsStringLiteral);
+
+        def continuation = combine_patterns (match_descriptor, continuation, 
+                                             non_literal_patterns);
+
+        match (literal_patterns) {
+          | [] => Option.UnSome (continuation)
+          | _ =>
+            def sorted_literal_patterns = 
+              List.Sort (literal_patterns, MatchPattern.Compare);
+  
+            // FIXME
+            Option.UnSome (combine_patterns (match_descriptor, continuation,
+                                             sorted_literal_patterns))
+        }
+      };
+    
+      def walk_blocks (blocks : list [MatchBlock]) : CExpr {
+        match (blocks) {
+          | [block] =>
+            process_block (block, None ())
+          | block :: rest =>            
+            def continuation = walk_blocks (rest);
+            process_block (block, Some (continuation))
+          | _ => 
+            Util.ice ("no blocks in match descriptor")
+        }
+      };
+    
+      walk_blocks (match_descriptor.GetMatchBlocks ())
+    }
+
+    /**
+     * Creates an expression that will raise the MatchFailureException
+     */
+    private raise_match_failure_exception_expr (_match_descriptor : MatchDescriptor)
+            : CExpr
+    {
+      CExpr.Throw (CExpr.Call (CExpr.ConstructorRef (InternalType.MatchFailureException_ctor), []))
+    }
+    
+    /**
+     * Creates a series of CExpr.If checking if any of the patterns matches.
+     */
+    private combine_patterns (match_descriptor : MatchDescriptor, 
+                              continuation : option [CExpr],
+                              patterns : list [MatchPattern]) : option [CExpr]
+    {             
+      def match_failure_expr =
+        raise_match_failure_exception_expr (match_descriptor);
+
+      def walk_patterns (continuation : option [CExpr],
+                         patterns : list [MatchPattern]) : option [CExpr] {      
+        match (patterns) {
+          | [] => continuation
+          | pattern :: rest =>            
+            def continuation =
+              match (continuation) {
+                | Some (continuation) =>
+                  pattern.MakeMatchExpr (match_descriptor.GetMatchedExpr (), 
+                                         continuation)
+                | None =>
+                  pattern.MakeMatchExpr (match_descriptor.GetMatchedExpr (), 
+                                         match_failure_expr)
+              };
+            walk_patterns (Some (continuation), rest)
+        }
+      };
+
+      walk_patterns (continuation, List.Rev (patterns))
+    }    
+  }
+
+  /**
+   * A match construct consists of a number of blocks, 
+   * guards and effects.
+   */
+  class MatchDescriptor
+  {    
+    /* -- CONSTRUCTORS ----------------------------------------------------- */
+
+    /**
+     * Initializes the match descriptor. 
+     * Builds the initial patterns block.
+     */    
+    public this (context : CTX, result_type : System.Type, 
+                 matched_expr : CExpr, match_cases : list [Match_case])
+    {
+      vals = SystemMap ();
+      guards = SystemMap ();
+      effects = SystemMap ();
+            
+      current_guard = -1;
+      current_effect = -1;
+      
+      this.context = context;
+      this.result_type = result_type;
+      this.matched_expr = matched_expr;
+
+      matched_expr_type = matched_expr.SystemType;
+      match_over_value_type = matched_expr_type.IsValueType;
+      
+      build_first_block (match_cases)
+    }
+
+    
+    /* -- PUBLIC METHODS --------------------------------------------------- */
+
+    public GetResultType () : System.Type
+    {
+      result_type
+    }
+    
+    public GetMatchBlocks () : list [MatchBlock] 
+    {
+      blocks
+    }
+
+    public GetMatchedExpr () : CExpr
+    {
+      matched_expr
+    }
+
+    public GetEffect (index : int) : CExpr
+    {
+      effects.Get (index)
+    }
+
+    public GetGuard (index : int) : option [CExpr]
+    {
+      if (index == -1) None () else guards.Get (index)
+    }
+
+    public MakeAsPatternAssignment (decl : LocalValue) : CExpr * CG_val
+    {      
+      mutable as_pattern_val = null;
+      
+      unless (decl.InClosure) {
+        match (vals.Find (decl.Id)) {
+          | Some (val) =>
+            as_pattern_val = val
+          | None =>
+            def (context, val) = store_local (context, decl, CExpr.Nop ());
+            this.context = context;
+            as_pattern_val = val;
+            vals = vals.Add (decl.Id, val);
+        }
+      };
+      
+      def assign_expr =
+        CExpr.Assign (local_ref (context, decl, true), 
+                      maybe_cast (context, decl.Type.Fix ().GetSystemType (), matched_expr));
+                               
+      (assign_expr, as_pattern_val)
+    }
+
+
+    /* -- PRIVATE METHODS -------------------------------------------------- */
+    
+    /**
+     * Builds the first block of patterns. This block will have to be either
+     * split or the overriding guards information will have to be updated.
+     */
+    private build_first_block (match_cases : list [Match_case]) : void
+    {
+      mutable patterns = [];
+
+      def process_pattern (pattern : Pattern, guard : TExpr) : void {
+        current_guard = current_guard + 1;
+        mutable previous_as_pattern_val = None ();
+     
+        // FIXME: 'as' nesting   
+        def guard =
+          match (pattern) {
+            | Pattern.As (_, decl) =>
+              def (assign_expr, as_pattern_val) = MakeAsPatternAssignment (decl); 
+              previous_as_pattern_val = Some (as_pattern_val);
+              CExpr.Sequence ([assign_expr, cg_expr (context, guard)])
+            | _ => 
+              cg_expr (context, guard)
+          };
+          
+        def guard_is_always_true =
+          match (guard) {
+            | CExpr.Literal (Literal.Bool (true)) =>
+              guards = guards.Add (current_guard, None ());
+              true
+            | _ =>
+              guards = guards.Add (current_guard, Some (guard));
+              false
+          };
+          
+        def pattern =
+          MatchPattern (this, pattern, current_guard, current_effect, 
+                        guard_is_always_true, previous_as_pattern_val);
+
+        patterns = pattern :: patterns
+      };
+      
+      def walk_match_cases (match_cases : list [Match_case]) : void {
+        match (match_cases) {
+          | [] => ()
+          | match_case :: rest =>
+            current_effect = current_effect + 1;
+            List.Iter (match_case.patterns, process_pattern);
+            effects = effects.Add (current_effect, cg_expr (context, match_case.body));
+            walk_match_cases (rest)
+        }
+      };
+      
+      walk_match_cases (match_cases);
+      patterns = List.Rev (patterns);
+      def block = MatchBlock (patterns);
+      block.RemoveOverridenPatterns ();
+      block.DecidePatternOverriding ();
+      blocks = [block]
+    }
+
+
+    /* -- PRIVATE FIELDS --------------------------------------------------- */
+
+    private mutable blocks : list [MatchBlock];
+    private mutable guards : SystemMap [int, option [CExpr]];
+    private mutable effects : SystemMap [int, CExpr];
+    private mutable current_guard : int;
+    private mutable current_effect : int;
+    private mutable vals : SystemMap [int, CG_val];
+    
+    private mutable context : CTX;
+    private mutable result_type : System.Type;
+    private mutable matched_expr : CExpr;
+
+    private mutable matched_expr_type : System.Type;
+    private mutable match_over_value_type : bool;
+  }
+
+  /**
+   * Description of a match pattern:
+   *
+   * | [pattern] when [guard] => [effect]
+   *
+   * Additionally, we hold an ordered list of guards that 
+   * could possibly override this match.
+   */
+  partial class MatchPattern {
+    /* -- CONSTRUCTORS ----------------------------------------------------- */
+    public this (match_descriptor : MatchDescriptor, pattern : Pattern, 
+                 guard : int, effect : int, guard_is_always_true : bool,
+                 as_pattern_val : option [CG_val])
+    {
+      this.guard_is_always_true = guard_is_always_true;
+      this.match_descriptor = match_descriptor;
+      this.as_pattern_val = as_pattern_val;
+      this.pattern = pattern;
+      this.guard = guard;
+      this.effect = effect;
+      overriden_by = [];
+    }
+
+    public PossiblyOverrides (match_pattern : MatchPattern) : bool
+    {
+      compare_patterns (pattern, match_pattern.pattern)
+    }
+        
+    public AlwaysOverrides (match_pattern : MatchPattern) : bool
+    {
+      PossiblyOverrides (match_pattern) && guard_is_always_true
+    }
+    
+    public AddOverridingPattern (match_pattern : MatchPattern) : void
+    {
+      overriden_by = match_pattern :: overriden_by
+    }
+    
+    public ReverseOverridingList () : void
+    {
+      overriden_by = List.Rev (overriden_by)
+    }
+    
+    public GetPattern () : Pattern
+    {
+      pattern
+    }
+    
+    public IsUnderscore () : bool
+    {
+      match (pattern) {
+        | Pattern.Wildcard => true
+        | Pattern.As (Pattern.Wildcard, _) => true
+        | _ => false
+      }
+    }
+
+    public Location : Location
+    {
+      get { pattern.loc }
+    }
+
+
+    /* -- PUBLIC METHODS --------------------------------------------------- */
+    
+
+    /* -- PRIVATE METHODS -------------------------------------------------- */
+    
+   
+    private compare_literals (l : Literal, r : Literal) : bool
+    {
+      match ((l, r)) {
+        | (Literal.Null, Literal.Null) => true
+        | (Literal.String (l), Literal.String (r)) => l == r
+        | (Literal.Float (l), Literal.Float (r)) => l == r
+        | (Literal.Char (l), Literal.Char (r)) => l == r
+        | (Literal.Bool (l), Literal.Bool (r)) => l == r
+        | (Literal.Integer (v1, n1, _), Literal.Integer (v2, n2, _)) =>
+          v1 == v2 && n1 == n2
+        | _ => false
+      }
+    } 
+    
+    private compare_tuples (l : list [Pattern], r : list [Pattern]) : bool
+    {
+      def walk_tuples (l : list [Pattern], r : list [Pattern]) : bool {
+        match ((l, r)) {
+          | ([], []) => true
+          | (l :: ls, r :: rs) => 
+            if (compare_patterns (l, r)) walk_tuples (ls, rs) else false
+          | _ => false
+        }
+      };
+      
+      walk_tuples (l, r)
+    }
+    
+    private compare_records (l : list [IMember * Pattern],
+                             r : list [IMember * Pattern]) : bool
+    {
+      // FIXME
+      List.Length (l) != List.Length (r)
+    }
+    
+    private compare_conses (_ln : TypeInfo, _la : Pattern, _rn : TypeInfo,
+                            _ra : Pattern) : bool
+    {
+      // FIXME
+      false
+    }
+    
+    private compare_patterns (l : Pattern, r : Pattern) : bool
+    {
+      match ((l, r)) {
+        | (Pattern.Wildcard, _) => true
+        | (Pattern.As (Pattern.Wildcard, _), _) => true
+        | (Pattern.Literal (l), Pattern.Literal (r)) => compare_literals (l, r)      
+        | (Pattern.Tuple (l), Pattern.Tuple (r)) => compare_tuples (l, r)
+        | (Pattern.Record (l), Pattern.Record (r)) => compare_records (l, r)
+        | (Pattern.Application (ln, la), Pattern.Application (rn, ra)) => compare_conses (ln, la, rn, ra)       
+        | _ => false
+      }
+    }
+
+
+    /* -- PRIVATE FIELDS --------------------------------------------------- */
+
+    private mutable pattern : Pattern;
+    private mutable overriden_by : list [MatchPattern];
+    private mutable guard_is_always_true : bool;
+
+    
+    public MakeGuardExpr (continuation : option [CExpr]) : CExpr
+    {
+      def guard_expr =
+        match (match_descriptor.GetGuard (guard)) {
+          | Some (guard) => 
+            assert (Option.IsSome (continuation),
+                    "need to have a continuation if guards can fail");
+            
+            CExpr.If (match_descriptor.GetResultType (), guard,
+                   match_descriptor.GetEffect (effect), 
+                   Option.UnSome (continuation))
+                  
+          | None => 
+            match_descriptor.GetEffect (effect)
+        };
+      
+      collect_overriding_patterns (overriden_by, guard_expr);
+    }
+
+    public MakeMatchExpr (compare_to : CExpr, continuation : CExpr) : CExpr
+    {
+      match (pattern) {
+        | Pattern.Literal (literal) =>
+          def eq_expr = MatchingCompiler.emit_compare_with (compare_to, literal);
+
+          def guard_expr =
+            match (match_descriptor.GetGuard (guard)) {
+              | Some (guard) => 
+                CExpr.If (match_descriptor.GetResultType (), guard, 
+                       match_descriptor.GetEffect (effect), continuation)
+              | None =>
+                match_descriptor.GetEffect (effect)
+            };
+
+          def overriding_expr =
+            collect_overriding_patterns (overriden_by, guard_expr);
+            
+          CExpr.If (match_descriptor.GetResultType (), eq_expr, overriding_expr,
+                 continuation)
+
+        | Pattern.Wildcard =>
+          def guard_expr =
+            match (match_descriptor.GetGuard (guard)) {
+              | Some (guard) => 
+                CExpr.If (match_descriptor.GetResultType (), guard,
+                       match_descriptor.GetEffect (effect), continuation)              
+              | None => 
+                match_descriptor.GetEffect (effect)
+            };
+
+          collect_overriding_patterns (overriden_by, guard_expr)
+              
+        | Pattern.As (subpattern, _) =>
+          def subpattern = 
+            MatchPattern (match_descriptor, subpattern, guard, 
+                          effect, true, None ());
+  
+          subpattern.SetOverridingPatterns (GetOverridingPatterns ());
+          
+          CExpr.Define (Option.UnSome (as_pattern_val), 
+                  subpattern.MakeMatchExpr (compare_to, continuation))
+          
+          /*
+          match (subpat) {
+            | Pattern.Application =>
+              match (cgpat (val, subpat)) {
+                | (CExpr.If (c, e_then, e_else)) as e =>
+                  CExpr.If (e.ty, c, CExpr.Sequence ([ass; e_then]), e_else)
+                | _ => Util.ice ()
+              }
+            | _ =>
+              CExpr.Sequence ([ass; cgpat (val, subpat)])
+          }
+          */
+          
+        | _ => 
+          Util.ice ("pattern type not supported in MakeMatchExpr")
+      }
+    }
+
+    public GetOverridingPatterns () : list [MatchPattern]
+    {
+      overriden_by
+    }    
+    
+    public SetOverridingPatterns (overriden_by : list [MatchPattern]) : void
+    {
+      this.overriden_by = overriden_by
+    }
+
+    /**
+     * Comparison function that can be used by the List.Sort function
+     */
+    public static Compare (l : MatchPattern, r : MatchPattern) : int
+    {
+      def is_string_pattern =
+        match (l.GetPattern ()) {
+          | Pattern.Literal (Literal.String)
+          | Pattern.As (Pattern.Literal (Literal.String), _) => true
+          | _ => false
+        };
+        
+      if (is_string_pattern) {
+        def get_literal (pattern : MatchPattern) : string {
+          match (pattern.GetPattern ()) {
+            | Pattern.Literal (Literal.String (literal)) => literal
+            | Pattern.As (Pattern.Literal (Literal.String (literal)), _) => literal
+            | _ => Util.ice ("invalid pattern type")
+          }
+        };
+        
+        System.String.CompareOrdinal (get_literal (r), get_literal (l))
+      }
+      else {
+        // compare instead of subtract, because of overflow possibility
+        get_int_from_pattern (l).CompareTo (get_int_from_pattern (r))
+      }
+    }
+    
+    /**
+     * Returns true if a pattern is an ordinal constant (an int 
+     * or a char) -- possibly hidden beyond the 'as' construct.
+     */
+    public static IsOrdinalLiteral (pattern : MatchPattern) : bool
+    {
+      def is_good_literal (lit) {
+        | Literal.Integer | Literal.Char => true
+        | Literal.Enum (l, _) => is_good_literal (l)
+        | _ => false
+      }
+
+      match (pattern.GetPattern ()) {
+        | Pattern.Wildcard => false
+        | Pattern.As (Pattern.Wildcard, _) => false
+        | Pattern.As (Pattern.Literal (lit), _) => is_good_literal (lit)
+        | Pattern.Literal (lit) => is_good_literal (lit)
+        | z => Util.ice ("invalid pattern type: " + z.ToString ())
+      }    
+    }
+
+    public MakeLessThanCondition (compare_to : CExpr) : CExpr
+    {
+      match (pattern) {
+        | Pattern.Literal (Literal.String) =>
+          Util.ice ("constant string patterns not supported in MakeLessThanCondition")
+        | Pattern.Literal (Literal.Bool) =>
+          Util.ice ("constant boolean patterns not supported in MakeLessThanCondition")
+        | Pattern.Literal (literal) =>
+          assert (literal != null);
+          CExpr.Call (SystemType.Boolean, CExpr.Opcode ("<.s"),
+                   [compare_to, CExpr.Literal (literal)])
+        | _ => 
+          Util.ice ("non-literal patterns not supported in MakeLessThanCondition")
+      }    
+    }
+
+#if EXTRAMATCHINGDEBUG
+    public Dump () : void
+    {
+      def message =
+        match (pattern) {
+          | Pattern.Literal (Literal.String (literal)) => "Literal Literal.String '" + literal + "'"
+          | Pattern.Literal (Literal.Integer (literal)) => "Literal Literal.Integer " + literal.ToString ()
+          | Pattern.Literal (Literal.Char (literal)) => "Literal Literal.Char " + 
+            (literal :> int).ToString ()
+          | Pattern.Wildcard => "Wildcard"
+          | Pattern.As (Pattern.Wildcard, _) => "As/Wildcard"
+          | _ => "other"
+        };
+        
+      Message.Debug (message)
+    }
+#endif
+    
+    /**
+     * Returns true if a pattern is a string constant 
+     * (possibly hidden beyond the 'as' construct).
+     */
+    public static IsStringLiteral (pattern : MatchPattern) : bool
+    {
+      match (pattern.GetPattern ()) {
+        | Pattern.Wildcard => false
+        | Pattern.As (Pattern.Wildcard, _) => false
+        | Pattern.As (Pattern.Literal (Literal.String), _) => true
+        | Pattern.Literal (Literal.String) => true
+        | _ => Util.ice ("invalid pattern type")
+      }    
+    }
+
+    internal static get_int_from_pattern (pattern : MatchPattern) : int {        
+      def get_int_from_literal (_) {
+        | Literal.Integer (AsInt = Some (literal)) => literal
+        | Literal.Char (literal) => literal :> int
+        | Literal.Enum (l, _) => get_int_from_literal (l)
+        | z => Util.ice ("invalid literal: " + z.ToString ())
+      }
+
+      match (pattern.GetPattern ()) {
+        | Pattern.Literal (literal) 
+        | Pattern.As (Pattern.Literal (literal), _) => get_int_from_literal (literal)
+        | _ => Util.ice ("invalid pattern type")
+      }
+    }
+    
+    private collect_overriding_patterns (overriden_by : list [MatchPattern], 
+                                         continuation : CExpr) : CExpr
+    {
+      match (overriden_by) {
+        | [] => continuation
+        | pattern :: rest =>
+          // Message.Debug (pattern.GetLocation (),
+          //                "this pattern is sometimes overriding");
+          def continuation = pattern.MakeGuardExpr (Some (continuation));
+          collect_overriding_patterns (rest, continuation)
+      }
+    }
+   
+    private mutable match_descriptor : MatchDescriptor;
+    private mutable guard : int;
+    private mutable effect : int;
+    private mutable as_pattern_val : option [CG_val];
+  }
+
+  /**
+   * Search for a matching pattern is optimized within
+   * pattern blocks only.
+   */
+  class MatchBlock
+  {
+    /* -- CONSTRUCTORS ----------------------------------------------------- */
+
+    public this (patterns : list [MatchPattern])
+    {
+      this.patterns = patterns;
+    }
+
+
+    /* -- PUBLIC METHODS --------------------------------------------------- */
+
+    public RemoveOverridenPatterns () : void
+    {
+      def walk_patterns (patterns : list [MatchPattern]) : list [MatchPattern] {
+        | [] => []
+        | head :: tail =>
+          def overrides (pattern : MatchPattern) : bool {
+            if (head.AlwaysOverrides (pattern)) {
+              Message.Warning (head.Location, "this pattern overrides pattern:");
+              Message.Warning (pattern.Location, "pattern is redundant");
+              false
+            }
+            else true              
+          };
+          head :: walk_patterns (List.Filter (tail, overrides))
+      };
+      
+      patterns = walk_patterns (patterns)
+    }
+
+
+    public DecidePatternOverriding () : void
+    {
+      mutable current_pattern_can_be_skipped = false;
+      
+      def decide_pattern_overriding (head : MatchPattern, 
+                           patterns : list [MatchPattern]) : list [MatchPattern]
+      {        
+        match (patterns) {
+          | pattern :: rest =>
+            // Message.Debug (pattern.Location, "comparing to this pattern");
+            if (head.PossiblyOverrides (pattern)) {
+              // add overriding information for possibly hidden patterns
+              pattern.AddOverridingPattern (head);
+              unless (head.IsUnderscore ()) current_pattern_can_be_skipped = true;
+              pattern :: decide_pattern_overriding (head, rest)
+            }
+            else {
+              // leave the rest as is
+              pattern :: decide_pattern_overriding (head, rest)
+            }
+          | [] => []
+        }
+      };  
+      
+      def walk_patterns (patterns : list [MatchPattern]) : list [MatchPattern] {
+        match (patterns) {
+          | pattern :: rest =>
+            current_pattern_can_be_skipped = false;
+            // Message.Debug (pattern.Location, "deciding overriding for this pattern");
+            def rest = decide_pattern_overriding (pattern, rest);
+            pattern.ReverseOverridingList ();
+            if (!current_pattern_can_be_skipped) {
+              // Message.Debug (pattern.Location, "keeping this pattern");
+              pattern :: walk_patterns (rest)
+            }
+            else {
+              // Message.Debug (pattern.Location, "skipping this pattern");
+              walk_patterns (rest)
+            }
+          | [] => []
+        }
+      };
+      
+      patterns = walk_patterns (patterns)
+    }
+
+    public GetMatchPatterns () : list [MatchPattern] 
+    {
+      patterns
+    }
+
+
+    /* -- PRIVATE FIELDS --------------------------------------------------- */
+
+    private mutable patterns : list [MatchPattern];
+  }
+}
+ 
