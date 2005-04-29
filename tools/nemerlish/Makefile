@@ -10,13 +10,16 @@ EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
 NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe -q -debug
 
-all:	evallib mainexe
+all:	mainexe
 
-evallib:
+evallib: eval.n
 	$(NCC) -r Nemerle.Compiler.dll -t library -o eval.dll eval.n
 
-mainexe:
-	$(NCC) -r eval.dll main.n
+#mainexe: evallib main.n
+#	$(NCC) -r eval.dll main.n
+
+mainexe: 
+	$(NCC) -r Nemerle.Compiler.dll -o nemish.exe eval.n main.n
 
 clean:
 	rm *.dll *.exe *~
