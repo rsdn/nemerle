@@ -66,6 +66,7 @@ all:
 	elif find tools/cs2n/CSharpParser.cs -cnewer tools/cs2n/csharpgrammar.g | grep -q "" ; then \
 		$(MAKE) -C tools/cs2n all; \
 	fi
+	$(Q)$(MAKE) -C tools/nemerlish all
 	$(Q)$(MAKE) -C tools/nant-task all
 
 
@@ -119,6 +120,7 @@ install: all
 	$(Q)$(MAKE) -C ncc install
 	$(Q)if test -f tools/cs2n/cs2n.exe ; then \
 	  $(MAKE) -C tools/cs2n install; fi
+	$(Q)$(MAKE) -C tools/nemerlish install
 	$(Q)$(MAKE) -C tools/nant-task all install
 	$(INST) $(PKGCONFIGDIR)/nemerle.pc
 	$(Q)install -d $(DESTDIR)$(PKGCONFIGDIR)
@@ -126,6 +128,7 @@ install: all
 
 uninstall:
 	$(Q)$(MAKE) -C tools/cs2n uninstall
+	$(Q)$(MAKE) -C tools/nemerlish uninstall
 	$(Q)$(MAKE) -C boot uninstall
 	$(Q)$(MAKE) -C doc  uninstall
 	$(Q)rm -f $(PKGCONFIGDIR)/nemerle.pc
@@ -142,6 +145,7 @@ clean:
 	$(MAKE) -C ncc clean
 	$(MAKE) -C snippets clean
 	$(MAKE) -C tools/cs2n clean
+	$(MAKE) -C tools/nemerlish clean
 	$(MAKE) -C tools/nant-task clean
 	$(MAKE) -C tools/htmldumper clean
 	rm -f config.mak configure.log

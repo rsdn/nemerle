@@ -8,9 +8,9 @@ include $(TOP_LEVEL)/config.mak
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
-NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe -q -debug
+NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe -debug
 
-all:	mainexe
+all:	nemish.exe
 
 evallib: eval.n
 	$(NCC) -r Nemerle.Compiler.dll -t library -o eval.dll eval.n
@@ -18,8 +18,24 @@ evallib: eval.n
 #mainexe: evallib main.n
 #	$(NCC) -r eval.dll main.n
 
-mainexe: 
+nemish.exe:  main.n eval.n
 	$(NCC) -r Nemerle.Compiler.dll -o nemish.exe eval.n main.n
+
+install: nemish.exe
+	$(INST) "[$(BINDIR)]" nemish.exe
+	$(Q)$(INSTALL) -m 755 nemish.exe $(DESTDIR)$(BINDIR)/nemish.exe
+	$(Q)if [ "$(NET_ENGINE)" != "" ] ; then \
+		echo "#!/bin/sh" > $(DESTDIR)$(BINDIR)/nemish && \
+		echo '$(NET_ENGINE) $(BINDIR)/nemish.exe "$$@"' >> $(DESTDIR)$(BINDIR)/nemish ; \
+		chmod 755 $(DESTDIR)$(BINDIR)/nemish ; \
+	fi
+
+uninstall:
+	$(RM) $(BINDIR)/nemish
+	$(Q)rm -f $(BINDIR)/nemish
+	$(RM) $(BINDIR)/nemish.exe
+	$(Q)rm -f $(BINDIR)/nemish.exe
+
 
 clean:
 	rm *.dll *.exe *~
