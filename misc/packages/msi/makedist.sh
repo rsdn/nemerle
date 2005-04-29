@@ -16,6 +16,7 @@ rm -rf dist
 mkdir -p dist/bin
 cp -f $top/tools/cs2n/*.dll dist/bin/
 cp -f $top/tools/cs2n/*.exe dist/bin/
+cp -f $top/tools/nemerlish/*.exe dist/bin/
 cp -f $top/tools/nant-task/*.dll dist/bin/
 cp -f $top/boot/*.exe dist/bin
 cp -f $top/boot/*.dll dist/bin
