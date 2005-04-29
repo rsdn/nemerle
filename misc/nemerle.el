@@ -1,12 +1,12 @@
 ;;; nemerle.el -- major mode for editing nemerle programs
 
-;; Copyright (C) 2003, 2004 The University of Wroclaw
+;; Copyright (C) 2003-2005 The University of Wroclaw
 ;; All rights reserved.
 
 ;; Author: Jacek Sliwerski (rzyjontko) <rzyj@o2.pl>
 ;; Maintainer: Jacek Sliwerski (rzyjontko) <rzyj@o2.pl>
 ;; Created: 5 Oct 2003
-;; Version: 0.1
+;; Version: 0.2
 ;; Keywords: nemerle, mode, languages
 ;; Website: http://nemerle.org
 
@@ -54,13 +54,20 @@
 ;; these lines into your ~/.emacs files.
 
 ;; (defun my-nemerle-mode-hook ()
-;;   (setq nemerle-basic-offset 2)
 ;;   (define-key nemerle-mode-map "\C-m" 'newline-and-indent))
 ;; (add-hook 'nemerle-mode-hook 'my-nemerle-mode-hook)
+
+;; You may use variables nemerle-basic-offset and nemerle-match-case-offset
+;; to customize indentation levels.
 
 
 
 ;;; Change Log:
+
+;; 2005-04-29 rzyjontko <rzyj@o2.pl>
+;;   * changes possible due to new syntax:
+;;     - rewrote indenting engine
+;;     - adapted coloring scheme
 
 ;; 2004-04-27 rzyjontko <rzyj@o2.pl>
 ;;   * further coloring improvements
@@ -94,6 +101,18 @@
 
 
 
+;;; Known Bugs
+
+;; There is a problem with single quote character, as it is also used 
+;; in type variables and may not be treated just like in C.  There is
+;; only one situation when you will suffer from this, namely if you try
+;; to insert the following sequence: '"'.  In this case, everything after
+;; the double quote will be coloured as a string.  However there exists
+;; a very simple workaround for this: simply type '\"' instead.  The same
+;; problem applies, when trying to indent line with '[' or '('.  Use the
+;; same workaround i.e.: replace them with '\[' and '\(' respectively.
+
+
 ;;; Todo:
 
 ;; - further indentation improvements
@@ -103,6 +122,8 @@
 
 
 ;;; Code:
+
+(require 'cc-cmds)
 
 (provide 'nemerle-mode)
 
@@ -123,6 +144,9 @@ buffer created.  This is a good place to put your customizations.")
 (defvar nemerle-basic-offset 4
   "Indentation of blocks in nemerle.")
 
+(defvar nemerle-match-case-offset 2
+  "Indentation of match case bodies.")
+
 (unless nemerle-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map "\C-c\C-c" 'comment-region)
@@ -133,138 +157,175 @@ buffer created.  This is a good place to put your customizations.")
 (unless nemerle-font-lock-keywords
   (setq nemerle-font-lock-keywords
 	(list
-	 ;; strings
-	 '("[^']\\(\"[^\"]*\"\\)" 1 font-lock-string-face)
+	 ;; character constants
 	 '("'[^\\']'\\|'\\\\.'" 0 font-lock-string-face)
 
-	 ;; one-line comments
-	 '("//.*" 0 font-lock-comment-face)
-	 
 	 ;; keywords
-	 '("\\<\\(_\\|abstract\\|and\\|as\\|base\\|catch\\|def\\|delegate\\|enum\\|extern\\|finally\\|fun\\|implements\\|interface\\|internal\\|is\\|macro\\|match\\|matches\\|mutable\\|new\\|out\\|override\\|params\\|private\\|protected\\|public\\|ref\\|sealed\\|static\\|struct\\|syntax\\|this\\|throw\\|try\\|type\\|typeof\\|virtual\\|where\\|event\\|partial\\)\\>"
+	 ;; some keywords are introduced later in more complex regular 
+	 ;; expressions such that we can mark their argument with colour
+	 ;; these are:
+	 ;;    class, interface, module, namespace, using, variant
+	 ;; 'void' and 'array' are also keywords but we treat them
+	 ;; as type names
+	 '("\\<\\(_\\|abstract\\|and\\|as\\|base\\|catch\\|def\\|delegate\\|enum\\|event\\|false\\|finally\\|fun\\|implements\\|internal\\|is\\|macro\\|match\\|matches\\|mutable\\|new\\|null\\|out\\|override\\|params\\|private\\|protected\\|public\\|ref\\|sealed\\|static\\|struct\\|syntax\\|this\\|throw\\|try\\|type\\|typeof\\|virtual\\|volatile\\|when\\|where\\|partial\\)\\>"
 	   0 font-lock-keyword-face)
+
 	 ;; these aren't really keywords but we set them so
 	 '("\\<\\(do\\|else\\|for\\|if\\|regexp\\|unless\\|while\\|when\\|in\\|foreach\\)\\>"
 	   0 font-lock-keyword-face)
-	 '("=>\\||" 0 font-lock-keyword-face)
-
+	 '("=>" 0 font-lock-keyword-face)
 	 '("\\<\\(foreach\\)\\s *(.*:\\s *\\(\\w*\\)\\s *\\(\\<in\\>\\)"
-	   (1 font-lock-keyword-face) (2 font-lock-type-face) (3 font-lock-keyword-face))
+	   (1 font-lock-keyword-face) 
+	   (2 font-lock-type-face) 
+	   (3 font-lock-keyword-face))
 	 
 	 '("\\<\\(variant\\|class\\|interface\\|module\\|namespace\\|using\\)\\s +\\(\\(\\w\\|\\.\\)*\\)"
 	   (1 font-lock-keyword-face) (2 font-lock-function-name-face))
 	 
 	 ;; types
-	 '("\\<list\\s *<[^>]*[^\\-]>+" 0 font-lock-type-face t)
-	 '("\\<option\\s *<[^>]*>+" 0 font-lock-type-face t)
-	 '("\\<array\\s *\\[[^\\]]*\\]+" 0 font-lock-type-face t)
 	 '("->" 0 font-lock-type-face)
-	 '("\\<\\(void\\|int\\|uint\\|char\\|float\\|double\\|decimal\\|byte\\|sbyte\\|short\\|ushort\\|long\\|ulong\\|bool\\|string\\|object\\)\\>"
+	 '("\\<\\(void\\|int\\|uint\\|char\\|float\\|double\\|decimal\\|byte\\|sbyte\\|short\\|ushort\\|long\\|ulong\\|bool\\|string\\|object\\|list\\|option\\|array\\)\\>"
 	   0 font-lock-type-face)
 	 
 	 ;; constants
-         '("\\<[0-9]+\\>" 0 font-lock-constant-face)
-	 '("\\<\\(false\\|true\\|null\\)\\>" 0 font-lock-constant-face))))
+         '("\\<[0-9]+\\>" 0 font-lock-constant-face))))
 
 
 (unless nemerle-mode-syntax-table
   (setq nemerle-mode-syntax-table (copy-syntax-table c-mode-syntax-table))
-  (modify-syntax-entry ?< "(>" nemerle-mode-syntax-table)
-  (modify-syntax-entry ?> ")<" nemerle-mode-syntax-table))
+  (modify-syntax-entry ?_  "_"  nemerle-mode-syntax-table)
+  (modify-syntax-entry ?\\ "\\" nemerle-mode-syntax-table)
+  (modify-syntax-entry ?+  "."  nemerle-mode-syntax-table)
+  (modify-syntax-entry ?-  "."  nemerle-mode-syntax-table)
+  (modify-syntax-entry ?=  "."  nemerle-mode-syntax-table)
+  (modify-syntax-entry ?%  "."  nemerle-mode-syntax-table)
+  (modify-syntax-entry ?<  "."  nemerle-mode-syntax-table)
+  (modify-syntax-entry ?>  "."  nemerle-mode-syntax-table)
+  (modify-syntax-entry ?&  "."  nemerle-mode-syntax-table)
+  (modify-syntax-entry ?|  "."  nemerle-mode-syntax-table)
+  (modify-syntax-entry ?\' "."  nemerle-mode-syntax-table)
+  (cond
+   ;; XEmacs 19 & 20
+   ((memq '8-bit c-emacs-features)
+    (modify-syntax-entry ?/  ". 1456" nemerle-mode-syntax-table)
+    (modify-syntax-entry ?*  ". 23"   nemerle-mode-syntax-table))
+   ;; Emacs 19 & 20
+   ((memq '1-bit c-emacs-features)
+    (modify-syntax-entry ?/  ". 124b" nemerle-mode-syntax-table)
+    (modify-syntax-entry ?*  ". 23"   nemerle-mode-syntax-table))
+   ;; incompatible
+   (t (error "Nemerle Mode is incompatible with this version of Emacs"))
+   )
+  (modify-syntax-entry ?\n "> b"  nemerle-mode-syntax-table)
+  ;; Give CR the same syntax as newline, for selective-display
+  (modify-syntax-entry ?\^m "> b" nemerle-mode-syntax-table))
 
 
-(defun nemerle-syntax ()
+
+(defun nemerle-go-up-one-level ()
+  "Find an innermost surrounding parenthesis (or brace, or whatever)
+and return the corresponding character.  Return 0 if the point is in
+the topmost block."
+  (let* ((here (point))
+	 (beg-buf (point-min))
+	 (state (parse-partial-sexp here beg-buf)))
+    (cond ((> (nth 0 state) 0)
+	   (goto-char (nth 1 state))
+	   (char-after))
+	  (t
+	   (goto-char (point-min))
+	   0))))
+
+(defun nemerle-skip-sexps (end)
+  "Skip all blocks of code (delimited with braces) until END."
+  (let ((last-brace-pos (point))
+	(state nil))
+    (while (< (point) end)
+      (forward-char 1)
+      (parse-partial-sexp (point) (point-max) 1)
+      (backward-char 1)
+      (forward-list 1)
+      (backward-char 1)
+      (if (and (< (point) end) (looking-at "}"))
+	  (setq last-brace-pos (point))))
+    (goto-char last-brace-pos)))
+
+
+(defun nemerle-up-and-skip ()
+  "Do NOT use it.  For testing purposes only!"
+  (interactive)
+  (beginning-of-line)
+  (let ((end (point)))
+    (nemerle-go-up-one-level)
+    (nemerle-skip-sexps end)))
+
+
+(defun nemerle-analyze-line ()
+  "Analyze the current line."
   (save-excursion
     (beginning-of-line)
-    (cond ((looking-at "[ \t]*\\<try\\>")
-	   'try)
-	  ((looking-at "[ \t]*\\<catch\\>")
-	   'catch)
+    (cond ((looking-at "[ \t]*}")
+	   'end-brace)
 	  ((looking-at "[ \t]*|")
 	   'match-case)
-	  ((looking-at "[ \t]*$")
-	   'empty)
-	  ((looking-at "[ \t]*\\<if\\>")
-	   'if)
-	  ((looking-at "[ \t]*\\<else\\>")
-	   'else)
-	  ((looking-at "[^\n{]*}")
-	   'block-end)
-	  ((looking-at "[^\n]*{[^\n}]*$")
-	   'block-beg)
-	  ((looking-at "[ \t]*\\<when\\>")
-	   'if)
-	  ((looking-at "[ \t]*\\<unless\\>")
-	   'if)
-	  (t 
-	   'other))))
+	  (t
+	   'none))))
 
 
-(defun nemerle-prev-line ()
-  (save-excursion
+(defun nemerle-analyze-block (end result)
+  "Analyze the block from current point position until END.  Return
+the relative offset + result for the block."
+  (beginning-of-line)
+  (let ((line 'none)
+	(in-match-case nil))
+    (while (<= (point) end)
+      (setq line (nemerle-analyze-line))
+      (cond ((eq line 'match-case)
+	     (setq in-match-case t))
+	    (t
+	     nil))
+      (forward-line 1))
+    (setq result (+ nemerle-basic-offset result))
+    (if in-match-case
+	(setq result (+ result nemerle-match-case-offset)))
+    result))
+
+
+(defun nemerle-get-offset (end line)
+  "Return the relative offset for the block from the current point
+position until END, where the last line has syntactic meaning given 
+by LINE."
+  (cond ((eq line 'end-brace)
+	 0)
+	((eq line 'match-case)
+	 (nemerle-analyze-block end (- nemerle-match-case-offset)))
+	(t
+	 (nemerle-analyze-block end 0))))
+
+
+(defun nemerle-calculate-indentation-of-line (line)
+  "Return the absolute indentation for the line at the current point,
+where its syntactic meaning is given by LINE."
+  (save-excursion 
     (beginning-of-line)
-    (if (bobp)
-	0
-      (let ((there (point)))
-	(skip-chars-backward " \t\n")
-	(beginning-of-line)
-	(let* ((here (point))
-	       (syntax (nemerle-syntax))
-	       (indent (current-indentation))
-	       (state (parse-partial-sexp here there)))
-	  (cond ((and (< (nth 0 state) 0) (eq ?\) (nth 2 state)))
-		 (goto-char (scan-lists (nth 2 state) -1 1))
-		 (cons (current-indentation) (nemerle-syntax)))
-	        ((null (nth 1 state))
-		 (cons indent syntax))
-		((eq (char-after (nth 1 state)) ?\()
-		 (cons (- (nth 1 state) here) 'open-paren))
-		(t
-		 (cons indent syntax))))))))
+    (let ((end (point))
+	  (paren-char (nemerle-go-up-one-level))
+	  (top-indentation (current-indentation))
+	  (paren-column (- (point) 
+			   (save-excursion (beginning-of-line) (point)))))
+      (nemerle-skip-sexps end)
+      (cond ((eq paren-char ?{)
+	     (+ top-indentation (nemerle-get-offset end line)))
+	    ((eq paren-char 0)
+	     0)
+	    (t
+	     (1+ paren-column))))))
 
 
 (defun nemerle-calculate-indentation ()
-  (let* ((prev-info (nemerle-prev-line))
-	 (prev-indent (car prev-info))
-	 (prev-syntax (cdr prev-info))
-	 (cur-syntax (nemerle-syntax)))
-    (cond ((eq prev-syntax 'open-paren)
-	   (1+ prev-indent))
-	  ((eq prev-syntax 'match-case)	; match-case
-	   (cond ((eq cur-syntax 'match-case)
-		  prev-indent)
-		 ((eq cur-syntax 'block-end)
-		  (- prev-indent nemerle-basic-offset))
-		 (t
-		  (+ prev-indent 2))))
-	  ((eq prev-syntax 'try)	; try
-	   (cond ((eq cur-syntax 'block-beg)
-		  prev-indent)
-		 ((eq cur-syntax 'catch)
-		  prev-indent)
-		 (t (+ prev-indent nemerle-basic-offset))))
-	  ((eq prev-syntax 'catch)
-	   (+ prev-indent nemerle-basic-offset))
-	  ((eq prev-syntax 'block-beg)	; beginning of block
-	   (+ prev-indent nemerle-basic-offset))
-	  ((eq prev-syntax 'block-end) 	; end of block
-	   (cond ((eq cur-syntax 'block-end)
-		  (- prev-indent nemerle-basic-offset))
-		 (t
-		  prev-indent)))
-	  ((eq prev-syntax 'if)		; if
-	   (+ prev-indent nemerle-basic-offset))
-	  ((eq prev-syntax 'else)	; else
-	   (+ prev-indent nemerle-basic-offset))
-	  (t
-	    (cond ((eq cur-syntax 'block-end)
-		   (- prev-indent nemerle-basic-offset))
-		  ((eq cur-syntax 'else)
-		   (- prev-indent nemerle-basic-offset))
-		  ((eq cur-syntax 'catch)
-		   (- prev-indent nemerle-basic-offset))
-		  (t
-		   prev-indent))))))
+  "Return the absolute indentation for the line at the current point."
+  (let ((line (nemerle-analyze-line)))
+    (nemerle-calculate-indentation-of-line line)))
 
 
 (defun nemerle-indent-to (level)
@@ -276,7 +337,6 @@ buffer created.  This is a good place to put your customizations.")
     (indent-to level))
   (if (< (current-column) (current-indentation))
       (skip-chars-forward " \t")))
-  
 
 
 (defun nemerle-indent-line ()
@@ -286,46 +346,28 @@ buffer created.  This is a good place to put your customizations.")
     (nemerle-indent-to level)))
 
 
-
 (defun nemerle-electric-bar (arg)
   "Insert a bar.
 
-Also, the line is re-indented unless a numeric ARG is supplied 
-or there are some non-blank symbols on the line."
+Also, the line is re-indented unless a numeric ARG is supplied."
   (interactive "p")
-  (if (or (not (eq (nemerle-syntax) 'empty)) (and arg (> arg 1)))
+  (if (and arg (> arg 1))
       (self-insert-command (or arg 1))
-    (message "ok")
-    (let* ((prev-info (nemerle-prev-line))
-	   (prev-indent (car prev-info))
-	   (prev-syntax (cdr prev-info))
-	   (level prev-indent))
-      (if (eq prev-syntax 'block-beg)
-	  (setq level (+ prev-indent nemerle-basic-offset)))
-      (nemerle-indent-to level)
-      (insert-char ?| 1))))
+    (let ((level (nemerle-calculate-indentation-of-line 'match-case)))
+      (nemerle-indent-to level))
+    (self-insert-command 1)))
 	
 
 (defun nemerle-electric-brace (arg)
   "Insert a brace.
 
-Also, the line is re-indented unless a numeric ARG is supplied
-or there are some non-blank symbols on the line."
+Also, the line is re-indented unless a numeric ARG is supplied."
   (interactive "p")
-  (if (or (not (eq (nemerle-syntax) 'empty)) (and arg (> arg 1)))
+  (if (and arg (> arg 1))
       (self-insert-command (or arg 1))
-    (let* ((prev-info (nemerle-prev-line))
-	   (prev-indent (car prev-info))
-	   (prev-syntax (cdr prev-info))
-	   (level prev-indent))
-      (nemerle-indent-to (- prev-indent nemerle-basic-offset))
-      (insert-char ?} 1))))
-
-
-(defun nemerle-comment-indent ()
-  "Indent current line of nemerle comment."
-  (interactive)
-  0)
+    (let ((level (nemerle-calculate-indentation-of-line 'end-brace)))
+      (nemerle-indent-to level))
+    (self-insert-command 1)))
 
 
 (defun nemerle-mode ()
@@ -346,8 +388,7 @@ Mode map
 
   (make-local-variable 'font-lock-defaults)
   (setq font-lock-defaults '(nemerle-font-lock-keywords nil nil
-			     ((?_ . "w") (?. . "w") (?\/ . ". 14b")
-			      (?* . ". 23") (?\" . ".") (?\' . "."))))
+			     ((?_ . "w") (?. . "w") (?\' . "."))))
   
   (make-local-variable 'indent-line-function)
   (setq indent-line-function 'nemerle-indent-line)
