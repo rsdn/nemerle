@@ -33,9 +33,7 @@ include ../config.mak
 # VARIABLES
 ############################################################
 
-root_docs = index rationale license hacking macros reference tutorial download \
-	    csharp-diff wprowadzenie lecture grokking documentation contact \
-	    examples macrouse news-archive
+root_docs = reference
 
 docs = $(root_docs)
 
