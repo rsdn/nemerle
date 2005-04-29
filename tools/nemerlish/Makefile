@@ -40,4 +40,4 @@ uninstall:
 
 
 clean:
-	rm *.dll *.exe *~
+	rm -f *.dll *.exe *~
