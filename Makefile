@@ -106,6 +106,13 @@ tarball:
 	@tar zcf $(PACKAGE)-$(VERSION).$(REVISION).tar.gz $(PACKAGE)-$(VERSION).$(REVISION)
 	$(Q)rm -rf $(PACKAGE)-$(VERSION).$(REVISION)
 
+get-static-copies:
+	@echo Getting static copies of the wiki.
+	rm -rf doc/wiki
+	mkdir doc/wiki
+	cd doc/wiki && lftp http://nemerle.org/static/ -e 'mirror .' < /dev/null
+	rm -f doc/wiki/*.txt
+
 dist-cleaner:
 	@echo Setting up html doc.
 	$(Q)$(MAKE) -C doc dist-cleaner
@@ -114,6 +121,9 @@ dist-cleaner:
 	$(Q)rm -rf doc/course{,-src} doc/images
 	$(Q)rm -rf doc/presentation
 	$(Q)rm -f config.mak configure.log
+	$(Q)$(MAKE) get-static-copies
+	mv -f doc/wiki/*.html doc/html/
+	rm -rf doc/wiki/
 
 install: all
 	$(Q)$(MAKE) -C doc install
