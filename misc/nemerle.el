@@ -370,6 +370,11 @@ Also, the line is re-indented unless a numeric ARG is supplied."
     (self-insert-command 1)))
 
 
+(defun nemerle-comment-indent ()
+  (interactive)
+  nil)
+
+
 (defun nemerle-mode ()
   "Major mode for editing nemerle source files.
 
@@ -394,7 +399,7 @@ Mode map
   (setq indent-line-function 'nemerle-indent-line)
 
   (make-local-variable 'comment-indent-function)
-  (setq comment-indent-function 'c-comment-indent)
+  (setq comment-indent-function 'nemerle-comment-indent)
 
   (make-local-variable 'comment-start)
   (setq comment-start "/* ")
