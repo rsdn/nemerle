@@ -83,6 +83,7 @@ $(NEMERLE_DLLS): $(NCC_DIR)/$@
 	$(Q)cp -f $(NCC_DIR)/$@ $@
 
 $(ANTLR_DLL): antlr/$@
+	@test -f antlr/$@ || ( echo "No antlr.runtime.dll found. Please run ./configure again." && false )
 	$(Q)cp -f antlr/$@ $@
 
 dist-clean: clean
