@@ -152,6 +152,7 @@ buffer created.  This is a good place to put your customizations.")
     (define-key map "\C-c\C-c" 'comment-region)
     (define-key map "|" 'nemerle-electric-bar)
     (define-key map "}" 'nemerle-electric-brace)
+    (define-key map "*" 'nemerle-electric-star)
     (setq nemerle-mode-map map)))
 
 (unless nemerle-font-lock-keywords
@@ -237,9 +238,10 @@ the topmost block."
 	   0))))
 
 (defun nemerle-skip-sexps (end)
-  "Skip all blocks of code (delimited with braces) until END."
+  "Skip all blocks of code (delimited with braces) until END.
+Returns t if inside a comment."
   (let ((last-brace-pos (point))
-	(state nil))
+	(last-pos (point)))		; this is used to force advance
     (while (< (point) end)
       (forward-char 1)
       (parse-partial-sexp (point) (point-max) 1)
@@ -247,7 +249,10 @@ the topmost block."
       (forward-list 1)
       (backward-char 1)
       (if (and (< (point) end) (looking-at "}"))
-	  (setq last-brace-pos (point))))
+	  (setq last-brace-pos (point)))
+      (if (eq (point) last-pos)		; this is where we force advance
+	  (forward-char 1))
+      (setq last-pos (point)))
     (goto-char last-brace-pos)))
 
 
@@ -260,11 +265,21 @@ the topmost block."
     (nemerle-skip-sexps end)))
 
 
+(defun nemerle-in-comment ()
+  "Return t if the point is somewhere in the comment."
+  (let ((state (parse-partial-sexp (point-min) (point) -1)))
+    (nth 4 state)))
+
+
 (defun nemerle-analyze-line ()
   "Analyze the current line."
   (save-excursion
     (beginning-of-line)
-    (cond ((looking-at "[ \t]*}")
+    (cond ((nemerle-in-comment)
+	   (if (looking-at "[ \t]*\\*")
+	       'star-comment
+	     'comment))
+	  ((looking-at "[ \t]*}")
 	   'end-brace)
 	  ((looking-at "[ \t]*|")
 	   'match-case)
@@ -297,6 +312,10 @@ position until END, where the last line has syntactic meaning given
 by LINE."
   (cond ((eq line 'end-brace)
 	 0)
+	((eq line 'comment)
+	 (nemerle-analyze-block end 2))
+	((eq line 'star-comment)
+	 (nemerle-analyze-block end 1))
 	((eq line 'match-case)
 	 (nemerle-analyze-block end (- nemerle-match-case-offset)))
 	(t
@@ -317,7 +336,7 @@ where its syntactic meaning is given by LINE."
       (cond ((eq paren-char ?{)
 	     (+ top-indentation (nemerle-get-offset end line)))
 	    ((eq paren-char 0)
-	     0)
+	     (nemerle-get-offset end line))
 	    (t
 	     (1+ paren-column))))))
 
@@ -366,6 +385,18 @@ Also, the line is re-indented unless a numeric ARG is supplied."
   (if (and arg (> arg 1))
       (self-insert-command (or arg 1))
     (let ((level (nemerle-calculate-indentation-of-line 'end-brace)))
+      (nemerle-indent-to level))
+    (self-insert-command 1)))
+
+
+(defun nemerle-electric-star (arg)
+  "Insert an asterisk.
+
+Also, the line is re-indented if inside a comment."
+  (interactive "p")
+  (if (or (and arg (> arg 1)) (not (nemerle-in-comment)))
+      (self-insert-command (or arg 1))
+    (let ((level (nemerle-calculate-indentation-of-line 'star-comment)))
       (nemerle-indent-to level))
     (self-insert-command 1)))
 
