@@ -75,7 +75,6 @@ NEMERLE_DLL_SRC = \
 	../lib/AssemblyInfo.n
 
 NEMERLE_COMPILER_DLL_SRC = \
-	typing/DecisionTreeBuilder.n     \
 	hierarchy/BuiltinMethod.n        \
 	hierarchy/ClassMembers.n	 \
 	hierarchy/CustomAttribute.n	 \
@@ -96,7 +95,7 @@ NEMERLE_COMPILER_DLL_SRC = \
 	typing/ConstantFolder.n		 \
 	typing/MacroRegistry.n		 \
 	typing/Macros.n			 \
-	typing/ExhaustivenessChecker.n   \
+	typing/DecisionTreeBuilder.n     \
 	typing/TypedTree.n		 \
 	typing/ErrorMessage.n		 \
 	typing/LocalContext.n		 \
