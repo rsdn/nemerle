@@ -46,6 +46,8 @@ namespace Nemerle.Compiler
       // Decision.IsEq (Path.Here, Con.Guard, _, _) is used to simulate
       // guard check
       | Guard
+      | Unspecified
+      | Not { lst : list [Con]; }
 
       [OverrideObjectEquals]
       public Equals (con : Con) : bool
@@ -59,13 +61,47 @@ namespace Nemerle.Compiler
         }
       }
 
+      FindValueExcept (cons : list [Con]) : string
+      {
+        | [] => "_"
+        | Lit (Literal.Bool (true)) :: _ => "false"
+        | Lit (Literal.Bool (false)) :: _ => "true"
+
+        | (Lit (Literal.Enum (_, tc)) :: _) as lits
+          when ! tc.HasAttribute (InternalType.FlagsAttribute_tc) =>
+          mutable res = null;
+          foreach (fld is IField in tc.GetMembers ())
+            when (fld.IsLiteral && fld.DeclaringType.Equals (tc) &&
+                  !lits.Contains (Lit (fld.GetValue ())))
+              res = fld.Name;
+          assert (res != null);
+          res
+          
+        | (Variant (tc) :: _) as variants =>
+          match (Option.UnSome (tc.SuperClass ()).GetTydecl ()) {
+            | TypeDeclaration.Variant (opts) => 
+              mutable res = null;
+              foreach (opt in opts)
+                when (!variants.Contains (Variant (opt)))
+                  res = opt.Name;
+              assert (res != null);
+              res
+            | _ => assert (false)
+          }
+
+        | vals => $ "(anything except $vals)"
+      }
+
       public override ToString () : string
       {
         match (this) {
           | Variant (ti) => ti.ToString ()
           | Lit (lit) => lit.ToString ()
           | Type (ti) => $ "is $ti"
-          | Guard => $ "GUARD"
+          | Guard => "GUARD"
+          | Unspecified => "UNSPECIFIED"
+          | Not (x) => FindValueExcept (x) 
+            // + $ "NOT($x)"
         }
       }
 
@@ -87,9 +123,14 @@ namespace Nemerle.Compiler
                 | _ => assert (false)
               }
 
+            | Lit (Literal.Bool) => 2
+            | Lit (Literal.Void) => 1
+
+            | Unspecified
             | Lit
             | Type
-            | Guard => -1
+            | Guard 
+            | Not => -1
           }
         }
       }
@@ -107,15 +148,17 @@ namespace Nemerle.Compiler
       public AddPositive (con : Con) : void
       {
         assert (is_con == null);
-        assert (! is_not.Contains (con));
-        is_not = con :: is_not;
+        is_con = con;
+        args = [];
+        is_not = null;
       }
 
       public AddNegative (con : Con) : void
       {
+        when (is_con != null) { Message.Warning ($ "trying to add $con to $is_con"); assert (false); }
         assert (is_con == null);
-        is_con = con;
-        is_not = null;
+        assert (! is_not.Contains (con));
+        is_not = con :: is_not;
       }
 
       public IsIt (con : Con) : bool
@@ -127,6 +170,13 @@ namespace Nemerle.Compiler
             AddPositive (con);
             true
           } else false
+        else is_con.Equals (con)
+      }
+
+      public CanBe (con : Con) : bool
+      {
+        if (is_con == null)
+          ! is_not.Contains (con)
         else is_con.Equals (con)
       }
 
@@ -155,7 +205,12 @@ namespace Nemerle.Compiler
 
       public Select (fld : IMember) : Skeleton
       {
-        assert (is_con != null);
+        when (is_con == null) {
+          is_con = Con.Unspecified ();
+          is_not = null;
+          args = [];
+        }
+
         match (args.Find (fun (td) { td.field.Equals (fld) })) {
           | Some (td) => td
           | None =>
@@ -163,6 +218,14 @@ namespace Nemerle.Compiler
             args = td :: args;
             td
         }
+      }
+
+      public override ToString () : string
+      {
+        if (is_con == null)
+          $ "Neg($is_not)"
+        else
+          $ "Pos($is_con($args))"
       }
     }
 
@@ -241,13 +304,20 @@ namespace Nemerle.Compiler
 
       public Build (pats : list [Path * Skeleton * Pattern]) : Decision
       {
+        // Message.Debug ($"Build($pats)");
         match (pats) {
           | [] => BuildSuccess ()
           | (path, skel, pat) :: rest =>
           
             def check_if (con, rest) {
-              if (skel.IsIt (con))
+              def positive = skel.IsIt (con);
+              def negative = !skel.CanBe (con);
+              
+              // Message.Debug ($ "check if: $con, $rest, $positive, $negative");
+              if (positive)
                 Build (rest)
+              else if (negative)
+                BuildFailure ()
               else {
                 def state = skel.Save ();
                 
@@ -296,7 +366,12 @@ namespace Nemerle.Compiler
                 check_if (Con.Variant (vart), rest)
 
               | Pattern.Enum (fld, val) =>
-                def lit = Literal.Enum (val :> Literal.Integer, fld.DeclaringType);
+                def lit =
+                  match (val) {
+                    | Literal.Enum => val
+                    | Literal.Integer as i => Literal.Enum (i, fld.DeclaringType)
+                    | _ => assert (false)
+                  }
                 check_if (Con.Lit (lit), rest)
            }
         }
@@ -315,6 +390,92 @@ namespace Nemerle.Compiler
           p.Build ([(Path.Here (), skel, pat)])
         | _ => assert (false)
       }
+    }
+
+
+    variant CounterExample
+    {
+      | Anything
+      | Exactly { con : Con; args : list [IMember * CounterExample]; }
+
+      public With (con : Con, path : Path) : CounterExample
+      {
+        match (path) {
+          | Path.Here =>
+            match (this) {
+              | Anything =>
+                Exactly (con, [])
+              | Exactly (con', args) =>
+                def con =
+                  if (con' == null) con
+                  else match (con') {
+                    | Con.Not (lst) =>
+                      match (con) {
+                        | Con.Not (lst') => Con.Not (lst' + lst)
+                        | c =>
+                          assert (!lst.Contains (c));
+                          c
+                      }
+                    | c =>
+                      assert (! (con is Con.Not));
+                      assert (c.Equals (con));
+                      c
+                  }
+                Exactly (con, args)
+            }
+          | Path.Field (fld, path) =>
+            match (this) {
+              | Anything =>
+                Exactly (null, [(fld, Anything ().With (con, path))])
+              | Exactly (con', args) =>
+                mutable example = Anything ();
+                def args = args.FoldLeft ([], fun (elem, acc) {
+                  def (fld', example') = elem;
+                  if (fld'.Equals (fld)) {
+                    example = example';
+                    acc
+                  } else elem :: acc
+                });
+                Exactly (con', (fld, example.With (con, path)) :: args)
+            }
+        }
+      }
+
+      FieldToString (mem : IMember, example : CounterExample) : string
+      {
+        if (mem.DeclaringType.FullName.StartsWith ("Nemerle.Internal.Tuple"))
+          example.ToString ()
+        else
+          mem.Name + " = " + example.ToString ()
+      }
+
+      public override ToString () : string
+      {
+        match (this) {
+          | Anything => "_"
+          | Exactly (null, []) => "_"
+          | Exactly (con, []) => con.ToString ()
+          | Exactly (null, lst) =>
+            "(" + lst.Map (FieldToString).ToString (", ") + ")"
+          | Exactly (con, lst) =>
+            $ "$con (" + lst.Map (FieldToString).ToString (", ") + ")"
+        }
+      }
+    }
+
+
+    static BuildCounterExample (path : list [Path * Con]) : string
+    {
+      def res = path.FoldLeft (CounterExample.Anything (), fun (elem, acc) {
+        def (access, con) = elem;
+        match (con) {
+          | Con.Guard
+          | Con.Not ([Con.Guard]) => acc
+          | _ =>
+            acc.With (con, access)
+        }
+      });
+      res.ToString ()
     }
     
 
@@ -336,11 +497,12 @@ namespace Nemerle.Compiler
       
       def tree = Build (patterns);
 
-      Message.Debug ($ "tree for $patterns: $tree");
-      
+      // Message.Debug ($ "tree for $patterns: $tree");
       def pat_arr = array (no);
       foreach ((pat, _, k) in patterns)
         pat_arr [k] = pat;
+
+      mutable non_exhaustive_shown = false;
 
       def traverse (path, n) {
         match (n) {
@@ -348,13 +510,17 @@ namespace Nemerle.Compiler
             pat_arr [res] = null
             
           | Decision.Failure =>
-            Message.Warning ("matching is not exhaustive")
-            // XXX
-            // BuildCounterExample (path)
+            if (non_exhaustive_shown) {}
+            else {
+              non_exhaustive_shown = true;
+              def example = BuildCounterExample (path);
+              Message.Warning ($ "matching is not exhaustive, example "
+                                 "unmatched value: $example")
+            }
             
           | Decision.IfEq (access, con, n1, n2) =>
-            traverse ((true, access, con) :: path, n1);
-            traverse ((false, access, con) :: path, n2);
+            traverse ((access, con) :: path, n1);
+            traverse ((access, Con.Not ([con])) :: path, n2);
         }
       }
 
