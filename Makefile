@@ -124,6 +124,7 @@ dist-cleaner:
 	$(Q)$(MAKE) get-static-copies
 	mv -f doc/wiki/*.html doc/html/
 	rm -rf doc/wiki/
+	rm -f nemerle.pc config.mak configure.log
 
 install: all
 	$(Q)$(MAKE) -C doc install
