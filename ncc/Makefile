@@ -75,6 +75,7 @@ NEMERLE_DLL_SRC = \
 	../lib/AssemblyInfo.n
 
 NEMERLE_COMPILER_DLL_SRC = \
+	typing/DecisionTreeBuilder.n     \
 	hierarchy/BuiltinMethod.n        \
 	hierarchy/ClassMembers.n	 \
 	hierarchy/CustomAttribute.n	 \
