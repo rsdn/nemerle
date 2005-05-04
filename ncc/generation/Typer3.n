@@ -1,0 +1,389 @@
+/*
+ * Copyright (c) 2003-2005 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Collections;
+using Nemerle.Utility;
+
+using Nemerle.Compiler;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Compiler.SolverMacros;
+
+namespace Nemerle.Compiler
+{
+  internal class Typer3
+  {
+    current_fun : Fun_header;
+    current_type : TypeBuilder;
+    messenger : Messenger;
+
+    public this (ty : TypeBuilder, fn : Fun_header)
+    {
+      current_fun = fn;
+      current_type = ty;
+
+      messenger = Passes.Solver.CurrentMessenger;
+    }
+
+
+    LocalRef (decl : LocalValue) : TExpr
+    {
+      LocalRef (decl, for_store = false)
+    }
+
+
+    [Nemerle.NotImplemented]
+    LocalRef (decl : LocalValue, for_store : bool) : TExpr
+    {
+    }
+    
+
+    [Nemerle.NotImplemented]
+    MakeFirstClass (expr : TExpr) : TExpr
+    {
+    }
+    
+
+    [Nemerle.NotImplemented]
+    HandleLocalFunction (fn : Fun_header) : void
+    {
+    }
+    
+
+    // expects reverted list
+    BuildSequence (exprs : list [TExpr]) : TExpr
+    {
+      match (exprs) {
+        | [] =>
+          TExpr.Literal (InternalType.Void, Literal.Void ())
+        | x :: xs =>
+          def loop (acc, l) {
+            match (l) {
+              | [] => acc
+              | TExpr.DefValIn (name, val, null) as x :: xs =>
+                loop (TExpr.DefValIn (acc.Type, name, val, acc), xs)
+              | x :: xs =>
+                loop (TExpr.Sequence (acc.Type, x, acc), xs)
+            }
+          }
+          loop (x, xs)
+      }
+    }
+
+
+    [Nemerle.NotImplemented]
+    PrepareClosure () : list [TExpr]
+    {
+    }
+
+
+    LoadParameters () : list [TExpr]
+    {
+      mutable initializers = [];
+      
+      foreach (fp in current_fun.parms) {
+        def parm = fp.decl;
+
+        if (parm.InClosure) {
+          def a = TExpr.Assign (InternalType.Void,
+                                LocalRef (parm, for_store = true), 
+                                TExpr.LocalRef (parm.Type, parm));
+          
+          initializers = a :: initializers
+        // this should be dead code with generics
+        } else if (fp.ty.Fix ().IsSystemObject && ! parm.Type.Fix ().IsSystemObject) {
+          def local = LocalValue (current_fun, parm.Name, parm.Type, 
+                                  LocalValue.Kind.Plain (), is_mutable = parm.IsMutable);
+          parm.AddRedirect (v);
+          def val =
+            TExpr.TypeConverion (parm.Type,
+                                 TExpr.LocalRef (fp.ty, parm),
+                                 parm.Type,
+                                 ConversionKind.IL (true));
+                                 
+          def a = TExpr.DefValIn (InternalType.Void, v, val)
+          initializers = a :: initializers
+        } else {}
+      }
+
+      initializers
+    }
+
+
+    GetBaseCall () : option [TExpr]
+    {
+      // put base () / this () call before storing 'this' in closure inside constructor
+      if (current_fun.name == ".ctor" && !current_type.IsValueType)
+        match (current_fun.body) {
+          | FunBody.Typed (TExpr.Sequence (TExpr.Call as basecall, rest)) =>
+            current_fun.body = FunBody.Typed (rest);
+            Some (Walk (basecall))
+
+          | FunBody.Typed (TExpr.Call as basecall)
+          | FunBody.Typed (TExpr.TailCall as basecall) =>
+            current_fun.body = FunBody.Typed (BuildSequence ([]));
+            Some (Walk (basecall))
+            
+          | FunBody.Typed (x) =>
+            Message.Warning (body.loc, body.ToString ());
+            Util.ice (" constructor body has: " + PrettyPrint.SprintTyExpr (None (), x))
+
+          | _ => assert (false)
+        }
+      else None ()
+    }
+    
+
+    // the result is reverted!
+    PrepareProlog () : list [TExpr]
+    {
+      // assigments of parameters and 'this' to closure fields
+      // interleaved with base (..) call in constructor
+      mutable initializers = [];
+
+      // we build the initialization stuff of method:
+      // 1. method's closure ctor()
+      // 2. store parameters into closure
+      // 3. base (..) / this (..) for constructors
+      // 4. store 'this' in closure
+
+      initializers = PrepareClosure ();
+
+      initializers = LoadParameters () + initializers;
+
+      match (GetBaseCall ()) {
+        | Some (call) =>
+          initializers = call :: initializers;
+        | None => {}
+      }
+
+      // store 'this' into closure object
+      foreach (d in current_fun.closure_vars) 
+        when (d.InClosure && 
+              d.ValKind is LocalValue.Kind.ClosurisedThisPointer) {
+          def ini =
+            TExpr.Assign (InternalType.Void,
+                          LocalRef (d, for_store = true),
+                          TExpr.This (current_type.GetMemType ()))
+          initializers = ini :: initializers;
+        }
+
+      initializers
+    }
+    
+
+    public Run () : void
+    {
+      Util.locate (current_fun.loc, {
+        def initializers = PrepareProlog ();
+
+        match (current_fun.body) {
+          | FunBody.Typed (body) =>
+            current_fun.body = FunBody.Typed (BuildSequence (Walk (body) :: initializers))
+          | _ => assert (false)
+        }
+      })
+    }
+
+
+    Walks (exprs : list [TExpr]) : list [TExpr]
+    {
+      List.Map (exprs, Walk)
+    }
+
+    
+    Walk (expr : TExpr) : TExpr
+    {
+      assert (expr != null);
+      Util.locate (expr.loc, {
+        def res = DoWalk (expr);
+        if (res == null)
+          expr
+        else {
+          res.ty = expr.ty;
+          res
+        }
+      })
+    }
+    
+
+    WalkPattern (pat : Pattern) : void
+    {
+      match (pat) {
+        | Pattern.Enum 
+        | Pattern.Literal
+        | Pattern.Error
+        | Pattern.Wildcard => {}
+
+        | Pattern.HasType (tc) =>
+          when (pat.ty.TryRequire (tc.GetFreshType ()) && messenger.NeedMessage)
+            Message.Warning (pat.loc, "using the ``is'' pattern here is redundant, "
+                                      "please use ``:''");
+        
+        | Pattern.As (pat, decl) =>
+          unless (decl.IsRegistered)
+            decl.Register ();
+          WalkPattern (pat)
+
+        | Pattern.Tuple (args) =>
+          foreach (a in args) WalkPattern (a);
+          
+        | Pattern.Record (args) =>
+          foreach ((_, a) in args) WalkPattern (a);
+          
+        | Pattern.Application (_, a) =>
+          WalkPattern (a)
+      }
+    }
+
+
+    DoWalk (expr : TExpr) : TExpr
+    {
+      // Message.Debug ($ "dowalk: $expr");
+      match (expr) {
+        // the real work
+        | TExpr.LocalRef (decl) =>
+          LocalRef (decl)
+          
+          
+        | TExpr.StaticRef (mem) =>
+          MakeFirstClass (expr)
+          
+          
+        | TExpr.DefFunctionsIn (funs, body) =>
+          foreach (fn in funs)
+            HandleLocalFunction (fn);
+          Walk (body)
+          
+          
+        | TExpr.MethodRef (obj, meth, notvirt) =>
+          MakeFirstClass (TExpr.MethodRef (Walk (obj), meth, notvirt))
+
+
+        // invalid
+        | TExpr.Delayed
+        | TExpr.This
+        | TExpr.PropertyMember
+        | TExpr.StaticPropertyRef
+        | TExpr.EventMember
+        | TExpr.StaticEventRef =>
+          Message.Warning ($ "invalid expr in Typer3: $(expr.GetType()): $expr");
+          assert (false)
+          
+
+        // fixpoint
+        | TExpr.Error
+        | TExpr.OpCode 
+        | TExpr.TypeOf
+        | TExpr.Literal
+        | TExpr.Base
+        | TExpr.ImplicitValueTypeCtor
+        | TExpr.ConstantObjectRef =>
+          null
+          
+
+        | TExpr.FieldMember (obj, fld) =>
+          TExpr.FieldMember (Walk (obj), fld)
+          
+          
+        | TExpr.TailCall (func, parms)
+        | TExpr.Call (func, parms) =>
+          foreach (p in parms)
+            p.expr = Walk (p.expr);
+
+          match (func) {
+            | TExpr.MethodRef
+            | TExpr.StaticRef =>
+
+            | _ => 
+          }
+          
+        
+        | TExpr.SelfTailCall (parms) =>
+          foreach (p in parms)
+            p.expr = Walk (p.expr);
+          null
+        
+
+        | TExpr.Assign (target, source) =>
+          TExpr.Assign (Walk (target), Walk (source))
+          
+   
+        | TExpr.DefValIn (name, val, body) =>
+          TExpr.DefValIn (name, Walk (val), Walk (body))
+          
+          
+        | TExpr.Match (matched_value, cases) =>
+          foreach (case in cases) {
+            mutable pats = [];
+            foreach ((pat, expr) in case.patterns) {
+              WalkPattern (pat);
+              pats = (pat, Walk (expr)) :: pats
+            }
+            case.patterns = List.Rev (pats);
+            case.body = Walk (case.body);
+          }
+          TExpr.Match (Walk (matched_value), cases)
+          
+
+        | TExpr.Throw (exn) =>
+          // exception can be null for `throw;' rethrow expression
+          if (exn != null)
+            TExpr.Throw (Walk (exn))
+          else
+            expr
+
+        | TExpr.TryWith (body, exn, handler) =>
+          TExpr.TryWith (Walk (body), exn, Walk (handler))
+          
+          
+        | TExpr.TryFinally (body, handler) =>
+          TExpr.TryFinally (Walk (body), Walk (handler))
+          
+
+        | TExpr.TypeConversion (expr, t, kind) =>
+          TExpr.TypeConversion (Walk (expr), t, kind)
+          
+          
+        | TExpr.Sequence (e1, e2) =>
+          TExpr.Sequence (Walk (e1), Walk (e2))
+          
+          
+        | TExpr.Tuple (args) =>
+          TExpr.Tuple (Walks (args))
+          
+          
+        | TExpr.Array (args, dimensions) =>
+          TExpr.Array (Walks (args), Walks (dimensions))
+          
+          
+        | TExpr.ArrayIndexer (t, obj, args) =>
+          TExpr.ArrayIndexer (t, Walk (obj), Walks (args))
+      }
+    }
+  }
+}
