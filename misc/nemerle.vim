@@ -95,9 +95,10 @@ function! NemOutlineToggle()
 endfunction
 
 syn keyword nemerleType int bool string void option list char float object
+syn keyword nemerleType double long ulong uint ushort short byte sbyte
 
 syn keyword nemerleModifier abstract extern internal new private protected
-syn keyword nemerleModifier public sealed virtual static override
+syn keyword nemerleModifier public sealed virtual static override partial
 
 syn keyword nemerleTopDecl class interface syntax module namespace type implements
 syn keyword nemerleTopDecl extends struct using macro enum
