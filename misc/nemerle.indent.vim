@@ -3,6 +3,16 @@
 " Maintainer:	Piotr Kalinowski <pitkali@interia.pl>
 " Last Change:	2005 May 03
 
+" Instructions:
+" Put this file under ~/.vim/indent/nemerle.vim and ensure the following lines are
+" present in ~/.vim/filetype.vim:
+" 
+" augroup filetypedetect
+"    autocmd BufNewfile,BufRead *.n setfiletype nemerle
+" augroup END
+"
+" Any comments and suggestions are welcome.
+
 " Load only once
 if exists("b:did_indent")
     finish
