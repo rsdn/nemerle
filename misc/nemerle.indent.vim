@@ -3,17 +3,6 @@
 " Maintainer:	Piotr Kalinowski <pitkali@interia.pl>
 " Last Change:	2005 May 03
 
-" Instructions:
-" Put this file under ~/.vim/indent/nemerle.vim and ensure following lines are
-" present in ~/.vim/filetype.vim:
-" 
-" augroup filetypedetect
-"    autocmd BufNewfile,BufRead *.n setfiletype nemerle
-" augroup END
-"
-" Any comments and suggestions are welcome.
-
-
 " Load only once
 if exists("b:did_indent")
     finish
@@ -21,7 +10,7 @@ endif
 let b:did_indent = 1
 
 setlocal cinkeys-=:
-setlocal indentkeys& indentkeys-=: indentkeys+=<Bar>
+setlocal indentkeys& indentkeys-=: indentkeys+=<Bar>,0=requires,0=ensures,0=invariant
 setlocal indentexpr=GetNemerleIndent()
 
 " Define function only once.
@@ -77,7 +66,7 @@ function GetNemerleIndent()
     if prev_line =~ ':' && prev_line !~ '{'
 	" If the previous line contains a colon but no {, cindent fails
 	" to correctly determine indentation
-	let theIndent = indent(prev)
+	let theIndent = ind
 	if prev_line !~ ';\s*$'
 	    let theIndent = theIndent + &sw
 	endif
@@ -85,12 +74,12 @@ function GetNemerleIndent()
 	if prev_line =~ '\s*|'
 	    if cur_line !~ '\s*|'
 		" if current line is not match pattern, whereas previous is
-		let theIndent = indent(prev) + &sw " indent it
+		let theIndent = ind + &sw " indent it
 	    endif
 	else
 	    if cur_line =~ '\s*|' " if previous line is not a pattern, but current is
 		if prev_line !~ '{' " and current line is not the first pattern in match clause
-		    let theIndent = indent(prev) - &sw " decrease indentation
+		    let theIndent = ind - &sw " decrease indentation
 		endif
 	    else
 		" now check, if this is label-case...
@@ -124,6 +113,11 @@ function GetNemerleIndent()
 	endif
     endif	    
 
+    " Design by contract macros
+    if cur_line =~ '^\s*\(requires\>\|ensures\>\|invariant\>\)'
+	let theIndent = ind
+    endif
+
     return theIndent
 endfunction " GetNemerleIndent
-    
+
