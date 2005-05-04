@@ -63,59 +63,54 @@ function GetNemerleIndent()
     let prev_line = getline(prev)
     let ind = indent(prev)
 
+    " Design by contract macros
+    if cur_line =~ '^\s*\(requires\>\|ensures\>\|invariant\>\)'
+	return ind
+    endif
+
     if prev_line =~ ':' && prev_line !~ '{'
 	" If the previous line contains a colon but no {, cindent fails
-	" to correctly determine indentation
+	" to correctly determine indentation. A colon is function or field
+	" declaration. Next line should have the same indentation unless
+	" previous line doesn't end with semicolon (function signature).
 	let theIndent = ind
 	if prev_line !~ ';\s*$'
 	    let theIndent = theIndent + &sw
 	endif
+	return theIndent
+    endif
+
+    " following handles lines inside a match clause
+    if prev_line =~ '\s*|'
+	if cur_line !~ '\s*|'
+	    " if current line is not match pattern, whereas previous is
+	    let theIndent = ind + &sw " indent it
+	endif
     else
-	if prev_line =~ '\s*|'
-	    if cur_line !~ '\s*|'
-		" if current line is not match pattern, whereas previous is
-		let theIndent = ind + &sw " indent it
+	if cur_line =~ '\s*|' " if previous line is not a pattern, but current is
+	    if prev_line !~ '{' " and current line is not the first pattern in match clause
+		let theIndent = ind - &sw " decrease indentation
 	    endif
 	else
-	    if cur_line =~ '\s*|' " if previous line is not a pattern, but current is
-		if prev_line !~ '{' " and current line is not the first pattern in match clause
-		    let theIndent = ind - &sw " decrease indentation
+	    " this is the normal line, but if, by any chance, we are
+	    " inside a match clause, we need to ensure that the
+	    " indentation is like the previous line.
+	    while prev > 0
+		if getline(prev) =~ '\s*|'
+		    " yep - we are inside a match
+		    let theIndent = ind
+		    break
+		elseif getline(prev) =~ '{'
+		    " if we reach that without coming across a match
+		    " pattern, we can safely leave the things as they are.
+		    " Even if the block, begining of which we've reached,
+		    " is inside a match itself, cindent does good job
+		    " here.
+		    break
 		endif
-	    else
-		" now check, if this is label-case...
-		if cur_line =~ '^\s*\S*\s*:'
-		    if prev_line =~ '{' && prev_line !~ '}'
-			let theIndent = ind + &sw
-		    else
-			let theIndent = ind;
-		    endif
-		else
-		    " this is the normal line, but if, by any chance, we are
-		    " inside a match clause, we need to ensure that the
-		    " indentation is like the previous line.
-		    while prev > 0
-			if getline(prev) =~ '\s*|'
-			    " yep - we are inside a match
-			    let theIndent = ind
-			    break
-			elseif getline(prev) =~ '{'
-			    " if we reach that without coming across a match
-			    " pattern, we can safely leave the things as they are.
-			    " Even if the block, begining of which we've reached,
-			    " is inside a match itself, cindent does good job
-			    " here.
-			    break
-			endif
-			let prev = GetPrevious(prev - 1)
-		    endwhile
-		endif
-	    endif
+		let prev = GetPrevious(prev - 1)
+	    endwhile
 	endif
-    endif	    
-
-    " Design by contract macros
-    if cur_line =~ '^\s*\(requires\>\|ensures\>\|invariant\>\)'
-	let theIndent = ind
     endif
 
     return theIndent
