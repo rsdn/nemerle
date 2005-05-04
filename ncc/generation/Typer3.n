@@ -35,7 +35,7 @@ using Nemerle.Compiler.SolverMacros;
 
 namespace Nemerle.Compiler
 {
-  internal class Typer3
+  public class Typer3
   {
     current_fun : Fun_header;
     current_type : TypeBuilder;
@@ -84,7 +84,7 @@ namespace Nemerle.Compiler
           def loop (acc, l) {
             match (l) {
               | [] => acc
-              | TExpr.DefValIn (name, val, null) as x :: xs =>
+              | TExpr.DefValIn (name, val, null) :: xs =>
                 loop (TExpr.DefValIn (acc.Type, name, val, acc), xs)
               | x :: xs =>
                 loop (TExpr.Sequence (acc.Type, x, acc), xs)
@@ -118,14 +118,14 @@ namespace Nemerle.Compiler
         } else if (fp.ty.Fix ().IsSystemObject && ! parm.Type.Fix ().IsSystemObject) {
           def local = LocalValue (current_fun, parm.Name, parm.Type, 
                                   LocalValue.Kind.Plain (), is_mutable = parm.IsMutable);
-          parm.AddRedirect (v);
+          parm.Redirect = local;
           def val =
-            TExpr.TypeConverion (parm.Type,
-                                 TExpr.LocalRef (fp.ty, parm),
-                                 parm.Type,
-                                 ConversionKind.IL (true));
+            TExpr.TypeConversion (parm.Type,
+                                  TExpr.LocalRef (fp.ty, parm),
+                                  parm.Type,
+                                  ConversionKind.IL (true));
                                  
-          def a = TExpr.DefValIn (InternalType.Void, v, val)
+          def a = TExpr.DefValIn (InternalType.Void, local, val, null);
           initializers = a :: initializers
         } else {}
       }
@@ -143,14 +143,17 @@ namespace Nemerle.Compiler
             current_fun.body = FunBody.Typed (rest);
             Some (Walk (basecall))
 
-          | FunBody.Typed (TExpr.Call as basecall)
+          | FunBody.Typed (TExpr.Call as basecall) =>
+            current_fun.body = FunBody.Typed (BuildSequence ([]));
+            Some (Walk (basecall))
+
           | FunBody.Typed (TExpr.TailCall as basecall) =>
             current_fun.body = FunBody.Typed (BuildSequence ([]));
             Some (Walk (basecall))
             
-          | FunBody.Typed (x) =>
+          | FunBody.Typed (body) =>
             Message.Warning (body.loc, body.ToString ());
-            Util.ice (" constructor body has: " + PrettyPrint.SprintTyExpr (None (), x))
+            assert (false)
 
           | _ => assert (false)
         }
@@ -188,7 +191,7 @@ namespace Nemerle.Compiler
           def ini =
             TExpr.Assign (InternalType.Void,
                           LocalRef (d, for_store = true),
-                          TExpr.This (current_type.GetMemType ()))
+                          TExpr.This (current_type.GetMemType ()));
           initializers = ini :: initializers;
         }
 
@@ -217,32 +220,70 @@ namespace Nemerle.Compiler
 
 
     [Nemerle.NotImplemented]
-    WalkPattern (pat : Pattern) : void
+    EmitLoop (hd : Fun_header, parms : list [Parm]) : TExpr
     {
-      match (pat) {
-        | Pattern.Enum 
-        | Pattern.Literal
-        | Pattern.Error
-        | Pattern.Wildcard => {}
+    }
 
-        | Pattern.HasType (tc) =>
-          when (pat.ty.TryRequire (tc.GetFreshType ()) && messenger.NeedMessage)
-            Message.Warning (pat.loc, "using the ``is'' pattern here is redundant, "
-                                      "please use ``:''");
-        
-        | Pattern.As (pat, decl) =>
-          unless (decl.IsRegistered)
-            decl.Register ();
-          WalkPattern (pat)
 
-        | Pattern.Tuple (args) =>
-          foreach (a in args) WalkPattern (a);
+    [Nemerle.NotImplemented]
+    EmitDelegateCtor (meth : IMethod, parms : list [Parm]) : TExpr
+    {
+    }
+
+
+    EmitCall (func : TExpr, parms : list [Parm], is_tail : bool) : TExpr
+    {
+      foreach (p in parms)
+        p.expr = Walk (p.expr);
+
+      def just_call (func) {
+        if (is_tail)
+          TExpr.TailCall (func, parms)
+        else
+          TExpr.Call (func, parms)
+      }
+
+      def plain_call () {
+        def meth = InternalType.GetFunctionType (parms.Length).ApplyMethod;
+        just_call (TExpr.MethodRef (func.ty, Walk (func), meth, false))
+      }
+
+      match (func) {
+        // check if it's a base.Foo call
+        | TExpr.MethodRef (
+           TExpr.LocalRef (ty = ty, 
+                           decl = LocalValue where (ValKind = 
+                                      LocalValue.Kind.ClosurisedThisPointer) as decl) as obj, 
+                         meth, _) when ! ty.Equals (decl.Type) =>
+          just_call (TExpr.MethodRef (func.ty, Walk (obj), meth, true))
+                           
+        | TExpr.MethodRef (obj, meth, notvirt) =>
+          just_call (TExpr.MethodRef (func.ty, Walk (obj), meth, notvirt))
           
-        | Pattern.Record (args) =>
-          foreach ((_, a) in args) WalkPattern (a);
-          
-        | Pattern.Application (_, a) =>
-          WalkPattern (a)
+        | TExpr.StaticRef (m is IMethod) =>
+          if (m.GetFunKind () is FunKind.Constructor &&
+              m.DeclaringType.IsDelegate)
+            EmitDelegateCtor (m, parms)
+          else
+            just_call (func)
+
+        | TExpr.OpCode
+        | TExpr.Base =>
+          just_call (func)
+
+        | TExpr.LocalRef (LocalValue where 
+                          (ValKind = LocalValue.Kind.Function (hd, _)) as decl) =>
+          match (hd.usage) {
+            | FunctionUsage.UsedJustOnce =>
+              EmitLoop (hd, parms)
+
+            | _ =>
+              _ = decl;
+              // FIXME
+              plain_call ()
+          }
+
+        | _ => plain_call ()
       }
     }
 
@@ -251,12 +292,11 @@ namespace Nemerle.Compiler
     {
       // Message.Debug ($ "dowalk: $expr");
       match (expr) {
-        // the real work
         | TExpr.LocalRef (decl) =>
           LocalRef (decl)
           
           
-        | TExpr.StaticRef (mem) =>
+        | TExpr.StaticRef =>
           MakeFirstClass (expr)
           
           
@@ -272,15 +312,7 @@ namespace Nemerle.Compiler
 
         | TExpr.TailCall (func, parms)
         | TExpr.Call (func, parms) =>
-          foreach (p in parms)
-            p.expr = Walk (p.expr);
-
-          match (func) {
-            | TExpr.MethodRef
-            | TExpr.StaticRef =>
-
-            | _ => 
-          }
+          EmitCall (func, parms, expr is TExpr.TailCall)
 
         | _ => null
       }
