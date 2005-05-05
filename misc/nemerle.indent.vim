@@ -78,7 +78,7 @@ function GetNemerleIndent()
 	return ind
     endif
 
-    if prev_line =~ ':' && prev_line !~ '{'
+    if prev_line =~ ':' && prev_line !~ '{' && prev_line !~ '::'
 	" If the previous line contains a colon but no {, cindent fails
 	" to correctly determine indentation. A colon is function or field
 	" declaration. Next line should have the same indentation unless
@@ -91,13 +91,13 @@ function GetNemerleIndent()
     endif
 
     " following handles lines inside a match clause
-    if prev_line =~ '\s*|'
-	if cur_line !~ '\s*|'
+    if prev_line =~ '^\s*|'
+	if cur_line !~ '^\s*|'
 	    " if current line is not match pattern, whereas previous is
 	    let theIndent = ind + &sw " indent it
 	endif
     else
-	if cur_line =~ '\s*|' " if previous line is not a pattern, but current is
+	if cur_line =~ '^\s*|' " if previous line is not a pattern, but current is
 	    if prev_line !~ '{' " and current line is not the first pattern in match clause
 		let theIndent = ind - &sw " decrease indentation
 	    endif
@@ -106,7 +106,7 @@ function GetNemerleIndent()
 	    " inside a match clause, we need to ensure that the
 	    " indentation is like the previous line.
 	    while prev > 0
-		if getline(prev) =~ '\s*|'
+		if getline(prev) =~ '^\s*|'
 		    " yep - we are inside a match
 		    let theIndent = ind
 		    break
