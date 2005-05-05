@@ -98,33 +98,29 @@ function GetNemerleIndent()
     " following handles lines inside a match clause
     if prev_line =~ '^\s*|'
 	if cur_line !~ '^\s*|'
-	    " if current line is not match pattern, whereas previous is
+	    " if current line is not a match pattern, whereas previous is
 	    let theIndent = ind + &sw " indent it
 	endif
     else
 	if cur_line =~ '^\s*|' " if previous line is not a pattern, but current is
 	    if prev_line !~ '{' " and current line is not the first pattern in match clause
-		let theIndent = ind - &sw " decrease indentation
+		let theIndent = theIndent - &sw " decrease indentation
 	    endif
 	else
-	    " this is the normal line, but if, by any chance, we are
-	    " inside a match clause, we need to ensure that the
-	    " indentation is like the previous line.
-	    while prev > 0
-		if getline(prev) =~ '^\s*|'
-		    " yep - we are inside a match
-		    let theIndent = ind
-		    break
-		elseif getline(prev) =~ '{'
-		    " if we reach that without coming across a match
-		    " pattern, we can safely leave the things as they are.
-		    " Even if the block, begining of which we've reached,
-		    " is inside a match itself, cindent does good job
-		    " here.
-		    break
-		endif
+	    " This is a normal line. Previous is not a match pattern. 
+	    " We check if previous line is multiline instruction starting with
+	    " match pattern. If so, indentation needs adjusting.
+	    if prev_line =~ ';\s*$'
+		" so we are a new instruction
+		" go backwards till another semicolon
 		let prev = GetPrevious(prev - 1)
-	    endwhile
+		while prev > 0 && getline(prev) !~ '\(;\|{\|}\)\s*$'
+		    let prev = GetPrevious(prev - 1)
+		endwhile
+		if prev > 0 && getline(prev+1) =~ '^\s*|'
+		    let theIndent = theIndent + &sw
+		endif
+	    endif
 	endif
     endif
 
