@@ -73,6 +73,11 @@ function GetNemerleIndent()
     let prev_line = getline(prev)
     let ind = indent(prev)
 
+    " Attributes
+    if prev_line =~ '^\s*\[.*\]'
+	return ind
+    endif
+
     " Design by contract macros
     if cur_line =~ '^\s*\(requires\>\|ensures\>\|invariant\>\)'
 	return ind
