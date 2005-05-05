@@ -64,6 +64,9 @@
 
 ;;; Change Log:
 
+;; 2005-05-04 rzyjontko <rzyj@o2.pl>
+;;   * indentation engine fixes
+
 ;; 2005-04-29 rzyjontko <rzyj@o2.pl>
 ;;   * changes possible due to new syntax:
 ;;     - rewrote indenting engine
@@ -122,8 +125,6 @@
 
 
 ;;; Code:
-
-(require 'cc-cmds)
 
 (provide 'nemerle-mode)
 
@@ -300,7 +301,6 @@ the relative offset + result for the block."
 	    (t
 	     nil))
       (forward-line 1))
-    (setq result (+ nemerle-basic-offset result))
     (if in-match-case
 	(setq result (+ result nemerle-match-case-offset)))
     result))
@@ -322,6 +322,14 @@ by LINE."
 	 (nemerle-analyze-block end 0))))
 
 
+(defun nemerle-get-nested (end line)
+  "Retrun the relative offset for the line LINE nested in the block
+of code.  Analyze code from the current point position until END."
+  (if (eq line 'end-brace)
+      0
+    (+ nemerle-basic-offset (nemerle-get-offset end line))))
+
+
 (defun nemerle-calculate-indentation-of-line (line)
   "Return the absolute indentation for the line at the current point,
 where its syntactic meaning is given by LINE."
@@ -334,7 +342,7 @@ where its syntactic meaning is given by LINE."
 			   (save-excursion (beginning-of-line) (point)))))
       (nemerle-skip-sexps end)
       (cond ((eq paren-char ?{)
-	     (+ top-indentation (nemerle-get-offset end line)))
+	     (+ top-indentation (nemerle-get-nested end line)))
 	    ((eq paren-char 0)
 	     (nemerle-get-offset end line))
 	    (t
