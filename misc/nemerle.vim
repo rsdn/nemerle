@@ -32,23 +32,27 @@
 " Version:     1.00
 " Revision:    $Rev$
 
-" Adapted from gont.vim file.
+" Adapted from the gont.vim file.
 
-" To use this file, copy it to ~/.vim/syntax/ and enter the following to
+" To use this file, copy it to ~/.vim/syntax/ and add the following to
 " ~/.vim/filetype.vim (create one if you don't already have it):
 "
 "	augroup filetypedetect
 "		autocmd BufNewfile,BufRead *.n setfiletype nemerle
 "	augroup END
 "
-" Additionally, since nemerlec assumes utf-8 encoding of input files, you 
-" can add following to your ~/.vimrc file:
+" Additionally, since ncc assumes utf-8 encoding of input files, you 
+" can add the following to your ~/.vimrc file:
 "
 "	augroup nemerle
 "		au!
 "		autocmd BufNewfile,BufReadPre *.n
 "			\ set fencs=utf-8,iso-8859-2 fenc=utf-8
 "	augroup END
+"
+" copy this to your ~/.vimrc to enable outline mode (folding regions) on <F8>
+" map <F8> <ESC>:call NemOutlineToggle()<CR>
+" imap <F8> <ESC>:call NemOutlineToggle()<CR>a
 "
 " Have fun :)
 
@@ -59,10 +63,6 @@ if version < 600
 elseif exists("b:current_syntax")
   finish
 endif
-
-" copy this to your ~/.vimrc to enable outline mode (folding regions) on <F8>
-" map <F8> <ESC>:call NemOutlineToggle()<CR>
-" imap <F8> <ESC>:call NemOutlineToggle()<CR>a
 
 " based on http://vim.sourceforge.net/tips/tip.php?tip_id=333
 function! NemOutlineToggle()
