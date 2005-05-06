@@ -1,0 +1,215 @@
+/*
+ * Copyright (c) 2003-2005 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Compiler;
+
+using PT = Nemerle.Compiler.Parsetree;
+
+namespace Nemerle.InternalMacros 
+{
+  // this macro is a hack for lack of type inference at class level
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeTypedMembers,
+                       Nemerle.MacroTargets.Field)]
+  macro StaticInitializer (t : TypeBuilder, f : ParsedField, val)
+  {
+    match (f.ty) {
+      | <[ _ ]> =>
+       match (ConstantFolder.FoldConstants (f.ParsedName.GetEnv (t.GlobalEnv), val)) {
+         | PT.PExpr.Literal (lit) =>
+           def mtype = lit.GetInternalType ();
+           f.ty = PrettyPrint.MTypeToParseTree (mtype);
+           
+         | _ => ()
+       }
+      | _ => ()
+    } 
+  }
+  
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
+                       Nemerle.MacroTargets.Field)]
+  macro StaticInitializer (t : TypeBuilder, f : FieldBuilder, val)
+  {
+    def is_static = f.Attributes %&& NemerleAttributes.Static;
+
+    // for constant fields we fold the expression and try to create
+    // value for literal fields
+    when (is_static && !f.IsMutable)
+      match (ConstantFolder.FoldConstants (t.GlobalEnv, val)) {
+        | PT.PExpr.Literal (Literal.Decimal) => ()
+        | PT.PExpr.Literal (Literal.Enum (lit : Literal, _))
+        | PT.PExpr.Literal (lit) =>
+          // watch out, we need to get the underlying enum type,
+          // so our literal to type checking works properly
+          def target = 
+            match (f.GetMemType ()) {
+              | MType.Class (ti, []) when ti.IsEnum => ti.UnderlyingType.GetMemType ()
+              | t => t
+            }
+          match (lit.WithType (target)) {
+            | Some (l) => f.const_value = l;
+            | None => ()
+          }
+        | _ => ()
+      }
+
+    // if we didn't end up wit literal value, create assignment in constructor
+    when (f.const_value == null) {
+      def static_attr =
+        if (is_static) BindingFlags.Static
+        else BindingFlags.Instance;
+      def mems = t.GetConstructors (static_attr %| BindingFlags.Public %|
+                                    BindingFlags.NonPublic %|
+                                    BindingFlags.DeclaredOnly);
+      def fieldName = Macros.UseSiteSymbol (f.Name);
+      def typeName = t.ParsedName;
+
+      def init =
+        if (is_static)
+          <[ $(typeName : name).$(fieldName : name) = $val ]>
+        else
+          <[ this.$(fieldName : name) = $val ]>;
+
+      // given existing constructor, insert call to base constructor
+      // at its beginning 
+      def inject (ctor) {
+        def ctor = ctor :> NemerleMethod;
+        def bd = ctor.Body;
+        def nbody =
+          match (bd) {
+            | <[ {.. $(e :: rest) } ]> =>
+              match (e) {
+                | <[ base (..$_) ]> => <[ $e; $init; {.. $rest } ]>
+                | <[ this (..$_) ]> => bd
+                | _ => <[ $init; $bd ]>
+              }
+            | _ => <[ $init; $bd ]>
+          };
+        ctor.Body = nbody
+      };
+      match (mems) {
+        | [] => 
+          if (is_static) 
+            t.Define (<[ decl: static public this () { $init } ]>)
+          else
+            t.Define (<[ decl: public this () { $init } ]>)
+        | _ =>
+          mems.Iter (inject)
+      }
+    }
+  }
+  
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
+                       Nemerle.MacroTargets.Property,
+                       Inherited = false, AllowMultiple = true)]
+  macro PropertyEmbeddedField (t : TypeBuilder, p : PropertyBuilder, field_box)
+  {
+    match (field_box) {
+      | PT.PExpr.Quoted (PT.SyntaxElement.ClassMember (PT.ClassMember.Field as val)) =>
+        def fld_name = val.name.GetName ();
+        def unique = t.ParsedName.NewName (Util.tmpname (fld_name.Id));
+        def set = p.GetSetter () :> NemerleMethod;
+        when (set != null)
+          set.Body = <[ InternalMacros.RedirectName ($(fld_name : name),
+                                                     $(unique : name),
+                                                     $(set.Body)) ]>;
+
+        def get = p.GetGetter () :> NemerleMethod;
+        when (get != null)
+          get.Body = <[ InternalMacros.RedirectName ($(fld_name : name),
+                                                     $(unique : name),
+                                                     $(get.Body)) ]>;
+
+        when (p.Attributes %&& NemerleAttributes.Static)
+          val.Attributes |= NemerleAttributes.Static;
+
+        def newdecl = <[ decl: ..$(val.modifiers) $(unique : name) : $(val.ty); ]>;
+        newdecl.loc = val.loc;
+        t.Define (newdecl)
+
+      | _ =>
+        Message.FatalError (field_box.loc, "malformed PropertyEmbeddedField (ICE?)")
+    }
+  }
+
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
+                       Nemerle.MacroTargets.Event,
+                       Inherited = false, AllowMultiple = true)]
+  macro EventEmbeddedField (t : TypeBuilder, p : EventBuilder, field_box)
+  {
+    match (field_box) { 
+      | PT.PExpr.Quoted (PT.SyntaxElement.ClassMember (PT.ClassMember.Field as val)) =>
+        def fld_name = val.name.GetName ();
+        def unique = t.ParsedName.NewName (Util.tmpname (fld_name.Id));        
+
+        def set = p.GetRemover () :> NemerleMethod;
+        when (set != null)
+          set.Body = <[ InternalMacros.RedirectName ($(fld_name : name),
+                                                     $(unique : name),
+                                                     $(set.Body)) ]>;
+
+        def get = p.GetAdder () :> NemerleMethod;
+        when (get != null)
+          get.Body = <[ InternalMacros.RedirectName ($(fld_name : name),
+                                                     $(unique : name),
+                                                     $(get.Body)) ]>;
+
+        when (p.Attributes %&& NemerleAttributes.Static)
+          val.Attributes |= NemerleAttributes.Static;
+
+        def newdecl = <[ decl: ..$(val.modifiers) $(unique : name) : $(val.ty); ]>;
+        newdecl.loc = val.loc;
+        t.Define (newdecl)
+
+      | _ =>
+        Message.FatalError (field_box.loc, "malformed EventEmbeddedField (ICE?)")
+    }
+  }
+
+  macro RedirectName (name, newname, oldbody)
+  {
+    match (name) {
+      | <[ $(n : name) ]> =>
+        Nemerle.Macros.ImplicitCTX().AddRedirection (n, newname);
+        oldbody
+
+      | _ => Message.FatalError ("invalid name supplied to RedirectName")
+    }     
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
