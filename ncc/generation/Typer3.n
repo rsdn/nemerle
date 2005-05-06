@@ -46,7 +46,7 @@ namespace Nemerle.Compiler
     current_type : TypeBuilder;
     messenger : Messenger;
     mutable static_proxies : Hashtable [int, IField] = Hashtable ();
-    closure_fields : Hashtable [int, IField] = Hashtable ();
+    mutable closure_fields : Hashtable [int, IField] = Hashtable ();
     mutable start_label : TExpr.Label;
 
 
@@ -298,9 +298,10 @@ namespace Nemerle.Compiler
       if (current_fun.closure_vars.IsEmpty) []
       else {
         def clo_type = current_type.DefineNestedType (<[ decl:
-          private class $(Util.tmpname ("closure") : dyn)
+          private class $(Util.tmpname ("_N_closure") : dyn)
           { }
         ]>);
+        current_fun.closure_type = clo_type;
         def closure_val =
           LocalValue (current_fun, "_N_closure", clo_type.GetMemType (), 
                       LocalValue.Kind.Plain (), is_mutable = false);
@@ -478,9 +479,70 @@ namespace Nemerle.Compiler
     }
 
 
-    [Nemerle.NotImplemented]
-    EmitFunctionalValue (fn : Fun_header) : TExpr
+    EmitFunctionalValue (fn : Fun_header, closures : list [Fun_header]) : TExpr
     {
+      def parm_cnt = fn.parms.Length;
+      def fnty = InternalType.GetFunctionType (parm_cnt).InternalType;
+      
+      def formal_parms =
+        fn.parms.Map (fun (fp) { <[ parameter: 
+          $(fp.name : dyn) : object
+        ]> });
+
+      def builder = current_type.DefineNestedType (<[ decl:
+        private class $(Util.tmpname ("_N_lm") : dyn) : $(fnty : typed)
+        {
+          public apply (.. $formal_parms) : object
+          {
+          }
+        }
+      ]>);
+
+      def closure_fields = Hashtable ();
+
+      def (parms, assigns) =
+        List.Split (closures.Map (fun (hd) {
+          def name = Util.tmpname (hd.name + "_clo");
+          assert (hd.closure_type != null);
+          def clo_type = hd.closure_type.GetMemType ();
+          def field =
+            Option.UnSome (builder.DefineAndReturn (<[ decl: 
+              $(name : dyn) : $(clo_type : typed) 
+            ]>)) :> IField;
+          closure_fields [hd.id] = field;
+          (<[ parameter: $(name : dyn) : $(clo_type : typed) ]>,
+           <[ this . $(name : dyn) = $(name : dyn) ]>)
+        }));
+
+      def ctor =
+        builder.DefineAndReturn (<[ decl:
+          public this (.. $parms)
+          {
+            { .. $assigns }
+          }
+        ]>);
+      def ctor = Option.UnSome (ctor);
+      
+      def the_method = SingleMemberLookup (builder, "apply") :> IMethod;
+      AddTupledMethod (builder, parm_cnt);
+
+      def new_header = the_method.GetHeader ();
+      List.Iter2 (fn.parms, new_header.parms, fun (orig : Fun_parm, copy) {
+        orig.decl = copy.decl;
+      });
+
+      new_header.body = fn.body;
+
+      def child = Typer3 (current_type, new_header);
+      child.local_function_type = builder;
+      child.closure_fields = closure_fields;
+      child.Run ();
+
+      builder.MarkWithSpecialName ();
+      builder.Compile ();
+
+      def ctor_parms = closures.Map (fun (hd) { Parm (ClosureRef (hd)) });
+      TExpr.Call (fnty, StaticRef (ctor), ctor_parms)
     }
 
     
@@ -503,7 +565,7 @@ namespace Nemerle.Compiler
 
         | FunctionUsage.Used
         | FunctionUsage.UsedAsFirstClass =>
-          def fval = EmitFunctionalValue (fn);
+          def fval = EmitFunctionalValue (fn, closures);
           assert (fn.decl != null);
           [TExpr.DefValIn (fn.decl, fval, null)] 
       }
