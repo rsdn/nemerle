@@ -50,6 +50,7 @@ namespace Nemerle.Compiler
     mutable start_label : TExpr.Label;
 
 
+    #region Entry points
     public this (ty : TypeBuilder, fn : Fun_header)
     {
       current_fun = fn;
@@ -60,7 +61,46 @@ namespace Nemerle.Compiler
     }
 
 
+    public Run () : void
+    {
+      Util.locate (current_fun.loc, {
+        start_label = TExpr.Label (null, null);
+
+        def initializers = PrepareProlog ();
+
+        match (current_fun.body) {
+          | FunBody.Typed (body) =>
+            current_fun.body = FunBody.Typed (start_label);
+            start_label.body = BuildSequence (Walk (body) :: initializers);
+          | _ => assert (false)
+        }
+      })
+    }
+    #endregion
+
+
     #region Utilities
+    // expects reversed list
+    BuildSequence (exprs : list [TExpr]) : TExpr
+    {
+      match (exprs) {
+        | [] =>
+          TExpr.Literal (InternalType.Void, Literal.Void ())
+        | x :: xs =>
+          def loop (acc, l) {
+            match (l) {
+              | [] => acc
+              | TExpr.DefValIn (name, val, null) :: xs =>
+                loop (TExpr.DefValIn (acc.Type, name, val, acc), xs)
+              | x :: xs =>
+                loop (TExpr.Sequence (acc.Type, x, acc), xs)
+            }
+          }
+          loop (x, xs)
+      }
+    }
+
+
     SingleMemberLookup (tb : TypeInfo, name : string) : IMember
     {
       match (tb.LookupMember (name)) {
@@ -136,6 +176,7 @@ namespace Nemerle.Compiler
     #endregion
 
 
+    #region Proxies
     AddTupledMethod (tb : TypeBuilder, parm_cnt : int) : void
     {
       if (parm_cnt == 0)
@@ -204,33 +245,53 @@ namespace Nemerle.Compiler
     }
     
 
-    [Nemerle.NotImplemented]
-    HandleLocalFunction (fn : Fun_header) : void
+    EmitDelegateProxy (expr : TExpr) : TExpr * IMethod
     {
+      def decl =
+        match (expr.Type.Fix ()) {
+          | MType.Fun (from, ret_type) as ty =>
+            def parms =
+              from.Fix ().GetFunctionArguments ().Map (fun (ty) {
+                def name = Util.tmpname ("_N_parm");
+                (<[ parameter: $(name : dyn) : $(ty : typed) ]>,
+                 <[ $(name : dyn) ]>)
+              });
+            def (parms, parm_refs) = List.Split (parms);
+            
+            <[ decl: 
+              private class $(Util.tmpname ("_N_delegate_proxy") : dyn)
+              {
+                funptr : $(ty : typed);
+                public this (fp : $(ty : typed))
+                {
+                  funptr = fp;
+                }
+
+                public InvokeDelegate (.. $parms) : $(ret_type : typed)
+                {
+                  funptr (.. $parm_refs)
+                }
+              }
+            ]>
+
+          | _ => assert (false)
+        }
+
+      def tb = current_type.DefineNestedType (decl);
+      tb.MarkWithSpecialName ();
+      tb.Compile ();
+
+      def ctor = SingleMemberLookup (tb, ".ctor");
+
+      def ctor_call =
+        TExpr.Call (tb.GetMemType (), StaticRef (ctor), [Parm (expr)]);
+
+      (ctor_call, SingleMemberLookup (tb, "InvokeDelegate") :> IMethod)
     }
-    
-
-    // expects reversed list
-    BuildSequence (exprs : list [TExpr]) : TExpr
-    {
-      match (exprs) {
-        | [] =>
-          TExpr.Literal (InternalType.Void, Literal.Void ())
-        | x :: xs =>
-          def loop (acc, l) {
-            match (l) {
-              | [] => acc
-              | TExpr.DefValIn (name, val, null) :: xs =>
-                loop (TExpr.DefValIn (acc.Type, name, val, acc), xs)
-              | x :: xs =>
-                loop (TExpr.Sequence (acc.Type, x, acc), xs)
-            }
-          }
-          loop (x, xs)
-      }
-    }
+    #endregion
 
 
+    #region Function prolog
     PrepareClosure () : list [TExpr]
     {
       if (current_fun.closure_vars.IsEmpty) []
@@ -360,31 +421,16 @@ namespace Nemerle.Compiler
 
       initializers
     }
+    #endregion
     
 
-    public Run () : void
+    [Nemerle.NotImplemented]
+    HandleLocalFunction (fn : Fun_header) : void
     {
-      Util.locate (current_fun.loc, {
-        start_label = TExpr.Label (null, null);
-
-        def initializers = PrepareProlog ();
-
-        match (current_fun.body) {
-          | FunBody.Typed (body) =>
-            current_fun.body = FunBody.Typed (start_label);
-            start_label.body = BuildSequence (Walk (body) :: initializers);
-          | _ => assert (false)
-        }
-      })
     }
+    
 
-
-    Walk (expr : TExpr) : TExpr
-    {
-      expr.Walk (DoWalk)
-    }
-
-
+    #region Language constructs
     EmitLoop (hd : Fun_header, parms : list [Parm]) : TExpr
     {
       def child = Typer3 (current_type, hd);
@@ -401,57 +447,12 @@ namespace Nemerle.Compiler
         }
 
       // need to pass parameters
-      def assigns = List.Map2 (parms, hd.parms, fun (actual, formal) {
+      def assigns = List.RevMap2 (parms, hd.parms, fun (actual, formal) {
         assert (actual.kind == ParmKind.Normal);
         TExpr.DefValIn (formal.decl, actual.expr, null)
       });
 
-      BuildSequence (assigns + [body]);
-    }
-
-
-    EmitDelegateProxy (expr : TExpr) : TExpr * IMethod
-    {
-      def decl =
-        match (expr.Type.Fix ()) {
-          | MType.Fun (from, ret_type) as ty =>
-            def parms =
-              from.Fix ().GetFunctionArguments ().Map (fun (ty) {
-                def name = Util.tmpname ("_N_parm");
-                (<[ parameter: $(name : dyn) : $(ty : typed) ]>,
-                 <[ $(name : dyn) ]>)
-              });
-            def (parms, parm_refs) = List.Split (parms);
-            
-            <[ decl: 
-              private class $(Util.tmpname ("_N_delegate_proxy") : dyn)
-              {
-                funptr : $(ty : typed);
-                public this (fp : $(ty : typed))
-                {
-                  funptr = fp;
-                }
-
-                public InvokeDelegate (.. $parms) : $(ret_type : typed)
-                {
-                  funptr (.. $parm_refs)
-                }
-              }
-            ]>
-
-          | _ => assert (false)
-        }
-
-      def tb = current_type.DefineNestedType (decl);
-      tb.MarkWithSpecialName ();
-      tb.Compile ();
-
-      def ctor = SingleMemberLookup (tb, ".ctor");
-
-      def ctor_call =
-        TExpr.Call (tb.GetMemType (), StaticRef (ctor), [Parm (expr)]);
-
-      (ctor_call, SingleMemberLookup (tb, "InvokeDelegate") :> IMethod)
+      BuildSequence (body :: assigns);
     }
 
 
@@ -525,6 +526,14 @@ namespace Nemerle.Compiler
         | _ => plain_call ()
       }
     }
+    #endregion
+
+
+    #region Top level stuff
+    Walk (expr : TExpr) : TExpr
+    {
+      expr.Walk (DoWalk)
+    }
 
 
     DoWalk (expr : TExpr) : TExpr
@@ -577,10 +586,11 @@ namespace Nemerle.Compiler
               
           def goto = TExpr.Goto (InternalType.Void, start_label);
           
-          BuildSequence (beg + [goto])
+          BuildSequence (goto :: beg)
 
         | _ => null
       }
     }
+    #endregion
   }
 }
