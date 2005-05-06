@@ -70,6 +70,7 @@ namespace Nemerle.Compiler
 
         match (current_fun.body) {
           | FunBody.Typed (body) =>
+            // FIXME: Typed3
             current_fun.body = FunBody.Typed (start_label);
             start_label.body = BuildRevSequence (Walk (body) :: initializers);
           | _ => assert (false)
@@ -422,13 +423,92 @@ namespace Nemerle.Compiler
       initializers
     }
     #endregion
-    
+
+
+    #region Local function generation
+    ParentsWithClosures (h : Fun_header) : list [Fun_header]
+    {
+      def loop (fh : Fun_header, acc) {
+        match (fh.closure_vars) {
+          | [] => acc
+          | vars => 
+            if (vars.Exists (fun (var) {
+                // FIXME: doesn't work, because function have to be removed from external closures
+                //var.id != h.decl.id && // call to our function shouldn't be closurised
+                (h :: h.children_funs).Exists (fun (child) { 
+                  var.UsedIn.Contains (child) 
+                })
+              })) 
+              fh :: acc
+            else
+              acc
+        }
+      }
+      List.FoldLeft (h.GetParents (), [], loop);
+    }
+
+
+    EmitStaticLocalFunction (fn : Fun_header) : void
+    {
+      def parms = fn.parms.Map (fun (fp) {
+        <[ parameter: $(fp.decl.Name : dyn) : $(fp.decl.Type : typed) ]>
+      });
+        
+      def meth =
+        current_type.DefineAndReturn (<[ decl:
+          private $(Util.tmpname (fn.name) : dyn) (.. $parms) 
+                    : $(fn.ret_type : typed)
+          {
+          }
+        ]>) :> IMethod;
+
+      fn.static_method = meth;
+      def new_header = meth.GetHeader ();
+      
+      List.Iter2 (fn.parms, new_header.parms, fun (orig : Fun_parm, copy) {
+        orig.decl = copy.decl;
+      });
+
+      new_header.body = fn.body;
+
+      def child = Typer3 (current_type, new_header);
+      // the child can reuse our static proxies
+      child.static_proxies = static_proxies;
+      child.Run ();
+    }
+
 
     [Nemerle.NotImplemented]
-    HandleLocalFunction (fn : Fun_header) : void
+    EmitFunctionalValue (fn : Fun_header) : TExpr
     {
-      
     }
+
+    
+    HandleLocalFunction (fn : Fun_header, is_single : bool) : list [TExpr]
+    {
+      def closures = ParentsWithClosures (fn);
+      
+      match (fn.usage) {
+        | FunctionUsage.UsedJustOnce => 
+          // handled in EmitLoop
+          []
+
+        | FunctionUsage.NotUsed =>
+          // obvious
+          []
+
+        | FunctionUsage.Used when is_single && closures.IsEmpty =>
+          EmitStaticLocalFunction (fn);
+          []
+
+        | FunctionUsage.Used
+        | FunctionUsage.UsedAsFirstClass =>
+          def fval = EmitFunctionalValue (fn);
+          assert (fn.decl != null);
+          [TExpr.DefValIn (fn.decl, fval, null)] 
+      }
+    }
+    #endregion
     
 
     #region Language constructs
@@ -513,15 +593,16 @@ namespace Nemerle.Compiler
           just_call (func)
 
         | TExpr.LocalRef (LocalValue where 
-                          (ValKind = LocalValue.Kind.Function (hd, _)) as decl) =>
+                          (ValKind = LocalValue.Kind.Function (hd, _))) =>
           match (hd.usage) {
             | FunctionUsage.UsedJustOnce =>
               EmitLoop (hd, parms)
 
             | _ =>
-              _ = decl;
-              // FIXME
-              plain_call ()
+              if (hd.static_method != null)
+                just_call (StaticRef (hd.static_method))
+              else
+                plain_call ()
           }
 
         | _ => plain_call ()
@@ -555,9 +636,16 @@ namespace Nemerle.Compiler
         | TExpr.StaticRef => assert (false)
           
         | TExpr.DefFunctionsIn (funs, body) =>
-          foreach (fn in funs)
-            HandleLocalFunction (fn);
-          Walk (body)
+          def res =
+            match (funs) {
+              | [single] =>
+                HandleLocalFunction (single, is_single = true);
+              | _ =>
+                List.Flatten (funs.Map (fun (fn) {
+                  HandleLocalFunction (fn, is_single = false)
+                }))
+            }
+          BuildRevSequence (Walk (body) :: res)
 
         // handled by Typer2.LambdaTransform
         | TExpr.MethodRef => assert (false)
