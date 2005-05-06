@@ -83,44 +83,44 @@ function GetNemerleIndent()
 	return ind
     endif
 
-    if prev_line =~ ':' && prev_line !~ '{' && prev_line !~ '::'
-	" If the previous line contains a colon but no {, cindent fails
-	" to correctly determine indentation. A colon is function or field
-	" declaration. Next line should have the same indentation unless
-	" previous line doesn't end with semicolon (function signature).
-	let theIndent = ind
-	if prev_line !~ ';\s*$'
-	    let theIndent = theIndent + &sw
+    " Here we shall handle the colon. There are exactly two scenarios we need
+    " to handle - function signature not ending with semicolon or opening
+    " brace, and a field with no attributes.
+    if cur_line =~ '^\s*\S*\s*:.*;' " field
+	if prev_line !~ '\(;\|}\)\s*$' " previous line is not end of expression
+	    return ind + &sw
+	else
+	    return ind
 	endif
-	return theIndent
     endif
 
-    " following handles lines inside a match clause
-    if prev_line =~ '^\s*|'
-	if cur_line !~ '^\s*|'
-	    " if current line is not a match pattern, whereas previous is
-	    let theIndent = ind + &sw " indent it
-	endif
-    else
-	if cur_line =~ '^\s*|' " if previous line is not a pattern, but current is
-	    if prev_line !~ '{' " and current line is not the first pattern in match clause
-		let theIndent = theIndent - &sw " decrease indentation
+    " funtion signature
+    if prev_line =~ '(.*)\s*:' && prev_line !~ '\(;\|{\)\s*$'
+	return ind + &sw
+    endif
+
+    " Now matching. Here we need to follow operation of cindent to know what
+    " to fix. Basically, we need to get previous non-continuation line.
+    if prev_line =~ ';\s*$'
+	" now we know that Current line is non-continuation
+	let prev = GetPrevious(prev - 1)
+	while prev > 0 && getline(prev) !~ '\(;\|{\|}\)\s*$'
+	    let prev = GetPrevious(prev - 1)
+	endwhile
+	let prev = prev + 1
+	let prev_nonc = getline(prev)
+
+	" if previous is a match pattern
+	if prev_nonc =~ '^\s*|'
+	    " if we are a pattern either
+	    if cur_line =~ '^\s*|'
+		return indent(prev)
+	    else
+		return theIndent + &sw
 	    endif
-	else
-	    " This is a normal line. Previous is not a match pattern. 
-	    " We check if previous line is multiline instruction starting with
-	    " match pattern. If so, indentation needs adjusting.
-	    if prev_line =~ ';\s*$'
-		" so we are a new instruction
-		" go backwards till another semicolon
-		let prev = GetPrevious(prev - 1)
-		while prev > 0 && getline(prev) !~ '\(;\|{\|}\)\s*$'
-		    let prev = GetPrevious(prev - 1)
-		endwhile
-		if prev > 0 && getline(prev+1) =~ '^\s*|'
-		    let theIndent = theIndent + &sw
-		endif
-	    endif
+	elseif cur_line =~ '^\s*|'
+	    " previous is not a pattern, but we are
+	    return theIndent - &sw
 	endif
     endif
 
