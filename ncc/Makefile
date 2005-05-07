@@ -73,7 +73,7 @@ NEMERLE_DLL_SRC = \
 	../lib/vector.n			\
 	../lib/concurrency.n		\
 	../lib/AssemblyInfo.n           \
-	../lib/UtilityInternal.n        \
+	../lib/LazyValue.n              \
 
 NEMERLE_COMPILER_DLL_SRC = \
 	generation/Typer3.n		 \
