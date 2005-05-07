@@ -72,7 +72,8 @@ NEMERLE_DLL_SRC = \
 	../lib/set.n			\
 	../lib/vector.n			\
 	../lib/concurrency.n		\
-	../lib/AssemblyInfo.n
+	../lib/AssemblyInfo.n           \
+	../lib/UtilityInternal.n        \
 
 NEMERLE_COMPILER_DLL_SRC = \
 	generation/Typer3.n		 \
@@ -152,6 +153,7 @@ STDMACROS_DLL_SRC = \
 	../macros/Logging.n \
 	../macros/Util.n \
 	../macros/Internals.n \
+	../macros/Nemerle.n \
 
 ############################################################
 # OUTPUT
