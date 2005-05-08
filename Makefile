@@ -138,8 +138,8 @@ install: all
 	$(Q)install -m 644 nemerle.pc $(DESTDIR)$(PKGCONFIGDIR)/nemerle.pc
 
 uninstall:
-	$(Q)$(MAKE) -C tools/cs2n uninstall
-	$(Q)$(MAKE) -C tools/nemerlish uninstall
+	$(Q)-$(MAKE) -C tools/cs2n uninstall
+	$(Q)-$(MAKE) -C tools/nemerlish uninstall
 	$(Q)$(MAKE) -C boot uninstall
 	$(Q)$(MAKE) -C doc  uninstall
 	$(Q)rm -f $(PKGCONFIGDIR)/nemerle.pc
