@@ -194,6 +194,9 @@ stage2:
 stage3:
 	$(Q)$(MAKE) STAGE=$@ COMPILER_PATH=out.stage2/ last-stage
 
+t3:
+	$(MAKE) STAGE=stage1 NEM_FLAGS="$(NEM_FLAGS) -def:T3" out.stage1/Nemerle.Compiler.stage1.dll
+
 aux-stage:
 	$(MKDIR) out.$(STAGE)
 	$(Q)mkdir -p out.$(STAGE)
