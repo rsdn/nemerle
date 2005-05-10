@@ -238,6 +238,7 @@ the topmost block."
 	   (goto-char (point-min))
 	   0))))
 
+
 (defun nemerle-skip-sexps (end)
   "Skip all blocks of code (delimited with braces) until END.
 Returns t if inside a comment."
@@ -247,8 +248,9 @@ Returns t if inside a comment."
       (forward-char 1)
       (parse-partial-sexp (point) (point-max) 1)
       (backward-char 1)
-      (forward-list 1)
-      (backward-char 1)
+      (when (< (point) end)
+	(forward-list 1)
+	(backward-char 1))
       (if (and (< (point) end) (looking-at "}"))
 	  (setq last-brace-pos (point)))
       (while (<= (point) last-pos)    ; this is where we force advance
