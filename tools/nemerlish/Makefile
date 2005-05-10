@@ -12,13 +12,15 @@ EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
 NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe -debug
 
+NEMISH_SRC = interp.n main.n readline.n
+
 all:	Nemerle.Evaluation.dll nemish.exe
 
 Nemerle.Evaluation.dll: 
 	$(NCC) -r Nemerle.Compiler.dll -t library -o Nemerle.Evaluation.dll eval.n
 
-nemish.exe: 
-	$(NCC) -r Nemerle.Evaluation.dll -o nemish.exe interp.n main.n
+nemish.exe: $(NEMISH_SRC)
+	$(NCC) -r Nemerle.Evaluation.dll -o nemish.exe $(NEMISH_SRC)
 
 devel-nemish.exe: 
 	$(NCC) -d READLINE -r Mono.ReadLine.dll -r Nemerle.Evaluation.dll -o nemish.exe interp.n main.n
