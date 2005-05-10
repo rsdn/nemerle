@@ -22,9 +22,6 @@ Nemerle.Evaluation.dll:
 nemish.exe: $(NEMISH_SRC)
 	$(NCC) -r Nemerle.Evaluation.dll -o nemish.exe $(NEMISH_SRC)
 
-devel-nemish.exe: 
-	$(NCC) -d READLINE -r Mono.ReadLine.dll -r Nemerle.Evaluation.dll -o nemish.exe interp.n main.n
-
 install: all
 	$(Q)$(GACUTIL_COMMAND) Nemerle.Evaluation.dll 
 	$(INST) "[$(BINDIR)]" nemish.exe
