@@ -64,6 +64,9 @@
 
 ;;; Change Log:
 
+;; 2005-05-10 rzyjontko <rzyj@o2.pl>
+;;   * final fixes of indentation engine and comment handling
+
 ;; 2005-05-04 rzyjontko <rzyj@o2.pl>
 ;;   * indentation engine fixes
 
