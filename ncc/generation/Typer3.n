@@ -49,7 +49,6 @@ namespace Nemerle.Compiler
     mutable closure_fields : Hashtable [int, IField] = Hashtable ();
     mutable start_label : TExpr.Label;
 
-
     #region Entry points
     public this (ty : TypeBuilder, fn : Fun_header)
     {
@@ -64,6 +63,7 @@ namespace Nemerle.Compiler
     public Run () : void
     {
       Util.locate (current_fun.loc, {
+        //Message.Debug ($"T3::run: $(current_fun.name)");
         start_label = TExpr.Label (null, null);
 
         def initializers = PrepareProlog ();
@@ -98,6 +98,8 @@ namespace Nemerle.Compiler
               | [] => acc
               | TExpr.DefValIn (name, val, null) :: xs =>
                 loop (TExpr.DefValIn (acc.Type, name, val, acc), xs)
+              | TExpr.Match (val, [Match_case where (pats, null)]) :: xs =>
+                loop (TExpr.Match (acc.Type, val, [Match_case (pats, acc)]), xs)
               | x :: xs =>
                 loop (TExpr.Sequence (acc.Type, x, acc), xs)
             }
@@ -134,6 +136,54 @@ namespace Nemerle.Compiler
     {
       assert (mem is IMethod || mem is IField);
       TExpr.StaticRef (mem.GetMemType (), mem)
+    }
+
+   
+    /** Given a call with [parms] to [fh] return a list of parameters
+        that should be passed along with any initialization code.  */
+    TupleParms (fh : Fun_header, parms : list [Parm]) 
+               : list [Parm] * list [TExpr]
+    {
+      if (parms.Length == 1 && fh.parms.Length > 1) {
+        def tupled = List.Hd (parms).expr;
+        def types = fh.parms.Map (fun (fp) { fp.decl.Type });
+        def vals = 
+          types.Map (fun (ty) {
+            def val =
+              LocalValue (current_fun, Util.tmpname ("_N_tupl"),
+                          ty,
+                          LocalValue.Kind.PatternVariable (true),
+                          is_mutable = false);
+            val.Register ();
+            val.UseFrom (current_fun);
+            val
+          });
+
+        def parms = vals.Map (PlainRef).Map (Parm);
+        
+        def pats = 
+          vals.Map (fun (val) { 
+            Pattern.As (val.Type, Pattern.Wildcard (val.Type), val) 
+          });
+        def pat = Pattern.Tuple (tupled.Type, pats);
+
+        def tr = TExpr.Literal (InternalType.Boolean, Literal.Bool (true));
+        
+        (parms, 
+         [TExpr.Match (tupled, [Match_case ([(pat, tr)], null)])])
+
+      } else if (parms.Length > 1 && fh.parms.Length == 1) {
+        def types = parms.Map (fun (fp) { fp.expr.Type });
+        def exprs = parms.Map (fun (fp) { fp.expr });
+        def parm = TExpr.Tuple (MType.Tuple (types), exprs);
+        ([Parm (parm)], [])
+
+      } else {
+        Util.cassert (parms.Length == fh.parms.Length,
+                      $ "parms length mismatch, $(fh.name) "
+                        "$parms $(fh.parms)");
+        (parms, [])
+      }
     }
     #endregion
 
@@ -224,7 +274,7 @@ namespace Nemerle.Compiler
           
         def builder =
           current_type.DefineNestedType (<[ decl:
-            private class $(name : name) : $(fnty : typed)
+            private sealed class $(name : name) : $(fnty : typed)
             {
               public static single_instance : $(name : name);
 
@@ -272,7 +322,7 @@ namespace Nemerle.Compiler
             def (parms, parm_refs) = List.Split (parms);
             
             <[ decl: 
-              private class $(Macros.NewSymbol ("delegate_proxy") : name)
+              private sealed class $(Macros.NewSymbol ("delegate_proxy") : name)
               {
                 funptr : $(ty : typed);
                 public this (fp : $(ty : typed))
@@ -307,10 +357,11 @@ namespace Nemerle.Compiler
     #region Function prolog
     PrepareClosure () : list [TExpr]
     {
+      //Message.Debug ($"closure for $(current_fun.name) $(current_fun.closure_vars)");
       if (current_fun.closure_vars.IsEmpty) []
       else {
         def clo_type = current_type.DefineNestedType (<[ decl:
-          private class $(Macros.NewSymbol ("closure") : name)
+          private sealed class $(Macros.NewSymbol ("closure") : name)
           {
             internal this () {}
           }
@@ -365,6 +416,7 @@ namespace Nemerle.Compiler
           local.Register ();
           local.UseFrom (current_fun);
           // Message.Debug ($ "redirect $parm $(parm.Id) --> $local $(local.Id)");
+          // FIXME: this should be handled by a local hashtable
           parm.Redirect = local;
           def val =
             TExpr.TypeConversion (parm.Type,
@@ -470,6 +522,42 @@ namespace Nemerle.Compiler
     }
 
 
+    PrepareForEmission (meth : NemerleMethod, fn : Fun_header) : void
+    {
+      def new_header = meth.fun_header;
+      meth.fun_header = fn;
+
+      if (new_header.parms.Length > 1 && fn.parms.Length == 1) {
+        match (fn.body) {
+          | FunBody.Typed (body) =>
+            def vals = new_header.parms.Map (fun (parm : Fun_parm) {
+              def local = LocalValue (fn, parm.name, parm.ty, 
+                                      LocalValue.Kind.Plain (), is_mutable = false);
+              local.Register ();
+              local.UseFrom (fn);
+              parm.decl = local;
+              local
+            });
+            def expr =
+              TExpr.DefValIn (body.Type,
+                              List.Hd (fn.parms).decl, 
+                              TExpr.Tuple (vals.Map (PlainRef)),
+                              body);
+            fn.body = FunBody.Typed (expr);
+            fn.parms = new_header.parms;
+          | _ => assert (false)
+        }
+      } else {
+        List.Iter2 (fn.parms, new_header.parms, fun (orig, copy : Fun_parm) {
+          copy.decl = orig.decl;
+        });
+        fn.parms = new_header.parms;
+      }
+
+      fn.ret_type = new_header.ret_type;
+    }
+
+
     EmitStaticLocalFunction (fn : Fun_header) : void
     {
       def parms = fn.parms.Map (fun (fp) {
@@ -482,39 +570,12 @@ namespace Nemerle.Compiler
                     : $(fn.ret_type : typed)
           {
           }
-        ]>)) :> IMethod;
+        ]>)) :> NemerleMethod;
 
+      PrepareForEmission (meth, fn);
       fn.static_method = meth;
-      def new_header = meth.GetHeader ();
 
-      if (new_header.parms.Length > 1 && fn.parms.Length == 1) {
-        match (fn.body) {
-          | FunBody.Typed (body) =>
-            def vals = new_header.parms.Map (fun (parm : Fun_parm) {
-              def local = LocalValue (new_header, parm.name, parm.ty, 
-                                      LocalValue.Kind.Plain (), is_mutable = false);
-              local.Register ();
-              local.UseFrom (new_header);
-              parm.decl = local;
-              local
-            });
-            def expr =
-              TExpr.DefValIn (body.Type,
-                              List.Hd (fn.parms).decl, 
-                              TExpr.Tuple (vals.Map (PlainRef)),
-                              body);
-            new_header.body = FunBody.Typed (expr);
-          | _ => assert (false)
-        }
-      } else {
-        List.Iter2 (fn.parms, new_header.parms, fun (orig, copy : Fun_parm) {
-          copy.decl = orig.decl;
-        });
-
-        new_header.body = fn.body;
-      }
-
-      def child = Typer3 (current_type, new_header);
+      def child = Typer3 (current_type, fn);
       // the child can reuse our static proxies
       child.static_proxies = static_proxies;
       child.Run ();
@@ -523,16 +584,24 @@ namespace Nemerle.Compiler
 
     EmitFunctionalValue (fn : Fun_header, closures : list [Fun_header]) : TExpr
     {
-      def parm_cnt = fn.parms.Length;
+      // we cannot use fn.parms.Length here, because if the argument is a tuple
+      // we will want more arguments
+      def parm_types =
+        match (MType.ConstructFunctionType (fn)) {
+          | MType.Fun (from, _) =>
+            from.Fix ().GetFunctionArguments ()
+          | _ => assert (false)
+        }
+      def parm_cnt = parm_types.Length;
       def fnty = InternalType.GetFunctionType (parm_cnt).InternalType;
       
       def formal_parms =
-        fn.parms.Map (fun (fp) { <[ parameter: 
-          $(fp.name : dyn) : object
+        parm_types.Map (fun (_) { <[ parameter: 
+          $(Macros.NewSymbol ("fp") : name) : object
         ]> });
 
       def builder = current_type.DefineNestedType (<[ decl:
-        private class $(Macros.NewSymbol ("lambda") : name) : $(fnty : typed)
+        private sealed class $(Macros.NewSymbol ("lambda") : name) : $(fnty : typed)
         {
           public apply (.. $formal_parms) : object
           {
@@ -550,7 +619,7 @@ namespace Nemerle.Compiler
       def (parms, assigns) =
         List.Split (closures.Map (fun (hd) {
           def name = Macros.NewSymbol (hd.name + "_clo");
-          assert (hd.closure_type != null);
+          Util.cassert (hd.closure_type != null, $ "null closure for $(hd.name)");
           def clo_type = hd.closure_type.GetMemType ();
           def field =
             Option.UnSome (builder.DefineAndReturn (<[ decl: 
@@ -570,17 +639,12 @@ namespace Nemerle.Compiler
         ]>);
       def ctor = Option.UnSome (ctor);
       
-      def the_method = SingleMemberLookup (builder, "apply") :> IMethod;
+      def the_method = SingleMemberLookup (builder, "apply") :> NemerleMethod;
       AddTupledMethod (builder, parm_cnt);
 
-      def new_header = the_method.GetHeader ();
-      List.Iter2 (fn.parms, new_header.parms, fun (orig, copy : Fun_parm) {
-        copy.decl = orig.decl;
-      });
+      PrepareForEmission (the_method, fn);
 
-      new_header.body = fn.body;
-
-      def child = Typer3 (current_type, new_header);
+      def child = Typer3 (current_type, fn);
       child.local_function_type = builder;
       child.closure_fields = closure_fields;
       child.Run ();
@@ -596,7 +660,8 @@ namespace Nemerle.Compiler
     HandleLocalFunction (fn : Fun_header, is_single : bool) : list [TExpr]
     {
       def closures = ParentsWithClosures (fn);
-      
+
+      //Message.Debug ($"hlf: $(fn.name) $(fn.usage)");
       match (fn.usage) {
         | FunctionUsage.UsedJustOnce => 
           // handled in EmitLoop
@@ -637,12 +702,13 @@ namespace Nemerle.Compiler
         }
 
       // need to pass parameters
+      def (parms, ini) = TupleParms (hd, parms);
       def assigns = List.RevMap2 (parms, hd.parms, fun (actual, formal) {
         assert (actual.kind == ParmKind.Normal);
         TExpr.DefValIn (formal.decl, actual.expr, null)
       });
 
-      BuildRevSequence (body :: assigns);
+      BuildRevSequence (body :: (assigns + ini));
     }
 
 
@@ -770,6 +836,7 @@ namespace Nemerle.Compiler
           EmitCall (func, parms, expr is TExpr.TailCall)
 
         | TExpr.SelfTailCall (parms) =>
+          def (parms, ini) = TupleParms (current_fun, parms);
           def assigns =
             List.Map2 (parms, current_fun.parms, fun (parm, fp) {
               assert (parm.kind == ParmKind.Normal);
@@ -778,9 +845,9 @@ namespace Nemerle.Compiler
 
           def beg =
             if (assigns.IsEmpty)
-              [] 
+              ini
             else
-              [TExpr.MultipleAssign (InternalType.Void, assigns)];
+              TExpr.MultipleAssign (InternalType.Void, assigns) :: ini;
               
           def goto = TExpr.Goto (InternalType.Void, start_label);
           
