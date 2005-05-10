@@ -208,7 +208,7 @@ buffer created.  This is a good place to put your customizations.")
   (modify-syntax-entry ?\' "."  nemerle-mode-syntax-table)
   (cond
    ;; XEmacs 21
-   ((not (listp c-emacs-features))
+   ((not (boundp c-emacs-features))
     (modify-syntax-entry ?/  ". 124b" nemerle-mode-syntax-table)
     (modify-syntax-entry ?*  ". 23"   nemerle-mode-syntax-table))
    ;; XEmacs 19 & 20
