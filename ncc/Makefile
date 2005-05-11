@@ -76,6 +76,14 @@ NEMERLE_DLL_SRC = \
 	../lib/LazyValue.n              \
 
 NEMERLE_COMPILER_DLL_SRC = \
+	generation/CompileTypedMethod.n  \
+	generation/CompileTypedTree.n	 \
+	generation/CompiledTree.n	 \
+	generation/HierarchyEmitter.n	 \
+	generation/ILEmitter.n		 \
+	generation/MatchingCompiler.n	 \
+	generation/Optimizer.n		 \
+	generation/Postprocessing.n	 \
 	generation/Typer3.n		 \
 	hierarchy/BuiltinMethod.n        \
 	hierarchy/ClassMembers.n	 \
@@ -123,14 +131,6 @@ NEMERLE_COMPILER_DLL_SRC = \
 	external/Codec.n		 \
 	external/InternalTypes.n	 \
 	external/LibrariesLoader.n	 \
-	generation/CompileTypedMethod.n  \
-	generation/CompileTypedTree.n	 \
-	generation/CompiledTree.n	 \
-	generation/HierarchyEmitter.n	 \
-	generation/ILEmitter.n		 \
-	generation/MatchingCompiler.n	 \
-	generation/Optimizer.n		 \
-	generation/Postprocessing.n	 \
 	misc/AssemblyInfo.n		 \
 	misc/PrettyPrint.n		 \
 	CompilationOptions.n		 \

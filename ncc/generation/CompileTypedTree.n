@@ -52,34 +52,21 @@ module CompileTypedTree
   {
     public mutable current_fun : Fun_header;
     public mutable current_fun_or_loop : Fun_header;
-    public mutable current_closure : option [CG_val];
-    // FIXME change this to NemerleMap [LocalValue, _]
-    public mutable closure_fields : SystemMap [int, FieldInfo];
-    public mutable closure_ptrs : SystemMap [int, FieldInfo];
     public mutable locals : SystemMap [int, CG_val];
     public mutable current_type : TypeBuilder;
-    public mutable current_loop : option [CExpr.Loop];
 
     /** Copy constructor */
     public this (copied : CTX) {
       current_fun = copied.current_fun;
-      current_closure = copied.current_closure;
-      closure_fields = copied.closure_fields;
-      closure_ptrs = copied.closure_ptrs;
       locals = copied.locals;
       current_type = copied.current_type;
-      current_loop = copied.current_loop;
       current_fun_or_loop = copied.current_fun_or_loop
     }
 
     /** Empty context */
     public this (ti : TypeBuilder) {
-      current_closure = None ();
-      closure_fields = SystemMap ();
-      closure_ptrs = SystemMap ();
       locals = SystemMap ();
       current_type = ti;
-      current_loop = None ();
     }
 
     public CurrentSystemType : System.Type
@@ -90,17 +77,6 @@ module CompileTypedTree
 
   internal store_local (ctx : CTX, d : LocalValue, val : CExpr) : CTX * CG_val
   {
-    def store_in_closure ()
-    {
-      match (ctx.current_closure) {
-        | Some (clo) =>
-          def rf = CExpr.FieldRef (CExpr.Ref (clo), ctx.closure_fields.Get (d.Id));
-          CExpr.Assign (rf, val)
-        | None =>
-          Message.Warning ("no local closure for " + d.Name);
-          Util.ice ()
-      }
-    }
     def var_ty = d.Type.Fix ().GetSystemType ();
     def val =
       match (val) {
@@ -110,15 +86,6 @@ module CompileTypedTree
         | _ => val
       };
     // Message.Debug ($ "store_local: $d $(d.InClosure)");
-    if (d.InClosure) {
-      def assign = store_in_closure ();
-      def cgv = CG_val (loc = d.loc, 
-                        name = "dummy",
-                        ty = SystemType.Void, 
-                        val = assign);
-      (CTX (ctx), cgv)
-    } 
-    else {
       def cgv = CG_val (loc = d.loc, 
                         name = d.Name, 
                         ty = var_ty,
@@ -126,20 +93,7 @@ module CompileTypedTree
       def ctx' = CTX (ctx);
       ctx'.locals = ctx.locals.Add (d.Id, cgv);
       (ctx', cgv)
-    }
   }
-
-  /** get code fetching closure of given function */
-  internal closure_ref (ctx : CTX, fn : Fun_header) : CExpr
-  {
-    if (ctx.current_fun.id == fn.id)
-      CExpr.Ref (Option.UnSome (ctx.current_closure))
-    else {
-      assert (ctx.closure_ptrs.Member (fn.id),
-              $ "broken closure ptr $(fn.name) inside $(ctx.current_fun.name)");
-      CExpr.FieldRef (CExpr.This (ctx.CurrentSystemType), ctx.closure_ptrs.Get (fn.id))
-    }
-  }            
 
   internal box_value (body : CExpr) : CExpr 
   {
@@ -180,19 +134,9 @@ module CompileTypedTree
     }
   }
 
-  internal local_ref (ctx : CTX, d : LocalValue, store : bool) : CExpr
+  internal local_ref (ctx : CTX, d : LocalValue, _store : bool) : CExpr
   {
-    // fetch value from closure in which it resides
-    if (d.InClosure) {
-      // special case then we are in global fun and we are asked for 'this'
-      if (!store && ctx.current_fun.decl == null && (d.ValKind is LocalValue.Kind.ClosurisedThisPointer))
-          CExpr.This (ctx.CurrentSystemType)
-      else {
-        CExpr.FieldRef (closure_ref (ctx, d.DefinedIn), 
-                        ctx.closure_fields.Get (d.Id))
-      }
-    }
-    else if (ctx.locals.Member (d.Id)) {
+    if (ctx.locals.Member (d.Id)) {
       match (d.ValKind) {
         | LocalValue.Kind.FunParm (kind) 
           when kind == ParmKind.Out || kind == ParmKind.Ref =>
@@ -261,39 +205,6 @@ module CompileTypedTree
       fun (v : CG_val, e) { 
         maybe_cast (ctx, v.ty, e) 
       })
-  }
-
-  casted_parms (ctx : CTX, formals : list [Fun_parm], parms : list [Parm]) : list [CExpr]
-  {
-    def parms = List.Map (parms, fun (p : Parm) { cg_expr (ctx, p.expr) });
-    def parms = adjust_tupled_parms (ctx, List.Length (formals), parms);
-    List.Map2 (formals, parms, 
-      fun (v : Fun_parm, e) { 
-        maybe_cast (ctx, v.SystemType, e) 
-      })
-  }
-
-  emit_loop (ctx : CTX, h : Fun_header, parms : list [Parm]) : CExpr
-  {
-    def ctx' = CTX (ctx);
-    def parms = casted_parms (ctx, h.parms, parms);
-    def parm_vals = List.Map2 (h.parms, parms, fun (fp : Fun_parm, ap) {
-      def val = CG_val (loc = fp.decl.loc, 
-                        name = fp.name,
-                        ty = fp.SystemType,
-                        val = ap);
-      ignore (set_parm_info (fp, val));
-      ctx'.locals = ctx'.locals.Add (fp.decl.Id, val);
-      val
-    });
-    ctx'.current_fun_or_loop = h;
-    def loop = CExpr.Loop (null, None ());
-    ctx'.current_loop = Some (loop);
-    loop.body = cg_expr (ctx', (h.body :> FunBody.Typed).expr);
-    h.body = null;
-    List.FoldRight (parm_vals, loop : CExpr, fun (v, expr) { 
-      CExpr.Define (v, expr) 
-    })
   }
 
   with_cached (expr : CExpr, f : CExpr -> CExpr) : CExpr
@@ -446,25 +357,6 @@ module CompileTypedTree
 #endif        
         emit_call (GetCgMethod (m), CExpr.BaseCtorRef (cons))
         
-      | TExpr.LocalRef (d) =>
-        match (d.ValKind) {
-          | LocalValue.Kind.Function (Fun_header where (usage = FunctionUsage.UsedJustOnce) as h, _) =>
-            emit_loop (ctx, h, ps);
-
-          | LocalValue.Kind.Function (h, _) =>
-            if (h.cg_method.constructor_builder == null)
-              // special case, when local method does not have its object                      
-              emit_call (h.cg_method, CExpr.GlobalRef (h.cg_method.method_builder))
-            else if (h.id == ctx.current_fun.id) {
-              assert (h.cg_method.method_builder != null);
-              emit_call (h.cg_method,
-                         CExpr.MethodRef (CExpr.This (ctx.CurrentSystemType), 
-                                          h.cg_method.method_builder, false))
-            }
-            else plain_call ()
-
-          | _ => plain_call ()
-        }
       | _ => plain_call ()
     }
   }
@@ -510,30 +402,13 @@ module CompileTypedTree
       
       | TExpr.TypeOf (t) => CExpr.TypeOf (t.Fix ().GetSystemType ())
 
-      | TExpr.SelfTailCall (parms) =>
-        def fn = ctx.current_fun_or_loop;
-        match (fn.usage) {
-          | FunctionUsage.UsedJustOnce =>
-            def parms = casted_parms (ctx, fn.parms, parms);
-            def assigns = 
-              List.Map2 (parms, fn.parms, fun (expr, fp : Fun_parm) {
-                (ctx.locals.Get (fp.decl.Id), expr)
-              });
-            CExpr.Sequence ([CExpr.MultipleAssign (assigns), 
-                             CExpr.ContinueLoop (Option.UnSome (ctx.current_loop))])
-          | _ =>
-            def parms = List.Map (parms, fun (p : Parm) { self (p.expr) });
-            // Message.Debug ("self casted params for " + fn.cg_method.name);
-            def parms = casted_exprs (ctx, fn.cg_method.parms, parms);
-            def t = inex.ty.Fix ().GetSystemType ();
-            CExpr.SelfTailCall (t, parms)
-        }
-
       | TExpr.Call (f, ps) =>
         cg_call (ctx, false, inex.ty, f, ps)
        
       | TExpr.TailCall (f, ps) =>
         cg_call (ctx, true, inex.ty, f, ps)
+
+      | TExpr.SelfTailCall => Util.ice ()
 
       | TExpr.Assign (e1, e2) =>
         def e1 = self (e1);
@@ -592,32 +467,7 @@ module CompileTypedTree
         else
           CExpr.Sequence ([CExpr.Ignore (self (v)), cg_expr (ctx, b)])
 
-      | TExpr.DefFunctionsIn (fs, body) =>
-        mutable vals = [];
-        def store (f : Fun_header, ctx : CTX) : CTX {
-          match (f.usage) {
-            | FunctionUsage.UsedJustOnce => ctx
-            | _ =>
-              // here we initialize local functions with new instances of their objects
-              match (make_lambda_ctor_call (ctx, f)) {
-                | null => ctx // special case when local function has not object
-                | ct =>
-                  // store instanciated functional object and continue with enriched ctx
-                  def (ctx, val) = store_local (ctx, f.decl, ct);
-                  vals = val :: vals;
-                  ctx
-              }
-          }
-        };
-        def ctx = List.FoldLeft (fs, ctx, store);
-        foreach (f in fs) {
-          match (f.usage) {
-            | FunctionUsage.UsedJustOnce => () // we will simply inline its body 
-            | _ => emit_lambda_code (ctx, f, (f.body :> FunBody.Typed).expr)
-          }
-        }
-        def mklet (val, acc) { CExpr.Define (val, acc) };        
-        List.FoldLeft (vals, cg_expr (ctx, body), mklet)
+      | TExpr.DefFunctionsIn => Util.ice ()
 
       | TExpr.Match (e, mcs) =>
         with_cached (cg_expr (ctx, e), 
