@@ -134,76 +134,6 @@ module CompileTypedMethod
     }
   }
 
-  make_untupled_method (ctx : CTX, parm_cnt : int) : CG_method
-  {
-    def cgm = build_cg_method (get_apply_method (parm_cnt));
-    
-    def mkparm (v) { CExpr.Ref (v) };
-    def parm = 
-      match (cgm.parms) {
-        | [] => CExpr.Literal (Literal.Null ())
-        | _ => maybe_cast (ctx, SystemType.Object, tuple_ctor (List.Map (cgm.parms, mkparm)))
-      };
-
-    def meth = get_apply_method (1);
-    def single_apply = CExpr.MethodRef (CExpr.This (), meth.GetMethodInfo (), false);
-    
-    cgm.body = CExpr.Call (single_apply, [parm]);
-    cgm.implemented_methods = [get_apply_method (parm_cnt)];
-    cgm.modifiers =  NemerleAttributes.Internal;
-    cgm
-  }
-
-  internal get_lambda_proxy (ctx : CTX, meth : IMethod) : ConstructorInfo
-  {
-    def cg_method = GetCgMethod (meth);
-    when (cg_method.lambda_ctor == null) {
-      // FIXME: we should generate proxies in module *or* in the class depending
-      // on permissions
-      //def mod = (ctx.current_type.GetSystemType ().Module :> ModuleBuilder);
-      def parm_cnt = List.Length (cg_method.parms);
-      def impl =
-        if (parm_cnt == 1)
-          array [function_type (1)]
-        else
-          array [function_type (parm_cnt), function_type (1)];
-
-      def tb = ctx.current_type.GetTypeBuilder ().
-                DefineNestedType (fun_uniq_name (meth.GetHeader ()), 
-                                  TypeAttributes.SpecialName %| TypeAttributes.NestedAssembly %|
-                                  TypeAttributes.Sealed,
-                                  SystemType.Object, impl);
-      Passes.Emitter.RegisterAuxType (tb);
-      cg_method.lambda_ctor = Passes.Emitter.AddImplicitCtor (tb);
-      
-      // get separate copy
-      def cgm = build_cg_method (meth);
-      cgm.name = "apply";
-      cgm.implemented_methods = [get_apply_method (parm_cnt)];
-      cgm.modifiers =  NemerleAttributes.Internal;
-      
-      def mkparm (v : CG_val) {
-        def t = v.ty;
-        v.ty = SystemType.Object;
-        CExpr.Cast (CExpr.Ref (v), t, true)
-      };
-      cgm.ret_type = SystemType.Object;
-
-      def fn =
-        match (meth.GetFunKind ()) {
-          | FunKind.Constructor => CExpr.ConstructorRef (meth.GetConstructorInfo ())
-          | _ => CExpr.GlobalRef (meth.GetMethodInfo ())
-        };
-      cgm.body = box_value (CExpr.Call (fn, List.Map (cgm.parms, mkparm)));
-      Passes.Emitter.AddMethod (ctx.current_type, cgm, tb);
-            
-      when (parm_cnt != 1)
-        Passes.Emitter.AddMethod (ctx.current_type, make_tupled_method (parm_cnt, cgm), tb);
-    };
-    
-    cg_method.lambda_ctor
-  }
-
   /**
    * Split tuple to parameters or vice versa.
    */
@@ -222,82 +152,6 @@ module CompileTypedMethod
     }
   }
 
-  /**
-   * Construct proxy object for delegate invocation. Used when anything except
-   * instance or static method is used for delegate construction (local 
-   * function, functional value returned from somewhere etc).
-   */
-  // FIXME: it probably won't work with local delegates because of the delegate
-  //        .ctor type hack in external.n
-  emit_delegate_proxy (ctx : CTX, ctor : IMethod) : ConstructorInfo * CG_method
-  {
-    def fh = ctor.GetHeader ();
-    match (fh.parms) {
-      | [Fun_parm where (ty = fun_type)] =>
-        def (parms, ret_type) =
-          match (fun_type.Fix ()) {
-            | MType.Fun (parms, ret_type) => (parms, ret_type)
-            | _ => assert (false)
-          }
-        // FIXME: what about ref/out delegates?!
-        def loc = fh.loc; // FIXME
-        def parms = parms.Fix ().GetFunctionArguments ();
-        def tb = ctx.current_type.GetTypeBuilder ().
-                  DefineNestedType (Util.tmpname ("delegate_proxy"),
-                                    TypeAttributes.SpecialName %| TypeAttributes.NestedAssembly, 
-                                    SystemType.Object, array []);    
-        Passes.Emitter.RegisterAuxType (tb);
-
-        def fptr = tb.DefineField ("funptr", fun_type.Fix ().GetSystemType (), 
-                                   FieldAttributes.SpecialName %| FieldAttributes.Assembly);
-        def mkparm (ty : MType) { 
-          set_parm_info (CG_val (loc = loc,
-                                 name = Util.tmpname ("dp"),
-                                 ty = ty.GetSystemType (),
-                                 val = CExpr.Nop ()))
-        };
-        
-        def m = CG_method ();
-        m.name = "InvokeDelegate";
-        m.ret_type = ret_type.Fix ().GetSystemType ();
-        m.parms = List.Map (parms, mkparm);
-        m.modifiers = NemerleAttributes.Internal;
-        m.implemented_methods = [];
-
-        def apply = get_apply_method (List.Length (parms)).GetMethodInfo ();
-        def meth = CExpr.MethodRef (CExpr.FieldRef (CExpr.This (), fptr), apply, false);
-        def mkparmref (v) { CExpr.Cast (CExpr.Ref (v), SystemType.Object, true) };
-        def parms' = List.Map (m.parms, mkparmref);
-        m.body = unbox_value (CExpr.Call (meth, parms'), m.ret_type);
-      
-        Passes.Emitter.AddMethod (ctx.current_type, m, tb);
-
-        def invoke_cgm = m;
-
-        def m = CG_method ();
-        m.name = ".ctor";
-        m.ret_type = SystemType.Void;
-        def ctor_parm =
-          set_parm_info (
-            CG_val (loc = loc,
-                    name = Util.tmpname ("dp"),
-                    ty = fptr.FieldType,
-                    val = CExpr.Nop ()));
-        m.parms = [ctor_parm];
-        m.modifiers = NemerleAttributes.Internal;
-        m.implemented_methods = [];
-        def assign = CExpr.Assign (CExpr.FieldRef (CExpr.This (), fptr), CExpr.Ref (ctor_parm));
-        m.body = CExpr.Sequence ([call_object_ctor (), assign]);
-        
-        Passes.Emitter.AddConstructorBuilder (m, tb, false);
-        Passes.Emitter.EmitConstructor (ctx.current_type, m);
-
-        ((m.constructor_builder : ConstructorInfo), invoke_cgm)
-        
-      | _ => assert (false)
-    }
-  }
-
   internal emit_delegate_ctor (ctx : CTX, m : IMethod, ps : list [Parm]) : CExpr
   {
     def the_problem () {
@@ -307,6 +161,7 @@ module CompileTypedMethod
     
     def (this_ptr, cgm) = 
       match (ps) {
+      /*
         | [Parm where (expr = TExpr.StaticRef (mem))] =>
           match (mem.GetKind ()) { 
             | MemberKind.Method (meth) =>
@@ -319,10 +174,14 @@ module CompileTypedMethod
           
         | [Parm where (expr = TExpr.MethodRef (obj, mem, _notvirt))] =>   // FIXME: use non virt?
           (CExpr.Cast (cg_expr (ctx, obj), SystemType.Object, true), GetCgMethod (mem))
+          */
           
         | [parm] =>
+          Util.ice ($ "wrong parameter for delegate ctor $(parm.expr)");
+          /*
           def (ctor, invoke_cgm) = emit_delegate_proxy (ctx, m);
           (CExpr.Call (CExpr.ConstructorRef (ctor), [cg_expr (ctx, parm.expr)]), invoke_cgm)
+          */
 
         | [Parm where (expr = obj), Parm where (expr = TExpr.MethodAddress (meth))] =>
           unless (meth.DeclaringType is TypeBuilder)
@@ -344,55 +203,14 @@ module CompileTypedMethod
     h.name + h.id.ToString ()
   }
 
-  mangle (s : string) : string
-  {
-    s.Replace ('.', '_')
-  }
-
-  make_closure_class (ctx : CTX, h : Fun_header) : CTX
-  {
-    def name = fun_uniq_name (h);
-    def tb = ctx.current_type.GetTypeBuilder ().DefineNestedType 
-                ("_N_cl_" + mangle (name), TypeAttributes.SpecialName %| TypeAttributes.NestedAssembly,
-                 SystemType.Object, System.Type.EmptyTypes);
-    Passes.Emitter.RegisterAuxType (tb);
-    def ctor = Passes.Emitter.AddImplicitCtor (tb);
-    
-    def mk_clo_fld (d : LocalValue, acc : SystemMap [int, FieldInfo]) {
-      def fi = tb.DefineField (d.Name + d.Id.ToString (), d.Type.Fix ().GetSystemType (),
-                               FieldAttributes.SpecialName %| FieldAttributes.FamORAssem);
-      //Message.Debug ("add " + d.name + " / " + d.parent_fun.name);
-      acc.Add (d.Id, fi)
-    };
-    def closure_fields = List.FoldLeft (h.closure_vars, ctx.closure_fields, mk_clo_fld);
-    def cloexpr = CExpr.Call (CExpr.ConstructorRef (ctor), []);
-    def cloval = CG_val (h.loc, "_N_closure", tb, cloexpr);
-    def cgm = get_cg_method (h);
-    cgm.closure_type = tb;
-    def ctx = CTX (ctx);
-    ctx.closure_fields = closure_fields;
-    ctx.current_closure = Some (cloval);
-    ctx
-  }
-
   prepare_ctx_for_fun (ctx : CTX, h : Fun_header) : CTX
   {
     def ctx =
-    #if !T3
-      match (h.closure_vars) {
-        | [] => 
-    #endif
           {
             def ctx = CTX (ctx);
             ctx.current_closure = None ();
             ctx;
           }
-
-    #if !T3
-        | _ =>
-          make_closure_class (ctx, h)
-      };
-    #endif
    
     def cgm = get_cg_method (h);
     ctx.closure_ptrs = cgm.closure_pointers;
@@ -430,11 +248,6 @@ module CompileTypedMethod
     res
   }
 
-  call_object_ctor () : CExpr
-  {
-    CExpr.Call (CExpr.BaseCtorRef (SystemType.ObjectCtor), [])
-  }
-
   /** return the method object, with shape of
       apply (t : object) : object {
         def (a1, a2, ...) = t;
@@ -468,84 +281,11 @@ module CompileTypedMethod
     when (cg_method.lambda_type_builder == null) {
       def name = fun_uniq_name (h);
       // get closures which this function has used
-      #if T3
-      def closures = [];
-      #else
-      def closures = get_parents_with_closures (ctx, h);
-      #endif
       def real_parm_cnt = List.Length (cg_method.parms);
                             
-      match (closures) {
-        | [] when h.usage != FunctionUsage.UsedAsFirstClass =>
-          cg_method.modifiers = NemerleAttributes.Static;
-          cg_method.lambda_type_builder = ctx.current_type.GetTypeBuilder ();
-          cg_method.name = name;
-         
-        | _ =>
-          // FIXME what's wrong with List.Length (h.parms)? tupling/untupling?
-          def virtual_parm_cnt =
-            match (MType.ConstructFunctionType (h)) {
-              | MType.Fun (args, _) => 
-                List.Length (args.FixedValue.GetFunctionArguments ())
-              | _ => Util.ice ()
-            };
-             
-          // first create type builder
-          def impl =
-            if (virtual_parm_cnt == 1)
-              array [function_type (1)]
-            else
-              array [function_type (virtual_parm_cnt), function_type (1)];
-          def tb = ctx.current_type.GetTypeBuilder ().DefineNestedType 
-                      ("_N_lm_" + name, 
-                       TypeAttributes.SpecialName %| TypeAttributes.NestedAssembly %|
-                       TypeAttributes.Sealed, SystemType.Object, impl);
-          Passes.Emitter.RegisterAuxType (tb);
-          cg_method.lambda_type_builder = tb;
-
-          when (virtual_parm_cnt != real_parm_cnt) {
-            assert (real_parm_cnt == 1);
-            Passes.Emitter.AddMethod (ctx.current_type, make_untupled_method (ctx, virtual_parm_cnt), tb);
-          };
-        
-          cg_method.implemented_methods = [get_apply_method (real_parm_cnt)];        
-          
-          // and then constructor
-          def mkparm (fh : Fun_header, acc) {
-            def (assigns, vals, ptrs) = acc;
-            def cgm = get_cg_method (fh);
-            assert (cgm.closure_type != null);
-            def name = fun_uniq_name (fh);
-            
-            def fld = 
-              tb.DefineField (name, cgm.closure_type,
-                              FieldAttributes.SpecialName %| FieldAttributes.Private);
-              
-            def val =
-              set_parm_info (
-                CG_val (loc = fh.loc, name = name, ty = cgm.closure_type,
-                        val = CExpr.Nop ()));
-            
-            def assign =
-              CExpr.Assign (CExpr.FieldRef (CExpr.This (), fld), CExpr.Ref (val));
-
-            (assign :: assigns, val :: vals, (ptrs : SystemMap [int, FieldInfo]).Add (fh.id, fld))
-          };
-
-          def (assigns, vals, ptrs) = 
-            List.FoldLeft (closures, ([], [], SystemMap ()), 
-                           mkparm);
-
-          def ctor_cgm = CG_method ();
-          ctor_cgm.parms = List.Rev (vals);
-          ctor_cgm.modifiers = NemerleAttributes.Internal;
-          ctor_cgm.body = CExpr.Sequence (call_object_ctor () :: assigns);
-
-          cg_method.closure_pointers = ptrs;
-          Passes.Emitter.AddConstructorBuilder (ctor_cgm, tb, false);
-          Passes.Emitter.EmitConstructor (ctx.current_type, ctor_cgm);
-          cg_method.constructor_builder = ctor_cgm.constructor_builder;
-      }
+      cg_method.modifiers = NemerleAttributes.Static;
+      cg_method.lambda_type_builder = ctx.current_type.GetTypeBuilder ();
+      cg_method.name = name;
 
       foreach (parm : CG_val in cg_method.parms) { 
         assert (parm.parm_info != null);
@@ -601,45 +341,8 @@ module CompileTypedMethod
 
     def loadparm (parm_val : CG_val, fp : Fun_parm) {
       def parm = fp.decl;
-
-#if T3
       parm.InClosure = false;
       ctx'.locals = ctx'.locals.Add (parm.Id, parm_val);
-#else
-#if !_GENERICS      
-      def needed_type = fp.SystemType;
-#endif
-
-      if (parm.InClosure) {
-        def a =
-          CExpr.Assign (local_ref (ctx, parm, true),
-#if _GENERICS
-             CExpr.Ref (parm_val));      
-#else            
-             maybe_cast (ctx, needed_type, CExpr.Ref (parm_val)));
-#endif                     
-                     
-        initializers = a :: initializers
-      } else {
-        def v =
-#if _GENERICS
-          parm_val;
-#else                  
-          if (parm_val.ty.IsByRef || needed_type.Equals (parm_val.ty))
-            parm_val
-          else {
-            def v = CG_val (loc = fp.decl.loc, 
-                            name = Util.tmpname (parm_val.name),
-                            ty = needed_type, 
-                            val = CExpr.Cast (CExpr.Ref (parm_val), needed_type, true));
-            vals = v :: vals;
-            v
-          };
-#endif          
-        // Message.Debug ($"store parm: $parm $(parm.Id)");
-        ctx'.locals = ctx'.locals.Add (parm.Id, v)
-      }
-#endif // T3
     };
 
     def cgm = get_cg_method (hd);
@@ -652,29 +355,6 @@ module CompileTypedMethod
     // 5. execute raw body of method
     
     List.Iter2 (cgm.parms, hd.parms, loadparm);
-    
-    // put base () / this () call before storing 'this' in closure inside constructor
-    #if !T3
-    when (_in_ctor && !ctx.current_type.IsValueType)
-      match (body) {
-        | TExpr.Sequence (TExpr.Call as basecall, rest) =>
-          initializers = cg_expr (ctx', basecall) :: initializers;
-          body = rest;
-
-        // body contains only base call, so rearrangement is not needed
-        | TExpr.Call | TExpr.TailCall => ()
-          
-        | x =>
-          Message.Warning (body.loc, body.ToString ());
-          Util.ice (" constructor body has: " + PrettyPrint.SprintTyExpr (None (), x))
-      }
-
-    // store 'this' into closure object
-    foreach (d in ctx.current_fun.closure_vars) 
-      when (d.InClosure && 
-            d.ValKind is LocalValue.Kind.ClosurisedThisPointer)
-        initializers = CExpr.Assign (local_ref (ctx, d, true), CExpr.This ()) :: initializers;
-    #endif
     
     // compile raw body of method
     mutable cbody = cg_expr (ctx', body);
