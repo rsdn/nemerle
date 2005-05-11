@@ -12,7 +12,8 @@ sub work
 	s/\?L[0-9a-f]+/L/g;
 	s/(_N\S*?)[0-9]+([\s:\)])/$1$2/g;
 	s/header: [0-9a-f]+//g;
-	s/stage[123]/stage0/g;
+	s/\.stage[0123]//g;
+	s/stage[0123]//g;
 	print OUT $_;
   }
 }
