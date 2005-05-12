@@ -172,7 +172,7 @@ buffer created.  This is a good place to put your customizations.")
 	 ;;    class, interface, module, namespace, using, variant
 	 ;; 'void' and 'array' are also keywords but we treat them
 	 ;; as type names
-	 '("\\<\\(_\\|abstract\\|and\\|as\\|base\\|catch\\|def\\|delegate\\|enum\\|event\\|false\\|finally\\|fun\\|implements\\|internal\\|is\\|macro\\|match\\|matches\\|mutable\\|new\\|null\\|out\\|override\\|params\\|private\\|protected\\|public\\|ref\\|sealed\\|static\\|struct\\|syntax\\|this\\|throw\\|try\\|type\\|typeof\\|virtual\\|volatile\\|when\\|where\\|partial\\)\\>"
+	 '("\\<\\(_\\|abstract\\|and\\|as\\|base\\|catch\\|def\\|delegate\\|enum\\|event\\|true\\|false\\|finally\\|fun\\|implements\\|internal\\|is\\|macro\\|match\\|matches\\|mutable\\|new\\|null\\|out\\|override\\|params\\|private\\|protected\\|public\\|ref\\|sealed\\|static\\|struct\\|syntax\\|this\\|throw\\|try\\|type\\|typeof\\|virtual\\|volatile\\|when\\|where\\|partial\\)\\>"
 	   0 font-lock-keyword-face)
 
 	 ;; these aren't really keywords but we set them so
