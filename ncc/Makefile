@@ -85,6 +85,7 @@ NEMERLE_COMPILER_DLL_SRC = \
 	generation/Optimizer.n		 \
 	generation/Postprocessing.n	 \
 	generation/Typer3.n		 \
+	generation/ImplementsWrapperMaker.n \
 	hierarchy/BuiltinMethod.n        \
 	hierarchy/ClassMembers.n	 \
 	hierarchy/CustomAttribute.n	 \
