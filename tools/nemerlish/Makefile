@@ -31,9 +31,10 @@ install: all
 		echo '$(NET_ENGINE) $(BINDIR)/nemish.exe "$$@"' >> $(DESTDIR)$(BINDIR)/nemish ; \
 		chmod 755 $(DESTDIR)$(BINDIR)/nemish ; \
 	fi
-	$(INST) "[$(HOME)]" .nemerlish_profile
+	$(INST) "[$(HOME)]" .nemerlish_profile 
 	$(Q)if [ ! -f "$(HOME)/.nemerlish_profile" ]; then \
-		$(INSTALL) -m 644 .nemerlish_profile $(HOME); \
+		$(INSTALL) -m 644 -o `ls -ld "$(HOME)"|cut -d " " -f 4` \
+                -g `ls -ld "$(HOME)"|cut -d " " -f 5` .nemerlish_profile $(HOME); \
         fi
 
 uninstall:
