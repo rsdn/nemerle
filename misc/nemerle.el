@@ -281,6 +281,19 @@ Returns t if inside a comment."
     (nth 4 state)))
 
 
+(defun nemerle-in-string ()
+  "Return t if the point is somewhere in the string."
+  (let ((state (parse-partial-sexp (point-min) (point) -1)))
+    (nth 3 state)))
+
+
+(defun nemerle-on-empty-line ()
+  "Return t if the point is on an empty line."
+  (save-excursion
+    (beginning-of-line)
+    (looking-at "[ \t]*$")))
+
+
 (defun nemerle-analyze-line ()
   "Analyze the current line."
   (save-excursion
@@ -289,6 +302,8 @@ Returns t if inside a comment."
 	   (if (looking-at "[ \t]*\\*")
 	       'star-comment
 	     'comment))
+	  ((nemerle-in-string)
+	   'in-string)
 	  ((looking-at "[ \t]*}")
 	   'end-brace)
 	  ((looking-at "[ \t]*|")
@@ -343,7 +358,7 @@ of code.  Analyze code from the current point position until END."
 
 (defun nemerle-calculate-indentation-of-line (line)
   "Return the absolute indentation for the line at the current point,
-where its syntactic meaning is given by LINE."
+where its syntactic meaning is given by LINE, and may not be IN-STRING."
   (save-excursion 
     (beginning-of-line)
     (let ((end (point))
@@ -363,7 +378,9 @@ where its syntactic meaning is given by LINE."
 (defun nemerle-calculate-indentation ()
   "Return the absolute indentation for the line at the current point."
   (let ((line (nemerle-analyze-line)))
-    (nemerle-calculate-indentation-of-line line)))
+    (if (eq line 'in-string)
+	(current-indentation)
+      (nemerle-calculate-indentation-of-line line))))
 
 
 (defun nemerle-indent-to (level)
@@ -389,7 +406,7 @@ where its syntactic meaning is given by LINE."
 
 Also, the line is re-indented unless a numeric ARG is supplied."
   (interactive "p")
-  (if (and arg (> arg 1))
+  (if (or (and arg (> arg 1)) (not (nemerle-on-empty-line)))
       (self-insert-command (or arg 1))
     (let ((level (nemerle-calculate-indentation-of-line 'match-case)))
       (nemerle-indent-to level))
@@ -401,7 +418,7 @@ Also, the line is re-indented unless a numeric ARG is supplied."
 
 Also, the line is re-indented unless a numeric ARG is supplied."
   (interactive "p")
-  (if (and arg (> arg 1))
+  (if (or (and arg (> arg 1)) (not (nemerle-on-empty-line)))
       (self-insert-command (or arg 1))
     (let ((level (nemerle-calculate-indentation-of-line 'end-brace)))
       (nemerle-indent-to level))
@@ -413,7 +430,8 @@ Also, the line is re-indented unless a numeric ARG is supplied."
 
 Also, the line is re-indented if inside a comment."
   (interactive "p")
-  (if (or (and arg (> arg 1)) (not (nemerle-in-comment)))
+  (if (or (and arg (> arg 1)) (not (nemerle-in-comment)) 
+	  (not (nemerle-on-empty-line)))
       (self-insert-command (or arg 1))
     (let ((level (nemerle-calculate-indentation-of-line 'star-comment)))
       (nemerle-indent-to level))
