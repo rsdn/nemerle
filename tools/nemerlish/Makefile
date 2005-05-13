@@ -16,7 +16,7 @@ NEMISH_SRC = interp.n main.n readline.n
 
 all:	Nemerle.Evaluation.dll nemish.exe
 
-Nemerle.Evaluation.dll: 
+Nemerle.Evaluation.dll: eval.n
 	$(NCC) -r Nemerle.Compiler.dll -t library -o Nemerle.Evaluation.dll eval.n
 
 nemish.exe: $(NEMISH_SRC)
