@@ -82,7 +82,6 @@ NEMERLE_COMPILER_DLL_SRC = \
 	generation/HierarchyEmitter.n	 \
 	generation/ILEmitter.n		 \
 	generation/MatchingCompiler.n	 \
-	generation/Optimizer.n		 \
 	generation/Postprocessing.n	 \
 	generation/Typer3.n		 \
 	generation/ImplementsWrapperMaker.n \

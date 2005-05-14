@@ -65,84 +65,33 @@ module CompileTypedMethod
     CExpr.Call (CExpr.ConstructorRef (ctor), vals)
   }
 
-  // always return a new copy
-  build_cg_method (meth : IMethod) : CG_method
-  {
-    def header = meth.GetHeader ();
-    def mkparm (p : Fun_parm) : CG_val {
-      match (p.ty.Fix ()) {
-        | MType.Void =>
-          // FIXME: do something about it
-          Message.FatalError (header.loc, "method `" + header.name + "' has void argument")
-        | _ => ()
-      };
-      set_parm_info (p, 
-        CG_val (loc = header.loc,
-                name = p.name, 
-                ty = p.SystemType,
-                val = CExpr.Nop ()))
-    };
-    def m = CG_method ();
-    m.name = header.name;
-    m.ret_type = header.ret_type.Fix ().GetSystemType ();
-    m.parms = List.Map (header.parms, mkparm);
-    m.implemented_methods = [];
-    m.method = meth;
-    m
-  }
-  
-  fixup_cg_method (meth : IMethod) : void
-  {
-    def cgm = GetCgMethod (meth);
-    cgm.modifiers = meth.Attributes;
-  }
-
-  internal GetCgMethod (meth : IMethod) : CG_method
-  {
-    def header = meth.GetHeader ();
-    when (header.cg_method == null) {
-      header.cg_method = build_cg_method (meth);
-      fixup_cg_method (meth);
-    };
-    header.cg_method
-  }
-
-  internal emit_delegate_ctor (ctx : CTX, m : IMethod, ps : list [Parm]) : CExpr
-  {
-    def the_problem () {
-      Message.FatalError ("delegate construction not supported for this expression")
-    };
-    mutable the_method = null;
-    
-    def (this_ptr, cgm) = 
-      match (ps) {
-        | [parm] =>
-          Util.ice ($ "wrong parameter for delegate ctor $(parm.expr)");
-
-        | [Parm where (expr = obj), Parm where (expr = TExpr.MethodAddress (meth))] =>
-          unless (meth.DeclaringType is TypeBuilder)
-            the_method = meth.GetHandle () :> System.Reflection.MethodInfo;
-          (cg_expr (ctx, obj), GetCgMethod (meth))
-          
-        | _ => the_problem ()
-      };
-    when (cgm.method_builder != null)
-      the_method = cgm.method_builder;
-    assert (the_method != null);
-    
-    CExpr.Call (CExpr.ConstructorRef (m.GetConstructorInfo ()), 
-             [this_ptr, CExpr.MethodAddress (the_method)])
-  }
-
   prepare_ctx_for_fun (ctx : CTX, meth : IMethod) : CTX
   {
     def ctx = CTX (ctx);
-    _ = GetCgMethod (meth);
     def h = meth.GetHeader ();
     ctx.locals = SystemMap ();
     ctx.current_fun = h;
     ctx.current_fun_or_loop = h;
     ctx
+  }
+
+  internal compile_parms (hd : Fun_header) : void
+  {
+    foreach (p in hd.parms)
+      when (p.cg_val == null) {
+        def ty = p.ty.Fix ();
+        when (ty.Equals (InternalType.Void))
+          Message.FatalError (hd.loc, "method $meth has void argument");
+        p.cg_val =
+          set_parm_info (p, 
+            CG_val (loc = hd.loc,
+                    name = p.name, 
+                    ty = p.SystemType,
+                    val = CExpr.Nop ()));
+
+        when (p.decl != null)
+          p.decl.InClosure = false;
+      }
   }
 
   /** Generates compiled body of a typed function */
@@ -157,23 +106,12 @@ module CompileTypedMethod
     // in case their type in not fully specific (lack of generics?)
     mutable vals = [];
 
-    def loadparm (parm_val : CG_val, fp : Fun_parm) {
-      def parm = fp.decl;
-      parm.InClosure = false;
-      ctx'.locals = ctx'.locals.Add (parm.Id, parm_val);
-    };
-
-    def cgm = GetCgMethod (meth);
     def hd = meth.GetHeader ();
 
-    // we build the initialization stuff of method:
-    // 1. method's closure ctor()
-    // 2. store parameters into closure
-    // 3. base (..) / this (..) for constructors
-    // 4. store 'this' in closure
-    // 5. execute raw body of method
-    
-    List.Iter2 (cgm.parms, hd.parms, loadparm);
+    compile_parms (hd);
+
+    foreach (p in hd.parms)
+      ctx'.locals = ctx'.locals.Add (p.decl.Id, p.cg_val);
     
     // compile raw body of method
     mutable cbody = cg_expr (ctx', body);
@@ -184,22 +122,23 @@ module CompileTypedMethod
                            CExpr.Sequence (List.Rev (cbody :: initializers)),
                            buildlet);
 
+    def ret_type = meth.ReturnType.Fix ().GetSystemType ();
+
 #if _GENERICS
-    when (!cgm.ret_type.IsGenericParameter && cgm.ret_type.Equals (SystemType.Object))
+    when (!ret_type.IsGenericParameter && ret_type.Equals (SystemType.Object))
 #else
-    when (cgm.ret_type.Equals (SystemType.Object))
+    when (ret_type.Equals (SystemType.Object))
 #endif    
       cbody = box_value (cbody);
   
-    cgm.body = cbody;
+    hd.body = FunBody.Compiled (cbody);
   }
 
   cg_global_fun (ctx : CTX, m : IMethod, body : TExpr) : void
   {
-    fixup_cg_method (m);
+    // fixup_cg_method (m);
     def ctx = prepare_ctx_for_fun (ctx, m);
     cg_fun_body (ctx, m, body, m.GetFunKind () is FunKind.Constructor);
-    m.GetHeader ().body = null;
   }
 
   do_compile_method (meth : NemerleMethod) : void
@@ -219,28 +158,22 @@ module CompileTypedMethod
     
     Util.locate (meth.Location, {
       match (meth.GetHeader ().body) {
+        | FunBody.ILed => Util.ice ()
         | FunBody.Compiled => Util.ice ()
         | FunBody.Parsed => Util.ice ()
 
         | FunBody.Typed when Message.SeenError =>
           // just skip it
-          meth.GetHeader ().body = FunBody.Compiled ()
+          meth.GetHeader ().body = FunBody.ILed ()
           
         | FunBody.Typed (body) =>
           cg_global_fun (ctx, meth, body);
-          // release memory for GC
-          meth.GetHeader ().body = FunBody.Compiled ();
 
-          def cgm = GetCgMethod (meth);
-          match (meth.GetFunKind ()) {
-            | FunKind.BoundMethod (impl_list) =>
-              cgm.implemented_methods = impl_list;
-              Passes.Emitter.EmitMethod (current_type, cgm);
-              
-            | FunKind.Constructor => Passes.Emitter.EmitConstructor (current_type, cgm)
-              
-            | _ => Passes.Emitter.EmitMethod (current_type, cgm);
-          }
+          if (meth.GetFunKind () is FunKind.Constructor)
+            Passes.Emitter.EmitConstructor (current_type, meth)
+          else
+            Passes.Emitter.EmitMethod (current_type, meth);
+
         | FunBody.Abstract => ()
       }
     });
@@ -251,8 +184,12 @@ module CompileTypedMethod
 
   internal CompileMethodImmediately (meth : NemerleMethod) : void
   {
-    unless (meth.GetHeader ().body is FunBody.Compiled)
-      do_compile_method (meth);
+    match (meth.GetHeader ().body) {
+      | FunBody.Compiled
+      | FunBody.ILed => {}
+      | _ =>
+        do_compile_method (meth);
+    }
   }
 } // end module
 } // end ns
