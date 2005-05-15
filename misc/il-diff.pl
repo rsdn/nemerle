@@ -21,7 +21,6 @@ sub work
 	s/header: [0-9a-f]+//g;
 	s/\.stage[0123]//g;
 	s/stage[0123]//g;
-	s/\d+//g;
 	print OUT $_;
   }
 }
