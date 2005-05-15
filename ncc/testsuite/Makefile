@@ -34,6 +34,7 @@ include $(TOP)/config.mak
 ############################################################
 
 STAGE1    = $(TOP)/ncc/out.stage1
+STAGE2    = $(TOP)/ncc/out.stage2
 STAGE3    = $(TOP)/ncc/out.stage3
 TESTN     = $(TOP)/ncc/testsuite/test.n
 NEM_DLLS  = Nemerle.dll Nemerle.Compiler.dll Nemerle.Macros.dll
@@ -82,6 +83,17 @@ test-stage1:
 		-r:Nemerle.Compiler.stage1 -r:System -out test.exe $(TESTN)
 	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" \
 		-p "-no-stdlib -r:Nemerle.stage1 -r:System $(NEM_FLAGS) -nowarn:10003" \
+		-verify "$(VERIFY)"  $(TEST_FILES)
+	rm -f *.dll *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
+
+test-stage2:
+	cp $(STAGE2)/Nemerle.stage2.dll .
+	cp $(STAGE2)/Nemerle.Compiler.stage2.dll .
+	cp $(STAGE2)/Nemerle.Macros.dll .
+	$(EXECUTE) ../../boot/ncc.exe -no-stdlib -r:Nemerle.stage2 \
+		-r:Nemerle.Compiler.stage2 -r:System -out test.exe $(TESTN)
+	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" \
+		-p "-no-stdlib -r:Nemerle.stage2 -r:System $(NEM_FLAGS) -nowarn:10003" \
 		-verify "$(VERIFY)"  $(TEST_FILES)
 	rm -f *.dll *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
 
