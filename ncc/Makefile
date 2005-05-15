@@ -140,20 +140,20 @@ NEMERLE_COMPILER_DLL_SRC = \
 NCC_EXE_SRC       = main.n
 
 STDMACROS_DLL_SRC = \
-        ../macros/core.n \
-        ../macros/compiler.n \
-        ../macros/assertions.n \
+	../macros/AssemblyInfo.n \
+	../macros/Data.n \
+	../macros/Internals.n \
+	../macros/Logging.n \
+	../macros/Nemerle.n \
+	../macros/Util.n \
+	../macros/concurrency.n \
 	../macros/operators.n \
+	../macros/xml.n \
+        ../macros/assertions.n \
+        ../macros/compiler.n \
+        ../macros/core.n \
         ../macros/io.n \
         ../macros/text.n \
-	../macros/AssemblyInfo.n \
-	../macros/xml.n \
-	../macros/concurrency.n \
-	../macros/Data.n \
-	../macros/Logging.n \
-	../macros/Util.n \
-	../macros/Internals.n \
-	../macros/Nemerle.n \
 
 ############################################################
 # OUTPUT
