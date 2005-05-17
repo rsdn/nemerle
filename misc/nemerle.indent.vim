@@ -74,7 +74,7 @@ function GetNemerleIndent()
     let ind = indent(prev)
 
     " Attributes
-    if prev_line =~ '^\s*\[.*\]'
+    if prev_line =~ '^\s*\[.*\]\s*$'
 	return ind
     endif
 
@@ -99,28 +99,49 @@ function GetNemerleIndent()
 	return ind + &sw
     endif
 
-    " Now matching. Here we need to follow operation of cindent to know what
-    " to fix. Basically, we need to get previous non-continuation line.
-    if prev_line =~ ';\s*$'
-	" now we know that Current line is non-continuation
-	let prev = GetPrevious(prev - 1)
-	while prev > 0 && getline(prev) !~ '\(;\|{\|}\)\s*$'
+    " Current is a pattern
+    if cur_line =~ '^\s*|'
+	let depth = 1
+	while prev > 0 && getline(prev) !~ '^\s*|' || depth > 1
+	    if getline(prev) =~ '}'
+		let depth = depth + 1
+	    endif
+	    if getline(prev) =~ '{'
+		let depth = depth - 1
+	    endif
 	    let prev = GetPrevious(prev - 1)
 	endwhile
-	let prev = prev + 1
+	if depth == 0
+	    return theIndent
+	else
+	    return indent(prev)
+	endif
+    endif
+
+    " Now matching. Here we need to follow operation of cindent to know what
+    " to fix. Basically, we need to get previous non-continuation line.
+    if prev_line =~ '\(;\|}\)\s*$' 
+	" now we know that Current line is non-continuation
+	let prev = GetPrevious(prev - 1)
+	let depth = 1
+	if prev_line =~ '}\s*$'
+	    let depth = 2
+	endif
+	while prev > 0 && getline(prev) !~ '\(;\|{\|}\)\s*$' || depth > 1
+	    if getline(prev) =~ '}'
+		let depth = depth + 1
+	    endif
+	    if getline(prev) =~ '{'
+		let depth = depth - 1
+	    endif
+	    let prev = GetPrevious(prev - 1)
+	endwhile
+	let prev = prev + 1 "TODO: obviously - it doesn't have to be next line...
 	let prev_nonc = getline(prev)
 
 	" if previous is a match pattern
 	if prev_nonc =~ '^\s*|'
-	    " if we are a pattern either
-	    if cur_line =~ '^\s*|'
-		return indent(prev)
-	    else
-		return theIndent + &sw
-	    endif
-	elseif cur_line =~ '^\s*|'
-	    " previous is not a pattern, but we are
-	    return theIndent - &sw
+	    return theIndent + &sw
 	endif
     endif
 
