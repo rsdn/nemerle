@@ -78,6 +78,11 @@ function GetNemerleIndent()
 	return ind
     endif
 
+    " Foreach
+    if prev_line =~ 'foreach (.*)\s*$'
+	return ind + &sw
+    endif
+
     " Design by contract macros
     if cur_line =~ '^\s*\(requires\>\|ensures\>\|invariant\>\)'
 	return ind
@@ -101,15 +106,21 @@ function GetNemerleIndent()
 
     " Current is a pattern
     if cur_line =~ '^\s*|'
+	if prev_line =~ '{\s*$'
+	    return ind + &sw
+	endif
 	let depth = 1
+	if prev_line =~ '}\s*$'
+	    let depth = depth + 1
+	endif
 	while prev > 0 && getline(prev) !~ '^\s*|' || depth > 1
+	    let prev = GetPrevious(prev - 1)
 	    if getline(prev) =~ '}'
 		let depth = depth + 1
 	    endif
 	    if getline(prev) =~ '{'
 		let depth = depth - 1
 	    endif
-	    let prev = GetPrevious(prev - 1)
 	endwhile
 	if depth == 0
 	    return theIndent
