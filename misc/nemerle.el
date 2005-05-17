@@ -287,6 +287,26 @@ Returns t if inside a comment."
     (nth 3 state)))
 
 
+(defun nemerle-in-match ()
+  "Return t if the point is somewhere in the match statement."
+  (save-excursion
+    (let ((end (point))
+	  (line 'none)
+	  (in-match-case nil)
+	  (at-end nil)
+	  (brace (nemerle-go-up-one-level)))
+      (if (not (eq brace ?{))
+	  nil
+	(beginning-of-line)
+	(while (and (not at-end) (<= (point) end))
+	  (setq line (nemerle-analyze-line))
+	  (if (eq line 'match-case)
+	      (setq in-match-case t))
+	  (if (> (forward-line 1) 0)
+	      (setq at-end t)))
+	in-match-case))))
+
+
 (defun nemerle-on-empty-line ()
   "Return t if the point is on an empty line."
   (save-excursion
@@ -408,8 +428,11 @@ Also, the line is re-indented unless a numeric ARG is supplied."
   (interactive "p")
   (if (or (and arg (> arg 1)) (not (nemerle-on-empty-line)))
       (self-insert-command (or arg 1))
-    (let ((level (nemerle-calculate-indentation-of-line 'match-case)))
-      (nemerle-indent-to level))
+    (if (nemerle-in-match)
+	(let ((level (nemerle-calculate-indentation-of-line 'match-case)))
+	  (nemerle-indent-to level))
+      (let ((level (nemerle-calculate-indentation-of-line 'none)))
+	(nemerle-indent-to level)))
     (self-insert-command 1)))
 	
 
