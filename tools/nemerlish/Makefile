@@ -10,7 +10,7 @@ INST	= @echo INSTALL $1
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
-NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe -debug
+NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe
 
 NEMISH_SRC = interp.n main.n readline.n
 
