@@ -89,6 +89,7 @@ NEMERLE_COMPILER_DLL_SRC = \
 	hierarchy/ClassMembers.n	 \
 	hierarchy/CustomAttribute.n	 \
 	hierarchy/DelegateClassGen.n	 \
+	hierarchy/GlobalEnv.n	         \
 	hierarchy/MacroClassGen.n	 \
 	hierarchy/NamespaceTree.n	 \
 	hierarchy/ScanTypeHierarchy.n	 \
