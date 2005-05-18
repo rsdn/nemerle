@@ -36,7 +36,7 @@ function! GetPrevious(lnum)
 	" C++ comments
 	if getline(prev) =~ '^\s*//'
 	    let prev = prev - 1
-	elseif getline(prev) =~ '\*/\s*$' " C comment
+	elseif getline(prev) =~ '\*/\s*$' && getline(prev) !~ '\S*\s*/\*.*\*/\s*$' " C comment
 	    let prev = prev - 1
 	    if getline (prev + 1) !~ '/\*'
 		while prev > 0 && getline(prev) !~ '/\*'
@@ -74,12 +74,12 @@ function GetNemerleIndent()
     let ind = indent(prev)
 
     " Attributes
-    if prev_line =~ '^\s*\[.*\]\s*$'
+    if prev_line =~ '^\s*\[.*\]\s*\(\s*\|//.*\|/\*.*\*/\s*\)$'
 	return ind
     endif
 
     " Foreach
-    if prev_line =~ 'foreach (.*)\s*$'
+    if prev_line =~ 'foreach (.*)\s*\(\s*\|//.*\|/\*.*\*/\s*\)$'
 	return ind + &sw
     endif
 
@@ -92,7 +92,7 @@ function GetNemerleIndent()
     " to handle - function signature not ending with semicolon or opening
     " brace, and a field with no attributes.
     if cur_line =~ '^\s*\S*\s*:.*;' " field
-	if prev_line !~ '\(;\|}\)\s*$' " previous line is not end of expression
+	if prev_line !~ '\(;\|}\)\s*\(\s*\|//.*\|/\*.*\*/\s*\)$' " previous line is not end of expression
 	    return ind + &sw
 	else
 	    return ind
@@ -100,17 +100,17 @@ function GetNemerleIndent()
     endif
 
     " funtion signature
-    if prev_line =~ '(.*)\s*:' && prev_line !~ '\(;\|{\)\s*$'
+    if prev_line =~ '(.*)\s*:' && prev_line !~ '\(;\|{\)\s*\(\s*\|//.*\|/\*.*\*/\s*\)$'
 	return ind + &sw
     endif
 
     " Current is a pattern
     if cur_line =~ '^\s*|'
-	if prev_line =~ '{\s*$'
+	if prev_line =~ '{\s*\(\s*\|//.*\|/\*.*\*/\s*\)$'
 	    return ind + &sw
 	endif
 	let depth = 1
-	if prev_line =~ '}\s*$'
+	if prev_line =~ '}\s*\(\s*\|//.*\|/\*.*\*/\s*\)$'
 	    let depth = depth + 1
 	endif
 	while prev > 0 && getline(prev) !~ '^\s*|' || depth > 1
@@ -131,14 +131,14 @@ function GetNemerleIndent()
 
     " Now matching. Here we need to follow operation of cindent to know what
     " to fix. Basically, we need to get previous non-continuation line.
-    if prev_line =~ '\(;\|}\)\s*$' 
+    if prev_line =~ '\(;\|}\)\s*\(\s*\|//.*\|/\*.*\*/\s*\)$' 
 	" now we know that Current line is non-continuation
 	let prev = GetPrevious(prev - 1)
 	let depth = 1
 	if prev_line =~ '}\s*$'
 	    let depth = 2
 	endif
-	while prev > 0 && getline(prev) !~ '\(;\|{\|}\)\s*$' || depth > 1
+	while prev > 0 && getline(prev) !~ '\(;\|{\|}\)\s*\(\s*\|//.*\|/\*.*\*/\s*\)$' || depth > 1
 	    if getline(prev) =~ '}'
 		let depth = depth + 1
 	    endif
