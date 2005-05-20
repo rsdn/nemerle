@@ -74,7 +74,6 @@ NEMERLE_DLL_SRC = \
 	../lib/concurrency.n		\
 	../lib/AssemblyInfo.n           \
 	../lib/LazyValue.n              \
-	../lib/mutablelist.n            \
 
 NEMERLE_COMPILER_DLL_SRC = \
 	generation/CompileTypedMethod.n  \
