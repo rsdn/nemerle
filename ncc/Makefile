@@ -76,15 +76,22 @@ NEMERLE_DLL_SRC = \
 	../lib/LazyValue.n              \
 
 NEMERLE_COMPILER_DLL_SRC = \
+	CompilationOptions.n		 \
+	codedom/NemerleCodeCompiler.n	 \
+	codedom/NemerleCodeGenerator.n	 \
+	codedom/NemerleCodeProvider.n	 \
+	external/Codec.n		 \
+	external/InternalTypes.n	 \
+	external/LibrariesLoader.n	 \
 	generation/CompileTypedMethod.n  \
 	generation/CompileTypedTree.n	 \
 	generation/CompiledTree.n	 \
 	generation/HierarchyEmitter.n	 \
 	generation/ILEmitter.n		 \
+	generation/ImplementsWrapperMaker.n \
 	generation/MatchingCompiler.n	 \
 	generation/Postprocessing.n	 \
 	generation/Typer3.n		 \
-	generation/ImplementsWrapperMaker.n \
 	hierarchy/BuiltinMethod.n        \
 	hierarchy/ClassMembers.n	 \
 	hierarchy/CustomAttribute.n	 \
@@ -96,23 +103,25 @@ NEMERLE_COMPILER_DLL_SRC = \
 	hierarchy/TypeBuilder.n		 \
 	hierarchy/TypeInfo.n		 \
 	hierarchy/XmlDump.n		 \
+	misc/AssemblyInfo.n		 \
+	misc/PrettyPrint.n		 \
 	parsing/AST.n			 \
 	parsing/Lexer.n			 \
-	parsing/MainParser.n		 \
 	parsing/MainParser-Extensions.n  \
+	parsing/MainParser.n		 \
 	parsing/ParseTree.n		 \
 	parsing/PreParser.n		 \
 	parsing/Utility.n		 \
+	passes.n			 \
 	typing/ConstantFolder.n		 \
-	typing/MacroRegistry.n		 \
-	typing/Macros.n			 \
 	typing/DecisionTreeBuilder.n     \
-	typing/TypedTree.n		 \
 	typing/ErrorMessage.n		 \
 	typing/LocalContext.n		 \
 	typing/LocalValue.n		 \
 	typing/MType.n			 \
 	typing/MacroColorizer.n		 \
+	typing/MacroRegistry.n		 \
+	typing/Macros.n			 \
 	typing/Messenger.n	         \
 	typing/OverloadPossibility.n	 \
 	typing/RestartInErrorMode.n	 \
@@ -121,21 +130,12 @@ NEMERLE_COMPILER_DLL_SRC = \
 	typing/Subst.n			 \
 	typing/TyVar.n			 \
 	typing/TyVarEnv.n		 \
+	typing/TypedTree.n		 \
 	typing/Typer-CallTyper.n	 \
 	typing/Typer-DelayedTyping.n	 \
 	typing/Typer-PatternTyper.n	 \
 	typing/Typer.n			 \
 	typing/Typer2.n			 \
-	codedom/NemerleCodeCompiler.n	 \
-	codedom/NemerleCodeGenerator.n	 \
-	codedom/NemerleCodeProvider.n	 \
-	external/Codec.n		 \
-	external/InternalTypes.n	 \
-	external/LibrariesLoader.n	 \
-	misc/AssemblyInfo.n		 \
-	misc/PrettyPrint.n		 \
-	CompilationOptions.n		 \
-	passes.n			 \
 
 
 NCC_EXE_SRC       = main.n

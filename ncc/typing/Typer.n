@@ -2037,9 +2037,13 @@ namespace Nemerle.Compiler
                 // XXX this fixes entire type, but we cannot do any better
                 // I guess
                 ty = Subst.Fresh (solver, fun_header.typarms).Apply (local.Type.Fix ())
+            
+            // for block of type 'a, block exit is forall 'b. 'a -> 'b
+            | LocalValue.Kind.BlockReturn (res, _) =>
+              ty = MType.Fun (res.Type, FreshTyVar ());
               
-              | _ => ty = local.Type
-            }
+            | _ => ty = local.Type
+          }
           if (ty != null) {
             // Message.Debug ($ "type local: $name : $ty");
             _ = Expect (expected, ty, "value reference");
@@ -2506,12 +2510,66 @@ namespace Nemerle.Compiler
     #region Special macros
     mutable checked_macro : NamespaceTree.Node;
     mutable unchecked_macro : NamespaceTree.Node;
+    mutable block_macro : GlobalEnv.NamespaceND;
+
+    /* block (foo) {
+         ...
+         when (...) foo (33);
+         ...
+         77
+       }
+
+       is translated to:
+       
+       mutable result;
+       result =
+         {
+           ...
+           when (...) { result = 33; goto end; }
+           ...
+           77
+         };
+       end: result
+
+       However the second part -- foo (33) --> result = 33; goto end; --
+       is done in Typer2, not here.
+    */
+    TypeBlock (name : PT.Name, body : PT.PExpr, expected : TyVar) : TExpr
+    {
+      PushLocals ();
+      try {
+        def result =
+          DefineLocal (name, expected, LocalValue.Kind.Plain (), 
+                       is_mutable = true);
+        def label_id = Util.next_id ();
+        def label = 
+          TExpr.Label (expected, label_id, TExpr.LocalRef (expected, result));
+        // the type is bogus here, it is handled specially in TypeLocal
+        def jumpout = 
+          DefineLocal (name, expected, 
+                       LocalValue.Kind.BlockReturn (result, label_id), 
+                       is_mutable = false);
+        AddLocal (name, jumpout);
+        def body = TypeExpr (body, expected);
+        def assign = 
+          TExpr.Assign (InternalType.Void, 
+                        TExpr.LocalRef (result.Type, result),
+                        body);
+        def seq = TExpr.Sequence (label.Type, assign, label);
+        def deflt = TExpr.DefaultValue (result.Type);
+        TExpr.DefValIn (expected, result, deflt, seq)
+      } finally {
+        PopLocals ();
+      }
+    }
+    
     
     InterceptSpecialMacros (expr : PT.PExpr, expected : TyVar) : TExpr
     {
       when (checked_macro == null) {
         checked_macro = GlobalEnv.ExactPath (["Nemerle", "Core", "checked"]);
         unchecked_macro = GlobalEnv.ExactPath (["Nemerle", "Core", "unchecked"]);
+        block_macro = GlobalEnv.ExactPath (["Nemerle", "Core", "block"]);
       }
       
       match (expr) {
@@ -2527,6 +2585,17 @@ namespace Nemerle.Compiler
             }
           } else null
 
+        | PT.PExpr.MacroCall (_, ns, [PT.SyntaxElement.Expression (label), 
+                                      PT.SyntaxElement.Expression (expr)])
+          when ns.Equals (block_macro) =>
+          match (label) {
+            | PT.PExpr.Ref (name) =>
+              TypeBlock (name, expr, expected)
+            | _ =>
+              ReportFatal (messenger,
+                           "block expects a simple identifier as a label")
+          }
+        
         | _ => null
       }
     }
@@ -2589,11 +2658,12 @@ namespace Nemerle.Compiler
         | TExpr.Error => "an erroneous expression"
         | TExpr.Delayed => "a yet-untyped expression"
 
+        | TExpr.DefaultValue
         | TExpr.Goto
         | TExpr.Label
         | TExpr.MultipleAssign
         | TExpr.MethodAddress => 
-          $ "shouldn't happen: $(expr.GetType())"
+          $ "!!!shouldn't happen: $(expr.GetType())!!!"
       }
     }
     #endregion

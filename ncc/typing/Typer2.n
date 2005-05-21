@@ -51,6 +51,9 @@ namespace Nemerle.Compiler
       | IsCalledValue      = 0x0004
       | IsIndexerRef       = 0x0008
       | IsDelegeteCtorParm = 0x0010
+      | AllowGoto          = 0x0020
+
+      | TopLevel           = IsTail %| AllowGoto
     }
     
     public this (ty : TypeBuilder, fn : Fun_header)
@@ -70,7 +73,7 @@ namespace Nemerle.Compiler
 
       match (current_fun.body) {
         | FunBody.Typed (expr) =>
-          current_fun.body = FunBody.Typed (Walk (Context.IsTail, expr));
+          current_fun.body = FunBody.Typed (Walk (Context.TopLevel, expr));
           FixupCurrentFunction ();
         | _ => {}
       }
@@ -504,6 +507,32 @@ namespace Nemerle.Compiler
     }
 
 
+    BuildBlockReturn (ty : TyVar, decl : LocalValue, parms : list [Parm]) : TExpr
+    {
+      def (result_decl, label) =
+        match (decl.ValKind) {
+          | LocalValue.Kind.BlockReturn (res, lab) => (res, lab)
+          | _ => Util.ice ()
+        }
+
+      match (parms) {
+        | [] =>
+          def ok = result_decl.Type.Unify (InternalType.Void);
+          Util.cassert (ok);
+          TExpr.Goto (ty, label)
+        | [parm] =>
+          def ok = parm.expr.Type.Require (result_decl.Type);
+          Util.cassert (ok);
+          TExpr.Sequence (ty, 
+                          TExpr.Assign (InternalType.Void,
+                                        TExpr.LocalRef (result_decl),
+                                        parm.expr),
+                          TExpr.Goto (ty, label))
+        | _ => Util.ice ()
+      }
+    }
+
+
     StripImplicitConversion (expr : TExpr) : TExpr
     {
       match (expr) {
@@ -515,9 +544,16 @@ namespace Nemerle.Compiler
 
     DoWalk (ctx : Context, expr : TExpr) : TExpr
     {
-      // Message.Debug ($ "dowalk: $expr");
+      //Message.Debug ($ "dowalk: $expr $(ctx %&& Context.AllowGoto)");
       match (expr) {
         | TExpr.LocalRef (decl) =>
+          when (decl.ValKind is LocalValue.Kind.BlockReturn) {
+            ReportError (messenger, 
+                         $ "$decl was used as a first class value, "
+                           "this is not supported");
+            decl.Register ();
+          }
+          
           unless (decl.IsRegistered) {
             Message.Warning ($ "unregistered local $decl, $(decl.Id)");
             assert (false);
@@ -563,14 +599,15 @@ namespace Nemerle.Compiler
               parm.decl.Register ();
             match (fn.body) {
               | FunBody.Typed (expr) =>
-                fn.body = FunBody.Typed (Walk (Context.IsTail, expr))
+                fn.body = FunBody.Typed (Walk (Context.TopLevel, expr))
               | _ => assert (false)
             }
             FixupCurrentFunction ();
             current_fun = last_fun;
           }
-          TExpr.DefFunctionsIn (funs, Walk (ctx & ~Context.IsCalledValue, VoidIfNull (body)))
-          
+          def body = Walk (ctx & ~Context.IsCalledValue, VoidIfNull (body));
+          TExpr.DefFunctionsIn (funs, body)
+
           
         | TExpr.ImplicitValueTypeCtor (tc) =>
           tc.HasBeenUsed = true;
@@ -711,6 +748,10 @@ namespace Nemerle.Compiler
               | TExpr.ImplicitValueTypeCtor as ivtc =>
                 ivtc
 
+              | TExpr.LocalRef (LocalValue where (
+                  ValKind = LocalValue.Kind.BlockReturn) as decl) =>
+                Walk (ctx, BuildBlockReturn (expr.Type, decl, parms))
+
               | TExpr.OpCode ("==.ref")
               | TExpr.OpCode ("!=.ref") =>
                 match (parms) {
@@ -766,9 +807,12 @@ namespace Nemerle.Compiler
                 | TExpr.Call => true
                 | _ => false
               }
-            
+
             def target = Walk (Context.NeedLValue, target);
-            def source = Walk (source);
+            def src_ctx =
+              if (target is TExpr.LocalRef) ctx & Context.AllowGoto
+              else Context.Clean;
+            def source = Walk (src_ctx, source);
 
             match (target) {
               | TExpr.Call (expr, parms) when transform_call =>
@@ -782,7 +826,9 @@ namespace Nemerle.Compiler
    
         | TExpr.DefValIn (name, val, body) =>
           name.Register ();
-          def val = Walk (val);
+          // goto is allowed inside value definition, because
+          // we do the store at the end anyway
+          def val = Walk (ctx & Context.AllowGoto, val);
           def body = Walk (ctx, VoidIfNull (body));
           TExpr.DefValIn (name, val, body)
           
@@ -829,6 +875,7 @@ namespace Nemerle.Compiler
           }
           null
 
+
         | TExpr.Literal =>
           null
           
@@ -866,9 +913,9 @@ namespace Nemerle.Compiler
           
           
         | TExpr.Sequence (e1, e2) =>
-          def e1 = IgnoreExpr (Walk (e1));
+          def e1 = IgnoreExpr (Walk (ctx & Context.AllowGoto, e1));
           TExpr.Sequence (e1, Walk (ctx & ~Context.IsCalledValue, e2))
-          
+
           
         | TExpr.Tuple (args) =>
           TExpr.Tuple (Walks (args))
@@ -897,10 +944,23 @@ namespace Nemerle.Compiler
 
         | TExpr.Error =>
           null
+          
+
+        | TExpr.Goto =>
+          unless (ctx %&& Context.AllowGoto)
+            ReportError (messenger, "goto (block return?) is not allowed "
+                                    "inside expressions");
+          null
+          
+          
+        | TExpr.Label (lab, body) =>
+          TExpr.Label (lab, Walk (ctx, body))
+          
+        
+        | TExpr.DefaultValue => null
+
 
         | TExpr.MultipleAssign
-        | TExpr.Label
-        | TExpr.Goto
         | TExpr.MethodAddress => assert (false)
       }
     }
