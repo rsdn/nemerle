@@ -1,0 +1,245 @@
+/*
+ * Copyright (c) 2005 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Collections;
+using Nemerle.Utility;
+
+using Nemerle.Compiler;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Compiler.SolverMacros;
+
+namespace Nemerle.Compiler
+{
+  public partial class Typer
+  {
+    // FIXME: to stdlib?
+    /** A simple O(n^2) algorithm for finding a set of minimal elements
+        of [lst] using strict partial order [less].  */
+    static GetMinimal['a] (lst : list ['a], less : 'a * 'a -> bool) : list ['a]
+    {
+      List.FoldLeft (lst, [], fun (elem, minimal) {
+        if (List.Exists (minimal, fun (min) { less (min, elem) }))
+          minimal
+        else
+          elem :: List.Filter (minimal, fun (min) { ! less (elem, min) })
+      })
+    }
+
+
+    static better_type_cache : Hashtable [int * int, bool] = Hashtable ();
+    IsBetterType (t1 : TyVar, t2 : TyVar) : bool
+    {
+      def real_check (t1, t2) {
+        mutable we_dont_care = null;
+
+        SubtypingOrImplicitConv (t1, t2, out we_dont_care) ||
+        (t1.IsFixed && t2.IsFixed &&
+         match (t1.FixedValue) {
+           // treat all parametric types (including arrays) as covariant
+           | MType.Class (tc1, _ :: _ as a1) =>
+             match (t2.FixedValue) {
+               | MType.Class (tc2, a2) when tc1.Equals (tc2) =>
+                 List.ForAll2 (a1, a2, IsBetterType)
+               | _ => false
+             }
+
+           | MType.Array (a1, r1) =>
+             match (t2.FixedValue) {
+               | MType.Array (a2, r2) when r1 == r2 =>
+                 IsBetterType (a1, a2)
+               | _ => false
+             }
+           
+           | _ => false
+         })
+      }
+
+
+      def both_fixed = t1.IsFixed && t2.IsFixed;
+      mutable tc1 = null;
+      mutable tc2 = null;
+
+      when (both_fixed)
+        match (t1.FixedValue) {
+          | MType.Class (tc, []) => 
+            tc1 = tc;
+            match (t2.FixedValue) {
+              | MType.Class (tc, []) =>
+                tc2 = tc;
+              | _ => {}
+            }
+          | _ => {}
+        }
+
+      def res =
+      if (tc2 == null) {
+        // cannot use cache
+        real_check (t1, t2)
+      } else {
+        def ids = (tc1.GetId (), tc2.GetId ());
+        unless (better_type_cache.Contains (ids))
+          better_type_cache [ids] = 
+            real_check (t1, t2) ||
+            (tc1.IsValueType && tc2.IsValueType &&
+             ((tc1.Equals (InternalType.SByte_tc) && tc2.Equals (InternalType.Byte_tc)) ||
+              (tc1.Equals (InternalType.Int16_tc) && tc2.Equals (InternalType.UInt16_tc)) ||
+              (tc1.Equals (InternalType.Int32_tc) && tc2.Equals (InternalType.UInt32_tc)) ||
+              (tc1.Equals (InternalType.Int64_tc) && tc2.Equals (InternalType.UInt64_tc))));
+        better_type_cache [ids]
+      }
+      //Message.Debug ($"better($t1,$t2)=$res");
+      res
+    }
+    
+    
+    IsBetterOverload (o1 : OverloadPossibility, o2 : OverloadPossibility) : bool
+    {
+      def f1 = o1.FormalTypes;
+      def f2 = o2.FormalTypes;
+      Util.cassert (f1 != null && f2 != null);
+      Util.cassert (f1.Length == f2.Length, 
+                    $"$o1==$(List.FromArray(f1)) != $o2==$(List.FromArray(f2))");
+      def loop (seen_better, i) {
+        if (i < 0) seen_better
+        else {
+          def not_worse = IsBetterType (f1 [i], f2 [i]);
+          not_worse &&
+            if (seen_better) loop (seen_better, i - 1)
+            else {
+              def rev_not_worse = IsBetterType (f2 [i], f1 [i]);
+              loop (!rev_not_worse, i - 1)
+            }
+        }
+      }
+      def res =
+      loop (false, f1.Length - 1);
+      //Message.Debug ($"cmp:$o1,$o2 $(f1.Length) ==> $res");
+      res
+    }
+    
+
+    static AintVarArgs (o : OverloadPossibility) : bool
+    {
+      !o.VarArgs
+    }
+
+
+    static DidntMamboJumbo (o : OverloadPossibility) : bool
+    {
+      ! o.DidMamboJumbo
+    }
+
+
+    GetBestOverloads (parms : list [OverloadPossibility]) : list [OverloadPossibility]
+    {
+      match (parms) {
+        | [] | [_] => parms
+        | _ =>
+          def res = GetMinimal (parms, IsBetterOverload);
+
+          def res =
+            if (List.Exists (res, AintVarArgs))
+              List.RevFilter (res, AintVarArgs)
+            else res;
+            
+          def res =
+            if (List.Exists (res, DidntMamboJumbo))
+              List.RevFilter (res, DidntMamboJumbo)
+            else res;
+            
+          //Message.Debug ($"gbo: $parms ---> $res");
+
+          res
+      }
+    }
+
+
+    #region Version using IMethod
+    static MinimalTypes['a] (tyvars : list [TyVar * 'a]) : list [TyVar * 'a]
+    {
+      def less (a, b) {
+        def (a, _) = a;
+        def (b, _) = b;
+        a.TryRequire (b) && !b.TryRequire (a)
+      }
+      GetMinimal (tyvars, less)
+    }
+
+
+    MinimalTypesWithImplicit['a] (tyvars : list [TyVar * 'a]) : list [TyVar * 'a]
+    {
+      def le (a, b) {
+        if (a.IsFixed && b.IsFixed)
+          match ((a.FixedValue, b.FixedValue)) {
+            | (MType.Tuple (l1), MType.Tuple (l2)) =>
+              l1.Length == l2.Length &&
+              List.FoldLeft2 (l1, l2, true, fun (x, y, acc) {
+                acc &&
+                IsBetterType (x, y)
+              })
+
+            | (x, y) => IsBetterType (x, y)
+          }
+        else false
+      }
+
+      def less (a, b) {
+        def (a, _) = a;
+        def (b, _) = b;
+        le (a, b) && ! le (b, a)
+      }
+
+      GetMinimal (tyvars, less)
+    }
+
+    
+    // FIXME! it won't work with named parameters
+    GetBestOverloads1 (parms : list [IMethod]) : list [IMethod]
+    {
+      match (parms) {
+        | [] | [_] => parms
+        | _ =>
+          def pairs =
+            List.RevMap (parms, fun (meth : IMethod) {
+                match (meth.GetFreshType ()) {
+                  | MType.Fun (from, _) => (from, meth)
+                  | _ => assert (false)
+                }
+              });
+
+          match (MinimalTypes (pairs)) {
+            | [] => []
+            | [(_, x)] => [x]
+            | lst =>
+              List.RevMap (MinimalTypesWithImplicit (lst), Pair.Second)
+          }
+      }
+    }
+    #endregion
+  }
+}
