@@ -56,6 +56,7 @@ namespace Nemerle.Compiler
       mutable is_delegate_constructor : bool;
       mutable argument_number : int;
 
+      public mutable used_default_parms : bool;
       public mutable used_var_args : bool;
       public mutable is_var_args : bool;
       public mutable is_final : bool;
@@ -336,17 +337,19 @@ namespace Nemerle.Compiler
 
         def has_named = List.Exists (call_parms, 
                                      fun (parm : Parm) { parm.name != "" });
+        def need_default = 
+          ! is_var_args &&
+          header != null && 
+          header.parms.Length > call_parms.Length &&
+          header.parms.Exists (fun (fp) { fp.default_value.IsSome });
 
-        when (has_named)
-          if (header == null) {
+        when (has_named || need_default)
+          if (header == null)
             ReportError (messenger,
                          "named parameters given but formals' names cannot" 
                          " be inferred");
-          } else {
-            def names = List.Map (header.parms, 
-                                  fun (p : Fun_parm) { p.name });
-            ReorderNamedParms (names)
-          }
+          else
+            ReorderNamedParms (header.parms);
 
         unless (messenger.LocalError) {
           DeduceFunctionType ();
@@ -401,7 +404,7 @@ namespace Nemerle.Compiler
               | x :: xs =>
                 if (x : object == elem) pos
                 else find (pos + 1, xs, elem)
-              | [] => Util.ice ()
+              | [] => -1
             }
           }
 
@@ -417,7 +420,7 @@ namespace Nemerle.Compiler
 
 
       // TODO: merge this into the other overload 
-      ReorderNamedParms (top_names : list [string]) : void
+      ReorderNamedParms (top_names : list [Fun_parm]) : void
       {
         call_parms = ReorderNamedParms (top_names, orig_parms);
         reordered_parms = call_parms;
@@ -434,19 +437,20 @@ namespace Nemerle.Compiler
        
           where x_i are the named parameter references and e_i are some
           expressions.  */
-      ReorderNamedParms (top_names : list [string],
+      ReorderNamedParms (top_names : list [Fun_parm],
                          top_parms : list [Parm]) : list [Parm]
       {
         // lookup tables for names, named and unnamed parameters
         def valid_names = Hashtable (16);
         def seen_named_parms = Hashtable (16);
         def seen_unnamed_parms = Hashtable (16);
+        def use_defaults_for = Hashtable (16);
 
         // we will need a way to lookup the valid parameter names
-        foreach (name in top_names) {
-          assert (name != null);
-          assert (!valid_names.ContainsKey (name));
-          valid_names.Add (name, name)
+        foreach (fp in top_names) {
+          assert (fp != null && fp.name != null);
+          assert (!valid_names.ContainsKey (fp.name));
+          valid_names.Add (fp.name, fp)
         }
 
         // failure handler
@@ -456,24 +460,33 @@ namespace Nemerle.Compiler
         }
 
         // the correctness verifier
-        def check_names_and_parms (names : list [string], parms : list [Parm]) : bool
+        def check_names_and_parms (names : list [Fun_parm], parms : list [Parm]) : bool
         {
           | ([], []) =>
             true
 
           | (_, []) =>
             def unresolved_names =
-              List.RevFilter (top_names, fun (name : string) {
-                !(seen_named_parms.Contains (name) || seen_unnamed_parms.Contains (name))
+              List.RevFilter (top_names, fun (fp) {
+                def seen =
+                  seen_named_parms.Contains (fp.name) || 
+                  seen_unnamed_parms.Contains (fp.name);
+                if (seen) false
+                else if (fp.default_value.IsSome) {
+                  used_default_parms = true;
+                  use_defaults_for [fp.name] = fp;
+                  false
+                } else true
               });
 
             def unresolved_names =
-              List.RevMap (unresolved_names, fun (name : string) { "`" + name + "'" });
+              List.RevMap (unresolved_names, fun (fp) { "`" + fp.name + "'" });
 
+            unresolved_names.IsEmpty ||
             fail ("unresolved named parameters: " +
                   NString.Concat (", ", unresolved_names))
 
-          | (name :: rest_of_names, parm :: rest_of_parms) when parm.name == "" =>
+          | (fp :: rest_of_names, parm :: rest_of_parms) when parm.name == "" =>
             // the case for an unnamed parameter
             if (seen_named_parms.Count > 0) {
               // seen a named parameter before, error...
@@ -481,7 +494,7 @@ namespace Nemerle.Compiler
             }
             else {
               // otherwise, this is an element of the leading unnamed parameters
-              seen_unnamed_parms.Add (name, parm);
+              seen_unnamed_parms.Add (fp.name, parm);
               check_names_and_parms (rest_of_names, rest_of_parms)
             }
 
@@ -511,16 +524,21 @@ namespace Nemerle.Compiler
         }
 
         // reordering is a matter of simple names list walk now:
-        def reorder_parms (names : list [string], acc : list [Parm]) : list [Parm]
+        def reorder_parms (names : list [Fun_parm], acc : list [Parm]) : list [Parm]
         {
-          | (name :: rest_of_names, _) =>
+          | (fp :: rest_of_names, _) =>
+            def name = fp.name;
             if (seen_unnamed_parms.Contains (name))
               reorder_parms (rest_of_names,
                              Option.UnSome (seen_unnamed_parms.Get (name)) :: acc)
             else if (seen_named_parms.Contains (name))
               reorder_parms (rest_of_names,
                              Option.UnSome (seen_named_parms.Get (name)) :: acc)
-            else
+            else if (use_defaults_for.Contains (name)) {
+              def lit = Option.UnSome (fp.default_value);
+              def expr = TExpr.Literal (typer.TypeOfLiteral (lit), lit);
+              reorder_parms (rest_of_names, Parm (expr) :: acc)
+            } else
               Util.ice ("reorder_named_parms: reorder")
 
           | ([], _) =>
