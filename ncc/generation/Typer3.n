@@ -94,10 +94,11 @@ namespace Nemerle.Compiler
         match (current_fun.body) {
           | FunBody.Typed (body) =>
             // FIXME?: Typed3 
-            def body = BuildRevSequence (Walk (body) :: initializers);
+            def body = BuildRevSequence (SimplfyIfs (Walk (body)) :: initializers);
+            //def body = BuildRevSequence (Walk (body) :: initializers);
             def expr = TExpr.Label (body.Type, start_label, body);
             current_fun.body = FunBody.Typed (expr);
-            when (Options.DumpTypedTree)
+            when (Options.ShouldDump (current_fun))
               Message.Debug ($ "after T3: $current_type.$(current_fun.name) "
                                "-> $(current_fun.ret_type) : $body\n");
           | _ => assert (false)
@@ -120,8 +121,6 @@ namespace Nemerle.Compiler
               | [] => acc
               | TExpr.DefValIn (name, val, null) :: xs =>
                 loop (TExpr.DefValIn (acc.Type, name, val, acc), xs)
-              | TExpr.Match (val, [Match_case where (pats, null)]) :: xs =>
-                loop (TExpr.Match (acc.Type, val, [Match_case (pats, acc)]), xs)
               | x :: xs =>
                 loop (TExpr.Sequence (acc.Type, x, acc), xs)
             }
@@ -175,35 +174,25 @@ namespace Nemerle.Compiler
     {
       if (parms.Length == 1 && fh.parms.Length > 1) {
         def tupled = List.Hd (parms).expr;
-        def types = fh.parms.Map (fun (fp) {
-          if (fp.decl == null) fp.ty
-          else fp.decl.Type
+        def cache =
+          LocalValue (current_fun, Util.tmpname ("tupl_cache"),
+                      tupled.Type, LocalValue.Kind.Plain (),
+                      is_mutable = false);
+        cache.Register ();
+        cache.UseFrom (current_fun);
+
+        def len = fh.parms.Length;
+        mutable pos = -1;
+        def parms = fh.parms.Map (fun (fp) {
+          def ty =
+            if (fp.decl == null) fp.ty
+            else fp.decl.Type;
+          pos++;
+          Parm (TExpr.TupleIndexer (ty, PlainRef (cache), pos, len))
         });
-        def vals = 
-          types.Map (fun (ty) {
-            def val =
-              LocalValue (current_fun, Util.tmpname ("_N_tupl"),
-                          ty,
-                          LocalValue.Kind.PatternVariable (true),
-                          is_mutable = false);
-            val.Register ();
-            val.UseFrom (current_fun);
-            val
-          });
-
-        def parms = vals.Map (PlainRef).Map (Parm);
-
-        def pats = 
-          vals.Map (fun (val : LocalValue) { 
-            val.RefAs = LocalRef (val);
-            Pattern.As (val.Type, Pattern.Wildcard (val.Type), val) 
-          });
-        def pat = Pattern.Tuple (tupled.Type, pats);
-
-        def tr = TExpr.Literal (InternalType.Boolean, Literal.Bool (true));
-        
+         
         (parms, 
-         [TExpr.Match (tupled, [Match_case ([(pat, tr)], null)])])
+         [TExpr.DefValIn (cache, tupled, null)])
 
       } else if (parms.Length > 1 && fh.parms.Length == 1) {
         def types = parms.Map (fun (fp) { fp.expr.Type });
@@ -217,6 +206,31 @@ namespace Nemerle.Compiler
                         "$parms $(fh.parms)");
         (parms, [])
       }
+    }
+
+
+    WithCached (e : TExpr, f : TExpr -> TExpr) : TExpr
+    {
+      def needs_cache =
+        match (e) {
+          | TExpr.LocalRef             
+          | TExpr.StaticRef            
+          | TExpr.ConstantObjectRef    
+          | TExpr.Literal              
+          | TExpr.This => false
+          | _ => true
+        }
+
+      if (needs_cache) {
+        def cache =
+          LocalValue (current_fun, Util.tmpname ("cache"),
+                      e.Type, LocalValue.Kind.Plain (),
+                      is_mutable = false);
+        cache.Register ();
+        cache.UseFrom (current_fun);
+        def body = f (PlainRef (cache));
+        TExpr.DefValIn (body.Type, cache, e, body)
+      } else f (e)
     }
     #endregion
 
@@ -246,6 +260,7 @@ namespace Nemerle.Compiler
 
     LocalRef (decl : LocalValue, for_store : bool) : TExpr
     {
+      // Message.Debug ($"local ref $decl $(decl.Id) $for_store");
       def decl =
         if (redirects.Contains (decl.Id))
           redirects [decl.Id]
@@ -834,6 +849,70 @@ namespace Nemerle.Compiler
     }
     #endregion
 
+    #region Optimizations
+    DoSimplfyIfs (_ : TExpr) : TExpr
+    {
+      | If (cond, e1, e2) => 
+        match (SimplfyIfs (cond)) {
+          | Literal (Bool (lit)) => SimplfyIfs (if (lit) e1 else e2)
+          
+          | Sequence (prep, Literal (Bool (lit))) =>
+            def e = SimplfyIfs (if (lit) e1 else e2);
+            TExpr.Sequence (e.Type, prep, e)
+            
+          | cond =>
+            match ((SimplfyIfs (e1), SimplfyIfs (e2))) {
+              | (Literal (Bool (true)), Literal (Bool (false))) =>
+                cond
+              | (e1, e2) =>
+                TExpr.If (cond, e1, e2)
+            }
+        }
+      | _ => null
+    }
+    
+    SimplfyIfs (e : TExpr) : TExpr
+    {
+      e.Walk (DoSimplfyIfs)
+    }
+    #endregion
+
+    
+    #region Matching compilation
+    CompileMatch (m : TExpr.Match) : TExpr
+    {
+      mutable vals = Set ();
+      
+      foreach (case in m.cases)
+        foreach ((pat, _) in case.patterns)
+          _ = pat.Walk (fun (_) {
+            | Pattern.As (_, decl) =>
+              vals = vals.Replace (decl);
+              null
+            | _ => null
+          });
+
+      def expr = 
+        WithCached (m.expr, fun (e) {
+          MatchingCompiler.Run (m.Type, e, m.cases)
+        });
+
+      def expr =
+        vals.Fold (expr, fun (decl, expr) {
+          if (decl.InClosure)
+            expr
+          else {
+            // Message.Debug ($"store $decl $(decl.Id)");
+            decl.UseFrom (current_fun);
+            TExpr.DefValIn (expr.Type, decl, 
+                            TExpr.DefaultValue (decl.Type), expr)
+          }
+        });
+
+      Walk (expr)
+    }
+    #endregion
+
 
     #region Top level stuff
     Walk (expr : TExpr) : TExpr
@@ -842,18 +921,9 @@ namespace Nemerle.Compiler
     }
 
 
-    StoreRefAs (pat : Pattern) : Pattern
-    {
-      | Pattern.As (_, decl) =>
-        decl.RefAs = LocalRef (decl);
-        null
-      | _ => null
-    }
-
-
     DoWalk (expr : TExpr) : TExpr
     {
-      //Message.Debug ($ "dowalk: $(expr.GetType()) $(expr)");
+      // Message.Debug ($ "dowalk: $(expr.GetType()) $(expr)");
       match (expr) {
         | TExpr.LocalRef (decl) =>
           LocalRef (decl)
@@ -935,11 +1005,8 @@ namespace Nemerle.Compiler
                                          "_N_constant_object_generator");
           Walk (StaticRef (meth))
 
-        | TExpr.Match (_, cases) =>
-          foreach (case in cases)
-            foreach ((pat, _) in case.patterns)
-              _ = pat.Walk (StoreRefAs);
-          null
+        | TExpr.Match as m =>
+          CompileMatch (m)
 
         // we cannot handle closurised values as placeholders for exceptions
         // so we use a fresh variable for exception and assign it using
