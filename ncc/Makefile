@@ -76,6 +76,7 @@ NEMERLE_DLL_SRC = \
 	../lib/LazyValue.n              \
 
 NEMERLE_COMPILER_DLL_SRC = \
+	generation/Typer4.n		 \
 	typing/Typer2.n			 \
 	typing/Typer.n			 \
 	typing/Typer-OverloadSelection.n \
@@ -175,7 +176,6 @@ INST	= @echo INSTALL $1
 # TARGETS
 ############################################################
 
-
 # Default rule is to build a compiler.  It is mainly used by
 # developers as they are the only people invoking make from
 # inside this directory.  All other people should invoke
@@ -220,6 +220,9 @@ last-stage-files: \
 		out.$(STAGE)/Nemerle.Compiler.dll \
 		out.$(STAGE)/Nemerle.Macros.dll \
 		out.$(STAGE)/ncc.exe
+
+nc:
+	$(MAKE) STAGE=stage1 out.stage1/Nemerle.Compiler.stage1.dll
 
 lib:
 	$(MAKE) STAGE=stage1 out.stage1/Nemerle.stage1.dll

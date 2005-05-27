@@ -1,0 +1,224 @@
+/*
+ * Copyright (c) 2005 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Collections;
+using Nemerle.Utility;
+
+using Nemerle.Compiler;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Compiler.SolverMacros;
+
+namespace Nemerle.Compiler
+{
+  class Typer4
+  {
+    current_fun : Fun_header;
+    current_type : TypeBuilder;
+    messenger : Messenger;
+    the_method : NemerleMethod;
+
+    #region Entry points
+    public this (meth : NemerleMethod)
+    {
+      current_fun = meth.GetHeader ();
+      the_method = meth;
+      messenger = Passes.Solver.CurrentMessenger;
+      current_type = meth.DeclaringType :> TypeBuilder;
+    }
+
+
+    public Run () : void
+    {
+      Util.locate (current_fun.loc, {
+        match (current_fun.body) {
+          | FunBody.Typed (body) =>
+            def body' = Walk (body);
+            current_fun.body = FunBody.Typed (body');
+            when (Options.ShouldDump (current_fun))
+              Message.Debug ($ "after T4: $the_method [$(current_fun.name)] "
+                               ":\n$(body')\n");
+          | _ => assert (false)
+        }
+      })
+    }
+
+
+    NeedBoxing (target_type : MType, expr : TExpr) : bool
+    {
+      (expr.Type.Fix ().IsValueType &&
+      !target_type.IsValueType)
+      // emit conversions for array types, becasue there is an error for 
+      // converting a value type array to non-value type array i ILEmitter
+      || (target_type is MType.Array && 
+          NeedConversionRec (target_type, expr.Type.Fix ()))
+    }
+    
+
+    Box (target_type : MType, expr : TExpr) : TExpr
+    {
+      Typer3.CheckedConversion (expr, target_type)
+    }
+
+
+    IsGeneric (t : MType) : bool
+    {
+      match (t) {
+        | MType.TyVarRef => true
+        | MType.Class (tc, []) => tc.Equals (InternalType.Object_tc)
+        | _ => false
+      }
+    }
+
+    NeedConversionRec (real_type : MType, expr_type : MType) : bool
+    {
+      (IsGeneric (real_type) && ! IsGeneric (expr_type)) ||
+      match (real_type) {
+        | MType.Array (real, _) =>
+          match (expr_type) {
+            | MType.Array (expr, _) =>
+              NeedConversionRec (real.Fix (), expr.Fix ())
+            | _ => Util.ice ()
+          }
+        | _ => false
+      }
+    }
+
+    NeedConversion (real_type : MType, expr : TExpr) : bool
+    {
+      // Message.Debug ($"maybe convert $real_type to $(expr.Type) (for $expr)");
+      NeedConversionRec (real_type, expr.Type.Fix ())
+    }
+    #endregion
+
+
+    #region Top level stuff
+    Walk (expr : TExpr) : TExpr
+    {
+      expr.Walk (DoWalk)
+    }
+
+
+    DoWalk (expr : TExpr) : TExpr
+    {
+      // Message.Debug ($ "dowalk: $(expr.GetType()) $(expr)");
+      def res =
+        match (expr) {
+          | FieldMember (obj, fld) 
+            when 
+              ! expr.IsAssigned && 
+              NeedConversion (fld.GetMemType (), expr) =>
+            // Message.Debug ($"field ref: $(fld.GetMemType())");
+            TExpr.FieldMember (fld.GetMemType (), Walk (obj), fld)
+            
+          | TupleIndexer (obj, pos, len) when NeedConversion (InternalType.Object, expr) =>
+            TExpr.TupleIndexer (InternalType.Object, Walk (obj), pos, len);
+
+          | Assign (e1, e2) =>
+            e1.IsAssigned = true;
+            def real_type =
+              match (e1) {
+                | FieldMember (_, fld)
+                | StaticRef (fld is IField) => fld.GetMemType ()
+                | LocalRef (decl) => decl.Type.Fix ()
+                | ArrayIndexer
+                | This => e1.Type.Fix ()
+                | _ => Util.ice ($ "wrong assignment target $e1")
+              }
+            def e1 = Walk (e1);
+            def e2 = Walk (e2);
+            if (NeedBoxing (real_type, e2))
+              TExpr.Assign (InternalType.Void, e1, Box (real_type, e2))
+            else 
+              TExpr.Assign (InternalType.Void, e1, e2)
+            
+          | TailCall (ImplicitValueTypeCtor, [])
+          | Call (ImplicitValueTypeCtor, []) => null
+          
+          // I hope opcodes don't need boxing ...
+          | TailCall (OpCode, _)
+          | Call (OpCode, _) => null
+          
+          | TailCall (func, parms)
+          | Call (func, parms) =>
+            def func = Walk (func);
+            def meth =
+              match (func) {
+                | MethodRef (_, meth, _)
+                | Base (meth)
+                | StaticRef (meth is IMethod) => meth
+                | _ => Util.ice ($ "invalid thing called $func")
+              }
+
+            unless (parms.IsEmpty) {
+              if (meth.DeclaringType.IsDelegate && meth.Name == ".ctor") {
+                def parm = parms.Head;
+                when (NeedBoxing (InternalType.Object, parm.expr))
+                  parm.expr = Box (InternalType.Object, parm.expr);
+              } else {
+                mutable formals = meth.GetParameters ();
+                
+                Util.cassert (formals.Length == parms.Length,
+                              $ "call to $meth $parms $formals");
+                
+                foreach (parm in parms) {
+                  match (formals) { 
+                    | f :: fs =>
+                      def t = f.ty.Fix ();
+                      parm.expr = Walk (parm.expr);
+                      when (parm.kind == ParmKind.Normal &&
+                            NeedBoxing (t, parm.expr))
+                        parm.expr = Box (t, parm.expr);
+                      formals = fs;
+                    | [] => Util.ice ();
+                  }
+                }
+              }
+            }
+
+            if (NeedConversion (meth.ReturnType.Fix (), expr))
+              TExpr.Call (meth.ReturnType.Fix (), func, parms)
+            else
+              if (expr is TExpr.TailCall)
+                TExpr.TailCall (expr.Type, func, parms)
+              else
+                TExpr.Call (expr.Type, func, parms)
+
+          | DefFunctionsIn
+          | Match
+          | SelfTailCall => Util.ice ()
+          
+          | _ => null
+        }
+      // Message.Debug ($"do walk: $expr -> $res");
+      if (res == null) null
+      else if (res.Type.Equals (expr.Type)) res
+      else Typer3.CheckedConversion (res, expr.Type)
+    }
+    #endregion
+  }
+}
