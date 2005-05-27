@@ -143,6 +143,8 @@ NEMERLE_COMPILER_DLL_SRC = \
 NCC_EXE_SRC       = main.n
 
 STDMACROS_DLL_SRC = \
+	../macros/AssemblyInfo.n \
+	../macros/Data.n \
 	../macros/Internals.n \
 	../macros/Logging.n \
 	../macros/Nemerle.n \
@@ -155,8 +157,6 @@ STDMACROS_DLL_SRC = \
         ../macros/core.n \
         ../macros/io.n \
         ../macros/text.n \
-	../macros/Data.n \
-	../macros/AssemblyInfo.n \
 
 ############################################################
 # OUTPUT
