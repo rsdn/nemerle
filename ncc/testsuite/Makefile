@@ -56,7 +56,7 @@ CP = @echo CP      $1
 ############################################################
 
 all: clean test
-	rm -f *.dll *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
+	rm -f *.dll *.mdb *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
 
 test: test.exe $(NEM_DLLS)
 	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" -p "$(NEM_FLAGS) $(ADDITIONAL_FLAGS)" \
@@ -84,7 +84,7 @@ test-stage1:
 	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" \
 		-p "-no-stdlib -r:Nemerle.stage1 -r:System $(NEM_FLAGS) -nowarn:10003" \
 		-verify "$(VERIFY)"  $(TEST_FILES)
-	rm -f *.dll *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
+	rm -f *.dll *.mdb *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
 
 test-stage2:
 	cp $(STAGE2)/Nemerle.stage2.dll .
@@ -95,12 +95,12 @@ test-stage2:
 	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" \
 		-p "-no-stdlib -r:Nemerle.stage2 -r:System $(NEM_FLAGS) -nowarn:10003" \
 		-verify "$(VERIFY)"  $(TEST_FILES)
-	rm -f *.dll *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
+	rm -f *.dll *.mdb *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
 
 clean:
 	$(Q) cd positive && $(MAKE) clean
 	$(Q) cd negative && $(MAKE) clean
-	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]* xml-*.xml
+	rm -f *.mdb *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]* xml-*.xml
 	rm -f test.err test_error.log a.out test_out.txt
 
 .PHONY: test
