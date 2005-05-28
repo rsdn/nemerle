@@ -61,13 +61,7 @@ INST  = @echo INSTALL $1
 # builds standard library.
 all:
 	$(Q)$(MAKE) -C ncc boot
-	$(Q)if test $(ANTLR); then \
-		$(MAKE) -C tools/cs2n all; \
-	elif find tools/cs2n/CSharpParser.cs -cnewer tools/cs2n/csharpgrammar.g | grep -q "" ; then \
-		$(MAKE) -C tools/cs2n all; \
-	fi
-	$(Q)$(MAKE) -C tools/nemerlish all
-	$(Q)$(MAKE) -C tools/nant-task all
+	$(Q)$(MAKE) -C tools all
 
 
 # This is necessary to make sure, that configuration file
@@ -129,17 +123,13 @@ dist-cleaner:
 install: all
 	$(Q)$(MAKE) -C doc install
 	$(Q)$(MAKE) -C ncc install
-	$(Q)if test -f tools/cs2n/cs2n.exe ; then \
-	  $(MAKE) -C tools/cs2n install; fi
-	$(Q)$(MAKE) -C tools/nemerlish install
-	$(Q)$(MAKE) -C tools/nant-task all install
+	$(Q)$(MAKE) -C tools install
 	$(INST) $(PKGCONFIGDIR)/nemerle.pc
 	$(Q)install -d $(DESTDIR)$(PKGCONFIGDIR)
 	$(Q)install -m 644 nemerle.pc $(DESTDIR)$(PKGCONFIGDIR)/nemerle.pc
 
 uninstall:
-	$(Q)-$(MAKE) -C tools/cs2n uninstall
-	$(Q)-$(MAKE) -C tools/nemerlish uninstall
+	$(Q)-$(MAKE) -C tools uninstall
 	$(Q)$(MAKE) -C boot uninstall
 	$(Q)$(MAKE) -C doc  uninstall
 	$(Q)rm -f $(PKGCONFIGDIR)/nemerle.pc
@@ -156,10 +146,7 @@ clean:
 	$(MAKE) -C doc clean
 	$(MAKE) -C ncc clean
 	$(MAKE) -C snippets clean
-	$(MAKE) -C tools/cs2n clean
-	$(MAKE) -C tools/nemerlish clean
-	$(MAKE) -C tools/nant-task clean
-	$(MAKE) -C tools/htmldumper clean
+	$(MAKE) -C tools clean
 	rm -f config.mak configure.log
 
 set-version: config.mak
