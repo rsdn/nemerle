@@ -38,6 +38,16 @@ namespace Nemerle.Compiler
 {
   public class GlobalEnv 
   {
+    [Record]
+    public class string_wrap : Nemerle.IComparable [string_wrap]
+    {
+      public Val : string;
+      
+      public CompareTo (y : string_wrap) : int {
+        string.CompareOrdinal (Val, y.Val)
+      }
+    }
+    
     public static Empty : GlobalEnv;
     public static mutable Core : GlobalEnv;
     
@@ -46,6 +56,12 @@ namespace Nemerle.Compiler
     namespace_aliases : list [string * string];
     mutable macro_ctx_cache : int;
 
+    /// this is a map of keywords, which trigger syntax extensions
+    public SyntaxKeywords : SystemMap [string, GrammarElement];
+
+    /// this is a set of keywords present in current global environment
+    public Keywords : Set [string_wrap];
+    
     static this () {
       Empty = GlobalEnv ();
     }
@@ -62,17 +78,44 @@ namespace Nemerle.Compiler
 
     this () 
     {
-      this ([], namespace_tree, []);
+      this ([], namespace_tree, [], SystemMap (), LexerBase.BaseKeywords);
     }
 
-    this (o : list [NamespaceTree.Node], c : NamespaceTree.Node, n : list [string * string])
+    this (o : list [NamespaceTree.Node], c : NamespaceTree.Node, n : list [string * string],
+          syntax_keys : SystemMap [string, GrammarElement],
+          keywords : Set [string_wrap])
     {
       open_namespaces = o;
       current_namespace = c;      
       namespace_aliases = n;
+
+      SyntaxKeywords = syntax_keys;
+      Keywords = keywords;
+      
       macro_ctx_cache = -1;
     }
-
+    
+    public IsKeyword (x : string) : bool
+    {
+      Keywords.Contains (string_wrap (x))
+    }
+    
+    internal CreateExtended (o : list [NamespaceTree.Node], c : NamespaceTree.Node,
+                             n : list [string * string],
+                             // note that only NEW extensions are specified here                      
+                             syntax_exts : list [list [SyntaxDefinition]]) : GlobalEnv
+    {
+      mutable syn_keys = SyntaxKeywords;
+      mutable keys = Keywords;
+      foreach (x in syntax_exts) {
+        syn_keys = MainParser.load_syntax (x, syn_keys);
+        foreach (ext in x)
+          foreach (k in ext.Keywords)
+            keys = keys.Replace (string_wrap (k));
+      }
+      GlobalEnv (o, c, n, syn_keys, keys)
+    }
+    
     
     public Define (td : PT.ClassMember) : TypeBuilder
     {
@@ -171,7 +214,7 @@ namespace Nemerle.Compiler
     }
   
     
-    internal LookupSymbol (name : list [string], _parent : TypeBuilder) : list [IMember]
+    public LookupSymbol (name : list [string], _parent : TypeBuilder) : list [IMember]
     {
       // these are really small, so we do linear lookup in list
       mutable visited = [];
@@ -253,9 +296,11 @@ namespace Nemerle.Compiler
       
       // we will warn when none of created namespace parts exists as real namespaces
       referenced_namespace_nodes = (all_opened, loc) :: referenced_namespace_nodes;
+      
       // we will warn if some of those namespace are already open
-      GlobalEnv (add_open_nodes (open_namespaces, all_opened, loc, true),
-                 current_namespace, namespace_aliases)
+      def (exts, new_opened) = add_open_nodes (open_namespaces, all_opened, loc, true);
+
+      CreateExtended (new_opened, current_namespace, namespace_aliases, exts)
     }
     
     public AddNamespaceAlias (short_name : string, long_name : list [string], 
@@ -269,7 +314,9 @@ namespace Nemerle.Compiler
                                   
       GlobalEnv (List.RevAppend (nodes_with_prefix, open_namespaces),
                  current_namespace,
-                 (short_name, long_name.ToString (".")) :: namespace_aliases)
+                 (short_name, long_name.ToString (".")) :: namespace_aliases,
+                 SyntaxKeywords,
+                 Keywords)
     }
 
     internal EnterIntoNamespace (qid : list [string]) : GlobalEnv
@@ -291,31 +338,38 @@ namespace Nemerle.Compiler
       when (full.Value is TypeInfoCache.No)
         full.Value = TypeInfoCache.NamespaceReference ();
 
-      def new_opened = add_open_nodes (open_namespaces, [full], Location.Default, false);
-      GlobalEnv (new_opened, full, namespace_aliases)
+      def (exts, new_opened) = add_open_nodes (open_namespaces, [full], Location.Default, false);
+
+      CreateExtended (new_opened, full, namespace_aliases, exts)
     }
 
-    internal ContainsOpenNamespace (ns : list [string]) : bool {
-      open_namespaces.Exists (fun (x) { x.Name.Equals (ns) });
-    }
 
     /** this is the auxiliary function for making set of opened namespaces
         unique and warn if namespaces are opened multiple times by user
      */
     add_open_nodes (old : list [NamespaceTree.Node], added : list [NamespaceTree.Node],
-                    loc : Location, should_warn : bool) : list [NamespaceTree.Node]
+                    loc : Location, should_warn : bool)
+      : list [list [SyntaxDefinition]] * list [NamespaceTree.Node]
     {
-      List.FoldLeft (added, old, fun (x : NamespaceTree.Node, acc) {
+      mutable exts = [];
+      def nodes = List.FoldLeft (added, old, fun (x : NamespaceTree.Node, acc) {
         if (List.ContainsRef (old, x)) {
           when (should_warn)
             Message.Warning (105, loc, $ @"namespace `$(x.Name.ToString ("".""))' is already open");
           acc
         }
-        else
+        else {
+          def ext = MacroRegistry.GetSyntaxExtensions (x.Name);
+          when (ext : object != [])
+            exts ::= ext;
+          
           x :: acc
-      })
+        }
+      });
+      (exts, nodes)
     }
-    
+
+
     /** We substitute
         using Y = X.Z;
         by

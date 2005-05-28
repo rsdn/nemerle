@@ -420,6 +420,15 @@ profile:
           $(NEMERLE_COMPILER_DLL_SRC) > nc-prof-log
 	$(Q)../misc/profiler/prof
 
+profile1:
+	$(Q)mono --profile=heap:n.prof $(COMPILER) -no-stdlib -t:dll \
+          -out:out.stage1/Nemerle.stage1.dll -r System.dll \
+          $(NEMERLE_DLL_SRC)
+	$(Q)mono --profile=heap:nc.prof $(COMPILER) -no-stdlib -t:dll \
+          -r out.stage1/Nemerle.stage1.dll -r System.dll \
+          $(NEMERLE_COMPILER_DLL_SRC) > nc-prof-log
+
+
 
 halfboot:
 	touch out.stage1/*
