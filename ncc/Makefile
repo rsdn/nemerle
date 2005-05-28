@@ -408,6 +408,7 @@ tests-mcs:
 	$(Q)cd testsuite/frommcs && $(MAKE)
 
 check:
+	$(MAKE) -C ../tools clean
 	$(MAKE) -C .. check
 
 profile:
