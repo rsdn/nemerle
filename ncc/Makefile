@@ -157,6 +157,7 @@ STDMACROS_DLL_SRC = \
         ../macros/core.n \
         ../macros/io.n \
         ../macros/text.n \
+	../macros/Memoize.n \
 
 ############################################################
 # OUTPUT
