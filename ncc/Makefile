@@ -34,7 +34,7 @@ include ../config.mak
 ############################################################
 
 COMPILER_PATH = ../boot/
-NCC_FLAGS     = -pedantic-lexer $(NEM_FLAGS)
+NCC_FLAGS     = -dowarn:10006 -pedantic-lexer $(NEM_FLAGS)
 COMPILER      = $(COMPILER_PATH)ncc.exe
 COMPILER_DEP  = $(COMPILER_PATH)ncc.exe $(COMPILER_PATH)Nemerle.Macros.dll
 EXECUTE       = $(NET_ENGINE) $(NET_FLAGS)
