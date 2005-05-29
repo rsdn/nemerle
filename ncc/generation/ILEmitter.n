@@ -36,6 +36,8 @@ namespace Nemerle.Compiler
   using System.Reflection.Emit;
   using System.Diagnostics.SymbolStore;
 
+  using Nemerle.Compiler.Typedtree;
+
   /* ----------------------------------------------------------------------- */
   /* -- CODE GENERATOR CLASS ----------------------------------------------- */
   /* ----------------------------------------------------------------------- */
@@ -51,11 +53,14 @@ namespace Nemerle.Compiler
     private _this_is_value_type : bool;
     private _type_of_this : System.Type;
 
-    private  _method_name : string;
+    private _method_name : string;
     private _method_is_static : bool;
     private _fun_header : Typedtree.Fun_header;
     private mutable _method_start_label : Label;
     private mutable _debug_doc : ISymbolDocumentWriter;        
+
+    private _labels : Hashtable [int, Label] = Hashtable ();
+    private _label_usage : Hashtable [int, TExpr] = Hashtable ();
 
     /**
      * Creates and executes a code generator for a method
@@ -93,26 +98,32 @@ namespace Nemerle.Compiler
       _type_of_this = constructor_builder.DeclaringType;
     }
 
-    public Run () : void {
+    public Run () : void
+    {
       _method_start_label = _ilg.DefineLabel ();
       _ilg.MarkLabel (_method_start_label);
 
       match (_fun_header.body) {
-        | FunBody.Compiled (body) =>
+        | FunBody.Typed (body) =>
           emit (body);
-          unless (throws (body))
+          unless (body.Throws)
             _ilg.Emit (OpCodes.Ret);
           // let GC take it
           _fun_header.body = FunBody.ILed ();
         | _ => Util.ice ()
       }
+      
+      _label_usage.Iter (fun (_, v : TExpr) {
+        when (v != null)
+          Message.Error (v.loc, "non local goto (block return?) detected");
+      })
     }
 
-    private is_always_true (expr : CExpr) : bool
+    private is_always_true (expr : TExpr) : bool
     {
-      | CExpr.Literal (Literal.Bool (true)) => true
+      | Literal (Literal.Bool (true)) => true
 
-      | CExpr.If (cond_expr, then_expr, else_expr) =>
+      | If (cond_expr, then_expr, else_expr) =>
         def cond_always_true = is_always_true (cond_expr);
         def cond_always_false = is_always_false (cond_expr);
         def then_always_true = is_always_true (then_expr);
@@ -132,14 +143,14 @@ namespace Nemerle.Compiler
         _debug_doc = _module_builder.DefineDocument (Path.GetFullPath (loc.File), 
           SymDocumentType.Text, SymLanguageType.ILAssembly, SymLanguageVendor.Microsoft);
       else
-        assert (false, "missing location");
+        Util.ice ("missing location");
     }
 
-    private is_always_false (expr : CExpr) : bool
+    private is_always_false (expr : TExpr) : bool
     {
-      | CExpr.Literal (Literal.Bool (false)) => true
+      | Literal (Bool (false)) => true
 
-      | CExpr.If (cond_expr, then_expr, else_expr) =>
+      | If (cond_expr, then_expr, else_expr) =>
         def cond_always_true = is_always_true (cond_expr);
         def cond_always_false = is_always_false (cond_expr);
         def then_always_false = is_always_false (then_expr);
@@ -153,33 +164,25 @@ namespace Nemerle.Compiler
       | _ => false
     }
 
-    private static throws (expr : CExpr) : bool
-    {
-      expr.flags %&& CgExprFlags.Throws
-    }
-
-    private static wish_address (expr : CExpr) : bool
-    {
-      expr.flags %&& CgExprFlags.WishAddress || 
-      expr.flags %&& CgExprFlags.NeedAddress
-    }
-
-    /** Emit volatile prefix if needed. */
-    private maybe_volatile (expr : CExpr) : void
-    {
-      | CExpr.VolatileGlobalRef
-      | CExpr.VolatileFieldRef => _ilg.Emit (OpCodes.Volatile)
-      | _ => ()
-    }
-
     /** Marks the point in source file for currently emmited opcode */
     Mark (loc : Location) : void
     {
       when (Options.EmitDebug && loc.Line != 0) {
-        assert (loc.Line <= loc.EndLine, "spoiled location " + loc.File + " " + loc.ToString ());
+        Util.cassert (loc.Line <= loc.EndLine, "spoiled location " + loc.File + " " + loc.ToString ());
         _ilg.MarkSequencePoint (_debug_doc, loc.Line, loc.Column, loc.EndLine, loc.EndColumn);
       }
-    } 
+    }
+
+
+    /** Emit volatile prefix if needed. */
+    private maybe_volatile (expr : TExpr) : void
+    {
+      | StaticRef (f is IField)
+      | FieldMember (_, f) =>
+        when (f.IsVolatile)
+          _ilg.Emit (OpCodes.Volatile)
+      | _ => ()
+    }
 
 
     /** Box the value of type [t] if needed.  */
@@ -190,10 +193,67 @@ namespace Nemerle.Compiler
     }
 
 
+    is_jump_target (expr : TExpr) : bool
+    {
+      match (expr) {
+        | Label (id, _) =>
+          _label_usage.Contains (id)
+        | _ => false
+      }
+    }
+
+
+    static is_void (ty : TyVar) : bool
+    {
+      ty.Fix () is MType.Void
+    }
+
+
+    static is_ctor (meth : IMethod) : bool
+    {
+      meth.GetFunKind () is FunKind.Constructor
+    }
+
+
+    store_local (decl : LocalValue) : void
+    {
+      if (decl.IsParm) {
+        Util.cassert (! decl.IsByRefParm);
+        store_argument (decl.ParmIndex)
+      } else
+        // simply skip assignment here
+        unless (is_void (decl.Type))
+          _ilg.Emit (OpCodes.Stloc, decl.LocalSlot);
+    }
+
+
+    emit_parms (parms : list [Parm]) : void
+    {
+      foreach (parm in parms)
+        emit (parm.expr);
+    }
+
+    static skipped (expr : TExpr) : void
+    {
+      Message.Warning (expr.loc,
+                       "this expression has been skipped in code "
+                       "generation due to throw usage");
+    }
+
+    static no_cast_needed (src_type : System.Type, target_type : System.Type) : bool
+    {
+      src_type.Equals (target_type) ||
+      (! src_type.IsValueType &&
+       ! target_type.IsValueType &&
+       target_type.IsAssignableFrom (src_type))
+    }
+
+
+
     /**
      * Emits an expression.
      */
-    private emit (expr : CExpr) : void
+    private emit (expr : TExpr) : void
     {
       // Message.Debug (expr.loc, "emit: " + expr.ToString ());
       match (expr) {
@@ -201,62 +261,63 @@ namespace Nemerle.Compiler
         /* -- SEQUENCING --------------------------------------------------- */
 
         /* emits a sequence of expressions */
-        | CExpr.Sequence (expr_seq) => 
-          foreach (e in expr_seq) emit (e);
+        | Sequence (e1, e2) =>
+          emit (e1);
+          if (!e1.Throws || is_jump_target (e2))
+            emit (e2);
+          else
+            skipped (e2);
 
+        | DefValIn (_, let_val, body) when let_val.Throws && ! is_jump_target (body) =>
+          emit (let_val);
+          skipped (body);
+        
         /* emits a local value definition */
-        | CExpr.Define (let_val, let_in) =>
+        | DefValIn (decl, let_val, let_in) =>
           def newscope = 
-          match (let_val.val) {
-            | CExpr.Nop => 
-              if (SystemType.Void.Equals (let_val.ty))
-                false
-              else {
-                _ = declare_val_local_slot (let_val);
-                true
-              }
+            match (let_val) {
+              | DefaultValue => 
+                if (is_void (decl.Type))
+                  false
+                else {
+                  _ = declare_val_local_slot (decl);
+                  true
+                }
 
-            | CExpr.InitValueType (t) =>
-              def slot = declare_val_local_slot (let_val);
-              Mark (let_val.loc);
-              _ilg.Emit (OpCodes.Ldloca, slot);
-              _ilg.Emit (OpCodes.Initobj, t);
-              true
-                            
-            | _ =>
-              emit (let_val.val);
-              if (SystemType.Void.Equals (let_val.ty)) 
-                false
-              else {
-                def local_slot = declare_val_local_slot (let_val);
-                Mark (let_val.loc);
-                _ilg.Emit (OpCodes.Stloc, local_slot);
+              | ImplicitValueTypeCtor (t) =>
+                def slot = declare_val_local_slot (decl);
+                Mark (decl.Location);
+                _ilg.Emit (OpCodes.Ldloca, slot);
+                _ilg.Emit (OpCodes.Initobj, t.GetSystemType ());
                 true
-              };
-          };
+                              
+              | _ =>
+                emit (let_val);
+                if (is_void (decl.Type)) 
+                  false
+                else if (!decl.EverUsed) {
+                  _ilg.Emit (OpCodes.Pop);
+                  false
+                } else {
+                  def local_slot = declare_val_local_slot (decl);
+                  Mark (decl.Location);
+                  unless (let_val.Throws)
+                    _ilg.Emit (OpCodes.Stloc, local_slot);
+                  true
+                }
+            }
           emit (let_in);
           when (Options.EmitDebug && newscope) _ilg.EndScope ();
 
 
-        /* ignores the results of a computation */
-        | CExpr.Ignore (ignored) =>
-          // a little trickery, so emit can be tail called sometimes
-          if (SystemType.Void.Equals (ignored.SystemType))
-            emit (ignored)
-          else {
-            emit (ignored);
-            Mark (expr.loc);
-            _ilg.Emit (OpCodes.Pop);
-          }
-
         /* -- CONDITIONAL CONSTRUCTIONS ------------------------------------ */
 
         /* emits the if/then/else construction */
-        | CExpr.If (cond_expr, then_expr, else_expr) =>
-          def emit_branch (expr, else_label : Label) {
+        | If (cond_expr, then_expr, else_expr) =>
+          def emit_branch (expr : TExpr, else_label : Label) {
             match (expr) {
-              | CExpr.Call (CExpr.Opcode (opcode), parms) =>
-                List.Iter (parms, emit);
+              | Call (OpCode (opcode), parms) =>
+                emit_parms (parms);
 
                 /* NOTE: the opcodes are swapped so that the 'then' expression
                          can be emitted before the 'else' expression */
@@ -276,24 +337,24 @@ namespace Nemerle.Compiler
                     | ">=.u" => OpCodes.Blt_Un
                     | "bool.!" => OpCodes.Brtrue
                     | _ => Util.ice ("invalid opcode '" + opcode +
-                                     "' in optimized CExpr.If pattern")
+                                     "' in optimized TExpr.If pattern")
                   };
                 Mark (expr.loc);
                 _ilg.Emit (opcode, else_label);
 
-              | CExpr.HasType (val, ty) =>
+              | HasType (val, ty) =>
                 emit (val);
                 Mark (expr.loc);
                 need_reference (val.SystemType);
-                _ilg.Emit (OpCodes.Isinst, ty);
+                _ilg.Emit (OpCodes.Isinst, ty.GetSystemType ());
                 _ilg.Emit (OpCodes.Brfalse, else_label);
 
-              | CExpr.If (new_cond, new_then, new_else) =>
+              | If (new_cond, new_then, new_else) =>
                 def my_label_else = _ilg.DefineLabel ();
                 def my_label_fi = _ilg.DefineLabel ();
                 emit_branch (new_cond, my_label_else);
                 emit_branch (new_then, else_label);
-                unless (throws (new_then))
+                unless (new_then.Throws)
                   _ilg.Emit (OpCodes.Br, my_label_fi);
                 _ilg.MarkLabel (my_label_else);                  
                 emit_branch (new_else, else_label);              
@@ -306,7 +367,7 @@ namespace Nemerle.Compiler
 
               | _ =>
                 //Message.Debug (e.loc, pretty_print (e));
-                // most of other expressions here are CExpr.Ref
+                // most of other expressions here are TExpr.Ref
                 emit (expr);
                 Mark (cond_expr.loc);
                 _ilg.Emit (OpCodes.Brfalse, else_label);                
@@ -318,7 +379,7 @@ namespace Nemerle.Compiler
           emit_branch (cond_expr, label_condition_else);
 
           emit (then_expr);
-          unless (throws (then_expr))
+          unless (then_expr.Throws)
             _ilg.Emit (OpCodes.Br, label_condition_fi);
 
           _ilg.MarkLabel (label_condition_else);
@@ -327,7 +388,7 @@ namespace Nemerle.Compiler
           _ilg.MarkLabel (label_condition_fi);
         
         /* emit a type check construction */
-        | CExpr.HasType (expr, ty) =>
+        | HasType (expr, ty) =>
           emit (expr);
           def label_condition_not_null = _ilg.DefineLabel ();
           def label_condition_has_type = _ilg.DefineLabel ();
@@ -341,7 +402,7 @@ namespace Nemerle.Compiler
           _ilg.MarkLabel (label_condition_not_null);
 
           need_reference (expr.SystemType);
-          _ilg.Emit (OpCodes.Isinst, ty);
+          _ilg.Emit (OpCodes.Isinst, ty.GetSystemType ());
           _ilg.Emit (OpCodes.Brtrue_S, label_condition_has_type);
           _ilg.Emit (OpCodes.Ldc_I4_0);
           _ilg.Emit (OpCodes.Br_S, label_condition_continue);
@@ -351,7 +412,7 @@ namespace Nemerle.Compiler
 
 
         /* emit a nullness check construction */
-        | CExpr.NotNull (val) =>
+        | NotNull (val) =>
           emit (val);
           def label_condition_not_null = _ilg.DefineLabel ();
 
@@ -364,59 +425,77 @@ namespace Nemerle.Compiler
 
 
         /* load runtime representation of given type */
-        | CExpr.TypeOf (t) =>
+        | TypeOf (t) =>
           Mark (expr.loc);
-          _ilg.Emit (OpCodes.Ldtoken, t);
+          _ilg.Emit (OpCodes.Ldtoken, t.GetSystemType ());
           _ilg.Emit (OpCodes.Call, SystemType.Type_GetTypeFromHandle);
 
 
-        /* emits the CExpr.Switch instruction */
-        | CExpr.Switch (indexing_expr, default_expr, cases) =>
+        /* emits the TExpr.Switch instruction */
+        | Switch (indexing_expr, default_expr, cases) =>
           match (cases) {
-            | [] => Message.Warning ("empty CExpr.Switch instruction");
+            | [] => Message.Warning ("empty TExpr.Switch instruction");
             | _ =>
               emit (indexing_expr);
               emit_switch (default_expr, cases)
           }
 
 
-        /* insert label so CExpr.Goto can work */
-        | CExpr.Label (expr, _, _) as loop =>
-          when (loop.il_label.IsNone)
-            loop.il_label = Some (_ilg.DefineLabel ());
-          def label = Option.UnSome (loop.il_label);
-          _ilg.MarkLabel (label);
+        /* insert label so TExpr.Goto can work */
+        | Label (id, expr) =>
+          if (_labels.Contains (id))
+            _label_usage [id] = null;
+          else
+            _labels [id] = _ilg.DefineLabel ();
+          _ilg.MarkLabel (_labels [id]);
           emit (expr)
 
 
-        | CExpr.Goto (which) =>
+        | Goto (id) =>
+          if (_labels.Contains (id)) {
+            _label_usage [id] = null;
+          } else {
+            _label_usage [id] = expr;
+            _labels [id] = _ilg.DefineLabel ();
+          }
+          
           Mark (expr.loc);
-          when (which.il_label.IsNone)
-            which.il_label = Some (_ilg.DefineLabel ());
-          _ilg.Emit (OpCodes.Br, Option.UnSome (which.il_label));
+          _ilg.Emit (OpCodes.Br, _labels [id]);
 
 
         /* -- TYPE CONVERSIONS --------------------------------------------- */
 
         /* do not perform casts between same types */
-        | CExpr.Cast (expr, cast_to_type, _) when expr.SystemType.Equals (cast_to_type) =>
+        | TypeConversion (expr, cast_to_type, _) 
+          when no_cast_needed (expr.SystemType, cast_to_type.GetSystemType ()) =>
           emit (expr)
 
-        | CExpr.Cast (expr, cast_to_type, _) when cast_to_type.Equals (SystemType.Void) =>
-          emit (CExpr.Ignore (expr))
+        // when expr throws we shouldn't emit anything
+        | TypeConversion (expr, _, _) when expr.Throws =>
+          emit (expr)
+
+        | TypeConversion (ignored, ty, _) when is_void (ty) =>
+          // a little trickery, so emit can be tail called sometimes
+          if (is_void (ignored.Type))
+            emit (ignored)
+          else {
+            emit (ignored);
+            Mark (expr.loc);
+            _ilg.Emit (OpCodes.Pop);
+          }
 
         /* to nonvalue type */
-        | CExpr.Cast (expr, cast_to_type, _) when !cast_to_type.IsValueType =>
-          emit (expr);        
-          if (SystemType.Void.Equals (expr.SystemType))
+        | TypeConversion (expr, cast_to_type, _) when !cast_to_type.Fix ().IsValueType =>
+          emit (expr);
+          if (is_void (expr.Type))
             /* special case casts from void */
             _ilg.Emit (OpCodes.Ldnull);
-          else 
-          if (expr.SystemType.IsValueType)
+          else if (expr.SystemType.IsValueType)
             /* box value types casted to non value types */          
             _ilg.Emit (OpCodes.Box, expr.SystemType);
           else {
             /* upcast / downcast non-value types */
+            def cast_to_type = cast_to_type.GetSystemType ();
             Mark (expr.loc);
             when (expr.SystemType.IsArray && cast_to_type.IsArray &&
                   expr.SystemType.GetElementType ().IsValueType !=
@@ -428,14 +507,16 @@ namespace Nemerle.Compiler
           }
 
         /* unbox value types or perform value type conversion */
-        | CExpr.Cast (val, cast_to_type, is_checked) =>
+        | TypeConversion (val, cast_to_type, kind) =>
+          def is_checked = ! (kind is IL (false));
           emit (val);
           Mark (expr.loc);
           def type_of_expr = val.SystemType;
+          def cast_to_type = cast_to_type.GetSystemType ();
 
           if (type_of_expr.IsValueType) {
             /* perform conversion of value types */
-            emit_value_type_conversion (type_of_expr, cast_to_type, is_checked)
+            emit_value_type_conversion (expr.loc, type_of_expr, cast_to_type, is_checked)
           }
           else if (SystemType.Object.Equals (type_of_expr) || type_of_expr.IsInterface
                    || (SystemType.Enum.Equals (type_of_expr) && cast_to_type.IsEnum)) {
@@ -447,23 +528,22 @@ namespace Nemerle.Compiler
             emit_ldind_for_value_type (cast_to_type)
           }
           else {
-            Message.Warning ($ "$_method_name: failed to convert non-value "
-                               "type $type_of_expr to a value type "
-                               "$cast_to_type");
-            assert (false)
+            Util.ice ($ "$_method_name: failed to convert non-value "
+                        "type $type_of_expr to a value type "
+                        "$cast_to_type");
           }
 
 
         /* -- REFERENCES --------------------------------------------------- */
 
         /* load the value of a local variable or a method parameter */
-        | CExpr.Ref (decl) =>
-          emit_ce_ref (decl, get_address_for_value_types = wish_address (expr))
+        | LocalRef (decl) =>
+          unless (is_void (decl.Type))
+            emit_ce_ref (decl, get_address_for_value_types = expr.NeedAddress)
 
         /* load the value of a field */
-        | CExpr.FieldRef (base_object, field) 
-        | CExpr.VolatileFieldRef (base_object, field) =>
-          def result_will_be_address = wish_address (expr);
+        | FieldMember (base_object, field) =>
+          def result_will_be_address = expr.NeedAddress;
           
           if (result_will_be_address) 
             _ = emit_and_convert_to_address (base_object);
@@ -473,14 +553,13 @@ namespace Nemerle.Compiler
           maybe_volatile (expr);
 
           if (result_will_be_address)
-            _ilg.Emit (OpCodes.Ldflda, field);
+            _ilg.Emit (OpCodes.Ldflda, field.GetFieldInfo ());
           else
-            _ilg.Emit (OpCodes.Ldfld, field);
+            _ilg.Emit (OpCodes.Ldfld, field.GetFieldInfo ());
 
         /* load the value of a static field */
-        | CExpr.VolatileGlobalRef (mi) when member_is_field (mi)
-        | CExpr.GlobalRef (mi) when member_is_field (mi) =>
-          def field_info = (mi :> FieldInfo);
+        | StaticRef (f is IField) =>
+          def field_info = f.GetFieldInfo ();
 
           assert (field_info.IsStatic, "GlobalRef to a non-static field");
 
@@ -489,62 +568,52 @@ namespace Nemerle.Compiler
             Message.Warning ("loading literal as field `" + field_info.ToString () + "'");
 
           maybe_volatile (expr);
-          if (wish_address (expr))
+          if (expr.NeedAddress)
             _ilg.Emit (OpCodes.Ldsflda, field_info);
           else
             _ilg.Emit (OpCodes.Ldsfld, field_info);
 
         /* load an array element */
-        | CExpr.ArrayAccess (array_obj, [index]) =>
+        | ArrayIndexer (_, array_obj, [index]) =>
           emit (array_obj);
           emit (index);
           def element_type = array_obj.SystemType.GetElementType ();
-          assert (element_type != null, "non-array in CExpr.ArrayAccess");
+          assert (element_type != null, "non-array in TExpr.ArrayIndexer");
 
           Mark (expr.loc);
-          if (wish_address (expr))
+          if (expr.NeedAddress)
             _ilg.Emit (OpCodes.Ldelema, element_type)
           else
             emit_array_load_opcode (element_type);
           
 
-        | CExpr.ArrayAccess (array_obj, indexes) =>
+        | ArrayIndexer (_, array_obj, indexes) =>
           emit (array_obj);
           List.Iter (indexes, emit);
           Mark (expr.loc);
           def method =
-            if (wish_address (expr)) array_addr_method (array_obj)
+            if (expr.NeedAddress) array_addr_method (array_obj)
             else array_get_method (array_obj);
           emit_method_call (expr, true, method);
 
 
         /* -- ASSIGNMENTS -------------------------------------------------- */
 
-        // FIXME? move it a bit down and see no redundant warning?
+        | Assign (LocalRef, val) when val.Throws
+        | Assign (LocalRef (local_var), val) when is_void (local_var.Type) =>
+          emit (val);
+          
+        
         /* special case these assignments for performance */
-        | CExpr.Assign (CExpr.Ref (decl), CExpr.InitValueType (t)) =>
+        | Assign (LocalRef (decl), ImplicitValueTypeCtor (t)) =>
           Mark (expr.loc);
           emit_ce_ref (decl, get_address_for_value_types = true);
-          _ilg.Emit (OpCodes.Initobj, t);
+          _ilg.Emit (OpCodes.Initobj, t.GetSystemType ());
 
      
-        /* assignment to a local variable */
-        | CExpr.Assign (CExpr.Ref (local_var), val) =>
-          emit (val);
-          Mark (expr.loc);          
-          match (local_var.local_slot) {
-            | Some (local_slot) =>
-              _ilg.Emit (OpCodes.Stloc, local_slot);
-            | _ when SystemType.Void.Equals (val.SystemType) =>
-              // simply skip assignment here
-              ()
-            | _ =>
-              store_argument (local_var.parm_index)
-          };
-
         /* assignment to ref/out parameter */
-        | CExpr.Assign (CExpr.Indirect (CExpr.Ref (CG_val where (parm_index = Some (parm_index)))), val) =>
-          emit_ldarg (parm_index);
+        | Assign (LocalRef (local_var), val) when local_var.IsByRefParm =>
+          emit_ldarg (local_var.ParmIndex);
           emit (val);
           Mark (expr.loc);
           def ty = val.SystemType;
@@ -554,27 +623,33 @@ namespace Nemerle.Compiler
             _ilg.Emit (OpCodes.Stind_Ref);
 
 
+        /* assignment to a local variable */
+        | Assign (LocalRef (local_var), val) =>
+          emit (val);
+          Mark (expr.loc); 
+          unless (val.Throws)
+            store_local (local_var);
+
+
         /* assignment to a field */
-        | CExpr.Assign (CExpr.VolatileFieldRef (base_object, field), val)
-        | CExpr.Assign (CExpr.FieldRef (base_object, field), val) =>
+        | Assign (FieldMember (base_object, field) as target, val) =>
           emit (base_object);
           emit (val);
           Mark (expr.loc);
-          maybe_volatile ((expr :> CExpr.Assign).target);
-          _ilg.Emit (OpCodes.Stfld, field);
+          maybe_volatile (target);
+          _ilg.Emit (OpCodes.Stfld, field.GetFieldInfo ());
 
 
         /* assignment to a static field */
-        | CExpr.Assign (CExpr.VolatileGlobalRef (mi), val) when member_is_field (mi)
-        | CExpr.Assign (CExpr.GlobalRef (mi), val) when member_is_field (mi) =>
+        | Assign (StaticRef (f is IField) as target, val) =>
           emit (val);
           Mark (expr.loc);
-          maybe_volatile ((expr :> CExpr.Assign).target);
-          _ilg.Emit (OpCodes.Stsfld, (mi :> FieldInfo));
+          maybe_volatile (target);
+          _ilg.Emit (OpCodes.Stsfld, f.GetFieldInfo ());
 
 
         /* assignment to an array element */
-        | CExpr.Assign (CExpr.ArrayAccess (array_obj, [index]), val) =>
+        | Assign (ArrayIndexer (_, array_obj, [index]), val) =>
           def type_of_val = val.SystemType;
 
           emit (array_obj);
@@ -586,7 +661,7 @@ namespace Nemerle.Compiler
           emit (val);
           emit_array_store_opcode (type_of_val);
 
-        | CExpr.Assign (CExpr.ArrayAccess (array_obj, indexes), val) =>
+        | Assign (ArrayIndexer (_, array_obj, indexes), val) =>
           emit (array_obj);
           List.Iter (indexes, emit);
           emit (val);
@@ -594,24 +669,18 @@ namespace Nemerle.Compiler
           def method = array_set_method (array_obj);
           emit_method_call (expr, true, method);
 
-        | CExpr.Assign (CExpr.This, val) =>
-          assert (_type_of_this.IsValueType, "we can assign to 'this' only in valuetypes");
+        | Assign (This, val) =>
+          Util.cassert (_this_is_value_type,
+                        "we can assign to 'this' only in valuetypes");
           _ilg.Emit (OpCodes.Ldarg_0);          
           emit (val);
           _ilg.Emit (OpCodes.Stobj, _type_of_this)
           
-        | CExpr.MultipleAssign (assigns) =>
-          def emit_store (local_var : CG_val, _) {
-            Mark (local_var.loc);
-            match (local_var.local_slot) {
-              | Some (local_slot) =>
-                _ilg.Emit (OpCodes.Stloc, local_slot);
-              | _ when local_var.parm_index.IsSome =>
-                store_argument (local_var.parm_index)
-              | _ =>
-                Util.ice (_method_name + ": null local slot in CExpr.MultipleAssign")
-            }
-          };
+        | MultipleAssign (assigns) =>
+          def emit_store (local_var : LocalValue, _) {
+            Mark (local_var.Location);
+            store_local (local_var);
+          }
           foreach ((_, e) in assigns) emit (e);
           List.Iter (List.Rev (assigns), emit_store);
 
@@ -619,27 +688,28 @@ namespace Nemerle.Compiler
         /* -- CALLS -------------------------------------------------------- */
 
         /* call the base constructor */
-        | CExpr.TailCall (CExpr.BaseCtorRef (base_ctor), ctor_params)
-        | CExpr.Call (CExpr.BaseCtorRef (base_ctor), ctor_params) =>
+        | TailCall (Base (base_ctor), ctor_params)
+        | Call (Base (base_ctor), ctor_params) =>
           _ilg.Emit (OpCodes.Ldarg_0);
-          foreach (parm in ctor_params) emit (parm);
+          emit_parms (ctor_params);
           Mark (expr.loc);          
-          _ilg.Emit (OpCodes.Call, base_ctor);
+          _ilg.Emit (OpCodes.Call, base_ctor.GetConstructorInfo ());
 
         /* create a new object */
-        | CExpr.TailCall (CExpr.ConstructorRef (ctor), ctor_params)
-        | CExpr.Call (CExpr.ConstructorRef (ctor), ctor_params) =>
-          foreach (parm in ctor_params) emit (parm);
+        | TailCall (StaticRef (meth is IMethod), ctor_params) when is_ctor (meth)
+        | Call (StaticRef (meth is IMethod), ctor_params) when is_ctor (meth) =>
+          emit_parms (ctor_params);
           Mark (expr.loc);
-          _ilg.Emit (OpCodes.Newobj, ctor);
+          _ilg.Emit (OpCodes.Newobj, meth.GetConstructorInfo ());
 
 
         /* emit a call to an instance method, basing on the 'this' pointer for value types */
-        | CExpr.TailCall (CExpr.MethodRef (CExpr.This, method, _), method_params)
+        | TailCall (MethodRef (This, method, _), method_params)
                                                       when _this_is_value_type
-        | CExpr.Call (CExpr.MethodRef (CExpr.This, method, _), method_params)
+        | Call (MethodRef (This, method, _), method_params)
                                                       when _this_is_value_type =>
           _ilg.Emit (OpCodes.Ldarg_0);
+          def method = method.GetMethodInfo ();
           
           // it actually IS the proper way to do it --
           // if this is our method and we do not need to box
@@ -647,39 +717,39 @@ namespace Nemerle.Compiler
             _ilg.Emit (OpCodes.Ldobj, _type_of_this);
             _ilg.Emit (OpCodes.Box, _type_of_this);
           }
-          foreach (parm in method_params) emit (parm);
+          emit_parms (method_params);
           Mark (expr.loc);
           emit_method_call (expr, true, method)
 
 
         /* emit a call to an instance method */
-        | CExpr.TailCall (CExpr.MethodRef (base_object, method, notvirt), method_params)
-        | CExpr.Call (CExpr.MethodRef (base_object, method, notvirt), method_params) =>
+        | TailCall (MethodRef (base_object, method, notvirt), method_params)
+        | Call (MethodRef (base_object, method, notvirt), method_params) =>
           def is_value_type = emit_and_convert_to_address (base_object);
 
-          foreach (parm in method_params) emit (parm);
+          emit_parms (method_params);
           Mark (expr.loc);
-          emit_method_call (expr, is_value_type || notvirt, method)
+          emit_method_call (expr, is_value_type || notvirt, method.GetMethodInfo ())
 
 
         /* emit a call to a static method */
-        | CExpr.TailCall (CExpr.GlobalRef (mi), method_parms) when member_is_method (mi)
-        | CExpr.Call (CExpr.GlobalRef (mi), method_parms) when member_is_method (mi) =>
-          def method_info = (mi :> MethodInfo);
+        | TailCall (StaticRef (mi is IMethod), method_parms)
+        | Call (StaticRef (mi is IMethod), method_parms) =>
+          def method_info = mi.GetMethodInfo ();
 
           Util.cassert (method_info.IsStatic, 
-                        $ "Call CExpr.GlobalRef to a non-static field: $(method_info.Name)");
+                        $ "Call TExpr.GlobalRef to a non-static field: $(method_info.Name)");
 
-          foreach (parm in method_parms) emit (parm);
+          emit_parms (method_parms);
           Mark (expr.loc);          
           emit_method_call (expr, true, method_info)
 
 
         /* emit an operator */
-        | CExpr.TailCall (CExpr.Opcode (opcode), parms)
-        | CExpr.Call (CExpr.Opcode (opcode), parms) =>
+        | TailCall (OpCode (opcode), parms)
+        | Call (OpCode (opcode), parms) =>
           // FIXME: seperate out
-          foreach (parm in parms) emit (parm);
+          emit_parms (parms);
           Mark (expr.loc);
           match (opcode) {
             | "+.s" =>  _ilg.Emit (OpCodes.Add_Ovf)
@@ -698,8 +768,8 @@ namespace Nemerle.Compiler
 
             | "unary.-.s" =>
               _ilg.Emit (OpCodes.Ldc_I4_M1);
-              emit_value_type_conversion (SystemType.Int32,
-                                          List.Hd (parms).SystemType, true);
+              emit_value_type_conversion (expr.loc, SystemType.Int32,
+                                          parms.Head.expr.SystemType, true);
               _ilg.Emit (OpCodes.Mul_Ovf)
             | "unary.-.f" =>
               _ilg.Emit (OpCodes.Neg)
@@ -726,7 +796,7 @@ namespace Nemerle.Compiler
             | "--.r8.f" => _ilg.Emit (OpCodes.Ldc_I4_1); _ilg.Emit (OpCodes.Conv_R8); _ilg.Emit (OpCodes.Sub);
 
             | "unary.~.f" =>
-              def type_of_parm = List.Head (parms).SystemType;
+              def type_of_parm = parms.Head.expr.SystemType;
               when (type_of_parm.FullName == "System.Single" ||
                     type_of_parm.FullName == "System.Double" ||
                     type_of_parm.FullName == "System.Decimal")
@@ -763,55 +833,40 @@ namespace Nemerle.Compiler
             | ">=.s" | ">=.f" => emit_compare (OpCodes.Bge_S)
             | ">=.u" => emit_compare (OpCodes.Bge_Un_S)
             | _ =>
-              Util.ice (_method_name + ": unmatched CExpr.Opcode (" + opcode + ")")
+              Util.ice (_method_name + ": unmatched TExpr.Opcode (" + opcode + ")")
           };
-
-        /* emit self tail call -- that is jump to method start */
-        | CExpr.SelfTailCall (method_params) =>
-          foreach (v in method_params) emit (v);
-          
-          def store_arguments (pars) {
-            | [] => ()
-            | (p : Typedtree.Fun_parm) :: ps =>
-              store_arguments (ps);
-              store_argument (p.cg_val.parm_index);
-          }
-          store_arguments (_fun_header.parms);
-          Mark (expr.loc);
-          _ilg.Emit (OpCodes.Br, _method_start_label);
-
 
         /* -- EXCEPTION HANDLING ------------------------------------------- */
 
         /* throw an exception */
-        | CExpr.Throw (null) =>
+        | Throw (null) =>
           Mark (expr.loc);
           _ilg.Emit (OpCodes.Rethrow);
         
-        | CExpr.Throw (exc) =>
+        | Throw (exc) =>
           emit (exc);
           Mark (expr.loc);
           _ilg.Emit (OpCodes.Throw);
 
 
         /* emit the try/with construction */
-        | CExpr.TryWith (try_expr, catch_val, catch_expr) =>
+        | TryWith (try_expr, catch_val, catch_expr) =>
           def type_of_try_expr = expr.SystemType;
 
-          def ignore_try_with_result = SystemType.Void.Equals (type_of_try_expr);
+          def ignore_try_with_result = is_void (try_expr.Type);
           mutable try_result = null;
 
           unless (ignore_try_with_result)
             try_result = _ilg.DeclareLocal (type_of_try_expr);
 
-          def _ = _ilg.BeginExceptionBlock ();
+          _ = _ilg.BeginExceptionBlock ();
 
           emit (try_expr);
 
-          unless (throws (try_expr) || ignore_try_with_result)
+          unless (try_expr.Throws || ignore_try_with_result)
             _ilg.Emit (OpCodes.Stloc, try_result);
 
-          _ilg.BeginCatchBlock (catch_val.ty);
+          _ilg.BeginCatchBlock (catch_val.Type.GetSystemType ());
 
           def catch_val_local_slot = declare_val_local_slot (catch_val);
           _ilg.Emit (OpCodes.Stloc, catch_val_local_slot);
@@ -820,25 +875,23 @@ namespace Nemerle.Compiler
           // close scope opened by declare_val_local_slot
           when (Options.EmitDebug) _ilg.EndScope ();
 
-          unless (throws (catch_expr) || ignore_try_with_result)
+          unless (catch_expr.Throws || ignore_try_with_result)
             _ilg.Emit (OpCodes.Stloc, try_result);
 
           _ilg.EndExceptionBlock ();
 
-          unless ((throws (catch_expr) && throws (try_expr)) || ignore_try_with_result)
+          unless ((catch_expr.Throws && try_expr.Throws) || ignore_try_with_result)
             _ilg.Emit (OpCodes.Ldloc, try_result);
 
 
-        // FIXME: how does finally work? what about storing it's result in
-        //        try_result as in CExpr.TryWith?
-        | CExpr.TryFinally (try_expr, finally_expr) =>
+        | TryFinally (try_expr, finally_expr) =>
           def type_of_try_expr = try_expr.SystemType;
 
           def _ = _ilg.BeginExceptionBlock ();
 
           emit (try_expr);
 
-          def ignore_try_result = throws (try_expr) || SystemType.Void.Equals (type_of_try_expr);
+          def ignore_try_result = try_expr.Throws || is_void (try_expr.Type);
           mutable try_result = null;
 
           unless (ignore_try_result) {
@@ -855,26 +908,45 @@ namespace Nemerle.Compiler
             _ilg.Emit (OpCodes.Ldloc, try_result);
 
 
+        /* -- TUPLES -------------------------------------------------------- */
+        | Tuple (vals) =>
+          foreach (v in vals) emit (v);
+          def tuple_ty = InternalType.GetTupleType (vals.Length);
+          _ilg.Emit (OpCodes.Newobj, tuple_ty.Ctor.GetConstructorInfo ());
+          
+
+        | TupleIndexer (obj, pos, len) =>
+          def tt = InternalType.GetTupleType (len);
+          when (tt.SystemType.IsValueType && !obj.NeedAddress)
+            obj.NeedAddress = true;
+          emit (obj);
+          _ilg.Emit (OpCodes.Ldfld, tt.GetField (pos + 1).GetFieldInfo ());
+
+
         /* -- MISC --------------------------------------------------------- */
 
         /* loads the 'this' pointer on the evaluation stack */
-        | CExpr.This =>
-          assert (!_method_is_static, "This is a static method");
+        | This =>
+          Util.cassert (!_method_is_static, "This is a static method");
           _ilg.Emit (OpCodes.Ldarg_0);
           
           // when we are in value type, this contains address of current
           // value type - so if value is expected instead of address, we must
           // create a copy
-          when (_this_is_value_type && !wish_address (expr))
+          when (_this_is_value_type && !expr.NeedAddress)
             _ilg.Emit (OpCodes.Ldobj, expr.SystemType);
 
 
         /* loads a literal on the evaluation stack */
-        | CExpr.Literal (l) => assert (l != null); emit_literal (l);
+        | Literal (l) => 
+          Util.cassert (l != null);
+          emit_literal (l);
+
 
         /* loads address of given method */
-        | CExpr.MethodAddress (meth, is_virt) =>
+        | MethodAddress (meth, is_virt) =>
           Mark (expr.loc);
+          def meth = meth.GetMethodInfo ();
           if (is_virt && meth.IsVirtual) {
             // ldvirtftn expects also an object reference
             // this is always part of delegate ctor, therefore
@@ -886,9 +958,10 @@ namespace Nemerle.Compiler
 
 
         /* creates object of value type using implicit ctor */
-        | CExpr.InitValueType (t) =>
+        | ImplicitValueTypeCtor (t) =>
           Mark (expr.loc);
           when (Options.EmitDebug) _ilg.BeginScope ();
+          def t = t.GetSystemType ();
           def local_slot = _ilg.DeclareLocal (t);
           _ilg.Emit (OpCodes.Ldloca, local_slot);
           _ilg.Emit (OpCodes.Initobj, t);
@@ -897,12 +970,18 @@ namespace Nemerle.Compiler
 
 
         /* creates a new array, given a list of initializers */
-        | CExpr.Array (element_type, initializers, [size]) =>
+        | Array (initializers, [size]) =>
+          def element_type =
+            match (expr.Type.Fix ()) {
+              | MType.Array (t, _) => t.GetSystemType ()
+              | _ => Util.ice ()
+            }
+            
           emit (size);
           Mark (expr.loc);
           _ilg.Emit (OpCodes.Newarr, element_type);
 
-          def load_elements (index : int, elements : list [CExpr]) {
+          def load_elements (index : int, elements : list [TExpr]) {
             match (elements) {
               | [] => ()
               | element :: rest =>
@@ -919,7 +998,7 @@ namespace Nemerle.Compiler
           };
           load_elements (0, initializers);
 
-        | CExpr.Array (_, initializers, dimensions) =>
+        | Array (initializers, dimensions) =>
           mutable size = 0;
           foreach (element in dimensions) {
             ++size;
@@ -927,9 +1006,12 @@ namespace Nemerle.Compiler
           }
 
           def arg_types = array (size);
-          for (mutable i = 0; i < size; ++i) arg_types [i] = SystemType.Int32;
-          def method = _module_builder.GetArrayMethod (expr.SystemType, ".ctor", CallingConventions.HasThis,
-                                                       null, arg_types);
+          for (mutable i = 0; i < size; ++i)
+            arg_types [i] = SystemType.Int32;
+          def method =
+            _module_builder.GetArrayMethod (expr.SystemType, ".ctor", 
+                                            CallingConventions.HasThis,
+                                            null, arg_types);
           Mark (expr.loc);                                                       
           _ilg.Emit (OpCodes.Newobj, method);
 
@@ -938,13 +1020,14 @@ namespace Nemerle.Compiler
 
             def dimensions_array = array (size);
             mutable i = 0;
-            foreach (CExpr.Literal (Literal.Integer (it, _, _)) in dimensions) {
+            foreach (TExpr.Literal (Literal.Integer (it, _, _)) in dimensions) {
               dimensions_array [i] = it;
               ++i;
             };
-            assert (i == size, "dimensions must be literals when initializes are supplied");
+            Util.cassert (i == size,
+                          "dimensions must be literals when initializes are supplied");
 
-            def load_elements (index : array [ulong], elements : list [CExpr]) {
+            def load_elements (index : array [ulong], elements : list [TExpr]) {
               match (elements) {
                 | [] => ()
                 | element :: rest =>
@@ -969,53 +1052,8 @@ namespace Nemerle.Compiler
             load_elements (array (dimensions_array.Length), initializers);
           }
 
-          
-        /* takes address of a value */
-        | CExpr.Address (CExpr.Indirect (expr)) =>
-          emit (expr)
-
-        | CExpr.Address (expr) =>
-          assert (wish_address (expr));
-          match (expr) {
-            | CExpr.Ref
-            | CExpr.FieldRef
-            | CExpr.VolatileFieldRef
-            | CExpr.VolatileGlobalRef
-            | CExpr.GlobalRef
-            | CExpr.ArrayAccess => ()
-            | _ => 
-              // should not happen
-              Message.Error (expr.loc, 
-                             "failed to take address of this expression: " + 
-                             pretty_print (expr))
-          }
-          // if wish_address(expr), then emit should handle this
-          emit (expr)
-
-        | CExpr.Indirect (CExpr.Address (expr)) =>
-          emit (expr)
-
-        /* load value by pointer */
-        | CExpr.Indirect (inner) =>
-          emit (inner);
-          def ty = inner.SystemType;
-          def el_ty = ty.GetElementType ();
-          assert (ty.IsByRef && el_ty != null);
-
-          maybe_volatile (inner);
-
-          if (el_ty.IsValueType)
-            unless (wish_address (expr))
-               emit_ldind_for_value_type (el_ty)
-          else
-            _ilg.Emit (OpCodes.Ldind_Ref);
-
-
-        /* an interrupting NOP instruction */
-        | CExpr.Nop => ()
-
         | _ =>
-          Message.Warning ("FIXME: unmatched: " + pretty_print (expr));
+          Message.Warning ($ "FIXME: unmatched: $expr");
       }
     }
 
@@ -1026,52 +1064,49 @@ namespace Nemerle.Compiler
         def args = array (rank + 1);
         for (mutable i = 0; i < rank; ++i)
         {
-            args [i] = typeof (System.Int32);
+            args [i] = SystemType.Int32;
         }
         args [rank] = t.GetElementType ();
 
         _module_builder.GetArrayMethod (t, "Set",
                                         CallingConventions.HasThis %| CallingConventions.Standard,
-                                        typeof (void), args);
+                                        SystemType.Void, args);
     }
 
 
     /*
      * Emits a local reference instruction
      */
-    private emit_ce_ref (decl : CG_val, get_address_for_value_types : bool) : void
+    private emit_ce_ref (decl : LocalValue, get_address_for_value_types : bool) : void
     {
-      match (decl.local_slot) {
-        | Some (local_slot) =>
-          // local values
-          if (get_address_for_value_types)
-            _ilg.Emit (OpCodes.Ldloca, local_slot)
-          else
-            _ilg.Emit (OpCodes.Ldloc, local_slot)
-
-        | _ =>
-          // method parameters
-          match (decl.parm_index) {
-            | Some (parm_index) =>
-              if (get_address_for_value_types)
-                emit_ldarga (parm_index)
-              else
-                emit_ldarg (parm_index)
-            | _ when SystemType.Void.Equals (decl.ty) => ()
-            | _ =>
-              Util.ice (_method_name + ": parameter index / variable local"
-                        " slot undefined in CExpr.Ref " + decl.name)
+      if (decl.IsParm) {
+        if (get_address_for_value_types && ! decl.IsByRefParm)
+          emit_ldarga (decl.ParmIndex)
+        else {
+          emit_ldarg (decl.ParmIndex);
+          when (! get_address_for_value_types && decl.IsByRefParm) {
+            def ty = decl.Type.Fix ().GetSystemType ();
+            if (ty.IsValueType)
+               emit_ldind_for_value_type (ty)
+            else
+              _ilg.Emit (OpCodes.Ldind_Ref);
           }
+        }
+      } else {
+        if (get_address_for_value_types)
+          _ilg.Emit (OpCodes.Ldloca, decl.LocalSlot)
+        else
+          _ilg.Emit (OpCodes.Ldloc, decl.LocalSlot)
       }
     }
 
 
-    private array_set_method (arr : CExpr) : MethodInfo
+    private array_set_method (arr : TExpr) : MethodInfo
     {
         array_set_method (arr.SystemType);
     }
 
-    private array_get_method (arr : CExpr) : MethodInfo
+    private array_get_method (arr : TExpr) : MethodInfo
     {
         def t = arr.SystemType;
         def rank = t.GetArrayRank ();
@@ -1079,7 +1114,7 @@ namespace Nemerle.Compiler
         def args = array (rank);
         for (mutable i = 0; i < rank; ++i)
         {
-            args [i] = typeof (System.Int32);
+            args [i] = SystemType.Int32;
         }
 
         _module_builder.GetArrayMethod (t, "Get",
@@ -1087,7 +1122,7 @@ namespace Nemerle.Compiler
                                         t.GetElementType (), args);
     }
 
-    private array_addr_method (arr : CExpr) : MethodInfo
+    private array_addr_method (arr : TExpr) : MethodInfo
     {
         def t = arr.SystemType;
         def rank = t.GetArrayRank ();
@@ -1104,7 +1139,7 @@ namespace Nemerle.Compiler
     }
 
     /**
-     * Emits the CExpr.Switch instruction
+     * Emits the TExpr.Switch instruction
      *
      * Asserts that the first of the case indices is zero. Quietly
      * asserts that the indexer is verified to be in a valid range -- i.e.
@@ -1112,8 +1147,8 @@ namespace Nemerle.Compiler
      * generate too long switch instructions -- assuring this should belong
      * to a higher level logic.
      */
-    private emit_switch (default_expr : option [CExpr], 
-                         cases : list [int * CExpr]) : void
+    private emit_switch (default_expr : option [TExpr], 
+                         cases : list [int * TExpr]) : void
     {
       def label_default = _ilg.DefineLabel ();
       def label_next_instruction = _ilg.DefineLabel ();
@@ -1126,22 +1161,22 @@ namespace Nemerle.Compiler
         };
 
       // step one: sort the cases increasingly
-      def compare_cases (l : int * CExpr, r : int * CExpr) : int {
-        Pair.First (l).CompareTo (Pair.First (r))
+      def compare_cases (l : int * TExpr, r : int * TExpr) : int {
+        Pair.First (l).CompareTo (r [0])
       };
 
       def cases = List.Sort (cases, compare_cases);
-      assert (Pair.First (List.Head (cases)) == 0);
+      Util.cassert (cases.Head [0] == 0);
 
       // step three: generate the jump labels for the switch cases
       mutable reversed_labels = [];
 
-      def make_labels (index : int, cases : list [int * CExpr])
-                                        : list [Label * CExpr] {
-        assert (index >= 0);
+      def make_labels (index : int, cases : list [int * TExpr])
+                                        : list [Label * TExpr] {
+        Util.cassert (index >= 0);
         match (cases) {
           | (case_index, case_expr) :: rest =>
-            assert (index <= case_index);
+            Util.cassert (index <= case_index);
 
             // insert jumps to the default expression where appropriate
             if (case_index == index) {
@@ -1171,18 +1206,18 @@ namespace Nemerle.Compiler
       match (default_expr) {
         | Some (default_expr) =>
           emit (default_expr);
-          unless (throws (default_expr))
+          unless (default_expr.Throws)
             _ilg.Emit (OpCodes.Br, label_next_instruction);
         | None =>
           _ilg.Emit (OpCodes.Br, label_next_instruction);
       };
 
       // step five: emit the switch cases
-      def walk_cases (cases : list [Label * CExpr]) : void {
+      def walk_cases (cases : list [Label * TExpr]) : void {
         | (label, expr) :: rest =>
           _ilg.MarkLabel (label);
           emit (expr);
-          unless (throws (expr))
+          unless (expr.Throws)
             _ilg.Emit (OpCodes.Br, label_next_instruction);
           walk_cases (rest)
         | [] => ()
@@ -1209,13 +1244,12 @@ namespace Nemerle.Compiler
     }
 
 
-    private store_argument (parm_index : option [int]) : void {
-      | Some (index) =>
-        if (index < 256)
-          _ilg.Emit (OpCodes.Starg_S, index :> byte)
-        else
-          _ilg.Emit (OpCodes.Starg, index);
-      | None => Util.ice ("no param_index found")
+    private store_argument (index : int) : void
+    {
+      if (index < 256)
+        _ilg.Emit (OpCodes.Starg_S, index :> byte)
+      else
+        _ilg.Emit (OpCodes.Starg, index);
     }
 
     
@@ -1232,7 +1266,8 @@ namespace Nemerle.Compiler
     /**
      * Performs value type conversion form l to r
      */
-    private emit_value_type_conversion (l : System.Type, r : System.Type,
+    private emit_value_type_conversion (loc : Location,
+                                        l : System.Type, r : System.Type,
                                         is_checked : bool) : void
     {
       def is_unsigned (t : System.Type) {
@@ -1247,8 +1282,8 @@ namespace Nemerle.Compiler
         }
       };
       def fail () {
-        Message.Warning ("failed to emit value type conversion from " +
-                         l.FullName + " to " + r.FullName)
+        Message.Warning (loc, 
+                         $ "failed to emit value type conversion from $l to $r")
       };
 
       match (()) {
@@ -1328,23 +1363,6 @@ namespace Nemerle.Compiler
       }
     }
 
-    /**
-     * Checks if a given member info describes a field
-     */
-    private static member_is_field (mi : MemberInfo) : bool
-    {
-      mi.MemberType == MemberTypes.Field
-    }
-
-
-    /**
-     * Checks if a given member info describes a method
-     */
-    private static member_is_method (mi : MemberInfo) : bool
-    {
-      mi.MemberType == MemberTypes.Method
-    }
-
 
     /**
      * Emits a method call.
@@ -1352,13 +1370,13 @@ namespace Nemerle.Compiler
      * If it is a tail call (which is checked based on [expr]), then we emit
      * tail modifier.
      */
-    private emit_method_call (expr : CExpr,
+    private emit_method_call (expr : TExpr,
                               base_is_value_type_or_static : bool,
                               method : MethodInfo) : void
     {
       def is_tail =
         match (expr) {
-          | CExpr.TailCall when Options.GeneralTailCallOpt =>
+          | TailCall when Options.GeneralTailCallOpt =>
             _ilg.Emit (OpCodes.Tailcall);
             true
           | _ => false
@@ -1380,11 +1398,11 @@ namespace Nemerle.Compiler
 
        Returns value indicating if base_object was really a value type
     */
-    private emit_and_convert_to_address (base_object : CExpr) : bool 
+    private emit_and_convert_to_address (base_object : TExpr) : bool 
     {
       emit (base_object);
       def is_value_type = base_object.SystemType.IsValueType;
-      when (is_value_type && !(base_object.flags %&& CgExprFlags.WishGranted)) {
+      when (is_value_type && ! base_object.NeedAddress) {
         def local_slot = _ilg.DeclareLocal (base_object.SystemType);
         _ilg.Emit (OpCodes.Stloc, local_slot);
         _ilg.Emit (OpCodes.Ldloca, local_slot);
@@ -1396,12 +1414,12 @@ namespace Nemerle.Compiler
     /**
      * Declares a local variable
      */
-    private declare_val_local_slot (val : CG_val) : LocalBuilder
+    private declare_val_local_slot (val : LocalValue) : LocalBuilder
     {
       when (Options.EmitDebug) _ilg.BeginScope ();              
-      def local_slot = _ilg.DeclareLocal (val.ty);
-      when (Options.EmitDebug) local_slot.SetLocalSymInfo (val.name);
-      val.local_slot = Some (local_slot);
+      def local_slot = _ilg.DeclareLocal (val.Type.GetSystemType ());
+      when (Options.EmitDebug) local_slot.SetLocalSymInfo (val.Name);
+      val.LocalSlot = local_slot;
       local_slot
     }
 
@@ -1617,109 +1635,6 @@ namespace Nemerle.Compiler
       _ilg.MarkLabel (label_condition_met);
       _ilg.Emit (OpCodes.Ldc_I4_1);
       _ilg.MarkLabel (label_condition_not_met)
-    }
-
-
-    /**
-     * Pretty prints a list of expressions
-     */
-    static pretty_print_list (exs : list [CExpr], acc : string) : string
-    {
-      acc + NString.Concat (", ", List.Map (exs, pretty_print))
-    }
-
-
-    /**
-     * Pretty prints an expression
-     */
-    public static pretty_print (ex : CExpr) : string
-    {
-      // ex.loc.ToString () +
-      if (ex == null) "[[[NULL]]]" else
-      (match (ex) {
-        | CExpr.Ref (decl) =>
-          "Ref (" + decl.name + ")"
-        | CExpr.GlobalRef (mi) =>
-          "GlobalRef (" + pretty_print_member_info (mi) + ")"
-        | CExpr.VolatileGlobalRef (mi) =>
-          "VolatileGlobalRef (" + pretty_print_member_info (mi) + ")"
-        | CExpr.BaseCtorRef (mi) =>
-          "BaseCtorRef (" + pretty_print_member_info (mi) + ")"
-        | CExpr.ConstructorRef (mi) =>
-          "ConstructorRef (" + pretty_print_member_info (mi) + ")"
-        | CExpr.FieldRef (expr, fld) =>
-          "FieldRef (" + pretty_print (expr) + " -> " + 
-                         pretty_print_member_info (fld) +")"
-        | CExpr.VolatileFieldRef (expr, fld) =>
-          "FieldRef.volatile (" + pretty_print (expr) + " -> " + 
-                         pretty_print_member_info (fld) +")"
-        | CExpr.MethodRef (expr, meth, _) =>
-          "MethodRef (" + pretty_print (expr) + " -> " + 
-                          pretty_print_member_info (meth) + ")"
-        | CExpr.MethodAddress (meth, is_virt) =>
-          "MethodAddress" + (if (is_virt) "Virt" else "") + 
-          " (" + pretty_print_member_info (meth) + ")"
-        | CExpr.Ignore (expr) =>
-          "Ignore (" + pretty_print (expr) + ")"
-        | CExpr.Opcode (name) =>
-          "Opcode (" + name + ")"
-        | CExpr.SelfTailCall (parms) =>
-          "SelfTailCall (" + pretty_print_list (parms, "") + ")"
-        | CExpr.Call (func, parms) =>
-          "Call (" + pretty_print (func) + " (" + pretty_print_list (parms, "") + "))"
-        | CExpr.TailCall (func, parms) =>
-          "TailCall (" + pretty_print (func) + " (" + pretty_print_list (parms, "") + "))"
-        | CExpr.Assign (target, source) =>
-          "(" + pretty_print (target) + " = " + pretty_print (source) + ")"
-        | CExpr.Address (expr) =>
-          "Address (" + pretty_print (expr) + ")"
-        | CExpr.Indirect (expr) =>
-          "Indirect (" + pretty_print (expr) + ")"
-        | CExpr.MultipleAssign =>
-          "MultipleAssign"
-        | CExpr.Label (expr, _, _) =>
-          "Label (" + pretty_print (expr) + ")"
-        | CExpr.Goto =>
-          "Goto"
-        | CExpr.Define (name, body) =>
-          "let " + name.name + " = " + pretty_print (name.val) + " in { "
-          + pretty_print (body) + " }"
-        | CExpr.HasType (_, ty) => "HasType (" + ty.FullName + ")"
-        | CExpr.NotNull => "NotNull"
-        | CExpr.TypeOf (ty) => "TypeOf (" + ty.FullName + ")"
-        | CExpr.Throw (exn) => "Throw (" + pretty_print (exn) + ")"
-        | CExpr.If (cond, e_then, e_else) =>
-          "if (" + pretty_print (cond) + ") { " + pretty_print (e_then)
-          + "} else {" + pretty_print (e_else) + "}"
-        | CExpr.TryWith => "TryWith"
-        | CExpr.TryFinally => "TryFinally"
-        | CExpr.Literal (l) => $ "Literal ($l)"
-        | CExpr.This => "This"
-        | CExpr.Cast (expr, ty, _) =>
-          "Cast (" + pretty_print (expr)
-          + " :> " + ty.FullName + ")"
-        | CExpr.InitValueType (ty) =>
-          "InitValueType (" + ty.FullName + ")"
-        | CExpr.Sequence (body) => "Sequence { " + pretty_print_list (body, "") + " }"
-        | CExpr.Nop => "Nop"
-        | CExpr.Array (_, initializers, dimensions) =>
-          "Array { " + pretty_print_list (initializers, "") + " } dim {" +
-            List.FoldLeft (dimensions, "", fun (i, acc) { acc + i.ToString () + "; " }) +"}"
-        | CExpr.ArrayAccess (obj, args) =>
-          "CE_mindexer " + pretty_print (obj) + "[" +
-          pretty_print_list (args, "") + "]"
-        | CExpr.Switch (indexer, _, _) =>
-          "Switch ( " + pretty_print (indexer) + " )"
-      })
-    }
-
-
-    /**
-     * Pretty prints a member info name
-     */
-    private static pretty_print_member_info (mi : MemberInfo) : string
-    {
-      mi.DeclaringType.FullName + "::" + mi.Name
     }
 
     /**

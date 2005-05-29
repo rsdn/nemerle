@@ -57,11 +57,18 @@ namespace Nemerle.Compiler
       Util.locate (current_fun.loc, {
         match (current_fun.body) {
           | FunBody.Typed (body) =>
-            def body' = Walk (body);
+            // Message.Debug ("start ush");
+            def body' = UnShare (body);
+            // Message.Debug ("start T4");
+            def body' = Walk (body');
             def body' =
               if (NeedBoxing (current_fun.ret_type.Fix (), body'))
                 Box (current_fun.ret_type.Fix (), body')
               else body';
+
+            goto_targets.Clear ();
+            _ = Throws (body');
+
             current_fun.body = FunBody.Typed (body');
             when (Options.ShouldDump (current_fun))
               Message.Debug ($ "after T4: $the_method [$(current_fun.name)] "
@@ -86,6 +93,11 @@ namespace Nemerle.Compiler
     
 
     static Box (target_type : MType, expr : TExpr) : TExpr
+    {
+      Typer3.CheckedConversion (expr, target_type)
+    }
+
+    static Convert (target_type : TyVar, expr : TExpr) : TExpr
     {
       Typer3.CheckedConversion (expr, target_type)
     }
@@ -132,6 +144,172 @@ namespace Nemerle.Compiler
     #endregion
 
 
+    #region Throw handling
+    static goto_targets : Hashtable [int, object] = Hashtable ();
+
+    static IsJumpTarget (expr : TExpr) : bool
+    {
+      match (expr) {
+        | Label (id, _) =>
+          goto_targets.Contains (id);
+        | _ => false
+      }
+    }
+
+    static NoThrowPlease (e : TExpr) : void
+    {
+      when (Throws (e))
+        Message.Error (e.loc, "`throw' is not allowed here");
+    }
+
+    static Throws (expr : TExpr) : bool
+    {
+      //Message.Debug ($ "throws: $(expr.GetType()) $(expr.GetHashCode())");
+      def res = 
+        match (expr) {
+          | Throw (e) =>
+            unless (e == null)
+              NoThrowPlease (e);
+            true
+
+          | Goto (id) =>
+            goto_targets [id] = null;
+            true
+
+          | Sequence (e1, e2)
+          | DefValIn (_, e1, e2) =>
+            if (Throws (e1)) {
+              if (IsJumpTarget (e2))
+                Throws (e2)
+              else true
+            } else Throws (e2)
+
+          | If (cond, e1, e2) =>
+            NoThrowPlease (cond);
+            def t1 = Throws (e1);
+            def t2 = Throws (e2);
+            t1 && t2
+
+          | Assign (e1, e2) =>
+            when (Throws (e1))
+              Message.Error (expr.loc, "`throw' in assignment target");
+
+            if (Throws (e2)) {
+              if (e1 is TExpr.LocalRef)
+                Message.Warning (expr.loc, "bad style: each branch in this block "
+                                 "ends with a break")
+              else
+                Message.Error (expr.loc, "`throw' in assignment source");
+              true
+            } else false
+
+          | TypeConversion (e, _, _)
+          | Label (_, e) =>
+            Throws (e)
+
+          | Switch (idx, defl, opts) =>
+            NoThrowPlease (idx);
+            // avoid closure
+            mutable all = true;
+            foreach ((_, e) in opts)
+              all = Throws (e) && all;
+            match (defl) {
+              | Some (e) => Throws (e) && all
+              | None => all // ???
+            }
+
+          | PropertyMember
+          | StaticPropertyRef
+          | EventMember
+          | StaticEventRef
+          | ConstantObjectRef
+          | Delayed
+          | Error
+          | DefFunctionsIn
+          | Match
+          | SelfTailCall =>
+            Util.cassert (Message.SeenError);
+            false
+
+          | FieldMember (e, _)
+          | MethodRef (e, _, _)
+          | TupleIndexer (e, _, _)
+          | HasType (e, _)
+          | NotNull (e) =>
+            NoThrowPlease (e);
+            false
+          
+          | ArrayIndexer (_, obj, args) =>
+            NoThrowPlease (obj);
+            args.Iter (NoThrowPlease);
+            false
+            
+          | MultipleAssign (assigns) =>
+            foreach ((_, e) in assigns)
+              NoThrowPlease (e);
+            false
+
+          | Array (args, dimensions) =>
+            args.Iter (NoThrowPlease);
+            dimensions.Iter (NoThrowPlease);
+            false
+            
+          | Call (func, parms)
+          | TailCall (func, parms) =>
+            NoThrowPlease (func);
+            foreach (parm in parms) NoThrowPlease (parm.expr);
+            false
+            
+          | Tuple (exprs) =>
+            exprs.Iter (NoThrowPlease);
+            false
+
+          | TryWith (body, _, handler)
+          | TryFinally (body, handler) =>
+            _ = Throws (body);
+            _ = Throws (handler);
+            false
+
+          | StaticRef
+          | LocalRef
+          | ImplicitValueTypeCtor
+          | Literal
+          | This
+          | Base
+          | TypeOf
+          | OpCode
+          | MethodAddress
+          | DefaultValue =>
+            false
+        }
+
+      expr.Throws = res;
+      res
+    }
+    #endregion
+
+
+    #region Unsharing and throw handling
+    static UnShare (expr : TExpr) : TExpr
+    {
+      expr.Walk (DoUnShare)
+    }
+    
+    static DoUnShare (expr : TExpr) : TExpr
+    {
+      // Message.Debug ($"unshare $expr");
+      if (expr.Visited) {
+        def expr = expr.Copy ();
+        Util.cassert (!expr.Visited);
+        UnShare (expr)
+      } else {
+        expr.Visited = true;
+        null
+      }
+    }
+    #endregion
+
+
     #region Top level stuff
     static Walk (expr : TExpr) : TExpr
     {
@@ -141,24 +319,26 @@ namespace Nemerle.Compiler
 
     static DoWalk (expr : TExpr) : TExpr
     {
-      _ = expr.Throws; // make it flag any error here
-      // Message.Debug ($ "dowalk: $(expr.GetType()) $(expr)");
+      // Message.Debug ($ "dowalk: $(expr.GetType()) $(expr.Type)");
       def res =
         match (expr) {
-          | FieldMember (obj, fld) 
-            when 
-              ! expr.IsAssigned && 
-              NeedConversion (fld.GetMemType (), expr) =>
-            // use address here for better performance
+          | FieldMember (obj, fld) when ! expr.IsAssigned =>
             def obj = Walk (obj);
+              
+            // use address here for better performance
             when (! obj.NeedAddress && fld.DeclaringType.IsValueType)
               obj.NeedAddress = true;
               
-            // Message.Debug ($"field ref: $(fld.GetMemType())");
-            TExpr.FieldMember (fld.GetMemType (), obj, fld)
-            
+            if (NeedConversion (fld.GetMemType (), expr))
+              Convert (expr.Type,
+                       TExpr.FieldMember (fld.GetMemType (), obj, fld))
+            else
+              TExpr.FieldMember (obj, fld)
+
           | TupleIndexer (obj, pos, len) when NeedConversion (InternalType.Object, expr) =>
-            TExpr.TupleIndexer (InternalType.Object, Walk (obj), pos, len);
+            Convert (expr.Type,
+                     TExpr.TupleIndexer (InternalType.Object,
+                                         Walk (obj), pos, len));
 
           | Assign (e1, e2) =>
             e1.IsAssigned = true;
@@ -181,40 +361,40 @@ namespace Nemerle.Compiler
             else
               e1.NeedAddress = true;
 
-            when (e1.Throws)
-              Message.Error ("`throw' in assignment target");
-
-            when (e2.Throws)
-              if (e1 is TExpr.LocalRef)
-                Message.Warning ("bad style: each branch in this block "
-                                 "ends with a break")
-              else
-                Message.Error ("`throw' in assignment source");
-
             if (NeedBoxing (real_type, e2))
               TExpr.Assign (InternalType.Void, e1, Box (real_type, e2))
             else 
               TExpr.Assign (InternalType.Void, e1, e2)
-            
+
+          
           | TailCall (ImplicitValueTypeCtor, [])
           | Call (ImplicitValueTypeCtor, []) => null
           
           // I hope opcodes don't need boxing ...
-          | TailCall (OpCode, parms)
-          | Call (OpCode, parms) =>
-            foreach (parm in parms)
-              when (parm.expr.Throws)
-                Message.Error ("`throw' in operand argument");
-            null
+          | TailCall (OpCode, _)
+          | Call (OpCode, _) => null
           
-          | TailCall (func, parms)
-          | Call (func, parms) =>
-            def func = Walk (func);
-            when (func.Throws)
-              Message.Error ("`throw' in called value");
+          | TailCall (origfunc, parms)
+          | Call (origfunc, parms) =>
+            mutable func = Walk (origfunc);
             def meth =
               match (func) {
-                | MethodRef (_, meth, _)
+                | MethodRef (obj, meth, nonvirt) =>
+                
+                  // we would kinda like address here
+                  when (obj.Type.Fix ().IsValueType) {
+                    def methty = meth.DeclaringType;
+                    if (methty.IsValueType)
+                      obj.NeedAddress = true;
+                    else {
+                      // but maybe we should employ boxing
+                      def obj = Box (methty.GetMemType (), obj);
+                      func = TExpr.MethodRef (func.Type, obj, meth, nonvirt);
+                    }
+                  }
+                  
+                  meth
+                  
                 | Base (meth)
                 | StaticRef (meth is IMethod) => meth
                 | _ => Util.ice ($ "invalid thing called $func")
@@ -236,8 +416,6 @@ namespace Nemerle.Compiler
                     | f :: fs =>
                       def t = f.ty.Fix ();
                       parm.expr = Walk (parm.expr);
-                      when (parm.expr.Throws)
-                        Message.Error ("`throw' in call parameter");
                       if (parm.kind == ParmKind.Normal) {
                         when (NeedBoxing (t, parm.expr))
                           parm.expr = Box (t, parm.expr);
@@ -256,18 +434,16 @@ namespace Nemerle.Compiler
             }
 
             if (NeedConversion (meth.ReturnType.Fix (), expr))
-              TExpr.Call (meth.ReturnType.Fix (), func, parms)
+              Convert (expr.Type,
+                       TExpr.Call (meth.ReturnType.Fix (), func, parms))
             else
               if (expr is TExpr.TailCall)
-                TExpr.TailCall (expr.Type, func, parms)
+                TExpr.TailCall (func, parms)
               else
-                TExpr.Call (expr.Type, func, parms)
+                TExpr.Call (func, parms)
 
           | Tuple (exprs) =>
-            foreach (expr in exprs)
-              when (expr.Throws)
-                Message.Error ("`throw' in tuple constructor");
-            TExpr.Tuple (expr.Type, exprs.Map (MaybeBoxToObject))
+            TExpr.Tuple (exprs.Map (MaybeBoxToObject))
 
           | Array (parms, dimensions) =>
             def ty =
@@ -278,19 +454,14 @@ namespace Nemerle.Compiler
             mutable res = [];
             foreach (parm in parms) {
               def parm = Walk (parm);
-              when (parm.Throws)
-                Message.Error ("`throw' in array constructor");
               def parm =
                 if (NeedBoxing (ty, parm))
                   Box (ty, parm)
                 else parm;
               res = parm :: res;
             }
-            foreach (dim in dimensions)
-              when (dim.Throws)
-                Message.Error ("`throw' in array constructor");
-            TExpr.Array (expr.Type, res.Rev (), dimensions)
-                
+            TExpr.Array (res.Rev (), dimensions)
+
           | DefFunctionsIn
           | Match
           | SelfTailCall =>
@@ -299,10 +470,8 @@ namespace Nemerle.Compiler
           
           | _ => null
         }
-      // Message.Debug ($"do walk: $expr -> $res");
-      if (res == null) null
-      else if (res.Type.Equals (expr.Type)) res
-      else Typer3.CheckedConversion (res, expr.Type)
+      //Message.Debug ($"do walk: $expr -> $res");
+      res
     }
     #endregion
   }
