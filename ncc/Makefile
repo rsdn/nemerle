@@ -123,13 +123,10 @@ NEMERLE_COMPILER_DLL_SRC = \
 	hierarchy/ClassMembers.n	 \
 	hierarchy/BuiltinMethod.n        \
 	generation/Typer3.n		 \
-	generation/Postprocessing.n	 \
 	generation/MatchingCompiler.n	 \
 	generation/ImplementsWrapperMaker.n \
 	generation/ILEmitter.n		 \
 	generation/HierarchyEmitter.n	 \
-	generation/CompiledTree.n	 \
-	generation/CompileTypedTree.n	 \
 	generation/CompileTypedMethod.n  \
 	external/LibrariesLoader.n	 \
 	external/InternalTypes.n	 \
