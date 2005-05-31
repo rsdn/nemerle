@@ -98,6 +98,8 @@ tarball:
 	$(Q)cp tools/cs2n/*.cs $(PACKAGE)-$(VERSION).$(REVISION)/tools/cs2n/
 	$(TAR) $(PACKAGE)-$(VERSION).$(REVISION).tar.gz 
 	@tar zcf $(PACKAGE)-$(VERSION).$(REVISION).tar.gz $(PACKAGE)-$(VERSION).$(REVISION)
+	$(TAR) $(PACKAGE)-$(VERSION).$(REVISION).tar.bz2
+	@tar jcf $(PACKAGE)-$(VERSION).$(REVISION).tar.bz2 $(PACKAGE)-$(VERSION).$(REVISION)
 	$(Q)rm -rf $(PACKAGE)-$(VERSION).$(REVISION)
 
 get-static-copies:
