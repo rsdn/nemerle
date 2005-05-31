@@ -5,7 +5,7 @@
 }
 .assembly extern Nemerle
 {
-  .ver 0:3:1:37267
+  .ver 0:3:1:20774
   .publickeytoken = (E0 80 A9 C7 24 E2 BF CD ) // ....$...
 }
 .assembly 'out'
@@ -17,7 +17,7 @@
   .hash algorithm 0x00008004
   .ver  0:0:0:0
 }
-.module 'out' // GUID = {2F806936-B496-4771-83B9-FC0030F90407}
+.module 'out' // GUID = {DBEE1CC0-D3E8-4492-B71A-858410D1D04F}
 
 
 .namespace a
@@ -1481,8 +1481,8 @@
            default void test_it (int32 max)  cil managed 
     {
         // Method begins at RVA 0x23c4
-	// Code size 656 (0x290)
-	.maxstack 8
+	// Code size 766 (0x2fe)
+	.maxstack 26
 	.locals init (
 		class a.A[]	V_0,
 		int32	V_1,
@@ -1579,7 +1579,7 @@
 	IL_00ee:  ldc.i4.1 
 	IL_00ef:  stloc.3 
 	IL_00f0:  ldloc.3 
-	IL_00f1:  brfalse IL_0289
+	IL_00f1:  brfalse IL_02f7
 
 	IL_00f6:  ldloc.0 
 	IL_00f7:  ldloc.2 
@@ -1599,185 +1599,225 @@
 	IL_0112:  callvirt instance int32 class a.A::_N_GetVariantCode()
 	IL_0117:  switch (
 	  IL_016a,
-	  IL_016f,
-	  IL_0174,
-	  IL_0179,
-	  IL_017e,
-	  IL_0183,
+	  IL_0170,
+	  IL_0176,
+	  IL_017c,
+	  IL_0182,
 	  IL_0188,
-	  IL_018d,
-	  IL_0192,
-	  IL_0197,
-	  IL_019c,
-	  IL_01a1,
-	  IL_01a6,
-	  IL_01ab,
-	  IL_01b0,
+	  IL_018e,
+	  IL_0194,
+	  IL_019a,
+	  IL_01a0,
+	  IL_01a7,
+	  IL_01ae,
 	  IL_01b5,
-	  IL_01ba,
-	  IL_01bf)
-	IL_0164:  newobj instance void class [Nemerle]Nemerle.Core.MatchFailureException::.ctor()
-	IL_0169:  throw 
-	IL_016a:  br IL_01c4
+	  IL_01bc,
+	  IL_01c3,
+	  IL_01ca,
+	  IL_01d1,
+	  IL_01d8)
+	IL_0164:  ldc.i4.m1 
+	IL_0165:  br IL_01df
 
-	IL_016f:  br IL_01cd
+	IL_016a:  ldc.i4.0 
+	IL_016b:  br IL_01df
 
-	IL_0174:  br IL_01d7
+	IL_0170:  ldc.i4.1 
+	IL_0171:  br IL_01df
 
-	IL_0179:  br IL_01e1
+	IL_0176:  ldc.i4.2 
+	IL_0177:  br IL_01df
 
-	IL_017e:  br IL_01eb
+	IL_017c:  ldc.i4.3 
+	IL_017d:  br IL_01df
 
-	IL_0183:  br IL_01f5
+	IL_0182:  ldc.i4.4 
+	IL_0183:  br IL_01df
 
-	IL_0188:  br IL_01ff
+	IL_0188:  ldc.i4.5 
+	IL_0189:  br IL_01df
 
-	IL_018d:  br IL_0209
+	IL_018e:  ldc.i4.6 
+	IL_018f:  br IL_01df
 
-	IL_0192:  br IL_0213
+	IL_0194:  ldc.i4.7 
+	IL_0195:  br IL_01df
 
-	IL_0197:  br IL_021d
+	IL_019a:  ldc.i4.8 
+	IL_019b:  br IL_01df
 
-	IL_019c:  br IL_0227
+	IL_01a0:  ldc.i4.s 0x09
+	IL_01a2:  br IL_01df
 
-	IL_01a1:  br IL_0231
+	IL_01a7:  ldc.i4.s 0x0a
+	IL_01a9:  br IL_01df
 
-	IL_01a6:  br IL_023b
+	IL_01ae:  ldc.i4.s 0x0b
+	IL_01b0:  br IL_01df
 
-	IL_01ab:  br IL_0248
+	IL_01b5:  ldc.i4.s 0x0c
+	IL_01b7:  br IL_01df
 
-	IL_01b0:  br IL_0252
+	IL_01bc:  ldc.i4.s 0x0d
+	IL_01be:  br IL_01df
 
-	IL_01b5:  br IL_025c
+	IL_01c3:  ldc.i4.s 0x0e
+	IL_01c5:  br IL_01df
 
-	IL_01ba:  br IL_0266
+	IL_01ca:  ldc.i4.s 0x0f
+	IL_01cc:  br IL_01df
 
-	IL_01bf:  br IL_0273
+	IL_01d1:  ldc.i4.s 0x10
+	IL_01d3:  br IL_01df
 
-	IL_01c4:  ldloc.1 
-	IL_01c5:  ldc.i4.1 
-	IL_01c6:  add.ovf 
-	IL_01c7:  stloc.1 
-	IL_01c8:  br IL_0280
+	IL_01d8:  ldc.i4.s 0x11
+	IL_01da:  br IL_01df
 
-	IL_01cd:  ldloc.1 
-	IL_01ce:  ldc.i4.s 0x0c
-	IL_01d0:  add.ovf 
-	IL_01d1:  stloc.1 
-	IL_01d2:  br IL_0280
-
-	IL_01d7:  ldloc.1 
-	IL_01d8:  ldc.i4.s 0x0d
-	IL_01da:  add.ovf 
-	IL_01db:  stloc.1 
-	IL_01dc:  br IL_0280
-
-	IL_01e1:  ldloc.1 
-	IL_01e2:  ldc.i4.s 0x0e
-	IL_01e4:  add.ovf 
-	IL_01e5:  stloc.1 
-	IL_01e6:  br IL_0280
-
-	IL_01eb:  ldloc.1 
-	IL_01ec:  ldc.i4.s 0x0f
-	IL_01ee:  add.ovf 
-	IL_01ef:  stloc.1 
-	IL_01f0:  br IL_0280
-
-	IL_01f5:  ldloc.1 
-	IL_01f6:  ldc.i4.s 0x10
-	IL_01f8:  add.ovf 
-	IL_01f9:  stloc.1 
-	IL_01fa:  br IL_0280
-
-	IL_01ff:  ldloc.1 
-	IL_0200:  ldc.i4.s 0x11
-	IL_0202:  add.ovf 
-	IL_0203:  stloc.1 
-	IL_0204:  br IL_0280
-
-	IL_0209:  ldloc.1 
-	IL_020a:  ldc.i4.s 0x12
-	IL_020c:  add.ovf 
-	IL_020d:  stloc.1 
-	IL_020e:  br IL_0280
-
-	IL_0213:  ldloc.1 
-	IL_0214:  ldc.i4.s 0x13
-	IL_0216:  add.ovf 
-	IL_0217:  stloc.1 
-	IL_0218:  br IL_0280
-
-	IL_021d:  ldloc.1 
-	IL_021e:  ldc.i4.s 0x0a
-	IL_0220:  add.ovf 
-	IL_0221:  stloc.1 
-	IL_0222:  br IL_0280
-
-	IL_0227:  ldloc.1 
-	IL_0228:  ldc.i4.s 0x0e
-	IL_022a:  add.ovf 
-	IL_022b:  stloc.1 
-	IL_022c:  br IL_0280
-
-	IL_0231:  ldloc.1 
-	IL_0232:  ldc.i4.s 0x0d
+	IL_01df:  switch (
+	  IL_0232,
+	  IL_023b,
+	  IL_0245,
+	  IL_024f,
+	  IL_0259,
+	  IL_0263,
+	  IL_026d,
+	  IL_0277,
+	  IL_0281,
+	  IL_028b,
+	  IL_0295,
+	  IL_029f,
+	  IL_02a9,
+	  IL_02b6,
+	  IL_02c0,
+	  IL_02ca,
+	  IL_02d4,
+	  IL_02e1)
+	IL_022c:  newobj instance void class [Nemerle]Nemerle.Core.MatchFailureException::.ctor()
+	IL_0231:  throw 
+	IL_0232:  ldloc.1 
+	IL_0233:  ldc.i4.1 
 	IL_0234:  add.ovf 
 	IL_0235:  stloc.1 
-	IL_0236:  br IL_0280
+	IL_0236:  br IL_02ee
 
 	IL_023b:  ldloc.1 
-	IL_023c:  ldc.i4 133
-	IL_0241:  add.ovf 
-	IL_0242:  stloc.1 
-	IL_0243:  br IL_0280
+	IL_023c:  ldc.i4.s 0x0c
+	IL_023e:  add.ovf 
+	IL_023f:  stloc.1 
+	IL_0240:  br IL_02ee
 
-	IL_0248:  ldloc.1 
-	IL_0249:  ldc.i4.s 0x0c
-	IL_024b:  add.ovf 
-	IL_024c:  stloc.1 
-	IL_024d:  br IL_0280
+	IL_0245:  ldloc.1 
+	IL_0246:  ldc.i4.s 0x0d
+	IL_0248:  add.ovf 
+	IL_0249:  stloc.1 
+	IL_024a:  br IL_02ee
 
-	IL_0252:  ldloc.1 
-	IL_0253:  ldc.i4.s 0x7b
-	IL_0255:  add.ovf 
-	IL_0256:  stloc.1 
-	IL_0257:  br IL_0280
+	IL_024f:  ldloc.1 
+	IL_0250:  ldc.i4.s 0x0e
+	IL_0252:  add.ovf 
+	IL_0253:  stloc.1 
+	IL_0254:  br IL_02ee
 
-	IL_025c:  ldloc.1 
-	IL_025d:  ldc.i4.s 0x7c
-	IL_025f:  add.ovf 
-	IL_0260:  stloc.1 
-	IL_0261:  br IL_0280
+	IL_0259:  ldloc.1 
+	IL_025a:  ldc.i4.s 0x0f
+	IL_025c:  add.ovf 
+	IL_025d:  stloc.1 
+	IL_025e:  br IL_02ee
 
-	IL_0266:  ldloc.1 
-	IL_0267:  ldc.i4 156
-	IL_026c:  add.ovf 
-	IL_026d:  stloc.1 
-	IL_026e:  br IL_0280
+	IL_0263:  ldloc.1 
+	IL_0264:  ldc.i4.s 0x10
+	IL_0266:  add.ovf 
+	IL_0267:  stloc.1 
+	IL_0268:  br IL_02ee
 
-	IL_0273:  ldloc.1 
-	IL_0274:  ldc.i4 153
-	IL_0279:  add.ovf 
-	IL_027a:  stloc.1 
-	IL_027b:  br IL_0280
+	IL_026d:  ldloc.1 
+	IL_026e:  ldc.i4.s 0x11
+	IL_0270:  add.ovf 
+	IL_0271:  stloc.1 
+	IL_0272:  br IL_02ee
 
-	IL_0280:  ldloc.2 
-	IL_0281:  ldc.i4.1 
-	IL_0282:  add.ovf 
-	IL_0283:  stloc.2 
-	IL_0284:  br IL_00e4
+	IL_0277:  ldloc.1 
+	IL_0278:  ldc.i4.s 0x12
+	IL_027a:  add.ovf 
+	IL_027b:  stloc.1 
+	IL_027c:  br IL_02ee
 
-	IL_0289:  ldloc.1 
-	IL_028a:  call void class [mscorlib]System.Console::WriteLine(int32)
-	IL_028f:  ret 
+	IL_0281:  ldloc.1 
+	IL_0282:  ldc.i4.s 0x13
+	IL_0284:  add.ovf 
+	IL_0285:  stloc.1 
+	IL_0286:  br IL_02ee
+
+	IL_028b:  ldloc.1 
+	IL_028c:  ldc.i4.s 0x0a
+	IL_028e:  add.ovf 
+	IL_028f:  stloc.1 
+	IL_0290:  br IL_02ee
+
+	IL_0295:  ldloc.1 
+	IL_0296:  ldc.i4.s 0x0e
+	IL_0298:  add.ovf 
+	IL_0299:  stloc.1 
+	IL_029a:  br IL_02ee
+
+	IL_029f:  ldloc.1 
+	IL_02a0:  ldc.i4.s 0x0d
+	IL_02a2:  add.ovf 
+	IL_02a3:  stloc.1 
+	IL_02a4:  br IL_02ee
+
+	IL_02a9:  ldloc.1 
+	IL_02aa:  ldc.i4 133
+	IL_02af:  add.ovf 
+	IL_02b0:  stloc.1 
+	IL_02b1:  br IL_02ee
+
+	IL_02b6:  ldloc.1 
+	IL_02b7:  ldc.i4.s 0x0c
+	IL_02b9:  add.ovf 
+	IL_02ba:  stloc.1 
+	IL_02bb:  br IL_02ee
+
+	IL_02c0:  ldloc.1 
+	IL_02c1:  ldc.i4.s 0x7b
+	IL_02c3:  add.ovf 
+	IL_02c4:  stloc.1 
+	IL_02c5:  br IL_02ee
+
+	IL_02ca:  ldloc.1 
+	IL_02cb:  ldc.i4.s 0x7c
+	IL_02cd:  add.ovf 
+	IL_02ce:  stloc.1 
+	IL_02cf:  br IL_02ee
+
+	IL_02d4:  ldloc.1 
+	IL_02d5:  ldc.i4 156
+	IL_02da:  add.ovf 
+	IL_02db:  stloc.1 
+	IL_02dc:  br IL_02ee
+
+	IL_02e1:  ldloc.1 
+	IL_02e2:  ldc.i4 153
+	IL_02e7:  add.ovf 
+	IL_02e8:  stloc.1 
+	IL_02e9:  br IL_02ee
+
+	IL_02ee:  ldloc.2 
+	IL_02ef:  ldc.i4.1 
+	IL_02f0:  add.ovf 
+	IL_02f1:  stloc.2 
+	IL_02f2:  br IL_00e4
+
+	IL_02f7:  ldloc.1 
+	IL_02f8:  call void class [mscorlib]System.Console::WriteLine(int32)
+	IL_02fd:  ret 
     } // end of method Test::default void test_it (int32 max) 
 
     // method line 94
     .method private static  hidebysig 
            default void Main ()  cil managed 
     {
-        // Method begins at RVA 0x2660
+        // Method begins at RVA 0x26d0
 	.entrypoint
 	// Code size 53 (0x35)
 	.maxstack 9
