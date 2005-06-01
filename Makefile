@@ -42,7 +42,8 @@ version_files = \
 	macros/AssemblyInfo.n \
 	lib/AssemblyInfo.n \
 	tools/cs2n/AssemblyInfo.{n,cs} \
-	ncc/main.n
+	ncc/main.n \
+	tools/nemerlish/eval.n
 
 ############################################################
 # OUTPUT
