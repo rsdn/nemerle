@@ -32,15 +32,8 @@ install: all
 		echo '$(NET_ENGINE) $(BINDIR)/nemish.exe "$$@"' >> $(DESTDIR)$(BINDIR)/nemish ; \
 		chmod 755 $(DESTDIR)$(BINDIR)/nemish ; \
 	fi
-	$(INST) "[$(HOME)]" .nemerlish_profile 
-# Copy .nemerlish_profile to the user's home directory setting apropriate ownership, based on
-# the ownership of $HOME in case they used sudo for `make install'.
-	$(Q)if [ ! -f "$(HOME)/.nemerlish_profile" ]; then \
-		$(INSTALL) -m 644 -o `ls -ld "$(HOME)"|cut -d " " -f 4` \
-                -g `ls -ld "$(HOME)"|cut -d " " -f 5` .nemerlish_profile $(HOME); \
-        fi
 
-# ~/.nemerlish_profile is _not_ deleted during uninstallation.
+
 uninstall:
 	$(RM) Nemerle.Evaluation
 	$(GACUTIL_UNINSTALL_COMMAND) Nemerle.Evaluation
