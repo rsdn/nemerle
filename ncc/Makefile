@@ -438,7 +438,8 @@ install:
 	$(Q)if test ! -d $(DESTDIR)$(BINDIR); then $(INSTALL) -d $(DESTDIR)$(BINDIR); fi
 	$(Q)$(GACUTIL_COMMAND) out.stage3/Nemerle.dll
 	$(Q)$(GACUTIL_COMMAND) out.stage3/Nemerle.Compiler.dll
-	$(Q)$(GACUTIL_COMMAND) out.stage3/Nemerle.Macros.dll
+	$(INST) "[$(BINDIR)]" Nemerle.Macros.dll 
+	$(Q)$(INSTALL) -m 755 out.stage3/Nemerle.Macros.dll $(DESTDIR)$(BINDIR)/Nemerle.Macros.dll
 	export MONO_PATH=$$MONO_PATH:$$PWD/out.stage3 ; $(NGEN_GAC)
 	$(INST) "[$(BINDIR)]" ncc.exe
 	$(Q)$(INSTALL) -m 755 out.stage3/ncc.exe $(DESTDIR)$(BINDIR)/ncc.exe

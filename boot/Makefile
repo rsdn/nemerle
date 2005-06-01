@@ -59,10 +59,10 @@ install:
 	$(Q)if test ! -d $(DESTDIR)$(BINDIR); then $(INSTALL) -d $(DESTDIR)$(BINDIR); fi
 	$(Q)$(GACUTIL_COMMAND) Nemerle.dll
 	$(Q)$(GACUTIL_COMMAND) Nemerle.Compiler.dll
-	$(Q)$(GACUTIL_COMMAND) Nemerle.Macros.dll
 	export MONO_PATH=$$MONO_PATH:$$PWD ; $(NGEN_GAC)
 	$(INST) [$(BINDIR)] ncc.exe
 	$(Q)$(INSTALL) -m 755 ncc.exe $(DESTDIR)$(BINDIR)/ncc.exe
+	$(Q)$(INSTALL) -m 755 Nemerle.Macros.dll $(DESTDIR)$(BINDIR)/Nemerle.Macros.dll
 	$(Q)if test "X$(NET_ENGINE)" != "X"; then \
 		echo "#!/bin/sh" > $(DESTDIR)$(BINDIR)/ncc && \
 		echo '$(NET_ENGINE) $(BINDIR)/ncc.exe "$$@"' >> $(DESTDIR)$(BINDIR)/ncc ; \
