@@ -43,7 +43,8 @@ version_files = \
 	lib/AssemblyInfo.n \
 	tools/cs2n/AssemblyInfo.{n,cs} \
 	ncc/main.n \
-	tools/nemerlish/eval.n
+	tools/nemerlish/eval.n \
+	tools/nemerlish/main.n \
 
 ############################################################
 # OUTPUT
