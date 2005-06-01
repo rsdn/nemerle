@@ -91,7 +91,7 @@ function GetNemerleIndent()
     " Here we shall handle the colon. There are exactly two scenarios we need
     " to handle - function signature not ending with semicolon or opening
     " brace, and a field with no attributes.
-    if cur_line =~ '^\s*\S*\s*:.*;' " field
+    if cur_line =~ '^\s*\S*\s*:.*;' || prev_line =~ '^\s*\S*\s*:.*;' " field
 	if prev_line !~ '\(;\|}\)\s*\(\s*\|//.*\|/\*.*\*/\s*\)$' " previous line is not end of expression
 	    return ind + &sw
 	else
