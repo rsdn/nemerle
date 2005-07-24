@@ -36,7 +36,7 @@ include ../config.mak
 all:
 	$(Q)if test $(ANTLR); then \
 		$(MAKE) -C cs2n all; \
-	elif find tools/cs2n/CSharpParser.cs -cnewer tools/cs2n/csharpgrammar.g | grep -q "" ; then \
+	elif find cs2n/CSharpParser.cs -cnewer cs2n/csharpgrammar.g | grep -q "" ; then \
 		$(MAKE) -C cs2n all; \
 	fi
 	$(Q)$(MAKE) -C nemerlish all
