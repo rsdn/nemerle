@@ -493,10 +493,10 @@ Mode map
   (setq comment-indent-function 'nemerle-comment-indent)
 
   (make-local-variable 'comment-start)
-  (setq comment-start "/* ")
+  (setq comment-start "// ")
 
   (make-local-variable 'comment-end)
-  (setq comment-end " */")
+  (setq comment-end "")
 
   (make-local-variable 'comment-start-skip)
   (setq comment-start-skip "/\\*+[ \t]*\\|//+ *")
