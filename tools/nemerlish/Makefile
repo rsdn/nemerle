@@ -28,9 +28,9 @@ install: all
 	$(Q)$(INSTALL) -m 755 nemish.exe $(DESTDIR)$(BINDIR)/nemish.exe
 # Set a `nemish' script if binfmt_misc is not available.
 	$(Q)if [ "$(NET_ENGINE)" != "" ] ; then \
-		echo "#!/bin/sh" > $(DESTDIR)$(BINDIR)/nemish && \
-		echo '$(NET_ENGINE) $(BINDIR)/nemish.exe "$$@"' >> $(DESTDIR)$(BINDIR)/nemish ; \
-		chmod 755 $(DESTDIR)$(BINDIR)/nemish ; \
+		echo "#!/bin/sh" > $(DESTDIR)$(SCRDIR)/nemish && \
+		echo '$(NET_ENGINE) $(BINDIR)/nemish.exe "$$@"' >> $(DESTDIR)$(SCRDIR)/nemish ; \
+		chmod 755 $(DESTDIR)$(SCRDIR)/nemish ; \
 	fi
 
 

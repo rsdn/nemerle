@@ -448,9 +448,9 @@ endif
 	$(INST) "[$(BINDIR)]" ncc.exe
 	$(Q)$(INSTALL) -m 755 out.stage3/ncc.exe $(DESTDIR)$(BINDIR)/ncc.exe
 	$(Q)if [ "$(NET_ENGINE)" != "" ] ; then \
-		echo "#!/bin/sh" > $(DESTDIR)$(BINDIR)/ncc && \
-		echo '$(NET_ENGINE) $(BINDIR)/ncc.exe "$$@"' >> $(DESTDIR)$(BINDIR)/ncc ; \
-		chmod 755 $(DESTDIR)$(BINDIR)/ncc ; \
+		echo "#!/bin/sh" > $(DESTDIR)$(SCRDIR)/ncc && \
+		echo '$(NET_ENGINE) $(BINDIR)/ncc.exe "$$@"' >> $(DESTDIR)$(SCRDIR)/ncc ; \
+		chmod 755 $(DESTDIR)$(SCRDIR)/ncc ; \
 	fi
 
 clean:

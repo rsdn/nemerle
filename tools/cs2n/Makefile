@@ -109,9 +109,9 @@ install: cs2n.exe
 	$(INST) "[$(BINDIR)]" cs2n.exe
 	$(Q)$(INSTALL) -m 755 cs2n.exe $(DESTDIR)$(BINDIR)/cs2n.exe
 	$(Q)if [ "$(NET_ENGINE)" != "" ] ; then \
-		echo "#!/bin/sh" > $(DESTDIR)$(BINDIR)/cs2n && \
-		echo '$(NET_ENGINE) $(BINDIR)/cs2n.exe "$$@"' >> $(DESTDIR)$(BINDIR)/cs2n ; \
-		chmod 755 $(DESTDIR)$(BINDIR)/cs2n ; \
+		echo "#!/bin/sh" > $(DESTDIR)$(SCRDIR)/cs2n && \
+		echo '$(NET_ENGINE) $(BINDIR)/cs2n.exe "$$@"' >> $(DESTDIR)$(SCRDIR)/cs2n ; \
+		chmod 755 $(DESTDIR)$(SCRDIR)/cs2n ; \
 	fi
 
 uninstall:
