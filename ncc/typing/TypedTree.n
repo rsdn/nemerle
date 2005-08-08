@@ -79,8 +79,12 @@ namespace Nemerle.Compiler.Typedtree
     public SystemType : System.Type
     {
       get {
-        ty.Fix ().GetSystemType ();
+        ty.Fix ().SystemType;
       }
+    }
+
+    public Name : string {
+      get { name }
     }
 
     internal GetDefaultValueFromModifiers (par : TypeBuilder) : void
@@ -178,8 +182,12 @@ namespace Nemerle.Compiler.Typedtree
     internal mutable children_funs : list [Fun_header] = [];
     internal mutable uses_try_block : bool;
 
+    // FIXME: move to hashtables in t3
+    internal mutable used_closures : list [Fun_header] = [];
     internal mutable static_method : IMethod;
-    internal mutable closure_type : TypeInfo;
+    internal mutable typarms_to_pass : list [MType]; 
+    internal mutable closure_type : MType.Class;
+    // end
 
     public CompareTo (other : Fun_header) : int
     {
@@ -242,10 +250,12 @@ namespace Nemerle.Compiler.Typedtree
     
     public this () { }
 
-    public GetSystemType () : System.Type
+    public SystemType : System.Type
     {
-      Util.cassert (ty != null);
-      ty.Fix ().GetSystemType ()
+      get { 
+        Util.cassert (ty != null);
+        ty.SystemType
+      }
     }
 
     public Type : TyVar
@@ -328,13 +338,16 @@ namespace Nemerle.Compiler.Typedtree
 
   public variant ConversionKind
   {
-    | MethodCall { meth : IMethod; }
+    | MethodCall { sr : TExpr.StaticRef; }
     | IL { is_checked : bool; }
     | UpCast
     | DownCast
     | Implicit
     | IgnoreValue // generates a warning in Typer2
     | Unspecified // like DownCast, but avoid warnings
+
+    // will disappear after generics bootstrap
+    | GenericSim
 
     // Boxing and Nop are to be unused when cgexpr is killed
     | Boxing
@@ -356,16 +369,18 @@ namespace Nemerle.Compiler.Typedtree
     | AddressableComputed  = 0x0040
     
     | JumpTarget           = 0x0080
+
+    | Constrained          = 0x0100
   }
 
   public variant TExpr : Located
   { 
     // always valid
-    | StaticRef             { mem : IMember; }
+    | StaticRef             { from : MType.Class; mem : IMember; type_parms : list [TyVar]; }
     | LocalRef              { decl : LocalValue; }
-    | ImplicitValueTypeCtor { tc : TypeInfo; }
+    | ImplicitValueTypeCtor
     | FieldMember           { obj : TExpr; fld : IField; }
-    | MethodRef             { obj : TExpr; meth : IMethod; notvirtual : bool; }
+    | MethodRef             { obj : TExpr; meth : IMethod; type_parms : list [TyVar]; notvirtual : bool; }
     | Call                  { mutable func : TExpr; mutable parms : list [Parm]; mutable is_tail : bool; }
     | Assign                { target : TExpr; source : TExpr; }
     | DefValIn              { name : LocalValue; val : TExpr; mutable body : TExpr; }
@@ -386,10 +401,10 @@ namespace Nemerle.Compiler.Typedtree
 
     // invalid after T2
     | PropertyMember        { obj : TExpr; prop : IProperty; }
-    | StaticPropertyRef     { prop : IProperty; }
+    | StaticPropertyRef     { from : MType.Class; prop : IProperty; }
     | EventMember           { obj : TExpr; ev : IEvent; }
-    | StaticEventRef        { ev : IEvent; }
-    | ConstantObjectRef     { mem : IField; }
+    | StaticEventRef        { from : MType.Class; ev : IEvent; }
+    | ConstantObjectRef     { from : MType.Class; mem : IField; }
     | Delayed               { susp : Typer.DelayedTyping; }
     | Error
 
@@ -397,14 +412,20 @@ namespace Nemerle.Compiler.Typedtree
     | DefFunctionsIn        { funs : list [Fun_header]; mutable body : TExpr; }
     | Match                 { expr : TExpr; cases : list [Match_case]; }
     | SelfTailCall          { parms : list [Parm]; }
+    | LocalFunRef           { decl : LocalValue; type_parms : list [TyVar]; }
     
     // new CG-related stuff
-    | MethodAddress         { meth : IMethod; is_virt : bool; }
+    | MethodAddress         { from : TyVar; meth : IMethod; is_virt : bool;
+                              type_parms : list [TyVar]; }
     | MultipleAssign        { assigns : list [LocalValue * TExpr]; }
     // we cannot directly reference Label from Goto, because Walk() would
     // destroy it
     | Label                 { id : int; body : TExpr; }
-    | Goto                  { target : int; }
+    // The try_block exact value has meaning only in T4, outside a value 
+    // different than zero means that we should use [leave] and not [br].
+    // This is set in T4, if you create nodes of this type earlier, set 
+    // it to 1.
+    | Goto                  { target : int; mutable try_block : int; }
     | DefaultValue
     | If                    { cond : TExpr; e_then : TExpr; e_else : TExpr; }
     | HasType               { expr : TExpr; test_ty : MType; }
@@ -436,6 +457,11 @@ namespace Nemerle.Compiler.Typedtree
       }
     }
 
+    internal NeedsConstrained : bool
+    {
+      get { flags %&& TExprFlags.Constrained  }
+      set { when (value) flags |= TExprFlags.Constrained }
+    }
 
     internal IsAddressable : bool
     {
@@ -550,14 +576,21 @@ namespace Nemerle.Compiler.Typedtree
           }
         }
 
+        Util.cassert (ty != null, $ "still null, $loc, $this");
+
         ty
       }
     }
 
+    public MType : MType
+    {
+      get { Type.Fix () }
+    }
+    
     public SystemType : System.Type
     {
       get {
-        Type.Fix ().GetSystemType ()
+        Type.SystemType
       }
     }
 
@@ -592,16 +625,16 @@ namespace Nemerle.Compiler.Typedtree
       match (expr) {
         | This => This ()
         | LocalRef (decl) => LocalRef (decl)
-        | StaticRef (mem) => StaticRef (mem)
+        | StaticRef (from, mem, parms) => StaticRef (from, mem, parms)
         | OpCode (o) => OpCode (o)
         | TypeOf (t) => TypeOf (t)
         | TExpr.Literal (l) => TExpr.Literal (l)
         | Base (ctor) => Base (ctor)
-        | ImplicitValueTypeCtor (t) => ImplicitValueTypeCtor (t)
-        | MethodAddress (meth, v) => MethodAddress (meth, v)
-        | Goto (id) => Goto (id)
+        | ImplicitValueTypeCtor => ImplicitValueTypeCtor ()
+        | MethodAddress (from, meth, v, typarms) => MethodAddress (from, meth, v, typarms)
+        | Goto (id, t) => Goto (id, t)
         | DefaultValue => DefaultValue ()
-        | ConstantObjectRef (mem) => ConstantObjectRef (mem)
+        | ConstantObjectRef (from, mem) => ConstantObjectRef (from, mem)
 
         | _ => null
       }
@@ -684,6 +717,7 @@ namespace Nemerle.Compiler.Typedtree
 
         | This
         | LocalRef
+        | LocalFunRef
         | StaticRef 
         | Error
         | OpCode 
@@ -708,11 +742,11 @@ namespace Nemerle.Compiler.Typedtree
           DefFunctionsIn (funs, walk (f, body))
           
           
-        | MethodRef (obj, meth, notvirt) =>
+        | MethodRef (obj, meth, tp, notvirt) =>
           def obj = null_walk (f, obj);
           if (obj == null) null
           else
-            MethodRef (obj, meth, notvirt)
+            MethodRef (obj, meth, tp, notvirt)
 
 
         | FieldMember (obj, fld) =>

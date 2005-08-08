@@ -45,6 +45,7 @@ namespace Nemerle.Compiler
       typer : Typer;
       local_context : LocalContext;
       expected : TyVar;
+      mutable generic_specifier : list [TyVar];
       static mutable current_id : int;
 
       [Record]
@@ -73,6 +74,15 @@ namespace Nemerle.Compiler
           typer.solver.dt_store.Get (this)
         }
       }
+
+
+      public ApplyGenericSpecifier (tyvars : list [TyVar]) : void
+      {
+        assert (generic_specifier == null);
+        generic_specifier = tyvars;
+        // apply it (possibly)
+        SetKind (DtKind);
+      }
       
  
       SetKind (k : Kind) : void
@@ -85,7 +95,7 @@ namespace Nemerle.Compiler
 
         def k =
           match (k) {
-            | Kind.Resolved ((TExpr.StaticRef (meth is IMethod)) as expr) =>
+            | Kind.Resolved ((TExpr.StaticRef (_, meth is IMethod, _)) as expr) =>
               match (meth.BuiltinKind) {
                 | BuiltinMethodKind.OpCode (ch, unch) =>
                   def opcode = if (local_context.IsChecked) ch else unch;
@@ -97,6 +107,20 @@ namespace Nemerle.Compiler
             | _ => k
           }
 
+        when (generic_specifier != null)
+          match (k) {
+            | Kind.Overloaded (lst) =>
+              foreach (o in lst)
+                o.SetGenericSpecifier (generic_specifier);
+              generic_specifier = null;
+              
+            | Kind.Resolved (expr) =>
+              typer.ApplyGenericSpecifier (expr, generic_specifier);
+              generic_specifier = null;
+              
+            | _ => {}
+          }
+          
         def solver = Passes.Solver;
         when (k.filtering_expression == null)
           match (solver.dt_store.Find (this)) {
@@ -104,6 +128,7 @@ namespace Nemerle.Compiler
               k.filtering_expression = k'.filtering_expression
             | None => {}
           }
+
         solver.dt_store = solver.dt_store.Replace (this, k);
       }
       
@@ -132,7 +157,7 @@ namespace Nemerle.Compiler
               })
 
             | Kind.Resolved (TExpr.PropertyMember (_, p))
-            | Kind.Resolved (TExpr.StaticPropertyRef (p)) =>
+            | Kind.Resolved (TExpr.StaticPropertyRef (_, p)) =>
               p.IsIndexer && p.IsMutable
             
             | _ => false
@@ -147,7 +172,7 @@ namespace Nemerle.Compiler
             | Kind.Overloaded (lst) =>
               lst.ForAll (fun (op) { op.Member is IMethod })
 
-            | Kind.Resolved (TExpr.StaticRef (_ is IMethod)) => true
+            | Kind.Resolved (TExpr.StaticRef (_, _ is IMethod, _)) => true
             
             | _ => false
           }
@@ -292,8 +317,10 @@ namespace Nemerle.Compiler
 
         def try_type (overload : OverloadPossibility, final) {
           def ct = CallTyper (typer, overload.Compile (), parms, expected);
+          ct.overload_possibility = overload;
           ct.is_final = final;
           ct.is_var_args = overload.VarArgs;
+          overload.ResetOverloadSelectionStuff ();
           ct.Run ();
           if (ct.result == null || (overload.VarArgs && !ct.used_var_args))
             TExpr.Error ()
@@ -374,19 +401,14 @@ namespace Nemerle.Compiler
       }
 
 
-      static LookupOperatorIn (bound : MType, name : string) : list [OverloadPossibility]
+      LookupOperatorIn (bound : MType, name : string) : list [OverloadPossibility]
       {
         mutable res = [];
         
         def loop (ti : TypeInfo) {
           foreach (meth is IMethod in ti.LookupMember (name))
-            when (meth.IsStatic) {
-              def pos = 
-                OverloadPossibility (Passes.Solver, 
-                                     bound.TypeOfMethod (meth),
-                                     null, meth);
-              res = pos :: res;
-            }
+            when (meth.IsStatic)
+              res = typer.ConstructMethodOverload (meth) :: res;
           match (ti.GetTydecl ()) {
             | TypeDeclaration.Interface =>
               loop (InternalType.Object_tc)
@@ -404,7 +426,7 @@ namespace Nemerle.Compiler
       }
 
 
-      static LookupOperator (t : TyVar, name : string) : option [list [OverloadPossibility]]
+      LookupOperator (t : TyVar, name : string) : option [list [OverloadPossibility]]
       {
         assert (name != null);
         if (t == null)
@@ -496,13 +518,8 @@ namespace Nemerle.Compiler
               def globals = env.LookupSymbol ([name], typer.current_type);
               mutable res = [];
               foreach (meth is IMethod in globals)
-                when (meth.IsStatic) {
-                  def pos = 
-                    OverloadPossibility (Passes.Solver, 
-                                         meth.GetFreshType (),
-                                         null, meth);
-                  res = pos :: res;
-                }
+                when (meth.IsStatic)
+                  res = typer.ConstructMethodOverload (meth) :: res;
 
               match ((operators, res)) {
                 | (x, []) => x

@@ -26,20 +26,19 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+using Nemerle.Collections;
+using Nemerle.Utility;
+using Nemerle.IO;
+using System.IO;
+
+using Nemerle.Compiler.Typedtree;
+
+using SR = System.Reflection;
+using SRE = System.Reflection.Emit;
+using PT = Nemerle.Compiler.Parsetree;  
+
 namespace Nemerle.Compiler 
 {
-  using Nemerle.Collections;
-  using Nemerle.Utility;
-  using Nemerle.IO;
-  using System.IO;
-  using System.Text.RegularExpressions;
-
-  using Nemerle.Compiler.Typedtree;
-
-  using SR = System.Reflection;
-  using SRE = System.Reflection.Emit;
-  using PT = Nemerle.Compiler.Parsetree;  
-
   /**
    * The library reference exception is typically thrown
    * when unable to load an assembly file.
@@ -84,8 +83,10 @@ namespace Nemerle.Compiler
     public Init () : void
     {
       namespace_nodes.Clear ();
-      _loaded_assemblies_by_name.Clear ();
-      _assemblies_loaded_by_hand.Clear ();
+      unless (Options.PersistentLibraries) {
+        _loaded_assemblies_by_name.Clear ();
+        _assemblies_loaded_by_hand.Clear ();
+      }
     }
 
   
@@ -108,7 +109,8 @@ namespace Nemerle.Compiler
         throw AssemblyFindException ()
       }
       else if (_loaded_assemblies_by_name.Contains (assembly.FullName)) {
-        when (_assemblies_loaded_by_hand.Contains (assembly.FullName))
+        when (_assemblies_loaded_by_hand.Contains (assembly.FullName)
+              && !Options.PersistentLibraries)
           Message.Warning ("assembly `" + name + "' already loaded");
         _assemblies_loaded_by_hand [assembly.FullName] = null;
       } else {
@@ -314,92 +316,85 @@ namespace Nemerle.Compiler
       internal system_type : System.Type;
       internal library : LibraryReference;
       internal mutable tycon : TypeInfo;
-      internal mutable message : string;
+
+      internal ConstructTypeInfo (node : NamespaceTree.Node, fix_node : bool) : void {
+        when (tycon == null)
+          tycon = library.ConstructTypeInfo (system_type, node);
+        when (fix_node)
+          node.Value = NamespaceTree.TypeInfoCache.Cached (tycon);
+      }
     }
 
     internal LoadTypesFrom (lib : LibraryReference) : void
     {
       def assembly = lib.GetAssembly ();
       def types = assembly.GetExportedTypes ();
-      def codebasens = NamespaceTree.ExactPath ([assembly.Location]);
 
       mutable i = 0;
       for (; i < types.Length; ++i) {
         def t = types[i];
-#if _GENERICS        
-        def name = Regex.Replace (t.FullName.Replace ('+', '.'), "`.", "");
-#else
-        def name = t.FullName.Replace ('+', '.');
-#endif        
+
 //        Message.Debug (name);
-        def e = ExternalType (t, lib, null, null);
-        def notcached = NamespaceTree.TypeInfoCache.NotLoaded (e);
+        def e = ExternalType (t, lib, null);
 
         def (ns_node, path_to_type) = framework_nesting (t);
 
         def mainnode = ns_node.Path (path_to_type);
-        def fullnode = codebasens.Path (name);
 
-        // check if we have met such type before
-        def ambiguous_other = 
-          match ((mainnode.Value, fullnode.Value))
-          {
-            | (NamespaceTree.TypeInfoCache.NotLoaded (x), _)
-            | (_, NamespaceTree.TypeInfoCache.NotLoaded (x)) => x
-            | _ => null
-          };
-
-        when (ambiguous_other != null) {
-          // such type was there somewhere, so create verbose message
-          // for the case of ambiguous use
-          assert (ambiguous_other.tycon == null);
-
-          e.message = 
-            "[" + assembly.FullName + "], " + 
-            (if (ambiguous_other.message == null)
-               "[" + ambiguous_other.library.GetAssembly ().FullName + "]"
-             else 
-               ambiguous_other.message);
-        };
+        mutable tinfo_cache = null;
         
+        // check if we have met such type before
+        match (mainnode.Value)
+        {
+          | NotLoaded (x) =>
+            tinfo_cache = NamespaceTree.TypeInfoCache.NotLoadedList ([e, x]);
+
+          | NotLoadedList (xs) =>
+            tinfo_cache = NamespaceTree.TypeInfoCache.NotLoadedList (e :: xs);
+
+          | _ =>
+            tinfo_cache = NamespaceTree.TypeInfoCache.NotLoaded (e);
+        };
+
         // assign wrappers for future loading of typecons
-        mainnode.Value = notcached;
-        fullnode.Value = notcached;
+        mainnode.Value = tinfo_cache;
       }
     }
 
-    internal CacheTypeInfo (t : System.Type, tc : TypeInfo) : void
+    internal CacheTypeInfo (t : System.Type, tc : TypeInfo, node : NamespaceTree.Node) : void
     {
-      def codebase = NamespaceTree.ExactPath ([t.Assembly.Location]); 
-      def (ns_node, path_to_type) = framework_nesting (t);
-      def ns = codebase.Path (ns_node.Name).Path (path_to_type);
-      match (ns.Value) {
+      match (node.Value) {
         | NamespaceTree.TypeInfoCache.NotLoaded (e) =>
           e.tycon = tc;
-          ns.Value = NamespaceTree.TypeInfoCache.Cached (tc)
-          
+
+        | NamespaceTree.TypeInfoCache.NotLoadedList (es) =>
+          brk: {
+            foreach (e in es)
+              when (e.system_type.Equals (t)) {
+                e.tycon = tc;
+                brk ();
+              }
+          }
+
+        // this happens when we load external protected type in GetInternalType
+        // we need to cache to prevent looping
         | NamespaceTree.TypeInfoCache.No =>
-          ns.Value = NamespaceTree.TypeInfoCache.Cached (tc)
-          
-        | NamespaceTree.TypeInfoCache.NamespaceReference
-        | NamespaceTree.TypeInfoCache.MacroCall => 
+          node.Value = NamespaceTree.TypeInfoCache.Cached (tc)
+
+        | NamespaceReference | MacroCall => 
           Util.ice ("wanted to cache in wrong place - value " + t.FullName)
-        | NamespaceTree.TypeInfoCache.Cached =>
+        | Cached | CachedAmbiguous =>
           Util.ice ("wanted to cache cached value " + t.FullName)
       }
     }
 
-    internal GetInternalType (lib : LibraryReference, t : System.Type) : TypeInfo
+    internal GetInternalType (lib : LibraryReference, t : System.Type,
+                              node : NamespaceTree.Node) : TypeInfo
     {
-      def codebase = NamespaceTree.ExactPath ([t.Assembly.Location]);
-      def (ns_node, path_to_type) = framework_nesting (t);
-      def ns = codebase.Path (ns_node.Name).Path (path_to_type);
-      match (ns.Value) {
+      match (node.Value) {
         | NamespaceTree.TypeInfoCache.Cached (tc) => tc
         | NamespaceTree.TypeInfoCache.No =>
-          def tc = lib.ConstructTypeInfo (t, ns);
-          ns.Value = NamespaceTree.TypeInfoCache.Cached (tc);
-          tc
+          lib.ConstructTypeInfo (t, node);
 
         | _ =>
           Util.ice ("not loaded internal type... " + t.Assembly.CodeBase
@@ -422,7 +417,7 @@ namespace Nemerle.Compiler
       def loop (t : System.Type, acc) {
         def dt = t.DeclaringType;
         if (dt != null)
-          loop (dt, dt.Name :: acc)
+          loop (dt, Util.StripGenericMark (dt.Name) :: acc)
         else {
           def namespc = if (t.Namespace != null) t.Namespace else "";
           match (namespace_nodes.Get (namespc)) {
@@ -441,12 +436,9 @@ namespace Nemerle.Compiler
             loop (t, [t.Name + acc])
         }
         find_name ("", t)
-      } else
-#if _GENERICS      
-        loop (t, [Regex.Replace (t.Name, "`.", "")])
-#else
-        loop (t, [t.Name])
-#endif
+      } else {
+        loop (t, [Util.StripGenericMark (t.Name)])
+      }
     }
   }
 
@@ -472,8 +464,6 @@ namespace Nemerle.Compiler
      */
     internal mutable _is_generated_by_nemerle : bool;
 
-    private solver : Solver;
-    
 
     // a little hack to prevent AddBuildins() calling in NetType
     internal static mutable add_buildins : bool = false;
@@ -485,7 +475,6 @@ namespace Nemerle.Compiler
     {
       _library = assembly;
       _location = Location (Location.GetFileIndex (assembly.Location), 0, 0);
-      solver = Passes.Solver;
 
       // Scans the assembly custom attributes looking for something interesting...
       foreach (x :> SR.AssemblyConfigurationAttribute in
@@ -500,10 +489,10 @@ namespace Nemerle.Compiler
     /**
      * Turns a Framework type into something edible by Nemerle's type system
      */
-    internal TypeOfType (_tenv : SystemMap [int, StaticTyVar],
+    internal TypeOfType (_tenv : Map [string, StaticTyVar],
                          framework_type : System.Type) : MType
     {
-      //Message.Debug (framework_type.ToString ());
+      // Message.Debug (framework_type.ToString ());
       if (framework_type.Equals (SystemType.Void))
         InternalType.Void
       else
@@ -515,41 +504,56 @@ namespace Nemerle.Compiler
             Message.Error ($ "ref type referenced $framework_type");
             TypeOfType (_tenv, framework_type.GetElementType ())
           }
-#if _NET_2_0            
           else if (framework_type.IsGenericParameter) {
-#if _GENERICS
-            assert (_tenv != null, framework_type.ToString ());
-            def tv = Option.UnSome (_tenv.Find (framework_type.MetadataToken));
-            MType.TyVarRef (tv)
-#else
-            InternalType.Void
-#endif
+            match (_tenv.Find (framework_type.Name)) {
+              | Some (tv) => MType.TyVarRef (tv)
+              | None =>
+//                _tenv.Iter (fun (x,y) { Message.Debug ($"$x - $y") });
+                Util.ice ($"$framework_type from $(framework_type.DeclaringType)")
+            }
           }
-#endif                      
           else {
             def tc = TypeInfoOfType (framework_type);
-#if _GENERICS
-            if (framework_type.ContainsGenericParameters)
-              MType.Class (tc, List.MapFromArray (framework_type.GetGenericArguments (),
-                                                  fun (t) { TypeOfType (_tenv, t) }))
+//            Message.Debug ($"tinfo $tc contains generic framework_type.ToString ());
+            def parms = 
+              if (framework_type.HasGenericArguments)
+                List.MapFromArray (framework_type.GetGenericArguments (),
+                                   fun (t) { TypeOfType (_tenv, t) });
+              else
+                [];
+
+            if (framework_type.Namespace == "Nemerle.IntTypes") {
+              def make_tupl (l) {
+                | [x] => x
+                | [] => InternalType.Void
+                | _ => MType.Tuple (l)
+              }
+
+              if (tc.Name.StartsWith ("Tuple"))
+                MType.Tuple (parms)
+              else if (tc.Name.StartsWith ("FuncVoid"))
+                MType.Fun (make_tupl (parms), InternalType.Void)
+              else {
+                def (front, last) = parms.DivideLast ();
+                MType.Fun (make_tupl (front), last)
+              }
+            }
             else
-              MType.Class (tc, [])
-#else
-            MType.Class (tc, [])
-#endif            
+              MType.Class (tc, parms);
           }
     } 
 
-    private TypeInfoOfType (framework_type : System.Type) : TypeInfo
+    internal TypeInfoOfType (framework_type : System.Type) : TypeInfo
     {
       def (ns_node, path_to_type) =
         LibraryReferenceManager.framework_nesting (framework_type);
+      def ns_node = ns_node.Path (path_to_type);
 
-      match (ns_node.LookupType (path_to_type)) {
+      match (ns_node.LookupType ([], framework_type.GetGenericArguments ().Length)) {
         | Some (tc) => tc
           // protected external types are not fetched automatically from external assembly
           // so sometimes we must load them by hand
-        | None => LibraryReferenceManager.GetInternalType (this, framework_type)
+        | None => LibraryReferenceManager.GetInternalType (this, framework_type, ns_node)
       }
     } 
 
@@ -564,22 +568,10 @@ namespace Nemerle.Compiler
     internal ConstructTypeInfo (reflected_type : System.Type,
                                 ns_node : NamespaceTree.Node) : TypeInfo
     {
-      if (
-#if _GENERICS
-          reflected_type.IsGenericTypeDefinition ||
-          _is_generated_by_nemerle &&
-          has_attribute ("Nemerle.Internal.TypeAttribute",
-                         reflected_type.GetCustomAttributes (false))
-//          reflected_type.IsDefined (typeof (Nemerle.Internal.TypeAttribute), false)
-#else
-          has_attribute ("Nemerle.Internal.TypeAttribute",
-                         reflected_type.GetCustomAttributes (false))
-//          reflected_type.IsDefined (typeof (Nemerle.Internal.NemerleAttribute), true)
-#endif
-       )
-        (NetTypeInfo (this, reflected_type, ns_node) : TypeInfo)
+      if (_is_generated_by_nemerle)
+        NetTypeInfo (this, reflected_type, ns_node)
       else
-        (NetType (this, reflected_type, ns_node) : TypeInfo)
+        NetType (this, reflected_type, ns_node)
     }
 
     /**
@@ -592,16 +584,19 @@ namespace Nemerle.Compiler
       def st = _library.GetType (name);
       if (st == null)
         None ()
-      else
-        Some (LibraryReferenceManager.GetInternalType (this, st))
+      else {
+        def (ns_node, path_to_type) = LibraryReferenceManager.framework_nesting (st);
+        def ns = ns_node.Path (path_to_type);
+        Some (LibraryReferenceManager.GetInternalType (this, st, ns))
+      }
     }
 
-    private MethodOfMethodInfo (self : IMember, meth : SR.MethodInfo) : MethodInfo
+    private MethodOfMethodInfo (tenv : Map [string, StaticTyVar], meth : SR.MethodInfo) : MethodInfo
     {
       if (meth == null)
         null
       else
-        MethodInfo ((self.DeclaringType :> NetType).tenv, this, meth)
+        MethodInfo (tenv, this, meth)
     }
 
 
@@ -615,22 +610,20 @@ namespace Nemerle.Compiler
       protected library : LibraryReference;
       protected attributes : NemerleAttributes;
 
-      internal tenv : SystemMap [int, StaticTyVar] = SystemMap ();
+      internal tenv : Map [string, StaticTyVar] = Map ();
       protected direct_supertypes : list [MType.Class];
       protected supertypes : list [MType.Class];
-      protected supertype_map : SystemMap [int, MType.Class] = SystemMap ();
+      protected supertype_map : Map [int, MType.Class] = Map ();
 
       
-      /** member_list is used to collect all members of given type
-         When we are queried for member "foo", we look for it, and if
-         it was never looked up before, we add it to the member_list.
-         When we are queried for the "" member (which means to list all
-         the members), we call system_type.GetMembers () and skip
-         members already in the member_list (they are marked in
-         queried_members). This avoids creating duplicate members,
-         which is crucial.  */
-      mutable member_list : list [IMember];
-      queried_members : Hashtable [string, object];
+      /** queried_members is used to collect all members of given type
+         When we are queried for member "foo", we look for it, and if it
+         was never looked up before, we add it to the queried_members.
+         When we are queried for the "" member (which means to list
+         all the members), we call system_type.GetMembers () and skip
+         IMember construction for members already in the queried_members.
+         This avoids creating duplicate members, which is crucial.  */
+      queried_members : Hashtable [string, list [IMember]];
       mutable implicit_conversion_initialized : bool;
 
       /** members is kind of cache, but it is also used (in connection with
@@ -643,65 +636,27 @@ namespace Nemerle.Compiler
         base (ns_node);
         
         // first cache ourself to avoid loops
-        LibraryReferenceManager.CacheTypeInfo (h, this);
+        LibraryReferenceManager.CacheTypeInfo (h, this, ns_node);
         library = lib;
         system_type = h;
         members = Hashtable (2);
         queried_members = Hashtable (2);
-        member_list = [];
 
         when (system_type.DeclaringType != null)
           tenv = (lib.TypeInfoOfType (system_type.DeclaringType) :> NetType).tenv;
 
         // init typarms and self_type
         (typarms, tenv, direct_supertypes, supertypes) =
-          if (library._is_generated_by_nemerle) {
-            def type_attrs = system_type.GetCustomAttributes (false);
-            def attr_str = get_encoded_type (type_attrs);         
-
-            if (has_attribute ("Nemerle.Internal.TypeAttribute",
-                               type_attrs))
-              TyCodec.DecodeTypeBuilder (library, tenv, attr_str)
-            else
-              TyCodec.ReflectTypeBuilder (library, tenv, system_type);
-          }
-          else
-            TyCodec.ReflectTypeBuilder (library, tenv, system_type);
+          TyCodec.ReflectTypeBuilder (library, tenv, system_type);
 
         foreach (t in supertypes)
           supertype_map = supertype_map.Add (t.tycon.GetId (), t);
 
-        fullname = system_type.FullName.Replace ('+', '.');
+        fullname = Util.StripGenericMark (system_type.FullName.Replace ('+', '.'));
           
-        def parms = List.Map (typarms, MType.TyVarRef);
+        def parms = List.Map (typarms, fun (x) { MType.TyVarRef (x) });
         self_type = MType.Class (this, parms);
         
-        // FIXME: get rid of this!
-        when (IsDelegate) {
-          def pref = "problem with delegate type `" + FullName + "': ";
-          match (LookupMember (".ctor")) {
-            | [ctor] =>
-              def meth = (ctor :> IMethod);
-              def fh = meth.GetHeader ();
-              match (meth.GetParameters ()) {
-                | [_, p2] =>
-                  match (LookupMember ("Invoke")) {
-                    | [inv] => 
-                      def ty = (inv :> IMethod).GetMemType ();
-                      fh.parms = [p2];
-                      p2.ty = ty
-                    | invs =>
-                      Message.Warning (pref + sprintf ("invoke count %d",
-                                                       List.Length (invs)))
-                  }
-                | parms =>
-                  Message.Warning (pref + sprintf ("ctor has %d parms",
-                                                   List.Length (parms)))
-              }
-            | ctors => Message.Warning (pref + sprintf ("%d constructors",
-                                                        List.Length (ctors)))
-          }
-        }
         attributes = NemerleAttributes.None;
 
         when (system_type.IsAbstract) attributes |= NemerleAttributes.Abstract;
@@ -719,13 +674,16 @@ namespace Nemerle.Compiler
         }
 
         def attrs = system_type.GetCustomAttributes (
-                        SystemType.Reflection_DefaultMemberAttribute, true);
+                      SystemType.Reflection_DefaultMemberAttribute, true);
         default_indexer =
           if (attrs.Length > 0) {
             def dma = attrs [0] :> System.Reflection.DefaultMemberAttribute;
             Some (dma.MemberName)
-          } else None ();
-          
+          } else
+            // there can be indexer in the base type, let DefaultIndexer
+            // property handle it
+            null;
+        
         when (LibraryReference.add_buildins) AddBuiltins ();
 //        else Message.Debug ($"omiititng $FullName");
       }
@@ -988,7 +946,10 @@ namespace Nemerle.Compiler
       { get { system_type.MemberType } }
 
       public override Name : string
-      { get { system_type.Name } }
+      {
+        [Nemerle.Memoize (InvalidValue = null)]
+        get { Util.StripGenericMark (system_type.Name) }
+      }
       
       internal override GetLibraryReference () : LibraryReference
       { library }
@@ -998,6 +959,7 @@ namespace Nemerle.Compiler
       
       public override IsDelegate : bool
       {
+        [Nemerle.Memoize]
         get { system_type.IsSubclassOf (SystemType.MulticastDelegate) }
       }
 
@@ -1006,7 +968,9 @@ namespace Nemerle.Compiler
         null
       }
 
-      public override DeclaringType : TypeInfo {
+      public override DeclaringType : TypeInfo
+      {
+        [Nemerle.Memoize]
         get {
           if (system_type.DeclaringType == null)
             null
@@ -1045,7 +1009,7 @@ namespace Nemerle.Compiler
       
       public override HasAttribute (attribute : TypeInfo) : bool
       {
-        def t = attribute.GetSystemType ();
+        def t = attribute.SystemType;
         system_type.IsDefined (t, false)
       }
       
@@ -1120,12 +1084,14 @@ namespace Nemerle.Compiler
 
       public override BaseType : TypeInfo
       {
+        [Nemerle.Memoize]
         get {
           if (system_type.BaseType == null) null
           else library.TypeInfoOfType (system_type.BaseType)
         }
       }
       
+      [Nemerle.Memoize (InvalidValue = null)]
       public override SuperClass () : option [TypeInfo]
       {
         if (system_type.BaseType == null)
@@ -1136,7 +1102,7 @@ namespace Nemerle.Compiler
 
       public override GetMembers () : list [IMember]
       {
-        LookupMember ("")
+        LookupMemberImpl ("")
       }
       
       public override GetMembers (bindingAttr : BindingFlags) : list [IMember]
@@ -1218,13 +1184,13 @@ namespace Nemerle.Compiler
         else true
       }
 
-      protected virtual imember_of_memberinfo (m : SR.MemberInfo) : IMember
+      protected imember_of_memberinfo (m : SR.MemberInfo) : IMember
       {
         match (m.MemberType) {
           | MemberTypes.Constructor 
           | MemberTypes.Method => MethodInfo (tenv, library, m :> SR.MethodBase) : IMember
-          | MemberTypes.Field => FieldInfo (library, m :> SR.FieldInfo)
-          | MemberTypes.Property => NetProperty (null, library, m :> SR.PropertyInfo)
+          | MemberTypes.Field => FieldInfo (tenv, library, m :> SR.FieldInfo)
+          | MemberTypes.Property => NetProperty (tenv, library, m :> SR.PropertyInfo)
           | MemberTypes.Event => NetEvent (library, m :> SR.EventInfo)
           | MemberTypes.NestedType => library.TypeInfoOfType (m :> System.Type)
           | _ => null
@@ -1234,10 +1200,7 @@ namespace Nemerle.Compiler
       private collect_members (name : string) : void
       {
         assert (! queried_members.Contains (name));
-        queried_members [name] = null;
 
-        def fields_to_shadow = Hashtable ();
-        
         def store_by_name (m : IMember) {
           members [m.Name] =
             if (members.Contains (m.Name))
@@ -1245,27 +1208,7 @@ namespace Nemerle.Compiler
             else
               [m];
         }
-        
-        def add_member (m : SR.MemberInfo, acc) {
-          // Message.Debug ($"adding $m from $this");
-          
-          if (!library.TypeInfoOfType (m.DeclaringType).Equals (this)) {
-            acc
-          } else if (is_internal (m) ||
-                     (name == "" && queried_members.Contains (m.Name))) {
-            acc
-          } else {
-            //Message.Debug ($ "add_member: $m to $(this) [$(GetId ())]");
-            match (imember_of_memberinfo (m)) {
-              | null => acc
-              | r =>
-                //Message.Debug ($ "on: $(r.OverloadName)");
-                fields_to_shadow [r.OverloadName] = null;
-                store_by_name (r);
-                r :: acc
-            }
-          }
-        }
+     
         
         def flags = SR.BindingFlags.Public     |
                     SR.BindingFlags.NonPublic  |
@@ -1279,59 +1222,52 @@ namespace Nemerle.Compiler
           else 
             system_type.GetMember (name, flags);
 
-        def collected_now = NArray.Fold (member_array, [], add_member);
+        //Message.Debug ($"{collect_members, '$name' in $this len=$(member_array.Length)");
 
-        def our_fields =
-          if (name == "") {
-            foreach (m : IMember in member_list)
-              fields_to_shadow [m.OverloadName] = null;
-            member_list + collected_now
+        mutable collected_now = [];
+        def already_added = Hashtable (2);
+        for (mutable i = member_array.Length - 1; i >= 0; i--) {
+          def m = member_array [i];
+//          Message.Debug ($"adding $m from $this $(this.GetId ())");
+          if (is_internal (m)) {}
+          else if (name == "" && queried_members.Contains (m.Name)) {
+            when (! already_added.Contains (m.Name))
+              collected_now = queried_members [m.Name] + collected_now;
+            already_added [m.Name] = null;
           } else {
-            member_list = collected_now + member_list;
-            collected_now
+//            Message.Debug ($ "add_member: $m to $(this) [$(GetId ())]");
+            match (imember_of_memberinfo (m)) {
+              | null => ()
+              | r =>
+//                    Message.Debug ($ "add_member: $r to $(this) [$(GetId ())]");
+                store_by_name (r);
+                collected_now ::= r;
+            }
           }
-
-        def fields_from_parents =
-          match (SuperClass ()) {
-            | Some (sc) => sc.LookupMember (name)
-            | None =>
-              // make sure each and every member gets its place just once
-              def uniq (lst) {
-                def ht = Hashtable ();
-                List.RevFilter (lst, fun (e : IMember) { 
-                  if (ht.Contains (e.GetId ())) false
-                  else { ht [e.GetId ()] = null; true }
-                })
+        }
+        
+        when (name == "") {
+          def res =
+            if (IsInterface) {
+              def supertypes = GetDirectSuperTypes ();
+              (if (supertypes.IsEmpty)
+                 [InternalType.Object_tc.GetMembers ()]
+               else
+                 supertypes.Map (fun (t) { t.tycon.GetMembers () }))
+              + [collected_now]
+            } else
+              match (SuperClass ()) {
+                | Some (ti) => [ti.GetMembers (), collected_now]
+                | None => [collected_now]
               }
+          collected_now = RemoveHiddenMembers (res);
               
-              if (system_type.IsInterface)
-                // collect members from inherited interfaces
-                uniq (
-                  NArray.Fold (system_type.GetInterfaces (), [], 
-                  fun (st, acc) {
-                    library.TypeInfoOfType (st).LookupMember (name) + acc
-                  }) +
-                  // and from System.Object
-                  InternalType.Object_tc.LookupMember (name))
-              else []
-          };
+          members [""] = collected_now;
+        }
 
-        def fields_from_parents = 
-          List.RevFilter (fields_from_parents, 
-                       fun (mem : IMember) {
-                         !(mem is BuiltinMethod) && // FIXME: reorganize builtins
-                         mem.Name != ".ctor" &&
-                         mem.Name != ".cctor" &&
-                         ! fields_to_shadow.Contains (mem.OverloadName)
-                       });
-
-        if (name == "") {
-          foreach (mem : IMember in fields_from_parents)
-            unless (queried_members.Contains (mem.Name))
-              store_by_name (mem);
-          members [""] = List.RevAppend (our_fields, fields_from_parents);
-        } else
-          List.Iter (fields_from_parents, store_by_name);
+        assert (! queried_members.Contains (name));
+        //Message.Debug ($"}the result: $collected_now");
+        queried_members [name] = collected_now;
       }
 
       public override LookupMemberImpl (name : string) : list [IMember] 
@@ -1371,6 +1307,7 @@ namespace Nemerle.Compiler
 
       public override UnderlyingType : TypeInfo
       {
+        [Nemerle.Memoize (InvalidValue = null)]
         get {
           assert (system_type.IsEnum);
           library.TypeInfoOfType (system_type.GetField ("value__").FieldType)
@@ -1386,26 +1323,14 @@ namespace Nemerle.Compiler
       protected mutable tt_type : MType;
       protected mutable attributes : NemerleAttributes;
 
-      public this (lib : LibraryReference, h : SR.FieldInfo)
-      {
-        id = Util.next_id ();
-        library = lib;
-        handle = h;
-        tt_type = null;
-        set_attributes ();
-      }
-
-      public this (tenv : SystemMap [int, StaticTyVar], lib : LibraryReference,
+      public this (tenv : Map [string, StaticTyVar], lib : LibraryReference,
                    h : SR.FieldInfo)
       {
         id = Util.next_id ();
         library = lib;
         handle = h;
        
-        def type_attrs = h.GetCustomAttributes (false);
-        def attr_str = get_encoded_type (type_attrs); 
-        tt_type = TyCodec.DecodeType (lib, tenv, attr_str);
-
+        tt_type = library.TypeOfType (tenv, handle.FieldType);
         set_attributes ();
       }
 
@@ -1425,6 +1350,7 @@ namespace Nemerle.Compiler
 
       public DeclaringType : TypeInfo
       {
+        [Nemerle.Memoize (InvalidValue = null)]
         get {
           library.TypeInfoOfType (handle.DeclaringType)
         }
@@ -1437,12 +1363,7 @@ namespace Nemerle.Compiler
 
       public override ToString () : string
       {
-        NemerleMember.DescribeMember (this)
-      }
-
-      public OverloadName : string
-      {
-        get { Name }
+        MemberBuilder.DescribeMember (this)
       }
 
       public MemberType : MemberTypes
@@ -1462,8 +1383,6 @@ namespace Nemerle.Compiler
 
       public GetMemType () : MType
       {
-        when (tt_type == null)
-          tt_type = library.TypeOfType (null, handle.FieldType);
         tt_type
       }
       
@@ -1555,13 +1474,8 @@ namespace Nemerle.Compiler
       {
         get
         {
-          def modreqs = handle.GetCustomAttributes (false);
-
-          NArray.Exists (modreqs,
-                         fun (x : System.Object) {
-                           (x is System.Runtime.CompilerServices.IsVolatile) ||
-                           (x is Nemerle.Internal.VolatileModifier)
-                         })
+          handle.IsDefined (typeof (System.Runtime.CompilerServices.IsVolatile), false) ||
+          handle.IsDefined (typeof (Nemerle.Internal.VolatileModifier), false);
         }
       }
       
@@ -1596,8 +1510,9 @@ namespace Nemerle.Compiler
           (add_method != null && add_method.IsStatic) ||
           (remove_method != null && remove_method.IsStatic);
 
-        adder = library.MethodOfMethodInfo (this, add_method);
-        remover = library.MethodOfMethodInfo (this, remove_method);
+        def tenv = (DeclaringType :> NetType).tenv;
+        adder = library.MethodOfMethodInfo (tenv, add_method);
+        remover = library.MethodOfMethodInfo (tenv, remove_method);
 
         assert (adder != null);
         assert (remover != null);
@@ -1610,6 +1525,7 @@ namespace Nemerle.Compiler
 
       public DeclaringType : TypeInfo
       {
+        [Nemerle.Memoize (InvalidValue = null)]
         get {
           library.TypeInfoOfType (handle.DeclaringType)
         }
@@ -1620,14 +1536,9 @@ namespace Nemerle.Compiler
         get { handle.Name }
       }
 
-      public OverloadName : string
-      {
-        get { Name }
-      }
-
       public override ToString () : string
       {
-        NemerleMember.DescribeMember (this)
+        MemberBuilder.DescribeMember (this)
       }
 
       public MemberType : MemberTypes
@@ -1719,9 +1630,8 @@ namespace Nemerle.Compiler
       protected setter : MethodInfo;
       protected any_method : MethodInfo;
       protected mutable mem_type : MType;
-      protected overload_name : string;
 
-      public this (tenv : SystemMap [int, StaticTyVar], lib : LibraryReference, h : SR.PropertyInfo)
+      public this (tenv : Map [string, StaticTyVar], lib : LibraryReference, h : SR.PropertyInfo)
       {
         id = Util.next_id ();
         library = lib;
@@ -1730,8 +1640,8 @@ namespace Nemerle.Compiler
         def get_method = handle.GetGetMethod (true);
         def set_method = handle.GetSetMethod (true);
 
-        getter = library.MethodOfMethodInfo (this, get_method);
-        setter = library.MethodOfMethodInfo (this, set_method);
+        getter = library.MethodOfMethodInfo (tenv, get_method);
+        setter = library.MethodOfMethodInfo (tenv, set_method);
 
         if (getter == null)
           any_method = setter;
@@ -1765,14 +1675,11 @@ namespace Nemerle.Compiler
           mem_type = ret_type
         else
           mem_type = MType.ConstructFunctionType (args, ret_type);
-          
-        overload_name =
-          if (args.IsEmpty) Name
-          else $ "$(this.Name)[$args]";
       }
 
       public DeclaringType : TypeInfo
       {
+        [Nemerle.Memoize (InvalidValue = null)]
         get {
           library.TypeInfoOfType (handle.DeclaringType)
         }
@@ -1783,11 +1690,6 @@ namespace Nemerle.Compiler
         get { handle.Name }
       }
 
-      public OverloadName : string
-      {
-        get { overload_name }
-      }
-
       public MemberType : MemberTypes
       {
         get { MemberTypes.Property }
@@ -1795,7 +1697,7 @@ namespace Nemerle.Compiler
 
       public override ToString () : string
       {
-        NemerleMember.DescribeMember (this)
+        MemberBuilder.DescribeMember (this)
       }
 
       public GetGetter () : IMethod
@@ -1877,6 +1779,7 @@ namespace Nemerle.Compiler
 
       public IsIndexer : bool
       {
+        [Nemerle.Memoize]
         get
         {
           def index_parms = handle.GetIndexParameters ();
@@ -1894,12 +1797,14 @@ namespace Nemerle.Compiler
       protected fun_header : Fun_header;
       protected attributes : NemerleAttributes;
       protected is_var_args : bool;
-      protected overload_name : string;
       
-      public this (tenv : SystemMap [int, StaticTyVar], lib : LibraryReference, h : SR.MethodBase)
+      public this (tenv : Map [string, StaticTyVar], lib : LibraryReference, h : SR.MethodBase)
       {
         library = lib;
         handle = h;
+
+        def (tyvars, tenv) = TyCodec.ReflectTyparms (lib, tenv, h);
+        
         def mkparm (p : SR.ParameterInfo) {
           def (parmkind, ty) =
             if (p.ParameterType.IsByRef) {
@@ -1943,13 +1848,9 @@ namespace Nemerle.Compiler
             name = Name,
             ret_type = ret_type,
             parms = List.MapFromArray (parms, mkparm),
-            typarms = [],
+            typarms = tyvars,
             tenv = null
           );
-
-        def parm_types = List.Map (fun_header.parms, 
-                                   fun (p : Fun_parm) { p.ty });
-        overload_name = $ "$(this.Name)($parm_types)";
 
         id = fun_header.id;
 
@@ -1962,17 +1863,11 @@ namespace Nemerle.Compiler
         when (handle.IsPrivate)  attributes |= NemerleAttributes.Private;
         when (handle.IsPublic)   attributes |= NemerleAttributes.Public;
         when (handle.IsFamily || handle.IsFamilyOrAssembly) attributes |= NemerleAttributes.Protected;
-
-        when (tenv != null) {
-          def type_attrs = h.GetCustomAttributes (false);
-          def attr_str = get_encoded_type (type_attrs); 
-          when (attr_str != null)
-            TyCodec.FixupFunctionHeader (lib, tenv, fun_header, attr_str);
-        }
       }
       
       public DeclaringType : TypeInfo
       {
+        [Nemerle.Memoize (InvalidValue = null)]
         get {
           library.TypeInfoOfType (handle.DeclaringType)
         }
@@ -1988,14 +1883,9 @@ namespace Nemerle.Compiler
          get { handle.MemberType }
       }
 
-      public OverloadName : string
-      {
-        get { overload_name }
-      }
-
       public override ToString () : string
       {
-        NemerleMember.DescribeMember (this)
+        MemberBuilder.DescribeMember (this)
       }
 
       public IsVarArgs : bool
@@ -2013,6 +1903,7 @@ namespace Nemerle.Compiler
         handle
       }
 
+      [Nemerle.Memoize (InvalidValue = null)]
       public GetMemType () : MType
       {
         MType.ConstructFunctionType (GetHeader ())
@@ -2063,13 +1954,13 @@ namespace Nemerle.Compiler
         id
       }
 
-      public GetFreshType () : MType
+      public GetFreshType () : MType * list [TyVar]
       {
         if (fun_header.typarms.IsEmpty)
-          GetMemType ()
+          (GetMemType (), [])
         else {
-          def subst = Subst.Fresh (fun_header.typarms);
-          subst.MonoApply (GetMemType ())
+          def (subst, vars) = Subst.Fresh (fun_header.typarms);
+          (subst.MonoApply (GetMemType ()), vars)
         }
       }
 
@@ -2151,10 +2042,6 @@ namespace Nemerle.Compiler
       loop (0)
     }
 
-    private static get_encoded_type (attributes : array [object]) : string
-    {
-      get_string_attribute ("Nemerle.Internal.TypeAttribute", "GetEncodedType", attributes)
-    }
 
     private static get_variant_options (attributes : array [object]) : list [string]
     {
@@ -2234,32 +2121,6 @@ namespace Nemerle.Compiler
       public override GetConstantObject () : IField
       {
         constant_object
-      }
-
-      protected override imember_of_memberinfo (m : SR.MemberInfo) : IMember
-      {
-        def is_nem (x : SR.MemberInfo) {
-#if _GENERICS
-          true ||
-#endif
-          has_attribute ("Nemerle.Internal.TypeAttribute", x.GetCustomAttributes (false))
-        };
-        match (m.MemberType) {
-          | MemberTypes.Constructor | MemberTypes.Method => 
-            MethodInfo (tenv, library, m :> SR.MethodBase) : IMember
-
-          | MemberTypes.Field => 
-            if (is_nem (m))
-              FieldInfo (tenv, library, m :> SR.FieldInfo)
-            else
-              FieldInfo (library, m :> SR.FieldInfo)
-
-          | MemberTypes.Property => NetProperty (tenv, library, m :> SR.PropertyInfo)
-          | MemberTypes.Event => NetEvent (library, m :> SR.EventInfo)
-          | MemberTypes.NestedType => library.TypeInfoOfType (m :> System.Type)
-          | _ => 
-            Util.ice ("unknown object in nemerle type " + m.Name + " in " + FullName)
-        }
       }
     }
   }

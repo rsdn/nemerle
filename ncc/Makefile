@@ -34,7 +34,7 @@ include ../config.mak
 ############################################################
 
 COMPILER_PATH = ../boot/
-NCC_FLAGS     = -dowarn:10006 -pedantic-lexer $(NEM_FLAGS)
+NCC_FLAGS     = -dowarn:10006 -pedantic-lexer -def:_$(STAGE) -stats $(NEM_FLAGS) $(ADD_FLAGS)
 COMPILER      = $(COMPILER_PATH)ncc.exe
 COMPILER_DEP  = $(COMPILER_PATH)ncc.exe $(COMPILER_PATH)Nemerle.Macros.dll
 EXECUTE       = $(NET_ENGINE) $(NET_FLAGS)
@@ -51,8 +51,6 @@ NEMERLE_DLL_SRC = \
 	../lib/hashtable.n		\
 	../lib/icloneable.n		\
 	../lib/icollection.n		\
-	../lib/ienumerable.n		\
-	../lib/ienumerator.n		\
 	../lib/input.n			\
 	../lib/linkedlist.n		\
 	../lib/list.n			\
@@ -63,99 +61,98 @@ NEMERLE_DLL_SRC = \
 	../lib/tree.n			\
 	../lib/idictionaryenumerator.n	\
 	../lib/idictionary.n		\
-	../lib/dictionaryentry.n	\
 	../lib/heap.n			\
-	../lib/icomparable.n		\
 	../lib/narray.n			\
 	../lib/nstring.n                \
 	../lib/pair.n			\
 	../lib/set.n			\
-	../lib/vector.n			\
 	../lib/concurrency.n		\
 	../lib/AssemblyInfo.n           \
 	../lib/LazyValue.n              \
+	../lib/oldapi.n                 \
 
 NEMERLE_COMPILER_DLL_SRC = \
+	CompilationOptions.n		 \
+	codedom/NemerleCodeCompiler.n	 \
+	codedom/NemerleCodeGenerator.n	 \
+	codedom/NemerleCodeProvider.n	 \
+	external/Codec.n		 \
+	external/InternalTypes.n	 \
+	external/LibrariesLoader.n	 \
+	generation/CompileTypedMethod.n  \
+	generation/HierarchyEmitter.n	 \
+	generation/ILEmitter.n		 \
+	generation/ImplementsWrapperMaker.n \
+	generation/MatchingCompiler.n	 \
+	generation/Typer3.n		 \
 	generation/Typer4.n		 \
-	typing/Typer2.n			 \
-	typing/Typer.n			 \
+	hierarchy/BuiltinMethod.n        \
+	hierarchy/ClassMembers.n	 \
+	hierarchy/CustomAttribute.n	 \
+	hierarchy/DelegateClassGen.n	 \
+	hierarchy/GlobalEnv.n	         \
+	hierarchy/MacroClassGen.n	 \
+	hierarchy/NamespaceTree.n	 \
+	hierarchy/ScanTypeHierarchy.n	 \
+	hierarchy/TypeBuilder.n		 \
+	hierarchy/TypeInfo.n		 \
+	hierarchy/XmlDump.n		 \
+	misc/AssemblyInfo.n		 \
+	misc/PrettyPrint.n		 \
+	misc/Stats.n                     \
+	parsing/AST.n			 \
+	parsing/Lexer.n			 \
+	parsing/MainParser-Extensions.n  \
+	parsing/MainParser.n		 \
+	parsing/ParseTree.n		 \
+	parsing/PreParser.n		 \
+	parsing/Utility.n		 \
+	passes.n			 \
+	typing/ConstantFolder.n		 \
+	typing/DecisionTreeBuilder.n     \
+	typing/ErrorMessage.n		 \
+	typing/LocalContext.n		 \
+	typing/LocalValue.n		 \
+	typing/MType.n			 \
+	typing/MacroColorizer.n		 \
+	typing/MacroRegistry.n		 \
+	typing/Macros.n			 \
+	typing/Messenger.n	         \
+	typing/OverloadPossibility.n	 \
+	typing/RestartInErrorMode.n	 \
+	typing/Solver.n			 \
+	typing/StaticTyVar.n		 \
+	typing/Subst.n			 \
+	typing/TyVar.n			 \
+	typing/TyVarEnv.n		 \
+	typing/TypedTree.n		 \
+	typing/Typer-CallTyper.n	 \
+	typing/Typer-DelayedTyping.n	 \
 	typing/Typer-OverloadSelection.n \
 	typing/Typer-PatternTyper.n	 \
-	typing/Typer-DelayedTyping.n	 \
-	typing/Typer-CallTyper.n	 \
-	typing/TypedTree.n		 \
-	typing/TyVarEnv.n		 \
-	typing/TyVar.n			 \
-	typing/Subst.n			 \
-	typing/StaticTyVar.n		 \
-	typing/Solver.n			 \
-	typing/RestartInErrorMode.n	 \
-	typing/OverloadPossibility.n	 \
-	typing/Messenger.n	         \
-	typing/Macros.n			 \
-	typing/MacroRegistry.n		 \
-	typing/MacroColorizer.n		 \
-	typing/MType.n			 \
-	typing/LocalValue.n		 \
-	typing/LocalContext.n		 \
-	typing/ErrorMessage.n		 \
-	typing/DecisionTreeBuilder.n     \
-	typing/ConstantFolder.n		 \
-	passes.n			 \
-	parsing/Utility.n		 \
-	parsing/PreParser.n		 \
-	parsing/ParseTree.n		 \
-	parsing/MainParser.n		 \
-	parsing/MainParser-Extensions.n  \
-	parsing/Lexer.n			 \
-	parsing/AST.n			 \
-	misc/PrettyPrint.n		 \
-	misc/AssemblyInfo.n		 \
-	hierarchy/XmlDump.n		 \
-	hierarchy/TypeInfo.n		 \
-	hierarchy/TypeBuilder.n		 \
-	hierarchy/ScanTypeHierarchy.n	 \
-	hierarchy/NamespaceTree.n	 \
-	hierarchy/MacroClassGen.n	 \
-	hierarchy/GlobalEnv.n	         \
-	hierarchy/DelegateClassGen.n	 \
-	hierarchy/CustomAttribute.n	 \
-	hierarchy/ClassMembers.n	 \
-	hierarchy/BuiltinMethod.n        \
-	generation/Typer3.n		 \
-	generation/MatchingCompiler.n	 \
-	generation/ImplementsWrapperMaker.n \
-	generation/ILEmitter.n		 \
-	generation/HierarchyEmitter.n	 \
-	generation/CompileTypedMethod.n  \
-	external/LibrariesLoader.n	 \
-	external/InternalTypes.n	 \
-	external/Codec.n		 \
-	codedom/NemerleCodeProvider.n	 \
-	codedom/NemerleCodeGenerator.n	 \
-	codedom/NemerleCodeCompiler.n	 \
-	CompilationOptions.n		 \
+	typing/Typer.n			 \
+	typing/Typer2.n			 \
 
 
 NCC_EXE_SRC       = main.n
 
 STDMACROS_DLL_SRC = \
-	../macros/AssemblyInfo.n \
-	../macros/Data.n \
-	../macros/Internals.n \
-	../macros/Logging.n \
-	../macros/Nemerle.n \
-	../macros/Util.n \
-	../macros/concurrency.n \
-	../macros/operators.n \
 	../macros/xml.n \
-        ../macros/assertions.n \
-        ../macros/compiler.n \
-        ../macros/core.n \
-        ../macros/io.n \
         ../macros/text.n \
+        ../macros/io.n \
+        ../macros/core.n \
+        ../macros/compiler.n \
+        ../macros/assertions.n \
+	../macros/operators.n \
+	../macros/concurrency.n \
+	../macros/Util.n \
+	../macros/Nemerle.n \
 	../macros/Memoize.n \
+	../macros/Logging.n \
+	../macros/Internals.n \
 	../macros/English.n \
+	../macros/Data.n \
+	../macros/AssemblyInfo.n \
 
 ############################################################
 # OUTPUT
@@ -195,6 +192,9 @@ stage2:
 stage3:
 	$(Q)$(MAKE) STAGE=$@ COMPILER_PATH=out.stage2/ last-stage
 
+winboot:
+	$(Q)$(MAKE) STAGE=winboot COMPILER_PATH=out.stage1/ ADD_FLAGS=-ms-net-boot last-stage
+
 t3:
 	$(MAKE) STAGE=stage1 NEM_FLAGS="$(NEM_FLAGS) -def:T3" out.stage1/Nemerle.Compiler.stage1.dll
 
@@ -226,7 +226,8 @@ nc:
 lib:
 	$(MAKE) STAGE=stage1 out.stage1/Nemerle.stage1.dll
 
-boot: stage1 stage2 stage3 compare ngen-stage3
+#boot: stage1 stage2 stage3 compare ngen-stage3
+boot: stage1 stage2 stage3
 
 out.stage3/all.done: \
 	out.stage3/Nemerle.Compiler.dll.done \
@@ -337,7 +338,8 @@ out.stage2/Nemerle.Macros.dll: $(COMPILER_DEP) out.stage2/Nemerle.stage2.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
 	$(Q)touch $@.done
 
-out.stage3/Nemerle.Macros.dll: $(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
+out.winboot/Nemerle.Macros.dll out.stage3/Nemerle.Macros.dll: \
+	$(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll $(STDMACROS_DLL_SRC)
 	$(COMP) "[stage3]" Nemerle.Macros.dll
 	$(Q)$(RUN_COMPILER) -target-library -out:$@ \
@@ -364,7 +366,8 @@ out.stage2/ncc.exe: $(COMPILER_DEP) out.stage2/Nemerle.stage2.dll \
 		$(GENERIC_SRC) $(NCC_EXE_SRC)
 	$(Q)touch $@.done
 
-out.stage3/ncc.exe: $(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
+out.winboot/ncc.exe out.stage3/ncc.exe: \
+		$(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll $(NCC_EXE_SRC)
 	$(COMP) "[stage3]" ncc.exe
 	$(Q)$(RUN_COMPILER) -target-exe -out:$@ \
@@ -447,13 +450,15 @@ endif
 	export MONO_PATH=$$MONO_PATH:$$PWD/out.stage3 ; $(NGEN_GAC)
 	$(INST) "[$(BINDIR)]" ncc.exe
 	$(Q)$(INSTALL) -m 755 out.stage3/ncc.exe $(DESTDIR)$(BINDIR)/ncc.exe
-	$(Q)if [ "$(NET_ENGINE)" != "" ] ; then \
-		echo "#!/bin/sh" > $(DESTDIR)$(SCRDIR)/ncc && \
-		echo '$(NET_ENGINE) $(BINDIR)/ncc.exe "$$@"' >> $(DESTDIR)$(SCRDIR)/ncc ; \
-		chmod 755 $(DESTDIR)$(SCRDIR)/ncc ; \
-	fi
+	echo "#!/bin/sh" > $(DESTDIR)$(SCRDIR)/ncc && \
+	echo '$(NET_ENGINE) $(BINDIR)/ncc.exe "$$@"' >> $(DESTDIR)$(SCRDIR)/ncc ; \
+	chmod 755 $(DESTDIR)$(SCRDIR)/ncc ;
 
 clean:
 	cd testsuite && $(MAKE) clean
 	rm -f *.exe.so *.dll.so *.pdb *.xml core.[0-9]* core *prof-log
 	rm -rf out.stage* doc
+
+.PHONY: tags
+tags:
+	ctags *.n */*.n ../{lib,macros}/*.n

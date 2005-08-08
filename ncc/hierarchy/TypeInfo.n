@@ -30,6 +30,7 @@ using Nemerle.Compiler;
 using Nemerle.Compiler.Typedtree;
 
 using Nemerle.Collections;
+using Nemerle.Utility;
 
 namespace Nemerle.Compiler {
 
@@ -88,10 +89,6 @@ public interface IMember
   
   /* public methods */
   GetModifiers () : Modifiers;
-
-  /* Return name that is unique for given member/overload, that is 
-     name for fields, name/argument types for methods etc */
-  OverloadName : string { get; }
 }
 
 public interface IField : IMember
@@ -113,7 +110,7 @@ public interface IEvent : IMember
 
 public interface IMethod : IMember
 {
-  GetFreshType () : MType;
+  GetFreshType () : MType * list [TyVar];
   GetHeader () : Fun_header;
   GetFunKind () : FunKind;
   GetMethodBase () : System.Reflection.MethodBase;
@@ -346,13 +343,6 @@ public abstract class TypeInfo : IMember,
     get;
   }
   
-  /* Return name that is unique for given member/overload, that is 
-     name for fields, name/argument types for methods etc */
-  public OverloadName : string
-  {
-    get { Name }
-  }
-
   internal virtual GetLibraryReference () : LibraryReference { null }
 
   public DefaultIndexerName : option [string]
@@ -369,9 +359,11 @@ public abstract class TypeInfo : IMember,
     }
   }
 
-  public GetSystemType () : System.Type
+  public SystemType : System.Type
   {
-    system_type
+    get {
+      system_type
+    }
   }
   
   /** Return full qualified type name with namespaces and nesting types,
@@ -399,6 +391,95 @@ public abstract class TypeInfo : IMember,
   public abstract LookupMemberImpl (name : string) : list [IMember];
 
   
+  GetSignature (mem : IMember) : option [MType]
+  {
+    match (mem.GetKind ()) {
+      | Field
+      | Type
+      | Event 
+      | Property (prop) when !prop.IsIndexer => None ()
+        
+      | Property 
+      | Method =>
+        // FIXME: this won't work for generic methods
+        match (GetMemType ().TypeOfMember (mem)) {
+          | MType.Fun (from, _) => Some (from.Fix ())
+          | _ => None ()
+        }
+    }
+  }
+    
+
+  static Hides (e1 : IMember * option [MType], e2 : IMember * option [MType]) : bool
+  {
+    def s1 = e1 [1];
+    def s2 = e2 [1];
+    
+    if (s1.IsNone || s2.IsNone) true
+    else
+      if (s1.Equals (s2)) {
+        match (e1 [0].Name) {
+          | "apply"
+          | "apply_void" =>
+            if (e1 [0] is IMethod && e2 [0] is IMethod)
+              (e1 [0] :> IMethod).GetParameters ().Length 
+                == (e2 [0] :> IMethod).GetParameters ().Length
+            else true
+          | _ => true
+        }
+      } else false
+  }
+
+  internal RemoveHiddenMembers (members : list [list [IMember]]) : list [IMember]
+  {
+    def ht = Hashtable ();
+    mutable res = [];
+
+    foreach (mems in members.Rev ())
+      foreach (origelem in mems) {
+        def name = origelem.Name;
+        def elem = (origelem, GetSignature (origelem));
+        if (ht.Contains (name)) {
+          // wtf? the enf
+          unless ((ht [name] : list [_]).Exists (fun (oldelem) { Hides (elem, oldelem) })) {
+            ht [name] ::= elem;
+            res ::= origelem;
+          }
+        } else {
+          ht [name] = [elem];
+          res ::= origelem;
+        }
+      }
+
+    //Message.Debug ($ "rhm: $members -> $res");
+
+    res.Rev ()
+  }
+
+  RemoveHiddenMembersSingleName (members : list [list [IMember]]) : list [IMember]
+  {
+    mutable store = [];
+    mutable res = [];
+
+    foreach (mems in members.Rev ())
+      foreach (origelem in mems) {
+        def elem = (origelem, GetSignature (origelem));
+        unless (store.Exists (fun (oldelem) { Hides (elem, oldelem) })) {
+          res ::= origelem;
+          store ::= elem;
+        }
+      }
+
+    res.Rev ()
+  }
+  
+  /*
+  static aint_override (mem : IMember) : bool
+  {
+    ! (mem.Attributes %&& NemerleAttributes.Override)
+  }
+  */
+
   /** Look for specified member. 
 
       Semantics of returning base class member is the same as for 
@@ -411,8 +492,41 @@ public abstract class TypeInfo : IMember,
 
     if (special_members.Contains (name))
       special_members [name]
-    else
-      LookupMemberImpl (name)
+    else {
+      def loop (acc, ti : TypeInfo) {
+        def res = ti.LookupMemberImpl (name);
+
+        // filter out members with override specified
+        // def res = res.RevFilterWhenNeeded (aint_override);
+
+        def acc = if (res is []) acc else res :: acc;
+
+        if (ti.IsInterface)
+          InternalType.Object_tc.LookupMemberImpl (name) ::
+          ti.GetSuperTypes ().Map (fun (c) { 
+            c.tycon.LookupMemberImpl (name)
+          }) + acc
+        else
+          match (ti.SuperClass ()) {
+            | Some (ti) => loop (acc, ti)
+            | None => acc
+          }
+      }
+
+      if (name == ".ctor")
+        // don't recurse
+        LookupMemberImpl (name)
+      else
+        match (loop ([], this)) {
+          | [] => []
+          | [one] => one
+          | members =>
+            // we have to protect agains members with 'new'
+            def res = RemoveHiddenMembersSingleName (members);
+            //Message.Debug ($ "members= $members, after removal $res");
+            res
+        }
+    }
   }
 
   /** */
@@ -440,12 +554,12 @@ public abstract class TypeInfo : IMember,
    */
   internal FreshSubst () : Subst
   {
-    Subst.Fresh (typarms)
+    Subst.Fresh (typarms) [0]
   }
 
-  public virtual GetFreshType () : MType
+  public virtual GetFreshType () : MType.Class
   {
-    FreshSubst ().MonoApply (GetMemType ())
+    FreshSubst ().MonoApply (GetMemType ()) :> MType.Class
   }
 
   /** If this tycon subtypes [tycon], then return instantiation using
@@ -526,17 +640,18 @@ public abstract class TypeInfo : IMember,
     assert (self_type != null, FullName);
     self_type
   }
+
+  public virtual TyparmsCount : int {
+    get { typarms.Length }
+  }
+
+  public virtual Typarms : list [StaticTyVar]
+  {
+    get { typarms }
+  }
   
   public abstract Location : Location { get; }
   public abstract CanAccess (source : TypeInfo) : bool;
-
-  internal virtual IsNemerleSpecific : bool {
-    get { throw System.InvalidOperationException ("external types should not be queried about nemerle specifics"); }
-    set { 
-      ignore (value); 
-      throw System.InvalidOperationException ("external types should not be queried about nemerle specifics");
-    }
-  }
 
   /* public methods */
   public abstract GetModifiers () : Modifiers;

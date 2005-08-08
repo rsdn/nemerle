@@ -31,10 +31,18 @@ struct activation_record {
 	unsigned long long children_time;
 };
 
+struct class_descriptor {
+	MonoClass *klass;
+	unsigned cumulative_size;
+	unsigned instance_count;
+};
+
 struct _MonoProfiler {
 	GHashTable *methods;
+	GHashTable *classes;
 	MonoMemPool *mempool;
 	unsigned long long total_time;
+	unsigned long long total_memory;
 	struct activation_record *the_stack;
 	struct activation_record *free_records;
 };
@@ -56,12 +64,36 @@ output_method (MonoMethod *meth, struct method_descriptor *desc, MonoProfiler *p
 }
 
 static void
+output_class (MonoClass *klass, struct class_descriptor *desc, MonoProfiler *prof)
+{
+	(void)prof;
+
+	printf("%10u %10u %8.2f  %s\n", desc->cumulative_size, desc->instance_count,
+		(double)desc->cumulative_size / desc->instance_count,
+		mono_type_full_name (mono_class_get_type (klass)));
+}
+
+extern void mono_gc_print_stats (void);
+
+static void
 simple_shutdown (MonoProfiler *prof)
 {
-	printf("%10s %10s %10s %8s %12s   %s\n",
-		"Total [%]", "Self [%]", "Cnt called",
-		"Cyc/call", "TotCyc/Call", "Name");
-	g_hash_table_foreach (prof->methods, (GHFunc) output_method, prof);
+	if (1) {
+		printf("%10s %10s %10s %8s %12s   %s\n",
+			"Total [%]", "Self [%]", "Cnt called",
+			"Cyc/call", "TotCyc/Call", "Name");
+		g_hash_table_foreach (prof->methods, (GHFunc) output_method, prof);
+	}
+
+	if (0) {
+		printf("%10s %10s %8s  %s\n",
+			"Size", "Instances", "InstSize", "Name");
+		g_hash_table_foreach (prof->classes, (GHFunc) output_class, prof);
+	
+	}
+
+	mono_gc_print_stats ();
+	printf ("managed bytes allocated:\t%llu\n", prof->total_memory);
 }
 
 static void
@@ -145,6 +177,27 @@ simple_method_leave (MonoProfiler *prof, MonoMethod *method)
 	prof->free_records = record;
 }
 
+static void
+simple_allocation (MonoProfiler *prof, MonoObject *obj, MonoClass *klass)
+{
+	struct class_descriptor *desc = 
+		g_hash_table_lookup (prof->classes, klass);
+	size_t size;
+
+	if (desc == NULL) {
+		desc = mono_mempool_alloc0 (prof->mempool,
+				            sizeof (struct class_descriptor));
+		g_hash_table_insert (prof->classes, klass, desc);
+		desc->klass = klass;
+	}
+
+	size = mono_object_get_size (obj);
+	
+	prof->total_memory += size;
+	desc->instance_count++;
+	desc->cumulative_size += size;
+}
+
 void mono_profiler_startup(const char *args)
 {
 	MonoProfiler *prof = g_new0 (MonoProfiler, 1);
@@ -152,9 +205,11 @@ void mono_profiler_startup(const char *args)
 	(void) args;
 
 	prof->methods = g_hash_table_new (NULL, NULL);
+	prof->classes = g_hash_table_new (NULL, NULL);
 	prof->mempool = mono_mempool_new ();
 
 	mono_profiler_install (prof, simple_shutdown);
 	mono_profiler_install_enter_leave (simple_method_enter, simple_method_leave);
-	mono_profiler_set_events (MONO_PROFILE_ENTER_LEAVE);
+	mono_profiler_install_allocation (simple_allocation);
+	mono_profiler_set_events (MONO_PROFILE_ENTER_LEAVE | MONO_PROFILE_ALLOCATIONS);
 }

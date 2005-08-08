@@ -33,6 +33,9 @@ using Nemerle.Compiler;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Compiler.SolverMacros;
 
+// #define DEBUG_STV
+#define CHECK_STV
+
 namespace Nemerle.Compiler
 {
   class Typer4
@@ -40,10 +43,11 @@ namespace Nemerle.Compiler
     current_fun : Fun_header;
     current_type : TypeBuilder;
     messenger : Messenger;
-    the_method : NemerleMethod;
+    the_method : MethodBuilder;
+
 
     #region Entry points
-    public this (meth : NemerleMethod)
+    public this (meth : MethodBuilder)
     {
       current_fun = meth.GetHeader ();
       the_method = meth;
@@ -57,6 +61,7 @@ namespace Nemerle.Compiler
       Util.locate (current_fun.loc, {
         match (current_fun.body) {
           | FunBody.Typed (body) =>
+            label_blocks.Clear ();
             // Message.Debug ("start ush");
             def body' = UnShare (body);
             // Message.Debug ("start T4");
@@ -65,6 +70,25 @@ namespace Nemerle.Compiler
               if (NeedBoxing (current_fun.ret_type.Fix (), body'))
                 Box (current_fun.ret_type.Fix (), body')
               else body';
+
+            #if CHECK_STV
+            current_t4 = this;
+            foreach (tv in current_fun.typarms) {
+              Util.cassert (tv.current_type == null);
+              tv.current_type = current_type;
+              tv.current_method = the_method;
+            }
+            foreach (tv in current_type.typarms) {
+              when (tv.current_type == null)
+                tv.current_type = current_type;
+            }
+            #if DEBUG_STV
+            Message.Debug ($"check header $the_method");
+            #endif
+            foreach (parm in current_fun.parms)
+              CheckSTV (parm.ty);
+            CheckSTV (current_fun.ret_type);
+            #endif
 
             goto_targets.Clear ();
             _ = Throws (body', allow_try = true);
@@ -83,63 +107,22 @@ namespace Nemerle.Compiler
     {
       def src = expr.Type.Fix ();
 
-      ((src.IsValueType || src is MType.Void) 
-       && !target_type.IsValueType)
-      // emit conversions for array types, becasue there is an error for 
-      // converting a value type array to non-value type array i ILEmitter
-      || (target_type is MType.Array && 
-          NeedConversionRec (target_type, src))
+      ((src.IsValueType || src is MType.Void || src is MType.TyVarRef) 
+       && (!target_type.IsValueType && !(target_type is MType.TyVarRef)
+       ))
     }
     
 
     static Box (target_type : MType, expr : TExpr) : TExpr
     {
-      Typer3.CheckedConversion (expr, target_type)
+      TExpr.TypeConversion (target_type, expr, target_type,
+                            ConversionKind.Boxing ())
     }
 
     static Convert (target_type : TyVar, expr : TExpr) : TExpr
     {
-      Typer3.CheckedConversion (expr, target_type)
-    }
-
-    static MaybeBoxToObject (expr : TExpr) : TExpr
-    {
-      if (NeedBoxing (InternalType.Object, expr))
-        Box (InternalType.Object, Walk (expr))
-      else
-        Walk (expr)
-    }
-
-
-    static IsGeneric (t : MType) : bool
-    {
-      match (t) {
-        | MType.TyVarRef => true
-        | MType.Class (tc, []) => tc.Equals (InternalType.Object_tc)
-        | MType.Array (t, _) => IsGeneric (t.Fix ())
-        | _ => false
-      }
-    }
-
-    static NeedConversionRec (real_type : MType, expr_type : MType) : bool
-    {
-      (IsGeneric (real_type) && ! IsGeneric (expr_type)) ||
-      match (real_type) {
-        | MType.Array (real, _) =>
-          match (expr_type) {
-            | MType.Array (expr, _) =>
-              NeedConversionRec (real.Fix (), expr.Fix ())
-            | _ => Util.ice ()
-          }
-        | _ => false
-      }
-    }
-
-    static NeedConversion (real_type : MType, _expr : TExpr) : bool
-    {
-      IsGeneric (real_type)
-      // Message.Debug ($"maybe convert $real_type to $(expr.Type) (for $expr)");
-      // NeedConversionRec (real_type, expr.Type.Fix ())
+      TExpr.TypeConversion (target_type, expr, target_type,
+                            ConversionKind.GenericSim ());
     }
     #endregion
 
@@ -161,6 +144,48 @@ namespace Nemerle.Compiler
       res
     }
 
+    #if CHECK_STV
+    static mutable current_t4 : Typer4;
+    static CheckSTV (t : TyVar) : void
+    {
+      match (t.Fix ()) {
+        | Class (_, args)
+        | Tuple (args) =>
+          args.Iter (CheckSTV);
+
+        | Intersection (args) =>
+          foreach (a in args) CheckSTV (a);
+
+        | Ref (t)
+        | Out (t)
+        | Array (t, _) =>
+          CheckSTV (t);
+
+        | Void => {}
+
+        | Fun (t1, t2) =>
+          CheckSTV (t1);
+          CheckSTV (t2);
+
+        | TyVarRef (tv) =>
+          Util.cassert (tv.current_type != null, $"type is null for $tv");
+          def check (t : TypeInfo) {
+            if (t == null)
+              Util.ice ($ "tv $tv defined in $(tv.current_type) and accessed from "
+                           "$(current_t4.current_type)");
+            else if (t : object == tv.current_type) {}
+            else check (t.DeclaringType)
+          }
+          check (current_t4.current_type);
+          Util.cassert (tv.current_method == null ||
+                        tv.current_method : object == current_t4.the_method,
+                        $ "tv $tv defined in $(tv.current_method) and accessed from "
+                           "$(current_t4.the_method)");
+          {}
+      }
+    }
+    #endif
+
     static NoThrowPlease (e : TExpr) : void
     {
       when (Throws (e))
@@ -169,7 +194,26 @@ namespace Nemerle.Compiler
 
     static Throws (expr : TExpr, allow_try : bool = false) : bool
     {
-      //Message.Debug ($ "throws: $(expr.GetType()) $(expr.GetHashCode())");
+      #if DEBUG_STV
+      Message.Debug (expr.loc, $ "{ throws: $expr $(expr.GetType()) ");
+      #endif
+      #if CHECK_STV
+      when (expr.ty != null) {
+        #if DEBUG_STV
+        Message.Debug (expr.loc, $ "( : $(expr.Type)");
+        #endif
+        CheckSTV (expr.Type);
+        #if DEBUG_STV
+        Message.Debug (expr.loc, $ "done )");
+        #endif
+      }
+      match (expr) {
+        | DefValIn (name, _, _)
+        | TryWith (_, name, _) =>
+          CheckSTV (name.Type);
+        | _ => {}
+      }
+      #endif
       def res = 
         match (expr) {
           | Throw (e) =>
@@ -177,8 +221,13 @@ namespace Nemerle.Compiler
               NoThrowPlease (e);
             true
 
-          | Goto (id) =>
+          | Goto (id, _) as g =>
             goto_targets [id] = null;
+            if (label_blocks.Contains (id))
+              g.try_block -= label_blocks [id];
+            else
+              Message.Error (expr.loc, 
+                             $ "non local goto (block return?) detected (l$id)");
             true
 
           | Sequence (e1, e2)
@@ -201,8 +250,8 @@ namespace Nemerle.Compiler
 
             if (e1 is TExpr.LocalRef)
               if (Throws (e2, allow_try)) {
-                Message.Warning (expr.loc, "bad style: each branch in this block "
-                                 "ends with a break");
+                // Message.Warning (expr.loc, "bad style: each branch in this block "
+                //                 "ends with a break");
                 true
               } else false
             else
@@ -211,7 +260,12 @@ namespace Nemerle.Compiler
                 true
               } else false
 
-          | TypeConversion (e, _, _)
+          | TypeConversion (e, _t, _) =>
+            #if CHECK_STV
+            CheckSTV (_t);
+            #endif
+            Throws (e, allow_try)
+
           | Label (_, e) =>
             Throws (e, allow_try)
 
@@ -226,6 +280,7 @@ namespace Nemerle.Compiler
               | None => all // ???
             }
 
+          | LocalFunRef
           | PropertyMember
           | StaticPropertyRef
           | EventMember
@@ -239,10 +294,25 @@ namespace Nemerle.Compiler
             Util.cassert (Message.SeenError);
             false
 
+          | MethodRef (e, meth, tp, _) =>
+            NoThrowPlease (e);
+            Util.cassert (meth.GetHeader ().typarms.Length == tp.Length,
+                          $ "typarms check failed for $meth "
+                            "$(meth.GetHeader ().typarms) $tp");
+            #if CHECK_STV
+            foreach (tp in tp) CheckSTV (tp);
+            #endif
+            false
+            
+          | HasType (e, _t) =>
+            NoThrowPlease (e);
+            #if CHECK_STV
+            CheckSTV (_t);
+            #endif
+            false
+          
           | FieldMember (e, _)
-          | MethodRef (e, _, _)
           | TupleIndexer (e, _, _)
-          | HasType (e, _)
           | NotNull (e) =>
             NoThrowPlease (e);
             false
@@ -282,13 +352,28 @@ namespace Nemerle.Compiler
             _ = Throws (handler, true);
             false
 
+          | StaticRef (_t, meth is IMethod, tp) =>
+            Util.cassert (meth.GetHeader ().typarms.Length == tp.Length,
+                          $ "typarms check failed for $meth "
+                            "$(meth.GetHeader ().typarms) $tp");
+            #if CHECK_STV
+            CheckSTV (_t);
+            foreach (tp in tp) CheckSTV (tp);
+            #endif
+            false
+
+          | TypeOf (_t) =>
+            #if CHECK_STV
+            CheckSTV (_t);
+            #endif
+            false
+            
           | StaticRef
           | LocalRef
           | ImplicitValueTypeCtor
           | Literal
           | This
           | Base
-          | TypeOf
           | OpCode
           | MethodAddress
           | DefaultValue =>
@@ -296,6 +381,9 @@ namespace Nemerle.Compiler
         }
 
       expr.Throws = res;
+      #if DEBUG_STV
+      Message.Debug (expr.loc, $ "throws } $(expr.GetType()) ");
+      #endif
       res
     }
     #endregion
@@ -323,11 +411,24 @@ namespace Nemerle.Compiler
 
 
     #region Top level stuff
+    static mutable current_try_block : int;
+    static label_blocks : Hashtable [int, int] = Hashtable ();
+    
     static Walk (expr : TExpr) : TExpr
     {
       expr.Walk (DoWalk)
     }
 
+    static WalkTry (expr : TExpr) : TExpr
+    {
+      def backup = current_try_block;
+      try {
+        current_try_block = Util.next_id ();
+        Walk (expr)
+      } finally {
+        current_try_block = backup;
+      }
+    }
 
     static DoWalk (expr : TExpr) : TExpr
     {
@@ -341,27 +442,18 @@ namespace Nemerle.Compiler
             when (! obj.NeedAddress && fld.DeclaringType.IsValueType)
               obj.NeedAddress = true;
               
-            if (NeedConversion (fld.GetMemType (), expr))
-              Convert (expr.Type,
-                       TExpr.FieldMember (fld.GetMemType (), obj, fld))
-            else
-              TExpr.FieldMember (obj, fld)
-
-          | TupleIndexer (obj, pos, len) when NeedConversion (InternalType.Object, expr) =>
-            Convert (expr.Type,
-                     TExpr.TupleIndexer (InternalType.Object,
-                                         Walk (obj), pos, len));
+            TExpr.FieldMember (obj, fld)
 
           | Assign (e1, e2) =>
             e1.IsAssigned = true;
 
             def real_type =
               match (e1) {
-                | FieldMember (_, fld)
-                | StaticRef (fld is IField) => fld.GetMemType ()
                 | LocalRef (decl) => decl.Type.Fix ()
                 | ArrayIndexer
-                | This => e1.Type.Fix ()
+                | This
+                | FieldMember
+                | StaticRef => e1.Type.Fix ()
                 | _ => Util.ice ($ "wrong assignment target $e1")
               }
             def e1 = Walk (e1);
@@ -373,6 +465,7 @@ namespace Nemerle.Compiler
             else
               e1.NeedAddress = true;
 
+          
             if (NeedBoxing (real_type, e2))
               TExpr.Assign (InternalType.Void, e1, Box (real_type, e2))
             else 
@@ -381,15 +474,31 @@ namespace Nemerle.Compiler
           
           | Call (ImplicitValueTypeCtor, [], _) => null
           
-          // I hope opcodes don't need boxing ...
+          | Call (OpCode ("==.ref"), [p1, p2], _)
+          | Call (OpCode ("!=.ref"), [p1, p2], _)
+          | Call (OpCode ("=="), [p1, p2], _)
+          | Call (OpCode ("!="), [p1, p2], _) =>
+            p1.expr = Walk (p1.expr);
+            p2.expr = Walk (p2.expr);
+            when (p1.expr.MType is MType.TyVarRef)
+              p1.expr = Box (InternalType.Object, p1.expr);
+            when (p2.expr.MType is MType.TyVarRef)
+              p2.expr = Box (InternalType.Object, p2.expr);
+            expr
+
+          // I hope other opcodes don't need boxing ...
           | Call (OpCode, _, _) => null
           
           | Call (origfunc, parms, is_tail) =>
             mutable func = Walk (origfunc);
             def meth =
               match (func) {
-                | MethodRef (obj, meth, nonvirt) =>
-                
+                | MethodRef (obj, meth, type_parms, nonvirt) =>
+                  if (obj.MType is MType.TyVarRef) {
+                    obj.NeedsConstrained = true;
+                    obj.NeedAddress = true;
+                  }
+                  else
                   // we would kinda like address here
                   when (obj.Type.Fix ().IsValueType) {
                     def methty = meth.DeclaringType;
@@ -398,14 +507,14 @@ namespace Nemerle.Compiler
                     else {
                       // but maybe we should employ boxing
                       def obj = Box (methty.GetMemType (), obj);
-                      func = TExpr.MethodRef (func.Type, obj, meth, nonvirt);
+                      func = TExpr.MethodRef (func.Type, obj, meth, type_parms, nonvirt);
                     }
                   }
                   
                   meth
                   
                 | Base (meth)
-                | StaticRef (meth is IMethod) => meth
+                | StaticRef (_, meth is IMethod, _) => meth
                 | _ => Util.ice ($ "invalid thing called $func")
               }
 
@@ -415,15 +524,17 @@ namespace Nemerle.Compiler
                 when (NeedBoxing (InternalType.Object, parm.expr))
                   parm.expr = Box (InternalType.Object, parm.expr);
               } else {
-                mutable formals = meth.GetParameters ();
-                
+                mutable formals = 
+                  origfunc.MType.FunReturnTypeAndParms (meth) [0];
+
+                //Message.Debug ($"origfunc: $origfunc type=$(origfunc.MType)");
                 Util.cassert (formals.Length == parms.Length,
                               $ "call to $meth $parms $formals");
                 
                 foreach (parm in parms) {
                   match (formals) { 
                     | f :: fs =>
-                      def t = f.ty.Fix ();
+                      def t = f.Fix ();
                       parm.expr = Walk (parm.expr);
                       if (parm.kind == ParmKind.Normal) {
                         when (NeedBoxing (t, parm.expr))
@@ -433,7 +544,7 @@ namespace Nemerle.Compiler
                           parm.expr.NeedAddress = true;
                         else
                           Message.Error ($ "non-addressable expression passed "
-                                           "as a ref/out parameter `$(f.name)'");
+                                           "as a ref/out parameter");
                       }
                       formals = fs;
                     | [] => Util.ice ();
@@ -441,15 +552,12 @@ namespace Nemerle.Compiler
                 }
               }
             }
-
-            if (NeedConversion (meth.ReturnType.Fix (), expr))
+            if (meth.ReturnType.Fix () is MType.TyVarRef &&
+                expr.MType is MType.Void)
               Convert (expr.Type,
-                       TExpr.Call (meth.ReturnType.Fix (), func, parms, false))
+                       TExpr.Call (InternalType.Object, func, parms, false))
             else
               TExpr.Call (func, parms, is_tail)
-
-          | Tuple (exprs) =>
-            TExpr.Tuple (exprs.Map (MaybeBoxToObject))
 
           | Array (parms, dimensions) =>
             def ty =
@@ -467,6 +575,20 @@ namespace Nemerle.Compiler
               res = parm :: res;
             }
             TExpr.Array (res.Rev (), dimensions)
+
+          | TryWith (body, exn, handler) =>
+            TExpr.TryWith (WalkTry (body), exn, WalkTry (handler))
+            
+          | TryFinally (body, handler) =>
+            TExpr.TryFinally (WalkTry (body), WalkTry (handler))
+
+          | Goto as g =>
+            g.try_block = current_try_block;
+            null
+
+          | Label (id, _) =>
+            label_blocks [id] = current_try_block;
+            null
 
           | DefFunctionsIn
           | Match

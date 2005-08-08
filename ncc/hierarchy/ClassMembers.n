@@ -36,7 +36,7 @@ using PT = Nemerle.Compiler.Parsetree;
 
 namespace Nemerle.Compiler {
 
-public abstract class NemerleMember : IMember
+public abstract class MemberBuilder : IMember
 {
   protected loc : Location;
   protected mutable name : string;
@@ -51,6 +51,8 @@ public abstract class NemerleMember : IMember
   protected mutable attributes : NemerleAttributes;
 
   protected mutable m_has_been_used : bool;
+
+  internal mutable disable_type_attr : bool;
   
   protected this (par : TypeBuilder, d : PT.ClassMember)
   {
@@ -361,9 +363,11 @@ public abstract class NemerleMember : IMember
                            " allowed to be $msg: $(this)")
     }
   }
+
+  internal abstract CreateEmitBuilder (emit_tb : Emit.TypeBuilder) : void;
 }
 
-public class NemerleField : NemerleMember, IField
+public partial class FieldBuilder : MemberBuilder, IField
 {
   public mutable field_builder : Emit.FieldBuilder;
   public mutable const_value : Literal;
@@ -378,11 +382,7 @@ public class NemerleField : NemerleMember, IField
       | _ => ()
     }
     
-    ty =
-      if (IsStatic)
-        par.MonoBindType (TyVarEnv (), f.ty)
-      else
-        par.MonoBindType (f.ty);
+    ty = par.MonoBindType (f.ty);
         
     kind = MemberKind.Field (this);
     
@@ -474,11 +474,11 @@ public class NemerleField : NemerleMember, IField
   }
 }
 
-public class NemerleProperty : NemerleMember, IProperty
+public partial class PropertyBuilder : MemberBuilder, IProperty
 {
   is_mutable : bool;
-  getter : NemerleMethod;
-  setter : NemerleMethod;
+  getter : MethodBuilder;
+  setter : MethodBuilder;
   internal parms : list [MType];
   mutable parent_property : IProperty = null;
   
@@ -487,12 +487,7 @@ public class NemerleProperty : NemerleMember, IProperty
   public this (par : TypeBuilder, f : PT.ClassMember.Property) {
     base (par, f);
     is_mutable = Option.IsSome (f.set);
-
-    ty =
-      if (IsStatic)
-        par.MonoBindType (TyVarEnv (), f.prop_ty)
-      else
-        par.MonoBindType (f.prop_ty);
+    ty = par.MonoBindType (f.prop_ty);
 
     kind = MemberKind.Property (this);
 
@@ -505,7 +500,7 @@ public class NemerleProperty : NemerleMember, IProperty
       | Some (fn) =>
         def fn = fn :> PT.ClassMember.Function;
         UpdateEmbeddedModifiers (attributes, ref fn.modifiers.mods);
-        def method = NemerleMethod (par, fn, is_property = true);
+        def method = MethodBuilder (par, fn, is_property = true);
         method.MarkWithSpecialName ();
         declaring_type.AddMember (method);
         method
@@ -591,7 +586,7 @@ public class NemerleProperty : NemerleMember, IProperty
   }
 }
 
-public class NemerleMethod : NemerleMember, IMethod
+public partial class MethodBuilder : MemberBuilder, IMethod
 {
   mutable fun_kind : FunKind;
   // FIXME: make these private
@@ -599,6 +594,8 @@ public class NemerleMethod : NemerleMember, IMethod
   
   public mutable method_builder : System.Reflection.Emit.MethodBuilder;
   public mutable ctor_builder : System.Reflection.Emit.ConstructorBuilder;
+
+  internal mutable overridden_method : IMethod;
 
   is_var_args : bool;
 
@@ -685,10 +682,15 @@ public class NemerleMethod : NemerleMember, IMethod
       attributes |= NemerleAttributes.Virtual;
 
     def (tenv', typarms) =
-      if (IsStatic)
-        declaring_type.BindTyparms (TyVarEnv (), f.header.typarms)
-      else
         declaring_type.BindTyparms (f.header.typarms);
+
+    // HACK HACK HACK!!!
+    def typarms =
+      if (declaring_type.forced_typarms != null) {
+        def tmp = declaring_type.forced_typarms;
+        declaring_type.forced_typarms = null;
+        tmp
+      } else typarms;
    
     mutable types_to_check = [];
 
@@ -872,9 +874,10 @@ public class NemerleMethod : NemerleMember, IMethod
     get { fun_header.ret_type }
   }
   
-  public GetFreshType () : MType
+  public GetFreshType () : MType * list [TyVar]
   {
-    Subst.Fresh (fun_header.typarms).MonoApply (GetMemType ())
+    def (subst, vars) = Subst.Fresh (fun_header.typarms);
+    (subst.MonoApply (GetMemType ()), vars)
   }
 
   public GetFunKind () : FunKind
@@ -977,21 +980,18 @@ public class NemerleMethod : NemerleMember, IMethod
   }
 }
 
-public class NemerleEvent : NemerleMember, IEvent
+public partial class EventBuilder : MemberBuilder, IEvent
 {
-  adder : NemerleMethod;
-  remover : NemerleMethod;
+  adder : MethodBuilder;
+  remover : MethodBuilder;
   
   internal mutable event_builder : Emit.EventBuilder;
-  internal storage_field : NemerleField;
+  internal storage_field : FieldBuilder;
   
   public this (par : TypeBuilder, f : PT.ClassMember.Event) {
     base (par, f);
     
-    if (IsStatic)
-      ty = par.MonoBindType (TyVarEnv (), f.ty)
-    else
-      ty = par.MonoBindType (f.ty);
+    ty = par.MonoBindType (f.ty);
 
     kind = MemberKind.Event (this);
 
@@ -1023,7 +1023,7 @@ public class NemerleEvent : NemerleMember, IEvent
       
       unless (declaring_type.IsInterface) {
         when (IsStatic) f.field.modifiers.mods |= NemerleAttributes.Static;
-        storage_field = NemerleField (par, f.field);
+        storage_field = FieldBuilder (par, f.field);
         declaring_type.AddMember (storage_field);
       }
       update_mfunction (f.add, "add");
@@ -1032,7 +1032,7 @@ public class NemerleEvent : NemerleMember, IEvent
       
     def make_method (mfunc : PT.ClassMember.Function) {
       UpdateEmbeddedModifiers (self.attributes, ref mfunc.modifiers.mods);
-      def meth' = NemerleMethod (self.declaring_type, mfunc);
+      def meth' = MethodBuilder (self.declaring_type, mfunc);
       self.declaring_type.AddMember (meth');
       meth'
     };

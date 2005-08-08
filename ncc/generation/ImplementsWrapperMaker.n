@@ -37,10 +37,10 @@ namespace Nemerle.Compiler
 {
   class ImplementsWrapperMaker
   {
-    the_method : NemerleMethod;
+    the_method : MethodBuilder;
     current_type : TypeBuilder;
 
-    public this (meth : NemerleMethod)
+    public this (meth : MethodBuilder)
     {
       the_method = meth;
       current_type = meth.DeclaringType :> TypeBuilder;
@@ -55,7 +55,10 @@ namespace Nemerle.Compiler
       match (the_method.GetFunKind ()) {
         | FunKind.BoundMethod (impl_list) =>
           def is_correct_impl (impl_meth : IMethod) {
-            if (impl_meth.GetMemType ().Equals (the_method.GetMemType ())) 
+
+// Message.Debug ($"compare: $(current_type.GetMemType ().TypeOfMember (impl_meth))     ======     $(the_method.GetMemType ())");
+            if (impl_meth.GetHeader ().typarms.Length == the_method.GetHeader ().typarms.Length &&
+            current_type.GetMemType ().TypeOfMember (impl_meth).TryUnify (the_method.GetFreshType () [0]))
               true
             else {
               Util.locate (the_method.Location, MakeImplWrapper (impl_meth));
@@ -77,28 +80,54 @@ namespace Nemerle.Compiler
       // Message.Debug ($"make impl wrap $the_method IMPL $impl_meth");
       def hd = impl_meth.GetHeader ();
       def parms = hd.parms;
+      mutable new_typarms = [];
 
       Util.cassert (the_method.Name.IndexOf ('.') == -1,
                     $ "impl loop, $the_method IMPL $impl_meth, "
-                      "$(the_method.GetMemType()) != $(impl_meth.GetMemType())");
-      
+                   "$(the_method.GetMemType()) != $(current_type.GetMemType ().TypeOfMember (impl_meth))");
+
+      def subst =
+          current_type.SubtypingSubst (impl_meth.DeclaringType);
+
+      def orig_typarms = hd.typarms;
+      //the_method.GetHeader ().typarms;
+      unless (orig_typarms.IsEmpty) {
+        def (s2, newtp) = StaticTyVar.CopyList (orig_typarms);
+        //Message.Debug ($"newtp: $orig_typarms -> $newtp");
+        new_typarms = newtp;
+        //Message.Debug ($"subst before: $subst");
+        subst.AddSubst (s2);
+        List.Iter2 (the_method.GetHeader ().typarms, newtp, 
+                    fun (tv, repl) {
+                      subst.Add (tv, MType.TyVarRef (repl))
+                    });
+        //Message.Debug ($"subst after: $subst");
+      }
+
       def parm_types_names =
-        parms.Map (fun (parm) { (parm.ty, Macros.NewSymbol ("sp_parm")) });
+        parms.Map (fun (parm) { (subst.Apply (parm.ty.Fix ()), Macros.NewSymbol ("sp_parm")) });
       def formal_parms =
         parm_types_names.Map (fun (ty, name) { 
           <[ parameter: $(name : name) : $(ty : typed) ]> 
         });
-      def name = impl_meth.DeclaringType.FullName + "." + impl_meth.Name;
+      def name = 
+        impl_meth.DeclaringType.FullName + "." + impl_meth.Name;
 
+      current_type.forced_typarms = new_typarms;
       def meth =
         current_type.bind_and_add_member (<[ decl:
-          private $(name : dyn) (.. $formal_parms) : $(hd.ret_type : typed)
+          private $(name : dyn) (.. $formal_parms) : $(subst.Apply (hd.ret_type.Fix ()) : typed)
           {
           }
-        ]>) :> NemerleMethod;
-      // Message.Debug ($"added $meth");
+        ]>) :> MethodBuilder;
+      //Message.Debug ($"added $meth");
       meth.SetFunKind (FunKind.BoundMethod ([impl_meth]));
       meth.Attributes |= NemerleAttributes.SpecialName | NemerleAttributes.Sealed;
+      unless (impl_meth.DeclaringType.IsInterface) {
+        meth.Attributes = NemerleAttributes.Public | NemerleAttributes.Override;
+      }
+
+      meth.disable_type_attr = true;
       meth.HasBeenUsed = true;
 
       def current_fun = meth.GetHeader ();
@@ -114,18 +143,27 @@ namespace Nemerle.Compiler
           TExpr.LocalRef (val.Type, val)
         });
 
-      def casted_refs = List.Map2 (refs, the_method.GetParameters (),
-                                   fun (e, fp) {
-                                     Parm (Typer3.CheckedConversion (e, fp.ty))
-                                   });
+      def casted_refs = refs.Map (Parm);
+      // def ty = subst.Apply (impl_meth.GetMemType ());
+      // def vars = new_typarms.Map (fun (x) { MType.TyVarRef (x) });
+      def (the_method_type, vars) =
+        the_method.DeclaringType.GetMemType ().TypeOfMethodWithTyparms (the_method);
+      List.Iter2 (new_typarms, vars, fun (x, tv) { 
+        tv.ForceUnify (MType.TyVarRef (x)) 
+      });
+      def (_, ret_type) = the_method_type.Fix ().FunReturnTypeAndParms (the_method);
+      //Message.Debug ($"ty=$ty");
+
       def methref =
-        TExpr.MethodRef (the_method.GetFreshType (),
-                           TExpr.This (current_type.GetMemType ()),
-                           the_method, false);
-      def call = TExpr.Call (the_method.ReturnType, methref, casted_refs, false);
-      def body = Typer3.CheckedConversion (call, current_fun.ret_type);
+        TExpr.MethodRef (the_method_type, TExpr.This (current_type.GetMemType ()),
+                         the_method, vars, ! impl_meth.DeclaringType.IsInterface);
+
+      // call the wrapped method, 
+      def body = TExpr.Call (ret_type, methref, casted_refs, false);
+      //Message.Debug ($"ty=$((the_method.ReturnType.Fix ()))  $(subst.Apply (the_method.ReturnType.Fix ()))");
       
       meth.GetHeader ().body = FunBody.Typed (body);
+      meth.GetHeader ().typarms = new_typarms;
 
       def t4 = Typer4 (meth);
       t4.Run ();

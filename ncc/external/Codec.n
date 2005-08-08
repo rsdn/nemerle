@@ -83,7 +83,7 @@ module TyCodec
   }
   
 
-  decode (lib : LibraryReference, tenv : SystemMap [int, StaticTyVar], t : Term) : MType
+  decode (lib : LibraryReference, tenv : Map [string, StaticTyVar], t : Term) : MType
   {
     def self (t) { decode (lib, tenv, t) : TyVar };
     match (t) {
@@ -109,7 +109,7 @@ module TyCodec
       | Term.App (".f", [t1, t2]) =>
         MType.Fun (decode (lib, tenv, t1), decode (lib, tenv, t2))
       | Term.App (".v", [Term.App (no, [])]) =>
-        match (tenv.Find (System.Int32.Parse (no))) {
+        match (tenv.Find (no)) {
           | Some (tv) => MType.TyVarRef (tv)
           | None => Util.ice ("unboud type variable in encoded type " + no)
         }
@@ -118,69 +118,26 @@ module TyCodec
     }
   }
 
-  decode_typarms (lib : LibraryReference, 
-                  tenv : SystemMap [int, StaticTyVar], 
-                  t : Term) : list [StaticTyVar] * SystemMap [int, StaticTyVar]
-  {
-    mutable tyvars = [];
-    def decode_tyvar (t, acc : SystemMap [int, StaticTyVar]) {
-      match (t) {
-        | Term.App (_, [Term.App (no, []), Term.App (name, []), _]) =>
-          def tv = StaticTyVar (name);
-          tyvars = tv :: tyvars;
-          acc.Replace (System.Int32.Parse (no), tv)
-        | _ => Util.ice ("evil encoded tyvar")
-      }
-    };
-
-    def vars =
-      match (t) {
-        | Term.App (".tp", vars) => vars
-        | Term.App (name, _) => Util.ice ("invalid typarms in encoded type " + name)
-      };
-      
-    def tenv = List.FoldLeft (vars, tenv, decode_tyvar);
-    
-    def set_constraints (t, tv : StaticTyVar) {
-      match (t) {
-        | Term.App (_, [_, _, Term.App (_, constraints)]) =>
-          tv.Constraints = 
-            List.Map (constraints, fun (t) { decode (lib, tenv, t) });
-        | _ => Util.ice ("evil encoded tyvar")
-      }
-    };
-
-    tyvars = List.Rev (tyvars);
-    List.Iter2 (vars, tyvars, set_constraints);
-    
-    (tyvars, tenv)
-  }
-
-
   reflect_typarms (_lib : LibraryReference, 
-                  mutable tenv : SystemMap [int, StaticTyVar], 
-                  _t : System.Type) : list [StaticTyVar] * SystemMap [int, StaticTyVar]
+                  mutable tenv : Map [string, StaticTyVar], 
+                  _t : System.Type) : list [StaticTyVar] * Map [string, StaticTyVar]
   {
     mutable tyvars = [];
-#if _GENERICS    
     def vars = _t.GetGenericArguments ();
 
     foreach (gparm in vars) {
       def tv = StaticTyVar (gparm.Name, gparm);
       tyvars = tv :: tyvars;
-      tenv = tenv.Replace (gparm.MetadataToken, tv)
+      tenv = tenv.Replace (gparm.Name, tv)
     }
     
     def set_constraints (t, tv : StaticTyVar) {
       def constraints = t.GetGenericParameterConstraints ();
-      tv.Constraints = 
-        List.MapFromArray (constraints, fun (t) { _lib.TypeOfType (tenv, t) });
+      tv.SetConstraints (t.GenericParameterAttributes,
+                         List.MapFromArray (constraints, fun (t) { _lib.TypeOfType (tenv, t) }))
     };
-#endif
     tyvars = List.Rev (tyvars);
-#if _GENERICS    
     NArray.Iter2 (vars, tyvars, set_constraints);
-#endif
     
     (tyvars, tenv)
   }
@@ -189,88 +146,93 @@ module TyCodec
   /**
    * Used to decode Nemerle types extracted from assembly metadata
    */
-  public DecodeType (lib : LibraryReference, tenv : SystemMap [int, StaticTyVar], tokens : string) : MType
+  public DecodeType (lib : LibraryReference, tenv : Map [string, StaticTyVar], tokens : string) : MType
   {
     decode (lib, tenv, ParseTerm (tokens))
   }
 
-  public DecodeTypeBuilder (lib : LibraryReference, 
-                       tenv : SystemMap [int, StaticTyVar], 
-                       s : string) 
-    : list [StaticTyVar] * SystemMap [int, StaticTyVar] * list [MType.Class] * list [MType.Class]
-  {
-    match (ParseTerm (s)) {
-      | Term.App (".ti", [tp, Term.App (_, dst), Term.App (_, st)]) =>
-          def (tyvars, tenv) = decode_typarms (lib, tenv, tp);
-          def decode_ty (t) { decode (lib, tenv, t) :> MType.Class };
-          (tyvars, tenv, List.Map (dst, decode_ty), List.Map (st, decode_ty))
-      | _ => Util.ice ("evil encoded tyinfo " + s)
-    }
-  }
-
   public ReflectTypeBuilder (lib : LibraryReference, 
-                             tenv : SystemMap [int, StaticTyVar], 
+                             tenv : Map [string, StaticTyVar], 
                              original : System.Type) 
-    : list [StaticTyVar] * SystemMap [int, StaticTyVar] * list [MType.Class] * list [MType.Class]
+    : list [StaticTyVar] * Map [string, StaticTyVar] * list [MType.Class] * list [MType.Class]
   {
     def (tyvars, tenv) = reflect_typarms (lib, tenv, original);
 
-    // compute direct supertypes
-    def ifaces = List.MapFromArray (original.GetInterfaces (), fun (ty) {
-      lib.TypeOfType (tenv, ty) :> MType.Class
-    });
-    def dst = 
-      match (original.BaseType) {
-        | null => ifaces
-        | t => (lib.TypeOfType (tenv, t) :> MType.Class) :: ifaces
+    def typeof_type (framework_type) {
+      def tc = lib.TypeInfoOfType (framework_type);
+      if (framework_type.HasGenericArguments) {
+        def parms = List.MapFromArray (framework_type.GetGenericArguments (),
+                                       fun (x) {
+                                         lib.TypeOfType (tenv, x)
+                                       });
+        MType.Class (tc, parms)
       }
+      else MType.Class (tc, [])
+    }
+
+    def system_ifaces = original.GetInterfaces ();
+    
+    // compute direct supertypes
+    mutable dst = [];
+    
+    foreach (ty in system_ifaces)
+      dst ::= typeof_type (ty);
+    match (original.BaseType) {
+      | null => ()
+      | t => dst ::= typeof_type (t)
+    }
 
     // compute all supertypes
-    def supertypes = Hashtable (30);
-    def add_bt (t : MType.Class) {
-      def tc = t.tycon;
-      unless (supertypes.Contains (tc.GetId ()))
-      {
-        supertypes.Add (tc.GetId (), t);
-        match (tc.BaseType) {
-          | null => ()          
-          | tc => add_bt (MType.Class (tc, []))
+    mutable st = [];
+    
+    mutable st_unique = [];
+    def add_bt (t : System.Type) {
+      | null => ()
+      | _ =>
+        def mtype = typeof_type (t);
+        unless (st_unique.Contains (mtype.tycon.GetId ()))
+        {
+          st ::= mtype;
+          st_unique ::= mtype.tycon.GetId ();
+          add_bt (t.BaseType)
         }
-      }
     };
-    List.Iter (dst, add_bt);
-    def st = supertypes.Fold ([], fun (_, tc, acc) { tc :: acc });
+    add_bt (original.BaseType);
+    foreach (x in system_ifaces) add_bt (x);
       
 //    Message.Debug ($"reflecting $original, created dts $dst");
     (tyvars, tenv, dst, st)
   }
 
-  public FixupFunctionHeader (lib : LibraryReference,
-                              tenv : SystemMap [int, StaticTyVar], 
-                              fh : Fun_header, 
-                              [Nemerle.Assertions.NotNull] tokens : string) : void
+  public ReflectTyparms (lib : LibraryReference,
+                         mutable tenv : Map [string, StaticTyVar], 
+                         meth : System.Reflection.MethodBase)
+                         : list [StaticTyVar] * Map [string, StaticTyVar]
   {
-    match (ParseTerm (tokens)) {
-      | Term.App (".m", [tp, ty]) =>
-        def (tyvars, tenv) = decode_typarms (lib, tenv, tp);
-        fh.typarms = tyvars;
-        match (decode (lib, tenv, ty)) {
-          | MType.Fun (arg, rt) =>
-            fh.ret_type = rt;
-            def arg_types = arg.Fix ().GetFunctionArguments ();
-            def set_type (p : Fun_parm, t) {
-              p.ty = t;
-            };
-            if (fh.parms.Length == 1 && arg_types.Length > 1)
-              set_type (List.Hd (fh.parms), arg)
-            else
-              List.Iter2 (fh.parms, arg_types, set_type);
-          | _ => Util.ice ("encoded method type aint ->")
-        }
-      | _ => Util.ice ("evil encoded method header " + tokens)
-    }
-  }
+    if (meth.IsGenericMethodDefinition) {
+      mutable tyvars = [];
 
+      def vars = meth.GetGenericArguments ();
+
+      foreach (gparm in vars) {
+        def tv = StaticTyVar (gparm.Name, gparm);
+        tyvars = tv :: tyvars;
+        tenv = tenv.Replace (gparm.Name, tv)
+      }
+      tyvars = tyvars.Reverse ();
+      
+      def set_constraints (t, tv : StaticTyVar) {
+        def constraints = t.GetGenericParameterConstraints ();
+        tv.SetConstraints (t.GenericParameterAttributes,
+                           List.MapFromArray (constraints, fun (t) { lib.TypeOfType (tenv, t) }))
+      };
+      NArray.Iter2 (vars, tyvars, set_constraints);
+
+      (tyvars, tenv)
+    }
+    else
+      ([], tenv)
+  }
 
   // -------------- ENCODING ----------------------
 
@@ -288,27 +250,6 @@ module TyCodec
     ret.ToString ()
   }
 
-  needs_encoding (t : TyVar) : bool
-  {
-    match (t.Fix ()) {
-      | MType.Ref (t)
-      | MType.Out (t)
-      | MType.Array (t, _) => needs_encoding (t)
-      | MType.Void 
-      | MType.Class (_, []) => false
-#if _GENERICS
-      | MType.Class 
-      | MType.TyVarRef => false
-#else
-      | MType.TyVarRef
-      | MType.Class         
-#endif        
-      | MType.Fun | MType.Tuple => true
-      | MType.Intersection => assert (false)
-    }
-  } 
-
-
   encode_tvs (t : list [TyVar]) : list [Term]
   {
     List.Map (t, encode_tv)
@@ -324,7 +265,7 @@ module TyCodec
     | MType.Array (t, rank) =>
       Term.App (".a", [Term.App (rank.ToString (), []), encode_tv (t)])
     | MType.TyVarRef (tv) =>
-      Term.App (".v", [Term.App (tv.Id.ToString (), [])])
+      Term.App (".v", [Term.App (tv.Name.ToString (), [])])
     | MType.Void =>
       Term.App ("System.Void", [])
     | MType.Fun (arg, rt) =>
@@ -350,89 +291,6 @@ module TyCodec
   public EncodeType (t : MType) : string
   {
     FlattenTerm (encode (t))
-  }
-
-  encode_typarms (tyvars : list [StaticTyVar]) : Term
-  {
-    def encode_tyvar (tv : StaticTyVar) {
-      Term.App ("", [Term.App (tv.Id.ToString (), []),
-                Term.App (tv.Name, []),
-                Term.App ("", List.Map (tv.Constraints, encode))])
-    };
-    
-    Term.App (".tp", List.Map (tyvars, encode_tyvar))
-  }
-
-
-  encode_tyinfo (ti : TypeBuilder) : Term
-  {
-    def generic_parms = ti.GetTyparms ();
-    def direct_super = ti.GetDirectSuperTypes ();
-    def super = ti.GetSuperTypes ();
-
-#if _GENERICS    
-    if (ti.IsNemerleSpecific
-#else        
-    if (ti.IsNemerleSpecific || !generic_parms.IsEmpty
-#endif        
-        || List.Exists (direct_super, needs_encoding)
-        || List.Exists (super, needs_encoding))
-      Term.App (".ti", [
-        encode_typarms (generic_parms),
-        Term.App ("", List.Map (direct_super, encode)),
-        Term.App ("", List.Map (super, encode))
-      ])
-    else null
-  }
- 
-  
-  public EncodeMemberType (tb : TypeBuilder) : SRE.CustomAttributeBuilder
-  {
-    def coded = encode_tyinfo (tb);
-    if (coded != null) {
-      when (tb.DeclaringType != null)
-        tb.DeclaringType.IsNemerleSpecific = true;
-      HierarchyEmitter.make_nemerle_type_attr (FlattenTerm (coded))
-    }
-    else 
-      null
-  }
-
-  public EncodeMemberType (m : NemerleMember) : SRE.CustomAttributeBuilder
-  {
-    def t = m.GetMemType ();
-    if (needs_encoding (t)) {
-      m.DeclaringType.IsNemerleSpecific = true;
-      HierarchyEmitter.make_nemerle_type_attr (EncodeType (t)) 
-    }
-    else
-      null
-  }
-
-  public EncodeMemberType (m : NemerleMethod) : SRE.CustomAttributeBuilder
-  { 
-    def generic_params = m.GetHeader ().typarms;
-    def mem_type = m.GetMemType ();
-    def need_enc = 
-      match (mem_type) {
-        | MType.Fun (MType.Tuple (parms), to) =>
-          List.Exists (to :: parms, needs_encoding)
-        | MType.Fun (from, to) =>
-          needs_encoding (from) || needs_encoding (to)
-        | _ => Util.ice ("method of non -> type")
-      }
-#if _GENERICS
-    if (need_enc) {
-#else
-    if (!generic_params.IsEmpty || need_enc) {
-#endif      
-      m.DeclaringType.IsNemerleSpecific = true;
-      def tp = encode_typarms (generic_params);
-      def mt = encode (mem_type);
-      def flat = FlattenTerm (Term.App (".m", [tp, mt]));
-      HierarchyEmitter.make_nemerle_type_attr (flat)
-    }
-    else null
   }
 }
 

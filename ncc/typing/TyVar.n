@@ -28,6 +28,8 @@
 
 using Nemerle;
 using Nemerle.Collections;
+using System.Reflection;
+using System;
 
 using Nemerle.Compiler.SolverMacros;
 
@@ -37,7 +39,7 @@ namespace Nemerle.Compiler
 {
   /** Represents a node in constraint graph. Used during type
       inference. */
-  public class TyVar : IComparable [TyVar]
+  public class TyVar : Nemerle.IComparable [TyVar]
   {
     #region PUBLIC interface
     /** Require [this] to be at least [t].
@@ -61,6 +63,20 @@ namespace Nemerle.Compiler
       def res = this.Require (t);
       Passes.Solver.PopState ();
       res
+    }
+
+
+    /** This is much like [assert (Require (t))], but is executed regardless
+        of asserts and ignores the result if there was already a
+        [LocalError].  */
+    public ForceRequire (t : TyVar) : void
+    {
+      if (LocalError)
+        _ = Require (t)
+      else {
+        def ok = Require (t);
+        Util.cassert (ok, $ "failed to require $t from $this");
+      }
     }
 
 
@@ -96,6 +112,15 @@ namespace Nemerle.Compiler
       res
     }
 
+    public ForceProvide (t : TyVar) : void
+    {
+      if (LocalError)
+        _ = Provide (t)
+      else {
+        def ok = Provide (t);
+        Util.cassert (ok, $ "failed to provide $t to $this");
+      }
+    }
     
     /** Provide type [t] as the maximal type for [this].
         
@@ -168,6 +193,17 @@ namespace Nemerle.Compiler
         }
 
         !LocalError
+      }
+    }
+
+
+    public ForceUnify (t : TyVar) : void
+    {
+      if (LocalError)
+        _ = Unify (t)
+      else {
+        def ok = Unify (t);
+        Util.cassert (ok, $ "failed to unify $t and $this");
       }
     }
 
@@ -256,6 +292,11 @@ namespace Nemerle.Compiler
     }
     
 
+    public virtual IsAccessibleFrom (_ : TypeInfo) : bool
+    {
+      throw System.NotSupportedException ("it is supposed to be called on fixed type");
+    }
+    
     public IsFixed : bool
     {
       get {
@@ -453,9 +494,74 @@ namespace Nemerle.Compiler
     }
 
 
-    public virtual GetSystemType () : System.Type
+    public virtual SystemType : System.Type
     {
-      Fix ().GetSystemType ()
+      get {
+        Fix ().SystemType
+      }
+    }
+
+
+    public virtual NonVoidSystemType : System.Type
+    {
+      get {
+        Fix ().NonVoidSystemType
+      }
+    }
+
+
+    static DoDeepFix (x : TyVar) : TyVar
+    {
+      x.DeepFix ()
+    }
+    
+
+    static DoDeepFixM (x : MType) : MType
+    {
+      x.DeepFix ()
+    }
+    
+
+    public DeepFix () : MType
+    {
+      if (Passes.Solver.CanEnterPossiblyLooping ())
+        try {
+          def t = Fix ();
+          match (t) {
+            | Class (tc, args) =>
+              MType.Class (tc, args.Map (DoDeepFix))
+
+            | Fun (from, to) =>
+              MType.Fun (from.DeepFix (), to.DeepFix ())
+
+            | Tuple (args) => 
+              MType.Tuple (args.Map (DoDeepFix))
+            
+            | Array (t, r) =>
+              MType.Array (t.DeepFix (), r)
+            
+            | Ref (t) =>
+              MType.Ref (t.DeepFix ())
+            
+            | Out (t) =>
+              MType.Out (t.DeepFix ())
+            
+            | Intersection (t) =>
+              MType.Intersection (t.Map (DoDeepFixM))
+              
+            | TyVarRef
+            | Void => t
+          }
+        } finally {
+          Passes.Solver.LeavePossiblyLooping ()
+        }
+      else {
+        ReportError (Passes.Solver.CurrentMessenger,
+                     "deep fixation failed");
+        when (Passes.Solver.CurrentMessenger.NeedMessage)
+          Message.MaybeBailout ();
+        MType.Void ()
+      }
     }
     #endregion
 
@@ -597,10 +703,10 @@ namespace Nemerle.Compiler
                 tv.IsFixed)
             match (tv.FixedValue) {
               | MType.TyVarRef (static_var) 
-                when ! (static_var.SpecialConstraints %&& SpecialConstraint.Class) =>
-                  Message.Warning ($ "using the `null' literal as a value of "
-                                   "generic type $tv, this won't work with real "
-                                   "generics");
+                when ! (static_var.SpecialConstraints %&&
+                        GenericParameterAttributes.ReferenceTypeConstraint) =>
+                  Message.Error ($ "the `null' literal is not a valid value of "
+                                   "generic type parameter $tv");
                                    
               | _ => ()
             }
@@ -699,10 +805,13 @@ namespace Nemerle.Compiler
 
       if (low.IsSeparated && high.IsFree)
         match (low) {
+          | MType.Fun
           | MType.Array
           | MType.TyVarRef
+          | MType.Tuple
           | MType.Void => high.Unify (low)
-          
+
+          /*
           | MType.Fun (t1, t2) =>
             def tv1 = Solver.FreshTyVar ();
             def tv2 = Solver.FreshTyVar ();
@@ -725,6 +834,7 @@ namespace Nemerle.Compiler
               tv
             });
             high.Unify (MType.Tuple (ts'))
+            */
             
           | _ => assert (false)
         }
@@ -754,8 +864,10 @@ namespace Nemerle.Compiler
           def new_bound = Passes.Solver.Intersect (high.lower_bound, low);
           def high = high.Self;
           high.WillWrite ();
-          // def tv = if (high.lower_bound == null) "(null)" else high.lower_bound.ToString ();
-          // Message.Debug ($"new bound $tv * $low  = $new_bound");
+          #if VERB
+          def tv = if (high.lower_bound == null) "(null)" else high.lower_bound.ToString ();
+          Message.Debug ($"new bound $tv * $low  = $new_bound");
+          #endif
           when (high.lower_bound == null || 
                 !new_bound.Equals (high.lower_bound)) {
             high.lower_bound = new_bound;

@@ -45,21 +45,22 @@ namespace Nemerle.Compiler {
  */
 public class TypeBuilder : TypeInfo
 {
-  type Subinfo = SystemMap [int, TypeInfo * list [MType]];
-
-  mutable contains_nemerle_specifics : bool = false;
+  type Subinfo = Map [int, TypeInfo * list [MType]];
 
   mutable tydecl : TypeDeclaration;
 
   before_finalization : Queue [void -> void] = Queue ();
+  before_finalization2 : Queue [void -> void] = Queue ();
 
   enclosing_type : TypeBuilder;
   internal mutable parent_type : MType.Class;
+  internal mutable forced_typarms : list [StaticTyVar];
+  internal mutable reflection_inheritance_emitted : bool;
   mutable t_implements : list [MType.Class];
   mutable contained_types : list [TypeBuilder] = [];
   mutable variant_options : list [TypeBuilder] = [];
-  mutable supertypes : SystemMap [int, TypeInfo * list [MType]];
-  mutable member_map : SystemMap [string, list [IMember]];
+  mutable supertypes : Map [int, TypeInfo * list [MType]];
+  mutable member_map : Map [string, list [IMember]];
   mutable member_list : list [IMember];
   mutable constant_object : IField;
   mutable underlying_enum_type : MType.Class;
@@ -102,6 +103,8 @@ public class TypeBuilder : TypeInfo
   internal this (par : TypeBuilder, td : PT.TopDeclaration, ns_node : NamespaceTree.Node)
   {
     base (ns_node);
+
+    Stats.AllTypeBuilders++;
     
     this.pt_tydecl = td;
     this.pt_name = td.ParsedName;
@@ -283,6 +286,18 @@ public class TypeBuilder : TypeInfo
   {
     get { pt_tydecl }
   }
+
+  public ParsedTypeName : PT.PExpr
+  {
+    get {
+      match (typarms) {
+        | [] => <[ $(pt_name : name) ]>
+        | _ =>
+          def tparms = typarms.Map (fun (x) { <[ $(pt_name.NewName (x.Name) : name) ]> });
+          <[ $(pt_name : name) [.. $tparms ] ]>
+      }
+    }
+  }
   
   /** Return type we were defined in (null for toplevel types). */
   public override DeclaringType : TypeInfo {
@@ -343,13 +358,26 @@ public class TypeBuilder : TypeInfo
         enclosing_type.HasBeenUsed = value
     }
   }
-    
+
+  public override TyparmsCount : int
+  {
+    get {
+      // we return number from parsetree if we can, because it is more accurate
+      // (at least before we finish initializing all tyenvs)
+      if (pt_tydecl != null && pt_tydecl.typarms != null)
+        pt_tydecl.typarms.tyvars.Length
+      else
+        base.TyparmsCount
+    }
+  }
+  
   public override CanAccess (source : TypeInfo) : bool
   {
     IsPublic ||
     (IsInternal && source is TypeBuilder) ||
     (IsProtected &&
         (if (enclosing_type != null)
+           supertypes == null || // during bind_types all supertypes are null
            Option.IsSome (source.SuperType (enclosing_type))
          else false
         )) ||
@@ -399,9 +427,9 @@ public class TypeBuilder : TypeInfo
   
 
   /**
-   * Adds a definition and returns the new NemerleMember, if available
+   * Adds a definition and returns the new MemberBuilder, if available
    */
-  public DefineAndReturn (f : PT.ClassMember) : option [NemerleMember]
+  public DefineAndReturn (f : PT.ClassMember) : MemberBuilder
   {
     // properties added with quotations have broken names for accessors, fix it
     match (f) {
@@ -421,7 +449,7 @@ public class TypeBuilder : TypeInfo
     
     if (member_map == null) {
       additional_decls = f :: additional_decls;
-      None ()
+      null
     }
     else {
       try {
@@ -431,9 +459,9 @@ public class TypeBuilder : TypeInfo
           when (IsFinalized)
             Passes.Emitter.MaybeCompile (this, mem);
         }
-        Some (mem :> NemerleMember)
+        mem
       } catch {
-        | _ is Recovery => None ()
+        | _ is Recovery => null
       }
     }
   }
@@ -471,7 +499,7 @@ public class TypeBuilder : TypeInfo
 
     when (Passes.Emitter != null) {
       // Message.Debug ($"emitimpl: $this -- $(GetDirectMembers ())");
-      Passes.Emitter.add_declarations (this);
+      HierarchyEmitter.add_declarations (this);
     }
 
     Passes.Solver.Enqueue (fun () {
@@ -525,6 +553,11 @@ public class TypeBuilder : TypeInfo
   public DoBeforeFinalization (action : void -> void) : void
   {
     before_finalization.Push (action);
+  }
+
+  public DoBeforeFinalization2 (action : void -> void) : void
+  {
+    before_finalization2.Push (action);
   }
 
   /**
@@ -582,10 +615,10 @@ public class TypeBuilder : TypeInfo
   public override LookupMemberImpl (name : string) : list [IMember]
   {
     match (member_map.Find (name)) {
-      | None =>
-        if (IsInterface) InternalType.Object_tc.LookupMember (name)
-        else []
-      | Some (mems) => mems
+      | None => []
+      | Some (mems) =>
+        // FIXME!!!!
+        mems.Filter (fun (mem) { mem.DeclaringType.Equals (this) })
     }
   }
 
@@ -903,11 +936,13 @@ public class TypeBuilder : TypeInfo
   {
     assert (this.tenv == null);
     def tenv = TyVarEnv ();
-    match (this.pt_tydecl) {
-      | PT.TopDeclaration.Class (typarms = ps)
-      | PT.TopDeclaration.Alias (typarms = ps)
-      | PT.TopDeclaration.Interface (typarms = ps)
-      | PT.TopDeclaration.Variant (typarms = ps) =>
+
+    match (this.pt_tydecl.typarms) {
+      | null => 
+        this.tenv = tenv;
+        this.typarms = [];
+      
+      | ps =>      
         // we must merge type parameter constrains from partial parts of this class
         def ps =
           List.FoldLeft (partial_parts, ps, fun (part : PT.TopDeclaration, acc : PT.Typarms) {
@@ -934,24 +969,34 @@ public class TypeBuilder : TypeInfo
               acc
           });
 
-        def (tenv, tyvars) =
+        (this.tenv, this.typarms) =
           tenv.AddTyparms (this.GlobalEnv, ps, this, check_parms = false);
-        this.tenv = tenv;
-        this.typarms = tyvars;
-      | _ =>
-        this.tenv = tenv;
-        this.typarms = [];
     }
 
+    when (forced_typarms != null) {
+      Util.cassert (typarms.IsEmpty);
+      typarms = forced_typarms;
+      forced_typarms = null;
+    }
+
+    // after we updated parsed tenvs of variants with partial parts
+    // we should copy them to variant options
+    // we do this using parsetrees, so the fresh StaticVars are used
+    match (this.pt_tydecl) {
+      | PT.TopDeclaration.Variant (_, decls) =>
+        foreach (PT.ClassMember.TypeDeclaration (VariantOption as x) in decls)
+          x.typarms = this.pt_tydecl.typarms;
+
+      | _ => () 
+    }
+    
+    
     match (pt_tydecl) {
       | PT.TopDeclaration.VariantOption (members) =>
         unless (Util.is_capitalized (name)) {
           Message.Error (loc, "variant options names must start with capital letters")
         };
-        assert (enclosing_type.tenv != null);
-        this.tenv = enclosing_type.tenv;
-        this.typarms = enclosing_type.typarms;
-       
+      
         foreach (mem in members)
           mem.Attributes |= NemerleAttributes.Public;
         
@@ -959,8 +1004,8 @@ public class TypeBuilder : TypeInfo
       | _ => ()
     };
 
-    self_type = MType.Class (this, List.Map (this.typarms, MType.TyVarRef));
-    
+    self_type = MType.Class (this, List.Map (this.typarms, fun (x) { MType.TyVarRef (x) }));
+
     foreach (tb in this.contained_types)
       Util.locate (tb.loc, tb.make_tyenvs ());
   }
@@ -985,7 +1030,7 @@ public class TypeBuilder : TypeInfo
     this.tydecl =
       match (td) {
         | PT.TopDeclaration.Class => TypeDeclaration.Class ()
-        | PT.TopDeclaration.Alias (_, t) =>
+        | PT.TopDeclaration.Alias (t) =>
           def ttype = this.tenv.MonoBind (this.GlobalEnv, this, t, check_parms = false);
           TypeDeclaration.Alias (ttype)
 
@@ -1010,7 +1055,9 @@ public class TypeBuilder : TypeInfo
     this.t_implements = [];
     match (td) {
       | PT.TopDeclaration.VariantOption =>
-        this.parent_type = enclosing_type.self_type;
+        this.parent_type = 
+          MType.Class (enclosing_type, 
+                       typarms.Map (fun (x) { MType.TyVarRef (x) }));
 
       | PT.TopDeclaration.Class (t_extends = hd :: tl)
       | PT.TopDeclaration.Interface (t_extends = hd :: tl)
@@ -1087,10 +1134,18 @@ public class TypeBuilder : TypeInfo
         }
 
       | tclass =>
-        when (IsInterface) {
+        if (IsInterface) {
           Message.Error (loc, "interfaces are not allowed to inherit from other types");
           parent_type = null;
         }
+        else
+          when (parent_type.tycon.GetTydecl () is TypeDeclaration.Variant &&
+                !(tydecl is TypeDeclaration.VariantOption)) {
+            // change current type, so we don't get junk warnings about GetVariantCode
+            tydecl = TypeDeclaration.Class (); 
+            Message.Error (loc, "cannot use variant as base type");
+          }
+
         when (IsStruct) {
           Message.Error (loc, "structures are not allowed to inherit from other types");
           parent_type = InternalType.ValueType
@@ -1122,7 +1177,17 @@ public class TypeBuilder : TypeInfo
     def add_srs (t : MType.Class, s : Subinfo) {
       add_subtyping_of (s, t.tycon, t.args)
     };
-    supertypes = List.FoldLeft (GetDirectSuperTypes (), SystemMap (), add_srs)
+    supertypes = List.FoldLeft (GetDirectSuperTypes (), SystemMap (), add_srs);
+
+    // we should do the additional accessibility checks, which could have
+    // been loosened during bind_types, when supertypes were null
+    foreach (t in GetDirectSuperTypes ())
+      unless (t.IsAccessibleFrom (this))
+        Message.Error ($"$t is inaccessible from $this");
+    foreach (t in typarms)
+      foreach (ct in t.Constraints)
+        unless (ct.IsAccessibleFrom (this))
+          Message.Error ($"$ct is inaccessible from $this");
   }
 
   add_subtyping_of (subinfo : Subinfo, tc : TypeInfo, args : list [TyVar]) : Subinfo
@@ -1337,7 +1402,7 @@ public class TypeBuilder : TypeInfo
   internal AddMember (mem : IMember) : void
   {
     match (mem) {
-      | mem is NemerleMember => mem.CheckAttributes ()
+      | mem is MemberBuilder => mem.CheckAttributes ()
       | _ => {}
     }
     
@@ -1345,6 +1410,8 @@ public class TypeBuilder : TypeInfo
     // with the newly added method [meth]
     // returns new list of members having this name
     def replace_method (acc, meth : IMethod, mems : list [IMember]) {
+      def par_amount = meth.GetParameters ().Length;
+      
       match (mems) {
         // no methods with matching signature found
         | [] =>
@@ -1377,7 +1444,7 @@ public class TypeBuilder : TypeInfo
               (sub_current :> MType.Fun).from.Equals ((mem.GetMemType () :> MType.Fun).from);
             
           // if signature of existing method is the new one
-          if (sig_matches)
+          if (sig_matches && m.GetParameters ().Length == par_amount)
           {
             // check if new method does not hide or conflict with
             // existing methods in this and base type
@@ -1388,6 +1455,8 @@ public class TypeBuilder : TypeInfo
             if (meth.Attributes %&& NemerleAttributes.New)
               ()
             else if (meth.Attributes %&& NemerleAttributes.Override) {
+                (meth :> MethodBuilder).overridden_method = m;
+              
                 if (m.Attributes %&& NemerleAttributes.Virtual)
                   when (m.IsFinal)
                     Message.Error ($"`override' specified on $meth, but $x is `sealed'")
@@ -1456,7 +1525,7 @@ public class TypeBuilder : TypeInfo
                 
               | (MemberKind.Property (new_prop), MemberKind.Property (old)) 
                   when new_prop.Attributes %&& NemerleAttributes.Override =>
-                (new_prop :> NemerleProperty).UpdateParentProperty (old);
+                (new_prop :> PropertyBuilder).UpdateParentProperty (old);
                 [mem : IMember]
                 
               | _ when mem.Attributes %&& NemerleAttributes.New => [mem : IMember]
@@ -1497,14 +1566,15 @@ public class TypeBuilder : TypeInfo
       action ()
     }
 
+    while (!before_finalization2.IsEmpty) {
+      def action = before_finalization2.Pop ();
+      action ()
+    }
+
     when (!cannot_finalize && type_builder != null) {
+      //  Message.Debug ($"finalize $this");
       try {
-#if _GENERICS
-       // workaround bug http://lab.msdn.microsoft.com/productfeedback/viewfeedback.aspx?feedbackid=7f85f92e-4154-4cb2-8f53-8be324bd6e11
-        _ = type_builder.CreateType ();
-#else               
         system_type = type_builder.CreateType ();
-#endif        
       }
       catch {
         | _ is System.TypeLoadException =>
@@ -1513,12 +1583,14 @@ public class TypeBuilder : TypeInfo
           // it throws this exc for nested value types, but actually assembly is
           // still being builded properly so we can ignore it
           ()
-      }
+      }   
+      // // workarond ms.net bug
+      // system_type = type_builder;
       type_builder = null;
     }
   }
   
-  internal bind_and_add_member (class_member : PT.ClassMember) : IMember
+  internal bind_and_add_member (class_member : PT.ClassMember) : MemberBuilder
   {
     Util.locate (class_member.loc, {
       // if current class is static (it's a module) then sign its members to static
@@ -1538,19 +1610,19 @@ public class TypeBuilder : TypeInfo
         | PT.ClassMember.TypeDeclaration => null
           
         | (PT.ClassMember.Field) as f =>
-          def r = NemerleField (this, f);
+          def r = FieldBuilder (this, f);
           AddMember (r);
-          r : NemerleMember
+          r : MemberBuilder
           
         | (PT.ClassMember.Function) as f =>          
-          def r = NemerleMethod (this, f);
+          def r = MethodBuilder (this, f);
           unless (instance_ctor_occured)
             instance_ctor_occured = r.MemberType == MemberTypes.Constructor;
           AddMember (r);
           r
           
         | (PT.ClassMember.Property) as p =>
-          def r = NemerleProperty (this, p);
+          def r = PropertyBuilder (this, p);
           when (r.IsIndexer && r.Name == "Item") {
             default_indexer = Some ("Item");
             modifiers.AddCustomAttribute (<[ System.Reflection.DefaultMemberAttribute ("Item") ]>);
@@ -1559,7 +1631,7 @@ public class TypeBuilder : TypeInfo
           r
           
         | (PT.ClassMember.Event) as e =>
-          def r = NemerleEvent (this, e);
+          def r = EventBuilder (this, e);
           AddMember (r);
           r
       }
@@ -1570,7 +1642,12 @@ public class TypeBuilder : TypeInfo
   {
     match (parent_type) {
       | null => underlying_enum_type = InternalType.Int32;
-      | t => underlying_enum_type = t;
+      | t =>
+        when (System.Array.IndexOf.[MType.Class] (InternalType.IntegralTypes, t) == -1) {
+          Message.Error (t.ToString () + " is not valid as an underlying type of enum");
+          Message.Hint ("Type byte, sbyte, short, ushort, int, uint, long, or ulong expected");
+        }
+        underlying_enum_type = t;
     };
     parent_type = InternalType.Enum;
 
@@ -1648,7 +1725,7 @@ public class TypeBuilder : TypeInfo
           def field = <[ decl: ..$(ef.modifiers) $(ef.name) : $field_type; ]>;
           field.loc = ef.loc;
           def field = bind_and_add_member (field);
-          (field :> NemerleField).const_value = current_value;
+          (field :> FieldBuilder).const_value = current_value;
           // Message.Debug ($ "add: $(ef.ParsedName.Id) $current_value ");
           resolved_values.Add (ef.ParsedName.Id, current_value);
           current_value
@@ -1712,7 +1789,7 @@ public class TypeBuilder : TypeInfo
         else
           <[ decl: public this () { } ]>;
 
-      def meth = bind_and_add_member (ctor) :> NemerleMember;
+      def meth = bind_and_add_member (ctor);
       meth.SetInstanceUsed ();
     }
 
@@ -1731,53 +1808,61 @@ public class TypeBuilder : TypeInfo
     match (member_map.Find (".ctor")) {
       // FIXME: probably we should also check if parent variant is pure, that is, if creating
       //        constant variant do not have side effects
-      | Some ([ctor is NemerleMethod]) when ctor.GetParameters ().IsEmpty &&
+      | Some ([ctor is MethodBuilder]) when Options.UseConstantObjects &&
+                                           ctor.GetParameters ().IsEmpty &&
                                            GetFields (BindingFlags.Instance %|
                                                       BindingFlags.Public %| 
                                                       BindingFlags.NonPublic).IsEmpty =>
         def ttf = GetMemType ();
         ctor.Attributes = NemerleAttributes.Private;
 
-        // if this constant variant option is serializable
-        // we give the explicit deserialization behaviour to keep the singleton
-        // semantics fo _N_constant_object always
-        def ior = InternalType.IObjectReference.tycon;
-        when (HasAttribute (InternalType.Serializable_tc))
-          unless (supertypes.Contains (ior.GetId ())) {
-            t_implements ::= InternalType.IObjectReference;
-            supertypes = supertypes.Add (ior.GetId (), (ior, []));
-
-            def decl = <[ decl:
-              public GetRealObject (_ : System.Runtime.Serialization.StreamingContext) : object
-              {
-                // When deserialiing this object, return a reference to 
-                // the Singleton object instead.
-                _N_constant_object;
-              }
-            ]>;
-            decl.Attributes |= NemerleAttributes.SpecialName;
-            Define (decl);
-          }
-                                                              
-        Util.locate (loc, {                                                      
+        Util.locate (loc, {        
           def field = <[ decl: 
             public static _N_constant_object : $(ttf : typed); 
           ]>;
-          constant_object = Option.UnSome (DefineAndReturn (field)) :> IField;
+          constant_object = DefineAndReturn (field) :> IField;
  
           // reference to called constructor must be directly in typed version          
           Define (<[ decl: 
             static this () {
-              _N_constant_object =
-                $(TExpr.Call (ttf, TExpr.StaticRef (loc, ctor.GetMemType (), ctor), [], false) : typed);
+              $(TExpr.Assign (loc, InternalType.Void, 
+                  TExpr.StaticRef (loc, ttf, ttf, 
+                                   constant_object, []),
+                  TExpr.Call (ttf, TExpr.StaticRef (loc, ctor.GetMemType (), 
+                                                    ttf, ctor, []), 
+                                                    [], false)) : typed);
             }
           ]>);
+
+          // if this constant variant option is serializable
+          // we give the explicit deserialization behaviour to keep the singleton
+          // semantics fo _N_constant_object always
+          def ior = InternalType.IObjectReference.tycon;
+
+          when (HasAttribute (InternalType.Serializable_tc))
+            unless (supertypes.Contains (ior.GetId ())) {
+              t_implements ::= InternalType.IObjectReference;
+              supertypes = supertypes.Add (ior.GetId (), (ior, []));
+
+              def decl = <[ decl:
+                public GetRealObject (_ : System.Runtime.Serialization.StreamingContext) : object
+                {
+                  // When deserialiing this object, return a reference to 
+                  // the Singleton object instead.
+                  $(TExpr.StaticRef (loc, ttf, ttf, 
+                                     constant_object, []) : typed);
+                }
+              ]>;
+              decl.Attributes |= NemerleAttributes.SpecialName;
+              Define (decl);
+            }
           
           // add the constant object generator function
           def decl = <[ decl:
             public static _N_constant_object_generator () : $(ttf : typed)
             {
-              _N_constant_object
+              $(TExpr.StaticRef (loc, ttf, ttf, 
+                                 constant_object, []) : typed)
             }
           ]>;
           decl.Attributes |= NemerleAttributes.SpecialName;
@@ -1843,11 +1928,6 @@ public class TypeBuilder : TypeInfo
     typarms
   }
 
-  internal override IsNemerleSpecific : bool {
-    get { contains_nemerle_specifics }
-    set { contains_nemerle_specifics = value; }
-  }
-
   internal FixupDefinedClass () : void
   {
     // finalization is blocked until call to Compile
@@ -1880,7 +1960,7 @@ public class TypeBuilder : TypeInfo
   {
     foreach (member in member_list)
       match (member) {
-        | member is NemerleMember => 
+        | member is MemberBuilder => 
           member.MarkWithSpecialName ()
         | tb is TypeBuilder =>
           tb.MarkWithSpecialName ()
@@ -1898,21 +1978,21 @@ public class TypeBuilder : TypeInfo
 
     def methods = GetMethods (BindingFlags.DeclaredOnly %| BindingFlags.Public %|
                               BindingFlags.Instance %| BindingFlags.NonPublic);
-    def methods = List.Map (methods, fun (x) { x :> NemerleMethod });
+    def methods = List.Map (methods, fun (x) { x :> MethodBuilder });
     
     // FIXME: in fact we should only mark some methods as implemented and scream
-    // when signature match is ambigious
+    // when signature match is ambiguous
 
     // unresolved interface methods, which we must implement
     def iface_methods = Hashtable (30);
 
     def method_type_ok (iface_meth, meth) {
-      meth.GetMemType ().TryRequire (GetMemType ().TypeOfMethod (iface_meth)) &&
-      // prevent object :> void kind of stuff
-      meth.GetParameters ().Length == iface_meth.GetParameters ().Length
+      def iftype = GetMemType ().TypeOfMethod (iface_meth);
+      meth.GetMemType ().TrySigRequire (iftype.Fix ())
     }
   
-    foreach (tc : TypeInfo in InterfacesToImplement ())
+    foreach (tc : TypeInfo in InterfacesToImplement ()) {
+      // Message.Debug ($ "in $this, $tc .GetMembers == $(tc.GetMembers (BindingFlags.DeclaredOnly %| BindingFlags.Public %| BindingFlags.Instance))");
       foreach (m : IMember in tc.GetMembers (BindingFlags.DeclaredOnly %|
                                              BindingFlags.Public %|
                                              BindingFlags.Instance))
@@ -1924,8 +2004,9 @@ public class TypeBuilder : TypeInfo
             };
           | _ => ()
         }
+    }
 
-    def bind_explicit_implements (meth : NemerleMethod)
+    def bind_explicit_implements (meth : MethodBuilder)
     {
       def bind_one (impl)
       {
@@ -1933,7 +2014,7 @@ public class TypeBuilder : TypeInfo
           | Some ((idl, name)) =>
             def env = name.context;
             def (ns, member) = List.DivideLast (idl);
-            def ty = env.GetType (ns, this);
+            def ty = env.GetType (ns, this, -1);
 
             match (iface_methods.Get (member)) {
               | Some (meths) =>
@@ -1957,9 +2038,9 @@ public class TypeBuilder : TypeInfo
                                          "' with proper signature")
                 }
               | None =>
-                Message.FatalError ("no interface implemented by `" + this.FullName + 
-                                     "' contains method named `" + member + 
-                                     "' (looking for `" + name.Id + "')")
+                Message.FatalError ($ "no interface implemented by `$FullName' " 
+                                     "contains method named `$member' " 
+                                     "(looking for `$(Util.QidOfList (idl))')")
             }
           | _ => Message.FatalError ("simple identifier expected in explicit implementation specifier")
         }
@@ -1989,7 +2070,7 @@ public class TypeBuilder : TypeInfo
 
     // now we can see which methods defined in current class directly match
     // to some of the yet unimlemented interfaces methods
-    def bind_implicit_implements (meth : NemerleMethod) {
+    def bind_implicit_implements (meth : MethodBuilder) {
       def lookup_iface_members () {
         match (iface_methods.Get (meth.Name)) {
           | Some (meths) =>
@@ -2100,10 +2181,7 @@ public class TypeBuilder : TypeInfo
                 {
                   base.$(meth_header.name : usesite) (..$meth_call_parms)
                 }
-              ]>);
-
-              // unpack the new method definition
-              def wrapper = Option.UnSome (wrapper) :> NemerleMethod;
+              ]>) :> MethodBuilder;
 
               wrapper.MarkWithSpecialName ();
               // note in method definition what we are implementing 
@@ -2121,11 +2199,20 @@ public class TypeBuilder : TypeInfo
     def scream_about_unimplemented (_, meths : list [IMethod])
     {
       foreach (meth in meths)
-        // the word method comes from meth.ToString
+        // the word ``method'' comes from meth.ToString
         Message.Error ($ "unimplemented interface $(meth)")
     }
     
-    iface_methods.Iter (scream_about_unimplemented)
+    iface_methods.Iter (scream_about_unimplemented);
+
+    foreach (meth is MethodBuilder in GetMembers ())
+      when (meth.overridden_method != null)
+        match (meth.GetFunKind ()) {
+          | BoundMethod (impl) =>
+            meth.SetFunKind (FunKind.BoundMethod (meth.overridden_method :: impl));
+            meth.overridden_method = null;
+          | _ => Util.ice ()
+        }
   }
 
   process_macro_attributes (stage : MacroPhase) : void
@@ -2213,27 +2300,27 @@ public class TypeBuilder : TypeInfo
       match (mem.GetKind ()) {
         | MemberKind.Field (f) =>
           process_attributes ([PT.SyntaxElement.TypeBuilder (this),
-                               PT.SyntaxElement.FieldBuilder ((f :> NemerleField))],
+                               PT.SyntaxElement.FieldBuilder ((f :> FieldBuilder))],
                                ":field:postadd", f.GetModifiers (), null)
         | MemberKind.Method (f) =>
           process_attributes ([PT.SyntaxElement.TypeBuilder (this),
-                               PT.SyntaxElement.MethodBuilder ((f :> NemerleMethod))],
+                               PT.SyntaxElement.MethodBuilder ((f :> MethodBuilder))],
                                ":method:postadd", f.GetModifiers (), f);
 
           foreach (p : Fun_parm in f.GetParameters ())
             process_attributes ([PT.SyntaxElement.TypeBuilder (this),
-                                 PT.SyntaxElement.MethodBuilder ((f :> NemerleMethod)),
+                                 PT.SyntaxElement.MethodBuilder ((f :> MethodBuilder)),
                                  PT.SyntaxElement.ParameterBuilder (p)],
                                  ":param:postadd", p.modifiers, f);
                               
         | MemberKind.Property (f) =>
           process_attributes ([PT.SyntaxElement.TypeBuilder (this),
-                               PT.SyntaxElement.PropertyBuilder ((f :> NemerleProperty))],
+                               PT.SyntaxElement.PropertyBuilder ((f :> PropertyBuilder))],
                                ":property:postadd", f.GetModifiers (), null)
 
         | MemberKind.Event (f) =>
           process_attributes ([PT.SyntaxElement.TypeBuilder (this),
-                               PT.SyntaxElement.EventBuilder ((f :> NemerleEvent))],
+                               PT.SyntaxElement.EventBuilder ((f :> EventBuilder))],
                                ":event:postadd", f.GetModifiers (), null)
 
         | MemberKind.Type => ()
@@ -2534,7 +2621,7 @@ public class TypeBuilder : TypeInfo
 
       // then, proceed with the members of this type
       foreach (member in tb.member_list) {
-        | f is NemerleField =>
+        | f is FieldBuilder =>
           when (!f.HasBeenAssigned)
             if (f.HasBeenUsed)
               when (!f.IsLiteral && (f.IsPrivate || tb.IsSealed || tb.IsInternal))
@@ -2565,8 +2652,9 @@ public class TypeBuilder : TypeInfo
     def override_methods = Hashtable (30);
     def type_members = GetMembers ();
 
+    // Message.Debug ($"mems $(type_members.ToString(\"\\n\"))");
     // first, check for the abstract method/non-abstract class errors
-    foreach (m : IMember in type_members)
+    foreach (m : IMember in type_members) 
       match (m.GetKind ()) {
         | MemberKind.Method when m.Attributes %&& NemerleAttributes.Abstract =>
           unless (Attributes %&& NemerleAttributes.Abstract)

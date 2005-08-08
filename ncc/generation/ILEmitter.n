@@ -62,40 +62,43 @@ namespace Nemerle.Compiler
     private _labels : Hashtable [int, Label] = Hashtable ();
     private _label_usage : Hashtable [int, TExpr] = Hashtable ();
 
+    static MS_NET_RuntimeType : System.Type 
+      = typeof (object).Assembly.GetType ("System.RuntimeType");
+
     /**
      * Creates and executes a code generator for a method
      */
-    internal this (method_builder : MethodBuilder, module_builder : ModuleBuilder, 
+    internal this (method_builder : Emit.MethodBuilder, type_ : Nemerle.Compiler.TypeBuilder, 
                    fun_header : Typedtree.Fun_header)
     {
       _fun_header = fun_header;
 
       _ilg = method_builder.GetILGenerator ();
-      _module_builder = module_builder;
+      _module_builder = method_builder.Module :> ModuleBuilder;
 
       _method_name = method_builder.DeclaringType.FullName + "::" + method_builder.Name;
       _method_is_static = method_builder.IsStatic;
-      _this_is_value_type = method_builder.DeclaringType.IsValueType;
-      _type_of_this = method_builder.DeclaringType;
+      _this_is_value_type = type_.IsValueType;
+      _type_of_this = type_.SystemType;
     }
 
 
     /**
      * Creates and executes a code generator for a method
      */
-    internal this (constructor_builder : ConstructorBuilder,
-                   module_builder : ModuleBuilder, fun_header : Typedtree.Fun_header)
+    internal this (constructor_builder : Emit.ConstructorBuilder,
+                   type_ : Nemerle.Compiler.TypeBuilder, fun_header : Typedtree.Fun_header)
     {
       _fun_header = fun_header;
 
       _ilg = constructor_builder.GetILGenerator ();
-      _module_builder = module_builder;
+      _module_builder = constructor_builder.Module :> ModuleBuilder;
 
       _method_name = constructor_builder.DeclaringType.FullName + "::"
                       + constructor_builder.Name;
       _method_is_static = constructor_builder.IsStatic;
-      _this_is_value_type = constructor_builder.DeclaringType.IsValueType;
-      _type_of_this = constructor_builder.DeclaringType;
+      _this_is_value_type = type_.IsValueType;
+      _type_of_this = type_.SystemType;
     }
 
     public Run () : void
@@ -114,6 +117,7 @@ namespace Nemerle.Compiler
       }
       
       _label_usage.Iter (fun (id, v : TExpr) {
+        // shouldn't happen now
         when (v != null)
           Message.Error (v.loc, 
                          $ "non local goto (block return?) detected (l$id)");
@@ -178,7 +182,7 @@ namespace Nemerle.Compiler
     /** Emit volatile prefix if needed. */
     private maybe_volatile (expr : TExpr) : void
     {
-      | StaticRef (f is IField)
+      | StaticRef (_, f is IField, _)
       | FieldMember (_, f) =>
         when (f.IsVolatile)
           _ilg.Emit (OpCodes.Volatile)
@@ -196,7 +200,7 @@ namespace Nemerle.Compiler
 
     static is_void (ty : TyVar) : bool
     {
-      ty.Fix () is MType.Void
+      ty.Fix () : object == InternalType.Void
     }
 
 
@@ -205,7 +209,176 @@ namespace Nemerle.Compiler
       meth.GetFunKind () is FunKind.Constructor
     }
 
+    #region HACKS FOR MS.NET BUGS
+    static GetHackishConstructor (_from_type : System.Type, ctr : ConstructorInfo) : ConstructorInfo 
+    {
+      def curtok = 
+        if (ctr is ConstructorBuilder)
+          typeof (ConstructorBuilder).GetProperty ("MetadataTokenInternal", BindingFlags.NonPublic | BindingFlags.Instance).GetValue (ctr, null) :> int;
+        else 
+          ctr.MetadataToken;
 
+      res: {
+        foreach (c in _from_type.GetConstructors (BindingFlags.NonPublic | BindingFlags.Public |
+                                                  BindingFlags.Instance | BindingFlags.Static |
+                                                  BindingFlags.DeclaredOnly))
+          when (c.MetadataToken == curtok)
+            res (c);
+        throw System.Exception ($"not found: $ctr in $_from_type")
+      }
+    }
+
+    static GetHackishMethod (_from_type : System.Type, meth : MethodInfo) : MethodInfo 
+    {
+      def curtok = 
+        if (meth is Emit.MethodBuilder)
+          typeof (Emit.MethodBuilder).GetProperty ("MetadataTokenInternal", BindingFlags.NonPublic | BindingFlags.Instance).GetValue (meth, null) :> int;
+        else
+          meth.MetadataToken;
+
+      res: {
+        foreach (m in _from_type.GetMethods (BindingFlags.NonPublic | BindingFlags.Public |
+                                             BindingFlags.Instance | BindingFlags.Static |
+                                             BindingFlags.DeclaredOnly))
+          when (m.MetadataToken == curtok)
+            res (m);
+        throw System.Exception ($"not found: $meth in $_from_type")
+      }
+    }
+
+    static GetHackishField (_from_type : System.Type, fld : FieldInfo) : FieldInfo 
+    {
+      def curtok = 
+        if (fld is Emit.FieldBuilder)
+          typeof (Emit.FieldBuilder).GetProperty ("MetadataTokenInternal", BindingFlags.NonPublic | BindingFlags.Instance).GetValue (fld, null) :> int;
+        else
+          fld.MetadataToken;
+
+      res: {
+        foreach (f in _from_type.GetFields (BindingFlags.NonPublic | BindingFlags.Public |
+                                            BindingFlags.Instance | BindingFlags.Static |
+                                            BindingFlags.DeclaredOnly))
+          when (f.MetadataToken == curtok)
+            res (f);
+        throw System.Exception ($"not found: $fld in $_from_type")
+      }
+    }
+    #endregion
+
+    static FrameworkGetConstructor (t : System.Type, mutable m : ConstructorInfo) : ConstructorInfo
+    {
+      if (MS_NET_RuntimeType != null && t.GetType().Equals (MS_NET_RuntimeType))
+        GetHackishConstructor (t, m);
+      else {
+        def td = t.GetGenericTypeDefinition ();
+        when (MS_NET_RuntimeType != null && td.GetType().Equals (MS_NET_RuntimeType)) {
+          m = GetHackishConstructor (td, m)
+        }
+        TypeBuilder.GetConstructor (t, m);
+      }
+    }
+
+    static FrameworkGetMethod (t : System.Type, mutable m : MethodInfo) : MethodInfo
+    {
+      if (MS_NET_RuntimeType != null)
+        if (t.GetType().Equals (MS_NET_RuntimeType))
+          // workaround MS.NET limitation of not allowing RuntimeType in TypeBuilder.GetMethod   
+          GetHackishMethod (t, m);
+        else {
+          def td = t.GetGenericTypeDefinition ();
+          when (td.GetType().Equals (MS_NET_RuntimeType))
+            m = GetHackishMethod (td, m);
+
+          TypeBuilder.GetMethod (t, m);
+        }
+      else
+        TypeBuilder.GetMethod (t, m);
+    }
+
+    static FrameworkGetField (t : System.Type, mutable m : FieldInfo) : FieldInfo
+    {
+      if (MS_NET_RuntimeType != null && t.GetType().Equals (MS_NET_RuntimeType))
+        GetHackishField (t, m);
+      else {
+        def td = t.GetGenericTypeDefinition ();
+        when (MS_NET_RuntimeType != null && td.GetType().Equals (MS_NET_RuntimeType)) {
+          m = GetHackishField (td, m)
+        }
+        TypeBuilder.GetField (t, m);
+      }
+    }
+
+    static GetConstructorInfo (_from_type : System.Type, meth : IMethod) : ConstructorInfo
+    {
+      mutable ctr_inf = meth.GetConstructorInfo ();
+      when (_from_type.HasGenericArguments) {
+        ctr_inf = FrameworkGetConstructor (_from_type, ctr_inf);
+      }
+      ctr_inf
+    }
+
+    // FIXME: get rid of this
+    internal static GetMethodInfo (_from_type : MType, meth : IMethod) : MethodInfo
+    {
+      mutable meth_inf = meth.GetMethodInfo ();
+      //Message.Debug ($"gmi: $_from_type $meth $(meth.GetHeader ().typarms)");
+      //Message.Debug ($"gmi mi: $meth_inf");
+
+      def _from_type = _from_type.Fix ().GetInstantiatedSuperType (meth.DeclaringType).SystemType;
+
+      when (_from_type.HasGenericArguments) {
+        meth_inf = FrameworkGetMethod (_from_type, meth_inf);
+      }
+      //Message.Debug ($"gmi mi2: $meth_inf");
+
+      meth_inf
+    }
+
+       
+    static GetMethodInfo (from_type : TyVar, meth : IMethod, typars : list [TyVar]) : MethodInfo
+    {
+      mutable meth_inf = meth.GetMethodInfo ();
+
+      //Message.Debug ($"gmi: $from_type $meth $(meth.GetHeader ().typarms) $typars");
+      //Message.Debug ($"gmi mi: $meth_inf");
+
+      def from_type = from_type.Fix ().GetInstantiatedSuperType (meth.DeclaringType);
+      def system_from_type = from_type.SystemType;
+
+      when (system_from_type.HasGenericArguments)
+        meth_inf = FrameworkGetMethod (system_from_type, meth_inf);
+      //Message.Debug ($"gmi mi2: $meth_inf");
+
+      def m_typarms = meth.GetHeader ().typarms;
+      unless (m_typarms.IsEmpty) {
+        def pars = array (typars.Length);
+        _ = List.FoldLeft (typars, 0, fun (x, i) {
+          pars [i] = x.NonVoidSystemType;
+          i + 1
+        });
+        meth_inf = meth_inf.BindGenericParameters (pars);
+        // Message.Debug ($"res gmi: $meth_inf");
+      }
+      meth_inf
+    }
+
+    static GetFieldInfo (_obj : TExpr, fld : IField) : FieldInfo
+    {
+      def obj_type = _obj.MType.GetInstantiatedSuperType (fld.DeclaringType).SystemType;
+      GetFieldInfo (obj_type, fld);
+    }
+    
+    
+    static GetFieldInfo (_from_type : System.Type, meth : IField) : FieldInfo
+    {
+      mutable fld_inf = meth.GetFieldInfo ();
+      when (_from_type.HasGenericArguments)
+        fld_inf = FrameworkGetField (_from_type, fld_inf);
+
+      fld_inf
+    }
+   
+    
     store_local (decl : LocalValue) : void
     {
       if (decl.IsParm) {
@@ -236,22 +409,13 @@ namespace Nemerle.Compiler
 
     static no_cast_needed (src_type : System.Type, target_type : System.Type) : bool
     {
-      src_type.Equals (target_type) ||
-      (! src_type.IsValueType &&
-       ! target_type.IsValueType &&
-       target_type.IsAssignableFrom (src_type))
+      src_type : object == target_type
     }
 
 
     static make_ref_type (t : System.Type) : System.Type
     {
-#if _NET_2_0
       t.MakeByRefType ()
-#else
-      def ty = t.Module.GetType (t.FullName + "&");
-      assert (ty != null);
-      ty
-#endif
     }
 
     /**
@@ -259,7 +423,8 @@ namespace Nemerle.Compiler
      */
     private emit (expr : TExpr) : void
     {
-      // Message.Debug (expr.loc, "emit: " + expr.ToString ());
+      // Message.Debug (expr.loc, "{ emit: " + expr.ToString ());
+      Util.cassert (expr != null);
       match (expr) {
 
         /* -- SEQUENCING --------------------------------------------------- */
@@ -288,11 +453,11 @@ namespace Nemerle.Compiler
                   true
                 }
 
-              | ImplicitValueTypeCtor (t) =>
+              | ImplicitValueTypeCtor =>
                 def slot = declare_val_local_slot (decl);
                 Mark (decl.Location);
                 _ilg.Emit (OpCodes.Ldloca, slot);
-                _ilg.Emit (OpCodes.Initobj, t.GetSystemType ());
+                _ilg.Emit (OpCodes.Initobj, let_val.SystemType);
                 true
                               
               | _ =>
@@ -350,7 +515,7 @@ namespace Nemerle.Compiler
                 emit (val);
                 Mark (expr.loc);
                 need_reference (val.SystemType);
-                _ilg.Emit (OpCodes.Isinst, ty.GetSystemType ());
+                _ilg.Emit (OpCodes.Isinst, ty.SystemType);
                 _ilg.Emit (OpCodes.Brfalse, else_label);
 
               | If (new_cond, new_then, new_else) =>
@@ -406,7 +571,7 @@ namespace Nemerle.Compiler
           _ilg.MarkLabel (label_condition_not_null);
 
           need_reference (expr.SystemType);
-          _ilg.Emit (OpCodes.Isinst, ty.GetSystemType ());
+          _ilg.Emit (OpCodes.Isinst, ty.SystemType);
           _ilg.Emit (OpCodes.Brtrue_S, label_condition_has_type);
           _ilg.Emit (OpCodes.Ldc_I4_0);
           _ilg.Emit (OpCodes.Br_S, label_condition_continue);
@@ -427,11 +592,23 @@ namespace Nemerle.Compiler
 
           _ilg.MarkLabel (label_condition_not_null);
 
-
+          
+        | DefaultValue =>
+          def ty = expr.SystemType;
+          if (is_void (expr.MType)) {}
+          else if (ty.IsValueType || ty.IsGenericParameter) {
+            def local_slot = _ilg.DeclareLocal (ty);
+            _ilg.Emit (OpCodes.Ldloca, local_slot);
+            _ilg.Emit (OpCodes.Initobj, ty);
+            _ilg.Emit (OpCodes.Ldloc, local_slot);
+          }
+          else
+            _ilg.Emit (OpCodes.Ldnull)
+          
         /* load runtime representation of given type */
         | TypeOf (t) =>
           Mark (expr.loc);
-          _ilg.Emit (OpCodes.Ldtoken, t.GetSystemType ());
+          _ilg.Emit (OpCodes.Ldtoken, t.SystemType);
           _ilg.Emit (OpCodes.Call, SystemType.Type_GetTypeFromHandle);
 
 
@@ -455,7 +632,7 @@ namespace Nemerle.Compiler
           emit (expr)
 
 
-        | Goto (id) =>
+        | Goto (id, try_block) =>
           if (_labels.Contains (id)) {
             _label_usage [id] = null;
           } else {
@@ -464,19 +641,29 @@ namespace Nemerle.Compiler
           }
           
           Mark (expr.loc);
-          _ilg.Emit (OpCodes.Br, _labels [id]);
+          if (try_block == 0)
+            _ilg.Emit (OpCodes.Br, _labels [id])
+          else {
+            // Message.Warning (expr.loc, $"emit leave, id=$id");
+            _ilg.Emit (OpCodes.Leave, _labels [id])
+          }
 
 
         /* -- TYPE CONVERSIONS --------------------------------------------- */
 
-        /* do not perform casts between same types */
-        | TypeConversion (expr, cast_to_type, _) 
-          when no_cast_needed (expr.SystemType, cast_to_type.GetSystemType ()) =>
-          emit (expr)
 
         // when expr throws we shouldn't emit anything
         | TypeConversion (expr, _, _) when expr.Throws =>
           emit (expr)
+
+        /* do not perform casts between same types */
+        | TypeConversion (expr, cast_to_type, _) 
+          when no_cast_needed (expr.SystemType, cast_to_type.SystemType) =>
+          emit (expr)
+
+        | TypeConversion (expr, cast_to_type, _) when cast_to_type.SystemType.IsGenericParameter =>
+          emit (expr);
+          _ilg.Emit (OpCodes.Unbox_Any, cast_to_type.SystemType);
 
         | TypeConversion (ignored, ty, _) when is_void (ty) =>
           // a little trickery, so emit can be tail called sometimes
@@ -487,19 +674,30 @@ namespace Nemerle.Compiler
             Mark (expr.loc);
             _ilg.Emit (OpCodes.Pop);
           }
-
+        
         /* to nonvalue type */
         | TypeConversion (expr, cast_to_type, _) when !cast_to_type.Fix ().IsValueType =>
           emit (expr);
           if (is_void (expr.Type))
             /* special case casts from void */
             _ilg.Emit (OpCodes.Ldnull);
+          else if (expr.SystemType.IsGenericParameter) {
+            _ilg.Emit (OpCodes.Box, expr.SystemType);
+            unless (cast_to_type.Fix ().IsSystemObject)
+              if (cast_to_type.Fix ().IsValueType)
+                _ilg.Emit (OpCodes.Unbox_Any, cast_to_type.SystemType);
+              else
+                _ilg.Emit (OpCodes.Castclass, cast_to_type.SystemType);
+          }
           else if (expr.SystemType.IsValueType)
+          {
+            // Message.Debug (k.ToString ());
             /* box value types casted to non value types */          
             _ilg.Emit (OpCodes.Box, expr.SystemType);
+          }
           else {
             /* upcast / downcast non-value types */
-            def cast_to_type = cast_to_type.GetSystemType ();
+            def cast_to_type = cast_to_type.SystemType;
             Mark (expr.loc);
             when (expr.SystemType.IsArray && cast_to_type.IsArray &&
                   expr.SystemType.GetElementType ().IsValueType !=
@@ -516,20 +714,20 @@ namespace Nemerle.Compiler
           emit (val);
           Mark (expr.loc);
           def type_of_expr = val.SystemType;
-          def cast_to_type = cast_to_type.GetSystemType ();
+          def cast_to_stype = cast_to_type.SystemType;
 
           if (type_of_expr.IsValueType) {
             /* perform conversion of value types */
-            emit_value_type_conversion (expr.loc, type_of_expr, cast_to_type, is_checked)
+            emit_value_type_conversion (expr.loc, val.Type, cast_to_type, is_checked)
           }
-          else if (SystemType.Object.Equals (type_of_expr) || type_of_expr.IsInterface
-                   || (SystemType.Enum.Equals (type_of_expr) && cast_to_type.IsEnum)) {
+          else if (SystemType.Object : object == type_of_expr || type_of_expr.IsInterface
+                   || (SystemType.Enum : object == type_of_expr && cast_to_stype.IsEnum)) {
             /* unboxing returns a pointer to a value */
-            _ilg.Emit (OpCodes.Unbox, cast_to_type);
+            _ilg.Emit (OpCodes.Unbox, cast_to_stype);
 
             maybe_volatile (val);
 
-            emit_ldind_for_value_type (cast_to_type)
+            emit_ldind_for_value_type (cast_to_stype)
           }
           else {
             Util.ice ($ "$_method_name: failed to convert non-value "
@@ -556,15 +754,17 @@ namespace Nemerle.Compiler
           
           maybe_volatile (expr);
 
+          def field_inf = GetFieldInfo (base_object, field);
+
           if (result_will_be_address)
-            _ilg.Emit (OpCodes.Ldflda, field.GetFieldInfo ());
+            _ilg.Emit (OpCodes.Ldflda, field_inf);
           else
-            _ilg.Emit (OpCodes.Ldfld, field.GetFieldInfo ());
+            _ilg.Emit (OpCodes.Ldfld, field_inf);
 
         /* load the value of a static field */
-        | StaticRef (f is IField) =>
-          def field_info = f.GetFieldInfo ();
-
+        | StaticRef (t, f is IField, _) =>
+          def field_info = GetFieldInfo (t.SystemType, f);
+          
           assert (field_info.IsStatic, "GlobalRef to a non-static field");
 
           when (field_info.IsLiteral)
@@ -609,10 +809,10 @@ namespace Nemerle.Compiler
           
         
         /* special case these assignments for performance */
-        | Assign (LocalRef (decl), ImplicitValueTypeCtor (t)) =>
+        | Assign (LocalRef (decl), ImplicitValueTypeCtor as ctr) =>
           Mark (expr.loc);
           emit_ce_ref (decl, get_address_for_value_types = true);
-          _ilg.Emit (OpCodes.Initobj, t.GetSystemType ());
+          _ilg.Emit (OpCodes.Initobj, ctr.SystemType);
 
      
         /* assignment to ref/out parameter */
@@ -641,15 +841,21 @@ namespace Nemerle.Compiler
           emit (val);
           Mark (expr.loc);
           maybe_volatile (target);
-          _ilg.Emit (OpCodes.Stfld, field.GetFieldInfo ());
+
+          def field_info = GetFieldInfo (base_object, field);
+          
+          _ilg.Emit (OpCodes.Stfld, field_info);
 
 
         /* assignment to a static field */
-        | Assign (StaticRef (f is IField) as target, val) =>
+        | Assign (StaticRef (t, f is IField, _) as target, val) =>
           emit (val);
           Mark (expr.loc);
           maybe_volatile (target);
-          _ilg.Emit (OpCodes.Stsfld, f.GetFieldInfo ());
+
+          def field_info = GetFieldInfo (t.SystemType, f);
+          
+          _ilg.Emit (OpCodes.Stsfld, field_info);
 
 
         /* assignment to an array element */
@@ -695,46 +901,56 @@ namespace Nemerle.Compiler
         | Call (Base (base_ctor), ctor_params, _) =>
           _ilg.Emit (OpCodes.Ldarg_0);
           emit_parms (ctor_params);
-          Mark (expr.loc);          
-          _ilg.Emit (OpCodes.Call, base_ctor.GetConstructorInfo ());
+          Mark (expr.loc);
+
+          def ctr_inf = GetConstructorInfo (_type_of_this.BaseType, base_ctor);
+          _ilg.Emit (OpCodes.Call, ctr_inf);
 
         /* create a new object */
-        | Call (StaticRef (meth is IMethod), ctor_params, _) when is_ctor (meth) =>
+        | Call (StaticRef (_t, meth is IMethod, _), ctor_params, _) when is_ctor (meth) =>
           emit_parms (ctor_params);
           Mark (expr.loc);
-          _ilg.Emit (OpCodes.Newobj, meth.GetConstructorInfo ());
+
+          def ctr_inf = GetConstructorInfo (_t.SystemType, meth);          
+          _ilg.Emit (OpCodes.Newobj, ctr_inf);
 
 
         /* emit a call to an instance method, basing on the 'this' pointer for value types */
-        | Call (MethodRef (This, method, _), method_params, _)
+        | Call (MethodRef (This as th, method, tparms, _), method_params, _)
                                                       when _this_is_value_type =>
           _ilg.Emit (OpCodes.Ldarg_0);
-          def method = method.GetMethodInfo ();
+
+          def method_inf = GetMethodInfo (th.Type, method, tparms);
           
           // it actually IS the proper way to do it --
-          // if this is our method and we do not need to box
-          unless (method.DeclaringType.Equals (_type_of_this)) {
+          // if this is our method, then we do not need to box
+          unless (th.SystemType : object == _type_of_this) {
             _ilg.Emit (OpCodes.Ldobj, _type_of_this);
             _ilg.Emit (OpCodes.Box, _type_of_this);
           }
           emit_parms (method_params);
           Mark (expr.loc);
-          emit_method_call (expr, true, method)
+          emit_method_call (expr, true, method_inf)
 
 
         /* emit a call to an instance method */
-        | Call (MethodRef (base_object, method, notvirt), method_params, _) =>
+        | Call (MethodRef (base_object, method, tparms, notvirt), method_params, _) =>
           def is_value_type = emit_and_convert_to_address (base_object);
+
+          def method_inf = GetMethodInfo (base_object.Type, method, tparms);
 
           emit_parms (method_params);
           Mark (expr.loc);
-          emit_method_call (expr, is_value_type || notvirt, method.GetMethodInfo ())
+
+          when (base_object.NeedsConstrained)
+            _ilg.Emit (OpCodes.Constrained, base_object.SystemType);
+          emit_method_call (expr, is_value_type || notvirt, method_inf)
 
 
         /* emit a call to a static method */
-        | Call (StaticRef (mi is IMethod), method_parms, _) =>
-          def method_info = mi.GetMethodInfo ();
-
+        | Call (StaticRef (_t, mi is IMethod, tparms), method_parms, _) =>
+          def method_info = GetMethodInfo (_t, mi, tparms);          
+        
           Util.cassert (method_info.IsStatic, 
                         $ "Call TExpr.GlobalRef to a non-static field: $(method_info.Name)");
 
@@ -765,8 +981,8 @@ namespace Nemerle.Compiler
 
             | "unary.-.s" =>
               _ilg.Emit (OpCodes.Ldc_I4_M1);
-              emit_value_type_conversion (expr.loc, SystemType.Int32,
-                                          parms.Head.expr.SystemType, true);
+              emit_value_type_conversion (expr.loc, InternalType.Int32,
+                                          parms.Head.expr.Type, true);
               _ilg.Emit (OpCodes.Mul_Ovf)
             | "unary.-.f" =>
               _ilg.Emit (OpCodes.Neg)
@@ -863,7 +1079,7 @@ namespace Nemerle.Compiler
           unless (try_expr.Throws || ignore_try_with_result)
             _ilg.Emit (OpCodes.Stloc, try_result);
 
-          _ilg.BeginCatchBlock (catch_val.Type.GetSystemType ());
+          _ilg.BeginCatchBlock (catch_val.Type.SystemType);
 
           def catch_val_local_slot = declare_val_local_slot (catch_val);
           _ilg.Emit (OpCodes.Stloc, catch_val_local_slot);
@@ -877,7 +1093,7 @@ namespace Nemerle.Compiler
 
           _ilg.EndExceptionBlock ();
 
-          unless ((catch_expr.Throws && try_expr.Throws) || ignore_try_with_result)
+          unless (ignore_try_with_result)
             _ilg.Emit (OpCodes.Ldloc, try_result);
 
 
@@ -888,12 +1104,13 @@ namespace Nemerle.Compiler
 
           emit (try_expr);
 
-          def ignore_try_result = try_expr.Throws || is_void (try_expr.Type);
+          def ignore_try_result = is_void (try_expr.Type);
           mutable try_result = null;
 
           unless (ignore_try_result) {
             try_result = _ilg.DeclareLocal (type_of_try_expr);
-            _ilg.Emit (OpCodes.Stloc, try_result)
+            unless (try_expr.Throws)
+              _ilg.Emit (OpCodes.Stloc, try_result)
           };
 
           _ilg.BeginFinallyBlock ();
@@ -901,6 +1118,7 @@ namespace Nemerle.Compiler
           emit (finally_expr);
 
           _ilg.EndExceptionBlock ();
+
           unless (ignore_try_result)
             _ilg.Emit (OpCodes.Ldloc, try_result);
 
@@ -908,16 +1126,16 @@ namespace Nemerle.Compiler
         /* -- TUPLES -------------------------------------------------------- */
         | Tuple (vals) =>
           foreach (v in vals) emit (v);
-          def tuple_ty = InternalType.GetTupleType (vals.Length);
-          _ilg.Emit (OpCodes.Newobj, tuple_ty.Ctor.GetConstructorInfo ());
+          def ctor = InternalType.GetTupleType (vals.Length).Ctor;
+          _ilg.Emit (OpCodes.Newobj, GetConstructorInfo (expr.SystemType, ctor));
           
 
         | TupleIndexer (obj, pos, len) =>
           def tt = InternalType.GetTupleType (len);
-          when (tt.SystemType.IsValueType && !obj.NeedAddress)
+          when (tt.TyCon.IsValueType && !obj.NeedAddress)
             obj.NeedAddress = true;
           emit (obj);
-          _ilg.Emit (OpCodes.Ldfld, tt.GetField (pos + 1).GetFieldInfo ());
+          _ilg.Emit (OpCodes.Ldfld, GetFieldInfo (obj.SystemType, tt.GetField (pos + 1)));
 
 
         /* -- MISC --------------------------------------------------------- */
@@ -937,13 +1155,16 @@ namespace Nemerle.Compiler
         /* loads a literal on the evaluation stack */
         | Literal (l) => 
           Util.cassert (l != null);
-          emit_literal (l);
+          if (expr.MType is MType.TyVarRef && l is Literal.Null)
+            emit (TExpr.DefaultValue (expr.loc, expr.Type))
+          else
+            emit_literal (l);
 
 
         /* loads address of given method */
-        | MethodAddress (meth, is_virt) =>
+        | MethodAddress (from, meth, is_virt, typarms) =>
           Mark (expr.loc);
-          def meth = meth.GetMethodInfo ();
+          def meth = GetMethodInfo (from, meth, typarms);
           if (is_virt && meth.IsVirtual) {
             // ldvirtftn expects also an object reference
             // this is always part of delegate ctor, therefore
@@ -955,10 +1176,10 @@ namespace Nemerle.Compiler
 
 
         /* creates object of value type using implicit ctor */
-        | ImplicitValueTypeCtor (t) =>
+        | ImplicitValueTypeCtor =>
           Mark (expr.loc);
           when (Options.EmitDebug) _ilg.BeginScope ();
-          def t = t.GetSystemType ();
+          def t = expr.SystemType;
           def local_slot = _ilg.DeclareLocal (t);
           _ilg.Emit (OpCodes.Ldloca, local_slot);
           _ilg.Emit (OpCodes.Initobj, t);
@@ -970,7 +1191,7 @@ namespace Nemerle.Compiler
         | Array (initializers, [size]) =>
           def element_type =
             match (expr.Type.Fix ()) {
-              | MType.Array (t, _) => t.GetSystemType ()
+              | MType.Array (t, _) => t.SystemType
               | _ => Util.ice ()
             }
             
@@ -1052,6 +1273,7 @@ namespace Nemerle.Compiler
         | _ =>
           Message.Warning ($ "FIXME: unmatched: $expr");
       }
+      // Message.Debug (expr.loc, "} emit");
     }
 
     private array_set_method (t : System.Type) : MethodInfo
@@ -1082,8 +1304,8 @@ namespace Nemerle.Compiler
         else {
           emit_ldarg (decl.ParmIndex);
           when (! get_address_for_value_types && decl.IsByRefParm) {
-            def ty = decl.Type.Fix ().GetSystemType ();
-            if (ty.IsValueType)
+            def ty = decl.Type.SystemType;
+            if (ty.IsGenericParameter || ty.IsValueType)
                emit_ldind_for_value_type (ty)
             else
               _ilg.Emit (OpCodes.Ldind_Ref);
@@ -1264,10 +1486,12 @@ namespace Nemerle.Compiler
      * Performs value type conversion form l to r
      */
     private emit_value_type_conversion (loc : Location,
-                                        l : System.Type, r : System.Type,
+                                        l_t : TyVar, r_t : TyVar,
                                         is_checked : bool) : void
     {
-      def is_unsigned (t : System.Type) {
+     def l = l_t.SystemType;
+
+     def is_unsigned (t : System.Type) {
         match (t.Name [0]) {
           // UInt32, UInt64, UInt16
           | 'U'
@@ -1280,16 +1504,18 @@ namespace Nemerle.Compiler
       };
       def fail () {
         Message.Warning (loc, 
-                         $ "failed to emit value type conversion from $l to $r")
+                         $ "failed to emit value type conversion from $l_t to $r_t")
       };
 
       match (()) {
-        | _ when r.Equals (l) => ()
+        | _ when r_t.Equals (l_t) => ()
         | _ when l.IsPrimitive || l.IsEnum =>
+          def r = r_t.SystemType;  
+
           if (r.IsPrimitive || r.IsEnum) {
             def rname =
               // FIXME: use true underalying type
-              if (r.IsEnum) "Int32" else r.Name;
+              if (r.IsEnum) "Int32" else r.Name; 
             def opcode =
               if (is_checked) {
                 match (rname) {
@@ -1344,7 +1570,7 @@ namespace Nemerle.Compiler
               }
             _ilg.Emit (opcode)
           }
-          else if (r.Equals (SystemType.Decimal)) {
+          else if (r : object == SystemType.Decimal) {
             // FIXME: use true underalying type
             def lname = if (l.IsEnum) "Int32" else l.Name;
             match (lname) {
@@ -1371,6 +1597,7 @@ namespace Nemerle.Compiler
                               base_is_value_type_or_static : bool,
                               method : MethodInfo) : void
     {
+      // Message.Debug ($"emc: $(method.Name)");
       def is_tail =
         match (expr) {
           | Call (_, _, true) when Options.GeneralTailCallOpt =>
@@ -1398,12 +1625,18 @@ namespace Nemerle.Compiler
     private emit_and_convert_to_address (base_object : TExpr) : bool 
     {
       emit (base_object);
-      def is_value_type = base_object.SystemType.IsValueType;
-      when (is_value_type && ! base_object.NeedAddress) {
+      def stype = base_object.SystemType;
+      def is_value_type = stype.IsValueType;
+
+      // we must allocate additional temporary variable if during
+      // emit(base_object) address was not granted
+      when ((is_value_type || stype.IsGenericParameter)
+            && !base_object.NeedAddress) {
         def local_slot = _ilg.DeclareLocal (base_object.SystemType);
         _ilg.Emit (OpCodes.Stloc, local_slot);
         _ilg.Emit (OpCodes.Ldloca, local_slot);
       };
+      // is_value_type is checked to decide in call vs callvirt emission
       is_value_type
     }
 
@@ -1414,7 +1647,8 @@ namespace Nemerle.Compiler
     private declare_val_local_slot (val : LocalValue) : LocalBuilder
     {
       when (Options.EmitDebug) _ilg.BeginScope ();              
-      def local_slot = _ilg.DeclareLocal (val.Type.GetSystemType ());
+
+      def local_slot = _ilg.DeclareLocal (val.Type.SystemType);
       when (Options.EmitDebug) local_slot.SetLocalSymInfo (val.Name);
       val.LocalSlot = local_slot;
       local_slot
@@ -1427,9 +1661,10 @@ namespace Nemerle.Compiler
      */
     private emit_array_store_opcode (ty : System.Type) : void
     {
-      assert (!SystemType.Void.Equals (ty), "tried to store a System.Void in an array");
+     // assert (!SystemType.Void.Equals (ty), "tried to store a System.Void in an array");
 
-      if (ty.IsPrimitive) {
+      if (ty.IsGenericParameter) _ilg.Emit (OpCodes.Stelem, ty)
+      else if (ty.IsPrimitive) {
         def opcode =
           match (ty.Name) {
             | "SByte" | "Boolean"
@@ -1443,9 +1678,9 @@ namespace Nemerle.Compiler
             | _ => Util.ice ("System.Type IsPrimitive has lied")
           }
           _ilg.Emit (opcode);
-        }
-        else if (ty.IsValueType) _ilg.Emit (OpCodes.Stobj, ty)
-        else _ilg.Emit (OpCodes.Stelem_Ref);
+      }
+      else if (ty.IsValueType) _ilg.Emit (OpCodes.Stobj, ty)
+      else _ilg.Emit (OpCodes.Stelem_Ref);
     }
 
 
@@ -1454,9 +1689,11 @@ namespace Nemerle.Compiler
      */
     private emit_array_load_opcode (ty : System.Type) : void
     {
-      assert (!SystemType.Void.Equals (ty), "tried to load a System.Void from an array");
+    //  assert (!SystemType.Void.Equals (ty), "tried to load a System.Void from an array");
 
-      if (ty.IsValueType && !ty.IsPrimitive) {
+      if (ty.IsGenericParameter)
+        _ilg.Emit (OpCodes.Ldelem, ty)
+      else if (ty.IsValueType && !ty.IsPrimitive) {
         _ilg.Emit (OpCodes.Ldelema, ty);
         _ilg.Emit (OpCodes.Ldobj, ty);
       } 
@@ -1488,7 +1725,7 @@ namespace Nemerle.Compiler
      */
     private emit_ldind_for_value_type (ty : System.Type) : void
     {
-      if (ty.IsEnum || !ty.IsPrimitive)
+      if (!ty.IsPrimitive || ty.IsEnum)
         _ilg.Emit (OpCodes.Ldobj, ty)
       else {
         def opcode =
@@ -1503,6 +1740,7 @@ namespace Nemerle.Compiler
             | "UInt64"                => OpCodes.Ldind_I8
             | "Single"                => OpCodes.Ldind_R4
             | "Double"                => OpCodes.Ldind_R8
+            | "IntPtr"                => OpCodes.Ldind_I
             | _ =>
               Util.ice (_method_name + ": not a recognized value type: " + ty.FullName);
           }

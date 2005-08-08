@@ -1069,7 +1069,7 @@ returns [StatementTree t]
 {
     t = new StatementTree();
     StatementTree st = new StatementTree();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     //<labelled_statement>
     :   (IDENTIFIER   COLON)=> 
@@ -1120,7 +1120,7 @@ returns [StatementTree t]
 {
     t = new StatementTree();
     StatementTree st = new StatementTree();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   s:SEMI          {a.Add (new StatementTree(ExtendedToken.getWhitespaces(s) + "();"));}
 	{t = new StatementTree ("EMPTY",a);}
@@ -1141,7 +1141,7 @@ returns [StatementTree t]
 {
     t = new StatementTree();
     StatementTree temp = new StatementTree ();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   lb:LBRACE  
         {a.Add (new StatementTree(lb));}
@@ -1282,7 +1282,7 @@ returns [StatementTree t]
 {
     t = new StatementTree();
     string temp = "";
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   temp = statement_expression   s:SEMI
         {
@@ -1337,7 +1337,7 @@ returns [StatementTree t]
     t = new StatementTree();
     StatementTree t1 = new StatementTree();
     StatementTree t2; 
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
     string be = "";
 }
     :   (IF   LPAREN   boolean_expression   RPAREN   embedded_statement   ELSE)=>
@@ -1362,7 +1362,7 @@ switch_statement
 returns [StatementTree t]
 {
     t = new StatementTree();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
     string exp = "";
 }
     :   s:SWITCH lp:LPAREN   exp = expression  rp:RPAREN   t = switch_block
@@ -1380,7 +1380,7 @@ switch_block
 returns [StatementTree t]
 {    
     t = new StatementTree();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   lb:LBRACE   {a.Add(new StatementTree(lb));}
 	(options {greedy=true;}: t = switch_section
@@ -1396,9 +1396,9 @@ returns [StatementTree t]
     t = new StatementTree();
     StatementTree t1 = new StatementTree ();
     StatementTree t2 = new StatementTree ();
-    LinkedList a1 = new LinkedList ();
-    LinkedList a2 = new LinkedList ();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a1 = new LinkedList<StatementTree> ();
+    LinkedList<StatementTree> a2 = new LinkedList<StatementTree> ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :	( options {greedy=true;}: 
 	    t = switch_label
@@ -1425,7 +1425,7 @@ switch_label
 returns [StatementTree t]
 {
     t = new StatementTree ();    
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
     string ce = "";
 }
     :	c:CASE                      {a.Add (new StatementTree(c));}
@@ -1453,7 +1453,7 @@ returns [StatementTree t]
 {
     t = new StatementTree();
     StatementTree t1 = new StatementTree();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
     string be = "";
 }
     :   w:WHILE                     {a.Add (new StatementTree(w));}
@@ -1469,7 +1469,7 @@ returns [StatementTree t]
 {
     t = new StatementTree();
     StatementTree t1 = new StatementTree();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
     string be = "";
 }
     :   d:DO                       {a.Add (new StatementTree(d));}
@@ -1490,7 +1490,7 @@ returns [StatementTree t]
     string finit = "";
     string fcond = "";
     string fiter = "";
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   f:FOR                        {a.Add (new StatementTree(f));}
         lp:LPAREN                    {a.Add (new StatementTree(lp));}
@@ -1563,7 +1563,7 @@ returns [StatementTree t]
 {
     t = new StatementTree();
     StatementTree es = new StatementTree();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
     string [] tp = new string[]{"",""};
     string e = "";
 }
@@ -1596,7 +1596,7 @@ break_statement
 returns [StatementTree t]
 {
     t = new StatementTree();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   b:BREAK s:SEMI
         {a.Add (new StatementTree(b));}
@@ -1608,7 +1608,7 @@ continue_statement
 returns [StatementTree t]
 {
     t = new StatementTree();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   c:CONTINUE s:SEMI
         {a.Add (new StatementTree(c));}
@@ -1620,7 +1620,7 @@ goto_statement
 returns [StatementTree t]
 {
     t = new StatementTree();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   (GOTO IDENTIFIER)=> 
         g:GOTO       {a.Add (new StatementTree(g));}
@@ -1640,7 +1640,7 @@ returns [StatementTree t]
 {
     t = new StatementTree();
     string exp = "";
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   r:RETURN               {a.Add (new StatementTree(r));}
         (exp = expression      {a.Add (new StatementTree(exp));})?    
@@ -1653,7 +1653,7 @@ returns [StatementTree t]
 {
     t = new StatementTree();
     string e = "";
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   th:THROW          {a.Add (new StatementTree(th));}
         (e = expression)? {a.Add (new StatementTree(e));}
@@ -1666,7 +1666,7 @@ returns [StatementTree t]
 {
     t = new StatementTree();
     StatementTree temp = new StatementTree();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   tr:TRY       {a.Add (new StatementTree(tr));}
         temp = block {a.Add (temp);}  
@@ -1686,7 +1686,7 @@ returns [StatementTree t]
 {
     t = new StatementTree();
     StatementTree temp = new StatementTree();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   ( specific_catch_clause )=>
             (options {greedy=true;}: temp = specific_catch_clause {a.Add (temp);}
@@ -1703,7 +1703,7 @@ returns [StatementTree t]
     t = new StatementTree();
     string [] tp = new string[]{"",""};
     string catched_type = "";
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :       c:CATCH         {a.Add (new StatementTree(c));}
             lp:LPAREN       {a.Add (new StatementTree(lp));}
@@ -1727,7 +1727,7 @@ general_catch_clause
 returns [StatementTree t]
 {
     t = new StatementTree();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   c:CATCH	    {a.Add (new StatementTree(c));}
         t = block   {a.Add (t);}
@@ -1738,7 +1738,7 @@ finally_clause
 returns [StatementTree t]
 {
     t = new StatementTree();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   f:FINALLY   {a.Add (new StatementTree(f));}
         t = block   {a.Add (t);}
@@ -1749,7 +1749,7 @@ checked_statement
 returns [StatementTree t]
 {
     t = new StatementTree();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   c:CHECKED   {a.Add (new StatementTree(c));}
         t = block   {a.Add (t);}
@@ -1760,7 +1760,7 @@ unchecked_statement
 returns [StatementTree t]
 {
     t = new StatementTree();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   u:UNCHECKED  {a.Add (new StatementTree(u));}
         t = block    {a.Add (t);}
@@ -1772,7 +1772,7 @@ returns [StatementTree t]
 {
     t = new StatementTree();
     string e = "";
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   l:LOCK                  {a.Add (new StatementTree(l));}
         lp:LPAREN               {a.Add (new StatementTree(lp));}
@@ -1786,7 +1786,7 @@ using_statement
 returns [StatementTree t]
 {
     t = new StatementTree() ;    
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   u:USING                  {a.Add (new StatementTree(u));}
         lp:LPAREN                {a.Add (new StatementTree(lp));}
@@ -2717,7 +2717,7 @@ returns [string return_string]
 constructor_body[string ctor_initializer]
 {
     StatementTree t = new StatementTree();
-    LinkedList a = new LinkedList ();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
 }
     :   lb:LBRACE    {a.Add (new StatementTree(lb));}
         

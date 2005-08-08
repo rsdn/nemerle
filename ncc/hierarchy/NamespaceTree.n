@@ -31,6 +31,7 @@ using Nemerle.Collections;
 using Nemerle.Utility;
 
 using PT = Nemerle.Compiler.Parsetree;
+using SCG = System.Collections.Generic;
 
 namespace Nemerle.Compiler
 {
@@ -39,14 +40,16 @@ namespace Nemerle.Compiler
     public variant TypeInfoCache {
       | No
       | Cached { tycon : TypeInfo; }
+      | CachedAmbiguous { elems : list [TypeInfo] }
       | NotLoaded { e : LibraryReferenceManager.ExternalType; }
+      | NotLoadedList { elems : list [LibraryReferenceManager.ExternalType] }        
       | MacroCall { m : IMacro; }
       | NamespaceReference
     }
     
     public class Node {
       public Parent : Node;
-      name : string;
+      name : string; // the same as edge from parent to this
       public mutable Value : TypeInfoCache;
       mutable children : Hashtable [string, Node];
       
@@ -131,7 +134,7 @@ namespace Nemerle.Compiler
                           | Some (nd) =>
                             match (nd.Value) {
                               | TypeInfoCache.Cached (tc) =>
-                                (tc.GetSystemType (), tc.GetLibraryReference ())
+                                (tc.SystemType, tc.GetLibraryReference ())
                                 
                               | TypeInfoCache.NotLoaded (e) =>
                                 (e.system_type, e.library)
@@ -175,33 +178,91 @@ namespace Nemerle.Compiler
         loop (n, this)
       }
 
-      public LookupType (split : list [string]) : option [TypeInfo]
+      internal LoadValue (val : TypeInfoCache.NotLoadedList) : list [TypeInfo]
       {
+        def by_parms_amount = Hashtable ();
+        def cached = val.elems.FoldLeft ([], fun (e, acc) {
+          // eliminate ambiguous types, store only those differing
+          // on amount of generic parameters
+          def count = e.system_type.GetGenericArguments ().Length;
+          if (by_parms_amount.Contains (count)) {
+            def used = by_parms_amount [count] : System.Type;
+            Message.Warning ($"using type `[$(used.Assembly)]$(used.FullName)' that"
+                             " was defined in more than one assembly: "
+                             " `[$(e.system_type.Assembly)]$(e.system_type.FullName)'"
+                             " (the first version was used)");
+            acc
+          }
+          else {
+            by_parms_amount.Add (count, e.system_type);
+
+            e.ConstructTypeInfo (this, false);
+            e.tycon :: acc
+          }
+        });
+        Value = TypeInfoCache.CachedAmbiguous (cached);
+        cached
+      }
+      
+      public LookupType (split : list [string], args_count : int) : option [TypeInfo]
+      {
+        def search (cached) {
+          | (x : TypeInfo) :: xs =>
+            if (args_count == -1 || args_count == x.TyparmsCount)
+              Some (x)
+            else
+              search (xs)
+            
+          | [] => None ()
+        }
+        
         match (TryPath (split)) {
-          | TypeInfoCache.Cached (tc) => Some (tc)
+          | TypeInfoCache.Cached (tc) =>
+            // incorrect number of args is reported later in a cleaner way
+            Some (tc)
+            
           | TypeInfoCache.NotLoaded (e) =>
-            def nd = Path (split);
-            when (e.tycon == null) {
-              when (e.message != null) {
-                Message.Warning ("using type `" + e.system_type.FullName + 
-                                 "' that was defined in more than one assembly: " +
-                                 e.message + " (the first version was used)")
-              };
-              e.tycon = e.library.ConstructTypeInfo (e.system_type, nd);
-            };
-            nd.Value = TypeInfoCache.Cached (e.tycon);
+            e.ConstructTypeInfo (Path (split), true);
+           
+            // incorrect number of args is reported later in a cleaner way
             Some (e.tycon)
+
+          | TypeInfoCache.NotLoadedList as val =>
+            def cached = Path (split).LoadValue (val);
+            search (cached)
+            
+          | CachedAmbiguous (all) => search (all)
 
           | TypeInfoCache.MacroCall | TypeInfoCache.No
           | TypeInfoCache.NamespaceReference => None ()
         }
       }
 
+      public LookupTypes (split : list [string]) : list [TypeInfo]
+      {
+        match (TryPath (split)) {
+          | TypeInfoCache.Cached (tc) => [tc]
+            
+          | TypeInfoCache.NotLoaded (e) =>
+            e.ConstructTypeInfo (Path (split), true);
+            [e.tycon]
+
+          | TypeInfoCache.NotLoadedList as val =>
+            Path (split).LoadValue (val);
+            
+          | CachedAmbiguous (all) => all
+          | TypeInfoCache.MacroCall | TypeInfoCache.No
+          | TypeInfoCache.NamespaceReference => []
+        }
+      }
+      
       public LookupSystemType (split : list [string]) : option [System.Type]
       {
         match (TryPath (split)) {
-          | TypeInfoCache.Cached (tc) => Some (tc.GetSystemType ())
+          | TypeInfoCache.Cached (tc) => Some (tc.SystemType)
           | TypeInfoCache.NotLoaded (e) => Some (e.system_type)
+          | NotLoadedList (ts) => Some (ts.Head.system_type)
+          | CachedAmbiguous (ts) => Some (ts.Head.SystemType)            
           | TypeInfoCache.MacroCall | TypeInfoCache.No
           | TypeInfoCache.NamespaceReference            => None ()
         }
@@ -209,7 +270,7 @@ namespace Nemerle.Compiler
 
       public LookupValue () : option [TypeInfo]
       {
-        LookupType ([])
+        LookupType ([], -1)
       }
 
 
@@ -259,18 +320,32 @@ namespace Nemerle.Compiler
     
     // we store nodes, which were referenced from using / alias to check their existance
     internal mutable referenced_namespace_nodes : list [list [Node] * Location];
+    // remeber node created for types from this program
+    current_program_nodes : SCG.List [Node];
 
     this () {
       macro_contexts = Hashtable (100);
       namespace_tree = Node (null, "", TypeInfoCache.NamespaceReference ());
+      current_program_nodes = SCG.List ();
     }
 
     public Init () : void
     {
-      namespace_tree.Clear ();
+      if (Options.PersistentLibraries) {
+        foreach (nd in current_program_nodes) {
+          when (nd.Name is ["alias"]) nd.Clear ();
+          nd.Value = TypeInfoCache.No ();
+        }
+        foreach ((nodes, _) in referenced_namespace_nodes)
+          foreach (nd in nodes)
+            nd.Value = TypeInfoCache.No ();
+      }
+      else namespace_tree.Clear ();
+
       macro_contexts.Clear ();
       macro_context = 0;
       macro_context_class = null;
+      current_program_nodes.Clear ();
       referenced_namespace_nodes = [];
     }
 
@@ -286,26 +361,62 @@ namespace Nemerle.Compiler
     {
       def pname = newdecl.ParsedName;
       def ns_node = parent_node.Path ([pname.Id]);
+      current_program_nodes.Add (ns_node);
+
+      def new_gparms =
+        if (newdecl.typarms != null) newdecl.typarms.tyvars.Length else 0;
+
+      def existing =
+        match (ns_node.Value) {
+          | TypeInfoCache.Cached (existing) => [existing]
+          | TypeInfoCache.CachedAmbiguous (many) => many
+
+          | TypeInfoCache.NotLoaded (external) =>
+            external.ConstructTypeInfo (ns_node, true);
+            [external.tycon]
+
+          | TypeInfoCache.NotLoadedList as val =>
+            ns_node.LoadValue (val)
+
+          | TypeInfoCache.MacroCall (m) =>
+            Message.Error ($"type declaration `$(pname.Id)' hides macro $(m.GetName ())");
+            []
+            
+          | _ => []
+        }
+
+      mutable builder = null;
       
-      match (ns_node.Value) {
-        | TypeInfoCache.Cached (existing) =>
-          match (existing) {
+      mutable all = existing.FoldLeft ([], fun (x : TypeInfo, acc) {
+        if (x.TyparmsCount == new_gparms)
+          match (x) {
             | tb is TypeBuilder =>
               tb.ExtendPartialClass (newdecl);
-              tb
+              builder = tb;
+              x :: acc
               
             | _ =>
               Message.Error (newdecl.loc, "redefinition of external type `" +
-                             existing.FullName + "'");
-              Message.Error (existing.Location, "first defined here");
-              TypeBuilder (par, newdecl, ns_node)
+                             x.FullName + "'");
+              Message.Error (x.Location, "first defined here");
+              builder = TypeBuilder (par, newdecl, ns_node);
+              builder :: acc
           }
+        else
+          x :: acc
+      });
 
-        | _ =>
-          def builder = TypeBuilder (par, newdecl, ns_node);
-          ns_node.Value = TypeInfoCache.Cached (builder);
-          builder
+      when (builder == null) {
+        builder = TypeBuilder (par, newdecl, ns_node);
+        all ::= builder;
       }
+
+      ns_node.Value = 
+        match (all) {
+          | [_] => TypeInfoCache.Cached (builder);
+          | _ => TypeInfoCache.CachedAmbiguous (all)
+        }
+      builder
     }
 
     public AddMacro (split : list[string], m : IMacro) : void {
@@ -314,7 +425,10 @@ namespace Nemerle.Compiler
 
     public AddMacro (ns : Node, m : IMacro) : void {
       match (ns.Value) {
-        | TypeInfoCache.No => ns.Value = TypeInfoCache.MacroCall (m)
+        | TypeInfoCache.No => 
+          current_program_nodes.Add (ns);
+          ns.Value = TypeInfoCache.MacroCall (m)
+
         | TypeInfoCache.NamespaceReference =>
           Message.Error ("cannot define `" + ns.Name.ToString (".") + 
                          "' because the same namespace exists ");
@@ -327,21 +441,25 @@ namespace Nemerle.Compiler
     public LookupInternalType (name : list[string]) : TypeInfo {
       match (LookupExactType (name)) {
         | Some (t) => t
-        | None => Util.ice ("unbound internal type " + Util.qid_of_list (name))
+        | None => Util.ice ("unbound internal type " + name.ToString ("."))
       }
     }
 
     public LookupExactType (name : string) : option [TypeInfo] {
-      namespace_tree.LookupType (NString.Split (name, array ['.']))
+      namespace_tree.LookupType (NString.Split (name, '.'), -1)
     }
 
     public LookupExactType (name : list [string]) : option [TypeInfo] {
-      namespace_tree.LookupType (name)
+      namespace_tree.LookupType (name, -1)
     }
-  
+
+    public LookupExactType (name : list [string], args_count : int) : option [TypeInfo] {
+      namespace_tree.LookupType (name, args_count)
+    }
+    
     public LookupSystemType (name : string) : option [System.Type]
     {
-      namespace_tree.LookupSystemType (NString.Split (name, array ['.']))
+      namespace_tree.LookupSystemType (NString.Split (name, '.'))
     }
     
     public ExactPath (path : list [string]) : Node
@@ -368,7 +486,7 @@ namespace Nemerle.Compiler
           }
         when (scream) {
           Message.Error (loc, "referenced namespace `" +
-                         Util.qid_of_list (all_opened.Last.Name)
+                         all_opened.Last.Name.ToString (".")
                          + "' does not exist")
         }
       }

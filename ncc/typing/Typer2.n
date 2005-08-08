@@ -37,7 +37,7 @@ namespace Nemerle.Compiler
 {
   internal class Typer2
   {
-    top_level_fun : NemerleMethod;
+    top_level_fun : MethodBuilder;
     mutable this_ptr_decl : LocalValue;
     mutable current_fun : Fun_header;
     current_type : TypeBuilder;
@@ -60,7 +60,7 @@ namespace Nemerle.Compiler
       | TopLevel           = IsTail %| AllowGoto %| AllowTry
     }
     
-    public this (ty : TypeBuilder, fn : NemerleMethod)
+    public this (ty : TypeBuilder, fn : MethodBuilder)
     {
       current_fun = fn.GetHeader ();
       top_level_fun = fn;
@@ -108,6 +108,11 @@ namespace Nemerle.Compiler
             expr
           else {
             match (res) {
+              | _ when res.ty != null =>
+                // Message.Debug ($ "type for $res ($(res.GetType())) already set to $(res.ty), "
+                //                 "would set to $(expr.ty)");
+                {}
+
               | Sequence (_, e)
               | DefValIn (_, _, e) =>
                 res.ty = e.Type;
@@ -130,15 +135,17 @@ namespace Nemerle.Compiler
     IsSelfCall (func : TExpr) : bool
     {
       match (Unfold (func)) {
-        | TExpr.LocalRef (decl) =>
+        | TExpr.LocalFunRef (decl, _) =>
           match (decl.ValKind) {
             | LocalValue.Kind.Function (hd, _) =>
               hd.id == current_fun.id
             | _ => false
           }
-        | TExpr.StaticRef (meth is IMethod) =>
+        | TExpr.StaticRef (_, meth is IMethod, _) =>
+          // FIXME: #478
           meth.GetHeader ().id == current_fun.id
-        | TExpr.MethodRef (th, meth : IMethod, _) =>
+        | TExpr.MethodRef (th, meth : IMethod, _, _) =>
+          // FIXME: #478
           meth.GetHeader ().id == current_fun.id &&
           Unfold (th) is TExpr.This
         | _ => false
@@ -166,7 +173,7 @@ namespace Nemerle.Compiler
     IsOperator (expr : TExpr) : bool
     {
       match (Unfold (expr)) {
-        | TExpr.StaticRef (meth is IMethod) =>
+        | TExpr.StaticRef (_, meth is IMethod, _) =>
           ! (meth.BuiltinKind is BuiltinMethodKind.NotBuiltin)
         | _ => false
       }
@@ -175,7 +182,7 @@ namespace Nemerle.Compiler
     OperatorKind (expr : TExpr) : BuiltinMethodKind
     {
       match (Unfold (expr)) {
-        | TExpr.StaticRef (meth is IMethod) =>
+        | TExpr.StaticRef (_, meth is IMethod, _) =>
           meth.BuiltinKind
         | _ => assert (false)
       }
@@ -192,11 +199,11 @@ namespace Nemerle.Compiler
     }
 
 
-    GetEventObj (expr : TExpr) : option [IEvent * TExpr]
+    GetEventObj (expr : TExpr) : option [IEvent * TExpr * MType.Class]
     {
       match (Unfold (expr)) {
-        | TExpr.StaticEventRef (ev) => Some ((ev, null))
-        | TExpr.EventMember (obj, ev) => Some ((ev, obj))
+        | TExpr.StaticEventRef (ty, ev) => Some ((ev, null, ty))
+        | TExpr.EventMember (obj, ev) => Some ((ev, obj, null))
         | _ => None ()
       }
     }
@@ -209,8 +216,10 @@ namespace Nemerle.Compiler
       match ((Unfold (e1), Unfold (e2))) {
         | (TExpr.LocalRef (d1), TExpr.LocalRef (d2)) =>
           d1.Equals (d2)
-        | (TExpr.StaticRef (m1), TExpr.StaticRef (m2)) =>
-          m1.Equals (m2)
+        | (TExpr.StaticRef (t1, m1, l1), TExpr.StaticRef (t2, m2, l2)) =>
+          t1.Equals (t2) &&
+          m1.Equals (m2) &&
+          l1.Equals (l2)
         | (TExpr.This, TExpr.This) => true
         | _ => false
       }
@@ -255,7 +264,7 @@ namespace Nemerle.Compiler
     ConvertEventExpr (target : TExpr, source : TExpr) : TExpr
     {
       match (GetEventObj (target)) {
-        | Some ((ev1, obj1)) =>
+        | Some ((ev1, obj1, ty1)) =>
           match (Unfold (source)) {
             | TExpr.Call (meth, [p1, p2], _) 
               when IsOperator (meth) =>
@@ -264,7 +273,7 @@ namespace Nemerle.Compiler
                   when meth.Equals (InternalType.Delegate_Combine) ||
                        meth.Equals (InternalType.Delegate_Remove) =>
                   match (GetEventObj (p1.expr)) {
-                    | Some ((ev2, obj2))
+                    | Some ((ev2, obj2, _ty2))
                       when ev1.Equals (ev2) && TheSame (obj1, obj2) =>
                       def ev_meth =
                         if (meth.Equals (InternalType.Delegate_Combine))
@@ -274,12 +283,14 @@ namespace Nemerle.Compiler
                       assert (ev_meth != null);
                       def ev_meth_ref =
                       // XXX possibly wrong type here
-                        if (obj1 == null)
-                          TExpr.StaticRef (ev_meth.GetFreshType (), ev_meth)
-                        else {
+                        if (obj1 == null) {
+                          def (ty, vars) = ev_meth.GetFreshType ();
+                          TExpr.StaticRef (ty, ty1, ev_meth, vars)
+                        } else {
                           def obj1 = Walk (obj1); 
-                          TExpr.MethodRef (ev_meth.GetFreshType (), 
-                                           obj1, ev_meth, IsBaseRef (obj1));
+                          def (ty, vars) = ev_meth.GetFreshType ();
+                          TExpr.MethodRef (ty, obj1, ev_meth, 
+                                           vars, IsBaseRef (obj1));
                         }
                       p2.expr = Walk (p2.expr);
                       TExpr.Call (ev_meth_ref, [p2], false)
@@ -337,11 +348,24 @@ namespace Nemerle.Compiler
             Message.Warning (10006, $"`this' was never used, consider making `$top_level_fun' static");
       }
 
+      // check for duplicate parameter names
+      def loop (_ : list[Fun_parm]) {
+        | x :: xs =>
+          foreach (y in xs) 
+            when (y.Name == x.Name) 
+              Message.Error (y.Location, "duplicate parameter name: " + y.Name);
+          loop (xs)
+
+        | _ => () 
+      }
+      loop (current_fun.parms);
+
       foreach (v in locals)
         match (v.ValKind) {
           | LocalValue.Kind.Function (h, _) when !h.closure_vars.IsEmpty =>
             // we cannot yet deal with expanding these to loops
-            h.usage = FunctionUsage.UsedAsFirstClass
+            when (h.usage == FunctionUsage.UsedJustOnce)
+              h.usage = FunctionUsage.Used
           | _ => ()
         }
 
@@ -379,7 +403,49 @@ namespace Nemerle.Compiler
     }
 
 
-    LambdaTransform (expr : TExpr, obj : TExpr, meth : IMethod, notvirt : bool) : TExpr
+    PolyLocalToLambdaTransform (expr : TExpr.LocalFunRef) : TExpr
+    {
+      def (ret_type, parms_types) =
+        match (expr.Type.Fix ()) {
+          | MType.Fun (from, to) =>
+            (to, from.Fix ().GetFunctionArguments ())
+          | _ => assert (false)
+        }
+      def parms = 
+        List.Map (parms_types, fun (ty) {
+          Fun_parm (Util.tmpname ("fp"), 0, ty, Modifiers.Empty, ParmKind.Normal)
+        });
+      def lambda_header = 
+        Fun_header (expr.loc, "_N_poly_local_lambda", ret_type, parms,
+                    [], current_fun.tenv);
+      def parms_refs =
+        List.Map (parms, fun (fp : Fun_parm) {
+          fp.decl =
+            LocalValue (lambda_header, fp.name, fp.ty,
+                        LocalValue.Kind.FunParm (ParmKind.Normal), 
+                        is_mutable = false);
+          Parm (TExpr.LocalRef (fp.ty, fp.decl))
+        });
+      def lambda_body =
+        TExpr.Call (ret_type, expr, parms_refs, false);
+      def parents = current_fun :: current_fun.GetParents ();
+      def lambda_value =
+        LocalValue (current_fun, lambda_header.name, expr.Type,
+                    LocalValue.Kind.Function (lambda_header, parents),
+                    is_mutable = false);
+      lambda_header.body = FunBody.Typed (lambda_body);
+      lambda_header.decl = lambda_value;
+
+      def res =
+        TExpr.DefFunctionsIn (expr.Type, [lambda_header], 
+                              TExpr.LocalFunRef (expr.Type, lambda_value, []));
+
+      Walk (res)
+    }
+
+
+    MethodToLambdaTransform (expr : TExpr, obj : TExpr, meth : IMethod, 
+                             type_parms : list [TyVar], notvirt : bool) : TExpr
     {
       def obj_cache = 
         LocalValue (current_fun, "_N_obj_cache", obj.Type,
@@ -391,8 +457,8 @@ namespace Nemerle.Compiler
           | _ => assert (false)
         }
       def parms = 
-        List.Map (parms_types, fun (ty : TyVar) {
-          Fun_parm ("fp", 0, ty, Modifiers.Empty, ParmKind.Normal)
+        List.Map (parms_types, fun (ty) {
+          Fun_parm (Util.tmpname ("fp"), 0, ty, Modifiers.Empty, ParmKind.Normal)
         });
       def lambda_header = 
         Fun_header (obj.loc, "_N_method_lambda", ret_type, parms,
@@ -409,7 +475,7 @@ namespace Nemerle.Compiler
         TExpr.Call (ret_type, 
            TExpr.MethodRef (expr.Type,
               TExpr.LocalRef (obj_cache.Type, obj_cache),
-              meth,
+              meth, type_parms,
               notvirt), parms_refs, false);
       def parents = current_fun :: current_fun.GetParents ();
       def lambda_value =
@@ -421,7 +487,7 @@ namespace Nemerle.Compiler
 
       def res =
         TExpr.DefFunctionsIn (expr.Type, [lambda_header], 
-                              TExpr.LocalRef (expr.Type, lambda_value));
+                              TExpr.LocalFunRef (expr.Type, lambda_value, []));
       def res = TExpr.DefValIn (expr.Type, obj_cache, obj, res);
 
       Walk (res)
@@ -502,12 +568,12 @@ namespace Nemerle.Compiler
         IgnoreExpr (expr)
       } else
         match (kind) {
-          | ConversionKind.MethodCall (meth) =>
-            TExpr.Call (target, TExpr.StaticRef (meth.GetFreshType (), meth), 
-                        [Parm (expr)], false)
+          | ConversionKind.MethodCall (sr) =>
+            sr.mem.HasBeenUsed = true;
+            TExpr.Call (target, sr, [Parm (expr)], false)
           | ConversionKind.DownCast =>
             if (expr.Type.TryRequire (target)) {
-              _ = expr.Type.Require (target);
+              expr.Type.ForceRequire (target);
               Message.Warning (10001, $"there is no check needed to cast $(expr.Type) to $target");
               Message.HintOnce (10001, "consider using : instead of :>");
               BuildEnforcement (expr, target)
@@ -515,7 +581,7 @@ namespace Nemerle.Compiler
               TExpr.TypeConversion (target, expr, target, kind)
           | ConversionKind.Unspecified =>
             if (expr.Type.TryRequire (target)) {
-              _ = expr.Type.Require (target);
+              expr.Type.ForceRequire (target);
               BuildEnforcement (expr, target)
             } else
               TExpr.TypeConversion (target, expr, target, ConversionKind.DownCast ())
@@ -537,15 +603,14 @@ namespace Nemerle.Compiler
         | [] =>
           def ok = result_decl.Type.Unify (InternalType.Void);
           Util.cassert (ok);
-          TExpr.Goto (ty, label)
+          TExpr.Goto (ty, label, 1)
         | [parm] =>
-          def ok = parm.expr.Type.Require (result_decl.Type);
-          Util.cassert (ok);
+          parm.expr.Type.ForceRequire (result_decl.Type);
           TExpr.Sequence (ty, 
                           TExpr.Assign (InternalType.Void,
                                         TExpr.LocalRef (result_decl),
                                         parm.expr),
-                          TExpr.Goto (ty, label))
+                          TExpr.Goto (ty, label, 1))
         | _ => Util.ice ()
       }
     }
@@ -564,6 +629,7 @@ namespace Nemerle.Compiler
     {
       //Message.Debug ($ "dowalk: $expr $(ctx %&& Context.AllowGoto)");
       match (expr) {
+        | TExpr.LocalFunRef (decl, _)
         | TExpr.LocalRef (decl) =>
           when (decl.ValKind is LocalValue.Kind.BlockReturn) {
             ReportError (messenger, 
@@ -594,16 +660,22 @@ namespace Nemerle.Compiler
                     hd.usage = FunctionUsage.Used
                   | FunctionUsage.Used | FunctionUsage.UsedAsFirstClass => ()
                 }
-              } else {
-                // Message.Debug ($ "making $decl 1st class");
-                hd.usage = FunctionUsage.UsedAsFirstClass;
-              }
-            | _ => {}
+                null
+              } else
+                match (expr) {
+                  | TExpr.LocalFunRef (_, []) =>
+                    hd.usage = FunctionUsage.UsedAsFirstClass;
+                    null
+                  | TExpr.LocalFunRef as e =>
+                    hd.usage = FunctionUsage.Used;
+                    PolyLocalToLambdaTransform (e)
+                  | _ => Util.ice ()
+                }
+            | _ => null
           }
-          null
           
           
-        | TExpr.StaticRef (mem) =>
+        | TExpr.StaticRef (_, mem, _) =>
           match (mem) {
             | f is IField when ctx & Context.NeedLValue != 0 =>
               f.HasBeenAssigned = true;
@@ -633,8 +705,8 @@ namespace Nemerle.Compiler
           TExpr.DefFunctionsIn (funs, body)
 
           
-        | TExpr.ImplicitValueTypeCtor (tc) =>
-          tc.HasBeenUsed = true;
+        | TExpr.ImplicitValueTypeCtor =>
+          (expr.MType :> MType.Class).tycon.HasBeenUsed = true;
           null
           
 
@@ -646,7 +718,7 @@ namespace Nemerle.Compiler
           TExpr.FieldMember (Walk (obj), fld)
           
           
-        | TExpr.ConstantObjectRef (mem) =>
+        | TExpr.ConstantObjectRef (_, mem) =>
           mem.HasBeenUsed = true;
           null
           
@@ -666,9 +738,9 @@ namespace Nemerle.Compiler
             Message.Error ($"property accessor $meth is inaccessible");
               
           // for setters the argument list is fixed later
-          // XXX possibly wrong type here
-          //Message.Debug ($ "prop $meth $obj $(IsBaseRef (obj))");
-          def the_ref = TExpr.MethodRef (meth.GetFreshType (), obj, meth, IsBaseRef (obj));
+          def ty = obj.Type.Fix ().TypeOfMember (meth);
+          // Message.Debug ($ "prop $meth ty=$ty $obj $(IsBaseRef (obj))");
+          def the_ref = TExpr.MethodRef (ty, obj, meth, [], IsBaseRef (obj));
           if (ctx %&& Context.IsIndexerRef)
             the_ref
           else if (prop.IsIndexer) {
@@ -678,14 +750,13 @@ namespace Nemerle.Compiler
             TExpr.Call (the_ref, [], false)
 
         
-        | TExpr.StaticPropertyRef (prop) =>
+        | TExpr.StaticPropertyRef (from, prop) =>
           prop.HasBeenUsed = true;
           def meth =
             if (ctx %&& Context.NeedLValue) prop.GetSetter ()
             else prop.GetGetter ();
           assert (meth != null);
-          // XXX possibly wrong type here
-          def the_ref = TExpr.StaticRef (meth.GetFreshType (), meth); 
+          def the_ref = TExpr.StaticRef (from.TypeOfMember (meth), from, meth, []); 
           if (ctx %&& Context.IsIndexerRef)
             the_ref
           else if (prop.IsIndexer) {
@@ -701,7 +772,7 @@ namespace Nemerle.Compiler
           
           mutable field = null;
           when (ev.DeclaringType.Equals (current_type)) {
-            field = (ev :> NemerleEvent).storage_field;
+            field = (ev :> EventBuilder).storage_field;
           }
           if (field != null)
             TExpr.FieldMember (obj, field);
@@ -710,33 +781,33 @@ namespace Nemerle.Compiler
             TExpr.Error ()
           }
           
-        | TExpr.StaticEventRef (ev) =>
+        | TExpr.StaticEventRef (from, ev) =>
           ev.HasBeenUsed = true;
 
           mutable field = null;
           when (ev.DeclaringType.Equals (current_type)) {
-            field = (ev :> NemerleEvent).storage_field;
+            field = (ev :> EventBuilder).storage_field;
           }
           if (field != null)
-            TExpr.StaticRef (field)            
+            TExpr.StaticRef (from, field, [])
           else {
             ReportError (messenger, $ "$(ev) can only appear on the left-side of a += or -=");
             TExpr.Error ()
           }
 
-        | TExpr.MethodRef (obj, meth, notvirt) =>
+        | TExpr.MethodRef (obj, meth, type_parms, notvirt) =>
           meth.HasBeenUsed = true;
           def notvirt = notvirt || IsBaseRef (obj);
 
           if (ctx %&& (Context.IsCalledValue | Context.IsDelegeteCtorParm))
-            TExpr.MethodRef (Walk (obj), meth, notvirt)
+            TExpr.MethodRef (Walk (obj), meth, type_parms, notvirt)
           else
-            LambdaTransform (expr, obj, meth, notvirt)
+            MethodToLambdaTransform (expr, obj, meth, type_parms, notvirt)
           
 
         | TExpr.Call (func, parms, false) =>
           match (Unfold (func)) {
-            | TExpr.StaticRef (meth is IMethod) 
+            | TExpr.StaticRef (_, meth is IMethod, _) 
               when meth.DeclaringType.IsDelegate &&
                    meth.GetFunKind () is FunKind.Constructor =>
               match (parms) {
@@ -754,9 +825,12 @@ namespace Nemerle.Compiler
               | BuiltinMethodKind.CallWithCast (meth') =>
                 assert (meth' != null);
                 // XXX possibly wrong type
+                def (ty, vars) = meth'.GetFreshType ();
                 BuildConversion (
                   TExpr.Call (meth'.ReturnType, 
-                              TExpr.StaticRef (meth'.GetFreshType (), meth'), parms, false),
+                              TExpr.StaticRef (ty, 
+                                               meth'.DeclaringType.GetMemType (), 
+                                               meth', vars), parms, false),
                   expr.Type.Fix (), ConversionKind.Unspecified ())
               
               | _ => assert (false)
@@ -764,15 +838,16 @@ namespace Nemerle.Compiler
           else
             match (Unfold (func)) {
               | TExpr.PropertyMember (_, prop) when prop.IsIndexer
-              | TExpr.StaticPropertyRef (prop) when prop.IsIndexer => 
+              | TExpr.StaticPropertyRef (_, prop) when prop.IsIndexer => 
                 def ctx =
                   Context.IsCalledValue %| 
                   Context.IsIndexerRef  %|
                   (ctx & Context.NeedLValue);
                 TExpr.Call (Walk (ctx, func), parms, false)
-              | TExpr.ConstantObjectRef (mem) =>
-                TExpr.StaticRef (mem) // skip the call
+              | TExpr.ConstantObjectRef (from, mem) =>
+                TExpr.StaticRef (from, mem, []) // skip the call
               | TExpr.ImplicitValueTypeCtor as ivtc =>
+                ivtc.ty = expr.ty;
                 ivtc
 
               | TExpr.LocalRef (LocalValue where (
@@ -849,6 +924,7 @@ namespace Nemerle.Compiler
             match (target) {
               | TExpr.Call as t when transform_call =>
                 t.parms += [Parm (source)];
+                t.ty = InternalType.Void;
                 t
                 
               | _ when transform_call => assert (false)
@@ -898,8 +974,8 @@ namespace Nemerle.Compiler
           exn.Register ();
           current_fun.uses_try_block = true;
 
-          TExpr.TryWith (Walk (Context.AllowTry, body), exn, 
-                         Walk (Context.AllowTry, handler))
+          TExpr.TryWith (Walk (Context.AllowGotoAndSuch, body), exn, 
+                         Walk (Context.AllowGotoAndSuch, handler))
           
           
         | TExpr.TryFinally (body, handler) =>
@@ -909,8 +985,8 @@ namespace Nemerle.Compiler
           
           current_fun.uses_try_block = true;
           
-          TExpr.TryFinally (Walk (Context.AllowTry, body), 
-                            IgnoreExpr (Walk (Context.AllowTry, handler)))
+          TExpr.TryFinally (Walk (Context.AllowGotoAndSuch, body), 
+                            IgnoreExpr (Walk (Context.AllowGotoAndSuch, handler)))
           
 
         | TExpr.Literal (Literal.Integer as i) =>

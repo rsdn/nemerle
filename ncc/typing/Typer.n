@@ -55,7 +55,7 @@ namespace Nemerle.Compiler
     #region Toplevel typing
     // FIXME: copy doc from TypeMethod
     /** Walk through method body typing it. */
-    public this (m : NemerleMethod)
+    public this (m : MethodBuilder)
     {
       solver = Passes.Solver;
       current_type = m.DeclaringType :> TypeBuilder;
@@ -119,7 +119,7 @@ namespace Nemerle.Compiler
               RunTyper ();
 
               when (errcnt == Message.ErrorCount)
-                Util.ice ("hidden errors compiling $m");
+                Util.ice ($"hidden errors compiling $m");
           }
         })
       } finally {
@@ -175,7 +175,7 @@ namespace Nemerle.Compiler
       local_context
     }
 
-    MaybeAddBaseCall (m : NemerleMethod) : void
+    MaybeAddBaseCall (m : MethodBuilder) : void
     {
       when (is_instance_ctor && !m.DeclaringType.IsValueType)
         match (current_fun.body) {
@@ -241,11 +241,11 @@ namespace Nemerle.Compiler
     }
 
 
-    RunSecondPass (meth : NemerleMethod) : void
+    RunSecondPass (meth : MethodBuilder) : void
     {
       def t2 = Typer2 (current_type, meth);
       t2.Run ();
-      def t3 = Typer3 (current_type, meth);
+      def t3 = Typer3 (meth);
       t3.Run ();
     }
     #endregion
@@ -411,7 +411,7 @@ namespace Nemerle.Compiler
     {
       match (e) {
         | TExpr.LocalRef (d) => d.IsMutable
-        | TExpr.StaticRef (m) =>
+        | TExpr.StaticRef (_, m, _) =>
           match (m.GetKind ()) {
             | MemberKind.Field (f) =>
               f.IsMutable || (current_fun.name == ".cctor" &&
@@ -419,7 +419,7 @@ namespace Nemerle.Compiler
             | MemberKind.Property (p) when !need_ref => p.IsMutable
             | _ => false
           }
-        | TExpr.StaticPropertyRef (p) when !need_ref => p.IsMutable
+        | TExpr.StaticPropertyRef (_, p) when !need_ref => p.IsMutable
         | TExpr.FieldMember (TExpr.This, _) when is_instance_ctor => true
         | TExpr.FieldMember (_, mem) => mem.IsMutable
         | TExpr.PropertyMember (_, p) when !need_ref => p.IsMutable
@@ -480,7 +480,7 @@ namespace Nemerle.Compiler
     }
 
 
-    static SquashDuplicates['a] (lst : list ['a]) : list ['a]
+    static internal SquashDuplicates['a] (lst : list ['a]) : list ['a]
       where 'a : IMember
     {
       def seen = Hashtable ();
@@ -553,7 +553,7 @@ namespace Nemerle.Compiler
     static IsFunctional (expr : TExpr) : bool
     {
       match (expr) {
-        | TExpr.StaticRef (_ is IMethod) => true
+        | TExpr.StaticRef (_, _ is IMethod, _) => true
         | TExpr.Delayed (dt) => dt.IsFunctional
         | _ => expr.Type.Hint is Some (MType.Fun)
       }
@@ -584,7 +584,7 @@ namespace Nemerle.Compiler
           MType.ConstructFunctionType ([from.GetFreshType () : TyVar], 
                                        to.GetFreshType ());
         foreach (meth is IMethod in methods : list [IMember]) {
-          when (meth.IsStatic && meth.GetFreshType ().TryRequire (ty))
+          when (meth.IsStatic && meth.GetFreshType () [0].TryRequire (ty))
             res = meth :: res;
         }
 
@@ -593,7 +593,7 @@ namespace Nemerle.Compiler
       }
     }
 
-    SubtypingOrImplicitConv (from : TyVar, to : TyVar, method : out IMethod) : bool
+    SubtypingOrImplicitConv (from : TyVar, to : TyVar, method : out TExpr.StaticRef) : bool
     {
       method = null;
       if (from.TryRequire (to)) {
@@ -608,16 +608,18 @@ namespace Nemerle.Compiler
                 if (methods.IsEmpty) false
                 else {
                   mutable res = [];
-                  def ty = MType.ConstructFunctionType ([from], to);
+                  def needed = MType.ConstructFunctionType ([from], to);
                   foreach (meth in methods) {
-                    when (meth.GetFreshType ().TryRequire (ty))
+                    when (meth.GetFreshType () [0].TryRequire (needed))
                       res = meth :: res;
                   }
                   res = GetBestOverloads1 (res);
                   match (res) {
                     | [one] =>
-                      method = one;
-                      _ = method.GetFreshType ().Require (ty);
+                      def overload = ConstructMethodOverload (one);
+                      method = overload.Compile () :> TExpr.StaticRef;
+                      def ok = method.Type.Require (needed);
+                      Util.cassert (ok);
                       true
                     | [] => false
                     | lst =>
@@ -742,8 +744,9 @@ namespace Nemerle.Compiler
             if (meth == null)
               expr
             else
-              match (meth.BuiltinKind) {
-                | BuiltinMethodKind.ValueTypeConversion =>
+              match (meth) {
+                | StaticRef (_, meth is IMethod, _) 
+                  when meth.BuiltinKind is ValueTypeConversion () =>
                   TExpr.TypeConversion (target, expr, target,
                                         ConversionKind.IL (local_context.IsChecked))
                 | _ =>
@@ -755,6 +758,19 @@ namespace Nemerle.Compiler
             assert (expr != null);
             TExpr.TypeConversion (target, expr, target,
                                   ConversionKind.IgnoreValue ())
+          } else if (target.Hint is Some (Fun) && 
+                     expr.Type.Hint is Some (Fun) &&
+                     expr.Type.Fix ().TrySigRequire (target.Fix ())) {
+            def target = target.Fix ();
+            _ = expr.Type.FixedValue.SigRequire (target);
+            def srctypes = Option.UnSome (target.FunReturnTypeAndParms ()) [0];
+            def (parms, refs) =
+              List.Split (srctypes.Map (fun (ty) {
+                def name = Util.tmpname ("p");
+                ( <[ parameter : $(name : dyn) : $(ty : typed) ]>,
+                  <[ $(name : dyn) ]> )
+              }));
+              TypeExpr (<[ fun (.. $parms) { $(expr : typed) (.. $refs) } ]>, target)
           } else null
       }
     }
@@ -777,19 +793,21 @@ namespace Nemerle.Compiler
     static AtLeast (m : TyVar) : TyVar
     {
       def tv = FreshTyVar ();
-      _ = tv.Require (m);
+      tv.ForceRequire (m);
       tv
     }
 
 
     PushLocals () : void
     {
+      //Message.Debug ("push locals{ ");
       locals_stack.Push (local_context)
     }
 
 
     PopLocals () : void
     {
+      //Message.Debug ("pop locals }");
       local_context = locals_stack.Pop ()
     }
     #endregion
@@ -1175,8 +1193,10 @@ namespace Nemerle.Compiler
             TExpr.Error ()
             
 
-        | PT.PExpr.GenericSpecifier (fnc, _) =>
-          TypeExpr (fnc, expected)
+        | PT.PExpr.GenericSpecifier (fnc, gen_params) =>
+          def fnc = TypeExpr (fnc, expected);
+          ApplyGenericSpecifier (fnc, gen_params.Map (BindType));
+          fnc
 
 
         | PT.PExpr.Is (e1, e2) =>
@@ -1250,8 +1270,10 @@ namespace Nemerle.Compiler
             }
           }
 
+          //Message.Debug ("push seq");
           PushLocals ();
           def res = loop ([], l);
+          //Message.Debug ("pop seq");
           PopLocals ();
           res
 
@@ -1262,7 +1284,7 @@ namespace Nemerle.Compiler
           foreach (e in l) {
             def tv1 = FreshTyVar ();
             def tv2 = FreshTyVar ();
-            _ = tv1.Require (tv2);
+            tv1.ForceRequire (tv2);
             def e = TypeExpr (e, tv1);
             res_exprs = ImplicitCast (e, tv2) :: res_exprs;
             res_types = tv2 :: res_types;
@@ -1572,7 +1594,7 @@ namespace Nemerle.Compiler
 
       if (mono_type == null) {
         def tv = FreshTyVar ();
-        _ = tv.Require (InternalType.Object);
+        tv.ForceRequire (InternalType.Object);
         tv.IsFromNull = true;
         tv
       } else {
@@ -1587,7 +1609,7 @@ namespace Nemerle.Compiler
       
       match (obj) {
         | TExpr.PropertyMember (_, prop) when prop.IsIndexer
-        | TExpr.StaticPropertyRef (prop) when prop.IsIndexer
+        | TExpr.StaticPropertyRef (_, prop) when prop.IsIndexer
         | TExpr.Delayed =>
           TypeCall (<[ $(obj : typed) ]>, args, expected, is_property = true)
         
@@ -1686,13 +1708,12 @@ namespace Nemerle.Compiler
                           | MType.Fun (from, _) => from
                           | _ => assert (false)
                         }
-                      // XXX if we want variant ctor to be of variant type
-                      // here is the place
                       def mt = MType.Fun (from, t.GetMemType ());
                       def ty = t.FreshSubst ().Apply (mt);
-                      res = OverloadPossibility (solver, ty, null, meth) :: res;
+                      def ret_type = (ty.FixedValue :> MType.Fun).to :> MType.Class;
+                      res = OverloadPossibility (solver, ty, null, ret_type, meth) :: res;
                       when (meth.IsVarArgs) {
-                        def op = OverloadPossibility (solver, ty, null, meth);
+                        def op = OverloadPossibility (solver, ty, null, ret_type, meth);
                         op.VarArgs = true;
                         res = op :: res;
                       }
@@ -1701,8 +1722,9 @@ namespace Nemerle.Compiler
                 }
 
                 when (t.IsValueType && !seen_empty_ctor) {
-                  def ty = ConstructFunctionType ([], t.GetFreshType ());
-                  def op = OverloadPossibility (solver, ty, null, t);
+                  def res_type = t.GetFreshType ();
+                  def ty = ConstructFunctionType ([], res_type);
+                  def op = OverloadPossibility (solver, ty, null, res_type, t);
                   res = op :: res;
                 }
 
@@ -1713,9 +1735,9 @@ namespace Nemerle.Compiler
                 res
 
               | f =>
-                def res = t.FreshSubst ().Apply (f.GetMemType ());
+                def res = t.FreshSubst ().Apply (f.GetMemType ()) :> MType.Class;
                 def ty = ConstructFunctionType ([], res);
-                def op = OverloadPossibility (solver, ty, null, f);
+                def op = OverloadPossibility (solver, ty, null, res, f);
                 op.IsConstantObject = true;
                 [op]
             }
@@ -1723,10 +1745,71 @@ namespace Nemerle.Compiler
     }
 
 
+    ConstructEnclosingType (symbol : IMember, 
+                            additional_sig_types : list [MType] = null) : MType.Class
+    {
+      def declaring = symbol.DeclaringType;
+      def from = declaring.GetFreshType ();
+
+      unless (declaring.Typarms.IsEmpty) {
+        def type_tyvars = Hashtable ();
+        foreach (tv in declaring.Typarms)
+          type_tyvars [tv.Id] = tv;
+
+        def clear_ht (_) {
+          | MType.TyVarRef (tv) when type_tyvars.ContainsKey (tv.Id) =>
+            type_tyvars [tv.Id] = null;
+          | _ => {}
+        }
+        
+        symbol.GetMemType ().Iter (clear_ht);
+        
+        when (additional_sig_types != null)
+          foreach (t in additional_sig_types)
+            t.Iter (clear_ht);
+
+        if (symbol.DeclaringType.Equals (current_type))
+          List.Iter2 (from.args, declaring.Typarms, fun (d, s) {
+            when (type_tyvars [s.Id] != null) {
+              def res = d.Unify (MType.TyVarRef (s));
+              Util.cassert (res);
+            }
+          })
+
+        else
+          List.Iter2 (from.args, declaring.Typarms, fun (d, s) {
+            when (type_tyvars [s.Id] != null)
+              match (s.Constraints) {
+                | [MType.Class (tc, [_])] when tc.Name == "IComparable" =>
+                  def ok = d.Unify (NamespaceTree.LookupInternalType (
+                      ["Nemerle", "Hacks", "IComparableClass"]).GetMemType ());
+                  Util.cassert (ok);
+                | _ => {}
+              }
+          })
+      }
+
+      from
+    }
+
+    
+    ConstructMethodOverload (m : IMethod) : OverloadPossibility
+    {
+      def bounds = m.GetHeader ().typarms.Map (fun (tv) { tv.LowerBound });
+      def from = ConstructEnclosingType (m, bounds);
+
+      def (ty, vars) = from.TypeOfMethodWithTyparms (m);
+      OverloadPossibility (solver, ty, null, from, m,
+                           method_typarms = vars)
+    }
+
+
     InterpretGlobal (symbol : IMember) : list [OverloadPossibility]
     {
-      def single (ty, mem) {
-         [OverloadPossibility (solver, ty, null, mem)]
+      def single (mem) {
+        //Message.Debug ($"access of $mem");
+        def from = ConstructEnclosingType (mem);
+        [OverloadPossibility (solver, from.TypeOfMember (mem), null, from, mem)]
       }
       
       match (symbol) {
@@ -1762,28 +1845,27 @@ namespace Nemerle.Compiler
 
             | MemberKind.Method (m) =>
               if (m.IsVarArgs) {
-                def o =
-                  OverloadPossibility (solver, m.GetFreshType (), null, m);
-                def o' =
-                  OverloadPossibility (solver, m.GetFreshType (), null, m);
-                o'.VarArgs = true;
-                [o, o']
-              } else
-                single (m.GetFreshType (), m)
+                def o1 = ConstructMethodOverload (m);
+                def o2 = ConstructMethodOverload (m);
+                o2.VarArgs = true;
+                [o1, o2]
+              } else {
+                [ConstructMethodOverload (m)]
+              }
 
             | MemberKind.Property
             | MemberKind.Field =>
-              single (mem.GetMemType (), mem)
+              single (mem)
 
             | MemberKind.Event (e) =>
               if (e.DeclaringType.Equals (current_type)) {
-                def field = (e :> NemerleEvent).storage_field;
+                def field = (e :> EventBuilder).storage_field;
                 if (field == null)
                   [] // XXX how?
                 else
-                  single (field.GetMemType (), field)
+                  single (field)
               } else
-                single (e.GetMemType (), e)
+                single (e)
           }
       }
     }
@@ -1871,26 +1953,29 @@ namespace Nemerle.Compiler
                     ReportError (messenger,
                                  $ "$mem is not accessible")
                 else {
-                  def ty =
+                  def (ty, vars) =
                     match (mem) {
-                      | meth is IMethod => t.TypeOfMethod (meth)
-                      | _ => t.TypeOfMember (mem)
+                      | meth is IMethod => t.TypeOfMethodWithTyparms (meth)
+                      | _ => (t.TypeOfMember (mem), [])
                     }
                   def allowed = expected.TryUnify (ty);
                   if (!allowed)
                     when (print_errors) {
                       solver.PushState ();
                       messenger.NeedMessage = true;
+                      def before = expected.ToString ();
                       def allowed = expected.Unify (ty);
                       assert (!allowed);
                       ReportError (messenger, 
-                                   $ "$mem has invalid type (expected $expected)")
+                                   $ "$mem has invalid type $ty (expected $before)")
                     }
                   else {
-                    res = OverloadPossibility (solver, ty, obj, mem) :: res;
+                    res = OverloadPossibility (solver, ty, obj, null, mem,
+                                               method_typarms = vars) :: res;
                     match (mem) {
                       | meth is IMethod when meth.IsVarArgs =>
-                        def op = OverloadPossibility (solver, ty, obj, mem);
+                        def op = OverloadPossibility (solver, ty, obj, null, mem,
+                                                      method_typarms = vars);
                         op.VarArgs = true;
                         res = op :: res;
                       | _ => {}
@@ -1952,12 +2037,21 @@ namespace Nemerle.Compiler
               result = TypeExpr (expr, expected);
                 
             | LocalValue.Kind.Function (fun_header, _) =>
-              if (fun_header.typarms.IsEmpty)
-                ty = local.Type
-              else
-                // XXX this fixes entire type, but we cannot do any better
-                // I guess
-                ty = Subst.Fresh (fun_header.typarms).Apply (local.Type.Fix ())
+              mutable sub = null;
+              mutable typarms = [];
+
+              def fnty =
+                if (fun_header.typarms.IsEmpty)
+                  local.Type
+                else {
+                  // XXX this fixes entire type, but we cannot do any better
+                  // I guess
+                  (sub, typarms) = Subst.Fresh (fun_header.typarms);
+                  sub.Apply (local.Type.Fix ())
+                }
+                
+              _ = Expect (expected, fnty, "local function reference");
+              result = TExpr.LocalFunRef (expected, local, typarms);
             
             // for block of type 'a, block exit is forall 'b. 'a -> 'b
             | LocalValue.Kind.BlockReturn (res, _) =>
@@ -2017,6 +2111,47 @@ namespace Nemerle.Compiler
     }
     #endregion
 
+    
+    #region Generic specifier
+    ApplyGenericSpecifier (meth : IMember, 
+                           inferred : list [TyVar],
+                           supplied : list [TyVar]) : void
+    {
+      if (inferred.Length != supplied.Length)
+        ReportError (Passes.Solver.CurrentMessenger,
+                     $ "$meth takes $(inferred.Length) generic parameters, "
+                       "while $(supplied.Length) was supplied")
+      else 
+        List.Iter2 (inferred, supplied, fun (inferred, supplied) {
+          _ = Expect (inferred, supplied, "generic specifier")
+        })
+    }
+    
+    ApplyGenericSpecifier (expr : TExpr, gen_parms : list [TyVar]) : void
+    {
+      match (expr) {
+        | TExpr.ImplicitValueTypeCtor =>
+          def c = (expr.Type.Fix () :> MType.Fun).to :> MType.Class;
+          ApplyGenericSpecifier (c.tycon, c.args, gen_parms);
+          
+        | TExpr.StaticRef (MType.Class (_, tp), meth is IMethod, [])
+          when meth.GetFunKind () is FunKind.Constructor =>
+          ApplyGenericSpecifier (meth, tp, gen_parms);
+        
+        | TExpr.MethodRef (_, meth, tp, _)
+        | TExpr.StaticRef (_, meth is IMethod, tp) =>
+          ApplyGenericSpecifier (meth, tp, gen_parms);
+
+        | TExpr.Delayed (susp) =>
+          susp.ApplyGenericSpecifier (gen_parms);
+
+        | _ =>
+          ReportError (messenger,
+                       $ "don't know how to apply generic specifier to $expr");
+      }
+    }
+    #endregion
+    
 
     #region Static caches -- operators and conversions
     static binary_operators : Hashtable [string, string] = Hashtable ();
@@ -2112,12 +2247,13 @@ namespace Nemerle.Compiler
         foreach (meth is IMethod in lookup_in.LookupMember (".ctor"))
           when (meth.CanAccess (current_type) && 
                 meth.GetFunKind () is FunKind.Constructor) {
+            def from = sub.Apply (lookup_in.GetMemType ()) :> MType.Class;
             def ty = sub.Apply (meth.GetMemType ());
-            def o = OverloadPossibility (solver, ty, null, meth);
+            def o = OverloadPossibility (solver, ty, null, from, meth);
             o.IsBaseCall = true;
             res = o :: res;
             when (meth.IsVarArgs) {
-              def op = OverloadPossibility (solver, ty, null, meth);
+              def op = OverloadPossibility (solver, ty, null, from, meth);
               op.IsBaseCall = true;
               op.VarArgs = true;
               res = op :: res;
@@ -2220,9 +2356,32 @@ namespace Nemerle.Compiler
               Delay (kind, FreshTyVar ())
             else {
               parameters = null;
+              _ = Expect (expected, folded.Type, "literal");
               folded
             }
 
+          | (Ref (name), []) when tenv.Find (name) is Some (_) =>
+            def var = Option.UnSome (tenv.Find (name));
+            parameters = null;
+            def defaultv = TExpr.DefaultValue (MType.TyVarRef (var));
+            
+            if (var.IsValueType)
+              defaultv
+            else if (var.HasDefaultConstructor) {
+              TypeExpr (<[
+                {
+                  def _N_def = $(defaultv : typed);
+                  if (_N_def : object == null)
+                    System.Activator.CreateInstance ()
+                  else _N_def
+                }
+              ]>, MType.TyVarRef (var))
+            }
+            else {
+              Message.FatalError ($"generic parameter $name cannot be used to create new instance, "
+                                  "because it doesn't have `struct' or `new ()' constraint");
+            }
+          
           | (PT.PExpr.Ref (PT.Name where (Id = "_N_op_Increment") as name), [parm1])
           | (PT.PExpr.Ref (PT.Name where (Id = "_N_op_Decrement") as name), [parm1]) =>
             def operator_name = name.Id.Substring (3);
@@ -2235,7 +2394,6 @@ namespace Nemerle.Compiler
                            $ "ref/out parameters not supported with ++/--");
             
             Delay (kind, FreshTyVar ())
-
             
               
           | (<[ this ]>, _) => GetBaseOverloads (is_base = false)
@@ -2259,9 +2417,9 @@ namespace Nemerle.Compiler
             dt.Resolve (); // just try
             expr
 
-          // if this call has been folded
-          | TExpr.Literal when parameters == null =>
-            _ = Expect (expected, fnc.Type, "literal");
+          // special cases when call has been folded to something else
+          // (literal, 'a(), etc.)
+          | _ when parameters == null =>
             fnc
             
           | fnc =>
@@ -2301,10 +2459,10 @@ namespace Nemerle.Compiler
         }
 
       if (to.TryRequire (from)) {
-        _ = to.Require (from);
+        to.ForceRequire (from);
         TExpr.TypeConversion (expr, to, ConversionKind.DownCast ());
       } else if (from.TryRequire (to)) {
-        _ = from.Require (to);
+        from.ForceRequire (to);
         Message.Warning (10001, $"there is no check needed to cast $from to $to");
         Message.HintOnce (10001, "consider using : instead of :>");
 
@@ -2325,7 +2483,7 @@ namespace Nemerle.Compiler
 
         def needed = ConstructFunctionType ([from], to);
         def operators = List.RevFilter (operators, fun (op : IMethod) {
-          op.GetFreshType ().TryRequire (needed);
+          op.GetFreshType () [0].TryRequire (needed);
         });
 
         def operators = GetBestOverloads1 (operators);
@@ -2349,8 +2507,14 @@ namespace Nemerle.Compiler
           | [single] =>
             if (single.BuiltinKind is BuiltinMethodKind.ValueTypeConversion)
               TExpr.TypeConversion (expr, to, ConversionKind.IL (local_context.IsChecked))
-            else
-              TExpr.TypeConversion (expr, to, ConversionKind.MethodCall (single))
+            else {
+              def (ty, vars) = single.GetFreshType ();
+              ty.ForceRequire (needed);
+              def from = single.DeclaringType.GetMemType ();
+              def sr = TExpr.StaticRef (ty, from, single, vars);
+              TExpr.TypeConversion (expr, to, 
+                                    ConversionKind.MethodCall (sr))
+            }
           | [] =>
             if (is_strange_type (from) || is_strange_type (to)) {
               TExpr.TypeConversion (expr, to, ConversionKind.DownCast ())
@@ -2525,28 +2689,25 @@ namespace Nemerle.Compiler
       match (expr) {
         | TExpr.LocalRef (d) =>
           $ "a reference to local symbol `$(d)'"
-        | TExpr.StaticRef (m) =>
-          def tyname =
-            if (m.DeclaringType == null)
-              ""
-            else
-              m.DeclaringType.FullName + ".";
+        | TExpr.LocalFunRef (d, _) =>
+          $ "a reference to `$(d)'"
+        | TExpr.StaticRef (from, m, _) =>
+          def tyname = from.ToString () + ".";
           "a reference to global symbol `" + tyname + m.Name + "'"
         | TExpr.FieldMember (_, f) =>
           "a reference to field `" + f.Name + "'"
-        | TExpr.ConstantObjectRef (m) =>
+        | TExpr.ConstantObjectRef (from, _) =>
           "a reference to constant constructor of `" +
-          m.DeclaringType.FullName + "'"
-        | TExpr.ImplicitValueTypeCtor (t) =>
-          "a reference to implicit constructor of `" +
-          t.FullName + "'"
-        | TExpr.StaticPropertyRef (p)
+          from.ToString () + "'"
+        | TExpr.ImplicitValueTypeCtor =>
+          $"a reference to implicit constructor of `$(expr.Type)'"
+        | TExpr.StaticPropertyRef (_, p)
         | TExpr.PropertyMember (_, p) =>
           "a reference to property `" + p.Name + "'"
-        | TExpr.StaticEventRef (p)
+        | TExpr.StaticEventRef (_, p)
         | TExpr.EventMember (_, p) =>
           "a reference to event `" + p.Name + "'"
-        | TExpr.MethodRef (_, m, _) =>
+        | TExpr.MethodRef (_, m, _, _) =>
           "a reference to method `" + m.Name + "'"
         | TExpr.Call (f, _, _) =>
           "a function call to " + DescribeExpression (f)
