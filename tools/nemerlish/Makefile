@@ -22,6 +22,14 @@ Nemerle.Evaluation.dll: eval.n
 nemish.exe: $(NEMISH_SRC)
 	$(NCC) -r Nemerle.Evaluation.dll -o nemish.exe $(NEMISH_SRC)
 
+withdoc: withdoc-dll withdoc-exe
+
+withdoc-dll: eval.n
+	$(NCC) -r Nemerle.Compiler.dll -t library -doc "Nemerle.Evaluation.dll.xml" -o Nemerle.Evaluation.dll eval.n
+
+withdoc-exe: $(NEMISH_SRC)
+	$(NCC) -r Nemerle.Evaluation.dll -doc "nemish.exe.xml" -o nemish.exe $(NEMISH_SRC)
+
 install: all
 	$(Q)$(GACUTIL_COMMAND) Nemerle.Evaluation.dll 
 	$(INST) "[$(BINDIR)]" nemish.exe
