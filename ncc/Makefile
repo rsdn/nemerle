@@ -132,6 +132,9 @@ NEMERLE_COMPILER_DLL_SRC = \
 	typing/Typer-PatternTyper.n	 \
 	typing/Typer.n			 \
 	typing/Typer2.n			 \
+    completion/CodeCompletionEngine.n   \
+    completion/CompletionEngineError.n  \
+    completion/CompletionEngineTree.n   \
 
 
 NCC_EXE_SRC       = main.n
