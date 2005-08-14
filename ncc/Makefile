@@ -79,7 +79,6 @@ NEMERLE_COMPILER_DLL_SRC = \
 	external/Codec.n		 \
 	external/InternalTypes.n	 \
 	external/LibrariesLoader.n	 \
-	generation/CompileTypedMethod.n  \
 	generation/HierarchyEmitter.n	 \
 	generation/ILEmitter.n		 \
 	generation/ImplementsWrapperMaker.n \
