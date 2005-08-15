@@ -242,7 +242,7 @@ namespace Nemerle.Compiler
       def create_type_emit_builder (ti : TypeBuilder) {
         when (allow_it (ti)) {
           //Message.Debug ("make type builder for " + ti.FullName);
-          ti.ConstructTypeBuilder ();
+          ti.CreateEmitBuilder (this);
           when (ti.Attributes %&& NemerleAttributes.Macro) {
             def attr = make_string_attribute (SystemType.ContainsMacroAttribute,
                                               ti.GetTypeBuilder ().FullName);
@@ -293,7 +293,7 @@ namespace Nemerle.Compiler
     {
       // Message.Debug ($"ma: $ti -> $mem ");
       when (_cgil_phase >= 1) {
-        ti.ConstructTypeBuilder ();
+        ti.CreateEmitBuilder (this);
         ti.UpdateEmittedInheritance ();
       }
 
@@ -327,7 +327,7 @@ namespace Nemerle.Compiler
     }
 
 
-    private static make_string_attribute (attr_type : System.Type, value : string) : Emit.CustomAttributeBuilder
+    internal static make_string_attribute (attr_type : System.Type, value : string) : Emit.CustomAttributeBuilder
     {
       def constructor_param_types = array [SystemType.String];
       def constructor_info = attr_type.GetConstructor (constructor_param_types);
@@ -343,13 +343,123 @@ namespace Nemerle.Compiler
       Emit.CustomAttributeBuilder (constructor_info, array [])
     }
 
+
+    /* -- PRIVATE FIELDS --------------------------------------------------- */
+
+    private _assembly_name : System.Reflection.AssemblyName;
+    private _assembly_builder : Emit.AssemblyBuilder;
+    internal _module_builder : Emit.ModuleBuilder;
+    public static mutable _debug_emit : ISymbolWriter;
+    internal mutable contains_nemerle_specifics : bool = false;
+
+    internal _need_entry_point : bool;
+    /** updated when method with static Main signature is met */
+    internal mutable _entry_point : option [MethodInfo];
+
+    private _OutputFileName : string;
+    private mutable _cgil_phase : int;
+  }
+
+
+  public partial class TypeBuilder : TypeInfo
+  {
+    /**
+     * This method makes a skeleton of a class -- the class partial type and
+     * partial types for the nested classes are created. The parent class and
+     * the interfaces being implemented are assumed to have been processed
+     * before constructing a dependant class. All the declarations and method
+     * implementations will be created successively in subsequent passes.
+     */
+    internal CreateEmitBuilder (emitter : HierarchyEmitter) : void
+    {
+      when (system_type == null) {
+        /* create optional custom attributes for this type */
+        def custom_attribute =
+          match (tydecl) {
+            | TypeDeclaration.Variant (decls) =>
+              make_nemerle_variant_attribute (decls)
+              
+            | TypeDeclaration.VariantOption =>
+              def has_co_ctor = GetConstantObject () != null;
+              make_nemerle_variant_option_attribute (has_co_ctor)
+
+            | TypeDeclaration.Alias (t) =>
+              make_nemerle_type_alias_attribute (t)
+              
+            | _ => null
+          };
+
+        /* decide the new type attributes */
+        def is_nested = DeclaringType != null;
+
+        def type_kind_attrs =
+          match (tydecl) {
+            | TypeDeclaration.Variant 
+            | TypeDeclaration.VariantOption 
+            | TypeDeclaration.Class          => TypeAttributes.Class
+            | TypeDeclaration.Alias // we pretend type alias is an interface
+            | TypeDeclaration.Interface      => TypeAttributes.Interface %| TypeAttributes.Abstract
+            | TypeDeclaration.Enum           => TypeAttributes.Sealed %| TypeAttributes.Class
+          };
+
+        def attrs = make_type_attributes (Attributes, is_nested) %| type_kind_attrs;
+        mutable typarms_len = TyparmsCount;
+
+        when (is_nested)
+          typarms_len -= DeclaringType.TyparmsCount;
+
+        def generic_mark_suffix =
+          match (typarms_len) {
+            | 0 => ""
+            | l => "`" + l.ToString ()
+          }
+
+        /* create the type builder for a top-level or nested class declaration */
+        type_builder =
+          if (!is_nested)
+            emitter._module_builder.DefineType (FullName + generic_mark_suffix, attrs)
+          else {
+            def containing_builder = (DeclaringType :> TypeBuilder).GetTypeBuilder ();
+            containing_builder.DefineNestedType (Name + generic_mark_suffix, attrs)
+          };
+
+        // creates and store generic parameters in our StaticTyVars
+
+        unless (typarms.IsEmpty) {
+          def names = typarms.MapToArray (fun (x) { x.Name });
+          def generic_parms = type_builder.DefineGenericParameters (names);
+          typarms.IterI (0, fun (idx, x) { 
+            x.SetGenericBuilder (generic_parms [idx]); 
+          });
+        }
+
+        when (custom_attribute != null) {
+          emitter.contains_nemerle_specifics = true;
+          type_builder.SetCustomAttribute (custom_attribute);
+        };
+
+        // Structs with no fields need to have at least one byte.
+        // The right thing would be to set the PackingSize in a DefineType
+        // but there are no functions that allow interfaces *and* the size to
+        // be specified.
+        // maybe in 2.0 there is a better API
+        when (IsStruct && GetFields (BindingFlags.Instance %|
+                                     BindingFlags.Public %| 
+                                     BindingFlags.NonPublic).IsEmpty)
+          _ = type_builder.DefineField ("$PLACE_HOLDER$", SystemType.Byte,
+                                        FieldAttributes.Private %| FieldAttributes.SpecialName);
+        
+        system_type = type_builder;
+      }
+    }
+
     /**
      * Builds a Nemerle variant attribute
      */
     private static make_nemerle_variant_attribute (decls : list [TypeInfo]) : Emit.CustomAttributeBuilder
     {
       def names = decls.Map (fun (decl) { decl.FullName });
-      make_string_attribute (SystemType.VariantAttribute, NString.Concat (",", names))
+      HierarchyEmitter.make_string_attribute (SystemType.VariantAttribute, NString.Concat (",", names))
     }
 
 
@@ -358,7 +468,7 @@ namespace Nemerle.Compiler
      */
     private static make_nemerle_type_alias_attribute (t : MType) : Emit.CustomAttributeBuilder
     {
-      make_string_attribute (SystemType.TypeAliasAttribute, TyCodec.EncodeType (t))
+      HierarchyEmitter.make_string_attribute (SystemType.TypeAliasAttribute, TyCodec.EncodeType (t))
     }
 
 
@@ -367,7 +477,7 @@ namespace Nemerle.Compiler
      */
     private static make_nemerle_variant_option_attribute (is_const : bool) : Emit.CustomAttributeBuilder
     {
-      make_void_attribute (if (is_const)
+      HierarchyEmitter.make_void_attribute (if (is_const)
                              SystemType.ConstantVariantOptionAttribute
                            else
                              SystemType.VariantOptionAttribute)
@@ -375,7 +485,7 @@ namespace Nemerle.Compiler
 
 
     /**
-     * Converts Nemerle method modifiers to the Framework type attributes.
+     * Converts Nemerle modifiers to the Framework type attributes.
      */
     private static make_type_attributes (attrs : NemerleAttributes, is_nested : bool) : TypeAttributes
     {
@@ -400,112 +510,7 @@ namespace Nemerle.Compiler
       result
     }
 
-
-    /**
-     * This method makes a skeleton of a class -- the class partial type and
-     * partial types for the nested classes are created. The parent class and
-     * the interfaces being implemented are assumed to have been processed
-     * before constructing a dependant class. All the declarations and method
-     * implementations will be created successively in subsequent passes.
-     */
-    internal ConstructTypeBuilder (tyinfo : TypeBuilder) : Emit.TypeBuilder
-    {
-      /* create optional custom attributes for this type */
-      def custom_attribute =
-        match (tyinfo.GetTydecl ()) {
-          | TypeDeclaration.Variant (decls) => make_nemerle_variant_attribute (decls)
-          | TypeDeclaration.VariantOption =>
-            def has_co_ctor = tyinfo.GetConstantObject () != null;
-            make_nemerle_variant_option_attribute (has_co_ctor)
-
-          | TypeDeclaration.Alias (t) => make_nemerle_type_alias_attribute (t)
-          | _ => null
-        };
-
-      /* decide the new type attributes */
-      def is_nested = tyinfo.DeclaringType != null;
-
-      def type_kind_attrs =
-        match (tyinfo.GetTydecl ()) {
-          | TypeDeclaration.Variant 
-          | TypeDeclaration.VariantOption 
-          | TypeDeclaration.Class          => TypeAttributes.Class
-          | TypeDeclaration.Alias // we pretend type alias is an interface
-          | TypeDeclaration.Interface      => TypeAttributes.Interface %| TypeAttributes.Abstract
-          | TypeDeclaration.Enum           => TypeAttributes.Sealed %| TypeAttributes.Class
-        };
-
-      def attrs = make_type_attributes (tyinfo.Attributes, is_nested) %| type_kind_attrs;
-      def typarms = tyinfo.GetTyparms ();
-      mutable typarms_len = tyinfo.TyparmsCount;
-
-      when (is_nested)
-        typarms_len -= tyinfo.DeclaringType.TyparmsCount;
-      
-      def generic_mark_suffix =
-        match (typarms_len) {
-          | 0 => ""
-          | l => "`" + l.ToString ()
-        }
-      
-      /* create the type builder for a top-level or nested class declaration */
-      def new_type_builder =
-        if (!is_nested)
-          this._module_builder.DefineType (tyinfo.FullName + generic_mark_suffix, attrs)
-        else {
-          def type_builder = (tyinfo.DeclaringType :> TypeBuilder).GetTypeBuilder ();
-          type_builder.DefineNestedType (tyinfo.Name + generic_mark_suffix, attrs)
-        };
-
-      // creates and store generic parameters in our StaticTyVars
-
-      unless (typarms.IsEmpty) {
-        def names = typarms.MapToArray (fun (x) { x.Name });
-        def generic_parms = new_type_builder.DefineGenericParameters (names);
-        typarms.IterI (0, fun (idx, x) { 
-          x.SetGenericBuilder (generic_parms [idx]); 
-        });
-      }
-
-      when (custom_attribute != null) {
-        contains_nemerle_specifics = true;
-        new_type_builder.SetCustomAttribute (custom_attribute);
-      };
-
-      // Structs with no fields need to have at least one byte.
-      // The right thing would be to set the PackingSize in a DefineType
-      // but there are no functions that allow interfaces *and* the size to
-      // be specified.
-      // maybe in 2.0 there is a better API
-      when (tyinfo.IsStruct && tyinfo.GetFields (BindingFlags.Instance %|
-                                                 BindingFlags.Public %| 
-                                                 BindingFlags.NonPublic).IsEmpty)
-        _ = new_type_builder.DefineField ("$PLACE_HOLDER$", SystemType.Byte,
-                                          FieldAttributes.Private %| FieldAttributes.SpecialName);
-
-      new_type_builder
-    }
-
-
-    /* -- PRIVATE FIELDS --------------------------------------------------- */
-
-    private _assembly_name : System.Reflection.AssemblyName;
-    private _assembly_builder : Emit.AssemblyBuilder;
-    internal _module_builder : Emit.ModuleBuilder;
-    public static mutable _debug_emit : ISymbolWriter;
-    private mutable contains_nemerle_specifics : bool = false;
-
-    internal _need_entry_point : bool;
-    /** updated when method with static Main signature is met */
-    internal mutable _entry_point : option [MethodInfo];
-
-    private _OutputFileName : string;
-    private mutable _cgil_phase : int;
-  }
-
-
-  public partial class TypeBuilder : TypeInfo
-  {
+    
     /**
      *  Set up custom attributes on members of this TypeBuilder. Compile method's bodies.
      */
@@ -595,12 +600,72 @@ namespace Nemerle.Compiler
         CreateMethodBuilder (tb)
     }
 
+    /**
+     * Emits a method's body
+     */
     internal CompileAfterTyping () : void
     {
+      def setup_method (emitter) {
+        // make sure type is not finalized
+        def type_builder = declaring_type.GetTypeBuilder ();      
+        assert (type_builder != null);
+
+        def mb = method_builder;
+        Util.cassert (mb != null, $"method builder is null for $this");
+
+        /* update the entry point settings, if necessary */
+        when (emitter._need_entry_point && Name == "Main") {
+          def has_correct_signature () {
+            mb.IsStatic &&
+            (ReturnType.Equals (InternalType.Int32) || 
+             ReturnType.Equals (InternalType.Void)) &&
+            match (fun_header.parms) {
+              // workaround bug in MS PEVerify
+              | [fp] =>
+                fp.ty.Fix ().Equals (MType.Array (InternalType.String, 1))
+              | [] => true
+              | _ => false
+            }
+          }
+
+          if (has_correct_signature ()) {
+            match (emitter._entry_point) {
+              | Some =>
+                Message.Error ($ "more then one entry point (Main function) "
+                                 "found in $(mb.DeclaringType)")
+              | None =>
+                when (HierarchyEmitter._debug_emit != null)
+                  HierarchyEmitter._debug_emit.SetUserEntryPoint (SymbolToken (1));
+                emitter._entry_point = Some (mb : MethodInfo)
+            }
+          }
+          else
+            Message.Warning (28, $"$this has the wrong signature to be an entry point");
+        };
+
+        /* update the overriding relationships */
+        match (fun_kind) {
+          | FunKind.BoundMethod (impl) =>
+            foreach (overridden : IMethod in impl) {
+
+              // Message.Debug ("override " + method_info.Name + " " + overridden_info.Name + " in " +
+              //                type_builder.FullName);
+              when (mb.IsPrivate || Name != overridden.Name) {
+                def overridden_info =
+                  ILEmitter.GetMethodInfo (declaring_type.GetMemType (), overridden);
+                type_builder.DefineMethodOverride (mb, overridden_info)
+              }
+            }
+          | _ => {}
+        }
+      }
+      
   //    Message.Debug (this.ToString ());
       match (fun_header.body) {
         | FunBody.ILed => {}
         | _ =>
+          // maybe create additional method for implementing interface method
+          // (in case of co/contravariant methods)
           CreateImplementsWrapper ();
 
           // Message.Debug (Location, $ "compile: $this");
@@ -617,11 +682,26 @@ namespace Nemerle.Compiler
                 unless (declaring_type.IsDelegate) {
                   assign_parameter_indexes (GetMethodBase ().IsStatic);
                   emit_parameter_attributes ();
+
+                  unless (fun_kind is FunKind.Constructor)
+                    setup_method (Passes.Emitter);
                   
-                  if (fun_kind is FunKind.Constructor)
-                    EmitConstructor ()
-                  else
-                    EmitMethod (Passes.Emitter);
+                  declaring_type.DoBeforeFinalization2 (fun () {
+                    // Message.Debug ($"making il generator for $meth");
+                    def gen =
+                      match (GetMethodBase ()) {
+                        | mb is Emit.MethodBuilder =>
+                          ILEmitter (mb, declaring_type, fun_header);
+
+                        | cb is Emit.ConstructorBuilder =>
+                          ILEmitter (cb, declaring_type, fun_header);
+
+                        | _ => Util.ice ()
+                      }
+
+                    when (Options.EmitDebug) gen.SetDocument (Location);
+                    gen.Run ();
+                  });
                 }
 
               | FunBody.Abstract => ()
@@ -633,94 +713,6 @@ namespace Nemerle.Compiler
       }
     }
 
-    /**
-     * Emits a constructor's body
-     */
-    EmitConstructor () : void
-    {
-      declaring_type.DoBeforeFinalization2 (fun () {
-        /* emit the constructor's body */
-        def gen = ILEmitter (ctor_builder, declaring_type, fun_header);
-        when (Options.EmitDebug) gen.SetDocument (declaring_type.Location);
-        gen.Run ();
-      })
-    }
-
-    /**
-     * Emits a method's body
-     */
-    EmitMethod (emitter : HierarchyEmitter) : void
-    {
-      def type_builder = declaring_type.GetTypeBuilder ();
-      
-      // make sure type is not finalized
-      assert (type_builder != null);
-      
-      def mb = method_builder;
-      Util.cassert (mb != null, $"method builder is null for $this");
-
-      /* update the entry point settings, if necessary */
-      when (emitter._need_entry_point && Name == "Main") {
-        def has_correct_signature () {
-          mb.IsStatic &&
-          (ReturnType.Equals (InternalType.Int32) || 
-           ReturnType.Equals (InternalType.Void)) &&
-          match (fun_header.parms) {
-            // workaround bug in MS PEVerify
-            | [fp] =>
-              fp.ty.Fix ().Equals (MType.Array (InternalType.String, 1))
-            | [] => true
-            | _ => false
-          }
-        }
-
-        if (has_correct_signature ()) {
-          match (emitter._entry_point) {
-            | Some =>
-              Message.Error ($ "more then one entry point (Main function) "
-                               "found in $(mb.DeclaringType)")
-            | None =>
-              when (HierarchyEmitter._debug_emit != null)
-                HierarchyEmitter._debug_emit.SetUserEntryPoint (SymbolToken (1));
-              emitter._entry_point = Some (mb : MethodInfo)
-          }
-        }
-        else
-          Message.Warning (28, $"$this has the wrong signature to be an entry point");
-      };
-
-      /* update the overriding relationships */
-      match (fun_kind) {
-        | FunKind.BoundMethod (impl) =>
-          foreach (overridden : IMethod in impl) {
-
-            // Message.Debug ("override " + method_info.Name + " " + overridden_info.Name + " in " +
-            //                type_builder.FullName);
-            when (mb.IsPrivate || Name != overridden.Name) {
-              def overridden_info =
-                ILEmitter.GetMethodInfo (declaring_type.GetMemType (), overridden);
-              type_builder.DefineMethodOverride (mb, overridden_info)
-            }
-          }
-        | _ => {}
-      }
-
-      declaring_type.DoBeforeFinalization2 (fun () {
-        /* emit the method body */
-        when (HierarchyEmitter._debug_emit != null) {
-          HierarchyEmitter._debug_emit.OpenMethod (SymbolToken (1));
-        }
-
-        // Message.Debug ($"making il generator for $meth");
-        def gen = ILEmitter (mb, declaring_type, fun_header);
-        when (Options.EmitDebug) gen.SetDocument (Location);
-        gen.Run ();
-
-        when (HierarchyEmitter._debug_emit != null)
-          HierarchyEmitter._debug_emit.CloseMethod ();
-      })
-    }
-    
     static parameter_attributes (fp : Fun_parm) : ParameterAttributes
     {
       (match (fp.kind) {
