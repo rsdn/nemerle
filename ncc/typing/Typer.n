@@ -541,9 +541,12 @@ namespace Nemerle.Compiler
     static CanBeTypeName (expr : PT.PExpr) : bool
     {
       match (expr) {
-        | PT.PExpr.Indexer (expr, _)
-        | expr =>
-          Option.IsSome (Util.QidOfExpr (expr))
+        | PT.PExpr.Ref => true
+        | <[ $expr . $_ ]>
+        | <[ $expr . [ .. $_ ] ]>
+        | <[ $expr [ .. $_ ] ]> =>
+          CanBeTypeName (expr)
+        | _ => false
       }
     }
     
@@ -1107,36 +1110,32 @@ namespace Nemerle.Compiler
 
         | PT.PExpr.Ref (name) =>
           match (TypeLocal (name, expected)) {
-            | null => TypeName ([name.Id], name, expected)
+            | null => TypeName (expression, expected)
             | e => e
           }
           
         | PT.PExpr.Member (obj, PT.Splicable.Name (name)) =>
           def mem_name = name.Id;
-          // see if entire expression is just a 'qualified.id.entifier'
-          match (Util.QidOfExpr (expression)) {
-            | Some ((idl, name)) =>
-              match (TryTyping (fun () { TypeName (idl, name, expected) })) {
-                | TExpr.Error =>
-                  // XXX this is a proper place to employ some heuristic
-                  // for example see if obj is uppercase identifier
-                  def obj =
-                    if (messenger.InErrorMode)
-                      TryTyping (fun () { TypeExpr (obj) })
-                    else
-                      TypeExpr (obj);
-                    
-                  if (IsError (obj) || IsFunctional (obj))
-                    TypeName (idl, name, expected)
+          if (CanBeTypeName (obj))
+            match (TryTyping (fun () { TypeName (expression, expected) })) {
+              | TExpr.Error =>
+                // XXX this is a proper place to employ some heuristic
+                // for example see if obj is uppercase identifier
+                def obj =
+                  if (messenger.InErrorMode)
+                    TryTyping (fun () { TypeExpr (obj) })
                   else
-                    TypeMemberExpr (obj, mem_name, expected)
+                    TypeExpr (obj);
+                  
+                if (IsError (obj) || IsFunctional (obj))
+                  TypeName (expression, expected)
+                else
+                  TypeMemberExpr (obj, mem_name, expected)
 
-                | e => e
-              }
-
-            | None =>
-              TypeMemberExpr (TypeExpr (obj), mem_name, expected)
-          }
+              | e => e
+            }
+          else
+            TypeMemberExpr (TypeExpr (obj), mem_name, expected)
 
 
         | PT.PExpr.Member (_, _) =>
@@ -1679,10 +1678,34 @@ namespace Nemerle.Compiler
 
 
     #region Member access
-    TypeToConstructor (t : TypeInfo) : list [OverloadPossibility]
+    ConstrainLeadingTyparms (pt_from : PT.PExpr, from : MType.Class) : void
+    {
+      if (pt_from == null) {}
+      else
+        match (current_type.BindType (pt_from)) {
+          | MType.Class (tc, args) =>
+            if (tc.Equals (from.tycon.DeclaringType)) {
+              _ = args.FoldLeft (from.args, fun (pa, fas) {
+                    match (fas) {
+                      | fa :: fas =>
+                        fa.ForceUnify (pa);
+                        fas
+                      | [] => Util.ice ()
+                    }
+                  })
+            } else
+              ReportError (messenger, $ "$pt_from is not declaring type of $from");
+          | _ =>
+            ReportError (messenger, $ "$pt_from is not a class type");
+        }
+    }
+
+    
+    TypeToConstructor (pt_from : PT.PExpr, t : TypeInfo) : list [OverloadPossibility]
     {
       match (t.GetTydecl ()) {
-        | TypeDeclaration.Alias (MType.Class (t, _)) => TypeToConstructor (t)
+        | TypeDeclaration.Alias (MType.Class (t, _)) => 
+          TypeToConstructor (pt_from, t)
         | _ =>
           if (t.Attributes %&& NemerleAttributes.Abstract) {
             ReportError (messenger, 
@@ -1709,6 +1732,7 @@ namespace Nemerle.Compiler
                       def mt = MType.Fun (from, t.GetMemType ());
                       def ty = t.FreshSubst ().Apply (mt);
                       def ret_type = (ty.FixedValue :> MType.Fun).to :> MType.Class;
+                      ConstrainLeadingTyparms (pt_from, ret_type);
                       res = OverloadPossibility (solver, ty, null, ret_type, meth) :: res;
                       when (meth.IsVarArgs) {
                         def op = OverloadPossibility (solver, ty, null, ret_type, meth);
@@ -1722,6 +1746,7 @@ namespace Nemerle.Compiler
                 when (t.IsValueType && !seen_empty_ctor) {
                   def res_type = t.GetFreshType ();
                   def ty = ConstructFunctionType ([], res_type);
+                  ConstrainLeadingTyparms (pt_from, res_type);
                   def op = OverloadPossibility (solver, ty, null, res_type, t);
                   res = op :: res;
                 }
@@ -1735,6 +1760,7 @@ namespace Nemerle.Compiler
               | f =>
                 def res = t.FreshSubst ().Apply (f.GetMemType ()) :> MType.Class;
                 def ty = ConstructFunctionType ([], res);
+                ConstrainLeadingTyparms (pt_from, res);
                 def op = OverloadPossibility (solver, ty, null, res, f);
                 op.IsConstantObject = true;
                 [op]
@@ -1743,57 +1769,83 @@ namespace Nemerle.Compiler
     }
 
 
-    ConstructEnclosingType (symbol : IMember, 
+    InCurrentType (mem : IMember) : bool
+    {
+      def loop (mem, t) {
+        if (t == null) false
+        else if (mem.Equals (t)) true
+        else loop (mem, t.DeclaringType)
+      }
+      loop (current_type, mem.DeclaringType) ||
+      loop (mem.DeclaringType, current_type)
+    }
+
+
+    ConstructEnclosingType (pt_from : PT.PExpr, symbol : IMember, 
                             additional_sig_types : list [MType] = null) : MType.Class
     {
-      def declaring = symbol.DeclaringType;
-      def from = declaring.GetFreshType ();
-
-      unless (declaring.Typarms.IsEmpty) {
-        def type_tyvars = Hashtable ();
-        foreach (tv in declaring.Typarms)
-          type_tyvars [tv.Id] = tv;
-
-        def clear_ht (_) {
-          | MType.TyVarRef (tv) when type_tyvars.ContainsKey (tv.Id) =>
-            type_tyvars [tv.Id] = null;
-          | _ => {}
+      if (pt_from != null) {
+        match (current_type.BindType (pt_from)) {
+          | MType.Class as c => c
+          | _ =>
+            ReportError (messenger, $ "$pt_from is not a class type");
+            InternalType.Object
         }
-        
-        symbol.GetMemType ().Iter (clear_ht);
-        
-        when (additional_sig_types != null)
-          foreach (t in additional_sig_types)
-            t.Iter (clear_ht);
+      } else if (InCurrentType (symbol) &&
+                 symbol.DeclaringType.TyparmsCount <= current_type.TyparmsCount) {
+        def typarms_count = symbol.DeclaringType.TyparmsCount;
+        def typarms = current_type.GetMemType ().args.FirstN (typarms_count);
+        MType.Class (symbol.DeclaringType, typarms)        
+      } else {
+        def declaring = symbol.DeclaringType;
+        def from = declaring.GetFreshType ();
 
-        if (symbol.DeclaringType.Equals (current_type))
-          List.Iter2 (from.args, declaring.Typarms, fun (d, s) {
-            when (type_tyvars [s.Id] != null) {
-              def res = d.Unify (MType.TyVarRef (s));
-              Util.cassert (res);
-            }
-          })
+        unless (declaring.Typarms.IsEmpty) {
+          def type_tyvars = Hashtable ();
+          foreach (tv in declaring.Typarms)
+            type_tyvars [tv.Id] = tv;
 
-        else
-          List.Iter2 (from.args, declaring.Typarms, fun (d, s) {
-            when (type_tyvars [s.Id] != null)
-              match (s.Constraints) {
-                | [MType.Class (tc, [_])] when tc.Name == "IComparable" =>
-                  d.ForceUnify (NamespaceTree.LookupInternalType (
-                      ["Nemerle", "Hacks", "IComparableClass"]).GetMemType ());
-                | _ => {}
+          def clear_ht (_) {
+            | MType.TyVarRef (tv) when type_tyvars.ContainsKey (tv.Id) =>
+              type_tyvars [tv.Id] = null;
+            | _ => {}
+          }
+          
+          symbol.GetMemType ().Iter (clear_ht);
+          
+          when (additional_sig_types != null)
+            foreach (t in additional_sig_types)
+              t.Iter (clear_ht);
+
+          if (symbol.DeclaringType.Equals (current_type))
+            List.Iter2 (from.args, declaring.Typarms, fun (d, s) {
+              when (type_tyvars [s.Id] != null) {
+                def res = d.Unify (MType.TyVarRef (s));
+                Util.cassert (res);
               }
-          })
-      }
+            })
 
-      from
+          else
+            List.Iter2 (from.args, declaring.Typarms, fun (d, s) {
+              when (type_tyvars [s.Id] != null)
+                match (s.Constraints) {
+                  | [MType.Class (tc, [_])] when tc.Name == "IComparable" =>
+                    d.ForceUnify (NamespaceTree.LookupInternalType (
+                        ["Nemerle", "Hacks", "IComparableClass"]).GetMemType ());
+                  | _ => {}
+                }
+            })
+        }
+
+        from
+      }
     }
 
     
-    ConstructMethodOverload (m : IMethod) : OverloadPossibility
+    ConstructMethodOverload (m : IMethod, pt_from : PT.PExpr = null) : OverloadPossibility
     {
       def bounds = m.GetHeader ().typarms.Map (fun (tv) { tv.LowerBound });
-      def from = ConstructEnclosingType (m, bounds);
+      def from = ConstructEnclosingType (pt_from, m, bounds);
 
       def (ty, vars) = from.TypeOfMethodWithTyparms (m);
       OverloadPossibility (solver, ty, null, from, m,
@@ -1801,11 +1853,11 @@ namespace Nemerle.Compiler
     }
 
 
-    InterpretGlobal (symbol : IMember) : list [OverloadPossibility]
+    InterpretGlobal (pt_from : PT.PExpr, symbol : IMember) : list [OverloadPossibility]
     {
       def single (mem) {
         //Message.Debug ($"access of $mem");
-        def from = ConstructEnclosingType (mem);
+        def from = ConstructEnclosingType (pt_from, mem);
         [OverloadPossibility (solver, from.TypeOfMember (mem), null, from, mem)]
       }
       
@@ -1815,7 +1867,7 @@ namespace Nemerle.Compiler
             ReportError (messenger, $ "  cannot access type `$(t)'");
             []
           } else {
-            TypeToConstructor (t)
+            TypeToConstructor (pt_from, t)
           }
         
         | mem when !mem.IsStatic =>
@@ -1838,16 +1890,16 @@ namespace Nemerle.Compiler
         | mem =>
           match (mem.GetKind ()) {
             | MemberKind.Type (t) =>
-              TypeToConstructor (t)
+              TypeToConstructor (pt_from, t)
 
             | MemberKind.Method (m) =>
               if (m.IsVarArgs) {
-                def o1 = ConstructMethodOverload (m);
-                def o2 = ConstructMethodOverload (m);
+                def o1 = ConstructMethodOverload (m, pt_from);
+                def o2 = ConstructMethodOverload (m, pt_from);
                 o2.VarArgs = true;
                 [o1, o2]
               } else {
-                [ConstructMethodOverload (m)]
+                [ConstructMethodOverload (m, pt_from)]
               }
 
             | MemberKind.Property
@@ -1868,7 +1920,8 @@ namespace Nemerle.Compiler
     }
 
 
-    InterpretGlobals (symbols : list [IMember], 
+    InterpretGlobals (pt_from : PT.PExpr,
+                      symbols : list [IMember], 
                       expected : TyVar, 
                       dump_errors : bool) 
                               : list [OverloadPossibility]
@@ -1877,7 +1930,7 @@ namespace Nemerle.Compiler
 
       foreach (symbol in symbols) {
         if (dump_errors) {
-          foreach (op in InterpretGlobal (symbol)) {
+          foreach (op in InterpretGlobal (pt_from, symbol)) {
             solver.PushState ();
             messenger.NeedMessage = true;
             _ = Expect (op.Type, expected, op.ToString ());
@@ -1885,10 +1938,10 @@ namespace Nemerle.Compiler
           }
         } else {
           solver.PushState ();
-          def not_ok = InterpretGlobal (symbol).IsEmpty;
+          def not_ok = InterpretGlobal (pt_from, symbol).IsEmpty;
           solver.PopState ();
           unless (not_ok)
-            foreach (op in InterpretGlobal (symbol)) {
+            foreach (op in InterpretGlobal (pt_from, symbol)) {
               solver.PushState ();
               def ok = op.Type.Unify (expected);
               solver.PopState ();
@@ -2081,34 +2134,77 @@ namespace Nemerle.Compiler
     }
 
 
-    TypeName (idl : list [string], name : PT.Name, expected : TyVar) : TExpr
+    TypeName (expr : PT.PExpr, expected : TyVar) : TExpr
     {
+      mutable mem_name = null;
+      
+      def pt_from = 
+        match (expr) {
+          | <[ $expr . $(mem : dyn) ]> when CanBeTypeName (expr) =>
+            mem_name = mem;
+            def was_error =
+              try {
+                solver.PushState ();
+                ! (current_type.BindType (expr) is MType.Class (_, _ :: _)) ||
+                messenger.LocalError
+              } finally {
+                solver.PopState ()
+              }
+            if (was_error) null
+            else expr
+          | _ => null
+        }
+      
       // Message.Debug ($ "type name: $idl");
       def from_this =
-        match (idl) {
-          | [name] when is_method =>
+        match (expr) {
+          | PT.PExpr.Ref (name) when is_method =>
             solver.PushState ();
-            def res = Option.UnSome (TypeMember (This (), name, expected));
+            def res = Option.UnSome (TypeMember (This (), name.Id, expected));
             solver.PopState ();
             if (res.IsEmpty) []
-            else Option.UnSome (TypeMember (This (), name, expected))
+            else Option.UnSome (TypeMember (This (), name.Id, expected))
           | _ => []
         };
-      def globals = name.GetEnv (env).LookupSymbol (idl, current_type);
-      def from_global = InterpretGlobals (globals, expected, dump_errors = false);
+
+      def globals =
+        if (pt_from == null)
+          match (Util.QidOfExpr (expr)) {
+            | Some ((idl, name)) =>
+              name.GetEnv (env).LookupSymbol (idl, current_type)
+            | None =>
+              // oops
+              match (expr) {
+                | <[ $broken_type . $_ ]>
+                | broken_type // XXX this shouldn't happen
+                  =>
+                  ReportError (messenger, $ "unbound type `$broken_type'");
+                  []
+              }
+          }
+        else
+          match (current_type.BindType (pt_from)) {
+            | MType.Class (tc, _) =>
+              tc.LookupMember (mem_name)
+            | _ =>
+              ReportError (messenger, $ "$pt_from is not a class type");
+              []
+          }
+        
+      def from_global = InterpretGlobals (pt_from, globals, expected, dump_errors = false);
       // Message.Debug ($ "type name g: $globals $from_global");
 
       match (from_this + from_global) {
         | [] =>
           if (globals.IsEmpty) {
             ReportError (messenger,
-                         $ "unbound name `$(idl.ToString (\".\"))'");
+                         $ "unbound name `$expr'");
           } else {
             ReportError (messenger, 
                          $ "none of the meanings of "
-                           "`$(idl.ToString (\".\"))' meets the type "
+                           "`$expr' meets the type "
                            "$expected:");
-            _ = InterpretGlobals (globals, expected, dump_errors = true);
+            _ = InterpretGlobals (pt_from, globals, expected, dump_errors = true);
           }
           TExpr.Error ()
         | overloads =>
@@ -2123,14 +2219,26 @@ namespace Nemerle.Compiler
                            inferred : list [TyVar],
                            supplied : list [TyVar]) : void
     {
+      def constrain (inferred, supplied) {
+        _ = Expect (inferred, supplied, "generic specifier")
+      }
+      
       if (inferred.Length != supplied.Length)
-        ReportError (Passes.Solver.CurrentMessenger,
-                     $ "$meth takes $(inferred.Length) generic parameters, "
-                       "while $(supplied.Length) was supplied")
+        match (meth) {
+          | meth is IMethod when 
+            meth.DeclaringType.DeclaringType != null &&
+            meth.GetFunKind () is FunKind.Constructor && 
+            supplied.Length == 
+              meth.DeclaringType.TyparmsCount - 
+              meth.DeclaringType.DeclaringType.TyparmsCount =>
+            List.Iter2 (inferred.LastN (supplied.Length), supplied, constrain)
+          | _ =>
+            ReportError (Passes.Solver.CurrentMessenger,
+                         $ "$meth takes $(inferred.Length) generic parameters, "
+                           "while $(supplied.Length) was supplied")
+        }
       else 
-        List.Iter2 (inferred, supplied, fun (inferred, supplied) {
-          _ = Expect (inferred, supplied, "generic specifier")
-        })
+        List.Iter2 (inferred, supplied, constrain)
     }
     
     ApplyGenericSpecifier (expr : TExpr, gen_parms : list [TyVar]) : void

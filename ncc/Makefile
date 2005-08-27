@@ -436,7 +436,6 @@ profile1:
 
 halfboot:
 	touch out.stage1/*
-	touch out.stage2/Nemerle.stage2.dll
 	$(Q)$(MAKE) boot
 
 install:

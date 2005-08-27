@@ -93,6 +93,30 @@ namespace Nemerle.Compiler
                  allow_tyvars : bool,
                  check_parms : bool) : TyVar
     {
+      // FIXME: check if correct number of arguments is given
+      def collect_name_and_types (names, types, expr) {
+        match (expr) {
+          | <[ $name . [ .. $args ] ]>
+          | <[ $name [ .. $args ] ]> =>
+            when (args.IsEmpty) {
+              ReportError (messenger, $"$name[] is not a valid type, use just $name");
+              when (messenger.NeedMessage)
+                Message.HintOnce ("if you had array type on mind, its syntax is `array [SomeType]'");
+            }
+            collect_name_and_types (names, args + types, name)
+            
+          | <[ $ns . $(fld : dyn) ]> =>
+            collect_name_and_types (fld :: names, types, ns)
+            
+          | <[ $(name : name) ]> =>
+            (name.idl :: names, types, name)
+            
+          | x =>
+            ReportError (messenger, $ "$x is not a legal type expression");
+            (names, types, null)
+        }
+      }
+      
       def f (t) {
         f2 (t, false)
       } and f2 (t, allow_ref) {
@@ -122,18 +146,11 @@ namespace Nemerle.Compiler
             
           | PExpr.Void => InternalType.Void
 
+          | PExpr.Indexer
+          | PExpr.GenericSpecifier
           | PExpr.Member
           | PExpr.Ref =>
-            type_class (t, [])
-
-          | PExpr.Indexer (t, args) =>
-            when (args.IsEmpty) {
-              ReportError (messenger, $"$t[] is not a valid type, use just $t");
-              when (messenger.NeedMessage)
-                Message.HintOnce ("if you had array type on mind, its syntax is `array [SomeType]'");
-            }
-              
-            type_class (t, args)
+            type_class (collect_name_and_types ([], [], t))
 
           | PExpr.TypedType (body) =>
             body
@@ -162,41 +179,63 @@ namespace Nemerle.Compiler
             ReportError (messenger, $ "$x is not a legal type expression");
             InternalType.Void
         }
-      } and type_class (name, args : list [_]) : TyVar {
-        match (Util.QidOfExpr (name)) {
-          | Some ((idl, nm)) =>
-            match (tyvars.Find (nm)) {
-              | Some (tv) =>
-                when (!args.IsEmpty)
-                  ReportError (messenger,
-                               $ "type variable `$(nm.Id)' supplied with "
-                                 "arguments");
+      } and type_class (names, args, nm) : TyVar {
+        if (nm == null)
+          InternalType.Void
+        else
+          match (tyvars.Find (nm)) {
+            | Some (tv) when names.Length == 1 =>
+              when (!args.IsEmpty)
+                ReportError (messenger,
+                             $ "type variable `$(nm.Id)' supplied with "
+                               "arguments");
 
-                MType.TyVarRef (tv)
-              | None =>
-                def env = nm.GetEnv (env);
-                assert (env != null);
-                def ti = env.GetType (idl, curtc, args.Length);
-                def args = List.Map (args, f);
-                
-                ti.HasBeenUsed = true;
+              MType.TyVarRef (tv)
+            | _ =>
+              def env = nm.GetEnv (env);
+              assert (env != null);
+              
 
-                match (ti.GetTydecl ()) {
-                  | Typedtree.TypeDeclaration.Alias (t) =>
-                    def subst = ti.MakeSubst (args);
-                    subst.Apply (t)
-
-                  | _ =>
-                    when (check_parms)
-                      _ = ti.MakeSubst (args);
-                    MType.Class (ti, args)
+              def (ti, need_args_tweak) =
+                match (env.LookupType (names, curtc, args.Length)) {
+                  | Some (ti) =>
+                    (ti, false)
+                  | None =>
+                    match (env.LookupType (names, curtc, -1)) {
+                      | Some (ti) => (ti, true)
+                      | None =>
+                        // this will print out error message
+                        (env.GetType (names, curtc, -1), false)
+                    }
                 }
-            }
-          | None =>
-            ReportError (messenger, 
-                         $ "expected qualified identifier in type, not $name");
-            InternalType.Void
-        }
+              def args = List.Map (args, f);
+              
+              ti.HasBeenUsed = true;
+
+              def find_proper_enclosing_type (t : TypeInfo) {
+                if (t == null || args.Length + t.TyparmsCount == ti.TyparmsCount) t
+                else find_proper_enclosing_type (t.DeclaringType)
+              }
+
+              def args =
+                if (need_args_tweak) {
+                  def ti' = find_proper_enclosing_type (curtc);
+                  if (ti' != null)
+                    ti'.GetMemType ().args + args
+                  else []
+                } else args;
+
+              match (ti.GetTydecl ()) {
+                | Typedtree.TypeDeclaration.Alias (t) =>
+                  def subst = ti.MakeSubst (args);
+                  subst.Apply (t)
+
+                | _ =>
+                  when (check_parms)
+                    _ = ti.MakeSubst (args);
+                  MType.Class (ti, args)
+              }
+          }
       }
 
       f (t)
