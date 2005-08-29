@@ -360,6 +360,45 @@ namespace Nemerle.Compiler
     }
 
 
+    /** Delay execution of the current macro. You need to provide a function
+        that will resolve it at a later time, when more info is needed. It shall
+        take one boolean parameter, when it is true, you should fail with a
+        descriptive error message stating that more typing information is needed.
+        If it is false, you should just return None ().
+
+        For example:
+
+        macro foo (x) {
+          def x' = Macros.ImplicitCTX ().TypeExpr (x);
+          
+          Macros.ImplicitCTX ().DelayMacro (fun (fail_loudly) {
+            match (x'.Type.Hint) {
+              | Some (t) =>
+                // do something with the type
+                Some (...)
+              | None =>
+                when (fail_loudly)
+                  Message.Error (x.loc, $ "cannot deduce type of $x");
+                None ()
+            }
+          })
+        }
+
+        This function will first try to call your resolution function and only if
+        it fails, it will get queued for later.
+    */
+    public DelayMacro (resolve : bool -> option [PT.PExpr],
+                       mutable expected : TyVar = null) : PT.PExpr
+    {
+      when (expected == null)
+        expected = FreshTyVar ();
+      def kind = DelayedTyping.Kind.Macro (resolve);
+      def dt = DelayedTyping (this, kind, expected);
+      dt.Resolve ();
+      <[ $(TExpr.Delayed (expected, dt) : typed) ]>
+    }
+
+
     /** Filter out wrong nodes, and if more then one left -- make the
         [Overloaded] node, and register it.  Removes duplicates.
 
@@ -791,7 +830,7 @@ namespace Nemerle.Compiler
     }
 
    
-    static AtLeast (m : TyVar) : TyVar
+    static internal AtLeast (m : TyVar) : TyVar
     {
       def tv = FreshTyVar ();
       tv.ForceRequire (m);
@@ -1116,7 +1155,9 @@ namespace Nemerle.Compiler
           
         | PT.PExpr.Member (obj, PT.Splicable.Name (name)) =>
           def mem_name = name.Id;
-          if (CanBeTypeName (obj))
+          if (obj is <[ _ ]>)
+            TypeExpr (PartialApplication (expression), expected)
+          else if (CanBeTypeName (obj))
             match (TryTyping (fun () { TypeName (expression, expected) })) {
               | TExpr.Error =>
                 // XXX this is a proper place to employ some heuristic
@@ -1157,7 +1198,13 @@ namespace Nemerle.Compiler
           
 
         | PT.PExpr.Call (fnc, parms) =>
-          TypeCall (fnc, parms, expected, is_property = false)
+          if (parms.Exists (fun (_) {
+                  | <[ _ ]> => true
+                  | _ => false
+                }) || fnc is <[ _ . $_ ]>)
+            TypeExpr (PartialApplication (expression), expected)
+          else
+            TypeCall (fnc, parms, expected, is_property = false)
 
 
         | PT.PExpr.Assign (PT.PExpr.Tuple (vars), e2) =>
@@ -1421,12 +1468,15 @@ namespace Nemerle.Compiler
         def parms = List.Map (fn.header.parms,
           fun (p : PT.Fun_parm) {
             def name = p.name.GetName ();
-            Fun_parm (loc = p.loc,
-                      name = name.Id,
-                      color = name.color,
-                      ty = current_type.BindType (tenv, p.ty),
-                      kind = ParmKind.Normal,
-                      modifiers = p.modifiers)
+            def fp =
+              Fun_parm (loc = p.loc,
+                        name = name.Id,
+                        color = name.color,
+                        ty = current_type.BindType (tenv, p.ty),
+                        kind = ParmKind.Normal,
+                        modifiers = p.modifiers);
+            fp.GetLocalDefaultValueFromModifiers (this);
+            fp
           });
         def name_obj = fn.header.name.GetName ();
         def header = Fun_header (
@@ -1573,7 +1623,7 @@ namespace Nemerle.Compiler
     }
 
 
-    static TypeOfLiteral (l : Literal) : TyVar
+    static internal TypeOfLiteral (l : Literal) : TyVar
     {
       def mono_type =
         match (l) {
@@ -2650,12 +2700,35 @@ namespace Nemerle.Compiler
     #region Matching typing
     TypePatterns (matched_value_type : TyVar, 
                   patterns : list [PT.PExpr]) 
-                  : list [Pattern * TExpr]
+                  : list [Pattern * TExpr * list [LocalValue * TExpr]]
     {
-      def patterns = List.Map (patterns, fun (_) {
-        | <[ @when ($pat, $expr) ]> => (pat, Some (expr))
-        | <[ $pat ]> => (pat, None ())
+      def decode_when (e, a) {
+        match (e) {
+          | <[ @when ($pat, $expr) ]> => (pat, Some (expr), a)
+          | <[ $pat ]> => (pat, None (), a)
+        }
+      }
+
+      def decode_assigns (pat, assigns) {
+        decode_when (pat, assigns.Map (fun (_) {
+          | <[ $(name : name) = $expr ]> =>
+            (name, expr)
+          | e =>
+            ReportError (messenger, $ "invalid with-assignment: $e");
+            (PT.Name ("dummy"), e)
+        }))
+      }
+        
+      def patterns = List.Map (patterns, fun (e) {
+        match (e) {
+          | <[ @with ($pat, ( .. $assigns )) ]> =>
+            decode_assigns (pat, assigns)
+          | <[ @with ($pat, $expr) ]> =>
+            decode_assigns (pat, [expr])
+          | pat => decode_when (pat, [])
+        }
       });
+
       def typer = PatternTyper (this, matched_value_type, patterns);
       typer.Run ()
     }
@@ -2664,7 +2737,7 @@ namespace Nemerle.Compiler
     static FixupMatchCase (case : Match_case) : void
     {
       case.patterns = 
-        case.patterns.Map (fun (p, e) { (p.StripEnums (), e) });
+        case.patterns.Map (fun (p, e, a) { (p.StripEnums (), e, a) });
     }
 
     
@@ -2792,6 +2865,41 @@ namespace Nemerle.Compiler
           } else null
         
         | _ => null
+      }
+    }
+    #endregion
+
+
+    #region Partial application
+    /** Transform [_.foo] to [fun (x) { x.foo }] and [foo (_, 3)] to
+        [fun (x) { foo (x, 3) }].  */
+    static PartialApplication (expr : PT.PExpr) : PT.PExpr
+    { 
+      def transform_parms (parms) {
+        mutable lambda_parms = [];
+        def res = parms.Map (fun (_) {
+          | <[ _ ]> =>
+            def sym = Macros.NewSymbol ();
+            lambda_parms ::= <[ parameter: $(sym : name) ]>;
+            <[ $(sym : name) ]>
+          | e => e
+        });
+        (lambda_parms.Rev (), res)
+      }
+      
+      match (expr) {
+        | <[ _ . $mem ]> =>
+          def sym = Macros.NewSymbol ();
+          <[ fun ($(sym : name)) { $(sym : name) . $mem } ]>
+        | <[ _ . $mem ( .. $parms ) ]> =>
+          def (lambda_parms, parms) = transform_parms (parms);
+          def sym = Macros.NewSymbol ();
+          def parm = <[ parameter: $(sym : name) ]>;
+          <[ fun (.. $(parm :: lambda_parms)) { $(sym : name) . $mem (.. $parms) } ]>
+        | <[ $fn ( .. $parms ) ]> =>
+          def (lambda_parms, parms) = transform_parms (parms);
+          <[ fun (.. $lambda_parms) { $fn (.. $parms) } ]>
+        | _ => Util.ice ($ "$expr")
       }
     }
     #endregion
