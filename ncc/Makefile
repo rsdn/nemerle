@@ -458,7 +458,7 @@ endif
 clean:
 	cd testsuite && $(MAKE) clean
 	rm -f *.exe.so *.dll.so *.pdb *.xml core.[0-9]* core *prof-log
-	rm -rf out.stage* doc
+	rm -rf out.stage* out.winboot doc
 
 .PHONY: tags
 tags:
