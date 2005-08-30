@@ -53,6 +53,119 @@ namespace Nemerle.Compiler.CompletionEngine
         }
     }
     
+    internal variant InternalReference
+    {
+        | LibraryReference { path : string }
+        | AssemblyReference { assembly : System.Reflection.Assembly }
+    }
+    
+    public class DefineCollection : System.Collections.Generic.IEnumerable [string]
+    {
+        internal this (parent : Engine)
+        {
+            parentEngine = parent;
+            defines = [];
+        }
+        
+        internal parentEngine : Engine;
+        internal mutable defines : list[string];
+        
+        private Add (Define : string) : void
+        {
+            defines ::= Define;
+            parentEngine.set_unparsed_state ();
+        }
+        
+        private Remove (Define : string) : void
+        {
+            defines.Remove (Define);
+            parentEngine.set_unparsed_state ();
+        }
+        
+        private Contains (Define : string) : bool
+        {
+            defines.Contains (Define)
+        }
+        
+        public GetEnumerator () : Nemerle.Collections.IEnumerator[string]
+        {
+            Nemerle.Collections.ListEnumerator(this)
+        }
+    }
+    
+    public class ReferenceCollection
+    {
+        internal this (parent : Engine)
+        {
+            parentEngine = parent;
+            references = Hashtable ();
+        }
+        
+        internal parentEngine : Engine;
+        internal mutable references : Hastable[string, InternalReference];
+        
+        public Add (Key : string, Path : string) : void
+        {
+            references.Add (Key, InternalReference.LibraryReference (Path));
+            parentEngine.set_unparsed_state ();
+        }
+        
+        public Add (Key : string, Assembly : System.Reflection.Assembly) : void
+        {
+            references.Add (Key, InternalReference.AssemblyReference (Assembly));
+            parentEngine.set_unparsed_state ();
+        }
+        
+        public Remove (Key : string) : void
+        {
+            references.Remove (Key);
+        }
+    }
+    
+    internal variant ParsedFile
+    {
+        | NotParsed { code : string }
+        | Parsed { decls : list [TopDeclaration], code : string }
+    }
+    
+    public class SourceCollection
+    {
+        internal this (parent : Engine)
+        {
+            parentEngine = parent;
+            references = Hashtable ();
+        }
+        
+        internal parentEngine : Engine;
+        internal mutable sources : Hastable[string, ParsedFile];
+
+        public Add (File : string, Contents : string) : void
+        {
+            sources.Add (File, ParsedFile.NotParsed (Contents));
+        }
+        
+        public AddToComplete (File : string, Contents : string, Offset : int) : void
+        {
+            def contents = Contents.Insert(Offset, Engine.MagicWord);
+            Add (File, contents);
+        }
+        
+        public Remove (File : string) : void
+        {
+            sources.Remove (File);
+            set_unparsed_state ();
+        }
+        
+        internal set_unparsed_state () : void
+        {
+            foreach (file in sources.Values)
+            {
+            | Parsed as p => file = NotParsed (p.code);
+            | _ => ();
+            }
+        }
+    }
+    
     public class Engine
     {
         // ---- PIPELINES USED IN COMPILATION PROCESS ----
@@ -78,10 +191,14 @@ namespace Nemerle.Compiler.CompletionEngine
         public static MagicWord = "CodeCompletionEnginePlaceholder";
         internal mutable textWriter : System.IO.TextWriter;
         
-        internal mutable Sources : list[string * string];
-        internal mutable NamedAssemblies : list[string];
-        internal mutable LoadedAssemblies : list[System.Reflection.Assembly];
-        internal mutable Defines : list[string];
+        public mutable Defines : DefinesCollection;
+        public mutable References : ReferenceCollection;
+        internal mutable Sources : SourceCollection;
+        
+        internal set_unparsed_state () : void
+        {
+            Sources.set_unparsed_state ();
+        }
         
         public static this()
         {
@@ -90,11 +207,15 @@ namespace Nemerle.Compiler.CompletionEngine
         
         public this()
         {
-            Sources = [];
-            Defines = [];
+            Defines = DefineCollection (this);
+            References = ReferenceCollection (this);
+            Sources = SourceCollection (this);
             ParsingPipeline = MainParser.Parse;
             ScanningPipeline = ScanTypeHierarchy.ProcessDeclaration;
             textWriter = null;
+            Message.MessageOccured += Message.MessageEventHandler (process_error_message);
+            
+            Location.Init();
         }
         
         public Init() : void
@@ -104,7 +225,6 @@ namespace Nemerle.Compiler.CompletionEngine
             else
                 Message.InitOutput (textWriter);
             MacroColorizer.Clear ();
-            Location.Init ();
             MacroRegistry.Init ();
             LibraryReferenceManager.Init ();     
             NamespaceTree.Init ();
@@ -131,24 +251,6 @@ namespace Nemerle.Compiler.CompletionEngine
             GlobalEnv.Init();
             
             listMessages = [];
-            Message.MessageOccured += Message.MessageEventHandler (process_error_message);
-        }
-        
-        public AddReferencedAssembly (Path : string) : void
-        {
-            NamedAssemblies ::= Path;
-        }
-        
-        // This overload is preferred as there is no possibility to fail
-        public AddReferencedAssembly (Assembly : System.Reflection.Assembly) : void
-        {
-            LoadedAssemblies ::= Assembly;
-        }
-        
-        // Add any special define preprocessor directive
-        public AddDefine (define : string) : void
-        {
-            Defines ::= define;
         }
         
         // If you want to recover the messages done by the parser/typer
@@ -156,20 +258,6 @@ namespace Nemerle.Compiler.CompletionEngine
         {
             get { textWriter }
             set { textWriter = value }
-        }
-        
-        // Adds a code file to the files-to-parse list
-        // WARNING! This is not a path to code, but the code itself
-        public AddCode (CodeContents : string, Filename : string) : void
-        {
-            Sources ::= (CodeContents, Filename);
-        }
-        
-        // It just add a "MagicWord" at the specified offset
-        public AddCodeToComplete (CodeContents : string, Filename : string, Offset : int) : void
-        {
-            def contents = CodeContents.Insert(Offset, MagicWord);
-            Sources ::= (contents, Filename);
         }
         
         public CompilerMessages : array[CompilerMessage]
@@ -183,6 +271,19 @@ namespace Nemerle.Compiler.CompletionEngine
             }
         }
         
+        /** We use a MemoryStream mapped LexerFile instead of a LexerString
+            because LexerString does not support defines */
+        string_to_lexerfile (code : string, file : string) : LexerFile
+        {
+            mutable memStream = IO.MemoryStream ();
+            mutable streamWriter = IO.StreamWriter (memStream, Text.Encoding.UTF8);
+            streamWriter.Write (code);
+            streamWriter.Flush ();
+            memStream.Position = 0L;
+            mutable streamReader = IO.StreamReader (memStream, Text.Encoding.UTF8);
+            LexerFile (file, streamReader)
+        }
+        
         public RunCompletionEngine () : void
         {
             // Tell the methods we are in completion mode
@@ -190,37 +291,37 @@ namespace Nemerle.Compiler.CompletionEngine
             
             Init ();
             
-            foreach (define in Defines)
+            foreach (define in Defines.defines)
                 LexerFile.command_defines.Set (define, true);
             
-            foreach (assemblyName in NamedAssemblies)
-                LibraryReferenceManager.AddLibrary (assemblyName);
-            foreach (assembly in LoadedAssemblies)
-                LibraryReferenceManager.AddAssembly (assembly);
-
-            /* LexerString does not work very well, so we create a 
-               MemoryStream from the code and work with LexerFile */
-            def string_to_lexerfile = fun (x) {
-                mutable memStream = IO.MemoryStream ();
-                mutable streamWriter = IO.StreamWriter (memStream, Text.Encoding.UTF8);
-                streamWriter.Write (Pair.First (x));
-                streamWriter.Flush ();
-                memStream.Position = 0L;
-                mutable streamReader = IO.StreamReader (memStream, Text.Encoding.UTF8);
-                LexerFile (Pair.Second (x), streamReader)
+            foreach (references in References.references)
+            {
+            | LibraryReference as l => LibraryReferenceManager.AddLibrary (l.path);
+            | AssemblyReference as a => LibraryReferenceManager.AddAssembly (a.assembly);
             }
-            
-            mutable codeContents = List.Map (Sources, string_to_lexerfile);
-            
+
             mutable trees = [];
             try
             {
-                trees = List.RevMap (codeContents, ParsingPipeline);
+                foreach (source in Sources.sources)
+                {
+                    match (source.Value)
+                    {
+                    | NotParsed as np =>
+                        def contents = np.code;
+                        def lexer = string_to_lexerfile (contents, source.Key);
+                        def decls = ParsingPipeline (lexer);
+                        source.Value = Parsed (decls, contents);
+                        trees ::= decls;
+                    | Parsed as p => trees ::= p.decls;
+                    }
+                }
             }
             catch
             {
                 | _ => ();
             }
+
             
             // create N.C.TypeBuilders for all parsed types and add them to namespace hierarchy
             try
@@ -343,32 +444,31 @@ namespace Nemerle.Compiler.CompletionEngine
             
             Init ();
             
-            foreach (define in Defines)
+            foreach (define in Defines.defines)
                 LexerFile.command_defines.Set (define, true);
             
-            foreach (assemblyName in NamedAssemblies)
-                LibraryReferenceManager.AddLibrary (assemblyName);
-            foreach (assembly in LoadedAssemblies)
-                LibraryReferenceManager.AddAssembly (assembly);
-
-            /* LexerString does not work very well, so we create a 
-               MemoryStream from the code and work with LexerFile */
-            def string_to_lexerfile = fun (x) {
-                mutable memStream = IO.MemoryStream ();
-                mutable streamWriter = IO.StreamWriter (memStream, Text.Encoding.UTF8);
-                streamWriter.Write (Pair.First (x));
-                streamWriter.Flush ();
-                memStream.Position = 0L;
-                mutable streamReader = IO.StreamReader (memStream, Text.Encoding.UTF8);
-                LexerFile (Pair.Second (x), streamReader)
+            foreach (references in References.references)
+            {
+            | LibraryReference as l => LibraryReferenceManager.AddLibrary (l.path);
+            | AssemblyReference as a => LibraryReferenceManager.AddAssembly (a.assembly);
             }
-            
-            mutable codeContents = List.Map (Sources, string_to_lexerfile);
-            
+
             mutable trees = [];
             try
             {
-                trees = List.RevMap (codeContents, ParsingPipeline);
+                foreach (source in Sources.sources)
+                {
+                    match (source.Value)
+                    {
+                    | NotParsed as np =>
+                        def contents = np.code;
+                        def lexer = string_to_lexerfile (contents, source.Key);
+                        def decls = ParsingPipeline (lexer);
+                        source.Value = Parsed (decls, contents);
+                        trees ::= decls;
+                    | Parsed as p => trees ::= p.decls;
+                    }
+                }
             }
             catch
             {
