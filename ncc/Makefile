@@ -195,9 +195,6 @@ stage2:
 stage3:
 	$(Q)$(MAKE) STAGE=$@ COMPILER_PATH=out.stage2/ last-stage
 
-winboot:
-	$(Q)$(MAKE) STAGE=winboot COMPILER_PATH=out.stage1/ ADD_FLAGS=-ms-net-boot last-stage
-
 t3:
 	$(MAKE) STAGE=stage1 NEM_FLAGS="$(NEM_FLAGS) -def:T3" out.stage1/Nemerle.Compiler.stage1.dll
 
@@ -341,7 +338,7 @@ out.stage2/Nemerle.Macros.dll: $(COMPILER_DEP) out.stage2/Nemerle.stage2.dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
 	$(Q)touch $@.done
 
-out.winboot/Nemerle.Macros.dll out.stage3/Nemerle.Macros.dll: \
+out.stage3/Nemerle.Macros.dll: \
 	$(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll $(STDMACROS_DLL_SRC)
 	$(COMP) "[stage3]" Nemerle.Macros.dll
@@ -369,7 +366,7 @@ out.stage2/ncc.exe: $(COMPILER_DEP) out.stage2/Nemerle.stage2.dll \
 		$(GENERIC_SRC) $(NCC_EXE_SRC)
 	$(Q)touch $@.done
 
-out.winboot/ncc.exe out.stage3/ncc.exe: \
+out.stage3/ncc.exe: \
 		$(COMPILER_DEP) out.$(STAGE)/Nemerle.dll \
 		out.$(STAGE)/Nemerle.Compiler.dll $(NCC_EXE_SRC)
 	$(COMP) "[stage3]" ncc.exe
@@ -459,7 +456,7 @@ endif
 clean:
 	cd testsuite && $(MAKE) clean
 	rm -f *.exe.so *.dll.so *.pdb *.xml core.[0-9]* core *prof-log
-	rm -rf out.stage* out.winboot doc
+	rm -rf out.stage* doc
 
 .PHONY: tags
 tags:
