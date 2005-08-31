@@ -95,8 +95,8 @@ NEMERLE_COMPILER_DLL_SRC = \
 	hierarchy/ScanTypeHierarchy.n	 \
 	hierarchy/TypeBuilder.n		 \
 	hierarchy/TypeInfo.n		 \
+    hierarchy/TypesManager.n    \
 	hierarchy/XmlDump.n		 \
-	hierarchy/TypesManager.n	 \
 	misc/AssemblyInfo.n		 \
 	misc/PrettyPrint.n		 \
 	misc/Stats.n                     \
