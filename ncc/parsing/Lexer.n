@@ -209,6 +209,28 @@ public abstract class LexerBase : IDisposable
   public mutable Keywords : Set [GlobalEnv.string_wrap];
 
   protected id_buffer : StringBuilder = StringBuilder ();
+
+
+  #region PREPROCESSOR VARIABLES
+  /** if there was only white chars from beginnig of line */
+  protected mutable white_beginning : bool;  
+
+  mutable eating_stack : Stack[int]; // stack of nested #if
+
+  /** -1 = now inside true preprocessing section
+       0 = no preprocessing currently in action
+       1 = there were no true preprocessing sections in this set
+       2 = there already was true preprocessing section in this set
+       3 = we are now inside #else section, but it is not analyzed   */
+  mutable eating_now : int;
+  mutable line_stack : int; // real line number at moment of `#line 3' occurence
+  mutable line_start : int; // how to compute real line after `#line default' occurence
+  protected file_real : string;           // real filename to revert after `#line 4 "bla"'
+  
+  protected defines : Hashtable [string, bool];
+  public static command_defines : Hashtable [string, bool] = Hashtable ();
+
+  #endregion PREPROCESSOR VARIABLES
   
   public class Error : System.Exception
   {
@@ -222,6 +244,13 @@ public abstract class LexerBase : IDisposable
     col = 1;
     putback = false;
     isPendingChar = false;
+
+    white_beginning = true;
+    defines = Hashtable (25);
+    command_defines.Iter (fun (key, _) { defines.Add (key, true) });
+    eating_stack = Stack ();
+    eating_now = 0;
+    line_stack = -1;
   }
 
   abstract protected do_read () : char;
@@ -706,7 +735,70 @@ public abstract class LexerBase : IDisposable
 
   abstract protected comment_beginning () : char;
   
-  abstract protected eat_whitespace () : bool;
+  protected eat_whitespace () : bool
+  {
+    mutable eof = false;
+    
+    def loop (shift : bool) {
+      when (shift) ignore (read ()); 
+      def ch = 
+        try { peek () } 
+        catch { _ is LexerBase.Error => eof = true; '_' };
+      if (eof) {
+        if (eating_now > 0) {
+          Message.Error (this.Location, "unexpected end of file"
+                         " before finishing preprocessor directive");
+          eating_now = 0;
+          false
+        }
+        else
+          if (!eating_stack.IsEmpty) {
+            Message.Error (this.Location, "there are still open"
+                           " preprocessing directives at the end of file");
+            false
+          }
+          else true
+      }
+      else
+        match (ch) {
+          | ' ' | '\t' | '\r' => loop (true);
+ 
+          | '\n' =>
+            white_beginning = true;
+            loop (true)
+            
+          | '/' =>
+            white_beginning = false;
+            _ = read ();
+            match (comment_beginning ()) {
+              | '/' => 
+                pendingChar = '/';
+                isPendingChar = true;
+                true
+                  
+              | _ => loop (false)
+            }
+              
+          | '#' =>
+            if (white_beginning) {
+              _ = read ();
+              parse_preprocessor ();
+              loop (false)
+            }
+            else {
+              Message.Error (this.Location, "preprocessor directives must occur only in"
+                             " lines beginning with whitespaces");
+              while (read () != '\n') ();
+              loop (false);
+            }
+        
+          | _ =>
+            white_beginning = false;
+            if (eating_now > 0) loop (true) else true
+        }
+    };
+    loop (false)
+  }
 
   protected do_get_token () : Token
   {
@@ -849,295 +941,6 @@ public abstract class LexerBase : IDisposable
     get { Location (file_idx, line, col) }
   }
 
-  public static this () 
-  {
-    def tab = array [
-        "_", "abstract", "and", "array", "as", "base", "catch",
-        "class", "def", "delegate", "enum", "event",
-        "false", "finally", "fun", "implements",
-        "interface", "internal", "is", "macro", "match", "matches",
-        "module", "mutable", "namespace", "new", "null", "out",
-        "override", "params", "private", "protected", "public",
-        "ref", "sealed", "static", "struct", "syntax", "this",
-        "throw", "true", "try", "type", "typeof", "using",
-        "variant", "virtual", "void", "volatile", "when", "where",
-        "partial", "extern", "with"
-    ];
-    mutable kes = Set ();
-    foreach (el in tab) kes = kes.Add (GlobalEnv.string_wrap (el));
-    BaseKeywords = kes;
-
-    def tab = array ['=', '<', '>', '@', '^', '&', '-', '+', '|', '*',
-                     '/', '$', '%', '!', '?', '~', '.', ':', '#'];
-    opchars = array (256);                      
-    foreach (x in tab) opchars [x :> int] = true;
-  }
-
-  public static IsOperator (str : string) : bool
-  {
-    def len = str.Length;
-    mutable is_op = true;
-    for (mutable i = 0; i < len && is_op; ++i) {
-      def c = str[i];
-      is_op = IsOperatorChar (c);
-      unless (is_op) 
-        match (c) {
-         | '(' | ')' | ';' | '[' | ']' => is_op = true
-         | _ => ()
-        }
-    };
-    is_op
-  }
-
-  public static HasKeywordChars (str : string) : bool
-  {
-    def len = str.Length;
-    mutable is_kw = true;
-    for (mutable i = 0; i < len && is_kw; ++i)
-      is_kw = Char.IsLetter (str[i]) || str[i] == '_';
-    is_kw
-  }
-} // end class LexerBase
-
-public class LexerFile : LexerBase
-{
-  reader : System.IO.TextReader;
-  mutable file_name : string;
-  comment_store : StringBuilder;
-  mutable comment_loc : Location;
-
- #region PREPROCESSOR VARIABLES
-  /** if there was only white chars from beginnig of line */
-  mutable white_beginning : bool;  
-
-  mutable eating_stack : list[int]; // stack of nested #if
-
-  /** -1 = now inside true preprocessing section
-       0 = no preprocessing currently in action
-       1 = there were no true preprocessing sections in this set
-       2 = there already was true preprocessing section in this set
-       3 = we are now inside #else section, but it is not analyzed   */
-  mutable eating_now : int;
-  mutable line_stack : int; // real line number at moment of `#line 3' occurence
-  mutable line_start : int; // how to compute real line after `#line default' occurence
-  file_real : string;           // real filename to revert after `#line 4 "bla"'
-  
-  protected defines : Hashtable [string, bool];
-
- #endregion PREPROCESSOR VARIABLES
-
-  public static mutable store_comments : bool;
-  public static command_defines : Hashtable [string, bool] = Hashtable ();
-  
-  private check_last_line_for_lf (file : IO.FileStream) : void
-  {
-    _ = file.Seek (-1 :> Int64, IO.SeekOrigin.End);
-    
-    def inp = file.ReadByte ();
-    
-    if (inp >= 0) {
-      def ch = Convert.ToChar (inp);
-      when (ch != '\n')
-        Message.Warning (this.Location, "no new line at the end of the file");
-    }
-    else 
-      throw LexerBase.Error ("unexpected end of file");
-      
-    _ = file.Seek (0 :> Int64, IO.SeekOrigin.Begin);
-  }
-
-  public static this () {
-    store_comments = false;
-  }
-
-  public override Dispose () : void {
-    (reader : IDisposable).Dispose ();
-  }
-  
-  public this (fn : string)
-  {
-    base ();
-    comment_store = StringBuilder (300);
-    file_name = fn;
-    file_idx = Location.AddFile (file_name);
-    file_real = fn;
-    line_stack = -1;
-    try {
-      def file = IO.FileStream (fn, IO.FileMode.Open, IO.FileAccess.Read);
-      reader = IO.StreamReader (file, Text.Encoding.UTF8);
-      when (WarningOptions.IsEnabled (10002))
-        check_last_line_for_lf (file);
-    }
-    catch {
-      | e => Message.FatalError ($"cannot open file `$fn': $(e.Message)")
-    }
-      
-    white_beginning = true;
-    defines = Hashtable (25);
-    command_defines.Iter (fun (key, _) { defines.Add (key, true) });
-    eating_stack = [];
-    eating_now = 0;
-  }
-
-  public this (fn : string, stream : IO.StreamReader)
-  {
-    base ();
-    comment_store = StringBuilder (300);
-    file_name = fn;
-    file_idx = Location.AddFile (file_name);
-    file_real = fn;
-    line_stack = -1;
-    reader = stream;
-    white_beginning = true;
-    defines = Hashtable (25);
-    foreach (el in command_defines) defines.Add (el.Key, true);
-    eating_stack = [];
-    eating_now = 0;
-  }
-
-  override protected do_read () : char
-  {
-    def inp = reader.Read ();
-    if (inp >= 0)
-      (inp :> char)
-    else 
-      throw LexerBase.Error ("unexpected end of file")
-  }
-        
-  override protected comment_beginning () : char
-  {
-    match (peek ()) {
-      | '/' =>
-        // we are for sure in one line comment
-        _ = read ();
-        try {
-          if (store_comments && peek () == '/') {
-            comment_loc = Location (file_idx, line, col - 2);
-            _ = read ();
-            mutable cc = ' ';
-            do {
-
-              cc = read ();                
-              _ = comment_store.Append (cc)
-            } while (cc != '\n');
-            comment_loc = comment_loc + Location (file_idx, line, col);
-          }
-          else
-            while (read () != '\n') {};
-        }
-        catch { _ is LexerBase.Error => () };
-          
-        white_beginning = true;
-        // pass whitespace, so next read would be eof checked
-        ' '
-
-      | '*' =>
-        // multiline comment
-        _ = read ();
-        def loop1 (seen_star, store) {
-          def cc = read ();
-          when (store)
-            ignore (comment_store.Append (cc));
-
-          match (cc) {
-            | '*' => loop1 (true, store)
-            | '/' when seen_star => ()
-            | _ => loop1 (false, store)
-          }
-        };
-        if (store_comments && peek () == '*') {
-          comment_loc = Location (file_idx, line, col - 2);
-          _ = read ();
-          loop1 (true, true);
-          if (comment_store.Length == 1)
-            ignore (comment_store.Remove (0, 1))
-          else
-            ignore (comment_store.Remove (comment_store.Length - 2, 2));
-          comment_loc = comment_loc + Location (file_idx, line, col);
-        }
-        else
-          loop1 (false, false);
-
-        // pass whitespace, so next read would be eof checked            
-        ' '
-
-      | _ => '/'
-    }
-  }
-
-  override protected eat_whitespace () : bool
-  {
-    mutable eof = false;
-    
-    def loop (shift : bool) {
-      when (shift) ignore (read ()); 
-      def ch = 
-        try { peek () } 
-        catch { _ is LexerBase.Error => eof = true; '_' };
-      if (eof) {
-        if (eating_now > 0) {
-          Message.Error (this.Location, "unexpected end of file"
-                         " before finishing preprocessor directive");
-          eating_now = 0;
-          false
-        }
-        else
-          if (!eating_stack.IsEmpty) {
-            Message.Error (this.Location, "there are still open"
-                           " preprocessing directives at the end of file");
-            false
-          }
-          else true
-      }
-      else
-        match (ch) {
-          | ' ' | '\t' | '\r' => loop (true);
- 
-          | '\n' =>
-            white_beginning = true;
-            loop (true)
-            
-          | '/' =>
-            white_beginning = false;
-            _ = read ();
-            match (comment_beginning ()) {
-              | '/' => 
-                pendingChar = '/';
-                isPendingChar = true;
-                true
-                  
-              | _ => loop (false)
-            }
-              
-          | '#' =>
-            if (white_beginning) {
-              _ = read ();
-              parse_preprocessor ();
-              loop (false)
-            }
-            else {
-              Message.Error (this.Location, "preprocessor directives must occur only in"
-                             " lines beginning with whitespaces");
-              while (read () != '\n') ();
-              loop (false);
-            }
-        
-          | _ =>
-            white_beginning = false;
-            if (eating_now > 0) loop (true) else true
-        }
-    };
-    loop (false)
-  }
-
-  override protected ignore_comments () : void {
-    when (comment_store.Length > 0) {
-      Message.Warning (this.Location,
-                       "documentation comments between literals are ignored");
-      ignore (comment_store.Remove (0, comment_store.Length))
-    }
-  }
-  
   parse_preprocessor () : void
   {
     def read_to_the_end_of_line () {
@@ -1173,7 +976,7 @@ public class LexerFile : LexerBase
 
     match (directive) {
       | "if" =>
-        eating_stack = eating_now :: eating_stack;
+        eating_stack.Push (eating_now);
         if (evaluate_preprocessing_expr (read_to_the_end_of_line ().Trim ()))
           unless (eating_now > 0)          
             eating_now = -1
@@ -1182,37 +985,38 @@ public class LexerFile : LexerBase
 
       | "elif" =>
         def now = evaluate_preprocessing_expr (read_to_the_end_of_line ().Trim ());
-        match (eating_stack) {
-          | x :: _ =>
-            unless (x > 0)
-              match (eating_now) {
-                | 1 => when (now) eating_now = -1
-                | -1 | 2 => eating_now = 2
-                | _ => throw LexerBase.Error ("unbalanced preprocessing directives")
-              }
-          | [] => throw LexerBase.Error ("unbalanced #else");
+        if (!eating_stack.IsEmpty) {
+          def x = eating_stack.Top;    
+          unless (x > 0)
+          match (eating_now) {
+            | 1 => when (now) eating_now = -1
+            | -1 | 2 => eating_now = 2
+            | _ => throw LexerBase.Error ("unbalanced preprocessing directives")
+          }
         }
+        else
+          throw LexerBase.Error ("unbalanced #else");
 
       | "else" =>
         ignore (read_to_the_end_of_line ());
-        match (eating_stack) {
-          | x :: _ =>
-            unless (x > 0)
-              match (eating_now) {
-                | 1 => eating_now = -1
-                | -1 | 2 => eating_now = 3
-                | _ => throw LexerBase.Error ("unbalanced preprocessing directives")
-              }
-          | [] => throw LexerBase.Error ("unbalanced #else");
+        if (!eating_stack.IsEmpty) {
+          def x = eating_stack.Top;    
+          unless (x > 0)
+            match (eating_now) {
+              | 1 => eating_now = -1
+              | -1 | 2 => eating_now = 3
+              | _ => throw LexerBase.Error ("unbalanced preprocessing directives")
+            }
         }
+        else
+          throw LexerBase.Error ("unbalanced #else");
         
       | "endif" =>
         ignore (read_to_the_end_of_line ());
-        match (eating_stack) {
-          | x :: xs =>
-            eating_now = x; eating_stack = xs
-          | [] => throw LexerBase.Error ("unbalanced #endif");
-        }
+        if (!eating_stack.IsEmpty)
+          eating_now = eating_stack.Pop ();
+        else
+          throw LexerBase.Error ("unbalanced #endif");
 
       | "line" =>
         mutable c = eat_spaces ();
@@ -1236,7 +1040,6 @@ public class LexerFile : LexerBase
           };
         if (new_line == -1) {
           line = line - line_start + line_stack;
-          file_name = file_real;
           file_idx = Location.GetFileIndex (file_real);
           line_stack = -1;
         }
@@ -1248,7 +1051,6 @@ public class LexerFile : LexerBase
           line_stack = line;
           line = new_line;
           when (new_file != "") {
-            file_name = new_file;
             file_idx = Location.GetFileIndex (new_file);
           }
         }
@@ -1405,6 +1207,186 @@ public class LexerFile : LexerBase
     highest ()
   }
 
+  public static this () 
+  {
+    def tab = array [
+        "_", "abstract", "and", "array", "as", "base", "catch",
+        "class", "def", "delegate", "enum", "event",
+        "false", "finally", "fun", "implements",
+        "interface", "internal", "is", "macro", "match", "matches",
+        "module", "mutable", "namespace", "new", "null", "out",
+        "override", "params", "private", "protected", "public",
+        "ref", "sealed", "static", "struct", "syntax", "this",
+        "throw", "true", "try", "type", "typeof", "using",
+        "variant", "virtual", "void", "volatile", "when", "where",
+        "partial", "extern", "with"
+    ];
+    mutable kes = Set ();
+    foreach (el in tab) kes = kes.Add (GlobalEnv.string_wrap (el));
+    BaseKeywords = kes;
+
+    def tab = array ['=', '<', '>', '@', '^', '&', '-', '+', '|', '*',
+                     '/', '$', '%', '!', '?', '~', '.', ':', '#'];
+    opchars = array (256);                      
+    foreach (x in tab) opchars [x :> int] = true;
+  }
+
+  public static IsOperator (str : string) : bool
+  {
+    def len = str.Length;
+    mutable is_op = true;
+    for (mutable i = 0; i < len && is_op; ++i) {
+      def c = str[i];
+      is_op = IsOperatorChar (c);
+      unless (is_op) 
+        match (c) {
+         | '(' | ')' | ';' | '[' | ']' => is_op = true
+         | _ => ()
+        }
+    };
+    is_op
+  }
+
+  public static HasKeywordChars (str : string) : bool
+  {
+    def len = str.Length;
+    mutable is_kw = true;
+    for (mutable i = 0; i < len && is_kw; ++i)
+      is_kw = Char.IsLetter (str[i]) || str[i] == '_';
+    is_kw
+  }
+} // end class LexerBase
+
+public class LexerFile : LexerBase
+{
+  reader : System.IO.TextReader;
+  comment_store : StringBuilder;
+  mutable comment_loc : Location;
+
+  public static mutable store_comments : bool;
+  
+  private check_last_line_for_lf (file : IO.FileStream) : void
+  {
+    _ = file.Seek (-1 :> Int64, IO.SeekOrigin.End);
+    
+    def inp = file.ReadByte ();
+    
+    if (inp >= 0) {
+      def ch = Convert.ToChar (inp);
+      when (ch != '\n')
+        Message.Warning (this.Location, "no new line at the end of the file");
+    }
+    else 
+      throw LexerBase.Error ("unexpected end of file");
+      
+    _ = file.Seek (0 :> Int64, IO.SeekOrigin.Begin);
+  }
+
+  public static this () {
+    store_comments = false;
+  }
+
+  public override Dispose () : void {
+    (reader : IDisposable).Dispose ();
+  }
+  
+  public this (fn : string)
+  {
+    base ();
+    comment_store = StringBuilder (300);
+    file_idx = Location.AddFile (fn);
+    file_real = fn;
+    try {
+      def file = IO.FileStream (fn, IO.FileMode.Open, IO.FileAccess.Read);
+      reader = IO.StreamReader (file, Text.Encoding.UTF8);
+      when (WarningOptions.IsEnabled (10002))
+        check_last_line_for_lf (file);
+    }
+    catch {
+      | e => Message.FatalError ($"cannot open file `$fn': $(e.Message)")
+    }
+      
+  }
+
+  override protected do_read () : char
+  {
+    def inp = reader.Read ();
+    if (inp >= 0)
+      (inp :> char)
+    else 
+      throw LexerBase.Error ("unexpected end of file")
+  }
+        
+  override protected comment_beginning () : char
+  {
+    match (peek ()) {
+      | '/' =>
+        // we are for sure in one line comment
+        _ = read ();
+        try {
+          if (store_comments && peek () == '/') {
+            comment_loc = Location (file_idx, line, col - 2);
+            _ = read ();
+            mutable cc = ' ';
+            do {
+
+              cc = read ();                
+              _ = comment_store.Append (cc)
+            } while (cc != '\n');
+            comment_loc = comment_loc + Location (file_idx, line, col);
+          }
+          else
+            while (read () != '\n') {};
+        }
+        catch { _ is LexerBase.Error => () };
+          
+        white_beginning = true;
+        // pass whitespace, so next read would be eof checked
+        ' '
+
+      | '*' =>
+        // multiline comment
+        _ = read ();
+        def loop1 (seen_star, store) {
+          def cc = read ();
+          when (store)
+            ignore (comment_store.Append (cc));
+
+          match (cc) {
+            | '*' => loop1 (true, store)
+            | '/' when seen_star => ()
+            | _ => loop1 (false, store)
+          }
+        };
+        if (store_comments && peek () == '*') {
+          comment_loc = Location (file_idx, line, col - 2);
+          _ = read ();
+          loop1 (true, true);
+          if (comment_store.Length == 1)
+            ignore (comment_store.Remove (0, 1))
+          else
+            ignore (comment_store.Remove (comment_store.Length - 2, 2));
+          comment_loc = comment_loc + Location (file_idx, line, col);
+        }
+        else
+          loop1 (false, false);
+
+        // pass whitespace, so next read would be eof checked            
+        ' '
+
+      | _ => '/'
+    }
+  }
+
+  override protected ignore_comments () : void {
+    when (comment_store.Length > 0) {
+      Message.Warning (this.Location,
+                       "documentation comments between literals are ignored");
+      ignore (comment_store.Remove (0, comment_store.Length))
+    }
+  }
+ 
+
   public override GetToken () : Token
   {
     unless (isPendingChar) _ = eat_whitespace ();
@@ -1432,6 +1414,7 @@ public class LexerString : LexerBase
     reader = fn;
     pos = 0;
     file_idx = loc.FileIndex;
+    file_real = fn;
     line = loc.Line;
     col = loc.Column;
   }
@@ -1481,41 +1464,6 @@ public class LexerString : LexerBase
 
       | _ => '/'
     }
-  }
-  
-  override protected eat_whitespace () : bool
-  {
-    mutable eof = false;
-    
-    def loop (shift : bool) {
-      when (shift) _ = read ();
-      def ch = 
-        try { peek () } 
-        catch { _ is LexerBase.Error => eof = true; '_' };
-      if (eof)
-        false
-      else
-        match (ch) {
-          | ' ' | '\t' | '\r' | '\n' => loop (true);
- 
-          | '/' =>
-            _ = read ();
-            match (comment_beginning ()) {
-              | '/' => 
-                pendingChar = '/';
-                isPendingChar = true;
-                true
-                
-              | _ => loop (false)
-            }
-        
-          | '#' =>
-            throw LexerBase.Error ("preprocessor directives may not occur in"
-                                   " string programs")
-          | _ => true
-        }
-    };
-    loop (false)
   }
 } // LexerString
 
