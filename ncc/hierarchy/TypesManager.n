@@ -1,0 +1,217 @@
+/*
+ * Copyright (c) 2003-2005 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+namespace Nemerle.Compiler 
+{
+  /* ---------------------------------------------------------------------- */
+  /* -- GLOBAL PROCESSING OF ALL TYPEBUILDERS------------------------------ */
+  /* ---------------------------------------------------------------------- */
+  public partial class TypesManager 
+  {
+    protected mutable infos : list [TypeBuilder] = [];
+    internal mutable run_phase : int;
+
+    public CreateTypeBuilder (par : TypeBuilder, td : Parsetree.TopDeclaration, 
+                              ns_node : NamespaceTree.Node) : TypeBuilder
+    {                          
+      def tb = TypeBuilder (this, par, td, ns_node);
+      infos ::= tb;
+      tb
+    }
+
+    /**
+     * Construct datastructures we use to check subtyping relations.
+     *
+     * <remarks>
+     *   This probably the hardest part of processing type declarations.
+     *
+     *   Each type directly subtypes types it extends or implements.  This
+     *   pass computes transitive closure of direct subtyping relation
+     *   and stores it [TypeBuilder.supertypes] map.  .NET generics doesn't allow
+     *   same type to be subtyped under different instantiations, so we
+     *   use map from (id of) subtyped TypeBuilder object to actual parameters
+     *   of subtyped type.
+     * </remarks>
+     */
+    determine_subtyping () : void
+    {
+      Iter (fun (ti : TypeBuilder) { 
+              ti.construct_subtyping_map () 
+            });
+    }
+
+    static Iter (builders : list [TypeBuilder], f : TypeBuilder -> void) : void
+    {
+      def working_on = Util.next_id ();
+      def done = Util.next_id ();
+
+      def maybe_f (ti : TypeBuilder) {
+        if (ti.phase == done) ()
+        else if (ti.phase == working_on)
+          Message.Error(ti.Location, "type definition for `" + ti.FullName + "' is cyclic")
+        else {
+          ti.phase = working_on;
+          Util.locate (ti.Location, {
+            ti.iterate_first.Iter (maybe_f);
+            f (ti)
+          });
+          ti.phase = done
+        }
+      }
+
+      builders.Iter (maybe_f)
+    }
+
+    /**
+     * Iterate over all types defined in source code.
+     *
+     * Supertypes are always processed before subtypes otherwise
+     * source code order is retained.
+     */
+    public Iter (f : TypeBuilder -> void) : void
+    {
+      Iter (infos.Reverse (), f);
+    }
+
+    public IterConditionally (f : TypeBuilder -> void, cond : TypeBuilder -> bool) : void
+    {
+      Iter (infos.Reverse (), fun (b) { 
+        when (cond (b)) 
+          f (b) 
+      });
+    }
+
+    /**
+     * Iterate over top level types in source code order.
+     */
+    public SourceTopIter (f : TypeBuilder -> void) : void
+    {
+      foreach (x : TypeBuilder in infos.Reverse ()) 
+        when (x.DeclaringType == null)
+          Util.locate (x.Location, f (x))
+    }
+
+    /**
+     * Iterate over top level types in inheritance order.
+     */
+    public TopIter (f : TypeBuilder -> void) : void
+    {
+      def wrap (x : TypeBuilder) : void {
+        when (x.DeclaringType == null)
+          Util.locate (x.Location, f (x))
+      };
+      Iter (wrap);
+    }
+
+    /**
+     * Main function of type declaration handling pass.
+     *
+     * <remarks>
+     *   - constructing typing environments [TypeBuilder.make_tyenvs]
+     *   - binding types [TypeBuilder.bind_types]
+     *   - determining subtyping relations [TypeBuilder.determine_subtyping]
+     *   - checking subtyping constraints on types that are already bound
+     *     [TypeBuilder.check_bound_types]
+     *   - adding members [TypeBuilder.add_members]
+     *   - adding the variant/variant option special matching methods
+     * </remarks>
+     */
+    public Run () : void
+    {
+      foreach (x : TypeBuilder in infos.Reverse ())
+        Util.locate (x.Location, x.process_macro_attributes (MacroPhase.BeforeInheritance));
+      AttributeCompiler.ExpandAssemblyMacros (MacroPhase.BeforeInheritance);
+
+      run_phase = 1;
+      SourceTopIter (fun (x : TypeBuilder) { x.make_tyenvs () });
+
+      run_phase = 2;
+
+      SourceTopIter (fun (x : TypeBuilder) { x.bind_types () });
+
+      // add the _N_GetVariantCode methods to variants and variant options
+      Iter (fun (x : TypeBuilder) { x.add_special_variant_methods () });
+
+      run_phase = 3;
+      determine_subtyping ();
+
+      run_phase = 4;
+      Iter (fun (x : TypeBuilder) { x.check_bound_types () });
+
+      run_phase = 5;
+
+      Iter (fun (x : TypeBuilder) { x.process_macro_attributes (MacroPhase.BeforeTypedMembers) });
+      AttributeCompiler.ExpandAssemblyMacros (MacroPhase.BeforeTypedMembers);    
+
+      Iter (fun (x : TypeBuilder) { x.add_members () });
+
+      Iter (fun (x : TypeBuilder) { x.process_macro_attributes (MacroPhase.WithTypedMembers) });
+      AttributeCompiler.ExpandAssemblyMacros (MacroPhase.WithTypedMembers);        
+
+      // add constant object constructors for constant variant options
+      Iter (fun (x : TypeBuilder) { x.add_constant_variant_ctors () });
+
+      // propagate the SpecialName attribute if needed
+      Iter (fun (x : TypeBuilder) { 
+        when (x.Attributes %&& NemerleAttributes.SpecialName)
+          x.mark_members_with_special_name ()
+      });
+
+      def check_method_implements (ti : TypeBuilder) {
+        unless (ti.IsInterface) ti.resolve_method_implements ();
+      };
+
+      Iter (check_method_implements);
+
+      Iter (fun (x : TypeBuilder) { x.check_ctor_constraints () });
+    }
+
+    /** Called at the end of the finialization. */
+    internal CheckFinalization () : void
+    {
+        Iter (fun (x : TypeBuilder) {
+            when (x.type_builder != null)
+            if (x.CannotFinalize)
+                Message.FatalError ($ "the type $(x) was not finalized, forgot the "
+                                    "TypeBuilder.Compile () on it?")
+            else
+                x.FinalizeType ();
+        });
+    }
+
+    /**
+    * This method iterates through all the known type builders,
+    * looking for unused global symbols.
+    */
+    internal CheckForUnusedGlobalSymbols () : void
+    {
+        when (WarningOptions.IsEnabled (10003) || WarningOptions.IsEnabled (649))
+        Iter (_.check_for_unused_global_symbols ())
+    }
+  }
+}
