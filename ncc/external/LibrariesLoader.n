@@ -615,21 +615,7 @@ namespace Nemerle.Compiler
       protected supertypes : list [MType.Class];
       protected supertype_map : Map [int, MType.Class] = Map ();
 
-      
-      /** queried_members is used to collect all members of given type
-         When we are queried for member "foo", we look for it, and if it
-         was never looked up before, we add it to the queried_members.
-         When we are queried for the "" member (which means to list
-         all the members), we call system_type.GetMembers () and skip
-         IMember construction for members already in the queried_members.
-         This avoids creating duplicate members, which is crucial.  */
-      queried_members : Hashtable [string, list [IMember]];
       mutable implicit_conversion_initialized : bool;
-
-      /** members is kind of cache, but it is also used (in connection with
-         member_list) to make sure each S.R.MemberInfo has only one 
-         N.C.IMember */
-      protected members : Hashtable [string, list [IMember]];
 
       public this (lib : LibraryReference, h : System.Type, ns_node : NamespaceTree.Node)
       {
@@ -639,8 +625,6 @@ namespace Nemerle.Compiler
         LibraryReferenceManager.CacheTypeInfo (h, this, ns_node);
         library = lib;
         system_type = h;
-        members = Hashtable (2);
-        queried_members = Hashtable (2);
 
         when (system_type.DeclaringType != null)
           tenv = (lib.TypeInfoOfType (system_type.DeclaringType) :> NetType).tenv;
@@ -757,7 +741,7 @@ namespace Nemerle.Compiler
         def name = system_type.Name;
         
         def targets =
-          if (system_type.Namespace != "System") {
+          if (!system_type.IsPrimitive) {
             is_numeric = false;
             []
           } else
@@ -791,7 +775,7 @@ namespace Nemerle.Compiler
 
           // add remaining as explicit
           def numeric_types =
-            ["SByte", "Int16", "Int32", "Int64", "Byte", "UInt16", "UInt32", 
+            array ["SByte", "Int16", "Int32", "Int64", "Byte", "UInt16", "UInt32", 
              "UInt64", "Single", "Double", "Char"];
 
           foreach (target in numeric_types) {
@@ -806,8 +790,8 @@ namespace Nemerle.Compiler
       internal AddBuiltins () : void
       {
         InitBuiltinMembers ();
-        when (system_type.DeclaringType == null &&
-              system_type.Namespace == "System") {
+        when (system_type.IsPrimitive || system_type.Equals (SystemType.Object) ||
+              system_type.Equals (SystemType.String)) {
           def name = system_type.Name;
           if (name == "String") {
             // == and != are surprisingly properly overloaded
@@ -1206,18 +1190,9 @@ namespace Nemerle.Compiler
         }
       }
 
-      private collect_members (name : string) : void
+      private collect_members () : void
       {
-        assert (! queried_members.Contains (name));
-
-        def store_by_name (m : IMember) {
-          members [m.Name] =
-            if (members.Contains (m.Name))
-              m :: members [m.Name]
-            else
-              [m];
-        }
-     
+        member_map = Hashtable ();
         
         def flags = SR.BindingFlags.Public     |
                     SR.BindingFlags.NonPublic  |
@@ -1225,59 +1200,44 @@ namespace Nemerle.Compiler
                     SR.BindingFlags.Instance   |
                     SR.BindingFlags.DeclaredOnly;
 
-        def member_array = 
-          if (name == "")
-            system_type.GetMembers (flags) 
-          else 
-            system_type.GetMember (name, flags);
+        def member_array = system_type.GetMembers (flags);
 
         //Message.Debug ($"{collect_members, '$name' in $this len=$(member_array.Length)");
-
         mutable collected_now = [];
-        def already_added = Hashtable (2);
+
         for (mutable i = member_array.Length - 1; i >= 0; i--) {
           def m = member_array [i];
 //          Message.Debug ($"adding $m from $this $(this.GetId ())");
           if (is_internal (m)) {}
-          else if (name == "" && queried_members.Contains (m.Name)) {
-            when (! already_added.Contains (m.Name))
-              collected_now = queried_members [m.Name] + collected_now;
-            already_added [m.Name] = null;
-          } else {
+          else {
 //            Message.Debug ($ "add_member: $m to $(this) [$(GetId ())]");
             match (imember_of_memberinfo (m)) {
               | null => ()
               | r =>
 //                    Message.Debug ($ "add_member: $r to $(this) [$(GetId ())]");
-                store_by_name (r);
                 collected_now ::= r;
+                add_member_by_name (r);
             }
           }
         }
-        
-        when (name == "") {
-          def res =
-            if (IsInterface) {
-              def supertypes = GetDirectSuperTypes ();
-              (if (supertypes.IsEmpty)
-                 [InternalType.Object_tc.GetMembers ()]
-               else
-                 supertypes.Map (fun (t) { t.tycon.GetMembers () }))
-              + [collected_now]
-            } else
-              match (SuperClass ()) {
-                | Some (ti) => [ti.GetMembers (), collected_now]
-                | None => [collected_now]
-              }
-          collected_now = RemoveHiddenMembers (res);
-              
-          members [""] = collected_now;
-        }
 
-        assert (! queried_members.Contains (name));
-        //Message.Debug ($"}the result: $collected_now");
-        queried_members [name] = collected_now;
-      }
+        def res =
+          if (IsInterface) {
+            def supertypes = GetDirectSuperTypes ();
+            (if (supertypes.IsEmpty)
+               [InternalType.Object_tc.GetMembers ()]
+             else
+               supertypes.Map (fun (t) { t.tycon.GetMembers () }))
+            + [collected_now]
+          } else
+            match (SuperClass ()) {
+              | Some (ti) => [ti.GetMembers (), collected_now]
+              | None => [collected_now]
+            }
+        collected_now = RemoveHiddenMembers (res);
+
+        member_map [""] = collected_now;
+     }
 
       public override LookupMemberImpl (name : string) : list [IMember] 
       {
@@ -1292,16 +1252,14 @@ namespace Nemerle.Compiler
           AddConversions ();
           LookupMember (name)
         } else {
-          match (members.Get (name)) {
-            | Some (r) => r
-            | None =>
-              collect_members (name);
-              if (members.Contains (name))
-                members [name]
-              else {
-                members [name] = [];
-                []
-              }
+          when (member_map == null)
+            collect_members ();
+
+          if (member_map.Contains (name))
+            member_map [name]
+          else {
+            member_map [name] = [];
+            []
           }
         }
       }
