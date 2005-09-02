@@ -254,6 +254,8 @@ namespace Nemerle.Completion
             }
         }
         
+        mutable completionList : list[CompletionInfo];
+        
         public RunCompletionEngine () : void
         {
             // Tell the methods we are in completion mode
@@ -270,6 +272,7 @@ namespace Nemerle.Completion
             | Assembly as a => LibraryReferenceManager.AddAssembly (a.assembly);
             }
 
+            completionList = [];
             mutable trees = [];
             try
             {
@@ -371,16 +374,21 @@ namespace Nemerle.Completion
         
         # region Code completion
         
-        internal static ResolveNoMemberNamed (obj : Typed.TExpr, _member_name : string, 
-            expected : TyVar, _declaring_type : TypeBuilder) : void
+        internal static ResolveNoMemberNamed (obj : Typed.TExpr, member_name : string, 
+            expected : TyVar, declaring_type : TypeBuilder) : void
         {
             def get_obj_type = fun (x) {
                 try
                 {
                 if (x is MType)
-                    (obj.Type :> MType)
+                    (x :> MType)
                 else
-                    obj.Type.FixedValue
+                    def hint = x.Hint;
+                    match (hint)
+                    {
+                    | Some (t) => t
+                    | None => null
+                    }
                 }
                 catch
                 {
@@ -389,13 +397,209 @@ namespace Nemerle.Completion
             }
             
             def object_type = get_obj_type (obj.Type);
-            def _expected_return_type = get_obj_type (expected);
+            def expected_return_type = get_obj_type (expected);
+            def name = member_name.Replace (MagicWord, "");
             
-            match (object_type)
+            make_completion_list (object_type, expected_return_type, name, declaring_type);
+        }
+        
+        make_completion_list (obj_type : MType, return_type : MType, 
+            member_name : string, declaring_type : TypeBuilder) : void
+        {
+            match (obj_type)
             {
-                | TyVarRef (t) => Console.WriteLine (t.Constraints);
+                | TyVarRef (t) => 
+                    foreach (mtype in t.tyvar.Constraints)
+                        make_completion_list (mtype, return_type, member_name, declaring_type);
+                | Class (tycon, args) => add_members_to_list(tycon, name, declaring_type);
+                | Array => 
+                    match (NamespaceTree.Node.LookupExactType ("System.Array"))
+                    {
+                    | Some (t) => add_members_to_list ((t :> TypeInfoCache.Cached).tycon, 
+                                      name, declaring_type);
+                    | _ => ();
+                    }
                 | _ => ();
             }
+        }
+
+        
+        static complete_common_member_props (member : IMember, info : NemerleMemberInfo) : void
+        {
+            info.Name = member.Name;
+            
+            info.IsStatic = member.IsStatic;
+            info.IsPublic = member.Attributes %&& NemerleAttributes.Public;
+            info.IsPrivate = member.Attributes %&& NemerleAttributes.Private;
+            info.IsProtected = member.Attributes %&& NemerleAttributes.Protected;
+            info.IsInternal = member.Attributes %&& NemerleAttributes.Internal;
+        }
+        
+        static complete_field (field : IField) : FieldInfo
+        {
+            mutable returnField = FieldInfo();
+            complete_common_member_props(field, returnField);
+            
+            if (returnField is FieldBuilder)
+                returnField.Type = construct_type ((field :> FieldBuilder).GetMemType());
+            else
+                returnField.Type = ReferencedTypeInfo (field.GetFieldInfo().FieldType);
+            
+            returnField.IsMutable = field.IsMutable;
+            returnField.IsVolatile = field.IsVolatile;
+            returnField.IsLiteral = field.IsLiteral;
+            
+            if (field.IsLiteral) {
+                def value = field.GetValue();
+                match (value) {
+                    | Void
+                    | Null => returnField.Value = null;
+                    | String as s => returnField.Value = s.val;
+                    | Float as f => returnField.Value = f.val;
+                    | Double as d => returnField.Value = d.val;
+                    | Decimal as dec => returnField.Value = dec.val;
+                    | Char as ch => returnField.Value = ch.val;
+                    | Bool as b => returnField.Value = b.val;
+                    | Integer as i => if (i.is_negative) returnField.Value = - (i.val :> long);
+                                      else returnField.Value = i.val;
+                    | Enum as l => if (l.val.is_negative) returnField.Value = - (l.val.val :> long);
+                                   else returnField.Value = l.val.val;
+                }
+            }
+            else
+                returnField.Value = null;
+            
+            returnField
+        }
+        
+        static complete_method (method : IMethod) : MethodInfo
+        {
+            mutable returnMethod = MethodInfo();
+            complete_common_member_props(method, returnMethod);
+            
+            def attributes = method.Attributes;
+            returnMethod.IsAbstract = attributes %&& NemerleAttributes.Abstract;
+            returnMethod.IsFinal = attributes %&& NemerleAttributes.Sealed;
+            returnMethod.IsOverride = attributes %&& NemerleAttributes.Override;
+            returnMethod.IsVirtual = attributes %&& NemerleAttributes.Virtual;    
+            returnMethod.IsNew = attributes %&& NemerleAttributes.New;
+            returnMethod.IsExtern = attributes %&& NemerleAttributes.Extern;
+            
+            returnMethod.IsConstructor = false;
+            returnMethod.IsStaticConstructor = false;
+            match (method.GetFunKind()){
+                | FunKind.Constructor => returnMethod.IsConstructor = true;
+                | FunKind.StaticConstructor => returnMethod.IsStaticConstructor = true;
+                | _ => ();
+            }
+            
+            if (method.ReturnType == null)
+                returnMethod.ReturnType = null;
+            else
+                returnMethod.ReturnType = construct_type (method.ReturnType :> MType);
+            
+            def param = method.GetParameters();
+            def listParams = List.Map (param, get_parm);
+            returnMethod.Parameters = listParams.ToArray ();
+            def typarms = method.GetHeader().typarms;
+            def listTyparms = List.Map (typarms, get_typarm);
+            returnMethod.TypeParameters = listTyparms.ToArray ();
+            
+            returnMethod
+        }
+        
+        
+        static complete_property (property : IProperty) : PropertyInfo
+        {
+            mutable returnProperty = PropertyInfo();
+            complete_common_member_props (property, returnProperty);
+            if (property is PropertyBuilder)
+                returnProperty.Type = construct_type ((property :> PropertyBuilder).GetMemType());
+            else
+                returnProperty.Type = ReferencedTypeInfo (property.GetPropertyInfo().PropertyType);
+            returnProperty.IsMutable = property.IsMutable;
+            returnProperty.IsIndexer = property.IsIndexer;
+            
+            def attributes = property.Attributes;
+            returnProperty.IsAbstract = attributes %&& NemerleAttributes.Abstract;
+            returnProperty.IsFinal = attributes %&& NemerleAttributes.Sealed;
+            returnProperty.IsOverride = attributes %&& NemerleAttributes.Override;
+            returnProperty.IsVirtual = attributes %&& NemerleAttributes.Virtual;    
+            returnProperty.IsNew = attributes %&& NemerleAttributes.New;
+            returnProperty.IsExtern = attributes %&& NemerleAttributes.Extern;
+
+            if (property.GetGetter() == null)
+                returnProperty.Getter = null;
+            else
+                returnProperty.Getter = complete_method (property.GetGetter());
+           
+            if (property.GetSetter() == null)
+                returnProperty.Setter = null;
+            else
+                returnProperty.Setter = complete_method (property.GetSetter());
+                
+            returnProperty
+        }
+        
+        static get_event (ev : IEvent) : EventInfo
+        {
+            mutable returnEvent = EventInfo();
+            complete_common_member_props (ev, returnEvent);
+            if (ev is EventBuilder)
+                returnEvent.Type = construct_type ((ev :> EventBuilder).GetMemType());
+            else
+                returnEvent.Type = ReferencedTypeInfo (ev.GetEventInfo().EventHandlerType);
+
+            if (ev.GetAdder() == null)
+                returnEvent.Adder = null;
+            else
+                returnEvent.Adder = get_method (ev.GetAdder());
+             
+            if (ev.GetRemover() == null)
+                returnEvent.Remover = null;
+            else
+                returnEvent.Remover = get_method (ev.GetRemover());
+             
+            returnEvent
+         }
+
+        add_members_to_list (Type : TypeInfo, Initial : string, declaring_type : TypeBuilder) : void
+        {
+            if (Type is TypeBuilder)
+            {
+                def real_type = Type :> TypeBuilder;
+                def members = real_type.GetMembers();
+                def add_to_list_if_initial = fun (x) {
+                    def member = complete_member (x);
+                    try
+                    {
+                        def member_initial = member.Name.Substring (0, Initial.Length);
+                        when (member.Compare (Initial, member_initial, true) == 0)
+                        {
+                            when (member.IsPublic || x.CanAccess (declaring_type))
+                                completionList ::= member;
+                        }
+                    }
+                    catch
+                    {
+                    | _ => ();
+                    }
+                }
+                members.Iter (add_to_list_if_initial);
+            }
+            else
+            {
+                def system_type = Type.SystemType;
+            }
+        }
+        
+        def complete_member (x) : NemerleTypeInfo
+        {
+             | x is IField => complete_field (x)
+             | x is IMethod => complete_method (x)
+             | x is IProperty => complete_property (x)
+             | x is IEvent => complete_event (x)
+             | x => null
         }
         
         # endregion
