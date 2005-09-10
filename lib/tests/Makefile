@@ -23,4 +23,6 @@ nunit: lib-unit-tests.dll
 	fi
 
 lib-unit-tests.dll: 
-	$(EXECUTE) $(TOP)/ncc/out.stage3/ncc.exe linkedlist.n -def:NUNIT -r nunit.core.dll -t:library -o:lib-unit-tests.dll
+	$(Q)if test $(NUNIT_CONSOLE); then \
+		$(EXECUTE) $(TOP)/ncc/out.stage3/ncc.exe linkedlist.n -def:NUNIT -r nunit.core.dll -t:library -o:lib-unit-tests.dll
+	fi
