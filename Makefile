@@ -151,6 +151,7 @@ clean:
 	$(MAKE) -C ncc clean
 	$(MAKE) -C snippets clean
 	$(MAKE) -C tools clean
+	$(MAKE) -C lib/tests clean
 	rm -f config.mak configure.log
 
 set-version: config.mak
