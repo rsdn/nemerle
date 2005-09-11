@@ -47,7 +47,7 @@
 "	augroup nemerle
 "		au!
 "		autocmd BufNewfile,BufReadPre *.n
-"			\ set fencs=utf-8,iso-8859-2 fenc=utf-8
+"			\ set fencs=ucs-bom,utf-8,iso-8859-2 fenc=utf-8
 "	augroup END
 "
 " copy this to your ~/.vimrc to enable outline mode (folding regions) on <F8>
