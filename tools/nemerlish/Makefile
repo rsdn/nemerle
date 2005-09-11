@@ -50,6 +50,9 @@ uninstall:
 	$(RM) $(BINDIR)/nemish.exe
 	$(Q)rm -f $(BINDIR)/nemish.exe
 
+symlinks:
+	ln -sf ../../ncc/out.stage3/*.{dll,exe} .
+
 clean:
 	rm -f *.dll *.exe *~
 
