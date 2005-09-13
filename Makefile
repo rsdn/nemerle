@@ -108,7 +108,7 @@ get-static-copies:
 	@echo Getting static copies of the wiki.
 	rm -rf doc/wiki
 	mkdir doc/wiki
-	cd doc/wiki && lftp http://nemerle.org/static/ -e 'mirror .' < /dev/null
+	cd doc/wiki && lftp http://nemerle.org/static/ -e 'mget *.html' < /dev/null
 	rm -f doc/wiki/*.txt
 
 dist-cleaner:
@@ -116,8 +116,7 @@ dist-cleaner:
 	$(Q)$(MAKE) -C doc dist-cleaner
 	@echo Cleaning non-dist junk.
 	$(Q)$(MAKE) clean
-	$(Q)rm -rf doc/course{,-src} doc/images
-	$(Q)rm -rf doc/presentation
+	$(Q)rm -rf doc/images doc/presentation
 	$(Q)rm -f config.mak configure.log
 	$(Q)$(MAKE) get-static-copies
 	mv -f doc/wiki/*.html doc/html/

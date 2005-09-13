@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2003, 2004 The University of Wroclaw.
+# Copyright (c) 2003-2005 The University of Wroclaw.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -33,16 +33,10 @@ include ../config.mak
 # VARIABLES
 ############################################################
 
-root_docs = reference
-
-docs = $(root_docs)
-
 tex_docs = metaprogramming intro
 
-normal_docs = $(html) $(addsuffix .ps, $(tex_docs)) $(addsuffix .pdf, $(tex_docs))
+normal_docs = $(addsuffix .ps, $(tex_docs)) $(addsuffix .pdf, $(tex_docs))
 
-html-no-course = $(addsuffix .html, $(root_docs))
-html = $(addsuffix .html, $(docs))
 ps = $(addsuffix .ps, $(docs)) $(addsuffix .ps, $(tex_docs))
 pdf = $(addsuffix .pdf, $(docs)) $(addsuffix .pdf, $(tex_docs))
 docb = $(addsuffix .docb, $(docs))
@@ -52,8 +46,6 @@ docb = $(addsuffix .docb, $(docs))
 ############################################################
 
 INST  = @echo INSTALL $1
-XSPP_ = @echo XSPP    $1
-XSLT_ = @echo XSLT    $1
 MKDIR = @echo MKDIR   $1
 TAR   = @echo TAR     $1
 CP    = @echo CP      $1
@@ -64,7 +56,6 @@ RM    = @echo RM      $1
 ############################################################
 
 .DELETE_ON_ERROR:
-.SECONDARY: mainStyle.xsl latex.xsl xml2tex.xsl docb.xsl $(addsuffix .tex, $(docs))
 
 all: $(normal_docs)
 
@@ -75,42 +66,11 @@ all: $(normal_docs)
 
 pdf: $(ps) $(pdf)
 
-%.html: src/%.xml mainStyle.xsl
-	$(XSLT_) $@
-	$(Q)$(XSLT) -o $@ mainStyle.xsl $<
-	$(Q)perl styles/include-sources $@
-
-grokking.html:: src/nem-examples/grokking.n dumper
-tutorial.html:: src/nem-examples/tutorial.n dumper
-
-dumper:
-	$(MAKE) -C ../tools/htmldumper all
-
-%.docb: src/%.xml docb.xsl
-	$(XSLT_) $@
-	$(Q)$(XSLT) -o - docb.xsl $< | xmllint --format - > $@
-
-%.xsl: styles/%.xspp
-	$(XSPP_) $@
-	$(Q)$(XSPP) $< > $@
-
-%.xsl: tex/%.xspp
-	$(XSPP_) $@
-	$(Q)$(XSPP) $< > $@
-
 %.ps: %.dvi
 	dvips -o $@ $<
 
 %.pdf: %.ps
 	ps2pdf $<
-
-%.dvi: src/%.tex
-	latex $< < /dev/null
-	latex $< < /dev/null
-
-%.dvi: %.tex
-	latex $< < /dev/null
-	latex $< < /dev/null
 
 %.dvi: presentation/net-workshop-2004/%.tex
 	TEXINPUTS=.:presentation/net-workshop-2004: latex $< < /dev/null
@@ -119,18 +79,6 @@ dumper:
 %.dvi: presentation/macros-gpce04/%.tex
 	TEXINPUTS=.:presentation/macros-gpce04: latex $< < /dev/null
 	TEXINPUTS=.:presentation/macros-gpce04: latex $< < /dev/null
-
-%.tex: %.docb styles/docb2latex.xsl
-	$(XSLT_)
-	$(Q)$(XSLT) -o $@ styles/docb2latex.xsl $<
-
-v: verify-html
-
-verify-html:
-	set -xe; for f in *.html ; do xmllint --noout --valid $$f ; done
-
-verify-docb:
-	set -xe; for f in *.docb ; do xmllint --noout --valid $$f ; done
 
 install:
 	$(Q)if test ! -d $(DESTDIR)$(MANDIR); then $(INSTALL) -d $(DESTDIR)$(MANDIR); fi
@@ -142,20 +90,18 @@ uninstall:
 	$(Q)rm -f $(MANDIR)/ncc.1
 
 clean:
-	rm -f *.xsl $(html) *.ps *.pdf *.aux *.log *.xml *.tex *.docb
-	$(MAKE) -C tex clean
+	rm -f *.ps *.pdf *.aux *.log
 
 .PHONY: www publish
 
 www: nemerle-web.tar.gz
 
 nemerle-web.tar.gz: $(normal_docs) $(wildcard styles/*.js styles/*.css styles/*.png styles/*.jpg)
-	$(MAKE) verify-html
 	rm -rf www
 	mkdir -p www/{styles,images}
 	cp styles/*.{css,png,js} www/styles/
 	cp images/* www/images/
-	cp *.{html,ps,pdf} www/
+	cp *.{ps,pdf} www/
 	for f in www/*.pdf www/*.ps ; do gzip <$$f > $$f.gz ; done
 	tar -C www -zcf $@ .
 	rm -rf www
@@ -179,6 +125,6 @@ dist-cleaner: all
 	$(Q)mkdir -p html
 	$(Q)mkdir -p html/styles
 	$(CP) html
-	$(Q)cp $(html-no-course) *.pdf html
+	$(Q)cp *.pdf html
 	$(CP) css
 	$(Q)cp styles/*.{css,png,js} html/styles
