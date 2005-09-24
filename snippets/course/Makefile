@@ -7,9 +7,7 @@ COMPILE = $(MONO) $(NPATH)/ncc.exe -pedantic-lexer
 
 all: swf-calculator.exe backup-tool.exe getmxbyname.exe
 	$(MAKE) -C huffman all
-ifneq ($(BROKEN_SWF),1)
 	$(MAKE) -C ERA-SMS-Sender all
-endif
 	$(MAKE) -C chat all
 
 swf-calculator.exe: swf-calculator.n
