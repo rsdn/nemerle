@@ -46,7 +46,10 @@ EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 ############################################################
 
 sql:
-	$(EXECUTE) ../boot/ncc.exe -r Npgsql -r Nemerle.Compiler -nostdmacros -r Nemerle.Macros -tdll dataNpgsql.n -o Nemerle.Data.Npgsql.dll
+	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r Npgsql -r Nemerle.Compiler -nostdmacros -r Nemerle.Macros -tdll dataNpgsql.n -o Nemerle.Data.Npgsql.dll
 
 sqlclient:
-	$(EXECUTE) ../boot/ncc.exe -r System.Data -r Nemerle.Compiler -nostdmacros -r Nemerle.Macros -tdll dataSqlClient.n -o Nemerle.Data.SqlClient.dll
+	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r System.Data -r Nemerle.Compiler -nostdmacros -r Nemerle.Macros -tdll dataSqlClient.n -o Nemerle.Data.SqlClient.dll
+
+clean:
+	rm -fr *dll *pdb *mdb
