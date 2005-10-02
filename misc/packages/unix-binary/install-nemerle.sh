@@ -130,6 +130,8 @@ Please attach $config_log.
 
 Build info: $build_info
 
+This script will also install an uninstall script.
+
 If you don't want to install Nemerle, please hit Ctrl-C now.  Otherwise
 press Enter.
 
@@ -289,6 +291,9 @@ cat <<EOF
 You can find language documentation in doc/ subdirectory here. It was not
 installed anywhere, you can copy it somewhere manually. This directory
 won't be needed anymore.
+
+If you would like to remove this software, please use the uninstall-nemerle.sh
+command.
 
 Good luck and thank you for trying Nemerle!
 
