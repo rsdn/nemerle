@@ -11,6 +11,8 @@ DIR = nemerle-bin-$(VERSION).$(REVISION)
 all: assembly-name.exe
 	rm -rf $(DIR)/*
 	install -d $(DIR)/{gac,bin,misc}
+	test -f ../../../doc/html/Grokking_Nemerle.html
+	cp -rf  ../../../doc/html $(DIR)/doc
 	cp -f ../../../ncc/out.stage3/*.dll $(DIR)/gac/
 	cp -f ../../../tools/cs2n/{antlr.runtime,Nemerle.CSharp{,.CS}}.dll $(DIR)/gac/
 	cp -f ../../../tools/nemerlish/Nemerle.Evaluation.dll $(DIR)/gac/
@@ -20,6 +22,7 @@ all: assembly-name.exe
 	cp -f ../../../doc/ncc.1 $(DIR)/misc/
 	cp -f ../../../tools/nant-task/Nemerle.NAnt.Tasks.dll $(DIR)/misc/
 	cp -f ../../print-dir.build $(DIR)/misc/
+	cp -f README $(DIR)/
 	sed \
 		-e 's/@version@/$(VERSION).$(REVISION)/' \
 		-e "s/@build_info@/`date` on `hostname` by `whoami`/" \
@@ -33,6 +36,7 @@ all: assembly-name.exe
 	@echo done
 	cat uninstall-nemerle.sh.foot >> $(DIR)/misc/uninstall-nemerle.sh
 	chmod 755 $(DIR)/misc/uninstall-nemerle.sh
+	tar zcf $(DIR).tgz $(DIR)
 
 assembly-name.exe: assembly-name.n
 	$(NCC) -o $@ $<
