@@ -32,8 +32,10 @@
 
 config_log="install.log"
 mono_dir=
-build_info=@build_info@
-version=@version@
+build_info="@build_info@"
+version="@version@"
+install_bindir=/usr/local/bin
+nant_plugin_path=
 
 
 ############################################################
@@ -53,7 +55,6 @@ abort () {
       echo "*** Ignoring error. ***"
     else
       echo "Aborting..."
-      rm -f $config_mak
       exit 1
     fi
 }
@@ -161,7 +162,6 @@ else
   abort "cannot find gacutil, please double check that running gacutil from the command line gives the help message"
 fi
 
-
 echo_check_for "mono binary location"
 oldIFS=$IFS
 IFS=":"
@@ -169,13 +169,13 @@ set -- $PATH
 IFS=$oldIFS
 
 for dir ; do
-  if test -x $dir/mono ; then
+  if test -x "$dir/mono" ; then
     mono_dir="$dir"
     break
   fi
 done
 if [ X"$mono_dir" != X ] ; then
-  case $mono_dir in
+  case "$mono_dir" in
     */ ) ;;
     * ) mono_dir="$mono_dir/" ;;
   esac
@@ -185,23 +185,114 @@ else
   echo "*** Warning, will use plain 'mono' without path in wrapper scripts ***"
 fi
 
+
+echo_check_for "nant plugin directory"
+rm -f misc/nant.dir
+try_execute nant -buildfile:misc/print-dir.build
+nant_dir=`cat misc/nant.dir 2>/dev/null`
+rm -f misc/nant.dir
+if test -d "$nant_dir" ; then
+  echo "found, $nant_dir"
+  nant_plugin_path="$nant_dir/Nemerle.NAnt.Tasks.dll"
+else
+  echo_result "not found, plugin disabled"
+  nant_plugin_path=
+fi
+
+
+case "$mono_dir" in
+  /home/* )
+    install_bindir="$mono_dir"
+    ;;
+  *) ;;
+esac
+
+echo "Which directory would you like to use for binaries?"
+echo "It should be in your PATH, the default is '$install_bindir'"
+echo -n "BINDIR [$install_bindir]: "
+read user_bindir
+
+if [ X != X$user_bindir ] ; then
+  install_bindir="$user_bindir"
+fi
+
+if test -d "$install_bindir" ; then
+  if test -f "$install_bindir/ncc" ; then
+    echo
+    echo "*** WARNING: a previous version of Nemerle was found to be installed ***"
+    echo
+    if test -x "$install_bindir/uninstall-nemerle.sh" ; then
+      echo "I can run the uninstall script, before continuing. If you wish"
+      echo "to break installation and do it yourself, please hit Ctrl-C now."
+      echo "Removing the previous version is recommended, as it allows to avoid"
+      echo "disk clutter, when several versions of given assembly are installed"
+      echo "in the GAC."
+      while : ; do
+        echo -n "Shall I run the uninstall script (y/n) [y]: "
+        read ANS
+	case "$ANS" in
+	  y | Y | yes | "" )
+	    "$install_bindir/uninstall-nemerle.sh" --dont-ask
+	    break
+	    ;;
+	  n | N | no )
+	    break
+	    ;;
+	  * ) ;;
+	esac
+      done
+    else
+      echo "The uninstall script was not found though. You can continue"
+      echo "installation but this may leave several versions of assemblies in"
+      echo "the GAC. This is only disk clutter, though, nothing dangerous."
+      echo -n "Hit Enter to continue, Ctrl-C to abort: "
+      read JUNK
+    fi
+  fi
+else
+  echo "Directory $install_bindir does not exists, creating it."
+  install -d $install_bindir || abort "cannot create $install_bindir"
+fi
+
+echo "Installing binaries and creating wrapper scripts."
+
+for f in bin/*.exe ; do
+  install -m 644 $f "$install_bindir" || abort "cannot install $f into $install_dir, permission problems?"
+  name=$(basename $f .exe)
+  cat >"$install_bindir/$name" <<EOF
+#!/bin/sh
+exec "${mono_dir}mono" "$install_bindir/$name.exe" "\$@"
+EOF
+  chmod 755 "$install_bindir/$name"
+done
+
+test x"$nant_plugin_path" != x"" && \
+install -m 644 misc/Nemerle.NAnt.Tasks.dll "$nant_plugin_path"
+
+echo "Creating uninstall script."
+sed \
+	-e "s#@install_bindir@#$install_bindir#" \
+	-e "s#@nant_plugin_path@#$nant_plugin_path#" \
+	misc/uninstall-nemerle.sh > "$install_bindir/uninstall-nemerle.sh"
+chmod 755 $install_bindir/uninstall-nemerle.sh
+
 echo "Installing binaries to the GAC."
 for f in gac/*.dll ; do
-  gacutil -package nemerle -i $f || \
+  try_execute gacutil -package nemerle -i $f || \
   abort "cannot install assembly to the GAC, please check the permissions"
 done
 
-  
-echo "Creating nemerle.pc"
+cat <<EOF
 
-cat > nemerle.pc <<EOF
-prefix=${prefix}
-exec_prefix=\${prefix}
-libdir=${libdir}
+                *** Installation successful. ***
 
-Name: Nemerle
-Description: Nemerle - a .NET object-functional language
-Version: $nem_version.$nem_revision
-Libs: -r:${mono_libdir}/mono/nemerle/Nemerle.dll -r:${mono_libdir}/mono/nemerle/Nemerle.Compiler.dll -r:${mono_libdir}/mono/nemerle/Nemerle.Macros.dll
+You can find language documentation in doc/ subdirectory here. It was not
+installed anywhere, you can copy it somewhere manually. This directory
+won't be needed anymore.
+
+Good luck and thank you for trying Nemerle!
+
 EOF
+
+exit 0
 

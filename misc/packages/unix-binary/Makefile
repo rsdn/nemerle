@@ -19,6 +19,7 @@ all: assembly-name.exe
 	cp -f ../../../tools/nemerlish/nemish.exe $(DIR)/bin/
 	cp -f ../../../doc/ncc.1 $(DIR)/misc/
 	cp -f ../../../tools/nant-task/Nemerle.NAnt.Tasks.dll $(DIR)/misc/
+	cp -f ../../print-dir.build $(DIR)/misc/
 	sed \
 		-e 's/@version@/$(VERSION).$(REVISION)/' \
 		-e "s/@build_info@/`date` on `hostname` by `whoami`/" \
