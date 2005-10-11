@@ -78,12 +78,16 @@ changelog:
 	last=`perl -e '$$_ = <>; /\[r(\d+-)?(\d+)\]/ and print "$$2\n"' ChangeLog 2>/dev/null`; \
 	if [ X$$last = X ] ; then last=0 ; fi ; \
 	last=$$(($$last + 1)) ; \
-	echo "Loggin from $$last."; \
-	svn log -r HEAD:$$last -v --xml > changelog.xml
-	$(svn2log) -o ChangeLog.new -p '$(nemroot)' -r npc/ncc=ncc
-	cat ChangeLog > ChangeLog.old 2>/dev/null || :
-	cat ChangeLog.new ChangeLog.old > ChangeLog
-	rm -f ChangeLog.old ChangeLog.new changelog.xml
+	if [ `svn info | grep '^Revision:' | sed -e 's/.* //'` -le $$last ] ; then \
+         echo "Nothing to log." ; \
+       	else \
+         echo "Loggin from $$last."; \
+         svn log -r HEAD:$$last -v --xml > changelog.xml  && \
+         $(svn2log) -o ChangeLog.new -p '$(nemroot)' -r npc/ncc=ncc && \
+         cat ChangeLog > ChangeLog.old 2>/dev/null; \
+         cat ChangeLog.new ChangeLog.old > ChangeLog && \
+         rm -f ChangeLog.old ChangeLog.new changelog.xml ; \
+        fi
 
 sync-boot:
 	$(MAKE) -C ncc boot sync
