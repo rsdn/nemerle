@@ -5,7 +5,9 @@ EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
 NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe
 
-DIR = nemerle-bin-$(VERSION).$(REVISION)
+RELEASE = 2
+
+DIR = nemerle-bin-$(VERSION).$(REVISION)-$(RELEASE)
 
 
 all: assembly-name.exe
