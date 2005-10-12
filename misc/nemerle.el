@@ -155,8 +155,10 @@ buffer created.  This is a good place to put your customizations.")
   (let ((map (make-sparse-keymap)))
     (define-key map "\C-c\C-c" 'comment-region)
     (define-key map "|" 'nemerle-electric-bar)
-    (define-key map "}" 'nemerle-electric-brace)
+    (define-key map "{" 'nemerle-electric-brace-begin)
+    (define-key map "}" 'nemerle-electric-brace-end)
     (define-key map "*" 'nemerle-electric-star)
+    (define-key map "e" 'nemerle-electric-e)
     (setq nemerle-mode-map map)))
 
 (unless nemerle-font-lock-keywords
@@ -293,18 +295,25 @@ Returns t if inside a comment."
     (let ((end (point))
 	  (line 'none)
 	  (in-match-case nil)
+	  (depth 0)
 	  (at-end nil)
 	  (brace (nemerle-go-up-one-level)))
       (if (not (eq brace ?{))
 	  nil
 	(beginning-of-line)
 	(while (and (not at-end) (<= (point) end))
+	  (cond ((looking-at ".*{[^}]*$")
+		 (setq depth (+ depth 1)))
+		((looking-at ".*}[^{]*$")
+		 (setq depth (- depth 1)))
+		(t
+		 nil))
 	  (setq line (nemerle-analyze-line))
-	  (if (eq line 'match-case)
-	      (setq in-match-case t))
+	  (if (and (eq line 'match-case) (eq depth 1))
+		 (setq in-match-case t))
 	  (if (> (forward-line 1) 0)
 	      (setq at-end t)))
-	in-match-case))))
+	  in-match-case))))
 
 
 (defun nemerle-on-empty-line ()
@@ -324,10 +333,14 @@ Returns t if inside a comment."
 	     'comment))
 	  ((nemerle-in-string)
 	   'in-string)
+	  ((looking-at "[ \t]*{")
+	   'begin-brace)
 	  ((looking-at "[ \t]*}")
 	   'end-brace)
 	  ((looking-at "[ \t]*|")
 	   'match-case)
+	  ((looking-at "[ \t]*else[ \t]*")
+	   'else-clause)
 	  (t
 	   'none))))
 
@@ -335,22 +348,91 @@ Returns t if inside a comment."
 (defun nemerle-analyze-block (end result)
   "Analyze the block from current point position until END.  Return
 the relative offset + result for the block."
-  (beginning-of-line)
-  (let ((line 'none)
-	(in-match-case nil)
-	(at-end nil))
-    (while (and (not at-end) (<= (point) end))
-      (setq line (nemerle-analyze-line))
-      (cond ((eq line 'match-case)
-	     (setq in-match-case t))
-	    (t
-	     nil))
-      (if (> (forward-line 1) 0)
-	  (setq at-end t)))
-    (if in-match-case
-	(setq result (+ result nemerle-match-case-offset)))
-    result))
+  (goto-char end)
+  (if (nemerle-in-match)
+      (setq result (+ result nemerle-match-case-offset)))
+  result)
 
+
+;; Go backwards, skipping comments, but no further than begin.
+;; After calling this  function you end up at most at the beginning
+;; of the line containing begin.
+(defun nemerle-go-backwards (begin)
+  ;; checks if currrent line is a comment line
+  ;; such situation will be noticed either by nemerle in comment in case
+  ;; of being in the middle of multi line comment or two regexps checking
+  ;; for the beginning of a comment.
+  (defun is-comment-line ()
+    (or (looking-at "[ \t]*//")	(looking-at "[ \t]*/\\*") (nemerle-in-comment)))
+
+  (while (and (eq (forward-line -1) 0) (<= begin (point)) (is-comment-line))
+    nil))
+ 
+
+(defun nemerle-check-if (end line offset)
+  "Checks if we have a case of if/else/whatever with one-line body. In such
+case braces may be missing and then syntax parser won't indicate the need to
+nest next line. This function will."
+  ;; check previous line for the if case and return offset
+  (let ((begin (point))
+	(add_offset 0) ; additional offset we could add
+	(done nil))
+    (unless (eq line 'begin-brace) ; don't indent begin-brace any more
+      (setq add_offset nemerle-basic-offset))
+    
+    (goto-char end)
+    (nemerle-go-backwards begin)
+    (if (> begin (point)) ; gone to far
+	(setq done t))
+    (goto-char (max (+ begin 1) (point)))
+    (let ((here (point))
+	  (type 'none))
+       (setq type (cond
+		   ((looking-at "[ \t]*\\(if\\|for\\|foreach\\|while\\|when\\|unless\\)[ \t]*(")
+		    'if)
+		   ((looking-at "[ \t]*else[ \t]*")
+		    'else)
+		   (t
+		    'none)))
+       (goto-char begin)
+       (if (eq type 'else)
+	   ;; skip to corresponding if - we should have same indentation
+	   (setq here (nemerle-find-if here)))
+       (if (eq type 'none)
+	   offset
+	 ;; we have the if-case, so increase offset and check another line
+	 ;; in case of nested if-cases
+	 (setq offset (+ offset add_offset))
+	 (if done
+	     offset
+	   (nemerle-check-if here 'none offset))))))
+	 
+
+(defun nemerle-find-if (end)
+  "Find if clause corresponding to else clause at position END. Return
+its position or END if no appropriate clause was found."
+  (let ((begin (point))
+	(depth 1)
+	(retval nil)
+	(too-far nil))
+    ;; depth is number of unmatched else's. We start with value of
+    ;; of 1 - the else line at end, and proceed until it reaches 0
+    (goto-char end)
+    (while (and (not (eq depth 0)) (not too-far))
+      (nemerle-go-backwards begin)
+      (if (> begin (point)) ;; oops - to far
+	  (setq too-far t))
+      (goto-char (max (+ 1 begin) (point)))
+      (if (looking-at "[ \t]*else[ \t]*")
+	  (setq depth (+ depth 1))
+	(if (looking-at "[ \t]*if[ \t]*(")
+	    (setq depth (- depth 1)))))
+    (if (eq depth 0)
+	(setq retval (point))
+      (setq retval end))
+    (goto-char begin)
+    retval))
+      
 
 (defun nemerle-get-offset (end line)
   "Return the relative offset for the block from the current point
@@ -361,15 +443,22 @@ by LINE."
 	((eq line 'comment)
 	 (nemerle-analyze-block end 2))
 	((eq line 'star-comment)
-	 (nemerle-analyze-block end 1))
+	 ;; handle star comments inside if-clause without braces
+	 (nemerle-analyze-block end (+ 1 (nemerle-check-if end line 0))))
 	((eq line 'match-case)
 	 (nemerle-analyze-block end (- nemerle-match-case-offset)))
+	((eq line 'else-clause)
+	 ;; handle proper indentation of else clause
+	 (nemerle-analyze-block end (nemerle-check-if
+				     (nemerle-find-if end)
+				     line 0)))
 	(t
-	 (nemerle-analyze-block end 0))))
+	 ;; handle if-clause without braces
+	 (nemerle-analyze-block end (nemerle-check-if end line 0)))))
 
 
 (defun nemerle-get-nested (end line)
-  "Retrun the relative offset for the line LINE nested in the block
+  "Return the relative offset for the line LINE nested in the block
 of code.  Analyze code from the current point position until END."
   (if (eq line 'end-brace)
       0
@@ -434,18 +523,48 @@ Also, the line is re-indented unless a numeric ARG is supplied."
       (let ((level (nemerle-calculate-indentation-of-line 'none)))
 	(nemerle-indent-to level)))
     (self-insert-command 1)))
-	
 
-(defun nemerle-electric-brace (arg)
+
+(defun nemerle-electric-e (arg)
+  "Insert letter e and force reindent if it's else-clause."
+  (interactive "p")
+  (self-insert-command (or arg 1))
+   (save-excursion
+     (beginning-of-line)
+     (cond ((looking-at "[ \t]*else[ \t]*")
+ 	   (let ((level (nemerle-calculate-indentation-of-line 'else-clause)))
+ 	     (nemerle-indent-to level))))))
+
+
+;; Common part of brace handling. Functions for specific brace (begin, end)
+;; need just to pass appropriate MEANING param.
+(defun nemerle-electric-brace (arg meaning)
+  "Insert a brace.
+
+Also, the line is re-indented unless a numeric ARG is supplied.
+MEANING is the symbol denoting syntax meaning of current line:
+begin-brace or end-brace."
+  (if (or (and arg (> arg 1)) (not (nemerle-on-empty-line)))
+      (self-insert-command (or arg 1))
+    (let ((level (nemerle-calculate-indentation-of-line meaning)))
+      (nemerle-indent-to level))
+    (self-insert-command 1)))
+
+
+(defun nemerle-electric-brace-begin (arg)
   "Insert a brace.
 
 Also, the line is re-indented unless a numeric ARG is supplied."
   (interactive "p")
-  (if (or (and arg (> arg 1)) (not (nemerle-on-empty-line)))
-      (self-insert-command (or arg 1))
-    (let ((level (nemerle-calculate-indentation-of-line 'end-brace)))
-      (nemerle-indent-to level))
-    (self-insert-command 1)))
+  (nemerle-electric-brace arg 'begin-brace))
+
+
+(defun nemerle-electric-brace-end (arg)
+  "Insert a brace.
+
+Also, the line is re-indented unless a numeric ARG is supplied."
+  (interactive "p")
+  (nemerle-electric-brace arg 'end-brace))
 
 
 (defun nemerle-electric-star (arg)
