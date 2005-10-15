@@ -41,12 +41,14 @@ all:
 	fi
 	$(Q)$(MAKE) -C nemerlish all
 	$(Q)$(MAKE) -C nant-task all
+	$(Q)$(MAKE) -C msbuild-task all
 
 install: all
 	$(Q)if test -f cs2n/cs2n.exe ; then \
 	  $(MAKE) -C cs2n install; fi
 	$(Q)$(MAKE) -C nemerlish install
 	$(Q)$(MAKE) -C nant-task all install
+	$(Q)$(MAKE) -C msbuild-task all install
 
 uninstall:
 	$(Q)-$(MAKE) -C cs2n uninstall
@@ -57,3 +59,4 @@ clean:
 	$(MAKE) -C nemerlish clean
 	$(MAKE) -C nant-task clean
 	$(MAKE) -C htmldumper clean
+	$(MAKE) -C msbuild-task clean
