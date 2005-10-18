@@ -47,8 +47,8 @@ namespace Nemerle.Compiler
    */
   public class PreParser
   {
-    lexer : LexerBase;
-    mutable last_token : Token = null;
+    protected lexer : LexerBase;
+    protected mutable last_token : Token = null;
     mutable Env : GlobalEnv;
 
     mutable finished : bool = false;
@@ -93,7 +93,7 @@ namespace Nemerle.Compiler
     }
 
     /** Fetch next token (from one token buffer or lexer if it's empty */
-    get_token () : Token {
+    protected virtual get_token () : Token {
       if (last_token != null) {
         def result = last_token;
         last_token = null;
@@ -448,5 +448,252 @@ namespace Nemerle.Compiler
       unless (finished) Message.Error (lexer.Location, "expected end of file, encountered closing brace");
       top
     }
+  }
+  
+  public class PreParserIndent : PreParser {
+    // For indentation syntax
+    mutable insert_unindents : int;
+    mutable indent_level : int;
+    mutable new_indent : string;
+    mutable current_indent : string;
+    // The number of unmatched { ( [ tokens found in the user code at this point
+    mutable explicit_groups : int;
+    static mutable indentation_syntax_active : bool;
+    mutable insertLocation : Location;
+    mutable token_pending : Token;
+    mutable last_real_tok : Token;
+    mutable indent_strings : System.Collections.ArrayList;
+    mutable set_namespace : bool;
+    mutable set_class : bool;
+    mutable force_brace_after_newline : bool;
+
+    public this (lex : LexerBase) {
+      base (lex);
+      
+      indentation_syntax_active = true;
+      new_indent = "";
+      current_indent = "";
+      indent_strings = System.Collections.ArrayList (20);
+      _ = indent_strings.Add("");
+    }
+
+    /** Fetch next token (from one token buffer or lexer if it's empty */
+    protected override get_token () : Token {
+      mutable lexer_tok = null;
+      mutable source = 0;
+      
+      mutable tok =
+        if (insert_unindents > 0) {
+          insert_unindents--;
+          indent_level--;
+          //Message.Debug (insertLocation, "Generate '}'");
+          Token.EndBrace (true);
+        }
+        // last_token has priority over token_pending
+        else if (last_token != null) {
+          source = 2;
+          def result = last_token;
+          last_token = null;
+          result;
+        }
+        else if (token_pending != null) {
+          source = 1;
+          def result = token_pending;
+          token_pending = null;
+          result;
+        }
+        else {
+          source = 3;
+          try {
+            lexer_tok = lexer.GetToken ();
+            match (lexer_tok) {
+              | Token.Indent as t =>
+                if (indentation_syntax_active) {
+                  if (force_brace_after_newline) {
+                    force_brace_after_newline = false;
+                    Token.BeginBrace (true);
+                  }
+                  else {
+                    new_indent = t.value;
+                    insertLocation = lexer_tok.Location;
+                    //Message.Debug (insertLocation, "Calling get_token_after_indent ()");
+                    source = 4;
+                    get_token_after_indent ();
+                  }
+                }
+                else
+                  get_token();
+              
+              | Token.EndOfFile =>
+                insert_unindents = indent_level;
+                when (set_class)
+                  insert_unindents++;
+                when (set_namespace)
+                  insert_unindents++;
+                if (insert_unindents > 0) {
+                  insertLocation = lexer_tok.Location;
+                  token_pending = lexer_tok;
+                  Token.EndBrace (true);
+                }
+                else {
+                  last_real_tok = lexer_tok;
+                  lexer_tok
+                }
+                
+              | BeginBrace
+              | BeginRound
+              | BeginSquare
+              | BeginQuote =>
+                explicit_groups++;
+                indentation_syntax_active = false;
+                last_real_tok = lexer_tok;
+                lexer_tok
+                
+              | EndBrace
+              | EndRound
+              | EndSquare
+              | EndQuote =>
+                when (explicit_groups == 0)
+                  // TODO: better error message
+                  throw PreParserException (lexer_tok.Location, "unmatched group end");
+                explicit_groups--;
+                when (explicit_groups == 0)
+                  indentation_syntax_active = true;
+                last_real_tok = lexer_tok;
+                lexer_tok
+                
+              | _ =>
+                last_real_tok = lexer_tok;
+                lexer_tok
+            }
+          }
+          catch {
+            | e is LexerBase.Error =>
+              Message.Error (lexer.Location, e.name);
+              get_token ()
+          }
+        }
+      
+      //Message.Debug (tok.ToString() + ", " + tok.GetType().ToString() + ", " + new_indent.Length.ToString());
+      // If this is the 'set' keyword in the first column of a new line:
+      //when (new_indent.Length == 0 && tok is Token.Identifier && (tok :> Token.Identifier).name == "set") {
+      when (current_indent.Length == 0 && tok.ToString() == "set") {
+        def tokNext = lexer.GetToken ();
+        match (tokNext) {
+          | Token.Keyword ("namespace") =>
+            when (set_namespace) 
+              throw PreParserException (tokNext.Location, "the 'set namespace' directive can only be used once per file");
+            set_namespace = true;
+            //tokNext = get_token_after_indent (tokNext);
+            force_brace_after_newline = true;
+          
+          | Token.Keyword ("class") =>
+            when (set_class) 
+              throw PreParserException (tokNext.Location, "the 'set class' directive can only be used once per file");
+            set_class = true;
+            //tokNext = get_token_after_indent (tokNext);
+            force_brace_after_newline = true;
+          
+          | _ =>
+            throw PreParserException (tokNext.Location, $"unrecognized 'set' directive: '$tokNext'");
+        }
+        tok = tokNext;
+      }
+        
+      //Message.Debug (tok.Location, tok.ToString() + $" ($source)");
+      tok;
+    }
+
+    get_token_after_indent () : Token {
+      //Message.Debug ("1");
+      mutable tok = lexer.GetToken ();
+      
+      //Message.Debug ("2");
+      while (tok is Token.Indent || tok is Token.Comment) {
+        // TODO: what's the best way to do this?
+        match (tok) {
+          | Token.Indent (value) => new_indent = value;
+          | _ => ()
+        }
+        tok = lexer.GetToken ();
+      }
+      
+      when (!force_brace_after_newline)
+        tok = get_token_after_indent (tok);
+      
+      tok;
+    }
+    
+    get_token_after_indent (tok : Token) : Token {
+      // If we have not unindented
+      if (new_indent.Length >= current_indent.Length) {
+        // Make sure that the beginning of the new indent string
+        //  starts with the contents of the current indent string.
+        when (!new_indent.StartsWith(current_indent)) {
+          // TODO: make a better error message -- checkout python error message
+          Message.Error (tok.Location, "inconsistent indentation");
+          current_indent = new_indent;
+        }
+        
+        // If we have remained at the same indentation level
+        if (new_indent == current_indent) {
+          if (last_real_tok != null) {
+            token_pending = tok;
+            //Message.Debug (tok.Location, $"Generate ';'");
+            mutable tokInsert = 
+              /*if (force_brace_after_newline) {
+                force_brace_after_newline = false;
+                Token.BeginBrace (true);
+              }
+              else*/
+                Token.Semicolon (true);
+            tokInsert.Location = insertLocation;
+            tokInsert;
+          }
+          else
+            tok;
+        }
+        // If we've indented further than the previous line
+        else {
+          match (tok) {
+            | Token.Operator =>
+              tok;
+            
+            | _ =>
+              indent_level++;
+              _ = indent_strings.Add(new_indent);
+              current_indent = new_indent;
+              token_pending = tok;
+              //Message.Debug (tok.Location, "Generate '{'");
+              mutable tokInsert = Token.BeginBrace (true);
+              tokInsert.Location = insertLocation;
+              tokInsert;
+          }
+        }
+      }
+      // Otherwise, we've unintented:
+      else {
+        def i = indent_strings.IndexOf(new_indent);
+        when (i == -1) {
+          // TODO: make a better error message -- checkout python error message
+          throw PreParserException (tok.Location, "inconsistent indentation");
+        }
+        
+        insert_unindents = indent_level - i;
+        indent_level = i;
+        indent_strings.RemoveRange(i + 1, indent_strings.Count - (i + 1));
+        //while (indent_strings.Length > i + 1)
+        //  indent_strings.Pop ();
+        
+        current_indent = new_indent;
+        token_pending = tok;
+        //Message.Debug (tok.Location, $"Generate $insert_unindents '}'");
+        insert_unindents--;
+        mutable tokInsert = Token.EndBrace (true);
+        tokInsert.Location = insertLocation;
+        tokInsert;
+      }
+    }
+    
   }
 }
