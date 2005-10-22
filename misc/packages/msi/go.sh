@@ -2,4 +2,7 @@
 
 TMP=/tmp 
 TEMP=/tmp
-$HOME/nant/NAnt -t:net-1.1 -v
+DIR=`dirname $0`
+NANT=`grep "NANT " ./$DIR/../../../config.mak | sed 's/.*=//g'`
+command=eval $NANT -t:net-2.0 -v
+$command 
