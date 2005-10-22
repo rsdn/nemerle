@@ -67,6 +67,9 @@ endif
 Nemerle.NAnt.Tasks.dll: NantTask.n
 	$(EXECUTE) $(TOP)/ncc/out.stage3/ncc.exe -L:$(NANT_DIR) -q -greedy- -r NAnt.DotNetTasks.dll -r NAnt.Core.dll -out $@ -t:library NantTask.n
 
+uninstall:
+	rm -f $(DESTDIR)$(NANT_DIR)Nemerle.NAnt.Tasks.dll
+
 clean:
 	rm -f *.exe *.dll core core.[0-9]*
 

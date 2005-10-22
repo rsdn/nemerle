@@ -48,11 +48,13 @@ install: all
 	  $(MAKE) -C cs2n install; fi
 	$(Q)$(MAKE) -C nemerlish install
 	$(Q)$(MAKE) -C nant-task all install
-	$(Q)$(MAKE) -C msbuild-task all install
+#	$(Q)$(MAKE) -C msbuild-task all install
 
 uninstall:
 	$(Q)-$(MAKE) -C cs2n uninstall
 	$(Q)-$(MAKE) -C nemerlish uninstall
+#	$(Q)-$(MAKE) -C nant-task uninstall
+#	$(Q)-$(MAKE) -C msbuild-task uninstall
 
 clean:
 	$(MAKE) -C cs2n clean

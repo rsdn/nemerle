@@ -19,8 +19,10 @@ cp -f $top/tools/cs2n/*.exe dist/bin/
 cp -f $top/tools/nemerlish/*.exe dist/bin/
 cp -f $top/tools/nemerlish/*.dll dist/bin/
 cp -f $top/tools/nant-task/*.dll dist/bin/
-cp -f $top/boot/*.exe dist/bin
-cp -f $top/boot/*.dll dist/bin
+cp -f $top/tools/msbuild-task/*.dll dist/bin/
+cp -f $top/tools/msbuild-task/*.targets dist/bin/
+cp -f $top/ncc/out.stage3/*.exe dist/bin
+cp -f $top/ncc/out.stage3/*.dll dist/bin
 tar -C dist -zxf $tar
 mv dist/nemerle-*/doc/html dist/
 rm -rf dist/nemerle-*
