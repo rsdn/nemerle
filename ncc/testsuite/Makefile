@@ -56,7 +56,7 @@ CP = @echo CP      $1
 ############################################################
 
 all: clean test
-	rm -f *.dll *.mdb *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
+	rm -f *.dll *.mdb *.pdb *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
 
 test: test.exe $(NEM_DLLS)
 	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" -p "$(NEM_FLAGS) $(ADDITIONAL_FLAGS)" \
@@ -124,7 +124,7 @@ test-stage2:
 clean:
 	$(Q) cd positive && $(MAKE) clean
 	$(Q) cd negative && $(MAKE) clean
-	rm -f *.mdb *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]* xml-*.xml
+	rm -f *.mdb *.pdb *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]* xml-*.xml
 	rm -f test.err test_error.log a.out test_out.txt
 
 .PHONY: test
