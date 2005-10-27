@@ -106,6 +106,7 @@ NEMERLE_COMPILER_DLL_SRC = \
 	parsing/MainParser.n		 \
 	parsing/ParseTree.n		 \
 	parsing/PreParser.n		 \
+	parsing/PreParserIndent.n	 \
 	parsing/Utility.n		 \
 	passes.n			 \
 	typing/ConstantFolder.n		 \
