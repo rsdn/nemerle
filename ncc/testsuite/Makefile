@@ -59,7 +59,7 @@ all: clean test
 	rm -f *.dll *.mdb *.pdb *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
 
 test: test.exe $(NEM_DLLS)
-	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" -p "$(NEM_FLAGS) $(ADDITIONAL_FLAGS)" \
+	$(EXECUTE) ./test.exe -s -r "$(NET_ENGINE)" -rp " $(NET_FLAGS)" -p "$(NEM_FLAGS) $(ADDITIONAL_FLAGS)" \
 		-verify "$(VERIFY)" $(TEST_FILES)
 
 test.exe: test.n

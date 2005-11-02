@@ -69,6 +69,7 @@ The data flow is:
 
 using Nemerle.Collections;
 using Nemerle.IO;
+using Nemerle.Utility;
 
 using Nemerle.Compiler;
 using Nemerle.Compiler.Typedtree;
@@ -79,7 +80,22 @@ namespace Nemerle.Compiler
 {
   class DecisionTreeBuilder
   {
-    variant Con
+
+    // this is used internally to tell CheckMatching to renounce
+    // the counter example being constructed and try to find
+    // another one
+    // a counter example is rejected in two cases:
+    // 1) when it contains 'null'
+    // 2) when it contains a numerical constant for an enum
+    //    that wasn't declared with System.Flags attribute
+    class IgnoreCounterExample : System.Exception
+    {
+      public this ()
+      {
+      }
+    }
+
+    internal variant Con
     {
       | Variant { ti : TypeInfo; }
       | Lit { lit : Nemerle.Compiler.Literal; }
@@ -106,39 +122,74 @@ namespace Nemerle.Compiler
       }
 
       /** Return a string representation of a value of the same kind
-          as values in [cons], but different than any of them.  */
-      static FindValueExcept (cons : list [Con]) : string
+          as values in [cons], but different than any of them. 
+
+          throw_ignore == true tells the function to throw
+          IgnoreCounterExample whenever it is unable to find
+          such value; otherwise (throw_ignore == false) the
+          compiler bails out with ``internal error''
+      */
+      static FindValueExcept (cons : list [Con], throw_ignore = false) : string
       {
-        | [] => "_"
-        | Lit (Literal.Bool (true)) :: _ => "false"
-        | Lit (Literal.Bool (false)) :: _ => "true"
+        match (cons) {
+          | [] => "_"
+          | Lit (Literal.Bool (true)) :: _ => "false"
+          | Lit (Literal.Bool (false)) :: _ => "true"
 
-        | (Lit (Literal.Enum (_, tc)) :: _) as lits
-          when ! tc.HasAttribute (InternalType.FlagsAttribute_tc) =>
-          mutable res = null;
-          foreach (fld is IField in tc.GetMembers ())
-            when (fld.IsLiteral && fld.DeclaringType.Equals (tc) &&
-                  !lits.Contains (Lit (fld.GetValue ())))
-              res = fld.Name;
-          assert (res != null);
-          res
+          | (Lit (Literal.Enum (_, tc)) :: _) as lits
+            when ! tc.HasAttribute (InternalType.FlagsAttribute_tc) =>
+
+            // seems that both cases are possible (Enum & Integer; the latter
+            // for example when enumeration is defined in different assembly 
+            // than the code that uses it)
+            def get_cmpf (val)
+            {
+              if (val is Literal.Enum)
+                fun (l) {
+                  | Lit (v) => val.Equals (v)
+                  | _ => false
+                }
+              else {
+                assert (val is Literal.Integer);
+                fun (l) {
+                  | Lit (Literal.Enum (v, _)) => val.Equals (v)
+                  | _ => false
+                }
+              }
+            }
+
+            mutable res = null;
+            foreach (fld is IField in tc.GetMembers ())
+              when (fld.IsLiteral && fld.DeclaringType.Equals (tc) &&
+                    !lits.Exists (get_cmpf (fld.GetValue ())))
+                res = fld.Name;
+            when (res == null && throw_ignore) 
+              throw IgnoreCounterExample ();
+            assert (res != null);
+            res
           
-        | (Variant (tc) :: _) as variants =>
-          match (Option.UnSome (tc.SuperClass ()).GetTydecl ()) {
-            | TypeDeclaration.Variant (opts) => 
-              mutable res = null;
-              foreach (opt in opts)
-                when (!variants.Contains (Variant (opt)))
-                  res = opt.Name;
-              assert (res != null);
-              res
-            | _ => assert (false)
-          }
+          | (Variant (tc) :: _) as variants =>
+            match (Option.UnSome (tc.SuperClass ()).GetTydecl ()) {
+              | TypeDeclaration.Variant (opts) => 
+                mutable res = null;
+                foreach (opt in opts)
+                  when (!variants.Contains (Variant (opt)))
+                    res = opt.Name;
+                when (res == null && variants.ForAll (fun (x) { ! (x is Con.Lit (Literal.Null)) }))
+                  if (throw_ignore)
+                    throw IgnoreCounterExample ();
+                  else
+                    res = "null";
+                assert (res != null);
+                res
+              | _ => assert (false)
+            }
 
-        | vals => $ "(anything except $vals)"
+          | vals => $ "(anything except $vals)"
+        }
       }
 
-      public override ToString () : string
+      public ToString (throw_ignore : bool) : string
       {
         match (this) {
           | Variant (ti) => ti.ToString ()
@@ -146,8 +197,25 @@ namespace Nemerle.Compiler
           | Type (ti) => $ "is $ti"
           | Guard => "GUARD"
           | Unspecified => "UNSPECIFIED"
-          | Not (x) => FindValueExcept (x) 
+          | Not (x) => FindValueExcept (x, throw_ignore) 
             // + $ "NOT($x)"
+        }
+      }
+
+      public override ToString () : string
+      {
+        ToString (false);
+      }
+
+      public override GetHashCode () : int
+      {
+        match (this) {
+            | Variant (ti) => ti.GetHashCode ()
+            | Type (ti) => ti.GetHashCode ()
+            | Lit (lit) => lit.GetHashCode ()
+            | Guard => 4
+            | Unspecified 
+            | Not => 0
         }
       }
 
@@ -157,17 +225,21 @@ namespace Nemerle.Compiler
       {
         get {
           match (this) {
-            | Lit (Literal.Enum (_, tc))
-              when ! tc.HasAttribute (InternalType.FlagsAttribute_tc) =>
-              mutable cnt = 0;
-              foreach (fld is IField in tc.GetMembers ())
-                when (fld.IsLiteral && fld.DeclaringType.Equals (tc))
-                  ++cnt;
-              cnt
+// this case is ok for CheckMatching () but doesn't work when a decision
+// tree is compiled (examples in new-matching-enums.n testcase)
+//            | Lit (Literal.Enum (_, tc))
+//              when ! tc.HasAttribute (InternalType.FlagsAttribute_tc) =>
+//              mutable cnt = 0;
+//              foreach (fld is IField in tc.GetMembers ())
+//                when (fld.IsLiteral && fld.DeclaringType.Equals (tc))
+//                  ++cnt;
+//              cnt
 
             | Variant (ti) =>
               match (Option.UnSome (ti.SuperClass ()).GetTydecl ()) {
-                | TypeDeclaration.Variant (opts) => opts.Length
+                | TypeDeclaration.Variant (opts) => 
+                  // + 1 for null value
+                  opts.Length + 1
                 | _ => assert (false)
               }
 
@@ -219,13 +291,21 @@ namespace Nemerle.Compiler
       public IsIt (con : Con) : bool
       {
         if (is_con == null)
-          if (is_not.Length + 1 == con.Span &&
-              ! is_not.Contains (con)) {
-            // normalize
-            AddPositive (con);
-            true
-          } else false
-        else is_con.Equals (con)
+          if (is_not is [] || is_not.Contains (con))
+            false
+          else {
+            def span = 
+              if (con is Con.Lit (Nemerle.Compiler.Literal.Null))
+                 is_not.Head.Span;
+              else 
+                 con.Span;
+            if (is_not.Length + 1 == span) {
+              AddPositive (con);
+              true
+            } else false
+          }
+        else
+          is_con.Equals (con)
       }
       
 
@@ -297,9 +377,35 @@ namespace Nemerle.Compiler
 
 
     /** Represent an access path to a subterm.  */
-    variant Path {
+    internal variant Path {
       | Here
       | Field { field : IMember; path : Path; }
+
+      // TyVar of Pattern that this Path node was created for
+      // necessary to compute access_expr 
+      ty : TyVar;
+
+      // TExpr that loads object this path points to on the VM stack
+      // field used by DecisionTreeCompiler to memoize computed TExprs
+      [Accessor (flags = WantSetter)]
+      mutable access_expr : TExpr;
+
+      public this (ty : TyVar)
+      {
+        this.ty = ty;
+        this.access_expr = null;
+      }
+
+      public this ()
+      {
+        this.ty = null;
+        this.access_expr = null;
+      }
+
+      public Type : TyVar
+      {
+        get { ty }
+      }
 
       public override ToString () : string
       {
@@ -308,13 +414,38 @@ namespace Nemerle.Compiler
           | Field (f, p) => $ "($p : $(f.DeclaringType)).$(f.Name)"
         }
       }
+
+      [OverrideObjectEquals]
+      public Equals (path : Path) : bool
+      {
+        match ((this, path)) {
+          | (Here, Here) => true
+          | (Field (f1, p1), Field (f2, p2)) => f1.Equals (f2) && p1.Equals (p2)
+          | _ => false
+        }
+      }
+
+      [Memoize]
+      public override GetHashCode () : int
+      {
+        match (this)
+        {
+          | Here => 0
+          | Field (f, p) => f.GetHashCode () + p.GetHashCode ()
+        }
+      }
     }
 
 
     /** Represent a decision tree.  */
-    variant Decision {
+    internal variant Decision {
       | Success { res : int; }
       | Failure
+      | Assign { 
+          path : Path;
+          decl : LocalValue;
+          dtree : Decision;
+        }
       | IfEq {
           path : Path;
           con : Con;
@@ -329,6 +460,10 @@ namespace Nemerle.Compiler
             $"$(indent)success $res\n"
           | Failure =>
             $"$(indent)failure\n"
+          | Assign (path, decl, dtree) =>
+            def i2 = indent + "   ";
+            $"$(indent)def $(decl.Name) = $path\n"
+             "$(dtree.ToString (i2))"
           | IfEq (path, con, tr, fl) =>
             def i2 = indent + "   ";
             $"$(indent)if $path = $con:\n"
@@ -342,6 +477,63 @@ namespace Nemerle.Compiler
       {
         "\n" + ToString ("")
       }
+
+      // in-degree of this node in decision dag
+      [Accessor (flags = WantSetter)]
+      mutable in_deg : int;
+
+      public IsShared : bool
+      {
+        get { in_deg > 1 }
+      }
+
+      // DecisionTreeCompiler labels shared nodes so they can
+      // be reused in IL (goto label_id) 
+      [Accessor (flags = WantSetter)]
+      mutable label_id : option [int];
+
+      public this ()
+      {
+        in_deg = 0;
+        label_id = None ()
+      }
+
+      // this equality test is used for bottom-up detection of shared
+      // nodes and that's why it compares subtrees by their references
+      [OverrideObjectEquals]
+      public Equals (other : Decision) : bool
+      {
+        match ((this, other)) {
+          | (IfEq (path1, con1, if_true1, if_false1),
+             IfEq (path2, con2, if_true2, if_false2)) =>
+             (if_true1 : object) == if_true2 && 
+             (if_false1 : object) == if_false2 && 
+             con1.Equals (con2) && path1.Equals (path2)
+
+          | (Assign (path1, decl1, dtree1), 
+             Assign (path2, decl2, dtree2)) =>
+            (dtree1 : object) == dtree2 && decl1.Equals (decl2) && 
+            path1.Equals (path2)
+
+          | (Success (res_id1), Success (res_id2)) => 
+            res_id1 == res_id2
+
+          | (Failure, Failure) => true
+
+          | _ => false
+        }
+      }
+
+      public override GetHashCode () : int
+      {
+        match (this) {
+          | IfEq (path, con, _, _) => path.GetHashCode () + con.GetHashCode ()
+          | Assign (path, decl, _) => path.GetHashCode () + decl.GetHashCode ()
+          | Success (res_id) => 1 + res_id
+          | Failure => 0
+        }
+      }
+
     }
 
 
@@ -352,6 +544,10 @@ namespace Nemerle.Compiler
       res_id : int;
       continuation : list [Pattern * bool * int];
       skel : Skeleton;
+      // used to detect shared nodes
+      // TODO: don't need a dictionary here (but don't have any
+      // meaningful comparator for a Set)
+      nodes : Hashtable [Decision, Decision];
 
       /** Called when we have failed to match the current pattern.  */
       BuildFailure () : Decision
@@ -359,8 +555,8 @@ namespace Nemerle.Compiler
         match (continuation) {
           | [] => Decision.Failure ()
           | (pat, has_guard, res_id) :: rest =>
-            def p = TopLevelPattern (has_guard, res_id, rest, skel);
-            p.Build ([(Path.Here (), skel, pat)])
+            def p = TopLevelPattern (has_guard, res_id, rest, skel, nodes);
+            p.Build ([(Path.Here (pat.Type), skel, pat)])
         }
       }
 
@@ -422,49 +618,107 @@ namespace Nemerle.Compiler
                 Decision.IfEq (path, con, if_true, if_false)
               }
             }
-            
-            match (pat) {
-              | Pattern.Wildcard
-              | Pattern.Error => Build (rest)
+
+            def dtree =            
+              match (pat) {
+                | Pattern.Wildcard
+                | Pattern.Error => Build (rest)
               
-              | Pattern.As (pat, _) =>
-                Build ((path, skel, pat) :: rest)
-                
-              // change tuple to record
-              | Pattern.Tuple (pats) =>
-                mutable id = 0;
-                def tt = InternalType.GetTupleType (pats.Length);
-                def pats' =
-                  pats.Map (fun (pat) { ++id; (tt.GetField (id), pat) });
-                def pat =
-                  Pattern.Record (pat.loc, pat.ty, pats');
-                Build ((path, skel, pat) :: rest)
+                | Pattern.As (pat, decl) =>
 
-              | Pattern.Literal (lit) =>
-                check_if (Con.Lit (lit), rest)
-
-              | Pattern.Record (pats) =>
-                def actions = pats.Map (fun (fld, pat) {
-                  (Path.Field (fld, path), skel.Select (fld), pat)
-                });
-                Build (actions + rest)
-
-              | Pattern.HasType (ti) =>
-                check_if (Con.Type (ti), rest)
-
-              | Pattern.Application (vart, subpat) =>
-                def rest = (path, skel, subpat) :: rest;
-                check_if (Con.Variant (vart), rest)
-
-              | Pattern.Enum (fld, val) =>
-                def lit =
-                  match (val) {
-                    | Literal.Enum => val
-                    | Literal.Integer as i => Literal.Enum (i, fld.DeclaringType)
-                    | _ => assert (false)
+                  // Check if by always choosing if_true branch in decision subtree we
+                  // eventually stop at either Failure or Success with res_id equal
+                  // to the current one.
+                  // This check is needed for Decision.Assign, because `if_true' path
+                  // in tree can cross TopLevelPatterns (see new-matching-as.n test case)
+                  // and assignment would be placed in wrong match effect (resulting in
+                  // InvalidCastException).
+                  def check_resid (decision) {
+                    | Decision.Success (res) => res == res_id
+                    | Decision.IfEq (_, _, if_true, _) => check_resid (if_true)
+                    | Decision.Assign (_, _, dtree) => check_resid (dtree)
+                    | Decision.Failure => true
                   }
-                check_if (Con.Lit (lit), rest)
-           }
+
+                  def dtree = Build ((path, skel, pat) :: rest);
+
+                  if (check_resid (dtree))               
+                    match (dtree) 
+                    {
+                      | Decision.IfEq (_, Con.Guard, _, _) => Decision.Assign (path, decl, dtree)
+
+                      | Decision.IfEq (p, con, if_true, if_false) => 
+                        def assign = Decision.Assign (path, decl, if_true);
+                        Decision.IfEq (p, con, assign, if_false);
+  
+                      | Decision.Success
+                      | Decision.Assign => Decision.Assign (path, decl, dtree)
+
+                      | Decision.Failure => dtree
+                    }
+                  else dtree
+
+                // change tuple to record
+                | Pattern.Tuple (pats) =>
+                  mutable id = 0;
+                  def tt = InternalType.GetTupleType (pats.Length);
+                  def pats' =
+                    pats.Map (fun (pat) { ++id; (tt.GetField (id), pat) });
+                  def pat =
+                    Pattern.Record (pat.loc, pat.ty, pats');
+                  Build ((path, skel, pat) :: rest)
+
+                | Pattern.Literal (lit) =>
+                  check_if (Con.Lit (lit), rest)
+
+                | Pattern.Record (pats) =>
+                  def actions = pats.Map (fun (fld, p) {
+                    (Path.Field (p.Type, fld, path), skel.Select (fld), p)
+                  });
+                  Build (actions + rest)
+
+                | Pattern.HasType (ti) =>
+                  check_if (Con.Type (ti), rest)
+
+                | Pattern.Application (vart, subpat) =>
+                  def rest = (path, skel, subpat) :: rest;
+                  check_if (Con.Variant (vart), rest)
+
+                | Pattern.Enum (fld, val) =>
+                  def lit =
+                    match (val) {
+                      | Literal.Enum => val
+                      | Literal.Integer as i => Literal.Enum (i, fld.DeclaringType)
+                      | _ => assert (false)
+                    }
+                  check_if (Con.Lit (lit), rest)
+             }
+
+            if (Options.BuildDecisionDAG)
+              match (nodes.Get (dtree)) {
+                | None => 
+                  nodes.Add (dtree, dtree);
+                  match (dtree) {
+                    | IfEq (_, _, tr, fl) =>
+                      ++ tr.InDeg;
+                      ++ fl.InDeg
+                    | Assign (_, _, tree) =>
+                      ++ tree.InDeg
+                    | _ => {}
+                  }
+                  dtree
+                | Some (dtree) => 
+                  dtree
+              }
+            else {
+              // ensure that leaves are shared even when DAG option is disabled
+              match (dtree) {
+                | Decision.Failure
+                | Decision.Success => dtree.InDeg = 2
+                | _ => {}
+              }
+              dtree
+            }
         }
       }
     }
@@ -477,8 +731,9 @@ namespace Nemerle.Compiler
       match (patterns) {
         | (pat, has_guard, res_id) :: rest =>
           def skel = Skeleton.Empty ();
-          def p = TopLevelPattern (has_guard, res_id, rest, skel);
-          p.Build ([(Path.Here (), skel, pat)])
+          def nodes = Hashtable ();
+          def p = TopLevelPattern (has_guard, res_id, rest, skel, nodes);
+          p.Build ([(Path.Here (pat.Type), skel, pat)])
         | _ => assert (false)
       }
     }
@@ -535,7 +790,7 @@ namespace Nemerle.Compiler
 
       static FieldToString (mem : IMember, example : CounterExample) : string
       {
-        if (mem.DeclaringType.FullName.StartsWith ("Nemerle.Internal.Tuple"))
+        if (TupleType.IsTupleMember (mem))
           example.ToString ()
         else
           mem.Name + " = " + example.ToString ()
@@ -546,7 +801,7 @@ namespace Nemerle.Compiler
         match (this) {
           | Anything => "_"
           | Exactly (null, []) => "_"
-          | Exactly (con, []) => con.ToString ()
+          | Exactly (con, []) => con.ToString (true)
           | Exactly (null, lst) =>
             "(" + lst.Map (FieldToString).ToString (", ") + ")"
           | Exactly (con, lst) =>
@@ -569,13 +824,13 @@ namespace Nemerle.Compiler
       });
       res.ToString ()
     }
-    
 
-    /** Give warnings about ``pattern matching not exhaustive'' and 
-        ``unused match clause''.  */
-    public static CheckMatching (cases : list [Match_case]) : void
+
+    mutable patterns : list [Pattern * bool * int] = [];
+    decision : Decision;
+
+    public this (cases : list [Match_case]) 
     {
-      mutable patterns = [];
       mutable no = 0;
       
       foreach (case in cases)
@@ -587,10 +842,20 @@ namespace Nemerle.Compiler
 
       patterns = patterns.Rev ();
       
-      def tree = Build (patterns);
+      decision = Build (patterns)
+    }
 
+    internal GetDecision () : Decision
+    {
+      decision
+    }
+
+    /** Give warnings about ``pattern matching not exhaustive'' and 
+        ``unused match clause''.  */    
+    public CheckMatching () : void
+    {
       // Message.Debug ($ "tree for $patterns: $tree");
-      def pat_arr = array (no);
+      def pat_arr = array (patterns.Length);
       foreach ((pat, _, k) in patterns)
         pat_arr [k] = pat;
 
@@ -603,24 +868,41 @@ namespace Nemerle.Compiler
             
           | Decision.Failure =>
             if (non_exhaustive_shown) {}
-            else {
-              non_exhaustive_shown = true;
-              def example = BuildCounterExample (path);
-              Message.Warning ($ "matching is not exhaustive, example "
-                                 "unmatched value: $example")
-            }
+            else 
+              try {
+                def example = BuildCounterExample (path);
+                non_exhaustive_shown = true;
+                Message.Warning ($ "matching is not exhaustive, example "
+                                   "unmatched value: $example")
+              } catch {
+                | _ is IgnoreCounterExample => {}
+              }
             
+          | Decision.Assign (_, _, dtree) => 
+            traverse (path, dtree)
+
           | Decision.IfEq (access, con, n1, n2) =>
             traverse ((access, con) :: path, n1);
             traverse ((access, Con.Not ([con])) :: path, n2);
         }
       }
 
-      traverse ([], tree);
+      traverse ([], decision);
       
       foreach (pat in pat_arr)
         when (pat != null)
           Message.Warning (pat.loc, "this match clause is unused");
     }
+    
+    /** Construct a Decision tree and call CheckMatching () on it. */
+    public static CheckMatching (cases : list [Match_case]) : void
+    {
+      def builder = DecisionTreeBuilder (cases);
+      builder.CheckMatching ();
+    }
+
+ 
   }
+
+  
 }

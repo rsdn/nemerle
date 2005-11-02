@@ -1,0 +1,358 @@
+/*
+ * Copyright (c) 2005 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Collections;
+
+namespace Nemerle.Compiler
+{
+  class DecisionTreeCompiler
+  {
+    type Path = DecisionTreeBuilder.Path;
+    type Decision = DecisionTreeBuilder.Decision;
+
+    // DAGs created by DecisionTreeBuilder can still contain
+    // repeated nodes since DTB ignores or-patterns
+    // this class is used to ensure that all shared effects
+    // are discovered
+    class SharedEffect
+    {
+      body : TExpr;
+      mutable label_id : option [int];
+
+      public this (body : TExpr)
+      {
+        this.body = body;
+        this.label_id = None ();
+      }
+
+      public GetExpr () : TExpr
+      {
+        match (label_id) {
+          | Some (id) => TExpr.Goto (id, 1);
+          | None =>
+            def id = Util.next_id ();
+            label_id = Some (id);
+            TExpr.Label (body.loc, body.Type, id, body);
+        }
+      }
+
+      public GetExpr (assigns : list [LocalValue * TExpr]) : TExpr
+      {
+        def effect_expr = GetExpr ();
+        if (assigns.IsEmpty) effect_expr
+        else
+          assigns.FoldRight (effect_expr, fun (assign, acc) {
+          def (name, value) = assign;
+          Util.locate (value.loc,
+            TExpr.Sequence (effect_expr.Type,
+              TExpr.Assign (InternalType.Void,
+                            TExpr.LocalRef (name.Type, name),
+                            value),
+              acc))
+          })
+      }
+    }
+
+    tyvar : TyVar;
+    val : TExpr;
+    cases : list [Match_case];
+
+    decision : Decision;
+
+    mutable effects : array [void -> TExpr];
+    mutable guards : array [TExpr];
+
+    public this (t : TyVar, val : TExpr, mcs : list [Match_case])
+    {
+      this.tyvar = t;
+      this.val = val;
+      this.cases = mcs;
+
+      def builder = DecisionTreeBuilder (mcs);
+
+      def disable_warnings = mcs.Exists (fun (mc) { mc.disable_warnings == true });
+
+      when (!disable_warnings && Passes.Solver.CurrentMessenger.NeedMessage)
+         builder.CheckMatching();
+
+      List.Iter (mcs, Typer.FixupMatchCase);
+
+      decision = builder.GetDecision ();
+
+      when (Options.DumpDecisionTree)
+         Message.Debug ($ "decision tree"
+                          "$(dag_to_string (decision))\n"
+                          "$(get_stats (decision))\n");
+
+      collect_effects_and_guards ()
+    }
+
+    collect_effects_and_guards () : void
+    {
+      def walk_cases (i, cases)
+      {
+        match (cases) {
+          | case0 :: rest =>
+            def effect = SharedEffect (case0.body);
+            walk_patterns (i, effect, case0.patterns, rest)
+          | _ =>
+            effects = array (i);
+            guards = array (i)
+        }
+      } 
+      and walk_patterns (i, effect, patterns, cases)
+      {
+        match (patterns) {
+          | (_, guard, assigns) :: rest =>
+            walk_patterns (i+1, effect, rest, cases);
+            effects[i] = fun () { effect.GetExpr (assigns) };
+            guards[i] = guard
+          | _ => walk_cases (i, cases)
+        }
+      }
+      assert (cases is _ :: _);
+      walk_cases (0, cases)
+    }
+
+    /** Generate TExpr tree for decision tree stored in this matching compiler. */
+    public Run() : TExpr
+    {
+      compile (decision)
+    }
+
+    /** Build and compile decision tree for the given matching instance. */
+    public static Run (t : TyVar, val : TExpr,
+                       mcs : list [Match_case]) : TExpr
+    {
+      def compiler = DecisionTreeCompiler (t, val, mcs);
+      compiler.Run ()
+    }
+
+    // check if node has already been compiled and either reuse
+    // memoized TExpr or call compile2() to generate a new one
+    compile (decision : Decision) : TExpr
+    {
+      // for effects SharedEffect class is used to detect reusable nodes
+      | Decision.Success => compile2 (decision)
+
+      | _ when decision.IsShared =>
+        match (decision.LabelId) {
+          | None =>
+            def label_id = Util.next_id ();
+            decision.LabelId = Some (label_id);
+            def expr = compile2 (decision);
+            TExpr.Label (expr.loc, expr.Type, label_id, expr)
+          | Some (id) =>
+            TExpr.Goto (id, 1)
+        }
+
+      | _ => compile2 (decision)
+    }
+
+
+    compile2 (decision : Decision) : TExpr
+    {
+      | Success (res_id) => effects [res_id] ()
+
+      | Failure => MatchingCompiler.ThrowMatchFailure ()
+
+      | Assign (path, decl, dtree) =>
+        def path_expr = get_path_expression (path);
+        def assign_expr = TExpr.Assign (TExpr.LocalRef (decl.Type, decl), 
+                                        MatchingCompiler.Cast (path_expr, decl.Type));
+        def expr = compile (dtree);
+        MatchingCompiler.Sequence (assign_expr, expr)
+
+      | IfEq (_, DecisionTreeBuilder.Con.Guard, 
+              Decision.Success (res_id) as if_true, if_false) =>
+        def true_expr = compile (if_true);
+        def false_expr = compile (if_false);
+        MatchingCompiler.If (guards [res_id], true_expr, false_expr)
+
+      | IfEq (path, con, if_true, if_false) => 
+        def path_expr = get_path_expression (path);
+        def true_expr = compile (if_true);
+        def false_expr = compile (if_false);
+        match (con)
+        {
+          | Variant (ti) =>
+            def constant_object =
+              if (ti.GetConstantObject () != null)
+                MatchingCompiler.get_constant_object (ti, path_expr.Type)
+              else
+                None ();
+
+            match (constant_object) {
+              | Some ((from, field)) => 
+                def sref = TExpr.StaticRef (from, from, field, []);
+                def cond = TExpr.Call (InternalType.Boolean, TExpr.OpCode ("==.ref"),
+                                       [Parm (path_expr), Parm (sref)], false);
+                MatchingCompiler.If (cond, true_expr, false_expr)
+
+              | None =>
+                def has_type_expr = MatchingCompiler.HasType (path_expr, ti);
+                MatchingCompiler.If (has_type_expr, true_expr, false_expr)
+            }
+
+          | Lit (lit) =>
+            def cmp_expr = MatchingCompiler.emit_compare_with (path_expr, lit);
+            MatchingCompiler.If (cmp_expr, true_expr, false_expr)
+
+          | Type (ti) => 
+            def has_type_expr = MatchingCompiler.HasType (path_expr, ti);
+            MatchingCompiler.If (has_type_expr, true_expr, false_expr)
+
+          | _ => assert (false);
+        }
+    }
+
+    // memoize calls to build_path_expression ()
+    get_path_expression (path : Path) : TExpr
+    {
+      when (path.AccessExpr == null)
+        path.AccessExpr = build_path_expression (path);
+      path.AccessExpr
+    }
+
+    // construct TExpr that will load object referenced by path on 
+    // the VM stack
+    build_path_expression (path : Path) : TExpr
+    {
+      | Here => val
+
+      | Field (f, p) =>
+        def p_expr = get_path_expression (p);
+
+        def val =
+          if (f.DeclaringType.GetTydecl () is TypeDeclaration.VariantOption) {
+            def ty = f.DeclaringType.GetFreshType ();
+            p_expr.Type.ForceProvide (ty);
+            MatchingCompiler.Cast (p_expr, ty)
+          } else p_expr;
+
+        if (TupleType.IsTupleMember (f)) {
+          def len = f.DeclaringType.TyparmsCount;
+          mutable pos = int ();
+          Nemerle.IO.sscanf (f.Name, "field%i", pos);
+          TExpr.TupleIndexer (path.Type, val, pos, len)
+        } else MatchingCompiler.build_record_field_ref (path.Type, val, f)
+    }
+
+    static get_stats (decision : Decision) : string
+    {
+      mutable num_nodes = 0;
+      mutable num_shared = 0;
+      def shared_nodes = Hashtable ();
+      mutable all_paths_length = 0;
+      mutable num_paths = 0;
+      mutable longest_path = 0;
+
+      def make_stats (decision : Decision, path_len, 
+                      mutable was_here_before)
+      {
+        when (! was_here_before)
+          if (! shared_nodes.Contains (decision)) {
+            ++ num_nodes;
+            when (decision.IsShared) {
+              ++ num_shared;
+              shared_nodes.Add (decision, decision)
+            }
+          } else was_here_before = true;
+
+        match (decision) {
+          | IfEq (_, _, tr, fl) =>
+            make_stats (tr, path_len + 1, was_here_before);
+            make_stats (fl, path_len + 1, was_here_before)
+          | Assign (_, _, dtree) =>
+            make_stats (dtree, path_len + 1, was_here_before)
+          | _ => // leaf
+            all_paths_length += path_len;
+            ++ num_paths;
+            when (path_len > longest_path)
+              longest_path = path_len
+        }
+      }
+
+      make_stats (decision, 1, false);
+      $ "Number of nodes: $(num_nodes)\n"
+        "Number of shared nodes: $(num_shared)\n"
+        "Number of paths: $(num_paths)\n"
+        "Length of the longest path: $(longest_path)\n"
+        "Average length of a path: $(all_paths_length / num_paths)"
+    }
+
+    // pretty-print a decision dag
+    // this function recognizes shared nodes in dag and prints each such
+    // node only once (in contrast to decision.ToString ())
+    static dag_to_string (decision : Decision) : string
+    {
+      def shared_nodes = Hashtable ();
+      mutable id = 0;
+
+      def to_string (decision : Decision, indent)
+      {
+        match (shared_nodes.Get (decision)) {
+          | Some (id) => 
+            if (Options.ColorMessages)
+              $"$(indent)\e[01;34m-> *$(id)*\e[0m\n"
+            else $"$(indent)-> *$(id)*\n"
+
+          | None =>
+            def ids =
+              if (decision.IsShared) {
+                ++ id;
+                shared_nodes.Add (decision, id);
+                if (Options.ColorMessages)
+                  $"  \e[01;34m(*$(id)*)\e[0m\n"
+                else 
+                  $"  (*$(id)*)\n"
+              } else "\n";
+
+            match (decision) {
+              | Success (res) =>
+                $"$(indent)success $res $ids"
+              | Failure =>
+                $"$(indent)failure $ids"
+              | Assign (path, decl, dtree) =>
+                def i2 = indent + "   ";
+                $"$(indent)def $(decl.Name) = $path $ids"
+                 "$(to_string (dtree, i2))"
+              | IfEq (path, con, tr, fl) =>
+                def i2 = indent + "   ";
+                $"$(indent)if $path = $con: $ids"
+                 "$(to_string(tr, i2))"
+                 "$(indent)else:\n"
+                 "$(to_string(fl, i2))"
+            }
+        }
+      }
+      "\n" + to_string (decision, "")
+    }
+  }
+}
