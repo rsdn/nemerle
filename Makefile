@@ -174,7 +174,6 @@ set-version: config.mak
 	$(Q)[ `grep -c MARK-SET-VER tools/cs2n/cs2n.n` = 1 ] || \
 		{ echo "Failed to set text version on tools/cs2n/cs2n.n"; exit 1; }
 	$(Q)kind=`if echo $(REVISION) | grep -q 99 ; then echo SVN ; else echo release ; fi` ; \
-	    echo -n "($$kind) " ; \
 	    perl -p -i -e "s/MARK-SET-VER/$$kind/" tools/cs2n/cs2n.n
 	@:
 	$(Q)for f in $(version_files) ; do \
