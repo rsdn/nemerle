@@ -31,6 +31,7 @@ using System.Globalization;
 using System;
 
 using Nemerle.Collections;
+using Nemerle.Utility;
 
 namespace Nemerle.Compiler {
 
@@ -236,6 +237,68 @@ public abstract class LexerBase : IDisposable
 
   protected id_buffer : StringBuilder = StringBuilder ();
 
+  #region Indentation syntax
+  // Variables for indentation-based syntax
+  // The location where a token should be automatically inserted
+  protected mutable insert_location : Location;
+  // Used by GetToken() to store that token that it postpones when insert_indent = true
+  protected mutable tok_pending : Token;
+  // Whether we are currently adding whitespaces to indentString
+  protected mutable counting_indentation : bool;
+  // Whether GetToken() should return a Token.Indent
+  protected mutable insert_indent : bool;
+  // String holding the current line's indent
+  protected mutable indent_string : string;
+
+  [Accessor]
+  protected mutable in_indentation_mode : bool;
+
+  public SwitchToIndentationMode () : void
+  {
+    in_indentation_mode = true;
+    counting_indentation = true;
+    indent_string = "";
+  }
+
+  pragma_indent () : void
+  {
+    unless (in_indentation_mode) {
+      SwitchToIndentationMode ();
+      _ = read_to_the_end_of_line ();
+      throw PragmaIndent ()
+    }
+  }
+  
+  do_read () : char
+  {
+    def ch = read_from_input ();
+    // Message.Debug (Location, $"ch = '$ch'");
+
+    when (in_indentation_mode) {
+      // Start counting indentation anew after a newline
+      if (ch == '\n' || ch == '\r') {
+        // Message.Debug (Location, $"start");
+        indent_string = "";
+        counting_indentation = true;
+        //Message.Debug (Location (file_idx, line, col), "countingIndentation ON");
+      }
+      else when (counting_indentation) {
+        if (ch == '\t' || ch == ' ')
+          indent_string += ch.ToString();
+        // We have a non-space character, so stop counting indentation
+        //  and indicate that we have a new line to process
+        else {
+          // Message.Debug (Location, $"stop");
+          counting_indentation = false;
+          insert_indent = true;
+        }
+      }
+    }
+    
+    ch
+  }
+  #endregion
+
 
   #region PREPROCESSOR VARIABLES
   /** if there was only white chars from beginnig of line */
@@ -263,6 +326,10 @@ public abstract class LexerBase : IDisposable
     public this (name : string) { this.name = name; }
   }
 
+  public class PragmaIndent : System.Exception
+  {
+  }
+
   protected this ()
   {
     line = 1;
@@ -277,7 +344,7 @@ public abstract class LexerBase : IDisposable
     line_stack = -1;
   }
 
-  abstract protected do_read () : char;
+  abstract protected read_from_input () : char;
 
   public abstract Dispose () : void;
   
@@ -765,6 +832,10 @@ public abstract class LexerBase : IDisposable
   {
     mutable eof = false;
     
+    // Location where possible automatic token insertion will take place
+    when (in_indentation_mode)
+      insert_location = Location;
+    
     def loop (shift : bool) {
       when (shift) ignore (read ()); 
       def ch = 
@@ -947,17 +1018,29 @@ public abstract class LexerBase : IDisposable
             throw Error ("invalid character")
     }      
   }
+  
 
   public virtual GetToken () : Token
   {
-    unless (isPendingChar)
-      _ = eat_whitespace ();
-    
-    def last_line = line;
-    def last_col = col;
-    def tok = do_get_token ();
-    tok.Location = Location (file_idx, last_line, last_col, line, col);
-    tok
+    if (tok_pending != null) {
+      def tok = tok_pending;
+      tok_pending = null;
+      tok
+    } else {
+      unless (isPendingChar)
+        _ = eat_whitespace ();
+      
+      if (insert_indent) {
+        insert_indent = false;
+        Token.Indent (insert_location, indent_string)
+      } else {
+        def last_line = line;
+        def last_col = col;
+        def tok = do_get_token ();
+        tok.Location = Location (file_idx, last_line, last_col, line, col);
+        tok
+      }
+    }
   }
 
   public Location : Location
@@ -965,18 +1048,20 @@ public abstract class LexerBase : IDisposable
     get { Location (file_idx, line, col) }
   }
 
+  read_to_the_end_of_line () : string
+  {
+    mutable c = ' ';
+    def line = StringBuilder (80);
+    while (c != '\n') {
+      ignore (line.Append (c));
+      try { c = read () }
+      catch { _ is LexerBase.Error => c = '\n' }
+    };
+    line.ToString ()
+  }
+
   parse_preprocessor () : void
   {
-    def read_to_the_end_of_line () {
-      mutable c = ' ';
-      def line = StringBuilder (80);
-      while (c != '\n') {
-        ignore (line.Append (c));
-        try { c = read () }
-        catch { _ is LexerBase.Error => c = '\n' }
-      };
-      line.ToString ()
-    };
     // eof isn't checked, because we are eating and expecting something
     // not white before end of line
     def eat_spaces () : char {
@@ -1127,6 +1212,9 @@ public abstract class LexerBase : IDisposable
               
              unless (did_something)
                WarningOptions.AddPragmaWarning (file_idx, line, 1 * negate)
+
+          | "indent" =>
+            pragma_indent ();
              
           | _ =>
             Message.Warning (1633, this.Location, "unrecognized #pragma directive");
@@ -1332,7 +1420,7 @@ public class LexerFile : LexerBase
       
   }
 
-  override protected do_read () : char
+  override protected read_from_input () : char
   {
     def inp = reader.Read ();
     if (inp >= 0)
@@ -1449,7 +1537,7 @@ public class LexerString : LexerBase
 
   public override Dispose () : void { }
   
-  override protected do_read () : char
+  override protected read_from_input () : char
   {
     if (pos < reader.Length) {
       def ch = reader[pos];
@@ -1525,84 +1613,6 @@ public class LexerCompletion : LexerString {
     }
   }
 }
-
-
-public class LexerFileIndent : LexerFile
-{
-  // Variables for indentation-based syntax
-  // The location where a token should be automatically inserted
-  protected mutable insertLocation : Location;
-  // Used by GetToken() to store that token that it postpones when insert_indent = true
-  protected mutable tokPending : Token;
-  // Whether we are currently adding whitespaces to indentString
-  protected mutable countingIndentation : bool;
-  // Whether GetToken() should return a Token.Indent
-  protected mutable insert_indent : bool;
-  // String holding the current line's indent
-  protected mutable indentString : string;
-  
-  
-  public this (fn : string)
-  {
-    base (fn);
-    countingIndentation = true;
-    indentString = "";
-  }
-  
-  override protected do_read () : char
-  {
-    def ch = base.do_read ();
-    // Message.Debug (Location, $"ch = '$ch'");
-    
-    // Start counting indentation anew after a newline
-    if (ch == '\n' || ch == '\r') {
-      // Message.Debug (Location, $"start");
-      indentString = "";
-      countingIndentation = true;
-      //Message.Debug (Location (file_idx, line, col), "countingIndentation ON");
-    }
-    else when (countingIndentation) {
-      if (ch == '\t' || ch == ' ')
-        indentString += ch.ToString();
-      // We have a non-space character, so stop counting indentation
-      //  and indicate that we have a new line to process
-      else {
-        // Message.Debug (Location, $"stop");
-        countingIndentation = false;
-        insert_indent = true;
-      }
-    }
-    
-    ch
-  }
-        
-  override protected eat_whitespace () : bool
-  {
-    // Location where possible automatic token insertion will take place
-    insertLocation = Location (file_idx, line, col);
-    
-    base.eat_whitespace ();
-  }
-
-  public override GetToken () : Token
-  {
-    if (tokPending != null) {
-      def tok = tokPending;
-      tokPending = null;
-      tok;
-    } else {
-      unless (isPendingChar)
-        _ = eat_whitespace ();
-      
-      if (insert_indent) {
-        insert_indent = false;
-        Token.Indent (insertLocation, indentString)
-      } else 
-        base.GetToken ()
-    }
-  }
-} // LexerFileIndent
-
 
 public enum SyntaxType {
   | Identifier 
