@@ -5,16 +5,18 @@ EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
 NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe
 
-RELEASE = 2
+RELEASE = 1
 
 DIR = nemerle-bin-$(VERSION).$(REVISION)-$(RELEASE)
+SRCDIR = nemerle-$(VERSION).$(REVISION)
 
 
 all: assembly-name.exe
 	rm -rf $(DIR)/*
 	install -d $(DIR)/{gac,bin,misc}
-	test -f ../../../doc/html/Grokking_Nemerle.html
-	cp -rf  ../../../doc/html $(DIR)/doc
+	tar zxf ../../../$(SRCDIR).tar.gz
+	test -f $(SRCDIR)/doc/html/Grokking_Nemerle.html
+	cp -rf $(SRCDIR)/doc/html $(DIR)/doc
 	cp -f ../../../ncc/out.stage3/*.dll $(DIR)/gac/
 	cp -f ../../../tools/cs2n/{antlr.runtime,Nemerle.CSharp{,.CS}}.dll $(DIR)/gac/
 	cp -f ../../../tools/nemerlish/Nemerle.Evaluation.dll $(DIR)/gac/
@@ -39,9 +41,10 @@ all: assembly-name.exe
 	cat uninstall-nemerle.sh.foot >> $(DIR)/misc/uninstall-nemerle.sh
 	chmod 755 $(DIR)/misc/uninstall-nemerle.sh
 	tar zcf $(DIR).tgz $(DIR)
+	rm -rf $(DIR) $(SRCDIR)
 
 assembly-name.exe: assembly-name.n
 	$(NCC) -o $@ $<
 
 clean:
-	rm -rf assembly-name.exe nemerle-bin-* install.log
+	rm -rf assembly-name.exe nemerle-* install.log
