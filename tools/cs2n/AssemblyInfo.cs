@@ -36,4 +36,5 @@ using System.Reflection;
 
 [assembly: System.Reflection.AssemblyVersion("0.9.1.*")]
 [assembly: AssemblyKeyFile("../../misc/keys/Nemerle.Compiler.snk")]
+[assembly: System.Runtime.InteropServices.ComVisible (false)]
 
