@@ -27,6 +27,7 @@
  */
 
 using Nemerle.Collections;
+using Nemerle.Utility;
 
 using Nemerle.Compiler;
 using Nemerle.Compiler.Typedtree;
@@ -36,6 +37,117 @@ using PT = Nemerle.Compiler.Parsetree;
 
 namespace Nemerle.Compiler
 {
+  // pattern Foo (x1, x2, ..., xN) = expr
+  // Name = "Foo",
+  // Identifiers = ["x1", ..., "xN"]
+  // Pattern = expr
+  [Record]
+  public class ExtensionPattern
+  {
+    [Accessor]
+    parent : TypeInfo;
+    
+    [Accessor]
+    name : string;
+
+    [Accessor]
+    identifiers : list [string];
+
+    [Accessor]
+    pattern : PT.PExpr;
+
+    public override ToString () : string
+    {
+      $ "extension pattern $parent.$name"
+    }
+
+    internal Transform (e : PT.PExpr) : PT.PExpr
+    {
+      def messenger = Passes.Solver.CurrentMessenger;
+      
+      def is_assignment (expr) {
+        expr is PT.PExpr.Assign (PT.PExpr.Ref, _) 
+      }
+
+      def add_wildcards (ids = Identifiers, m = Map ()) {
+        ids.FoldLeft (m, fun (id, m) { m.Add (id, <[ _ ]>) })
+      }
+
+      def handle_assigns (assigns) {
+        def (remaining, map) =
+          assigns.FoldLeft ((Identifiers, Map ()), fun (assign, acc) {
+            def (remaining, map) = acc;
+            match (assign) {
+              | <[ $(n : dyn) = $pat ]> =>
+                if (remaining.Contains (n)) {
+                  (remaining.Remove (n), map.Add (n, pat))
+                } else if (Identifiers.Contains (n)) {
+                  ReportError (messenger,
+                               $ "the pattern for `$n' was already specified");
+                  acc
+                } else {
+                  ReportError (messenger,
+                               $ "$this does not contain a field named `$n'");
+                  acc
+                }
+              | _ => Util.ice ()
+            }
+          });
+        add_wildcards (remaining, map)
+      }
+
+      def handle_pats (pats) {
+        if (pats.Length != Identifiers.Length) {
+          ReportError (messenger,
+                       $ "$this expects $(Identifiers.Length) patterns "
+                         "as arguments, got $(pats.Length)");
+          add_wildcards ()
+        } else
+          List.FoldLeft2 (Identifiers, pats, Map (),
+                          fun (n, p, m) { m.Add (n, p) });
+      }
+      
+      def map =
+        match (e) {
+          | <[ _ ]> =>
+            add_wildcards ()
+            
+          | <[ () ]> =>
+            unless (Identifiers is [])
+              ReportError (messenger, 
+                           $ "$this needs $Identifiers as parameters");
+            add_wildcards ()
+            
+          | <[ $assign ]> when is_assignment (assign) =>
+            handle_assigns ([assign])
+            
+          | <[ ( .. $assigns ) ]> when assigns.ForAll (is_assignment) =>
+            handle_assigns (assigns)
+
+          | <[ ( .. $pats ) ]> =>
+            handle_pats (pats)
+            
+          | <[ $pat ]>  =>
+            handle_pats ([pat])
+        }
+            
+      def rename (_, is_post, e) {
+        match (e) {
+          | <[ $(n : dyn) ]> when is_post =>
+            match (map.Find (n)) {
+              | Some (e') => e'
+              | _ => e
+            }
+          | _ => e
+        }
+      }
+      
+      def res = Macros.TraverseExpr (None (), Pattern, true, rename);
+      Message.Debug ($ "expand: $Pattern -> $res");
+      res
+    }
+  }
+
   public partial class Typer
   {
     class PatternTyper
@@ -383,8 +495,50 @@ namespace Nemerle.Compiler
                 lookup (ti)
                 
               | [] =>
-                ReportError (messenger, $ "unbound type name $(idl.ToString (\".\"))");
-                Pattern.Error ()
+                def ext_pattern =
+                  match ((idl, matched_value_type.Hint)) {
+                    | ([name], Some (MType.Class (tc, _))) =>
+                      tc.GetExtensionPattern (name)
+                    | _ => 
+                      def (typ, field) = idl.DivideLast ();
+                      def patterns =
+                        env.LookupSymbol (typ, typer.current_type).FoldLeft ([],
+                          fun (tc, acc) {
+                            match (tc) {
+                              | tc is TypeInfo =>
+                                match (tc.GetExtensionPattern (field)) {
+                                  | Some (ext) => ext :: acc
+                                  | None => acc
+                                }
+                              | _ => acc
+                            }
+                          });
+                      match (patterns) {
+                        | [] => None ()
+                        | [e] => Some (e)
+                        | x =>
+                          ReportError (messenger, $ "overloading ambiguity $(x.ToString (\", \"))");
+                          None ()
+                      }
+                  }
+
+                match (ext_pattern) {
+                  | Some (e) =>
+                    def option_type = e.Parent.GetFreshType ();
+                    if (matched_value_type.Require (option_type)) {
+                      TypePattern (matched_value_type, e.Transform (pattern))
+                    } else {
+                      ReportError (messenger,
+                                   $ "the matched value type "
+                                     "$matched_value_type was expected "
+                                     "to be compatible with $option_type");
+                      Pattern.Error ()
+                    }
+
+                  | _ =>
+                    ReportError (messenger, $ "unbound type name $(idl.ToString (\".\"))");
+                    Pattern.Error ()
+                }
 
               | x =>
                 ReportError (messenger, $ "overloading ambiguity $(x.ToString (\", \"))");
@@ -531,19 +685,18 @@ namespace Nemerle.Compiler
 
              
           | PT.PExpr.Call (PT.PExpr.Ref (n), _) when ConstantFolder.is_known_operator (n.Id) => 
-
-          def folded = ConstantFolder.FoldConstants (typer.env, pattern);
-          // constant folder will return the same object if it didn't do anything
-          if ((folded : object) == pattern) {
-            ReportError (messenger,
-                         "couldn't fold arithmetic expression in pattern "
-                         "to a constant");
-            when (messenger.NeedMessage)
-              Message.Hint ("you can use `| x when x == complex expression =>' "
-                            " to do such things");
-            Pattern.Error ()
-          } else
-            TypePattern (matched_value_type, folded)
+            def folded = ConstantFolder.FoldConstants (typer.env, pattern);
+            // constant folder will return the same object if it didn't do anything
+            if ((folded : object) == pattern) {
+              ReportError (messenger,
+                           "couldn't fold arithmetic expression in pattern "
+                           "to a constant");
+              when (messenger.NeedMessage)
+                Message.Hint ("you can use `| x when x == complex expression =>' "
+                              " to do such things");
+              Pattern.Error ()
+            } else
+              TypePattern (matched_value_type, folded)
                          
 
           | PT.PExpr.Call (f, []) =>
