@@ -76,6 +76,153 @@ namespace Nemerle.Compiler
                     check_parms = check_parms);
       t.Fix ()
     }
+
+
+    bind_simple_named_type (env : GlobalEnv, curtc : TypeBuilder,
+                            name : Name, idl : list [string],
+                            args : list [TyVar]) : TyVar
+    {
+      match (tyvars.Find (name)) {
+        | Some (tv) when idl is [_] =>
+          when (!args.IsEmpty)
+            ReportError (messenger,
+                         $ "type variable `$(name.Id)' supplied with "
+                           "arguments");
+
+          MType.TyVarRef (tv)
+          
+        | _ =>
+          def env = name.GetEnv (env);
+          assert (env != null);
+
+          mutable wrong_parms = false;
+          mutable add_info = "unbound type name";
+          mutable exact_hit = null;
+
+          def symbols = env.LookupSymbol (idl, curtc);
+          def typeinfos = symbols.FoldLeft ([], fun (m, acc) {
+            match (m) {
+              | ti is TypeInfo =>
+                if (curtc == null || ti.CanAccess (curtc))
+                  if (args.Length == ti.SourceTyparmsCount) {
+                    when (ti.FullName == name.Id)
+                      exact_hit = ti;
+                    ti :: acc
+                  } else { 
+                    wrong_parms = true;
+                    add_info = "wrong number of type parameters to";
+                    acc
+                  }
+                else {
+                  when (! wrong_parms)
+                    add_info = "inaccessible type";
+                  acc
+                }
+              | _ => acc
+            }
+          });
+
+          match (typeinfos) {
+            | [ti]
+            | _ when exact_hit != null with ti = exact_hit =>
+              if (ti.TyparmsCount == args.Length)
+                MType.Class (ti, args)
+              else {
+                def find_nesting (nesting : TypeInfo) {
+                  if (nesting == null) null
+                  else if (ti.DeclaringType.Equals (nesting))
+                    nesting.GetMemType ()
+                  else if (nesting.LookupMemberAvailable && 
+                           nesting.LookupMember (ti.Name).Contains (ti))
+                    nesting.SubtypingSubst (ti)
+                      .Apply (ti.DeclaringType.GetMemType ())
+                  else find_nesting (nesting.DeclaringType)
+                }
+                match (find_nesting (curtc)) {
+                  | null =>
+                    ReportError (messenger,
+                                 $ "cannot determine nested type parameters "
+                                   "for `$(idl.ToString (\".\"))', please use the fully "
+                                   "qualified name");
+                    InternalType.Object
+                    
+                  | MType.Class (_, args') =>
+                    def args = args' + args;
+                    Util.cassert (args.Length == ti.TyparmsCount);
+                    MType.Class (ti, args)
+                    
+                  | _ => Util.ice ()
+                }
+              }
+              
+            | [] =>
+              ReportError (messenger, $ "$add_info `$(idl.ToString (\".\"))'");
+              InternalType.Object
+              
+            | _ =>
+              ReportError (messenger,
+                           $ "type name `$(idl.ToString (\".\"))' is ambiguous, it could be:");
+              when (messenger.NeedMessage)
+                foreach (ti in typeinfos)
+                  Message.Error (ti.Location, $"   this declaration `$ti'");
+              InternalType.Object
+          }
+      }
+    }
+    
+
+    static poors_man_lookup_member (ti : TypeInfo, name : string) : list [IMember]
+    {
+      def loop (acc = [name], ti = ti) {
+        if (ti == null) acc
+        else loop (ti.Name :: acc, ti.DeclaringType)
+      }
+      match (NamespaceTree.LookupExactType (loop ())) {
+        | Some (t) => [t]
+        | None => []
+      }
+    }
+    
+
+    bind_nested_type (curtc : TypeInfo, base_type : TyVar, name : string, args : list [TyVar]) : TyVar
+    {
+      match (base_type.Fix ()) {
+        | MType.Class (ti, args') =>
+          mutable seen_typeinfo = "";
+          
+          def symbols =
+            if (ti.LookupMemberAvailable)
+              ti.LookupMember (name)
+            else
+              poors_man_lookup_member (ti, name);
+
+          def types =
+            symbols.Filter (fun (m) {
+              | m is TypeInfo when curtc == null || m.CanAccess (curtc) =>
+                seen_typeinfo = "with this number of type parameters";
+                m.SourceTyparmsCount == args.Length
+              | _ => false
+            });
+            
+          match (types) {
+            | [m is TypeInfo] =>
+              MType.Class (m, args' + args)
+
+            | [] =>
+              ReportError (messenger,
+                           $ "the type `$base_type' does not contain "
+                             "a nested type named `$name' $seen_typeinfo");
+              InternalType.Object
+
+            | l => Util.ice ($ "$l");
+          }
+        | t =>
+          ReportError (messenger,
+                       $ "won't lookup nested types in $t");
+          InternalType.Object
+      }
+    }
+
     
     /** Perform typing of Parsetree type to Typedtree type, looking up
         type constructors in given global environment (with accessibility
@@ -93,30 +240,6 @@ namespace Nemerle.Compiler
                  allow_tyvars : bool,
                  check_parms : bool) : TyVar
     {
-      // FIXME: check if correct number of arguments is given
-      def collect_name_and_types (names, types, expr) {
-        match (expr) {
-          | <[ $name . [ .. $args ] ]>
-          | <[ $name [ .. $args ] ]> =>
-            when (args.IsEmpty) {
-              ReportError (messenger, $"$name[] is not a valid type, use just $name");
-              when (messenger.NeedMessage)
-                Message.HintOnce ("if you had array type on mind, its syntax is `array [SomeType]'");
-            }
-            collect_name_and_types (names, args + types, name)
-            
-          | <[ $ns . $(fld : dyn) ]> =>
-            collect_name_and_types (fld :: names, types, ns)
-            
-          | <[ $(name : name) ]> =>
-            (name.idl :: names, types, name)
-            
-          | x =>
-            ReportError (messenger, $ "$x is not a legal type expression");
-            (names, types, null)
-        }
-      }
-      
       def f (t) {
         f2 (t, false)
       } and f2 (t, allow_ref) {
@@ -150,7 +273,7 @@ namespace Nemerle.Compiler
           | PExpr.GenericSpecifier
           | PExpr.Member
           | PExpr.Ref =>
-            type_class (collect_name_and_types ([], [], t))
+            type_class (t)
 
           | PExpr.TypedType (body) =>
             body
@@ -179,69 +302,53 @@ namespace Nemerle.Compiler
             ReportError (messenger, $ "$x is not a legal type expression");
             InternalType.Void
         }
-      } and type_class (names, args, nm) : TyVar {
-        if (nm == null)
-          InternalType.Void
-        else
-          match (tyvars.Find (nm)) {
-            | Some (tv) when names.Length == 1 =>
-              when (!args.IsEmpty)
-                ReportError (messenger,
-                             $ "type variable `$(nm.Id)' supplied with "
-                               "arguments");
+      } and type_class (tyexpr) : TyVar {
+        def res =
+          match (tyexpr) {
+            | <[ $t [] ]> =>
+              ReportError (messenger, $"$t[] is not a valid type, use just $t");
+              when (messenger.NeedMessage)
+                Message.HintOnce ("if you had array type on mind, its syntax is `array [SomeType]'");
+              f (t)
 
-              MType.TyVarRef (tv)
-            | _ =>
-              def env = nm.GetEnv (env);
-              assert (env != null);
+            | <[ $(name : name) ]> with args = []
+            | <[ $(name : name) [ .. $args ] ]>
+            | <[ $(name : name) . [ .. $args ] ]> =>
+              bind_simple_named_type (env, curtc, name, [name.Id], args.Map (f))
               
+            | <[ $t . [ .. $args ] ]>
+            | <[ $t [ .. $args ] ]>
+            | <[ $t ]> with args = [] =>
+              match (Util.qidl_of_expr (t)) {
+                | Some ((idl, name)) =>
+                  bind_simple_named_type (env, curtc, name, idl, args.Map (f))
 
-              def (ti, need_args_tweak) =
-                match (env.LookupType (names, curtc, args.Length)) {
-                  | Some (ti) =>
-                    (ti, false)
-                  | None =>
-                    match (env.LookupType (names, curtc, -1)) {
-                      | Some (ti) =>
-                        def is_nested_in_curtc (ti) {
-                          if (ti == null) false
-                          else
-                            ti.Equals (curtc) || is_nested_in_curtc (ti.DeclaringType)
-                        }
-                        (ti, is_nested_in_curtc (ti))
-                      | None =>
-                        // this will print out error message
-                        (env.GetType (names, curtc, -1), false)
-                    }
-                }
-              def args = List.Map (args, f);
-              
-              ti.HasBeenUsed = true;
-
-              def find_proper_enclosing_type (t : TypeInfo) {
-                if (t == null || args.Length + t.TyparmsCount == ti.TyparmsCount) t
-                else find_proper_enclosing_type (t.DeclaringType)
-              }
-
-              def args =
-                if (need_args_tweak) {
-                  def ti' = find_proper_enclosing_type (curtc);
-                  if (ti' != null)
-                    ti'.GetMemType ().args + args
-                  else []
-                } else args;
-
-              match (ti.GetTydecl ()) {
-                | Typedtree.TypeDeclaration.Alias (t) =>
-                  def subst = ti.MakeSubst (args);
-                  subst.Apply (t)
-
-                | _ =>
-                  when (check_parms)
-                    _ = ti.MakeSubst (args);
-                  MType.Class (ti, args)
+                | None =>
+                  match (t) {
+                    | <[ $ns . $(fld : dyn) ]> =>
+                      bind_nested_type (curtc, f (ns), fld, args.Map (f))
+                    | _ =>
+                      ReportError (messenger, $ "$t is not a legal type expression");
+                      InternalType.Void
+                  }
               }
           }
+
+        match (res.Fix ()) {
+          | MType.Class (ti, args) =>
+            ti.HasBeenUsed = true;
+            match (ti.GetTydecl ()) {
+              | Typedtree.TypeDeclaration.Alias (t) =>
+                def subst = ti.MakeSubst (args);
+                subst.Apply (t)
+
+              | _ =>
+                when (check_parms)
+                  _ = ti.MakeSubst (args);
+                MType.Class (ti, args)
+            }
+          | t => t
+        }
       }
 
       f (t)
