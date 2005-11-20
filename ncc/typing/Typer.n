@@ -423,10 +423,31 @@ namespace Nemerle.Compiler
     {
       when (expected == null)
         expected = FreshTyVar ();
-      def kind = DelayedTyping.Kind.Macro (resolve);
+      <[ $(DelayAction (expected, DelayedMacro (this, expected, resolve)) : typed) ]>
+    }
+
+    [Record]
+    class DelayedMacro : DelayedAction
+    {
+      typer : Typer;
+      expected : TyVar;
+      fn : bool -> option [PT.PExpr];
+      
+      public override Resolve (fail_loudly : bool) : option [TExpr]
+      {
+        match (fn (fail_loudly)) {
+          | Some (e) => Some (typer.TypeExpr (e, expected))
+          | None => None ()
+        }
+      }
+    }
+
+    internal DelayAction (expected : TyVar, action : DelayedAction) : TExpr
+    {
+      def kind = DelayedTyping.Kind.Macro (action);
       def dt = DelayedTyping (this, kind, expected);
       dt.Resolve ();
-      <[ $(TExpr.Delayed (expected, dt) : typed) ]>
+      TExpr.Delayed (expected, dt)
     }
 
 
@@ -908,7 +929,7 @@ namespace Nemerle.Compiler
               log (TYPING, e.loc, $ "intercepted: $e'");
               e'
             } else {
-              log (TYPING, e.loc, $ "running expand with: $e");
+              log (MACRO_EXPANSIONS, e.loc, $ "running expand with: $e");
               def e = MacroRegistry.expand_macro (this, e);
               log (MACRO_EXPANSIONS, e.loc, $ "after expansion: $e");
 
@@ -1636,7 +1657,7 @@ namespace Nemerle.Compiler
     #endregion
 
 
-    #region Arrays, literals, indexers
+    #region Arrays, literals
     // FIXME: make this tail rec
     TypeArray (rank : int, args : PT.PExpr, expected : TyVar) : TExpr
     {
@@ -1731,80 +1752,88 @@ namespace Nemerle.Compiler
       }
     }
 
+    #endregion
 
+
+    #region Indexers
     TypeIndexer (obj : PT.PExpr, args : list [PT.PExpr], expected : TyVar) : TExpr
     {
       def obj = TypeExpr (obj);
-      
-      match (obj) {
-        | TExpr.PropertyMember (_, prop) when prop.IsIndexer
-        | TExpr.StaticPropertyRef (_, prop) when prop.IsIndexer
-        | TExpr.Delayed =>
-          TypeCall (<[ $(obj : typed) ]>, args, expected, is_property = true)
-        
-        | _ =>
-          match (obj.Type.Hint) {
-            | Some (MType.Class (ti, _))
-              when Option.IsSome (ti.DefaultIndexerName) =>
-              // Message.Debug ($ "using $(ti.DefaultIndexerName) for $ti");
-              def idx = Option.UnSome (ti.DefaultIndexerName);
-              TypeIndexer (<[ $(obj : typed) . $(idx : dyn) ]>, args, expected)
 
-            | Some (MType.Tuple (types)) =>
-              match (args) {
-                | [expr] =>
-                  match (TypeExpr (expr)) {
-                    | TExpr.Literal (Literal where (AsInt = Some (k))) =>
-                      if (k < 0 || k >= types.Length) {
+      DelayAction (expected, 
+        DelayedLambdaAction (desc = "", fn = fun (fail_loudly) {
+        match (obj) {
+          | TExpr.PropertyMember (_, prop) when prop.IsIndexer
+          | TExpr.StaticPropertyRef (_, prop) when prop.IsIndexer
+          | TExpr.Delayed (DelayedTyping where (DtKind = Overloaded)) =>
+            Some (TypeCall (<[ $(obj : typed) ]>, args, expected, is_property = true))
+          
+          | _ =>
+            match (obj.Type.Hint) {
+              | Some (MType.Class (ti, _))
+                when Option.IsSome (ti.DefaultIndexerName) =>
+                // Message.Debug ($ "using $(ti.DefaultIndexerName) for $ti");
+                def idx = Option.UnSome (ti.DefaultIndexerName);
+                Some (TypeIndexer (<[ $(obj : typed) . $(idx : dyn) ]>, args, expected))
+
+              | Some (MType.Tuple (types)) =>
+                match (args) {
+                  | [expr] =>
+                    match (TypeExpr (expr)) {
+                      | TExpr.Literal (Literal where (AsInt = Some (k))) =>
+                        if (k < 0 || k >= types.Length) {
+                          ReportError (messenger,
+                                       $ "the indexed tuple has only "
+                                         "$(types.Length) members, cannot "
+                                         "index at argument $k");
+                          None ()
+                        } else {
+                          _ = Expect (expected, types.Nth (k), "tuple indexer");
+                          Some (TExpr.TupleIndexer (expected, obj, k, types.Length))
+                        }
+                      | _ =>
                         ReportError (messenger,
-                                     $ "the indexed tuple has only "
-                                       "$(types.Length) members, cannot "
-                                       "index at argument $k");
-                        TExpr.Error ()
-                      } else {
-                        _ = Expect (expected, types.Nth (k), "tuple indexer");
-                        TExpr.TupleIndexer (obj, k, types.Length)
-                      }
-                    | _ =>
-                      ReportError (messenger,
-                                   "argument to tuple indexer must be a "
-                                   "constant integer");
-                      TExpr.Error ()
-                  }
-                | _ =>
+                                     "argument to tuple indexer must be a "
+                                     "constant integer");
+                        None ()
+                    }
+                  | _ =>
+                    ReportError (messenger, 
+                                 "indexer over tuples expects a single "
+                                 "integer argument");
+                    None ()
+                }
+                
+              | Some (MType.Array (indexer_over_type, rank) as arty) =>
+                // indexers over arrays
+                def typed_args = List.Map (args, TypeExpr);
+
+                _ = TypeOf (obj).Unify (arty);
+                
+                mutable args_amount = rank;
+                foreach (index in typed_args) {
+                  _ = Expect (TypeOf (index), InternalType.Int32, "array index");
+                  --args_amount;
+                }
+
+                _ = Expect (expected, indexer_over_type, "array indexer");
+
+                if (args_amount != 0) {
+                  ReportError (messenger, "wrong number of indexes");
+                  None ()
+                } else {
+                  Some (TExpr.ArrayIndexer (indexer_over_type, obj, typed_args))
+                }
+                
+              | hint =>
+                when (hint.IsSome || fail_loudly)
                   ReportError (messenger, 
-                               "indexer over tuples expects a single "
-                               "integer argument");
-                  TExpr.Error ()
-              }
-              
-            | Some (MType.Array (indexer_over_type, rank) as arty) =>
-              // indexers over arrays
-              def typed_args = List.Map (args, TypeExpr);
-
-              _ = TypeOf (obj).Unify (arty);
-              
-              mutable args_amount = rank;
-              foreach (index in typed_args) {
-                _ = Expect (TypeOf (index), InternalType.Int32, "array index");
-                --args_amount;
-              }
-
-              _ = Expect (expected, indexer_over_type, "array indexer");
-
-              if (args_amount != 0) {
-                ReportError (messenger, "wrong number of indexes");
-                TExpr.Error ()
-              } else {
-                TExpr.ArrayIndexer (indexer_over_type, obj, typed_args)
-              }
-            | _ =>
-              ReportError (messenger, 
-                           $ "cannot find any suitable indexer in "
-                             "$(TypeOf (obj))");
-              TExpr.Error ()
-          }
-      }
+                               $ "cannot find any suitable indexer in "
+                                 "$(TypeOf (obj))");
+                None ()
+            }
+        }
+      }))
     }
     #endregion
 
@@ -2105,7 +2134,7 @@ namespace Nemerle.Compiler
         | Some (lst) =>
           MakeOverloadedNode (lst, expected)
         | None =>
-          Delay (DelayedTyping.Kind.MemberAccess (obj, mem_name, false), expected)
+          Delay (DelayedTyping.Kind.MemberAccess (obj, mem_name), expected)
       }
     }
 
@@ -3039,7 +3068,11 @@ namespace Nemerle.Compiler
         | TExpr.OpCode => "an operator reference"
         
         | TExpr.Error => "an erroneous expression"
-        | TExpr.Delayed => "a yet-untyped expression"
+        | TExpr.Delayed (dt) =>
+          match (dt.DtKind) {
+            | Resolved (e) => DescribeExpression (e)
+            | _ => "a yet-untyped expression"
+          }
 
         | TExpr.NotNull
         | TExpr.Switch

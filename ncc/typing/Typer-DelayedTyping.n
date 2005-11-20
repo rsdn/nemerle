@@ -39,6 +39,40 @@ namespace Nemerle.Compiler
 {
   public partial class Typer
   {
+    public abstract class DelayedAction
+    {
+      public abstract Resolve (fail_loudly : bool) : option [TExpr];
+
+      public override ToString () : string
+      {
+        "delayed macro"
+      }
+    }
+
+    public class DelayedLambdaAction : DelayedAction
+    {
+      desc : string;
+      fn : bool -> option [TExpr];
+
+      public override ToString () : string
+      { 
+        desc
+      }
+
+      public override Resolve (fail_loudly : bool) : option [TExpr]
+      {
+        fn (fail_loudly)
+      }
+      
+      public this (fn : bool -> option [TExpr], desc = "delayed typing action")
+      {
+        this.fn = fn;
+        this.desc = desc;
+      }
+    }
+
+    
+    // TODO: object model seems to fit better here, upgrade most kinds to use DelayedAction
     public class DelayedTyping : Located, Nemerle.IComparable [DelayedTyping]
     {
       id : int;
@@ -51,14 +85,17 @@ namespace Nemerle.Compiler
       [Record]
       public variant Kind
       {
-        | MemberAccess { expr : TExpr; name : string; mutable need_writable : bool; }
+        | MemberAccess { expr : TExpr; name : string; }
         | Overloaded { overloads : list [OverloadPossibility]; }
         | Operator { t1 : TyVar; t2 : TyVar; name : string; env : GlobalEnv; }
         | Resolved { expr : TExpr; }
-        | Macro { resolve : bool -> option [PT.PExpr]; }
+        | Macro { action : DelayedAction }
         | Error
 
         public mutable filtering_expression : TExpr.Call;
+        public mutable need_ref : bool;
+        public mutable need_write : bool;
+
         public this () {}
       }
       
@@ -123,14 +160,26 @@ namespace Nemerle.Compiler
           }
           
         def solver = Passes.Solver;
-        when (k.filtering_expression == null)
-          match (solver.dt_store.Find (this)) {
-            | Some (k') =>
-              k.filtering_expression = k'.filtering_expression
-            | None => {}
-          }
+
+        match (solver.dt_store.Find (this)) {
+          | Some (k') =>
+            when (k.filtering_expression == null)
+              k.filtering_expression = k'.filtering_expression;
+            k.need_ref = k'.need_ref;
+            k.need_write = k'.need_write;
+          | None => {}
+        }
 
         solver.dt_store = solver.dt_store.Replace (this, k);
+
+        match (k) {
+          | Kind.Resolved (expr) =>
+            when (k.need_write)
+              typer.CheckLValue (expr, k.need_ref, 
+                 if (k.need_ref) "ref/out parameter"
+                 else "assignment target");
+          | _ => {}
+        }
       }
       
       
@@ -182,8 +231,14 @@ namespace Nemerle.Compiler
       
       public ExpectLValue (need_ref : bool) : bool
       {
-        match (DtKind) {
+        def kind = DtKind;
+        kind.need_write = true;
+        when (need_ref)
+          kind.need_ref = true;
+          
+        match (kind) {
           | Kind.Overloaded (lst) =>
+            !need_ref &&
             match (List.RevFilter (lst, fun (o : OverloadPossibility) {
               match (o.Member) {
                 | p is IProperty => p.IsMutable && !need_ref
@@ -193,15 +248,16 @@ namespace Nemerle.Compiler
             })) {
               | [] => false
               | newlst =>
-                when (newlst : object != lst)
-                  SetKind (Kind.Overloaded (newlst));
+                SetKind (Kind.Overloaded (newlst));
                 true
             }
  
           | Kind.Resolved (r) => typer.IsLValue (r, need_ref)
-          | Kind.MemberAccess as ma => ma.need_writable = true; true
-          | Kind.Error => true
+
+          | Kind.MemberAccess
           | Kind.Macro
+          | Kind.Error => true
+
           | Kind.Operator => false
         }
       }
@@ -237,13 +293,12 @@ namespace Nemerle.Compiler
           | Error => "an error"
           | Overloaded (overloads) =>
             "ambiguity between overloads:\n  " + overloads.ToString ("\n  ")
-          | MemberAccess (expr, name, _) =>
+          | MemberAccess (expr, name) =>
             $ "accessing member `$(name)' in `$(expr)' : $(expr.Type)"
           | Operator (t1, t2, name, _) =>
             $ "operator `$(name)' on $(t1)"
             + (if (t2 == null) "" else $ " and $(t2)")
-          | Macro =>
-            "delayed macro"
+          | Macro (action) => action.ToString ()
         }
       }
 
@@ -258,10 +313,10 @@ namespace Nemerle.Compiler
                overloads.Filter (used) 
              else 
                overloads).ToString ("\n  ")
-          | Macro (resolve) =>
-            // the resolve function should dump the error message
+          | Macro (action) =>
+            // the Resolve function should dump the error message
             Util.locate (loc, {
-              def res = resolve (true);
+              def res = action.Resolve (true);
               when (res.IsSome)
                 Message.Error ($ "the macro resolution function unexpectedly succeeded "
                                  "when run for the second time, the result is "
@@ -477,7 +532,7 @@ namespace Nemerle.Compiler
         def solver = typer.solver;
         def messenger = solver.CurrentMessenger;
         match (DtKind) {
-          | Kind.MemberAccess (e, name, need_writable) =>
+          | Kind.MemberAccess (e, name) =>
             match (typer.TypeMember (e, name, expected)) {
               | Some ([]) =>
                 ReportError (messenger,
@@ -487,7 +542,7 @@ namespace Nemerle.Compiler
                 
               | Some (lst) =>
                 SetKind (Kind.Overloaded (lst));
-                when (need_writable && !ExpectLValue (false))
+                when (DtKind.need_write && !ExpectLValue (false))
                   ReportError (messenger, $"needed writable value, got $lst");
                 
                 // restart with more information
@@ -558,11 +613,14 @@ namespace Nemerle.Compiler
             unless (typer.Expect (expected, expr.Type, "already resolved overload"))
               SetKind (Kind.Error ())
 
-          | Kind.Macro (resolve) =>
+          | Kind.Macro (action) =>
             Util.locate (loc,
-              match (resolve (false)) {
+              match (action.Resolve (false)) {
                 | Some (expr) =>
-                  SetKind (Kind.Resolved (typer.TypeExpr (expr, expected)))
+                  if (typer.Expect (expected, expr.Type, $ "result of $action execution"))
+                    SetKind (Kind.Resolved (expr))
+                  else
+                    SetKind (Kind.Error ())
                   
                 | None => {}
               })
