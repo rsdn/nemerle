@@ -49,9 +49,9 @@ all: links run
 	gmcs $<
 
 run: ray.exe ray-hand-opt.exe ray-cs.exe
-	time $(EXECUTE) ./ray.exe 9 128 > out.ppm
-	time $(EXECUTE) ./ray-hand-opt.exe 9 128 > out.ppm
-	time $(EXECUTE) ./ray-cs.exe 9 128 > out.ppm
+	time $(EXECUTE) ./ray.exe 9 128 > out1.ppm
+	time $(EXECUTE) ./ray-hand-opt.exe 9 128 > out2.ppm
+	time $(EXECUTE) ./ray-cs.exe 9 128 > out3.ppm
 
 links:
 	ln -fs ../../ncc/out.stage3/*.dll .
