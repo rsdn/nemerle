@@ -40,14 +40,19 @@ THISDIR = $(shell if cygpath --help 2>/dev/null 1>&2; then echo `cygpath -m $(CU
 # TARGETS
 ############################################################
 
-all: run
+all: links run
 
-ray.exe: links ray.n
-	$(EXECUTE) ../../ncc/out.stage3/ncc.exe -g ray.n -o ray.exe
+%.exe: %.n
+	$(EXECUTE) ../../ncc/out.stage3/ncc.exe -g $< -o $@
 
-run: ray.exe
+%.exe: %.cs
+	gmcs $<
+
+run: ray.exe ray-hand-opt.exe ray-cs.exe
 	time $(EXECUTE) ./ray.exe 9 128 > out.ppm
-	
+	time $(EXECUTE) ./ray-hand-opt.exe 9 128 > out.ppm
+	time $(EXECUTE) ./ray-cs.exe 9 128 > out.ppm
+
 links:
 	ln -fs ../../ncc/out.stage3/*.dll .
 
