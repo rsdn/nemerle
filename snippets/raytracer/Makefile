@@ -48,8 +48,9 @@ all: links run
 %.exe: %.cs
 	gmcs $<
 
-run: ray.exe ray-hand-opt.exe ray-cs.exe ray-compressed.exe
+run: ray.exe ray-hand-opt.exe ray-cs.exe ray-compressed.exe ray2.exe
 	time $(EXECUTE) ./ray.exe 9 128 > out1.ppm
+	time $(EXECUTE) ./ray2.exe 9 128 > out5.ppm
 	time $(EXECUTE) ./ray-compressed.exe 9 128 > out4.ppm
 	time $(EXECUTE) ./ray-hand-opt.exe 9 128 > out2.ppm
 	time $(EXECUTE) ./ray-cs.exe 9 128 > out3.ppm
