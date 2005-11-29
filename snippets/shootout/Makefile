@@ -27,6 +27,7 @@
 #
 
 THISDIR = $(shell if cygpath --help 2>/dev/null 1>&2; then echo `cygpath -m $(CURDIR)`; else echo $(CURDIR); fi)
+TIME = @/usr/bin/time --format '%C  : real %e, %U+%S (%P%%)' $(EXECUTE) 
 
 ############################################################
 # TARGETS
@@ -38,3 +39,29 @@ all:
 clean:
 	rm -f *.exe *.il *.dll *.pdb *.netmodule ext_test.out core core.[0-9]*
 	rm -f test.err test_error.log a.out
+
+run-test: $(TESTNAME).exe cs/$(TESTNAME).exe
+	$(TIME) ./$(TESTNAME).exe $(ARGS) > $(TESTNAME).log
+	$(TIME) ./cs/$(TESTNAME).exe $(ARGS) > $(TESTNAME)-cs.log
+
+%.exe: %.csharp
+	gmcs $< -out:$@
+
+%.exe: %.n
+	$(EXECUTE) ../../ncc/out.stage3/ncc.exe $(ADDFLAGS) -i $< -out:$@
+
+t: tests
+
+links:
+	ln -sf ../../ncc/out.stage3/*.dll .
+
+tests: links ackermann fibo binarytrees
+
+ackermann:
+	$(MAKE) TESTNAME=$@ ARGS=9 run-test
+
+fibo:
+	$(MAKE) TESTNAME=$@ ARGS=32 run-test
+	
+binarytrees:
+	$(MAKE) TESTNAME=$@ ARGS=16 run-test
