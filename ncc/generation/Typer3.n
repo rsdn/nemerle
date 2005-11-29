@@ -438,7 +438,7 @@ namespace Nemerle.Compiler
         PlainRef (decl)
       } else {
         Util.cassert (closure_fields != null);
-        Util.cassert (closure_fields.Contains (hd.id), $ "no clo for $(hd.name)");
+        Util.cassert (closure_fields.Contains (hd.id), $ "no clo for $(hd.name) from $(current_local_fun.name)");
         def field = closure_fields [hd.id];
         // Message.Debug ($"cloref: $(hd.name) from $(current_local_fun.name) $(field.GetMemType()) $field");
         TExpr.FieldMember (field.GetMemType (),
@@ -642,7 +642,8 @@ namespace Nemerle.Compiler
     #region Function prolog
     PrepareClosureParms () : void
     {
-      when (closure_parms != null) {
+      when (closure_parms != null &&
+            (parent == null || parent.closure_parms : object != closure_parms)) {
         def len = current_local_fun.used_closures.Length;
         List.Iter2 (current_local_fun.parms.FirstN (len),
                     current_local_fun.used_closures, fun (parm, header) {
@@ -826,25 +827,46 @@ namespace Nemerle.Compiler
 
 
     #region Local function generation
-    static ParentsWithClosures (h : Fun_header) : list [Fun_header]
+    ComputeUsedClosures (h : Fun_header) : void
     {
-      def loop (fh : Fun_header, acc) {
-        match (fh.closure_vars) {
-          | [] => acc
-          | vars => 
-            if (vars.Exists (fun (var) {
-                // FIXME: doesn't work, because function have to be removed from external closures
-                //var.id != h.decl.id && // call to our function shouldn't be closurised
-                (h :: h.children_funs).Exists (fun (child) { 
-                  var.UsedIn.Contains (child) 
-                })
-              })) 
-              fh :: acc
-            else
-              acc
-        }
+      def we_use (var) {
+        // FIXME: doesn't work, because function have to be removed from external closures
+        //var.id != h.decl.id && // call to our function shouldn't be closurised
+        (h :: h.children_funs).Exists (fun (child) { 
+          var.UsedIn.Contains (child) 
+        })
       }
-      List.FoldLeft (h.GetParents (), [], loop);
+      
+      when (h.used_closures == null) {
+        h.used_closures = [];
+
+        def needed = Hashtable ();
+        
+        foreach (fh in h.GetParents ())
+          foreach (var in fh.closure_vars) {
+            when (we_use (var)) {
+              needed [fh.id] = true;
+              match (var.ValKind) {
+                | Function (ch, _) =>
+                  ComputeUsedClosures (ch);
+                  foreach (clo in ch.used_closures)
+                    needed [clo.id] = true;
+                | _ => {}
+              }
+            }
+          }
+
+          h.used_closures = h.GetParents ().Filter (fun (fh) { needed.Contains (fh.id) })
+      }
+    }
+
+
+    static ClosureParmCount (fn : Fun_header) : int
+    {
+      Util.cassert (fn.used_closures != null || fn.decl == null, 
+                    $ "closures not computed for $(fn.name)");
+      if (fn.static_method == null) 0
+      else fn.used_closures.Length
     }
 
 
@@ -853,7 +875,7 @@ namespace Nemerle.Compiler
       def new_header = meth.fun_header;
       meth.fun_header = fn;
 
-      def clo_count = fn.used_closures.Length;
+      def clo_count = ClosureParmCount (fn);
       def new_parms = new_header.parms.ChopFirstN (clo_count);
 
       foreach (parm in new_header.parms.FirstN (clo_count)) {
@@ -899,10 +921,11 @@ namespace Nemerle.Compiler
     }
 
 
-    EmitStaticLocalFunction (fn : Fun_header, closures : list [Fun_header], children : Queue [Typer3]) : void
+    EmitStaticLocalFunction (fn : Fun_header, children : Queue [Typer3]) : void
     {
       def (new_tp, subst) = CopyFunTyparms ();
       fn.typarms = fn.typarms + new_tp;
+      def closures = fn.used_closures;
 
       // Message.Debug ($ "emit static $(fn.name) $(fn.typarms) subst=$subst");
 
@@ -948,8 +971,8 @@ namespace Nemerle.Compiler
       CurrentType.forced_typarms = fn.typarms;
       def meth = CurrentType.DefineAndReturn (decl) :> MethodBuilder;
 
-      PrepareForEmission (meth, fn, subst);
       fn.static_method = meth;
+      PrepareForEmission (meth, fn, subst);
       fn.typarms_to_pass =
         accumulated_typarms.Map (fun (x) { MType.TyVarRef (x) });
 
@@ -961,9 +984,10 @@ namespace Nemerle.Compiler
     }
 
 
-    EmitFunctionalValue (fn : Fun_header, closures : list [Fun_header], children : Queue [Typer3]) : TExpr
+    EmitFunctionalValue (fn : Fun_header, children : Queue [Typer3]) : TExpr
     {
       Stats.FirstClassFunctions++;
+      def closures = fn.used_closures;
 
       Util.cassert (fn.typarms.IsEmpty, $"should be handled in T2, $(fn.name)");
 
@@ -1060,7 +1084,9 @@ namespace Nemerle.Compiler
       mutable res = [];
       def q = Queue ();
 
+      
       foreach (fn in fns) {
+        ComputeUsedClosures (fn);
         //Message.Debug ($"hlf: $(fn.name) $(fn.usage) $closures");
         match (fn.usage) {
           | FunctionUsage.UsedJustOnce // handled in EmitLoop
@@ -1068,11 +1094,10 @@ namespace Nemerle.Compiler
             {}
 
           | FunctionUsage.Used =>
-            fn.used_closures = ParentsWithClosures (fn);
-            EmitStaticLocalFunction (fn, fn.used_closures, q);
+            EmitStaticLocalFunction (fn, q);
 
           | FunctionUsage.UsedAsFirstClass =>
-            def fval = EmitFunctionalValue (fn, ParentsWithClosures (fn), q);
+            def fval = EmitFunctionalValue (fn, q);
             assert (fn.decl != null);
             res ::= TExpr.DefValIn (fn.decl, fval, null);
         }
@@ -1128,14 +1153,13 @@ namespace Nemerle.Compiler
           | TExpr.DefFunctionsIn ([func], LocalFunRef (decl, typarms))
             when func.decl.Equals (decl) => // this is for sure lambda
 
-            def closures = ParentsWithClosures (func);
-            match (closures) {
+            ComputeUsedClosures (func);
+            match (func.used_closures) {
               | [] when func.parms.Length == 
                         Option.UnSome (parm.MType.FunReturnTypeAndParms ()) [0].Length =>
                 // Message.Debug ($"empty, parms count = $(func.parms.Length)");
                 def q = Queue ();
-                func.used_closures = closures;
-                EmitStaticLocalFunction (func, closures, q);
+                EmitStaticLocalFunction (func, q);
                 
                 while (!q.IsEmpty)
                   q.Take ().Run ();
@@ -1394,7 +1418,7 @@ namespace Nemerle.Compiler
           EmitCall (expr.Type, func, parms, is_tail)
 
         | TExpr.SelfTailCall (parms) =>
-          def clo_len = current_local_fun.used_closures.Length;
+          def clo_len = ClosureParmCount (current_local_fun);
           def (parms, ini) = TupleParms (current_local_fun, parms, clo_len);
           def assigns =
             List.Map2 (parms, current_local_fun.parms.ChopFirstN (clo_len), 
