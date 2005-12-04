@@ -66,19 +66,30 @@ namespace Nemerle.Compiler
     locals_stack : Stack [LocalContext];
     mutable skip_n_return : bool;
     
+    mutable inside_yielding_function : bool;
+    yield_stuff : option [PT.PExpr * list [PT.Fun_parm]];
+    mutable yield_labels : list [int] = [];
+
     #region Toplevel typing
+    class SwitchToYielding : System.Exception { }
+    
     // FIXME: copy doc from TypeMethod
     /** Walk through method body typing it. */
     public this (m : MethodBuilder)
     {
       solver = Passes.Solver;
       current_type = m.DeclaringType;
+      yield_stuff = m.yield_stuff;
       parent_typer = None ();
       env = current_type.GlobalEnv;
       current_fun = m.GetHeader ();
       tenv = current_fun.tenv;
       messenger = solver.CurrentMessenger;
       locals_stack = Stack ();
+
+      inside_yielding_function =
+        m.Name == "MoveNext" && 
+        current_type.LookupMember ("_N_current") is [_];
 
       local_context = LocalContext.Empty;
 
@@ -101,6 +112,16 @@ namespace Nemerle.Compiler
           mutable typer_done = false;
           assert (messenger.IsTopLevel);
 
+          def put_in_error_mode () {
+            solver.Unwind ();
+            messenger.Cleanup ();
+            assert (!messenger.InErrorMode);
+            assert (messenger.IsTopLevel);
+            messenger.InErrorMode = true;
+            local_context = LocalContext.Empty;
+            assert (!typer_done);
+          }
+
           try {
             messenger.Cleanup ();
             messenger.InErrorMode = false;
@@ -122,18 +143,23 @@ namespace Nemerle.Compiler
           } catch {
             | _ is RestartInErrorMode =>
               def errcnt = Message.ErrorCount;
-              solver.Unwind ();
-              messenger.Cleanup ();
-              assert (!messenger.InErrorMode);
-              assert (messenger.IsTopLevel);
-              messenger.InErrorMode = true;
-              local_context = LocalContext.Empty;
-
-              assert (!typer_done);
+              put_in_error_mode ();
               RunTyper ();
 
               when (errcnt == Message.ErrorCount)
                 Util.ice ($"hidden errors compiling $m");
+                
+            | _ is SwitchToYielding =>
+              def errcnt = Message.ErrorCount;
+              // just in case
+              put_in_error_mode ();
+              m.Body = MakeEnumeratorClass (m.Body);
+              when (errcnt == Message.ErrorCount)
+                RunTyper ();
+              when (errcnt == Message.ErrorCount) {
+                RunSecondPass (m);
+                MaybeDumpTypedTree ();
+              }
           }
         })
       } finally {
@@ -257,10 +283,7 @@ namespace Nemerle.Compiler
               MakeImplicitBlockJumpOut ("_N_return", current_fun.ret_type);
           def e' = TypeExpr (e);
           messenger.CleanLocalError ();
-          def ret_type =
-            if (UsedYield) InternalType.Void
-            else current_fun.ret_type;
-          def e' = AddCastTo (e', ret_type, "function return type");
+          def e' = AddCastTo (e', current_fun.ret_type, "function return type");
           def e' =
             if (skip_n_return) e' 
             else TExpr.Block (e'.Type, local, e');
@@ -277,7 +300,13 @@ namespace Nemerle.Compiler
 
     RunSecondPass (meth : MethodBuilder) : void
     {
-      def t2 = Typer2 (current_type, meth, UsedYield);
+      when (inside_yielding_function)
+        match (current_fun.body) {
+          | FunBody.Typed (t) => AddYieldStateMachine (t)
+          | _ => Util.ice ()
+        }
+
+      def t2 = Typer2 (current_type, meth);
       t2.Run ();
       def t3 = Typer3 (meth);
       t3.Run ();
@@ -2982,6 +3011,10 @@ namespace Nemerle.Compiler
               PopLocals ();
             }
           } else if (ns.Equals (yield_macro)) {
+            when (! inside_yielding_function) {
+              _ = GetYieldStuff ();
+              throw SwitchToYielding ();
+            }
             _ = Expect (expected, InternalType.Void, "yield ``result''");
             HandleYield (expr)
           } else null
@@ -2993,48 +3026,130 @@ namespace Nemerle.Compiler
     
 
     #region yield handling
-    GetYieldType () : TyVar
+    MakeEnumeratorClass (body : PT.PExpr) : PT.PExpr
+    {
+      def (yield_type, parms) = GetYieldStuff ();
+      def this_type = Util.ExprOfQid (current_type.FullName);
+      def all_parms = <[ parameter: _N_this : $this_type ]> :: parms;
+
+      def pt = <[ decl:
+        class $(Macros.NewSymbol ("Enumerator") : name) :
+          System.Collections.IEnumerator,
+          System.Collections.Generic.IEnumerator [$yield_type]
+        {
+          mutable _N_current : $yield_type;
+          mutable _N_state : int;
+
+          public Current : $yield_type
+          {
+            get { _N_current }
+          }
+
+          public MoveNext () : bool
+          {
+            _N_MoveNext_exit : {
+              match (_N_state) {
+                // AddYieldStateMachine will add something here
+                | 0 => {}
+                | _ => _N_MoveNext_exit (false)
+              }
+              {
+                $body;
+                false
+              }
+            }
+          }
+
+          public Dispose () : void
+          {
+            _N_state = -1;
+          }
+
+          public Reset () : void
+          {
+            throw System.NotSupportedException ();
+          }
+
+          public this (.. $all_parms)
+          {
+          }
+        }
+      ]>;
+
+      def tb = current_type.DefineNestedType (pt);
+      
+      def ctor_assigns =
+        all_parms.Map (fun (fp) {
+          when (fp.ty is <[ ref $_ ]> || fp.ty is <[ out $_ ]>)
+            ReportError (messenger, 
+                         "ref/out parameters not allowed in functions "
+                         "using ``yield''");
+          tb.Define (<[ decl: mutable $(fp.name) : $(fp.ty) ]>);
+          <[ this . $(fp.name) = $(fp.name.GetName () : name) ]>
+        });
+        
+      def meth = Typer3.SingleMemberLookup (tb, ".ctor") :> MethodBuilder;
+      meth.Body = <[ { .. $ctor_assigns } ]>;
+
+      tb.Compile ();
+
+      def parm_refs = 
+        <[ this ]> :: parms.Map (fun (fp) { <[ $(fp.name.GetName () : name) ]> });
+
+      <[ $(Util.ExprOfQid (tb.FullName)) (.. $parm_refs) ]>
+    }
+
+
+    GetYieldStuff () : PT.PExpr * list [PT.Fun_parm]
     {
       match (parent_typer) {
-        | Some (t) => t.GetYieldType ()
+        | Some (t) => t.GetYieldStuff ()
         | None =>
-          match (current_fun.ret_type.Fix ()) {
-            | Class (tc, [t])
-              when tc.Equals (InternalType.Generic_IEnumerable_tc) =>
-              t
-            | t =>
+          match (yield_stuff) {
+            | Some (x) => x
+            | None =>
               ReportError (messenger,
-                           $ "yield used in a function returning $t (it "
+                           $ "yield used in a function returning "
+                             "$(current_fun.ret_type) (it "
                              "should be System.Collections.Generic."
                              "IEnumerable[T])");
-              InternalType.Object
-          }
+              (<[ object ]>, [])
+         }
       }
     }
 
     HandleYield (expr : PT.PExpr) : TExpr
     {
-      when (solver.IsTopLevel)
-        UsedYield = true;
-      TExpr.Yield (InternalType.Void,
-                   AddCastTo (TypeExpr (expr), GetYieldType (), "yielded expression"))
+      Util.cassert (solver.IsTopLevel);
+      def label_no = Util.next_id ();
+      yield_labels ::= label_no;
+      def label =
+        TExpr.Label (InternalType.Void, label_no, VoidLiteral ());
+      def state_no = yield_labels.Length;
+      
+      TypeExpr (<[ 
+        {
+          $(This () : typed) . _N_current = $expr;
+          $(This () : typed) . _N_state = $(state_no : int);
+          _N_MoveNext_exit (true);
+          $(label : typed)
+        }
+      ]>)
     }
 
-    UsedYield : bool
+    AddYieldStateMachine (e : TExpr) : void
     {
-      mutable used_yield : bool;
-
-      get {
-        match (parent_typer) {
-          | Some (t) => t.UsedYield
-          | None => used_yield
-        }
-      }
-      set {
-        match (parent_typer) {
-          | Some (t) => t.UsedYield = value
-          | None => used_yield = value
-        }
+      match (e) {
+        | Block (_, Block (_, Sequence (Match as m, _))) =>
+          mutable cnt = 1;
+          def cases = yield_labels.Rev ().Map (fun (id) {
+            def cntpat = Pattern.Literal (InternalType.Int32, Literal.FromInt (cnt));
+            cnt++;
+            def yes = TExpr.Literal (InternalType.Boolean, Literal.Bool (true));
+            Match_case ([(cntpat, yes, [])], TExpr.Goto (m.Type, id, 1), false)
+          });
+          m.cases = cases + m.cases;
+        | _ => Util.ice ($ "e = $e")
       }
     }
     #endregion
@@ -3139,7 +3254,6 @@ namespace Nemerle.Compiler
         | TExpr.Goto
         | TExpr.Label
         | TExpr.Block
-        | TExpr.Yield
         | TExpr.MultipleAssign
         | TExpr.MethodAddress => 
           $ "!!!shouldn't happen: $(expr.GetType())!!!"
