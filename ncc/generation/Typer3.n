@@ -428,7 +428,11 @@ namespace Nemerle.Compiler
     /** Return code referencing closure of [hd].  */
     ClosureRef (hd : Fun_header) : TExpr
     {
-      if (hd.id == current_method.id) {
+      if (current_method.name == "_N_yielding_function") {
+        Util.cassert (hd.id == current_method.id ||
+                      current_method.decl.DefinedIn.id == hd.id);
+        TExpr.This (local_function_type.GetMemType ())
+      } else if (hd.id == current_method.id) {
         PlainRef (current_closure)
       } else if (hd.usage == FunctionUsage.UsedJustOnce) {
         ClosureRef (hd.decl.DefinedIn)
@@ -654,6 +658,57 @@ namespace Nemerle.Compiler
       }
     }
 
+
+    PrepareEnumeratorObject () : Parsetree.ClassMember
+    {
+      def yield_type = Option.UnSome (the_method.yield_stuff) [0];
+
+      <[ decl:
+        class $(Macros.NewSymbol ("Enumerator") : name) :
+          System.Collections.IEnumerator,
+          System.Collections.Generic.IEnumerator [$yield_type]
+        {
+          public Current : $yield_type
+          {
+            get { this._N_current }
+          }
+
+          public Dispose () : void
+          {
+            this._N_state = -1;
+          }
+
+          public Reset () : void
+          {
+            throw System.NotSupportedException ();
+          }
+
+          public MoveNext () : bool
+          {
+          }
+        }
+      ]>
+    }
+
+
+    SetEnumeratorBody (clo_type : TypeInfo, subst : Subst) : void
+    {
+      match (current_local_fun.body) {
+        | FunBody.Typed (DefValIn (_, _, DefValIn (_, _, DefFunctionsIn ([fh], _)))) =>
+          def meth = SingleMemberLookup (clo_type, "MoveNext") :> MethodBuilder;
+          fh.used_closures = fh.GetParents ();
+          PrepareForEmission (meth, fh, subst);
+          def child = Typer3 (this, meth);
+          child.current_subst = subst;
+          child.Run ();
+
+          current_local_fun.body = FunBody.Typed (PlainRef (current_closure));
+
+        | FunBody.Typed (t)
+        | _ with t = null => Util.ice ($ "oops, t=$t")
+      }
+    }
+
     
     PrepareClosure () : list [TExpr]
     {
@@ -671,12 +726,17 @@ namespace Nemerle.Compiler
             subst.Apply (t.DeepFix ())
         }
 
-        def clo_type = CurrentType.DefineNestedType (<[ decl:
-          private sealed class $(Macros.NewSymbol ("closure") : name)
-          {
-            internal this () {}
-          }
-        ]>, do_fixup = false);
+        def clo_decl = 
+          if (the_method.yield_stuff.IsNone)
+            <[ decl:
+              private sealed class $(Macros.NewSymbol ("closure") : name)
+              {
+                internal this () {}
+              }
+            ]>
+          else PrepareEnumeratorObject ();
+
+        def clo_type = CurrentType.DefineNestedType (clo_decl, do_fixup = false);
         clo_type.forced_typarms = new_tp;
         clo_type.FixupDefinedClass ();
         
@@ -704,7 +764,10 @@ namespace Nemerle.Compiler
           });
         
         foreach (decl in vars) {
-          def name = Macros.NewSymbol (decl.Name);
+          def name =
+            if (decl.Name == "_N_current" || decl.Name == "_N_state")
+              Parsetree.Name (decl.Name)
+            else Macros.NewSymbol (decl.Name);
           //Message.Debug ($"clo field: $name $(fix_type (decl.Type)) tv=$new_tp");
           def ptdecl = <[ decl: 
             internal mutable 
@@ -721,6 +784,9 @@ namespace Nemerle.Compiler
         clo_type.MarkWithSpecialName ();
         clo_type.HasBeenUsed = true;
         clo_type.Compile ();
+
+        when (the_method.yield_stuff.IsSome)
+          SetEnumeratorBody (clo_type, subst);
 
         [TExpr.DefValIn (InternalType.Void, closure_val, ctor_call, null)]
       }
