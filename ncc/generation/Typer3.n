@@ -430,10 +430,11 @@ namespace Nemerle.Compiler
     {
       if (hd.usage == FunctionUsage.UsedJustOnce) {
         ClosureRef (hd.decl.DefinedIn)
-      } else if (current_method.name == "_N_yielding_function") {
+      } else if (current_method.is_in_closure_of != 0) {
         // Message.Debug ($ "lookup $(hd.name) from $(current_method.name)");
-        Util.cassert (hd.id == current_method.id ||
-                      current_method.decl.DefinedIn.id == hd.id);
+        Util.cassert (hd.id == current_method.is_in_closure_of ||
+                      (current_method.decl != null && 
+                       current_method.decl.DefinedIn.id == hd.id));
         TExpr.This (local_function_type.GetMemType ())
       } else if (hd.id == current_method.id) {
         PlainRef (current_closure)
@@ -674,7 +675,7 @@ namespace Nemerle.Compiler
 
           public Dispose () : void
           {
-            this._N_state = -1;
+            foobar
           }
 
           public Reset () : void
@@ -684,19 +685,86 @@ namespace Nemerle.Compiler
 
           public MoveNext () : bool
           {
+            foobar
           }
         }
       ]>
     }
 
+    static RewriteTryFinally (clo_type : TypeBuilder, fh : Fun_header) : void
+    {
+      mutable dispose_expr = Typer.VoidLiteral ();
 
-    SetEnumeratorBody (clo_type : TypeInfo, subst : Subst) : void
+      def thisref = TExpr.This (clo_type.GetMemType ());
+
+      def rewrite (expr : TExpr) {
+        | TryFinally (body, handler) =>
+          def fld = clo_type.DefineAndReturn (<[ decl: 
+            mutable $(Macros.NewSymbol ("finally_needed") : name) : bool;
+          ]>) :> IField;
+          fld.HasBeenAssigned = true;
+          fld.HasBeenUsed = true;
+          def fldref = TExpr.FieldMember (InternalType.Boolean, thisref, fld);
+          def for_dispose =
+            TExpr.If (InternalType.Void, fldref, handler, Typer.VoidLiteral ());
+          dispose_expr = TExpr.Sequence (dispose_expr.Type, for_dispose, dispose_expr);
+          
+          BuildRevSequence (
+             [handler, 
+              TExpr.Assign (InternalType.Void, fldref, TExpr.FalseLiteral),
+              body.Walk (rewrite),
+              TExpr.Assign (InternalType.Void, fldref, TExpr.TrueLiteral)])
+
+        | _ => null
+      }
+      
+      match (fh.body) {
+        | FunBody.Typed (expr) =>
+          def expr = expr.Walk (rewrite);
+          
+          def dispose_meth =
+            SingleMemberLookup (clo_type, "Dispose") :> IMethod;
+          def dispose_call = 
+            TExpr.Call (InternalType.Void,
+                        TExpr.MethodRef (dispose_meth.GetMemType (),
+                                         thisref, dispose_meth, [], true), 
+                        [], false);
+          def expr = TExpr.TryFault (expr.Type, expr, dispose_call);
+          fh.body = FunBody.Typed (expr);
+          
+          def this_N_state =
+            TExpr.FieldMember (InternalType.Int32, thisref,
+                               SingleMemberLookup (clo_type, "_N_state") :> IField);
+          dispose_expr =
+            TExpr.Sequence (InternalType.Void,
+              TExpr.Assign (InternalType.Void,
+                            this_N_state, 
+                            TExpr.Literal (InternalType.Int32,
+                                           Literal.FromInt (-1))),
+              dispose_expr);
+          dispose_meth.GetHeader ().body = FunBody.Typed (dispose_expr);
+          
+        | _ => Util.ice ()
+      }
+    }
+
+
+    SetEnumeratorBody (clo_type : TypeBuilder, subst : Subst) : void
     {
       match (current_local_fun.body) {
         | FunBody.Typed (DefValIn (_, _, DefValIn (_, _, DefFunctionsIn ([fh], _)))) =>
           def meth = SingleMemberLookup (clo_type, "MoveNext") :> MethodBuilder;
+          RewriteTryFinally (clo_type, fh);
           fh.used_closures = fh.GetParents ();
+          fh.is_in_closure_of = fh.id;
           PrepareForEmission (meth, fh, subst);
+          def child = Typer3 (this, meth);
+          child.current_subst = subst;
+          child.Run ();
+
+          def meth = SingleMemberLookup (clo_type, "Dispose") :> MethodBuilder;
+          meth.GetHeader ().used_closures = fh.GetParents ();
+          meth.GetHeader ().is_in_closure_of = fh.id;
           def child = Typer3 (this, meth);
           child.current_subst = subst;
           child.Run ();
@@ -784,10 +852,11 @@ namespace Nemerle.Compiler
                       
         clo_type.MarkWithSpecialName ();
         clo_type.HasBeenUsed = true;
-        clo_type.Compile ();
 
         when (uses_yield)
           SetEnumeratorBody (clo_type, subst);
+
+        clo_type.Compile ();
 
         [TExpr.DefValIn (InternalType.Void, closure_val, ctor_call, null)]
       }
@@ -1612,6 +1681,7 @@ namespace Nemerle.Compiler
         | Assign
         | Throw
         | TryFinally
+        | TryFault
         | Literal
         | This
         | Base
