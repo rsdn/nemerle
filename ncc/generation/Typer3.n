@@ -666,7 +666,8 @@ namespace Nemerle.Compiler
       <[ decl:
         class $(Macros.NewSymbol ("Enumerator") : name) :
           System.Collections.IEnumerator,
-          System.Collections.Generic.IEnumerator [$(yield_type : typed)]
+          System.Collections.Generic.IEnumerator [$(yield_type : typed)],
+          System.IDisposable
         {
           public Current : $(yield_type : typed)
           {
@@ -686,6 +687,66 @@ namespace Nemerle.Compiler
           public MoveNext () : bool
           {
             foobar
+          }
+        }
+      ]>
+    }
+
+    PrepareEnumerableObject (yield_type : TyVar) : Parsetree.ClassMember
+    {
+      def name = Macros.NewSymbol ("Enumerable");
+
+      def has_mutable_parm = current_local_fun.parms.Exists (fun (fp) { fp.decl.IsMutable });
+
+      def interlocked_stuff =
+        if (has_mutable_parm)
+          <[ true ]>
+        else
+          <[ System.Threading.Interlocked.CompareExchange 
+             (ref _N_this_used, 1, 0) != 0 ]>;
+           
+      <[ decl:
+        class $(name : name) :
+          System.Collections.IEnumerator,
+          System.Collections.Generic.IEnumerator [$(yield_type : typed)],
+          System.IDisposable,
+          System.Collections.Generic.IEnumerable [$(yield_type : typed)]
+        {
+          public Current : $(yield_type : typed)
+          {
+            get { this._N_current }
+          }
+
+          public Dispose () : void
+          {
+            foobar
+          }
+
+          public Reset () : void
+          {
+            throw System.NotSupportedException ();
+          }
+
+          public MoveNext () : bool
+          {
+            foobar
+          }
+
+          mutable _N_this_used : int;
+          
+          public GetEnumerator () : System.Collections.Generic.IEnumerator [$(yield_type : typed)]
+          {
+            if ($interlocked_stuff) {
+              def res = $(name : name) ();
+              res.CopyFrom (this);
+              res
+            } else
+              this
+          }
+
+          CopyFrom (other : $(name : name)) : void
+          {
+            _N_this_used = 1;
           }
         }
       ]>
@@ -749,7 +810,7 @@ namespace Nemerle.Compiler
     }
 
 
-    SetEnumeratorBody (clo_type : TypeBuilder, subst : Subst) : void
+    SetEnumeratorBody (clo_type : TypeBuilder, subst : Subst, parm_field_names : list [string]) : void
     {
       match (current_local_fun.body) {
         | FunBody.Typed (DefValIn (_, _, DefValIn (_, _, DefFunctionsIn ([fh], _)))) =>
@@ -768,6 +829,14 @@ namespace Nemerle.Compiler
           def child = Typer3 (this, meth);
           child.current_subst = subst;
           child.Run ();
+          
+          unless (parm_field_names.IsEmpty) {
+            def meth = SingleMemberLookup (clo_type, "CopyFrom") :> MethodBuilder;
+            def assigns = meth.Body :: parm_field_names.Map (fun (name) {
+              <[ this . $(name : dyn) = other . $(name : dyn) ]>
+            });
+            meth.Body = <[ { .. $assigns } ]>;
+          }
 
           current_local_fun.body = FunBody.Typed (PlainRef (current_closure));
 
@@ -794,6 +863,14 @@ namespace Nemerle.Compiler
         }
 
         def uses_yield = current_local_fun.yield_type != null;
+        def is_enumerable =
+          if (uses_yield)
+            match (current_local_fun.ret_type.Fix ()) {
+              | Class (tc, _) =>
+                tc.Equals (InternalType.Generic_IEnumerable_tc)
+              | _ => Util.ice ()
+            }
+          else false;
 
         def clo_decl = 
           if (!uses_yield)
@@ -803,7 +880,11 @@ namespace Nemerle.Compiler
                 internal this () {}
               }
             ]>
-          else PrepareEnumeratorObject (fix_type (current_local_fun.yield_type));
+          else 
+            if (is_enumerable)
+              PrepareEnumerableObject (fix_type (current_local_fun.yield_type));
+            else 
+              PrepareEnumeratorObject (fix_type (current_local_fun.yield_type));
 
         def clo_type = CurrentType.DefineNestedType (clo_decl, do_fixup = false);
         clo_type.forced_typarms = new_tp;
@@ -831,7 +912,9 @@ namespace Nemerle.Compiler
               | _ => true
             }
           });
-        
+
+        mutable parm_field_names = [];
+
         foreach (decl in vars) {
           def name =
             if (decl.Name == "_N_current" || decl.Name == "_N_state")
@@ -845,6 +928,8 @@ namespace Nemerle.Compiler
           def fld = clo_type.DefineAndReturn (ptdecl);
           decl.ClosureField = fld :> IField;
           decl.ClosureField.HasBeenAssigned = true;
+          when (is_enumerable && decl.ValKind is FunParm (_))
+            parm_field_names ::= name.Id;
         }
         def ctor = SingleMemberLookup (clo_type, ".ctor");
         def ctor_ref = TExpr.StaticRef (ctor.GetMemType (), clo_mtype, ctor, []);
@@ -854,7 +939,8 @@ namespace Nemerle.Compiler
         clo_type.HasBeenUsed = true;
 
         when (uses_yield)
-          SetEnumeratorBody (clo_type, subst);
+          SetEnumeratorBody (clo_type, subst, parm_field_names);
+        
 
         clo_type.Compile ();
 
