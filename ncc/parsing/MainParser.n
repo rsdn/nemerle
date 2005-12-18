@@ -1275,11 +1275,11 @@ namespace Nemerle.Compiler
      *  Parse plain functional header (with optional '[..]' generic parameters
      *                                 and '(..)' fun parameters)
      */
-    parse_fun_header (mutable name : Splicable) : Fun_header
+    parse_fun_header (mutable name : Splicable, allow_patterns = false) : Fun_header
     {
       when (name == null) name = get_splicable_id ();
       def tyvars = parse_tyvars ();      
-      def parms = parse_parameters ();
+      def parms = parse_parameters (allow_patterns);
       def ret_type = parse_return_type (true);
       def typarms = parse_where_constraints (tyvars);
 
@@ -1291,26 +1291,42 @@ namespace Nemerle.Compiler
     }
    
 
+    parse_parameter () : Fun_parm
+    {
+      parse_parameter (false)
+    }
+
     /** Parse function parameter definition from given LooseGroup */
-    parse_parameter () : Fun_parm {
+    parse_parameter (allow_patterns : bool) : Fun_parm {
       mutable customs_token = get_customs ();
       def mods = Modifiers (get_modifiers (), []);
       take_attributes_out (ref customs_token, System.AttributeTargets.Parameter, true, mods);      
 
       parse_top_extensions (mods, MacroTargets.Parameter);
-      
-      match (peek_token ()) {
-        | Token.Keyword ("params") =>
-          shift ();
-          mods.custom_attrs = <[ System.ParamArrayAttribute ]> :: mods.custom_attrs;
-        | _ => ()
-      };
-      def id = get_splicable_id ();
+
+      mutable pattern = null;
+     
+      def id =
+        match (peek_token ()) {
+          | Token.Keyword ("params") =>
+            shift ();
+            mods.custom_attrs = <[ System.ParamArrayAttribute ]> :: mods.custom_attrs;
+            get_splicable_id ()
+            
+          | Token.RoundGroup as tok when allow_patterns =>
+            pattern = parse_expr ();
+            Splicable.Name (tok.Location, Macros.NewSymbol ("pat"));
+            
+          | _ =>
+            get_splicable_id ()
+        }
+        
       def t =
         match (peek_token ()) {
           | Token.Operator (":") => shift (); parse_expr (TokenStoppers.Equal)
           | _ => PExpr.Wildcard (id.Location)
-        };
+        }
+
       match (peek_token ()) {
         | Token.Operator ("=") => 
           shift ();
@@ -1318,12 +1334,14 @@ namespace Nemerle.Compiler
           mods.custom_attrs = <[ System.ComponentModel.DefaultValueAttribute ($e)
                               ]> :: mods.custom_attrs;
         | _ => ()
-      };
-      Fun_parm (loc = id.loc, name = id, ty = t, modifiers = mods)
+      }
+      
+      Fun_parm (loc = id.loc, name = id, ty = t,
+                modifiers = mods, pattern_hack = pattern)
     }
 
     /// parameters of (a:foo,b,c) or [a,b:foo,c] kind
-    parse_parameters () : list [Fun_parm] {
+    parse_parameters (allow_patterns = false) : list [Fun_parm] {
       def group = get_token ();
       match (group) {
         | Token.RoundGroup (null) | Token.SquareGroup (null) => []
@@ -1336,7 +1354,7 @@ namespace Nemerle.Compiler
               [Fun_parm (e.loc, Splicable.Name (mkname ("")), PExpr.Void (e.loc), 
                          Modifiers (NemerleAttributes.None, [e]))]
                          
-            | _ => pop_stream (); TokenMap (group, parse_parameter);
+            | _ => pop_stream (); TokenMap (group, fun () { parse_parameter (allow_patterns) });
           }
         | _ => Error (group, "expecting function parameters"); []
       }
@@ -1358,38 +1376,50 @@ namespace Nemerle.Compiler
     parse_block (tok : Token.BracesGroup, parms : list [Fun_parm]) : PExpr
     {
       def loc = tok.Location;
-      match (tok.Child) {
-        | null => PExpr.Sequence (loc, [])
+      mutable res =
+        match (tok.Child) {
+          | null => PExpr.Sequence (loc, [])
 
-        // function body with embedded matching { | pat => bd | ... }
-        | Token.LooseGroup (Token.Operator ("|")) as group =>
-          // convert function's parameters to tuple to be matched
-          def parms_to_tupl (prs : list [Fun_parm], acc) {
-            match (prs) {
-              | [] => PExpr.Tuple (group.Location, List.Rev (acc))
-              | (Fun_parm where (name = Splicable.Name (x), loc = l)) :: xs => 
-                parms_to_tupl (xs, PExpr.Ref (l, x) :: acc)
-              | x :: _  => fatal_error (x.Location, "illegal spliced parameter?");
+          // function body with embedded matching { | pat => bd | ... }
+          | Token.LooseGroup (Token.Operator ("|")) as group =>
+            // convert function's parameters to tuple to be matched
+            def parms_to_tupl (prs : list [Fun_parm], acc) {
+              match (prs) {
+                | [] => PExpr.Tuple (group.Location, List.Rev (acc))
+                | (Fun_parm where (name = Splicable.Name (x), loc = l)) :: xs => 
+                  parms_to_tupl (xs, PExpr.Ref (l, x) :: acc)
+                | x :: _  => fatal_error (x.Location, "illegal spliced parameter?");
+              }
+            };
+            def cases = process_groups (group, "function body", parse_match_case);
+            def to_be_matched =
+              match (parms) {
+                | [Fun_parm where (name = Splicable.Name (x), loc = l)] => PExpr.Ref (l, x)
+                | _::_::_ => parms_to_tupl (parms, [])
+
+                // syntax encountered is normally incorrect, but we allow it, so macros
+                // and syntax extensions can reshape it
+                | [] => null
+                
+                | x :: _ => fatal_error (x.Location, "illegal spliced parameter?");
             }
-          };
-          def cases = process_groups (group, "function body", parse_match_case);
-          def to_be_matched =
-            match (parms) {
-              | [Fun_parm where (name = Splicable.Name (x), loc = l)] => PExpr.Ref (l, x)
-              | _::_::_ => parms_to_tupl (parms, [])
+            PExpr.Match (loc, to_be_matched, cases)
+            
+          // standard body enclosed by { ... }
+          | groups => 
+            PExpr.Sequence (loc, parse_expr_sequence (groups));
+        }
+        
+      foreach (p in parms)
+        when (p.pattern_hack != null) {
+          res = <[
+            def $(p.pattern_hack) = $(p.name.GetName () : name); 
+            $res 
+          ]>;
+          p.pattern_hack = null;
+        }
 
-              // syntax encountered is normally incorrect, but we allow it, so macros
-              // and syntax extensions can reshape it
-              | [] => null
-              
-              | x :: _ => fatal_error (x.Location, "illegal spliced parameter?");
-          }
-          PExpr.Match (loc, to_be_matched, cases)
-          
-        // standard body enclosed by { ... }
-        | groups => 
-          PExpr.Sequence (loc, parse_expr_sequence (groups));
-      }
+      res
     }
 
     /// parse {...} or $body - usually it is a body of method
@@ -1850,7 +1880,7 @@ namespace Nemerle.Compiler
 
           | Token.Keyword ("fun") =>
             def tyvars = parse_tyvars ();      
-            def parms = parse_parameters ();
+            def parms = parse_parameters (allow_patterns = true);
             def ret_type = parse_return_type (true);
             def typarms = parse_where_constraints (tyvars);
 
@@ -1973,7 +2003,7 @@ namespace Nemerle.Compiler
               PExpr.Define (loc + expr.loc, pat, expr)
             };
             def parse_funs (acc, idopt) {
-              def h = parse_fun_header (idopt);
+              def h = parse_fun_header (idopt, allow_patterns = true);
               def fd = Function_decl (h, parse_block (h.parms));
               if (flag_sibling_keyword ("and")) {
                 def id = get_splicable_id ();
