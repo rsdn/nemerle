@@ -1092,6 +1092,8 @@ embedded_statement
 returns [StatementTree t]
 {
     t = new StatementTree();
+    LinkedList<StatementTree> a = new LinkedList<StatementTree> ();
+    string exp;
 }
     :   t = block
     |   t = empty_statement        
@@ -1104,7 +1106,16 @@ returns [StatementTree t]
     |   t = iteration_statement
     |   t = jump_statement
     |   t = try_statement
-    |   y:YIELD { Message.Warning ("'yield' is not supported in nemerle yet" , y); } t = jump_statement
+
+    |   y:YIELD r:RETURN {a.Add (new StatementTree(y));} 
+        exp = expression s:SEMI {
+                                  a.Add (new StatementTree(exp));
+                                  a.Add (new StatementTree(s));
+                                  t = new StatementTree ("YIELD", a);
+                                }
+
+    |   y1:YIELD { Message.Warning ("'yield break' is not supported in nemerle yet" , y1); } t = jump_statement
+
 
     //<unchecked statement>
     |   (UNCHECKED   block)=> t = unchecked_statement
