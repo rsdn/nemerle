@@ -159,6 +159,7 @@ STDMACROS_DLL_SRC = \
 	../macros/Internals.n \
 	../macros/English.n \
 	../macros/Data.n \
+	../macros/DesignPatterns.n \
 	../macros/AssemblyInfo.n \
 
 ############################################################
