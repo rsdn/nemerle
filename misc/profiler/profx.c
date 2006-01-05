@@ -73,8 +73,6 @@ output_class (MonoClass *klass, struct class_descriptor *desc, MonoProfiler *pro
 		mono_type_full_name (mono_class_get_type (klass)));
 }
 
-extern void mono_gc_print_stats (void);
-
 static void
 simple_shutdown (MonoProfiler *prof)
 {
@@ -92,7 +90,6 @@ simple_shutdown (MonoProfiler *prof)
 	
 	}
 
-	mono_gc_print_stats ();
 	printf ("managed bytes allocated:\t%llu\n", prof->total_memory);
 }
 
