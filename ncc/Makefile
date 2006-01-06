@@ -144,6 +144,7 @@ NEMERLE_COMPILER_DLL_SRC = \
 NCC_EXE_SRC       = main.n
 
 STDMACROS_DLL_SRC = \
+	../macros/Profiling.n \
 	../macros/xml.n \
         ../macros/text.n \
         ../macros/io.n \
