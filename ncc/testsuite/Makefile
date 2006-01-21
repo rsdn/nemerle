@@ -59,8 +59,9 @@ all: clean test
 	rm -f *.dll *.mdb *.pdb *.exe xml-*.xml *.netmodule ext_test.out test_out.txt
 
 test: test.exe $(NEM_DLLS)
+	echo $(TEST_FILES) | xargs \
 	$(EXECUTE) ./test.exe -s -r "$(NET_ENGINE)" -rp " $(NET_FLAGS)" -p "$(NEM_FLAGS) $(ADDITIONAL_FLAGS)" \
-		-verify "$(VERIFY)" $(TEST_FILES)
+		-verify "$(VERIFY)"
 
 test.exe: test.n
 	$(EXECUTE) $(STAGE3)/ncc.exe -r:Nemerle.Compiler -out test.exe $(TESTN)
