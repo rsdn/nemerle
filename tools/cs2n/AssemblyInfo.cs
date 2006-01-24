@@ -34,7 +34,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyProduct("C# to Nemerle converter")]
 [assembly: System.Reflection.AssemblyCopyright("Copyright @ University of Wroclaw 2003-2005")]
 
-[assembly: System.Reflection.AssemblyVersion("0.9.2")]
+[assembly: System.Reflection.AssemblyVersion("0.9.2.*")]
 [assembly: AssemblyKeyFile("../../misc/keys/Nemerle.Compiler.snk")]
 [assembly: System.Runtime.InteropServices.ComVisible (false)]
 
