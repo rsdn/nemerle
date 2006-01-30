@@ -88,6 +88,7 @@ NEMERLE_COMPILER_DLL_SRC = \
 	generation/DecisionTreeCompiler.n \
 	generation/Typer3.n		 \
 	generation/Typer4.n		 \
+	hierarchy/ExtensionMethod.n      \
 	hierarchy/BuiltinMethod.n        \
 	hierarchy/ClassMembers.n	 \
 	hierarchy/CustomAttribute.n	 \
