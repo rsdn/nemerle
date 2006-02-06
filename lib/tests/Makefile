@@ -4,6 +4,7 @@ include $(TOP)/config.mak
 
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 THISDIR = $(shell if cygpath --help 2>/dev/null 1>&2; then echo `cygpath -m $(CURDIR)`; else echo $(CURDIR); fi)
+UNIT_SCR = linkedlist.n list.n
 
 ############################################################
 # TARGETS
@@ -24,5 +25,5 @@ nunit: lib-unit-tests.dll
 
 lib-unit-tests.dll: 
 	$(Q)if test $(NUNIT_CONSOLE); then \
-		$(EXECUTE) $(TOP)/ncc/out.stage3/ncc.exe linkedlist.n -def:NUNIT $(NUNIT_LIB) -t:library -o:lib-unit-tests.dll; \
+		$(EXECUTE) $(TOP)/ncc/out.stage3/ncc.exe $(UNIT_SRC) -def:NUNIT $(NUNIT_LIB) -t:library -o:lib-unit-tests.dll; \
 	fi
