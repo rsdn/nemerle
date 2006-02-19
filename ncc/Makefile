@@ -34,11 +34,11 @@ include ../config.mak
 ############################################################
 
 COMPILER_PATH = ../boot/
-NCC_FLAGS     = -dowarn:10006 -pedantic-lexer -def:_$(STAGE) -stats $(NEM_FLAGS) $(ADD_FLAGS)
+NCC_FLAGS     = -dowarn:10006 -pedantic-lexer -def:_$(STAGE) -stats -greedy- $(NEM_FLAGS) $(ADD_FLAGS)
 COMPILER      = $(COMPILER_PATH)ncc.exe
 COMPILER_DEP  = $(COMPILER_PATH)ncc.exe $(COMPILER_PATH)Nemerle.Macros.dll
 EXECUTE       = $(NET_ENGINE) $(NET_FLAGS)
-RUN_COMPILER  = $(Q)$(TIME) $(EXECUTE) $(COMPILER) -no-stdlib -r:mscorlib -r:System $(NCC_FLAGS)
+RUN_COMPILER  = $(Q)$(TIME) $(EXECUTE) $(COMPILER) -no-stdlib -r:mscorlib -r:System -r:System.Xml $(NCC_FLAGS)
 
 GENERIC_SRC =
 
