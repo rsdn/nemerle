@@ -68,13 +68,13 @@ endif
 all: cs2n.exe
 
 cs2n.exe: $(NEMERLE_DLLS) $(ANTLR_DLL) Nemerle.CSharp.CS.dll  $(CS2N_EXE_SOURCES)
-	$(NCC) -greedy- -texe -r:antlr.runtime.dll -r:Nemerle.CSharp.CS.dll -r:Nemerle.CSharp.dll -o:$@ $(CS2N_EXE_SOURCES)
+	$(NCC) -greedy- -texe -r:./antlr.runtime.dll -r:Nemerle.CSharp.CS.dll -r:Nemerle.CSharp.dll -o:$@ $(CS2N_EXE_SOURCES)
 
 Nemerle.CSharp.CS.dll : Nemerle.CSharp.dll $(GENERATED_SOURCES_PARSER) $(ANTLR_DLL)
-	$(MCS) /t:library /r:antlr.runtime.dll /r:Nemerle.CSharp.dll /r:Nemerle.dll -out:$@ $(GENERATED_SOURCES) AssemblyInfo.cs
+	$(MCS) /t:library /r:./antlr.runtime.dll /r:Nemerle.CSharp.dll /r:Nemerle.dll -out:$@ $(GENERATED_SOURCES) AssemblyInfo.cs
 
 Nemerle.CSharp.dll : $(NEMERLE_CSHARP_DLL_SOURCES) $(ANTLR_DLL)
-	$(NCC) -tdll -r:antlr.runtime.dll -r:Nemerle.Compiler.dll -o:$@ $(NEMERLE_CSHARP_DLL_SOURCES) 
+	$(NCC) -tdll -r:./antlr.runtime.dll -r:Nemerle.Compiler.dll -o:$@ $(NEMERLE_CSHARP_DLL_SOURCES) 
 
 $(GENERATED_SOURCES_PARSER): $(GRAMMAR_FILE)
 	$(ANTLR) $(GRAMMAR_FILE) 2> error_log
