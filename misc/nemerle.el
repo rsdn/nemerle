@@ -60,9 +60,31 @@
 ;; You may use variables nemerle-basic-offset and nemerle-match-case-offset
 ;; to customize indentation levels.
 
+;; By default indentation based syntax is turned on. It is switched off
+;; inside any parens anyway so it should be ok. If you think otherwise
+;; you can use following in your ~/.emacs file:
+
+;; (setq nemerle-indentation-based-syntax nil)
+
 
 
 ;;; Change Log:
+
+;; 2006-03-06 Piotr Kalinowski <pitkali@gmail.com>
+;;   * I have corrected if-else structures handling
+;;     and in-match detection.
+;;   * Added support for indentation based syntax
+;;     - try .. catch and if .. else alignment
+;;     - tab iterates over different indentation possibilities
+;;     - backspace if pressed inside indentation deletes
+;;       until previous indentation level
+;;     - \C-c. to shift region right, \C-c, to shift left
+;;     - \C-c\C-j to indent single line, use region-indent
+;;       to indent multiple lines
+;;     - inside any parens indentation based syntax
+;;       modifications are turned off
+;;     - support for explicit switching syntax type with
+;;       \C-c\C-i and state feedback in mode line.
 
 ;; 2005-05-10 rzyjontko <rzyj@o2.pl>
 ;;   * final fixes of indentation engine and comment handling
@@ -151,6 +173,10 @@ buffer created.  This is a good place to put your customizations.")
 (defvar nemerle-match-case-offset 2
   "Indentation of match case bodies.")
 
+(defvar nemerle-indentation-based-syntax t
+  "Whether we are using indentation based syntax. On by default, because
+it'll get turned off inside any parens anyway.")
+
 (unless nemerle-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map "\C-c\C-c" 'comment-region)
@@ -159,6 +185,13 @@ buffer created.  This is a good place to put your customizations.")
     (define-key map "}" 'nemerle-electric-brace-end)
     (define-key map "*" 'nemerle-electric-star)
     (define-key map "e" 'nemerle-electric-e)
+    (define-key map "h" 'nemerle-electric-h)
+    (define-key map "\C-c\C-i" 'nemerle-toggle-indentation-syntax)
+    (define-key map "\C-c\C-j" 'nemerle-indent-line)
+    (define-key map (kbd "TAB") 'nemerle-electric-tab)
+    (define-key map (kbd "DEL") 'nemerle-electric-delete)
+    (define-key map "\C-c." 'nemerle-shift-region-right)
+    (define-key map "\C-c," 'nemerle-shift-region-left)
     (setq nemerle-mode-map map)))
 
 (unless nemerle-font-lock-keywords
@@ -232,6 +265,17 @@ buffer created.  This is a good place to put your customizations.")
   (modify-syntax-entry ?\^m "> b" nemerle-mode-syntax-table))
 
 
+(defun nemerle-toggle-indentation-syntax (arg)
+  "Toggle the variable controlling type of the syntax used."
+  (interactive "p")
+  (cond (nemerle-indentation-based-syntax
+	 (setq nemerle-indentation-based-syntax nil)
+	 (setq mode-name "Nemerle"))
+	(t
+	 (setq nemerle-indentation-based-syntax t)
+	 (setq mode-name "Nemerle Indent.")))
+  (force-mode-line-update))
+
 
 (defun nemerle-go-up-one-level ()
   "Find an innermost surrounding parenthesis (or brace, or whatever)
@@ -246,6 +290,21 @@ the topmost block."
 	  (t
 	   (goto-char (point-min))
 	   0))))
+
+
+(defun nemerle-is-not-indentation-exception ()
+  "Returns t if indentation-based syntax should be applied."
+  (let* ((here (point))
+	 (beg-buf (point-min))
+	 (state-one (parse-partial-sexp here beg-buf))
+	 (state-two (parse-partial-sexp here beg-buf -1)))
+    (goto-char here)
+    (cond ((or (> (nth 0 state-one) 0)
+	       (nth 3 state-two))
+	   nil)
+	  (t
+	   t))))
+
 
 
 (defun nemerle-skip-sexps (end)
@@ -295,24 +354,18 @@ Returns t if inside a comment."
     (let ((end (point))
 	  (line 'none)
 	  (in-match-case nil)
-	  (depth 0)
 	  (at-end nil)
-	  (brace (nemerle-go-up-one-level)))
+	  (brace (nemerle-go-up-one-level))
+	  (begin (point)))
       (if (not (eq brace ?{))
 	  nil
-	(beginning-of-line)
-	(while (and (not at-end) (<= (point) end))
-	  (cond ((looking-at ".*{[^}]*$")
-		 (setq depth (+ depth 1)))
-		((looking-at ".*}[^{]*$")
-		 (setq depth (- depth 1)))
-		(t
-		 nil))
+	(while (and (not in-match-case) (not at-end) (<= (point) end))
 	  (setq line (nemerle-analyze-line))
-	  (if (and (eq line 'match-case) (eq depth 1))
+	  (if (and (eq line 'match-case) (eq (nth 0 (parse-partial-sexp (point) begin)) 1))
 		 (setq in-match-case t))
 	  (if (> (forward-line 1) 0)
-	      (setq at-end t)))
+	      (setq at-end t))
+	  (beginning-of-line))
 	  in-match-case))))
 
 
@@ -339,8 +392,11 @@ Returns t if inside a comment."
 	   'end-brace)
 	  ((looking-at "[ \t]*|")
 	   'match-case)
-	  ((looking-at "[ \t]*else[ \t]*")
+	  ((looking-at "[ \t]*else\\b")
 	   'else-clause)
+	  ((or (looking-at "[ \t]*catch\\b")
+	       (looking-at "[ \t]*finally\\b"))
+	   'catch-clause)
 	  (t
 	   'none))))
 
@@ -357,18 +413,38 @@ the relative offset + result for the block."
 ;; Go backwards, skipping comments, but no further than begin.
 ;; After calling this  function you end up at most at the beginning
 ;; of the line containing begin.
-(defun nemerle-go-backwards (begin)
+(defun nemerle-go-backwards (begin &optional indent-syntax)
   ;; checks if currrent line is a comment line
   ;; such situation will be noticed either by nemerle in comment in case
   ;; of being in the middle of multi line comment or two regexps checking
   ;; for the beginning of a comment.
-  (defun is-comment-line ()
-    (or (looking-at "[ \t]*//")	(looking-at "[ \t]*/\\*") (nemerle-in-comment)))
+  (if indent-syntax
+      (defun should-be-skipped ()
+	(or (looking-at "[ \t]*/\\*") (nemerle-in-comment) (nemerle-on-empty-line) ))
+    (defun should-be-skipped ()
+      (or (looking-at "[ \t]*//") (looking-at "[ \t]*/\\*") (nemerle-in-comment)
+	  (nemerle-on-empty-line))))
 
-  (while (and (eq (forward-line -1) 0) (<= begin (point)) (is-comment-line))
-    nil))
+  (let ((lvl (nth 0 (parse-partial-sexp (point) begin))))
+    (while (and (eq (forward-line -1) 0) (< begin (point))
+		(should-be-skipped))
+      nil)
+    (if (save-excursion (beginning-of-line) (looking-at "[ \t]*}"))
+	nil
+      (cond ((and (< begin (point))
+		  (> (nth 0 (parse-partial-sexp (point) begin)) lvl))
+	     (nemerle-go-up-one-level)
+	     (beginning-of-line)
+	     (while (and (< begin (point))
+			 (> (nth 0 (parse-partial-sexp (point) begin)) lvl))
+	       (nemerle-go-up-one-level)
+	       (beginning-of-line))
+	     (goto-char (max begin (point))))
+	    (t
+	     nil)))
+    (beginning-of-line)))
+		      	 
  
-
 (defun nemerle-check-if (end line offset)
   "Checks if we have a case of if/else/whatever with one-line body. In such
 case braces may be missing and then syntax parser won't indicate the need to
@@ -388,16 +464,16 @@ nest next line. This function will."
     (let ((here (point))
 	  (type 'none))
        (setq type (cond
-		   ((looking-at "[ \t]*\\(if\\|for\\|foreach\\|while\\|when\\|unless\\)[ \t]*(")
+		   ((looking-at ".*\\b\\(if\\|for\\|foreach\\|while\\|when\\|unless\\)[ \t]*(")
 		    'if)
-		   ((looking-at "[ \t]*else[ \t]*")
+		   ((looking-at "[ \t]*else\\b")
 		    'else)
 		   (t
 		    'none)))
        (goto-char begin)
        (if (eq type 'else)
 	   ;; skip to corresponding if - we should have same indentation
-	   (setq here (nemerle-find-if here)))
+	   (setq here (nemerle-find-if (point) here)))
        (if (eq type 'none)
 	   offset
 	 ;; we have the if-case, so increase offset and check another line
@@ -408,30 +484,29 @@ nest next line. This function will."
 	   (nemerle-check-if here 'none offset))))))
 	 
 
-(defun nemerle-find-if (end)
+(defun nemerle-find-if (begin end)
   "Find if clause corresponding to else clause at position END. Return
 its position or END if no appropriate clause was found."
-  (let ((begin (point))
-	(depth 1)
-	(retval nil)
-	(too-far nil))
-    ;; depth is number of unmatched else's. We start with value of
-    ;; of 1 - the else line at end, and proceed until it reaches 0
-    (goto-char end)
-    (while (and (not (eq depth 0)) (not too-far))
-      (nemerle-go-backwards begin)
-      (if (> begin (point)) ;; oops - to far
-	  (setq too-far t))
-      (goto-char (max (+ 1 begin) (point)))
-      (if (looking-at "[ \t]*else[ \t]*")
-	  (setq depth (+ depth 1))
-	(if (looking-at "[ \t]*if[ \t]*(")
-	    (setq depth (- depth 1)))))
-    (if (eq depth 0)
-	(setq retval (point))
-      (setq retval end))
-    (goto-char begin)
-    retval))
+  (save-excursion
+    (let ((depth 1)
+	  (retval nil)
+	  (too-far nil))
+      ;; depth is number of unmatched else's. We start with value of
+      ;; of 1 - the else line at end, and proceed until it reaches 0
+      (goto-char end)
+      (while (and (not (eq depth 0)) (not too-far))
+	(nemerle-go-backwards begin)
+	(if (or (> begin (point)) (eq (point-min) (point))) ;; oops - too far
+	    (setq too-far t))
+	(goto-char (max (+ 1 begin) (point)))
+	(if (looking-at "[ \t]*else\\b")
+	    (setq depth (+ depth 1))
+	  (if (looking-at ".*\\bif[ \t]*(")
+	      (setq depth (- depth 1)))))
+      (if (eq depth 0)
+	  (setq retval (point))
+	(setq retval end))
+      retval)))
       
 
 (defun nemerle-get-offset (end line)
@@ -450,7 +525,7 @@ by LINE."
 	((eq line 'else-clause)
 	 ;; handle proper indentation of else clause
 	 (nemerle-analyze-block end (nemerle-check-if
-				     (nemerle-find-if end)
+				     (nemerle-find-if (point) end)
 				     line 0)))
 	(t
 	 ;; handle if-clause without braces
@@ -465,23 +540,108 @@ of code.  Analyze code from the current point position until END."
     (+ nemerle-basic-offset (nemerle-get-offset end line))))
 
 
+(defun nemerle-looking-at-function ()
+  (or (looking-at
+	   "[ \t]*\\(\\(public\\|internal\\|private\\|override\\|virtual\\|static\\|protected\\)[ \t]*\\)+[^ \t]+[ \t]*(")
+      (looking-at "[ \t]*[^ \t]+[ \t]*(.*)[ \t]*:")
+      (looking-at "[ \t]*def[ \t]*[^ \t]+[ \t]*([^{]*$")))
+	 
+
+(defun nemerle-if-add-indent (line)
+  "Try to infer where indentation-based syntax need to increase indent."
+  (cond ((or
+	  (looking-at ".*\\b\\(if\\|for\\|foreach\\|while\\|when\\|unless\\)[ \t]*(")
+	  (looking-at "[ \t]*namespace\\b")
+	  (looking-at ".*\\b\\(class\\|struct\\|module\\|try\\)\\b")
+	  (nemerle-looking-at-function)
+	  (looking-at "[ \t]*else\\b")
+	  (looking-at ".*\\bmatch[ \t]*(")
+	  (looking-at "[ \t]*catch\\b")
+	  (looking-at "[ \t]*finally\b"))
+	 nemerle-basic-offset)
+	((looking-at "[ \t]*|")
+	 nemerle-match-case-offset)
+	(t
+	 0)))
+
+
+(defun nemerle-calculate-dedent (line)
+  "Try to infer, if we need to decrease indentation in indentation-based syntax."
+  (cond ((eq line 'star-comment)
+	 -1)
+	(t
+	 0)))
+
+
+(defun nemerle-find-try-clause ()
+  "Finds and moves to the try clause."
+  (let ((depth 1)
+	(too-far nil))
+      ;; depth is number of unmatched else's. We start with value of
+      ;; of 1 - the else line at end, and proceed until it reaches 0
+      (while (and (not (eq depth 0)) (not too-far))
+	(nemerle-go-backwards (point-min))
+	(if (eq (point-min) (point)) ;; oops - too far
+	    (setq too-far t))
+	(if (looking-at "[ \t]*catch\\b")
+	    (setq depth (+ depth 1))
+	  (if (looking-at ".*\\btry\\b")
+	      (setq depth (- depth 1)))))))
+
+
+(defun nemerle-find-match-clause (current)
+  "Find matching match clause."
+  (nemerle-go-backwards (point-min))
+  (let ((indent (current-indentation))
+	(previous current))
+    (while (and (or (>= indent previous)
+		    (and (not (looking-at ".*\\bmatch[ \t]*("))
+			 (not (looking-at "[ \t]*catch\\b"))
+			 (not (nemerle-looking-at-function))))
+		(not (eq (point) (point-min))))
+      (setq previous (min previous indent))
+      (nemerle-go-backwards (point-min))
+      (setq indent (current-indentation)))))
+
+
+
 (defun nemerle-calculate-indentation-of-line (line)
   "Return the absolute indentation for the line at the current point,
 where its syntactic meaning is given by LINE, and may not be IN-STRING."
   (save-excursion 
     (beginning-of-line)
-    (let ((end (point))
-	  (paren-char (nemerle-go-up-one-level))
-	  (top-indentation (current-indentation))
-	  (paren-column (- (point) 
-			   (save-excursion (beginning-of-line) (point)))))
-      (nemerle-skip-sexps end)
-      (cond ((eq paren-char ?{)
-	     (+ top-indentation (nemerle-get-nested end line)))
-	    ((eq paren-char 0)
-	     (nemerle-get-offset end line))
-	    (t
-	     (1+ paren-column))))))
+    (cond ((and nemerle-indentation-based-syntax
+		(nemerle-is-not-indentation-exception))
+	   (cond ((eq line 'else-clause)
+		  (goto-char (nemerle-find-if (point-min) (point)))
+		  (current-indentation))
+		 ((eq line 'match-case)
+		  (nemerle-find-match-clause (current-indentation))
+		  (+ (current-indentation) nemerle-basic-offset))
+		 ((eq line 'catch-clause)
+		  (nemerle-find-try-clause)
+		  (current-indentation))
+		 (t
+		  (nemerle-go-backwards (point-min) t)
+		  (if (or (eq line 'begin-brace)
+			  (looking-at "[ \t]*//")
+			  (looking-at ".*\\\\[ \t]*$"))
+		      (current-indentation)
+		    (- (+ (current-indentation) (nemerle-if-add-indent line))
+		       (nemerle-calculate-dedent line))))))
+	  (t
+	   (let ((end (point))
+		 (paren-char (nemerle-go-up-one-level))
+		 (top-indentation (current-indentation))
+		 (paren-column (- (point) 
+				  (save-excursion (beginning-of-line) (point)))))
+	     (nemerle-skip-sexps end)
+	     (cond ((eq paren-char ?{)
+		    (+ top-indentation (nemerle-get-nested end line)))
+		   ((eq paren-char 0)
+		    (nemerle-get-offset end line))
+		   (t
+		    (1+ paren-column))))))))
 
 
 (defun nemerle-calculate-indentation ()
@@ -510,6 +670,78 @@ where its syntactic meaning is given by LINE, and may not be IN-STRING."
     (nemerle-indent-to level)))
 
 
+(defun nemerle-change-indentation (shift)
+  (let ((level (+ (current-indentation) shift)))
+    (if (< level 0)
+	(setq level 0))
+    (nemerle-indent-to level)))
+
+
+(defun nemerle-electric-tab ()
+  "If indentation-based syntax is turned on and the point is not
+inside any parens and it is not only brace opening or closing,
+increase indentation level. Otherwise indent line."
+  (interactive)
+  (beginning-of-line)
+  (cond ((and nemerle-indentation-based-syntax
+	   (not (looking-at "[ \t]*\\({\\|}\\)"))
+	   (nemerle-is-not-indentation-exception))
+	 (let ((current (current-indentation))
+	       (preceding 0)
+	       (suggested (nemerle-calculate-indentation)))
+	   (save-excursion
+	     (nemerle-go-backwards (point-min))
+	     (setq preceding (current-indentation)))
+	   (if (> current preceding)
+	       (nemerle-indent-to (min suggested (max 0 (- preceding nemerle-basic-offset))))
+	     (if (eq current preceding)
+		 (nemerle-indent-to
+		  (if (<= suggested current)
+		      (+ current nemerle-basic-offset)
+		    suggested))
+	       (nemerle-indent-to preceding)))))
+	(t
+	 (nemerle-indent-line))))
+
+
+(defun nemerle-electric-delete (arg)
+  "Normally behaves like backspace, but if the point is at first
+non-blank character on line and indentation based syntax should be
+applied, delete characters up to line begin or next indentation level,
+whichever comes first."
+  (interactive "p")
+  (let ((here (point))
+	(paren-column (backward-to-indentation 0))
+	(count arg))
+    (if (and nemerle-indentation-based-syntax
+	     (eq (point) here)
+	     (nemerle-is-not-indentation-exception))
+	(setq count (max (min nemerle-basic-offset paren-column) 1)))
+    (goto-char here)
+    (backward-delete-char-untabify count nil)))
+
+
+(defun nemerle-shift-region-right (start end)
+  "Shift selected region to the right by indentation level."
+  (interactive "r")
+  (nemerle-shift-region start end nemerle-basic-offset))
+
+
+(defun nemerle-shift-region-left (start end)
+  "Shift selected region to the left by indentation level."
+  (interactive "r")
+  (nemerle-shift-region start end (- nemerle-basic-offset)))
+
+
+(defun nemerle-shift-region (start end shift)
+  "Shift given region."
+  (goto-char start)
+  (nemerle-change-indentation shift)
+  (while (and (eq (forward-line 1) 0) (<= (point) end))
+    (nemerle-change-indentation shift))
+  (goto-char end))
+      
+
 (defun nemerle-electric-bar (arg)
   "Insert a bar.
 
@@ -517,7 +749,9 @@ Also, the line is re-indented unless a numeric ARG is supplied."
   (interactive "p")
   (if (or (and arg (> arg 1)) (not (nemerle-on-empty-line)))
       (self-insert-command (or arg 1))
-    (if (nemerle-in-match)
+    (if (or (and nemerle-indentation-based-syntax
+		 (nemerle-is-not-indentation-exception))
+	    (nemerle-in-match))
 	(let ((level (nemerle-calculate-indentation-of-line 'match-case)))
 	  (nemerle-indent-to level))
       (let ((level (nemerle-calculate-indentation-of-line 'none)))
@@ -531,8 +765,19 @@ Also, the line is re-indented unless a numeric ARG is supplied."
   (self-insert-command (or arg 1))
    (save-excursion
      (beginning-of-line)
-     (cond ((looking-at "[ \t]*else[ \t]*")
+     (cond ((looking-at "[ \t]*else\\b")
  	   (let ((level (nemerle-calculate-indentation-of-line 'else-clause)))
+ 	     (nemerle-indent-to level))))))
+
+
+(defun nemerle-electric-h (arg)
+  "Insert letter e and force reindent if it's else-clause."
+  (interactive "p")
+  (self-insert-command (or arg 1))
+   (save-excursion
+     (beginning-of-line)
+     (cond ((looking-at "[ \t]*catch\\b")
+ 	   (let ((level (nemerle-calculate-indentation-of-line 'catch-clause)))
  	     (nemerle-indent-to level))))))
 
 
@@ -594,8 +839,10 @@ Mode map
 
   (interactive)
   (kill-all-local-variables)
-  
-  (setq mode-name "Nemerle")
+
+  (if nemerle-indentation-based-syntax
+      (setq mode-name "Nemerle Indent.")
+    (setq mode-name "Nemerle"))
   (setq major-mode 'nemerle-mode)
 
   (use-local-map nemerle-mode-map)
