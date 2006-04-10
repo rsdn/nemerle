@@ -130,11 +130,11 @@ dist-cleaner:
 	rm -f nemerle.pc config.mak configure.log
 
 install: all
+	$(Q)install -d $(DESTDIR)$(PKGCONFIGDIR)
 	$(Q)$(MAKE) -C doc install
 	$(Q)$(MAKE) -C ncc install
 	$(Q)$(MAKE) -C tools install
 	$(INST) $(PKGCONFIGDIR)/nemerle.pc
-	$(Q)install -d $(DESTDIR)$(PKGCONFIGDIR)
 	$(Q)install -m 644 nemerle.pc $(DESTDIR)$(PKGCONFIGDIR)/nemerle.pc
 
 uninstall:
