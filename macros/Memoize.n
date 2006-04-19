@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005 The University of Wroclaw.
+ * Copyright (c) 2006 The University of Wroclaw.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,60 +27,86 @@
  */
 
 
+
 using Nemerle.Collections;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 
-
 namespace Nemerle
 {
+  /**
+   * This macro implements memoization (with the default option Scope = Instance),
+   * as well as something closer to aggressive sharing, when Scope = Class is used.
+   * A Synchronized = true | false option is also available, to set thread safety.
+   */
   [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
                        Nemerle.MacroTargets.Method)]
-  macro Memoize (tb : TypeBuilder, meth : MethodBuilder, params opts : list [PExpr])
-  {
-    def _is_static = meth.IsStatic;
-    mutable invalid = null;
-    mutable invalid_is_null = false;
-    mutable synch = true;
-
+  macro Memoize (tb : TypeBuilder, meth : MethodBuilder, params opts : list [PExpr]) {
+    mutable scope = "Instance";
+    mutable synch = false;
     foreach (o in opts) {
-      | <[ InvalidValue = null ]> =>
-        invalid = <[ null ]>;
-        invalid_is_null = true;
+      | <[ Scope = Instance ]> => scope = "Instance" 
+      | <[ Scope = Class ]> => scope = "Class"
+      | <[ Scope = $other ]> => 
+        Message.Error ($"Invalid parameter: Scope = $other. Valid options are Instance (default) and Class.")
+      | <[ Synchronized = $(opt : bool) ]> => synch = opt
+      | <[ Synchronized = $other ]> => 
+        Message.Error ($"Invalid parameter: Synchronized = $other. Valid options are true and false (default).")
+      | _ => () // for backwards compatibility
+    } 
+    def parms = meth.GetParameters ();
+    match (parms) {
+      | [] =>
+        def cached_value = Macros.NewSymbol ("cached_value");
+        def is_cached = Macros.NewSymbol ("is_cached");
+        match (scope) {
+          | "Instance" => 
+            tb.Define (<[ decl: mutable $(cached_value : name) : $(meth.ReturnType : typed); ]>);
+            tb.Define (<[ decl: mutable $(is_cached : name) : bool; ]>)
+          | "Class" =>
+            tb.Define (<[ decl: static mutable $(cached_value : name) : $(meth.ReturnType : typed); ]>);
+            tb.Define (<[ decl: static mutable $(is_cached : name) : bool; ]>)
+          | _ => () // unreachable
+        }
+        meth.Body = <[
+          when (! $(is_cached : name)) {
+            $(cached_value : name) = $(meth.Body);
+            $(is_cached : name) = true;
+          }
+          $(cached_value : name)
+        ]>
+      | (prm :: _) => 
+        def cache = Macros.NewSymbol ("cache");
+        match (MType.ConstructFunctionType (meth.GetHeader ())) {
+          | Fun (t1, t2) => 
+            match (scope) {
+              | "Instance" => tb.Define (<[ decl: mutable $(cache : name) : Hashtable [$(t1 : typed), $(t2 : typed)]; ]>);
+              | "Class" => tb.Define (<[ decl: static mutable $(cache : name) : Hashtable [$(t1 : typed), $(t2 : typed)]; ]>);
+              | _ => () // unreachable
+            }
+          | _ => Message.Error ("This code should not be reached.")
+        }
+        def parm_values = if (parms.Length > 1) 
+                            <[ (.. $(List.Map (parms, fun (p) { <[ $(p.name : usesite) ]> })) )]>
+                          else
+                            <[ $(prm.name : usesite) ]>;
+        meth.Body = <[
+          when ($(cache : name) == null)
+            // Can't this initialization by done without the additional check each time ?
+            $(cache : name) = Hashtable ();
 
-      | <[ InvalidValue = $expr ]> =>
-        when (invalid != null) Message.Error ("invalid value specified more than once");
-        invalid = expr;
-
-      | <[ Synchronized = $(x : bool) ]> =>
-        synch = x;
-
-      | _ => Message.Error ($"unrecognized parameter: $o")
+          match ($(cache : name).Get ($parm_values)) {
+            | Some (ret) => ret
+            | None => 
+              def ret = $(meth.Body);
+              // Does that code make sense ?;] I've never used threading stuff before..
+              $(if (synch) 
+                <[ lock ($(cache : name)) { $(cache : name).Add ($parm_values, ret) } ]> 
+              else
+                <[ $(cache : name).Add ($parm_values, ret) ]>);
+              ret
+          }
+        ]>;
     }
-
-    def store = Macros.NewSymbol ("storage");
-    def is_cached =
-      if (invalid == null) {
-        def x = Macros.NewSymbol ("is_cached");
-        tb.Define (<[ decl: private mutable $(x : name) : bool; ]>);
-        <[ $(x : name) ]>
-      }
-      else
-        <[ $(store : name) != $invalid ]>;
-
-    if (invalid != null && ! invalid_is_null)
-      tb.Define (<[ decl: private mutable $(store : name) : $(meth.ReturnType : typed) = $invalid; ]>);
-    else
-      tb.Define (<[ decl: private mutable $(store : name) : $(meth.ReturnType : typed); ]>);
-
-    meth.Body = <[
-      if ($is_cached)
-        $(store : name)
-      else {
-        $(store : name) = $(meth.Body);
-        $(if (invalid == null) <[ $is_cached = true ]> else <[ () ]>);
-        $(store : name)
-      }
-    ]>
   }
 }
