@@ -44,6 +44,7 @@ GENERIC_SRC =
 
 NEMERLE_DLL_SRC = \
 	../lib/internal-numbered.n	\
+	../lib/internal-array.n		\
 	../lib/internal.n		\
 	../lib/core.n			\
 	../lib/macros.n			\
