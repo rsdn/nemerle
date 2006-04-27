@@ -11,16 +11,17 @@ INST	= @echo INSTALL $1
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
 NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe
+SNK_COMPILER = -keyfile:$(TOP_LEVEL)/misc/keys/Nemerle.Compiler.snk
 
 NEMISH_SRC = interp.n main.n readline.n
 
 all:	Nemerle.Evaluation.dll nemish.exe
 
 Nemerle.Evaluation.dll: eval.n $(NCC_DIR)/Nemerle.dll $(NCC_DIR)/Nemerle.Compiler.dll $(NCC_DIR)/Nemerle.Macros.dll 
-	$(NCC) -r Nemerle.Compiler.dll -t library -o Nemerle.Evaluation.dll eval.n
+	$(NCC) -r Nemerle.Compiler.dll -t library $(SNK_COMPILER) -o Nemerle.Evaluation.dll eval.n
 
 nemish.exe: $(NEMISH_SRC) Nemerle.Evaluation.dll
-	$(NCC) -r Nemerle.Evaluation.dll -o nemish.exe $(NEMISH_SRC)
+	$(NCC) -r Nemerle.Evaluation.dll -o nemish.exe $(SNK_COMPILER) $(NEMISH_SRC)
 
 check: all
 	$(MAKE) -C tests all
