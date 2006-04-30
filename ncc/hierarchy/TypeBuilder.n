@@ -449,6 +449,8 @@ public partial class TypeBuilder : TypeInfo
     
     if (member_map == null) {
       additional_decls = f :: additional_decls;
+      add_macros_from_parsedmems (f, MacroPhase.BeforeInheritance);            
+      add_macros_from_parsedmems (f, MacroPhase.BeforeTypedMembers);      
       null
     }
     else {
@@ -1440,7 +1442,9 @@ public partial class TypeBuilder : TypeInfo
   internal AddMember (mem : IMember) : void
   {
     match (mem) {
-      | mem is MemberBuilder => mem.CheckAttributes ()
+      | mem is MemberBuilder => 
+        mem.CheckAttributes ();
+        mem.ProcessMacroAttributes();
       | _ => {}
     }
     
@@ -1994,9 +1998,11 @@ public partial class TypeBuilder : TypeInfo
       construct_subtyping_map ();
     when (run_phase >= 4)
       check_bound_types ();
-    when (run_phase >= 5) {
+    when (run_phase >= 5)
       process_macro_attributes (MacroPhase.BeforeTypedMembers);
+    when (run_phase >= 6)
       add_members ();
+    when (run_phase >= 7) {
       process_macro_attributes (MacroPhase.WithTypedMembers);
       when (Manager.IsEmitting)
         Manager.EnsureEmitProgress (this);
@@ -2273,123 +2279,80 @@ public partial class TypeBuilder : TypeInfo
         }
   }
 
+  internal process_attributes (self_parm : list [Parsetree.SyntaxElement], target : MacroTargets, 
+                               stage : MacroPhase, mods : Modifiers, meth : IMethod) : void 
+  {
+    mutable macro_attrs = mods.macro_attrs;
+    // we have to do the assignment here, in case macro has added a new
+    // custom attribute
+    def suff = TypesManager.AttributeMacroExpansion.Suffix (target, stage);
+    mods.custom_attrs =
+      mods.custom_attrs.Filter (fun (expr) {
+        match (MacroRegistry.lookup_macro (this.GlobalEnv, expr, suff)) {
+          | None => true
+          | Some =>
+            macro_attrs ::= (suff, expr);
+            false
+        }
+      });
+    mods.macro_attrs = macro_attrs;        
+    foreach ((_, expr) in macro_attrs)
+    {
+      def expansion = TypesManager.AttributeMacroExpansion (target, stage, expr, self_parm, this, meth);
+      Manager.AddMacroExpansion (expansion);                                                              
+    };
+  }
+
+  add_macros_from_parsedmems (mem : PT.ClassMember, stage : MacroPhase) : void 
+  {
+    def syntax_tb = PT.SyntaxElement.TypeBuilder (this);
+    def syntax_mem = PT.SyntaxElement.ClassMember (mem);
+    def parms = [syntax_tb, syntax_mem];
+    
+    match (mem) {
+      | PT.ClassMember.Field =>
+        process_attributes (parms, MacroTargets.Field, stage, mem.modifiers, null)
+
+      | (PT.ClassMember.Function) as f =>
+        process_attributes (parms, MacroTargets.Method, stage, mem.modifiers, null);
+
+        foreach (p : PT.Fun_parm in f.header.parms)
+          process_attributes ([syntax_tb, syntax_mem, PT.SyntaxElement.Parameter (p)],
+                              MacroTargets.Parameter, stage, p.modifiers, null);
+
+      | PT.ClassMember.EnumOption
+      | PT.ClassMember.TypeDeclaration => ()
+
+      | PT.ClassMember.Property (_, _, _, getr, setr) =>
+        process_attributes (parms, MacroTargets.Property, stage, mem.modifiers, null);
+        match (getr) {
+          | Some (m) => add_macros_from_parsedmems (m, stage);
+          | _ => ()
+        }
+        match (setr) {
+          | Some (m) => add_macros_from_parsedmems (m, stage);
+          | _ => ()
+        }
+    
+      | PT.ClassMember.Event => 
+        process_attributes (parms, MacroTargets.Event, stage, mem.modifiers, null)
+    }
+  }
+    
   internal process_macro_attributes (stage : MacroPhase) : void
   {
-    def process_attributes (self_parm, target, stage, mods : Modifiers, meth : IMethod) {
-      mutable macro_attrs = mods.macro_attrs;
-      // we have to do the assignment here, in case macro has added a new
-      // custom attribute
-      def suff = TypesManager.AttributeMacroExpansion.Suffix (target, stage);
-      mods.custom_attrs =
-        mods.custom_attrs.Filter (fun (expr) {
-          match (MacroRegistry.lookup_macro (this.GlobalEnv, expr, suff)) {
-            | None => true
-            | Some =>
-              macro_attrs ::= (suff, expr);
-              false
-          }
-        });
-      mods.macro_attrs = macro_attrs;        
-      foreach ((_, expr) in macro_attrs)
-      {
-        def expansion = TypesManager.AttributeMacroExpansion (target, stage,
-                                                              expr, self_parm,
-                                                              this, meth);
-        _ = expansion.Expand ();
-      };
-    };
-
-    def process_member (mem, stage) {
-      def syntax_tb = PT.SyntaxElement.TypeBuilder (this);
-      def syntax_mem = PT.SyntaxElement.ClassMember (mem);
-      def parms = [syntax_tb, syntax_mem];
-      
-      match (mem) {
-        | PT.ClassMember.Field =>
-          process_attributes (parms, MacroTargets.Field, stage, mem.modifiers, null)
-
-        | (PT.ClassMember.Function) as f =>
-          process_attributes (parms, MacroTargets.Method, stage, mem.modifiers, null);
-
-          foreach (p : PT.Fun_parm in f.header.parms)
-            process_attributes ([syntax_tb, syntax_mem, PT.SyntaxElement.Parameter (p)],
-                                MacroTargets.Parameter, stage, p.modifiers, null);
-
-        | PT.ClassMember.EnumOption
-        | PT.ClassMember.TypeDeclaration => ()
-
-        | PT.ClassMember.Property (_, _, _, getr, setr) =>
-          process_attributes (parms, MacroTargets.Property, stage, mem.modifiers, null);
-          match (getr) {
-            | Some (m) => process_member (m, stage);
-            | _ => ()
-          }
-          match (setr) {
-            | Some (m) => process_member (m, stage);
-            | _ => ()
-          }
+    process_attributes ([PT.SyntaxElement.TypeBuilder (this)], MacroTargets.Class, stage, modifiers, null);
     
-        | PT.ClassMember.Event => 
-          process_attributes (parms, MacroTargets.Event, stage, mem.modifiers, null)
-      }
-    };
-
-    def iter_decls (stage) {
-      def decls =
-        match (pt_tydecl) {
-          | PT.TopDeclaration.Class (decls = ds)
-          | PT.TopDeclaration.Interface (methods = ds)
-          | PT.TopDeclaration.Variant (decls = ds)
-          | PT.TopDeclaration.VariantOption (ds) => ds
-          | _ => []
-        };      
-
-      foreach (x in decls) process_member (x, stage);
-      foreach (x in additional_decls) process_member (x, stage);
-    };
-
-    def process_typed_member (mem : IMember) {
-      match (mem.GetKind ()) {
-        | MemberKind.Field (f) =>
-          process_attributes ([PT.SyntaxElement.TypeBuilder (this),
-                               PT.SyntaxElement.FieldBuilder ((f :> FieldBuilder))],
-                               MacroTargets.Field, MacroPhase.WithTypedMembers, f.GetModifiers (), null)
-        | MemberKind.Method (f) =>
-          process_attributes ([PT.SyntaxElement.TypeBuilder (this),
-                               PT.SyntaxElement.MethodBuilder ((f :> MethodBuilder))],
-                               MacroTargets.Method, MacroPhase.WithTypedMembers, f.GetModifiers (), f);
-
-          foreach (p : Fun_parm in f.GetParameters ())
-            process_attributes ([PT.SyntaxElement.TypeBuilder (this),
-                                 PT.SyntaxElement.MethodBuilder ((f :> MethodBuilder)),
-                                 PT.SyntaxElement.ParameterBuilder (p)],
-                                 MacroTargets.Parameter, MacroPhase.WithTypedMembers, p.modifiers, f);
-                              
-        | MemberKind.Property (f) =>
-          process_attributes ([PT.SyntaxElement.TypeBuilder (this),
-                               PT.SyntaxElement.PropertyBuilder ((f :> PropertyBuilder))],
-                               MacroTargets.Property, MacroPhase.WithTypedMembers, f.GetModifiers (), null)
-
-        | MemberKind.Event (f) =>
-          process_attributes ([PT.SyntaxElement.TypeBuilder (this),
-                               PT.SyntaxElement.EventBuilder ((f :> EventBuilder))],
-                               MacroTargets.Event, MacroPhase.WithTypedMembers, f.GetModifiers (), null)
-
-        | MemberKind.Type => ()
-      }
-    };
-
     match (stage) {
       | MacroPhase.BeforeInheritance | MacroPhase.BeforeTypedMembers =>
-        process_attributes ([PT.SyntaxElement.TypeBuilder (this)], MacroTargets.Class, stage, modifiers, null);
-        iter_decls (stage);
-        
-      | MacroPhase.WithTypedMembers =>
-        process_attributes ([PT.SyntaxElement.TypeBuilder (this)], MacroTargets.Class, stage, modifiers, null);
-        List.Iter (GetDirectMembers (), process_typed_member);
-
+        foreach (x in GetParsedMembers()) 
+          add_macros_from_parsedmems (x, stage);
+       
+      | MacroPhase.WithTypedMembers => ()
       | _ => Util.ice ("cannot run macros processing with none phase")
     }
+    
+    Manager.ExpandMacros();
   }
 
 
