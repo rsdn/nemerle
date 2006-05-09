@@ -91,8 +91,11 @@ changelog:
            rm -f ChangeLog.old ChangeLog.new changelog.xml ; \
         fi
 
-sync-boot:
+sync:
+	$(MAKE) -C tools/msbuild-task all sync
 	$(MAKE) -C ncc boot sync
+        
+sync-boot: sync
 	svn commit -m "Sync for release." boot/
 
 dist: changelog tarball
