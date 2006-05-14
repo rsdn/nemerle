@@ -25,5 +25,5 @@ nunit: lib-unit-tests.dll
 
 lib-unit-tests.dll: $(UNIT_SRC) 
 	$(Q)if test $(NUNIT_CONSOLE); then \
-		$(EXECUTE) $(TOP)/ncc/out.stage3/ncc.exe $(UNIT_SRC) -def:NUNIT $(NUNIT_LIB) -t:library -o:lib-unit-tests.dll; \
+		$(EXECUTE) $(TOP)/ncc/out.stage3/ncc.exe $(UNIT_SRC) -def:NUNIT $(NUNIT_LIB_FLAG) -t:library -o:lib-unit-tests.dll; \
 	fi
