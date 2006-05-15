@@ -68,6 +68,7 @@ NEMERLE_DLL_SRC = \
 	../lib/narray.n			\
 	../lib/nstring.n                \
 	../lib/pair.n			\
+	../lib/rlist.n                  \
 	../lib/set.n			\
 	../lib/concurrency.n		\
 	../lib/AssemblyInfo.n           \
