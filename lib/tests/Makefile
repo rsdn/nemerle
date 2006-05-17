@@ -5,6 +5,7 @@ include $(TOP)/config.mak
 EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 THISDIR = $(shell if cygpath --help 2>/dev/null 1>&2; then echo `cygpath -m $(CURDIR)`; else echo $(CURDIR); fi)
 UNIT_SRC = linkedlist.n list.n heap.n set.n
+NUNIT_LIB = -pkg:/home/morgul/programs/local/lib/pkgconfig/mono-nunit.pc
 
 ############################################################
 # TARGETS
