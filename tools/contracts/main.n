@@ -1,0 +1,2121 @@
+using Nemerle.IO;
+using Nemerle.Utility;
+using Nemerle.Collections;
+
+using System;
+using System.Text;
+using Nemerle.Macros;
+
+using Nemerle.Compiler;
+using PT = Nemerle.Compiler.Parsetree;
+using TT = Nemerle.Compiler.Typedtree;
+
+using MC = Microsoft.Contracts;
+using SC = System.Compiler;
+
+namespace Nemerle.Assertions
+{
+  /*-------------------------- Invariant --------------------------*/
+
+  /**
+   * Example:
+   *   class A
+   *   invariant x >= 0
+   *   { mutable x : int = 0; ... }
+   * or:
+   *   [Invariant (x >= 0)]
+   *   class A
+   *   { mutable x : int = 0; ... }
+   *
+   * Adding an invariant methods and fields has to be done in two steps, 
+   * because we have to know whether the base class of the current class 
+   * has an invariant and we do that by checking if it has a field i.e. 
+   * SpecSharp::frameGuard. Now, if we'd do that in one step, the 
+   * existance of this field could depend on the sequence the macro was 
+   * applied.
+   * So first we add the private members, the public members will be added
+   * after inheritance, so we won't have to check if we're overriding the 
+   * invariant methods or not.
+   */
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
+                       Nemerle.MacroTargets.Class,
+                       Inherited = true, AllowMultiple = true)]
+  macro Invariant (ty : TypeBuilder, assertion)
+  syntax ("invariant", assertion)
+  {
+    ty.Define (<[ decl: 
+      [SC.CciMemberKind(SC.CciMemberKind.Auxiliary)]
+      private mutable $("SpecSharp::frameGuard" : dyn) : MC.Guard; ]> );
+
+    ty.Define (<[ decl: 
+      private $("SpecSharp::CheckInvariant" : dyn) (throwException : bool) : bool
+      {
+        def result = $assertion;
+
+        when (! result && throwException)
+          throw MC.ObjectInvariantException ();
+
+        result
+      } ]> );
+
+    /**
+     * Some method has to add the class attribute for the invariant. It 
+     * cannot be done from the current context because it does not have 
+     * any information about the class fields. Furthermore, the method 
+     * has to be paremeterless so none of the method parameters would 
+     * override the invariant variables.
+     */
+    ty.Define (<[ decl:
+      [MC.NoDefaultActivity, MC.NoDefaultContract, 
+        SC.CciMemberKind(SC.CciMemberKind.Auxiliary)]
+      private $("SpecSharp::InitGuardSets" : dyn) () : void 
+      {
+        __Invariant ($assertion);
+      } ]> );
+
+    ty.Define (<[ decl: 
+      [SC.CciMemberKind (SC.CciMemberKind.Auxiliary)]
+      private static $("SpecSharp::GetFrameGuard" : dyn) (o : object) : MC.Guard
+      {
+        when (o == null)
+            throw ArgumentNullException();
+
+        MC.NonNullType.IsNonNullGeneric ((o :> this).$("SpecSharp::frameGuard" : dyn))
+      } ]> );
+  }
+
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
+                       Nemerle.MacroTargets.Class,
+                       Inherited = true, AllowMultiple = true)]
+  macro Invariant (ty : TypeBuilder, _assertion)
+  syntax ("invariant", _assertion)
+  {
+    /**
+     * SpecSharp::FrameGuard property has to return NonNullType.
+     */
+    ty.Define (<[ decl: 
+      [NotNull]
+      internal $("SpecSharp::FrameGuard" : dyn) : MC.Guard
+      {
+        [MC.NoDefaultActivity, MC.NoDefaultContract, MC.Delayed, MC.Pure, 
+          SC.CciMemberKind (SC.CciMemberKind.FrameGuardGetter)]
+        get {
+          MC.NonNullType.IsNonNullGeneric ( $("SpecSharp::frameGuard" : dyn) )
+        }
+      } ]> );
+
+    when (ty.BaseType != null && 
+      ! ty.BaseType.LookupMember ("SpecSharp::InitGuardSets").IsEmpty)
+    {
+      def init = 
+        ty.LookupMember ("SpecSharp::InitGuardSets").Head :> MethodBuilder;
+
+      init.Body = <[
+        $(init.Body);
+        this.$("SpecSharp::FrameGuard" : dyn).AddRepFrame (
+          this, typeof ( $(ty.BaseType.GetMemType () : typed) ) );
+      ]>
+    }
+
+    mutable methods = ty.GetMethods (BindingFlags.Public %|
+      BindingFlags.Instance %| BindingFlags.DeclaredOnly);
+
+    /**
+     * The methods get_SpecSharp::FrameGuard, SpecSharp::CheckInvariant and 
+     * SpecSharp::InitGuardSets should not chceck the invariant, so we remove 
+     * them from the list.
+     */
+    def memNames = ["get_SpecSharp::FrameGuard", "SpecSharp::CheckInvariant", 
+      "SpecSharp::InitGuardSets"];
+
+    foreach (memName in memNames)
+      foreach (mem in ty.LookupMember (memName))
+        methods = methods.Remove (mem :> IMethod);
+
+    foreach (m :> MethodBuilder in methods)
+    {
+      m.Body = <[
+        try
+        {
+          when (! this.$("SpecSharp::FrameGuard" : dyn).CanStartWritingTransitively)
+            throw MC.RequiresException ("The target object of this call " +
+              "must be exposable.");
+        } catch
+        {
+          | _exc is MC.ContractMarkerException => throw
+        }
+
+        $(m.Body)
+      ]>;
+    }
+
+    def instanceCtors = ty.GetConstructors (BindingFlags.Public %|
+      BindingFlags.Instance %| BindingFlags.DeclaredOnly);
+
+    foreach (c :> MethodBuilder in instanceCtors)
+    {
+      c.Body = <[ 
+        $(c.Body);
+
+        try
+        {
+          $("SpecSharp::frameGuard" : dyn) = MC.Guard(
+            MC.InitGuardSetsDelegate (this.$("SpecSharp::InitGuardSets" : dyn)), 
+            MC.CheckInvariantDelegate (this.$("SpecSharp::CheckInvariant" : dyn)) );
+        } catch
+        {
+          | _ is MC.ContractMarkerException => throw
+        }
+        this.$("SpecSharp::FrameGuard" : dyn).EndWriting ()
+      ]>;
+    }
+
+    mutable staticCtors = ty.GetConstructors (
+      BindingFlags.Static %| BindingFlags.Public %| 
+      BindingFlags.NonPublic %| BindingFlags.DeclaredOnly);
+
+    when (staticCtors.IsEmpty)
+    {
+      ty.Define (<[ decl: 
+        private static this () 
+        {} ]> );
+      staticCtors = ty.GetConstructors (
+        BindingFlags.Static %| BindingFlags.Public %| 
+        BindingFlags.NonPublic %| BindingFlags.DeclaredOnly);
+    }
+
+    foreach (c :> MethodBuilder in staticCtors)
+    {
+      c.Body = <[ 
+        try
+        {
+          MC.Guard.RegisterGuardedClass (
+            typeof ( $(ty.GetMemType () : typed) ),
+            MC.FrameGuardGetter ( 
+              $(Util.ExprOfQid (ty.FullName)).$("SpecSharp::GetFrameGuard" : dyn)) );
+        }
+        catch
+        {
+          _exc is MC.ContractMarkerException => throw
+        }
+
+        $(c.Body);
+      ]>;
+    }
+  }
+
+  macro __Invariant (assertion)
+  {
+    def typedAssert = ImplicitCTX ().TypeExpr (assertion);
+    def assertionString = AssertionHelper.SprintTyExpr (ImplicitCTX(), typedAssert);
+
+    ImplicitCTX ().CurrentType.GetModifiers ().AddCustomAttribute (
+      <[ MC.InvariantAttribute ( 
+        $(assertionString : string), 
+        Filename = $(assertion.Location.File : string), 
+        StartLine = $(assertion.Location.Line : int), 
+        StartColumn = $(assertion.Location.Column : int), 
+        EndLine = $(assertion.Location.EndLine : int), 
+        EndColumn = $(assertion.Location.EndColumn : int), 
+        SourceText = $("invariant " + assertion.ToString () : string) ) ]> );
+
+    <[ () ]>
+  }
+
+/*---------------------------- Requires ----------------------------*/
+
+  /*
+    Example:
+      public Foo (y : int) : void
+      requires y >= 0
+      { ... }
+  */
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
+                       Nemerle.MacroTargets.Method,
+                       Inherited = true, AllowMultiple = true)]
+  macro Requires (_ : TypeBuilder, m : ParsedMethod, assertion, other = null)
+  syntax ("requires", assertion, Optional("otherwise", other))
+  {
+    m.Body =
+      <[
+        __Requires ($assertion, $other);
+        $(m.Body)
+      ]>
+  }
+
+  macro __Requires (assertion, other = null)
+  {
+    /**
+     * We have a separate case for an obj.IsExposable expression, like Spec# has.
+     * TODO: At the moment, with the assertion containing obj.IsExposable there 
+     * cannot be any conjuncted assertions other than obj2.IsExposable.
+     */
+    mutable expList = [];
+
+    _ = Macros.TraverseExpr (None(), assertion, false, fun (_, _, expr) {
+        match (expr) { 
+          | <[ $obj.IsExposable ]> => 
+              expList ::= obj;
+          | _ => ();
+        }
+        expr} );
+    expList = expList.RemoveDuplicates ();
+
+    if (expList.IsEmpty)
+    {
+      def t = ImplicitCTX ().TypeExpr (assertion);
+      def assertionString = AssertionHelper.SprintTyExpr (ImplicitCTX(), t);
+
+      ImplicitCTX ().GetMethodBuilder ().Modifiers.AddCustomAttribute (
+        <[ MC.RequiresAttribute ( 
+          $(assertionString : string), 
+          Filename = $(assertion.Location.File : string), 
+          StartLine = $(assertion.Location.Line : int), 
+          StartColumn = $(assertion.Location.Column : int), 
+          EndLine = $(assertion.Location.EndLine : int), 
+          EndColumn = $(assertion.Location.EndColumn : int), 
+          SourceText = $("requires " + assertion.ToString () : string) ) ]> );
+
+      def cond = Macros.NewSymbol ("condition");
+
+      def other' = 
+        if (other == null)
+          <[ MC.RequiresException( "Precondition violated " +
+            "from method '" + getMethodHeaderMacro () + "'" ) ]>;
+        else
+          other;
+
+      <[
+        try
+        {
+          mutable $(cond : name) = false;
+          try
+          {
+            $(cond : name) = $(assertion);
+          } catch
+          {
+            | exc is System.Exception => 
+              throw MC.InvalidContractException ( "Exception occurred " +
+              "during evaluation of precondition in method '" + 
+              getMethodHeaderMacro () + "'", exc);
+          }
+
+          when (! $(cond : name) )
+            throw $(other');
+        } catch
+        {
+          | _ is MC.ContractMarkerException => throw;
+        }
+      ]>
+    }
+    else
+    {
+      mutable result = <[ () ]>;
+
+      foreach (exp in expList)
+      {
+        def texp = ImplicitCTX ().TypeExpr (exp);
+
+        def assertion' = <[ MC.Guard.FrameIsExposable (
+          MC.NonNullType.IsNonNullImplicitGeneric ($exp), 
+          typeof ( $(texp.ty : typed) ) ) ]>;
+
+        def t = ImplicitCTX ().TypeExpr (assertion');
+        def assertionString = AssertionHelper.SprintTyExpr (ImplicitCTX(), t);
+
+        ImplicitCTX ().GetMethodBuilder ().Modifiers.AddCustomAttribute (
+          <[ MC.RequiresAttribute ( 
+            $(assertionString : string), 
+            Filename = $(assertion.Location.File : string), 
+            StartLine = $(assertion.Location.Line : int), 
+            StartColumn = $(assertion.Location.Column : int), 
+            EndLine = $(assertion.Location.EndLine : int), 
+            EndColumn = $(assertion.Location.EndColumn : int), 
+            SourceText = $("requires " + assertion.ToString () : string) ) ]> );
+
+        result = <[
+          $result;
+
+          try
+          {
+            when (! $assertion' )
+            {
+              throw MC.RequiresException("Precondition violated from method " +
+                getMethodHeaderMacro ());
+            }
+          }
+          catch
+          {
+            | _exc is MC.ContractMarkerException => throw
+          }
+        ]>
+      }
+
+      result
+    }
+  }
+
+/*---------------------------- Ensures ----------------------------*/
+
+  /*
+    Example:
+      public Foo (y : int) : int
+      ensures y > 0 ==> old(x) + y == x
+      { when (y > 0)
+          x += y; ... }
+  */
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
+                       Nemerle.MacroTargets.Method,
+                       Inherited = true, AllowMultiple = true)]
+  macro Ensures (_ : TypeBuilder, m : ParsedMethod, assertion, other = null)
+  syntax ("ensures", assertion, Optional("otherwise", other))
+  {
+    m.Body =
+      <[
+        maybeHasOld ($assertion);
+        $(m.Body);
+        __Ensures ($assertion, $other)
+      ]>;
+  }
+
+  macro __Ensures (assertion, other)
+  {
+    def t = ImplicitCTX ().TypeExpr (assertion);
+    def assertionString = AssertionHelper.SprintTyExpr (ImplicitCTX(), t);
+
+    ImplicitCTX ().GetMethodBuilder ().Modifiers.AddCustomAttribute (
+      <[ MC.EnsuresAttribute ( 
+        $(assertionString : string), 
+        Filename = $(assertion.Location.File : string), 
+        StartLine = $(assertion.Location.Line : int), 
+        StartColumn = $(assertion.Location.Column : int), 
+        EndLine = $(assertion.Location.EndLine : int), 
+        EndColumn = $(assertion.Location.EndColumn : int), 
+        SourceText = $("ensures " + assertion.ToString () : string) ) ]> );
+
+    def cond = Macros.NewSymbol ("condition");
+
+    def other' = 
+      if (other == null)
+        <[ MC.EnsuresException( "Postcondition violated " +
+          "from method '" + getMethodHeaderMacro () + "'" ) ]>;
+      else
+        other;
+
+    <[
+      try
+      {
+        mutable $(cond : name) = false;
+
+        try
+        {
+          $(cond : name) = $(assertion);
+        } catch
+        {
+          | exc is System.Exception => 
+            throw MC.InvalidContractException ("Exception occurred " +
+              "during evaluation of postcondition in method '" + 
+              getMethodHeaderMacro () + "'", exc);
+        }
+
+        when (! $(cond : name) )
+          throw $(other');
+      } catch
+      {
+        | _ is MC.ContractMarkerException => throw
+      }
+    ]>
+  }
+
+  macro maybeHasOld (assertion)
+  {
+    /**
+     * The ensures assertion may look like this:
+     * ensures old (x) <= x && old (x) > y
+     * We would like to store the old value of x, but only once, not with
+     * every ocurrence of old (x). That is why for x we add a variable to 
+     * the hash table to keep the old value of x. If the variable already 
+     * exists, there's no need to add it again.
+     */
+    mutable newDefs = [];
+
+    _ = Macros.TraverseExpr (None(), assertion, false, fun (_, _, expr) {
+        match (expr) { 
+          | <[ old ($variable) ]> => 
+            def t = ImplicitCTX ().TypeExpr (variable);
+            def varString = AssertionHelper.SprintTyExpr (ImplicitCTX(), t);
+            mutable symbol = null;
+
+            try
+            {
+              symbol = AssertionHelper.varTable[varString];
+            }
+            catch
+            {
+              | _e is System.Collections.Generic.KeyNotFoundException => ()
+            }
+
+            when (symbol == null)
+            {
+              symbol = Macros.NewSymbol ("old_" + variable.ToString ());
+              AssertionHelper.varTable[varString] = symbol;
+              AssertionHelper.varTableRev[symbol.ToString ()] = t;
+              newDefs ::= (<[ $(symbol : name) ]>, variable);
+            }
+          | _ => ()
+        }
+        expr} );
+
+    def (symbols, vars) = List.Split (newDefs);
+
+    def result = match ( (symbols, vars) )
+    {
+      | ([], []) => <[ () ]>
+      | ([s], [v]) => <[ def $s = $v ]>
+      | _ => <[ def (.. $symbols) = (.. $vars) ]>
+    }
+
+    <[ $result ]>
+  }
+
+  macro old (variable)
+  {
+    def t = ImplicitCTX ().TypeExpr (variable);
+    def varString = AssertionHelper.SprintTyExpr (ImplicitCTX(), t);
+    mutable symbol = null;
+
+    try
+    {
+      symbol = AssertionHelper.varTable[varString];
+    }
+    catch
+    {
+      | _exc is System.Collections.Generic.KeyNotFoundException => ()
+    }
+
+    when (symbol == null)
+      Message.Error ("the 'old (" + variable.ToString () + ")' expression " +
+      "has to be used in a 'requires' or 'ensures' contract first");
+
+    <[ $(symbol : name) ]>
+  }
+
+/*---------------------------- NotNull ----------------------------*/
+
+  /*
+    Example:
+      [NotNull] // this means the returned value will be not-null
+      public Foo ([NotNull] a : A) : A
+      { a.Bar (); ...; a }
+  */
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
+                       Nemerle.MacroTargets.Parameter,
+                       Inherited = true, AllowMultiple = false)]
+  macro NotNull (_ : TypeBuilder, m : ParsedMethod, p : ParsedParameter)
+  {
+    m.Body = <[
+      try
+      {
+        when ($(p.ParsedName : name) == null)
+          throw System.ArgumentNullException ( $(p.ParsedName.Id : string) );
+      }
+      catch
+      {
+        | _ is MC.ContractMarkerException => throw
+      }
+
+      $(m.Body)
+    ]>
+  }
+
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
+                       Nemerle.MacroTargets.Parameter,
+                       Inherited = true, AllowMultiple = false)]
+  macro NotNull (_ : TypeBuilder, _ : MethodBuilder, p : ParameterBuilder)
+  {
+    p.optional_modifiers ::= typeof (MC.NonNullType);
+  }
+
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
+                       Nemerle.MacroTargets.Method,
+                       Inherited = true, AllowMultiple = false)]
+  macro NotNull (_ : TypeBuilder, m : MethodBuilder)
+  {
+    m.fun_header.ret_type_optional_modifiers ::= typeof (MC.NonNullType);
+
+    def result = Macros.NewSymbol ("result");
+
+    m.Body = <[
+      def $(result : name) = { $(m.Body) };
+      $(result : name) : $(m.fun_header.ret_type : typed)
+    ]>;
+  }
+
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
+                       Nemerle.MacroTargets.Field,
+                       Inherited = true, AllowMultiple = false)]
+  macro NotNull (_ : TypeBuilder, f : FieldBuilder)
+  {
+    f.optional_modifiers ::= typeof (MC.NonNullType);
+  }
+
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
+                       Nemerle.MacroTargets.Property,
+                       Inherited = true, AllowMultiple = false)]
+  macro NotNull (_ : TypeBuilder, p : PropertyBuilder)
+  {
+    def getter = (p.GetGetter () :> MethodBuilder);
+    def setter = (p.GetSetter () :> MethodBuilder);
+
+    when (getter == null && setter == null)
+      Message.Error ("Cannot use [NotNull] for a property " + p.Name +
+        ", because it does not have neither getter nor setter");
+
+    unless (getter == null)
+    {
+      getter.fun_header.ret_type_optional_modifiers ::= typeof (MC.NonNullType);
+      def result = Macros.NewSymbol ("result");
+
+      getter.Body = <[
+        def $(result : name) = { $(getter.Body) };
+        $(result : name) : $(getter.fun_header.ret_type : typed)
+      ]>;
+    }
+
+    unless (setter == null)
+    {
+      setter.fun_header.parms.Head.optional_modifiers ::= typeof (MC.NonNullType);
+
+      setter.Body = <[
+        try
+        {
+          when ( $("value" : dyn) == null)
+            throw System.ArgumentNullException ( "value" );
+        }
+        catch
+        {
+          | _ is MC.ContractMarkerException => throw
+        }
+
+        $(setter.Body)
+      ]>
+    }
+  }
+
+  /*
+    Example:
+      [NotNull] // this means the returned value will be not-null
+      public Foo () : A
+      { notnull def a = A(); ...; a }
+  */
+  macro notnull (define)
+  syntax ("notnull", define)
+  {
+    def make_notnull = fun (val : PT.PExpr) {
+      if (ImplicitCTX ().TypeExpr (val) is TT.TExpr.Literal)
+        val
+      else
+        <[ MC.NonNullType.IsNonNullGeneric ($val) ]>
+    }
+
+    match (define)
+    {
+      | <[ def (.. $vars) = (.. $vals) ]> =>
+          <[ def (.. $vars) = (.. $(vals.Map (make_notnull)) ) ]>
+      | <[ mutable (.. $vars) = (.. $vals) ]> =>
+          <[ mutable (.. $vars) = (.. $(vals.Map (make_notnull)) ) ]>
+      | <[ def $var = $val ]> => <[ def $var = $(make_notnull (val)) ]>
+      | <[ mutable $var = $val ]> => <[ mutable $var = $(make_notnull (val)) ]>
+      | _ => Message.Error ("Unsupported way of assignment for notnull type");
+          define
+    }
+  }
+
+/*---------------------------- Expose ----------------------------*/
+
+  /*
+    Example:
+      public Foo ([NotNull] a : A, y : int) : void
+      {
+        expose (a)
+        { a.Bar (); ... }
+      }
+  */
+  macro Expose (exposed, body)
+  syntax ("expose", "(", exposed, ")", body)
+  {
+    /**
+     * In Spec# 1.0.6 object with invariant does not implement IGuardedObject 
+     * any more. Thus, to find out whether this class has an invariant, 
+     * we look for a private field called SpecSharp::frameGuard.
+     */
+    def fields = ImplicitCTX ().CurrentType.GetFields (BindingFlags.NonPublic);
+    def hasInvariant = 
+      fields.Exists (fun (field) { field.Name == "SpecSharp::frameGuard" } );
+
+    def result = if ( hasInvariant )
+    {
+      def exc = Macros.NewSymbol ("exception");
+      def guard = Macros.NewSymbol ("guard");
+
+      <[
+        def $(guard : name) = 
+          $(exposed).$("SpecSharp::FrameGuard" : dyn).StartWritingTransitively ();
+        mutable $(exc : name) = null;
+
+        try
+        {
+          $body;
+        }
+        catch
+        {
+          | e => $(exc : name) = e; throw
+        }
+        finally
+        {
+          when ( $(exc : name) == null || $(exc : name) is MC.ICheckedException)
+            $(guard : name).EndWritingTransitively ();
+        }
+      ]>
+    }
+    else
+    {
+      def var = Macros.NewSymbol (exposed.ToString ());
+      def ty = ImplicitCTX ().TypeExpr(exposed).ty;
+
+      <[
+        def $(var : name) = $exposed;
+
+        MC.Guard.StartWritingFrame ($(var : name), typeof ( $(ty : typed) ) );
+        try
+        {
+          $body;
+        }
+        finally
+        {
+          MC.Guard.EndWritingFrame ($(var : name), typeof ( $(ty : typed) ) );
+        }
+      ]>
+    }
+
+    <[ $result ]>
+  }
+
+/*---------------------------- Acquire ----------------------------*/
+
+  /*
+    Example:
+      public Foo ([NotNull] a : A, y : int) : void
+      {
+        acquire readonly (a)
+        { def foo = a.bar; ... }
+      }
+  */
+  macro Acquire (acquired, body)
+  syntax ("acquire", "(", acquired, ")", body)
+  {
+    /**
+     * For the object to be acquirable it has to have an invariant. In 
+     * Spec# 1.0.6 object with invariant does not implement IGuardedObject 
+     * any more. Thus, to find out whether this class has an invariant, 
+     * we look for a private field called SpecSharp::frameGuard.
+     */
+    def fields = ImplicitCTX ().CurrentType.GetFields (BindingFlags.NonPublic);
+    def hasInvariant = 
+      fields.Exists (fun (field) { field.Name == "SpecSharp::frameGuard" } );
+
+    if (! hasInvariant)
+    {
+      Message.Error ("Type of expression must be guarded class");
+      Message.HintOnce ("The object " + acquired.ToString () + 
+        ", that is being acquired has no invariant");
+      <[ () ]>
+    }
+    else
+      <[
+        $(acquired).$("SpecSharp::FrameGuard" : dyn).AcquireForWriting (null);
+
+        try
+        {
+          $body;
+        }
+        finally
+        {
+          $(acquired).$("SpecSharp::FrameGuard" : dyn).ReleaseForWriting ();
+        }
+      ]>
+  }
+
+  macro AcquireReadonly (acquired, body)
+  syntax ("acquire", "readonly", "(", acquired, ")", body)
+  {
+    def fields = ImplicitCTX ().CurrentType.GetFields (BindingFlags.NonPublic);
+    def hasInvariant = 
+      fields.Exists (fun (field) { field.Name == "SpecSharp::frameGuard" } );
+
+    when (! hasInvariant)
+    {
+      Message.Error ("Type of expression must be guarded class");
+      Message.HintOnce ("The object that is being acquired has no invariant");
+    }
+
+    <[
+      $(acquired).$("SpecSharp::FrameGuard" : dyn).AcquireForReading (null);
+
+      try
+      {
+        $body;
+      }
+      finally
+      {
+        $(acquired).$("SpecSharp::FrameGuard" : dyn).ReleaseForReading ();
+      }
+    ]>
+  }
+
+/*---------------------------- Assert ----------------------------*/
+
+  /*
+    Example:
+      public AddToEmptyList (list : list [int], y : int) : void
+      {
+        assert list.IsEmpty;
+        list ::= y;
+        ...
+      }
+  */
+  macro Assert (assertion)
+  syntax ("assert", assertion)
+  {
+    def t = ImplicitCTX ().TypeExpr (assertion);
+    def assertionString = AssertionHelper.SprintTyExpr (ImplicitCTX(), t);
+
+    <[
+      MC.AssertHelpers.AssertStatement ( $(assertionString : string) );
+      try {
+        MC.AssertHelpers.Assert ( $(assertion) );
+      } catch {
+        | _ex is MC.ContractMarkerException => throw
+      }
+    ]>
+  }
+
+/*---------------------------- for ----------------------------*/
+
+  /*
+    Example:
+      public Foo () : int
+      {
+        for (mutable i = 0; i < tab.Length; i++)
+        invariant i <= tab.Length && i < tab.Length ==> tab[i] > 0
+        { ... }
+      }
+  */
+  macro @for (init, cond, change, assertion, body)
+  syntax ("for", "(", Optional (init), ";", Optional (cond), ";",
+          Optional (change), ")", "invariant", assertion, body)
+  {
+    def init = if (init != null) init else <[ () ]>;
+    def cond = if (cond != null) cond else <[ true ]>;
+    def change = if (change != null) change else <[ () ]>;
+
+    def loop = Nemerle.Macros.Symbol (Util.tmpname ("for_"));
+
+    /**
+     * In the loop invariant the non-local variables and function parameters
+     * are in a regular form, but local variables are not. In an assertion
+     * string an integer variable x should appear as $blockVar(i32){x}.
+     */
+    AssertionHelper.for_invariant_mode = true;
+
+    def t = ImplicitCTX ().TypeExpr (<[ $init; $assertion ]>);
+    def assertionString = AssertionHelper.SprintTyExpr (ImplicitCTX(), t);
+
+    def result = <[
+      $init;
+      $(PT.Name.Global ("_N_break") : name) : {
+        def $(loop : name) () : void {
+          MC.AssertHelpers.LoopInvariant ( $(assertionString : string) );
+
+          when ($cond)
+          {
+            try
+            {
+              MC.AssertHelpers.AssertLoopInvariant ($assertion);
+            } catch
+            {
+              | _exc is MC.ContractMarkerException => throw
+            }
+
+            $(PT.Name.Global ("_N_continue") : name) : {
+              $body;
+            }
+            $change;
+            $(loop : name) ();
+          }
+        }
+
+        $(loop : name) ();
+      }
+    ]>;
+
+    AssertionHelper.for_invariant_mode = false;
+    result
+  }
+
+/*------------------------- other macros -------------------------*/
+//[NotDelayed]
+//[Delayed]
+//[Pure]
+//[Confined]
+//[StateIndependent]
+//[NoDefaultContract]
+//[SpecPublic]
+
+  macro @==> (e1, e2)
+  {
+    <[
+      match ($e1)
+      {
+        | false => true
+        | _ => $e2
+      }
+    ]>
+  }
+
+  macro @<==> (e1, e2)
+  {
+    <[
+      $e1 : bool == $e2 : bool
+/*
+      match ($e1)
+      {
+        | true => $e2
+        | _ => ! $e2
+/*
+          $(PT.PExpr.Call (
+            e2.Location, 
+            PT.PExpr.Ref (e2.Location, 
+              PT.Name.NameInCurrentColor("!", ImplicitCTX ().Env)), 
+            [e2]))
+
+      }
+*/
+    ]>
+  }
+
+  macro getMethodHeaderMacro ()
+  {
+    def funh = ImplicitCTX ().GetMethodBuilder ().fun_header;
+    def methodHeader = AssertionHelper.FunHeaderToString (funh);
+
+    <[ $(methodHeader : string) ]>
+  }
+
+  /*------------------------------------------------------------------------*/
+  /*-----------------------------AssertionHelper----------------------------*/
+  /*------------------------------------------------------------------------*/
+
+  internal static class AssertionHelper
+  {
+    /**
+     * We do not want the old (...) macro to add a new variable each time
+     * it is called for the same variable, so we keep the variables for
+     * which a new variable has been created in a hash table. That's what
+     * the varTable is for.
+     * We also would like to have "\\old(x)" in the assertion string for
+     * a variable x. When the variable is about to be added to the assertion
+     * string, we check whether it exists in the varTableRev table. If it
+     * does, we append "\\old(x)" to the assertion string, where x is the
+     * TT.TExpr from the table.
+     */
+    public varTable : Hashtable[string, PT.Name] = Hashtable ();
+    public varTableRev : Hashtable[string, TT.TExpr] = Hashtable ();
+
+    public mutable for_invariant_mode : bool = false;
+
+    public IsFunctionArg (funHeader : TT.Fun_header, p : LocalValue) : (bool * int)
+    {
+      mutable i = 0, parmnum = 0, found = false;
+
+      foreach ( parm in funHeader.parms )
+      {
+        i++;
+        when ( p : object == parm.decl : object )
+        {
+          parmnum = i;
+          found = true;
+        }
+      }
+
+      (found, parmnum)
+    }
+
+    public FunHeaderToString (funHeader : TT.Fun_header) : string
+    {
+      mutable str = funHeader.name.ToString () + "(";
+      mutable len = funHeader.parms.Length;
+
+      foreach (param in funHeader.parms)
+      {
+        str += param.ty.ToString();
+        len--;
+        when (len > 0)
+          str += ",";
+      }
+      str += ")";
+
+      str
+    }
+
+    /* -- MATCHING ---------------------------------------------------------- */
+
+    public SprintPattern (pattern : TT.Pattern) : string
+    {
+      def result = StringBuilder ();
+
+      def append (x : string) { ignore (result.Append (x)) }
+
+      def print_pattern (pattern : TT.Pattern)
+      {
+        | TT.Pattern.Error => append ("(ERROR)")
+        | TT.Pattern.Wildcard => append ("_")
+        | TT.Pattern.As (TT.Pattern.HasType (tycon), decl) =>
+          append (decl.Name + " : " + tycon.ToString ())
+        | TT.Pattern.As (pat /* Pattern */, decl /* LocalValue */) =>
+          append ("("); 
+          print_pattern (pat);
+          append (") as " + decl.Name)
+        | TT.Pattern.HasType (tc) =>
+          append ($ "_ is $tc");
+        | TT.Pattern.Tuple (args /* list [Pattern] */) =>
+          append ("(");
+          def loop (args) {
+            | [] => ()
+            | [arg] =>
+              print_pattern (arg)
+            | arg :: args =>
+              print_pattern (arg);
+              append (", ");
+              loop (args)
+          };
+          loop (args);
+          append (")")
+
+        // records
+        | TT.Pattern.Record (args /* list <IField * TT.Pattern> */) =>
+          def print_record_field (fld, pat)
+          {
+            append (fld.Name + " = ");
+            print_pattern (pat)
+          }
+
+          def loop (args) {
+            | [] => ()
+            | [(fld, pat)] =>
+              print_record_field (fld, pat)
+            | (fld, pat) :: rest =>
+              print_record_field (fld, pat);
+              append ("; ");
+              loop (rest)
+          }
+
+          append ("{");
+          loop (args);
+          append ("}")
+
+        // variant constructors
+        | TT.Pattern.Application (
+            name /* TypeInfo */, 
+            TT.Pattern.Wildcard /* Pattern */) =>
+          append (name.FullName)
+        | TT.Pattern.Application (
+            name /* TypeInfo */, 
+            (TT.Pattern.Record) as arg /* Pattern */) =>
+          append (name.FullName + " ");
+          print_pattern (arg);
+        | TT.Pattern.Application (name /* TypeInfo */, arg /* Pattern */) =>
+          append (name.FullName + " (");
+          print_pattern (arg);
+          append (")")
+
+        // literals
+        | TT.Pattern.Literal (lit /* Literal */) =>
+          append (lit.ToString ())
+
+        | TT.Pattern.Enum (fld, _) =>
+          append (fld.Name)
+      }
+
+      print_pattern (pattern);
+      result.ToString ()
+    }
+    
+
+    /**
+     * Pretty prints a match ('expr') { 'match_cases' } instruction.
+     */
+    public SprintTyMatch (ctx : Typer,
+                          expr : TT.TExpr,
+                          match_cases : list [TT.Match_case],
+                          indentation : string,
+                          result : StringBuilder, 
+                          _printType : bool) : void
+    {
+      def append (x : string) { ignore (result.Append (x)) }
+      def indent () { append (indentation) }
+
+      def recurse (expr : TT.TExpr, printType = false) {
+        SprintTyExpr (ctx, expr, false, indentation, result, printType)
+      }
+      def recurse_and_indent (expr : TT.TExpr) {
+        SprintTyExpr (ctx, expr, true, indentation + "    ", result, false)
+      }
+      def recurse_and_short_indent (expr : TT.TExpr) {
+        SprintTyExpr (ctx, expr, true, indentation + "  ", result, false)
+      }
+
+      def print_pattern (pattern : TT.Pattern)
+      {
+        append (SprintPattern (pattern))
+      }
+
+      def print_patterns (patterns)
+      {
+        def do_print (pattern, guard, assigns : list [_], terminator)
+        {
+          indent ();
+          append ("  | ");
+          print_pattern (pattern);
+
+          match (guard) {
+            | TT.TExpr.Literal (Literal.Bool (true)) => ()
+            | _ =>
+              append (" when ");
+              recurse (guard);
+          }
+
+          unless (assigns.IsEmpty) {
+            append (" with (");
+            foreach ((name, value) in assigns) {
+              append (name.Name);
+              append (" = ");
+              recurse (value);
+              append (", ");
+            }
+          }
+
+          append (terminator)
+        }
+
+        match (patterns) {
+          | [(pattern, guard, assigns)] =>
+            do_print (pattern, guard, assigns, " =>\n")
+          | (pattern, guard, assigns) :: rest =>
+            do_print (pattern, guard, assigns, "\n");
+            print_patterns (rest)
+          | _ => ()
+        }
+      }
+
+      def print_match_cases (cases : list [TT.Match_case])
+      {
+        | TT.Match_case where (patterns, body, _) :: rest =>
+          print_patterns (patterns);
+          recurse_and_indent (body);
+          append ("\n");
+          print_match_cases (rest)
+        | _ => ()      
+      }
+
+      def collapse_match_like_constructions () : bool
+      {
+        def expr_is_bool (expr : TT.TExpr)
+        {
+          expr.Type.IsFixed &&
+          match (expr.Type.FixedValue) {
+            | MType.Class (tycon, []) =>
+              tycon.FullName == "System.Boolean" ||
+              tycon.FullName == "Nemerle.Core.bool"
+            | _ =>
+              false
+          }
+        }
+/*
+        def (else_body_is_negated_bool, else_body_without_negation) = 
+          match (expr : TT.TExpr)
+          {
+            | TT.TExpr.Call (op, [body], _) => 
+                System.Console.WriteLine ("true  " + expr.ToString ());
+                (op.ToString () == "bool.!", body.expr)
+            | _ => 
+                System.Console.WriteLine ("false " + expr.ToString ());
+                (false, null)
+          };
+*/
+        def case_is_true (case : TT.Match_case) {
+          (case.patterns is [(Literal (Bool (true)),
+                              Literal (Bool (true)), [])])
+        }
+        def case_is_false (case : TT.Match_case) {
+          (case.patterns is [(Literal (Bool (false)),
+                              Literal (Bool (true)), [])])
+        }
+        def case_is_wildcard (case : TT.Match_case) {
+          (case.patterns is [(Wildcard, Literal (Bool (true)), [])])
+        }
+        def case_is_ty_check (case : TT.Match_case) {
+          (case.patterns is [(As (HasType, _), Literal (Bool (true)), [])])
+        }
+        def expr_is_true (expr : TT.TExpr) {
+          (expr is TT.TExpr.Literal (Literal.Bool (true)))
+        }
+        def expr_is_false (expr : TT.TExpr) {
+          (expr is TT.TExpr.Literal (Literal.Bool (false)))
+        }        
+        def expr_is_unit (expr : TT.TExpr) {
+          (expr is TT.TExpr.Literal (Literal.Void))
+        }
+
+        def matching_over_bool =
+          expr_is_bool (expr);
+
+        match (match_cases) {
+          | [then_case, else_case] =>
+            def then_is_true = case_is_true (then_case);
+            def then_is_false = case_is_false (then_case);
+            def then_is_ty_check = case_is_ty_check (then_case);
+            def else_is_wildcard = case_is_wildcard (else_case);
+
+            def then_body_is_true = expr_is_true (then_case.body);
+            def then_body_is_false = expr_is_false (then_case.body);
+//            def then_body_is_bool = expr_is_bool (then_case.body);
+            def else_body_is_unit = expr_is_unit (else_case.body);
+            def else_body_is_true = expr_is_true (else_case.body);
+            def else_body_is_false = expr_is_false (else_case.body);
+            def else_body_is_bool = expr_is_bool (else_case.body);
+
+            def then_pattern_count = then_case.patterns.Length;
+            def else_pattern_count = then_case.patterns.Length;
+
+            def is_if =
+              matching_over_bool && then_is_true && else_is_wildcard;
+            def is_when =
+              matching_over_bool && then_is_true &&
+              else_is_wildcard && else_body_is_unit;
+            def is_unless =
+              matching_over_bool && then_is_false &&
+              else_is_wildcard && else_body_is_unit;
+
+            def is_and_and =
+              matching_over_bool && then_is_false &&
+              then_body_is_false && else_is_wildcard && else_body_is_bool;
+
+            def is_or_or =
+              matching_over_bool && then_is_true &&
+              then_body_is_true && else_is_wildcard && else_body_is_bool;
+
+            def is_is =
+              then_body_is_true && then_is_ty_check &&
+              else_is_wildcard && else_body_is_false;
+
+            def is_matches =
+              then_body_is_true && else_is_wildcard && else_body_is_false &&
+              then_pattern_count == 1 && else_pattern_count == 1;
+
+            def is_redundant =
+              matching_over_bool &&
+              then_is_true && then_body_is_true &&
+              else_is_wildcard && else_body_is_false ||
+              then_is_false && then_body_is_false &&
+              else_is_wildcard && else_body_is_true;
+
+            def is_implication = matching_over_bool && then_is_false && 
+              then_body_is_true && else_is_wildcard && else_body_is_bool;
+
+//            def is_iff = matching_over_bool && then_is_true && 
+//              then_body_is_bool && else_is_wildcard && else_body_is_negated_bool;
+
+            if (is_redundant) {
+              append ("(");
+              recurse (expr);
+              append (")");
+              true
+            }
+            else if (is_or_or || is_and_and) {
+//====>
+              append (if (is_or_or) "::||" else "::&&");
+              append ( "(bool,bool){" );
+              recurse (expr);
+              append (",");
+              recurse (else_case.body);
+              append ("}");
+              true
+            }
+            else if (is_implication) {
+              append ("::==>(");
+              recurse (expr, true);
+              append (",");
+              recurse (else_case.body, true);
+              append ("){");
+              recurse (expr);
+              append (",");
+              recurse (else_case.body);
+              append ("}");
+              true
+            }
+            else if (is_when || is_unless) {
+              append ((if (is_when) "when" else "unless") + " (");
+              recurse (expr);
+              append (") {\n");
+              recurse_and_short_indent (then_case.body);
+              append ("\n" + indentation + "}");
+              true
+            }
+            else if (is_if)
+            {
+              append ("if (");
+              recurse (expr);
+              append (") {\n");
+              recurse_and_short_indent (then_case.body);
+              append ("\n" + indentation + "}\n" + indentation + "else {\n");
+              recurse_and_short_indent (else_case.body);
+              append ("\n" + indentation + "}");
+              true
+            }
+            else if (is_is)
+            {
+              append ("(");
+              recurse (expr);
+              append (" is ");
+              match (then_case.patterns) {
+                | [(As (HasType (ty), _), _, [])] =>
+                  append (strip_nemerle_core_dot_prefix (ty.ToString ()));
+                | _ =>
+                  Util.ice ("SprintTyMatch: is_is")
+              }
+              append (")");
+              true
+            }
+            else if (is_matches)
+            {
+              append ("(");
+              recurse (expr);
+              append (" matches ");
+              match (then_case.patterns) {
+                | [(then_pat, _, [])] =>
+                  print_pattern (then_pat)
+                | _ =>
+                  Util.ice ("SprintTyMatch: is_matches")
+              }
+              append (")");
+              true
+            }
+            else
+              false
+
+          | _ =>
+            false
+        }
+      }
+
+      unless (collapse_match_like_constructions ())
+      {
+        append ("match (");
+        recurse (expr);
+        append (") {\n");
+
+        print_match_cases (match_cases);
+
+        indent ();
+        append ("}")
+      }
+    }
+
+     /* -- EXPRESSIONS ------------------------------------------------------- */
+
+    /**
+     * Pretty prints a typed tree expression.
+     */
+    public SprintTyExpr (ctx : Typer, expr : TT.TExpr) : string
+    {
+      def result = StringBuilder ();
+      SprintTyExpr (ctx, expr, false, "", result, false);
+      result.ToString ()    
+    }
+
+
+    /**
+     * Pretty prints a typed tree expression.
+     */
+    public SprintTyExpr (ctx : Typer,
+                         expr : TT.TExpr,
+                         is_top_level : bool,
+                         indentation : string,
+                         result : StringBuilder,
+                         printType : bool) : void
+    {
+      def append (x : string) { ignore (result.Append (x)) }
+      def indent () { append (indentation) }
+      //append($"{$(expr.GetHashCode())}");
+
+      def recurse (expr : TT.TExpr, printType = false) {
+        SprintTyExpr (ctx, expr, false, indentation, result, printType)
+      }
+      def recurse_no_indent (expr : TT.TExpr) {
+        SprintTyExpr (ctx, expr, true, indentation, result, false)
+      }
+      def recurse_and_indent (expr : TT.TExpr) {
+        SprintTyExpr (ctx, expr, true, indentation + "  ", result, false)
+      }
+
+      def print_expr_list (begin : string, args : list [TT.TExpr],
+                           separator : string, end : string, printType = false)
+      {
+        append (begin);
+        NString.SeparatedCalls (
+          separator, 
+          args, 
+          fun (expr : TT.TExpr) { recurse (expr, printType) }, 
+          result);
+        append (end)
+      }
+
+      def print_fun_call_parms (parms : list [TT.Parm], printType = false)
+      {
+        NString.SeparatedCalls (",", 
+          parms, 
+          fun (parm : TT.Parm) { recurse (parm.expr, printType) }, 
+          result)
+      }
+
+      def is_list_cons (mem : IMember)
+      {
+        mem.DeclaringType.FullName == "Nemerle.Core.list.Cons" && mem.Name == ".ctor"
+      }
+
+      def is_list_nil (mem : IMember)
+      {
+        mem.DeclaringType.FullName == "Nemerle.Core.list.Nil" 
+          && mem.Name == "_N_constant_object"
+      }
+
+      // checks if an expression needs to be put in curly braces
+      def need_curly_braces (expr : TT.TExpr)
+      {
+        | TT.TExpr.DefValIn => true
+        | TT.TExpr.DefFunctionsIn => true
+        | TT.TExpr.Sequence => true
+        | TT.TExpr.FieldMember (obj, _)
+        | TT.TExpr.PropertyMember (obj, _)
+        | TT.TExpr.MethodRef (obj, _, _, _)
+        | TT.TExpr.ArrayIndexer (obj, _) =>
+          need_curly_braces (obj)
+        | TT.TExpr.Assign (target, source) =>
+          need_curly_braces (target) || need_curly_braces (source)
+        | TT.TExpr.Throw (exn) =>
+          need_curly_braces (exn)
+        | _ => false
+      }
+
+
+      // prints a list, using the [,] and :: shortcuts for Cons where appropriate
+      def print_list_constructors (cons : TT.TExpr)
+      {
+        def walk_tree (cons : TT.TExpr, acc : list [TT.TExpr]) : (list [TT.TExpr] * bool)
+        {
+          match (cons) {
+            | TT.TExpr.Call (TT.TExpr.StaticRef (_, mem, _), parms, _) 
+                when is_list_cons (mem) =>
+              match (parms) {
+                | [head, tail] =>
+                  walk_tree (tail.expr, head.expr :: acc)
+                | _ =>
+                  Util.ice ("SprintTyExpr/flatten_list/walk_list_tree")
+                }
+
+            | TT.TExpr.StaticRef (_, mem, _) when is_list_nil (mem) =>
+              (List.Rev (acc), true)
+
+            | _ =>
+              (List.Rev (cons :: acc), false)
+          }
+        }
+
+        def (flattened_list, ended_with_nil) =
+          walk_tree (cons, []);
+
+        if (ended_with_nil)
+          print_expr_list ("<", flattened_list, ", ", ">")
+        else
+          print_expr_list ("", flattened_list, " :: ", "")
+      }
+
+      // prints a local function declaration
+      def print_local_fun_decl (title : string, fun_decl : TT.Fun_header)
+      {
+        append (title + " " +
+                print_fun_typarms (fun_decl.typarms) +
+                fun_decl.name + " " +
+                print_fun_parms (fun_decl.parms) + " : " +
+                fun_decl.ret_type.ToString () + " {\n");
+
+        // change the current function's name when recursing
+        match (fun_decl.body) {
+          | FunBody.Typed (body) =>
+            SprintTyExpr (ctx, body, true, indentation + "  ", result, false);
+          | _ => {}
+        }
+
+        append ("\n" + indentation + "}\n")
+      }
+
+
+      // indent the top level expressions
+      when (is_top_level) indent ();
+
+      if (expr == null) append ("[[[NULL]]]") else
+      match (expr) {
+        // reference building
+        | TT.TExpr.LocalFunRef (decl /* LocalValue */, _)
+        | TT.TExpr.LocalRef (decl /* LocalValue */) =>
+//====>
+//nazwy zmiennych
+          if (printType)
+          {
+            match (decl.Type)
+            {
+              | MType.Array (_, _) =>
+                  def arr = Type.GetType("System.Array");
+                  append ("[" + NString.Split (
+                    arr.Assembly.FullName, array[',']).Head + "]" + arr.ToString ());
+              | _ => append (toBoogieType (decl.Type.ToString() ) );
+            }
+          }
+          else
+          {
+            def (found, parmnum) = 
+              IsFunctionArg(ctx.GetMethodBuilder ().fun_header, decl);
+
+            if (found)
+              append ("$" + parmnum.ToString ());
+            else
+            {
+              mutable origVar = null;
+
+              try
+              {
+                origVar = varTableRev[decl.Name.ToString ()];
+              }
+              catch
+              {
+                | _ is System.Collections.Generic.KeyNotFoundException => ()
+              }
+
+              if (origVar == null)
+              {
+                if (for_invariant_mode)
+                {
+                  append ( "$blockVar(" );
+                  recurse ( TT.TExpr.LocalRef (decl), true );
+                  append ( "){" + decl.Name + "}" );
+                }
+                else
+                  append (decl.Name);
+              }
+              else
+              {
+                append (@"\\old(");
+                recurse (origVar);
+                append (")");
+              }
+            }
+          }
+
+        | TT.TExpr.StaticRef (from, mem /* IMember */, type_parms) =>
+          def ty_name =
+            strip_nemerle_core_dot_prefix (from.ToString ());
+          def co_name = mem.Name;
+
+          unless (from.tycon.SystemType.Assembly.FullName == null)
+            append ("[" + NString.Split (
+                from.tycon.SystemType.Assembly.FullName, array[',']).Head + "]");
+
+          if (printType)
+          {
+            if (is_list_nil (mem))
+              append ("[]")
+            else
+              append (ty_name);
+          }
+          else
+          {
+            if (is_list_nil (mem))
+              append ("[]")
+            else {
+              append (ty_name);
+
+              unless (co_name == ".ctor")
+                append ("::" + co_name)
+            }
+
+            unless (type_parms.IsEmpty)
+            {
+              mutable str = $"$type_parms";
+              str = str.Replace ("[", "<");
+              str = str.Replace ("]", ">");
+              str = str.Replace ("-", "");
+              str = str.Replace ("+", "");
+              append (str);
+            }
+          }
+
+        | TT.TExpr.FieldMember (obj /* TExpr */, fld /* IField */) =>
+//====>
+          if (printType)
+          {
+            match (fld.GetMemType ())
+            {
+              | MType.Array (_, _) =>
+                  def arr = Type.GetType("System.Array");
+                  append ("[" + NString.Split (
+                    arr.Assembly.FullName, array[',']).Head + "]" + arr.ToString ());
+              | _ => append (toBoogieType (fld.GetMemType().ToString() ) ); 
+            }
+          }
+          else
+          {
+            recurse (obj);
+            append ("@" + fld.DeclaringType.FullName + "::" + fld.Name);
+          }
+
+        | TT.TExpr.ConstantObjectRef (_, mem /* IField */) =>
+          append (mem.DeclaringType.FullName + "::" + mem.Name);
+
+        | TT.TExpr.ImplicitValueTypeCtor =>
+          append (expr.Type.ToString () + " ()");
+
+        | TT.TExpr.DefaultValue =>
+          append ("DEFAULT")
+
+        | TT.TExpr.NotNull (e) =>
+          append ($"when ($e == null) throw NullMatchException ();")
+
+        | TT.TExpr.Switch (indexing, defl, cases) =>
+          append ($ "switch ($indexing) $defl $cases")
+
+        | TT.TExpr.If (cond, e1, e2) =>
+          append ("if.real (");
+          recurse (cond);
+          append (") {\n");
+          recurse_and_indent (e1);
+          append ("\n" + indentation + "}\n" + indentation + "else {\n");
+          recurse_and_indent (e2);
+          append ("\n" + indentation + "}");
+
+        | TT.TExpr.HasType (e, t) =>
+          append ($ "($e is $t)")
+
+        | TT.TExpr.PropertyMember (obj /* PExpr */, prop /* IProperty */) =>
+          recurse (obj, printType);
+          append ("::" + prop.Name)
+
+        | TT.TExpr.StaticPropertyRef (_, prop /* IProperty */) =>
+          append (prop.DeclaringType.FullName + "::" + prop.Name)
+
+        | TT.TExpr.EventMember (obj /* PExpr */, ev /* IEvent */) =>
+          recurse (obj, printType);
+          append ("::" + ev.Name)
+          
+        | TT.TExpr.StaticEventRef (_, ev /* IEvent */) =>
+          append (ev.DeclaringType.FullName + "::" + ev.Name)
+
+        // FIXME: handle the 'notvirtual' flag
+        | TT.TExpr.MethodRef (
+            obj /* PExpr */, 
+            meth /* IMethod */, 
+            vars, _ /* notvirtual : bool */) =>
+//====>
+          if (printType)
+            append (toBoogieType (meth.ReturnType.FixedValue.ToString() ) );
+          else
+          {
+            recurse (obj);
+            append ("@");
+            recurse (obj, true);
+            append ("::" + meth.Name);
+          }
+
+          unless (vars.IsEmpty)
+            append ($".$vars");
+
+        // the special case for unary operators
+        | TT.TExpr.Call (TT.TExpr.OpCode (name), [parm], _) =>
+          append (name + "(");
+          recurse (parm.expr, true);
+          append ("){");
+          recurse (parm.expr);
+          append ("}");
+
+        // the special case for infix binary operators
+        | TT.TExpr.Call (TT.TExpr.OpCode (name), [parm1, parm2], _) =>
+          append ("::" + name + "(");
+          recurse (parm1.expr, true);
+          append (",");
+          recurse (parm2.expr, true);
+          append ("){");
+          recurse (parm1.expr);
+          append (",");
+          recurse (parm2.expr);
+          append ("}")
+
+        // pretty print the list constructors
+        | TT.TExpr.Call (TT.TExpr.StaticRef (_, mem, _), _, _) 
+            when is_list_cons (mem) =>
+          print_list_constructors (expr)
+
+        // write all the other calls in prefix form 
+        | TT.TExpr.Call (func /* TExpr */, parms /* list [Parm] */, _) =>
+//====>
+          if (printType)
+            recurse (func, true);
+          else
+          {
+            recurse (func);
+            append ("(");
+            print_fun_call_parms (parms, true);
+            append ("){");
+            print_fun_call_parms (parms);
+            append ("}");
+          }
+
+        | TT.TExpr.SelfTailCall (parms /* list [Parm] */) =>
+          append (ctx.GetMethodBuilder ().fun_header.name);
+          append (" (");
+          print_fun_call_parms (parms);
+          append (")")
+
+
+        // assignment
+        | TT.TExpr.Assign (target /* PExpr */, source /* PExpr */) =>
+          recurse (target);
+          append (" = ");
+          recurse (source);
+
+
+        | TT.TExpr.MultipleAssign (assigns) =>
+          append ($ "ASSIGNS $assigns");
+
+
+        | TT.TExpr.Label (k, body) =>
+          append ($ "l$k:\n");
+          recurse_and_indent (body);
+
+
+        | TT.TExpr.Block (jump, body) =>
+          append ($ "block ($(jump.Name)) : ");
+          recurse_and_indent (body);
+
+
+        | TT.TExpr.Goto (id, t) =>
+          append ($ "goto l$id [$t];");
+
+
+        // local definitions
+        // We do not want to have any defs in the assertion string. 
+        // They may occur e.g. in the loop invariant, but they must not 
+        // appear in the assertion string.
+        | TT.TExpr.DefValIn (_name /* LocalValue */, _val /* PExpr */, body /* PExpr */)
+            => recurse (body, printType);
+/*
+          if (need_curly_braces (val))
+          {
+            append ("def " + name.Name + " = {\n");
+            recurse_and_indent (val);
+            append ("\n" + indentation + "};\n");
+            recurse_no_indent (body)
+          }
+          else
+          {
+            append ("def " + name.Name + " = ");
+            recurse (val);
+            append (";\n");
+            recurse_no_indent (body)
+          }
+*/
+        // local function definitions can be grouped using the 'and' keyword
+        | TT.TExpr.DefFunctionsIn (funs /* list [Function_decl] */, body /* PExpr */) =>
+          match (funs) {
+            | fun_decl :: rest =>
+              print_local_fun_decl ("def", fun_decl);
+              List.Iter (rest, fun (fun_decl) { print_local_fun_decl ("and", fun_decl) })
+            | _ => Util.ice ("TT.TExpr.DefFunctionsIn with no function declarations")
+          }
+          recurse_no_indent (body)
+
+
+        // the 'match' instruction is handled separately
+        | TT.TExpr.Match (expr /* PExpr */, cases /* list [Match_case] */) =>
+          SprintTyMatch (ctx, expr, cases, indentation, result, false)
+
+
+        // exception handling
+        | TT.TExpr.Throw (exn /* PExpr */) =>
+          append ("throw ");
+          recurse (exn)
+
+        | TT.TExpr.TryFault (body, handler) =>
+          append ("try {\n");
+          recurse_and_indent (body);
+          append ("\n" + indentation + "} fault {\n");
+          recurse_and_indent (handler);
+          append ("\n" + indentation + "}")
+
+        | TT.TExpr.TryWith (body /* PExpr */, exn /* LocalValue */, handler /* PExpr */) =>
+          append ("try {\n");
+          recurse_and_indent (body);
+          append ("\n" + indentation + "} catch {\n  " + indentation + exn.Name + " : ");
+          append (exn.Type.ToString () );
+          append (" =>\n");
+          recurse_and_indent (handler);
+          append ("\n" + indentation + "}")
+
+        | TT.TExpr.TryFinally (body /* PExpr */, handler /* PExpr */) =>
+          append ("try {\n");
+          recurse_and_indent (body);
+          append ("\n" + indentation +"} finally {\n");
+          recurse_and_indent (handler);
+          append ("\n" + indentation + "}")
+
+
+        // 'this' and 'base' objects
+        | TT.TExpr.This =>
+          append ("this");
+
+        | TT.TExpr.Base /* (base_ctor : IMethod) */ =>
+          append ("base")
+
+
+        // type related nodes
+        // FIXME: checked/unchecked
+        | TT.TExpr.TypeConversion (expr /* TExpr */, target_type /* TType */, kind) =>
+//====>
+          if (printType)
+            append (toBoogieType (target_type.ToString () ) );
+          else
+          {
+            match (target_type.SystemType.ToString ()) {
+              | "System.SByte"  => append ( "::$Conv_I1(" );
+              | "System.Int16"  => append ( "::$Conv_I2(" );
+              | "System.Int32"  => append ( "::$Conv_I4(" );
+              | "System.Int64"  => append ( "::$Conv_I8(" );
+              | "System.Byte"   => append ( "::$Conv_U1(" );
+              | "System.UInt16" => append ( "::$Conv_U2(" );
+              | "System.UInt32" => append ( "::$Conv_U4(" );
+              | "System.UInt64" => append ( "::$Conv_U8(" );
+              | "System.Single" => append ( "::$Conv_R4(" );
+              | "System.Double" => append ( "::$Conv_R8(" );
+              //| "System.Decimal" => 
+              | _ => append ( "$coerce(" );
+            }              
+
+            match (target_type.SystemType.ToString ()) {
+              | "System.SByte"
+              | "System.Int16"
+              | "System.Int32"
+              | "System.Int64"
+              | "System.Byte"
+              | "System.UInt16"
+              | "System.UInt32"
+              | "System.UInt64"
+              | "System.Single"
+              | "System.Double" => 
+                  match (kind) {
+                    | TT.ConversionKind.Nop
+                    | TT.ConversionKind.UpCast =>
+                        match (expr) {
+                          | TT.TExpr.TypeConversion (expr_2, _target_type2, _kind2) =>
+                              recurse (expr_2, true);
+                              append ( "){" );
+                              recurse (expr_2);
+                              append ( "}" );
+                          | _ => 
+                              recurse (expr, true);
+                              append ( "){" );
+                              recurse (expr);
+                              append ( "}" );
+                        }
+                    | _ =>
+                        recurse (expr, true);
+                        append ( "){" );
+                        recurse (expr);
+                        append ( "}" );
+                  }
+              | _ =>
+                  match (kind) {
+                    | TT.ConversionKind.Nop
+                    | TT.ConversionKind.UpCast =>
+                        match (expr) {
+                          | TT.TExpr.TypeConversion (expr_2, _target_type_2, _kind_2) =>
+                              recurse (expr_2, true);
+                              append ( "){" );
+                              recurse (expr_2);
+                              append ( "}" );
+                          | _ => 
+                              recurse (expr, true);
+                              append ( "){" );
+                              recurse (expr);
+                              append ( "}" );
+                        }
+                    | _ =>
+                       recurse (expr);
+                       append ("," + toBoogieType (target_type.ToString () ) + ")");
+                  }
+            }
+          }
+
+        | TT.TExpr.TypeOf (target_type /* TType */) =>
+          if (printType)
+            append (target_type.ToString () );
+          else
+          {
+            append ("$typeof(");
+            append (target_type.ToString () );
+            append (")")
+          }
+
+        // array related nodes
+        | TT.TExpr.Array (args : list [TT.TExpr], _ /* dimensions : list [int] */) =>
+          if (printType)
+            append ("System.Array");
+          else
+          {
+            append ("array");
+            print_expr_list ("[", args, ", ", "]")
+          }
+
+        | TT.TExpr.ArrayIndexer (obj /* PExpr */, args /* list [TExpr] */) =>
+//====>
+          if (printType)
+          {
+            print_expr_list ("", args, ",", "", true);
+          }
+          else
+          {
+            recurse (obj, false);
+            print_expr_list ("[", args, ",", "]", false);
+            print_expr_list ("(", args, ",", ")", true);
+            
+            /*
+            foreach (arg in args)
+            {
+              if (arg : object == args.Head)
+              {
+                append ("(");
+                recurse (arg, true);
+              }
+              else
+              {
+                append (",");
+                recurse (arg, true);
+              }
+            }
+
+            append (")");
+            */
+          }
+
+        | TT.TExpr.TupleIndexer (obj, k, _) =>
+          recurse (obj);
+          append ($ " [$k]");
+
+
+        // loading of a literal
+        | TT.TExpr.Literal (val /* Literal */) =>
+//====>
+          if (printType)
+            append (toBoogieType (val.SystemType.ToString () ) );
+          else
+            append (val.ToString () )
+
+        // other nodes
+        | TT.TExpr.Sequence (e1 /* PExpr */, e2 /* PExpr */) =>
+          recurse (e1);
+          append (";\n");
+          recurse_no_indent (e2);
+
+        | TT.TExpr.Tuple (args /* list [PExpr] */) =>
+          print_expr_list ("(", args, ", ", ")")
+
+        | TT.TExpr.OpCode (name /* string */) =>
+//====>
+          if (printType)
+            match (expr.ty) {
+              | MType.Fun (_from, to) => append (toBoogieType (to.ToString () ) );
+              | _ => append ("##");
+                     append (expr.ty.ToString () );
+            }
+          else
+            match (name) {
+              | ">=.f"
+              | ">=.s" => append ("::>=")
+              | ">.f"
+              | ">.s"  => append ("::>")
+              | "<=.f"
+              | "<=.s" => append ("::<=")
+              | "<.f"
+              | "<.s"  => append ("::<")
+              | "!=.f"
+              | "!=.ref"
+              | "!=.s" => append ("::!=")
+              | "=="   => append ("::==")
+              | "+.f"
+              | "+.s"  => append ("::+")
+              | "-.f"
+              | "-.s"  => append ("::-")
+              | "*.f"
+              | "*.s"  => append ("::*")
+              | "/.f"
+              | "/.s"  => append ("::/")
+              | "unary.-.f"
+              | "unary.-.s" => append ("::0-");
+              | _ => append (name)
+            }
+
+        | TT.TExpr.Error =>
+          append ("(ERROR)")
+
+        | TT.TExpr.MethodAddress (_, meth, is_virt, _) =>
+          append ($ "ADDR($meth, $is_virt)")
+
+        | TT.TExpr.Delayed (dt) =>
+          if (dt.IsResolved)
+            SprintTyExpr (ctx, dt.ResolutionResult, is_top_level, 
+                          indentation, result, printType)
+          else
+            append ("(Delayed)")
+      }
+
+      //append ($"{$(expr.Type)}");
+    }
+    
+
+    public TyVarToParseTree (ty : TyVar) : PT.PExpr
+    {
+      if (ty.IsFixed) 
+        MTypeToParseTree (ty.FixedValue)
+      else
+        MTypeToParseTree (ty.Fix ())
+    }
+
+
+    public MTypeToParseTree (ty : MType) : PT.PExpr
+    {
+      match (ty) {
+        | MType.Class (tycon, []) =>
+          Util.ExprOfQid (tycon.FullName)
+
+        | MType.Class (tycon, args) =>
+          PT.PExpr.Indexer (Util.ExprOfQid (tycon.FullName),
+                         List.Map (args, TyVarToParseTree))
+
+        | MType.TyVarRef (t) => PT.PExpr.Ref (PT.Name (t.Name))
+
+        | MType.Fun (from, to) =>
+          <[ $(TyVarToParseTree (from)) -> $(TyVarToParseTree (to)) ]>
+
+        | MType.Void => PT.PExpr.Void ()
+
+        | MType.Tuple (all) =>
+          <[ @* (..$( List.Map (all, TyVarToParseTree))) ]>
+
+        | MType.Array (ty, rank) =>
+          <[ array [ $(rank : int), $(TyVarToParseTree (ty)) ] ]>
+
+        | MType.Ref (ty) =>
+          <[ ref $(TyVarToParseTree (ty)) ]>
+
+        | MType.Out (ty) =>
+          <[ out $(TyVarToParseTree (ty)) ]>
+
+        | MType.Intersection => assert (false)
+      }
+    }
+
+    
+    /* -- PRIVATE METHODS --------------------------------------------------- */
+
+    /**
+     * returns the Boogie type equivalent
+     */
+    // FIXME: This method should take MType and return string. Also the 
+    // MType.Array type should be taken care of here, not in the code above.
+    private toBoogieType (str : string) : string
+    {
+      | "System.SByte"
+      | "sbyte"  => "i8"
+      | "System.Int16"
+      | "short"  => "i16"
+      | "System.Int32"
+      | "int"    => "i32"
+      | "System.Int64"
+      | "long"   => "i64"
+      | "System.Byte"
+      | "byte"   => "u8"
+      | "System.UInt16"
+      | "ushort" => "u16"
+      | "System.UInt32"
+      | "uint"   => "u32"
+      | "System.UInt64"
+      | "ulong"  => "u64"
+      | "char"   => "char"
+      | "System.Single"
+      | "float"  => "single"
+      | "System.Double"
+      | "double" => "double"
+      | "System.String"
+      | "string" => "string"
+      | "System.Object" => "object"
+      | _ => str
+    }
+
+    /**
+     * Strips the 'Nemerle.Core.' prefix from type names
+     */
+    private strip_nemerle_core_dot_prefix (tyname : string) : string
+    {
+      if (tyname.StartsWith ("Nemerle.Core."))
+        tyname.Substring (13);
+      else
+        tyname;
+    }
+
+    /**
+     * Prints a type parameters of a function declaration
+     */
+    private print_fun_typarms (typarms : list [StaticTyVar]) : string
+    {
+      typarms.ToString ()
+    }
+
+
+    /**
+     * Prints the parameters of a function declaration
+     */
+    private print_fun_parms (parms : list [TT.Fun_parm]) : string
+    {      
+      def result = StringBuilder ();
+      
+      def append (x : string) { ignore (result.Append (x)) }
+
+      append ("(");
+      NString.SeparatedCalls (", ", parms,
+                              fun (parm : TT.Fun_parm) {
+                                append ($ "$(parm.name) : $(parm.ty)")
+                              }, result);
+      append (")");
+
+      result.ToString ()
+    }
+  }
+}
