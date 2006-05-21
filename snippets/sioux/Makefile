@@ -50,7 +50,7 @@ SOURCES = $(SIOUX_DLL_SOURCES) $(SIOUX_EXE_SOURCES)
 
 NEMERLE_XML_DLL_SOURCES = xmltemplate.n xmlpipeline.n generators.n transformers.n
 
-NEMERLE_DLLS = Nemerle.dll Nemerle.Macros.dll Nemerle.Compiler.dll
+NEMERLE_DLLS = Nemerle.dll
 
 
 CSL_APPLICATION_SOURCES = csl04/csl.n csl04/submission.n
