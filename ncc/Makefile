@@ -355,7 +355,7 @@ doc-xml:
 	$(Q)rm temp.dll
 
 
-sync:
+sync-impl:
 	cd out.stage3 ; \
 	for x in *.dll *.exe ; do \
 		mv -vf ../../boot/$$x ../../boot/$$x.old ; \

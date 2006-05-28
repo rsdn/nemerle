@@ -64,10 +64,10 @@ install: all
 	$(Q)install -m644 Nemerle.MSBuild.targets $(DESTDIR)$(BINDIR)
 endif
 
-Nemerle.MSBuild.Tasks.dll: MSBuildTask.n
+Nemerle.MSBuild.Tasks.dll: MSBuildTask.n $(TOP)/ncc/out.stage3/ncc.exe
 	$(EXECUTE) $(TOP)/ncc/out.stage3/ncc.exe $(NEM_FLAGS) -q -r:Microsoft.Build.Tasks.dll -out $@ -t:library MSBuildTask.n
 
-sync:
+sync-impl:
 	cp -f Nemerle.MSBuild.Tasks.dll ../../boot/
 
 uninstall:

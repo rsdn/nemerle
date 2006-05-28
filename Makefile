@@ -92,8 +92,8 @@ changelog:
         fi
 
 sync:
-	$(MAKE) -C tools/msbuild-task all sync
-	$(MAKE) -C ncc boot sync
+	$(MAKE) -C tools/msbuild-task all sync-impl
+	$(MAKE) -C ncc boot sync-impl
         
 sync-boot: sync
 	svn commit -m "Sync for release." boot/
