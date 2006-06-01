@@ -13,7 +13,7 @@ NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
 NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe
 SNK_COMPILER = -keyfile:$(TOP_LEVEL)/misc/keys/Nemerle.Compiler.snk
 
-NEMISH_SRC = interp.n main.n readline.n
+NEMISH_SRC = main.n interp.n readline.n
 
 all:	Nemerle.Evaluation.dll nemish.exe
 
