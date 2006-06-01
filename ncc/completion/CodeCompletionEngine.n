@@ -72,33 +72,46 @@ namespace Nemerle.Completion
         internal this (eng : Engine)
         {
             defines = [];
-            this.Engine = eng;
+            engine = eng;
         }
         
         internal mutable defines : list[string];
-        Engine : Completion.Engine;
+        engine : Completion.Engine;
         
-        public Add (Define : string) : void
+        public Add (define : string) : void
         {
-            defines ::= Define;
-            this.Engine.set_unparsed_state ();
+            unless (defines.Contains (define))
+            {
+                defines ::= define;
+                engine.Options.DefineConstant (define);
+                engine.Sources.set_unparsed_state ();
+            }
         }
         
-        public Remove (Define : string) : void
+        public Remove (define : string) : void
         {
-            _ = defines.Remove (Define);
-            this.Engine.set_unparsed_state ();
+            when (defines.Contains (define))
+            {
+                _ = defines.Remove (define);
+                engine.Options.UndefineConstant (define);
+                engine.Sources.set_unparsed_state ();
+            }
         }
         
-        public Contains (Define : string) : bool
+        public Contains (define : string) : bool
         {
-            defines.Contains (Define)
+            defines.Contains (define)
         }
         
         public Clear () : void
         {
-            defines = [];
-            this.Engine.set_unparsed_state();
+            unless (defines.Length == 0)
+            {
+                foreach (define in defines)
+                    engine.Options.UndefineConstant (define);
+                defines = [];
+                engine.Sources.set_unparsed_state();
+            }
         }
         
         public GetEnumerator () : Nemerle.Collections.IEnumerator[string]
@@ -112,33 +125,61 @@ namespace Nemerle.Completion
         internal this (eng : Engine)
         {
             references = Hashtable ();
-            this.Engine = eng;
+            engine = eng;
         }
         
         internal mutable references : Hashtable[string, InternalReference];
-        Engine : Completion.Engine;
+        engine : Completion.Engine;
         
-        public Add (Key : string, Path : string) : void
+        public Add (key : string, path : string) : void
         {
-            references.Add (Key, InternalReference.Library (Path));
-            this.Engine.set_unparsed_state ();
+            unless (references.Contains (key))
+            {
+                references.Add (key, InternalReference.Library (path));
+                engine.LibrariesManager.AddLibrary (path);
+            }
         }
         
-        public Add (Key : string, LoadedAssembly : System.Reflection.Assembly) : void
+        public Add (key : string, loadedAssembly : System.Reflection.Assembly) : void
         {
-            references.Add (Key, InternalReference.Assembly (LoadedAssembly));
-            this.Engine.set_unparsed_state ();
+            unless (references.Contains (key))
+            {
+                references.Add (key, InternalReference.Assembly (loadedAssembly));
+                engine.LibrariesManager.AddAssembly (loadedAssembly);
+            }
         }
         
-        public Remove (Key : string) : void
+        public Remove (key : string) : void
         {
-            references.Remove (Key);
+            when (references.Contains (key))
+            {
+                references.Remove (key);
+                engine.state = EngineState.Pure;
+                engine.Sources.set_unparsed_state ();
+                
+                foreach (reference in references.Values)
+                {
+                | Library as l => engine.LibrariesManager.AddLibrary (l.path);
+                | Assembly as a => engine.LibrariesManager.AddAssembly (a.assembly);
+                }
+            }
         }
         
         public Clear () : void
         {
             references = Hashtable ();
-            this.Engine.set_unparsed_state();
+            engine.state = EngineState.Pure;
+            engine.Sources.set_unparsed_state ();
+        }
+        
+        public ContainsKey (key : string) : bool
+        {
+            references.ContainsKey (key)
+        }
+        
+        public GetKeys () : System.Collections.Generic.IEnumerable[string]
+        {
+            references.Keys
         }
     }
     
@@ -157,14 +198,17 @@ namespace Nemerle.Completion
         
         internal mutable sources : Hashtable[string, ParsedFile];
 
-        public Add (File : string, Contents : string) : void
+        public Add (file : string, contents : string) : void
         {
-            sources.Add (File, ParsedFile.NotParsed (Contents));
+            if (sources.ContainsKey (file))
+                sources [file] = ParsedFile.NotParsed (contents);
+            else
+                sources.Add (file, ParsedFile.NotParsed (contents));
         }
         
-        public Remove (File : string) : void
+        public Remove (dile : string) : void
         {
-            sources.Remove (File);
+            sources.Remove (dile);
             set_unparsed_state ();
         }
         
@@ -187,6 +231,16 @@ namespace Nemerle.Completion
                 sources [item [0]] = ParsedFile.NotParsed (item [1]);
             }
         }
+        
+        public ContainsKey (file : string) : bool
+        {
+            sources.ContainsKey (file)
+        }
+        
+        public GetKeys () : System.Collections.Generic.IEnumerable[string]
+        {
+            sources.Keys
+        }
     }
    
     public class Engine : ManagerClass
@@ -196,15 +250,9 @@ namespace Nemerle.Completion
         public Sources : SourceCollection;
         
         [Accessor]
-        mutable state : EngineState;
+        internal mutable state : EngineState;
         
         syncObject : object;
-
-        internal set_unparsed_state () : void
-        {
-          state = EngineState.Pure;
-          Sources.set_unparsed_state ();
-        }
 
         mutable is_completion : bool;        
         public override IsInCompletionMode : bool {
@@ -282,45 +330,43 @@ namespace Nemerle.Completion
             }
         }
         
-        public RunCompletionEngine (memberInfo : NemerleMemberInfo, contents : string) : CompletionInfo
+        public RunCompletionEngine (member : IMember, contents : string) : array[OverloadPossibility]
         {
-            lock (syncObject)
-            {
-                // Tell the methods we are in completion mode
-                is_completion = true;
-                def theMember = memberInfo._member;
-                def observed_method = theMember :> MethodBuilder;
-                
-                mutable completionList  = null;
-                when (observed_method != null) {
-                    def env = observed_method.DeclaringType.GlobalEnv;
-                    def my_body = contents.Trim();
-    
-                    def lexer = LexerCompletion (this, my_body + " ", my_body.Length);
-                    observed_method.GetHeader ().body =
-                        FunBody.Parsed (MainParser.ParseExpr (env, lexer));
-                
-                    try
-                    {
-                        observed_method.RunBodyTyper ();
-                    }
-                    catch
-                    {
-                    | e is CompletionResult => completionList = translate_ovpossibility_to_info (e.Overloads);
-                    | e => System.Console.WriteLine (e.Message);
-                    }
+            // Tell the methods we are in completion mode
+            is_completion = true;
+            def observed_method = member :> MethodBuilder;
+            
+            mutable completionList  = null;
+            when (observed_method != null) {
+                def env = observed_method.DeclaringType.GlobalEnv;
+                def my_body = contents.Trim();
+
+                def lexer = LexerCompletion (this, my_body + " ", my_body.Length);
+                observed_method.GetHeader ().body =
+                    FunBody.Parsed (MainParser.ParseExpr (env, lexer));
+            
+                try
+                {
+                    observed_method.RunBodyTyper ();
                 }
-                is_completion = false;
-                completionList
+                catch
+                {
+                | e is CompletionResult => completionList = e.Overloads;
+                | e => System.Console.WriteLine (e.Message);
+                }
             }
+            
+            if (completionList == null)
+                array (0)
+            else
+                completionList.ToArray ()
         }
         
         mutable listMessages : list[CompilerMessage];
         process_error_message (location : Location, message : string) : void
         {
             mutable error = CompilerMessage();
-            error.Location = CodeLocation(location.File, location.Line, location.Column,
-                location.EndLine, location.EndColumn);
+            error.Location = location;
             if (message.IndexOf ("error: ") != -1)
             {
                 error.Message = message.Substring (message.IndexOf ("error: ")).Replace ("error: ", "");
@@ -340,681 +386,77 @@ namespace Nemerle.Completion
                 listMessages ::= error;
             }
         }
-        
-        # region Code completion
-        
-        public translate_ovpossibility_to_info (ovpos : list[OverloadPossibility]) : CompletionInfo
+       
+        public GetTypeTree () : NamespaceTree.Node
         {
-            mutable info : CompletionInfo = null;
-            if (ovpos.Length == 0)
-                info = null;
-            else
+            Instance = this;
+            Init ();
+        
+            System.Console.WriteLine ("just before lexing");
+            mutable trees = [];
+            try
             {
-                mutable complete_types = false;
-                def first = ovpos.Head;
-                when (first.Member.Name == ".ctor" || first.Member.Name == ".cctor" ||
-                    first.Member is TypeInfo) {
-                   complete_types = true;
-                }
-
-                if (complete_types)
+                def filenames = Sources.sources.Fold ([], fun (k, _, acc) { k :: acc });
+              
+                foreach (filename in filenames)
                 {
-                    def cinfo = CompletionTypes ();
-                    
-                    def ns_node = first.from.tycon.NamespaceNode.Parent;
-                    mutable already_added = [];
-                    foreach (child in ns_node.children)
+                    match (Sources.sources [filename])
                     {
-                        match (child.Value.Value) {
-                        | Cached (tycon) => def type_name = child.Key.TrimEnd('*').TrimEnd ('1', '2', '3', '4').TrimEnd('`');
-                            when (!already_added.Contains (type_name))
-                            {
-                                cinfo.AddType (complete_type (tycon));
-                                already_added ::= type_name;
-                            }
-                        //| NotLoaded (tycon) => System.Console.WriteLine ("notloaded " + child.Key);
-                        | NamespaceReference => cinfo.AddNamespace (child.Key);
-                        | _ => ();
-                        }
+                    | NotParsed as np =>
+                        def contents = np.code;
+                        def lexer = LexerString (this, contents, Location (Location.GetFileIndex (filename), 1, 1));
+                        def decls = this.ParsingPipeline (lexer);
+                        Sources.sources[filename] = ParsedFile.Parsed (decls, contents);
+                        trees ::= decls;
+                    | Parsed as p => trees ::= p.decls;
                     }
-                    
-                    info = cinfo;
-                }
-                else
-                {
-                    def cinfo = CompletionMembers ();
-                    try {
-                    foreach (possibility in ovpos) {
-                      match (possibility.Member) {
-                      | y is IField => cinfo.AddMember (complete_field (y));
-                      | y is IMethod => cinfo.AddMember (complete_method (y));
-                      | y is IProperty => cinfo.AddMember (complete_property (y));
-                      | y is IEvent => cinfo.AddMember (complete_event (y));
-                      // | y is TypeInfo => cinfo.AddMember (complete_type (y));
-                      | _ => ();
-                      }
-                    }
-                    info = cinfo;
-                    }
-                    catch {
-                    | e => System.Console.WriteLine (e.Message + "\n" + e.StackTrace);
-                    }
-                 }
-            }
-            info
-        }
-        
-        static complete_common_member_props (member : IMember, info : NemerleMemberInfo) : void
-        {
-            info.Name = member.Name;
-            
-            info.IsStatic = member.IsStatic;
-            info.IsPublic = member.Attributes %&& NemerleAttributes.Public;
-            info.IsPrivate = member.Attributes %&& NemerleAttributes.Private;
-            info.IsProtected = member.Attributes %&& NemerleAttributes.Protected;
-            info.IsInternal = member.Attributes %&& NemerleAttributes.Internal;
-        }
-
-        
-        complete_field (field : IField) : FieldInfo
-        {
-            mutable returnField = FieldInfo();
-            complete_common_member_props(field, returnField);
-            
-            if (field is FieldBuilder)
-                returnField.Type = construct_type ((field :> FieldBuilder).GetMemType());
-            else
-                returnField.Type = ConstructedTypeInfo.Class ( 
-                    ReferencedTypeInfo (field.GetFieldInfo ().FieldType), array (0));
- 
-            returnField.IsMutable = field.IsMutable;
-            returnField.IsVolatile = field.IsVolatile;
-            returnField.IsLiteral = field.IsLiteral;
-            
-            if (field.IsLiteral) {
-                def value = field.GetValue();
-                match (value) {
-                    | Void
-                    | Null => returnField.Value = null;
-                    | String as s => returnField.Value = s.val;
-                    | Float as f => returnField.Value = f.val;
-                    | Double as d => returnField.Value = d.val;
-                    | Decimal as dec => returnField.Value = dec.val;
-                    | Char as ch => returnField.Value = ch.val;
-                    | Bool as b => returnField.Value = b.val;
-                    | Integer as i => if (i.is_negative) returnField.Value = - (i.val :> long);
-                                      else returnField.Value = i.val;
-                    | Enum as l => if (l.val.is_negative) returnField.Value = - (l.val.val :> long);
-                                   else returnField.Value = l.val.val;
                 }
             }
-            else
-                returnField.Value = null;
-            
-            returnField
-        }
-
-        complete_method (method : IMethod) : MethodInfo
-        {
-            mutable returnMethod = MethodInfo();
-            complete_common_member_props(method, returnMethod);
-            
-            def attributes = method.Attributes;
-            returnMethod.IsAbstract = attributes %&& NemerleAttributes.Abstract;
-            returnMethod.IsFinal = attributes %&& NemerleAttributes.Sealed;
-            returnMethod.IsOverride = attributes %&& NemerleAttributes.Override;
-            returnMethod.IsVirtual = attributes %&& NemerleAttributes.Virtual;    
-            returnMethod.IsNew = attributes %&& NemerleAttributes.New;
-            returnMethod.IsExtern = attributes %&& NemerleAttributes.Extern;
-            
-            returnMethod.IsConstructor = false;
-            returnMethod.IsStaticConstructor = false;
-            match (method.GetFunKind()){
-                | FunKind.Constructor => returnMethod.IsConstructor = true;
-                | FunKind.StaticConstructor => returnMethod.IsStaticConstructor = true;
-                | _ => ();
-            }
-            
-            if (method.ReturnType == null)
-                returnMethod.ReturnType = null;
-            else
-                returnMethod.ReturnType = construct_type (method.ReturnType :> MType);
-            
-            def param = method.GetParameters();
-            def listParams = List.Map (param, get_parm);
-            returnMethod.Parameters = listParams.ToArray ();
-            def typarms = method.GetHeader().typarms;
-            def listTyparms = List.Map (typarms, get_typarm);
-            returnMethod.TypeParameters = listTyparms.ToArray ();
-            
-            returnMethod
-        }
-        
-        complete_property (property : IProperty) : PropertyInfo
-        {
-            mutable returnProperty = PropertyInfo();
-            complete_common_member_props (property, returnProperty);
-            if (property is PropertyBuilder)
-                returnProperty.Type = construct_type ((property :> PropertyBuilder).GetMemType());
-            else
-                returnProperty.Type = ConstructedTypeInfo.Class ( 
-                    ReferencedTypeInfo (property.GetPropertyInfo().PropertyType), array(0));
-            returnProperty.IsMutable = property.IsMutable;
-            returnProperty.IsIndexer = property.IsIndexer;
-            
-            def attributes = property.Attributes;
-            returnProperty.IsAbstract = attributes %&& NemerleAttributes.Abstract;
-            returnProperty.IsFinal = attributes %&& NemerleAttributes.Sealed;
-            returnProperty.IsOverride = attributes %&& NemerleAttributes.Override;
-            returnProperty.IsVirtual = attributes %&& NemerleAttributes.Virtual;    
-            returnProperty.IsNew = attributes %&& NemerleAttributes.New;
-            returnProperty.IsExtern = attributes %&& NemerleAttributes.Extern;
-
-            if (property.GetGetter() == null)
-                returnProperty.Getter = null;
-            else
-                returnProperty.Getter = complete_method (property.GetGetter());
-           
-            if (property.GetSetter() == null)
-                returnProperty.Setter = null;
-            else
-                returnProperty.Setter = complete_method (property.GetSetter());
-                
-            returnProperty
-        }
-
-        complete_event (ev : IEvent) : EventInfo
-        {
-            mutable returnEvent = EventInfo();
-            complete_common_member_props (ev, returnEvent);
-            if (ev is EventBuilder)
-                returnEvent.Type = construct_type ((ev :> EventBuilder).GetMemType());
-            else
-                returnEvent.Type = ConstructedTypeInfo.Class ( 
-                    ReferencedTypeInfo (ev.GetEventInfo().EventHandlerType), array(0));
-
-            if (ev.GetAdder() == null)
-                returnEvent.Adder = null;
-            else
-                returnEvent.Adder = complete_method (ev.GetAdder());
-             
-            if (ev.GetRemover() == null)
-                returnEvent.Remover = null;
-            else
-                returnEvent.Remover = complete_method (ev.GetRemover());
-             
-            returnEvent
-        }
-        
-        complete_type (t : TypeInfo) : NemerleTypeInfo
-        {
-        | x is TypeBuilder => get_type (x)
-        | _ => ReferencedTypeInfo (t.SystemType)
-        }
-        
-        # endregion
-        
-        # region Type Tree building
-        /** This section of code is used to build the Type Tree
-            All errors are handled doing nothing. We just try to
-            have the most information we could take, but if there's
-            some error in the code, the engine must continue */
-        mutable listTypes : list[DeclaredTypeInfo];
-        mutable uniqueTypesTable : Hashtable[string, DeclaredTypeInfo];
-        mutable tree : TypeTree;
-        
-        public GetTypeTree () : TypeTree
-        {
-            lock (syncObject)
+            catch
             {
-                Instance = this;
-                tree = TypeTree ();
-                Init ();
-            
-                foreach (define in Defines.defines)
-                    Options.DefineConstant (define);
-            
-                foreach (references in References.references.Values)
-                {
-                | Library as l => this.LibrariesManager.AddLibrary (l.path);
-                | Assembly as a => this.LibrariesManager.AddAssembly (a.assembly);
-                }
+                | _e => 
+                  #if DEBUG
+                  System.Console.WriteLine (_e);
+                  #endif
+                  {}
+            }
+             
+            System.Console.WriteLine ("just before TypesManager");
+            this.Hierarchy = TypesManager (this);
     
-                System.Console.WriteLine ("just before lexing");
-                mutable trees = [];
-                try
-                {
-                    def filenames = Sources.sources.Fold ([], fun (k, _, acc) { k :: acc });
-                  
-                    foreach (filename in filenames)
-                    {
-                        match (Sources.sources [filename])
-                        {
-                        | NotParsed as np =>
-                            def contents = np.code;
-                            def lexer = LexerString (this, contents, Location (Location.GetFileIndex (filename), 1, 1));
-                            def decls = this.ParsingPipeline (lexer);
-                            Sources.sources[filename] = ParsedFile.Parsed (decls, contents);
-                            trees ::= decls;
-                        | Parsed as p => trees ::= p.decls;
-                        }
-                    }
+            // create N.C.TypeBuilders for all parsed types and add them to namespace hierarchy
+            System.Console.WriteLine ("just before parsing");
+            try
+            {
+                foreach (group in trees) {
+                    List.Iter (group, this.ScanningPipeline);
                 }
-                catch
-                {
-                    | _e => 
-                      #if DEBUG
-                      System.Console.WriteLine (_e);
-                      #endif
-                      {}
-                }
-                
-                System.Console.WriteLine ("just before TypesManager");
-
-                this.Hierarchy = TypesManager (this);
-    
-                // create N.C.TypeBuilders for all parsed types and add them to namespace hierarchy
-                System.Console.WriteLine ("just before parsing");
-                try
-                {
-                    foreach (group in trees) {
-                        List.Iter (group, this.ScanningPipeline);
-                    }
-                }
-                catch
-                {
-                    | _e => 
-                      #if DEBUG
-                      System.Console.WriteLine (_e);
-                      #endif
-                      {}
-                }
-                
-                System.Console.WriteLine ("just before building the hierarchy");
-                try
-                {
-                    this.Hierarchy.Run();
-                }
-                catch
-                {
-                    | _e => 
-                      #if DEBUG
-                      System.Console.WriteLine (_e);
-                      #endif
-                      {}
-                }
-                
-                listTypes = [];
-                uniqueTypesTable = Hashtable ();
-                
-                loop (this.NameTree.namespace_tree);
-                tree.Types = listTypes.ToArray ();
-                
-                tree
-             }
-         }
-             
-         loop (x : NamespaceTree.Node) : void
-         {
-             foreach ( pair in x.children )
-             {
-                 def node = pair.Value;
-                 match (node.Value) {
-                 | NamespaceReference => loop(node);
-                 | Cached as c =>
-                     match (c.tycon) {
-                       | tb is TypeBuilder =>
-                         listTypes ::= get_type (tb);
-                       | _ => ();
-                     }
-                 | _ => ()
-                 }
-             }
-         }
-         
-         get_type (t : TypeBuilder) : DeclaredTypeInfo
-         {
-             mutable uniqueName = t.FrameworkTypeName;
-             
-             if (uniqueTypesTable.Contains(uniqueName))
-                 uniqueTypesTable[uniqueName]
-             else 
-             {
-                 mutable returnType = DeclaredTypeInfo();
-                 uniqueTypesTable.Add(uniqueName, returnType);
-                 try
-                 {
-                     def suffixPos = t.Name.IndexOfAny(array['*', '`']);
-                     returnType.Name = 
-                       if (suffixPos >= 0) t.Name.Substring(0, suffixPos);
-                       else                t.Name;
-
-                     if (t.DeclaringType == null) {
-                         returnType.Namespace = t.NamespaceNode.Parent.Name.ToString(".");
-                         returnType.IsNested = false;
-                     }
-                     else {
-                         returnType.Namespace = (t.DeclaringType :> TypeBuilder).NamespaceNode.Parent.Name.ToString(".");
-                         returnType.IsNested = true;
-                     }
-                     
-                     returnType.Location = CodeLocation (t.Location.File, t.Location.Line,
-                         t.Location.Column, t.Location.EndLine, t.Location.EndColumn);
-                     returnType.IsSealed = t.IsSealed;
-                     returnType.IsAbstract = t.IsAbstract;
-                     
-                     returnType.IsInterface = t.IsInterface;
-                     returnType.IsDelegate = t.IsDelegate;
-                     returnType.IsEnum = t.IsEnum;
-                     returnType.IsValueType = t.IsValueType;
-                     returnType.IsModule = t.IsModule;
-                     returnType.IsAlias = t.IsAlias;
-                     returnType.IsStruct = t.IsStruct;
-                     returnType.IsVariant = (t.GetVariantOptions().Length > 0);
-                     
-                     returnType.IsPublic = t.IsPublic;
-                     returnType.IsInternal = t.IsInternal;
-                     returnType.IsProtected = t.IsProtected;
-                     returnType.IsPrivate = t.IsPrivate;
-                     
-                     match (t.DefaultIndexerName) {
-                         | None => returnType.DefaultIndexerName = null;
-                         | Some (x) => returnType.DefaultIndexerName = x;
-                     }
-                     if (t.DeclaringType == null)
-                         returnType.DeclaringType = null;
-                     else
-                         returnType.DeclaringType = get_type(t.DeclaringType :> TypeBuilder);
-                     
-                     mutable listFields = [];
-                     mutable listMethods = [];
-                     mutable listProperties = [];
-                     mutable listEvents = [];
-                     mutable listNestedTypes = [];
-                     
-                     // Add all members to type information
-                     def members = t.GetDirectMembers();
-                     foreach (member in members){
-                         | x is FieldBuilder => listFields ::= get_field (x);
-                         | x is MethodBuilder => listMethods ::= get_method (x);
-                         | x is PropertyBuilder => listProperties ::= get_property (x);
-                         | x is EventBuilder => listEvents ::= get_event (x);
-                         | x is TypeBuilder => listNestedTypes ::= get_type (x);
-                         | x => throw System.Exception (x.ToString ())
-                     }
-                     
-                     returnType.Fields = listFields.ToArray ();
-                     returnType.Methods = listMethods.ToArray ();
-                     returnType.Properties = listProperties.ToArray ();
-                     returnType.Events = listEvents.ToArray ();
-                     returnType.NestedTypes = listNestedTypes.ToArray ();
-                     
-                     def listVarOpts = t.GetVariantOptions();
-                     def listVarOptsReal = listVarOpts.Map (get_type);
-                     returnType.VariantOptions = listVarOptsReal.ToArray ();
-                     
-                     returnType.BaseType = get_type_info (t.BaseType);
-                     def listInterf = t.InterfacesToImplement ();
-                     def listInterfaces = listInterf.Map (get_type_info);
-                     returnType.Interfaces = listInterfaces.ToArray ();
-                     
-                     def typarms = t.GetTyparms ();
-                     def listTyparms = typarms.Map (get_typarm);
-                     returnType.TypeParameters = listTyparms.ToArray ();
-                 }
-                 catch
-                 {
-                     | _ => ();
-                 }
-                 
-                 returnType
-             }
-         }
-         
-         get_type_info (x : TypeInfo) : NemerleTypeInfo
-         {
-             if (x == null)
-                 null
-             else {
-                 match (x) {
-                   | x is TypeBuilder => get_type (x)
-                   | _ => ReferencedTypeInfo (x.SystemType)
-                 }
-             }
-         }
-         
-         static fill_common_member_props (member : MemberBuilder, info : NemerleMemberInfo) : void
-         {
-             info.Name = member.Name;
-             info.Location = CodeLocation (member.BodyLocation.File, member.BodyLocation.Line, 
-                 member.BodyLocation.Column, member.BodyLocation.EndLine, member.BodyLocation.EndColumn);
-             
-             info.IsStatic = member.IsStatic;
-             info.IsPublic = member.IsPublic;
-             info.IsPrivate = member.IsPrivate;
-             info.IsProtected = member.IsProtected;
-             info.IsInternal = member.IsInternal;
-             info._member = member;
-         }
-         
-         construct_type (t : MType) : ConstructedTypeInfo
-         {
-            | Class as c =>
-                 def returnClass = ConstructedTypeInfo.Class();
-                 returnClass.Type = match (c.tycon) {
-                   | x is TypeBuilder => get_type (x)
-                   | x => ReferencedTypeInfo (x.SystemType)
-                 }
-                 def listArgs = List.Map(c.args, fun(x) {
-                   | x is MType => construct_type(x)
-                   | _ => null
-                 });
-                 returnClass.SubstitutedArguments = listArgs.ToArray ();
-                 returnClass
-                 
-             | TyVarRef as r =>
-                 def returnStaTyVar = ConstructedTypeInfo.GenericSpecifier();
-                 returnStaTyVar.Name = r.tyvar.Name;
-                 def listTypes = List.Map(r.tyvar.Constraints, construct_type);
-                 returnStaTyVar.TypeConstraints = listTypes.ToArray ();
-                 returnStaTyVar.SpecialConstraints = (r.tyvar.SpecialConstraints :> int) 
-                     :> Nemerle.Completion.Constraint;
-                 returnStaTyVar
+            }
+            catch
+            {
+                | _e => 
+                  #if DEBUG
+                  System.Console.WriteLine (_e);
+                  #endif
+                  {}
+            }
             
-             | Fun as f =>
-                 def returnFun = ConstructedTypeInfo.Function();
-                 returnFun.From = construct_type (f.from :> MType);
-                 returnFun.To = construct_type (f.to :> MType);
-                 returnFun
-             
-             | Tuple as tuple =>
-                 def returnTuple = ConstructedTypeInfo.Tuple();
-                 def listTypes = List.Map (tuple.args, fun(x) {construct_type (x :> MType)});
-                 returnTuple.Types = listTypes.ToArray ();
-                 returnTuple
-                 
-             | Array as a =>
-                 def returnArray = ConstructedTypeInfo.Array();
-                 returnArray.Type = construct_type (a.t :> MType);
-                 returnArray.Rank = a.rank;
-                 returnArray
+            System.Console.WriteLine ("just before building the hierarchy");
+            try
+            {
+                this.Hierarchy.Run();
+            }
+            catch
+            {
+                | _e => 
+                  #if DEBUG
+                  System.Console.WriteLine (_e);
+                  #endif
+                  {}
+            }
             
-             | Void => ConstructedTypeInfo.Void()
-             | _ => null // Ref and out are only available in parameters,
-                         // so they should never appear here
-         }
-         
-         get_field (field : FieldBuilder) : FieldInfo
-         {
-             mutable returnField = FieldInfo();
-             fill_common_member_props (field, returnField);
-             
-             returnField.Type = construct_type (field.GetMemType());
-             returnField.IsMutable = field.IsMutable;
-             returnField.IsVolatile = field.IsVolatile;
-             returnField.IsLiteral = field.IsLiteral;
-             
-             if (field.IsLiteral) {
-                 def value = field.GetValue();
-                 match (value) {
-                     | Void
-                     | Null => returnField.Value = null;
-                     | String as s => returnField.Value = s.val;
-                     | Float as f => returnField.Value = f.val;
-                     | Double as d => returnField.Value = d.val;
-                     | Decimal as dec => returnField.Value = dec.val;
-                     | Char as ch => returnField.Value = ch.val;
-                     | Bool as b => returnField.Value = b.val;
-                     | Integer as i => if (i.is_negative) returnField.Value = - (i.val :> long);
-                                       else returnField.Value = i.val;
-                     | Enum as l => if (l.val.is_negative) returnField.Value = - (l.val.val :> long);
-                                    else returnField.Value = l.val.val;
-                 }
-             }
-             else
-                 returnField.Value = null;
-             
-             returnField
-         }
-         
-         get_method (method : MethodBuilder) : MethodInfo
-         {
-             mutable returnMethod = MethodInfo();
-             fill_common_member_props(method, returnMethod);
-             
-             returnMethod.IsVarArgs = method.IsVarArgs;
-             def attributes = method.Attributes;
-             returnMethod.IsAbstract = attributes %&& NemerleAttributes.Abstract;
-             returnMethod.IsFinal = attributes %&& NemerleAttributes.Sealed;
-             returnMethod.IsOverride = attributes %&& NemerleAttributes.Override;
-             returnMethod.IsVirtual = attributes %&& NemerleAttributes.Virtual;    
-             returnMethod.IsNew = attributes %&& NemerleAttributes.New;
-             returnMethod.IsExtern = attributes %&& NemerleAttributes.Extern;
-             
-             returnMethod.IsConstructor = false;
-             returnMethod.IsStaticConstructor = false;
-             match (method.GetFunKind()){
-                 | FunKind.Constructor => returnMethod.IsConstructor = true;
-                 | FunKind.StaticConstructor => returnMethod.IsStaticConstructor = true;
-                 | _ => ();
-             }
-             
-             if (method.ReturnType == null)
-                 returnMethod.ReturnType = null;
-             else
-                 returnMethod.ReturnType = construct_type (method.ReturnType :> MType);
-             
-             def param = method.GetParameters();
-             def listParams = List.Map (param, get_parm);
-             returnMethod.Parameters = listParams.ToArray ();
-             def typarms = method.GetHeader().typarms;
-             def listTyparms = List.Map (typarms, get_typarm);
-             returnMethod.TypeParameters = listTyparms.ToArray ();
-             
-             returnMethod
-         }
-         
-         get_parm (parm : Typed.Fun_parm) : ParameterInfo
-         {
-             mutable returnParam = ParameterInfo();
-             returnParam.Name = parm.name;
-             
-             returnParam.IsRefParameter = false;
-             returnParam.IsOutParameter = false;
-             match (parm.ty :> MType) {
-                 | Ref (x) => returnParam.IsRefParameter = true;
-                              returnParam.Type = construct_type (x :> MType);
-                 | Out (x) => returnParam.IsOutParameter = true;
-                              returnParam.Type = construct_type (x :> MType);
-                 | _ as x => returnParam.Type = construct_type (x);
-             }
-             
-             match (parm.default_value) {
-                 | None => returnParam.HasDefaultValue = false;
-                           returnParam.DefaultValue = null;
-                 | Some (value) => returnParam.HasDefaultValue = true;
-                     match (value) {
-                         | Void
-                         | Null => returnParam.DefaultValue = null;
-                         | String as s => returnParam.DefaultValue = s.val;
-                         | Float as f => returnParam.DefaultValue = f.val;
-                         | Double as d => returnParam.DefaultValue = d.val;
-                         | Decimal as dec => returnParam.DefaultValue = dec.val;
-                         | Char as ch => returnParam.DefaultValue = ch.val;
-                         | Bool as b => returnParam.DefaultValue = b.val;
-                         | Integer as i => if (i.is_negative) returnParam.DefaultValue = - (i.val :> long);
-                                           else returnParam.DefaultValue = i.val;
-                         | Enum as l => if (l.val.is_negative) returnParam.DefaultValue = - (l.val.val :> long);
-                                        else returnParam.DefaultValue = l.val.val;
-                     }
-             }
-             
-             returnParam
-         }
-         
-         get_typarm (typarm : StaticTyVar) : TypeParameterInfo
-         {
-             mutable returnTyparm = TypeParameterInfo();
-             returnTyparm.Name = typarm.Name;
-             def listTypes = List.Map (typarm.Constraints, construct_type);
-             returnTyparm.TypeConstraints = listTypes.ToArray ();
-             returnTyparm.SpecialConstraints = (typarm.SpecialConstraints :> int) 
-                 :> Nemerle.Completion.Constraint;
-             returnTyparm
-         }
-         
-         get_property (property : PropertyBuilder) : PropertyInfo
-         {
-             mutable returnProperty = PropertyInfo();
-             fill_common_member_props (property, returnProperty);
-             returnProperty.Type = construct_type (property.GetMemType());
-
-             returnProperty.IsMutable = property.IsMutable;
-             returnProperty.IsIndexer = property.IsIndexer;
-             def listIndexParams = List.Map (property.parms, construct_type);
-             returnProperty.IndexerParameters = listIndexParams.ToArray ();
-             
-             def attributes = property.Attributes;
-             returnProperty.IsAbstract = attributes %&& NemerleAttributes.Abstract;
-             returnProperty.IsFinal = attributes %&& NemerleAttributes.Sealed;
-             returnProperty.IsOverride = attributes %&& NemerleAttributes.Override;
-             returnProperty.IsVirtual = attributes %&& NemerleAttributes.Virtual;    
-             returnProperty.IsNew = attributes %&& NemerleAttributes.New;
-             returnProperty.IsExtern = attributes %&& NemerleAttributes.Extern;
-
-             if (property.GetGetter() == null)
-                 returnProperty.Getter = null;
-             else
-                 returnProperty.Getter = get_method (property.GetGetter() :> MethodBuilder);
-            
-             if (property.GetSetter() == null)
-                 returnProperty.Setter = null;
-             else
-                 returnProperty.Setter = get_method (property.GetSetter() :> MethodBuilder);
-                 
-             returnProperty
-         }
-         
-         get_event (ev : EventBuilder) : EventInfo
-         {
-             mutable returnEvent = EventInfo();
-             fill_common_member_props (ev, returnEvent);
-             returnEvent.Type = construct_type (ev.GetMemType());
-
-             if (ev.GetAdder() == null)
-                 returnEvent.Adder = null;
-             else
-                 returnEvent.Adder = get_method (ev.GetAdder());
-             
-             if (ev.GetRemover() == null)
-                 returnEvent.Remover = null;
-             else
-                 returnEvent.Remover = get_method (ev.GetRemover());
-             
-             returnEvent
-         }
-         # endregion
-         
+            this.NameTree.namespace_tree
+         }         
     } // end class CodeCompletionEngine
 } // end namespace
 
