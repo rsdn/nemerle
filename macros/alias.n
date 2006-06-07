@@ -1,0 +1,203 @@
+/*
+ * Copyright (c) 2006 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+
+using SCG = System.Collections.Generic;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+namespace Nemerle
+{
+  /** 
+   * The Alias macro creates aliases for methods with alternative
+   * names/argument count/argument order. The generated code may be
+   * a static or non-static method, or a property. The macro tries
+   * to be "intelligent" in it's choices (which basically means, 
+   * that only reasonable possibilities are taken into account).
+   *
+   * TODO: write code for aliasing non-static methods, properties 
+   *       and fields and handling attributes like public, private,
+   *       override etc.
+   *
+   ***** Example #1:
+   *
+   * [Alias (F2, F3 ())]
+   * public static F1 () : int { System.Random ().Next () }
+   *
+   * // generates the following code:
+   *
+   * public F2 : int { get { System.Random.Next () } }
+   * public F3 () : int { System.Random.Next () }
+   *
+   ***** Example #2:
+   *
+   * [Alias (Hd, Head2 (), Head3 (l))]
+   * public static Head (l : list ['a]) : 'a { 
+   *   match (l) {
+   *     | x :: _ => x
+   *     | [] => throw System.ArgumentException ("Head called with empty list")
+   *   }
+   * }
+   *
+   * // generates the following code:
+   *
+   * public Hd : 'a { get { def l = this; match (l) { ... } } }
+   * public Head2 () : int { def l = this; match (l) { ... } }
+   * public static Head3 (l) : int { match (l) { ... } }
+   *
+   * // where "..." is the code in matching.
+   *
+   ***** Example #3:
+   *
+   * [Alias (Nth (i, l), Lookup (i))]
+   * static Nth (xs : RList ['a], i : int) { some_code }
+   *
+   * // generates the following code:
+   *
+   * static Nth (i : int, xs : RList ['a]) { some_code }
+   * Lookup (i : int) { def xs = this; some_code }
+   *
+   */
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
+                       Nemerle.MacroTargets.Method)]
+  macro Alias (tb : TypeBuilder, meth : MethodBuilder, params opts : list [PExpr]) {
+    def parms = meth.GetParameters ();
+    if (meth.IsStatic) 
+      match (parms.Length) {
+        | 0 => 
+          foreach (o in opts) {
+            | <[ $alias_name () ]> => // [Alias (G ())] static F ()
+              tb.Define (<[ decl: 
+                public static $(alias_name.ToString () : usesite) () 
+                              : $(meth.ReturnType : typed) { 
+                  $(meth.Body) 
+                }
+              ]>) 
+            | <[ $_ (.. $_) ]> => // e.g. [Alias (G (x)] static F ()
+              Message.Error ($"Invalid parameter count for alias: $o.")
+            | <[ $alias_name ]> => // [Alias (G)] static F ()
+              tb.Define (<[ decl: 
+                public $(alias_name.ToString () : usesite) : $(meth.ReturnType : typed) { 
+                  get { $(meth.Body) }
+                }
+              ]>) 
+          }
+        | 1 => 
+          foreach (o in opts) {
+            | <[ $alias_name () ]> => // [Alias (G ())] static F (x) /* [x] <-> [this] */
+              tb.Define (<[ decl: 
+                public $(alias_name.ToString () : usesite) () : $(meth.ReturnType : typed) { 
+                  def $(parms.Head.name.ToString () : usesite) = this; 
+                  $(meth.Body) 
+                }
+              ]>) 
+
+            | <[ $alias_name ($alias_parm) ]> => // [Alias (G (x))] static F (x)
+              def parm = parms.Head;
+              when (parm.name.ToString () != alias_parm.ToString ()) 
+                Message.Error ($"Invalid parameter name for alias: $o.");
+              tb.Define (<[ decl: 
+                static public $(alias_name.ToString () : usesite) 
+                              ($(parm.name.ToString () : usesite) : $(parm.ty : typed)) 
+                              : $(meth.ReturnType : typed) { 
+                  $(meth.Body) 
+                }
+              ]>) 
+
+            | <[ $alias_name ]> => // [Alias (G)] static F (x) /* [x] <-> [this] */
+              tb.Define (<[ decl: 
+                public $(alias_name.ToString () : usesite) : $(meth.ReturnType : typed) { 
+                  get { def $(parms.Head.name.ToString () : usesite) = this; $(meth.Body) }
+                }
+              ]>) 
+          }
+        | parms_num =>
+          foreach (o in opts) {
+            | <[ $alias_name (.. $alias_parms) ]> => 
+              match (parms_num - alias_parms.Length) {
+                | 0 => // e.g. [Alias (G (x, y))] static F (x, y)
+                  def parm_dict = Hashtable ();
+                  List.Iter (parms, p => parm_dict.Add (p.Name.ToString (), p.ty));
+                  try { 
+                    def fparms = List.Map (alias_parms, p => <[ parameter: $(p.ToString () : usesite) 
+                                                                : $(parm_dict [p.ToString ()] : typed) ]>);
+                    tb.Define (<[ decl: 
+                      static public $(alias_name.ToString () : usesite) (..$fparms) 
+                                    : $(meth.ReturnType : typed) { 
+                        $(meth.Body) 
+                      }
+                    ]>) 
+                  } 
+                  catch {
+                    | _ is SCG.KeyNotFoundException => 
+                      Message.Error ($"Invalid parameter name for alias: $o.");
+                  }
+                | 1 => // e.g. [Alias (G (x))] static F (x, y) /* [y] <-> [this] */
+                  def parm_dict = Hashtable ();
+                  List.Iter (parms, p => parm_dict.Add (p.Name.ToString (), p.ty));
+                  try { 
+                    def fparms = List.Map (alias_parms, p => { 
+                                             def ret = <[ parameter: $(p.ToString () : usesite) 
+                                                          : $(parm_dict [p.ToString ()] : typed) ]>;
+                                             parm_dict.Remove ($"$p");
+                                             ret 
+                                           });
+                    def this_def = parm_dict.Fold (<[ () ]>, (k, v, _) => 
+                                                     <[ def $(k : usesite) : $(v : typed) = this ]>);
+                    tb.Define (<[ decl: 
+                      public $(alias_name.ToString () : usesite) (..$fparms) 
+                               : $(meth.ReturnType : typed) { 
+                        $this_def;
+                        $(meth.Body) 
+                      }
+                    ]>) 
+                  } 
+                  catch {
+                    | _ is SCG.KeyNotFoundException => 
+                      Message.Error ($"Invalid parameter name for alias: $o.");
+                  }
+                | _ => Message.Error ($"Invalid parameter count for alias: $o.");
+              }
+          }
+      }
+    else
+      Message.Error ("Sorry, aliasing non-static methods are not yet supported!")
+      /* // Need to add support for 
+       *
+       * [Alias (F1, F2 (), F3 (x)] // [x] <-> [this]
+       * F () { ... }
+       *
+       * // and
+       *
+       * [Alias (F1 (x, y), F2 (x, y, z)] // [z] <-> [this]
+       * F (x, y) { ... }
+       *
+       */
+  }
+}
