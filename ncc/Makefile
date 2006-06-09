@@ -153,6 +153,7 @@ STDMACROS_DLL_SRC = \
         ../macros/core.n \
         ../macros/compiler.n \
         ../macros/assertions.n \
+        ../macros/alias.n \
 	../macros/operators.n \
 	../macros/concurrency.n \
 	../macros/Util.n \
