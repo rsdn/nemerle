@@ -57,7 +57,7 @@ namespace Nemerle.Contracts
    *
    * Adding an invariant methods and fields has to be done in two steps, 
    * because we have to know whether the base class of the current class 
-   * has an invariant and we do that by checking if it has a field i.e. 
+   * has an invariant and we do that by checking if it has a field e.g. 
    * SpecSharp::frameGuard. Now, if we'd do that in one step, the 
    * existance of this field could depend on the sequence the macro was 
    * applied.
@@ -163,6 +163,9 @@ namespace Nemerle.Contracts
     foreach (m :> MethodBuilder in methods)
     {
       m.Body = <[
+        //check whether the checked exceptions are declared at method's signature
+        //CheckExceptions ();
+
         try
         {
           when (! this.$("SpecSharp::FrameGuard" : dyn).CanStartWritingTransitively)
@@ -183,6 +186,9 @@ namespace Nemerle.Contracts
     foreach (c :> MethodBuilder in instanceCtors)
     {
       c.Body = <[ 
+        //check whether the checked exceptions are declared at method's signature
+        //CheckExceptions ();
+
         $(c.Body);
 
         try
@@ -215,6 +221,9 @@ namespace Nemerle.Contracts
     foreach (c :> MethodBuilder in staticCtors)
     {
       c.Body = <[ 
+        //check whether the checked exceptions are declared at method's signature
+        //CheckExceptions ();
+
         try
         {
           MC.Guard.RegisterGuardedClass (
@@ -605,8 +614,8 @@ namespace Nemerle.Contracts
       def result = Macros.NewSymbol ("result");
 
       getter.Body = <[
-        def $(result : name) = { $(getter.Body) };
-        $(result : name) : $(getter.fun_header.ret_type : typed)
+        def $(result : name) = MC.NonNullType.IsNonNullGeneric ($(getter.Body));
+        $(result : name)// : $(getter.fun_header.ret_type : typed)
       ]>;
     }
 
@@ -828,6 +837,14 @@ namespace Nemerle.Contracts
     ]>
   }
 
+/*
+  macro @forall (inexpr, body)
+  syntax ("forall", "(", inexpr, body, ")")
+  {
+    <[ () ]>
+  }
+*/
+
 /*---------------------------- for ----------------------------*/
 
   /*
@@ -889,6 +906,100 @@ namespace Nemerle.Contracts
 
     AssertionHelper.for_invariant_mode = false;
     result
+  }
+
+  /*---------------------- Checked exceptions ---------------------*/
+
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
+                       Nemerle.MacroTargets.Method,
+                       Inherited = true, AllowMultiple = true)]
+  macro Throws (_ : TypeBuilder, m : MethodBuilder, exc)
+  syntax ("throws", exc)
+  {
+    m.Body = <[ AddException ($exc); $(m.Body); ]>;
+  }
+
+  /**
+   * Checks whether the exception declared in the 'throws' clause 
+   * is a checked exception and if so, adds it to the hash table.
+   */
+  macro AddException (exc)
+  {
+    def texc = ImplicitCTX ().TypeExpr (exc);
+
+    match (texc)
+    {
+      | TT.TExpr.StaticRef (from, _, _) => 
+          
+          match (from)
+          {
+            | MType.Class (ty, _) => 
+                unless (ty.SystemType.IsSubclassOf (typeof (MC.CheckedException)))
+                  Message.Error ("exception " + ty.ToString () + " declared " +
+                    "in the 'throws' clause has to inherit from the " +
+                    "Microsoft.Contracts.CheckedException class");
+            | _ => Message.Error ("a checked exception expected");
+          }
+      | _ => Message.Error ("a checked exception expected");
+    }
+
+    //We add the checked exception to the hash table. Later, we will check 
+    //whether the thrown exception is declared in the 'throws' set, that is, 
+    //whether it is in the hash table.
+    def excString = ImplicitCTX ().GetMethodBuilder ().ToString () 
+      + "@" + texc.ToString ();
+    AssertionHelper.checkedExceptionsTable[excString] = true;
+
+    <[ () ]>
+  }
+
+  /**
+   * Checks whether the exception thrown is a checked exception 
+   * and if so, checks whether it was declared in a 'throws' 
+   * clause (whether it exists in the hash table).
+   */
+  macro CheckExceptions ()
+  {
+    def body = ImplicitCTX ().GetMethodBuilder ().Body;
+
+    _ = Macros.TraverseExpr (None(), body, false, fun (_, _, expr) {
+        match (expr)
+        {
+          | <[ throw $exc ]> =>
+              def texc = ImplicitCTX ().TypeExpr (exc);
+
+              // when the thrown exception inherits from the CheckedException, 
+              // it has to be declared in the "throws set"
+              match (texc)
+              {
+                | TT.TExpr.Call (TT.TExpr.StaticRef (from, _, _), _, _) => 
+                    match (from)
+                    {
+                      | MType.Class (ty, _args) =>
+                          when (ty.SystemType.IsSubclassOf (typeof (MC.CheckedException)))
+                          {
+                            def excString = ImplicitCTX ().GetMethodBuilder ().ToString ()
+                              + "@" + ty.ToString ();
+                            try
+                            {
+                              _ = AssertionHelper.checkedExceptionsTable[excString];
+                            }
+                            catch
+                            {
+                              | _ => Message.Error (ty.ToString () + " is a "
+                                + "checked exception and should be mentioned in "
+                                + "the 'throws' clause at method's declaration");
+                            }
+                          }
+                      | _ => Message.Error ("a checked exception expected");
+                    }
+                | _ => ()
+              }
+          | _ => ()
+        }
+        expr} );
+
+    <[ () ]>
   }
 
 /*------------------------- other macros -------------------------*/
@@ -959,6 +1070,13 @@ namespace Nemerle.Contracts
      */
     public varTable : Hashtable[string, PT.Name] = Hashtable ();
     public varTableRev : Hashtable[string, TT.TExpr] = Hashtable ();
+
+    public checkedExceptionsTable : Hashtable[string, bool] = Hashtable ();
+
+    /**
+     * There are some syntax differences when a string for 'for' loop
+     * is created, so we have to know when we are creating it.
+     */
 
     public mutable for_invariant_mode : bool = false;
 
@@ -1625,9 +1743,6 @@ namespace Nemerle.Contracts
 
         | TT.TExpr.DefaultValue =>
           append ("DEFAULT")
-
-        | TT.TExpr.NotNull (e) =>
-          append ($"when ($e == null) throw NullMatchException ();")
 
         | TT.TExpr.Switch (indexing, defl, cases) =>
           append ($ "switch ($indexing) $defl $cases")
