@@ -45,6 +45,7 @@ all:
 	$(Q)$(MAKE) -C synq all
 	$(Q)$(MAKE) -C ants-icfp2004 all
 	$(Q)$(MAKE) -C ants-icfp2004/simulator all
+	$(Q)$(MAKE) -C ants-icfp2004 run
 	$(Q)$(MAKE) -C sioux all
 	$(Q)$(MAKE) -C shootout all
 	$(Q)$(MAKE) -C course all

@@ -29,9 +29,12 @@ t: all
 	$(MONO) simulator/simulator.exe simulator/worlds/sample$(MAP).world \
 		the-ant simulator/brain.2.in 10000 dump-results 1000
 
-run: ants.exe
+run: Nemerle.dll ants.exe
 	$(MONO) ants.exe
+
+Nemerle.dll: $(NPATH)/Nemerle.dll
+	cp -f $(NPATH)/Nemerle.dll .
 
 clean:
 	$(MAKE) -C simulator clean
-	rm -f ants.exe antslib.dll antsmacro.dll serializer.dll
+	rm -f ants.exe antslib.dll antsmacro.dll serializer.dll Nemerle.dll
