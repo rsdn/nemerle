@@ -223,8 +223,6 @@ public abstract class LexerBase : IDisposable
     | Binary
   }
 
-  protected mutable putback : bool;
-  protected mutable putbackVal : char;
   protected mutable isPendingChar : bool;  // is there already some first char
   protected mutable pendingChar : char;
   protected mutable line : int;
@@ -275,12 +273,24 @@ public abstract class LexerBase : IDisposable
     mutable ch = read_from_input ();
     // Message.Debug (Location, $"ch = '$ch'");
 
-    when (ch == '\r')
-      if (peek_from_input_or_white () != '\n')
-        ch = '\n'; // \r is alone here, so we change it to newline
-      else
+    match (ch)
+    {
+      | '\n' => ++line; col = 1;
+          
+      | '\t' =>
+        ++col;
         when (is_check_wrong_chars)
-          Message.Warning (10002, this.Location, "CR character found in input stream");
+          Message.Warning (10002, this.Location, "tab character found in input stream")
+
+      | '\r' =>
+        if (peek_from_input_or_white () != '\n')
+          ch = '\n'; // \r is alone here, so we change it to newline
+        else
+          when (is_check_wrong_chars)
+            Message.Warning (10002, this.Location, "CR character found in input stream");
+
+      | _ => ++col;
+    };
    
     when (in_indentation_mode) {
       // Start counting indentation anew after a newline
@@ -345,7 +355,6 @@ public abstract class LexerBase : IDisposable
     Manager = man;
     line = 1;
     col = 1;
-    putback = false;
     isPendingChar = false;
 
     white_beginning = true;
@@ -358,6 +367,7 @@ public abstract class LexerBase : IDisposable
 
   abstract protected read_from_input () : char;
   abstract protected peek_from_input_or_white () : char;
+  abstract protected peek_from_input () : char;
 
   public abstract Dispose () : void;
   
@@ -368,35 +378,17 @@ public abstract class LexerBase : IDisposable
 
   protected virtual read () : char
   {
-    def ch = if (!putback) do_read () else { putback = false; putbackVal };
-  
-    match (ch) {
-      | '\n' => ++line; col = 1;
-          
-      | '\t' =>
-        ++col;
-        when (is_check_wrong_chars)
-          Message.Warning (10002, this.Location, "tab character found in input stream")
-      | _ => ++col;
-    };
-
-    ch
+    do_read ();
   }
 
   protected peek_or_white () : char
   {
-    if (putback)
-      putbackVal
-    else
-      peek_from_input_or_white ()
+    peek_from_input_or_white ()
   }
   
   protected peek () : char
   {
-    unless (putback) 
-      putbackVal = do_read ();
-    putback = true;
-    putbackVal
+    peek_from_input ();
   }
   
   public static IsIdBeginning (ch : char) : bool
@@ -419,7 +411,7 @@ public abstract class LexerBase : IDisposable
   }
 
   protected clear_id_buffer () : void {
-    _ = id_buffer.Remove (0, id_buffer.Length);
+    id_buffer.Length = 0;
   }
   
   protected get_op (first_ch : char) : Token
@@ -715,25 +707,21 @@ public abstract class LexerBase : IDisposable
 
   protected get_char_from_hex(len : int) : char
   {
-    def max = if (len == -1) 4 else len;
+    def max = if (len < 0) 4 else len;
     clear_id_buffer ();
     def loop (i) {
       when (i < max) {
-        def ch = read ();
+        def ch = peek ();
         match (ch) {
           | 'a' | 'A' | 'b' | 'B' | 'c' | 'C' | 'd' | 'D'
           | 'e' | 'E' | 'f' | 'F' | '0' | '1' | '2' | '3'
           | '4' | '5' | '6' | '7' | '8' | '9' =>
-            _ = id_buffer.Append(ch);
+            _ = id_buffer.Append(read ());
             loop(i+1)
             
           | _ =>
-            if (len != -1 || i == 0) {
-              throw Error ("bad escape character")
-            }
-            else {
-              putback = true; putbackVal = ch
-            }
+            when (len != -1 || i == 0)
+              throw Error ($"bad escape character '$ch'")
         }
       }
     }
@@ -874,9 +862,9 @@ public abstract class LexerBase : IDisposable
       }
       else
         match (ch) {
-          | ' ' | '\t' | '\r' => loop (true);
+          | ' ' | '\t' => loop (true);
  
-          | '\n' =>
+          | '\n' | '\r' => // Single \r interpret as new line!
             white_beginning = true;
             loop (true)
             
@@ -1437,6 +1425,15 @@ public class LexerFile : LexerBase
       
   }
 
+  override protected peek_from_input () : char
+  {
+    def inp = reader.Peek ();
+    if (inp >= 0)
+      inp :> char
+    else
+      throw LexerBase.Error ("unexpected end of file")
+  }
+
   override protected peek_from_input_or_white () : char
   {
     def inp = reader.Peek ();
@@ -1454,7 +1451,8 @@ public class LexerFile : LexerBase
     else 
       throw LexerBase.Error ("unexpected end of file")
   }
-        
+  
+
   override protected comment_beginning () : char
   {
     match (peek_or_white ()) {
@@ -1466,8 +1464,8 @@ public class LexerFile : LexerBase
             comment_loc = Location (file_idx, line, col - 2);
             _ = read ();
             mutable cc = ' ';
-            do {
-
+            do
+            {
               cc = read ();                
               _ = comment_store.Append (cc)
             } while (cc != '\n');
@@ -1562,6 +1560,14 @@ public class LexerString : LexerBase
 
   public override Dispose () : void { }
   
+  override protected peek_from_input () : char
+  {
+    if (pos < reader.Length)
+      reader[pos]
+    else
+      throw LexerBase.Error ("unexpected end of file")
+  }
+
   override protected peek_from_input_or_white () : char
   {
     if (pos < reader.Length)
@@ -1584,8 +1590,10 @@ public class LexerString : LexerBase
     match (peek_or_white ()) {
       | '/' =>
         // we are for sure in one line comment
-        try {
-          while (peek () != '\n') { _ = read (); };
+        try
+        {
+          while (read () != '\n')
+            ();
         } 
         catch { _ is LexerBase.Error => () };
         // pass whitespace, so next read would be eof checked
@@ -1618,7 +1626,7 @@ public class LexerCompletion : LexerString {
 
   public this (man : ManagerClass, fl : string, mark : int) {
     base (man, fl, Location_stack.top());
-    CompletionMarkAt = mark + 1;
+    CompletionMarkAt = mark;
   }
 
   public override GetToken () : Token {
