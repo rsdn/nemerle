@@ -165,6 +165,7 @@ STDMACROS_DLL_SRC = \
 	../macros/Data.n \
 	../macros/DesignPatterns.n \
 	../macros/AssemblyInfo.n \
+	../macros/Late.n \
 
 ############################################################
 # OUTPUT

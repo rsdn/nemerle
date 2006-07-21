@@ -1,0 +1,354 @@
+//
+// Late Binding Macro for Nemerle
+// Copyright (c) 2006, Snaury (snaury@gmail.com)
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without modification,
+// are permitted provided that the following conditions are met:
+//
+//     * Redistributions of source code must retain the above copyright notice,
+//       this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above copyright notice,
+//       this list of conditions and the following disclaimer in the documentation
+//       and/or other materials provided with the distribution.
+//     * Neither the name of the author nor the names of its contributors may be
+//       used to endorse or promote products derived from this software without
+//       specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+// ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+// (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+// ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+// SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+//
+
+#pragma indent
+
+namespace Nemerle.Late
+
+  using Nemerle.IO
+  using Nemerle.Compiler
+  using Nemerle.Compiler.Parsetree
+  using BF = System.Reflection.BindingFlags
+  using PM = System.Reflection.ParameterModifier
+
+  [Record] \
+  public class LateMacro
+    env : GlobalEnv
+  
+    /// This class holds info used when passing it to Type.InvokeMember
+    public class CallInfo
+      public mutable name : string
+      public mutable args : list[PExpr]
+      public mutable byref : list[bool]
+      public mutable isout : list[bool]
+      public mutable names : list[PExpr]
+
+      public this(name : string, args : list[PExpr], tail : list[PExpr] = null)
+        this.name = name
+        this.args = args
+        transform()
+        unless(tail == null)
+          this.args = this.args + tail
+
+      transform() : void
+        def transform_named()
+          def loop(args, named_args = [], named_names = [], unnamed_args = [])
+            match(args)
+              | [] => (named_args.Rev() + unnamed_args.Rev(), named_names.Rev())
+              | arg :: args => match(arg)
+                | <[ $(id : name) = $val ]> => loop(args, val :: named_args, <[ $(id.Id : string) ]> :: named_names, unnamed_args)
+                | _ => loop(args, named_args, named_names, arg :: unnamed_args)
+          (args, names) = loop(args)
+        def transform_byref()
+          def loop(args, _args = [], _byref = [], _isout = [])
+            match(args)
+              | [] => (_args.Rev(), _byref.Rev(), _isout.Rev())
+              | arg :: args => match(arg)
+                | <[ out $arg ]> => loop(args, arg :: _args, true :: _byref, true :: _isout)
+                | <[ ref $arg ]> => loop(args, arg :: _args, true :: _byref, false :: _isout)
+                | _ => loop(args, arg :: _args, false :: _byref, false :: _isout)
+          (args, byref, isout) = loop(args)
+        transform_named()
+        transform_byref()
+
+    public variant LateCall
+      | SetProperty { loc: Location; callinfo: CallInfo }
+      | GetProperty { loc: Location; callinfo: CallInfo }
+      | Method { loc: Location; callinfo: CallInfo }
+
+    /// returns expression that does a single late invoke
+    /// expr_name is used to hold expr
+    public static invoke(expr_name : Name, expr : PExpr, loc : Location, info : CallInfo, flags : BF, ignore_result = false) : PExpr
+      def array_literal(ty, args, exclude = [])
+        def transform(args, exclude, r = [])
+          match(args)
+            | [] => r.Rev()
+            | arg :: args => match(exclude)
+              | x :: exclude when x => transform(args, exclude, <[ null : object ]> :: r)
+              | _ :: exclude \
+              | exclude => transform(args, exclude, PExpr.TypeEnforcement(arg.Location, arg, ty) :: r)
+        if(args.Length != 0)
+          PExpr.Array(loc, <[ $(1 : int) ]>, PExpr.ListLiteral(loc, transform(args, exclude)))
+        else
+          <[ null ]>
+
+      def pms_literal(numargs, byrefs)
+        def pms_needed = need:
+          foreach(x in byrefs) when(x)
+            need(true)
+          false
+        if(pms_needed)
+          def pms = Macros.NewSymbol()
+          def init(byrefs, i = 0, r = [])
+            match(byrefs)
+              | x :: byrefs when (x && i < numargs) => init(byrefs, i + 1, PExpr.Assign(loc, PExpr.Indexer(loc, <[ $(pms : name) ]>, [<[ $(i : int)]>]), <[ true ]>) :: r)
+              | _ => r.Rev()
+          PExpr.Array(loc, <[ $(1 : int) ]>, PExpr.ListLiteral(loc, [PExpr.Sequence(loc, [<[ def $(pms : name) = PM($(numargs : int)) ]>, PExpr.Sequence(loc, init(byrefs)), <[ $(pms : name) ]>])]))
+        else
+          <[ null ]>
+
+      def name_expr = <[ $(info.name : string) ]>
+      def flags_expr = PExpr.Literal(Literal.FromObject(flags))
+      def args_expr = array_literal(<[ object ]>, info.args, info.isout) // FIXME: do we really need to pass info.isout here?
+      def pms_expr = pms_literal(info.args.Length, info.byref)
+      def names_expr = array_literal(<[ string ]>, info.names)
+      def call_expr(args_expr)
+        PExpr.Sequence(loc, [PExpr.Assign(loc, <[ $(expr_name : name) ]>, expr),
+                             <[ $(expr_name : name).GetType().InvokeMember($name_expr, $flags_expr, null, $(expr_name : name), $args_expr, $pms_expr, null, $names_expr) ]>])
+      def need_copyback = need:
+        foreach(x in info.byref) when(x)
+          need(true)
+        false
+      if(need_copyback)
+        def args_name = Macros.NewSymbol()
+        def init = PExpr.Define(loc, <[ $(args_name : name) ]>, args_expr)
+        def call = call_expr(<[ $(args_name : name) ]>)
+        def copyback(args, byref, i = 0, r = [])
+          match(args)
+            | arg :: args => match(byref)
+              | x :: byref when x => copyback(args, byref, i + 1, PExpr.Assign(arg.Location, arg, PExpr.Indexer(loc, <[ $(args_name : name) ]>, [<[ $(i : int) ]>])) :: r)
+              | _ :: byref => copyback(args, byref, i + 1, r)
+              | _ => r.Rev()
+            | _ => r.Rev()
+        def copyback = PExpr.Sequence(loc, copyback(info.args, info.byref))
+        if(ignore_result)
+          PExpr.Sequence(loc, [init, PExpr.Assign(loc, PExpr.Wildcard(), call), copyback])
+        else
+          def result_name = Macros.NewSymbol()
+          PExpr.Sequence(loc, [init, PExpr.Define(loc, <[ $(result_name : name) ]>, call), copyback, <[ $(result_name : name) ]>])
+      else
+        def call = call_expr(args_expr)
+        if(ignore_result)
+          PExpr.Sequence(loc, [PExpr.Assign(loc, PExpr.Wildcard(), call)])
+        else
+          call
+
+    /// returns expression that does all late invokes in chain
+    /// expr_name is used to hold expr with each invoke
+    public static build(expr_name : Name, expr : PExpr, chain : list[LateCall]) : PExpr
+      def loop(expr, chain)
+        match(chain)
+          | null => expr
+          | [] => expr
+          | x :: xs => match(x)
+            | null => loop(expr, xs)
+            | LateCall.SetProperty(loc, info) =>
+              loop(invoke(expr_name, expr, loc, info, if(info.args.Length > 1) BF.SetProperty else BF.SetField %| BF.SetProperty, true), xs)
+            | LateCall.GetProperty(loc, info) =>
+              loop(invoke(expr_name, expr, loc, info, if(info.args.Length > 0) BF.GetProperty else BF.GetField %| BF.GetProperty), xs)
+            | LateCall.Method(loc, info) =>
+              loop(invoke(expr_name, expr, loc, info, BF.InvokeMethod), xs)
+      loop(expr, chain)
+
+    /// scans single expression and returns (expr, list[LateCall])
+    /// returns (expr, []) if nothing in expression can be late bound
+    public static scan(expr : PExpr) : PExpr * list[LateCall]
+      def loop(expr, r = [])
+        def can_be_late(expr)
+          | PExpr.This => false
+          | PExpr.Base => false
+          | _ when Macros.IsTypeName(expr) => false
+          | _ => true
+        match(expr)
+          | null => (expr, r)
+          | <[ $rest . $(id : name) [.. $args] = $value ]> when can_be_late(rest) \
+          | <[ $rest . $(id : name) = $value ]> when can_be_late(rest) with (args = []) \
+          | <[ $rest . [.. $args] = $value ]> when can_be_late(rest) with(id = Name("")) \
+          | <[ $rest [.. $args] = $value ]> when can_be_late(rest) with(id = Name("")) =>
+            when(id.Id == "" && args.Length == 0)
+              Message.FatalError(expr.Location, "default indexer must have parameters")
+            loop(rest, LateCall.SetProperty(expr.Location, CallInfo(id.Id, args, [value])) :: r)
+          | <[ $rest . $(id : name) [.. $args] ]> when can_be_late(rest) \
+          | <[ $rest . $(id : name) ]> when can_be_late(rest) with(args = []) \
+          | <[ $rest . [.. $args] ]> when can_be_late(rest) with(id = Name("")) \
+          | <[ $rest [.. $args] ]> when can_be_late(rest) with(id = Name("")) =>
+            when(id.Id == "" && args.Length == 0)
+              Message.FatalError(expr.Location, "default indexer must have parameters")
+            loop(rest, LateCall.GetProperty(expr.Location, CallInfo(id.Id, args)) :: r)
+          | <[ $rest . $(id : name) (.. $args) ]> when can_be_late(rest) =>
+            loop(rest, LateCall.Method(expr.Location, CallInfo(id.Id, args)) :: r)
+          | _ => (expr, r)
+      loop(expr)
+
+    /// transform any first class lateexpr by transformation rules
+    /// sets expr' and returns true if expr is first class lateexpr
+    /// returns false otherwise
+    /// note: if deep is true then any subexpr in expr' is sent to transform(expr, true)
+    public latebound(expr : PExpr, expr' : out PExpr, deep = true) : bool
+      def (expr, chain) = scan(expr)
+      if(chain is [])
+        false
+      else
+        def expr = if(deep)
+          def deeptransform(expr)
+            transform(expr, true)
+          def expr = deeptransform(expr)
+          def loop(chain)
+            | x :: chain =>
+              match(x)
+                | LateCall.SetProperty(_, info) \
+                | LateCall.GetProperty(_, info) \
+                | LateCall.Method(_, info) =>
+                  info.args = info.args.Map(deeptransform)
+              loop(chain)
+            | _ => ()
+          loop(chain)
+          expr
+        else
+          expr
+        def expr_name = Macros.NewSymbol()
+        expr' = PExpr.Sequence(expr.Location, [PExpr.DefMutable(expr.Location, <[ $(expr_name : name) ]>, null), build(expr_name, expr, chain)])
+        true
+
+    /// transforms any lateexpr in expr by lateexpr transformation rules
+    /// if deep is true, then also transforms any subexpr in any lateexpr
+    /// note: mostly based on traverse in typing/Macros.n
+    /// too bad that traverse can't be used here directly
+    public transform(expr : PExpr, deep = true) : PExpr
+      def loc = expr.Location
+      def recurse(expr)
+        transform(expr, deep)
+      def recurse_fun(f)
+        def recurse_funparm(p)
+          def recurse_attr(attr)
+            | <[ System.ComponentModel.DefaultValueAttribute($e) ]> =>
+              <[ System.ComponentModel.DefaultValueAttribute($(recurse(e))) ]>
+            | _ => attr
+          Fun_parm(p.Location, p.name, p.ty, Modifiers(p.modifiers.mods, p.modifiers.custom_attrs.Map(recurse_attr)))
+        Function_decl(Fun_header(f.header.Location, f.header.typarms, f.header.name, f.header.ret_type, f.header.parms.Map(recurse_funparm)), recurse(f.body))
+      mutable expr'
+      def result = match(expr)
+        | null => null
+        | _ when latebound(expr, out expr', deep) => expr'
+        | PExpr.Wildcard \
+        | PExpr.Void => expr
+        | PExpr.As(pat, name) => PExpr.As(loc, recurse(pat), name)
+        | PExpr.Is(pat, ty) => PExpr.Is(loc, recurse(pat), ty)
+        | PExpr.Where(name, fields) => PExpr.Where(loc, recurse(name), recurse(fields))
+        | PExpr.Match(mexpr, cases) =>
+          def recurse_case(c)
+            def recurse_guard(g)
+              | PExpr.Call(<[ $("when" : dyn) ]> as w, [pat, expr]) =>
+                PExpr.Call(g.Location, w, [pat, recurse(expr)])
+              | _ => g
+            MatchCase(c.patterns.Map(recurse_guard), recurse(c.body), c.disable_warnings)
+          PExpr.Match(loc, recurse(mexpr), cases.Map(recurse_case))
+        | PExpr.Ref => expr
+        | PExpr.Member(obj, mem) => 
+          if (Macros.IsTypeName (obj))
+            expr
+          else
+            PExpr.Member(loc, recurse(obj), mem)
+        | PExpr.Call(func, parms) => 
+          def ismacro = match (Util.QidOfExpr (func))
+            | Some ((id, name)) =>
+              def ctx = name.GetEnv (env)
+              match (ctx.LookupMacro (id))
+                | Some (_) => true
+                | None => false
+            | None => false
+          if (ismacro)
+            PExpr.Call(loc, func, parms.Map(recurse))
+          else
+            PExpr.Call(loc, recurse(func), parms.Map(recurse))
+        | PExpr.GenericSpecifier(func, parms) => PExpr.GenericSpecifier(loc, recurse(func), parms.Map(recurse))
+        | PExpr.ListLiteral(elems) => PExpr.ListLiteral(loc, elems.Map(recurse))
+        | PExpr.Assign(target, source) => PExpr.Assign(loc, recurse(target), recurse(source))
+        | PExpr.DefMutable(name, val) => PExpr.DefMutable(loc, name, recurse(val))
+        | PExpr.Define(name, val) => PExpr.Define(loc, name, recurse(val))
+        | PExpr.DefFunctions(funs) => PExpr.DefFunctions(loc, funs.Map(recurse_fun))
+        | PExpr.Lambda(decl) => PExpr.Lambda(loc, recurse_fun(decl))
+        | PExpr.Throw(expr) =>
+          PExpr.Throw(loc, recurse(expr))
+        | PExpr.TryWith(body, ex, ty, handler) =>
+          PExpr.TryWith(loc, recurse(body), ex, ty, recurse(handler))
+        | PExpr.TryFinally(body, handler) =>
+          PExpr.TryFinally(loc, recurse(body), recurse(handler))
+        | PExpr.Literal \
+        | PExpr.This \
+        | PExpr.Base \
+        | PExpr.Typeof => expr
+        | PExpr.TypeConversion(expr, ty) => PExpr.TypeConversion(loc, recurse(expr), ty)
+        | PExpr.TypeEnforcement(expr, ty) => PExpr.TypeEnforcement(loc, recurse(expr), ty)
+        | PExpr.Sequence(seq) => PExpr.Sequence(loc, seq.Map(recurse))
+        | PExpr.Tuple(args) => PExpr.Tuple(loc, args.Map(recurse))
+        | PExpr.Array(rank, args) => PExpr.Array(loc, recurse(rank), recurse(args))
+        | PExpr.EmptyArray(sizes) => PExpr.EmptyArray(loc, sizes.Map(recurse))
+        | PExpr.Indexer(obj, args) => PExpr.Indexer(loc, recurse(obj), args.Map(recurse))
+        | PExpr.ParmByRef \
+        | PExpr.ParmOut \
+        | PExpr.Error => expr
+        | PExpr.MacroCall(name, ns, parms) =>
+          match(ns.Value)
+            | NamespaceTree.TypeInfoCache.MacroCall(m) when (false
+                                                             || m is late_macroMacro
+                                                             || m is late_parens_macroMacro
+                                                             || m is nolate_macroMacro
+                                                             || m is nolate_parens_macroMacro
+                                                            ) =>
+              expr
+            | _ =>
+              def recurse_parm(parm)
+                | SyntaxElement.Expression(expr) =>
+                  SyntaxElement.Expression(recurse(expr))
+                | _ => parm
+              PExpr.MacroCall(loc, name, ns, parms.Map(recurse_parm))
+        | PExpr.Quoted(quot) =>
+          def inner = match(quot)
+            | SyntaxElement.Expression(expr) => SyntaxElement.Expression(recurse(expr))
+            | _ => quot // perhaps I shouldn't be lazy here, what if something new is added to the compiler?
+          PExpr.Quoted(loc, inner)
+        | PExpr.Spliced(expr) => PExpr.Spliced(loc, recurse(expr))
+        | PExpr.ToComplete => expr
+        | PExpr.Ellipsis(expr) => PExpr.Ellipsis(loc, recurse(expr))
+        | PExpr.Typed \
+        | PExpr.TypedPattern \
+        | PExpr.TypedType => expr
+      result.loc = loc // TODO: rewrite everything up there passing loc to constructors
+      result
+
+  macro late_parens_macro(expr) \
+  syntax("late", "(", expr, ")")
+    def result = LateMacro (Macros.ImplicitCTX().Env).transform(expr)
+    // [DEBUG] printf("result: %s\n", result.ToString())
+    result
+
+  macro late_macro(expr) \
+  syntax("late", expr)
+    def result = LateMacro (Macros.ImplicitCTX().Env).transform(expr)
+    // [DEBUG] printf("result: %s\n", result.ToString())
+    result
+
+  macro nolate_parens_macro(expr) \
+  syntax("nolate", "(", expr, ")")
+    expr
+
+  macro nolate_macro(expr) \
+  syntax("nolate", expr)
+    expr
