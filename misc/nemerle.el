@@ -363,7 +363,7 @@ Returns t if inside a comment."
 	  (setq line (nemerle-analyze-line))
 	  (if (and (eq line 'match-case) (eq (nth 0 (parse-partial-sexp (point) begin)) 1))
 		 (setq in-match-case t))
-	  (if (> (forward-line 1) 0)
+	  (if (or (> (forward-line 1) 0) (eq (point) end))
 	      (setq at-end t))
 	  (beginning-of-line))
 	  in-match-case))))
