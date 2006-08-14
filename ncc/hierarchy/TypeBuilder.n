@@ -68,7 +68,6 @@ public partial class TypeBuilder : TypeInfo
   loc : Location;
   [Accessor] mutable parts_location : list [Location];
   modifiers : Modifiers;
-  mutable attributes : NemerleAttributes;
   accessibility : Accessibility;
   
   typarms_count : int;
@@ -78,6 +77,7 @@ public partial class TypeBuilder : TypeInfo
   mutable partial_parts : list [PT.TopDeclaration] = [];
   
   is_enum : bool;
+  [Accessor (flags = WantSetter)]
   mutable is_finalized : bool;
   mutable cannot_finalize : bool;
   mutable m_has_been_used : bool;
@@ -206,21 +206,11 @@ public partial class TypeBuilder : TypeInfo
     }
   }
 
-  public override IsSealed : bool
-  {
-    get { attributes %&& NemerleAttributes.Sealed }
-  } 
-
   public IsAbstract : bool
   {
     get { attributes %&& NemerleAttributes.Abstract }
   } 
 
-  public IsModule : bool
-  {
-    get { attributes %&& NemerleAttributes.Static }
-  }
-  
   public override IsDelegate : bool
   {
     get
@@ -250,32 +240,12 @@ public partial class TypeBuilder : TypeInfo
     get { IsStruct || is_enum }
   }
 
-  public IsPublic : bool
-  {
-    get { attributes %&& NemerleAttributes.Public }
-  }
-
-  public IsInternal : bool
-  {
-    get { attributes %&& NemerleAttributes.Internal }
-  }
-
-  public IsProtected : bool
-  {
-    get { attributes %&& NemerleAttributes.Protected }
-  }
-
-  public IsPrivate : bool
-  {
-    get { attributes %&& NemerleAttributes.Private }
-  }
-  
   public override GetModifiers () : Modifiers
   {
     modifiers
   }
 
-  public GlobalEnv : GlobalEnv
+  public override GlobalEnv : GlobalEnv
   {
     get { pt_name.context }
   }
@@ -321,11 +291,6 @@ public partial class TypeBuilder : TypeInfo
     get { accessibility }
   }
 
-  public override Attributes : NemerleAttributes
-  {
-    get { attributes }
-  }
-
   public override IsExternallyAccessible : bool
   {
     get
@@ -356,9 +321,10 @@ public partial class TypeBuilder : TypeInfo
   {
     get { m_has_been_used }
     set {
-      m_has_been_used = m_has_been_used || value;
+      base.HasBeenUsed = value;
+      m_has_been_used = true;
       when (enclosing_type != null)
-        ManagerClass.Instance.MarkAsUsed (enclosing_type)
+        Manager.MarkAsUsed (enclosing_type, value)
     }
   }
 
@@ -390,11 +356,6 @@ public partial class TypeBuilder : TypeInfo
      }
      else false
     )
-  }
-
-  public IsFinalized : bool {
-    get { is_finalized }
-    set { is_finalized = value }
   }
 
   [Nemerle.Assertions.Requires (TyManager.run_phase <= 2)] 
@@ -534,21 +495,9 @@ public partial class TypeBuilder : TypeInfo
   }
 
 
-  public FindAttribute (looking_for : TypeInfo) : option [PT.PExpr]
+  public FindAttribute (looking_for : TypeInfo) : option [PT.PExpr * list [PT.PExpr]]
   {
-    mutable result = None ();
-    
-    // find our attribute
-    foreach (expr in GetModifiers ().custom_attrs)
-      match (Manager.AttributeCompiler.ResolveAttribute (this.GlobalEnv, expr)) {
-        | Some ((t, _)) =>
-          when (looking_for.Equals (t))
-            result = Some (expr)
-            
-        | _ => ()
-      }
-
-    result
+    GetModifiers ().FindAttribute (looking_for, this.GlobalEnv)
   }
 
   public override AttributeTargets : System.AttributeTargets
@@ -1489,10 +1438,13 @@ public partial class TypeBuilder : TypeInfo
               ()
             else if (meth.Attributes %&& NemerleAttributes.Override) {
                 (meth :> MethodBuilder).overridden_method = m;
+                meth.HasBeenUsed = false;
               
                 if (m.Attributes %&& NemerleAttributes.Virtual)
-                  when (m.IsFinal)
+                  if (m.IsFinal)
                     Message.Error ($"`override' specified on $meth, but $x is `sealed'")
+                  else
+                    m.HasBeenUsed = !meth.IsObsolete;
                 else
                   Message.Error ($"`override' specified on $meth"
                                  ", but there is no `virtual' modifier on $x");
@@ -1502,10 +1454,11 @@ public partial class TypeBuilder : TypeInfo
                   Message.Error ($"attempt to change the access modifiers of $meth"
                                  " during override of $x");
             }
-            else
+            else {
               Message.Warning (114, meth.Location, $"$(meth) hides $(x) inherited from base class. "
                                "To make the current member override that implementation, "
                                "add the `override' keyword. Otherwise add the `new' keyword.");
+            }
 
             // return list with the new method inside (and without [x], which is hidden now)
             List.RevAppend (xs, meth :: acc)
@@ -1789,6 +1742,8 @@ public partial class TypeBuilder : TypeInfo
    */
   internal add_members () : void
   {
+    is_obsolete = HasAttribute (InternalType.Obsolete_tc);
+    
     assert (member_list == null);
 
     add_derived_members ();
@@ -2109,7 +2064,7 @@ public partial class TypeBuilder : TypeInfo
               method_type_ok (iface_meth, meth)
             };
 
-            ManagerClass.Instance.MarkAsUsed (meth);
+            Manager.MarkAsUsed (meth);
             
             def partition_and_set (meths, methods_map) {
               def (correct, notcorrect) = List.Partition (meths, is_correct);
@@ -2156,7 +2111,7 @@ public partial class TypeBuilder : TypeInfo
            unless (meth.Attributes %&& NemerleAttributes.Virtual)
              meth.Attributes |= NemerleAttributes.Sealed %| NemerleAttributes.Virtual %| NemerleAttributes.New;
               
-          foreach (mem in impl') ManagerClass.Instance.MarkAsUsed (mem);
+          foreach (mem in impl') Manager.MarkAsUsed (mem, !meth.IsObsolete);
 
           meth.SetFunKind (FunKind.BoundMethod (impl'))
          
@@ -2189,7 +2144,7 @@ public partial class TypeBuilder : TypeInfo
                   } else [];
                 already_bound [meth.Name] = lst + already;
                 unless (lst.IsEmpty)
-                  ManagerClass.Instance.MarkAsUsed (meth);
+                  Manager.MarkAsUsed (meth, false);
                 lst
             }
           | None => []
@@ -2203,7 +2158,7 @@ public partial class TypeBuilder : TypeInfo
               def new_impls = impl' + impl;
 
               foreach (impl in new_impls)
-                ManagerClass.Instance.MarkAsUsed (impl);
+                Manager.MarkAsUsed (impl, !meth.IsObsolete);
 
               meth.SetFunKind (FunKind.BoundMethod (new_impls));
 
@@ -2263,6 +2218,7 @@ public partial class TypeBuilder : TypeInfo
               ]>) :> MethodBuilder;
 
               wrapper.MarkWithSpecialName ();
+              wrapper.HasBeenUsed = false; // do not trigger obsoletion warning
               // note in method definition what we are implementing 
               // (this cannot be automatic because we are currently resolving implements
               wrapper.SetFunKind (FunKind.BoundMethod (correct));
@@ -2353,7 +2309,7 @@ public partial class TypeBuilder : TypeInfo
         process_attributes (parms, MacroTargets.Event, stage, mem.modifiers, null)
     }
   }
-    
+
   internal process_macro_attributes (stage : MacroPhase) : void
   {
     process_attributes ([PT.SyntaxElement.TypeBuilder (this)], MacroTargets.Class, stage, modifiers, null);
@@ -2493,97 +2449,23 @@ public partial class TypeBuilder : TypeInfo
 
   /**
    * Checks for abstract method in non-abstract class errors.
-   * Marks abstract declaration/implementation pairs as used.
-   *
-   * FIXME: we should store information about abstract overrides
-   *        the same way we store information about interfaces,
-   *        this way this code would be linear instead of n^2
    */
   check_abstract () : void
   {
-    def override_methods = Hashtable (30);
-    def type_members = GetMembers ();
-
     // Message.Debug ($"mems $(type_members.ToString(\"\\n\"))");
-    // first, check for the abstract method/non-abstract class errors
-    foreach (m : IMember in type_members) 
-      match (m.GetKind ()) {
-        | MemberKind.Method when m.Attributes %&& NemerleAttributes.Abstract =>
-          unless (Attributes %&& NemerleAttributes.Abstract)
-          {
+    // check for the abstract method/non-abstract class errors
+    unless (Attributes %&& NemerleAttributes.Abstract)
+      foreach (m in GetMembers ()) 
+        match (m.GetKind ()) {
+          | MemberKind.Method when m.Attributes %&& NemerleAttributes.Abstract =>
             attributes |= NemerleAttributes.Abstract;
             if (m.DeclaringType.Equals (this))
               Message.Error ($"$m is abstract, but its declaring class `$(FullName)' is not");
             else
               Message.Error ($"$m must be overriden, because it is abstract and the current class `$(FullName)' is not");
-          }
-            
-        | _ => ()
-      }
-
-    // find all the `override' methods in this type
-    foreach (m : IMember in type_members)
-      match (m.GetKind ()) {
-        | MemberKind.Method when m.Attributes %&& NemerleAttributes.Override =>
-          def previous_methods =
-            match (override_methods.Get (m.Name)) {
-              | Some (methods) => methods
-              | _ => []
-            }
-            
-          override_methods.Set (m.Name, (m :> IMethod) :: previous_methods);
-          ManagerClass.Instance.MarkAsUsed (m)
-    
-        | _ => ()
-      }
-
-    // then, mark abstract declaration/implementation pair as used
-    def walk_hierarchy (tycon : TypeInfo)
-    {
-      // FIXME: this should be defined on Fun_header -- IsCompatible () (?)
-      def fun_parms_agree (abstract_parms : list [Fun_parm], impl_parms : list [Fun_parm])
-      {          
-        | ([], []) => true
-          
-        | (abstract_parm :: rest_abstract_parms, impl_parm :: rest_impl_parms) =>
-          abstract_parm.name == impl_parm.name &&
-          abstract_parm.ty.Fix ().Equals (impl_parm.ty.Fix ()) &&
-          fun_parms_agree (rest_abstract_parms, rest_impl_parms)
-          
-        | _ => false
-      }
-      
-      override_methods.Iter (fun (name : string, meths : list [IMethod]) {
-        foreach (meth : IMethod in meths) 
-        {
-          def meth_parms = meth.GetParameters ();
-        
-          def possible_abstract_meths =
-            List.RevFilter (tycon.LookupMember (name), fun (mem : IMember) {            
-              mem.Attributes %&& NemerleAttributes.Abstract
-            });
-
-          foreach (abstract_meth : IMember in possible_abstract_meths) {
-            def abstract_meth = abstract_meth :> IMethod;
-
-            when (fun_parms_agree (abstract_meth.GetParameters (), meth_parms)) {
-              ManagerClass.Instance.MarkAsUsed (abstract_meth);
-              ManagerClass.Instance.MarkAsUsed (meth)
-            }
-          }
+                      
+          | _ => ()
         }
-      })
-    }
-    and recurse (supertypes : list [MType.Class])
-    {
-      | ty :: rest =>
-        walk_hierarchy (ty.tycon);
-        recurse (rest)
-
-      | [] => ()
-    }
-
-    recurse (GetDirectSuperTypes ())
   }
 
   /**
