@@ -325,7 +325,7 @@ out.$(STAGE)/Nemerle.Compiler.$(OUTF_STAGE)dll: \
 out.$(STAGE)/Nemerle.Macros.dll: $(COMPILER_DEP) out.$(STAGE)/Nemerle.$(OUTF_STAGE)dll \
 		out.$(STAGE)/Nemerle.Compiler.$(OUTF_STAGE)dll $(STDMACROS_DLL_SRC)
 	$(COMP) "[$(STAGE)]" Nemerle.Macros.dll
-	$(Q)$(RUN_COMPILER) -target-library $(SNK_COMPILER) -out:$@ \
+	$(Q)$(RUN_COMPILER) -r System.Data -target-library $(SNK_COMPILER) -out:$@ \
 		-reference:out.$(STAGE)/Nemerle.$(OUTF_STAGE)dll \
 		-reference:out.$(STAGE)/Nemerle.Compiler.$(OUTF_STAGE)dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)

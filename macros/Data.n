@@ -29,11 +29,298 @@
 using Nemerle.Compiler;
 using Nemerle.Collections;
 using System.Text.RegularExpressions;
+using System.Data;
 
 namespace Nemerle.Data 
 {
-  public module Tools 
+  /**
+    Define connection string, which will be used by application
+    (also for compile-time verification of SQL queries by compiler)
+   */
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
+                       Nemerle.MacroTargets.Assembly)]
+  macro ConfigureConnection (connClass : string, con_str : string, name : string = "")
   {
+    def mng = Nemerle.Macros.ImplicitCTX().Manager;
+    if (Helper.connections.Contains (name))
+      Message.FatalError ("Connection with name `" + name + "' is already defined")
+    else {
+      try {
+        def connection = Helper.CreateConnection (mng, connClass, con_str);
+        connection.Open ();
+        Helper.connections.Add (name, connection);
+      }
+      catch {
+        | e is Recovery => throw e;
+        | e =>
+          Message.FatalError ($"connecting to database failed: $e")
+      }
+    };
+  }
+
+  macro ExecuteNonQuery (query : string, conn, con_name : string = "")
+  {
+    def (query, tpars, pars_init) =
+      Helper.ExtractParameters (Nemerle.Macros.ImplicitCTX (), query, Helper.ParameterChar (con_name));
+
+    // create compile-time query to check syntax and types in query
+    def (mycmd, mytran) = Helper.CreateCommand (query, con_name);    
+
+    try { 
+      tpars.Iter (fun (name, tvar : Typedtree.TExpr) {
+        Helper.InitParameter (mycmd, name, tvar.ty.Fix ());
+      });
+      // try to execute query chcecking its syntax and typecorrectness
+      _ = mycmd.ExecuteNonQuery ()
+    }
+    catch {
+      | e  =>
+        Message.FatalError ("sql query error: " + e.Message)
+    }
+    finally {
+      mytran.Rollback ();
+      mycmd.Dispose ();
+    };
+
+    <[
+      using (querycmd = $(Helper.CommandExpr (con_name)) ($(query : string), $conn))
+      {
+        { .. $pars_init };
+        querycmd.ExecuteNonQuery ();
+      }
+    ]>
+  }
+
+  macro ExecuteScalar (query : string, conn, con_name : string = "")
+  {
+    def (query, tpars, pars_init) =
+      Helper.ExtractParameters (Nemerle.Macros.ImplicitCTX (), query, Helper.ParameterChar (con_name));
+
+    // create compile-time query to check syntax and types in query
+    def (mycmd, mytran) = Helper.CreateCommand (query, con_name);
+
+    mutable col_type = null;
+    try {
+      tpars.Iter (fun (name, tvar : Typedtree.TExpr) {
+        Helper.InitParameter (mycmd, name, tvar.ty.Fix ());
+      });
+
+      // try to execute query chcecking its syntax and aquiring names of columns
+      def myreader = mycmd.ExecuteReader(CommandBehavior.SchemaOnly);
+      def table = myreader.GetSchemaTable ();
+      if (table.Rows.Count < 1)
+        Message.FatalError ("this query doesn't return any value")
+      else 
+        col_type = Util.ExprOfQid (table.Rows[0]["DataType"].ToString ());
+      myreader.Close ();
+    }
+    catch {
+      | e  =>
+        Message.FatalError ("sql query error: " + e.Message)
+    }
+    finally {
+      mytran.Rollback ();
+      mycmd.Dispose ();
+    };
+
+    /// final code for entire sql loop
+    <[
+      using (querycmd = $(Helper.CommandExpr (con_name)) ($(query : string), $conn))
+      {
+        { .. $pars_init };
+        (querycmd.ExecuteScalar () :> $col_type);
+      }
+    ]>
+  }
+
+  macro ExecuteReader (query : string, conn, con_name : string = "")
+  {
+    def (query, tpars, pars_init) =
+      Helper.ExtractParameters (Nemerle.Macros.ImplicitCTX (), query, Helper.ParameterChar (con_name));
+
+    // create compile-time query to check syntax and types in query
+    def (mycmd, mytran) = Helper.CreateCommand (query, con_name);
+    try {
+      tpars.Iter (fun (name, tvar : Typedtree.TExpr) {
+        Helper.InitParameter (mycmd, name, tvar.ty.Fix ());
+      });
+      // try to execute query chcecking its syntax
+      _ = mycmd.ExecuteNonQuery ();
+    }
+    catch {
+      | e  =>
+        Message.FatalError ("sql query error: " + e.Message)
+    }
+    finally {
+      mytran.Rollback ();
+      mycmd.Dispose ();
+    };
+
+    /// final code for entire sql loop
+    <[
+      using (querycmd = $(Helper.CommandExpr (con_name)) ($(query : string), $conn)) 
+      {
+        { .. $pars_init };
+        querycmd.ExecuteReader ();
+      }
+    ]>
+  }
+
+  macro ExecuteReaderLoop (query : string, conn, body, con_name : string = "")
+  {
+    def (query, tpars, pars_init) =
+      Helper.ExtractParameters (Nemerle.Macros.ImplicitCTX (), query, Helper.ParameterChar (con_name));
+
+    // list of definitions of query results inside loop body
+    mutable bodyseq = [body];
+
+    // create compile-time query to check syntax and types in query
+    def (mycmd, mytran) = Helper.CreateCommand (query, con_name);
+    try {
+      tpars.Iter (fun (name, tvar : Typedtree.TExpr) {
+        Helper.InitParameter (mycmd, name, tvar.ty.Fix ())
+      });
+
+      // try to execute query chcecking its syntax and aquiring names of columns
+      def myreader = mycmd.ExecuteReader(CommandBehavior.SchemaOnly %|
+                                         CommandBehavior.SingleRow);
+      def table = myreader.GetSchemaTable ();
+      mutable col_num = 0;
+      foreach (myRow :> DataRow in table.Rows){
+        def col_type = myRow["DataType"].ToString ();
+        def col_name = myRow["ColumnName"].ToString ();
+        def type_suff = 
+          if (col_type.StartsWith ("System."))
+            col_type.Substring (7)
+          else col_type;
+
+        // create runtime variables definition according to extracted types
+        bodyseq = <[ def $(col_name : usesite) =
+                        reader.$("Get" + type_suff : usesite) ($(col_num : int)) ]>
+                    :: bodyseq;
+        ++col_num;
+      };
+
+      myreader.Close ();
+    }
+    catch {
+      | e  =>
+        Message.FatalError ("sql query error: " + e.Message)
+    }
+    finally {
+      mytran.Rollback ();
+      mycmd.Dispose ();
+    };
+
+    /// final code for entire sql loop
+    <[
+      using (querycmd = $(Helper.CommandExpr (con_name)) ($(query : string), $conn)) {
+        { .. $pars_init };
+        def reader = querycmd.ExecuteReader ();
+        while (reader.Read ()) { ..$bodyseq };
+        reader.Close ();
+      }
+    ]>
+  }
+
+  module Helper {
+    internal connections : Hashtable [string, IDbConnection] = Hashtable ();
+
+    public CreateConnection (mng : ManagerClass, tyName : string, connStr : string) : IDbConnection
+    {
+      def idbTy = match (mng.NameTree.LookupExactType ("System.Data.IDbConnection")) {
+        | Some (t) => t
+        | None => Message.FatalError ("You need to have `System.Data.dll' among reference assemblies to use sql macros - could not find `System.Data.IDbConnection' interface");
+      }
+        
+      match (mng.NameTree.LookupExactType (tyName)) {
+        | Some (ty) => 
+          if (ty.SuperType (idbTy).IsSome)
+            System.Activator.CreateInstance (ty.SystemType, connStr) :> IDbConnection;
+          else
+            Message.FatalError ($"Specified type `$tyName' does not implement `System.Data.IDbConnection' interface for providing sql connection");
+        | None =>
+          Message.FatalError ($"Could not instantiate type `$tyName' providing sql connection - not found in referenced assemblies");
+      }
+      
+    }
+    
+    public CreateCommand (query : string, con_name : string, want_tran = true) : IDbCommand * IDbTransaction
+    {
+      def conn = get_connection (con_name);
+      mutable tran = null;
+      when (want_tran)
+        tran = conn.BeginTransaction ();
+      def cmd = conn.CreateCommand ();
+      cmd.CommandText = query;
+      cmd.Connection = conn;
+      when (tran != null)
+        cmd.Transaction = tran;
+      (cmd, tran)
+    }
+    
+    public InitParameter (cmd : IDbCommand, name : string, ty : MType) : void
+    {
+       def dbvalue = type_representant (ty);
+       def p = cmd.CreateParameter ();
+       p.ParameterName = name;
+       p.Value = dbvalue;
+       _ = cmd.Parameters.Add (p);
+    }
+    
+    public CommandExpr (con_name : string) : Parsetree.PExpr {
+      def connClass = connections [con_name].GetType ().FullName;
+      Util.ExprOfQid (connClass.Replace ("Connection", "Command"))
+    }
+    
+    public ParameterChar (conName : string) : char {
+      def connClass = connections [conName].GetType ().FullName;
+      if (connClass.EndsWith (".SqlConnection"))
+        '@' 
+      else if (connClass.EndsWith (".NpgsqlConnection"))
+        ':'
+      else
+        ':'
+    }
+    
+    get_connection (name : string) : IDbConnection
+    {
+      match (connections.Get (name)) {
+        | Some (c) => c
+        | None =>
+          if (name == "")
+            Message.FatalError ("default connection was not found")
+          else
+            Message.FatalError ("connection `" + name + "' was not found")
+      }
+    }
+
+    type_representant (t : MType) : object
+    {
+      match (t) {
+        | MType.Class (tc, []) =>
+          match (tc.FullName) {
+            | "System.String" | "Nemerle.Core.string" => "st" : object
+            | "System.Int32" | "Nemerle.Core.int" => 234
+            | "System.Boolean" | "Nemerle.Core.bool" => true
+            | "System.UInt32" | "Nemerle.Core.uint" => 234u
+            | "System.Byte" | "Nemerle.Core.byte" => 34ub
+            | "System.DateTime" => System.DateTime.Now
+            | "System.Decimal" | "Nemerle.Core.decimal" => 45.3m
+            | "System.Double" | "Nemerle.Core.double" => 34.4
+            | "System.Int16" | "Nemerle.Core.short" => 34s
+            | "System.UInt16" | "Nemerle.Core.ushort" => 34us
+            | "System.Int64" | "Nemerle.Core.long" => 34l
+            | "System.UInt64" | "Nemerle.Core.ulong" => 34ul
+            | "System.SByte" | "Nemerle.Core.sbyte" => 34b
+            | "System.Single" | "Nemerle.Core.float" => 34.4f
+            | x => Message.FatalError (x + " type not supported")
+          }
+        | _ =>
+          Message.FatalError ("only basic types supported in sql query")
+      }
+    }
+    
     /** Extracts parameters after $, perform typing of expressions containing
         variables with names of those parameters.
     
@@ -73,7 +360,9 @@ namespace Nemerle.Data
 
         /// add parameter initializer
         pars_init = <[
-          _ = querycmd.Parameters.Add ($(x : string), $(tvar : typed))
+          def p = querycmd.CreateParameter ();
+          p.ParameterName = $(x : string);
+          querycmd.Parameters.Add (p).Value = $(tvar : typed);
         ]> :: pars_init;
       });
       (fquery.ToString (), tpars, pars_init)
