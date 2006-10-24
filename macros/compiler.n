@@ -29,6 +29,7 @@
 /* Macros used only inside the compiler.  */
 
 using Nemerle.Compiler;
+using System.Diagnostics;
 
 namespace Nemerle.Compiler.Util
 {
@@ -67,6 +68,12 @@ namespace Nemerle.Compiler.Util
 
 namespace Nemerle.Compiler
 {
+  using Nemerle.Collections;
+  using Nemerle.Utility;
+  using SCG = System.Collections.Generic;
+  using Attr = NemerleAttributes;
+  using Member = Parsetree.ClassMember;
+  
   [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
                        Nemerle.MacroTargets.Class)]
   macro ManagerAccess (tb : TypeBuilder, params options : list [PExpr])
@@ -101,6 +108,311 @@ namespace Nemerle.Compiler
         _ = InternalType;
       }
     ]>);
+  }
+
+  module Helpers
+  {
+    public IsRelocatedType (tb : TypeBuilder) : bool
+    {
+      !(tb.Attributes %&& (Attr.Static | Attr.Struct) // | Attr.Sealed
+        || tb.IsValueType || tb.IsInterface || tb.IsDelegate || tb.IsAlias
+       )
+    }
+  }
+
+  /// Add Relocate() method to class and all class referenced dy it fields.
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
+                       Nemerle.MacroTargets.Class)]
+  macro SupportRelocation (typeBuilder : TypeBuilder)
+  {
+    //def wl(x : object) { System.Console.WriteLine(x); }
+    //wl("vvvvvvv SupportRelocation (BeforeInheritance).");
+
+    def env            = typeBuilder.GlobalEnv;
+    def nameTree       = env.NameTree;
+    def nsRoot         = nameTree.NamespaceTree;
+    def typeBuilders   = nsRoot.GetTypeBuilders();
+
+    foreach (tb when Helpers.IsRelocatedType (tb) && !tb.IsVariantOption in typeBuilders)
+    {
+      ////wl($"$(tb.Name) tb.IsDelegate= $(tb.IsDelegate)");
+      System.Diagnostics.Trace.Assert(tb.Name != "InitDelegate");
+      tb.AddImplementedInterface (<[ Nemerle.Compiler.ISupportRelocation ]>);
+    }
+    //wl("^^^^^^^ SupportRelocation (BeforeInheritance).");
+  }
+  
+  /// Add Relocate() method to class and all class referenced dy it fields.
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeTypedMembers,
+                       Nemerle.MacroTargets.Class)]
+  macro SupportRelocation (typeBuilder : TypeBuilder)
+  {
+    //def wl(x : object) { System.Console.WriteLine(x); }
+    //wl("vvvvvvv SupportRelocation (BeforeTypedMembers).");
+
+    /////////////////////////////////////////////////////////////////////////
+    // 0. Init variables.
+    //wl("vvvvvvv 0. Init variables for SupportRelocation macro.");
+
+    def error (loc, msg) { when (Nemerle.Macros.ImplicitCTX ().InErrorMode) Message.Error (loc, msg); }
+    def errorLocationFieldCanNotBeImmutable (field)
+    {
+      error (field.Location, $"Location field $(field.Name) can't be immutable!");
+    }
+    def env               = typeBuilder.GlobalEnv;
+    def manager           = env.Manager;
+    def nameTree          = env.NameTree;
+    def nsRoot            = nameTree.NamespaceTree;
+
+    /// Type info variables:
+    def tyVarTyInfo        = manager.Lookup ("Nemerle.Compiler.TyVar") :> TypeBuilder;
+    def locationTyInfo     = manager.Lookup ("Nemerle.Compiler.Location");
+    def iMacroTyInfo       = manager.Lookup ("Nemerle.Compiler.IMacro");
+    def stackTyInfo        = manager.Lookup ("Nemerle.Collections.Vector");
+    def nodeTyInfo         = manager.Lookup ("Nemerle.Compiler.NamespaceTree.Node");
+    def managerClassTyInfo = manager.Lookup ("Nemerle.Compiler.ManagerClass");
+    def globalEnvTyInfo    = manager.Lookup ("Nemerle.Compiler.GlobalEnv");
+    def optinTyInfo        = manager.InternalType.Nemerle_option_tc;
+    def listTyInfo         = manager.InternalType.Nemerle_list_tc;
+    /// The ignore list of some types.
+    def ignoreTypeList     = manager.Lookup ("Nemerle.Compiler.TypeBuilder")
+      :: manager.Lookup ("Nemerle.Compiler.TypeInfo")
+      :: tyVarTyInfo :: nodeTyInfo
+      :: managerClassTyInfo :: globalEnvTyInfo
+      :: manager.Lookup ("Nemerle.Compiler.TypesManager")
+      :: tyVarTyInfo.GetAllSubTypes().Map(_ : TypeInfo);
+
+    //wl("ignoreTypeList:");
+    //wl(ignoreTypeList);
+
+    def isTypedInstanceField (field)
+    { 
+      !(field.ty is <[ _ ]> || field.modifiers.mods %&& Attr.Static)
+    }
+
+    def isMutable (field) { field.modifiers.mods %&& Attr.Mutable }
+
+    /// True if we need visite property of this type 
+    /// (ignore: Alias, Delegate, ValueType and Static types).
+    def isStepInto (tb : TypeBuilder) : bool
+    {
+      !(tb.Attributes %&& (Attr.Static | Attr.Struct)
+        || tb.IsValueType || tb.IsDelegate || tb.IsAlias
+       )
+    }
+
+    def equalsAny(ty, types) { types.Exists(_.Equals(ty)) }
+
+    //wl("^^^^^^^ 0. Init variables for SupportRelocation macro.");
+    // End 0.
+    /////////////////////////////////////////////////////////////////////////
+    
+    /////////////////////////////////////////////////////////////////////////
+    // 1. Make relocation code.
+    //wl("vvvvvvv 1. Make relocation code.");
+
+    // Key   - type
+    // Value - code of relocation and recusion walk into fields.
+    def relocationCode = Hashtable() : Hashtable[TypeBuilder, list [Parsetree.PExpr]];
+    
+    // For each class defined in project...
+    foreach (tb when Helpers.IsRelocatedType (tb) in nsRoot.GetTypeBuilders())
+    {
+      def fields = tb.GetParsedMembers (true);
+      // The constructing expression.
+      mutable exprs = [] : list[Parsetree.PExpr];
+      
+      // For each instance field which type explicit assign...
+      foreach (field is Member.Field when isTypedInstanceField (field) in fields)
+      {
+        // Manually calculate type of field.
+        def ty = tb.MonoBindType (field.ty);
+        // Make field name
+        def n = Macros.UseSiteSymbol (field.Name);
+
+        //def s = field.Name;
+
+        match (ty)
+        {
+          // Ignore property of some types. It prevent unproductive recursion.
+          | Class (t is TypeBuilder, []) when equalsAny(t, ignoreTypeList) 
+                                              && t.DeclaringType : object != tb 
+            => ()
+          
+          // Skip IMacro members.
+          | Class (t, []) when t.Equals(iMacroTyInfo)
+          | Class (_, [MType.Class(t, [])]) when t.Equals(iMacroTyInfo) => ()
+
+          // Process 'collection[Location]' fields (make relocation code for it).
+          | Class (tc, [MType.Class(ti, [])]) when ti.Equals(locationTyInfo) => 
+            if (isMutable (field))
+              if (tc.Equals(listTyInfo) || tc.Equals(stackTyInfo))
+                exprs ::= <[ 
+                  def x = this.$(n : name);
+                  when (x != null)
+                    this.$(n : name) = x.Map(Completion.Relocate(_, info)) ]>;
+              else
+                error (field.Location, $"The 'unknown type'[Location] ($tc[$ti]) not suported!");
+            else
+              errorLocationFieldCanNotBeImmutable (field);
+            
+          // Process 'Location' fields (make relocation code for it).
+          | Class (tc, []) when tc.Equals(locationTyInfo) => 
+            if (isMutable (field))
+              exprs ::= <[ this.$(n : name) = Completion.Relocate(this.$(n : name), info); ]>;
+            else
+              errorLocationFieldCanNotBeImmutable (field);
+          
+          // Below reference fields processed...
+
+          // 1. Is optional field of reference type defined in this project. 
+          | Class (tc, [MType.Class(t is TypeBuilder, _)]) when tc.Equals(optinTyInfo) =>
+            exprs ::= if (t.IsInterface)
+              <[
+                match (this.$(n : name))
+                {
+                  | Some(x is ISupportRelocation) => 
+                    //System.Diagnostics.Trace.WriteLine(ident + $(s : string));
+                    x.RelocateImpl (info/*, ident*/);
+                  | _ => ()
+                }
+              ]>
+            else
+              <[
+                match (this.$(n : name))
+                {
+                  | Some(x) => 
+                    //System.Diagnostics.Trace.WriteLine(ident + $(s : string));
+                    x.RelocateImpl (info/*, ident*/);
+                  | _ => ()
+                }
+              ]>;
+
+          // 2. Is collection of reference type defined in this project.
+          | Class (_, [MType.Class(t is TypeBuilder, _)]) when isStepInto (t) =>
+            exprs ::= if (t.IsInterface)
+              <[
+                def x = this.$(n : name);
+                when (x != null)
+                {
+                  //System.Diagnostics.Trace.WriteLine(ident + $(s : string));
+                  foreach (elem :> ISupportRelocation in x)
+                    elem.RelocateImpl (info/*, ident*/);
+                }
+              ]>
+            else
+              <[
+                def x = this.$(n : name);
+                when (x != null)
+                  foreach (elem in x)
+                    elem.RelocateImpl (info/*, ident*/);
+              ]>;
+
+          // 3. Is field of reference type defined in this project (represent as TypeBuilder).
+          | Class (t is TypeBuilder, _) when isStepInto (t) =>
+            if (ty.IsInterface)
+              exprs ::= <[
+                def x = this.$(n : name);
+                when (x != null)
+                {
+                  //System.Diagnostics.Trace.WriteLine(ident + $(s : string));
+                  (x :> ISupportRelocation).RelocateImpl (info/*, ident*/);
+                }
+              ]>;
+            else
+              exprs ::= <[
+                def x = this.$(n : name);
+                when (x != null)
+                {
+                  //System.Diagnostics.Trace.WriteLine(ident + $(s : string));
+                  x.RelocateImpl (info/*, ident*/);
+                }
+              ]>;
+
+          // 3. Process other fields.
+          | Class (t, tArgs) =>
+            // Check for Location type...
+            when (t.Equals(locationTyInfo) || tArgs.Exists (_.Equals(locationTyInfo)))
+              error (field.Location, $"The $t$tArgs not handled in relocation algorithm!");
+
+          | _ => ()
+        }  
+      }
+
+      relocationCode.Add (tb, exprs);
+    }
+
+    //wl("^^^^^^^ 1. Make relocation code.");
+    // End 1.
+    /////////////////////////////////////////////////////////////////////////
+
+    /////////////////////////////////////////////////////////////////////////
+    // 2. Generate "RelocateImpl (info : RelocationInfo) : void" methods.
+    //wl("vvvvvvv 2. Generate RelocateImpl (info : RelocationInfo) : void methods.");
+
+    foreach ((tb, code) in relocationCode.KeyValuePairs)
+    {
+      match (tb.BaseType)
+      {
+        | _ is TypeBuilder =>
+          unless (code.IsEmpty)
+          {
+            //tb.Define (<[ decl: public override RelocateImpl (_info : RelocationInfo) : void {}]>);
+            tb.Define (
+              <[ decl: 
+                public override RelocateImpl (info : RelocationInfo/*, ident : string*/) : void
+                {
+                  //info.NodeCount++;
+                  unless (info.VisitedObjects.ContainsKey (this))
+                  {
+                    //System.Diagnostics.Trace.WriteLine(ident + "obj:" + this.GetType().FullName + " (" + $(tb.FullName : string) + ")");
+                    //info.VisitCount++;
+                    //System.Diagnostics.Trace.WriteLine(ident + "---> base");
+                    base.RelocateImpl (info/*, ident*/);
+                    //System.Diagnostics.Trace.WriteLine(ident + "<--- base");
+                    //def ident = ident + " ";
+                    info.VisitedObjects[this] = 0;
+                    { ..$code }
+                    //ignore(ident);
+                  }
+                }
+              ]>);
+          }
+
+        | _ =>
+          if (code.IsEmpty)
+          {
+            //tb.Define (<[ decl: public virtual RelocateImpl (_info : RelocationInfo, _ident : string) : void { } ]>);
+            tb.Define (<[ decl: public virtual RelocateImpl (_info : RelocationInfo) : void { } ]>);
+          }
+          else
+          {
+            //tb.Define (<[ decl: public virtual RelocateImpl (_info : RelocationInfo) : void {}]>);
+
+            tb.Define (
+              <[ decl: 
+                public virtual RelocateImpl (info : RelocationInfo/*, ident : string*/) : void
+                {
+                  //info.NodeCount++;
+                  unless (info.VisitedObjects.ContainsKey (this))
+                  {
+                    //System.Diagnostics.Trace.WriteLine(ident + "obj:" + this.GetType().FullName + " (" + $(tb.FullName : string) + ")");
+                    //def ident = ident + " ";
+                    //info.VisitCount++;
+                    info.VisitedObjects[this] = 0;
+                    { ..$code }
+                    //ignore(ident);
+                  }
+                }
+              ]>);
+          }
+      }
+    }
+
+    //wl("^^^^^^^ 2. Generate RelocateImpl (info : RelocationInfo) : void methods.");
+    // End 2.
+    /////////////////////////////////////////////////////////////////////////
+    //wl("^^^^^^^ SupportRelocation (BeforeTypedMembers).");
   }
 }
 
