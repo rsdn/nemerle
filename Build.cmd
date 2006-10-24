@@ -25,6 +25,8 @@ copy /Y boot\*.pdb boot\old
 IF errorlevel 1 goto Error
 @echo !!! Phase 1 success !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
+IF "%SkipPhase2%"=="true" goto Success
+
 @echo ### Phase 2 ############################################
 @echo ### Copy new binaries to boot
 copy /Y bin\%Type%\*.dll boot
@@ -60,5 +62,7 @@ pause
 exit /b 1
 
 :Success
+
+@echo Build success!
 
 IF NOT "%NoPause%"=="true" pause
