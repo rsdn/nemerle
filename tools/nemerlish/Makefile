@@ -46,6 +46,9 @@ install: all
 	fi
 
 
+test-nemish: symlinks
+	perl tests/test-nemish.pl "$(EXECUTE)" tests/*.test
+
 uninstall:
 	$(RM) Nemerle.Evaluation
 	$(GACUTIL_UNINSTALL_COMMAND) Nemerle.Evaluation
