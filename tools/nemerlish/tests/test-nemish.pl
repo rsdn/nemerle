@@ -16,7 +16,7 @@ sub one_test($) {
   $lerr = 0;
   while (<M>) {
     s/^- ([=-]\s*)*//;
-    /^\S*$/ and next;
+    /^\s*$/ and next;
     /^(Please|Welcome|Type) / and next;
     $act = $_;
     $exp = <T>;
