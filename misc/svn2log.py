@@ -260,7 +260,7 @@ def process_opts():
       usage()
       sys.exit(0)
     elif o in ("--output", "-o"):
-      fout = open(a, "w")
+      fout = utf_open(a, "w")
     elif o in ("--domain", "-d"):
       default_domain = a
     elif o in ("--users", "-u"):
