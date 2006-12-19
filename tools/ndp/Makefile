@@ -8,7 +8,9 @@ DOC = nemerledoc.xml
 
 $(EXE): $(SOURCES) 
 	ncc -g -Ot -texe -doc:$(DOC) -out:$@ $^
-#	mono $(EXE) $(EXE) $(DOC)
+
+test:
+	mono --debug $(EXE) -np $(EXE) $(DOC)
 
 clean:
 	rm  $(CLEAN_FILES)
