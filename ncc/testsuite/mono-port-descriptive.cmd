@@ -1,0 +1,1 @@
+tests.exe -d:frommcs -p "-nowarn:10001,10003,649 -def:RUNTIME_MS" -s -v > mono-port-descriptive.results
