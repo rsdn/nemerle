@@ -31,6 +31,7 @@ using Nemerle.IO;
 
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
+using Nemerle.Utility;
 
 using System.Xml;
 using System.Text;
@@ -95,65 +96,229 @@ namespace Nemerle.Compiler
       }
     }
 
-    parse_comment (comment : string) : XmlNode
+    variant XToken
+    {
+      | EmptyLine
+      | EOF
+      | Text { t : string; }
+      | XmlStart { n : string; v : string; }
+      | XmlEnd { n : string; }
+      | WhiteSpace { w : string }
+    }
+
+    static tokenize (comment : string) : array [XToken]
     {
       def lines = comment.Split (array ['\n']);
       mutable all_stars = true;
       def white_space = array [' ', '\t', '\r', '\n'];
-      
+      def res = System.Collections.Generic.List ();
+
       for (mutable i = 0; i < lines.Length; ++i) {
-        lines [i] = lines [i].Trim (white_space);
-        when (i > 0 && lines[i] != "" && !lines [i].StartsWith ("*"))
+        lines[i] = lines[i].TrimEnd (white_space);
+        when (i > 0 && 
+              lines[i].Trim (white_space) != "" && 
+              !lines [i].TrimStart (white_space).StartsWith ("*"))
           all_stars = false;
       }
 
       when (all_stars)
         for (mutable i = 1; i < lines.Length; ++i)
-          when (lines [i] != "")
-            lines [i] = lines [i].Substring (1).Trim (white_space);
+          when (lines [i].Trim (white_space) != "")
+            lines [i] = lines [i].TrimStart (white_space).Substring (1);
 
-      def sb = StringBuilder ("<summary>");
-      mutable summary = true;
-      mutable remarks = false;
-      mutable para = false;
+      def buf = string.Join ("\n", lines) + "\n";
+      
+      mutable i = 0; 
+      while (i < buf.Length)
+      {
+        def start = i;
 
-      mutable i = 0;
-      while (i < lines.Length && lines [i] == "")
-        ++i;
+        def space_tab (ch) { ch == ' ' || ch == '\t' }
+        def scan (pred) {
+          while (i < buf.Length && pred (buf [i])) i++;
+          buf.Substring (start, i - start)
+        }
 
-      for (; i < lines.Length; ++i) {
-        def line = lines [i];
-        if (line == "") {
-          if (summary) {
-            _ = sb.Append ("</summary>");
-            summary = false;
-          } else if (para) {
-            _ = sb.Append ("</para>");
-            para = false;
-          } else {}
-        } else {
-          when (!summary && !remarks) {
-            _ = sb.Append ("<remarks>");
-            remarks = true;
+        if (space_tab (buf [i]))
+          res.Add (XToken.WhiteSpace (scan (space_tab)));
+        else if (buf [i] == '\n')
+          match (scan (_ == '\n')) {
+            | "\n" =>
+              res.Add (XToken.WhiteSpace ("\n"));
+            | s =>
+              res.Add (XToken.WhiteSpace (s));
+              res.Add (XToken.EmptyLine ());
           }
-/*          
-          when (!summary && !para) {
-            _ = sb.Append ("<para>");
-            para = true;
+        else if (buf [i] == '<') {
+          def v = scan (_ != '>');
+          if (i == buf.Length)
+            // location?
+            Message.Warning ("unfinished XML tag");
+          else i++;
+          def v = v.Substring (1).Trim (white_space);
+          if (v.StartsWith ("/"))
+            res.Add (XToken.XmlEnd (v.Substring (1)));
+          else {
+            def idx = v.IndexOfAny (array [' ', '\t']);
+            if (idx == -1)
+              if (v.EndsWith ("/")) {
+                def v = v.Substring (0, v.Length - 1);
+                res.Add (XToken.XmlStart (v, ""));
+                res.Add (XToken.XmlEnd (v));
+              }
+              else
+                res.Add (XToken.XmlStart (v, ""));
+            else {
+              def name = v.Substring (0, idx);
+              def args = v.Substring (idx);
+              if (args.EndsWith ("/")) {
+                def args = args.Substring (0, args.Length - 1);
+                res.Add (XToken.XmlStart (name, args));
+                res.Add (XToken.XmlEnd (name));
+              } else
+                res.Add (XToken.XmlStart (name, args));
+            }
           }
-*/          
-          _ = sb.Append (line).Append ('\n');
+        } else
+          res.Add (XToken.Text (scan (c => c != '<' && c != '\n')));
+      }
+
+      res.Add (XToken.EOF ());
+      res.ToArray ();
+    }
+
+    /*
+     Top-level tags:
+       <remarks>, <summary>, <example>, <exception>, <param>, <permission>,
+       <returns>, <seealso>, <include>, <value>
+     Other tags:
+       <c>, <code>, <list>, <listheader>, <item>, <term>, <description>,
+       <para>, <paramref>, <see>
+    */
+    
+    parse_comment (comment : string) : XmlNode
+    {
+      def is_top_tag (_) {
+        | "summary" | "remarks" | "example" | "exception" | "param"
+        | "permission" | "returns" | "seealso" | "include" | "value" => true
+        | _ => false
+      }
+
+      def is_text_holding (_) {
+        | "para" | "code" | "list" => true
+        | _ => false
+      }
+
+      def tokens = tokenize (comment).ToList ().GetEnumerator ();
+      // stack of currently active tags, along with information if
+      // they were user-supplied
+      mutable tags = [];
+      def sb = StringBuilder ("");
+
+      def skip_ws () {
+        match (tokens.Current) {
+          | WhiteSpace | EmptyLine =>
+            _ = tokens.MoveNext (); skip_ws ()
+          | _ => {}
         }
       }
 
-      when (para)
-        _ = sb.Append ("</para>");
-      when (summary)
-        _ = sb.Append ("</summary>");
-      when (remarks)
-        _ = sb.Append ("</remarks>");
+      def output (_ : XToken) {
+        | EmptyLine 
+        | EOF => {}
+        | WhiteSpace (t)
+        | Text (t) => _ = sb.Append (t)
+        | XmlStart (n, v) => _ = sb.Append ("<" + n + v + ">");
+        | XmlEnd (n) => _ = sb.Append ("</" + n + ">");
+      }
+
+      def output_and_move ()
+      {
+        output (tokens.Current);
+        _ = tokens.MoveNext ();
+      }
+
+      def possibly_close (pred)
+      {
+        match (tags) {
+          | (name, false) :: xs when pred (name) =>
+            tags = xs;
+            output (XToken.XmlEnd (name));
+          | _ => {}
+        }
+      }
+
+      def open_fake (name)
+      {
+        tags ::= (name, false);
+        output (XToken.XmlStart (name, ""));
+      }
+
+      _ = tokens.MoveNext ();
+      skip_ws ();
+
+      match (tokens.Current) {
+        | XmlStart (n, _) when is_top_tag (n) =>
+          output_and_move ();
+          skip_ws ();
+          tags ::= (n, true);
+        | _ =>
+          open_fake ("summary")
+      }
+
+      while (! (tokens.Current is XToken.EOF))
+      {
+        def t = tokens.Current;
+        match (t) {
+          | EOF => {}
+
+          | EmptyLine =>
+            possibly_close (_ == "para");
+            possibly_close (_ == "summary");
+
+          | Text =>
+            // TODO: for <code> we should strip some common prefix
+            when (!tags.Exists ((n, _) => is_top_tag (n)))
+              open_fake ("remarks");
+            when (!tags.Exists ((n, _) => is_text_holding (n)))
+              open_fake ("para");
+            output (t);
+            
+          | XmlStart (n, _) =>
+            when (is_text_holding (n) || is_top_tag (n))
+              possibly_close (_ == "para");
+            when (is_top_tag (n))
+              // any auto summary/remarks
+              possibly_close (is_top_tag);
+            tags ::= (n, true);
+            output (t);
+
+          | XmlEnd (n) =>
+            // close any auto tags at the top
+            while (tags is (_, false) :: _)
+              possibly_close (_ => true);
+            match (tags) {
+              | (n', true) :: xs when n' == n || n == "" =>
+                tags = xs;
+                output (XToken.XmlEnd (n'));
+              | _ =>
+                Message.Warning ($"trying to close XML tag <$n> that is not open")
+            }
+
+          | WhiteSpace =>
+            output (t)
+        }
+        _ = tokens.MoveNext ();
+      }
+
+      while (tags is (_, false) :: _)
+        possibly_close (_ => true);
+
+      foreach ((n, true) in tags)
+        Message.Warning ($"unclosed XML tag <$n>");
 
       def frag = document.CreateDocumentFragment ();
+      //Message.Debug ($"comment: $sb");
       frag.InnerXml = sb.ToString ();
       frag
     }
@@ -170,15 +335,18 @@ namespace Nemerle.Compiler
           acc
       }
 
-      def comment = Comments.Fold (null, choose);
-      when (comment != null && comment != "") {
-        try {
-          _ = x.AppendChild (parse_comment (comment));
+      Util.locate (curr, {
+        def comment = Comments.Fold (null, choose);
+        when (comment != null && comment != "") {
+          try {
+            _ = x.AppendChild (parse_comment (comment));
+          }
+          catch {
+            | e is XmlException =>
+              Message.Warning ("Cannot parse XML in comment: " + e.Message);       
+          }
         }
-        catch {
-          | e is XmlException => Message.Warning (curr, "Cannot parse XML in comment: " + e.Message);       
-        }
-      }
+      });
 
       last_loc = curr;
     }
