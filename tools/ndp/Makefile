@@ -1,4 +1,7 @@
 # Nemerle Documentation Project
+#
+# $ make test
+# tests this program on itself.
 
 SOURCES = NemerleDoc.n XMLMacro.n DataTree.n AssemblyAnalyzer.n
 DIST_FILES = $(SOURCES) Makefile COPYRIGHT
