@@ -43,11 +43,14 @@ namespace Nemerle.Compiler
     // are discovered
     class SharedEffect
     {
-      body : TExpr;
+      mutable body : TExpr;
       mutable label_id : option [int];
+      mutable body_emitted : bool;
+      parent : DecisionTreeCompiler;
 
-      public this (body : TExpr)
+      public this (par : DecisionTreeCompiler, body : TExpr)
       {
+        this.parent = par;
         this.body = body;
         this.label_id = None ();
       }
@@ -59,7 +62,15 @@ namespace Nemerle.Compiler
           | None =>
             def id = Util.next_id (body.Type.Manager);
             label_id = Some (id);
-            TExpr.Label (body.loc, body.Type, id, body);
+            if (parent.debug_mode) {
+              body = TExpr.Sequence (body.loc, body.Type, body,
+                          TExpr.Goto (body.loc, body.Type, parent.jump_out_id, 1));
+              body = TExpr.Label (body.loc, body.Type, id, body);
+              TExpr.Goto (null, id, 1)
+            } else {
+              body_emitted = true;
+              TExpr.Label (body.loc, body.Type, id, body)
+            }
         }
       }
 
@@ -77,6 +88,15 @@ namespace Nemerle.Compiler
               acc))
           })
       }
+
+      public BuildRest (prev : TExpr) : TExpr
+      {
+        if (body_emitted || label_id.IsNone) prev
+        else {
+          body_emitted = true;
+          TExpr.Sequence (prev.loc + body.loc, body.Type, prev, body)
+        }
+      }
     }
 
     tyvar : TyVar;
@@ -86,7 +106,11 @@ namespace Nemerle.Compiler
     decision : Decision;
 
     mutable effects : array [void -> TExpr];
+    mutable shared_effects : array [SharedEffect];
     mutable guards : array [TExpr];
+    jump_out_id : int;
+
+    debug_mode : bool;
 
     public this (t : TyVar, val : TExpr, mcs : list [Match_case])
     {
@@ -94,6 +118,7 @@ namespace Nemerle.Compiler
       this.tyvar = t;
       this.val = val;
       this.cases = mcs;
+      this.jump_out_id = Util.next_id (Manager);
 
       def builder = DecisionTreeBuilder (mcs);
 
@@ -111,6 +136,8 @@ namespace Nemerle.Compiler
                           "$(dag_to_string (decision, Manager.Options.ColorMessages))\n"
                           "$(get_stats (decision))\n");
 
+      debug_mode = if (cases.Length <= 2) false else Manager.Options.EmitDebug;
+
       collect_effects_and_guards ()
     }
 
@@ -120,10 +147,11 @@ namespace Nemerle.Compiler
       {
         match (cases) {
           | case0 :: rest =>
-            def effect = SharedEffect (case0.body);
+            def effect = SharedEffect (this, case0.body);
             walk_patterns (i, effect, case0.patterns, rest)
           | _ =>
             effects = array (i);
+            shared_effects = array (i);
             guards = array (i)
         }
       } 
@@ -133,6 +161,7 @@ namespace Nemerle.Compiler
           | (_, guard, assigns) :: rest =>
             walk_patterns (i+1, effect, rest, cases);
             effects[i] = fun () { effect.GetExpr (assigns) };
+            shared_effects[i] = effect;
             guards[i] = guard
           | _ => walk_cases (i, cases)
         }
@@ -144,7 +173,20 @@ namespace Nemerle.Compiler
     /** Generate TExpr tree for decision tree stored in this matching compiler. */
     public Run() : TExpr
     {
-      compile (decision)
+      mutable body = compile (decision);
+
+      when (debug_mode)
+        body = TExpr.MacroEnvelope (<[ skip_debug ]>, null, body);
+
+      foreach (se in shared_effects)
+        body = se.BuildRest (body);
+
+      when (debug_mode)
+        body = TExpr.Sequence (body.loc, body.Type, body, 
+                TExpr.Label (body.loc, body.Type, jump_out_id, 
+                      TExpr.Literal (InternalType.Void, Literal.Void ())));
+
+      body
     }
 
     /** Build and compile decision tree for the given matching instance. */
@@ -152,7 +194,7 @@ namespace Nemerle.Compiler
                        mcs : list [Match_case]) : TExpr
     {
       def compiler = DecisionTreeCompiler (t, val, mcs);
-      compiler.Run ()
+      compiler.Run ();
     }
 
     // check if node has already been compiled and either reuse
