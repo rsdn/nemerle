@@ -1,7 +1,7 @@
 " Vim indent file
 " Language:	Nemerle
-" Maintainer:	Piotr Kalinowski <pitkali@interia.pl>
-" Last Change:	2005 May 03
+" Maintainer:	Piotr Kalinowski <pitkali@gmail.com>
+" Last Change:	2007 Jan 02
 
 " Instructions:
 " Put this file under ~/.vim/indent/nemerle.vim and ensure the following lines are
@@ -20,7 +20,7 @@ endif
 let b:did_indent = 1
 
 setlocal cinkeys-=:
-setlocal indentkeys& indentkeys-=: indentkeys+=<Bar>,0=requires,0=ensures,0=invariant
+setlocal indentkeys& indentkeys-=: indentkeys+=<Bar>,0=requires,0=ensures,0=invariant,0=syntax
 setlocal indentexpr=GetNemerleIndent()
 
 " Define function only once.
@@ -83,8 +83,8 @@ function GetNemerleIndent()
 	return ind + &sw
     endif
 
-    " Design by contract macros
-    if cur_line =~ '^\s*\(requires\>\|ensures\>\|invariant\>\)'
+    " Design by contract macros and syntax extension
+    if cur_line =~ '^\s*\(requires\>\|ensures\>\|invariant\>\|syntax\>\)'
 	return ind
     endif
 
@@ -131,14 +131,14 @@ function GetNemerleIndent()
 
     " Now matching. Here we need to follow operation of cindent to know what
     " to fix. Basically, we need to get previous non-continuation line.
-    if prev_line =~ '\(;\|}\)\s*\(\s*\|//.*\|/\*.*\*/\s*\)$' 
+    if prev_line =~ '\(;\|}\)\s*\(\s*\|//.*\|/\*.*\*/\s*\)$' || prev_line =~ '^\s*|'
 	" now we know that Current line is non-continuation
 	let prev = GetPrevious(prev - 1)
 	let depth = 1
 	if prev_line =~ '}\s*$'
 	    let depth = 2
 	endif
-	while prev > 0 && getline(prev) !~ '\(;\|{\|}\)\s*\(\s*\|//.*\|/\*.*\*/\s*\)$' || depth > 1
+	while prev > 0 && (getline(prev) !~ '\(;\|{\|}\)\s*\(\s*\|//.*\|/\*.*\*/\s*\)$' || depth > 1)
 	    if getline(prev) =~ '}'
 		let depth = depth + 1
 	    endif
@@ -151,7 +151,7 @@ function GetNemerleIndent()
 	let prev_nonc = getline(prev)
 
 	" if previous is a match pattern
-	if prev_nonc =~ '^\s*|'
+	if prev_nonc =~ '^\s*|' && theIndent == indent (prev)
 	    return theIndent + &sw
 	endif
     endif
