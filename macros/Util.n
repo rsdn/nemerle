@@ -30,6 +30,10 @@ using System.Text;
 
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
+using System;             
+using System.IO;
+using System.Globalization;
+using Nemerle.Assertions;
 
 namespace Nemerle 
 {
@@ -257,48 +261,129 @@ namespace Nemerle.Utility
 
   [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
                        Nemerle.MacroTargets.Assembly)]
-  macro AssemblyVersionFromSVN (val : string) {
-    def rev () {
-      try {
-        def svn = System.Diagnostics.Process();
-        svn.StartInfo.FileName = "svn";
-        svn.StartInfo.Arguments = "info";
-        svn.StartInfo.CreateNoWindow = true;
-        svn.StartInfo.UseShellExecute = false;
-        svn.StartInfo.RedirectStandardOutput = true;
-        svn.StartInfo.RedirectStandardError = true;
-        _ = svn.Start();
-        def stdout = svn.StandardOutput.ReadToEnd(); 
-        svn.WaitForExit ();
-        if (svn.ExitCode == 0) {
-          foreach (l in stdout.Split ('\n'))
-            when (l.StartsWith ("Revision"))
-              Nemerle.Text.regexp (match (l)  {
-                | @".* (?<num : int>\d+).*" => Nemerle.Imperative.Return (num)
-                | _ => ()
-              });
-          -1
-        }
-        else -2
-      }
-      catch {
-        | _ => -3
-      }
-    }
+  macro AssemblyVersionFromSVN (val : string, fallbackToDate : bool = true) {
     def svnidx = val.IndexOf ("SVN", System.StringComparison.InvariantCultureIgnoreCase);
     def val = 
       if (svnidx != -1) {
-        def svnrev = rev ();
+        def myLoc = Nemerle.Macros.Manager ().CurrentLocation ();
+        def path = if (myLoc.IsSourceAvailable) 
+                     Path.GetDirectoryName (Path.GetFullPath (myLoc.File))
+                   else 
+                     Directory.GetCurrentDirectory ();
+                     
+        def svnrev = SVNRevisionHelper.FindRevision (path);
         if (svnrev < 0)
-          val.Substring (0, svnidx) + "*" + val.Substring (svnidx + 3)
+          if (fallbackToDate)
+            val.Substring (0, svnidx) + 
+            ((DateTime.Now.Year % 100).ToString () + DateTime.Now.DayOfYear.ToString ("000")) 
+            + val.Substring (svnidx + 3)
+          else
+            Message.FatalError (myLoc, $"could not obtain revision from SVN metadata (error code $(-svnrev))");
         else
           val.Substring (0, svnidx) + svnrev.ToString () + val.Substring (svnidx + 3)
       }
       else val;
+      
     Nemerle.Macros.Manager().Hierarchy.AddAssemblyAttribute (Nemerle.Macros.Manager().CoreEnv, 
       <[ System.Reflection.AssemblyVersion ($(val : string)) ]>);
   }
 
+  /// based on svn://rsdn.ru/Janus/trunk/SvnRevision  
+  module SVNRevisionHelper {
+    SVN_DIRECTORY_NAME_COMMON = ".svn";
+    SVN_ENTRIES_FILE_NAME = "entries";
+    SVN_FORMAT_FILE_NAME = "format";
+    XPATH_REVISION = @"ns:wc-entries/ns:entry/@revision";    
+      
+    public FindRevision(current : string) : int
+    {
+        def dirs = Directory.GetDirectories(current, SVN_DIRECTORY_NAME_COMMON);
+        match (dirs.Length) {
+          | 0 => -1
+          | 1 => GetRevisionDetectFormat (Path.Combine (current, dirs [0]))
+          | _ => -2
+        }
+    }
+  
+    private GetRevisionDetectFormat([NotNull] path : string) : int
+    {
+        def filePath = Path.Combine(path, SVN_FORMAT_FILE_NAME);
+        if(File.Exists(filePath))
+        {
+            using(stream = FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                def bytes = array (stream.Length :> int); // Last symbol is '\n'
+                _ = stream.Read(bytes, 0, bytes.Length);
+                match (System.Text.Encoding.ASCII.GetString(bytes).Trim ()) {
+                  | "4" => GetRevisionVer4 (path)
+                  | "8" => GetRevisionVer8 (path)
+                  | _ => -10
+                }
+            }
+        }
+        else -9
+    }
+  
+    private GetRevisionVer4 (path : string) : int
+    {
+      def filePath = Path.Combine(path, SVN_ENTRIES_FILE_NAME);
+  
+      if(!File.Exists(filePath)) -6
+      else 
+        using(reader = StreamReader(filePath))
+        {
+          def doc = System.Xml.XPath.XPathDocument(reader);
+          def nav = doc.CreateNavigator();
+  
+          def manager = System.Xml.XmlNamespaceManager(nav.NameTable);
+          manager.AddNamespace("ns", "svn:");
+  
+          def expr = nav.Compile(XPATH_REVISION);
+          expr.SetContext(manager);
+  
+          def iterator = nav.Select(expr);
+          if (iterator.MoveNext())
+            try
+            {
+              int.Parse(iterator.Current.Value, NumberStyles.Integer, CultureInfo.InvariantCulture)
+            }
+            catch
+            {
+              | _e is FormatException => -8
+            }
+          else -7
+        }
+    }
+  
+    private GetRevisionVer8 (path : string) : int
+    {
+      def filePath = Path.Combine(path, SVN_ENTRIES_FILE_NAME);
+  
+      if(!File.Exists(filePath)) -3
+      else 
+        try
+        {
+          using(sr = StreamReader(filePath))
+          {
+            def loop (lineCounter) {
+              def line = sr.ReadLine ();
+              if (line != null)
+                if (lineCounter == 3)
+                  int.Parse(line, NumberStyles.Integer, CultureInfo.InvariantCulture)
+                else
+                  loop (lineCounter + 1)
+              else -5
+            }
+            loop (0);
+          }
+        }
+        catch
+        {
+          _e is FormatException => -4
+        }
+    }
+  }
+ 
 
   [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
                        Nemerle.MacroTargets.Class,
