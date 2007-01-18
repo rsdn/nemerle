@@ -2,7 +2,7 @@
 
 IF "%Type%"=="" set Type=Debug
 
-set NemerleBin=%~dp0\bin\%Type%
+set NemerleBin=%~dp0bin\%Type%
 set GacUtil="%VS80COMNTOOLS%..\..\SDK\v2.0\Bin\gacutil.exe"
 set NemerleInstall=%ProgramFiles%\Nemerle
 set NGen="%SystemRoot%\Microsoft.NET\Framework\v2.0.50727\ngen.exe"
@@ -13,6 +13,7 @@ set NGen="%SystemRoot%\Microsoft.NET\Framework\v2.0.50727\ngen.exe"
 @echo NGen=%NGen%
 @echo NemerleBin=%NemerleBin%
 
+md "%NemerleInstall%"
 cd /D "%NemerleInstall%"
 
 %GacUtil% /u Nemerle
