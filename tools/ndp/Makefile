@@ -13,7 +13,7 @@ $(EXE): $(SOURCES)
 	ncc -g -Ot -texe -doc:$(DOC) -out:$@ $^
 
 test:
-	mono --debug $(EXE) -title:"Nemerle Documentation Project" -np $(EXE) $(DOC)
+	mono --debug $(EXE) -title:"Nemerle Documentation Project" -s -np $(EXE) $(DOC)
 
 clean:
 	rm  $(CLEAN_FILES)
