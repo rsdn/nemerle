@@ -124,15 +124,8 @@ namespace Nemerle.Compiler
 
       assert (!solver.InUse);
 
-
-      match (m.GetFunKind ()) {
-        | FunKind.Constructor =>
-          is_instance_ctor = true;
-          is_method = true;
-        | FunKind.Method | FunKind.BoundMethod =>
-          is_method = true;
-        | _ => ()
-      }
+      is_instance_ctor = m.MemberKind == MemberKinds.Constructor && !m.IsStatic;
+      is_method = m.MemberKind == MemberKinds.Method && !m.IsStatic || is_instance_ctor;
 
       try {
         assert (!solver.InUse);
@@ -669,14 +662,10 @@ namespace Nemerle.Compiler
     {
       match (e) {
         | TExpr.LocalRef (d) => d.IsMutable
-        | TExpr.StaticRef (_, m, _) =>
-          match (m.GetKind ()) {
-            | MemberKind.Field (f) =>
-              f.IsMutable || (current_fun.name == ".cctor" &&
-                              f.DeclaringType.Equals (current_type))
-            | MemberKind.Property (p) when !need_ref => p.IsMutable
-            | _ => false
-          }
+        | TExpr.StaticRef (_, f is IField, _) =>
+          f.IsMutable || (current_fun.name == ".cctor" &&
+                           f.DeclaringType.Equals (current_type))
+        | TExpr.StaticRef (_, p is IProperty, _) when !need_ref => p.IsMutable
         | TExpr.StaticPropertyRef (_, p) when !need_ref => p.IsMutable
         | TExpr.FieldMember (TExpr.This, fld) when is_instance_ctor && fld.DeclaringType.Equals (current_type) => true
         | TExpr.FieldMember (_, mem) =>
@@ -2143,31 +2132,24 @@ namespace Nemerle.Compiler
                 mutable seen_empty_ctor = false;
                 mutable res = [];
 
-                foreach (meth is IMethod in t.LookupMember (".ctor")) {
-                  match (meth.GetFunKind ()) {
-                    | FunKind.Constructor 
-                      when meth.CanAccess (current_type) =>
-                      when (meth.GetParameters ().IsEmpty)
-                        seen_empty_ctor = true;
-                      def from =
-                        match (meth.GetMemType ()) {
-                          | MType.Fun (from, _) => from
-                        }
-                      def mt = MType.Fun (from, t.GetMemType ());
-                      def ty = t.FreshSubst ().Apply (mt);
-                      def ret_type = (ty.FixedValue :> MType.Fun).to :> MType.Class;
-                      when (add_constraint != null)
-                        _ = Expect (add_constraint, ret_type, "constructor");
-                      ConstrainLeadingTyparms (pt_from, ret_type);
-                      res = OverloadPossibility (this, ty, null, ret_type, meth) :: res;
-                      when (meth.IsVarArgs) {
-                        def op = OverloadPossibility (this, ty, null, ret_type, meth);
-                        op.VarArgs = true;
-                        res = op :: res;
-                      }
-                    | _ => {}
+                foreach (meth is IMethod in t.LookupMember (".ctor"))
+                  when (meth.MemberKind == MemberKinds.Constructor && meth.CanAccess (current_type)) {
+                    when (meth.GetParameters ().IsEmpty)
+                      seen_empty_ctor = true;
+                    def from = meth.GetMemType ().from;
+                    def mt = MType.Fun (from, t.GetMemType ());
+                    def ty = t.FreshSubst ().Apply (mt);
+                    def ret_type = (ty.FixedValue :> MType.Fun).to :> MType.Class;
+                    when (add_constraint != null)
+                      _ = Expect (add_constraint, ret_type, "constructor");
+                    ConstrainLeadingTyparms (pt_from, ret_type);
+                    res = OverloadPossibility (this, ty, null, ret_type, meth) :: res;
+                    when (meth.IsVarArgs) {
+                      def op = OverloadPossibility (this, ty, null, ret_type, meth);
+                      op.VarArgs = true;
+                      res = op :: res;
+                    }
                   }
-                }
 
                 when (t.IsValueType && !seen_empty_ctor) {
                   def res_type = t.GetFreshType ();
@@ -2327,26 +2309,26 @@ namespace Nemerle.Compiler
           []
 
         | mem =>
-          match (mem.GetKind ()) {
-            | MemberKind.Type (t) =>
-              TypeToConstructor (pt_from, t)
+          match (mem.MemberKind) {
+            | MemberKinds.TypeInfo | MemberKinds.NestedType =>
+              TypeToConstructor (pt_from, mem :> TypeInfo)
 
-            | MemberKind.Method (m) =>
-              ConstructMethodOverload (m, pt_from, maybe_varargs = true)
+            | MemberKinds.Method | MemberKinds.Constructor =>
+              ConstructMethodOverload (mem :> IMethod, pt_from, maybe_varargs = true)
 
-            | MemberKind.Property
-            | MemberKind.Field =>
+            | MemberKinds.Property
+            | MemberKinds.Field =>
               single (mem)
 
-            | MemberKind.Event (e) =>
-              if (e.DeclaringType.Equals (current_type)) {
-                def field = (e :> EventBuilder).storage_field;
+            | MemberKinds.Event =>
+              if (mem.DeclaringType.Equals (current_type)) {
+                def field = (mem :> EventBuilder).storage_field;
                 if (field == null)
                   [] // XXX how?
                 else
                   single (field)
-              } else
-                single (e)
+              } else single (mem)
+            | _ => Util.ice (mem.ToString ())
           }
       }
     }
@@ -2728,7 +2710,7 @@ namespace Nemerle.Compiler
         match (meth) {
           | meth is IMethod when 
             meth.DeclaringType.DeclaringType != null &&
-            meth.GetFunKind () is FunKind.Constructor && 
+            meth.MemberKind == MemberKinds.Constructor && 
             supplied.Length == 
               meth.DeclaringType.TyparmsCount - 
               meth.DeclaringType.DeclaringType.TyparmsCount =>
@@ -2750,7 +2732,7 @@ namespace Nemerle.Compiler
           ApplyGenericSpecifier (c.tycon, c.args, gen_parms);
           
         | TExpr.StaticRef (MType.Class (_, tp), meth is IMethod, [])
-          when meth.GetFunKind () is FunKind.Constructor =>
+          when meth.MemberKind == MemberKinds.Constructor =>
           ApplyGenericSpecifier (meth, tp, gen_parms);
         
         | TExpr.MethodRef (_, meth, tp, _)
@@ -2851,7 +2833,7 @@ namespace Nemerle.Compiler
         mutable res = [];
         foreach (meth is IMethod in lookup_in.LookupMember (".ctor"))
           when (meth.CanAccess (current_type) && 
-                meth.GetFunKind () is FunKind.Constructor) {
+                meth.MemberKind == MemberKinds.Constructor) {
             def from = sub.Apply (lookup_in.GetMemType ()) :> MType.Class;
             def ty = sub.Apply (meth.GetMemType ());
             def o = OverloadPossibility (this, ty, null, from, meth);
