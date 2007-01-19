@@ -106,6 +106,7 @@ NEMERLE_COMPILER_DLL_SRC = \
 	misc/AssemblyInfo.n		 \
 	misc/PrettyPrint.n		 \
 	misc/Stats.n                     \
+	misc/ComponentsFactory.n  \
 	parsing/AST.n			 \
 	parsing/Lexer.n			 \
 	parsing/MainParser-Extensions.n  \
