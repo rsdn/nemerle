@@ -64,20 +64,43 @@ namespace Nemerle.Utility
                        Inherited = false, AllowMultiple = true)]
   macro Accessor (current_type : TypeBuilder, storage_field : ParsedField, params args : list [PExpr])
   {
-    def (name, flags) =
-      match (args) {
-        | [ <[ $(n : dyn) ]>, <[ $("flags" : dyn) = $opts ]> ] =>
-          (Some (n), Some (opts))
-        | [ <[ $("flags" : dyn) = $opts ]> ] =>
-          (None (), Some (opts))
-        | [ <[ $(n : dyn) ]> ] =>
-          (Some (n), None ())
-        | [] =>
-          (None (), None ())
-        | _ =>
-          Message.FatalError ("usage: Accessor (name, flags = SOMEFLAGS), "
-                              "where both name and flags are optional");
+    mutable setterMods = NemerleAttributes.None;
+    mutable getterMods = NemerleAttributes.Public;
+    mutable want_setter = false;
+    mutable oname = None ();
+
+    def parse_opts (expr, allow_deprec) {
+      match (expr) {
+      | <[ $("WantSetter" : dyn) ]>
+      | <[ $("Setter" : dyn) ]>     => 
+        unless (allow_deprec)
+          Message.Error ("WantSetter / Setter is not allowed outside 'flags' section");
+        want_setter = true; NemerleAttributes.None
+      | <[ $("Internal" : dyn) ]>   => NemerleAttributes.Internal
+      | <[ $("Protected" : dyn) ]>  => NemerleAttributes.Protected
+      | <[ $("Override" : dyn) ]>   => NemerleAttributes.Override
+      | <[ $("Virtual" : dyn) ]>    => NemerleAttributes.Virtual
+      | <[ None ]>                  => NemerleAttributes.Extern // will be removed
+      | <[ $e1 | $e2 ]> => (parse_opts (e1, allow_deprec) | parse_opts (e2, allow_deprec));
+      
+      | e =>
+        Message.FatalError ($ "bad accessor option, $e");
       }
+    }
+          
+    foreach (a in args) {
+      | <[ $(n : dyn) ]> => oname = Some (n)
+      | <[ flags = $opts ]> => 
+        def opts = parse_opts (opts, true);
+        getterMods |= opts;        
+        when (want_setter) 
+          setterMods |= getterMods;
+      | <[ set ($opts) ]> => setterMods |= parse_opts (opts, false)
+      | <[ get ($opts) ]> => getterMods |= parse_opts (opts, false)
+      | _ =>
+        Message.FatalError ("usage: Accessor (name, flags = MODIFIERS, get (MODIFIERS), set (MODIFIERS)), "
+                            "where all sections are optional");
+    }
 
     // __some_foo__bar ==> SomeFooBar
     def transformed_name = 
@@ -94,76 +117,72 @@ namespace Nemerle.Utility
             _ = sb.Append (ch);
         sb.ToString ()
       }
+    def name = oname.WithDefault (transformed_name);
+    
+    when (getterMods %&& NemerleAttributes.Extern)
+      getterMods = NemerleAttributes.None;
 
-    def name = name.WithDefault (transformed_name);
-
-    mutable want_setter = false;
-    mutable want_internal = false;
-    mutable want_protected = false;
-    mutable want_override = false;
-    mutable want_virtual = false;
-
-    def parse_opts (expr) {
-      | <[ $("WantSetter" : dyn) ]> => want_setter = true
-      | <[ $("Setter" : dyn) ]>     => want_setter = true
-      | <[ $("Internal" : dyn) ]>   => want_internal = true;
-      | <[ $("Protected" : dyn) ]>  => want_protected = true;
-      | <[ $("Override" : dyn) ]>   => want_override = true;
-      | <[ $("Virtual" : dyn) ]>    => want_virtual = true;        
-      | <[ $e1 | $e2 ]> =>
-        parse_opts (e1);
-        parse_opts (e2);
-      
-      | e =>
-        Message.FatalError ($ "bad accessor option, $e");
+    def take_minimum_access (mods) {
+      if (mods %&& NemerleAttributes.Protected && !(mods %&& NemerleAttributes.Internal))
+        NemerleAttributes.Protected
+      else if (mods %&& NemerleAttributes.Internal && !(mods %&& NemerleAttributes.Protected))
+        NemerleAttributes.Internal
+      else if (mods %&& NemerleAttributes.Protected && mods %&& NemerleAttributes.Internal)
+        NemerleAttributes.Internal | NemerleAttributes.Protected
+      else if (mods %&& NemerleAttributes.Public)
+        NemerleAttributes.Public
+      else
+        NemerleAttributes.None
     }
-    match (flags) {
-      | Some (e) =>
-        parse_opts (e)
-      | None => {}
-    }
+    getterMods = (getterMods & ~NemerleAttributes.AccessModifiers) | take_minimum_access (getterMods);  
+    setterMods = (setterMods & ~NemerleAttributes.AccessModifiers) | take_minimum_access (setterMods);  
 
     def fieldref = <[ $(storage_field.ParsedName : name) ]>;
+    def setterAttrs = Modifiers (setterMods, [<[ System.Diagnostics.DebuggerStepThroughAttribute ]>]);
+    def getterAttrs = Modifiers (getterMods, [<[ System.Diagnostics.DebuggerStepThroughAttribute ]>]);
 
     def prop = 
-      if (want_setter)
+      if (setterMods != NemerleAttributes.None && getterMods != NemerleAttributes.None)
         <[ decl:
-          public $(name : dyn) : $(storage_field.ty)
+          $(name : dyn) : $(storage_field.ty)
           {
-            [System.Diagnostics.DebuggerStepThroughAttribute]
-            set { $fieldref = value; }
-            [System.Diagnostics.DebuggerStepThroughAttribute]
-            get { $fieldref }
+            ..$setterAttrs set { $fieldref = value; }
+            ..$getterAttrs get { $fieldref }
           }
         ]>
-      else
+      else if (getterMods != NemerleAttributes.None)
         <[ decl:
-          public $(name : dyn) : $(storage_field.ty)
+          $(name : dyn) : $(storage_field.ty)
           {
-            [System.Diagnostics.DebuggerStepThroughAttribute]
-            get { $fieldref }
+            ..$getterAttrs get { $fieldref }
           }
         ]>;
+      else if (setterMods != NemerleAttributes.None)
+        <[ decl:
+          $(name : dyn) : $(storage_field.ty)
+          {
+            ..$setterAttrs set { $fieldref = value }
+          }
+        ]>;
+      else Message.FatalError ("no accessor will be visible with specified modifiers");
 
     prop.SetEnv (storage_field.Env);
-
-    when (want_internal) {
-      prop.Attributes &= ~NemerleAttributes.Public;
-      prop.Attributes |= NemerleAttributes.Internal;
-    }
-
-    when (want_protected) {
-      prop.Attributes &= ~NemerleAttributes.Public;
-      prop.Attributes |= NemerleAttributes.Protected;
-    }
-    when (want_override)
-      prop.Attributes |= NemerleAttributes.Override;
-    when (want_virtual)
-      prop.Attributes |= NemerleAttributes.Virtual;
+    
+    def totalMods = getterMods | setterMods;
+    if (totalMods %&& NemerleAttributes.Public)
+      prop.Attributes = (totalMods & ~NemerleAttributes.AccessModifiers) | NemerleAttributes.Public;
+    else if (totalMods %&& NemerleAttributes.Internal && totalMods %&& NemerleAttributes.Protected)
+      prop.Attributes = (totalMods & ~NemerleAttributes.AccessModifiers) | NemerleAttributes.Internal | NemerleAttributes.Protected;
+    else if (totalMods %&& NemerleAttributes.Internal)
+      prop.Attributes = (totalMods & ~NemerleAttributes.AccessModifiers) | NemerleAttributes.Internal;
+    else if (totalMods %&& NemerleAttributes.Protected)
+      prop.Attributes = (totalMods & ~NemerleAttributes.AccessModifiers) | NemerleAttributes.Protected;
+    else 
+      prop.Attributes = (totalMods & ~NemerleAttributes.AccessModifiers) | NemerleAttributes.Private;
 
     when (storage_field.Attributes %&& NemerleAttributes.Static)
       prop.Attributes |= NemerleAttributes.Static;
-
+            
     current_type.Define (prop);
   }
 
