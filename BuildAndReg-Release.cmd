@@ -4,3 +4,4 @@ set Type=Release
 
 call BuildAndReg.cmd
 
+pause
