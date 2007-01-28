@@ -62,8 +62,6 @@ NEMERLE_DLL_SRC = \
 	../lib/queue.n			\
 	../lib/stack.n			\
 	../lib/tree.n			\
-	../lib/idictionaryenumerator.n	\
-	../lib/idictionary.n		\
 	../lib/heap.n			\
 	../lib/narray.n			\
 	../lib/nstring.n                \

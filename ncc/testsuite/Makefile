@@ -79,7 +79,6 @@ Nemerle.Compiler.dll:
 test-stage1:
 	cp $(STAGE1)/Nemerle.stage1.dll .
 	cp $(STAGE1)/Nemerle.Compiler.stage1.dll .
-	cp $(STAGE1)/Nemerle.Macros.dll .
 	$(EXECUTE) ../../boot/ncc.exe -no-stdlib -r:Nemerle.stage1 \
 		-r:Nemerle.Compiler.stage1 -r:System -out test.exe $(TESTN)
 	$(EXECUTE) ./test.exe -s -r "$(EXECUTE)" \
