@@ -33,17 +33,18 @@ using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Utility;
 
+using System;
 using System.Xml;
 using System.Text;
 
 namespace Nemerle.Compiler 
 {
-  class XmlDoc {
+  public class XmlDoc {
     document : XmlDocument;
     docNode : XmlNode;
     mutable last_loc : Location;
 
-    public this (comments : Map [Location, string], output : string) {
+    internal this (comments : Map [Location, string], output : string) {
       this.Comments = comments;
       this.OutputFileName = output;
       
@@ -59,7 +60,7 @@ namespace Nemerle.Compiler
     OutputFileName : string;
     Comments : Map [Location, string];
     
-    public Save () : void {
+    internal Save () : void {
       document.Save (OutputFileName);
     }
 
@@ -72,30 +73,8 @@ namespace Nemerle.Compiler
     }
 
     DumpMember (m : IMember) : void {
-      def full_name = m.DeclaringType.FullName + "." + m.Name;
-      def (prefix, suffix) = 
-        match (m.MemberKind) {
-          | MemberKinds.Field => ("F:", "")
-          | MemberKinds.Method | MemberKinds.Constructor =>
-            def method = m :> IMethod;
-            def parms = List.Map (method.GetParameters (),
-                                  fun (p : Typedtree.Fun_parm) {
-                                    p.ty.SystemType.FullName
-                                  });
-            if (!(parms is []))                                  
-              ("M:", "(" + Nemerle.Utility.NString.Concat (",", parms) + ")")
-            else 
-              ("M:", "")
-
-          | MemberKinds.Property => ("P:", "")
-          | MemberKinds.TypeInfo | MemberKinds.NestedType => DumpType (m :> TypeInfo); ("", "")
-          | MemberKinds.Event => ("E:", "")
-          | _ => ("", "")
-        }
-      unless (prefix == "" && suffix == "") {
-        def member = docNode.AppendChild (CreateMember (prefix + full_name + suffix));
-        add_comments (member, m);
-      }
+      def member = docNode.AppendChild (CreateMember (GetKey(m)));
+      add_comments (member, m);
     }
 
     variant XToken
@@ -396,13 +375,157 @@ namespace Nemerle.Compiler
       last_loc = curr;
     }
 
-    public DumpType (t : TypeInfo) : void {
-      def node = docNode.AppendChild (CreateMember ("T:" + t.FullName));
+    internal DumpType (t : TypeInfo) : void {
+      def node = docNode.AppendChild (CreateMember (GetKey(t)));
       add_comments (node, t);
       def mems = t.GetMembers (BindingFlags.Static %| BindingFlags.Instance %|
                                BindingFlags.Public %| BindingFlags.NonPublic %| 
                                BindingFlags.DeclaredOnly);
       List.Iter (mems, DumpMember);
+    }
+
+    public static GetKey (m : IMember) : string {
+
+      // Since typical member key has at least four parts
+      // (prefix, declaring type, dot, name) it is good
+      // to use a string builder here.
+      //
+      def sb = StringBuilder ();
+
+      // Append a list of something.
+      // The comma symbol will be inserted between elements.
+      //
+      def appendList['a] (lst : list['a], action : 'a -> void) : void {
+        match (lst) {
+          | Nil      => ()
+          | x :: Nil => action (x);
+          | x :: xs  =>
+            action (x);
+            ignore (sb.Append (","));
+            appendList (xs, action);
+          }
+      }
+
+      // Append a method parameter type name.
+      //
+      def appendParmTypeName (p : TyVar, m : IMethod) : void {
+
+        // Append a generic parameter type name,
+        // which is an index actually.
+        //
+        def appendStaticTyVarName (tyvar : StaticTyVar) : void {
+          def indexOf ['a] (l : list ['a], a : 'a) : int {
+            def loop (l, a, idx) {
+              match (l) {
+                | h :: t  =>
+                  if (h.Equals (a))
+                    idx
+                  else
+                    loop (t, a, idx + 1)
+                | [] => -1
+                }
+            }
+
+            loop (l, a, 0)
+          }
+
+          match (indexOf (m.GetHeader ().typarms, tyvar)) {
+            | -1 =>
+              match (indexOf (m.DeclaringType.Typarms, tyvar)) {
+                | -1 => throw ArgumentException ("Unknown type parameter"); // Should never be happen.
+                | x  => ignore (sb.Append ("`").Append (x)); // The declaring type generic parameter index.
+                }
+            | x  => ignore (sb.Append ("``").Append (x)); // The method generic parameter index.
+          }
+        }
+
+        // Append type name and, optional, generic argument names.
+        //
+        def appendTypeNameAndArgs (typeName : string, args : list[TyVar]) : void {
+          ignore (sb.Append (typeName));
+          unless (args.IsEmpty) {
+            ignore (sb.Append ("{"));
+            appendList (args, e => appendParmTypeName (e, m));
+            ignore (sb.Append ("}"));
+          }
+        }
+
+        match (p.Fix ()) {
+          | Class       (tycon, args) => appendTypeNameAndArgs (tycon.FullName, args);
+          | TyVarRef    (tyvar)       => appendStaticTyVarName (tyvar);
+          | Array       (t, rank)     =>
+            appendParmTypeName (t, m);
+            if (rank > 1) {
+              ignore (sb.Append ("[0:"));
+              repeat (rank - 1)
+                ignore (sb.Append (",0:"));
+              ignore (sb.Append ("]"));
+            }
+            else
+              ignore (sb.Append ("[]"));
+
+          | Ref         (t)
+          | Out         (t)           => appendParmTypeName (t, m);
+          | Tuple       (args)        => appendTypeNameAndArgs ("Nemerle.Builtins.Tuple", args);
+          | Fun         (from, to)    =>
+            def args = match (from.Fix ()) {
+              | Void         => [];
+              | Tuple (args) => args;
+              | _            => [from];
+              }
+            match (to.Fix ()) {
+              | Void => appendTypeNameAndArgs ("Nemerle.Builtins.FunctionVoid", args);
+              | _    => appendTypeNameAndArgs ("Nemerle.Builtins.Function", args.Append ([to]));
+              }
+
+          | Void
+          | Intersection              => throw InvalidOperationException ("Invalid MType for doc comment");
+          }
+      }
+
+      def appendTypeName (typeInfo : TypeInfo) : void {
+        def tyParmsCount = typeInfo.Typarms.Length;
+
+        ignore (sb.Append (typeInfo.FullName));
+        unless (tyParmsCount == 0)
+          ignore (sb.Append ("`").Append (tyParmsCount));
+      }
+
+      match (m.MemberKind) {
+        | MemberKinds.Field    with prefix = "F:"
+        | MemberKinds.Event    with prefix = "E:"
+        | MemberKinds.Property with prefix = "P:" =>
+          ignore (sb.Append (prefix));
+          appendTypeName (m.DeclaringType);
+          ignore (sb.Append (".").Append (m.Name.Replace ('.', '#')));
+
+        | MemberKinds.Constructor
+        | MemberKinds.Method =>
+          def method       = m :> IMethod;
+          def parms        = method.GetParameters ();
+          def tyParmsCount = method.GetHeader ().typarms.Length;
+
+          ignore (sb.Append ("M:"));
+          appendTypeName (method.DeclaringType);
+          ignore (sb.Append (".").Append (m.Name.Replace ('.', '#')));
+
+          unless (tyParmsCount == 0)
+            ignore (sb.Append ("``").Append (tyParmsCount));
+          unless (parms.IsEmpty) {
+            ignore (sb.Append ("("));
+            appendList (parms, p => appendParmTypeName (p.ty, method));
+            ignore (sb.Append (")"));
+          }
+
+        | MemberKinds.TypeInfo
+        | MemberKinds.NestedType =>
+          ignore (sb.Append ("T:"));
+          appendTypeName(m :> TypeInfo);
+
+        | other => throw InvalidOperationException ($"Invalid MemberKinds for doc comment: `$other'");
+        }
+
+      sb.ToString ();
     }
   }
 } // end ns
