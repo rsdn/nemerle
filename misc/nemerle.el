@@ -70,6 +70,11 @@
 
 ;;; Change Log:
 
+;; 2006-12-27 Piotr Kalinowski <pitkali@gmail.com>
+;;   * Added indent-expr-to-paren variable, so now the user can
+;;     choose behaviour when breaking the expression inside
+;;     parens.
+
 ;; 2006-03-06 Piotr Kalinowski <pitkali@gmail.com>
 ;;   * I have corrected if-else structures handling
 ;;     and in-match detection.
@@ -176,6 +181,10 @@ buffer created.  This is a good place to put your customizations.")
 (defvar nemerle-indentation-based-syntax t
   "Whether we are using indentation based syntax. On by default, because
 it'll get turned off inside any parens anyway.")
+
+(defvar nemerle-indent-expr-to-paren t
+  "If a line is broken inside parenthesised expression and this is set to t,
+next line will be aligned to the opening paren.")
 
 (unless nemerle-mode-map
   (let ((map (make-sparse-keymap)))
@@ -641,7 +650,9 @@ where its syntactic meaning is given by LINE, and may not be IN-STRING."
 		   ((eq paren-char 0)
 		    (nemerle-get-offset end line))
 		   (t
-		    (1+ paren-column))))))))
+		    (if nemerle-indent-expr-to-paren
+			(1+ paren-column)
+		      (+ (+ top-indentation nemerle-basic-offset) (nemerle-get-nested end line))))))))))
 
 
 (defun nemerle-calculate-indentation ()
