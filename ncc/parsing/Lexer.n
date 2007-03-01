@@ -234,16 +234,16 @@ public class Region
   [Accessor] mutable location   : Location;
   [Accessor]         text       : string;
 
-  internal SetEndRegion(loc : Location) : void
+  internal SetEndRegion (loc : Location) : void
   {
     when (isComplete)
-      throw System.InvalidOperationException("region is complete.");
+      throw System.InvalidOperationException ("region is complete.");
 
     when (location.FileIndex != loc.FileIndex)
-      throw System.InvalidOperationException("invalid endregion.");
+      throw System.InvalidOperationException ("invalid endregion.");
 
     isComplete = true;
-    location   = Location(location.FileIndex, location.Line, location.Column, loc.Line, loc.Column)
+    location   = Location (location.FileIndex, location.Line, location.Column, loc.Line, loc.Column)
   }
 }
 
@@ -309,13 +309,22 @@ public abstract class LexerBase : IDisposable
   /** if there was only white chars from beginnig of line */
   protected mutable white_beginning : bool;  
 
-  protected mutable eating_stack : Stack[int]; // stack of nested #if
+  protected mutable eating_stack : Stack[int]; // stack of states (nested #if)
 
-  /** -1 = now inside true preprocessing section
-       0 = no preprocessing currently in action
-       1 = there were no true preprocessing sections in this set
-       2 = there already was true preprocessing section in this set
-       3 = we are now inside #else section, but it is not analyzed   */
+  /**
+    states:
+     now processing:
+      -4 region
+      -3 else
+      -1 if/elif
+       0 no preprocessor
+     not processing:
+       1 if/elif, but some other block possibly will be processed
+       2 if/elif, and other blocks won't be processed 
+        (there already was processed block, or parent block isn't processed)
+       3 else
+       4 region
+  */
   protected mutable eating_now : int;
 
   mutable   line_stack : int;    // real line number at moment of `#line 3' occurence
@@ -1139,7 +1148,7 @@ public abstract class LexerBase : IDisposable
 
   read_to_the_end_of_line () : string
   {
-    mutable c = ' ';
+    mutable c = read_or_eol ();
     def line = StringBuilder (80);
     while (c != '\n') {
       if (c == '/') {
@@ -1162,7 +1171,7 @@ public abstract class LexerBase : IDisposable
   {
     def eat_spaces () : void {
       mutable c = peek ();
-      while (Char.IsWhiteSpace (c)) 
+      while (Char.IsWhiteSpace (c) && c != '\n') 
       {
         ignore (read ());
         c = peek ();
@@ -1185,46 +1194,45 @@ public abstract class LexerBase : IDisposable
     match (directive) {
       | "if" =>
         eating_stack.Push (eating_now);
-        if (evaluate_preprocessing_expr (read_to_the_end_of_line ().Trim ()))
-          unless (eating_now > 0)          
-            eating_now = -1
+        def now = evaluate_preprocessing_expr (read_to_the_end_of_line ().Trim ());
+        if (eating_now > 0)          
+          eating_now = 2
         else
-          eating_now = 1
+          eating_now = if (now) -1 else 1
 
       | "elif" =>
         def now = evaluate_preprocessing_expr (read_to_the_end_of_line ().Trim ());
-        if (!eating_stack.IsEmpty) {
-          def x = eating_stack.Top;    
-          unless (x > 0)
-          match (eating_now) {
-            | 1 => when (now) eating_now = -1
-            | -1 | 2 => eating_now = 2
-            | _ => throw LexerBase.Error ("unbalanced preprocessing directives")
-          }
+        match (eating_now) {
+          | -4 | 4 => throw LexerBase.Error ("unexpected #elif inside region")
+          | -3 | 3 => throw LexerBase.Error ("unexpected #elif after #else")
+          | 1 => eating_now = if (now) -1 else 1
+          | -1 | 2 => eating_now = 2
+          | _ => throw LexerBase.Error ("unbalanced preprocessing directives")
         }
-        else
-          throw LexerBase.Error ("unbalanced #else");
 
       | "else" =>
-        ignore (read_to_the_end_of_line ());
-        if (!eating_stack.IsEmpty) {
-          def x = eating_stack.Top;    
-          unless (x > 0)
-            match (eating_now) {
-              | 1 => eating_now = -1
-              | -1 | 2 => eating_now = 3
-              | _ => throw LexerBase.Error ("unbalanced preprocessing directives")
-            }
+        eat_spaces ();
+        when (read_to_the_end_of_line () != "")
+          throw LexerBase.Error ("extra tokens after #else");
+        match (eating_now) {
+          | -4 | 4 => throw LexerBase.Error ("unexpected #else inside region")
+          | -3 | 3 => throw LexerBase.Error ("unexpected #else after #else")
+          | 1 => eating_now = -3
+          | -1 | 2 => eating_now = 3
+          | _ => throw LexerBase.Error ("unbalanced preprocessing directives")
         }
-        else
-          throw LexerBase.Error ("unbalanced #else");
         
       | "endif" =>
-        ignore (read_to_the_end_of_line ());
-        if (!eating_stack.IsEmpty)
-          eating_now = eating_stack.Pop ();
-        else
-          throw LexerBase.Error ("unbalanced #endif");
+        eat_spaces ();
+        when (read_to_the_end_of_line () != "")
+          throw LexerBase.Error ("extra tokens after #endif");
+        match (eating_now)
+        {
+          | -4 | 4 => throw LexerBase.Error ("unexpected #endif inside region")
+          | 0 => throw LexerBase.Error ("unbalanced preprocessing directives")
+          | _ => ()
+        }
+        eating_now = eating_stack.Pop ();
 
       | "line" =>
         eat_spaces ();
@@ -1232,7 +1240,9 @@ public abstract class LexerBase : IDisposable
         def (new_line, new_file) =
           if (c == 'd') {
             if (read_word () == "default") {
-              ignore (read_to_the_end_of_line ());
+              eat_spaces ();
+              when (read_to_the_end_of_line () != "")
+                throw LexerBase.Error ("extra tokens after directive");
               (-1, null)
             }
             else
@@ -1282,9 +1292,14 @@ public abstract class LexerBase : IDisposable
         Message.Warning (this.Location, read_to_the_end_of_line ().Trim ());
 
       | "region" =>
-        incompleteRegions ::= Region(this.Location, read_to_the_end_of_line ().Trim ());
+        eating_stack.Push (eating_now);
+        eating_now = if (eating_now > 0) 4 else -4;
+        incompleteRegions ::= Region (this.Location, read_to_the_end_of_line ().Trim ());
 
       | "endregion" =>
+        when (eating_now != 4 && eating_now != -4)
+          throw LexerBase.Error ("Unexpected #endregion");
+        eating_now = eating_stack.Pop ();          
         match (incompleteRegions)
         {
           | h :: t =>
@@ -1300,7 +1315,7 @@ public abstract class LexerBase : IDisposable
         when (w == "")
           throw LexerBase.Error ("#define should be followed by name to define");
         when (w == "true" || w == "false")
-          throw LexerBase.Error ($ "Attempt to define $w");
+          throw LexerBase.Error ($ "Attempt to define ``$w''");
         defines = defines.Replace (w, true);
         _ = read_to_the_end_of_line ()
 
@@ -1309,7 +1324,7 @@ public abstract class LexerBase : IDisposable
         when (w == "")
           throw LexerBase.Error ("#undef should be followed by name to undefine");
         when (w == "true" || w == "false")
-          throw LexerBase.Error ($ "Attempt to undefine $w");
+          throw LexerBase.Error ($ "Attempt to undefine ``$w''");
         defines = defines.Replace (w, false);
         _ = read_to_the_end_of_line ()
 
