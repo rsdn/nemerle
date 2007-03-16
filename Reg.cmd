@@ -3,9 +3,11 @@
 IF "%Type%"=="" set Type=Debug
 
 set NemerleBin=%~dp0bin\%Type%
+set NemerleRoot=%~dp0.
 set GacUtil="%VS80COMNTOOLS%..\..\SDK\v2.0\Bin\gacutil.exe"
 set NemerleInstall=%ProgramFiles%\Nemerle
 set NGen="%SystemRoot%\Microsoft.NET\Framework\v2.0.50727\ngen.exe"
+
 
 @echo NemerleInstall=%NemerleInstall%
 @echo VS80COMNTOOLS=%VS80COMNTOOLS%
@@ -47,14 +49,9 @@ pause
 exit /b 1
 )
 
+copy /Y "%NemerleRoot%\tools\msbuild-task\Nemerle.MSBuild.targets" "%NemerleInstall%\*.*"
 copy /Y "%NemerleBin%\*.pdb" "%NemerleInstall%\*.pdb"
 copy /Y "%NemerleBin%\*.xml" "%NemerleInstall%\*.xml"
-
-%NGen% install "%NemerleInstall%\Nemerle.dll"
-%NGen% install "%NemerleInstall%\Nemerle.Compiler.dll"
-%NGen% install "%NemerleInstall%\Nemerle.Macros.dll"
-%NGen% install "%NemerleInstall%\Nemerle.MSBuild.Tasks.dll"
-%NGen% install "%NemerleInstall%\ncc.exe"
 
 cd "%~dp0"
 
