@@ -56,12 +56,6 @@ copy /Y "%NemerleBin%\*.xml" "%NemerleInstall%\*.xml"
 %NGen% install "%NemerleInstall%\Nemerle.MSBuild.Tasks.dll"
 %NGen% install "%NemerleInstall%\ncc.exe"
 
-%GacUtil% /i "%NemerleInstall%\Nemerle.dll"
-%GacUtil% /i "%NemerleInstall%\Nemerle.Compiler.dll"
-%GacUtil% /i "%NemerleInstall%\Nemerle.Macros.dll"
-%GacUtil% /i "%NemerleInstall%\Nemerle.MSBuild.Tasks.dll"
-
-
 cd "%~dp0"
 
 pause 
