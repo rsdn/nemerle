@@ -53,6 +53,12 @@ copy /Y "%NemerleRoot%\tools\msbuild-task\Nemerle.MSBuild.targets" "%NemerleInst
 copy /Y "%NemerleBin%\*.pdb" "%NemerleInstall%\*.pdb"
 copy /Y "%NemerleBin%\*.xml" "%NemerleInstall%\*.xml"
 
+%NGen% install "%NemerleInstall%\Nemerle.dll"
+%NGen% install "%NemerleInstall%\Nemerle.Compiler.dll"
+%NGen% install "%NemerleInstall%\Nemerle.Macros.dll"
+%NGen% install "%NemerleInstall%\Nemerle.MSBuild.Tasks.dll"
+%NGen% install "%NemerleInstall%\ncc.exe"
+
 cd "%~dp0"
 
 pause 
