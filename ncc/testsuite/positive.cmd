@@ -1,5 +1,6 @@
 IF exist positive.results del positive.results
-tests.exe -d:positive -p "-nowarn:10003 -def:RUNTIME_MS" -s > positive.results
-type positive.results
+tests.exe -d:positive -p "-nowarn:10003 -def:RUNTIME_MS" -s
+rem  > positive.results
+rem  type positive.results
 echo ----------------------------------------
 pause

@@ -345,8 +345,7 @@ namespace Nemerle.IO
       iter_through (parse_format (format), parms.Length, []);
     }
 
-
-    /** for $(..) expressions:
+    /** for $(...) and ..$(...) expressions:
         - first evaluate expressions
         - store intermediate results in variables
         - return list of evaluators and reference variables in reverse order
@@ -378,57 +377,130 @@ namespace Nemerle.IO
             | _ => idx
           }
       }
+      
+      def indexOfDollar(idx)
+      {
+        def str = str;
+        if (idx >= str.Length) -1
+        else if (char.IsWhiteSpace(str[idx])) indexOfDollar(idx + 1)
+        else if (str[idx] == '$') idx
+        else -1
+      }
 
-      def loop (res, idx) {
+      mutable nestLevel = 0;
+
+      def loop (res, idx)
+      {
+        def str = str;
+        nestLevel++;
+        Diagnostics.Trace.Assert(nestLevel < 200);
+
         if (idx < 0 || idx >= str.Length)
           res
-        else if (str[idx] == '$') {
-          when (idx + 1 >= str.Length)
-            Message.FatalError ("lone `$' at the end of the format string");
-          if (str[idx + 1] == '(') {
-            def end = find_end (1, idx + 2);
-            def expr = str.Substring (idx + 2, end - idx - 2);
-            def expr =
-              if (expr == "" || expr == "_" || 
-                  seen_non_alnum || 
-                  System.Char.IsDigit (expr [0])) {
-                _env.Manager.MacroColors.PushUseSiteColor ();
-                def expr = MainParser.ParseExpr (_env, expr);
-                _env.Manager.MacroColors.PopColor ();
-                <[ Convert.ToString ($expr) ]>
-              } else if (expr == "this")
-                <[ Convert.ToString (this) ]>
-              else
-                <[ Convert.ToString ($(expr : usesite)) ]>;
-            loop (expr :: res, end + 1)
-          }
-          else if (str[idx + 1] == '$')
-            loop (<[$("$" : string)]> :: res, idx + 2)
-          else {
-            def end = find_end_normal (idx + 1);
-            def variable_name = str.Substring (idx + 1, end - idx - 1);
+        else if (str[idx] == '.') // try recognize pattern '..$x'
+        {
+          if (idx + 3 < str.Length && str[idx + 1] == '.' && indexOfDollar(idx + 2) >= 0)
+            parceSpliceEx(res, indexOfDollar(idx + 2), false);  // found pattern '..$'
+          else
+            loop (<[$("." : string)]> :: res, idx + 1)
+        }
+        else if (str[idx] == '$')
+          parceSpliceEx(res, idx, true)
+        else
+        {
+          def str = str;
+          def get(index) { if (index < 0 || index >= str.Length) '\0' else str[index] }
+          def getElipseIndex(index)
+          { // If '..' prefix exists return it index. Otherwise return initial index.
+            def ch = get(index - 1);
             
-            if (variable_name == "") {
-              Message.Warning ("expected variable name or expression enclosed with (..) after $ in splice string");
-              loop (<[$("$" : string)]> :: res, idx + 1)
-            }
-            else {
-              def expr =
-                if (variable_name == "this") <[ Convert.ToString (this) ]>
-                else <[ Convert.ToString ($(variable_name : usesite)) ]>;
-              loop (expr :: res, end)
-            }
+            if (char.IsWhiteSpace(ch)) getElipseIndex(index - 1)
+            else if (get(index - 1) == '.' && get(index - 2) == '.') index - 2
+            else -1
           }
-        } else {
-          def next_idx = str.IndexOf ('$', idx);
-          def next_str =
-            if (next_idx == -1) str.Substring (idx)
-            else str.Substring (idx, next_idx - idx);
-          loop (<[ $(next_str : string) ]> :: res, next_idx)
+          def nextIdx   = str.IndexOf('$', idx);
+          def elipseIdx = getElipseIndex(nextIdx);
+          def nextIdx   = if (elipseIdx >= 0) elipseIdx else nextIdx;
+          def next_str  = if (nextIdx == -1) str.Substring (idx)
+                          else str.Substring (idx, nextIdx - idx);
+          loop (<[ $(next_str : string) ]> :: res, nextIdx)
+        }
+      }
+      and parceSpliceEx(res, idx, isSimple)
+      {
+        def str = str;
+
+        when (idx + 1 >= str.Length)
+        {
+          //Diagnostics.Trace.Assert(false);
+          Message.Error ("lone `$' at the end of the format string");
+          Nemerle.Imperative.Return ([<[ "$" ]>]);
+        }
+          
+        def nextIndex = idx + 1;
+          
+        if (str[nextIndex] == '(')
+        {
+          def end = find_end (1, idx + 2);
+          def expr = str.Substring (idx + 2, end - idx - 2);
+          def expr =
+            if (expr == "" || expr == "_" || seen_non_alnum || char.IsDigit(expr[0]))
+            {
+              _env.Manager.MacroColors.PushUseSiteColor ();
+              try
+              {
+                def pExpr = MainParser.ParseExpr (_env, expr);
+                def makeSeqExpr(pExpr)
+                {
+                  def makeSeqExpr(seqExpr, sepExpr, cnvFuncExpr)
+                  {
+                    <[ string.Join($sepExpr, NCollectionsUtils.MapToArray($seqExpr, $cnvFuncExpr)) ]>
+                  }
+                  match (pExpr)
+                  {
+                    | <[ $seqExpr; $sepExpr; $cnvFuncExpr; ]> => makeSeqExpr(seqExpr, sepExpr, cnvFuncExpr)
+                    | <[ $seqExpr; $sepExpr; ]> => makeSeqExpr(seqExpr, sepExpr, <[ Convert.ToString(_) ]>)
+                    | _ => makeSeqExpr(pExpr, <[ ", " ]>, <[ Convert.ToString(_) ]>)
+                  }
+                }
+                
+                if (isSimple) <[ Convert.ToString ($pExpr) ]> else makeSeqExpr(pExpr)
+              }
+              finally { _env.Manager.MacroColors.PopColor (); }
+            } else if (expr == "this")
+              if (isSimple) <[ Convert.ToString (this) ]>
+              else <[ string.Join(", ", NCollectionsUtils.MapToArray(this, Convert.ToString(_))) ]>
+            else if (isSimple) <[ Convert.ToString ($(expr : usesite)) ]>;
+            else <[ string.Join(", ", NCollectionsUtils.MapToArray($(expr : usesite), Convert.ToString(_))) ]>;
+          loop (expr :: res, end + 1)
+        }
+        else if (str[nextIndex] == '$')
+          loop (<[$("$" : string)]> :: res, idx + 2)
+        else
+        {
+          def end = find_end_normal (nextIndex);
+          def variable_name = str.Substring (nextIndex, end - idx - 1);
+          
+          if (variable_name == "")
+          {
+            Message.Warning ("expected variable name or expression enclosed with (..) after $ in splice string");
+            loop (<[$("$" : string)]> :: res, nextIndex)
+          }
+          else
+          {
+            def expr =
+              if (variable_name == "this") 
+                if (isSimple) <[ Convert.ToString (this) ]>
+                else <[ string.Join(", ", NCollectionsUtils.MapToArray(this, Convert.ToString(_))) ]>
+              else if (isSimple)
+                <[ Convert.ToString ($(variable_name : usesite)) ]>
+              else <[ string.Join(", ", NCollectionsUtils.MapToArray($(variable_name : usesite), Convert.ToString(_))) ]>;
+            loop (expr :: res, end)
+          }
         }
       }
 
       loop ([], 0)
-    } 
+    }
   }
 }
