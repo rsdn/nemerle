@@ -30,6 +30,7 @@ using Nemerle.Collections;
 using Nemerle.Utility;
 
 using Nemerle.Compiler;
+using PT = Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Compiler.SolverMacros;
 
@@ -90,6 +91,8 @@ namespace Nemerle.Compiler
 
     // typer of our typer method or null for top-level methods
     parent : Typer3;
+
+    is_ctor : bool;
     
     // current method we're working on
     the_method : MethodBuilder;
@@ -169,6 +172,7 @@ namespace Nemerle.Compiler
       }
 
       this.parent = parent;
+      is_ctor = current_local_fun.name == ".ctor";
     }
 
 
@@ -991,27 +995,305 @@ namespace Nemerle.Compiler
 
       initializers
     }
+    
+    #region ctors, base calls, etc
+    /*
+    Simple execution flow analysis tool
+    Computes [result] : T for expression [e]
+    [f] is used to find atomic results, 
+    i.e. when f(e) isn't None result is f(e)
+    if it's None we transform expression to
+    - sequence, and pass it to [seq]
+    - several sequences, pass them to [fork]
+    for all other expressions we return [default]
+    */
+    SimpleFlow[T] (e : TExpr, 
+                   f : TExpr -> option[T], 
+                   default : T, 
+                   seq : list[TExpr] -> T,
+                   fork : list[list[TExpr]] -> T) : T
+    {
+      def SimpleFlow = SimpleFlow(_, f, default, seq, fork);
+      match (f (e)) {
+        | Some (t) => t
+        | _ =>
+           match (e) {
+             | TExpr.FieldMember (e, _)
+             | TExpr.MethodRef (e, _, _, _)
+             | TExpr.Throw (e) 
+             | TExpr.DefFunctionsIn (_, e) 
+             | TExpr.HasType (e, _) 
+             | TExpr.MacroEnvelope (_, _, e)
+             | TExpr.TypeConversion (e, _, _, _)
+             | TExpr.Label (_, e) 
+              => SimpleFlow (e)
 
+             | TExpr.Call (e, p, _) 
+              => def lst = List.Map (p, x => x.expr); 
+                 def lst = lst.Append ([e]);
+                 seq (lst);
 
-    GetBaseCall () : option [TExpr]
+             | TExpr.DefValIn (_, v, e) 
+              => seq ( [v, e] )
+
+             | TExpr.Assign (t, s) 
+              => seq ( [t, s] )
+
+             | TExpr.TryFinally (b, h) 
+              => fork ([h] :: [b, h] :: [])
+
+             //TODO: analyze catchs?
+             //like fork (  [b] :: List.Map (cs, x => [b, x.handler]) + 
+             //             [ ] :: List.Map (cs, x => [   x.handler])  )
+             | TExpr.Try (b, _) 
+              => fork ([] :: [b] :: [])
+
+             | TExpr.Sequence (a, b) 
+              => seq ( [a, b] )
+             | TExpr.MultipleAssign (la) 
+              => seq (List.Map (la, x => x[1]))
+             | TExpr.Tuple (l) 
+              => seq (l)
+             | TExpr.Array (l, d) 
+              => seq (l + d)
+             | TExpr.ArrayIndexer (a, l) 
+              => seq (a :: l)
+             | TExpr.TupleIndexer (a, _, _) 
+              => SimpleFlow (a)
+
+             | TExpr.If (c, a, b) 
+              => fork ( [c, a] :: [c, b] :: [] )
+             | TExpr.Switch (e, Some (c), cs) 
+              => fork ([e, c] :: List.Map (cs, x => [e, x[1]]))
+             | TExpr.Switch (e, None, cs) 
+              => fork ([e   ] :: List.Map (cs, x => [e, x[1]]))
+             | TExpr.Match (e, cs) 
+              => fork (List.Map (cs, x => [e, x.body]))
+
+             | TExpr.StaticRef | TExpr.LocalRef | TExpr.LocalFunRef
+             | TExpr.Literal | TExpr.This | TExpr.DefaultValue
+             | TExpr.ImplicitValueTypeCtor
+             | TExpr.Base | TExpr.SelfTailCall
+             | TExpr.MethodAddress
+             | TExpr.TypeOf
+             | TExpr.OpCode
+             | TExpr.Goto
+              => default;
+
+             //invalid things
+             | TExpr.PropertyMember 
+             | TExpr.StaticPropertyRef
+             | TExpr.EventMember
+             | TExpr.StaticEventRef
+             | TExpr.ConstantObjectRef
+             | TExpr.Block
+             | TExpr.Delayed
+             | TExpr.Cache
+             | TExpr.CacheRef
+             | TExpr.Error 
+              => Util.ice ("invalid expression in Typer3")
+           }  
+      }
+    }
+
+    IsCtor (_ : TExpr) : bool
+    {
+      | TExpr.Base => true
+      | TExpr.MacroEnvelope (_, _, e) => IsCtor (e)
+      | _ => false
+    }
+
+    IsBaseCtor (_ : TExpr) : bool
+    {
+      | TExpr.Base (mth) =>
+          !CurrentType.GetConstructors (). Contains (mth)
+      | TExpr.MacroEnvelope (_, _, e) => IsBaseCtor (e)
+      | _ => false
+    }
+
+    /*
+    Inject expressions before base ctor call, after this ctor call
+    If expression is null then don't inject it.
+    Used to inject field inits before and closure init after.
+    */
+    InjectAroundCtor (e : TExpr, beforeBase : TExpr, afterThis : TExpr) : TExpr
+    {
+      def inject (e : TExpr, inits : TExpr, post_init : TExpr)
+      {
+        def inject = inject (_, inits, post_init);
+        def o = e;
+        match (e) {
+          | TExpr.StaticRef | TExpr.LocalRef | TExpr.LocalFunRef
+          | TExpr.Literal | TExpr.This | TExpr.DefaultValue
+          | TExpr.ImplicitValueTypeCtor
+          | TExpr.Base | TExpr.SelfTailCall
+          | TExpr.MethodAddress
+          | TExpr.TypeOf
+          | TExpr.OpCode | TExpr.Goto
+           => e
+
+          | TExpr.FieldMember (e, z) => 
+             TExpr.FieldMember (o.loc, o.ty, inject (e), z)
+
+          | TExpr.MethodRef (e, z, x, c) => 
+             TExpr.MethodRef (o.loc, o.ty, inject (e), z, x, c)
+
+          | TExpr.Throw (e) => TExpr.Throw (o.loc, o.ty, inject (e))
+
+          | TExpr.DefFunctionsIn (q, e) => 
+             TExpr.DefFunctionsIn (o.loc, o.ty, q, inject (e))
+
+          | TExpr.DefValIn (z, v, e) => 
+             TExpr.DefValIn (o.loc, o.ty, z, inject (v), inject (e))
+
+          | TExpr.HasType (e, z) => 
+             TExpr.HasType (o.loc, o.ty, inject (e), z)
+
+          | TExpr.MacroEnvelope (z, x, e) => 
+             TExpr.MacroEnvelope (o.loc, o.ty, z, x, inject (e))
+
+          | TExpr.TypeConversion (e, z, x, c) => 
+             TExpr.TypeConversion (o.loc, o.ty, inject (e), z, x, c)
+
+          | TExpr.Label (z, e) => 
+             TExpr.Label (o.loc, o.ty, z, inject (e))
+
+          | TExpr.Call (e, p, t) when IsBaseCtor (e) => 
+             def p = List.Map (p,
+                   x => Parm (x.kind, inject (x.expr), x.name, x.required_type)
+             );
+             def expr = TExpr.Call (o.loc, o.ty, e, p, t);
+             match ((inits, post_init)) {
+               | (null, null) => expr
+               | (_, null) => TExpr.Sequence (o.loc, o.ty, inits, expr)
+               | (null, _) => TExpr.Sequence (o.loc, o.ty, expr, post_init);
+               | _ => TExpr.Sequence (o.loc, o.ty, 
+                        inits, 
+                        TExpr.Sequence (o.loc, o.ty, expr, post_init)
+                      )
+             }
+
+          | TExpr.Call (e, p, t) when IsCtor (e) => 
+             def p = List.Map (p,
+                 x => Parm (x.kind, inject (x.expr), x.name, x.required_type)
+             );
+             def expr = TExpr.Call (o.loc, o.ty, e, p, t);
+             match (post_init) {
+               | null => expr
+               | _ => TExpr.Sequence (o.loc, o.ty, expr, post_init)
+             }
+
+          | TExpr.Call => e
+
+          | TExpr.Assign (a, b) => 
+             TExpr.Assign (o.loc, o.ty, inject (a), inject (b))
+
+          | TExpr.TryFinally (b, h) => 
+             TExpr.TryFinally (o.loc, o.ty, inject (b), inject (h))
+
+          | TExpr.Try (b, cs) => 
+             TExpr.Try (o.loc, o.ty, inject (b), cs)
+
+          | TExpr.Sequence (a, b) => 
+             TExpr.Sequence (o.loc, o.ty, inject (a), inject (b))
+
+          | TExpr.MultipleAssign (la) => 
+             TExpr.MultipleAssign (o.loc, o.ty, 
+               List.Map (  la, x => (x[0], inject (x[1]))  )
+             )
+
+          | TExpr.Tuple (l) => 
+             TExpr.Tuple (o.loc, o.ty, List.Map (l, inject))
+
+          | TExpr.Array (l, d) => 
+             TExpr.Array (o.loc, o.ty, 
+               List.Map (l, inject), List.Map (d, inject)
+             )
+
+          | TExpr.ArrayIndexer (a, l) => 
+             TExpr.ArrayIndexer (o.loc, o.ty, 
+               inject (a), 
+               List.Map (l, inject)
+             )
+
+          | TExpr.TupleIndexer (a, z, x) => 
+             TExpr.TupleIndexer (o.loc, o.ty, inject (a), z, x)
+
+          | TExpr.If (c, a, b) => 
+             TExpr.If (o.loc, o.ty, inject (c), inject (a), inject (b))
+
+          | TExpr.Switch (e, Some (c), cs) => 
+             TExpr.Switch (o.loc, o.ty, 
+               inject (e), 
+               Some (inject (c)), 
+               List.Map (  cs, x => (x[0], inject (x[1]))  )
+             )
+
+          | TExpr.Switch (e, None, cs) => 
+             TExpr.Switch (o.loc, o.ty, 
+               inject (e), 
+               None (), 
+               List.Map (  cs, x => (x[0], inject (x[1]))  )
+             )
+
+          | TExpr.Match (e, cs) => 
+             TExpr.Match (o.loc, o.ty, 
+               inject (e), 
+               List.Map (cs, x => 
+                Match_case (x.patterns, inject (x.body), x.disable_warnings)
+               )
+             )
+
+          //invalid things
+          | TExpr.PropertyMember 
+          | TExpr.StaticPropertyRef
+          | TExpr.EventMember
+          | TExpr.StaticEventRef
+          | TExpr.ConstantObjectRef
+          | TExpr.Block
+          | TExpr.Delayed
+          | TExpr.Cache
+          | TExpr.CacheRef
+          | TExpr.Error 
+           => Util.ice ("invalid expression in Typer3")
+        }
+      }
+      inject (e, beforeBase, afterThis);
+    }
+#endregion
+
+    FixBaseCall (clo_ini : TExpr = null) : void
     {
       // put base () / this () call before storing 'this' in closure inside constructor
-      if (current_local_fun.name == ".ctor" && !CurrentType.IsValueType)
-        match (current_local_fun.body) {
-          | FunBody.Typed (TExpr.Sequence (TExpr.Call as basecall, rest)) =>
-            current_local_fun.body = FunBody.Typed (rest);
-            Some (Walk (basecall))
-
-          | FunBody.Typed (TExpr.Call as basecall) =>
-            current_local_fun.body = FunBody.Typed (BuildRevSequence ([]));
-            Some (Walk (basecall))
-
-          // ctor call is (if not, it's a bug) placed somewhere inside, but this case disallows using 'this' in closures
-          | FunBody.Typed (_) => Some (null) 
-
-          | _ => assert (false)
+      when (is_ctor && !CurrentType.IsValueType)
+      {
+        def ini = null;
+        mutable e = match (current_local_fun.body) {
+          | FunBody.Typed (e) => e
+          | _ => Util.ice ("bad function body")
         }
-      else None ()
+        when (clo_ini != null)
+        {
+          def f (_) {
+            | TExpr.Call (e, _, _) when IsCtor (e) => Some (true)
+            | _ => None ()
+          }
+          and ctor_calls (e) {
+            SimpleFlow (e, f, false, seq, fork)
+          }
+          and seq (_) {
+            | e :: _ => ctor_calls (e)
+            | _ => false
+          }
+          and fork (l) {
+            List.ForAll (l, seq)
+          }
+          when (!ctor_calls (e))
+            Message.Error ("closure utilizing 'this' reference is not allowed when base ctor call is not placed at the beginning of current ctor");
+        }
+        e = InjectAroundCtor (e, ini, clo_ini);
+        current_local_fun.body = FunBody.Typed (e);
+      }
     }
     
 
@@ -1036,27 +1318,21 @@ namespace Nemerle.Compiler
 
       initializers = LoadParameters () + initializers;
 
-      mutable base_call_missing = false;
-      match (GetBaseCall ()) {
-        | Some (null) => base_call_missing = true;
-        | Some (call) =>
-          initializers = call :: initializers;
-        | None => {}
-      }
-
+      mutable ini = null;
       // store 'this' into closure object
       foreach (d in current_local_fun.closure_vars) 
         when (d.InClosure &&
               d.ValKind is LocalValue.Kind.ClosurisedThisPointer) {
-          when (base_call_missing)
-            Message.Error ("closure utilizing 'this' reference is not allowed when base ctor call is not placed at the beginning of current ctor");
-          def ini =
+          ini =
             TExpr.Assign (InternalType.Void,
                           LocalRef (d, for_store = true),
                           TExpr.This (CurrentType.GetMemType ()));
-          initializers = ini :: initializers;
         }
 
+      FixBaseCall (ini);
+      unless (is_ctor && !CurrentType.IsValueType)
+        when (ini != null)
+          initializers ::= ini;
       initializers
     }
     #endregion
