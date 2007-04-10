@@ -92,6 +92,8 @@ namespace Nemerle.Compiler
     // typer of our typer method or null for top-level methods
     parent : Typer3;
 
+    ptyper : Typer;
+    ptyper2 : Typer2;
     is_ctor : bool;
     
     // current method we're working on
@@ -129,14 +131,16 @@ namespace Nemerle.Compiler
 
     
     #region Entry points
-    public this (meth : MethodBuilder)
+    public this (meth : MethodBuilder, pt : Typer = null, pt2 : Typer2 = null)
     {
-      this (null, meth);
+      this (null, meth, pt, pt2);
     }
 
 
-    this (parent : Typer3, meth : MethodBuilder)
+    this (parent : Typer3, meth : MethodBuilder, pt : Typer = null, pt2 : Typer2 = null)
     {
+      ptyper = pt;
+      ptyper2 = pt2;
       the_method = meth;
       this (parent, meth.GetHeader ());
       local_function_type = meth.DeclaringType;
@@ -1111,6 +1115,44 @@ namespace Nemerle.Compiler
       | _ => false
     }
 
+    //Return min*max ctor calls in expr
+    CtorCalls (e : TExpr) : int*int 
+    {
+      def default = (0, 0);
+      def f (_) {
+        | TExpr.Call (e, _, _) when IsCtor (e) => Some ((1, 1))
+        | _ => None ()
+      }
+      and ctor_calls (e) {
+        SimpleFlow (e, f, default, seq, fork)
+      }
+      and acc (_) {
+        | [] => (0, 0)
+        | h :: rst => 
+          def (a, b) = acc (rst);
+          (a + h[0], b + h[1])
+      }
+      and seq (l) {
+        acc (List.Map (l, x => ctor_calls (x)))
+      }
+      and min (a, b) {
+        if (a < b) a else b
+      }
+      and max (a, b) {
+        if (a < b) b else a
+      }
+      and alt (_) {
+        | [] => (0, 0)
+        | [q] => q
+        | h :: rst => 
+          def (a, b) = alt (rst);
+          (min (a, h[0]), max (b, h[1])) 
+      }
+      and fork (l) {
+        alt (List.Map (l, x => seq (x)))
+      };
+      ctor_calls (e);
+    }
     /*
     Inject expressions before base ctor call, after this ctor call
     If expression is null then don't inject it.
@@ -1265,13 +1307,60 @@ namespace Nemerle.Compiler
     FixBaseCall (clo_ini : TExpr = null) : void
     {
       // put base () / this () call before storing 'this' in closure inside constructor
-      when (is_ctor && !CurrentType.IsValueType)
+      mutable e = null;
+      when (is_ctor)
       {
-        def ini = null;
-        mutable e = match (current_local_fun.body) {
+        e = match (current_local_fun.body) {
           | FunBody.Typed (e) => e
           | _ => Util.ice ("bad function body")
         }
+        if (CurrentType.IsValueType) 
+        {
+          //Value types cannot call base ctor, so they can call several this()
+          def f (_) {
+            | TExpr.Call (e, _, _) as o when IsBaseCtor (e)
+             => Message.Error (o.loc, "Base constructor call in struct isn't allowed");
+                Some (false)
+            | _ => None ()
+          }
+          and check (e) {
+            SimpleFlow (e, f, false, seq, fork)
+          }
+          and seq (l) {
+            _ = List.Map (l, check);
+            true
+          }
+          and fork (l) {
+            _ = List.Map (l, seq);
+            true
+          }
+          _ = check (e);
+        }
+        else
+        {
+          match (CtorCalls (e)) {
+            | (0, 0) => 
+              def bc = ptyper.TypeExpr ( <[ base () ]> );
+              def bc = ptyper2.Walk (Typer2.Context.TopLevel, bc);
+              e = TExpr.Sequence (e.loc, e.ty, bc, e);
+            | (1, 1) => ()
+            | (0, _) => 
+              Message.Warning ("Base constructor call can be missed");
+            | (x, _) when x > 1 => 
+              Message.Error ($"Base constructor call happens at least $x times");
+            | (_, y) => 
+              Message.Warning ($"Base constructor call can happen $y times");
+          }
+        }
+      }
+      when (is_ctor && !CurrentType.IsValueType)
+      {
+        def ini = null;
+        when (e == null)
+          e = match (current_local_fun.body) {
+                | FunBody.Typed (e) => e
+                | _ => Util.ice ("bad function body")
+              }
         when (clo_ini != null)
         {
           def f (_) {
