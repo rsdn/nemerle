@@ -6,7 +6,14 @@ set NemerleBin=%~dp0bin\%Type%
 set NemerleRoot=%~dp0.
 set GacUtil="%VS80COMNTOOLS%..\..\SDK\v2.0\Bin\gacutil.exe"
 set NemerleInstall=%ProgramFiles%\Nemerle
+
+IF NOT "%PROCESSOR_ARCHITECTURE%" == "x86" goto b64
+IF NOT "%PROCESSOR_ARCHITEW6432%" == "" goto b64
 set NGen="%SystemRoot%\Microsoft.NET\Framework\v2.0.50727\ngen.exe"
+goto b32
+:b64
+set NGen="%SystemRoot%\Microsoft.NET\Framework64\v2.0.50727\ngen.exe"
+:b32
 
 
 @echo NemerleInstall=%NemerleInstall%
@@ -61,4 +68,4 @@ copy /Y "%NemerleBin%\*.xml" "%NemerleInstall%\*.xml"
 
 cd "%~dp0"
 
-pause 
+pause
