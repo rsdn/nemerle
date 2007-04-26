@@ -30,7 +30,7 @@ t: all
 		the-ant simulator/brain.2.in 10000 dump-results 1000
 
 run: Nemerle.dll ants.exe
-	$(MONO) ants.exe
+	$(MONO) ./ants.exe
 
 Nemerle.dll: $(NPATH)/Nemerle.dll
 	cp -f $(NPATH)/Nemerle.dll .
