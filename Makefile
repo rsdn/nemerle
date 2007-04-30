@@ -181,7 +181,7 @@ set-version: config.mak
 	$(Q)for f in $(version_files) ; do \
 		echo -n "."; \
 		perl -p -i -e \
-		 '$$r="$(REVISION)"; $$r =~ s/99$$/*/; s/AssemblyVersion\("[^"]+"\)/AssemblyVersion("$(VERSION).$$r")MARK-SET-VER/' \
+		 '$$r="$(REVISION)"; $$r =~ s/99$$/SVN/; s/AssemblyVersion(FromSVN)?\("[^"]+"\)/AssemblyVersion$$1("$(VERSION).$$r")MARK-SET-VER/' \
 		 $$f ; \
 		: check if we succeed ; \
 		grep -q MARK-SET-VER $$f || { echo "Failed to set version on $$f"; exit 1; } ; \
