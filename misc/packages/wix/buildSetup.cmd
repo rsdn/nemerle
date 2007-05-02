@@ -53,16 +53,13 @@ set NemerleSetupContent=%~dp0dist
 set GeneratedFile=%~dp0src\Generated.wxi
 set MsiFile=%~dp0redist\Nemerle.msi
 
-rem
-rem Add some assemblies to GAC.
-rem
 
-GacUtil -i %NemerleSetupContent%\bin\Nemerle.dll
-GacUtil -i %NemerleSetupContent%\bin\Nemerle.Macros.dll
-GacUtil -i %NemerleSetupContent%\bin\Nemerle.Compiler.dll
+rem Change current directory to dist/bin to help RegPkg.exe find the right dlls.
+cd "%~dp0dist\bin"
 
 "%RegPkgDir%\RegPkg.exe" /root:Software\Microsoft\VisualStudio\8.0 "/wixfile:%GeneratedFile%" /codebase "%NemerleSetupContent%\vs-plugin\Nemerle.VisualStudio.dll"
 if errorlevel 1 goto done
+cd "%~dp0"
 
 "%WixDir%\candle.exe" -ext WixNetFxExtension -sw1080 src/*.wxs
 if errorlevel 1 goto done
@@ -91,4 +88,5 @@ echo Please specify environment variable "WixDir".
 goto done
 
 :done
+cd "%~dp0"
 pause
