@@ -54,10 +54,7 @@ set GeneratedFile=%~dp0src\Generated.wxi
 set MsiFile=%~dp0redist\Nemerle.msi
 
 
-rem Change current directory to dist/bin to help RegPkg.exe find the right dlls.
-cd "%~dp0dist\bin"
-
-"%RegPkgDir%\RegPkg.exe" /root:Software\Microsoft\VisualStudio\8.0 "/wixfile:%GeneratedFile%" /codebase "%NemerleSetupContent%\vs-plugin\Nemerle.VisualStudio.dll"
+"%RegPkgDir%\RegPkg.exe" /root:Software\Microsoft\VisualStudio\8.0 "/wixfile:%GeneratedFile%" /codebase "%NemerleSetupContent%\bin\Nemerle.VisualStudio.dll"
 if errorlevel 1 goto done
 cd "%~dp0"
 
