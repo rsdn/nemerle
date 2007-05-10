@@ -27,10 +27,11 @@
  */
 
 using System;
-using Nemerle.Collections;
-using Nemerle.Utility;
-using Nemerle.Compiler.Typedtree;
 using System.Diagnostics;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Utility;
 
 using SCG = System.Collections.Generic;
 using SR  = System.Reflection;
@@ -79,6 +80,7 @@ public abstract class MemberBuilder : MemberInfo, IMember
   {
     declaring_type = par;
     _ast = ast;
+    _ast._builder = this;
     Env = ast.Env;
     loc = ast.loc;
     modifiers = ast.modifiers;
@@ -261,6 +263,17 @@ public abstract class MemberBuilder : MemberInfo, IMember
           | MemberKinds.Event    => "event"
           | _                    => "<unknown>"
         };
+
+      def makeTypeName(ty) { ty.FullName.Replace('+', '.') }
+      def add(str, iaAdd) { if (iaAdd) str + " " else "" }
+      def mekeGetSet (canRead, canWrite)
+      {
+        | (false, false) => ""
+        | (true,  false) => "get;"
+        | (false, true)  => "set;"
+        | (true,  true)  => "get; set;"
+      }
+
       match (m) {
         | m is IMethod =>
           def parms = List.Map (m.GetParameters (), 
@@ -271,17 +284,36 @@ public abstract class MemberBuilder : MemberInfo, IMember
           kind + " " + full_name + "(" + NString.Concat (", ", parms) + ") : " + ret_ty
 
         | prop is PropertyBuilder =>
+          def getSet = mekeGetSet (prop.CanRead, prop.CanWrite);
           match (prop.parms)
           {
             | _ :: _ => 
               match (prop.ty)
               {
-                | MType.Fun(_, to) => $"$kind `$full_name$(prop.parms) : $to'"
+                | MType.Fun(_, to) => $"property: `$full_name$(prop.parms) : $to { $getSet }"
                 | _                  => "<error>"
               }
 
-            | _      => $"$kind `$full_name : $(prop.ty)'"
+            | _      => $"property: $full_name : $(prop.ty) { $getSet }"
           }
+        | p is IProperty => 
+          def pi = p.GetPropertyInfo ();
+          _=pi;
+          def getSet = mekeGetSet (pi.CanRead, pi.CanWrite);
+          def indexer = if (p.IsIndexer) "[...]" else "";
+          def typeName = makeTypeName(pi.PropertyType);
+
+          $"property: $(p.Name)$indexer : $typeName { $getSet }"
+
+        | fld is FieldBuilder => 
+          def modifs = add("static", fld.IsStatic) + add("mutable", fld.IsMutable);
+          $"field: $modifs$(fld.Name) : $(fld.ty);"
+
+        | fld is IField => 
+          def fi = fld.GetFieldInfo ();
+          def typeName = makeTypeName(fi.FieldType);
+          def modifs = add("static", fi.IsStatic) + add("mutable", !fi.IsInitOnly);
+          $"field: $modifs$(fld.Name) : $typeName;"
 
         | _ => $ "$kind `$full_name'"
       }
@@ -387,6 +419,12 @@ public abstract class MemberBuilder : MemberInfo, IMember
   internal abstract CreateEmitBuilder (emit_tb : SRE.TypeBuilder) : void;
   internal virtual Compile () : void {
       _ast = null; // GC kill
+  }
+
+  public IsBodyless : bool
+  {
+    // only allow abstract and extern methods to have no bodies
+    get { attributes %&& (NemerleAttributes.Abstract | NemerleAttributes.Extern) }
   }
 }
 
@@ -618,6 +656,23 @@ public partial class PropertyBuilder : MemberBuilder, IProperty
         par.MonoBindType (parm.ty);
       });
 
+    // Support autoproperty (see C# 3.0 specification).
+    when (!(propertyAst.Attributes %&& (NemerleAttributes.Abstract | NemerleAttributes.Extern)) 
+          && !IsIndexer && !par.IsInterface)
+      match (propertyAst.get, propertyAst.set)
+      {
+        | (Some(PT.ClassMember.Function(_, _, FunBody.Abstract) as getr), 
+           Some(PT.ClassMember.Function(_, _, FunBody.Abstract) as setr)) =>
+
+          def field = Macros.NewSymbol ("field");
+          par.Define(<[ decl: mutable $(field : name) : $(propertyAst.ty); ]>);
+
+          getr.Body = <[ $(field : name) ]>;
+          setr.Body = <[ $(field : name) = value ]>;
+
+        | _ => ()
+      }
+
     def process_accessor (_ : option [PT.ClassMember]) {
       | Some (fn) =>
         def fn = fn :> PT.ClassMember.Function;
@@ -628,6 +683,7 @@ public partial class PropertyBuilder : MemberBuilder, IProperty
         method
       | None => null
     }
+
     getter = process_accessor (propertyAst.get);
     setter = process_accessor (propertyAst.set);
 
@@ -668,6 +724,9 @@ public partial class PropertyBuilder : MemberBuilder, IProperty
     property_builder
   }
 
+  public Getter : IMethod { get { GetGetter () } }
+  public CanRead : bool { get { Getter != null } }
+
   public GetGetter () : IMethod
   {
     if (getter == null && parent_property != null)
@@ -676,6 +735,9 @@ public partial class PropertyBuilder : MemberBuilder, IProperty
       getter
   }
   
+  public Setter : IMethod { get { GetSetter () } }
+  public CanWrite : bool { get { Setter != null } }
+
   public GetSetter () : IMethod
   {
     if (setter == null && parent_property != null)
@@ -821,24 +883,44 @@ public partial class MethodBuilder : MemberBuilder, IMethod
       if (this.name == ".ctor" || this.name == ".cctor") MemberKinds.Constructor else MemberKinds.Method
     } 
   }  
-  
-  
+
+  type BeforeBodyTypingHandler = MethodBuilder * PT.PExpr -> PT.PExpr;
+
+  public BeforeBodyTyping     : list[BeforeBodyTypingHandler]
+  {
+    mutable _beforeBodyTyping : list[BeforeBodyTypingHandler];
+
+    private set { _beforeBodyTyping = value; }
+    get { _beforeBodyTyping }
+  }
+
+  public AddBeforeBodyTypingHandler([NotNull] handler : BeforeBodyTypingHandler) : void
+  {
+    unless (Manager.IsIntelliSenseMode) // see also property BodyParsed in http://nemerle.org/svn/vs-plugin/trunk/Nemerle.Compiler.Utils/Nemerle.Completion2/CompilerConcreteDefinitions/IntelliSenseModeMethodBuilder.n
+      Body = handler(this, Body);
+
+    if (BeforeBodyTyping == null) BeforeBodyTyping = [handler];
+    else                          BeforeBodyTyping ::= handler;
+  }
+
+  public ClearBeforeBodyTypingHandlers() : void { BeforeBodyTyping = null; }
+
   //***********************************************************************
   // This members available only under completion engine.
 
-  public virtual EnsureCompiled() : void
+  ThrowNotSupported[T] () : T
   { throw System.NotSupportedException ("available on in code-completion use-case") }
-  public virtual BodyMessages : SCG.List[CompilerMessage]
-  { get { throw System.NotSupportedException ("available on in code-completion use-case") } }
-  public virtual BodyTokens : Token.BracesGroup
-  { get { throw System.NotSupportedException ("available on in code-completion use-case") } 
-    set { throw System.NotSupportedException ("available on in code-completion use-case " + value.ToString ()) } }
-  public virtual BodyParsed : PT.PExpr
-  { get { throw System.NotSupportedException ("available on in code-completion use-case") } }
-  public virtual IsBodyCompilable : bool
-  { get { throw System.NotSupportedException ("available on in code-completion use-case") } }
-  public virtual BodyTyped : TExpr
-  { get { throw System.NotSupportedException ("available on in code-completion use-case") } }
+
+  public virtual EnsureCompiled()                  : void { ThrowNotSupported () }
+  public virtual BodyMessages : SCG.List[CompilerMessage] { get { ThrowNotSupported () } }
+  public virtual BodyTokens           : Token.BracesGroup
+  {
+    get { ThrowNotSupported() } 
+    set { throw System.NotSupportedException ("available on in code-completion use-case " + value.ToString ()) }
+  }
+  public virtual BodyParsed                    : PT.PExpr { get { ThrowNotSupported () } }
+  public virtual IsBodyCompilable                  : bool { get { ThrowNotSupported () } }
+  public virtual BodyTyped                        : TExpr { get { ThrowNotSupported () } }
 
   // End: This members available only under completion engine.
   //***********************************************************************
@@ -1199,10 +1281,7 @@ public partial class MethodBuilder : MemberBuilder, IMethod
         Message.Error (loc, "interface method cannot implement anything");
     }
 
-    // only allow abstract and extern methods to have no bodies
-    def bodyless = attributes %&& (NemerleAttributes.Abstract | NemerleAttributes.Extern);
-
-    when (HasAbstractBody && !bodyless)
+    when (HasAbstractBody && !IsBodyless)
       Message.Error (loc, "missing body of a non-abstract and non-extern method in " +
                            ToString ());
 
