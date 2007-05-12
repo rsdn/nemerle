@@ -106,47 +106,74 @@ namespace Nemerle.Compiler
     #region Toplevel typing
     class SwitchToYielding : System.Exception { }
     
-    // FIXME: copy doc from TypeMethod
-    /** Walk through method body typing it. */
+    /** Prepared for walking through method body typing it. */
     public this (m : MethodBuilder)
     {
-      base (m.DeclaringType.Manager);
-      current_method_builder = m;
-      solver = Manager.Solver;
-      current_type = m.DeclaringType;
-      parent_typer = None ();
+      this (m.DeclaringType.Manager, m.DeclaringType, m);
       env = current_type.GlobalEnv;
-      current_fun = m.GetHeader ();
       tenv = current_fun.tenv.CopyWithObsolete(TriggerObsoleteWarning);
-      messenger = solver.CurrentMessenger;
-      locals_stack = Stack ();
-
-      local_context = LocalContext.Empty;
-
       assert (!solver.InUse);
+    }
+    
+    /** Prepred as reduced version of typer, ready to be passed to macros */
+    public this (tb : TypeBuilder, tenv : TyVarEnv, mb : MethodBuilder, env : GlobalEnv)
+    {
+      this (env.Manager, tb, mb);
+      this.env = env;
+      this.tenv = tenv;
+      assert (solver.IsTopLevel);
+    }
 
-      is_instance_ctor = m.MemberKind == MemberKinds.Constructor && !m.IsStatic;
-      is_method = m.MemberKind == MemberKinds.Method && !m.IsStatic || is_instance_ctor;
+    /** Prepared for walking through a local function body typing it. */
+    public this (parent : Typer, fn : Fun_header)
+    {
+      this (parent.Manager);
+      parent_typer = Some (parent);
 
+      // copy from parent
+      current_method_builder = parent.current_method_builder;
+      current_type = parent.current_type;
+      local_context = parent.local_context;
+      is_method = parent.is_method;
+      is_instance_ctor = parent.is_instance_ctor;
+      env = parent.env;
+      inside_yielding_function = parent.inside_yielding_function;
+      messenger = parent.messenger;
+      
+      current_fun = fn;
+      tenv = current_fun.tenv;
+    }
+    
+    private this (mng : ManagerClass) {
+      base (mng);
+      locals_stack = Stack ();    
+      solver = mng.Solver;
+    }
+
+    private this (mng : ManagerClass, tb : TypeBuilder, mb : MethodBuilder) {
+      this (mng);
+      current_type = tb;
+      parent_typer = None ();
+      local_context = LocalContext.Empty;
+      messenger = solver.CurrentMessenger;
+      current_method_builder = mb;
+      when (mb != null) {
+        current_fun = mb.Header;
+        is_instance_ctor = mb.MemberKind == MemberKinds.Constructor && !mb.IsStatic;
+        is_method = mb.MemberKind == MemberKinds.Method && !mb.IsStatic || is_instance_ctor;
+      }
+    }
+
+    public RunFullTyping () : void {
       try {
         assert (!solver.InUse);
         assert (solver.IsTopLevel);
         solver.dt_store = Map ();
         solver.InUse = true;
 
-        Util.locate (m.Location, {
+        Util.locate (current_method_builder.Location, {
           mutable typer_done = false;
           assert (messenger.IsTopLevel);
-
-          def put_in_error_mode () {
-            solver.Unwind ();
-            messenger.Cleanup ();
-            assert (!messenger.InErrorMode);
-            assert (messenger.IsTopLevel);
-            messenger.InErrorMode = true;
-            local_context = LocalContext.Empty;
-            assert (!typer_done);
-          }
 
           try {
             try {
@@ -164,28 +191,28 @@ namespace Nemerle.Compiler
               MaybeDumpTypedTree ("after delayed typings");
               
               when (errcnt == Message.ErrorCount) {
-                RunSecondPass (m);
+                RunSecondPass (current_method_builder);
                 MaybeDumpTypedTree ("after second pass");
               }
             } catch {
               | e is RestartInErrorMode =>
                 def errcnt = Message.ErrorCount;
-                put_in_error_mode ();
+                put_in_error_mode (typer_done);
                 RunTyper ();
 
                 when (errcnt == Message.ErrorCount)
-                  Util.ice ($"hidden errors compiling $m - $(Message.ErrorCount) vs $errcnt: $(e.StackTrace)");
+                  Util.ice ($"hidden errors compiling $current_method_builder - $(Message.ErrorCount) vs $errcnt: $(e.StackTrace)");
             }
           } catch {
             | _ is SwitchToYielding =>
               messenger.InErrorMode = false;
-              put_in_error_mode ();
+              put_in_error_mode (typer_done);
               log (TYPING, "got STY, trying again");
               current_fun.yield_type = GetYieldType ();
               def errcnt = Message.ErrorCount;
               // just in case
-              def newBody = Util.locate(m.Body.Location, WrapYieldingFunction (m.Body));
-              m.Body = newBody;
+              def newBody = Util.locate(current_method_builder.Body.Location, WrapYieldingFunction (current_method_builder.Body));
+              current_method_builder.Body = newBody;
               inside_yielding_function = true;
               when (Manager.IsIntelliSenseMode || errcnt == Message.ErrorCount) {
                 assert (solver.IsTopLevel);
@@ -195,7 +222,7 @@ namespace Nemerle.Compiler
               when (Manager.IsIntelliSenseMode || errcnt == Message.ErrorCount)
                 RunDelayedTypings ();
               when (errcnt == Message.ErrorCount) {
-                RunSecondPass (m);
+                RunSecondPass (current_method_builder);
                 MaybeDumpTypedTree ("after second pass [yield mode]");
               }
           }
@@ -206,50 +233,20 @@ namespace Nemerle.Compiler
       }
     }
     
+    put_in_error_mode (typer_done : bool) : void {
+      solver.Unwind ();
+      messenger.Cleanup ();
+      assert (!messenger.InErrorMode);
+      assert (messenger.IsTopLevel);
+      messenger.InErrorMode = true;
+      assert (!typer_done);
+      local_context = LocalContext.Empty;
+    }
+    
     internal TriggerObsoleteWarning : bool
     {
       get { (current_method_builder == null || !current_method_builder.IsObsolete) 
           && !current_type.IsObsolete }
-    }
-
-    public this (tb : TypeBuilder, tenv : TyVarEnv, fn : Fun_header, env : GlobalEnv)
-    {
-      base (env.Manager);
-      solver = Manager.Solver;
-      current_type = tb;
-      parent_typer = None ();
-      this.env = env;
-      current_fun = fn;
-      this.tenv = tenv;
-      messenger = solver.CurrentMessenger;
-
-      locals_stack = Stack ();
-      local_context = LocalContext.Empty;
-      assert (solver.IsTopLevel);
-    }
-
-    /** Walk through a local function body typing it. */
-    public this (parent : Typer, fn : Fun_header)
-    {
-      base (parent.Manager);
-      parent_typer = Some (parent);
-
-      // copy from parent
-      solver = parent.solver;
-      current_method_builder = parent.current_method_builder;
-      current_type = parent.current_type;
-      local_context = parent.local_context;
-      is_method = parent.is_method;
-      is_instance_ctor = parent.is_instance_ctor;
-      env = parent.env;
-      inside_yielding_function = parent.inside_yielding_function;
-      messenger = parent.messenger;
-      locals_stack = Stack ();
-      
-      current_fun = fn;
-      tenv = current_fun.tenv;
-
-      RunTyper ();
     }
 
     public GetLocals () : LocalContext
@@ -1880,7 +1877,8 @@ namespace Nemerle.Compiler
       headers = List.Rev (headers);
 
       foreach (hd in headers) {
-        _ = Manager.ComponentsFactory.CreateTyper (this, hd);
+        def typer = Manager.ComponentsFactory.CreateTyper (this, hd);
+        typer.RunTyper ();
       }
 
       TExpr.DefFunctionsIn (headers, null)
