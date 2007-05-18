@@ -3,6 +3,6 @@
 set Type=Release
 
 call BuildAndReg.cmd
-call Reg-boot.cmd
+call Reg.cmd
 
 pause
