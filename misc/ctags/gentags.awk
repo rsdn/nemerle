@@ -1,6 +1,6 @@
-# author: Kamil Dworakowski (@gmail)
+# author: Kamil Dworkakowski (@gmail)
 #
-# generates a half finished tags file in a basic format of ctags 
+# generates an tags file in a basic format of ctags that needs to be sorted
 # (not an exuberant ctags format)
 # the output needs to be sorted to be valid tags file
 BEGIN { 
@@ -8,9 +8,9 @@ BEGIN {
     print ("!_TAG_FILE_SORTED\t1\t/0 - unsorted, 1 - sorted/") 
 }
 # \w 	alphanumeric character or '_'
-# [:space:] 	Space characters (such as space, TAB, ... ). 
-/.*public[[:space:]]+class[[:space:]]+\w+.*/ {
-    match($0, /.*(public[[:space:]]+class[[:space:]]+)(\w+).*/, arr )
-# Format: {tagname}	{TAB} {tagfile} {TAB} {tagaddress}
-    print( arr[2] "\t" FILENAME "\t" "/" arr[1] arr[2] "/" )
+# [:space:] 	whitespace characters
+/.*(public|internal)[[:space:]]+(class|variant|module)[[:space:]]+\w+.*/ {
+    match($0, /.*((class|variant|module)[[:space:]]+)(\w+).*/, arr )
+# Format is: {tagname}	{TAB} {tagfile} {TAB} {tagaddress}
+    print( arr[3] "\t" FILENAME "\t" "/" arr[1] arr[3] "/" )
 }
