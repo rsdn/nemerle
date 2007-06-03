@@ -58,6 +58,8 @@ set MsiFile=%~dp0redist\Nemerle.msi
 if errorlevel 1 goto done
 cd "%~dp0"
 
+echo Wixing "%WixDir%"
+
 "%WixDir%\candle.exe" -ext WixNetFxExtension -sw1080 src/*.wxs
 if errorlevel 1 goto done
 

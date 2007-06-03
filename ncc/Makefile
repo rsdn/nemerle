@@ -351,7 +351,7 @@ doc-xml:
 	-ref:out.stage3/Nemerle.dll -doc Nemerle.Compiler.xml
 	$(COMP) "[with xml doc generation]" Nemerle.Macros.xml
 	$(Q)$(RUN_COMPILER) -target-library -out:temp.dll $(STDMACROS_DLL_SRC) \
-	-ref:out.stage3/Nemerle.dll -ref:out.stage3/Nemerle.Compiler.dll -doc Nemerle.Macros.xml
+	-ref:out.stage3/Nemerle.dll -ref:System.Data -ref:out.stage3/Nemerle.Compiler.dll -doc Nemerle.Macros.xml
 	$(Q)rm temp.dll
 
 
