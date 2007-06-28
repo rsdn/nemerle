@@ -87,6 +87,10 @@ namespace Nemerle.Compiler
       {
         | MemberAccess { expr : TExpr; name : PT.Name; }
         | Overloaded { overloads : list [OverloadPossibility]; }
+        | OverloadedOperator { overloads : list [OverloadPossibility]; 
+                               t1 : TyVar; t2 : TyVar; name : string; env : GlobalEnv; 
+                               seen : list [OverloadPossibility];
+                             }
         | Operator { t1 : TyVar; t2 : TyVar; name : string; env : GlobalEnv; }
         | Resolved { expr : TExpr; }
         | Macro { action : DelayedAction }
@@ -142,11 +146,14 @@ namespace Nemerle.Compiler
               }
             | Kind.Overloaded (lst) =>
               Kind.Overloaded (OverloadPossibility.Unique (lst))
+            | Kind.OverloadedOperator (lst, t1, t2, n, e, s) =>
+              Kind.OverloadedOperator (OverloadPossibility.Unique (lst), t1, t2, n, e, s)
             | _ => k
           }
 
         when (generic_specifier != null)
           match (k) {
+            | Kind.OverloadedOperator (lst, _, _, _, _, _) 
             | Kind.Overloaded (lst) =>
               foreach (o in lst)
                 o.SetGenericSpecifier (generic_specifier);
@@ -198,6 +205,7 @@ namespace Nemerle.Compiler
       { 
         get {
           match (DtKind) {
+            | Kind.OverloadedOperator (lst, _, _, _, _, _) 
             | Kind.Overloaded (lst) =>
               List.ForAll (lst, fun (op : OverloadPossibility) {
                 match (op.Member) {
@@ -219,6 +227,7 @@ namespace Nemerle.Compiler
       {
         get {
           match (DtKind) {
+            | Kind.OverloadedOperator (lst, _, _, _, _, _) 
             | Kind.Overloaded (lst) =>
               lst.ForAll (fun (op) { op.Member is IMethod })
 
@@ -258,6 +267,7 @@ namespace Nemerle.Compiler
           | Kind.Macro
           | Kind.Error => true
 
+          | Kind.OverloadedOperator 
           | Kind.Operator => false
         }
       }
@@ -273,6 +283,20 @@ namespace Nemerle.Compiler
         }
 
         match (DtKind) {
+          | Kind.OverloadedOperator (lst, t1, t2, n, e, s) => 
+            when (InternalType.Object_tc.LookupMember (name) is []) {
+              // otherwise it's pointless
+              def newlst = List.RevFilter (lst, fun (o : OverloadPossibility) {
+                match (o.Type.Hint) {
+                  | Some (mt) => can_have (mt)
+                  | None => true // we don't yet know
+                }
+              });
+
+              if (newlst is []) {}
+              else SetKind (Kind.OverloadedOperator (newlst, t1, t2, n, e, s));
+            }
+          
           | Kind.Overloaded (lst) =>
             when (InternalType.Object_tc.LookupMember (name) is []) {
               // otherwise it's pointless
@@ -327,6 +351,10 @@ namespace Nemerle.Compiler
           | Operator (t1, t2, name, _) =>
             $ "operator `$(name)' on $(t1)"
             + (if (t2 == null) "" else $ " and $(t2)")
+          | OverloadedOperator (lst, t1, t2, name, _, _) => 
+            $ "overloaded operator `$(name)' on $(t1)"
+            + (if (t2 == null) "" else $ " and $(t2)") + "\n" 
+            + lst.ToString ("\n ")
           | Macro (action) => action.ToString ()
         }
       }
@@ -335,6 +363,16 @@ namespace Nemerle.Compiler
       public GetDescriptionForError () : list [string]
       {
         match (DtKind) {
+          | OverloadedOperator (overloads, t1, t2, name, _env, _seen) =>
+            def used (o) { o.UsedLastTime }
+            "ambiguity between operator " +
+            $"$name($t1" + (if (t2 != null) $", $t2" else "") + ")"
+            " overloads:" :: 
+            (if (overloads.Exists (used))
+               overloads.Filter (used) 
+             else 
+             overloads).Map (x => $"Posible overload: $x")
+            
           | Overloaded (overloads) =>
             def used (o) { o.UsedLastTime }
             "ambiguity between overloads:" :: 
@@ -360,7 +398,7 @@ namespace Nemerle.Compiler
 
       public IsOverloaded : bool
       {
-        get { DtKind is Kind.Overloaded }
+        get { DtKind is Kind.Overloaded || DtKind is Kind.OverloadedOperator }
       }
 
 
@@ -376,6 +414,7 @@ namespace Nemerle.Compiler
           match (DtKind) {
             | MemberAccess
             | Overloaded
+            | OverloadedOperator
             | Error
             | Operator => true
             | Resolved
@@ -632,7 +671,64 @@ namespace Nemerle.Compiler
                 | lst =>
                   SetKind (Kind.Overloaded (lst))
               }
-            
+          | Kind.OverloadedOperator (overloads, t1, t2, name, env, seen) =>
+            def not_seen (l) { 
+              | None with l = []
+              | Some (l) =>
+                l.Filter ( fun (x) { !seen.Contains (x) } );
+            }
+            def new_operators = not_seen (LookupOperator (t1, name)) + not_seen (LookupOperator (t2, name));
+            def seen = new_operators + seen;
+            def added = 
+              match (new_operators) {
+                | lst when lst != [] =>
+                  def lst = OverloadPossibility.Unique (overloads + lst);
+                  if (lst == overloads)
+                    false
+                  else
+                  {
+                    SetKind (Kind.OverloadedOperator (lst, t1, t2, name, env, seen));
+                    true
+                  }
+                | _ => false
+              }
+            unless (added)
+            {
+                def args = if (t2 == null) 1 else 2;
+                def hints = (if (t1.Hint.IsSome) 1 else 0) + (if (t2 != null && t2.Hint.IsSome) 1 else 0);
+
+                def expr = DtKind.filtering_expression;
+                def o' =
+                  if (expr == null) {
+                    RemoveExtensionMethods (OverloadPossibility.OnlyPossible (overloads, expected))
+                  } else {
+                    if (typer.Expect (expected, expr.func.Type, 
+                                        "overloaded function call"))
+                      match (overloads) {
+                        | [one] when hints == 0 
+                                  || typer.BadnessAllowed > 1 => 
+                          [one] //don't call ResolveOverload early, as it can add wrong hints
+                        | _ => ResolveOverload (overloads, expr.parms, expr.Type)
+                      }
+                    else
+                      []
+                  }
+           
+                when (o'.Length != overloads.Length || o'.Length == 1)
+                  match (o') {
+                    | [] =>
+                      SetKind (Kind.Error ())
+                  
+                    | [one] when hints == args
+                              || hints > 0 && typer.BadnessAllowed > 0
+                              || typer.BadnessAllowed > 1 =>
+                      SetKind (Kind.Resolved (one.Compile ()))
+           
+                    | lst =>
+                      SetKind (Kind.OverloadedOperator (lst, t1, t2, name, env, seen));
+                  }
+              }
+           
           | Kind.Operator (t1, t2, name, env) =>
             def operators =
               match ((LookupOperator (t1, name), LookupOperator (t2, name))) {
@@ -660,7 +756,7 @@ namespace Nemerle.Compiler
                 SetKind (Kind.Error ())
                 
               | Some (lst) =>
-                SetKind (Kind.Overloaded (lst));
+                SetKind (Kind.OverloadedOperator (lst, t1, t2, name, env, lst));
                 Resolve ()
                 
               | None => {}
