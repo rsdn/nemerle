@@ -1,0 +1,183 @@
+#pragma indent
+
+using Nemerle.Compiler
+using Nemerle.IO
+using System.Collections
+using Nemerle.Collections
+using Nemerle
+using Nemerle.Builtins.Function
+using Nemerle.Utility
+
+namespace Nemerle.Aop.Helper
+    interface TypePatternFactory['a]
+        Blank(): 'a
+        Void(): 'a
+        ClassLike(full_name: list[string],args: list['a], env: GlobalEnv): 'a
+        SubtypesOf(type_pattern: 'a): 'a 
+        Array(rank:int, arg: 'a): 'a
+        Arrow(from: 'a, to: 'a): 'a
+        Tuple(args: list['a]): 'a
+
+    [Record]class MTypePatternData
+        [Accessor] mtype: MType
+        [Accessor] tyVars: list[StaticTyVar]
+        [Accessor] text: string
+
+    class MTypePattern: TypePatternFactory[MTypePatternData]
+        
+
+        public Blank(): MTypePatternData
+            def static_var = StaticTyVar(ManagerClass.Instance,"blank")
+            static_var.Constraints = []
+            MTypePatternData(MType.TyVarRef(static_var),[static_var],"blank") //TODO maybe ?
+
+        public Void(): MTypePatternData
+            MTypePatternData(MType.Void(),[],"void")
+
+        public ClassLike(full_name: list[string],args: list[MTypePatternData], env: GlobalEnv): MTypePatternData
+            def ti = match (env.LookupType(full_name)) 
+                | Some(ti) when ti.ToString().StartsWith("Nemerle.Core.") => 
+                    match (ti.GetTydecl()) {
+                        | Alias(aliased) => aliased.TypeInfo
+                        | _ => ti
+                    }
+                | Some(ti) => 
+                    ti
+                | None => throw System.Exception($"class ..$(full_name;\".\") not found") //TODO learn about error messages in nemerle
+            def arg_types = args.Map(t=> t.Mtype)
+            def vars = args.Map(t=> t.TyVars)
+            MTypePatternData(MType.Class(ti, arg_types.Map(x=>x)), List.Flatten(vars), "TODO") 
+
+        public SubtypesOf(type_pattern: MTypePatternData): MTypePatternData 
+            def new_staticTyVar = StaticTyVar(ManagerClass.Instance,"subtype")
+            new_staticTyVar.Constraints = [type_pattern.Mtype]
+            MTypePatternData(MType.TyVarRef(new_staticTyVar),new_staticTyVar::type_pattern.TyVars, "TODO name of subtype")
+            
+        public Array(rank:int, arg: MTypePatternData): MTypePatternData
+            MTypePatternData(MType.Array( arg.Mtype, rank), arg.TyVars, $"array[$rank,$(arg.Text)]") 
+
+        public Arrow(from: MTypePatternData, to: MTypePatternData): MTypePatternData
+            MTypePatternData(MType.Fun(from.Mtype, to.Mtype), from.TyVars + to.TyVars, $"$(from.Text)->$(to.Text)") 
+
+        public Tuple(args: list[MTypePatternData]): MTypePatternData
+            def arg_types = args.Map(t=> t.Mtype)
+            def vars = args.Map(t=> t.TyVars)
+            MTypePatternData(MType.Tuple(arg_types), List.Flatten(vars), args.Map(x=>x.Text).ToString("*"))
+            
+    public variant TypePattern
+
+        static mutable next_unique_id: int = 0
+        static mutable stack: Stack[int] = Nemerle.Collections.Stack()
+
+        public static PushState(): int
+            def id = next_unique_id
+            next_unique_id += 1
+            ManagerClass.Instance.GetSolver().PushState()
+            stack.Push(id)
+            id
+
+        public static PopState(id: int): void
+            ManagerClass.Instance.GetSolver().PopState()
+            match(stack.Pop())
+               | poped_id when poped_id == id => ()
+               | _ => 
+                PopState(id)
+            
+        internal static Make(p: MTypePatternData): TypePattern
+            def (subst,_) = Subst.Fresh(p.TyVars)
+            def tyvar = subst.Apply(p.Mtype) 
+            TypePattern.TyVarBased(tyvar)
+                 
+        | ExactlyTheSame
+            tyvar: TyVar
+            public override Matches( mtype: MType ): bool
+                tyvar.Unify(mtype)
+
+        | ExactSupertype
+            mtype: TyVar
+            public override Matches( ty: MType ): bool
+                ty.Require(mtype) // ty <: mtype
+
+        | TyVarBased
+            mtype: TyVar
+            public override Matches( ty: MType ): bool
+                ty.Require(mtype) // ty <: mtype
+
+        public Matches(ti: TypeInfo): bool
+            Matches(ti.GetMemType()) 
+
+        public static Parse(ty: MType ): TypePattern 
+            ExactSupertype(ty)
+
+        public static FromTyVar(ty: TyVar): TypePattern 
+            ExactSupertype(ty)
+
+        public virtual Matches( _: MType ): bool
+            false
+
+    internal variant ClassNamePattern
+        public static MakeClassPattern(class_name: list[PatternFragment[IdPattern]], with_plus: bool,env: GlobalEnv): ClassNamePattern
+            def full_name = class_name.Map(fun(_) {
+                | PatternFragment.Fragment(id) => id.ToString()  
+                | PatternFragment.Gap => ".."
+            })
+
+            def reversed = class_name.Rev()
+
+            match (env.LookupType(full_name)) 
+//                | Some(ti) when ti.ToString().StartsWith("Nemerle.Core.") => 
+//                    // in Nemerle.Core are aliases for System.Int32 (int) and the like declared
+//                    TypePattern.ExactType(with_plus,match (ti.GetTydecl()) {
+//                        | Alias(aliased) => aliased.TypeInfo
+//                        | _ => ti
+//                    })
+                | Some(ti) => 
+                    ExactType(with_plus,ti) 
+                | None => Class(with_plus,reversed)
+                 
+        | Class 
+            fullname_reversed: list[PatternFragment[IdPattern]] // it is reversed e.g., ["ArrayList","Collections", "System"]
+
+            public override Matches( type_info: TypeInfo ): bool
+                def matches_ti(ti: TypeInfo)
+                    def namespace_matches(fullname_reversed, node) 
+                        def lazylst(node)
+                            | n when n.PartName == "" => LazyList.Nil()
+                            | n => LazyList.Cons(n,lazy(lazylst(n.Parent)))
+                        def ismatch(id,node) {
+                            id.Matches(node.PartName)
+                        }
+                        GapMatching.Match(fullname_reversed,lazylst(node),ismatch)
+                    namespace_matches(fullname_reversed,ti.NamespaceNode) 
+                
+                are_matching(matches_ti, type_info)
+
+            public override ToString(): string {$"$(fullname_reversed.Rev())"}
+
+        | ExactType 
+            ty: TypeInfo
+
+            public override Matches( ti: TypeInfo ): bool
+                def is_match (typeinfo) 
+                    ty.Equals(typeinfo)
+                are_matching(is_match,ti)
+
+            public override ToString(): string
+                $"$ty"
+
+
+        with_plus = false
+        protected this(with_plus: bool)
+            this.with_plus = with_plus
+
+        protected are_matching(match_fun: TypeInfo->bool, type_to_check: TypeInfo): bool
+            if (with_plus)
+                def super_types = type_to_check.GetSuperTypes().Map(fun(_) {
+                    | MType.Class(ti,_) => ti
+                })
+                (type_to_check::super_types).Exists(match_fun)
+            else
+                match_fun(type_to_check)
+
+        public virtual Matches( _: TypeInfo ): bool
+            false

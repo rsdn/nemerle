@@ -1,0 +1,190 @@
+#pragma indent
+
+using Nemerle
+using Nemerle.Compiler
+using Nemerle.Aop.Helper
+using Nemerle.IO
+using Nemerle.Macros
+using Nemerle.Collections
+using Nemerle.Compiler.Parsetree
+
+namespace Nemerle.Aop 
+
+    module AdviceFactory
+
+        contains_proceed_call(tok: Token): bool
+            | null => false
+            | Token.Identifier("proceed") => true
+            | Token.BracesGroup(c) | Token.LooseGroup(c) | Token.SquareGroup(c) | Token.RoundGroup(c) =>
+                contains_proceed_call(c) || contains_proceed_call(tok.Next)
+            | tok => contains_proceed_call(tok.Next)
+
+        check_if_within_aspect(type_builder: TypeBuilder): void
+            def is_aspect(type_builder): bool
+                def modifiers = type_builder.GetModifiers()
+                modifiers.GetMacroAttributes().Exists( fun(x){ | PExpr.Call(PExpr.Ref(n),_) | PExpr.Ref(n) => n.Id == "aspect" |  _=> false})
+            unless(is_aspect(type_builder))
+                Message.Error($"$(type_builder.Name) is not an aspect")
+
+        parse_parms(parms_roundgroup: Token.RoundGroup, env: GlobalEnv): list[Fun_parm]
+            MainParser.ParseFunParms(env,parms_roundgroup)
+
+        make_header(loc: Location, parms: list[Fun_parm], meth_body: ClassMember, ret_type: PExpr,typarms: Typarms): string*Fun_header
+            def advice_name = Util.tmpname("advice")
+            def header = match(meth_body)
+                | ClassMember.Function(h,_,_) => 
+                      Fun_header (loc,
+                                   name = Splicable.Name (loc,h.ParsedName.NewName(advice_name)),
+                                   ret_type = ret_type,
+                                   parms = parms, 
+                                   typarms = typarms);
+
+                | _ => 
+                    Message.Error("asjflakj")
+                    null
+            (advice_name,header)
+
+        define_advice_member(tok: Token, type_builder: TypeBuilder, header: Fun_header, loc: Location): void
+            def find_next_braces_group(tok): Token.BracesGroup
+                | null => 
+                    Message.Error("expected advice body")
+                    null
+                | Token.BracesGroup as g => g
+                | tok => find_next_braces_group(tok.Next)
+
+            def body = MainParser.ParseFunctionBody(type_builder.GlobalEnv,header,find_next_braces_group(tok))
+
+            def meth = ClassMember.Function (header = header, name = header.name,  modifiers = Modifiers(NemerleAttributes.Internal,[]),
+                                             loc = loc, body = FunBody.Parsed(body), implemented = []);
+
+            type_builder.Define(meth)
+
+        maybe_parse_tyvars(lexer: Lexer, env: GlobalEnv): list[PExpr] * PExpr
+            match(lexer.Peek())
+                | Token.SquareGroup() as sqrgrp =>
+                    _=lexer.Drop()
+                    MainParser.ParseTyVars(env,sqrgrp)
+                | _ => ([],PExpr.Void())
+
+        take_while(lst: list[Token], p: Token -> bool): list[Token]
+            match(lst)
+                | x::xs when p(x) => x::take_while(xs,p)
+                | _ => []
+
+        drop(lst: list[Token],p: Token->bool): list[Token]
+            match(lst)
+                | x::xs when p(x) => drop(xs,p)
+                | xs => xs
+
+        split_tokens(lexer: Lexer): list[Token]*list[Token]
+            def no_where_no_braces(tok)
+                | Token.Keyword("where") | Token.BracesGroup => false
+                | _ => true
+
+            def tokens = lexer.TokenList
+            def pointcut_tokens = take_while(tokens,no_where_no_braces)
+            def after_pointcut = drop(tokens,no_where_no_braces)
+            (pointcut_tokens,after_pointcut)
+            
+        
+        public CreateBefore(type_builder: TypeBuilder, meth: ClassMember, tail:Token): LazyValue[Advice]
+            check_if_within_aspect(type_builder)
+            def lexer = Lexer.WithoutFixing(tail)
+            def tyvars = maybe_parse_tyvars(lexer,type_builder.GlobalEnv) 
+            def parameters = parse_parms(lexer.Pop():> Token.RoundGroup,type_builder.GlobalEnv)
+            lexer.DropOperator(":")
+            def (pointcut_toks,beyond_pointcut_toks) = split_tokens(lexer);
+            def typarms = MainParser.ParseWhereConstraints(type_builder.GlobalEnv,beyond_pointcut_toks.Head,tyvars)
+            def(advice_name,header) = make_header(tail.Location, parameters, meth, PExpr.Void(), typarms)
+            def advice_meth = AdviceMethod(type_builder,advice_name)
+            def advice = lazy(Advice.Before(advice_meth,pointcut_toks))
+            define_advice_member(beyond_pointcut_toks.Head,type_builder,header,tail.Location)
+            advice
+
+        public CreateAfter(type_builder: TypeBuilder, meth: ClassMember, tail:Token): LazyValue[Advice]
+            check_if_within_aspect(type_builder)
+            def lexer = Lexer.WithoutFixing(tail)
+            def tyvars = maybe_parse_tyvars(lexer,type_builder.GlobalEnv) 
+            def parameters = parse_parms(lexer.Pop():> Token.RoundGroup,type_builder.GlobalEnv)
+            def (after_type,ret_or_throw_parm) = match(lexer.Peek())
+                | Token.Identifier("returning" as key) | Token.Identifier("throwing" as key) =>
+                    _=lexer.Drop()
+                    def ret_or_throw_parm = match(lexer.Peek())
+                        | Token.RoundGroup  =>
+                            parse_parms(lexer.Pop():> Token.RoundGroup,type_builder.GlobalEnv)
+                        | _ => []
+                    (match(key) {"returning" => AfterType.Returning | "throwing" => AfterType.Throwing | _ => throw System.Exception("expectedt returning or throwing")},ret_or_throw_parm) 
+                    //TODO error when more than one return param
+                | _ => (AfterType.After,[])
+            def has_ret_parm = ret_or_throw_parm.Length == 1
+            lexer.DropOperator(":")
+            def (pointcut_toks,beyond_pointcut_toks) = split_tokens(lexer);
+            def typarms = MainParser.ParseWhereConstraints(type_builder.GlobalEnv,beyond_pointcut_toks.Head,tyvars)
+            def(advice_name,header) = make_header(tail.Location, parameters+ret_or_throw_parm, meth, PExpr.Void(), typarms)
+            def advice_method = AdviceMethod(type_builder,advice_name)
+            def advice = lazy(Advice.After(advice_method, pointcut_toks, has_ret_parm,after_type,ret_or_throw_parm))
+            define_advice_member(beyond_pointcut_toks.Head,type_builder,header,tail.Location)
+            advice
+
+        public CreateAround(type_builder: TypeBuilder, meth: ClassMember, tail:Token): LazyValue[Advice]
+            def find_the_return_type(lexer): PExpr
+                def take_till_colon(tok)
+                    | Token.Operator(":") => Token.BracesGroup(null)
+                    | tok => 
+                        _=lexer.Drop()
+                        tok.Next = take_till_colon(lexer.Peek())
+                        tok
+                def ret_type_toks = take_till_colon(lexer.Peek())
+                MainParser.ParseExpr(type_builder.GlobalEnv, ret_type_toks)
+                
+            check_if_within_aspect(type_builder)
+            def lexer = Lexer.WithoutFixing(tail)
+            def tyvars = maybe_parse_tyvars(lexer,type_builder.GlobalEnv) 
+            def parameters = parse_parms(lexer.Pop():> Token.RoundGroup,type_builder.GlobalEnv)
+            lexer.DropOperator(":")
+            def ret_type = find_the_return_type(lexer)
+            lexer.DropOperator(":")
+            def (pts,beyond_pointcut_toks) = split_tokens(lexer);
+            def pointcut_toks = drop(pts,fun(_) {| Token.Operator(":") => true | _ => false});
+            
+            //TODO delegate this extraction of params to nemerle compiler
+            def proceed_type = match(parameters)
+                | [] => 
+                    PExpr.Void()
+                | [p] =>
+                    p.ty
+                | ps => PExpr.Call(PExpr.Ref(Name("*")),ps.Map(_.ty))
+
+            def parameters' = if (contains_proceed_call(beyond_pointcut_toks.Head))
+                parameters+[<[ parameter: proceed:  $proceed_type -> $ret_type]>]
+            else
+                parameters
+
+            def typarms = MainParser.ParseWhereConstraints(type_builder.GlobalEnv,beyond_pointcut_toks.Head,tyvars)
+            def(advice_name,header) = make_header(tail.Location, parameters', meth,ret_type,typarms)
+            def advice_method = AdviceMethod(type_builder,advice_name)
+            def advice = lazy( Advice.Around(advice_method,pointcut_toks) )
+            define_advice_member(beyond_pointcut_toks.Head,type_builder,header,tail.Location)
+            advice
+
+    
+    [Nemerle.MacroUsage(Nemerle.MacroPhase.BeforeInheritance,
+                       Nemerle.MacroTargets.Method)]\
+    macro before( type_builder: TypeBuilder, advice: ParsedMethod, tail: Token )\
+    syntax("before",tail )
+        def advice = AdviceFactory.CreateBefore(type_builder,advice,tail)
+        Advices.Instance.Add(advice)
+
+    [Nemerle.MacroUsage(Nemerle.MacroPhase.BeforeInheritance,
+                       Nemerle.MacroTargets.Method)]\
+    macro after_returning( type_builder: TypeBuilder, advice: ParsedMethod, tail: Token )\
+    syntax("after",tail )
+        def advice = AdviceFactory.CreateAfter(type_builder,advice,tail)
+        Advices.Instance.Add(advice)
+
+    [Nemerle.MacroUsage(Nemerle.MacroPhase.BeforeInheritance,
+                       Nemerle.MacroTargets.Method)]\
+    macro around( type_builder: TypeBuilder, advice: ParsedMethod, tail: Token )\
+    syntax("around",tail )
+        def advice = AdviceFactory.CreateAround(type_builder,advice,tail)
+        Advices.Instance.Add(advice)

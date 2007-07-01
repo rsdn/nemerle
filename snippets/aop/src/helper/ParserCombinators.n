@@ -1,0 +1,143 @@
+#pragma indent
+
+using Nemerle.Aop.DevMacros
+using Nemerle.Compiler
+using Nemerle.Utility
+using Nemerle.Builtins.Function
+using Nemerle.Collections
+
+namespace Nemerle.Aop.Helper
+
+    type Parser['a] = list[Token] -> PResult['a]
+
+    public variant PResult['a]
+        | OK
+            val: 'a
+            unparsed: list[Token]
+        | Fail
+            unparsed: list[Token]
+        | Error
+            unparsed: list[Token]
+            description: string
+
+    public module ParserCombinators
+        public token_equal(tok1: Token, tok2: Token): bool
+            | (Token.Identifier(id1),Token.Identifier(id2)) => id1 == id2
+            | (Token.Operator(id1),Token.Operator(id2)) => id1 == id2
+            | _ => false
+
+        // implements <|> operator
+        public @<|>['a](parser1: Parser['a], parser2: Parser['a]): Parser['a]
+            MapOutput(parser1, (result,rest)=>PResult.OK(result,rest), ts=>parser2(ts))
+
+        //implements <*>
+        public @<*>['a,'b](parser1: Parser['a], parser2: Parser['b]): Parser['a*'b] 
+            fun(ts)
+                match(parser1(ts))
+                    | PResult.OK(v,rest) =>
+                        match(parser2(rest))
+                            | PResult.OK(v2,rest2) => PResult.OK((v,v2),rest2)
+                            | PResult.Fail => PResult.Fail(ts) 
+                            | PResult.Error(errest,desc) => PResult.Error(errest,desc) 
+                    | PResult.Fail => PResult.Fail(ts)
+                    | PResult.Error(errest,desc) => PResult.Error(errest,desc)
+
+        // ignore output from the left parser; implements *>
+        public @*>['a,'b](parser1: Parser['a], parser2: Parser['b]): Parser['b] 
+            parser1 <*> parser2 <@ (_,v2) => v2
+
+        // ignore output from the right parser; implements <*
+        public @<*['a,'b](parser1: Parser['a], parser2: Parser['b]): Parser['a] 
+            parser1 <*> parser2 <@ (v1,_) => v1
+
+        // implements <@
+        public @<@['a,'b](parse: Parser['a], f: 'a -> 'b ): Parser['b] 
+            MapOutput(parse, (v,l) => PResult.OK(f(v),l), x=>PResult.Fail(x))
+
+        MapOutput['a,'b](parse: Parser['a], some: 'a * list[Token] -> PResult['b], none: list[Token] -> PResult['b]): Parser['b]
+            fun(ts)
+                match(parse(ts)) 
+                    | PResult.OK(x,y)  => some(x,y)
+                    | PResult.Fail(x)  => none(x)
+                    | PResult.Error(x,desc) => PResult.Error(x,desc) // propagate error up
+
+        public @<%['a] (description: string, parse: Parser['a]): Parser['a]
+            fun(ts)
+                match(parse(ts))
+                    | PResult.Fail(x) => PResult.Error(x,description)
+                    | x => x
+
+        public optional['a](parse: Parser['a]): Parser[option['a]]
+            (parse <@ x => Some(x)) <|> succeed(None())
+
+        public repetition['a](parser: Parser['a]): Parser[list['a]]
+            def rep(tokens)
+                def parse = (parser<*>rep <@ (_::_)) <|> succeed([])
+                parse(tokens)
+            rep
+
+        public rep_with_separator['a,'b](parse: Parser['a], parse_sep: Parser['b]): Parser[list['a]]
+            parse <*> repetition(parse_sep *> parse) <@ (x,y) => x::y
+
+        public succeed['a](val_to_return:'a): Parser['a]
+            ts => PResult.OK(val_to_return,ts)
+
+        public condition['a](parse: Parser['a], p: 'a -> bool) : Parser['a]
+            fun(ts)
+                match(parse(ts))
+                    | PResult.OK(v,_) as result when p(v) => result
+                    | _ => PResult.Fail(ts)
+
+        public keyword(val: string): Parser[string]
+            condition(parse_id,x=>val==x)
+
+        public integer(tokens: list[Token]): PResult[int]
+            | Token.IntegerLiteral(Literal.Integer(val,_,_),_)::rest => PResult.OK((val:>int,rest))
+            | _ => PResult.Fail(tokens)
+
+        public operator(oper: string): Parser[string]
+            fun (ts)
+                | Token.Operator(op)::rest when oper == op =>
+                    PResult.OK(op,rest)
+                | _ => PResult.Fail(ts)
+
+        public parse_id(tokens: list[Token]): PResult[string]
+            | Token.Identifier(id)::rest => 
+                PResult.OK(id,rest)
+            | _ => PResult.Fail(tokens)
+
+        public roundgrp['a](parse: Parser['a]): Parser['a]
+            condition_tok(grp(parse), fun(_) {|Token.RoundGroup => true | _ => false})
+
+        public bracesgrp['a](parse: Parser['a]): Parser['a]
+            condition_tok(grp(parse), fun(_) {|Token.BracesGroup => true | _ => false})
+        
+        grp['a](parser: Parser['a]): Parser['a]
+            fun(ts)
+                | Token.RoundGroup(_)::rest | Token.BracesGroup(_)::rest | Token.LooseGroup(_)::rest | Token.SquareGroup(_)::rest =>
+                    def toks = Lexer(ts.Head).Map(x=>x)
+                    def p = MapOutput(parser,(v,_) => PResult.OK(v,rest), x=>PResult.Fail(x))
+                    p(toks)
+                | _ => PResult.Fail(ts)
+
+        condition_tok['a](parser: Parser['a], p: Token->bool): Parser['a]
+            fun(ts)
+                | h::_ when p(h) => parser(ts)
+                | _ => PResult.Fail(ts)
+
+        public squaregrp['a](parse: Parser['a]): Parser['a]
+            condition_tok(grp(parse), fun(_) {|Token.SquareGroup => true | _ => false})
+
+        public loosegrp['a](parse: Parser['a]): Parser['a]
+            condition_tok(grp(parse), fun(_) {|Token.LooseGroup => true | _ => false})
+
+        public parentheses['a](parser: Parser['a]): Parser['a]
+            roundgrp(loosegrp(parser))
+
+        public some['a](parse: Parser['a]): list[Token] -> 'a
+            parse >> (fun(_){|PResult.OK(x,_)=>x |PResult.Fail(x) with desc =""|PResult.Error(x,desc) => Nemerle.IO.print("error $x |> $desc\n"); throw System.Exception()}) 
+
+        public get_result['a](res: PResult['a]): 'a * list[Token]
+            | OK(v,rest) => (v,rest)
+            | _ => throw System.Exception()
+                
