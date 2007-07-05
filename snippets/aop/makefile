@@ -43,9 +43,9 @@ functional_tests: testbin testbin/test.exe bin/Nemerle.Aop.dll
 	cp bin/Nemerle.Aop.dll testbin/Nemerle.Aop.dll
 	cp ../../ncc/out.stage3/Nemerle.Macros.dll testbin/Nemerle.Macros.dll
 	cd testbin; find ../src/ftests -name  "*$(NAME)*_positive.n" \
-		-exec $(NET_ENGINE) test.exe -r "$(NET_ENGINE)" $(ARG) -ref Nemerle.Aop.dll {} +
+		-exec $(NET_ENGINE) ./test.exe -r "$(NET_ENGINE)" $(ARG) -ref Nemerle.Aop.dll {} +
 	cd testbin; find ../src/ftests -name "*$(NAME)*_negative.n" \
-		-exec $(NET_ENGINE) test.exe -r "$(NET_ENGINE)" $(ARG) -ref Nemerle.Aop.dll {} +
+		-exec $(NET_ENGINE) ./test.exe -r "$(NET_ENGINE)" $(ARG) -ref Nemerle.Aop.dll {} +
 
 testbin/test.exe: testbin
 	ncc -o:$@ -r Nemerle.Compiler.dll ../../ncc/testsuite/test.n
