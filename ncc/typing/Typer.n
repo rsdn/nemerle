@@ -147,7 +147,7 @@ namespace Nemerle.Compiler
     
     private this (mng : ManagerClass) {
       base (mng);
-      locals_stack = Stack ();    
+      locals_stack = Stack ();
       solver = mng.Solver;
     }
 
@@ -233,7 +233,7 @@ namespace Nemerle.Compiler
         solver.InUse = false;
       }
     }
-    
+
     put_in_error_mode (typer_done : bool) : void {
       solver.Unwind ();
       messenger.Cleanup ();
@@ -243,7 +243,7 @@ namespace Nemerle.Compiler
       assert (!typer_done);
       InitLocalContext (LocalContext.Empty);
     }
-    
+
     internal TriggerObsoleteWarning : bool
     {
       get { (current_method_builder == null || !current_method_builder.IsObsolete) 
@@ -643,8 +643,9 @@ namespace Nemerle.Compiler
           else
             e.SkipWriteCheck && mem.Attributes %&& NemerleAttributes.CompilerMutable
 
-        | TExpr.CacheRef (desc) => IsLValue (desc.TExpr, need_ref)
-          
+        | TExpr.CacheRef (desc)    => IsLValue (desc.TExpr, need_ref)
+        | TExpr.DebugInfo(expr, _) => IsLValue (expr,       need_ref)
+
         | TExpr.PropertyMember (_, p) when !need_ref => p.IsMutable
         | TExpr.Call (TExpr.PropertyMember (_, p), _, _) when !need_ref => p.IsMutable
         | TExpr.Call (TExpr.Delayed (dt), _, _) when !need_ref => dt.IsMutableIndexer
@@ -1059,22 +1060,20 @@ namespace Nemerle.Compiler
     }
 
 
-    public TypeExpr (e : PT.PExpr, expected : TyVar, is_toplevel_in_seq : bool) : TExpr
+    public TypeExpr (expr : PT.PExpr, expected : TyVar, is_toplevel_in_seq : bool) : TExpr
     {
-      log (TYPING, e.loc, $ "(typing expression: $e, exp=$expected");
+      log (TYPING, expr.loc, $ "(typing expression: $expr, exp=$expected");
 
-      def texpr = Util.locate (e.loc, {
-        def e' = InterceptSpecialMacros (e, expected);
+      def texpr = Util.locate (expr.loc, {
+        def e' = InterceptSpecialMacros (expr, expected);
         def e' = 
           try {
             if (e' != null) {
-              log (TYPING, e.loc, $ "intercepted: $e'");
+              log (TYPING, expr.loc, $ "intercepted: $e'");
               e'
             } else {
-              def orig_loc = e.Location;
-
-              log (MACRO_EXPANSIONS, e.loc, $ "running expand with: $e");
-              match (MacroRegistry.expand_one_macro (this, e)) {
+              log (MACRO_EXPANSIONS, expr.loc, $ "running expand with: $expr");
+              match (MacroRegistry.expand_one_macro (this, expr)) {
                 | (e, None) => 
                   log (MACRO_EXPANSIONS, e.loc, $ "after expansion: $e");
 
@@ -1089,13 +1088,24 @@ namespace Nemerle.Compiler
                 | (e, Some ((orig, im))) =>
                   log (MACRO_EXPANSIONS, e.loc, $ "after expansion: $e");
 
+                  def debugLocation = 
+                    if (Manager.Options.EmitDebug && !expr.loc.IsGeneratedOrEmpty)
+                      GetDebugLocation(expr);
+                    else
+                      Location.Default;
+
                   def res = TypeExpr (e, expected, is_toplevel_in_seq);
 
                   // IT: In some cases, MacroEnvelope takes e.Location without keyword location.
                   // For example, for (mutable i;;) {} takes e.Location without 'for'.
                   // The following fixes that.
-                  def loc = if (orig_loc.IsGenerated) res.Location else orig_loc;
-                  TExpr.MacroEnvelope (loc, res.Type, im, orig, res)
+                  def loc = if (expr.loc.IsGeneratedOrEmpty) res.Location else expr.loc;
+                  def res = TExpr.MacroEnvelope (loc, res.Type, im, orig, res);
+
+                  if (debugLocation.IsEmpty)
+                    res
+                  else
+                    TExpr.DebugInfo (debugLocation, null, res, expr);
               }
             }
           } catch {
@@ -1112,8 +1122,8 @@ namespace Nemerle.Compiler
         e'
       });
 
-      when (e.typed_object == null)
-        e.typed_object = texpr;
+      when (expr.typed_object == null)
+        expr.typed_object = texpr;
       texpr;
     }
 
@@ -1150,22 +1160,18 @@ namespace Nemerle.Compiler
       }
     }
 
-   
+
     Expect (expected : TyVar, actual : TyVar, place : string) : bool
     {
       DoExpect (expected, actual, place, false)
     }
 
-   
+
     ExpectSubtyping (expected : TyVar, actual : TyVar, place : string) : bool
     {
       DoExpect (expected, actual, place, true)
     }
 
-    static _debug(obj : object) : void
-    {
-      _ = obj.ToString();
-    }
 
     DoType (expression : PT.PExpr, expected : TyVar, is_toplevel_in_seq : bool) : TExpr
     {
@@ -1175,13 +1181,7 @@ namespace Nemerle.Compiler
         Manager.Complete (expression, expected, this, env);
       }
 
-      def addDebugInfo(res)
-      {
-          //if (expression.IsGenerated || expression.loc.IsEmpty || Manager.IsIntelliSenseMode)
-            res
-          //else
-          //  TExpr.DebugInfo(expression.Location, null, res, expression);
-      }
+      def debugLocation = GetDebugLocation(expression);
 
       def texpr = match (expression)
       {
@@ -1191,25 +1191,23 @@ namespace Nemerle.Compiler
                        "ref and out parameters are only allowed in function calls")
 
         | PT.PExpr.DefMutable (x, null) => 
-          DoType (PT.PExpr.DefMutable (x, <[ $(TExpr.DefaultValue (FreshTyVar ()) : typed) ]>), expected, is_toplevel_in_seq)
-                       
+          DoType (PT.PExpr.DefMutable (x, <[ $(TExpr.DefaultValue (FreshTyVar ()) : typed) ]>), expected, is_toplevel_in_seq);
+
         | PT.PExpr.DefMutable (PT.PExpr.Ref as name, val)
         | PT.PExpr.Define (PT.PExpr.Ref as name, val) =>
           def is_mutable = expression is PT.PExpr.DefMutable;
-          def res =
-            if (Expect (expected, InternalType.Void, "definition ``result''"))
-              if (is_toplevel_in_seq)
-                TypeLocalDefinition (is_mutable, name.name, name.Location, val)
-              else
-                try {
-                  PushLocals ();
-                  TypeLocalDefinition (is_mutable, name.name, name.Location, val)
-                } finally {
-                  PopLocals ()
-                }
+          if (Expect (expected, InternalType.Void, "definition ``result''"))
+            if (is_toplevel_in_seq)
+              TypeLocalDefinition (is_mutable, name.name, name.Location, val)
             else
-              TExpr.Error ();
-          addDebugInfo(res);
+              try {
+                PushLocals ();
+                TypeLocalDefinition (is_mutable, name.name, name.Location, val)
+              } finally {
+                PopLocals ()
+              }
+          else
+            TExpr.Error ();
 
         | PT.PExpr.DefMutable (Tuple (Ref (first_n) :: names), Tuple (first_v :: vals)) =>
           if (Expect (expected, InternalType.Void, "definition ``result''"))
@@ -1231,7 +1229,7 @@ namespace Nemerle.Compiler
 
                   | PT.PExpr.TypeEnforcement (nm, ty) =>
                     create_single (nm, PT.PExpr.TypeEnforcement (v, ty), acc)
-                    
+
                   | _ =>
                     Message.FatalError (n.Location, "expected simple variable name in mutable definition")
                 }
@@ -1244,7 +1242,7 @@ namespace Nemerle.Compiler
                 PopLocals ()
             }
           else
-            TExpr.Error ()
+            TExpr.Error ();
 
         | PT.PExpr.DefMutable (TypeEnforcement (nm, ty) as te, val) =>
           def nte = PT.PExpr.TypeEnforcement (ty.Location.Combine(val.Location), val, ty);
@@ -1266,8 +1264,8 @@ namespace Nemerle.Compiler
                 PopLocals ()
               }
           else
-            TExpr.Error ()
-          
+            TExpr.Error ();
+
 
         | PT.PExpr.DefFunctions (functions) =>
           if (Expect (expected, InternalType.Void, "definition ``result''"))
@@ -1297,7 +1295,7 @@ namespace Nemerle.Compiler
 
         | PT.PExpr.Array (<[ $(r : int) ]>, _) when r > 32 =>          
           ReportFatal (messenger, "array must have at most 32 dimensions (.NET runtime limit)")
-                    
+
         | PT.PExpr.Array (<[ $(r : int) ]>, PT.PExpr.ListLiteral ([])) =>
           def list_of_zeros (r) {
             | 1 => [ <[ 0 ]> ]
@@ -1471,7 +1469,7 @@ namespace Nemerle.Compiler
             | null => TypeName (expression, expected)
             | e => e
           }
-          
+
 
         | PT.PExpr.Member (obj, PT.Splicable.Name as name) =>
           def mem_name = name.body.Id;
@@ -1527,8 +1525,8 @@ namespace Nemerle.Compiler
               PT.PExpr.Call (star_ref, [loop (ps), p])
             | [] => assert (false)
           }
-          TypeExpr (loop (List.Rev (parms)), expected)
-          
+          TypeExpr (loop (List.Rev (parms)), expected);
+
         | <[ $("_N_ref_cache" : dyn) ($(name : name), $val) ]> =>
             if (Expect (expected, InternalType.Void, "definition ``result''")) {
               def res = TypeLocalDefinition (false, name, val);
@@ -1549,7 +1547,7 @@ namespace Nemerle.Compiler
                 }) || fnc is <[ _ . $_ ]>)
             TypeExpr (PartialApplication (expression), expected)
           else
-            TypeCall (fnc, parms, expected, is_property = false)
+            TypeCall (fnc, parms, expected, is_property = false);
 
 
         | PT.PExpr.Assign (PT.PExpr.Tuple (vars), e2) =>
@@ -1562,14 +1560,14 @@ namespace Nemerle.Compiler
             ]>;
             TypeExpr (expr, expected)
           } else 
-            TExpr.Error ()
+            TExpr.Error ();
 
 
         | PT.PExpr.Assign (PT.PExpr.Wildcard, e2) =>
           if (Expect (expected, InternalType.Void, "assignment ``result''"))
             TypeExpr (<[ def _ = $e2 ]>, expected)
           else
-            TExpr.Error ()
+            TExpr.Error ();
 
 
         | PT.PExpr.Assign (e1, e2) =>
@@ -1579,8 +1577,8 @@ namespace Nemerle.Compiler
             def e2 = TypeExpr (e2);
             TExpr.Assign (e1, AddCastTo (e2, e1.Type, "assigned value"))
           } else
-            TExpr.Error ()
-            
+            TExpr.Error ();
+
 
         | PT.PExpr.GenericSpecifier (fnc, gen_params) =>
           def fnc = TypeExpr (fnc, expected);
@@ -1648,7 +1646,7 @@ namespace Nemerle.Compiler
 
         | PT.PExpr.Sequence ([]) =>
           _ = Expect (expected, InternalType.Void, "empty sequence");
-          addDebugInfo (VoidLiteral ())
+          VoidLiteral ()
 
 
         | PT.PExpr.Sequence (l) =>
@@ -1670,7 +1668,7 @@ namespace Nemerle.Compiler
           def res = loop ([], l);
           //Message.Debug ("pop seq");
           PopLocals ();
-          addDebugInfo (res)
+          res
 
 
         | PT.PExpr.Tuple (l) =>
@@ -1736,7 +1734,7 @@ namespace Nemerle.Compiler
 
         | PT.PExpr.Spliced =>
           ReportFatal (messenger, "$ macro keyword used in regular expression")
-          
+
 
         | PT.PExpr.TypedType
         | PT.PExpr.Wildcard
@@ -1770,13 +1768,116 @@ namespace Nemerle.Compiler
 
       when (expression.typed_object == null)
         expression.typed_object = texpr;
-      texpr
+
+      if (debugLocation.IsEmpty)
+        texpr
+      else
+        TExpr.DebugInfo (debugLocation, null, texpr, expression)
+    }
+
+    private mutable debugInfos : list[Location * PT.PExpr] = [];
+
+    private GetDebugLocation(pexpr : PT.PExpr) : Location
+    {
+      def skip(l) 
+      {
+        debugInfos.Exists((loc, _) => loc.Contains(l));
+      }
+
+      //IT.TEMP
+      _ = 
+      if (!Manager.Options.EmitDebug || pexpr.loc.IsGeneratedOrEmpty || skip(pexpr.loc))
+        Location.Default
+      else
+      {
+        mutable loc = pexpr.Location;
+
+        def truncateLoc()
+        {
+          mutable isTruncated = false;
+
+          // Truncate DebugInfo location to inner exprs.
+          //
+          ExprWalker().Walk(pexpr, info =>
+          {
+            def truncate(line, col)
+            {
+              when (line < loc.EndLine || line == loc.EndLine && col < loc.EndColumn)
+              {
+                loc = Location(loc.FileIndex, loc.Line, loc.Column, line, col);
+                isTruncated = true;
+              }
+            }
+
+            match (info.Node)
+            {
+              | PT.PExpr.Sequence as s when !s.loc.IsGeneratedOrEmpty => truncate(s.loc.Line, s.loc.Column);
+              | PT.PExpr.Match(_, _, l) when !l.IsGeneratedOrEmpty => truncate(l.EndLine,  l.EndColumn);
+              | _ => ()
+            }
+          });
+
+          when (isTruncated)
+          {
+            // Here we store the location of the last element,
+            // which ends on the same line where the original pexpr starts.
+            // It's used to truncate DebugInfo location to a single line.
+            //
+            mutable lastLineLoc;
+
+            // Scan inner exprs.
+            //
+            ExprWalker().Walk(pexpr, info =>
+            {
+              when (info.Node is Located)
+              {
+                def l = (info.Node :> Located).loc;
+
+                when (
+                  l.EndLine == loc.Line &&
+                  l.EndColumn > lastLineLoc.EndColumn &&
+                  (loc.EndLine != loc.Line || l.EndColumn < loc.EndColumn))
+                {
+                  lastLineLoc = l;
+                }
+              }
+            });
+
+            unless (lastLineLoc.IsEmpty)
+              loc = Location(loc.FileIndex, loc.Line, loc.Column, lastLineLoc.EndLine, lastLineLoc.EndColumn);
+          }
+        }
+
+        match (pexpr)
+        {
+          | PT.PExpr.Sequence => ()
+          | PT.PExpr.MacroCall(nm, _, _) when
+            nm.loc.IsGenerated == false &&
+            nm.loc.Line   == loc.Line &&
+            nm.loc.Column == loc.Column =>
+
+            loc = nm.loc;
+
+          | _ =>
+            truncateLoc();
+            unless (loc.IsEmpty)
+            {
+              if (skip (loc))
+                loc = Location.Default;
+              else
+                debugInfos ::= (loc, pexpr);
+            }
+        }
+
+        loc;
+      }
+      Location.Default;
     }
 
     #endregion
 
-       
     #region ,,def''
+    
     TypeLocalDefinition (is_mutable : bool, name : PT.Name, val : PT.PExpr) : TExpr.DefValIn
     {
       TypeLocalDefinition (is_mutable, name, Location.Default, val)
