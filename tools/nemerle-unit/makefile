@@ -4,9 +4,8 @@ build: bin/NemerleUnit.dll
 
 bin/NemerleUnit.dll: bin src/macros/*.n
 	ncc -g -i  -t:library -r Nemerle.Compiler.dll \
-		-r lib/nunit.core.interfaces.dll $(NUNIT_LIB_FLAG)\
+		$(NUNIT_LIB_FLAG)\
 		-o:$@ src/macros/*.n
-
 
 test: bin/NemerleUnit.dll bin/fixture.dll bin/UnitTests.dll
 	cd bin; $(NUNIT_CONSOLE) UnitTests.dll
