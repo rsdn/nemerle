@@ -7,6 +7,7 @@ using Nemerle.IO
 using Nemerle.Macros
 using Nemerle.Collections
 using Nemerle.Compiler.Parsetree
+using Nemerle.Aop.Helper.ParserCombinators
 
 namespace Nemerle.Aop 
 
@@ -26,8 +27,23 @@ namespace Nemerle.Aop
             unless(is_aspect(type_builder))
                 Message.Error($"$(type_builder.Name) is not an aspect")
 
-        parse_parms(parms_roundgroup: Token.RoundGroup, env: GlobalEnv): list[Fun_parm]
-            MainParser.ParseFunParms(env,parms_roundgroup)
+        parse_parms(parms_roundgroup: Token.RoundGroup, env: GlobalEnv): list[Fun_parm]*list[Splicable]*list[Constraint] {
+            def parse_parameter = 
+                parse_id <* operator(":") <*> Parse.param_pattern(_,env);
+            def parser = repetition(loosegrp(parse_parameter));
+            def lexer = Lexer(parms_roundgroup, fix=false);
+            def tokens = lexer.TokenList;
+            def result = match(parser(tokens)) {
+                | PResult.OK(val,_) => val
+                | PResult.Fail(unparsed) with description="parse failed"
+                | PResult.Error(unparsed,description) =>
+                    Message.FatalError($"$description $unparsed");
+            }
+
+            def funparms = result.Map((id,p) => <[parameter: $(id:dyn) : $(p.Pexpr)]>);
+            def ps = result.Map((_,y)=> y);
+            (funparms,List.Flatten(ps.Map(x=> x.Tyvars)), List.Flatten(ps.Map(x=> x.Constraints)))
+        }
 
         make_header(loc: Location, parms: list[Fun_parm], meth_body: ClassMember, ret_type: PExpr,typarms: Typarms): string*Fun_header
             def advice_name = Util.tmpname("advice")
@@ -91,10 +107,11 @@ namespace Nemerle.Aop
             check_if_within_aspect(type_builder)
             def lexer = Lexer.WithoutFixing(tail)
             def tyvars = maybe_parse_tyvars(lexer,type_builder.GlobalEnv) 
-            def parameters = parse_parms(lexer.Pop():> Token.RoundGroup,type_builder.GlobalEnv)
+            def (parameters,artificialtyvars,constraints) = parse_parms(lexer.Pop():> Token.RoundGroup,type_builder.GlobalEnv)
             lexer.DropOperator(":")
             def (pointcut_toks,beyond_pointcut_toks) = split_tokens(lexer);
             def typarms = MainParser.ParseWhereConstraints(type_builder.GlobalEnv,beyond_pointcut_toks.Head,tyvars)
+            def typarms = Typarms(typarms.tyvars+artificialtyvars,typarms.constraints+constraints) 
             def(advice_name,header) = make_header(tail.Location, parameters, meth, PExpr.Void(), typarms)
             def advice_meth = AdviceMethod(type_builder,advice_name)
             def advice = lazy(Advice.Before(advice_meth,pointcut_toks))
@@ -105,21 +122,22 @@ namespace Nemerle.Aop
             check_if_within_aspect(type_builder)
             def lexer = Lexer.WithoutFixing(tail)
             def tyvars = maybe_parse_tyvars(lexer,type_builder.GlobalEnv) 
-            def parameters = parse_parms(lexer.Pop():> Token.RoundGroup,type_builder.GlobalEnv)
-            def (after_type,ret_or_throw_parm) = match(lexer.Peek())
+            def (parameters,artificialtyvars,constraints) = parse_parms(lexer.Pop():> Token.RoundGroup,type_builder.GlobalEnv)
+            def (after_type,(ret_or_throw_parm,rtyvars,rconstrs)) = match(lexer.Peek())
                 | Token.Identifier("returning" as key) | Token.Identifier("throwing" as key) =>
                     _=lexer.Drop()
                     def ret_or_throw_parm = match(lexer.Peek())
                         | Token.RoundGroup  =>
                             parse_parms(lexer.Pop():> Token.RoundGroup,type_builder.GlobalEnv)
-                        | _ => []
+                        | _ => ([],[],[])
                     (match(key) {"returning" => AfterType.Returning | "throwing" => AfterType.Throwing | _ => throw System.Exception("expectedt returning or throwing")},ret_or_throw_parm) 
                     //TODO error when more than one return param
-                | _ => (AfterType.After,[])
+                | _ => (AfterType.After,([],[],[]))
             def has_ret_parm = ret_or_throw_parm.Length == 1
             lexer.DropOperator(":")
             def (pointcut_toks,beyond_pointcut_toks) = split_tokens(lexer);
             def typarms = MainParser.ParseWhereConstraints(type_builder.GlobalEnv,beyond_pointcut_toks.Head,tyvars)
+            def typarms = Typarms(typarms.tyvars+artificialtyvars+rtyvars,typarms.constraints+constraints+rconstrs) 
             def(advice_name,header) = make_header(tail.Location, parameters+ret_or_throw_parm, meth, PExpr.Void(), typarms)
             def advice_method = AdviceMethod(type_builder,advice_name)
             def advice = lazy(Advice.After(advice_method, pointcut_toks, has_ret_parm,after_type,ret_or_throw_parm))
@@ -140,7 +158,7 @@ namespace Nemerle.Aop
             check_if_within_aspect(type_builder)
             def lexer = Lexer.WithoutFixing(tail)
             def tyvars = maybe_parse_tyvars(lexer,type_builder.GlobalEnv) 
-            def parameters = parse_parms(lexer.Pop():> Token.RoundGroup,type_builder.GlobalEnv)
+            def (parameters,artificialtyvars,constraints) = parse_parms(lexer.Pop():> Token.RoundGroup,type_builder.GlobalEnv)
             lexer.DropOperator(":")
             def ret_type = find_the_return_type(lexer)
             lexer.DropOperator(":")
@@ -161,12 +179,12 @@ namespace Nemerle.Aop
                 parameters
 
             def typarms = MainParser.ParseWhereConstraints(type_builder.GlobalEnv,beyond_pointcut_toks.Head,tyvars)
+            def typarms = Typarms(typarms.tyvars+artificialtyvars,typarms.constraints+constraints) 
             def(advice_name,header) = make_header(tail.Location, parameters', meth,ret_type,typarms)
             def advice_method = AdviceMethod(type_builder,advice_name)
             def advice = lazy( Advice.Around(advice_method,pointcut_toks) )
             define_advice_member(beyond_pointcut_toks.Head,type_builder,header,tail.Location)
             advice
-
     
     [Nemerle.MacroUsage(Nemerle.MacroPhase.BeforeInheritance,
                        Nemerle.MacroTargets.Method)]\

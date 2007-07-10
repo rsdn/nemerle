@@ -9,7 +9,8 @@ bin/DevMacros.dll: bin src/dev_macros/parser_operators.n
 		src/dev_macros/parser_operators.n
 
 bin/Nemerle.Aop.dll: bin bin/DevMacros.dll src/macros/*.n src/helper/*.n
-	ncc -g -t:library -r Nemerle.Compiler.dll -m bin/DevMacros.dll -o:$@\
+	ncc --no-color -g -t:library -r Nemerle.Compiler.dll \
+		-m bin/DevMacros.dll -o:$@\
 		src/macros/*.n src/helper/*.n
 
 
