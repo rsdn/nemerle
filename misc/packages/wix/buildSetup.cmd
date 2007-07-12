@@ -36,10 +36,15 @@ if "%VisualStudioIntegration%"=="" goto errEnvVarVSSDK
 if not "%WixDir%"=="" goto wixSet
 
 rem Check default wix folder
-if not exist "%ProgramFiles%\Windows Installer XML v3\bin\light.exe" goto errEnvVarWix
-
+if not exist "%ProgramFiles%\Windows Installer XML v3\bin\light.exe" goto wixWow64check
 echo light.exe found in "%ProgramFiles%\Windows Installer XML v3\bin" folder
 set WixDir=%ProgramFiles%\Windows Installer XML v3\bin
+goto wixSet
+
+:wixWow64check
+if not exist "%ProgramFiles(x86)%\Windows Installer XML v3\bin\light.exe" goto errEnvVarWix
+echo light.exe found in "%ProgramFiles(x86)%\Windows Installer XML v3\bin" folder
+set WixDir=%ProgramFiles(x86)%\Windows Installer XML v3\bin
 
 :wixSet
 
