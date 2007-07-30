@@ -10,10 +10,10 @@ CLEAN_FILES = $(EXE) $(EXE:.exe=.exe.mdb)
 DOC = nemerledoc.xml
 
 $(EXE): $(SOURCES) 
-	ncc -g -Ot -texe -doc:$(DOC) -out:$@ $^
+	ncc -g -Ot -texe -resource:nemerle-doc.css -doc:$(DOC) -out:$@ $^
 
 test:
-	mono --debug $(EXE) -title:"Nemerle Documentation Project" -s -np $(EXE) $(DOC)
+	mono --debug $(EXE) -dir:"wynik" -title:"Nemerle Documentation Project" -s -np $(EXE) $(DOC)
 
 clean:
 	rm  $(CLEAN_FILES)
