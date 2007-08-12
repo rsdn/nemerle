@@ -1,5 +1,4 @@
 
-# I use only nunit vars, I don't know how to utilize others yet
 include ../../config.mak
 
 build: bin bin/DevMacros.dll bin/Nemerle.Aop.dll
