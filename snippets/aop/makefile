@@ -7,10 +7,10 @@ bin/DevMacros.dll: bin src/dev_macros/parser_operators.n
 	ncc -g -t:library -r Nemerle.Compiler.dll -o:$@\
 		src/dev_macros/parser_operators.n
 
-bin/Nemerle.Aop.dll: bin bin/DevMacros.dll src/macros/*.n src/helper/*.n
+bin/Nemerle.Aop.dll: bin bin/DevMacros.dll src/macros/*.n src/helper/*.n src/pubapi/*.n
 	ncc --no-color -g -t:library -r Nemerle.Compiler.dll \
 		-m bin/DevMacros.dll -o:$@\
-		src/macros/*.n src/helper/*.n
+		src/macros/*.n src/helper/*.n src/pubapi/*.n
 
 
 test: utests ftests
