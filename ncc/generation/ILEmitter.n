@@ -73,10 +73,6 @@ namespace Nemerle.Compiler
     private _labels : Hashtable [int, Label] = Hashtable ();
     private _label_usage : Hashtable [int, TExpr] = Hashtable ();
 
-    // marks how deep we are inside in the blocks of code, 
-    // which disable debug-marking of simple constructs, like local value or field access
-    private mutable limited_debug_nesting = 0;
-
     static MS_NET_RuntimeType : System.Type 
       = typeof (object).Assembly.GetType ("System.RuntimeType");
 
@@ -111,16 +107,7 @@ namespace Nemerle.Compiler
           _is_ctor   = is_ctor(_method_builder);
           _is_lambda = _method_builder.DeclaringType.is_lambda;
 
-          when (IsDebugEnabled) {
-            Mark (beginLocation (_method_builder.BodyLocation));
-            //IT.TEMP            _ilg.Emit (OpCodes.Nop);
-          }
-
           emit (body);
-
-          when (IsDebugEnabled) {
-            Mark (endLocation (_method_builder.BodyLocation));
-          }
 
           unless (body.Throws)
             _ilg.Emit (OpCodes.Ret);
@@ -137,15 +124,6 @@ namespace Nemerle.Compiler
       })
     }
 
-    private static beginLocation (mutable loc : Location) : Location {
-      loc = loc.FromStart ();
-      Location (loc.FileIndex, loc.Line, loc.Column - 1, loc.EndLine, loc.EndColumn)
-    }
-    private static endLocation (mutable loc : Location) : Location {
-      loc = loc.FromEnd ();
-      Location (loc.FileIndex, loc.Line, loc.Column, loc.EndLine, loc.EndColumn + 1)
-    }
-    
     private is_always_true (expr : TExpr) : bool
     {
       | Literal (Literal.Bool (true)) => true
@@ -195,40 +173,8 @@ namespace Nemerle.Compiler
       | _ => false
     }
 
-    mutable debug_tmp_disabled : bool;
-    mutable prev_location      : Location;
+    IsDebugEnabled : bool { get { _debug_doc != null } }
 
-    /** Marks the point in source file for currently emmited opcode */
-    Mark (loc : Location) : void
-    {
-      when (loc.Line == loc.EndLine)
-      when (IsDebugEnabled && loc.Line != 0 && !debug_tmp_disabled && !prev_location.Contains(loc)) {
-        prev_location = loc;
-        Util.cassert (loc.Line <= loc.EndLine, "spoiled location " + loc.File + " " + loc.ToString ());
-        //IT.TEMP        _ilg.MarkSequencePoint (_debug_doc, loc.Line, loc.Column, loc.EndLine, loc.EndColumn);
-      }
-    }
-
-    _Mark (loc : Location, ignoreMultiline : bool) : void
-    {
-      when (!ignoreMultiline || loc.Line == loc.EndLine)
-        Mark(loc);
-    }
-
-    MaybeMark (loc : Location) : void {
-      when (limited_debug_nesting == 0)
-        Mark (loc);
-    }
-
-    MaybeMark (loc : Location, ignoreMultiline : bool) : void {
-      when (!ignoreMultiline || loc.Line == loc.EndLine)
-        MaybeMark(loc);
-    }
-
-    IsDebugEnabled : bool {
-      get { _debug_doc != null && !(_is_ctor && _is_lambda) }
-    }
-    
 
     /** Emit volatile prefix if needed. */
     private maybe_volatile (expr : TExpr) : void
@@ -447,10 +393,8 @@ namespace Nemerle.Compiler
 
     emit_parms (parms : list [Parm]) : void
     {
-      limited_debug_nesting++;
       foreach (parm in parms)
         emit (parm.expr);
-      limited_debug_nesting--;
     }
 
     static skipped (expr : TExpr) : void
@@ -532,45 +476,6 @@ namespace Nemerle.Compiler
       }
     }
 
-    private static _debug(loc : Located) : void
-    {
-      _ = loc.Location;
-    }
-    
-
-    MarkCall(call : TExpr.Call, loc : Location) : void
-    {
-      when (IsDebugEnabled)
-      {
-        def mark()
-        {
-          def parm = call.parms.Find(p =>
-            if (p == null || p.required_type == null) false
-            else p.expr.Location.Line != p.expr.Location.EndLine || p.required_type.Fix().IsFunction);
-
-          match (parm)
-          {
-          | None    => Mark (loc);
-          | Some(p) =>
-
-            when (loc.Line < p.expr.Location.Line ||
-                  loc.Line == p.expr.Location.Line && loc.Column < p.expr.Location.Column)
-              Mark (Location(loc.FileIndex, loc.Line, loc.Column, p.expr.Location.Line, p.expr.Location.Column));
-          }
-        }
-
-        match (call.func)
-        {
-        | StaticRef(_, mb is NC.MethodBuilder, _) when is_ctor(mb) && mb.DeclaringType.is_lambda => ();
-        | _ => mark();
-        }
-      }
-    }
-
-    MarkCall(call : TExpr.Call) : void
-    {
-      MarkCall(call, call.Location);
-    }
 
     /**
      * Emits an expression.
@@ -598,16 +503,6 @@ namespace Nemerle.Compiler
         
         /* emits a local value definition */
         | DefValIn (decl, let_val, let_in) =>
-
-          match (let_val)
-          {
-          | Call as call => MarkCall (call, decl.Location.Combine(call.Location));
-          | _            =>
-
-            when (decl.Location.Line == decl.Location.EndLine && !decl.Name.StartsWith("_N_"))
-              Mark (decl.Location);
-
-          }
 
           def newscope = 
             match (let_val) {
@@ -640,7 +535,7 @@ namespace Nemerle.Compiler
                 }
             }
           emit (let_in);
-          when (_debug_doc != null && newscope) _ilg.EndScope ();
+          when (IsDebugEnabled && newscope) _ilg.EndScope ();
 
 
         /* -- CONDITIONAL CONSTRUCTIONS ------------------------------------ */
@@ -648,17 +543,29 @@ namespace Nemerle.Compiler
         /* emits the if/then/else construction */
         | If (cond_expr, then_expr, else_expr, then_debug_loc, else_debug_loc) =>
 
-          def emit_debug (loc)
-          {
+          def emit_debug (loc) {
             // This code locates the debugger right after the condition gets successful or fails.
             // Used to debug match cases.
             //
-            unless (_debug_doc == null || loc.IsGeneratedOrEmpty)
+            when (IsDebugEnabled && !loc.IsGeneratedOrEmpty)
               emit_debug_info (TExpr.DebugInfo (loc, null, null, null));
           }
 
           def emit_branch (expr : TExpr, else_label : Label, debug_loc: Location) {
-            MaybeMark (expr.Location);
+
+            def emit_br (opcode1, opcode2)
+            {
+              if (!IsDebugEnabled || debug_loc.IsGeneratedOrEmpty) {
+                _ilg.Emit (opcode1, else_label);
+              } else {
+                def debug_label = _ilg.DefineLabel ();
+                _ilg.Emit (opcode2, debug_label);
+                emit_debug (debug_loc);
+                _ilg.Emit (OpCodes.Br, else_label);
+                _ilg.MarkLabel (debug_label);
+              }
+            }
+
             match (expr) {
               | Call (OpCode ("=="), [nested_cond,
                 Parm where (expr = TExpr.TypeConversion(TExpr.Literal(Literal.Bool(true)), _, _, _))], _) =>
@@ -669,57 +576,27 @@ namespace Nemerle.Compiler
 
                 /* NOTE: the opcodes are swapped so that the 'then' expression
                          can be emitted before the 'else' expression */
-                if (_debug_doc == null || debug_loc.IsGeneratedOrEmpty)
-                {
-                  def opcode =
-                    match (opcode) {
-                      | "==.ref" | "=="   => OpCodes.Bne_Un
-                      | "!=.ref" | "!="   => OpCodes.Beq
-                      | "<.s"    | "<.f"  => OpCodes.Bge
-                      | "<.u"             => OpCodes.Bge_Un
-                      | ">.s"    | ">.f"  => OpCodes.Ble
-                      | ">.u"             => OpCodes.Ble_Un
-                      | "<=.s"   | "<=.f" => OpCodes.Bgt
-                      | "<=.u"            => OpCodes.Bgt_Un
-                      | ">=.s"   | ">=.f" => OpCodes.Blt
-                      | ">=.u"            => OpCodes.Blt_Un
-                      | "bool.!"          => OpCodes.Brtrue
-                      | _ => Util.ice ("invalid opcode '" + opcode +
-                                       "' in optimized TExpr.If pattern")
-                    };
-                  _ilg.Emit (opcode, else_label);
-                }
-                else
-                {
-                  def opcode =
-                    match (opcode) {
-                      | "==.ref" | "=="   => OpCodes.Beq
-                      | "!=.ref" | "!="   => OpCodes.Bne_Un
-                      | "<.s"    | "<.f"  => OpCodes.Blt
-                      | "<.u"             => OpCodes.Blt_Un
-                      | ">.s"    | ">.f"  => OpCodes.Bgt
-                      | ">.u"             => OpCodes.Bgt_Un
-                      | "<=.s"   | "<=.f" => OpCodes.Ble
-                      | "<=.u"            => OpCodes.Ble_Un
-                      | ">=.s"   | ">=.f" => OpCodes.Bge
-                      | ">=.u"            => OpCodes.Bge_Un
-                      | "bool.!"          => OpCodes.Brfalse
-                      | _ => Util.ice ("invalid opcode '" + opcode +
-                                       "' in optimized TExpr.If pattern")
-                    };
+                def opcodes =
+                  match (opcode) {
+                    | "==.ref" | "=="   => (OpCodes.Bne_Un, OpCodes.Beq)
+                    | "!=.ref" | "!="   => (OpCodes.Beq,    OpCodes.Bne_Un)
+                    | "<.s"    | "<.f"  => (OpCodes.Bge,    OpCodes.Blt)
+                    | "<.u"             => (OpCodes.Bge_Un, OpCodes.Blt_Un)
+                    | ">.s"    | ">.f"  => (OpCodes.Ble,    OpCodes.Bgt)
+                    | ">.u"             => (OpCodes.Ble_Un, OpCodes.Bgt_Un)
+                    | "<=.s"   | "<=.f" => (OpCodes.Bgt,    OpCodes.Ble)
+                    | "<=.u"            => (OpCodes.Bgt_Un, OpCodes.Ble_Un)
+                    | ">=.s"   | ">=.f" => (OpCodes.Blt,    OpCodes.Bge)
+                    | ">=.u"            => (OpCodes.Blt_Un, OpCodes.Bge_Un)
+                    | "bool.!"          => (OpCodes.Brtrue, OpCodes.Brfalse)
+                    | _ => Util.ice ("invalid opcode '" + opcode +
+                                     "' in optimized TExpr.If pattern")
+                  };
 
-                  def debug_label = _ilg.DefineLabel ();
-
-                  _ilg.Emit (opcode, debug_label);
-                  emit_debug (debug_loc);
-                  _ilg.Emit (OpCodes.Br, else_label);
-                  _ilg.MarkLabel (debug_label);
-                }
+                emit_br (opcodes);
 
               | HasType (val, ty) =>
-                limited_debug_nesting++;
                 emit (val);
-                limited_debug_nesting--;
                 need_reference (val.SystemType);
                 _ilg.Emit (OpCodes.Isinst, ty.SystemType);
                 _ilg.Emit (OpCodes.Brfalse, else_label);
@@ -742,50 +619,17 @@ namespace Nemerle.Compiler
               | _ =>
                 //Message.Debug (e.loc, pretty_print (e));
                 // most of other expressions here are TExpr.Ref
-                limited_debug_nesting++;
                 emit (expr);
-                limited_debug_nesting--;
 
                 unless (expr.Throws)
-                {
-                  //if (_debug_doc == null || debug_loc.IsGeneratedOrEmpty)
-                  //{
-                    _ilg.Emit (OpCodes.Brfalse, else_label);
-                  //}
-                  //else
-                  //{
-                  //  def debug_label = _ilg.DefineLabel ();
-
-                  //  _ilg.Emit (OpCodes.Brtrue, debug_label);
-                  //  emit_debug (debug_loc);
-                  //  _ilg.Emit (OpCodes.Br, else_label);
-                  //  _ilg.MarkLabel (debug_label);
-                  //}
-                }
+                  emit_br (OpCodes.Brfalse, OpCodes.Brtrue);
             }
           }
-
-          // IT: this code is very questionable.
-          //when (IsDebugEnabled) {
-          //  Mark (expr.loc);
-          //  _ilg.Emit (OpCodes.Nop);
-          //}
 
           def label_condition_else = _ilg.DefineLabel ();
           def label_condition_fi   = _ilg.DefineLabel ();
 
-          when (IsDebugEnabled)
-          {
-            match (cond_expr)
-            {
-            | HasType(LocalRef(decl), _) when decl.NameLocation.IsEmpty && decl.Name.StartsWith("_N_") => ()
-            | _ => MaybeMark (cond_expr.Location);
-            }
-          }
-
-          limited_debug_nesting++;
           emit_branch (cond_expr, label_condition_else, else_debug_loc);
-          limited_debug_nesting--;
 
           emit_debug (then_debug_loc);
           emit (then_expr);
@@ -855,7 +699,6 @@ namespace Nemerle.Compiler
           
         /* load runtime representation of given type */
         | TypeOf (t) =>
-          MaybeMark (expr.Location);
           _ilg.Emit (OpCodes.Ldtoken, t.SystemType);
           _ilg.Emit (OpCodes.Call, SystemTypeCache.Type_GetTypeFromHandle);
 
@@ -869,12 +712,6 @@ namespace Nemerle.Compiler
               emit_switch (default_expr, cases)
           }
 
-
-        | MacroEnvelope (<[ skip_debug ]>, _, expr) =>
-          def backup = debug_tmp_disabled;
-          debug_tmp_disabled = true;
-          emit (expr);
-          debug_tmp_disabled = backup;
 
         | MacroEnvelope (_, _, expr) =>
           emit (expr)
@@ -898,7 +735,6 @@ namespace Nemerle.Compiler
             _labels [id] = _ilg.DefineLabel ();
           }
           
-          Mark (expr.Location);
           if (try_block == 0)
             _ilg.Emit (OpCodes.Br, _labels [id])
           else {
@@ -933,7 +769,6 @@ namespace Nemerle.Compiler
           _ilg.Emit (OpCodes.Unbox_Any, cast_to_type.SystemType);
           
         | TypeConversion (ignored, ty, _, _) when is_void (ty) =>
-          Mark (expr.Location);
           // a little trickery, so emit can be tail called sometimes
           if (is_void (ignored.Type))
             emit (ignored)
@@ -965,7 +800,6 @@ namespace Nemerle.Compiler
           else {
             /* upcast / downcast non-value types */
             def cast_to_type = cast_to_type.SystemType;
-            Mark (expr.Location);
             when (expr.SystemType.IsArray && cast_to_type.IsArray &&
                   expr.SystemType.GetElementType ().IsValueType !=
                   cast_to_type.GetElementType ().IsValueType)
@@ -978,7 +812,6 @@ namespace Nemerle.Compiler
 
         /* unbox value types or perform value type conversion */
         | TypeConversion (val, cast_to_type, kind, _) =>
-          MaybeMark (expr.Location);
           def is_checked = ! (kind is IL (false));
           emit (val);
           def type_of_expr = val.SystemType;
@@ -1016,22 +849,18 @@ namespace Nemerle.Compiler
 
         /* load the value of a local variable or a method parameter */
         | LocalRef (decl) =>
-          MaybeMark (expr.Location);
           unless (is_void (decl.Type))
             emit_ce_ref (decl, get_address_for_value_types = expr.NeedAddress)
 
         /* load the value of a field */
         | FieldMember (base_object, field) =>
-          MaybeMark (expr.Location);
           def result_will_be_address = expr.NeedAddress;
-          
-          limited_debug_nesting++;
+
           if (result_will_be_address) 
             _ = emit_and_convert_to_address (base_object);
           else
             emit (base_object);
-          limited_debug_nesting--;
-          
+
           maybe_volatile (expr);
 
           def field_inf = GetFieldInfo (base_object, field);
@@ -1045,7 +874,6 @@ namespace Nemerle.Compiler
 
         /* load the value of a static field */
         | StaticRef (t, f is IField, _) =>
-          MaybeMark (expr.Location);
           def field_info = GetFieldInfo (t.SystemType, f);
           
           assert (field_info.IsStatic, "GlobalRef to a non-static field");
@@ -1064,11 +892,8 @@ namespace Nemerle.Compiler
 
         /* load an array element */
         | ArrayIndexer (array_obj, [index]) =>
-          MaybeMark (expr.Location);
-          limited_debug_nesting++;
           emit (array_obj);
           emit (index);
-          limited_debug_nesting--;
           def element_type = array_obj.SystemType.GetElementType ();
           assert (element_type != null, "non-array in TExpr.ArrayIndexer");
 
@@ -1079,14 +904,11 @@ namespace Nemerle.Compiler
           
 
         | ArrayIndexer (array_obj, indexes) =>
-          MaybeMark (expr.Location);
-          limited_debug_nesting++;
           emit (array_obj);
           List.Iter (indexes, emit);
           def method =
             if (expr.NeedAddress) array_addr_method (array_obj)
             else array_get_method (array_obj);
-          limited_debug_nesting--;            
           emit_method_call (expr, true, method);
 
 
@@ -1099,18 +921,14 @@ namespace Nemerle.Compiler
         
         /* special case these assignments for performance */
         | Assign (LocalRef (decl), ImplicitValueTypeCtor as ctr) =>
-          Mark (expr.Location);
           emit_ce_ref (decl, get_address_for_value_types = true);
           _ilg.Emit (OpCodes.Initobj, ctr.SystemType);
 
      
         /* assignment to ref/out parameter */
         | Assign (LocalRef (local_var), val) when local_var.IsByRefParm =>
-          Mark (expr.Location);
           emit_ldarg (local_var.ParmIndex);
-          limited_debug_nesting++;
           emit (val);
-          limited_debug_nesting--;
           def ty = val.SystemType;
           if (ty.IsValueType || ty.IsGenericParameter)
             _ilg.Emit (OpCodes.Stobj, ty)
@@ -1120,21 +938,15 @@ namespace Nemerle.Compiler
 
         /* assignment to a local variable */
         | Assign (LocalRef (local_var), val) =>
-          Mark (expr.Location); 
-          limited_debug_nesting++;
           emit (val);
-          limited_debug_nesting--;
           unless (val.Throws)
             store_local (local_var);
 
 
         /* assignment to a field */
         | Assign (FieldMember (base_object, field) as target, val) =>
-          Mark (expr.Location);
-          limited_debug_nesting++;
           emit (base_object);
           emit (val);
-          limited_debug_nesting--;
           maybe_volatile (target);
 
           def field_info = GetFieldInfo (base_object, field);
@@ -1144,10 +956,7 @@ namespace Nemerle.Compiler
 
         /* assignment to a static field */
         | Assign (StaticRef (t, f is IField, _) as target, val) =>
-          Mark (expr.Location);
-          limited_debug_nesting++;
           emit (val);
-          limited_debug_nesting--;
           maybe_volatile (target);
 
           def field_info = GetFieldInfo (t.SystemType, f);
@@ -1157,25 +966,19 @@ namespace Nemerle.Compiler
 
         /* assignment to an array element */
         | Assign (ArrayIndexer (array_obj, [index]) as target, val) =>
-          Mark (expr.Location);
           def type_of_val = val.SystemType;
-          limited_debug_nesting++;
           emit (array_obj);
           emit (index);
           when (type_of_val.IsValueType && !type_of_val.IsPrimitive)
             _ilg.Emit (OpCodes.Ldelema, type_of_val);
 
           emit (val);
-          limited_debug_nesting--;
           emit_array_store_opcode (target.SystemType);
 
         | Assign (ArrayIndexer (array_obj, indexes), val) =>
-          Mark (expr.Location);
-          limited_debug_nesting++;
           emit (array_obj);
           List.Iter (indexes, emit);
           emit (val);
-          limited_debug_nesting--;
           def method = array_set_method (array_obj);
           emit_method_call (expr, true, method);
 
@@ -1188,23 +991,19 @@ namespace Nemerle.Compiler
           
         | MultipleAssign (assigns) =>
           def emit_store (local_var : LocalValue, _) {
-            Mark (local_var.Location);
             if (local_var.EverUsed)
               store_local (local_var)
             else
               _ilg.Emit (OpCodes.Pop);
           }
-          limited_debug_nesting++;
           foreach ((_, e) in assigns) emit (e);
-          limited_debug_nesting--;
           List.Iter (List.Rev (assigns), emit_store);
 
 
         /* -- CALLS -------------------------------------------------------- */
 
         /* call the base constructor */
-        | Call (Base (base_ctor), ctor_params, _) as call=>
-          MarkCall (call);
+        | Call (Base (base_ctor), ctor_params, _) =>
           _ilg.Emit (OpCodes.Ldarg_0);
           emit_parms (ctor_params);
 
@@ -1219,20 +1018,18 @@ namespace Nemerle.Compiler
             _ilg.Emit (OpCodes.Ret);
 
         /* create a new object */
-        | Call (StaticRef (_t, meth is IMethod, _), ctor_params, _) as call when is_ctor (meth) =>
-          MarkCall (call);
+        | Call (StaticRef (_t, meth is IMethod, _), ctor_params, _) when is_ctor (meth) =>
           emit_parms (ctor_params);
 
-          def ctr_inf = GetConstructorInfo (_t.SystemType, meth);          
+          def ctr_inf = GetConstructorInfo (_t.SystemType, meth);
           _ilg.Emit (OpCodes.Newobj, ctr_inf);
           when (expr.GenerateTail)
             _ilg.Emit (OpCodes.Ret);
 
 
         /* emit a call to an instance method, basing on the 'this' pointer for value types */
-        | Call (MethodRef (This as th, method, tparms, _), method_params, _) as call
+        | Call (MethodRef (This as th, method, tparms, _), method_params, _)
                                                       when _this_is_value_type =>
-          MarkCall (call);                                                      
           _ilg.Emit (OpCodes.Ldarg_0);
 
           def method_inf = GetMethodInfo (th.Type, method, tparms);
@@ -1248,8 +1045,7 @@ namespace Nemerle.Compiler
 
 
         /* emit a call to an instance method */
-        | Call (MethodRef (base_object, method, tparms, notvirt), method_params, _) as call =>
-          MarkCall (call);
+        | Call (MethodRef (base_object, method, tparms, notvirt), method_params, _) =>
           def is_value_type = emit_and_convert_to_address (base_object);
 
           def method_inf = GetMethodInfo (base_object.Type, method, tparms);
@@ -1271,8 +1067,7 @@ namespace Nemerle.Compiler
 
 
         /* emit a call to a static method */
-        | Call (StaticRef (_t, mi is IMethod, tparms), method_parms, _) as call =>
-          MarkCall (call);
+        | Call (StaticRef (_t, mi is IMethod, tparms), method_parms, _) =>
           def method_info = GetMethodInfo (_t, mi, tparms);          
         
           Util.cassert (method_info.IsStatic, 
@@ -1283,8 +1078,7 @@ namespace Nemerle.Compiler
 
 
         /* emit an operator */
-        | Call (OpCode (opcode), parms, _) as call =>
-          MarkCall (call);
+        | Call (OpCode (opcode), parms, _) =>
           // FIXME: seperate out
           emit_parms (parms);
           match (opcode) {
@@ -1413,14 +1207,10 @@ namespace Nemerle.Compiler
 
         /* throw an exception */
         | Throw (null) =>
-          Mark (expr.Location);
           _ilg.Emit (OpCodes.Rethrow);
         
         | Throw (exc) =>
-          Mark (expr.Location);
-          limited_debug_nesting++;
           emit (exc);
-          limited_debug_nesting--;
           _ilg.Emit (OpCodes.Throw);
 
 
@@ -1480,7 +1270,7 @@ namespace Nemerle.Compiler
 
               emit (catch_expr);
               // close scope opened by declare_val_local_slot
-              when (_debug_doc != null) _ilg.EndScope ();
+              when (IsDebugEnabled) _ilg.EndScope ();
 
               unless (catch_expr.Throws || ignore_try_result)
                 _ilg.Emit (OpCodes.Stloc, try_result);
@@ -1513,7 +1303,7 @@ namespace Nemerle.Compiler
               _ilg.BeginCatchBlock (null);
               _ilg.Emit (OpCodes.Pop); // ignore value on stack, it's already local
               emit (catch_expr);
-              when (_debug_doc != null) _ilg.EndScope ();
+              when (IsDebugEnabled) _ilg.EndScope ();
 
               unless (catch_expr.Throws || ignore_try_result)
                 _ilg.Emit (OpCodes.Stloc, try_result);
@@ -1530,9 +1320,7 @@ namespace Nemerle.Compiler
 
         /* -- TUPLES -------------------------------------------------------- */
         | Tuple (vals) =>
-          limited_debug_nesting++;
           foreach (v in vals) emit (v);
-          limited_debug_nesting--;
           def ctor = InternalType.GetTupleType (vals.Length).Ctor;
           _ilg.Emit (OpCodes.Newobj, GetConstructorInfo (expr.SystemType, ctor));
           
@@ -1541,9 +1329,7 @@ namespace Nemerle.Compiler
           def tt = InternalType.GetTupleType (len);
           //when (tt.TyCon.IsValueType && !obj.NeedAddress)
           //  obj.NeedAddress = true;
-          limited_debug_nesting++;
           emit (obj);
-          limited_debug_nesting--;
           _ilg.Emit (OpCodes.Ldfld, GetFieldInfo (obj.SystemType, tt.GetField (pos + 1)));
 
 
@@ -1563,7 +1349,6 @@ namespace Nemerle.Compiler
 
         /* loads a literal on the evaluation stack */
         | Literal (l) => 
-          MaybeMark (expr.Location, true);
           Util.cassert (l != null);
           if (l is Literal.Null)
             match (expr.MType) {
@@ -1573,16 +1358,11 @@ namespace Nemerle.Compiler
               | _ => emit_literal (l);
             }
           else if (l is Literal.Void) {
-            // IT.TEMP ???
-            //when (IsDebugEnabled) {
-            //  _ilg.Emit (OpCodes.Nop);
-            //}
           } else
             emit_literal (l);
 
         /* loads address of given method */
         | MethodAddress (from, meth, is_virt, typarms) =>
-          MaybeMark (expr.Location);
           def meth = GetMethodInfo (from, meth, typarms);
           if (is_virt && meth.IsVirtual) {
             // ldvirtftn expects also an object reference
@@ -1596,25 +1376,22 @@ namespace Nemerle.Compiler
 
         /* creates object of value type using implicit ctor */
         | ImplicitValueTypeCtor =>
-          MaybeMark (expr.Location);
-          when (_debug_doc != null) _ilg.BeginScope ();
+          when (IsDebugEnabled) _ilg.BeginScope ();
           def t = expr.SystemType;
           def local_slot = _ilg.DeclareLocal (t);
           _ilg.Emit (OpCodes.Ldloca, local_slot);
           _ilg.Emit (OpCodes.Initobj, t);
           _ilg.Emit (OpCodes.Ldloc, local_slot);
-          when (_debug_doc != null) _ilg.EndScope ();
+          when (IsDebugEnabled) _ilg.EndScope ();
 
 
         /* creates a new array, given a list of initializers */
         | Array (initializers, [size]) =>
-          MaybeMark (expr.Location);
           def element_type =
             match (expr.Type.Fix ()) {
               | MType.Array (t, _) => t.SystemType
               | _ => Util.ice ()
             }
-          limited_debug_nesting++;            
           emit (size);
           _ilg.Emit (OpCodes.Newarr, element_type);
 
@@ -1633,12 +1410,9 @@ namespace Nemerle.Compiler
                 load_elements (index + 1, rest)
             }
           };
-          limited_debug_nesting--;
           load_elements (0, initializers);
 
         | Array (initializers, dimensions) =>
-          MaybeMark (expr.Location);
-          limited_debug_nesting++;
           mutable size = 0;
           foreach (element in dimensions) {
             ++size;
@@ -1690,7 +1464,6 @@ namespace Nemerle.Compiler
             }
             load_elements (array (dimensions_array.Length), initializers);
           }
-          limited_debug_nesting--;
 
         | DebugInfo as di =>
           emit_debug_info(di);
@@ -1703,14 +1476,11 @@ namespace Nemerle.Compiler
 
     private emit_debug_info(di : TExpr.DebugInfo) : void
     {
-      if (_debug_doc == null)
-      {
+      if (_debug_doc == null) {
         emit(di.expr);
-      }
-      else
-      {
-        def emit_debug (line, col, eline, ecol)
-        {
+      } else {
+
+        def emit_debug (line, col, eline, ecol) {
           _ilg.MarkSequencePoint (_debug_doc, line, col, eline, ecol);
         }
 
@@ -2097,7 +1867,7 @@ namespace Nemerle.Compiler
      */
     private declare_val_local_slot (val : LocalValue) : LocalBuilder
     {
-      when (_debug_doc != null) _ilg.BeginScope ();
+      when (IsDebugEnabled) _ilg.BeginScope ();
 
       def ty =
         if (val.IsManagedPtr)
@@ -2105,7 +1875,7 @@ namespace Nemerle.Compiler
         else val.Type.SystemType;
 
       def local_slot = _ilg.DeclareLocal (ty);
-      when (_debug_doc != null) local_slot.SetLocalSymInfo (val.Name);
+      when (IsDebugEnabled) local_slot.SetLocalSymInfo (val.Name);
       val.LocalSlot = local_slot;
       local_slot
     }
