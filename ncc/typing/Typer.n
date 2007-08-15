@@ -591,7 +591,7 @@ namespace Nemerle.Compiler
 
     internal DelayAction (expected : TyVar, action : DelayedAction) : TExpr
     {
-      def kind = DelayedTyping.Kind.Macro (action);
+      def kind = DelayedTyping.Kind.Macro (null, action);
       def dt = DelayedTyping (this, kind, expected);
       dt.Resolve ();
       TExpr.Delayed (expected, dt)
@@ -616,7 +616,7 @@ namespace Nemerle.Compiler
           (expr, o.Member)
         
         | lst =>
-          (Delay (DelayedTyping.Kind.Overloaded (lst), expected), null)
+          (Delay (DelayedTyping.Kind.Overloaded (null, lst), expected), null)
       }
     }
 
@@ -1382,13 +1382,28 @@ namespace Nemerle.Compiler
                           def decl = DefineLocal (exn, BindType (y.exn_ty),
                                                   LocalValue.Kind.ExceptionValue (), false);
                           PushLocals ();
-                          def handler =
+                          mutable handler =
                             try {
                               AddLocal (exn, decl);
                               TypeExpr (y.handler);
                             } finally {
                               PopLocals ();
                             }
+
+                          when (Manager.Options.EmitDebug) {
+                            // This code adds break point at the end of the catch expr.
+                            when (!x.Location.IsGeneratedOrEmpty) {
+                              def l  = x.Location;
+                              def dl = Location (l.FileIndex, l.EndLine, l.EndColumn - 1, l.EndLine, l.EndColumn);
+                              def di = TExpr.DebugInfo (dl, handler.Type, null, null);
+
+                              handler = TExpr.Sequence (l, handler.Type, handler, di);
+                            }
+
+                            // This code adds break point at the case.
+                            when (!y.exn.Location.IsGeneratedOrEmpty)
+                              handler = TExpr.DebugInfo (y.exn.Location, handler.Type, handler, null);
+                          }
 
                           _ = ExpectSubtyping (expected, handler.Type, "catch body");
                           type_trycases (cases, 
@@ -1489,7 +1504,7 @@ namespace Nemerle.Compiler
           }
 
 
-        | PT.PExpr.Member (obj, PT.Splicable.Name as name) =>
+        | PT.PExpr.Member (obj, PT.Splicable.Name as name) as mem =>
           def mem_name = name.body.Id;
           if (CanBeTypeName (obj))
             match (TryTyping (fun () { TypeName (expression, expected) })) {
@@ -1509,20 +1524,20 @@ namespace Nemerle.Compiler
                     TypeName (expression, expected)
                   else
                     if (messenger.InErrorMode) {
-                      def e = TryTyping (fun () { TypeMemberExpr (obj, name, expected) });
+                      def e = TryTyping (fun () { TypeMemberExpr (mem, obj, name, expected) });
                       if (IsError (e))
                         TypeName (expression, expected)
                       else
-                        TypeMemberExpr (obj, name, expected)
+                        TypeMemberExpr (mem, obj, name, expected)
                     } else
-                      TypeMemberExpr (obj, name, expected)
+                      TypeMemberExpr (mem, obj, name, expected)
                   } else
-                    TypeMemberExpr (obj, name, expected)
+                    TypeMemberExpr (mem, obj, name, expected)
 
               | e => e
             }
           else
-            TypeMemberExpr (TypeExpr (obj), name, expected)
+            TypeMemberExpr (mem, TypeExpr (obj), name, expected)
 
         | PT.PExpr.Member (_, null) =>
           ReportError (messenger, "expected member");
@@ -1558,14 +1573,14 @@ namespace Nemerle.Compiler
           e.SkipWriteCheck = true;
           e
 
-        | PT.PExpr.Call (fnc, parms) =>
+        | PT.PExpr.Call (fnc, parms) as call =>
           if (parms.Exists (fun (_) {
                   | <[ _ ]> => true
                   | _ => false
                 }) || fnc is <[ _ . $_ ]>)
             TypeExpr (PartialApplication (expression), expected)
           else
-            TypeCall (fnc, parms, expected, is_property = false);
+            TypeCall (call, fnc, parms, expected, is_property = false);
 
 
         | PT.PExpr.Assign (PT.PExpr.Tuple (vars), e2) =>
@@ -2205,7 +2220,8 @@ namespace Nemerle.Compiler
     #region Indexers
     TypeIndexer (obj : PT.PExpr, args : list [PT.PExpr], expected : TyVar) : TExpr
     {
-      def obj = TypeExpr (obj);
+      def pexpr = obj;
+      def obj   = TypeExpr (pexpr);
 
       DelayAction (expected, 
         DelayedLambdaAction (desc = "", fn = fun (fail_loudly) {
@@ -2213,7 +2229,7 @@ namespace Nemerle.Compiler
           | TExpr.PropertyMember (_, prop) when prop.IsIndexer
           | TExpr.StaticPropertyRef (_, prop) when prop.IsIndexer
           | TExpr.Delayed (DelayedTyping where (DtKind = Overloaded)) =>
-            Some (TypeCall (<[ $(obj : typed) ]>, args, expected, is_property = true))
+            Some (TypeCall (pexpr, <[ $(obj : typed) ]>, args, expected, is_property = true))
           
           | _ =>
             match (obj.Type.Hint) {
@@ -2575,7 +2591,7 @@ namespace Nemerle.Compiler
     }
 
 
-    TypeMemberExpr (obj : TExpr, name : PT.Splicable.Name, expected : TyVar) : TExpr
+    TypeMemberExpr (pexpr : PT.PExpr, obj : TExpr, name : PT.Splicable.Name, expected : TyVar) : TExpr
     {
       def mem_name = name.body;
 
@@ -2596,7 +2612,7 @@ namespace Nemerle.Compiler
           name.typed_object = mem;
           expr;
         | None =>
-          Delay (DelayedTyping.Kind.MemberAccess (obj, mem_name), expected)
+          Delay (DelayedTyping.Kind.MemberAccess (pexpr, obj, mem_name), expected)
       }
     }
 
@@ -2947,7 +2963,7 @@ namespace Nemerle.Compiler
         | TExpr.Delayed (susp) =>
           susp.ApplyGenericSpecifier (gen_parms);
 
-        | TExpr.DebugInfo (e, _) =>
+        | TExpr.DebugInfo (e, _) when e != null =>
           ApplyGenericSpecifier (e, gen_parms);
 
         | _ =>
@@ -3068,7 +3084,8 @@ namespace Nemerle.Compiler
     }
 
 
-    TypeCall (pfnc : PT.PExpr,
+    TypeCall (pexpr : PT.PExpr,
+              pfnc : PT.PExpr,
               parms : list [PT.PExpr], 
               expected : TyVar, 
               is_property : bool) : TExpr
@@ -3114,7 +3131,8 @@ namespace Nemerle.Compiler
               else name.Id;
                 
             def kind =
-              DelayedTyping.Kind.Operator (TypeOf (parm1.expr), 
+              DelayedTyping.Kind.Operator (pexpr,
+                                           TypeOf (parm1.expr), 
                                            TypeOf (parm2.expr), 
                                            operator_name, 
                                            name.GetEnv (env));
@@ -3140,7 +3158,7 @@ namespace Nemerle.Compiler
               else name.Id;
                 
             def kind =
-              DelayedTyping.Kind.Operator (TypeOf (parm1.expr), null,
+              DelayedTyping.Kind.Operator (pexpr, TypeOf (parm1.expr), null,
                                            operator_name,
                                            name.GetEnv (env));
             when (parm1.kind != ParmKind.Normal)
@@ -3183,7 +3201,7 @@ namespace Nemerle.Compiler
           | (PT.PExpr.Ref (PT.Name where (Id = "_N_op_Decrement") as name), [parm1]) =>
             def operator_name = name.Id.Substring (3);
             def kind =
-              DelayedTyping.Kind.Operator (TypeOf (parm1.expr), null,
+              DelayedTyping.Kind.Operator (pexpr, TypeOf (parm1.expr), null,
                                            operator_name,
                                            name.GetEnv (env));
             when (parm1.kind != ParmKind.Normal)
