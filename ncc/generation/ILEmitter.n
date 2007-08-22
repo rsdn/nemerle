@@ -111,6 +111,7 @@ namespace Nemerle.Compiler
 
           unless (body.Throws)
             _ilg.Emit (OpCodes.Ret);
+
           // let GC take it
           _method_builder.GetHeader ().body = FunBody.ILed ();
         | _ => Util.ice ($"method $_method_name is already ILed")
@@ -505,38 +506,30 @@ namespace Nemerle.Compiler
         /* emits a local value definition */
         | DefValIn (decl, let_val, let_in) =>
 
-          def newscope = 
-            match (let_val) {
-              | DefaultValue => 
-                if (is_void (decl.Type))
-                  false
-                else {
-                  _ = declare_val_local_slot (decl);
-                  true
-                }
+          match (let_val) {
+            | DefaultValue => 
+              unless (is_void (decl.Type))
+                declare_val_local_slot_ex (decl);
 
-              | ImplicitValueTypeCtor =>
-                def slot = declare_val_local_slot (decl);
-                _ilg.Emit (OpCodes.Ldloca, slot);
-                _ilg.Emit (OpCodes.Initobj, let_val.SystemType);
-                true
-                              
-              | _ =>
-                emit (let_val);
-                if (is_void (decl.Type)) 
-                  false
-                else if (!decl.EverUsed) {
+            | ImplicitValueTypeCtor =>
+              def slot = declare_val_local_slot (decl);
+              _ilg.Emit (OpCodes.Ldloca, slot);
+              _ilg.Emit (OpCodes.Initobj, let_val.SystemType);
+
+            | _ =>
+              emit (let_val);
+              unless (is_void (decl.Type)) {
+                if (!decl.EverUsed) {
                   _ilg.Emit (OpCodes.Pop);
-                  false
                 } else {
                   def local_slot = declare_val_local_slot (decl);
                   unless (let_val.Throws)
                     _ilg.Emit (OpCodes.Stloc, local_slot);
-                  true
                 }
-            }
+              }
+          }
+
           emit (let_in);
-          when (IsDebugEnabled && newscope) _ilg.EndScope ();
 
 
         /* -- CONDITIONAL CONSTRUCTIONS ------------------------------------ */
@@ -630,18 +623,33 @@ namespace Nemerle.Compiler
           def label_condition_else = _ilg.DefineLabel ();
           def label_condition_fi   = _ilg.DefineLabel ();
 
-          emit_branch (cond_expr, label_condition_else, else_debug_loc);
+          def inScope(emit)
+          {
+            _ilg.BeginScope ();
+            emit ();
+            _ilg.EndScope ();
+          }
 
-          emit_debug (then_debug_loc);
-          emit (then_expr);
-          unless (then_expr.Throws)
-            _ilg.Emit (OpCodes.Br, label_condition_fi);
+          inScope (() => {
+            emit_branch (cond_expr, label_condition_else, else_debug_loc);
 
-          _ilg.MarkLabel (label_condition_else);
-          emit (else_expr);
+            inScope (() => {
+              emit_debug (then_debug_loc);
+              emit (then_expr);
+            });
 
-          _ilg.MarkLabel (label_condition_fi);
-        
+            unless (then_expr.Throws)
+              _ilg.Emit (OpCodes.Br, label_condition_fi);
+
+            inScope (() => {
+              _ilg.MarkLabel (label_condition_else);
+              emit (else_expr);
+            });
+
+            _ilg.MarkLabel (label_condition_fi);
+          });
+
+
         /* emit a type check construction */
         | HasType (expr, ty) =>
           emit (expr);
@@ -1270,8 +1278,6 @@ namespace Nemerle.Compiler
               _ilg.Emit (OpCodes.Stloc, catch_val_local_slot);
 
               emit (catch_expr);
-              // close scope opened by declare_val_local_slot
-              when (IsDebugEnabled) _ilg.EndScope ();
 
               unless (catch_expr.Throws || ignore_try_result)
                 _ilg.Emit (OpCodes.Stloc, try_result);
@@ -1304,7 +1310,6 @@ namespace Nemerle.Compiler
               _ilg.BeginCatchBlock (null);
               _ilg.Emit (OpCodes.Pop); // ignore value on stack, it's already local
               emit (catch_expr);
-              when (IsDebugEnabled) _ilg.EndScope ();
 
               unless (catch_expr.Throws || ignore_try_result)
                 _ilg.Emit (OpCodes.Stloc, try_result);
@@ -1377,13 +1382,11 @@ namespace Nemerle.Compiler
 
         /* creates object of value type using implicit ctor */
         | ImplicitValueTypeCtor =>
-          when (IsDebugEnabled) _ilg.BeginScope ();
           def t = expr.SystemType;
           def local_slot = _ilg.DeclareLocal (t);
           _ilg.Emit (OpCodes.Ldloca, local_slot);
           _ilg.Emit (OpCodes.Initobj, t);
           _ilg.Emit (OpCodes.Ldloc, local_slot);
-          when (IsDebugEnabled) _ilg.EndScope ();
 
 
         /* creates a new array, given a list of initializers */
@@ -1489,8 +1492,11 @@ namespace Nemerle.Compiler
 
         match (di.pexpr)
         {
-          | Sequence => emit_debug (l.Line, l.Column, l.Line,    l.Column + 1);
-          | _        => emit_debug (l.Line, l.Column, l.EndLine, l.EndColumn);
+          | Sequence =>
+            emit_debug (l.Line, l.Column, l.Line,    l.Column + 1);
+            _ilg.BeginScope ();
+
+          | _ => emit_debug (l.Line, l.Column, l.EndLine, l.EndColumn);
         }
 
         unless (di.expr == null)
@@ -1498,7 +1504,10 @@ namespace Nemerle.Compiler
 
         match (di.pexpr)
         {
-          | Sequence => emit_debug (l.EndLine, l.EndColumn - 1, l.EndLine, l.EndColumn);
+          | Sequence =>
+            emit_debug (l.EndLine, l.EndColumn - 1, l.EndLine, l.EndColumn);
+            _ilg.EndScope ();
+
           | _ => ()
         }
       }
@@ -1868,17 +1877,24 @@ namespace Nemerle.Compiler
      */
     private declare_val_local_slot (val : LocalValue) : LocalBuilder
     {
-      when (IsDebugEnabled) _ilg.BeginScope ();
-
       def ty =
         if (val.IsManagedPtr)
           val.Type.SystemType.MakeByRefType ()
         else val.Type.SystemType;
 
       def local_slot = _ilg.DeclareLocal (ty);
-      when (IsDebugEnabled) local_slot.SetLocalSymInfo (val.Name);
+      when (IsDebugEnabled && !val.Location.IsGeneratedOrEmpty)
+        local_slot.SetLocalSymInfo (val.Name);
       val.LocalSlot = local_slot;
       local_slot
+    }
+
+    private declare_val_local_slot_ex (val : LocalValue) : void
+    {
+      if (val.PostponedDeclaration && IsDebugEnabled && !val.Location.IsGeneratedOrEmpty)
+        val.Declare = fun() { _ = declare_val_local_slot (val) };
+      else
+        _ = declare_val_local_slot (val)
     }
 
     /**
@@ -2134,7 +2150,7 @@ namespace Nemerle.Compiler
       public DeclareLocal (localType : Type)                : LocalBuilder { _ilg.DeclareLocal(localType)         }
       public DeclareLocal (localType : Type, pinned : bool) : LocalBuilder { _ilg.DeclareLocal(localType, pinned) }
 
-      public DefineLabel ()             : Label { _ilg.DefineLabel()  }
+      public DefineLabel () : Label { _ilg.DefineLabel() }
 
       public Emit (opcode : OpCode)                              : void { Emited(opcode); _ilg.Emit(opcode)            }
       public Emit (opcode : OpCode, arg       : byte)            : void { Emited(opcode); _ilg.Emit(opcode, arg)       }
