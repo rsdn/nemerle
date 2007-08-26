@@ -80,6 +80,7 @@ NEMERLE_COMPILER_DLL_SRC = \
 	codedom/NemerleCodeCompiler.n	 \
 	codedom/NemerleCodeGenerator.n	 \
 	codedom/NemerleCodeProvider.n	 \
+	codedom/NemerleMemberAttributeConverter.n \
 	external/Codec.n		 \
 	external/InternalTypes.n	 \
 	external/LibrariesLoader.n	 \
