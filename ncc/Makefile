@@ -151,6 +151,7 @@ STDMACROS_DLL_SRC = \
 	../macros/xml.n \
         ../macros/text.n \
         ../macros/io.n \
+        ../macros/string.n \
         ../macros/core.n \
         ../macros/compiler.n \
         ../macros/assertions.n \
