@@ -52,6 +52,7 @@ all:
 	$(Q)$(MAKE) -C sokoban all
 	$(Q)$(MAKE) -C concurrency all
 	$(Q)$(MAKE) -C designpatt all
+	$(Q)$(MAKE) -C aop test
 
 myPoll.exe: myPoll.n
 	$(EXECUTE) ../ncc/out.stage3/ncc.exe -r Npgsql -r System.Web myPoll.n -o myPoll.exe
@@ -72,5 +73,6 @@ clean:
 	$(MAKE) -C course clean
 	$(MAKE) -C sokoban clean
 	$(MAKE) -C concurrency clean
+	$(MAKE) -C aop clean
 	rm -f *.exe *.il *.dll *.netmodule ext_test.out core core.[0-9]*
 	rm -f test.err test_error.log a.out
