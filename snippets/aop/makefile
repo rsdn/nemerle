@@ -67,4 +67,4 @@ testbin:
 .PHONY: clean build test ftests utests functional_tests
 
 clean:
-	rm -r bin testbin
+	rm -fr bin testbin
