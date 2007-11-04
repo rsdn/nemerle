@@ -27,7 +27,7 @@ utests: bin/UnitTests.dll
 	cd bin;	$(NUNIT_CONSOLE) UnitTests.dll
 
 bin/UnitTests.dll: bin/Nemerle.Aop.dll bin/NemerleUnit.dll src/utests/*.n
-	$(NCC) src/utests/*.n -g -r bin/NemerleUnit.dll -m bin/DevMacros.dll -nowarn:10005 \
+	$(NCC) src/utests/*.n -r bin/NemerleUnit.dll -m bin/DevMacros.dll -nowarn:10005 \
 		-o:$@ -t:library -r Nemerle.Compiler.dll -r bin/Nemerle.Aop.dll \
 		$(NUNIT_LIB_FLAG)
 
