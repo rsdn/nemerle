@@ -57,7 +57,7 @@ set RegPkgDir=%VisualStudioIntegration%\Tools\Bin
 set NemerleSetupContent=%~dp0dist
 set GeneratedFile=%~dp0src\Generated.wxi
 set MsiFile=%~dp0redist\Nemerle.msi
-
+set Path=%Path%;%VisualStudioIntegration%\Common\Assemblies
 
 "%RegPkgDir%\RegPkg.exe" /root:Software\Microsoft\VisualStudio\8.0 "/wixfile:%GeneratedFile%" /codebase "%NemerleSetupContent%\bin\Nemerle.VisualStudio.dll"
 if errorlevel 1 goto done
