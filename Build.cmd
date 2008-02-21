@@ -8,6 +8,14 @@ goto b32
 set MSBuild=%SystemRoot%\Microsoft.NET\Framework64\v2.0.50727\MSBuild.exe
 :b32
 
+set errors=no
+goto skip
+:err_check
+set errors=yes
+IF %1 == 0 set errors=no
+exit /b %1
+:skip
+
 @echo MSBuild=%MSBuild%
 
 IF "%Type%"=="" set Type=Debug
@@ -16,12 +24,17 @@ IF "%Type%"=="" set Type=Debug
 IF EXIST boot\old\ RMDIR /S /Q boot\old
 
 MKDIR boot\old\
+call :err_check %errorlevel%
+IF %errors% == yes goto Error
 
-IF errorlevel 1 goto Error
 copy /Y boot\*.dll boot\old
-IF errorlevel 1 goto Error
+call :err_check %errorlevel%
+IF %errors% == yes goto Error
+
 copy /Y boot\*.exe boot\old
-IF errorlevel 1 goto Error
+call :err_check %errorlevel%
+IF %errors% == yes goto Error
+
 copy /Y boot\*.pdb boot\old
 
 @echo !!! Backup success !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -29,7 +42,8 @@ copy /Y boot\*.pdb boot\old
 @echo ### Phase 1 ############################################
 %MSBuild% Nemerle.sln /p:Configuration=%Type%
 
-IF errorlevel 1 goto Error
+call :err_check %errorlevel%
+IF %errors% == yes goto Error
 @echo !!! Phase 1 success !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 IF "%SkipPhase2%"=="true" goto Success
@@ -37,21 +51,26 @@ IF "%SkipPhase2%"=="true" goto Success
 @echo ### Phase 2 ############################################
 @echo ### Copy new binaries to boot
 copy /Y bin\%Type%\*.dll boot
-IF errorlevel 1 goto Error
+call :err_check %errorlevel%
+IF %errors% == yes goto Error
 copy /Y bin\%Type%\*.exe boot
-IF errorlevel 1 goto Error
+call :err_check %errorlevel%
+IF %errors% == yes goto Error
 copy /Y bin\%Type%\*.pdb boot
 @echo !!! Copy success!
 
 @echo ### Build solution (phase 2)
 %MSBuild% Nemerle.sln /p:Configuration=%Type%
-IF errorlevel 1 goto Error
+call :err_check %errorlevel%
+IF %errors% == yes goto Error
 @echo !!! Build solution (phase 2) success!
 
 copy /Y bin\%Type%\*.dll boot
-IF errorlevel 1 goto Error
+call :err_check %errorlevel%
+IF %errors% == yes goto Error
 copy /Y bin\%Type%\*.exe boot
-IF errorlevel 1 goto Error
+call :err_check %errorlevel%
+IF %errors% == yes goto Error
 copy /Y bin\%Type%\*.pdb boot
 
 @echo !!! Phase 2 success !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

@@ -8,6 +8,14 @@ call Build.cmd
 
 @echo ERRORLEVEL
 
-IF NOT ERRORLEVEL 1 call Reg.cmd
+set errors=no
+goto skip
+:err_check
+set errors=yes
+IF %1 == 0 set errors=no
+exit /b %1
+:skip
 
+call :err_check %errorlevel%
+IF %errors% == no call Reg.cmd
 

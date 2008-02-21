@@ -15,6 +15,14 @@ goto b32
 set NGen="%SystemRoot%\Microsoft.NET\Framework64\v2.0.50727\ngen.exe"
 :b32
 
+set errors=no
+goto skip
+:err_check
+set errors=yes
+IF %1 == 0 set errors=no
+exit /b %1
+:skip
+
 
 @echo NemerleInstall=%NemerleInstall%
 @echo VS80COMNTOOLS=%VS80COMNTOOLS%
@@ -41,17 +49,19 @@ set errorlevel=0
 
 copy /Y "%NemerleBin%\*.dll" "%NemerleInstall%\*.dll"
 
-if not errorlevel 0 (
+call :err_check %errorlevel%
+IF %errors% == yes (
 @echo errorlevel=%errorlevel%
-@echo !!! ERORR: copy files !!!
+@echo !!! ERROR: copy files !!!
 pause
 exit /b 1
 )
 
 copy /Y "%NemerleBin%\*.exe" "%NemerleInstall%\*.exe"
 
-if not errorlevel 0 (
-@echo !!! ERORR: copy files !!!
+call :err_check %errorlevel%
+IF %errors% == yes (
+@echo !!! ERROR: copy files !!!
 pause
 exit /b 1
 )
