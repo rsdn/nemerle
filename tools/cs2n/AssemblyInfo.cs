@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2005 The University of Wroclaw.
+ * Copyright (c) 2003-2008 The University of Wroclaw.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,8 +32,8 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyDescription("C# to Nemerle (http://nemerle.org) converter tool")]
 [assembly: System.Reflection.AssemblyCompany("University of Wroclaw")]
 [assembly: System.Reflection.AssemblyProduct("C# to Nemerle converter")]
-[assembly: System.Reflection.AssemblyCopyright("Copyright @ University of Wroclaw 2003-2006")]
+[assembly: System.Reflection.AssemblyCopyright("Copyright @ University of Wroclaw 2003-2008")]
 
-[assembly: System.Reflection.AssemblyVersion("0.9.3.*")]
+[assembly: System.Reflection.AssemblyVersion("0.9.4.*")]
 [assembly: System.Runtime.InteropServices.ComVisible (false)]
 

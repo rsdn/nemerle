@@ -31,8 +31,6 @@ rem
 rem Ensure we have all required tools
 rem
 
-if "%VisualStudioIntegration%"=="" goto errEnvVarVSSDK
-
 if not "%WixDir%"=="" goto wixSet
 
 rem Check default wix folder
@@ -52,16 +50,8 @@ rem
 rem Ready to build the setup.exe
 rem
 
-set RegPkgDir=%VisualStudioIntegration%\Tools\Bin
-
 set NemerleSetupContent=%~dp0dist
-set GeneratedFile=%~dp0src\Generated.wxi
-set MsiFile=%~dp0redist\Nemerle.msi
-set Path=%Path%;%VisualStudioIntegration%\Common\Assemblies
-
-"%RegPkgDir%\RegPkg.exe" /root:Software\Microsoft\VisualStudio\8.0 "/wixfile:%GeneratedFile%" /codebase "%NemerleSetupContent%\bin\Nemerle.VisualStudio.dll"
-if errorlevel 1 goto done
-cd "%~dp0"
+set MsiFile=%~dp0NemerleSetup.msi
 
 echo Wixing "%WixDir%"
 
@@ -71,20 +61,11 @@ if errorlevel 1 goto done
 "%WixDir%\light.exe"  -ext WixNetFxExtension *.wixobj -ext WixUIExtension -out "%MsiFile%" -cultures:en-us 
 if errorlevel 1 goto done
 
-echo Building NemerleSetup.exe. Please wait...
-iexpress /N /Q Bootstrapper.sed
-
 rem Clean up
-del "%GeneratedFile%"
 del *.wixobj
-del "%MsiFile%"
 
 echo.
 echo Done.
-goto done
-
-:errEnvVarVSSDK
-echo Please specify environment variable "VisualStudioIntegration".
 goto done
 
 :errEnvVarWix
