@@ -70,6 +70,22 @@ copy /Y "%NemerleRoot%\tools\msbuild-task\Nemerle.MSBuild.targets" "%NemerleInst
 copy /Y "%NemerleBin%\*.pdb" "%NemerleInstall%\*.pdb"
 copy /Y "%NemerleBin%\*.xml" "%NemerleInstall%\*.xml"
 
+@echo --------------------------- Update registry ---------------------------
+
+set NemerleMSBuildTargets=%NemerleInstall%\Nemerle.MSBuild.targets
+
+@echo Add NemerleTarget=%NemerleMSBuildTargets% 
+@echo     into HKLM\SOFTWARE\Microsoft\VisualStudio\9.0\MSBuild\SafeImports
+reg add HKLM\SOFTWARE\Microsoft\VisualStudio\9.0\MSBuild\SafeImports /v NemerleTarget /d "%NemerleInstall%\Nemerle.MSBuild.targets" /f
+
+@echo     into HKCU\Software\Microsoft\VisualStudio\9.0\Configuration\MSBuild\SafeImports
+reg add HKCU\Software\Microsoft\VisualStudio\9.0\Configuration\MSBuild\SafeImports /v NemerleTarget /d "%NemerleInstall%\Nemerle.MSBuild.targets" /f
+
+@echo     into HKCU\Software\Microsoft\VisualStudio\9.0Exp\Configuration\MSBuild\SafeImports
+reg add HKCU\Software\Microsoft\VisualStudio\9.0Exp\Configuration\MSBuild\SafeImports /v NemerleTarget /d "%NemerleInstall%\Nemerle.MSBuild.targets" /f
+
+@echo --------------------------- Registry updated ---------------------------
+
 %NGen% install "%NemerleInstall%\Nemerle.dll"
 %NGen% install "%NemerleInstall%\Nemerle.Compiler.dll"
 %NGen% install "%NemerleInstall%\Nemerle.Macros.dll"
