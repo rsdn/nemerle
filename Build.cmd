@@ -2,10 +2,10 @@
 
 IF NOT "%PROCESSOR_ARCHITECTURE%" == "x86" goto b64
 IF NOT "%PROCESSOR_ARCHITEW6432%" == "" goto b64
-set MSBuild=%SystemRoot%\Microsoft.NET\Framework\v3.5\MSBuild.exe
+set MSBuild=%SystemRoot%\Microsoft.NET\Framework\v2.0.50727\MSBuild.exe
 goto b32
 :b64
-set MSBuild=%SystemRoot%\Microsoft.NET\Framework64\v3.5\MSBuild.exe
+set MSBuild=%SystemRoot%\Microsoft.NET\Framework64\v2.0.50727\MSBuild.exe
 :b32
 
 set errors=no
@@ -40,7 +40,7 @@ copy /Y boot\*.pdb boot\old
 @echo !!! Backup success !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 @echo ### Phase 1 ############################################
-%MSBuild% Nemerle.sln /p:Configuration=%Type%
+%MSBuild% Nemerle-2005.sln /p:Configuration=%Type%
 
 call :err_check %errorlevel%
 IF %errors% == yes goto Error
@@ -60,7 +60,7 @@ copy /Y bin\%Type%\*.pdb boot
 @echo !!! Copy success!
 
 @echo ### Build solution (phase 2)
-%MSBuild% Nemerle.sln /p:Configuration=%Type%
+%MSBuild% Nemerle-2005.sln /p:Configuration=%Type%
 call :err_check %errorlevel%
 IF %errors% == yes goto Error
 @echo !!! Build solution (phase 2) success!
