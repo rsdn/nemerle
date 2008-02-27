@@ -56,9 +56,11 @@ set MsiFile=%~dp0NemerleSetup.msi
 echo Wixing "%WixDir%"
 
 "%WixDir%\candle.exe" -ext WixNetFxExtension -sw1080 src/*.wxs
+if not errorlevel 0 goto done
 if errorlevel 1 goto done
 
 "%WixDir%\light.exe"  -ext WixNetFxExtension *.wixobj -ext WixUIExtension -out "%MsiFile%" -cultures:en-us 
+if not errorlevel 0 goto done
 if errorlevel 1 goto done
 
 rem Clean up
