@@ -18,7 +18,6 @@ cd /D "%NemerleInstall%"
 %GacUtil% /u Nemerle.Macros
 
 @echo errorlevel=%errorlevel%
-set errorlevel=0
 
 %GacUtil% /i "%NemerleInstall%\Nemerle.dll"
 %GacUtil% /i "%NemerleInstall%\Nemerle.Compiler.dll"

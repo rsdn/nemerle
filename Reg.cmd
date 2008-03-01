@@ -45,7 +45,6 @@ cd /D "%NemerleInstall%"
 %NGen% uninstall "%NemerleInstall%\ncc.exe"
 
 @echo errorlevel=%errorlevel%
-set errorlevel=0
 
 copy /Y "%NemerleBin%\*.dll" "%NemerleInstall%\*.dll"
 

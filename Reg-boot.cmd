@@ -26,7 +26,6 @@ set NGen="%SystemRoot%\Microsoft.NET\Framework64\v2.0.50727\ngen.exe"
 %NGen% uninstall "%NemerleInstall%\ncc.exe"
 
 @echo errorlevel=%errorlevel%
-set errorlevel=0
 
 %NGen% install "%NemerleInstall%\Nemerle.dll"
 %NGen% install "%NemerleInstall%\Nemerle.Compiler.dll"
