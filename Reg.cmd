@@ -53,7 +53,7 @@ IF %errors% == yes (
 @echo errorlevel=%errorlevel%
 @echo !!! ERROR: copy files !!!
 pause
-exit /b 1
+goto Error
 )
 
 copy /Y "%NemerleBin%\*.exe" "%NemerleInstall%\*.exe"
@@ -62,7 +62,7 @@ call :err_check %errorlevel%
 IF %errors% == yes (
 @echo !!! ERROR: copy files !!!
 pause
-exit /b 1
+goto Error
 )
 
 copy /Y "%NemerleRoot%\tools\msbuild-task\Nemerle.MSBuild.targets" "%NemerleInstall%\*.*"
@@ -94,3 +94,11 @@ reg.exe add HKCU\Software\Microsoft\VisualStudio\9.0Exp\Configuration\MSBuild\Sa
 cd "%~dp0"
 
 pause
+
+exit /b 0
+
+:strong_fail
+exit /b 1
+
+:Error
+call :strong_fail

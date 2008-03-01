@@ -79,16 +79,18 @@ goto Success
 @echo Phase 1 failed!
 goto Error
 
+:Success
+@echo Build success!
+IF NOT "%NoPause%"=="true" pause
+exit /b 0
+
+:strong_fail
+exit /b 1
+
 :Error
 @echo !!! Build FAILED !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 copy /Y boot\old\*.dll boot
 copy /Y boot\old\*.exe boot
 copy /Y boot\old\*.pdb boot
 pause
-exit /b 1
-
-:Success
-
-@echo Build success!
-
-IF NOT "%NoPause%"=="true" pause
+call :strong_fail
