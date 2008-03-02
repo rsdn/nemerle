@@ -10,7 +10,6 @@ set NemerleInstall=%ProgramFiles%\Nemerle
 @echo GacUtil=%GacUtil%
 
 md "%NemerleInstall%"
-cd /D "%NemerleInstall%"
 
 %GacUtil% /u Nemerle
 %GacUtil% /u Nemerle.Compiler
@@ -24,7 +23,5 @@ cd /D "%NemerleInstall%"
 %GacUtil% /i "%NemerleInstall%\Nemerle.Macros.dll"
 rem It doesn't have a strong name
 rem %GacUtil% /i "%NemerleInstall%\Nemerle.MSBuild.Tasks.dll"
-
-cd "%~dp0"
 
 pause 

@@ -31,7 +31,6 @@ exit /b %1
 @echo NemerleBin=%NemerleBin%
 
 md "%NemerleInstall%"
-cd /D "%NemerleInstall%"
 
 %GacUtil% /u Nemerle
 %GacUtil% /u Nemerle.Compiler
@@ -90,8 +89,6 @@ reg.exe add HKCU\Software\Microsoft\VisualStudio\9.0Exp\Configuration\MSBuild\Sa
 %NGen% install "%NemerleInstall%\Nemerle.Macros.dll"
 %NGen% install "%NemerleInstall%\Nemerle.MSBuild.Tasks.dll"
 %NGen% install "%NemerleInstall%\ncc.exe"
-
-cd "%~dp0"
 
 pause
 
