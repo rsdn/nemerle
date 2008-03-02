@@ -5,4 +5,4 @@ set Type=Release
 call BuildAndReg.cmd
 call Reg.cmd
 
-pause
+IF NOT "%NoPause%"=="true" pause

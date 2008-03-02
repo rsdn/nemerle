@@ -92,5 +92,5 @@ exit /b 1
 copy /Y boot\old\*.dll boot
 copy /Y boot\old\*.exe boot
 copy /Y boot\old\*.pdb boot
-pause
+IF NOT "%NoPause%"=="true" pause
 call :strong_fail

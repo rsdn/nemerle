@@ -24,4 +24,4 @@ md "%NemerleInstall%"
 rem It doesn't have a strong name
 rem %GacUtil% /i "%NemerleInstall%\Nemerle.MSBuild.Tasks.dll"
 
-pause 
+IF NOT "%NoPause%"=="true" pause

@@ -51,7 +51,7 @@ call :err_check %errorlevel%
 IF %errors% == yes (
 @echo errorlevel=%errorlevel%
 @echo !!! ERROR: copy files !!!
-pause
+IF NOT "%NoPause%"=="true" pause
 goto Error
 )
 
@@ -60,7 +60,7 @@ copy /Y "%NemerleBin%\*.exe" "%NemerleInstall%\*.exe"
 call :err_check %errorlevel%
 IF %errors% == yes (
 @echo !!! ERROR: copy files !!!
-pause
+IF NOT "%NoPause%"=="true" pause
 goto Error
 )
 
@@ -90,7 +90,7 @@ reg.exe add HKCU\Software\Microsoft\VisualStudio\9.0Exp\Configuration\MSBuild\Sa
 %NGen% install "%NemerleInstall%\Nemerle.MSBuild.Tasks.dll"
 %NGen% install "%NemerleInstall%\ncc.exe"
 
-pause
+IF NOT "%NoPause%"=="true" pause
 
 exit /b 0
 

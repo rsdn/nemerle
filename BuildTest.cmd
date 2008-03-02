@@ -24,12 +24,12 @@ IF "%Type%"=="" set Type=Debug
 call :err_check %errorlevel%
 IF %errors% == yes goto Error
 
-pause
+IF NOT "%NoPause%"=="true" pause
 exit /b 0
 
 :strong_fail
 exit /b 1
 
 :Error
-pause
+IF NOT "%NoPause%"=="true" pause
 call :strong_fail
