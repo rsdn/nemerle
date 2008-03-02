@@ -10,8 +10,26 @@ set MSBuild=%SystemRoot%\Microsoft.NET\Framework64\v2.0.50727\MSBuild.exe
 
 @echo MSBuild=%MSBuild%
 
+set errors=no
+goto skip
+:err_check
+set errors=yes
+IF %1 == 0 set errors=no
+exit /b %1
+:skip
+
 IF "%Type%"=="" set Type=Debug
 
 %MSBuild% Tests.nproj /p:Configuration=%Type%
+call :err_check %errorlevel%
+IF %errors% == yes goto Error
 
 pause
+exit /b 0
+
+:strong_fail
+exit /b 1
+
+:Error
+pause
+call :strong_fail
