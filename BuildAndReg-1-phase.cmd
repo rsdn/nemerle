@@ -18,5 +18,6 @@ exit /b %1
 :skip
 
 call :err_check %errorlevel%
+set NoPause=false
 IF %errors% == no call Reg.cmd
 
