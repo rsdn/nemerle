@@ -13,8 +13,7 @@ class M {
   {
     if (cnt < 0)
       return 1;
-    else
-	  return
+    else return
       dupl (cnt - 1, new C1<T> ()) +
       dupl (cnt - 1, new C2<T> ()) +
       dupl (cnt - 1, new C3<T> ()) +
