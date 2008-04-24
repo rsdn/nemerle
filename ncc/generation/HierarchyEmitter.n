@@ -34,6 +34,7 @@ using System.Reflection;
 using System.IO;
 using System.Diagnostics.SymbolStore;
 using System.Diagnostics;
+using System.Security;
 
 using NC = Nemerle.Compiler;
 using SRE = System.Reflection.Emit;
@@ -91,13 +92,26 @@ namespace Nemerle.Compiler
       def dir = Path.GetDirectoryName(Path.GetFullPath (_OutputFileName));
       unless (Directory.Exists (dir))
         Message.FatalError ($"specified output directory `$dir' does not exist");
-      
+
+      mutable required : PermissionSet;
+      mutable optional : PermissionSet;
+      mutable refused : PermissionSet;
+
+      foreach ((action, perm_set) in Manager.AttributeCompiler.GetPermissionSets (assembly_attributes)) {
+        match (action) {
+        | Permissions.SecurityAction.RequestMinimum  => required = perm_set
+        | Permissions.SecurityAction.RequestOptional => optional = perm_set
+        | Permissions.SecurityAction.RequestRefuse   => refused  = perm_set
+        | _ => Message.FatalError ($"$action is not valid here")
+        }
+      }
+
       /* define a dynamic assembly */
       this._assembly_builder =
         System.AppDomain.CurrentDomain.DefineDynamicAssembly
           (this._assembly_name,
            assembly_requirements,
-           dir);
+           dir, required, optional, refused);
 
       when (_assembly_name.Name == "") Message.FatalError ("name of output assembly cannot be empty");
 
@@ -426,14 +440,14 @@ namespace Nemerle.Compiler
           match (tydecl) {
             | TypeDeclaration.Variant (decls) =>
               make_nemerle_variant_attribute (decls)
-              
+
             | TypeDeclaration.VariantOption =>
               def has_co_ctor = GetConstantObject () != null;
               make_nemerle_variant_option_attribute (has_co_ctor)
 
             | TypeDeclaration.Alias (t) =>
               make_nemerle_type_alias_attribute (t)
-              
+
             | _ => null
           };
 
@@ -506,6 +520,9 @@ namespace Nemerle.Compiler
         when (extension_patterns.Count > 0)
           TyManager.contains_nemerle_specifics = true;
 
+        Manager.AttributeCompiler.GetPermissionSets(Manager.CoreEnv, modifiers.custom_attrs)
+          .Iter(type_builder.AddDeclarativeSecurity);
+
         system_type = type_builder;
       }
     }
@@ -566,7 +583,7 @@ namespace Nemerle.Compiler
       when (attrs %&& NemerleAttributes.Sealed) result |= TypeAttributes.Sealed;
       when (attrs %&& NemerleAttributes.SpecialName) result |= TypeAttributes.SpecialName;
       when (attrs %&& NemerleAttributes.Static) result |= TypeAttributes.Abstract | TypeAttributes.Sealed;
-        
+
       result
     }
 
@@ -578,9 +595,9 @@ namespace Nemerle.Compiler
     {
       unless (IsFinalized) {
         IsFinalized = true;
-      
+
         foreach (m is MemberBuilder in member_list) m.Compile ();
-      
+
         unless (GetModifiers ().IsEmpty) {
           GetModifiers ().SaveCustomAttributes (this, fun (target, a) {
             def valid = target %&& System.AttributeTargets.Class ||
@@ -590,7 +607,10 @@ namespace Nemerle.Compiler
               type_builder.SetCustomAttribute (a);
               null
             }
-            else "type " + ToString ()
+            else if (a != null)
+              "type " + ToString ()
+            else
+              null
           })
         }
 
@@ -633,7 +653,7 @@ namespace Nemerle.Compiler
             (null, interfaces)
       }
     }
-    
+
     internal UpdateEmittedInheritance () : void
     {
       when (! reflection_inheritance_emitted) {
@@ -658,8 +678,8 @@ namespace Nemerle.Compiler
       }
     }
   }
-  
-  public partial class MethodBuilder : MemberBuilder 
+
+  public partial class MethodBuilder : MemberBuilder
   {
     internal override CreateEmitBuilder (tb : Emit.TypeBuilder) : void
     {
@@ -730,7 +750,7 @@ namespace Nemerle.Compiler
           }
         }
       }
-      
+
   //    Message.Debug (this.ToString ());
       match (fun_header.body) {
         | FunBody.ILed => {}
@@ -817,8 +837,8 @@ namespace Nemerle.Compiler
         index++;
       }
     }
-  
-    
+
+
     /* build the parameter types array */
     param_types () : array [System.Type] 
     { 
@@ -858,7 +878,7 @@ namespace Nemerle.Compiler
 
       result
     }
-    
+
     /**
      * Adds a method builder to a type builder
      */
@@ -869,14 +889,14 @@ namespace Nemerle.Compiler
       /* update the modifiers list */
       unless (ImplementedMethods.IsEmpty)
         Attributes |= NemerleAttributes.Virtual;
-      
+
       def attrs = make_method_attributes (Attributes);
       def attrs =
         if (Name == ".cctor")
           attrs | MethodAttributes.RTSpecialName | MethodAttributes.SpecialName
         else
           attrs;
-    
+
       /* add the method to the type builder */
       mutable pinvoke = false;
 
@@ -894,7 +914,7 @@ namespace Nemerle.Compiler
         }
         else {
           method_base = tb.DefineMethod (Name, attrs);
-          
+
           def names = fun_header.typarms.MapToArray (_.Name);
 
           def generic_parms = GetMethodInfo().DefineGenericParameters (names);
@@ -908,6 +928,9 @@ namespace Nemerle.Compiler
         | e => throw System.ApplicationException (
           $"Can't define method '$Name' (attrs: $attrs) in type '$tb'.\nError: $(e.Message)", e);
       }
+
+      Manager.AttributeCompiler.GetPermissionSets(Manager.CoreEnv, modifiers.custom_attrs)
+        .Iter((method_base :> SRE.MethodBuilder).AddDeclarativeSecurity);
 
       GetMethodInfo ().SetSignature (
         fun_header.ret_type.SystemType,
@@ -929,7 +952,7 @@ namespace Nemerle.Compiler
         Message.Error (Location, "method is marked `extern' but do not have DllImport attribute");
 
       // CompileTypedMethod.compile_parms (hd);
-      
+
       def name_parms (pos, parms) {
         match (parms) {
           | [] => ()
@@ -964,6 +987,9 @@ namespace Nemerle.Compiler
           param_types (),
           fun_header.GetParamTypeRequiredModifiers (),
           fun_header.GetParamTypeOptionalModifiers ());
+
+      Manager.AttributeCompiler.GetPermissionSets(Manager.CoreEnv, modifiers.custom_attrs)
+        .Iter((method_base :> SRE.ConstructorBuilder).AddDeclarativeSecurity);
 
       /* add the runtime modifiers for delegate constructors */
       when (DeclaringType.IsDelegate) {
@@ -1002,20 +1028,26 @@ namespace Nemerle.Compiler
                 GetConstructorInfo ().SetCustomAttribute (attribute);
                 null
               }
-              else "constructor " + ToString ()
+              else if (attribute != null)
+                "constructor " + ToString ()
+              else
+                null
             }
           else
-            fun (target, a) {
+            fun (target, attribute) {
               if (target %&& System.AttributeTargets.Method) {
-                GetMethodInfo ().SetCustomAttribute (a);
+                GetMethodInfo ().SetCustomAttribute (attribute);
                 null
               }
-              else "method " + ToString ()
+              else if (attribute != null)
+                "method " + ToString ()
+              else
+                null
             }
-    
+
         modifiers.SaveCustomAttributes (declaring_type, adder);
       }
-      
+
       CompileAfterTyping ()
     }
   }
@@ -1034,7 +1066,7 @@ namespace Nemerle.Compiler
 
         when (attrs %&& NemerleAttributes.Public) result |= FieldAttributes.Public;
         when (attrs %&& NemerleAttributes.Private) result |= FieldAttributes.Private;
-        
+
         if (attrs %&& NemerleAttributes.Internal)
           if (attrs %&& NemerleAttributes.Protected)
             result |= FieldAttributes.FamORAssem;
@@ -1043,19 +1075,19 @@ namespace Nemerle.Compiler
         else
           when (attrs %&& NemerleAttributes.Protected)
             result |= FieldAttributes.Family;
-          
+
         when (attrs %&& NemerleAttributes.Static) result |= FieldAttributes.Static;
         when (attrs %&& NemerleAttributes.SpecialName) result |= FieldAttributes.SpecialName %|
             FieldAttributes.RTSpecialName;
 
         unless (attrs %&& (NemerleAttributes.Mutable | NemerleAttributes.CompilerMutable))
           result |= FieldAttributes.InitOnly;
-        
+
         result
       }
-      
+
       mutable attrs = make_field_attributes (Attributes);
-      
+
       when (IsLiteral) {
         attrs |= FieldAttributes.Literal;
         attrs &= ~FieldAttributes.InitOnly;
@@ -1088,7 +1120,7 @@ namespace Nemerle.Compiler
           else "field " + ToString ()
         });
       }
-      
+
       when (IsVolatile) {
         def volatile_attr = Manager.AttributeCompiler.MakeEmittedAttribute (SystemTypeCache.VolatileModifier);
         field_builder.SetCustomAttribute (volatile_attr)
@@ -1157,7 +1189,7 @@ namespace Nemerle.Compiler
         param_type_req_mods,
         param_type_opt_mods);
     }
-    
+
     internal override Compile () : void
     {
       base.Compile ();
@@ -1170,7 +1202,7 @@ namespace Nemerle.Compiler
           else "property " + ToString ()
         })
       }
-      
+
       def declaring = DeclaringType : object;
 
       // emit getter only if it was defined in this type, not derived  
@@ -1206,7 +1238,7 @@ namespace Nemerle.Compiler
           else "event " + ToString ()
         });
       }
-      
+
       event_builder.SetAddOnMethod (adder.GetMethodInfo ());
       event_builder.SetRemoveOnMethod (remover.GetMethodInfo ());
     }

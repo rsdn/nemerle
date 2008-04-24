@@ -35,6 +35,8 @@ using SY = System;
 using PT = Nemerle.Compiler.Parsetree;
 using SR = System.Reflection;
 using SRI = System.Runtime.InteropServices;
+using SS = System.Security;
+using SSP = System.Security.Permissions;
 using SCG = System.Collections.Generic;
 using Nemerle.Compiler.Typedtree;
 
@@ -43,6 +45,15 @@ namespace Nemerle.Compiler
   [ManagerAccess]
   class AttributeCompilerClass
   {
+    // A security attribute must be imported from an external assembly,
+    // so using LibraryReference.NetType is good enought here.
+    //
+    static is_security_attribute (ti : TypeInfo) : bool
+    {
+      ti is LibraryReference.NetType
+        && typeof(SSP.SecurityAttribute).IsAssignableFrom ((ti :> LibraryReference.NetType).SystemType)
+    }
+
     compile_expr (env : GlobalEnv, ti : TypeBuilder, allow_rec : bool, 
                   expr : PT.PExpr) : object * MType
     {
@@ -121,8 +132,10 @@ namespace Nemerle.Compiler
       }
     }
 
-    do_compile (env : GlobalEnv, ti : TypeBuilder, attr : TypeInfo, parms : list [PT.PExpr]) 
-        : SR.Emit.CustomAttributeBuilder
+    pre_compile (env : GlobalEnv, ti : TypeBuilder, attr : TypeInfo, parms : list [PT.PExpr]) 
+        : SR.ConstructorInfo * list[object] *
+          list[SR.PropertyInfo] * list[object] *
+          list[SR.FieldInfo] * list[object]
     {
       mutable ctor_parm_types = [];
       mutable ctor_parms = [];
@@ -130,7 +143,7 @@ namespace Nemerle.Compiler
       mutable fields = [];
       mutable property_infos = [];
       mutable properties = [];
-      
+
       def compile_parm (parm : PT.PExpr) {
         | <[ $(n : name) = $expr ]> =>
           def name = n.Id;
@@ -164,7 +177,7 @@ namespace Nemerle.Compiler
             Message.FatalError ($ "the member `$(name)' has type "
                                    "$(mem.GetMemType ()) while the value "
                                    "assigned has type $ty")
-                                 
+
         | _ =>
           def (obj, ty) = compile_expr (env, ti, true, parm);
           ctor_parm_types = ty :: ctor_parm_types;
@@ -172,7 +185,6 @@ namespace Nemerle.Compiler
       };
 
       List.Iter (parms, compile_parm);
-
 
       ctor_parm_types = List.Rev (ctor_parm_types);
 
@@ -193,26 +205,44 @@ namespace Nemerle.Compiler
             Message.Error ("ambiguous call to constructor") 
         }
       }
-      
+
       when (proper_ctor == null) 
         Message.FatalError ("none of the constructors of `" + attr.FullName + 
                              "' matches positional argument types: " + ctor_parm_types.ToString ());
-                             
-      SR.Emit.CustomAttributeBuilder 
-          (proper_ctor, 
-           ctor_parms.Reverse ().ToArray (), 
-           property_infos.Reverse ().ToArray (), 
-           properties.Reverse ().ToArray (), 
-           field_infos.Reverse ().ToArray (), 
-           fields.Reverse ().ToArray ())
+
+      (proper_ctor, ctor_parms, property_infos, properties, field_infos, fields)
     }
 
-    
+    do_compile (env : GlobalEnv, ti : TypeBuilder, attr : TypeInfo, parms : list [PT.PExpr]) 
+        : SR.Emit.CustomAttributeBuilder
+    {
+      def (ctor_info, ctor_params, prop_infos, prop_values, field_infos, field_values) = pre_compile (env, ti, attr, parms);
+
+      SR.Emit.CustomAttributeBuilder (ctor_info, ctor_params.Reverse ().ToArray (),
+        prop_infos.Reverse ().ToArray (), prop_values.Reverse ().ToArray (),
+        field_infos.Reverse ().ToArray (), field_values.Reverse ().ToArray ())
+    }
+
+    create_instance (env : GlobalEnv, ti : TypeInfo, parms : list [PT.PExpr]) : object
+    {
+      def (ctor_info, ctor_params, prop_infos, prop_values, field_infos, field_values) = pre_compile (env, null, ti, parms);
+      def obj = ctor_info.Invoke(ctor_params.Reverse ().ToArray ());
+
+      List.Iter2 (prop_infos,  prop_values,  (prop,  val) => prop.SetValue  (obj, val, null));
+      List.Iter2 (field_infos, field_values, (field, val) => field.SetValue (obj, val));
+
+      obj
+    }
+
+
     internal CompileAttribute (env : GlobalEnv, ti : TypeBuilder, expr : PT.PExpr)
         : System.AttributeTargets * SR.Emit.CustomAttributeBuilder
     {
       def (tc, parms) = CheckAttribute (env, expr);
-      (tc.AttributeTargets, do_compile (env, ti, tc, parms));
+      if (is_security_attribute(tc))
+        (0 :> System.AttributeTargets, null)
+      else
+        (tc.AttributeTargets, do_compile (env, ti, tc, parms));
     }
 
     internal ResolveAttribute (env : GlobalEnv, expr : PT.PExpr, expect_exact : TypeInfo = null) 
@@ -298,11 +328,50 @@ namespace Nemerle.Compiler
     {
       mutable result = [];
       foreach ((env, attr) in attrs) {
-         def (tc, parms) = CheckAttribute (env, attr);
-         unless (tc.Equals (InternalType.AssemblyVersionAttribute_tc))
-           result ::= do_compile (env, null, tc, parms);      
+        def (tc, parms) = CheckAttribute (env, attr);
+        unless (tc.Equals (InternalType.AssemblyVersionAttribute_tc) || is_security_attribute (tc)) {
+          result ::= do_compile (env, null, tc, parms);
+        }
       }
       result
+    }
+
+
+    /*
+      Quote from MSDN:
+      At compile time, attributes convert security declarations to a serialized form in metadata.
+
+      Declarative security data in metadata is created from the permission that
+      SecurityAttribute::CreatePermission method returns that corresponds to this attribute.
+
+      This means that the compiler must instantiate a security attribute at compile time and
+      retrieve a serializable permission object to store somewhere in the metadata.
+    */
+    internal GetPermissionSets (attrs : SCG.IEnumerable [GlobalEnv * PT.PExpr])
+    : list [SSP.SecurityAction * SS.PermissionSet]
+    {
+      mutable result = [];
+      foreach ((env, attr) in attrs) {
+        def (tc, parms) = CheckAttribute (env, attr);
+
+        when (is_security_attribute (tc)) {
+          match (create_instance (env, tc, parms)) {
+          | ps is SSP.PermissionSetAttribute => result ::= (ps.Action, ps.CreatePermissionSet ())
+          | sa is SSP.SecurityAttribute =>
+            def perm_set = SS.PermissionSet (SSP.PermissionState.None);
+			_ = perm_set.AddPermission (sa.CreatePermission ());
+			result ::= (sa.Action, perm_set)
+          | _ => Message.FatalError (attr.Location, "given attribute must be a System.Security.Permissions.SecurityAttribute")
+          }
+        }
+      }
+      result
+    }
+
+    internal GetPermissionSets (env : GlobalEnv, attrs : SCG.IEnumerable [PT.PExpr])
+    : list [SSP.SecurityAction * SS.PermissionSet]
+    {
+      GetPermissionSets(attrs.Map(attr => (env, attr)));
     }
 
     internal MakeEmittedAttribute (attr_type : System.Type, value : string) : SR.Emit.CustomAttributeBuilder
@@ -346,7 +415,7 @@ namespace Nemerle.Compiler
               when (meth.Attributes & NemerleAttributes.Extern == 0)
                 Message.Error (expr.Location, "only methods marked with `extern' modifier can have "
                                "`System.Runtime.InteropServices.DllImport' attribute");
-                
+
               mutable callingconv = SRI.CallingConvention.Winapi;
               mutable charset = SRI.CharSet.Ansi;
               mutable preserve_sig = true;
@@ -361,7 +430,7 @@ namespace Nemerle.Compiler
               mutable set_throw_on = null;
 
               mutable char_set_extra = 0;
-              
+
               foreach (p in parms) 
                 match (p) {
                   | <[ $(target : dyn) = $val ]> =>
@@ -492,11 +561,11 @@ namespace Nemerle.Compiler
       when (Manager.Options.StrongAssemblyKeyName != null) {
         an.KeyPair = read_keypair (Location.Default, Manager.Options.StrongAssemblyKeyName);
       }
-      
+
       foreach ((env, attr) in assembly_attributes) {
         /* store resolved attribute */
         def (tc, parms) = Manager.AttributeCompiler.CheckAttribute (env, attr);
-        
+
         def take_string (pars) {
           | [ <[ $(x : string) ]> ] => x
           | _ =>
@@ -555,7 +624,7 @@ namespace Nemerle.Compiler
       an
     }
   }
-  
+
   public partial class Modifiers
   {
     public FindAttributeWithArgs (looking_for : TypeInfo, env : GlobalEnv) : option [PT.PExpr * list [PT.PExpr]]
