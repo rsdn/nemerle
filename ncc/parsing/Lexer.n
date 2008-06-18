@@ -36,7 +36,7 @@ using Nemerle.Utility;
 
 namespace Nemerle.Compiler {
 
-public variant Token : System.Collections.IEnumerable
+public variant Token : System.Collections.Generic.IEnumerable [Token]
 {
   | Identifier { name : string; }
   | QuotedIdentifier { name : string; }
@@ -44,7 +44,7 @@ public variant Token : System.Collections.IEnumerable
   | Keyword { name : string; }
   | Operator { name : string; }
 
-  | StringLiteral { value : string; }
+  | StringLiteral { value : string; rawString : string; this(val : string) { this(val, "") } }
   | CharLiteral { value : char; }
   | IntegerLiteral { lit : Literal.Integer; cast_to : Parsetree.PExpr }
   | FloatLiteral { value : float; }
@@ -101,7 +101,7 @@ public variant Token : System.Collections.IEnumerable
       | Keyword (name) => name
       | Operator (name : string) => name
 
-      | StringLiteral (value) => "\"" + value + "\"";
+      | StringLiteral (_, raw) => raw;
       | CharLiteral (value) => "'" + value.ToString () + "'" 
       | IntegerLiteral  (value, _) => value.ToString ()
       | FloatLiteral   (value) => value.ToString ()
@@ -142,10 +142,21 @@ public variant Token : System.Collections.IEnumerable
 
   public GetEnumerator () : System.Collections.Generic.IEnumerator [Token]
   {
-    match (this) {
+    match (this) 
+    {
       | RoundGroup (child) | BracesGroup (child, _) | SquareGroup (child)
       | QuoteGroup (child) | LooseGroup (child)  | Namespace (_, child) =>
-        TokenEnumerator (child)
+        def loop (current)
+        {
+          when (current != null)
+          {
+            yield current;
+            loop (current.Next)
+          }
+        }
+        
+        loop (child)
+
       | _ => throw System.ArgumentException ("this is not a group token")
     }
   }
@@ -208,30 +219,6 @@ public variant Token : System.Collections.IEnumerable
     else
       ToString ()
   }
-}
-
-[DebuggerNonUserCode]
-public class TokenEnumerator : System.Collections.Generic.IEnumerator [Token]
-{
-  mutable current : Token;
-  mutable next : Token;  
-
-  public this (begin : Token) { next = begin; }
-
-  public Current : Token { get { current } }
-
-  public MoveNext () : bool {
-    if (next != null) {
-      current = next;
-      next = current.Next;
-      true;
-    }
-    else false
-  }
-
-  public Reset () : void {  }
-
-  public Dispose () : void {  }
 }
 
 public class Region
@@ -780,55 +767,89 @@ public abstract class LexerBase : IDisposable
     }
   }
 
-  protected get_char_from_hex(len : int) : char
+  protected get_char_from_hex : int * StringBuilder -> char = 
+    GetCharFromHex(_, _, peek, read, Message.Error (this.Location, _));
+
+  public static GetCharFromHex(
+    len : int,
+    rawStringBuilder : StringBuilder,
+    peek : void -> char,
+    read : void -> char,
+    error : string -> void
+  )
+    : char
   {
     def max = if (len < 0) 4 else len;
-    clear_id_buffer ();
-    def loop (i) {
-      when (i < max) {
+    def buffer = StringBuilder (max);
+    def loop (i) : bool
+    {
+      if (i < max) 
+      {
         def ch = peek ();
-        match (ch) {
+        match (ch)
+        {
           | 'a' | 'A' | 'b' | 'B' | 'c' | 'C' | 'd' | 'D'
           | 'e' | 'E' | 'f' | 'F' | '0' | '1' | '2' | '3'
           | '4' | '5' | '6' | '7' | '8' | '9' =>
-            _ = id_buffer.Append(read ());
-            loop(i+1)
+            _ = buffer.Append(read ());
+            loop(i + 1)
             
-          | _ =>
-            when (len != -1 || i == 0)
-              throw Error ($"bad escape character '$ch'")
+          | _ when (len == -1 && i != 0) => true
+          | _ => error ($"bad escape character '$ch'"); false
         }
       }
+      else true
     }
-    loop (0);
     
-    try {
-      Convert.ToChar (UInt64.Parse (id_buffer.ToString (), Globalization.NumberStyles.HexNumber,
-                                    CultureInfo.InvariantCulture));
-    }
-    catch {
-      _ is System.OverflowException =>
-        throw Error ($ "Character literal $id_buffer must be in the range U+0000 to U+FFFF");
-    }
+    def ok = loop (0);
+    when (rawStringBuilder != null)
+      _ = rawStringBuilder.Append(buffer);
+
+    if (ok)
+      try 
+      {
+        Convert.ToChar (UInt64.Parse (buffer.ToString (), Globalization.NumberStyles.HexNumber,
+                                      CultureInfo.InvariantCulture));
+      }
+      catch 
+      { | _ is System.OverflowException =>
+          error ($"Character literal '$buffer' must be in the range U+0000 to U+FFFF");
+          '?'
+      }
+    else '?'
   }
 
-  
-  protected escape_value (ch : char) : char
+  protected escape_value : char * StringBuilder -> char = 
+    EscapeValue(_, _, get_char_from_hex, Message.Error (Location, _));
+
+  public static EscapeValue (
+      ch : char,
+      rawStringBuilder : StringBuilder,
+      get_char_from_hex : int * StringBuilder -> char, 
+      error : string -> void
+  )
+    : char
   {
-    | 'n' => '\n'
-    | 't' => '\t'
-    | 'r' => '\r'
-    | 'b' => '\b'
-    | 'e' => '\e'
-    | '"' => '"'
-    | '\'' => '\''
-    | '\\' => '\\'
-    | '0' => '\0'
-    | 'x' => get_char_from_hex(-1)
-    | 'u' => get_char_from_hex(4)
-    | 'U' => get_char_from_hex(8)
-    | '$' => '$'
-    | _ => Message.Error (this.Location, $"bad escape character `\\$(ch)'"); ' '
+    when (rawStringBuilder != null)
+      _ = rawStringBuilder.Append(ch);
+
+    match (ch)
+    {
+      | 'n'  => '\n'
+      | 't'  => '\t'
+      | 'r'  => '\r'
+      | 'b'  => '\b'
+      | 'e'  => '\e'
+      | '"'  => '"'
+      | '\'' => '\''
+      | '\\' => '\\'
+      | '0'  => '\0'
+      | 'x'  => get_char_from_hex(-1, rawStringBuilder)
+      | 'u'  => get_char_from_hex(4,  rawStringBuilder)
+      | 'U'  => get_char_from_hex(8,  rawStringBuilder)
+      | '$'  => '$'
+      | _    => error ($"bad escape character `\\$ch'"); ' '
+    }
   }
     
   protected get_char () : Token.CharLiteral
@@ -850,11 +871,18 @@ public abstract class LexerBase : IDisposable
   protected get_string (end_ch : char, is_dollarized : bool) : Token.StringLiteral
   {
     mutable tok;
+    def startLine = line; def startCol = col - 1;
     def buf = StringBuilder ();
-    def loop () {
-      match (read ()) {
+    def rawString = StringBuilder ();
+    _ = rawString.Append(end_ch);
+    def loop ()
+    {
+      def ch = read ();
+      _ = rawString.Append(ch);
+      match (ch)
+      {
         | '\\' =>
-          def esc = escape_value (read ());
+          def esc = escape_value (read (), rawString);
           _ = buf.Append (esc);
           loop ();
 
@@ -866,40 +894,52 @@ public abstract class LexerBase : IDisposable
           _ = buf.Append ('$');
           loop ()
         
-        | '\0' => Message.Error (this.Location, "Unterminated string literal") // like MS csc
+        | '\0' => rawString.Length--; Message.Error (this.Location, "Unterminated string literal") // like MS csc
         
-        | '\n' => Message.Error (this.Location, "Newline in constant") // like MS csc
+        | '\n' => rawString.Length--; Message.Error (this.Location, "Newline in constant") // like MS csc
         
         | ch when ch != end_ch => 
           _ = buf.Append (ch);
           loop ();
           
         | _ =>
-          tok = Token.StringLiteral (buf.ToString ());
-          tok.Location = Location (file_idx, 0, 0, line, col);
+          tok = Token.StringLiteral (buf.ToString (), rawString.ToString ());
+          tok.Location = Location (file_idx, startLine, startCol, line, col);
 
-          when (eat_whitespace () && peek_or_white () == end_ch) {
+          /*when (eat_whitespace () && peek_or_white () == end_ch) 
+          {
             tok = null;
             ignore_comments ();
             _ = read ();
             loop ();
-          }
+          }*/
       }
     }
     loop ();
 
     if (tok == null)
-      Token.StringLiteral (buf.ToString ())
+    {
+      tok = Token.StringLiteral (buf.ToString (), rawString.ToString ());
+      tok.Location = Location (file_idx, startLine, startCol, line, col);
+      tok
+    }
     else
       tok;
   }
 
   protected get_monkey_string () : Token
   {
-    def buf = Text.StringBuilder (32);
+    def buf = StringBuilder (32);
+    def startLine = line; def startCol = col - 2;
+    def rawString = StringBuilder ();
+    _ = rawString.Append(<#@"#>);
 
-    def loop () {
-      match (read ()) {
+    def loop () 
+    {
+      def ch = read ();
+      _ = rawString.Append(ch);
+      match (ch) 
+      {
         | '"' =>
           match (peek_or_white ()) {
             | '"' =>
@@ -907,11 +947,16 @@ public abstract class LexerBase : IDisposable
               _ = read ();
               loop ()
             | _ =>
-              Token.StringLiteral (buf.ToString ())
+              def tok = Token.StringLiteral (buf.ToString (), rawString.ToString ());
+              tok.Location = Location (file_idx, startLine, startCol, line, col);
+              tok
           }
         | '\0' => 
           Message.Error (this.Location, "Unterminated string literal"); // like MS csc
-          Token.StringLiteral (buf.ToString ())
+          rawString.Length--;
+          def tok = Token.StringLiteral (buf.ToString (), rawString.ToString ());
+          tok.Location = Location (file_idx, startLine, startCol, line, col - 1);
+          tok
         | ch =>
           _ = buf.Append (ch); loop ()
       }
@@ -923,41 +968,57 @@ public abstract class LexerBase : IDisposable
   /// Read &lt;# .... &lt;# ... #&gt; ... #&gt; string
   protected get_recursive_string () : Token
   {
-    mutable nestingLevel = 1;
-    def buf = Text.StringBuilder (1024);
-    def startLine = line;
-    def startCol  = col;
-    def loop (ch)
+    def buf = StringBuilder (1024);
+    def rawString = StringBuilder ();
+    _ = rawString.Append("<#");
+    def startLine = line; def startCol = col - 2;
+    def loop (nestingLevel = 1)
     {
-      | '<' when peek () == '#' => _ = read (); nestingLevel++; _ = buf.Append ("<#"); loop (read ())
-      | '#' =>
-        def next = read ();
-        if (next == '>')
-        {
-          nestingLevel--;
-          if (nestingLevel == 0) Token.StringLiteral (buf.ToString ())
+      def ch = read ();
+      _ = rawString.Append(ch);
+      match (ch)
+      {
+        | '<' when peek () == '#' => 
+          _ = rawString.Append(read ());
+          _ = buf.Append ("<#"); 
+          loop (nestingLevel + 1)
+
+        | '#' =>
+          def next = read ();
+          _ = rawString.Append (next);
+          if (next == '>')
+          {
+            if (nestingLevel == 1) 
+            {
+              def tok = Token.StringLiteral (buf.ToString (), rawString.ToString ());
+              tok.Location = Location (file_idx, startLine, startCol, line, col);
+              tok
+            }
+            else
+            {
+              _ = buf.Append ("#>");
+              loop (nestingLevel - 1)
+            }
+          }
           else
           {
-            _ = buf.Append ("#>");
-            loop (read ())
+            _ = buf.Append ('#');
+            _ = buf.Append (next);
+            loop (nestingLevel)
           }
-        }
-        else
-        {
-          _ = buf.Append ('#');
-          _ = buf.Append (next);
-          loop (read ())
-        }
 
-      | '\0' =>
-          Message.Error (this.Location, "Unterminated string literal"); // like MS csc
-          Token.StringLiteral (buf.ToString ())
+        | '\0' =>
+            Message.Error (this.Location, "Unterminated string literal"); // like MS csc
+            rawString.Length--;
+            def tok = Token.StringLiteral (buf.ToString (), rawString.ToString ());
+            tok.Location = Location (file_idx, startLine, startCol, line, col - 1);
+            tok
 
-      | _ => _ = buf.Append (ch); loop (read ())
+        | _ => _ = buf.Append (ch); loop (nestingLevel)
+      }
     }
 
-    def tok = loop (read ());
-    tok.Location = Location (file_idx, startLine, startCol, line, col - 2);
+    def tok = loop ();
     tok
   }
 
@@ -1281,7 +1342,7 @@ public abstract class LexerBase : IDisposable
       eat_spaces ();
       def word = StringBuilder ();
       try {
-        while (IsIdBeginning (peek_or_white ()) || Char.IsDigit (peek_or_white ()))
+        while (IsIdBeginning (peek_or_white ()) || char.IsDigit (peek_or_white ()))
           _ = word.Append (read ())
       } catch { _ is LexerBase.Error => () };
       word.ToString ()
@@ -1465,7 +1526,7 @@ public abstract class LexerBase : IDisposable
             _ = read_to_the_end_of_line ();
         }
         
-      | x => throw LexerBase.Error ("unsupported preprocessing directive `" + x + "'")
+      | x => throw LexerBase.Error ($"unsupported preprocessing directive `$x'")
     };
   }
 
