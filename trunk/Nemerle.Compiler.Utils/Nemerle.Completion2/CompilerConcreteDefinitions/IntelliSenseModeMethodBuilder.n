@@ -1,0 +1,211 @@
+using System;
+using Nemerle.Assertions;
+using Nemerle.Compiler;
+using Nemerle.Utility;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using System.Diagnostics;
+
+using Typed = Nemerle.Compiler.Typedtree;
+using SR = System.Reflection;
+using SCG = System.Collections.Generic;
+
+namespace Nemerle.Completion2.Factories
+{
+  public class IntelliSenseModeMethodBuilder : MethodBuilder
+  {
+    protected new Manager : Engine { get { base.Manager :> Engine } }
+
+    public this (par : TypeBuilder, functionAst : ClassMember.Function)
+    {
+      this (par, functionAst, false);
+    }
+
+    public this (par : TypeBuilder, functionAst : ClassMember.Function, is_property : bool)
+    {
+      base (par, functionAst, is_property);
+      _bodyTokens = functionAst.Tokens;
+    }
+    
+    public override Body : PExpr 
+    {
+      get { base.Body }      
+      set { ResetCodeCache(); SetBodyParsed(value); }
+    }
+    
+    public override EnsureCompiled() : void
+    {
+      unless (BodyLocation.FileIndex > 0 && this.Attributes %&& NemerleAttributes.Abstract)
+        _ = BodyTyped;
+    }
+  
+    mutable _bodyMessages : SCG.List[CompilerMessage];
+    public override BodyMessages : SCG.List[CompilerMessage]
+    {
+      get
+      {
+        Trace.Assert(!(Attributes %&& NemerleAttributes.Abstract || BodyLocation.FileIndex <= 0));
+        when (_bodyMessages == null)
+          _bodyMessages = SCG.List();
+  
+        _bodyMessages
+      }
+    }
+  
+    public override ResetCodeCache () : void
+    {
+      when (_bodyMessages != null)
+        _bodyMessages.Clear();
+  
+      _bodyTokens     = null;
+      _bodyParsed     = null;
+      _bodyTyped      = null;
+      fun_header.body = null;
+    }
+  
+    mutable _bodyTokens : Token.BracesGroup;
+  
+    //mutable _indent : string = "";
+  
+    /// The method body tokens. 
+    public override BodyTokens : Token.BracesGroup
+    {
+      get
+      {
+        //Trace.WriteLine($"$_indent>>>> ##### BodyTokens ($Name)!");
+        Trace.Assert(!(Attributes %&& NemerleAttributes.Abstract || BodyLocation.FileIndex <= 0));
+        when (_bodyTokens == null)
+        {
+          //def indent = _indent; _indent += "  ";
+          Manager.SetCompiletMessages (BodyMessages);
+          _bodyTokens = PreParseMethodBody (this);
+          //_indent = indent;
+        }
+  
+        //Trace.WriteLine($"$_indent<<<< ##### BodyTokens ($Name)!");
+        _bodyTokens
+      }
+  
+      set { ResetCodeCache(); _bodyTokens = value; }
+    }
+    
+    SetBodyParsed(mutable bodyParsed : PExpr) : void
+    {
+      // Do all transform of method body.
+      when (BeforeBodyTyping != null)
+        foreach (handler in BeforeBodyTyping)
+          bodyParsed = handler(this, bodyParsed);
+
+      _bodyParsed = bodyParsed;
+
+      fun_header.body = FunBody.Parsed (_bodyParsed);
+    }
+  
+    mutable _bodyParsed : PExpr;
+  
+    /// The method body parsed expressions. 
+    public override BodyParsed : PExpr
+    {
+      get
+      {
+        //Trace.WriteLine($"$_indent>>>> ##### BodyParsed ($Name)!");
+        Trace.Assert(!(Attributes %&& NemerleAttributes.Abstract || BodyLocation.FileIndex <= 0));
+        when (_bodyParsed == null)
+        {
+          if (Location.IsGenerated) 
+            when (fun_header.body is FunBody.Parsed(code))
+              Body = code;
+          else
+          {
+            //def indent = _indent; _indent += "  ";
+            Manager.SetCompiletMessages(BodyMessages);
+
+            try
+            {
+              SetBodyParsed(MainParser.ParseFunctionBody (Env, Ast.header, BodyTokens));
+            }
+            finally { Manager.SetCompiletMessages (null); }
+            
+            //_indent = indent;
+          }
+        }
+  
+        //Trace.WriteLine($"$_indent<<<< ##### BodyParsed ($Name)!");
+        _bodyParsed
+      }
+    }
+  
+    public override IsBodyCompilable : bool
+    {
+      get
+      {
+        def res = HasAbstractBody //|| BodyLocation.IsGenerated 
+          || BodyLocation.FileIndex <= 0
+          || Attributes %&& NemerleAttributes.SpecialName;
+        !res
+      }
+    }
+  
+    mutable _bodyTyped : TExpr;
+  
+    /// The method body parsed expressions. 
+    public override BodyTyped : TExpr
+    {
+      get
+      {
+        Manager.CheckSolver();
+        //Trace.WriteLine($"$_indent>>>> ##### BodyTyped ($Name)!");
+        Trace.Assert(!(Attributes %&& NemerleAttributes.Abstract || BodyLocation.FileIndex <= 0));
+        when (_bodyTyped == null)
+        {
+          //def indent = _indent; _indent += "  ";
+          _ = BodyParsed; // Use side affect
+          Manager.SetCompiletMessages (BodyMessages);
+          try
+          {
+            RunBodyTyper();
+            _bodyTyped = (fun_header.body :> FunBody.Typed).expr;
+          }
+          finally { Manager.SetCompiletMessages (null); }
+          //_indent = indent;
+        }
+  
+        //Trace.WriteLine($"$_indent<<<< ##### BodyTyped ($Name)!");
+        _bodyTyped
+      }
+    }
+    
+    PreParseMethodBody (method : MethodBuilder) : Token.BracesGroup
+    {
+      def reportError(e, msg)
+      {
+        Trace.WriteLine($"$msg method body of:");
+        Trace.WriteLine($"\t$method");
+        Trace.WriteLine( "\tfailed.");
+        Trace.WriteLine($"\tError: $(e.Message)");
+      }
+
+      def loc      = method.BodyLocation;
+      def engine = Manager;
+      def bodyCode =
+        if (loc == Location.Default)
+          "{}"
+        else try   { engine.ProjectSources.GetSource(loc.File).GetRegion(loc); }
+             catch { e => reportError(e, "Try get"); "{}" }; // return empty body!
+
+      try
+      {
+        def lexer     = LexerString(engine, bodyCode, loc);
+        def preparser = PreParser(lexer, method.Env);
+
+        preparser.PreParse()
+      }
+      catch 
+      { e =>
+        reportError(e, "Try to compile");
+        Token.BracesGroup(null)
+      } // return empty body!
+    }
+  } // class
+} // namespace

@@ -1,0 +1,212 @@
+using System;
+using System.IO;
+using System.Diagnostics;
+
+using SCG = System.Collections.Generic;
+using SR  = System.Reflection;
+
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
+using Nemerle.Utility;
+using Nemerle.Compiler.Utils;
+
+using Typed = Nemerle.Compiler.Typedtree;
+using TExpr = Nemerle.Compiler.Typedtree.TExpr;
+using LibRefManager = Nemerle.Completion2.Factories.IntelliSenseModeLibraryReferenceManager;
+
+namespace Nemerle.Completion2
+{
+  public partial class Engine : ManagerClass
+  {
+    public event TypedtreeCreated : EventHandler;
+
+    public ParseTopDeclarations(source : ISource) : list[TopDeclaration]
+    {
+      if (IsProjectAvailable) // Get cached TopDeclaration-s.
+        this.Project.CompileUnits[source.FileIndex].TopDeclarations;
+      else // Perce TopDeclaration-s from source.
+      {
+        _decls = []; // reset ToDeclaration list
+        MainParser.Parse(GetLexer(source));
+      }
+    }
+    
+    /// Makes the typed tree (namespace tree) and constructs compile 
+    /// unit collection.
+    private BuildNamespaceTreeAndInitProject() : void
+    {
+      try
+      {
+        Trace.WriteLine(">>>> ##### Build types tree!");
+
+        def init() : void
+        {
+          RestoreManagerClassInstance();
+
+          InitCompiler();
+
+          // we must clean the nodes from current program - note that this 
+          // behaviour is automatically provided by Run, but completion
+          // engine does not use it at the moment.. :(
+          if (Options.PersistentLibraries)
+            LibrariesManager.RemoveInternalExtensionMethods();
+          else
+          {
+            // Get assembly references from IDE.
+            def asmRefs = _callback.GetAssemblyReferences().ToArray();
+            // Update library list.
+            LibRefManager.UpdateAssemblies(asmRefs);
+
+            try
+            {
+              foreach (asm in asmRefs) // Add all asseblies into compiler
+                LibrariesManager.AddLibrary(asm);
+              
+              LoadExternalLibraries(); // reload types information
+            }
+            catch
+            {
+              | e =>
+                def errorMag =
+                  if (LibRefManager.UnresolvedAssms.Count > 0)
+                  {
+                    $"Error: $(e.Message)\r\n\r\n"
+                    + LibRefManager.UnresolvedAssms.Values.ToString("\r\n\r\n")
+                    + "\r\n\r\nTry recompile solution or referenced assembies!";
+                  }
+                  else $"Error: $(e.Message)\r\n\r\n";
+
+                _callback.ShowMessage(errorMag, MessageType.Error);
+            }
+
+          }
+          
+          // next time Init is called, we won't reload libs
+          Options.PersistentLibraries = true;
+    #pragma warning disable 618 // Obsolete
+          _project = null; // in other locations you must use ResetNamespaceTree()!
+    #pragma warning restore 618 // Obsolete
+          _namespaces.Clear();
+          _decls = [];
+          _fileInfos.Clear();
+          _currentMessages = SCG.List(32);
+          this.Hierarchy = TypesManager (this);
+          _isCanBeReset = true;
+        }
+
+        init();
+
+        mutable trees = [];
+        def regionsMap = Hashtable();
+        def projSources = ProjectSources;
+
+        foreach (fileIndex in Sources.GetFileIndices())
+        {
+          _fileIndex = fileIndex;
+          mutable endLoc;
+          mutable topDecls;
+          def source = projSources.GetSource(fileIndex);
+          def code = source.GetText();
+          BeginParseFile(fileIndex);
+          try
+          {
+            topDecls = null;
+            def lexer = LexerString (this, code, Location(_fileIndex, 1, 1));
+            topDecls = ParsingPipeline (lexer);
+            regionsMap.Add(fileIndex, lexer.Regions);
+            endLoc = lexer.Location;
+            trees ::= topDecls.Rev();
+          }
+          finally { EndParseFile(fileIndex, endLoc, topDecls); }
+        }
+         
+        // create N.C.TypeBuilders for all parsed types and add them to namespace hierarchy
+        try
+        {
+            //Trace.WriteLine("!!! Begin >>>>");
+            foreach (group in trees)
+              foreach (topDecl in group)
+              {
+                //Output.WriteLine($"------- $topDecl: $(topDecl.Name)");
+                //Output.WriteLine(topDecl.Location);
+                when (topDecl.name is Splicable.Name && topDecl.ParsedName.context != null)
+                  ScanningPipeline(topDecl);
+              }
+            //Trace.WriteLine("!!! End <<<<");
+        }
+        catch { | _e => Trace.WriteLine(_e); }
+
+        // xz. Looks like it's building types' tree and is resolving references.
+        try { this.Hierarchy.Run(); }
+        catch { | _e => Trace.WriteLine(_e); }
+
+        def nsTree = NameTree.NamespaceTree;
+
+        // Go through namespaces for each file.
+        def AddTypeBilders(@namespace, index, nsTree)
+        {
+          def node = @namespace.InsideEnv.CurrentNamespace;
+
+          foreach (subNs is Decl.Namespace in @namespace.Decls)
+            AddTypeBilders(subNs, index, nsTree);
+
+          when (node.Children != null)
+            foreach (subNode in node.Children.Values)
+              match (subNode.Value)
+              {
+                | Cached(tb is TypeBuilder) =>
+                  //FixMe: match (tb.PartsLocation.Find(loc => loc.FileIndex == index))
+                  //  unresolved expression: accessing member `FileIndex' in `loc' : Nemerle.Compiler.Location
+                  //   at Nemerle.Compiler.Typer2.Unfold(TExpr expr) in D:\MyProjects\RSDN\Nemerle\nemerle\ncc\typing\Typer2.n:line 198
+                  //   at Nemerle.Compiler.Typer2.PushConversionDown(TExpr expr) in D:\MyProjects\RSDN\Nemerle\nemerle\ncc\typing\Typer2.n:line 266
+                  match (tb.PartsLocation.Find(loc : Location => loc.FileIndex == index))
+                  {
+                    | Some(loc) => @namespace.Decls ::= Decl.Type(loc, tb);
+                    | _ => ()
+                  }
+                | _ => ()
+              }
+
+          // Sort declarations by first part of locatoin.
+          @namespace.Decls = Nemerle.Collections.List.Sort(
+            @namespace.Decls, fun (e1, e2)
+            {
+              def (loc1, loc2)  = (e1.Location, e2.Location);
+              assert(loc1.FileIndex == loc2.FileIndex);
+              if (loc1.Line == loc2.Line) loc1.Column - loc2.Column else loc1.Line - loc2.Line
+            });
+        }
+
+        for (mutable i = 0; i < _fileInfos.Length; i++)
+          when (_fileInfos[i] != null)
+            AddTypeBilders(_fileInfos[i], i, nsTree);
+
+#pragma warning disable 618 // Obsolete
+        _project = Project(
+          this, 
+          CompileUnitCollection(this, _fileInfos, regionsMap),
+          nsTree,
+          _currentMessages.ToList());
+
+        _rowProject = _project;
+        
+        when (TypedtreeCreated != null)
+          TypedtreeCreated(_project, EventArgs.Empty);
+#pragma warning restore 618 // Obsolete
+
+        Trace.WriteLine("<<<< ##### Build types tree finish!");
+      }
+      finally
+      {
+        when (Hierarchy != null)
+          Hierarchy.Dispose();
+
+        _currentMessages = null;
+      }
+    }
+  } // end class Engine
+} // end namespace
+

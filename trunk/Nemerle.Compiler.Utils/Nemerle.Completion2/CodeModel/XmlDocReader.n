@@ -1,0 +1,228 @@
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Xml;
+
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Utils;
+using Nemerle.Imperative;
+
+using Nemerle.Completion2.Engine;
+
+namespace Nemerle.Completion2
+{
+  public module XmlDocReader
+  {
+    private class XmlDocFile
+    {
+      private         _filePath  : string;
+      private mutable _timeStamp : DateTime;
+      private mutable _members   : Map[string, string];
+
+      public this(filePath : string)
+      {
+        _filePath  = filePath;
+        _members   = Map();
+        Load();
+      }
+
+      public GetMemberDoc(member : string) : string
+      {
+        when (File.GetLastWriteTime(_filePath) > _timeStamp)
+          Load();
+
+        match (_members.Find(member))
+        {
+        | Some(doc) => doc;
+        | None      => null;
+        }
+      }
+
+      private Load() : void
+      {
+        _timeStamp = File.GetLastWriteTime(_filePath);
+        _members   = _members.Clear();
+
+        using (rdr = XmlTextReader(_filePath))
+        {
+          do
+          {
+              when (rdr.NodeType == XmlNodeType.Element && rdr.LocalName == "member")
+                _members = _members.Add(rdr.GetAttribute("name"), rdr.ReadInnerXml());
+          }
+          while (rdr.Read());
+        }
+      }
+    }
+
+    private mutable _xmlDocCache : Map[string, XmlDocFile];
+
+    public this()
+    {
+      _xmlDocCache = Map();
+    }
+
+    private GetDocFile(asmFilePath : string) : XmlDocFile
+    {
+      match (_xmlDocCache.Find(asmFilePath))
+      {
+      | Some(docFile) => docFile;
+      | None          =>
+        def xmlFile = Environment.ExpandEnvironmentVariables(Path.ChangeExtension(asmFilePath, ".xml"));
+        def docFile = 
+          try
+          {
+            if (File.Exists(xmlFile))
+              XmlDocFile(xmlFile);
+            else
+            {
+              // Hack for .Net framework assemblies.
+              // Some of them are loaded from the GAC, while their xml documentation stored in
+              // the %SystemRoot%/Microsoft.Net/<version>/ folder.
+              //
+              def altPath = Path.Combine(System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory(), Path.GetFileName(xmlFile));
+
+              if (File.Exists(altPath))
+                XmlDocFile(altPath);
+              else
+                null;
+            }
+          }
+          catch
+          {
+          // Eat exceptions related to bad file format or problems with access to.
+          //
+          | e is XmlException              => Debug.WriteLine(e.ToString(), typeof(XmlDocReader).Name); null;
+          | e is InvalidOperationException => Debug.WriteLine(e.ToString(), typeof(XmlDocReader).Name); null;
+          }
+        _xmlDocCache = _xmlDocCache.Add(asmFilePath, docFile);
+
+        docFile;
+      }
+    }
+
+    public GetContent(member : IMember, location : Location) : string
+    {
+      match (XmlDoc.GetKey(member))
+      {
+      | null => null;
+      | key  => GetContent(key, location);
+      }
+    }
+
+    public GetContent(ns : NamespaceTree.Node, location : Location) : string
+    {
+      GetContent("N:" + ns.GetDisplayName(), location);
+    }
+
+    public GetContent(key : string, location : Location) : string
+    {
+      if (string.IsNullOrEmpty(location.File) || location.EndLine > 0)
+        null;
+      else
+      {
+        def docFile = GetDocFile(location.File);
+
+        if (docFile == null)
+          null;
+        else
+          docFile.GetMemberDoc(key);
+      }
+    }
+
+    public GetInfo(member : IMember, location : Location) : XmlDocInfo
+    {
+      match (XmlDoc.GetKey(member))
+      {
+      | null => null;
+      | key  => GetInfo(key, location);
+      }
+    }
+
+    public GetInfo(ns : NamespaceTree.Node, location : Location) : XmlDocInfo
+    {
+      GetInfo("N:" + ns.GetDisplayName(), location);
+    }
+
+    public GetInfo(key : string, location : Location) : XmlDocInfo
+    {
+      def content = GetContent(key, location);
+
+      if (content == null)
+        null
+      else
+      {
+        def info = XmlDocInfo();
+
+        using (reader = XmlReader.Create(StringReader("<root>" + content + "</root>")))
+        {
+          def getText() 
+          {
+            if (reader.Read())
+            {
+              match (reader.NodeType)
+              {
+              | XmlNodeType.Text       => reader.Value + getText()
+              | XmlNodeType.EndElement => ""
+              | XmlNodeType.Element    =>
+
+                def val = match (reader.Name)
+                {
+                | "see" =>
+
+                  if (reader.MoveToAttribute("cref"))
+                  {
+                    def attr = reader.Value;
+                    def text = getText();
+
+                    if (string.IsNullOrEmpty(text)) attr.Substring(2) else text
+                  }
+                  else
+                    getText()
+
+                | _ => string.Empty;
+                }
+
+                val + getText()
+
+              | _ => getText()
+              }
+            }
+            else
+              string.Empty;
+          }
+
+          while (reader.Read())
+          {
+            match (reader.NodeType)
+            {
+            | XmlNodeType.Element    when reader.Name == "summary"   => info.Summary = getText()
+            | XmlNodeType.Element    when reader.Name == "returns"   => info.Returns = getText()
+            | XmlNodeType.Element    when reader.Name == "param"     => 
+
+              if (reader.MoveToAttribute("name"))
+                info.Params ::= (reader.Value, getText());
+              else
+                _ = getText()
+
+            | XmlNodeType.Element    when reader.Name == "exception" => 
+
+              if (reader.MoveToAttribute("cref"))
+                info.Exceptions ::= (reader.Value.Substring(2), getText());
+              else
+                _ = getText()
+                
+            | _ => ()
+            }
+          }
+        }
+
+        info.Params     = info.Params.    Rev();
+        info.Exceptions = info.Exceptions.Rev();
+
+        info;
+      }
+    }
+  }
+}

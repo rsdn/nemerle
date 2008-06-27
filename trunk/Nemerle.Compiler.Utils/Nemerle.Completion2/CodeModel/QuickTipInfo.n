@@ -1,0 +1,416 @@
+using System;
+
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Imperative;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.IO;
+using Nemerle.Compiler.Utils;
+
+namespace Nemerle.Completion2
+{
+  public class QuickTipInfo
+  {
+    [Accessor(flags = WantSetter)] mutable _text      : string;
+    [Accessor]                     mutable _lineStart : int;
+    [Accessor]                     mutable _lineEnd   : int;
+    [Accessor]                     mutable _colStart  : int;
+    [Accessor]                     mutable _colEnd    : int;
+
+    public this(prefix : string, names : list[string], locations : list[Location])
+    {
+      _text = prefix + " " + names.ToString(".");
+
+      match (locations)
+      {
+      | []            => ()
+      | first :: []   => SetLocation(first);
+      | first :: tail => SetStartEndLocation(first, tail.Last);
+      }
+    }
+
+    public this(location : Location, member : IMember, manager : ManagerClass)
+    {
+      SetLocation  (location);
+      SetMemberText(member, manager);
+    }
+
+    public this(location : Location, value : LocalValue)
+    {
+      SetLocation(location);
+      SetText    (value);
+    }
+
+    public this(location : Location, tv : TyVar)
+    {
+      SetLocation(location);
+
+      match (tv)
+      {
+      | mt is MType => SetText(mt);
+      | _           => _text = tv.ToString();
+      }
+    }
+
+    public this(location : Location, st : StaticTyVar)
+    {
+      SetLocation(location);
+      _text = $<#(type parameter) $(st.Name): ..$(st.Constraints)#>;
+    }
+
+    public this(location : Location, fh : Typedtree.Fun_header)
+    {
+      match (fh.parms)
+      {
+      | head :: _ => SetStartStartLocation(location, head.Location);
+      | []        => SetLocation          (location);
+      }
+
+      _text = sprintf("(%s) %s(", fh.decl.GetKindText(), fh.name);
+      _text += fh.parms.Map(p => p.Name + " : " + p.ty.ToDisplayString()).ToString(", ");
+      _text += ") : " + fh.ret_type.ToDisplayString();
+    }
+
+    public this(location : Location, parm : Typedtree.Fun_parm)
+    {
+      SetLocation(location);
+      _text = $"(function parameter) $(parm.name) : $(parm.ty)";
+    }
+
+    public this(location : Location, me : TExpr.MacroEnvelope)
+    {
+      SetLocation(location);
+      _text = me.MakeHint();
+    }
+
+    public this(location : Location, obj : object)
+    {
+      SetLocation(location);
+      _text = $"DEBUG: $(obj.GetType()): '$obj'";
+    }
+
+    private SetLocation(location : Location) : void
+    {
+      _lineStart = location.Line      - 1;
+      _colStart  = location.Column    - 1;
+      _lineEnd   = location.EndLine   - 1;
+      _colEnd    = location.EndColumn - 1;
+    }
+
+    private SetStartEndLocation(l1 : Location, l2 : Location) : void
+    {
+      _lineStart = l1.Line      - 1;
+      _colStart  = l1.Column    - 1;
+      _lineEnd   = l2.EndLine   - 1;
+      _colEnd    = l2.EndColumn - 1;
+    }
+
+    private SetStartStartLocation(l1 : Location, l2 : Location) : void
+    {
+      _lineStart = l1.Line   - 1;
+      _colStart  = l1.Column - 1;
+      _lineEnd   = l2.Line   - 1;
+      _colEnd    = l2.Column - 1;
+    }
+
+    private GetAttributeText(attrs : NemerleAttributes) : string
+    {
+      mutable s = "";
+
+      when (attrs %&& NemerleAttributes.Public)    s += "public ";
+      when (attrs %&& NemerleAttributes.Private)   s += "private ";
+      when (attrs %&& NemerleAttributes.Protected) s += "protected ";
+      when (attrs %&& NemerleAttributes.Internal)  s += "internal ";
+      when (attrs %&& NemerleAttributes.New)       s += "new ";
+      when (attrs %&& NemerleAttributes.Abstract)  s += "abstract ";
+      when (attrs %&& NemerleAttributes.Virtual)   s += "virtual ";
+      when (attrs %&& NemerleAttributes.Override)  s += "override ";
+      when (attrs %&& NemerleAttributes.Sealed)    s += "sealed ";
+      when (attrs %&& NemerleAttributes.Static)    s += "static ";
+
+      /*
+      | Mutable     = 0x00100
+      | Struct      = 0x01000
+      | Macro       = 0x02000
+      | Volatile    = 0x04000
+      | SpecialName = 0x08000
+      | Partial     = 0x10000
+      | Extern      = 0x20000
+      | CompilerMutable = 0x40000 // field is immutable, but compiler overrides it and can assign something
+      */
+
+      s
+    }
+
+    private static GetDocText(mtype : MType, location : Location) : string
+    {
+      def info = XmlDocReader.GetInfo(mtype.TypeInfo, location);
+
+      if (info != null) "\n" + info.GetText() else ""
+    }
+
+    private static GetDocText(member : IMember, location : Location) : string
+    {
+      def info = XmlDocReader.GetInfo(member, location);
+
+      if (info != null) "\n" + info.GetText() else ""
+    }
+
+    private GetLocationText(location : Location) : string
+    {
+      if (string.IsNullOrEmpty(location.File))
+        ""
+      else if (location.EndLine == 0)
+        "\n\n" + location.File
+      else
+        "\n\n" + location.ToString();
+    }
+
+    private SetMemberText(member : IMember, manager : ManagerClass) : void
+    {
+      mutable name = match (member)
+      {
+      | ti is TypeInfo => match (ti.GetTydecl())
+        {
+        | VariantOption => "variant option "
+        | Variant       => "variant "
+        | _ => ""
+        }
+      | _ => ""
+      }
+
+      name += member.ToString();
+
+      when (name.IndexOf(" `") > 0)
+      {
+        name = name.Replace(" `", " ");
+
+        when (name.EndsWith("'"))
+          name = name.Substring(0, name.Length - 1);
+      }
+
+      _text = GetAttributeText(member.Attributes) + name;
+
+      match (member)
+      {
+      | _ is IProperty
+      | _ is IField    => _text += " : " + member.GetMemType().ToString();
+      | _ => ()
+      }
+
+      _text += GetDocText(member, member.Location);
+
+      match (member)
+      {
+      | fb is IField when fb.IsLiteral && fb.DeclaringType.IsEnum =>
+
+        match (fb.GetValue())
+        {
+        | Enum(Integer(val, is_negative, _), _, _)
+        | Integer(val, is_negative, _) =>
+
+          def toHex(val)
+          {
+            mutable s = val.ToString("X");
+            while (s.Length % 4 != 0)
+              s = "0" + s;
+            "0x" + s
+          }
+
+          _text += string.Format("\n\nValue: {0}{1} ({2}) {3}",
+            if (is_negative) "-" else "",
+            val,
+            toHex(val),
+            {
+              if (fb.DeclaringType.HasAttribute(manager.InternalType.FlagsAttribute_tc))
+              {
+                mutable n = val;
+                def     fields = fb.DeclaringType.GetMembers(BindingFlags.Static);
+                def     fields = fields.Filter(f =>
+                {
+                  match (f)
+                  {
+                  | f is FieldBuilder when f.IsLiteral =>
+                    match (f.ConstValue)
+                    {
+                    | Integer(f_val, f_is_negative, _) =>
+
+                      if (!fb.Equals(f) && f_val != 0 && is_negative == f_is_negative && (val & f_val == f_val))
+                      {
+                        n &= ~f_val;
+                        true;
+                      }
+                      else
+                        false
+
+                    | _ => false
+                    }
+                  | _ => false
+                  }
+                });
+
+                if (fields.Length > 0)
+                {
+                  def sb = System.Text.StringBuilder("= ");
+
+                  foreach (f :> FieldBuilder in fields)
+                    _ = sb.Append(f.Name).Append(" | ");
+
+                  if (n != 0) _ = sb.Append(toHex(n));
+                  else        _ = sb.Remove(sb.Length - 2, 2);
+
+                  sb.ToString()
+                }
+                else
+                  ""
+              }
+              else
+                ""
+            });
+        | _ => ()
+        }
+
+      | _ => ()
+      }
+
+      _text += GetLocationText(member.Location);
+    }
+
+    private SetText(value : LocalValue) : void
+    {
+      _text = value.MakeHint();
+    }
+
+    private SetText(mtype : MType) : void
+    {
+      match (mtype)
+      {
+      | Class(tycon, _) =>
+
+        _text = GetAttributeText(tycon.Attributes);
+
+        _text += match (tycon.GetTydecl())
+        {
+        | VariantOption => "variant option"
+        | Variant       => "variant"
+        | Class         => if (tycon.Attributes %&& NemerleAttributes.Struct) "struct" else "class"
+        | Alias         => "alias"
+        | Interface     => "interface"
+        | Enum          => "enum"
+        }
+
+        _text += " " + tycon.FullName + GetDocText(mtype, tycon.Location) + GetLocationText(tycon.Location);
+
+      | _ => _text += mtype.ToString()
+      }
+    }
+
+    // Shared implementation
+
+    public static GetKindText(this value : LocalValue) : string
+    {
+      mutable kind = value.ValKind.ToString();
+
+      when (kind.StartsWith("a "))
+        kind = kind.Substring(2);
+      //def valKind = match (value.ValKind)
+      //{
+      //  | Plain => "local variable"
+      //  | Function(_header, _uses_closure_of) => "function"//: Fun_header, list[Fun_header]; 
+      //  | FunParm(kind) => 
+      //    (if (kind == Typedtree.ParmKind.Normal) "" else kind.ToString().ToLower() + " ")
+      //    + "parametr" 
+      //  | ExceptionValue => "exception value"
+      //  | PatternVariable => "pattern variable"
+      //  | BlockReturn => "block"
+      //  | ClosurisedThisPointer => "captured by closure"
+      //  | MacroRedirection => "macro" //{ subst : Parsetree.PExpr; }
+      //};
+
+      when (value.IsMutable)
+        kind = "mutable " + kind;
+
+      kind
+    }
+
+    public static MakeHint(this value : LocalValue) : string
+    {
+      mutable text = sprintf("(%s) %s%s", 
+        value.GetKindText(),
+        value.Name,
+        match (value.ValKind)
+        {
+        | Function => value.Type.ToMethodDefinitionString()
+        | _        => " : " + value.Type.ToDisplayString()
+        });
+
+      def definedIn = value.DefinedIn.ToString();
+
+      foreach (use in value.UsedIn)
+      {
+        when (use.ToString() != definedIn)
+        {
+          text += $"\ndefined in $definedIn";
+          break;
+        }
+      }
+
+      text
+    }
+
+    public static MakeHint(this node : NamespaceTree.Node) : string
+    {
+      node.EnsureCached();
+
+      def makeTypeName(ty)
+      {
+          def kind = ty.GetTydecl().GetTypeKindName();
+          
+          def name = ty.FullName + (if (ty.Typarms.IsEmpty) ""
+             else "[" + ty.Typarms.Map(p => p.Name).ToString(", ") + "]");
+
+          kind + name
+      }
+
+      def name = node.GetDisplayName();
+
+      match (node.Value) // : NamespaceTree.TypeInfoCache
+      {
+        // TypeInfo loaded or parsed
+        | Cached(ty)                     => makeTypeName(ty)
+        // ambiguous TypeInfo loaded or parsed
+        | CachedAmbiguous(typeInfos)     => 
+          "ambiguous:\n\t" + typeInfos.Map(makeTypeName).ToString("\n\t")
+
+        | NamespaceReference             => "namespace " + name;
+        | MacroCall                      => "macro " + name
+        // TypeInfo of external type not yet loaded
+        | NotLoaded | NotLoadedList | No => 
+          throw ArgumentException("Tish function can't process nade wich value is No!")
+      }
+    }
+
+    public static MakeHint(this mc : TExpr.MacroEnvelope) : string
+    {
+      def m = mc.the_macro;
+
+      "macro " + m.GetNamespace() + "." + m.GetName()
+      +
+      (
+        match (m.Keywords)
+        {
+        | [] => ""
+        | _  => "\n\nKeywords:\n   " + m.Keywords.ToString(", ")
+        }
+      )
+      +
+      "\n\n" + mc.ToString();
+    }
+
+    _debug[T](o : T) : void
+    {
+      _ = o.ToString();
+    }
+  }
+}

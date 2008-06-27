@@ -1,0 +1,839 @@
+using System;
+using System.IO;
+using System.Collections;
+using System.Collections.Generic;
+using System.CodeDom;
+using System.CodeDom.Compiler;
+using System.ComponentModel.Design.Serialization;
+using System.Diagnostics;
+using System.Drawing;
+using System.Reflection;
+
+using Nemerle.Assertions;
+using Nemerle.Collections; 
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Completion2;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System.CodeDom.CodeBinaryOperatorType;
+
+using SCG = System.Collections.Generic;
+
+namespace Nemerle.Compiler.Utils
+{
+  // now CodeDomParser only parses files from Project.CompileUnits
+  // it is not thread-safe at the moment!
+
+  /// <summary>
+  /// Provides an implementation of the <see cref="T:System.CodeDom.Compiler.ICodeParser"/> interface.
+  /// </summary>
+  public class NemerleCodeParser : ManagerClass, ICodeParser
+  {
+    /// <summary>
+    /// Initializes a new instance of the <see cref="T:Nemerle.Compiler.NemerleCodeParser"/> class.
+    /// </summary>
+    public this ()
+    {
+      base (CompilationOptions());
+      InitCompiler ();
+      LoadExternalLibraries ();
+    }
+
+    // now needed only for AsObject
+    protected mutable _manager : ManagerClass;
+
+    // TODO: do we need to make it type-safe
+    protected mutable _currentMethod : MethodBuilder;
+
+    /// <summary>
+    /// Compiles the specified text stream into a <see cref="T:System.CodeDom.CodeCompileUnit"/>
+    ///.</summary>
+    /// <param name="codeStream">A <see cref="T:System.IO.TextReader"/>
+    /// that is used to read the code to be parsed.</param>
+    /// <returns>
+    /// A <see cref="T:System.CodeDom.CodeCompileUnit"/> containing the code
+    /// model produced from parsing the code.
+    /// </returns>
+    public Parse(codeStream: TextReader) : CodeCompileUnit
+    {
+      def oldMan   = ManagerClass.Instance;
+      def topDecls = 
+        try
+        {
+          def lexer = LexerString (this, codeStream.ReadToEnd(), Location.Default);
+          ParsingPipeline (lexer);
+        }
+        finally
+        {
+          ManagerClass.Instance = oldMan;
+        }
+
+      def unit = CodeCompileUnit();
+
+      mutable lastNamespace;
+      mutable codeDomNamespace;
+
+      def switchToNamespace(decl : TopDeclaration)
+      {
+        unless (decl.ParsedName.context.CurrentNamespace.Equals(lastNamespace))
+        {
+          lastNamespace = decl.ParsedName.context.CurrentNamespace;
+          codeDomNamespace = ToCodeNamespace(decl.ParsedName.context.CurrentNamespace);
+          _ = unit.Namespaces.Add(codeDomNamespace);
+        }
+      }
+
+      topDecls.Iter (fun(decl: TopDeclaration) {
+      | TopDeclaration.Class as cls =>
+
+        switchToNamespace(cls);
+        _ = codeDomNamespace.Types.Add(ToCodeTypeDeclaration(cls));
+
+      | TopDeclaration.Interface as ifs =>
+        
+        switchToNamespace(ifs);
+        _ = codeDomNamespace.Types.Add(ToCodeTypeDeclaration(ifs));
+        
+      | TopDeclaration.Enum as enm =>
+      
+        switchToNamespace(enm);
+        _ = codeDomNamespace.Types.Add(ToCodeTypeDeclaration(enm));
+      
+      | TopDeclaration.Variant as vrt =>
+      
+        switchToNamespace(vrt);
+        _ = codeDomNamespace.Types.Add(ToCodeTypeDeclaration(vrt));
+      
+      | TopDeclaration.VariantOption as vrto =>
+      
+        switchToNamespace(vrto);
+        _ = codeDomNamespace.Types.Add(ToCodeTypeDeclaration(vrto));
+        
+      | TopDeclaration.Delegate as del =>
+        
+        //there is no need to switch to namespace 
+        switchToNamespace(del);       
+        _ = codeDomNamespace.Types.Add(ToCodeTypeDelegate(del));
+        
+      | _ =>
+        throw NotSupportedException($"$decl is not supported");
+      });
+
+      unit;
+    }    
+  
+    protected virtual ToCodeNamespace(ns : NamespaceTree.Node) : CodeNamespace
+    {
+      CodeNamespace(ns.GetDisplayName());
+    }    
+
+    protected virtual ToCodeTypeDelegate(del : TopDeclaration.Delegate) : CodeTypeDelegate
+    {
+      def ty = CodeTypeDelegate(del.Name);
+      
+      ty.ReturnType = ToCodeTypeReference(del.header.ret_type);
+      ty.Parameters.AddRange(del.header.parms.Map(ToCodeParameterDeclarationExpression).ToArray());
+      
+      ty;
+    }
+
+    protected virtual ToCodeTypeDeclaration(vrt : TopDeclaration.Variant) : CodeTypeDeclaration
+    {
+      def ty = CodeTypeDeclaration(vrt.Name);
+    
+      ty.IsClass = true;
+      ty.IsInterface = false;      
+      ty.BaseTypes.AddRange(vrt.t_extends.Map(ToCodeTypeReference).ToArray());
+      ty.TypeParameters.AddRange(ToCodeTypeParameters(vrt.typarms).ToArray());
+      ty.Members.AddRange(vrt.decls.Map(ToCodeTypeMember).ToArray());      
+                              
+      ty.UserData["Nemerle.TopDeclaration"] = "Variant";
+      
+      ty;
+    }
+  
+    protected virtual ToCodeTypeDeclaration(vrto : TopDeclaration.VariantOption) : CodeTypeDeclaration
+    {
+      def ty = CodeTypeDeclaration(vrto.Name);
+    
+      ty.IsClass = true;
+      ty.IsInterface = false;      
+      //ty.BaseTypes.AddRange(vrto.t_extends.Map(ToCodeTypeReference).ToArray());
+      //ty.TypeParameters.AddRange(ToCodeTypeParameters(vrto.typarms).ToArray());
+      ty.Members.AddRange(vrto.decls.Map(ToCodeTypeMember).ToArray());
+    
+      ty.UserData["Nemerle.TopDeclaration"] = "VariantOption";
+    
+      ty;
+    }
+
+    protected virtual ToCodeTypeDeclaration(enm : TopDeclaration.Enum) : CodeTypeDeclaration
+    {
+      def ty = CodeTypeDeclaration(enm.Name);
+      ty.IsClass = false;
+      ty.IsEnum = true;      
+      ty.BaseTypes.AddRange(enm.t_extends.Map(ToCodeTypeReference).ToArray());
+      ty.TypeParameters.AddRange(ToCodeTypeParameters(enm.typarms).ToArray());
+      ty.Members.AddRange(enm.decls.Map(ToCodeTypeMember).ToArray());
+      ty;
+    }
+
+    protected virtual ToCodeTypeDeclaration(ifs : TopDeclaration.Interface) : CodeTypeDeclaration
+    {
+      def ty = CodeTypeDeclaration(ifs.Name);
+      ty.IsClass = false;
+      ty.IsInterface = true;      
+      ty.BaseTypes.AddRange(ifs.t_extends.Map(ToCodeTypeReference).ToArray());
+      ty.TypeParameters.AddRange(ToCodeTypeParameters(ifs.typarms).ToArray());
+      ty.Members.AddRange(ifs.methods.Map(ToCodeTypeMember).ToArray());
+      ty;
+    }
+  
+    protected virtual ToCodeTypeDeclaration(cls : TopDeclaration.Class) : CodeTypeDeclaration
+    {
+      def ty = CodeTypeDeclaration(cls.Name);
+      
+      when(cls.Attributes %&& NemerleAttributes.Struct)
+      {
+        ty.IsClass = false;
+        ty.IsStruct = true;
+      }
+      
+      ty.BaseTypes.AddRange(cls.t_extends.Map(ToCodeTypeReference).ToArray());
+      ty.TypeParameters.AddRange(ToCodeTypeParameters(cls.typarms).ToArray());
+      ty.Members.AddRange(cls.decls.Map(ToCodeTypeMember).ToArray());
+      ty;
+    }
+
+    private ToCodeTypeReference(typeName : string) : CodeTypeReference
+    {
+      CodeTypeReference(typeName);
+    }
+
+    protected virtual ToCodeTypeReference(expr : PExpr) : CodeTypeReference
+    {
+      ToCodeTypeReference(expr.ToString());
+    }
+
+    protected virtual ToCodeTypeParameter(tyvar : Splicable) : CodeTypeParameter
+    {
+      CodeTypeParameter(tyvar.GetName().Id);
+    }
+
+    protected virtual ToCodeTypeParameters(typarms : Typarms) : list [CodeTypeParameter]
+    {
+      def toCodeTypeParameter(tyvar : Splicable) : CodeTypeParameter
+      {
+        def tyParm = ToCodeTypeParameter(tyvar);
+        typarms.constraints
+          .Filter(c => c.tyvar.Equals(tyvar))
+          .Iter  (c => _ = tyParm.Constraints.Add(ToCodeTypeReference(c.ty)));
+        tyParm;
+      }
+
+      typarms.tyvars.Map(toCodeTypeParameter);
+    }
+
+    protected virtual ToMemberAttributes(attrs : NemerleAttributes) : MemberAttributes
+    {
+      mutable memberAttrs: MemberAttributes;
+
+      when(attrs %&& NemerleAttributes.Static)  memberAttrs |= MemberAttributes.Static;
+      when(attrs %&& NemerleAttributes.Public)  memberAttrs |= MemberAttributes.Public;
+      when(attrs %&& NemerleAttributes.Private) memberAttrs |= MemberAttributes.Private;
+
+      if(attrs %&& NemerleAttributes.Internal && attrs %&& NemerleAttributes.Protected)
+        memberAttrs |= MemberAttributes.FamilyOrAssembly
+      else
+      {
+        when(attrs %&& NemerleAttributes.Internal)  memberAttrs |= MemberAttributes.Assembly;
+        when(attrs %&& NemerleAttributes.Protected) memberAttrs |= MemberAttributes.Family;
+      }
+
+      when(attrs %&& NemerleAttributes.New)      memberAttrs |= MemberAttributes.New;
+      when(attrs %&& NemerleAttributes.Override) memberAttrs |= MemberAttributes.Override;
+      when(attrs %&& NemerleAttributes.Sealed)   memberAttrs |= MemberAttributes.Final;
+
+      memberAttrs;
+    }
+
+    protected virtual ToCodeEnumOption(opt : ClassMember.EnumOption) : CodeMemberField
+    {
+      def ext = (opt.DefinedIn :> TopDeclaration.Enum).t_extends;
+    
+      def typeRef = 
+        if(ext.Length>0) 
+          ToCodeTypeReference(ext.Head);
+        else
+          ToCodeTypeReference("int");
+    
+      CodeMemberField(typeRef, opt.Name);
+    }
+
+    protected virtual ToCodeMemberField(field : ClassMember.Field) : CodeMemberField
+    {
+      CodeMemberField (ToCodeTypeReference (field.ty), field.Name);
+    }
+
+    protected virtual ToCodeMemberMethod(func : ClassMember.Function) : CodeMemberMethod
+    {
+      def codeMethod =
+        match(func.Name)
+        {
+          | ".ctor"  => CodeConstructor()
+          | ".cctor" => CodeTypeConstructor()
+          | "Main" when func.Attributes %&& NemerleAttributes.Static
+                     => CodeEntryPointMethod()
+          | _        => CodeMemberMethod()
+        };
+
+      codeMethod.Name = func.Name;
+      codeMethod.ReturnType = ToCodeTypeReference(func.header.ret_type);
+      //TODO: codeMethod.ReturnTypeCustomAttributes.AddRange(???.ToArray());
+      codeMethod.Parameters.AddRange(func.header.parms.Map(ToCodeParameterDeclarationExpression).ToArray());
+      codeMethod.ImplementationTypes.AddRange(func.implemented.Map(ToCodeTypeReference).ToArray());
+      //TODO: codeMethod.PrivateImplementationType = ???
+      codeMethod.TypeParameters.AddRange(ToCodeTypeParameters(func.header.typarms).ToArray());
+      codeMethod.Statements.AddRange(ToStatements(func.Body).ToArray());
+
+      codeMethod;
+    }
+
+    protected virtual ToCodeParameterDeclarationExpression(parm : Parsetree.Fun_parm) : CodeParameterDeclarationExpression
+    {
+      def codeParam = CodeParameterDeclarationExpression(ToCodeTypeReference(parm.ty), parm.Name);
+      codeParam.CustomAttributes.AddRange(parm.modifiers.GetCustomAttributes().Map(ToCodeAttributeDeclaration).ToArray());
+      //codeParam.Direction = ???
+      codeParam;
+    }
+
+    protected virtual ToCodeMemberProperty(prop : ClassMember.Property) : CodeMemberProperty
+    {
+      def codeProperty = CodeMemberProperty();
+      codeProperty.Name = prop.Name;
+      //TODO: codeProperty.ImplementationTypes.AddRange(???(ToCodeTypeReference).ToArray());
+      //TODO: codeProperty.PrivateImplementationType = ???
+      //TODO: codeProperty.Parameters = ???
+      match (prop.get)
+      {
+      | Some (m) => codeProperty.GetStatements.AddRange(ToStatements(m.Body).ToArray());
+      | None     => ()
+      }
+
+      match (prop.set)
+      {
+      | Some (m) => codeProperty.SetStatements.AddRange(ToStatements(m.Body).ToArray());
+      | None     => ()
+      }
+
+      codeProperty;
+    }
+
+    protected virtual ToCodeMemberEvent(evt : ClassMember.Event) : CodeMemberEvent
+    {
+      def codeEvent = CodeMemberEvent();
+      codeEvent.Name = evt.Name;
+      codeEvent.Type = ToCodeTypeReference(evt.ty);
+      //TODO: codeProperty.ImplementationTypes.AddRange(???(ToCodeTypeReference).ToArray());
+      //TODO: codeProperty.PrivateImplementationType = ???
+
+      codeEvent;
+    }
+
+    protected virtual ToCodeTypeMember(member : ClassMember) : CodeTypeMember
+    {
+      def codeMember =
+        match (member)
+        {
+        | ClassMember.TypeDeclaration as tyDecl      
+          when tyDecl.td is TopDeclaration.Class => ToCodeTypeDeclaration(tyDecl.td :> TopDeclaration.Class);      
+    
+        | ClassMember.TypeDeclaration as tyDecl      
+          when tyDecl.td is TopDeclaration.Variant => ToCodeTypeDeclaration(tyDecl.td :> TopDeclaration.Variant);
+
+        | ClassMember.TypeDeclaration as tyDecl      
+          when tyDecl.td is TopDeclaration.VariantOption => ToCodeTypeDeclaration(tyDecl.td :> TopDeclaration.VariantOption);
+    
+        | ClassMember.TypeDeclaration as tyDecl
+          when tyDecl.td is TopDeclaration.Delegate => ToCodeTypeDelegate(tyDecl.td :> TopDeclaration.Delegate);
+    
+        | ClassMember.Field    as field => ToCodeMemberField(field);
+        | ClassMember.Function as func  => ToCodeMemberMethod(func);
+        | ClassMember.Property as prop  => ToCodeMemberProperty(prop);
+        | ClassMember.Event    as evt   => ToCodeMemberEvent(evt);
+        | ClassMember.EnumOption as enm => ToCodeEnumOption(enm);                
+        
+        | _ => throw NotSupportedException($"$member not supported");
+        }
+
+      when(member.modifiers != null)
+      {//member.modifiers == null for TopDeclaration.Variant
+        codeMember.Attributes = ToMemberAttributes (member.Attributes);
+        codeMember.CustomAttributes.AddRange(member.modifiers.GetCustomAttributes().Map(ToCodeAttributeDeclaration).ToArray());
+      }
+
+      codeMember;
+    }
+
+    protected virtual ToCodeAttributeDeclaration(attr : PExpr) : CodeAttributeDeclaration
+    {
+      CodeAttributeDeclaration(ToCodeTypeReference(attr));
+    }
+
+    protected ProcessTypeDeclaration(typeDecl: TypeBuilder) : CodeTypeDeclaration
+    {
+      match(typeDecl.GetTydecl())
+      {
+       | TypeDeclaration.Class  => CreateClass(typeDecl)
+       | _ => 
+          throw NotImplementedException("Non class top declarations aren't supported yet")
+      }
+    }
+
+    protected CreateClass(cls : TypeBuilder) : CodeTypeDeclaration
+    {
+      // creates class declaration
+      def classDecl = CodeTypeDeclaration(cls.Name);
+      
+      classDecl.Attributes = CodeDomHelper.GetMemberAttributes(cls.Attributes);
+      cls.GetDirectSuperTypes().Iter(baseType =>
+        classDecl.BaseTypes.Add(baseType.tycon.FullName));
+
+      // TODO: Seems like comments went away
+      //classDecl.Comments = CodeCommentStatement();
+
+      // TODO: Figure out how to parse CustomAttributes
+      //classDecl.CustomAttributes = cls.GetModifiers().GetCustomAttributes();
+
+      classDecl.IsClass = true;
+
+      // sets class access mofifiers
+      classDecl.IsPartial = CodeDomHelper.IsPartial(cls.Attributes);
+      classDecl.TypeAttributes = CodeDomHelper.GetTypeAttributes(cls.Attributes);
+
+      // Set type parameters
+      // will it work?
+      cls.Typarms.Iter(t => { _ = classDecl.TypeParameters.Add(CodeTypeParameter(t.Name));});
+
+      // adds members
+      Debug.Print("ProcessClassMembers in reversed order");
+      ProcessClassMembers(cls.GetMembers().Reverse(), classDecl);
+      
+      //TODO: adds usings directives
+
+      //AddToCodeNamespace(cls, codeClass);
+
+      //TODO: Add Location ?
+
+      classDecl
+    }
+
+    // needed cause we may want to override it in derived classes
+    protected virtual ProcessClassMembers(members : list[IMember], classDecl : CodeTypeDeclaration) : void
+    {
+      members.Iter(m : IMember =>
+        match(m)
+        {
+          | m is TypeBuilder => {_ = classDecl.Members.Add(CreateClass(m));}
+          //| m is EventBuilder => CreateEvent(m) // TODO
+          | m is MemberBuilder => {_ = classDecl.Members.Add(CreateMember(m));}
+
+          //| m is NetEvent 
+          //| m is NetProperty
+          //| m is MethodInfo =>
+          | _ =>
+            () //Debug.Print($"Declaration of external member $m ignored");
+          /*| _ => 
+            throw CodeDomSerializerException($"Unknown declaration type: $m of type $(m.GetType().ToString())",
+                                             CodeLinePragma(m.Location.File, m.Location.Line)); 
+          */
+        }
+        //} 
+      );
+    }
+
+    protected virtual CreateMember(member: MemberBuilder) : CodeTypeMember
+    {
+      Debug.Print($"CreateMember : from $member");
+
+      // creates class declaration
+      def memberDecl : CodeTypeMember = 
+        match(member)
+        {
+          | m is EventBuilder => CreateEvent(m) 
+          | m is FieldBuilder => CreateField(m)
+          | m is MethodBuilder => CreateMethod(m) 
+          | m is PropertyBuilder => CreateProperty(m) 
+          | _ => 
+            { Debug.WriteLine($"CodeDomParser ignore declaration: $member : $(member.Name)"); null }
+        }
+  
+      memberDecl.Name = member.Name;
+      
+      // performed in CreateField/CreateMethod
+      //memberDecl.Attributes = CodeDomHelper.GetMemberAttributes(member.Attributes);
+      
+      // TODO: Seems like comments went away
+      //memberDecl.Comments = CodeCommentStatement();
+
+      // TODO: Figure out how to parse CustomAttributes
+      //memberDecl.CustomAttributes = member.GetModifiers().GetCustomAttributes();
+
+      // Add Location
+      memberDecl.UserData.Add(typeof(Location), member.Location);
+
+      memberDecl
+    }
+
+    protected virtual CreateField(field: FieldBuilder) : CodeMemberField
+    {
+      // GetFieldInfo() doesn't work
+      //def fieldDecl = CodeMemberField(field.GetFieldInfo().FieldType, field.Name);
+
+      Debug.Print($"CreateField: from field $field");
+
+      def fieldMemType = field.GetMemType();
+      def fieldDecl = if(fieldMemType.SystemType != null)
+                        CodeMemberField(fieldMemType.SystemType, field.Name)
+                      else
+                        CodeMemberField(fieldMemType.TypeInfo.FullName, field.Name);
+
+      fieldDecl.Attributes = CodeDomHelper.GetMemberAttributes(field.Attributes, true);
+
+      /*if (field.IsLiteral)
+        fieldDecl.InitExpression = CodePrimitiveExpression(field.GetValue().AsObject(
+          _manager.InternalType));
+      else */
+
+      // temporary
+      //when (field.IsInitializerPresent)
+      //  fieldDecl.InitExpression = CreateExpression(field.InitializerTyped);
+
+      fieldDecl
+    }
+    
+    protected virtual CreateProperty(prop : PropertyBuilder) : CodeMemberProperty
+    {
+      Debug.Print($"CreateProperty: from $prop");
+      
+      def result = CodeMemberProperty();
+      result.Attributes = CodeDomHelper.GetMemberAttributes(prop.Attributes);
+      result.Name = prop.Name;
+      
+      when(prop.Getter != null)
+      {
+        result.HasGet = true;
+        result.Type = ToTypeRef(prop.Getter.ReturnType);
+        when(prop.Getter is MethodBuilder)
+          _ = result.GetStatements.AddRange(ToStatements((prop.Getter :> MethodBuilder).BodyParsed).ToArray())
+      }
+      when(prop.Setter != null)
+      {
+        result.HasSet = true;
+        result.Type = ToTypeRef(prop.Setter.ReturnType);
+        when(prop.Setter is MethodBuilder)
+          _ = result.SetStatements.AddRange(ToStatements((prop.Setter :> MethodBuilder).BodyParsed).ToArray())
+      }
+      result  
+    }
+
+    protected virtual CreateEvent(evt : EventBuilder) : CodeMemberEvent
+    {
+      def eventDecl = CodeMemberEvent();
+      eventDecl.Attributes = CodeDomHelper.GetMemberAttributes(evt.Attributes);
+      eventDecl.Name = evt.Name;
+      // TODO: Find Type properly
+      eventDecl.Type = ToTypeRef(evt.GetAdder().ReturnType);
+      
+      eventDecl
+    }
+    
+    protected virtual CreateMethod(method: MethodBuilder) : CodeMemberMethod
+    { 
+      Debug.Print($"CreateMethod : from $method");
+
+      def methodDecl : CodeMemberMethod =
+        match(method.MemberKind)
+        {
+          | Constructor when method.IsStatic => CodeTypeConstructor()
+          | Constructor                      => CodeConstructor()
+          | Method      when method.IsStatic
+            && method.Name == "Main"         => CodeEntryPointMethod()
+          | Method                           => CodeMemberMethod()
+          | other                            => throw NotSupportedException($"Unsupported method kind: `$other'");
+        };
+
+      methodDecl.Attributes = CodeDomHelper.GetMemberAttributes(method.Attributes, false);
+
+      //TODO: methodDecl.ImplementationTypes - how to get that
+      
+      //methodDecl.Parameters
+      method.GetParameters().Iter(param =>
+          { _ = methodDecl.Parameters.Add(CodeParameterDeclarationExpression(ToTypeRef(param.ty), param.Name)) } 
+     );
+
+      //TODO:  methodDecl.PrivateImplementationType ?
+
+      methodDecl.ReturnType = ToTypeRef(method.ReturnType);
+      
+      // methodDecl.TypeParameters , TODO: check if it actually works
+      method.GetHeader().typarms.Iter(typaram =>
+        { _ = methodDecl.TypeParameters.Add(CodeTypeParameter(typaram.Name))}
+     ); 
+
+      // Body , TODO: does this work?
+      //methodDecl.Statements.AddRange(CreateStatements(method.Ast));
+      /*
+      match(method.Ast.body)
+      {
+        | FunBody.Parsed(expr) => 
+          CreateStatements(expr, methodDecl.Statements);
+        | FunBody.Typed(expr) => CreateStatements(expr, methodDecl.Statements);
+        | _                   =>
+          throw InvalidOperationException($"Function body of $method is supposed to be Typed");
+      } 
+      */
+
+      //Debug.Write(method.Ast.body);
+        //.Typed.expr);
+
+      _currentMethod = method;
+      method.EnsureCompiled(); // we need PExpr & TExpr
+      methodDecl.Statements.AddRange(ToStatements(method.BodyParsed).ToArray());
+
+      Debug.Print($"  method.BodyTyped.Location (col = $(method.BodyTyped.Location.Column), line = $(method.BodyTyped.Location.Line))");
+
+      methodDecl
+    }
+
+
+    ToTypeRefExpression(typeInfo : Nemerle.Compiler.TypeInfo, typeParaams : list[TyVar]) : CodeTypeReferenceExpression
+    {
+      CodeTypeReferenceExpression(ToTypeRef(typeInfo, typeParaams))
+    }
+
+    ToTypeRef(tyVar : TyVar) : CodeTypeReference
+    {
+      def ty = tyVar.Fix();
+      
+      if (ty.IsFixed)
+      {
+        def makeTypeArgs(args) { args.MapToArray(ToTypeRef) }
+        
+        match (ty)
+        {
+          | Class(tycon, args)   => ToTypeRef(tycon, args)
+          | TyVarRef(tyvar)      => CodeTypeReference(tyvar.Name)
+          | Fun(_from, _to)      => CodeTypeReference(typeof(object)) // HACK: Not supported by C#
+          | Tuple(args)          => 
+            CodeTypeReference("Nemerle.Builtins.Tuple", makeTypeArgs(args))
+          | Array(tyVar, rank)   => CodeTypeReference(ToTypeRef(tyVar), rank)
+          | Void                 => CodeTypeReference(typeof(void))
+          | Ref(_tyVar)
+          | Out(_tyVar)          => throw ApplicationException("Ref/Out not supported")
+          | Intersection(_types) => CodeTypeReference(typeof(object))
+        }
+      }
+      else CodeTypeReference(typeof(object))
+    }
+    
+    ToTypeRef(typeInfo : Nemerle.Compiler.TypeInfo, typeParams : list[TyVar]) : CodeTypeReference
+    {
+      //Trace.Assert(typeInfo.TyparmsCount == 0, "typeInfo.TyparmsCount == 0, value is $(typeInfo.TyparmsCount)"); // TODO: Add support for type parametrs!
+      //Trace.Assert(typeParams.IsEmpty, $"typeParams.IsEmpty, value is $(typeParams.ToString())");
+      
+      if (typeInfo.SystemType != null)
+        CodeTypeReference(typeInfo.SystemType.FullName, typeParams.Map(ToTypeRef).ToArray());
+      else
+        CodeTypeReference(typeInfo.FullName, typeParams.Map(ToTypeRef).ToArray());
+    }
+
+    protected virtual ToExpression(expr : PExpr) : CodeExpression
+    {
+      match (expr)
+      {
+        | <[ $expr1 && $expr2 ]> with op = BooleanAnd
+        | <[ $expr1 || $expr2 ]> with op = BooleanOr
+        | <[ $expr1 != $expr2 ]> with op = IdentityInequality
+        | <[ $expr1 == $expr2 ]> with op = IdentityEquality
+        | <[ $expr1 &  $expr2 ]> with op = BitwiseAnd
+        | <[ $expr1 |  $expr2 ]> with op = BitwiseOr
+        | <[ $expr1 +  $expr2 ]> with op = Add
+        | <[ $expr1 -  $expr2 ]> with op = Subtract
+        | <[ $expr1 /  $expr2 ]> with op = Divide
+        | <[ $expr1 *  $expr2 ]> with op = Multiply =>
+          CodeBinaryOperatorExpression(ToExpression(expr1), op, ToExpression(expr2))
+          
+        | <[ array[..$parms] ]>  as ary =>
+          def tExpr = ary.TypedObject :> TExpr;
+          match (tExpr)
+          {
+            | TExpr.Array(_args, dimensions) =>
+              Trace.Assert(dimensions is [_]);
+              CodeArrayCreateExpression(
+                ToTypeRef(tExpr.MType()), parms.MapToArray(ToExpression))
+            | _ => NotSupportedExpression(ary)
+          }
+
+        | <[ $obj.$func(..$parms) ]> as call => 
+          match (call.func.TypedObject)
+          {
+            | TExpr.StaticRef(from, mem, type_parms) when mem.MemberKind == MemberTypes.Constructor =>
+              def codeParams = parms.MapToArray(ToExpression);
+              CodeObjectCreateExpression(ToTypeRef(from.tycon, type_parms), codeParams);
+            
+            | _ => 
+              CodeMethodInvokeExpression(
+                CodeMethodReferenceExpression(ToExpression(obj), 
+                                              func.ToString()),
+                                              parms.MapToArray(ToExpression));
+          }
+
+        | <[ $func(..$parms) ]> => // TODO: Add support of ctor's
+          CodeMethodInvokeExpression(
+            CodeMethodReferenceExpression(null, func.ToString()),
+            parms.MapToArray(ToExpression));
+            
+        | <[ $obj.$field ]> when field.TypedObject is IField =>
+          CodeFieldReferenceExpression(ToExpression(obj), field.TypedObject.Name);
+
+        | <[ $obj.$prop ]> when prop.TypedObject is IProperty =>
+          CodePropertyReferenceExpression(ToExpression(obj), prop.TypedObject.Name);
+
+        | <[ $obj.$_ ]> as mem when mem.TypedObject is TExpr =>
+          match (mem.TypedObject)
+          {
+            | TExpr.StaticRef(_from, mem, type_parms) when mem.IsStatic =>
+              CodeFieldReferenceExpression(
+                ToTypeRefExpression(mem.DeclaringType, type_parms), mem.Name)
+
+            | TExpr.MethodRef(_tObj, meth, typeParms, _notvirtual) =>
+              CodeMethodReferenceExpression(ToExpression(obj), meth.Name, 
+                typeParms.MapToArray(param => ToTypeRef(param)))
+              
+            | xxx => 
+              _ = xxx; 
+              NotSupportedExpression(expr)
+          }
+
+        | PExpr.Ref(name) => CodeVariableReferenceExpression(name.ToString())
+        
+        | PExpr.Literal(literal) =>
+          match (literal)
+          {
+            | Void => CodeTypeReferenceExpression("void")
+            | Null with val = null : object | String(val) | Float (val) | Double (val)
+            | Decimal (val) | Char (val) | Bool (val) 
+                        => CodePrimitiveExpression(val)
+            | Integer(val, is_negative, _treat_as) => 
+              def val = val :> long;
+              def val = if (is_negative) -val else val;
+              CodePrimitiveExpression(val)
+              
+            | Enum (_val : Literal.Integer, ty : TypeInfo, field : IField) =>
+              CodeFieldReferenceExpression(CodeTypeReferenceExpression(ty.FullName), field.Name)
+          }
+        
+        | <[ $sourceExpr :> $_ ]> =>
+          def tExpr = expr.TypedObject :> TExpr.TypeConversion;
+          CodeCastExpression(ToTypeRef(tExpr.MType()), ToExpression(sourceExpr))
+
+        | <[ base ]> => CodeBaseReferenceExpression()
+        | <[ this ]> => CodeThisReferenceExpression()
+        | <[ typeof($typeExpr) ]> => CodeTypeOfExpression(typeExpr.ToString()) // TODO: Test it
+        | null       => CodeSnippetExpression("");
+        | PExpr.Member(_, _) => // (obj, member) 
+            // sample: obj = System.Drawing, member = Color
+            match(_manager.CoreEnv.LookupType(expr.ToString().Split('.').ToList()))
+            {
+              | Some(ti) => CodeTypeReferenceExpression(ti.FullName);
+              | _ => NotSupportedExpression(expr);
+            }
+        
+        | _          => NotSupportedExpression(expr)
+      }
+    }
+
+    NotSupportedExpression(expr : PExpr) : CodeExpression
+    {
+      Debug.WriteLine($"[Form Designer]: Not suported expression: '$expr' ($(expr.GetType().Name))");
+      CodeSnippetExpression(expr.ToString())
+    }
+
+    protected ToStatements(expr : PExpr) : SCG.IEnumerable[CodeStatement]
+    {
+      match (expr)
+      {
+        | PExpr.Sequence(exprs) =>
+          foreach (expr in exprs)
+            foreach (codeStatement in ToStatements(expr))
+              yield codeStatement;
+
+        | <[ $expr1 += $expr2 ]> => 
+          match (expr1)
+          {
+            | <[ $obj.$member ]> when member.TypedObject is IEvent =>
+              yield CodeAttachEventStatement(ToExpression(obj), 
+                member.TypedObject.Name, ToExpression(expr2))
+                
+            | _ =>
+              yield CodeAssignStatement(ToExpression(expr1), ToExpression(<[ $expr1 + $expr2 ]>))
+          }
+
+        | <[ $expr1 -= $expr2 ]> => 
+          match (expr1)
+          {
+            | <[ $obj.$member ]> when member.TypedObject is IEvent =>
+              yield CodeRemoveEventStatement(ToExpression(obj), 
+                member.TypedObject.Name, ToExpression(expr2))
+                
+            | _ =>
+              yield CodeAssignStatement(ToExpression(expr1), ToExpression(<[ $expr1 - $expr2 ]>))
+          }
+
+        | <[ $target = $source ]> =>
+          yield CodeAssignStatement(ToExpression(target), ToExpression(source))
+
+        | <[ mutable $expr = $val ]> with isMutable = true
+        | <[ def $expr = $val ]>     with isMutable = false =>
+
+          def (expr, tyRef) = 
+            match (expr)
+            {
+            | PExpr.TypeEnforcement (expr, ty) => (expr, ToCodeTypeReference (ty));
+            | _ => (expr, CodeTypeReference ());
+            }
+
+          def name =
+            match (expr)
+            {
+            | PExpr.Ref (name) => name.Id;
+            | _                => throw NotSupportedException($"$expr not supported");
+            }
+
+          def statement = 
+            match (val)
+            {
+            | null => CodeVariableDeclarationStatement(tyRef, name);
+            | _    => CodeVariableDeclarationStatement(tyRef, name, ToExpression(val))
+            }
+
+          statement.UserData["mutable"] = isMutable;
+          yield statement;
+
+        | <[ when ($cond) $expr ]> =>
+          yield CodeConditionStatement(ToExpression(cond), ToStatements(expr).ToArray())
+
+        | <[ if ($cond) $trueExpr else $falseExpr ]> =>
+          yield CodeConditionStatement(ToExpression(cond),
+            ToStatements(trueExpr).ToArray(), ToStatements(falseExpr).ToArray())
+          
+        | _ => yield CodeExpressionStatement(ToExpression(expr))
+      }
+    }
+  }
+}

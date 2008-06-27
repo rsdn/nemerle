@@ -1,0 +1,737 @@
+using System;
+using System.Diagnostics;
+using System.Text;
+
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using SCG = System.Collections.Generic;
+
+/* TODO: Formatter
+ * format comments
+ * format multiline expressions
+ * format macro calls with respect to custom syntax
+ * 
+ *
+ */
+
+namespace Nemerle.Completion2.CodeFormatting
+{
+  public class CodeIndentationStage : CodeFormattingStageBase
+  {
+    public this (engine : Engine, fileIndex : int)
+    {
+      base(engine, fileIndex);
+    }
+    
+    mutable currentLine = 1;
+    mutable indentStack : list[int] = [];
+    
+    PushIndent() : void
+    {
+      PushIndent(PeekIndent() + defaultIndentSize);
+    }
+    PushIndent(arg : int) : void
+    {
+      indentStack ::= arg;
+    }
+    PopIndent() : int
+    {
+      match(indentStack)
+      {
+      | x :: xs => indentStack = xs; x;
+      | [] => 1 // the first column. 
+      }  
+    }
+    PeekIndent() : int
+    {
+      match(indentStack)
+      {
+      | x :: _ => x;
+      | [] => 1 // the first column. 
+      }  
+    }
+    
+    class IndentPusher : IDisposable
+    {
+      parentClass : CodeIndentationStage;
+      //private this() {}
+      public this(parent :  CodeIndentationStage, indentValue : int)
+      {
+        parentClass = parent;
+        parentClass.PushIndent(indentValue);
+      }
+      
+      public Dispose() : void
+      {
+        _ = parentClass.PopIndent();
+      }
+    }
+    GetIndentPusher() : IndentPusher
+    {
+      IndentPusher(this, PeekIndent() + defaultIndentSize);
+    }
+    GetIndentPusher(arg : int) : IndentPusher
+    {
+      IndentPusher(this, arg);
+    }
+    
+    
+    public static IsWhiteSpace(this token : Token) : bool
+    {
+      match(token)
+      {
+        | Token.WhiteSpace
+        | Token.Indent
+        | Token.NewLine => true;
+        | _ => false    
+      }
+    }
+    
+    RecalcLocation(loc : Location) : Location
+    {
+      def recalc(col, results)
+      {
+        mutable newCol = col;
+        
+        foreach(fr in results)
+        {
+          when(fr.StartCol < col && fr.EndCol <= col && fr.StartLine == fr.EndLine)
+          {
+            newCol += (fr.ReplacementString.Length - (fr.EndCol - fr.StartCol));
+          }
+        }
+        
+        newCol
+      }
+      
+      def newStartCol = recalc(loc.Column, GetResults().Filter(fr => fr.StartLine == loc.Line));
+      def newEndCol = recalc(loc.EndColumn, GetResults().Filter(fr => fr.StartLine == loc.EndLine));
+      
+      Location(loc.FileIndex, loc.Line, newStartCol, loc.EndLine, newEndCol);
+    }
+    
+    indentValue = " "; // TODO: make it configurable by user.
+    defaultIndentSize = 2;
+    matchCasesIndentOffset = 1; // match cases will be indented by matchCasesIndentOffset * defaultIndentSize
+    matchCasesBodyIndentOffset = 2;
+    variantOptionIndentOffset = 2;
+        
+    
+    IndentLocation(loc : Location) : void
+    {
+      def getIndentString(size)
+      {
+        def builder = StringBuilder(size * indentValue.Length);
+        repeat(size) 
+          _ = builder.Append(indentValue);
+        builder.ToString();
+      }
+
+      def canOperate = !loc.IsEmpty && _tokenFinder.FindAll(tok => tok.Location.Line == loc.Line)
+        .Filter(tok => tok.Location.EndColumn <= loc.Column)
+        .ForAll(_.IsWhiteSpace());
+      def isWithinRange = if(RegionToFormat.IsEmpty) true
+                          else if(RegionToFormat.Contains(loc.Line, loc.Column)) true
+                          else false;
+      when(canOperate && isWithinRange)
+      {
+        def expectedPosition = PeekIndent();  
+        
+        unless(loc.Column == expectedPosition)
+        {
+          if(expectedPosition != 1)
+            AddResult(FormatterResult.Replace(loc.Line, 1, loc.Column, getIndentString(expectedPosition - 1)));
+          else
+            AddResult(FormatterResult.Erase(loc.Line, 1, loc.Column));
+        }
+      }
+    }
+
+    FormatMatchCases(cases : list[MatchCase]) : void
+    {
+      def formatSingleCase(matchCase)
+      {
+        matchCase.patterns.Map(_.Location).Iter(loc =>
+            {
+               def pipe = _tokenFinder.FindPrevIf(loc.Line, loc.Column, _ is Token.Operator("|"));
+               IndentLocation(pipe.Location);
+            });
+
+        using(GetIndentPusher(PeekIndent() + matchCasesBodyIndentOffset * defaultIndentSize))
+        {
+          FormatPExpr(matchCase.body);
+          //cases.Map(_.body).Iter(FormatPExpr);
+        }
+      }
+      
+      using(GetIndentPusher(PeekIndent() + matchCasesIndentOffset * defaultIndentSize))
+      {
+        cases.Iter(formatSingleCase);
+      }
+    }
+
+
+    FormatPExpr(pexpr : PExpr) : void
+    {
+      
+      if(pexpr.Location.Line == pexpr.Location.EndLine)
+        IndentLocation(pexpr.Location);
+      else match(pexpr)
+      {
+      | Sequence(exprs) => // Sequence { body : list [PExpr]; }
+            exprs.Iter(FormatPExpr);
+      | Try(body, cases) => // Try { body : PExpr; cases : list [TryCase]; }
+          def beginTryBrace = GetFirstBeginBraceAfterLocation(pexpr.Location.Line, pexpr.Location.Column);
+          IndentLocation(pexpr.Location);
+          IndentLocation(beginTryBrace.Location);
+          
+          using(GetIndentPusher())
+          {
+            FormatPExpr(body);
+          } 
+                              
+          def endTryBrace = GetNextPairedBrace(beginTryBrace);
+          IndentLocation(endTryBrace.Location);
+          
+          def catchKeyword = _tokenFinder.FindNextIf(endTryBrace.Location.Line, endTryBrace.Location.Column, _ is Token.Keyword("catch")); 
+          def beginCatchBrace = GetFirstBeginBraceAfterLocation(catchKeyword.Location);
+          def endCatchBrace = GetNextPairedBrace(beginCatchBrace);
+          IndentLocation(catchKeyword.Location);
+          IndentLocation(beginCatchBrace.Location);
+          
+          //cases.Map(_.Location).Iter(WriteLocation);
+          cases.Iter(FormatTryCase);
+
+          IndentLocation(endCatchBrace.Location);
+            
+      | TryFinally(body, handler) => // TryFinally { body : PExpr; handler : PExpr; }
+          def beginTryBrace = GetFirstBeginBraceAfterLocation(pexpr.Location.Line, pexpr.Location.Column);
+          IndentLocation(pexpr.Location);
+          IndentLocation(beginTryBrace.Location);
+                    
+          using(GetIndentPusher())
+          {
+            FormatPExpr(body);
+          } 
+
+          def endTryBrace = GetNextPairedBrace(beginTryBrace);
+          IndentLocation(endTryBrace.Location);
+          
+          def finallyKeyword = _tokenFinder.FindNextIf(endTryBrace.Location.Line, endTryBrace.Location.Column, _ is Token.Keyword("finally")); 
+          def beginFinallyBrace = GetFirstBeginBraceAfterLocation(finallyKeyword.Location);
+          def endFinallyBrace = GetNextPairedBrace(beginFinallyBrace);
+          IndentLocation(finallyKeyword.Location);
+          IndentLocation(beginFinallyBrace.Location);
+          
+          using(GetIndentPusher())
+          {
+            FormatPExpr(handler);
+          } 
+          
+          IndentLocation(endFinallyBrace.Location);
+            
+      | MacroCall(_, ns, parms) as macroExpr => // MacroCall       { name : Name; ns : NamespaceTree.Node; parms : list [SyntaxElement]; }
+          match(ns.Value)
+          {
+          | NamespaceTree.TypeInfoCache.MacroCall (m) =>
+            def (rules, _) = m.SyntaxExtension ();
+            mutable parms_left = parms;
+            //def rules = rules.Next;
+            mutable firstKeywordLoc = None();
+            
+            def formatExpression(pexpr : PExpr)
+            {
+            | PExpr.Sequence(body) as seq =>
+                def beginBrace = _tokenFinder.FindAt(seq.Location.Line, seq.Location.Column);
+                assert(beginBrace is Token.BeginBrace);
+                
+                using(GetIndentPusher(Math.Max(PeekIndent(), RecalcLocation(firstKeywordLoc.UnSome()).Column)))
+                {
+                  IndentLocation(beginBrace.Location);
+                  using(GetIndentPusher())
+                  {
+                    body.Iter(FormatPExpr);
+                  }
+                  IndentLocation(GetNextPairedBrace(beginBrace).Location);
+                }
+                
+            | _ => 
+                using(GetIndentPusher(Math.Max(PeekIndent(), RecalcLocation(firstKeywordLoc.UnSome()).Column + defaultIndentSize)))
+                {
+                  FormatPExpr(pexpr);
+                }
+            }
+            def processSyntaxRules (x) 
+            {
+              match (x) 
+              {
+                | GrammarElement.Keyword (k) => 
+                    def kw = _tokenFinder.FindNextIf(macroExpr.Location.Line,
+                                                     macroExpr.Location.Column,
+                                                     fun(tok : Token) 
+                                                     {
+                                                     | Token.Keyword as a when a.name == k => true
+                                                     | _ => false;
+                                                     });
+                    mutable preferredColumn = 0;
+                    match(firstKeywordLoc)
+                    {
+                    | None => 
+                        firstKeywordLoc = Some(kw.Location);
+                        preferredColumn = PeekIndent();
+                    | _ => preferredColumn = Math.Max(PeekIndent(), RecalcLocation(firstKeywordLoc.UnSome()).Column);
+
+                    }
+                    using(GetIndentPusher(preferredColumn))
+                    {
+                      IndentLocation(kw.Location);
+                    }
+                    
+                //| GrammarElement.Operator (")") => acc.Write (") ")
+                //| GrammarElement.Operator ("}") => acc.Write ("} ")                
+                //| GrammarElement.Operator (o) => acc.Write (o)
+                //| GrammarElement.Optional (g) => print_gel (g)
+                //| GrammarElement.RawToken => 
+                  //match (parms_left) {
+                    //| SyntaxElement.RawToken (t) :: xs =>
+                      //acc.Write (t.ToString ());
+                      //parms_left = xs;
+                    //| _ =>
+                      //Message.Error ("expected raw token as parameter of macro "
+                                     //+ namespc.GetDisplayName ())
+                  //};
+  //
+                | GrammarElement.Expression =>
+                  match (parms_left) {
+                    | SyntaxElement.Expression (e) :: xs =>
+                      //def beginBrace = GetFirstBeginBraceAfterLocation(e.Location.Line, e.Location.Column);
+                      //IndentLocation(beginBrace.Location);
+                      formatExpression(e);
+                      //IndentLocation(GetNextPairedBrace(beginBrace).Location);
+                      parms_left = xs;
+                    | _ => ()
+                  };
+                | GrammarElement.Parameter =>
+                  match (parms_left) 
+                  {
+                    | SyntaxElement.Parameter (p) :: xs =>
+                      IndentLocation(p.Location);
+                      parms_left = xs;
+                    | _ => ()
+                  }
+
+                //| GrammarElement.ExpressionList =>
+                  //SeparatedCalls (", ", parms_left, fun (_) {
+                    //| SyntaxElement.Expression (e) => SprintExpr (ctx, e, indentation, acc)
+                    //| _ =>
+                      //Message.Error ("expected expression in macro parameters: "
+                                     //+ namespc.GetDisplayName ())
+                  //}, acc);
+  //
+                //| GrammarElement.Branch | GrammarElement.End => Util.ice ("invalid node");
+                | _ => ()
+              }
+              when (x.Next != null)
+                processSyntaxRules (x.Next)
+            }
+            processSyntaxRules(rules);
+          | _ => ()
+          }
+          
+
+      | Match(_, cases, _) => // Match { expr : PExpr; cases : list [MatchCase]; }
+          def beginBrace = GetFirstBeginBraceAfterLocation(pexpr.Location.Line, pexpr.Location.Column);
+          IndentLocation(pexpr.Location);
+          IndentLocation(beginBrace.Location);
+          
+          FormatMatchCases(cases);
+          
+          def endBrace = GetNextPairedBrace(beginBrace);
+          IndentLocation(endBrace.Location);
+      | DefFunctions(funcs) => // DefFunctions { funs : list [Function_decl]; }
+          foreach(func in funcs)
+          {
+            def kw = _tokenFinder.FindPrevIf( func.header.Location.Line,
+                                              func.header.Location.Column,
+                                              tok => match(tok)
+                                                     {
+                                                     | Token.Keyword("def")
+                                                     | Token.Keyword("and") => true;
+                                                     | _ => false;
+                                                     });
+            IndentLocation(kw.Location);
+            def beginBrace = GetFirstBeginBraceAfterLocation(func.header.Location);
+            IndentLocation(beginBrace.Location);
+            
+            match(func.body)
+            {
+            | PExpr.Match(_, cases, _) => FormatMatchCases(cases);
+            | expr => 
+                using(GetIndentPusher())
+                {
+                  FormatPExpr(expr);  
+                }
+            }
+            
+            IndentLocation(GetNextPairedBrace(beginBrace).Location);
+          }
+      | Lambda(_) => // Lambda { decl : Function_decl; }
+          ()
+          //IndentLocation(lambda.header.Location);
+          //def formatBodyAfter(loc)
+          //{
+          //  def tok = _tokenFinder.FindNextIf(loc.EndLine, loc.EndColumn, FirstNonWhitespaceToken);
+          //  match(tok)
+          //  {
+          //  | BeginBrace =>
+          //      IndentLocation(tok.Location);
+          //      using(GetIndentPusher())
+          //      {
+          //        FormatPExpr(lambda.body);
+          //      }
+          //      IndentLocation(GetNextPairedBrace(tok).Location);
+          //  | Operator("=>") => formatBodyAfter(tok.Location);
+          //  | _ => 
+          //      using(GetIndentPusher())
+          //      {
+          //        FormatPExpr(lambda.body);
+          //      } 
+          //  }
+          //}
+          //formatBodyAfter(lambda.header.Location);
+          
+      | Define (name, val)
+      | DefMutable(name, val) =>
+          def kw = _tokenFinder.FindPrevIf( name.Location.Line,
+                                            name.Location.Column,
+                                            tok => match(tok)
+                                                   {
+                                                   | Token.Keyword("def")
+                                                   | Token.Keyword("mutable") => true;
+                                                   | _ => false;
+                                                   });
+          IndentLocation(kw.Location);
+          FormatPExpr(name);
+
+          def equalSign = _tokenFinder.FindNextIf(name.Location.EndLine, name.Location.EndColumn, _ is Token.Operator("="));
+          using(GetIndentPusher(RecalcLocation(equalSign.Location).EndColumn + 1))
+          {
+            FormatPExpr(val);
+          }
+          
+      | Assign (name, val) =>
+          FormatPExpr(name);
+
+          def equalSign = _tokenFinder.FindNextIf(name.Location.EndLine, name.Location.EndColumn, _ is Token.Operator("="));
+          using(GetIndentPusher(RecalcLocation(equalSign.Location).EndColumn + 1))
+          {
+            FormatPExpr(val);
+          }
+      //| Indexer (obj, parms) 
+      | Call(obj, parms)  => // here obj is the func name.
+          FormatPExpr(obj);
+          using(GetIndentPusher(RecalcLocation(parms.Head.Location).Column + defaultIndentSize))
+          {
+            parms.Iter(FormatPExpr);  
+          }
+      | Member(obj, member) =>
+          FormatPExpr(obj);
+          def dot = _tokenFinder.FindNextIf(obj.Location.EndLine, obj.Location.EndColumn, _ is Token.Operator("."));
+          using(GetIndentPusher())
+          {
+            IndentLocation(dot.Location);
+            FormatSplicable(member);
+          }
+      | ListLiteral (elems) =>
+          def beginBracket = _tokenFinder.FindNextIf(pexpr.Location.Line, pexpr.Location.Column, _ is Token.BeginSquare);
+          IndentLocation(beginBracket.Location);
+          using(GetIndentPusher())
+          {
+            elems.Iter(FormatPExpr);
+          }
+          IndentLocation(GetNextPairedBrace(beginBracket).Location);
+
+      | _ => Debug.WriteLine($"Unhandled PExpr, $(pexpr.ToString())");   
+      }
+    } 
+    
+/* Unhandled PExpr's
+    | Wildcard        // _ used mainly in patterns, but also in _ = ignored
+    | Void            // void used only in types
+    | As              { pat : PExpr; name : Splicable; }
+    | Is              { pat : PExpr; ty : PExpr; }
+    | Where           { name : PExpr; fields : PExpr; }
+
+    | Ref             { name : Name; }
+    | GenericSpecifier { func : PExpr; generic_parms : list [PExpr]; }
+    | Throw           { exn : PExpr; }
+    | Literal         { val : Nemerle.Compiler.Literal; }
+    | This
+    | Base
+    | Typeof          { ty : PExpr; }
+    | TypeConversion  { expr : PExpr; ty : PExpr; }  // (expr :> ty)
+    | TypeEnforcement { expr : PExpr; ty : PExpr; } // (expr : ty)
+    | Tuple           { args : list [PExpr]; }
+    | Array           { rank : PExpr; args : PExpr; }
+    | EmptyArray      { sizes : list [PExpr]; }
+    | ParmByRef       { parm : PExpr; }
+    | ParmOut         { parm : PExpr; }
+
+    | Error // placeholder of missing tree (where some errors occured)
+      
+    // macros stuff    
+    | Quoted          { body : SyntaxElement; }
+    | Spliced         { body : PExpr; }
+    | ToComplete      { body : Name; }
+    | Ellipsis        { body : PExpr; }
+    | Typed           { body : Typedtree.TExpr; }
+    | TypedPattern    { body : Typedtree.Pattern; }  
+    | TypedType       { body : TyVar; }
+
+*/   
+    FormatSplicable(name : Splicable) : void
+    {
+    | Name (body) 
+    | HalfId(body)  => IndentLocation(body.Location);
+    | Expression(expr) => FormatPExpr(expr);
+    }
+
+    FormatTryCase(tryCase : TryCase) : void
+    {
+      def pipe = _tokenFinder.FindPrevIf(tryCase.Location.Line, tryCase.Location.Column, _ is Token.Operator("|"));
+      IndentLocation(pipe.Location);
+      
+      match(tryCase)
+      {
+      | Catch(_, exn_ty, handler) => 
+          FormatPExpr(exn_ty);
+          using(GetIndentPusher(PeekIndent() + matchCasesBodyIndentOffset * defaultIndentSize))
+          {
+            FormatPExpr(handler);
+          }
+      | Filter(_, exn_ty, filter, handler) => 
+          FormatPExpr(exn_ty);
+          FormatPExpr(filter);
+          using(GetIndentPusher(PeekIndent() + matchCasesBodyIndentOffset * defaultIndentSize))
+          {
+            FormatPExpr(handler);
+          }
+      | Ellipsis(body) => 
+          using(GetIndentPusher(PeekIndent() + matchCasesBodyIndentOffset * defaultIndentSize))
+          {
+            FormatPExpr(body);
+          }
+      }
+    } 
+
+    FormatMethod(mb : MethodBuilder) : void
+    {
+      // Skipping properties (other methods too?)
+      when((mb.Attributes & NemerleAttributes.SpecialName) == 0)
+      {
+        // TODO: Format header properly (handle multiline headers)
+        IndentLocation(mb.Location);
+
+        def beginBrace = GetFirstBeginBraceAfterLocation(mb.GetHeader().Location);
+        IndentLocation(beginBrace.Location);
+        
+        match(mb.BodyParsed)
+        {
+        | PExpr.Match(_, cases, _) => FormatMatchCases(cases);
+        | expr => 
+            using(GetIndentPusher())
+            {
+              FormatPExpr(expr);  
+            }
+        }
+        
+        IndentLocation(GetNextPairedBrace(beginBrace).Location);
+      }
+    }
+    
+    FormatProperty(pb : PropertyBuilder) : void
+    {
+      def formatInternal(method : MethodBuilder, kwPredicate)
+      {
+        when(method != null)
+        {
+          def kw = _tokenFinder.FindNextIf( method.Location.Line, 
+                                            method.Location.Column,
+                                            kwPredicate);
+          IndentLocation(kw.Location);
+          
+          def beginBrace = GetFirstBeginBraceAfterLocation(kw.Location);
+          IndentLocation(beginBrace.Location);
+          
+          using(GetIndentPusher())
+          {
+            FormatPExpr(method.BodyParsed);
+          }
+          
+          IndentLocation(GetNextPairedBrace(beginBrace).Location);  
+        }    
+      }
+
+      IndentLocation(pb.Location);
+      def beginBrace = GetFirstBeginBraceAfterLocation(pb.Ast.name.Location);
+      IndentLocation(beginBrace.Location);
+
+      using(GetIndentPusher())
+      {
+        formatInternal(pb.GetGetter() :> MethodBuilder, _ is Token.Identifier("get"));
+        formatInternal(pb.GetSetter() :> MethodBuilder, _ is Token.Identifier("set"));
+      }
+      
+      IndentLocation(GetNextPairedBrace(beginBrace).Location);
+    }
+    
+    FormatField(fb : FieldBuilder) : void
+    {
+      //Debug.Assert(fb.Location.Line == fb.Location.EndLine, $"Declaration of field $(fb.Name) spans over several lines. Can't indent.");
+      when(fb.Location.Line == fb.Location.EndLine)
+        IndentLocation(fb.Location);
+    }
+    
+    FormatEvent(eb : EventBuilder) : void
+    {
+      Debug.Assert(eb.Location.Line == eb.Location.EndLine, $"Declaration of event $(eb.Name) spans over several lines. Can't indent.");
+      IndentLocation(eb.Location);
+    }
+
+    FormatVariantOption(variantOption : TypeBuilder) : void
+    {
+      def pipe = _tokenFinder.FindPrevIf(variantOption.Location.Line, variantOption.Location.Column, _ is Token.Operator("|"));
+      IndentLocation(pipe.Location);
+      
+      def members = variantOption.GetDirectMembers();
+      def hasFields = ! members.ForAll(member => member.Location.IsGenerated); 
+      when(hasFields)
+      {
+        using(GetIndentPusher(PeekIndent() + defaultIndentSize * variantOptionIndentOffset))
+        {
+          def beginBrace = GetFirstBeginBraceAfterLocation(variantOption.Location.Line, variantOption.Location.Column);
+          IndentLocation(beginBrace.Location);
+          using(GetIndentPusher())
+          {
+            foreach(member in members)
+              FormatTypeBuilderMember(member);
+          }
+          IndentLocation(GetNextPairedBrace(beginBrace).Location);
+        }
+          
+      }
+    }
+
+    FormatTypeBuilderMember(member : IMember) : void
+    {
+    | mmb is MemberBuilder => // fields, properties, methods, events
+        unless(mmb.IsGenerated)
+        {
+          match(mmb)
+          {
+          | mb is MethodBuilder => FormatMethod(mb);
+          | pb is PropertyBuilder => FormatProperty(pb);
+          | fb is FieldBuilder => FormatField(fb);
+          | eb is EventBuilder => FormatEvent(eb);
+          | _ => Debug.WriteLine($"!!! Unhandled MemberBuilder type in FormatClassMember: $(mmb.GetType().Name)");  
+          }
+        }
+    | tb is TypeBuilder =>  if(tb.IsVariantOption) 
+                              FormatVariantOption(tb)
+                            else
+                              FormatType(tb);
+    | _ => Debug.WriteLine($"!!! Unhandled member type in FormatClassMember: $(member.GetType().Name)");  
+    }
+    
+    FormatType(tb : TypeBuilder) : void
+    {
+      unless(tb.Location.IsGenerated)
+      {
+        def part = match(tb.AstParts.Find(part => part.Location.FileIndex == _fileIndex))
+                    {
+                    | Some(val) => val
+                    | None => throw ApplicationException($"No type part found in file $_fileIndex");
+                    };
+        
+        // TODO: Format base class and implemented interfaces list.
+        
+        IndentLocation(tb.Location);
+        def beginBrace = GetFirstBeginBraceAfterLocation(part.name.Location);
+        IndentLocation(beginBrace.Location);
+  
+        PushIndent();
+        
+        foreach(member in tb.GetDirectMembers().Filter(mmbr => mmbr.Location.FileIndex == _fileIndex))
+          FormatTypeBuilderMember(member);
+
+        _ = PopIndent();
+        def endBrace = GetNextPairedBrace(beginBrace);
+        IndentLocation(endBrace.Location);
+      }
+    }
+    
+    FormatUsing(us : Decl.Using) : void
+    {
+      IndentLocation(us.Location);
+    }
+    
+    FormatNamespace(ns : Decl.Namespace) : void
+    {
+      def beginBrace = GetFirstBeginBraceAfterLocation(ns.Location.Line, ns.Location.Column);
+      mutable isGlobalNS = false;
+      match(ns.Name)
+      {
+      | _ :: _ => // if namespace name isn't empty (not global namespace)
+          IndentLocation(ns.Location);
+          when(beginBrace.Location.Line > ns.Location.Line) // assume that namespace name is single-lined.
+            IndentLocation(beginBrace.Location);
+      | _ => isGlobalNS = true;
+      }
+      unless(isGlobalNS)
+        PushIndent();
+      
+      foreach(x in ns.Decls)
+      {
+        match(x)
+        {
+          | Decl.Namespace as n => FormatNamespace(n);
+          | Decl.Type as t => FormatType(t.Builder);
+          | Decl.Using as u => FormatUsing(u);
+          | _ => ()
+        }
+      }
+
+      unless(isGlobalNS)
+      {
+        _ = PopIndent();
+        def endBrace = GetNextPairedBrace(beginBrace);
+        IndentLocation(endBrace.Location);
+      }
+    }
+
+    _WriteLocation(loc : Location) : void
+    {
+      Debug.WriteLine($"Location: $(loc.Line), $(loc.Column), $(loc.EndLine), $(loc.EndColumn)");
+    }
+    
+    public override FormatDocument() : SCG.List.[FormatterResult]
+    {
+      Prepare();
+      
+      //def preparser = PreParser(lexer);
+      //_documentTokens = preparser.PreParse();
+      //
+      FormatNamespace(rootNamespaceNode);
+      GetResults();
+    }
+    public override FormatRegion(startLine : int, startCol : int, endLine : int, endCol : int) : SCG.List.[FormatterResult]
+    {
+_ = base.FormatRegion(startLine, startCol, endLine, endCol);
+      // The call above sets "clipping" region, and FormatDocument will respect
+// this and will not make any changes that are not inside of that region.
+FormatDocument();
+}
+  }
+}

@@ -1,0 +1,434 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Compiler.Utils;
+using Nemerle.Collections;
+
+using Nemerle.Assertions;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+using Nemerle.Compiler.NemerleAttributes;
+
+using SCG = System.Collections.Generic;
+using SR  = System.Reflection;
+
+namespace Nemerle.Completion2
+{
+  public delegate AddHiddenRegion(location : Location, text : string, isExpanded : bool) : void;
+  public delegate AddError       (compilerMessage : CompilerMessage) : bool;
+
+  [Record]
+  public partial class Project
+  {
+    public Engine : Engine
+    {
+      mutable _engine : Engine;
+      get         { ManagerClass.Instance = _engine; _engine; }
+      private set { _engine = value }
+    }
+
+    [Accessor] _compileUnits  : CompileUnitCollection;
+    [Accessor] _namespaceTree : NamespaceTree.Node;
+    [Accessor] _errors        : list[CompilerMessage];
+
+    public CompleteWord(
+                fileIndex : int,
+                line      : int,
+                col       : int,
+      /*[NotNull]*/ source   : ISource
+    )
+      : array[CompletionElem]
+    {
+      // Find the declaration under text cursor.
+      def decl = GetActiveDecl(fileIndex, line, col);
+
+      match (decl)
+      {
+        | GlobalAttribute => array(0)
+        | Using as us     => this.Engine.CompleteInUsing    (us, fileIndex, line, col, source);
+        | Namespace as ns => this.Engine.CompleteInNamespace(ns, fileIndex, line, col, source);
+        | Type as ty      => CompleteInType     (ty, fileIndex, line, col, source);
+        | None            => throw System.Exception();
+      }
+    }
+    
+    static _autoModule = "_N_AutoModule";
+
+    public GetActiveNamespaces(fileIndex : int, line : int, column : int) : list[Decl.Namespace]
+    {
+      def findNamespaces(declaration) : list[Decl.Namespace]
+      {
+        | @namespace is Decl.Namespace =>
+          def namespaces =
+            match (@namespace.Decls.Find(declaration => declaration.Location.Contains(line, column)))
+            {
+              | Some(declaration) => findNamespaces(declaration);
+              | None => [];
+            }
+          @namespace :: namespaces
+        | _ => []
+      }
+
+      findNamespaces(_compileUnits[fileIndex])
+    }
+
+    /// Finds the innermost top level construction (namespace, class,
+    /// using, attribute) located at fileIndex, line, and col.
+    public GetActiveDecl(fileIndex : int, line : int, col : int) : Decl
+    {
+      def find_decl(decl : Decl)
+      {
+        def find(decls : list[Decl])
+        {
+          | decl2 :: tail =>
+            match (find_decl(decl2))
+            {
+              | Decl.None => find(tail)
+              | x         => x
+            }
+          | [] => decl
+        }
+
+        match (decl)
+        {
+          | Decl.Namespace as ns2 when ns2.Location.Contains(line, col) => find(ns2.Decls)
+          | Decl.Using     as usn when usn.Location.Contains(line, col) => decl
+          | Decl.Type      as ty =>
+            match (ty.Builder.PartsLocation.Find(l => l.Contains(fileIndex, line, col)))
+            {
+            | Some => decl
+            | None => Decl.None(Location.Default)
+            }
+          | _      => Decl.None(Location.Default)
+        }
+      }
+
+      find_decl(_compileUnits[fileIndex])
+    }
+
+    public GetActiveEnv(fileIndex : int, line : int) : GlobalEnv * TypeBuilder * int * int
+    {
+      mutable env;
+      mutable typeBuilder;
+      mutable start = 0;
+      mutable end   = int.MaxValue;
+
+      def check(loc, doFind)
+      {
+        if (line >= loc.Line)
+        {
+          if (line <= loc.EndLine)
+          {
+            start = loc.Line;
+            end   = loc.EndLine;
+
+            doFind();
+
+            true;
+          }
+          else
+          {
+            start = loc.EndLine + 1;
+            false;
+          }
+        }
+        else
+        {
+          end = loc.Line - 1;
+          false;
+        }
+      }
+
+      def loop(decl : Decl)
+      {
+      | Namespace as ns => 
+
+        check(ns.Location, () =>
+        {
+          env = ns.InsideEnv;
+
+          foreach (d in ns.Decls)
+            when (loop(d))
+              break;
+        });
+
+      | Type(builder) => 
+
+        def checkBuilder(builder)
+        {
+          _debug(builder);
+          mutable found = false;
+
+          foreach (loc
+            when !found && loc.FileIndex == fileIndex && builder.Location.Line < builder.Location.EndLine
+            in builder.PartsLocation)
+          {
+            found = check(loc, () =>
+            {
+              typeBuilder = builder;
+
+              foreach (b in builder.DeclaredNestedTypes)
+                when (checkBuilder(b))
+                  break;
+            });
+          }
+
+          found
+        }
+
+        checkBuilder(builder);
+
+      | Using as us   => 
+
+        when (us.NameLocations.Length > 0 && line >= us.NameLocations.Head.Line)
+        {
+          start = us.Location.Line;
+          env   = us.AfterEnv;
+        }
+
+        false;
+
+      | _ => false
+      }
+
+      def decl = _compileUnits[fileIndex];
+
+      _ = loop(decl);
+
+      (env, typeBuilder, start, end)
+    }
+
+    /// Finds the innermost top level construction (namespace, class,
+    /// using, attribute) located at filePath, line, and col.
+    public GetActiveDecl([NotNull] filePath : string, line : int, col : int) : Decl
+    {
+      GetActiveDecl(_compileUnits.GetFileIndex(filePath), line, col)
+    }
+
+    public GetQuickTipInfo([NotNull] filePath : string, line : int, col : int) : QuickTipInfo
+    {
+      def fileIndex = _compileUnits.GetFileIndex(filePath);
+      def decl      = GetActiveDecl(fileIndex, line, col);
+
+      match (decl)
+      {
+      | Using as us => this.Engine.GetUsingQuickTip(us, fileIndex, line, col)
+      | Type  as tp => GetTypeQuickTip (tp, fileIndex, line, col, Engine);
+      | _           => null
+      }
+    }
+
+    public GetGotoInfo(member : SR.MemberInfo) : array [GotoInfo]
+    {
+      def isType   = member is System.Type && Attribute.GetCustomAttribute(member, typeof(Nemerle.Internal.VariantOptionAttribute)) == null;
+      def ty       = if (isType) member :> System.Type else member.DeclaringType;
+      def fullName = ty.FullName.Split('`')[0];
+
+      def typeBuilder = Array.Find(NamespaceTree.GetTypeBuilders(), p => p.FullName == fullName);
+      if (typeBuilder != null)
+      {
+        def lst = 
+          if (isType)
+            typeBuilder.AstParts.Map(p => GotoInfo(p.name.Location))
+          else if (typeBuilder.LookupMemberAvailable)
+            typeBuilder.GetMembers()      .Filter(m => m.Name == member.Name).Map(GotoInfo);
+          else
+            typeBuilder.GetParsedMembers().Filter(m => m.Name == member.Name).Map(GotoInfo);
+
+        lst.ToArray()
+      }
+      else
+      {
+        Debug.WriteLine($"Type builder $fullName not found");
+        null
+      }
+    }
+
+    public GenerateCode(ty : System.Type, member : SR.MemberInfo, writer : System.IO.TextWriter) : GotoInfo
+    {
+      def nameAndGenericArgs =
+        if (ty.IsGenericType)
+          (ty.FullName.Split('`')[0], ty.GetGenericArguments().Length);
+        else
+          (ty.FullName, 0);
+
+      def typeInfo = Engine.Lookup(nameAndGenericArgs);
+      Debug.Assert(null != typeInfo, $"type $(ty.FullName) not found");
+
+      def generator = SourceGenerator(writer, member);
+      generator.WriteTypeDeclaration(typeInfo);
+      GotoInfo(generator.Location);
+    }
+
+    public GetTypes(fileIndex : int) : List[TypeBuilder]
+    {
+      def l = List();
+
+      def find(decl)
+      {
+        match (decl)
+        {
+        | Decl.Type(b)    =>
+
+          l.Add(b);
+          l.AddRange(b.DeclaredNestedTypes);
+
+          //foreach (t when !t.IsVariantOption in b.DeclaredNestedTypes)
+          //  l.Add(t);
+
+        | Namespace as nm => nm.Decls.Iter(find);
+        | _               => ()
+        }
+      }
+
+      find(_compileUnits[fileIndex]);
+
+      l
+    }
+
+    internal GetAllCompilerMessageForFile(fileIndex : int) : SCG.IEnumerable[CompilerMessage]
+    {
+      foreach (cm when cm.Location.FileIndex == fileIndex in Errors)
+        yield cm;
+
+      def methods = GetAllMetodsDefinedInFile(fileIndex);
+
+      foreach (method when method.IsBodyCompilable in methods)
+      {
+#if !DEBUG
+        try
+        {
+#endif
+          method.EnsureCompiled();
+#if !DEBUG
+        }
+        catch
+        {
+          e =>
+            Trace.WriteLine("Exception occur in retrive error messages:");
+            Trace.WriteLine($"Error:$(e.Message)");
+        }
+#endif
+        foreach (cm in method.BodyMessages)
+          yield cm;
+      }
+    }
+
+    private GetAllMetodsDefinedInFile(fileIndex : int) : SCG.List[MethodBuilder]
+    {
+      def ns = CompileUnits[fileIndex];
+      def seq = SCG.List();
+
+      def scanType(ty : TypeBuilder)
+      {
+        when (ty.PartsLocation.Exists(x => x.FileIndex == fileIndex))
+          foreach (member in ty.GetDirectMembers())
+          {
+            | tb is TypeBuilder => scanType(tb)
+            | mb is MethodBuilder when mb.Location.FileIndex == fileIndex =>
+              seq.Add(mb);
+              seq.AddRange(mb.GetAllRelated());
+            | _ => ()
+          }
+      }
+
+      def scanDecl(decl : Decl)
+      {
+        | Namespace as ns when ns.BodyLocation.FileIndex == fileIndex =>
+          foreach (subDecl in ns.Decls)
+            scanDecl(subDecl);
+
+        | Type(tb) => scanType(tb);
+        | _ => ()
+      }
+
+      scanDecl(ns);
+
+      seq
+    }
+
+    public Check(
+      [NotNull] fileName        : string,
+      [NotNull] source          : ISource,
+      [NotNull] addHiddenRegion : AddHiddenRegion,
+      [NotNull] addError        : AddError
+    )
+      : void
+    {
+#if !DEBUG
+      try
+      {
+#endif
+
+        Checker(this, fileName, source, addHiddenRegion, addError).Check();
+
+#if !DEBUG
+      }
+      catch { _ => () }
+#endif
+
+    }
+
+    public GetMethodTip(
+      [NotNull] filePath : string,
+                line     : int,
+                col      : int,
+      [NotNull] source   : ISource
+    )
+      : MethodTipInfo
+    {
+      def fileIndex = _compileUnits.GetFileIndex(filePath);
+      def decl      = GetActiveDecl(fileIndex, line, col);
+      
+      match (decl)
+      {
+      | Type as tp => GetMethodTip(tp, fileIndex, line, col, source);
+      | None       => throw System.Exception()
+      | _          => null
+      }
+    }
+
+    _debug(obj : object) : void
+    {
+      when (obj != null)
+        _ = obj.ToString();
+    }
+
+    /// Find TypeBuilder by it full qualified name (include outer classes)/
+    /// namespacePath - list of namespace path.
+    /// typeInfs - list of names with type parametrs count of class and it
+    ///            outer classes which it nested.
+    public LookupTypeBuilder(
+      namespacePath : list[string],
+      typeInfs      : list[string * int]
+    )
+      : TypeBuilder // nullable
+    {
+      def nsTree = NamespaceTree;
+      def fullName = namespacePath + [typeInfs.Head[0]];
+      def typeInfo = nsTree.LookupType(fullName, typeInfs.Head[1]);
+      match (typeInfo)
+      {
+        | Some(tb is TypeBuilder) =>
+          def nesteds = typeInfs.Tail;
+          
+          if (nesteds.IsEmpty) tb
+            else nesteds.FoldRight(tb, fun((name, tArgs) : string * int, obj : TypeBuilder) : TypeBuilder
+          {
+            Trace.Assert(obj.LookupMemberAvailable);
+            match (obj.GetNestedTypes().Find(a : TypeInfo => a.Name == name && a.TyparmsCount == tArgs))
+            {
+              | Some(nestedTb is TypeBuilder) => nestedTb
+              | _ => obj
+            }
+          });
+
+        | _ => null
+      }
+    }
+  }
+}

@@ -1,0 +1,715 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
+
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Utils;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using SCG = System.Collections.Generic;
+
+namespace Nemerle.Completion2
+{
+  public partial class Project
+  {
+    public static TopKeywords : array[CompletionElem] { get { Engine.TopKeywords } }
+    
+    /// Complete word inside the method.
+    CompleteInType(
+      @type     : Decl.Type,
+      fileIndex : int,
+      line      : int,
+      col       : int, 
+      source    : ISource
+    )
+      : array[CompletionElem]
+    {
+      def typeBuilder = @type.Builder;
+      // Find member under cursor
+      def member = typeBuilder.GetMemberByLocation(fileIndex, line, col);
+
+      def scanMethod(method)
+      {
+        def loc = method.BodyLocation;
+        
+        if (loc.Contains(line, col)) // completion in method body
+        {
+          def bodyCode = source.GetRegion(loc.Line, loc.Column, loc.EndLine, loc.EndColumn);
+          def result   = Engine.RunCompletionEngine(method, bodyCode, loc, line, col);
+
+          if (result == null)
+          {
+            Trace.WriteLine("### RunCompletionEngine() return null!");
+            Engine.ExpressionDefaultKeywords
+          }
+          else
+            Engine.MakeCompletionList(result, true);
+        }
+        else // Completion outside method body.
+          this.Engine.ComplateInParsedTypeAst(method.Ast, fileIndex, line, col, source)
+      }
+
+      def FindCorrespondMethod()
+      {
+        def result = typeBuilder.GetMemberByLocation(fileIndex, line, col);
+        
+        match (result) { m is MethodBuilder => scanMethod(m) | _ => TopKeywords }
+      }
+
+      match (member)
+      {
+        | _ is PropertyBuilder => 
+          //def isAccessor(m : MemberBuilder) { prop.GetGetter() == m : object || prop.GetSetter() == m : object }
+          FindCorrespondMethod();
+
+        | method is MethodBuilder => scanMethod(method)
+        | null => this.Engine.CompleteDeclarationBase(
+                    @type.Builder.Ast, fileIndex, line, col, source);
+        | field is FieldBuilder =>
+          if (field.InitializerLocation.Contains(fileIndex, line, col))
+            scanMethod(field.LookupInitializerMethod());
+          else
+            TopKeywords
+
+        | _ => throw System.Exception($"Unknown member type '$member'.");
+      }
+    }
+
+    public FindObjectEverywhere(
+      typeDecl  : Decl.Type,
+      fileIndex : int,
+      line      : int,
+      col       : int
+    )
+      : Location * object * object
+    {
+      def res = FindObject(typeDecl, fileIndex, line, col);
+      when (res[1] != null || res[2] != null)
+        return res;
+    
+      def checkType(pexpr, texpr : TyVar) 
+      {
+        def pargs =
+          match (pexpr)
+          {
+          | PExpr.Array  (_, p)          => [p]
+          | PExpr.Call   (_, p)
+          | PExpr.Indexer(_, p)
+          | PExpr.GenericSpecifier(_, p) => p
+          | _                            => []
+          }
+
+        match (pargs.Find((p) => p.Location.Contains(line, col)))
+        {
+        | Some(p) =>
+            def targs =
+              match (texpr)
+              {
+              | mType is MType =>
+                match (mType)
+                {
+                | MType.Array (p, _) => [p]
+                | MType.Fun   (f, t) => [f, t]
+                | MType.Class (_, p)
+                | MType.Tuple (p)    => p
+                | _                  => []
+                }
+              | _                    => []
+              };
+
+            def idx = pargs.IndexOf(p);
+            checkType(p, targs.Nth(idx))
+
+        | _       => (pexpr.Location, null, texpr)
+        }
+      }
+      def getMethod(method)
+      {
+        def ast = method.Ast;
+
+        // Body must be processed first.
+        if (ast.header.Location.Contains(line, col))
+        {
+          if (ast.header.name.Location.Contains(line, col))
+            (ast.header.name.Location, ast, method)
+          else if (ast.header.ret_type.Location.Contains(line, col))
+            checkType(ast.header.ret_type, method.ReturnType);
+          else if (ast.modifiers.custom_attrs.OrderedContains(line, col))
+          {
+            // PB06116: TODO: CustomAttributes
+            //
+            (Location.Default, null, null)
+          }
+          else
+          {
+            def getParam(pparms, tparms)
+            {
+              match (pparms)
+              {
+              | []     => (Location.Default, null, null)
+              | p :: _ =>
+
+                if (p.name.Location.Contains(line, col))
+                  (p.name.Location, p.name, tparms.Head)
+                else if (p.ty.Location.Contains(line, col))
+                  checkType(p.ty, tparms.Head.ty)
+                else
+                  getParam(pparms.Tail, tparms.Tail)
+
+              }
+            }
+
+            getParam(ast.header.parms, method.Header.parms);
+          }
+        }
+        else
+        {
+          def typarms = ast.header.typarms;
+
+          if (typarms.tyvars.OrderedContains(line, col))
+            match (typarms.tyvars.Find(t => t.Location.Contains(line, col)))
+            {
+            | Some(t) => (t.Location, null, method.Header.typarms.Nth(typarms.tyvars.IndexOf(t)))
+            | _       => (Location.Default, null, null)
+            }
+          else
+          {
+            def res = 
+            {
+              def found = ExprFinder().FindEverywhere(method.BodyParsed, method.BodyTyped, line, col);
+              def (loc, _, typedObject) = found;
+
+              def getParameterNumber(name, parameters, i = 0)
+              {
+                | (_, parameter :: tail, _) =>
+                  if (parameter.Name == name)
+                    i
+                  else
+                    getParameterNumber(name, tail, i + 1)
+                | (_, [], _) => -1
+              }
+
+              match (typedObject)
+              {
+                | reference is LocalValue when (reference.ValKind is LocalValue.Kind.FunParm) =>
+                  def function = reference.DefinedIn;
+                  def number = getParameterNumber(reference.Name, function.ParametersDeclarations);
+                  if (number < 0)
+                    found
+                  else
+                  {
+                    def parsedParameter = function.ParametersDeclarations.Nth(number);
+                    def typedParameter = function.parms.Nth(number);
+                    (loc, parsedParameter.name, typedParameter)
+                  }
+                | ty is TExpr.This | ty is TExpr.Base => (loc, null, ty.MType())
+                | _ => found
+              }
+            }
+            
+            when (res[1] != null || res[2] != null)
+              return res;
+              
+            // Covarian/Contravariant constraints breaks OrderedContains optimization
+            // so process them one-by-one.
+            //
+            def constraints = typarms.constraints.RevFilter(c => !Utils.IsSpecialConstraint(c.ty));
+
+            match (constraints.Find(c => c.ty.Location.Contains(line, col)))
+            {
+            | Some(c) =>
+
+              def tyVarConstraints = constraints.Filter(tc => tc.tyvar.Equals(c.tyvar));
+              def typarm = method.Header.typarms.Nth(typarms.tyvars.IndexOf(c.tyvar));
+
+              Debug.Assert(tyVarConstraints.Length == typarm.Constraints.Length);
+              (c.ty.Location, null, typarm.Constraints.Nth(tyVarConstraints.IndexOf(c)))
+
+            | _       =>           (Location.Default, null, null)
+            }
+          }
+        }
+      }
+
+      def typeBuilder = typeDecl.Builder;
+      if (typeBuilder.IsDelegate) FindObject(typeDecl, fileIndex, line, col)
+      else
+      {
+        def members = typeBuilder.GetMembers();
+        
+        foreach (member in members)
+        {
+          | mb is MethodBuilder   =>
+           	when (mb.Name == "IndxEntry__StImpl") 
+           	{
+           	  assert2(true);
+           	}
+            def res = getMethod(mb);
+            when (res[1] != null || res[2] != null)
+              return res;
+              
+          | _ => ()
+        }
+        
+        (Location.Default, null, null)
+      }
+    }
+
+    /// Finds an object by provided location.
+    /// Returns object location * associated Parsetree * associated Typedtree
+    private FindObject(
+      typeDecl  : Decl.Type,
+      fileIndex : int,
+      line      : int,
+      col       : int
+    )
+      : Location * object * object
+    {
+      def typeBuilder = typeDecl.Builder;
+      def member      = 
+        if (typeBuilder.IsDelegate) typeBuilder : IMember
+        else typeBuilder.GetMemberByLocation(fileIndex, line, col) ?? typeBuilder;
+
+      def checkType(pexpr, texpr : TyVar) 
+      {
+        def pargs =
+          match (pexpr)
+          {
+          | PExpr.Array  (_, p)          => [p]
+          | PExpr.Call   (_, p)
+          | PExpr.Indexer(_, p)
+          | PExpr.GenericSpecifier(_, p) => p
+          | _                            => []
+          }
+
+        match (pargs.Find((p) => p.Location.Contains(line, col)))
+        {
+        | Some(p) =>
+            def targs =
+              match (texpr)
+              {
+              | mType is MType =>
+                match (mType)
+                {
+                | MType.Array (p, _) => [p]
+                | MType.Fun   (f, t) => [f, t]
+                | MType.Class (_, p)
+                | MType.Tuple (p)    => p
+                | _                  => []
+                }
+              | _                    => []
+              };
+
+            def idx = pargs.IndexOf(p);
+            checkType(p, targs.Nth(idx))
+
+        | _       => (pexpr.Location, null, texpr)
+        }
+      }
+
+      def getMethod(method)
+      {
+        def ast = method.Ast;
+        def headerLocation = ast.header.Location;
+        def bodyLocation = method.BodyLocation;
+
+        // Body must be processed first.
+        //
+        if (bodyLocation.Contains(line, col) || bodyLocation.IsGenerated)
+        {
+          def found = ExprFinder().Find(method.BodyParsed, method.BodyTyped, line, col);
+          def (loc, _, typedObject) = found;
+/*
+          def getParameter(name, parsedParameters, typedParameters)
+          {
+            match (parsedParameters)
+            {
+              | parameter :: tail =>
+                if (parameter.Name == name)
+                  (parameter.name.Location, parameter.name, typedParameters.Head)
+                else
+                  getParameter(name, tail, typedParameters.Tail)
+              | [] => found
+            }
+          }
+
+          match (typedObject)
+          {
+            | reference is LocalValue when (reference.ValKind is LocalValue.Kind.FunParm) =>
+              getParameter(reference.Name, ast.header.parms, method.Header.parms);
+            | _ => found
+*/
+
+          def getParameterNumber(name, parameters, i = 0)
+          {
+            | (_, parameter :: tail, _) =>
+              if (parameter.Name == name)
+                i
+              else
+                getParameterNumber(name, tail, i + 1)
+            | (_, [], _) => -1
+          }
+
+          match (typedObject)
+          {
+            | reference is LocalValue when (reference.ValKind is LocalValue.Kind.FunParm) =>
+              def function = reference.DefinedIn;
+              def number = getParameterNumber(reference.Name, function.ParametersDeclarations);
+              if (number < 0)
+                found
+              else
+              {
+                def parsedParameter = function.ParametersDeclarations.Nth(number);
+                def typedParameter = function.parms.Nth(number);
+                (loc, parsedParameter.name, typedParameter)
+              }
+            | ty is TExpr.This | ty is TExpr.Base => (loc, null, ty.MType())
+            | _ => found
+          }
+        }
+        else if (headerLocation.Contains(line, col) || headerLocation.IsGenerated)
+        {
+          if (ast.header.name.Location.Contains(line, col))
+            (ast.header.name.Location, ast, method)
+          else if (ast.header.ret_type.Location.Contains(line, col))
+            checkType(ast.header.ret_type, method.ReturnType);
+          else if (ast.modifiers.custom_attrs.OrderedContains(line, col))
+          {
+            // PB06116: TODO: CustomAttributes
+            //
+            (Location.Default, null, null)
+          }
+          else
+          {
+            def getParam(pparms, tparms)
+            {
+              match (pparms)
+              {
+              | []     => (Location.Default, null, null)
+              | p :: _ =>
+
+                if (p.name.Location.Contains(line, col))
+                  (p.name.Location, p.name, tparms.Head)
+                else if (p.ty.Location.Contains(line, col))
+                  checkType(p.ty, tparms.Head.ty)
+                else
+                  getParam(pparms.Tail, tparms.Tail)
+
+              }
+            }
+
+            getParam(ast.header.parms, method.Header.parms);
+          }
+        }
+        else
+        {
+          def typarms = ast.header.typarms;
+
+          if (typarms.tyvars.OrderedContains(line, col))
+            match (typarms.tyvars.Find(t => t.Location.Contains(line, col)))
+            {
+            | Some(t) => (t.Location, null, method.Header.typarms.Nth(typarms.tyvars.IndexOf(t)))
+            | _       => (Location.Default, null, null)
+            }
+          else
+          {
+            // Covarian/Contravariant constraints breaks OrderedContains optimization
+            // so process them one-by-one.
+            //
+            def constraints = typarms.constraints.RevFilter(c => !Utils.IsSpecialConstraint(c.ty));
+
+            match (constraints.Find(c => c.ty.Location.Contains(line, col)))
+            {
+            | Some(c) =>
+
+              def tyVarConstraints = constraints.Filter(tc => tc.tyvar.Equals(c.tyvar));
+              def typarm = method.Header.typarms.Nth(typarms.tyvars.IndexOf(c.tyvar));
+
+              Debug.Assert(tyVarConstraints.Length == typarm.Constraints.Length);
+              (c.ty.Location, null, typarm.Constraints.Nth(tyVarConstraints.IndexOf(c)))
+
+            | _       =>           (Location.Default, null, null)
+            }
+          }
+        }
+      }
+
+      def checkMethods (methods)
+      {
+        | hd :: tail =>
+          if (hd != null && hd.BodyLocation.Contains(line, col))
+            getMethod(hd)
+          else
+            checkMethods(tail)
+        | []         => (Location.Default, null, null)
+      }
+
+      def processMember(member : IMember)
+      {
+        | mb is MethodBuilder   => getMethod(mb)
+        | eb is EventBuilder    => 
+
+            if (eb.Ast.ty.Location.Contains(line, col))
+              checkType(eb.Ast.ty, eb.GetMemType())
+            else if (eb.Ast.name.Location.Contains(line, col))
+              (eb.Ast.name.Location, null, eb)
+            else
+              checkMethods([eb.GetAdder(), eb.GetRemover()])
+
+        | fb is FieldBuilder    => 
+
+          if (typeDecl.Builder.IsEnum)
+            if (fb.Attributes %&& NemerleAttributes.SpecialName)
+              (Location.Default,     null, null)
+            else
+              (fb.Location,          null, fb)
+          else
+            if (fb.Ast.ty.Location.Contains(line, col))
+              checkType(fb.Ast.ty, fb.GetMemType())
+            else if (fb.Ast.name.Location.Contains(line, col))
+              (fb.Ast.name.Location, null, fb)
+            else if (fb.InitializerLocation.Contains(line, col))
+              getMethod(fb.LookupInitializerMethod())
+            else
+              (fb.Location,          null, fb)
+
+        | pb is PropertyBuilder => 
+
+            if (pb.Ast.ty.Location.Contains(line, col))
+              match (pb.GetMemType())
+              {
+              // Indexer
+              //
+              | f is MType.Fun => checkType(pb.Ast.ty, f.to)
+
+              // Regular prop
+              //
+              | t              => checkType(pb.Ast.ty, t)
+              }
+            else if (pb.Ast.name.Location.Contains(line, col))
+              (pb.Ast.name.Location, null, pb)
+            else
+            {
+              def parms = pb.Ast.dims;
+
+              match (parms.Find(p => p.ty.Location.Contains(line, col)))
+              {
+              | Some(p) => checkType(p.ty, pb.GetParameters().Nth(parms.IndexOf(p)))
+              | _       => checkMethods([pb.GetGetter() :> MethodBuilder, pb.GetSetter() :> MethodBuilder])
+              }
+            }
+
+        | tb is TypeBuilder     => 
+
+          def lookupType(p)
+          {
+          | PExpr.Ref (name) =>
+              match (name.context.LookupType([name.Id], tb, -1))
+              {
+              | Some(ty) => (p.Location, null, ty)
+              | _        => (Location.Default, null, null)
+              }
+          | PExpr.Indexer(obj, args) =>
+              match ((obj :: args).Find(a => a.Location.Contains(line, col)))
+              {
+              | Some (p) => lookupType(p)
+              | _        => (Location.Default, null, null)
+              }
+          | _        => (Location.Default, null, null)
+          }
+
+          def processAst (tb, ast)
+          {
+            match (ast)
+            {
+            | TopDeclaration.Class    (extends, _)
+            | TopDeclaration.Variant  (extends, _)
+            | TopDeclaration.Interface(extends, _) =>
+
+              // Remove compiler generated base type or interface
+              //
+              def extends = extends.Filter(cls => !cls.Location.IsGenerated);
+
+              def typarms = ast.typarms;
+
+              if (extends.OrderedContains(line, col))
+                match (extends.Find(t => t.Location.Contains(line, col)))
+                {
+                | Some(p) => lookupType(p)
+                | _       => (Location.Default, null, null)
+                }
+              else if (typarms.tyvars.OrderedContains(line, col))
+                match (typarms.tyvars.Find(t => t.Location.Contains(line, col)))
+                {
+                | Some(t) => (t.Location, null, tb.Typarms.Nth(typarms.tyvars.IndexOf(t)))
+                | _       => (Location.Default, null, null)
+                }
+              else
+              {
+                // Covariant/Contravariant constraints breaks OrderedContains optimization
+                // so process them one-by-one.
+                //
+                match (typarms.constraints.Find(c => c.ty.Location.Contains(line, col)))
+                {
+                | Some (c) => lookupType(c.ty)
+                | _        => (ast.ParsedName.Location, null, tb : object)
+                }
+              }
+            | _ => (ast.ParsedName.Location, null, tb : object)
+            }
+          }
+
+          match (tb.AstParts.Find(part => part.Location.Contains(fileIndex, line, col)))
+          {
+          | Some(ast) => processAst (tb, ast)
+          | _         => (Location.Default, null, null)
+          }
+
+        | null                  => (Location.Default, null, null)
+        | _                     => 
+          Trace.Assert(false, $"Unknown member type '$member'.");
+          throw System.Exception($"Unknown member type '$member'.");
+      }
+      
+      def result = processMember(member);
+      
+      match (member, result)
+      {
+        | (mb is MemberBuilder, (_, null, null)) => mb.CallForAllRelated(processMember)
+        | _ => result
+      }
+    }
+
+    private GetTypeQuickTip(
+      typeDecl  : Decl.Type,
+      fileIndex : int,
+      line      : int,
+      col       : int,
+      //2IT: практически любой класс в компиляторе содержит ссылку на ManagerClass.
+      // По крайней мере MemberBuilder и TypeBuilder точно их имеют.
+      // Так что этот параметр скорее всего ошибка.
+      manager   : ManagerClass
+    )
+      : QuickTipInfo
+    {
+      def (loc, _, tObj) = FindObject(typeDecl, fileIndex, line, col);
+
+      match (tObj)
+      {
+      | me is TExpr.MacroEnvelope         => (QuickTipInfo(loc, me))
+      | lv is LocalValue                  => (QuickTipInfo(loc, lv))
+      | mm is IMember                     => (QuickTipInfo(loc, mm, manager))
+      | st is StaticTyVar                 => (QuickTipInfo(loc, st))
+      | tv is TyVar                       => (QuickTipInfo(loc, tv))
+      | tc is TExpr.ImplicitValueTypeCtor => (QuickTipInfo(loc, tc.ty))
+      | fh is Typedtree.Fun_header        => (QuickTipInfo(loc, fh))
+      | fp is Typedtree.Fun_parm          => (QuickTipInfo(loc, fp))
+      | p  is Pattern.Enum                => (QuickTipInfo(loc, p.fld, manager))
+      | null                              => (null)
+#if DEBUG
+      | o                                 => (QuickTipInfo(loc, o))
+#else
+      | _                                 => (null)
+#endif
+      }
+    }
+
+    GetMethodTip(
+      typeDecl  : Decl.Type,
+      fileIndex : int,
+      line      : int,
+      col       : int, 
+      source    : ISource
+    )
+      : MethodTipInfo
+    {
+      def typeBuilder = typeDecl.Builder;
+      def member      = typeBuilder.GetMemberByLocation(fileIndex, line, col);
+
+      match (member)
+      {
+        | method is MethodBuilder => 
+
+          def loc = method.BodyLocation;
+          
+          if (loc.Contains(line, col)) // completion in method body
+          {
+            def timer    = Stopwatch.StartNew();
+            def bodyCode = source.GetRegion(loc.Line, loc.Column, loc.EndLine, loc.EndColumn);
+            def tokens   = TokenFinder().Find(method.BodyTokens, line, col);
+
+            Debug.WriteLine($"Comlete took $(timer.Elapsed)");
+
+            match (tokens.Find(t => t is Token.RoundGroup))
+            {
+            | Some(group) =>
+
+              def result = Engine.RunCompletionEngine(
+                method, bodyCode, loc, group.Location.Line, group.Location.Column);
+
+              if (result != null)
+              {
+                def overloads = List();
+
+                mutable l = int.MaxValue;
+
+                foreach (elem in result.Elems)
+                {
+                | Overloads(values) =>
+
+                  foreach (overload in values)
+                  {
+                    match (overload.Member)
+                    {
+                    | m is IMethod => 
+
+                      when (l > m.Name.Length)
+                      {
+                        l = m.Name.Length;
+                        overloads.Clear();
+                      }
+
+                      overloads.Add(overload);
+
+                    | _            => ()
+                    }
+                  }
+
+                | _ => ()
+                }
+
+                if (overloads.Count > 0)
+                {
+                  def tip = MethodTipInfo(overloads, tokens);
+                  if (tip.HasTip) (tip) else (null)
+                }
+                else
+                  (null)
+              }
+              else (null)
+
+            | None => (null)
+            }
+          }
+          else
+          {
+            if (method.Ast.header.Location.Contains(line, col))
+            {
+              (null)
+            }
+            else
+              (null)
+          }
+
+        | null => (null)
+        | _    => throw System.Exception($"Unknown member type '$member'.");
+      }
+    }
+  }
+}

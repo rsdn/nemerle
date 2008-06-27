@@ -1,0 +1,615 @@
+﻿using System;
+using System.Reflection;
+using System.Diagnostics;
+
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Compiler.Utils;
+
+using Nemerle.Assertions;
+using Nemerle.Imperative;
+using Nemerle.Utility;
+
+using SCG = System.Collections.Generic;
+
+namespace Nemerle.Completion2
+{
+  class Checker
+  {
+    public this(
+      project         : Project,
+      fileName        : string,
+      source          : ISource,
+      addHiddenRegion : AddHiddenRegion,
+      addError        : AddError
+    )
+    {
+      _project         = project;
+      _fileName        = fileName;
+      _source          = source;
+      _addHiddenRegion = addHiddenRegion;
+      _addError        = addError;
+    }
+
+    mutable _project : Project;
+    _fileName        : string;
+    _source          : ISource;
+    _addHiddenRegion : AddHiddenRegion;
+    _addError        : AddError;
+
+    mutable _lastLine       : string;
+    mutable _lastLineIndex  : int;
+    mutable _lineCount      : int;
+    mutable _fileIndex      : int;
+    mutable _afterUsingLine : int;
+
+    GetLine(lineIndex : int) : string 
+    {
+      when (_lastLineIndex != lineIndex)
+      {
+        _lastLineIndex = lineIndex;
+        _lastLine      = _source.GetLine(lineIndex);
+      }
+
+      _lastLine
+    }
+
+    GetLineCount() : int 
+    {
+      when (_lineCount < 0)
+        _lineCount = _source.LineCount;
+
+      _lineCount
+    }
+
+    IsNext(line : int, col : int, ch : char) : bool 
+    {
+      def str = GetLine(line);
+      col > 0 && str.Length >= col && str[col - 1] == ch
+    }
+
+    //VladD2: А не лучше ли воспользоваться лексером? И ошибок меньше, и точность выше.
+    FindNext(lineIndex : int, col : int, text : string, eatComments : bool) : int * int 
+    {
+      def endLine = Math.Max(GetLineCount(), lineIndex + 10);
+
+      mutable c = col - 1;
+
+      for (mutable l = lineIndex; l < endLine; l++)
+      {
+        mutable line = GetLine(l);
+
+        def peek ()  { if (c < line.Length) line[c] else '\0' }
+        def skip ()  { c++; }
+        def peekn(i) { if (c + i < line.Length) line[c + i] else '\0' }
+        def eol  ()  { c >= line.Length }
+
+        while (!eol())
+        {
+          match (peek())
+          {
+          | '/' when l == lineIndex || eatComments => 
+
+            match (peekn(+1))
+            {
+            | '/' 
+            | '*' when line.IndexOf("*/", c) > 0 => c = int.MaxValue - 1;
+            | '*' when eatComments =>
+
+              for (l++; l < endLine; l++)
+              {
+                line = GetLine(l);
+                c    = line.IndexOf("*/");
+
+                when (c >= 0)
+                {
+                  skip();
+                  break;
+                }
+              }
+
+            | _ => ()
+            }
+
+          | '/'                     => 
+
+            match (peekn(+1)) { | '/' | '*' => return (l, c + 1); | _ => () }
+
+          | ch  when text[0] == ch  => 
+
+            when (text.Length == 1 || line.Substring(c) == text)
+              return (l, c + 1);
+
+          | _ => ()
+          }
+
+          skip();
+        }
+
+        c = 0;
+      }
+
+      (lineIndex, col)
+    }
+
+    CheckLine(line : int) : void
+    {
+      when (_afterUsingLine > line)
+        _afterUsingLine = line;
+    }
+
+    AddRegion(loc : Location, isExpanded : bool) : void
+    {
+      when (!loc.IsEmpty)
+      {
+        _addHiddenRegion(
+          if (IsNext(loc.Line, loc.Column, ' '))
+            Location(_fileIndex, loc.Line, loc.Column + 1, loc.EndLine, loc.EndColumn)
+          else
+            loc,
+          null,
+          isExpanded);
+
+        CheckLine(loc.Line);
+      }
+    }
+
+    ProcessMatch(cases : list[MatchCase]) : void
+    {
+      def walker = ExprWalker();
+      def locs   = cases.Map(c =>
+        {
+          mutable ploc = walker.GetLocation(c.patterns.Head);
+
+          foreach (p in c.patterns.Tail)
+            ploc = ploc.Combine(walker.GetLocation(p));
+
+          (ploc, walker.GetLocation(c.body))
+        });
+
+      def startLoc(ploc, bloc) 
+      {
+        mutable line = bloc.Line;
+        mutable col  = bloc.Column;
+
+        def str = GetLine(ploc.EndLine);
+        //VladD2: Следующая строчка все время приводит к вылету (неверный индекс)
+        // на файле Engine-main.n. IT, разберись, плиз. Пока что просто убрал
+        // указание стартового индекса.
+        def idx = str.IndexOf("=>"); //, ploc.EndColumn - 1
+
+        when (idx >= 0)
+        {
+          line = ploc.EndLine;
+          col  = idx + 3;
+        }
+
+        (line, col)
+      }
+
+      def loop(locs) 
+      {
+      | (p1, b1) :: (p2, b2) :: t => 
+
+        when (p1.EndLine + 1 < p2.Line)
+        {
+          def (line, col) = startLoc(p1, b1);
+          def endLine     = p2.Line - 1;
+
+          AddRegion(
+            Location(_fileIndex, line, col, endLine, GetLine(endLine).Length + 1),
+            false);
+        }
+
+        loop((p2, b2) :: t)
+
+      | [(p, b)] =>
+
+        _debug((p, b));
+
+        def     (line, col) = startLoc(p, b);
+        mutable eLine;
+        mutable eCol;
+
+        (eLine, eCol) = FindNext(b.EndLine, b.EndColumn, "}", false);
+
+        if (eLine == b.EndLine)
+        {
+          when (eCol > 1 && eCol != b.EndColumn)
+          {
+            def line = GetLine(eLine);
+
+            when (line[eCol - 2] == ' ' || line[eCol - 2] == '\t')
+              eCol--;
+          }
+        }
+        else
+        {
+          def line = GetLine(eLine).Substring(0, eCol - 1);
+
+          when (line.Trim(' ', '\t').Length == 0)
+          {
+            eLine--;
+            eCol = GetLine(eLine).Length + 1
+          }
+        }
+
+        AddRegion(Location(_fileIndex, line, col, eLine, eCol),false);
+
+      | [] => ()
+      }
+
+      loop(locs);
+    }
+
+    ProcessMethod(method : MethodBuilder) : void
+    {
+#if !DEBUG
+      when (_start < Environment.TickCount - 2000)
+        return;
+#endif
+
+      when (method.BodyLocation.FileIndex <= 0)
+        return;
+
+
+      //method.ResetBody(); //HACK!!!
+      
+      ProcessCustomAttributes(method.GetModifiers().GetCustomAttributes());
+      
+      def pExpr = method.BodyParsed;
+
+      when (pExpr != null)
+      {
+        ExprWalker().Walk(pExpr, fun(info : ExprWalkInfo)
+        {
+          match (info.Node)
+          {
+          | PExpr.DefFunctions(funs) => // { funs : list [Function_decl]; }
+
+            funs.Iter(f =>
+            {
+              mutable loc = f.header.Location.Combine(f.body.Location).TrimStart(f.header.Location, false);
+
+              when (IsNext(loc.Line, loc.Column, ' ') && IsNext(loc.Line, loc.Column + 1, ')'))
+                loc = Location(loc.FileIndex, loc.Line, loc.Column + 1, loc.EndLine, loc.EndColumn);
+
+              when (IsNext(loc.Line, loc.Column, ')'))
+                loc = Location(loc.FileIndex, loc.Line, loc.Column + 1, loc.EndLine, loc.EndColumn);
+
+              AddRegion(loc, false);
+            });
+
+          | PExpr.Match(_, cases, _) => ProcessMatch(cases);
+          | _ => ()
+          }
+        });
+      }
+
+      AddRegion(method.Location.TrimStart(method.Header.Location, false), true);
+    }
+
+    ProcessProperty(prop : PropertyBuilder) : void
+    {
+    //TODO: We need read preprocessor symbols and add it to completion engine.
+#if !DEBUG
+      when (_start < Environment.TickCount - 2000)
+        return;
+#endif
+
+      def getter = prop.GetGetter() :> MethodBuilder;
+      def setter = prop.GetSetter() :> MethodBuilder;
+
+      // This is suppose to mean that the property is generated.
+      //
+      when (getter != null && getter.Location == prop.Location ||
+            getter == null && setter.Location == prop.Location)
+        return;
+
+      AddRegion(prop.Ast.Location.TrimStart(prop.Ast.ty.Location, false), true);
+
+      def add(f)
+      {
+        when (f != null)
+          AddRegion(
+            Location(
+              f.Header.Location.FileIndex,
+              f.Header.Location.EndLine,
+              f.Header.Location.EndColumn,
+              f.BodyLocation.EndLine,
+              f.BodyLocation.EndColumn + 1),
+            true);
+      }
+
+      add(getter);
+      add(setter);
+    }
+
+    mutable _start : int;
+
+    ProcessCustomAttributes(attrs : list[PExpr]) : void
+    {
+      def combineLocations(attrs) : Location
+      {
+        match(attrs)
+        {
+        | x :: xs => 
+            if(x.Location.FileIndex == _fileIndex)
+              x.Location.Combine(combineLocations(xs)); 
+            else
+              combineLocations(xs);
+        | _ => Location.Default;
+        }
+      }
+      
+      match(attrs)
+      {
+      | _ :: _ => 
+          def combined = combineLocations(attrs);
+          
+          _addHiddenRegion(
+            Location(combined.FileIndex,  // expand a combined location a little to include 
+                     combined.Line,       // opening and closing square brackets.
+                     combined.Column - 1,
+                     combined.EndLine,
+                     combined.EndColumn + 1), 
+            "[custom attributes]", 
+            false);
+      | _ => ();
+      }
+      
+    }
+
+    ProcessBuilder(builder : TypeBuilder) : void
+    {
+      //VladD2: VariantOption может содержать в себе другие члены.
+      when (builder.IsDelegate || builder.IsVariantOption)
+        return;
+      
+      foreach (part when part.Location.FileIndex == _fileIndex in builder.AstParts)
+      {
+        ProcessCustomAttributes(part.GetCustomAttributes());
+        
+        _addHiddenRegion(
+          Location(
+            _fileIndex,
+            // kliss: Make sure that type name is visible after collapsing its region (also
+            // leaving all attributes visible).
+            // TODO: Collapse all attributes to their own region.
+            part.name.Location.EndLine,
+            part.name.Location.EndColumn,
+            part.Location.EndLine,
+            part.Location.EndColumn),
+          null,
+          true);
+
+        CheckLine(part.Location.Line);
+      }
+
+      // Get regions and errors for methods.
+      //
+      _start = Environment.TickCount;
+
+      def isProcessed(m) 
+      {
+        !(m.Attributes %&& (NemerleAttributes.SpecialName | NemerleAttributes.Abstract))
+          && m.Location.FileIndex == _fileIndex
+      }
+
+      def members = builder.GetDirectMembers();
+      when (members != null)
+        foreach (member in members.Filter(isProcessed))
+        {
+        | method  is MethodBuilder   => ProcessMethod  (method);
+        | prop    is PropertyBuilder => ProcessProperty(prop);
+        | builder is TypeBuilder     => ProcessBuilder (builder)
+        | _                          => ()
+        }
+    }
+
+    ProcessRegions(decls : list[Decl]) : void
+    {
+      //TODO: Регионы пока не релокейтятся. Так что при зменении исходников они должны врать.
+      def regions = _project.CompileUnits.GetRegions(_fileIndex);
+
+      foreach (r in regions)
+      {
+        _addHiddenRegion(
+          Location(
+            _fileIndex,
+            r.Location.Line,
+            GetLine(r.Location.Line).IndexOf('#') + 1,
+            r.Location.EndLine,
+            r.Location.EndColumn),
+          if (r.Text.IsNullOrEmpty()) "#region" else r.Text,
+          false);
+      }
+
+      def usings = SCG.List();
+
+      foreach (decl in decls)
+      {
+      | Decl.Type(builder)
+               when builder.PartsLocation.Exists(l => l.FileIndex == _fileIndex) => 
+
+        ProcessBuilder(builder)
+
+      | Using as us when us.NameLocations.Exists(l => l.FileIndex == _fileIndex) => 
+
+        usings.Add(us);
+
+      | Namespace(decls, _, locations, _, _, nsloc, _) => 
+
+        ProcessRegions(decls);
+
+        match (locations.Find(l => l.FileIndex == _fileIndex))
+        {
+        | Some(loc) =>
+
+          mutable lineStart = loc.EndLine;
+          mutable colStart  = loc.EndColumn;
+          mutable lineEnd   = nsloc.EndLine;
+          mutable colEnd    = nsloc.EndColumn;
+
+          when (IsNext(lineStart, colStart, ' ')) colStart++;
+          when (IsNext(lineEnd,   colEnd,   '}')) colEnd++;
+
+          _addHiddenRegion(Location(_fileIndex, lineStart, colStart, lineEnd, colEnd), null, true);
+          CheckLine(lineStart);
+
+        | None => ()
+        }
+      | _ => ()
+      }
+
+      when (usings.Count > 1)
+      {
+        mutable usingLoc;
+
+        foreach (us in usings)
+        {
+          match (us.NameLocations.Find(l => l.FileIndex == _fileIndex))
+          {
+          | Some(loc) => 
+
+            usingLoc = if (usingLoc.IsEmpty) loc else usingLoc.Combine(us.Location);
+
+          | None      => ()
+          }
+        }
+
+        when (!usingLoc.IsEmpty)
+        {
+          mutable lineStart = usingLoc.Line;
+          mutable colStart  = usingLoc.Column;
+          mutable lineEnd   = usingLoc.EndLine;
+          mutable colEnd    = usingLoc.EndColumn;
+
+          when (_afterUsingLine != int.MaxValue)
+          {
+            for (mutable i = lineEnd; i < _afterUsingLine; i++)
+            {
+              def str = GetLine(i);
+              def idx = str.IndexOf(";");
+
+              when (idx >= 0)
+              {
+                lineEnd = i;
+                colEnd  = idx + 2;
+                break;
+              }
+            }
+          }
+
+          _addHiddenRegion(Location(_fileIndex, lineStart, colStart, lineEnd, colEnd), null, true);
+        }
+      }
+    }
+
+    public Check() : void
+    {
+      _lineCount      = -1;
+      _lastLineIndex  = -1;
+      _afterUsingLine = int.MaxValue;
+      _fileIndex      = _project.CompileUnits.GetFileIndex(_fileName);
+
+      mutable errors = _project.GetAllCompilerMessageForFile(_fileIndex).ToArray();
+
+      // Check compiler error messages for brace errors.
+      // If brace errors exists and calculate brace match,
+      // and if match we must reparce type tree (it reset method 
+      // editing optimization).
+      def isBraceErrorMsg = errors.Exists(cm =>
+        cm.Message.Contains("when parsing this `{' brace group")
+        || cm.Message.Contains("unexpected end of file")
+        || cm.Message.Contains("expected end of file, encountered closing brace"));
+
+      def engine = _project.Engine;
+      def isBraceMatch()
+      {
+        def lex = engine.GetLexer(_source);
+        def stack = Stack();
+        stack.Push(Token.EndOfFile());
+        def scan(toc : Token)
+        {
+          | EndOfFile              => stack.Count == 1
+
+          | BeginBrace(_generated) // {
+          | BeginRound             // (
+          | BeginSquare            // [
+          | BeginQuote          => // <[
+            stack.Push(toc);
+            scan(lex.GetToken())
+
+          | EndBrace(_generated)   => check(_ is Token.BeginBrace)  // }
+          | EndRound               => check(_ is Token.BeginRound)  // )
+          | EndSquare              => check(_ is Token.BeginSquare) // ]
+          | EndQuote               => check(_ is Token.BeginQuote)  // ]>
+          | _                      => scan(lex.GetToken());
+        }
+        and check(predicate)
+        {
+            if (stack.Count > 0 && predicate(stack.Peek()))
+            {
+              stack.RemoveLast();
+              scan(lex.GetToken())
+            }
+            else
+              false
+        }
+
+        scan(lex.GetToken());
+      }
+
+      when (isBraceErrorMsg && isBraceMatch()) // Rebuild "type tree".
+      {
+        engine.ResetNamespaceTree();
+        _project = engine.Project; // new type tree.
+        errors = _project.GetAllCompilerMessageForFile(_fileIndex).ToArray();
+      }
+
+      mutable err;
+      mutable doAdd = true;
+
+      foreach (cm when doAdd in errors)
+      {
+        if (err == null)
+          err = cm;
+        else if (err.Location == cm.Location)
+          err = CompilerMessage(
+            {
+              mutable msg = err.Message;
+
+              unless (msg.EndsWith(".") || msg.EndsWith(":"))
+                msg += ".";
+
+              msg += "\n";
+              msg += char.ToUpper(cm.Message[0]).ToString();
+              msg += cm.Message.Substring(1);
+
+              msg
+            },
+            err.Location,
+            err.MessageKind);
+        else
+        {
+          doAdd = _addError(err);
+          err = cm;
+        }
+      }
+      
+      when (doAdd && err != null)
+        _ = _addError(err);
+
+      ProcessRegions(_project.CompileUnits[_fileIndex].Decls);
+    }
+
+    _debug(obj : object) : void
+    {
+      when (obj != null)
+        ignore(obj.ToString());
+    }
+  }
+}
