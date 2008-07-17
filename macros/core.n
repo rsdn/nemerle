@@ -35,6 +35,8 @@ using Nemerle.Collections;
 using Nemerle.Utility;
 
 using PT = Nemerle.Compiler.Parsetree;
+using TT = Nemerle.Compiler.Typedtree;
+using SCG = System.Collections.Generic;
 
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.Core", "is", false, 210, 211)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.Core", ".", false, 285, 301)]
@@ -547,12 +549,12 @@ namespace Nemerle.Core
           });
           def build_loops (depth)  {
             /// build expression defining iteration symbols
-            | 0 => build_definition ( <[ cached_collection [..$indices_list] ]> )
+            | 0 => build_definition (<[ cached_collection [..$indices_list] ]>)
             | n => 
               def idx = indices [n - 1];
               <[ for (mutable $(idx : name) = 0; 
                       $(idx : name) < $(lengths [n - 1] : name);
-                      ++ $(idx : name) ) 
+                      ++ $(idx : name)) 
                    $(build_loops (n - 1)) 
               ]>
           }
@@ -595,8 +597,312 @@ namespace Nemerle.Core
   }
 
   /** MACROS EXTENDING TYPE SYSTEM OF LANGUAGE */
+  
+  /* NEW RECORD */
 
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
+                       Nemerle.MacroTargets.Field,
+                       Inherited = false, AllowMultiple = false)]
+  macro RecordIgnore (ty : TypeBuilder, fld : ParsedField) 
+  {
+    MacrosHelper.MarkIgnored (ty, fld);
+  }   
+  [Nemerle.MacroUsage(Nemerle.MacroPhase.BeforeInheritance,
+                       Nemerle.MacroTargets.Class,
+                       Inherited = false, AllowMultiple = false)]
+  macro Record(ty : TypeBuilder, params _ : list [PExpr])
+  {
+    ty.DisableImplicitConstructor();
+  }
+  [Nemerle.MacroUsage(Nemerle.MacroPhase.BeforeTypedMembers,
+                       Nemerle.MacroTargets.Class,
+                       Inherited = false, AllowMultiple = false)]
+  macro Record(ty : TypeBuilder, params options : list[PExpr])
+  {
+    MacrosHelper.MakeRecord (ty, options);
+  }
 
+  module MacrosHelper
+  {
+    public InstanceFlags = BindingFlags.Instance %| BindingFlags.Public %| 
+                           BindingFlags.NonPublic %| BindingFlags.DeclaredOnly;
+
+    public MakeRecord (ty : TypeBuilder, options : list[PT.PExpr]) : void
+    {    
+      def patterns = AnalyseNameInclusionPatterns (options);
+      def fields = CollectFields (ty, patterns);
+      InheritConstructorsAddingFields (ty, fields);
+    }   
+    
+    public InheritConstructorsAddingFields (ty : TypeBuilder, fields : list[PT.ClassMember.Field]) : void
+    {
+      def define_ctor (base_ctor : BaseConstructor) : void
+      {      
+        def has_empty_ctor (ty) {
+          def predicate(member) {
+            | PT.ClassMember.Function as func =>
+              func.Name == ".ctor" && func.header.Parameters.IsEmpty;
+            | _ => false;
+          }
+          ty.GetParsedMembers (true).Exists (predicate);
+        }
+
+        // Build parameters declarations
+        def (lead_base_parms, trail_base_parms) = base_ctor.BaseParameters (ty);
+        def this_parms = fields.Map (parm => <[parameter: $(parm.name) : $(parm.ty) ]>);
+        def parms = lead_base_parms + this_parms + trail_base_parms;
+        
+        // Build base constructor call
+        def base_call = base_ctor.BaseCall;
+        
+        // Deduce constructor attributes
+        def modifiers = 
+          match (ty.GetTydecl ()) {
+            | TypeDeclaration.Variant => NemerleAttributes.Protected
+            | _ => NemerleAttributes.Public//base_ctor.Mods
+          }
+        def attrs = Modifiers (modifiers, []);
+        
+        // Skip generation of empty constructor if it exists
+        when (!parms.IsEmpty || !has_empty_ctor (ty)) 
+        {
+          def assigns = base_call :: fields.Map(
+            parm => <[ this.$(parm.Name : usesite) = $(parm.ParsedName : name); ]>);
+          def ctor = <[ decl: ..$attrs this (..$(parms)) { ..$assigns } ]>;
+          ty.Define (ctor);
+        }
+      }
+
+      def ctors = CollectBaseConstructors (ty);
+      ctors.Iter (define_ctor);
+    }
+    
+    public AnalyseNameInclusionPatterns (options : list[PT.PExpr]) : Regex * Regex
+    {
+      mutable inclusion = null;
+      mutable exclusion = null;
+      foreach (e in options) {
+        | <[ Include = [..$names] ]> =>
+          inclusion = Regex ("^" + names.ToString("$|^") + "$")
+        | <[ Include = $(regexp : string) ]> =>
+          inclusion = Regex (regexp)
+        | <[ Exclude = [..$names] ]> =>
+          exclusion = Regex ("^" + names.ToString ("$|^") + "$")
+        | <[ Exclude = $(regexp : string) ]> =>
+          exclusion = Regex (regexp)
+        | e =>
+          Message.Error (e.Location, $"unsupported argument `$e' in macro, please specify 'Include/Exclude = [name1,name2]/pattern")
+      }
+      (inclusion, exclusion)
+    }   
+    
+    public NameMatchesPatterns (name : string, patterns : Regex * Regex) : bool
+    {
+      def (inclusion, exclusion) = patterns;
+      (inclusion == null || inclusion.Match (name).Success) && 
+      (exclusion == null || !exclusion.Match (name).Success)
+    }    
+    
+    public MarkIgnored (ty : TypeBuilder, field : PT.ClassMember.Field) : void
+    {
+      ignoreMap_[(ty, field)] = null;        
+    }    
+
+    public IsIgnored (ty : TypeBuilder, field : PT.ClassMember.Field) : bool
+    {      
+      ignoreMap_.ContainsKey ((ty, field));      
+    }  
+    
+    #region Implementation
+    ignoreMap_ : SCG.Dictionary.[TypeBuilder * PT.ClassMember.Field, object] = SCG.Dictionary();
+
+    private CollectFields (ty : TypeBuilder, patterns : Regex * Regex) : list[PT.ClassMember.Field]
+    {
+      def filter_type (member)
+      {
+        | PT.ClassMember.Field as field => 
+          !(field.modifiers.mods %&& NemerleAttributes.Static);
+        | _ => false;
+      }
+      def filter = field => NameMatchesPatterns (field.Name, patterns) && !IsIgnored (ty, field);
+      ty.GetParsedMembers (true)
+        .MapFiltered (filter_type, _ :> PT.ClassMember.Field)
+        .Filter (filter);         
+    }
+    private CollectBaseConstructors (ty : TypeBuilder) : list[BaseConstructor]
+    {
+      def collect_ctors (ty : TypeInfo)
+      {
+        | ty is TypeBuilder => // Base class is defined in the same assembly and is available in parsed form
+          def filter (member)
+          {
+            | PT.ClassMember.Function as func =>
+              func.Name == ".ctor" &&
+              !(func.modifiers.mods %&& NemerleAttributes.Private);
+            | _ => false;
+          }    
+          ty.GetParsedMembers (true)
+            .MapFiltered(filter, ctor => BaseConstructor.Parsed(ctor :> PT.ClassMember.Function));
+        | _ => // Base class is not available in parsed form because it is defined in some other assembly
+          ty.GetConstructors (InstanceFlags)
+            .MapFiltered (ctor => !ctor.IsPrivate, ctor => BaseConstructor.Compiled (ctor));
+      }
+      if (ty.IsValueType)
+        [BaseConstructor.Implicit (CallBase = false)];
+      else match (collect_ctors (ty.BaseType)) {
+             | [] => [BaseConstructor.Implicit (CallBase = true)];
+             | ctors => ctors;
+           };
+    }
+    variant BaseConstructor
+    {
+      | Parsed {
+          Ctor : PT.ClassMember.Function;
+          public override BaseParameters(target_ty : TypeBuilder) : list[PT.Fun_parm] * list[PT.Fun_parm]
+          {
+            // Split leading and trailing parameters
+            def is_param_array (parm) {
+              parm.modifiers.custom_attrs
+                  .Exists(fun (attr) {
+                             | <[ System.ParamArrayAttribute ]> => true;
+                             |_ => false;
+                           });
+            }      
+            def (trail, lead) = Ctor.header.Parameters.Partition (is_param_array);
+
+            def base_ty = target_ty.BaseType :> TypeBuilder;
+            def subst = target_ty.SubtypingSubst(base_ty);
+            // Build base ctor parameter based on type substitution
+            def bind_to_target(varargs, parm) {              
+              def extract (parm) { 
+                match (parm.ty){
+                  | PT.PExpr.ParmByRef (parm) => 
+                    (parm, (parm, tyvar) => <[parameter: $(parm.Name : usesite) : ref $(tyvar : typed)]>);
+                  | PT.PExpr.ParmOut (parm) =>
+                    (parm, (parm, tyvar) => <[parameter: $(parm.Name : usesite) : out $(tyvar : typed)]>);
+                  | parm => 
+                    (parm, (parm, tyvar) => <[parameter: $(parm.Name : usesite) : $(tyvar : typed)]>);
+                }             
+              }
+              def (base_type, make_parm) = extract (parm);
+              def bound_base_type = base_ty.MonoBindType (base_type);                        
+              def this_type = subst.Apply (bound_base_type);
+              def parm = make_parm (parm, this_type);
+              when (varargs) 
+                parm.modifiers.custom_attrs ::= <[ System.ParamArrayAttribute ]>;
+              parm;
+            }
+            (lead.Map (bind_to_target (false, _)), trail.Map (bind_to_target (true, _)));
+          }          
+          public override BaseCall : PT.PExpr 
+          {
+            get
+            {
+              def make_base_call_parm (parm : PT.Fun_parm)
+              {         
+                match (parm.ty)
+                {
+                  | PT.PExpr.ParmByRef =>
+                    <[ ref $(parm.Name : usesite) ]>;
+                  | PT.PExpr.ParmOut =>
+                    <[ out $(parm.Name : usesite) ]>;
+                  | _ => 
+                    <[ $(parm.Name : usesite) ]>;
+                }
+              }
+              def base_call_parms = Ctor.header.Parameters.Map (make_base_call_parm);
+              <[ base(..$base_call_parms); ]>
+            }
+          }
+        }
+      | Compiled {
+          Ctor : IMethod;
+          public override BaseParameters(target_ty : TypeBuilder) : list[PT.Fun_parm] * list[PT.Fun_parm]
+          {
+            def parms = Ctor.GetParameters ();
+            def (lead, trail) =
+              if (Ctor.IsVarArgs && !parms.IsEmpty)
+              {
+                def (parms, last) = parms.DivideLast();                
+                (parms, [last]);                
+              }
+              else              
+                (parms, []);
+                
+            def base_ty = target_ty.BaseType;
+            def subst = target_ty.SubtypingSubst(base_ty);                
+                
+            def bind_to_target(varargs, parm) {
+              def bound_type = parm.ty.Fix();
+              def this_type = subst.Apply (bound_type);
+              def parm = <[parameter: $(parm.Name : usesite) : $(this_type : typed)]>;
+              when (varargs) 
+                parm.modifiers.custom_attrs ::= <[ System.ParamArrayAttribute ]>;
+              parm;
+            }
+            (lead.Map (bind_to_target (false, _)), trail.Map (bind_to_target (true, _)));                
+          }                
+          public override BaseCall : PT.PExpr 
+          {
+            get
+            { 
+              def make_base_call_parm (parm : TT.Fun_parm)
+              {
+                match (parm.kind)
+                {
+                  | TT.ParmKind.Ref =>
+                    <[ ref $(parm.Name : usesite) ]>;
+                  | TT.ParmKind.Out =>
+                    <[ out $(parm.Name : usesite) ]>;
+                  | TT.ParmKind.Normal =>
+                    <[ $(parm.Name : usesite) ]>;
+                }
+              }
+              def base_call_parms = Ctor.GetParameters ().Map (make_base_call_parm);
+              <[ base(..$base_call_parms); ]>
+            }
+          }
+        }
+      | Implicit {
+          CallBase : bool;
+          public override BaseParameters(_ : TypeBuilder) : list[PT.Fun_parm] * list[PT.Fun_parm]
+          {
+            ([], []);
+          }      
+          public override BaseCall : PT.PExpr 
+          {
+            get 
+            { 
+              if (CallBase) <[ base(); ]>;
+              else            <[ () ]>;
+            }
+          }
+        }
+      public abstract BaseParameters(target_ty : TypeBuilder) : list[PT.Fun_parm] * list[PT.Fun_parm];
+      public abstract BaseCall : PT.PExpr { get; }      
+      //public Mods : NemerleAttributes 
+      //{ 
+      //  get
+      //  {
+      //    match (this)
+      //    {
+      //      | Parsed (ctor) => 
+      //        if (ctor.modifiers.mods %&& NemerleAttributes.Internal)
+      //          NemerleAttributes.Internal
+      //        else 
+      //          NemerleAttributes.Public;
+      //      | Compiled 
+      //      | Implicit =>
+      //        NemerleAttributes.Public;
+      //    }
+      //  }
+      //}
+    }
+    #endregion // Implementation
+  }
+  
+  /* OLD RECORD * /
+  
   [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
                        Nemerle.MacroTargets.Class,
                        Inherited = false, AllowMultiple = false)]
@@ -706,6 +1012,7 @@ namespace Nemerle.Core
     }
   }
   
+  /* END RECORD */
   
   [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
                        Nemerle.MacroTargets.Class,
@@ -1237,7 +1544,7 @@ namespace Nemerle {
     def parms = m.header.ParametersReferences;
     
     def newBody = Util.locate(m.Body.Location, <[ 
-      $this_expr . $(meth : name) ( .. $parms )
+      $this_expr . $(meth : name) (.. $parms)
     ]>);
     
     m.Body = newBody;
