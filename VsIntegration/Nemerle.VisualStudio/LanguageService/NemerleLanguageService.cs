@@ -506,7 +506,7 @@ namespace Nemerle.VisualStudio.LanguageService
 					return null;
 
 				Nemerle.Completion2.Project p = projectInfo.Engine.Project;
-				Trace.Assert(p != null);
+				Debug.Assert(p != null);
 
 				NemerleSource source = projectInfo.GetSource(request.FileName);
 
@@ -623,7 +623,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 			catch (Exception ex)
 			{
-				Trace.Assert(false, ex.ToString());
+				Debug.Assert(false, ex.ToString());
 				Trace.WriteLine(ex);
 			}
 

@@ -59,7 +59,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			//int lineCount = LineCount;
 
 			//if (line >= lineCount) // just for debugging purpose.
-			//	Trace.Assert(line < lineCount);
+			//	Debug.Assert(line < lineCount);
 #endif
 
 			return Source.GetLine(line);

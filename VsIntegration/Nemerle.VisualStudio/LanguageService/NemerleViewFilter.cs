@@ -456,7 +456,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		//public override int GetWordExtent(int line, int index, uint flags, TextSpan[] span)
 		//{
-		//	System.Diagnostics.Trace.Assert(false, "line " + line + " index " + index + " flags " + flags + " span length " + span.Length);
+    //	System.Diagnostics.Debug.Assert(false, "line " + line + " index " + index + " flags " + flags + " span length " + span.Length);
 
 		//	base.GetWordExtent(line, index, flags, span);
 		//	return 0;

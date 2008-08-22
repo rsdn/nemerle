@@ -133,7 +133,7 @@ namespace Nemerle.VisualStudio.Project
 		public void RemoveAssembly(ReferenceNode node)
 		{
 			bool res = _assemblyReferences.Remove(node);
-			Trace.Assert(res, "Can't remove assembly reference '"
+			Debug.Assert(res, "Can't remove assembly reference '"
 				+ node.Caption + "' (" + node.Url + ")");
 			Engine.Reset();
 		}
@@ -314,7 +314,7 @@ namespace Nemerle.VisualStudio.Project
 
 		private void FileAdded(object sender, HierarchyEventArgs ergs)
 		{
-			Trace.Assert(ergs.TextBuffer == null);
+			Debug.Assert(ergs.TextBuffer == null);
 
 			IVsHierarchy hierarchy = (IVsHierarchy)sender;
 			NemerleFileNodeProperties nodeProps = GetNodeProperties(hierarchy, ergs.ItemID);

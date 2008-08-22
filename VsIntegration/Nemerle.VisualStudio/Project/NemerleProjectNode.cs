@@ -104,7 +104,7 @@ namespace Nemerle.VisualStudio.Project
 			Stream   imageStream = assembly.GetManifestResourceStream(
 				NemerleConstants.ProjectImageListName);
 
-			Trace.Assert(imageStream != null);
+			Debug.Assert(imageStream != null);
 
 			return PkgUtils.GetImageList(imageStream);
 		}
@@ -469,9 +469,9 @@ namespace Nemerle.VisualStudio.Project
 			ref Guid iidProject,
 			out int  canceled)
 		{
-			Trace.Assert(BuildEngine  != null);
-			Trace.Assert(BuildProject != null);
-			Trace.Assert(BuildProject.FullFileName == Path.GetFullPath(filename));
+			Debug.Assert(BuildEngine  != null);
+			Debug.Assert(BuildProject != null);
+			Debug.Assert(BuildProject.FullFileName == Path.GetFullPath(filename));
 
 			// IT: ProjectInfo needs to be created before loading
 			// as we will catch assembly reference adding.

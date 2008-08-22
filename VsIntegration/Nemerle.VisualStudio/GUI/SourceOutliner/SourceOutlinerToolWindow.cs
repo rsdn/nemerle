@@ -825,7 +825,7 @@ namespace Nemerle.VisualStudio.GUI.SourceOutliner
 
                         case CodeOutlineFileManager.OutlineFileManagerState.LoadingCodeModel:
                             // Continue loading after an interruption.
-                            _codeCache.CurrentFileManager.ContinueLoading();
+                            //_codeCache.CurrentFileManager.ContinueLoading();
                             return;
 
                         case CodeOutlineFileManager.OutlineFileManagerState.DoneLoadingCodeModel:
