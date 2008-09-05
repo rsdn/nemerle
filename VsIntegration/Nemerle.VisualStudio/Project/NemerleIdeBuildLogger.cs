@@ -176,6 +176,10 @@ namespace Nemerle.VisualStudio.Project
 			int line,
 			int column)
 		{
+      //var project = _hierarchy as IVsUIHierarchy;
+      file = System.IO.Path.GetFullPath(file);
+      System.Diagnostics.Trace.Assert(System.IO.File.Exists(file));
+
 			TaskPriority priority = (errorEvent is BuildErrorEventArgs) 
 				? TaskPriority.High : TaskPriority.Normal;
 
