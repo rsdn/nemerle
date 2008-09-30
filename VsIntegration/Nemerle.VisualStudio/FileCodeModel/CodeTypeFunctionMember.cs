@@ -3,8 +3,8 @@ using System.CodeDom;
 
 using EnvDTE;
 
-using Microsoft.VisualStudio;
 using System.Text;
+using Microsoft.VisualStudio.Project;
 
 namespace Nemerle.VisualStudio.FileCodeModel
 {

@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Runtime.InteropServices;
 
-using MSP = Microsoft.VisualStudio.Package;
+using MSP = Microsoft.VisualStudio.Project;
 using Microsoft.VisualStudio;
 using EnvDTE80;
 using EnvDTE;

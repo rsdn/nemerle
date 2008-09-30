@@ -6,7 +6,7 @@ using System.Runtime.InteropServices;
 using System.Windows.Forms.Design;
 
 using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
 
 namespace Nemerle.VisualStudio.Project
 {

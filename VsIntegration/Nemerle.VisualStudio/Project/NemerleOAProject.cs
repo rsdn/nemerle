@@ -1,6 +1,6 @@
 using System;
-using Microsoft.VisualStudio.Package.Automation;
-using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
+using Microsoft.VisualStudio.Project.Automation;
 using System.Runtime.InteropServices;
 
 namespace Nemerle.VisualStudio.Project

@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-
 using Microsoft.VisualStudio.Package;
 
 using Nemerle.Completion2;

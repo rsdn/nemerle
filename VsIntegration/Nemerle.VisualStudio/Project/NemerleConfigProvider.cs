@@ -2,7 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 
 using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
 
 namespace Nemerle.VisualStudio.Project
 {

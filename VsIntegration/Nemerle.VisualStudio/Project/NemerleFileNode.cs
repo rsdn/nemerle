@@ -4,8 +4,8 @@ using System.Globalization;
 using System.IO;
 
 using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.Package;
-using Microsoft.VisualStudio.Package.Automation;
+using Microsoft.VisualStudio.Project;
+using Microsoft.VisualStudio.Project.Automation;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.Windows.Design.Host;

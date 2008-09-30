@@ -1,8 +1,8 @@
 using System.IO;
 using System.Reflection;
 
-using Microsoft.VisualStudio.Package;
-using Microsoft.VisualStudio.Package.Automation;
+using Microsoft.VisualStudio.Project;
+using Microsoft.VisualStudio.Project.Automation;
 using System;
 using System.Diagnostics;
 using Microsoft.VisualStudio.Shell;

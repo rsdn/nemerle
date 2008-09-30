@@ -1,9 +1,9 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Windows.Forms;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
 using Microsoft.VisualStudio.TextManager.Interop;
 using Nemerle.Builtins;
 using Nemerle.Compiler;

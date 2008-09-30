@@ -10,8 +10,8 @@ using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.Package;
-using Microsoft.VisualStudio.Package.Automation;
+using Microsoft.VisualStudio.Project;
+using Microsoft.VisualStudio.Project.Automation;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.Windows.Design.Host;
 
@@ -19,7 +19,7 @@ using Nemerle.VisualStudio.LanguageService;
 using Nemerle.VisualStudio.Project.PropertyPages;
 using Nemerle.VisualStudio.WPFProviders;
 
-using PkgUtils = Microsoft.VisualStudio.Package.Utilities;
+using PkgUtils = Microsoft.VisualStudio.Project.Utilities;
 using MSBuild = Microsoft.Build.BuildEngine;
 
 namespace Nemerle.VisualStudio.Project
@@ -668,9 +668,11 @@ namespace Nemerle.VisualStudio.Project
 			newNode.OleServiceProvider.AddService(typeof(EnvDTE.ProjectItem), newNode.GetAutomationObject(), false);
 			newNode.OleServiceProvider.AddService(typeof(VSLangProj.VSProject), this.VSProject, false);
 
-			if (IsCodeFile(include) && item.ItemName == "Compile")
-				newNode.OleServiceProvider.AddService(typeof(SVSMDCodeDomProvider),
-					new VSMDCodeDomProvider( newNode.CodeDomProvider ), false);
+			// PB: no more VSMDCodeDomProvider in VS2008SP1 sdk
+			//
+			//if (IsCodeFile(include) && item.ItemName == "Compile")
+			//	newNode.OleServiceProvider.AddService(typeof(SVSMDCodeDomProvider),
+			//		new VSMDCodeDomProvider( newNode.CodeDomProvider ), false);
 
 			return newNode;
 		}
@@ -691,9 +693,11 @@ namespace Nemerle.VisualStudio.Project
 			newNode.OleServiceProvider.AddService(typeof(EnvDTE.ProjectItem), newNode.GetAutomationObject(), false);
 			newNode.OleServiceProvider.AddService(typeof(VSLangProj.VSProject), this.VSProject, false);
 
-			if (IsCodeFile(include) && item.ItemName == "Compile")
-				newNode.OleServiceProvider.AddService(typeof(SVSMDCodeDomProvider),
-					new VSMDCodeDomProvider(newNode.CodeDomProvider), false);
+			// PB: no more VSMDCodeDomProvider in VS2008SP1 sdk
+			//
+			//if (IsCodeFile(include) && item.ItemName == "Compile")
+			//	newNode.OleServiceProvider.AddService(typeof(SVSMDCodeDomProvider),
+			//		new VSMDCodeDomProvider(newNode.CodeDomProvider), false);
 
 			return newNode;
 		}
@@ -785,8 +789,8 @@ namespace Nemerle.VisualStudio.Project
 							0,
 							null,
 							// Title
-							Microsoft.VisualStudio.Package.SR.GetString(
-								Microsoft.VisualStudio.Package.SR.AddReferenceDialogTitle),
+							Microsoft.VisualStudio.Project.SR.GetString(
+								Microsoft.VisualStudio.Project.SR.AddReferenceDialogTitle),
 							"VS.AddReference", // Help topic
 							ref pX,
 							ref pY,

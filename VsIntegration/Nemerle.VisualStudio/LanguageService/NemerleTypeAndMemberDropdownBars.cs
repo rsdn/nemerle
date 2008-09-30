@@ -1,8 +1,8 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-
 using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
 using Microsoft.VisualStudio.TextManager.Interop;
 
 using Nemerle.Completion2;

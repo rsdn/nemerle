@@ -1,5 +1,5 @@
 ﻿using System;
-using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
 
 using MSBuild = Microsoft.Build.BuildEngine;
 using ComInteropHelpers;

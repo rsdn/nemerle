@@ -1,6 +1,6 @@
 ﻿using System;
 using System.Runtime.InteropServices;
-using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
 using System.IO;
 
 namespace Nemerle.VisualStudio.Project

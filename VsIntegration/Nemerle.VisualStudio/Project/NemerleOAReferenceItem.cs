@@ -2,8 +2,8 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using Microsoft.VisualStudio.Package.Automation;
-using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project.Automation;
+using Microsoft.VisualStudio.Project;
 
 namespace Nemerle.VisualStudio.Project
 {

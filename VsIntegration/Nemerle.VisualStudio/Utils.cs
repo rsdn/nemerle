@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using System.Collections.Generic;
 
-using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
 using Nemerle.Compiler;
 using Nemerle.VisualStudio.LanguageService;
 using Msbuild = Microsoft.Build.BuildEngine;

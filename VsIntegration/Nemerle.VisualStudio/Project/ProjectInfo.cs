@@ -8,7 +8,7 @@ using System.Reflection;
 using System.Windows.Forms;
 
 using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
 using Microsoft.VisualStudio.Shell.Interop;
 
 using Nemerle.Compiler;
@@ -21,6 +21,7 @@ using SourceMap = System.Collections.Generic.Dictionary<string, Nemerle.VisualSt
 using ProjectManager = Nemerle.VisualStudio.LanguageService.ProjectManager;
 using Nemerle.VisualStudio.GUI;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Package;
 
 namespace Nemerle.VisualStudio.Project
 {

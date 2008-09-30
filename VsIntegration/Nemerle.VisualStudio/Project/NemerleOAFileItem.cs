@@ -3,8 +3,8 @@ using System.Runtime.InteropServices;
 
 using EnvDTE;
 
-using Microsoft.VisualStudio.Package;
-using Microsoft.VisualStudio.Package.Automation;
+using Microsoft.VisualStudio.Project;
+using Microsoft.VisualStudio.Project.Automation;
 
 using Nemerle.VisualStudio.FileCodeModel;
 

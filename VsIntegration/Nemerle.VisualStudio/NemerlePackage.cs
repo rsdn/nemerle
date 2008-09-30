@@ -7,7 +7,7 @@ using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
-using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
 
 using Nemerle.VisualStudio.LanguageService;
 using Nemerle.VisualStudio.Project;

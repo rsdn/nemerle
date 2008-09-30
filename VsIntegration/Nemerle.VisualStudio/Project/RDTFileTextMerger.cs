@@ -6,7 +6,7 @@ using System.Text;
 
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.OLE.Interop;
-using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.TextManager.Interop;
@@ -220,7 +220,7 @@ namespace Nemerle.VisualStudio.Project
 
 				// Open the document in rdt.
 				ErrorHandler.ThrowOnFailure(manager.Open(false, false, VSConstants.LOGVIEWID_Code,
-					out frame, WindowFrameShowAction.DontShow));
+					out frame, WindowFrameShowAction.DoNotShow));
 				// Find the document in rdt.
 				ErrorHandler.ThrowOnFailure(rdt.FindAndLockDocument((uint)_VSRDTFLAGS.RDT_EditLock,
 					filePath, out hier, out itemId, out docData, out cookie));

@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 
-using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
 
 using IOleServiceProvider = Microsoft.VisualStudio.OLE.Interop.IServiceProvider;
 

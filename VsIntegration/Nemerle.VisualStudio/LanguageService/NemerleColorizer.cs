@@ -1,5 +1,4 @@
 using System;
-
 using Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio.TextManager.Interop;
 using Nemerle.Completion2;

@@ -2,7 +2,7 @@ using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 
-using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -29,9 +29,9 @@ namespace Nemerle.VisualStudio.Project
 			set { ((NemerleFileNode)Node).SubType = value; }
 		}
 
-		[SRCategoryAttribute   (Microsoft.VisualStudio.Package.SR.Advanced)]
-		[LocDisplayName        (Microsoft.VisualStudio.Package.SR.BuildAction)]
-		[SRDescriptionAttribute(Microsoft.VisualStudio.Package.SR.BuildActionDescription)]
+		[SRCategoryAttribute   (Microsoft.VisualStudio.Project.SR.Advanced)]
+		[LocDisplayName        (Microsoft.VisualStudio.Project.SR.BuildAction)]
+		[SRDescriptionAttribute(Microsoft.VisualStudio.Project.SR.BuildActionDescription)]
 		public virtual NemerleBuildAction NemerleBuildAction
 		{
 			get

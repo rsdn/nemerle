@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-
 using Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio.TextManager.Interop;
 

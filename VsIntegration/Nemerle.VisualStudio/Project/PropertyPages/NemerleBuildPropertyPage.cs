@@ -1,9 +1,8 @@
 ﻿using System.Runtime.InteropServices;
-using Microsoft.VisualStudio.Package;
 using System.Diagnostics;
 using Microsoft.VisualStudio;
-
-using MSSR = Microsoft.VisualStudio.Package.SR;
+using Microsoft.VisualStudio.Project;
+using MSSR = Microsoft.VisualStudio.Project.SR;
 using System.ComponentModel;
 
 namespace Nemerle.VisualStudio.Project.PropertyPages

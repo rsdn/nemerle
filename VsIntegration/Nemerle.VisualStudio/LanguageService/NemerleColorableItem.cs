@@ -1,9 +1,8 @@
-using System;
 using System.Drawing;
 
 //using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.TextManager.Interop;
 using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.TextManager.Interop;
 
 namespace Nemerle.VisualStudio.LanguageService
 {

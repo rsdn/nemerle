@@ -1,7 +1,7 @@
 using System;
 
 using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 

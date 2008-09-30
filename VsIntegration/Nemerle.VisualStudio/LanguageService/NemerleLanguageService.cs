@@ -7,7 +7,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 
 using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.TextManager.Interop;
 
@@ -21,6 +21,7 @@ using Nemerle.VisualStudio.GUI;
 using Nemerle.Utility;
 
 using Nemerle.VisualStudio.Properties;
+using Microsoft.VisualStudio.Package;
 
 namespace Nemerle.VisualStudio.LanguageService
 {

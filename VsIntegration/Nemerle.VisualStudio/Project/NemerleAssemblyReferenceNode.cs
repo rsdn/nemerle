@@ -1,4 +1,4 @@
-using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
 using Microsoft.VisualStudio;
 using System;
 using Microsoft.VisualStudio.Shell.Interop;

@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 
-using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
 
 using Nemerle.VisualStudio.Project;
 

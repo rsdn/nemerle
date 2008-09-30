@@ -1,11 +1,9 @@
 using System;
 using System.Diagnostics;
 using System.Collections.Generic;
-using System.Linq;
 using System.Windows.Forms;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.OLE.Interop;
-using Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio.TextManager.Interop;
 
 using Nemerle.Completion2;
@@ -15,8 +13,8 @@ using Nemerle.VisualStudio.Project;
 using Nemerle.VisualStudio.GUI;
 
 using VsCommands2K = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
-using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Package.Automation;
+using Microsoft.VisualStudio.Project.Automation;
+using Microsoft.VisualStudio.Package;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
@@ -294,8 +292,8 @@ namespace Nemerle.VisualStudio.LanguageService
 					var usages = proj.GetUsages(Source.GetFilePath(),
 														 lineIndex + 1,
 														 colIndex)
-											.Where(usage => usage.UsageType == UsageType.Usage)
-											.ToArray();
+											/*.Where(usage => usage.UsageType == UsageType.Usage)
+											.ToArray()*/;
 					using (var frm = new InlineRefactoringPreview(proj))
 					{
 						frm.Usages = usages;
@@ -335,11 +333,11 @@ namespace Nemerle.VisualStudio.LanguageService
 			int colIndex;
 			TextView.GetCaretPos(out lineIndex, out colIndex);
 			var allUsages = proj.GetUsages(Source.GetFilePath(), lineIndex + 1, colIndex);
-			var usages = allUsages.Distinct().ToArray();
+			var usages = allUsages/*.Distinct().ToArray()*/;
 			if (usages == null || usages.Length == 0)
 				return;
 
-			var definitionCount = usages.Count(usage => usage.UsageType == UsageType.Definition);
+			var definitionCount = 0;//usages.Count(usage => usage.UsageType == UsageType.Definition);
 			if(definitionCount == 0)
 			{
 				MessageBox.Show("Cannot find definition.");
