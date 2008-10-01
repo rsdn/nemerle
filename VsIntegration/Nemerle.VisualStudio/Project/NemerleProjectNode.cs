@@ -668,11 +668,9 @@ namespace Nemerle.VisualStudio.Project
 			newNode.OleServiceProvider.AddService(typeof(EnvDTE.ProjectItem), newNode.GetAutomationObject(), false);
 			newNode.OleServiceProvider.AddService(typeof(VSLangProj.VSProject), this.VSProject, false);
 
-			// PB: no more VSMDCodeDomProvider in VS2008SP1 sdk
-			//
-			//if (IsCodeFile(include) && item.ItemName == "Compile")
-			//	newNode.OleServiceProvider.AddService(typeof(SVSMDCodeDomProvider),
-			//		new VSMDCodeDomProvider( newNode.CodeDomProvider ), false);
+			if (IsCodeFile(include) && item.ItemName == "Compile")
+				newNode.OleServiceProvider.AddService(typeof(SVSMDCodeDomProvider),
+					new NemerleVSMDProvider( newNode.CodeDomProvider ), false);
 
 			return newNode;
 		}
@@ -693,11 +691,9 @@ namespace Nemerle.VisualStudio.Project
 			newNode.OleServiceProvider.AddService(typeof(EnvDTE.ProjectItem), newNode.GetAutomationObject(), false);
 			newNode.OleServiceProvider.AddService(typeof(VSLangProj.VSProject), this.VSProject, false);
 
-			// PB: no more VSMDCodeDomProvider in VS2008SP1 sdk
-			//
-			//if (IsCodeFile(include) && item.ItemName == "Compile")
-			//	newNode.OleServiceProvider.AddService(typeof(SVSMDCodeDomProvider),
-			//		new VSMDCodeDomProvider(newNode.CodeDomProvider), false);
+			if (IsCodeFile(include) && item.ItemName == "Compile")
+				newNode.OleServiceProvider.AddService(typeof(SVSMDCodeDomProvider),
+					new NemerleVSMDProvider(newNode.CodeDomProvider), false);
 
 			return newNode;
 		}
