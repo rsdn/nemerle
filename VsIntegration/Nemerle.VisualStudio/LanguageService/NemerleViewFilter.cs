@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Collections.Generic;
+using System.Linq;
 using System.Windows.Forms;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.OLE.Interop;
@@ -121,7 +122,7 @@ namespace Nemerle.VisualStudio.LanguageService
 							var names = CollectFileNames(dte);
 
 							frm.SetFiles(names);
-							frm.ShowDialog();
+							frm.ShowDialog(TextEditorWindow);
 							if (frm.SelectedFileName != null)
 							{
 								var srv = Source.LanguageService as NemerleLanguageService;
@@ -136,16 +137,13 @@ namespace Nemerle.VisualStudio.LanguageService
 					return VSConstants.S_OK;
 				case MenuCmd.CmdId.SourceOutlinerWindow:
 					{
-						//this.CodeWindowManager.LanguageService.
-						NemerleSource source = Source as NemerleSource;
-						if(source != null)
-							source.ProjectInfo.ProjectNode.Package.OnSourceOutlinerWindowShow(null, null);
+						if(Source != null)
+							Source.ProjectInfo.ProjectNode.Package.OnSourceOutlinerWindowShow(null, null);
 					}
 					return VSConstants.S_OK;
 			}
 
-			if (txt != null)
-				System.Diagnostics.Trace.Assert(false, "Implement the menu!\r\nID: " + txt);
+			Trace.Assert(txt == null, "Implement the menu!\r\nID: " + txt);
 
 
 			return base.ExecCommand(ref guidCmdGroup, nCmdId, nCmdexecopt, pvaIn, pvaOut);
@@ -179,10 +177,10 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 		}
 
-		private List<Location> _selectionsStack = null;
+		private List<Location> _selectionsStack;
 
 		private int _currentSelection;
-		public int CurrentSelection
+		public  int  CurrentSelection
 		{
 			get { return _currentSelection; }
 			set
@@ -199,6 +197,11 @@ namespace Nemerle.VisualStudio.LanguageService
 		public new NemerleSource Source
 		{
 			get { return (NemerleSource)base.Source; }
+		}
+
+		public IWin32Window TextEditorWindow
+		{
+			get { return NativeWindow.FromHandle(TextView.GetWindowHandle()); }
 		}
 
 		private void ExpandSelection()
@@ -221,7 +224,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private void HighlightSymbol()
 		{
-			NemerleSource source = Source as NemerleSource;
+			NemerleSource source = Source;
+
 			if (source != null)
 			{
 				TextSpan span = GetSelection();
@@ -243,15 +247,14 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 		}
 
-		private static bool WarnAboutErrors(Nemerle.Completion2.Project project)
+		private bool WarnAboutErrors(Nemerle.Completion2.Project project)
 		{
 			foreach (var cm in project.Errors)
 				if (cm.MessageKind == MessageKind.Error)
-					return
-						MessageBox.Show("This project doesn't build. Are you sure you want to proceed?",
+					return MessageBox.Show(TextEditorWindow, "This project doesn't build. Are you sure you want to proceed?",
 										"",
 										MessageBoxButtons.YesNo,
-						                MessageBoxIcon.Exclamation) == DialogResult.Yes;
+										MessageBoxIcon.Exclamation) == DialogResult.Yes;
 			return true;
 		}
 
@@ -273,7 +276,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			if (definitions.Length > 1)
 			{
-				MessageBox.Show("More than one definition found. Cannot inline.");
+				MessageBox.Show(TextEditorWindow, "More than one definition found. Cannot inline.");
 				return;
 			}
 
@@ -292,15 +295,15 @@ namespace Nemerle.VisualStudio.LanguageService
 					var usages = proj.GetUsages(Source.GetFilePath(),
 														 lineIndex + 1,
 														 colIndex)
-											/*.Where(usage => usage.UsageType == UsageType.Usage)
-											.ToArray()*/;
+											.Where(usage => usage.UsageType == UsageType.Usage)
+											.ToArray();
 					using (var frm = new InlineRefactoringPreview(proj))
 					{
 						frm.Usages = usages;
 						frm.ExpressionToInline = shouldEmbrace
 													? string.Format("({0})", replacement)
 													: replacement;
-						if (frm.ShowDialog() != DialogResult.OK)
+						if (frm.ShowDialog(TextEditorWindow) != DialogResult.OK)
 						{
 							RemoveLastHighlighting();
 							return;
@@ -319,7 +322,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 			else
 			{
-				MessageBox.Show("Only simple def's can be inlined at the moment.");
+				MessageBox.Show(TextEditorWindow, "Only simple def's can be inlined at the moment.");
 			}
 		}
 
@@ -333,25 +336,25 @@ namespace Nemerle.VisualStudio.LanguageService
 			int colIndex;
 			TextView.GetCaretPos(out lineIndex, out colIndex);
 			var allUsages = proj.GetUsages(Source.GetFilePath(), lineIndex + 1, colIndex);
-			var usages = allUsages/*.Distinct().ToArray()*/;
+			var usages = allUsages.Distinct().ToArray();
 			if (usages == null || usages.Length == 0)
 				return;
 
-			var definitionCount = 0;//usages.Count(usage => usage.UsageType == UsageType.Definition);
+			var definitionCount = usages.Count(usage => usage.UsageType == UsageType.Definition);
 			if(definitionCount == 0)
 			{
-				MessageBox.Show("Cannot find definition.");
+				MessageBox.Show(TextEditorWindow, "Cannot find definition.");
 				return;
 			}
 			if(definitionCount > 1)
 			{
-				MessageBox.Show("More than one definition found. Must be error in Find Usages.");
+				MessageBox.Show(TextEditorWindow, "More than one definition found. Must be error in Find Usages.");
 				return;
 			}
 
 			using (var frm = new RenameRefactoringDlg(proj, usages))
 			{
-				if (frm.ShowDialog() == DialogResult.OK)
+				if (frm.ShowDialog(TextEditorWindow) == DialogResult.OK)
 				{
 					Source.RenameSymbols(frm.NewName, usages);
 				}
@@ -361,27 +364,27 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private void FindInheritors()
 		{
-			NemerleSource source = Source as NemerleSource;
-			NemerleLanguageService ourLanguageService = Source.LanguageService as NemerleLanguageService;
-			if (source != null && ourLanguageService != null)
-			{
-				int lineIndex;
-				int colIndex;
-				TextView.GetCaretPos(out lineIndex, out colIndex);
-				GotoInfo[] infos =
-					Source.ProjectInfo.Project.GetInheritors(source.FileIndex, lineIndex + 1, colIndex + 1);
+			if (Source == null)
+				return;
 
-				// If we have only one found usage, then jump directly to it.
-				if (infos.Length == 1)
-					ourLanguageService.GotoLocation(infos[0].Location);
-				else if (infos.Length > 0) // otherwise show a form to let user select entry manually
-				{
-					NativeWindow textEditorWnd =
-						NativeWindow.FromHandle(TextView.GetWindowHandle());
-					using (GotoUsageForm popup = new GotoUsageForm(infos))
-						if (popup.ShowDialog(textEditorWnd) == DialogResult.OK)
-							ourLanguageService.GotoLocation(popup.Result.Location);
-				}
+			NemerleLanguageService ourLanguageService = Source.LanguageService as NemerleLanguageService;
+			if (ourLanguageService == null)
+				return;
+
+			int lineIndex;
+			int colIndex;
+			TextView.GetCaretPos(out lineIndex, out colIndex);
+			GotoInfo[] infos =
+				Source.ProjectInfo.Project.GetInheritors(Source.FileIndex, lineIndex + 1, colIndex + 1);
+
+			// If we have only one found usage, then jump directly to it.
+			if (infos.Length == 1)
+				ourLanguageService.GotoLocation(infos[0].Location);
+			else if (infos.Length > 0) // otherwise show a form to let user select entry manually
+			{
+				using (GotoUsageForm popup = new GotoUsageForm(infos))
+					if (popup.ShowDialog(TextEditorWindow) == DialogResult.OK)
+						ourLanguageService.GotoLocation(popup.Result.Location);
 			}
 		}
 
@@ -392,16 +395,14 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (_selectionsStack == null || _selectionsStack.Count == 0)
 				return false;
 			Location current = Utils.LocationFromSpan(_selectionsStack[0].FileIndex, selection);
-			int i = 0;
-			foreach (Location location in _selectionsStack)
+
+			int i = _selectionsStack.IndexOf(current);
+			if (i >= 0)
 			{
-				if (location == current)
-				{
-					_currentSelection = i;
-					return true;
-				}
-				i++;
+				_currentSelection = i;
+				return true;
 			}
+
 			return false;
 		}
 
@@ -409,7 +410,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			using (Options options = new Options())
 			{
-				if (options.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+				if (options.ShowDialog(TextEditorWindow) == DialogResult.OK)
 					options.Save();
 			}
 		}
@@ -606,7 +607,7 @@ namespace Nemerle.VisualStudio.LanguageService
             //List<FormatterResult> results = Formatter.FormatExpressionAt(engine, filePath, line + 1, idx + 1);
             //ApplyFormatterResults(results);
 
-			//MessageBox.Show("Caret pos in HandleSmartIndent: " + line + ":" + col);
+			//MessageBox.Show(TextEditorWindow, "Caret pos in HandleSmartIndent: " + line + ":" + col);
 			return false;
 		}
 
