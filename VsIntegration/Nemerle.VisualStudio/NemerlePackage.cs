@@ -155,7 +155,6 @@ namespace Nemerle.VisualStudio
 			RegisterProjectFactory(new NemerleProjectFactory(this));
 			RegisterEditorFactory (new NemerleEditorFactory (this));
 			RegisterProjectFactory(new NemerleWPFProjectFactory(this));
-			InitializeSourceOutlinerToolWindow();
 			RegisterNemerleCommands();
 		}
 
@@ -244,25 +243,10 @@ namespace Nemerle.VisualStudio
 			if(window == null || window.Frame == null)
 				throw new COMException(Resources.CannotCreateWindow);
 
+			_sourceOutlinerToolWindow = (SourceOutlinerToolWindow)window;
+	
 			IVsWindowFrame windowFrame = (IVsWindowFrame)window.Frame;
 			ErrorHandler.ThrowOnFailure(windowFrame.Show());
-		}
-
-		private void InitializeSourceOutlinerToolWindow()
-		{
-			EnvDTE.DTE dte = GetService<EnvDTE.DTE>();
-			if(dte == null)
-				throw new NullReferenceException("DTE is null");
-
-			_sourceOutlinerToolWindow = (SourceOutlinerToolWindow)this.FindToolWindow(typeof(SourceOutlinerToolWindow), 0, true);
-
-			if(_sourceOutlinerToolWindow == null || _sourceOutlinerToolWindow.Frame == null)
-				throw new COMException(Resources.CannotCreateWindow);
-
-			_sourceOutlinerToolWindow.Package = this;
-			_sourceOutlinerToolWindow.InitializeDTE(dte);
-			_sourceOutlinerToolWindow.AddWindowEvents();
-			_sourceOutlinerToolWindow.AddSolutionEvents();
 		}
 
 		#endregion

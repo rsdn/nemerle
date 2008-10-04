@@ -225,7 +225,7 @@ namespace Nemerle.VisualStudio.Project
 		/// Walks the subpaths of a project relative path and checks if the folder nodes 
 		/// hierarchy is already there, if not creates it.
 		/// </summary>
-		/// <param name="strPath">Path of the folder, can be relative to project or absolute</param>
+		/// <param name="path">Path of the folder, can be relative to project or absolute</param>
 		public override HierarchyNode CreateFolderNodes(string path)
 		{
 			if (String.IsNullOrEmpty(path))

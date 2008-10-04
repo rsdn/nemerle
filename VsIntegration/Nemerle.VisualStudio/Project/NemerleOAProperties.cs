@@ -14,36 +14,5 @@ namespace Nemerle.VisualStudio.Project
 			: base(target)
 		{
 		}
-
-		public override EnvDTE.Property Item(object index)
-		{
-			if (index is string)
-			{
-				string indexAsString = (string)index;
-				if (Properties.ContainsKey(indexAsString))
-				{
-					return (EnvDTE.Property)Properties[indexAsString];
-				}
-			}
-			else if (index is int)
-			{
-				int realIndex = (int)index - 1;
-				if (realIndex >= 0 && realIndex < Properties.Count)
-				{
-					System.Collections.IEnumerator enumerator = Properties.Values.GetEnumerator();
-
-					int i = 0;
-					while (enumerator.MoveNext())
-					{
-						if (i++ == realIndex)
-						{
-							return (EnvDTE.Property)enumerator.Current;
-						}
-					}
-				}
-			}
-
-				return base.Item(index);
-			}
 	}
 }
