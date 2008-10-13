@@ -38,6 +38,7 @@ using Nemerle.Collections;
 using Nemerle.Imperative;
 using Nemerle.Utility;
 using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.NemerleAttributes;
 
 using System;
 using System.Diagnostics.Trace;
@@ -73,6 +74,17 @@ namespace StringTemplate
     Helper.SprintImpl(str, true, expr => expr, Macros.ImplicitCTX().Env)
   }
 
+  [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Class, Inherited = true)]
+#if DEBUG_StringTemplate
+  macro StringTemplateGroupDebug(tb : TypeBuilder, parms = <[ () ]>)
+#else
+  macro StringTemplateGroup(tb : TypeBuilder, parms = <[ () ]>)
+#endif
+  {
+    _ = parms;
+    Helper2.StringTemplateGroupBeforeInheritance(tb, Nemerle.Macros.ImplicitCTX());
+  }
+
   [MacroUsage(MacroPhase.BeforeTypedMembers, MacroTargets.Class, Inherited = true)]
 #if DEBUG_StringTemplate
   macro StringTemplateGroupDebug(tb : TypeBuilder, parms = <[ () ]>)
@@ -97,40 +109,78 @@ namespace StringTemplate
   internal module Helper2
   {
     StSuffix = "__StImpl";
+    mutable _inherMap : Set[TypeInfo] = Set();
+    _sync : object = object();
+
+    internal StringTemplateGroupBeforeInheritance(tb : TypeBuilder, _ctx : Typer) : void
+    {
+      lock (_sync)
+        _inherMap = _inherMap.Replace(tb);
+    }
 
     internal StringTemplateGroupBeforeTypedMembers(tb : TypeBuilder, ctx : Typer) : void
     {
+      def isDrived = _inherMap.Contains(tb.BaseType);
+      //TODO: Добавить распознование StringTemplateGroup-классов из внешних сборок.
       ctx.Env.Manager.MacroColors.PushUseSiteColor();
       try
       {
+        if (tb.IsAbstract) _ = tb.DefineWithSource(<[ decl: 
+          public abstract CreateInstance() : object; ]>);
+        else if (isDrived) _ = tb.DefineWithSource(<[ decl: 
+            public override CreateInstance() : object { $(tb.ParsedTypeName)() } ]>);
+        else _ = tb.DefineWithSource(<[ decl: 
+            public virtual  CreateInstance() : object { $(tb.ParsedTypeName)() } ]>);
+
         // Add <MethodName>__StImpl method into STG.
         
         def members1 = tb.GetParsedMembers(true);
-        def ideTest      = m => m.Tokens != null // BUG in compiler! Workaround!
+        def testAbstract(m) { m.Attributes %&& Abstract && m.Name != "CreateInstance" }
+        def ideTest      = m => testAbstract(m) || m.Tokens != null // BUG in compiler! Workaround!
           && m.Tokens is Token.BracesGroup(Token.LooseGroup(Token.StringLiteral(_, _)), _);
-        def compilerTest = m => m.Body is PExpr.Sequence([PExpr.Literal(Literal.String(_))]);
+        def compilerTest = m => testAbstract(m) || m.Body is PExpr.Sequence([PExpr.Literal(Literal.String(_))]);
         def test = if (ctx.Manager.IsIntelliSenseMode) ideTest else compilerTest;
         def members2 = members1.Filter(_ => { | m is ClassMember.Function when test(m) => true | _ => false});
         
         foreach (method is ClassMember.Function in members2)
         {
-          def h            = method.header;
+          def mods               = method.modifiers;
+          def attrs              = mods.Attributes;
+          def newMods            = Modifiers(Public | (attrs & (Virtual | Override | Abstract)), //Protected
+                                   mods.GetCustomAttributes());
+          def h                  = method.header;
           def workMethParsedName = MakeWorkMethParsedName(method);
           def newMethodAst = <[ decl:
-            protected virtual $(workMethParsedName : name)[..$(h.typarms.tyvars)] (..$(h.Parameters)) : void
+             ..$newMods $(workMethParsedName : name)[..$(h.typarms.tyvars)] (..$(h.Parameters)) : void
               where ..$(h.typarms.constraints)
             {
             }]>;
           _ = tb.DefineWithSource(newMethodAst);
           method.UserData = newMethodAst;
-          method.Attributes |= NemerleAttributes.Static | NemerleAttributes.Public;
+          method.Attributes = method.Attributes %| Public; // & ~(Virtual %| Override) %| Static  %| New
         }
       }
       finally { ctx.Env.Manager.MacroColors.PopColor(); }
     }
-    
+
     internal StringTemplateGroupWithTypedMembers(tb : TypeBuilder, ctx : Typer, parms : PExpr) : void
     {
+      def isDrived = _inherMap.Contains(tb.BaseType);
+      /*
+      def findRootBase(tb : TypeBuilder)
+      {
+          if (_inherMap.Contains(tb.BaseType)) 
+            match (tb.BaseType)
+            {
+              | baseTb is TypeBuilder => findRootBase(baseTb)
+              | _ => tb
+            }
+          else tb
+      }
+      def rootBase = findRootBase(tb);
+      */
+      //TODO: Добавить распознование StringTemplateGroup-классов из внешних сборок.
+      
       def makeConverters(parms)
       {
         def converters1 = match (parms)
@@ -168,29 +218,40 @@ namespace StringTemplate
       {
         makeConverters(parms);
 
-        tb.Define(<[ decl: protected         _builder : StringBuilder = StringBuilder(1024); ]>);
-        tb.Define(<[ decl: protected mutable _indent : string = "\n"; ]>);
-        tb.Define(<[ decl: protected         _indentLenStack : Stack[int] = Stack(); ]>);
-        _ = tb.DefineWithSource(<[ decl: protected virtual _N_ToString[T](value : T) : string { value.ToString() } ]>);
-        _ = tb.DefineWithSource(<[ decl: 
-          protected AddIndent(indent : string) : void
-          {
-            _indentLenStack.Add(indent.Length);
-            _indent += indent;
-          }
-         ]>);
-        _ = tb.DefineWithSource(<[ decl: 
-          protected RemoveLastIndent() : void
-          {
-            _indent = _indent.Substring(0, _indent.Length - _indentLenStack.Pop());
-          }
-         ]>);
-        _ = tb.DefineWithSource(<[ decl: 
-          protected PrintNewLineAndIndent() : void
-          {
-            _ = _builder.Append(_indent);
-          }
-         ]>);
+        unless (isDrived)
+        {
+          tb.Define(<[ decl: protected         _builder : StringBuilder = StringBuilder(1024); ]>);
+          tb.Define(<[ decl: protected mutable _indent : string = "\n"; ]>);
+          tb.Define(<[ decl: protected         _indentLenStack : Stack[int] = Stack(); ]>);
+          def t = Macros.NewSymbol("T");
+          def ts = [Splicable.Name(t)];
+          _ = tb.DefineWithSource(<[ decl: protected virtual _N_ToString[..$ts](value : $(t : name)) : string { value.ToString() } ]>);
+          _ = tb.DefineWithSource(<[ decl: 
+            protected AddIndent(indent : string) : void
+            {
+              _indentLenStack.Add(indent.Length);
+              _indent += indent;
+            }
+           ]>);
+          _ = tb.DefineWithSource(<[ decl: 
+            protected RemoveLastIndent() : void
+            {
+              _indent = _indent.Substring(0, _indent.Length - _indentLenStack.Pop());
+            }
+           ]>);
+          _ = tb.DefineWithSource(<[ decl: 
+            protected PrintNewLineAndIndent() : void
+            {
+              _ = _builder.Append(_indent);
+            }
+           ]>);
+          _ = tb.DefineWithSource(<[ decl: 
+            public override ToString() : string
+            {
+              _builder.ToString()
+            }
+           ]>);
+        }
 
         def beforeBodyTypingHandler(mb : MethodBuilder, pBody) : PExpr
         {
@@ -206,7 +267,7 @@ namespace StringTemplate
               def findCorrespondMethod()
               {
                 def stAst = mb.Ast.UserData;
-                def stMethods = tb.GetMethods(BF.DeclaredOnly | BF.Instance | BF.NonPublic).FindAll(
+                def stMethods = tb.GetMethods(BF.DeclaredOnly | BF.Instance | BF.Public).FindAll(
                   _ => { | m is MethodBuilder when m.Ast == stAst => true | _ => false });
                   
                 match (stMethods)
@@ -224,8 +285,8 @@ namespace StringTemplate
               
               def h                  = mb.Ast.header;
               def workMethParsedName = MakeWorkMethParsedName(mb);
-              
-              <[  def instance = $(tb.ParsedTypeName)();
+              <[  def instance = CreateInstance() :> $(tb.ParsedTypeName);
+                  //Console.WriteLine(instance.GetType().FullName);
                   instance.$(workMethParsedName : name)(..$(h.ParametersReferences));
                   instance._builder.ToString() ]>
 
@@ -233,8 +294,8 @@ namespace StringTemplate
           }
         }
 
-        foreach (mb is MethodBuilder in tb.GetMethods(BF.DeclaredOnly | BF.Static | BF.Public))
-          when (mb.Ast.UserData is ClassMember.Function)
+        foreach (mb is MethodBuilder in tb.GetMethods(BF.DeclaredOnly | BF.Public | BF.Instance))
+          when (mb.Ast.UserData is ClassMember.Function && !(mb.Attributes %&& Abstract))
             mb.AddBeforeBodyTypingHandler(beforeBodyTypingHandler);
       }
       finally { ctx.Env.Manager.MacroColors.PopColor(); }
