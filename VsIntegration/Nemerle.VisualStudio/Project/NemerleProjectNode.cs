@@ -20,7 +20,13 @@ using Nemerle.VisualStudio.Project.PropertyPages;
 using Nemerle.VisualStudio.WPFProviders;
 
 using PkgUtils = Microsoft.VisualStudio.Project.Utilities;
+using OleConstants = Microsoft.VisualStudio.OLE.Interop.Constants;
+using MsBuildProject = Microsoft.Build.BuildEngine.Project;
+using VsCommands = Microsoft.VisualStudio.VSConstants.VSStd97CmdID;
+using VsCommands2K = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
+
 using MSBuild = Microsoft.Build.BuildEngine;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -117,6 +123,17 @@ namespace Nemerle.VisualStudio.Project
 		{
 			get { return (NemerlePackage)base.Package; }
 		}
+        
+        private bool _showAllFilesEnabled;
+	    /// <summary>
+	    /// Gets if the ShowAllFiles is enabled or not.
+	    /// </summary>
+	    /// <value>true if the ShowAllFiles option is enabled, false otherwise.</value>
+	    public bool ShowAllFilesEnabled
+	    {
+	        get { return _showAllFilesEnabled; }
+	        private set { _showAllFilesEnabled = value; }
+	    }
 
 		public string OutputFileName
 		{
@@ -191,6 +208,47 @@ namespace Nemerle.VisualStudio.Project
 
 		#endregion
 
+        /// <summary>
+        /// Creates and returns the ProjectElement for a folder item.
+        /// </summary>
+        /// <param name="folder">Path of the folder.</param>
+        /// <returns>ProjectElement for the folder item.</returns>
+        internal ProjectElement CreateMsBuildFolderProjectElement(string folder)
+        {
+            return AddFolderToMsBuild(folder);
+        }
+
+        /// <summary>
+        /// Creates and returns the ProjectElement for a file item.
+        /// </summary>
+        /// <param name="file">Path of the file.</param>
+        /// <returns>ProjectElement for the file item.</returns>
+        internal ProjectElement CreateMsBuildFileProjectElement(string file)
+        {
+            return AddFileToMsBuild(file);
+        }
+
+        /// <summary>
+        /// Toggles the state of Show all files
+        /// </summary>
+        /// <returns>S_OK if it's possible to toggle the state, OLECMDERR_E_NOTSUPPORTED if not</returns>
+        internal int ToggleShowAllFiles()
+        {
+            if (ProjectMgr == null || ProjectMgr.IsClosed)
+                return (int)OleConstants.OLECMDERR_E_NOTSUPPORTED;
+
+            ((NemerlePackage)ProjectMgr.Package).SetWaitCursor();
+            
+            ShowAllFilesEnabled = !ShowAllFilesEnabled;
+
+            if (ShowAllFilesEnabled)
+                NemerleProjectMembers.AddNonMemberItems(this);
+            else
+                NemerleProjectMembers.RemoveNonMemberItems(this);
+            
+            return NativeMethods.S_OK;
+        }
+
 		#region Overridden Properties
 
 		public   override int	ImageIndex  { get { return _imageOffset + NemerleConstants.ImageListIndex.NemerleProject; } }
@@ -202,6 +260,20 @@ namespace Nemerle.VisualStudio.Project
 		{
 			return new NemerleReferenceContainerNode(this);
 		}
+
+        /// <summary>
+        /// Creates and returns the folder node object for Wix projects.
+        /// </summary>
+        /// <param name="path">Folder path.</param>
+        /// <param name="element">MSBuild element.</param>
+        /// <returns>Returns newly created Folder Node object.</returns>
+        [SuppressMessage("Microsoft.Naming", "CA1725:ParameterNamesShouldMatchBaseDeclaration", MessageId = "1#")]
+        protected internal override FolderNode CreateFolderNode(string path, ProjectElement element)
+        {
+            ErrorHelper.ThrowIsNull(element, "element");
+            
+            return new NemerleFolderNode(this, path, element, element.IsVirtual);
+        }
 
 		#endregion
 
@@ -228,12 +300,9 @@ namespace Nemerle.VisualStudio.Project
 		/// <param name="path">Path of the folder, can be relative to project or absolute</param>
 		public override HierarchyNode CreateFolderNodes(string path)
 		{
-			if (String.IsNullOrEmpty(path))
-			{
-				throw new ArgumentNullException("path");
-			}
-
-			if (Path.IsPathRooted(path))
+            ErrorHelper.ThrowIsNullOrEmpty(path, "path");
+			
+            if (Path.IsPathRooted(path))
 			{
 				// Ensure we are using a relative path
 				if (String.Compare(ProjectFolder, 0, path, 0, ProjectFolder.Length, StringComparison.OrdinalIgnoreCase) == 0)
@@ -658,10 +727,10 @@ namespace Nemerle.VisualStudio.Project
 		/// <returns>NemerleFileNode or FileNode</returns>
 		public override FileNode CreateFileNode(ProjectElement item)
 		{
-			if (item == null)
-				throw new ArgumentNullException("item");
+            ErrorHelper.ThrowIsNull(item, "item");
+            
+			NemerleFileNode newNode = new NemerleFileNode(this, item, item.IsVirtual);
 
-			NemerleFileNode newNode = new NemerleFileNode(this, item);
 			string		  include = item.GetMetadata(ProjectFileConstants.Include);
 			
 			newNode.OleServiceProvider.AddService(typeof(EnvDTE.Project),	   ProjectMgr.GetAutomationObject(), false);
@@ -682,8 +751,8 @@ namespace Nemerle.VisualStudio.Project
 		/// <returns>dependent file node</returns>
 		public override DependentFileNode CreateDependentFileNode(ProjectElement item)
 		{
-			if (item == null) throw new ArgumentNullException("item");
-
+            ErrorHelper.ThrowIsNull(item, "item");
+            
 			NemerleDependentFileNode newNode = new NemerleDependentFileNode(this, item);
 			string				   include = item.GetMetadata(ProjectFileConstants.Include);
 
@@ -918,6 +987,15 @@ namespace Nemerle.VisualStudio.Project
 				String.Compare(type, "Resource",              StringComparison.OrdinalIgnoreCase) == 0;
 		}
 
+        /// <summary>
+        /// Enables / Disables the ShowAllFileMode.
+        /// </summary>
+        /// <returns>S_OK if it's possible to toggle the state, OLECMDERR_E_NOTSUPPORTED if not</returns>
+        protected internal override int ShowAllFiles()
+        {
+            return ToggleShowAllFiles();
+        }
+        
 		#endregion
 
 		#region IVsProjectSpecificEditorMap2 Members

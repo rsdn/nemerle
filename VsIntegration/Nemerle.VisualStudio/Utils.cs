@@ -1,8 +1,11 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Collections.Generic;
-
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
 using Microsoft.VisualStudio.Project;
+using Microsoft.VisualStudio.Shell;
 using Nemerle.Compiler;
 using Nemerle.VisualStudio.LanguageService;
 using Msbuild = Microsoft.Build.BuildEngine;
@@ -321,5 +324,26 @@ namespace Nemerle.VisualStudio
 			}
 			Trace.WriteLine(output);
 		}
+
+        public static string GetRelativePath(string basePath, string subPath)
+        {
+            ErrorHelper.ThrowIsNullOrEmpty(basePath, "basePath");
+            ErrorHelper.ThrowIsNullOrEmpty(subPath, "subPath");
+
+            if (!Path.IsPathRooted(basePath))
+                throw new ArgumentException("The 'basePath' is not rooted.");
+
+            if (!Path.IsPathRooted(subPath))
+                return subPath;
+
+            if (!StringComparer.OrdinalIgnoreCase.Equals(Path.GetPathRoot(basePath), Path.GetPathRoot(subPath)))
+                return subPath;
+
+            if (!basePath.EndsWith(Path.DirectorySeparatorChar.ToString()))
+                basePath += Path.DirectorySeparatorChar;
+            
+            Url url = new Url(basePath);
+            return url.MakeRelative(new Url(subPath));
+        }
 	}
 }
