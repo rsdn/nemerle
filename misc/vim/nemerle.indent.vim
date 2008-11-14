@@ -19,8 +19,7 @@ if exists("b:did_indent")
 endif
 let b:did_indent = 1
 
-setlocal cinkeys-=:
-setlocal indentkeys& indentkeys-=: indentkeys+=<Bar>,0=requires,0=ensures,0=invariant,0=syntax
+setlocal indentkeys& indentkeys-=:,0# indentkeys+=<Bar>,0=requires,0=ensures,0=invariant,0=syntax
 setlocal indentexpr=GetNemerleIndent()
 
 " Define function only once.
@@ -158,4 +157,3 @@ function GetNemerleIndent()
 
     return theIndent
 endfunction " GetNemerleIndent
-
