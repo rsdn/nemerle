@@ -468,7 +468,7 @@ namespace Nemerle.Compiler
       get { ! (parent_typer.IsSome) }
     }
 
-    AddLocal (name : PT.Name, local : LocalValue) : void
+    public AddLocal (name : PT.Name, local : LocalValue) : void
     {
       local_context = local_context.WithLocal (name, local);
     }
@@ -938,37 +938,96 @@ namespace Nemerle.Compiler
           target.TryUnify (lit.GetInternalType (InternalType))
       }
     }
+    
+    /// Returns: delegateTyInf expressinTreeTyInf * fromTyInf * toTyInf for ty or nulls.
+    public static TryExtractFunType (ty : option[MType]) : TypeInfo * TypeInfo * list[TyVar] * TyVar
+    {
+      | Some (MType.Class (exprTree, [MType.Class (del, tyArgs)])) 
+        when (del.IsDelegate 
+           && exprTree.FullName == "System.Linq.Expressions.Expression") 
+      | Some (MType.Class (del, tyArgs)) when del.IsDelegate with exprTree = null => 
+        def invoke = del.GetMembers().FindWithDefault(null, m => m.Name == "Invoke");
+        assert(invoke != null);
+        def tysMap = List.FoldLeft2(del.Typarms, tyArgs, Hashtable(), 
+          fun(parm, arg, tysMap) { tysMap.Add(parm, arg); tysMap });
+        def fTy = invoke.GetMemType() :> MType.Fun;
+        def mapTy(t)
+        {
+          | MType.TyVarRef(tyVar) => tysMap[tyVar]
+          | _ => t
+        }
+        def args = match (fTy.from.Fix ()) 
+          {
+            | MType.Tuple(lst) => lst.Map(mapTy)
+            | MType.Void => []
+            | t => [mapTy(t)]
+          };
 
+        def ret = mapTy(fTy.to);
+
+        (del, exprTree, args, ret)
+        
+      | _ => (null, null, null, null)
+    }
+    
     NonLiteralCast (expr : TExpr, target : TyVar) : TExpr
     {
       mutable meth = null;
 
-      def (del_tc, exprTree_tc) =
+      def (del_tc, exprTree_tc, argsTys, ret) =
         if (IsFunctional (expr))
-          match (target.Hint) 
+        {
+          def (del, exprTree, args, ret) = TryExtractFunType(target.Hint);
+          when (args != null && ret != null)
           {
-            | Some (MType.Class (exprTree, [MType.Class (del, _)])) 
-              when (del.IsDelegate 
-                 && exprTree.FullName == "System.Linq.Expressions.Expression") 
-                => (del, exprTree)
-            | Some (MType.Class (del, _)) when del.IsDelegate => (del, null)
-            | _ => (null, null)
+            def fnTy = MType.Fun(TyVar.FromList(args), ret);
+            def ok = expr.Type.Require(fnTy);
+            _ = ok;
           }
-        else (null, null);
+          (del, exprTree, args, ret)
+        }
+        else (null, null, null, null);
 
       if (exprTree_tc != null)
       {
-        def expr2 = TryTyping (() => TypeExpr (
-          <[ System.Linq.Expressions.Expression.Lambda.[System.Func.[int, bool]](
-                System.Linq.Expressions.Expression.Constant(true),
-                array[System.Linq.Expressions.Expression.Parameter(typeof(int), "x")]
-            ) ]>));
-        
-        if (IsError (expr2) || !expr2.Type.TryRequire (target)) null
-        else 
+        match (expr)
         {
-          expr2.Type.ForceRequire (target);
-          expr2
+          | TExpr.MacroEnvelope (_, _, TExpr.DefFunctionsIn([fn], _), _)
+          | TExpr.DefFunctionsIn([fn], _) => 
+            def <[ fundecl: $_name [ ..$typarms1] (..$args1) : $ty1 where ..$tyconstrs1 
+                            $body1 ]> = fn.Parsed;
+            def trySetType(parm, ty)
+            {
+              when (parm.ty is PT.PExpr.Wildcard)
+                parm.ty = PT.PExpr.TypedType(ty)
+            }
+            mutable retTy = ty1;
+            when (!args1.IsEmpty && argsTys.Length == args1.Length)
+            {
+              List.Iter2(args1, argsTys, trySetType);
+              when (retTy is PT.PExpr.Wildcard)
+                retTy = PT.PExpr.TypedType(ret);
+            }
+            
+            def lamda = <[ fun [ ..$typarms1] (..$args1) : $retTy where ..$tyconstrs1 $body1 ]>;
+            _ = _name; def lamda1 = lamda; _ = lamda1;
+            // TODO: Make correct locations!
+            def expr2 = TryTyping(() => 
+              TypeExpr(<[ Nemerle.Data.Linq.ToExpression($lamda) ]>));
+
+            if (IsError (expr2) || !expr2.Type.TryRequire(target)) null
+            else 
+            {
+              // The source texpr can be not typed. Help type it...
+              def fnTy = MType.Fun(TyVar.FromList(argsTys), ret);
+              def ok = fn.decl.Type.Require(fnTy);
+              
+              expr2.Type.ForceRequire (target);
+              _ = ok;
+              expr2
+            }
+
+          | _ => null
         }
       }
       else if (del_tc != null)
@@ -1082,22 +1141,23 @@ namespace Nemerle.Compiler
     }
 
 
-    PushLocals () : void
+    public PushLocals () : void
     {
       log (TYPING, "push locals{ ");
       locals_stack.Push (local_context)
     }
 
 
-    PopLocals () : void
+    public PopLocals () : void
     {
       log (TYPING, "pop locals }");
       local_context = locals_stack.Pop ()
     }
+    
     #endregion
 
-
     #region Expressions in general
+    
     public TypeExpr (e : PT.PExpr) : TExpr
     {
       TypeExpr (e, FreshTyVar ())
@@ -1346,7 +1406,7 @@ namespace Nemerle.Compiler
 
         // FIXME: this should be a macro
         | PT.PExpr.Lambda (d) =>
-          def newname = d.header.ParsedName.NewName (Util.tmpname ("l"));
+          def newname = d.header.ParsedName.NewName (Util.tmpname ("lambda_"));
           d.header.name = PT.Splicable.Name (newname);
           def rf = PT.PExpr.Ref (newname);
           def sq = PT.PExpr.Sequence ([PT.PExpr.DefFunctions ([d]), rf]);
@@ -2086,6 +2146,7 @@ namespace Nemerle.Compiler
            loc          = fn.header.Location);
 
         fn.header.typed_object = header;
+        header.Parsed = fn;
 
         def parm_types = List.Map (parms, fun (p : Fun_parm) { p.ty });
         def fun_type = ConstructFunctionType (parm_types, header.ret_type);
