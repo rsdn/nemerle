@@ -567,7 +567,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			catch (Exception e)
 			{
 				Trace.WriteLine("!!! Check() throw Exception " + e.Message);
-				throw;
+        return GetDefaultScope(request);
 			}
 			finally
 			{
