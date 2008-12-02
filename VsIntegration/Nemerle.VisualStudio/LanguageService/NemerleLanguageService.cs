@@ -402,23 +402,15 @@ namespace Nemerle.VisualStudio.LanguageService
 			/// </summary>
 			private static Predicate<Token> GetMatchBracePredicate(Token token)
 			{
-				if (token is Token.BeginBrace)
-					return delegate(Token t) { return t is Token.BeginBrace; };
-				if (token is Token.BeginQuote)
-					return delegate(Token t) { return t is Token.BeginQuote; };
-				if (token is Token.BeginRound)
-					return delegate(Token t) { return t is Token.BeginRound; };
-				if (token is Token.BeginSquare)
-					return delegate(Token t) { return t is Token.BeginSquare; };
+				if (token is Token.BeginBrace)  return t => t is Token.BeginBrace;
+				if (token is Token.BeginQuote)  return t => t is Token.BeginQuote;
+				if (token is Token.BeginRound)  return t => t is Token.BeginRound;
+				if (token is Token.BeginSquare) return t => t is Token.BeginSquare;
 
-				if (token is Token.EndBrace)
-					return delegate(Token t) { return t is Token.EndBrace; };
-				if (token is Token.EndQuote)
-					return delegate(Token t) { return t is Token.EndQuote; };
-				if (token is Token.EndRound)
-					return delegate(Token t) { return t is Token.EndRound; };
-				if (token is Token.EndSquare)
-					return delegate(Token t) { return t is Token.EndSquare; };
+				if (token is Token.EndBrace)    return t => t is Token.EndBrace;
+				if (token is Token.EndQuote)    return t => t is Token.EndQuote;
+				if (token is Token.EndRound)    return t => t is Token.EndRound;
+				if (token is Token.EndSquare)   return t => t is Token.EndSquare;
 
 				Token.Keyword kwd = token as Token.Keyword;
 
@@ -511,7 +503,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 				NemerleSource source = projectInfo.GetSource(request.FileName);
 
-				int nErrors = 0;
+				int  nErrors     = 0;
 				bool allExpanded = source.TimeStamp > 0;
 
 				request.Sink.ProcessHiddenRegions = true;
@@ -519,26 +511,27 @@ namespace Nemerle.VisualStudio.LanguageService
 				projectInfo.Project.Check(
 					request.FileName,
 					new SourceTextManager(source),
-					delegate(Location location, string text, bool isExpanded)
+					(location, text, isExpanded) =>
 					{
 						if (location.Line < location.EndLine)
 						{
-							NewHiddenRegion r = new NewHiddenRegion();
-
-							r.tsHiddenText = Utils.SpanFromLocation(location);
-							r.iType = (int)HIDDEN_REGION_TYPE.hrtCollapsible;
-							r.dwBehavior = (int)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled; //.hrbClientControlled;
-							r.pszBanner = string.IsNullOrEmpty(text) ? null : text;
-							r.dwClient = 25;
-							r.dwState = (uint)(allExpanded || isExpanded ?
-								HIDDEN_REGION_STATE.hrsExpanded : HIDDEN_REGION_STATE.hrsDefault);
+							var r = new NewHiddenRegion
+							{
+								tsHiddenText = Utils.SpanFromLocation(location),
+								iType        = (int)HIDDEN_REGION_TYPE.hrtCollapsible,
+								dwBehavior   = (int)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled, //.hrbClientControlled;
+								pszBanner    = string.IsNullOrEmpty(text) ? null : text,
+								dwClient     = 25,
+								dwState      = (uint)(allExpanded || isExpanded ?
+									HIDDEN_REGION_STATE.hrsExpanded : HIDDEN_REGION_STATE.hrsDefault)
+							};
 
 							request.Sink.AddHiddenRegion(r);
 						}
 					},
-					delegate(CompilerMessage cm)
+					cm =>
 					{
-						NemerleAuthoringSink sink = (NemerleAuthoringSink)request.Sink;
+						var sink = (NemerleAuthoringSink)request.Sink;
 
 						if (++nErrors >= sink.MaxErrors)
 							return false;
@@ -549,16 +542,15 @@ namespace Nemerle.VisualStudio.LanguageService
 							request.FileName,
 							cm.Message.Replace("`", "'"),
 							ts,
-							cm.MessageKind == MessageKind.Error ? Severity.Error :
-							cm.MessageKind == MessageKind.Warning ? Severity.Warning :
-																										 Severity.Hint);
+							cm.MessageKind == MessageKind.Error   ? Severity.Error :
+							cm.MessageKind == MessageKind.Warning ? Severity.Warning : Severity.Hint);
 
 						return true;
 					});
 
-				AuthoringScope scope = GetDefaultScope(request);
+				var scope = GetDefaultScope(request);
+				var tool  = AstToolWindow.AstTool;
 
-				AstToolWindow tool = AstToolWindow.AstTool;
 				if (tool != null && tool.IsAutoUpdate)
 					tool.ShowInfo(source);
 
@@ -567,7 +559,8 @@ namespace Nemerle.VisualStudio.LanguageService
 			catch (Exception e)
 			{
 				Trace.WriteLine("!!! Check() throw Exception " + e.Message);
-        return GetDefaultScope(request);
+				//return GetDefaultScope(request);
+				throw;
 			}
 			finally
 			{

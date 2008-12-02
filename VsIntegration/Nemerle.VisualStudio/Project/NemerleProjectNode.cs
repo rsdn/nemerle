@@ -154,7 +154,7 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
-		private			VSLangProj.VSProject _vsProject;
+		private            VSLangProj.VSProject _vsProject;
 		protected internal VSLangProj.VSProject  VSProject
 		{
 			get
@@ -251,10 +251,10 @@ namespace Nemerle.VisualStudio.Project
 
 		#region Overridden Properties
 
-		public   override int	ImageIndex  { get { return _imageOffset + NemerleConstants.ImageListIndex.NemerleProject; } }
+		public   override int    ImageIndex  { get { return _imageOffset + NemerleConstants.ImageListIndex.NemerleProject; } }
 		public   override Guid   ProjectGuid { get { return typeof(NemerleProjectFactory).GUID; } }
-		public   override string ProjectType { get { return NemerleConstants.LanguageName;	  } }
-		internal override object Object	  { get { return VSProject;						  } }
+		public   override string ProjectType { get { return NemerleConstants.LanguageName;      } }
+		internal override object Object      { get { return VSProject;                          } }
 
 		protected override ReferenceContainerNode CreateReferenceContainerNode()
 		{
@@ -300,9 +300,9 @@ namespace Nemerle.VisualStudio.Project
 		/// <param name="path">Path of the folder, can be relative to project or absolute</param>
 		public override HierarchyNode CreateFolderNodes(string path)
 		{
-            ErrorHelper.ThrowIsNullOrEmpty(path, "path");
+			ErrorHelper.ThrowIsNullOrEmpty(path, "path");
 			
-            if (Path.IsPathRooted(path))
+			if (Path.IsPathRooted(path))
 			{
 				// Ensure we are using a relative path
 				if (String.Compare(ProjectFolder, 0, path, 0, ProjectFolder.Length, StringComparison.OrdinalIgnoreCase) == 0)

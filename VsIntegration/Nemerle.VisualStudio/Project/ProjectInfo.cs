@@ -27,19 +27,19 @@ namespace Nemerle.VisualStudio.Project
 {
 	public class ProjectInfo : IEngineCallback
 	{
-		private HierarchyListener			  _listener;
-		private Dictionary<string, int>		_fileMap  = new Dictionary<string, int>();
-		private SourceMap					  _sourceMap = new SourceMap();
+		private HierarchyListener      _listener;
+		private Dictionary<string,int> _fileMap   = new Dictionary<string, int>();
+		private SourceMap              _sourceMap = new SourceMap();
 
 		private static Collection<ProjectInfo> _projects = new Collection<ProjectInfo>();
-		private string						 _projectLocation;
+		private string                         _projectLocation;
 
 		public ProjectInfo(
-			NemerleProjectNode	 projectNode,
-			IVsHierarchy		   hierarchy,
+			NemerleProjectNode     projectNode,
+			IVsHierarchy           hierarchy,
 			NemerleLanguageService languageService,
-			string				 fileName, 
-			string				 location
+			string                 fileName, 
+			string                 location
 		)
 		{
 			ErrorHelper.ThrowIsNull(projectNode, "projectNode");

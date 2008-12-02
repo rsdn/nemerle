@@ -60,10 +60,10 @@ namespace Nemerle.VisualStudio.Project
 	internal class NemerleFileNodeCodeDomProvider : NemerleCodeProvider, ICodeParser
 		// ICodeGenerator
 	{
-		readonly FileNode			_fileNode;
-		NCU.FormCodeDomParser		_codeDomParser;
-		NCU.FormCodeDomGenerator	_codeDomGenerator;
-		NemerleCodeGeneratorProxy	_codeGenProxy;
+		readonly FileNode         _fileNode;
+		NCU.FormCodeDomParser     _codeDomParser;
+		NCU.FormCodeDomGenerator  _codeDomGenerator;
+		NemerleCodeGeneratorProxy _codeGenProxy;
 
 		private void Init()
 		{
