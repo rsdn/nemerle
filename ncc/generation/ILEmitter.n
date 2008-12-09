@@ -396,8 +396,7 @@ namespace Nemerle.Compiler
 
     emit_parms (parms : list [Parm]) : void
     {
-      foreach (parm in parms)
-        emit (parm.expr);
+      emit_exprs (parms.Map (_.expr));
     }
 
     static skipped (expr : TExpr) : void
@@ -948,8 +947,7 @@ namespace Nemerle.Compiler
 
         /* load an array element */
         | ArrayIndexer (array_obj, [index]) =>
-          emit (array_obj);
-          emit (index);
+          emit_exprs ([array_obj, index]);
           def element_type = array_obj.GetSystemType ().GetElementType ();
           assert (element_type != null, "non-array in TExpr.ArrayIndexer");
 
@@ -960,8 +958,7 @@ namespace Nemerle.Compiler
           
 
         | ArrayIndexer (array_obj, indexes) =>
-          emit (array_obj);
-          List.Iter (indexes, emit);
+          emit_exprs ([array_obj] + indexes);
           def method =
             if (expr.NeedAddress) array_addr_method (array_obj)
             else array_get_method (array_obj);
@@ -983,8 +980,10 @@ namespace Nemerle.Compiler
      
         /* assignment to ref/out parameter */
         | Assign (LocalRef (local_var), val) when local_var.IsByRefParm =>
+          def vars = emit_exprs_prepare ([val]);
           emit_ldarg (local_var.ParmIndex);
-          emit (val);
+          emit_exprs_push (vars, [val]);
+
           def ty = val.GetSystemType ();
           if (ty.IsValueType || ty.IsGenericParameter)
             _ilg.Emit (OpCodes.Stobj, ty)
@@ -1001,10 +1000,26 @@ namespace Nemerle.Compiler
 
         /* assignment to a field */
         | Assign (FieldMember (base_object, field) as target, val) =>
-          emit (base_object);
-          when (base_object.GetSystemType ().IsGenericParameter)
-            _ilg.Emit (OpCodes.Box, base_object.GetSystemType ());
-          emit (val);
+          if (val.NeedsEmptyStack) {
+            def base_local = _ilg.DeclareLocal (base_object.GetSystemType ());
+            def val_local = _ilg.DeclareLocal (val.GetSystemType ());
+
+            emit (base_object);
+            _ilg.Emit (OpCodes.Stloc, base_local);
+
+            emit (val);
+            _ilg.Emit (OpCodes.Stloc, val_local);
+
+            _ilg.Emit (OpCodes.Ldloc, base_local);
+            when (base_object.GetSystemType ().IsGenericParameter)
+              _ilg.Emit (OpCodes.Box, base_object.GetSystemType ());
+            _ilg.Emit (OpCodes.Ldloc, val_local);
+          } else {
+            emit (base_object);
+            when (base_object.GetSystemType ().IsGenericParameter)
+              _ilg.Emit (OpCodes.Box, base_object.GetSystemType ());
+            emit (val);
+          }
           maybe_volatile (target);
 
           def field_info = GetFieldInfo (base_object, field);
@@ -1025,26 +1040,48 @@ namespace Nemerle.Compiler
         /* assignment to an array element */
         | Assign (ArrayIndexer (array_obj, [index]) as target, val) =>
           def type_of_val = val.GetSystemType ();
-          emit (array_obj);
-          emit (index);
-          when (type_of_val.IsValueType && !type_of_val.IsPrimitive)
-            _ilg.Emit (OpCodes.Ldelema, type_of_val);
+          if (index.NeedsEmptyStack || val.NeedsEmptyStack) {
+            def obj_local = _ilg.DeclareLocal (array_obj.GetSystemType ());
+            def index_local = _ilg.DeclareLocal (index.GetSystemType ());
+            def val_local = _ilg.DeclareLocal (val.GetSystemType ());
 
-          emit (val);
+            emit (array_obj);
+            _ilg.Emit (OpCodes.Stloc, obj_local);
+
+            emit (index);
+            _ilg.Emit (OpCodes.Stloc, index_local);
+
+            emit (val);
+            _ilg.Emit (OpCodes.Stloc, val_local);
+
+            _ilg.Emit (OpCodes.Ldloc, obj_local);
+            _ilg.Emit (OpCodes.Ldloc, index_local);
+            when (type_of_val.IsValueType && !type_of_val.IsPrimitive)
+              _ilg.Emit (OpCodes.Ldelema, type_of_val);
+
+            _ilg.Emit (OpCodes.Ldloc, val_local);
+          } else {
+            emit (array_obj);
+            emit (index);
+            when (type_of_val.IsValueType && !type_of_val.IsPrimitive)
+              _ilg.Emit (OpCodes.Ldelema, type_of_val);
+
+            emit (val);
+          }
           emit_array_store_opcode (target.GetSystemType ());
 
         | Assign (ArrayIndexer (array_obj, indexes), val) =>
-          emit (array_obj);
-          List.Iter (indexes, emit);
-          emit (val);
+          emit_exprs ([array_obj] + indexes + [val]);
           def method = array_set_method (array_obj);
           emit_method_call (expr, true, method);
 
         | Assign (This, val) =>
           Util.cassert (_this_is_value_type,
                         "we can assign to 'this' only in valuetypes");
+          def vars = emit_exprs_prepare ([val]);
           _ilg.Emit (OpCodes.Ldarg_0);
-          emit (val);
+          emit_exprs_push (vars, [val]);
+         
           _ilg.Emit (OpCodes.Stobj, _type_of_this)
           
         | MultipleAssign (assigns) =>
@@ -1054,7 +1091,7 @@ namespace Nemerle.Compiler
             else
               _ilg.Emit (OpCodes.Pop);
           }
-          foreach ((_, e) in assigns) emit (e);
+          emit_exprs (assigns.Map ((_, e) => e));
           List.Iter (List.Rev (assigns), emit_store);
 
 
@@ -1062,8 +1099,10 @@ namespace Nemerle.Compiler
 
         /* call the base constructor */
         | Call (Base (base_ctor), ctor_params, _) =>
+          def parameters = ctor_params.Map (_.expr);
+          def vars = emit_exprs_prepare (parameters);
           _ilg.Emit (OpCodes.Ldarg_0);
-          emit_parms (ctor_params);
+          emit_exprs_push(vars, parameters);
 
           def from =
             if (base_ctor.DeclaringType.Equals (_parent_type_builder))
@@ -1088,27 +1127,34 @@ namespace Nemerle.Compiler
         /* emit a call to an instance method, basing on the 'this' pointer for value types */
         | Call (MethodRef (This as th, method, tparms, _), method_params, _)
                                                       when _this_is_value_type =>
+          def method_inf = GetMethodInfo (th.Type, method, tparms);
+            
+          def parameters = method_params.Map (_.expr);
+          def vars = emit_exprs_prepare (parameters);
+          
           _ilg.Emit (OpCodes.Ldarg_0);
 
-          def method_inf = GetMethodInfo (th.Type, method, tparms);
-          
           // it actually IS the proper way to do it --
           // if this is our method, then we do not need to box
           unless (th.MType().Equals (_parent_type_builder.GetMemType ())) {
             _ilg.Emit (OpCodes.Ldobj, _type_of_this);
             _ilg.Emit (OpCodes.Box, _type_of_this);
           }
-          emit_parms (method_params);
+          emit_exprs_push(vars, parameters);
+          
           emit_method_call (expr, true, method_inf, method, th.MType())
 
 
         /* emit a call to an instance method */
         | Call (MethodRef (base_object, method, tparms, notvirt), method_params, _) =>
+          def method_inf = GetMethodInfo (base_object.Type, method, tparms);
+          
+          def parameters = method_params.Map (_.expr);
+          def vars = emit_exprs_prepare (parameters);
+
           def is_value_type = emit_and_convert_to_address (base_object);
 
-          def method_inf = GetMethodInfo (base_object.Type, method, tparms);
-
-          emit_parms (method_params);
+          emit_exprs_push(vars, parameters);
 
           if (base_object.NeedsConstrained) {
             def is_tail = expr.GenerateTail;
@@ -1375,7 +1421,7 @@ namespace Nemerle.Compiler
 
         /* -- TUPLES -------------------------------------------------------- */
         | Tuple (vals) =>
-          foreach (v in vals) emit (v);
+          emit_exprs (vals);
           def ctor = InternalType.GetTupleType (vals.Length).Ctor;
           _ilg.Emit (OpCodes.Newobj, GetConstructorInfo (expr.GetSystemType (), ctor));
           
@@ -1448,29 +1494,60 @@ namespace Nemerle.Compiler
           emit (size);
           _ilg.Emit (OpCodes.Newarr, element_type);
 
+          def need_empty_stack = initializers.Exists (_.NeedsEmptyStack);
+
+          mutable local_array_var = null;
+          mutable local_val_var = null;
+          when (need_empty_stack) {
+            local_array_var = _ilg.DeclareLocal (expr.GetSystemType ());
+            local_val_var = _ilg.DeclareLocal (element_type);
+            _ilg.Emit (OpCodes.Stloc, local_array_var);
+            _ilg.Emit (OpCodes.Ldloc, local_array_var);
+          }
+          
           def load_elements (index : int, elements : list [TExpr]) {
             match (elements) {
               | [] => ()
               | element :: rest =>
-                _ilg.Emit (OpCodes.Dup);
-                _ilg.Emit (OpCodes.Ldc_I4, index);
+                if (element.NeedsEmptyStack) {
+                  _ilg.Emit (OpCodes.Pop); // stack should be empty now
 
-                when (element_type.IsValueType && !element_type.IsPrimitive)
-                  _ilg.Emit (OpCodes.Ldelema, element_type);
+                  emit (element);
+                  _ilg.Emit (OpCodes.Stloc, local_val_var);
 
-                emit (element);
-                emit_array_store_opcode (element_type);
+                  _ilg.Emit (OpCodes.Ldloc, local_array_var);
+                  _ilg.Emit (OpCodes.Ldc_I4, index);
+
+                  when (element_type.IsValueType && !element_type.IsPrimitive)
+                    _ilg.Emit (OpCodes.Ldelema, element_type);
+
+                  _ilg.Emit (OpCodes.Ldloc, local_val_var);
+                  emit_array_store_opcode (element_type);
+                  _ilg.Emit (OpCodes.Ldloc, local_array_var); // restore stack layout for "normal" initializers
+                } else {
+                  _ilg.Emit (OpCodes.Dup);
+                  _ilg.Emit (OpCodes.Ldc_I4, index);
+
+                  when (element_type.IsValueType && !element_type.IsPrimitive)
+                    _ilg.Emit (OpCodes.Ldelema, element_type);
+
+                  emit (element);
+                  emit_array_store_opcode (element_type);
+                }
                 load_elements (index + 1, rest)
             }
           };
           load_elements (0, initializers);
 
         | Array (initializers, dimensions) =>
-          mutable size = 0;
-          foreach (element in dimensions) {
-            ++size;
-            emit (element);
-          }
+          def element_type =
+            match (expr.Type.Fix ()) {
+              | MType.Array (t, _) => t.GetSystemType ()
+              | _ => Util.ice ()
+            }
+
+          def size = dimensions.Length;
+          emit_exprs (dimensions);
 
           def arg_types = array (size);
           for (mutable i = 0; i < size; ++i)
@@ -1493,14 +1570,40 @@ namespace Nemerle.Compiler
             Util.cassert (i == size,
                           "dimensions must be literals when initializes are supplied");
 
+            def need_empty_stack = initializers.Exists (_.NeedsEmptyStack);
+
+            mutable local_array_var = null;
+            mutable local_val_var = null;
+            when (need_empty_stack) {
+              local_array_var = _ilg.DeclareLocal (expr.GetSystemType ());
+              local_val_var = _ilg.DeclareLocal (element_type);
+              _ilg.Emit (OpCodes.Stloc, local_array_var);
+              _ilg.Emit (OpCodes.Ldloc, local_array_var);
+            }
+
             def load_elements (index : array [ulong], elements : list [TExpr]) {
               match (elements) {
                 | [] => ()
                 | element :: rest =>
-                  _ilg.Emit (OpCodes.Dup);                  
-                  for (mutable j = 0; j < index.Length; ++j)
-                    emit_literal (Literal.Integer ((index [j] :> int) :> ulong, false, InternalType.Int32));
-                  emit (element);
+                  if (element.NeedsEmptyStack) {
+                    _ilg.Emit (OpCodes.Pop); // stack should be empty now
+
+                    emit (element);
+                    _ilg.Emit (OpCodes.Stloc, local_val_var);
+
+                    _ilg.Emit (OpCodes.Ldloc, local_array_var);
+                    _ilg.Emit (OpCodes.Dup);
+
+                    for (mutable j = 0; j < index.Length; ++j)
+                      emit_literal (Literal.Integer ((index [j] :> int) :> ulong, false, InternalType.Int32));
+                    
+                    _ilg.Emit (OpCodes.Ldloc, local_val_var);
+                  } else {
+                    _ilg.Emit (OpCodes.Dup);
+                    for (mutable j = 0; j < index.Length; ++j)
+                      emit_literal (Literal.Integer ((index [j] :> int) :> ulong, false, InternalType.Int32));
+                    emit (element);
+                  }
                   def next (index : array [ulong])
                   {
                     ++index [index.Length - 1];
@@ -1527,6 +1630,66 @@ namespace Nemerle.Compiler
       log (EMIT, "} emit");
     }
 
+    /*
+     * Emit all expressions and push them onto the stack.
+     * Take care when some expressions need an empty stack.
+     */
+    private emit_exprs (exprs : list[TExpr]) : void
+    {
+      def vars = emit_exprs_prepare (exprs);
+      emit_exprs_push (vars, exprs);
+    }
+    
+    /*
+     * Emit all expressions up to the last which needs an empty stack and
+     * return the local variables where the result is stored.
+     */
+    private emit_exprs_prepare (exprs : list[TExpr]) : array[LocalBuilder]
+    {
+      def exprs_array = exprs.ToArray ();
+      def len = exprs.Length;
+      
+      mutable needed_local_variables = 0;
+      foreach (i in [0 .. len - 1]) {
+        when (exprs_array[i].NeedsEmptyStack)
+          needed_local_variables = i + 1;
+      }
+
+      def local_variables = array (needed_local_variables);
+
+      foreach (i in [0 .. needed_local_variables - 1]) {
+        def expr = exprs_array[i];
+        def var_type =
+          if (expr.NeedAddress)
+            make_ref_type (expr.GetSystemType ())
+          else
+            expr.GetSystemType ();
+        local_variables[i] = _ilg.DeclareLocal (var_type);
+        emit (expr);
+        _ilg.Emit (OpCodes.Stloc, local_variables[i]);
+      }
+
+      local_variables
+    }
+
+    /*
+     * Push the local variables and emit all expressions with a higher index
+     * than the array length
+     */
+    private emit_exprs_push (local_variables : array[LocalBuilder], exprs : list[TExpr]) : void {
+      foreach (var in local_variables) {
+        _ilg.Emit (OpCodes.Ldloc, var);
+      }
+
+      mutable i = 0;
+      foreach (e in exprs) {
+        when (i >= local_variables.Length) {
+          emit (e);
+        }
+        i++;
+      }
+    }
+    
     private emit_debug_info(di : TExpr.DebugInfo) : void
     {
       if (_debug_doc == null) {
