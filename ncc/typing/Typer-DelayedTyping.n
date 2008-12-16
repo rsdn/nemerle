@@ -174,11 +174,11 @@ namespace Nemerle.Compiler
         def solver = Manager.Solver;
 
         match (solver.dt_store.Find (this)) {
-          | Some (k') =>
+          | Some (k1) =>
             when (k.filtering_expression == null)
-              k.filtering_expression = k'.filtering_expression;
-            k.need_ref = k'.need_ref;
-            k.need_write = k'.need_write;
+              k.filtering_expression = k1.filtering_expression;
+            k.need_ref = k1.need_ref;
+            k.need_write = k1.need_write;
           | None => {}
         }
 
@@ -354,7 +354,7 @@ namespace Nemerle.Compiler
           | Overloaded (overloads) =>
             "ambiguity between overloads:\n  " + overloads.ToString ("\n  ")
           | MemberAccess (expr, name) =>
-            $ "accessing member `$(name)' in `$(expr)' : $(expr.Type)"
+          $ "accessing member: ($expr : $(expr.Type)).$name"
           | Operator (t1, t2, name, _) =>
             $ "operator `$(name)' on $(t1)"
             + (if (t2 == null) "" else $ " and $(t2)")
@@ -469,11 +469,12 @@ namespace Nemerle.Compiler
 
         def has_untyped_parm = parms.Exists (p => p.expr.Type.Hint.IsNone);
 
-        def try_type (overload : OverloadPossibility, final) {
-          def parms =
-            if (overload.ExtensionMethodObject == null) parms
+        def try_type (overload : OverloadPossibility, final) 
+        {
+          def parms = parms;
+          def parms2 = if (overload.ExtensionMethodObject == null) parms
             else Parm (overload.ExtensionMethodObject) :: parms;
-          def ct = CallTyper (typer, overload.Compile (), parms, expected);
+          def ct = CallTyper (typer, overload.Compile (), parms2, expected);
           ct.overload_possibility = overload;
           ct.is_final = final;
           ct.is_var_args = overload.VarArgs;
@@ -490,40 +491,50 @@ namespace Nemerle.Compiler
           }
         }
 
-        def print_error_message (overload : OverloadPossibility) {
-          solver.PushState ();
-          messenger.NeedMessage = true;
-          _ = try_type (overload, final = false);
-          solver.PopState ();
+        def print_error_message (overload : OverloadPossibility) 
+        {
+          when (messenger.NeedMessage)
+          {
+              solver.PushState ();
+              messenger.NeedMessage = true;
+              _ = try_type (overload, final = false);
+              solver.PopState ();
+          }
         }
 
-        match (OverloadPossibility.OnlyPossible (overloads, null)) {
+        match (OverloadPossibility.OnlyPossible(overloads, null)) 
+        {
           | [] => []
-
           | overloads =>
             mutable ok = [];
 
             // Message.Debug ($ "try type: $overloads");
             foreach (overload in overloads)
             {
-              try { solver.PushState ();
-              unless (IsError (try_type (overload, final = false)))
-                ok = overload :: ok;
-              } finally { solver.PopState (); }
+              solver.PushState();
+              _speculetiveOverloadStack ::= overload;
+              try
+              { 
+                unless (IsError (try_type (overload, final = false)))
+                  ok ::= overload;
+              } 
+              finally 
+              { 
+                _speculetiveOverloadStack = _speculetiveOverloadStack.Tail;
+                solver.PopState (); 
+              }
             }
             // Message.Debug ($ "res: $ok");
             
             def makeArgsTypes() { parms.Map(p => p.expr.Type) }
             
-            match (typer.GetBestOverloads(ok, makeArgsTypes()))
+            match (if (ok.Length > 1) typer.GetBestOverloads(ok, makeArgsTypes()) else ok)
             {
               | [] =>
-                when (messenger.NeedMessage) 
-                {
+                if (messenger.NeedMessage) 
                   match (overloads) 
                   {
-                    | [o] =>
-                      print_error_message (o);
+                    | [o] => print_error_message(o);
                     | _ =>
                       ReportError (messenger, "each overload has an error during call:");
                       mutable cnt = 1;
@@ -534,7 +545,8 @@ namespace Nemerle.Compiler
                         ++cnt;
                       }
                   }
-                }
+                else
+                  messenger.MarkError();
                 []
 
               /*
@@ -552,23 +564,40 @@ namespace Nemerle.Compiler
                 Bug #770.
               */
 
-              | [one] when 
-                ok is [_] || 
-                !has_untyped_parm ||
-                typer.BadnessAllowed > 0 || 
-                one.Member.Name == "op_Equality" ||
-                one.Member.Name == "op_Inequality" =>
+              | [one] as result when 
+                ok is [_]
+                || !has_untyped_parm 
+                || typer.BadnessAllowed > 0 
+                || one.Member.Name == "op_Equality" 
+                || one.Member.Name == "op_Inequality" =>
 
-                match (try_type (one, final = true)) {
-                  | TExpr.Call (_func, parms, _) =>
-                    def expr = DtKind.filtering_expression;
-                    // XXX this shouldn't be needed
-                    // expr.func = _func;
-                    expr.parms = parms;
-                  | _ => assert (false)
+                match (try_type (one, final = !this.Speculetive)) 
+                {
+                  | TExpr.Call (_func, _parms, _) as _tCall =>
+                    if (this.Speculetive)
+                    {}
+                    else
+                    {
+                      def call = this.DtKind.filtering_expression;
+                      // VladD2: This is a hack! 
+                      // Copy original TExpr.Call. We should safe it for next speculative typing 
+                      // processes (delayed typing).
+                      def copy = TExpr.Call(call.func, call.parms, call.is_tail);
+                      copy.ty = call.ty;
+                      // Set copy to filter
+                      this.DtKind.filtering_expression = copy;
+                      // This change source TExpr.Call wich been made while parsing.
+                      // TODO: This is a dirty hack. We mast remove it.
+                      call.parms = _parms;
+                    }
+                    one.UsedLastTime = true;
+                    result
+
+                  | e => 
+                    _ = e;
+                    //assert2(false);
+                    overloads
                 }
-                one.UsedLastTime = true;
-                [one]
 
               // This is important -- we only drop the clearly evil
               // solutions. We leave the less general ones (dropped by 
@@ -700,7 +729,7 @@ namespace Nemerle.Compiler
 
           | Kind.Overloaded (overloads) =>
             def expr = DtKind.filtering_expression;
-            def o' =
+            def o1 =
               if (expr == null) 
               {
                 def res1 = OverloadPossibility.OnlyPossible (overloads, expected);
@@ -708,16 +737,12 @@ namespace Nemerle.Compiler
                 {
                   assert (overloads.Length > 1);
 
-                  def cntArgsForEachOverload = overloads.Map (arg =>
-                    match (arg.Type.Fix ().FixedValue)
+                  def cntArgsForEachOverload = overloads.Map(arg =>
+                    match (arg.Type.Hint)
                     {
-                      | MType.Fun (from, _) =>
-                        match (from)
-                        {
-                          | MType.Tuple (lst) => lst.Length
-                          | MType.Void => 0
-                          | _ => 1
-                        }
+                      | Some(MType.Fun(MType.Tuple(lst), _)) => lst.Length
+                      | Some(MType.Fun(MType.Void, _))       => 0
+                      | Some(MType.Fun)                      => 1
                       | _ => 0
                     });
 
@@ -727,7 +752,7 @@ namespace Nemerle.Compiler
                   argsCnt >= 0
                 }
 
-                def res2 = if (res1.Length > 1 && isAllOverloadsHaveSameArgCnt (res1))
+                def res2 = if (res1.Length > 1 && isAllOverloadsHaveSameArgCnt(res1))
                     typer.GetBestOverloads (res1);
                   else if (res1.Length > 1)
                     RemoveExtensionMethods (res1)
@@ -746,8 +771,8 @@ namespace Nemerle.Compiler
                   []
               }
 
-            when (o'.Length != overloads.Length || o'.Length == 1)
-              match (o') {
+            when (o1.Length != overloads.Length || o1.Length == 1)
+              match (o1) {
                 | [] =>
                   SetKind (Kind.Error ())
 
@@ -785,7 +810,7 @@ namespace Nemerle.Compiler
                 def hints = (if (t1.Hint.IsSome) 1 else 0) + (if (t2 != null && t2.Hint.IsSome) 1 else 0);
 
                 def expr = DtKind.filtering_expression;
-                def o' =
+                def o1 =
                   if (expr == null) {
                     RemoveExtensionMethods (OverloadPossibility.OnlyPossible (overloads, expected))
                   } else {
@@ -800,8 +825,8 @@ namespace Nemerle.Compiler
                       []
                   }
 
-                when (o'.Length != overloads.Length || o'.Length == 1)
-                  match (o') {
+                when (o1.Length != overloads.Length || o1.Length == 1)
+                  match (o1) {
                     | [one] when hints == args
                               || hints > 0 && typer.BadnessAllowed > 0
                               || typer.BadnessAllowed > 1 =>
@@ -851,15 +876,25 @@ namespace Nemerle.Compiler
         }
       }
 
-      public Resolve () : void
+      static mutable _speculetiveOverloadStack : list[OverloadPossibility] = [];
+      [Accessor] mutable _speculetive : bool;
+
+      public Resolve (speculetive = false) : void
       {
-        Util.locate (Location, {
+        Util.locate (Location, 
+        {
+          def old_speculetive = _speculetive;
+          _speculetive = _speculetive || speculetive;
           def tmp = typer.local_context;
-          try {
+          try 
+          {
             typer.local_context = local_context;
             DoResolve ();
-          } finally {
+          } 
+          finally 
+          {
             typer.local_context = tmp;
+            _speculetive = old_speculetive;
           }
         })
       }

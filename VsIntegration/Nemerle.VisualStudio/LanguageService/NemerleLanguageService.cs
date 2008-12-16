@@ -559,8 +559,10 @@ namespace Nemerle.VisualStudio.LanguageService
 			catch (Exception e)
 			{
 				Trace.WriteLine("!!! Check() throw Exception " + e.Message);
-				//return GetDefaultScope(request);
-				throw;
+				return GetDefaultScope(request);
+				//	VladD2: 2 IT: Don't re-throw exception here!
+				//                It leads to check loophole!!!
+				//throw;
 			}
 			finally
 			{

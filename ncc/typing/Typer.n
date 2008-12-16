@@ -28,6 +28,7 @@
 
 using SCG = System.Collections.Generic;
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Utility;
 using Nemerle.Logging;
 
@@ -404,15 +405,18 @@ namespace Nemerle.Compiler
       mutable seen_unresolved = false;
       mutable did_something = false;
       
-      solver.dt_store.Iter (fun (dt : DelayedTyping, _) {
-        unless (dt.IsResolved) {
+      foreach ((dt : DelayedTyping, _) in solver.dt_store)
+      {
+        unless (dt.IsResolved) 
+        {
           dt.Resolve ();
+
           if (dt.IsResolved)
             did_something = true;
           else
             seen_unresolved = true;
         }
-      });
+      }
 
       def max_badness = 3;
 
@@ -979,13 +983,18 @@ namespace Nemerle.Compiler
         if (IsFunctional (expr))
         {
           def (del, exprTree, args, ret) = TryExtractFunType(target.Hint);
-          when (args != null && ret != null)
+          if (args != null && ret != null)
           {
             def fnTy = MType.Fun(TyVar.FromList(args), ret);
-            def ok = expr.Type.Require(fnTy);
-            _ = ok;
+            def ok = expr.Type.TryRequire(fnTy);
+            if (ok)
+            {
+              _ = expr.Type.Require(fnTy);
+              (del, exprTree, args, ret)
+            }
+            else (null, null, null, null)
           }
-          (del, exprTree, args, ret)
+          else (del, exprTree, args, ret)
         }
         else (null, null, null, null);
 
@@ -1036,12 +1045,17 @@ namespace Nemerle.Compiler
         log (TYPING, $ "delegate conversion, $(expr.Type) ---> $del_tc");
         // we don't want any delegate named del_tc, we want this specific delegate
         def (con, _) = MakeOverloadedNode (TypeToConstructor (null, del_tc), FreshTyVar ());
-        def expr = TryTyping (() => TypeExpr (<[ $(con : typed) ($(expr : typed)) ]>));
-        if (IsError (expr) || ! expr.Type.TryRequire (target))
+        def expr2 = TryTyping (fun() { 
+            def resExpr = TypeExpr(<[ $(con : typed)($(expr : typed)) ]>);
+            def ok = !IsError(resExpr) && TryRevolveNestedDelayedTyping([resExpr]);
+            if (ok) resExpr else TExpr.Error()
+          });
+        
+        if (IsError (expr2) || ! expr2.Type.TryRequire (target))
           null
         else {
-          expr.Type.ForceRequire (target);
-          expr
+          expr2.Type.ForceRequire (target);
+          expr2
         }
       }
       else if (SubtypingOrImplicitConv (expr.Type, target, out meth)) 
@@ -1122,6 +1136,29 @@ namespace Nemerle.Compiler
 
 
     #region Solver interaction
+
+    internal TryRevolveNestedDelayedTyping(exprs : SCG.IEnumerable[TExpr], speculetive = true) : bool
+    {
+      def walker = ExprWalker();
+
+      try
+      { 
+        when (speculetive) 
+          solver.PushState();
+        // Try to resolve nested delayed typing (TExpr.Delayed). It can fail and this call 
+        // typing action will be also failed.
+        foreach (expr in exprs)
+        {
+            walker.Resolve(expr, speculetive);
+            when (messenger.LocalError)
+              return false;
+        }
+      } finally { when (speculetive) solver.PopState(); };
+
+      true
+    }
+
+
     FreshTyVar () : TyVar
     {
       solver.FreshTyVar ()
@@ -1141,13 +1178,11 @@ namespace Nemerle.Compiler
       tv
     }
 
-
     public PushLocals () : void
     {
       log (TYPING, "push locals{ ");
       locals_stack.Push (local_context)
     }
-
 
     public PopLocals () : void
     {
@@ -1259,28 +1294,24 @@ namespace Nemerle.Compiler
       get { !messenger.InErrorMode || Env.Manager.IsIntelliSenseMode }
     }
 
-    DoExpect (expected : TyVar, actual : TyVar, place : string, is_subtyping : bool) : bool
+    DoExpect(expected : TyVar, actual : TyVar, place : string, is_subtyping : bool) : bool
     {
-      if (messenger.InErrorMode) {
-        def exp_s = expected.ToString ();
-        def act_s = actual.ToString ();
-        if (if (is_subtyping) actual.Require (expected) else expected.Unify (actual))
-          true
-        else {
-          ReportError (messenger, $ "expected $exp_s, got $act_s in $place");
-          false
-        }
-      } else {
-        if (if (is_subtyping) actual.Require (expected) else expected.Unify (actual))
-          true
-        else {
-          // the message is not going to be used anyway
-          ReportError (messenger, null);
-          false
-        }
+      mutable expectedStr : string = null;
+      mutable actualStr   : string = null;
+      when (messenger.InErrorMode && messenger.NeedMessage)
+      {
+        expectedStr = expected.ToString();
+        actualStr   = actual.ToString();
+      }
+
+      if (if (is_subtyping) actual.Require (expected) else expected.Unify (actual))
+        true
+      else 
+      {
+        ReportError (messenger, $ "expected $expectedStr, got $actualStr in $place");
+        false
       }
     }
-
 
     Expect (expected : TyVar, actual : TyVar, place : string) : bool
     {
@@ -1622,7 +1653,7 @@ namespace Nemerle.Compiler
 
 
         | PT.PExpr.Member (obj, PT.Splicable.Name as name) =>
-          if (CanBeTypeName (obj))
+          if (CanBeTypeName (obj))//FixMe: VladD2: This check hide locals if it name intersect with type name!
             match (TryTyping (fun () { TypeName (expression, expected) })) {
               | TExpr.Error =>
                 // XXX this is a proper place to employ some heuristic
@@ -1800,14 +1831,14 @@ namespace Nemerle.Compiler
               | [] => assert (false)
             }
           }
-
           //Message.Debug ("push seq");
           PushLocals ();
-          def res = loop ([], l);
-          //Message.Debug ("pop seq");
-          PopLocals ();
-          res
-
+          try 
+          { 
+            def res = loop ([], l);
+            //Message.Debug ("pop seq");
+            res
+          } finally { PopLocals (); }
 
         | PT.PExpr.Tuple (l) =>
           mutable res_exprs = [];
@@ -1820,8 +1851,8 @@ namespace Nemerle.Compiler
             res_exprs = ImplicitCast (e, tv2) :: res_exprs;
             res_types = tv2 :: res_types;
           }
-          res_exprs = List.Rev (res_exprs);
-          res_types = List.Rev (res_types);
+          res_exprs = res_exprs.Rev();
+          res_types = res_types.Rev();
           _ = Expect (expected, MType.Tuple (res_types), "tuple constructor");
           TExpr.Tuple (res_exprs)
 
@@ -2169,7 +2200,7 @@ namespace Nemerle.Compiler
         headers = header :: headers;
       }
 
-      headers = List.Rev (headers);
+      headers = headers.Rev();
 
       foreach (hd in headers) {
         def typer = Manager.ComponentsFactory.CreateTyper (this, hd);
@@ -2756,27 +2787,32 @@ namespace Nemerle.Compiler
     {
       def mem_name = name.Id;
 
-      match (obj) {
+      match (obj) 
+      {
         | Delayed (dt) => dt.ExpectMember (mem_name)
         | _ => {}
       }
 
       def possible_type =
-        match (obj.Type.Hint) {
+        match (obj.Type.Hint) 
+        {
           | Some (t) => t
           | None => null
-        }
-      if (possible_type != null) {
+        };
+      if (possible_type != null) 
+      {
         def mems = Hashtable ();
         mutable visited = []; // this set is in practice very small
         mutable res = [];
         mutable print_errors = false;
 
-        def lookup (t) {
+        def lookup (t) 
+        {
           | MType.Class (tc, _) when !List.ContainsRef (visited, tc) =>
             visited = tc :: visited;
             foreach (mem in tc.LookupMember (mem_name, for_completion))
-              when (!mems.Contains (mem)) {
+              when (!mems.Contains (mem)) 
+              {
                 mems [mem] = null;
                 if (mem.IsStatic)
                   when (print_errors)
@@ -2787,18 +2823,21 @@ namespace Nemerle.Compiler
                   when (print_errors)
                     ReportError (messenger,
                                  $ "$mem is not accessible")
-                else {
+                else 
+                {
                   def (ty, vars) =
-                    match (mem) {
+                    match (mem) 
+                    {
                       | meth is IMethod => t.TypeOfMethodWithTyparms (meth)
                       | _ => (t.TypeOfMember (mem), [])
-                    }
+                    };
                   def allowed = expected.TryUnify (ty);
                   if (allowed || for_completion)
                   {
                     res = OverloadPossibility (this, ty, obj, null, mem,
                                                method_typarms = vars) :: res;
-                    match (mem) {
+                    match (mem) 
+                    {
                       | meth is IMethod when meth.IsVarArgs =>
                         def op = OverloadPossibility (this, ty, obj, null, mem,
                                                       method_typarms = vars);
@@ -2807,18 +2846,12 @@ namespace Nemerle.Compiler
                       | _ => {}
                     }
                   }
-                  else when (print_errors) 
+                  else when (print_errors)
                   {
-                    solver.PushState ();
-                    try
-                    {
-                      messenger.NeedMessage = true;
-                      def before = expected.ToString ();
-                      def allowed = expected.Unify (ty);
-                      assert (!allowed);
-                      ReportError (messenger, 
-                                   $ "$mem has invalid type $ty (expected $before)")
-                    } finally { solver.PopState (); }
+                    def before = expected.ToString ();
+                    def allowed = expected.TryUnify(ty);
+                    assert(!allowed);
+                    ReportError (messenger, $"$mem has invalid type $ty (expected $before)")
                   }
                 }
               }
@@ -2839,12 +2872,14 @@ namespace Nemerle.Compiler
         lookup (possible_type);
 
         foreach (meth in Manager.LibrariesManager.GetExtensionMethods (name.Id, name.GetEnv (env), false))
-          foreach (over in ConstructMethodOverload (null, meth, maybe_varargs = true)) {
+          foreach (over in ConstructMethodOverload (null, meth, maybe_varargs = true)) 
+          {
             over.ExtensionMethodObject = obj;
             res ::= over;
           }
 
-        when (res.IsEmpty) {
+        when (res.IsEmpty) 
+        {
           print_errors = true;
           visited = [];
           mems.Clear ();
@@ -3254,7 +3289,7 @@ namespace Nemerle.Compiler
         | e => refout ("", e)
       };
 
-      mutable parameters = List.Map (parms, compile_parm);
+      mutable parameters = parms.Map(compile_parm);
 
       def fnc =
         match ((pfnc, parameters)) {
@@ -3376,7 +3411,7 @@ namespace Nemerle.Compiler
             log (TYPING, $"result is delayed: $dt");
             def expr = TExpr.Call (expected, expr, parameters, false);
             dt.SetCallExpr (expr);
-            dt.Resolve (); // just try
+            dt.Resolve (); // just try  
             when (dt.IsResolved)
               pfnc.typed_object = dt.ResolutionResult;
             expr
