@@ -212,6 +212,7 @@ namespace Nemerle.Compiler
 
                 when (errcnt == Message.ErrorCount)
                 {
+                  assert2(false);
                   Message.Warning ($"$(current_fun.body)");
                   def expr = match (current_fun.body) { | FunBody.Typed (e) => e | _ => null };
                   Message.Warning ($"$expr, $(expr.Location)");
@@ -617,7 +618,7 @@ namespace Nemerle.Compiler
     MakeOverloadedNode (overloads : list [OverloadPossibility], expected : TyVar) : TExpr * IMember
     {
       def res = OverloadPossibility.Unique (overloads);
-      match (OverloadPossibility.OnlyPossible (res, expected)) {
+      match (OverloadPossibility.OnlyPossible (res, expected, this)) {
         | [] => (TExpr.Error (), null)
 
         | [o] when o.ExtensionMethodObject == null =>
@@ -889,8 +890,8 @@ namespace Nemerle.Compiler
 
     AddCastTo (expr : TExpr, target : TyVar, place : string) : TExpr
     {
-      def expr' = TryAddCastTo (expr, target);
-      if (expr' != null) expr'
+      def expr1 = TryAddCastTo (expr, target);
+      if (expr1 != null) expr1
       else {
         _ = ExpectSubtyping (target, expr.Type, place);
         TExpr.Error (target)
@@ -1047,7 +1048,7 @@ namespace Nemerle.Compiler
         def (con, _) = MakeOverloadedNode (TypeToConstructor (null, del_tc), FreshTyVar ());
         def expr2 = TryTyping (fun() { 
             def resExpr = TypeExpr(<[ $(con : typed)($(expr : typed)) ]>);
-            def ok = !IsError(resExpr) && TryRevolveNestedDelayedTyping([resExpr]);
+            def ok = !IsError(resExpr) && TryResolveNestedDelayedTyping([resExpr]);
             if (ok) resExpr else TExpr.Error()
           });
         
@@ -1102,7 +1103,7 @@ namespace Nemerle.Compiler
     }
 
 
-    TryAddCastTo (expr : TExpr, target : TyVar) : TExpr
+    internal TryAddCastTo (expr : TExpr, target : TyVar) : TExpr
     {
       match (expr) {
         | TExpr.Literal (lit)
@@ -1139,10 +1140,10 @@ namespace Nemerle.Compiler
 
     /// Returns true if no error. This method does not 
     /// guarantee absence the unresolved delayed typind.
-    internal TryRevolveNestedDelayedTyping(exprs : SCG.IEnumerable[TExpr], speculative = true) : bool
+    internal TryResolveNestedDelayedTyping(exprs : SCG.IEnumerable[TExpr], speculative = true) : bool
     {
       // RTry resolve list of unresolved delayed typind (TExpr.Delayed)
-      def resolve(unresolvedDelayeds : SCG.IEnumerable[_], initialCount)
+      def resolve(unresolvedDelayeds : SCG.IEnumerable[_], initialCount, speculative)
       {
         if (initialCount > 0)
         {
@@ -1157,7 +1158,7 @@ namespace Nemerle.Compiler
           def newCount = newUnresolvedDelayeds.Count();
 
           if (newCount != 0 && initialCount != newCount) // we can try agen
-            resolve(newUnresolvedDelayeds, newCount)
+            resolve(newUnresolvedDelayeds, newCount, speculative)
           else 
             true
         }
@@ -1179,16 +1180,13 @@ namespace Nemerle.Compiler
 
         // Try to resolve nested delayed typing. It can fail and this call 
         // typing action will be also failed (in this case we return false).
-        resolve(unresolvedDelayeds, unresolvedDelayeds.Count())
+        resolve(unresolvedDelayeds, unresolvedDelayeds.Count(), speculative)
 
       } finally { when (speculative) solver.PopState(); };
     }
 
-
-    FreshTyVar () : TyVar
-    {
-      solver.FreshTyVar ()
-    }
+    [System.Diagnostics.DebuggerNonUserCode]
+    FreshTyVar () : TyVar { solver.FreshTyVar() }
 
 
     static ConstructFunctionType (parms : list [TyVar], res : TyVar) : TyVar
@@ -1758,9 +1756,9 @@ namespace Nemerle.Compiler
             TExpr.Error ();
 
 
-        | PT.PExpr.Assign (PT.PExpr.Wildcard, e2) =>
+        | PT.PExpr.Assign (PT.PExpr.Wildcard as wildcard, e2) =>
           if (Expect (expected, InternalType.Void, "assignment ``result''"))
-            TypeExpr (<[ def _ = $e2 ]>, expected)
+            TypeExpr (Util.locate(wildcard.Location, <[ def _ = $e2 ]>), expected)
           else
             TExpr.Error ();
 
@@ -2857,7 +2855,8 @@ namespace Nemerle.Compiler
                       | meth is IMethod => t.TypeOfMethodWithTyparms (meth)
                       | _ => (t.TypeOfMember (mem), [])
                     };
-                  def allowed = expected.TryUnify (ty);
+                  def expected = expected;
+                  def allowed = ty.TryUnify(expected);
                   if (allowed || for_completion)
                   {
                     res = OverloadPossibility (this, ty, obj, null, mem,
@@ -3432,10 +3431,10 @@ namespace Nemerle.Compiler
 
       def res =
         match (fnc) {
-          | TExpr.DebugInfo (TExpr.Delayed ((CanSetCallExpr = true) as dt) as expr, _)
-          | TExpr.Delayed ((CanSetCallExpr = true) as dt) as expr =>
+          | TExpr.DebugInfo (TExpr.Delayed ((CanSetCallExpr = true) as dt) as delayedExpr, _)
+          | TExpr.Delayed ((CanSetCallExpr = true) as dt) as delayedExpr =>
             log (TYPING, $"result is delayed: $dt");
-            def expr = TExpr.Call (expected, expr, parameters, false);
+            def expr = TExpr.Call (expected, delayedExpr, parameters, false);
             dt.SetCallExpr (expr);
             dt.Resolve (); // just try  
             when (dt.IsResolved)
@@ -3491,20 +3490,20 @@ namespace Nemerle.Compiler
                      LookupStaticMethod (t, "op_Explicit") +
                      LookupStaticMethod (t, "op_Implicit")];
       }
-      def operators = get_convertion_operators (to); 
-      def operators =
+      def operators1 = get_convertion_operators (to); 
+      def operators2 =
         match (from.Hint) {
-          | Some (t) => get_convertion_operators (t) + operators
-          | None => operators
+          | Some (t) => get_convertion_operators (t) + operators1
+          | None => operators1
         }
-      def operators = SquashDuplicates (operators);
+      def operators3 = SquashDuplicates (operators2);
 
       def needed = ConstructFunctionType ([from], to);
-      def operators = List.RevFilter (operators, fun (t, op) {
+      def operators4 = List.RevFilter (operators3, fun (t, op) {
         t.TypeOfMethodWithTyparms (op) [0].TryRequire (needed)
       });
 
-      def operators = GetBestOverloads1 (operators);
+      def operators5 = GetBestOverloads1 (operators4);
 
       def is_strange_type (t) {
         match (t.Hint) {
@@ -3528,23 +3527,25 @@ namespace Nemerle.Compiler
         }
       }
 
-      match (operators) {
+      match (operators5) {
         | [(from, single)] =>
           if (single.BuiltinKind is BuiltinMethodKind.ValueTypeConversion)
             TExpr.TypeConversion (expr, to, ConversionKind.IL (local_context.IsChecked))
-          else {
+          else 
+          {
             def (ty, vars) = from.TypeOfMethodWithTyparms (single);
             ty.ForceRequire (needed);
             def sr = TExpr.StaticRef (ty, from :> MType.Class, single, vars);
-            TExpr.TypeConversion (expr, to, 
-                                  ConversionKind.MethodCall (sr))
+            TExpr.TypeConversion (expr, to, ConversionKind.MethodCall (sr))
           }
         | [] =>
-          if (to.TryRequire (from)) {
-            to.ForceRequire (from);
-            TExpr.TypeConversion (expr, to, ConversionKind.DownCast ());
+          if (to.TryRequire (from)) 
+          {
+            //to.ForceRequire (from);
+            TExpr.TypeConversion (expr, to, ConversionKind.DownCast ()); //FixMy: VladD2: We here do not lose value of local_context.IsChecked?
           } 
-          else if (from.TryRequire (to)) {
+          else if (from.TryRequire (to)) 
+          {
             from.ForceRequire (to);
             Message.Warning (10001, $"there is no check needed to cast $from to $to");
             Message.HintOnce (10001, "consider using : instead of :>");

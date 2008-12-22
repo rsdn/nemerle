@@ -102,6 +102,31 @@ namespace Nemerle.Compiler
         public mutable need_write : bool;
 
         public this () {}
+
+        public override ToString () : string
+        {
+          match (this) 
+          {
+            | Resolved (a) => "resolved expression " + a.ToString ()
+            | Error => "an error"
+            | Overloaded (overloads) =>
+              "ambiguity between overloads:\n  " + overloads.ToString ("\n  ")
+            | MemberAccess (expr, name) =>
+              $ "accessing member: ($expr : $(expr.Type)).$name"
+            | Operator (t1, t2, name, _) =>
+              "operator: "
+              + if (t2 == null) $"$t1 $name\n"
+                else            $"$t1 $name $t2\n"
+
+            | OverloadedOperator (lst, t1, t2, name, _, _) => 
+              "overloaded operator: "
+              + if (t2 == null) $"$t1 $name\n"
+                else            $"$t1 $name $t2\n"
+              + $<# [..$(lst; "\n")]#>
+
+            | Macro (action) => action.ToString ()
+          }
+        }
       }
 
 
@@ -346,25 +371,7 @@ namespace Nemerle.Compiler
       }
 
 
-      public override ToString () : string
-      {
-        match (DtKind) {
-          | Resolved (a) => "resolved expression " + a.ToString ()
-          | Error => "an error"
-          | Overloaded (overloads) =>
-            "ambiguity between overloads:\n  " + overloads.ToString ("\n  ")
-          | MemberAccess (expr, name) =>
-          $ "accessing member: ($expr : $(expr.Type)).$name"
-          | Operator (t1, t2, name, _) =>
-            $ "operator `$(name)' on $(t1)"
-            + (if (t2 == null) "" else $ " and $(t2)")
-          | OverloadedOperator (lst, t1, t2, name, _, _) => 
-            $ "overloaded operator `$(name)' on $(t1)"
-            + (if (t2 == null) "" else $ " and $(t2)") + "\n" 
-            + lst.ToString ("\n ")
-          | Macro (action) => action.ToString ()
-        }
-      }
+      public override ToString () : string { $"$DtKind" }
 
       public GetDescriptionForError () : list [Location * string]
       {
@@ -502,7 +509,7 @@ namespace Nemerle.Compiler
           }
         }
 
-        match (OverloadPossibility.OnlyPossible(overloads, null)) 
+        match (OverloadPossibility.OnlyPossible(overloads, null, typer)) 
         {
           | [] => []
           | overloads =>
@@ -584,13 +591,12 @@ namespace Nemerle.Compiler
                 Bug #770.
               */
 
-              | [one] as result when 
-                ok is [_]
-                || !has_untyped_parm 
-                || typer.BadnessAllowed > 0 
-                || one.Member.Name == "op_Equality" 
-                || one.Member.Name == "op_Inequality" =>
-
+              | [one] as result when ok is [_]
+                                      || !has_untyped_parm 
+                                      || typer.BadnessAllowed > 0 
+                                      || one.Member.Name == "op_Equality" 
+                                      || one.Member.Name == "op_Inequality" 
+                =>
                 // if this typing is speculative, then we should not do final typeng.
                 // It prevent change some types.
                 if (this.Speculative)
@@ -729,7 +735,11 @@ namespace Nemerle.Compiler
         def messenger = solver.CurrentMessenger;
         match (DtKind) {
           | Kind.MemberAccess (e, name) =>
-            match (typer.TypeMember (e, name, expected)) {
+            // We should not check "expected" in this time.
+            // Instead we should try to add implicit type conversion 
+            // in the end of delayed overload resolution process.
+            // see [End of overload resoluton process] in this file.
+            match (typer.TypeMember (e, name, typer.FreshTyVar())) {
               | Some ([]) =>
                 ReportError (messenger,
                              $ "there is no member named `$(name)' "
@@ -752,7 +762,7 @@ namespace Nemerle.Compiler
             def o1 =
               if (expr == null) 
               {
-                def res1 = OverloadPossibility.OnlyPossible (overloads, expected);
+                def res1 = OverloadPossibility.OnlyPossible (overloads, expected, typer);
                 def isAllOverloadsHaveSameArgCnt (overloads)
                 {
                   assert (overloads.Length > 1);
@@ -774,34 +784,29 @@ namespace Nemerle.Compiler
 
                 def res2 = if (res1.Length > 1 && isAllOverloadsHaveSameArgCnt(res1))
                     typer.GetBestOverloads (res1);
-                  else if (res1.Length > 1)
-                    RemoveExtensionMethods (res1)
-                  else
-                    res1;
+                  else if (res1.Length > 1) RemoveExtensionMethods (res1)
+                  else res1;
 
                 res2
-
               }
-              else
-              {
-                if (typer.Expect (expected, expr.func.Type, 
-                                  "overloaded function call"))
-                  ResolveOverload (overloads, expr.parms, expr.Type)
-                else
-                  []
-              }
+              else if (typer.Expect (expected, expr.func.Type, "overloaded function call"))
+                ResolveOverload (overloads, expr.parms, expr.Type)
+              else [];
 
             when (o1.Length != overloads.Length || o1.Length == 1)
-              match (o1) {
-                | [] =>
-                  SetKind (Kind.Error ())
+              match (o1) 
+              {
+                | [] => SetKind (Kind.Error ())
+                | [one] => 
+                  // [End of overload resoluton process]
+                  // Add implicit cast if needed.
+                  def expr1 = one.Compile();
+                  def expr2 = typer.TryAddCastTo(expr1, expected);
+                  SetKind(Kind.Resolved(expr2 ?? expr1))
 
-                | [one] =>
-                  SetKind (Kind.Resolved (one.Compile ()))
-
-                | lst =>
-                  SetKind (Kind.Overloaded (lst))
+                | lst => SetKind (Kind.Overloaded (lst))
               }
+
           | Kind.OverloadedOperator (overloads, t1, t2, name, env, seen) =>
             def not_seen (l) { 
               | None with l = []
@@ -832,7 +837,7 @@ namespace Nemerle.Compiler
                 def expr = DtKind.filtering_expression;
                 def o1 =
                   if (expr == null) {
-                    RemoveExtensionMethods (OverloadPossibility.OnlyPossible (overloads, expected))
+                    RemoveExtensionMethods (OverloadPossibility.OnlyPossible (overloads, expected, typer))
                   } else {
                     if (typer.Expect (expected, expr.func.Type, 
                                         "overloaded function call"))
