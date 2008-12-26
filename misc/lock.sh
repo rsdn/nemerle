@@ -1,4 +1,7 @@
 #!/bin/bash
+
+# this should use native svn locking
+
 cd ..
 svn up
 cd ncc
