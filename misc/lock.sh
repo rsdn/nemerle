@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# sometimes when changing quotation mechanism we need to make sure no two people modify boot binaries
+# at the same time.
+
 # this should use native svn locking
 
 cd ..
