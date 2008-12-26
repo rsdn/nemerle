@@ -3,7 +3,7 @@
 # Sometimes when changing quotation mechanism we need to make sure no two people modify boot binaries
 # at the same time.
 
-# TODO: This should use native svn locking.
+# TODO: This should use native svn locking on boot/.
 
 cd ..
 svn up
