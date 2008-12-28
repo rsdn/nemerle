@@ -3,7 +3,7 @@
 # $ make test
 # tests this program on itself.
 
-SOURCES = NemerleDoc.n XMLMacro.n DataTree.n AssemblyAnalyzer.n
+SOURCES = NemerleDoc.n XMLMacro.n DataTree.n AssemblyAnalyzer.n TestNemerledoc.n
 DIST_FILES = $(SOURCES) Makefile COPYRIGHT
 EXE = nemerledoc.exe
 CLEAN_FILES = $(EXE) $(EXE:.exe=.exe.mdb)
@@ -13,7 +13,7 @@ $(EXE): $(SOURCES)
 	ncc -g -Ot -texe -resource:nemerle-doc.css -doc:$(DOC) -out:$@ $^
 
 test:
-	mono --debug $(EXE) -dir:"wynik" -title:"Nemerle Documentation Project" -s -np $(EXE) $(DOC)
+	mono --debug $(EXE) -dest:"wynik" -title:"Nemerle Documentation Project" -s -d -p $(EXE) $(DOC)
 
 clean:
 	rm  $(CLEAN_FILES)
