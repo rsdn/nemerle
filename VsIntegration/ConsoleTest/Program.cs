@@ -13,9 +13,11 @@ namespace ConsoleTest
 			Test1 test = new Test1();
 			test.Init();
 
+			test.GetMethodTip();
+			test.QuickTips();
+			test.QuickTip();
 			test.Complete_in_lambda();
 			test.Property_location();
-			test.QuickTip();
 			test.Complete_in_return_type_1();
 			test.Complete_in_return_type_2();
 			test.Complete_in_return_type_3();
@@ -32,7 +34,6 @@ namespace ConsoleTest
 			test.Complete_type_escalation_3();
 			test.Complete_Complete_aliased_type();
 			test.Complete_ExtensionMethod_1();
-			test.QuickTips();
 			test.QuickTip_Imperative();
 			//test.QuickTip_StackOverflow();
 			test.QuickTip_ArgPattern();
