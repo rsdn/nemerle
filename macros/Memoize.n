@@ -31,9 +31,15 @@
 using Nemerle.Collections;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.NemerleAttributes;
 
 namespace Nemerle
 {
+  enum MemoizeScope
+  {
+    | Instance
+    | Class
+  }
   /**
    * This macro implements memoization (with the default option Scope = Instance),
    * as well as something closer to aggressive sharing, when Scope = Class is used.
@@ -42,11 +48,12 @@ namespace Nemerle
   [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
                        Nemerle.MacroTargets.Method)]
   macro Memoize (tb : TypeBuilder, meth : MethodBuilder, params opts : list [PExpr]) {
-    mutable scope = "Instance";
+    mutable scope = MemoizeScope.Instance;
     mutable synch = false;
-    foreach (o in opts) {
-      | <[ Scope = Instance ]> => scope = "Instance" 
-      | <[ Scope = Class ]> => scope = "Class"
+    foreach (o in opts) 
+    {
+      | <[ Scope = Instance ]> => scope = MemoizeScope.Instance 
+      | <[ Scope = Class    ]> => scope = MemoizeScope.Class
       | <[ Scope = $other ]> => 
         Message.Error ($"Invalid parameter: Scope = $other. Valid options are Instance (default) and Class.")
       | <[ Synchronized = $(opt : bool) ]> => synch = opt
@@ -55,76 +62,69 @@ namespace Nemerle
       | _ => () // for backwards compatibility
     } 
     def parms = meth.GetParameters ();
-    def @lock = Macros.NewSymbol ("lock");
+    def lockVar = Macros.NewSymbol ("lockVar");
+    def immutableAttrs = if (scope == MemoizeScope.Class) Static else None;
+    def mutableAttrs   = immutableAttrs | Mutable;
+    def immutableMods  = Modifiers(immutableAttrs, []);
+    def mutableMods    = Modifiers(mutableAttrs,   []);
     def newBody = Util.locate(meth.Body.Location, match (parms)
     {
-      | [] =>
+      | [] | null =>
         def cached_value = Macros.NewSymbol ("cached_value");
-        def is_cached = Macros.NewSymbol ("is_cached");
-        match (scope) {
-          | "Instance" => 
-            tb.Define (<[ decl: mutable $(cached_value : name) : $(meth.ReturnType : typed); ]>);
-            tb.Define (<[ decl: mutable $(is_cached : name) : bool; ]>);
-            when (synch)
-              tb.Define (<[ decl: $(@lock : name) : object = object (); ]>);
-          | "Class" =>
-            tb.Define (<[ decl: static mutable $(cached_value : name) : $(meth.ReturnType : typed); ]>);
-            tb.Define (<[ decl: static mutable $(is_cached : name) : bool; ]>);
-            when (synch)
-              tb.Define (<[ decl: static $(@lock : name) : object = object (); ]>);
-          | _ => () // unreachable
-        }
+        def is_cached    = Macros.NewSymbol ("is_cached");
+        
+        tb.Define (<[ decl: ..$mutableMods $(cached_value : name) : $(meth.ReturnType : typed); ]>);
+        tb.Define (<[ decl: ..$mutableMods $(is_cached : name) : bool; ]>);
+        when (synch)
+          tb.Define (<[ decl: ..$immutableMods $(lockVar : name) : object = object (); ]>);
+
         def res = <[
-          when (! $(is_cached : name)) {
-            $(cached_value : name) = $(meth.Body);
-            $(is_cached : name) = true;
-          }
-          $(cached_value : name)
-        ]>;
+            when (! $(is_cached : name)) 
+            {
+              $(cached_value : name) = $(meth.Body);
+              $(is_cached : name) = true;
+            }
+            $(cached_value : name)
+          ]>;
         if (synch)
-        <[
-          lock ($(@lock : name)) {
-            $res
-          }
-        ]>
+          <[
+            lock ($(lockVar : name))
+              $res
+          ]>
         else
           res
 
       | (prm :: _) => 
         def cache = Macros.NewSymbol ("cache");
-        match (MType.ConstructFunctionType (meth.GetHeader ())) {
+        match (MType.ConstructFunctionType (meth.GetHeader ())) 
+        {
           | Fun (t1, t2) => 
-            match (scope) {
-              | "Instance" =>
-                tb.Define (<[ decl: $(cache : name) : Hashtable [$(t1 : typed), $(t2 : typed)] = Hashtable (); ]>);
-                when (synch)
-                  tb.Define (<[ decl: $(@lock : name) : object = object (); ]>);
-              | "Class" =>
-                tb.Define (<[ decl: static $(cache : name) : Hashtable [$(t1 : typed), $(t2 : typed)] = Hashtable (); ]>);
-                when (synch)
-                  tb.Define (<[ decl: static $(@lock : name) : object = object (); ]>);
-              | _ => () // unreachable
-            }
+            tb.Define (<[ decl: ..$mutableMods $(cache : name) : Hashtable [$(t1 : typed), $(t2 : typed)]; ]>);
+            when (synch)
+              tb.Define (<[ decl: ..$immutableMods $(lockVar : name) : object = object (); ]>);
         }
-        def parm_values = if (parms.Length > 1) 
-                            <[ (.. $(List.Map (parms, fun (p) { <[ $(p.name : usesite) ]> })) )]>
+        def parm_values = if (parms.Length > 1)
+                            <[ (..$(parms.Map(p => <[ $(p.name : usesite) ]>)) )]>
                           else
                             <[ $(prm.name : usesite) ]>;
         def res = <[
-          match ($(cache : name).Get ($parm_values)) {
-            | Some (ret) => ret
-            | None => 
-              def ret = $(meth.Body);
-              $(cache : name).Add ($parm_values, ret);
-              ret
-          }
-        ]>;
+            when ($(cache : name) == null)
+              $(cache : name) = Hashtable();
+
+            match ($(cache : name).TryGetValue ($parm_values)) 
+            {
+              | (ret, true) => ret
+              | _ => 
+                def ret = $(meth.Body);
+                $(cache : name)[$parm_values] = ret;
+                ret
+            }
+          ]>;
+
         if (synch)
-        <[
-          lock ($(@lock : name)) {
-            $res
-          }
-        ]>
+          <[ lock ($(lockVar : name))
+              $res
+          ]>
         else
           res
     });

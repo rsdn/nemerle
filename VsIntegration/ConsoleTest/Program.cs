@@ -13,6 +13,7 @@ namespace ConsoleTest
 			Test1 test = new Test1();
 			test.Init();
 
+			test.Overload1();
 			test.GetMethodTip();
 			test.QuickTips();
 			test.QuickTip();
@@ -51,7 +52,6 @@ namespace ConsoleTest
 			test.SimpleSourceTextManager_GetRegion_block_3();
 			test.Hint_on_return();
 			test.Hint_in_body_of_implicit_match();
-			test.Overload1();
 			test.QuickTip_ClassExtension();
 			test.Complete_generic_type_cast();
 			test.Complete_type_cast();
