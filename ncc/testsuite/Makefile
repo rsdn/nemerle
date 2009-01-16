@@ -60,7 +60,7 @@ all: clean test
 
 test: test.exe $(NEM_DLLS)
 	echo $(TEST_FILES) | xargs -n 200 \
-	$(EXECUTE) ./test.exe -s -r "$(NET_ENGINE)" -rp " $(NET_FLAGS)" -p "$(NEM_FLAGS) $(ADDITIONAL_FLAGS)" \
+	$(EXECUTE) ./test.exe -unix_colors -s -r "$(NET_ENGINE)" -rp " $(NET_FLAGS)" -p "$(NEM_FLAGS) $(ADDITIONAL_FLAGS)" \
 		-verify "$(VERIFY)"
 
 test.exe: test.n
