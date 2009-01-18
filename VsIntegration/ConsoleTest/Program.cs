@@ -13,11 +13,11 @@ namespace ConsoleTest
 			Test1 test = new Test1();
 			test.Init();
 
+			test.Complete_in_lambda();
 			test.Overload1();
 			test.GetMethodTip();
 			test.QuickTips();
 			test.QuickTip();
-			test.Complete_in_lambda();
 			test.Property_location();
 			test.Complete_in_return_type_1();
 			test.Complete_in_return_type_2();
