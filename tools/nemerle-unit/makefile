@@ -1,8 +1,10 @@
 TOP_LEVEL = ../..
-NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
-NCC = $(NCC_DIR)/ncc.exe -q
 
 include $(TOP_LEVEL)/config.mak
+
+EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
+NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
+NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe -q
 
 build: bin/NemerleUnit.dll
 

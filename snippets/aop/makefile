@@ -2,8 +2,9 @@ TOP_LEVEL = ../..
 
 include $(TOP_LEVEL)/config.mak
 
+EXECUTE = $(NET_ENGINE) $(NET_FLAGS)
 NCC_DIR = $(TOP_LEVEL)/ncc/out.stage3
-NCC = $(NCC_DIR)/ncc.exe -q
+NCC = $(EXECUTE) $(NCC_DIR)/ncc.exe -q
 
 
 build: bin bin/DevMacros.dll bin/Nemerle.Aop.dll
@@ -52,9 +53,9 @@ functional_tests: testbin testbin/test.exe bin/Nemerle.Aop.dll
 	cp $(NCC_DIR)/Nemerle.dll testbin/
 	cp $(NCC_DIR)/Nemerle.Compiler.dll testbin/
 	cd testbin; find ../src/ftests -name  "*$(NAME)*_positive.n" \
-		-exec $(NET_ENGINE) ./test.exe $(ARG) -ref Nemerle.Aop.dll {} +
+		-exec $(EXECUTE) ./test.exe $(ARG) -ref Nemerle.Aop.dll {} +
 	cd testbin; find ../src/ftests -name "*$(NAME)*_negative.n" \
-		-exec $(NET_ENGINE) ./test.exe $(ARG) -ref Nemerle.Aop.dll {} +
+		-exec $(EXECUTE) ./test.exe $(ARG) -ref Nemerle.Aop.dll {} +
 
 testbin/test.exe: testbin
 	$(NCC) -o:$@ -r Nemerle.Compiler.dll $(TOP_LEVEL)/ncc/testsuite/test.n
