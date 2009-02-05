@@ -536,10 +536,22 @@ namespace Nemerle.VisualStudio.LanguageService
 						if (++nErrors >= sink.MaxErrors)
 							return false;
 
-						TextSpan ts = Utils.SpanFromLocation(cm.Location);
+						string fileName;
+						TextSpan ts;
+
+						if (cm.Location == Location.Default)
+						{
+							fileName = projectInfo.ProjectFullPath;
+							ts = new TextSpan();
+						}
+						else
+						{
+							fileName = request.FileName;
+							ts = Utils.SpanFromLocation(cm.Location);
+						}
 
 						sink.AddError(
-							request.FileName,
+							fileName,
 							cm.Message.Replace("`", "'"),
 							ts,
 							cm.MessageKind == MessageKind.Error   ? Severity.Error :

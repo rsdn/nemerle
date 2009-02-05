@@ -27,6 +27,7 @@ namespace Nemerle.VisualStudio.Project
 {
 	public class ProjectInfo : IEngineCallback
 	{
+		public string ProjectFullPath { get; private set; }
 		private HierarchyListener      _listener;
 		private Dictionary<string,int> _fileMap   = new Dictionary<string, int>();
 		private SourceMap              _sourceMap = new SourceMap();
@@ -46,6 +47,7 @@ namespace Nemerle.VisualStudio.Project
 			ErrorHelper.ThrowIsNull(hierarchy,   "hierarchy");
 			Debug.Assert(projectNode.Site != null);
 
+			ProjectFullPath = Path.GetFullPath(fileName);
 			_projectNode = projectNode;
 			_hierarchy   = hierarchy;
 
