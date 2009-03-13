@@ -374,7 +374,7 @@ namespace Nemerle.VisualStudio.Project
 			Engine.ResetNamespaceTree();
 		}
 
-		public void AddRelocation(
+		public bool AddRelocation(
 			string filePath,
 			int newEndIndex, int newEndLine,
 			int oldEndIndex, int oldEndLine,
@@ -383,11 +383,13 @@ namespace Nemerle.VisualStudio.Project
 			ErrorHelper.ThrowIfPathNullOrEmpty(filePath, "filePath");
 
 			if (!IsProjectAvailable || IsDocumentOpening)
-				return;
+				return false;
+
+			bool relocated = Project.AddRelocation(filePath, newEndIndex, newEndLine, 
+				oldEndIndex, oldEndLine, startIndex, startLine);
 
 			// If can't add relocation we must reparse types tree.
-			if (!Project.AddRelocation(filePath, newEndIndex, newEndLine, 
-				oldEndIndex, oldEndLine, startIndex, startLine))
+			if (!relocated)
 			{
 				// Временно отключено!
 				//NemerleSource source = Utils.GetFileSource(_site, filePath);
@@ -421,6 +423,8 @@ namespace Nemerle.VisualStudio.Project
 				Engine.Project.UpdateDebugTree(fileIndex);
 #endif
 			}
+
+			return relocated;
 		}
 
 		public Nemerle.Completion2.Project Project

@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Diagnostics;
 using System.Collections.Generic;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Package;
@@ -54,6 +55,27 @@ namespace Nemerle.VisualStudio.LanguageService
 			base.Dispose();
 		}
 
+		public override void OnIdle(bool periodic)
+		{
+			if (IsDirty)
+				base.OnIdle(periodic);
+		}
+
+		public override bool IsDirty
+		{
+			get { return base.IsDirty; }
+			set
+			{
+				Debug.WriteLine("IsDirty = " + value);
+				base.IsDirty = value;
+			}
+		}
+
+		public override void OnChangesCommitted(uint reason, TextSpan[] changedArea)
+		{
+				Debug.WriteLine("OnChangesCommitted");
+		}
+
 		#endregion
 
 		#region Properties
@@ -102,6 +124,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override void OnChangeLineText(TextLineChange[] lineChange, int last)
 		{
+			base.OnChangeLineText(lineChange, last);
 			_timeStamp++;
 
 			//TODO: —юда нужно вставить код обновл€ющий локейшоны в дереве типов если редактирование
@@ -114,19 +137,18 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (projectInfo == null)
 				return;
 
-			for (int i = 0; i < lineChange.Length; i++)
-			{
-				TextLineChange changes = lineChange[i];
+			TextLineChange changes = lineChange[0];
+			var relocated = projectInfo.AddRelocation(
+				fileName,
+				changes.iNewEndIndex + 1,
+				changes.iNewEndLine  + 1,
+				changes.iOldEndIndex + 1,
+				changes.iOldEndLine  + 1,
+				changes.iStartIndex  + 1,
+				changes.iStartLine   + 1);
 
-				projectInfo.AddRelocation(
-					fileName,
-					changes.iNewEndIndex + 1,
-					changes.iNewEndLine  + 1,
-					changes.iOldEndIndex + 1,
-					changes.iOldEndLine  + 1,
-					changes.iStartIndex  + 1,
-					changes.iStartLine   + 1);
-			}
+			if (relocated)
+				this.IsDirty = false;
 
 			if (_scanner != null && _scanner.GetLexer().ClearHoverHighlights())
 			{
@@ -134,8 +156,6 @@ namespace Nemerle.VisualStudio.LanguageService
 				GetTextLines().GetLineCount(out lineCount);
 				Recolorize(1, lineCount);
 			}
-
-			base.OnChangeLineText(lineChange, last);
 		}
 
 		#endregion
