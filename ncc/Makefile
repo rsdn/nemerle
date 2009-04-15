@@ -73,7 +73,6 @@ NEMERLE_DLL_SRC = \
 	../lib/LazyValue.n              \
 	../lib/PipeReader.n             \
 	../lib/PipeWriter.n             \
-	../lib/oldapi.n                 \
 
 NEMERLE_COMPILER_DLL_SRC = \
 	CompilationOptions.n		 \
