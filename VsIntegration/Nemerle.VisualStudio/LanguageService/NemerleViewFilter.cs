@@ -523,6 +523,15 @@ namespace Nemerle.VisualStudio.LanguageService
 
 				switch (cmd)
 				{
+					case VsCommands2K.COMPLETEWORD:
+						{
+							int line;
+							int col;
+							ErrorHandler.ThrowOnFailure(TextView.GetCaretPos(out line, out col));
+							var tokenInfo = Source.GetTokenInfo(line, col);
+							Source.Completion(TextView, tokenInfo, ParseReason.CompleteWord);
+							return true;
+						}
 					case VsCommands2K.FORMATSELECTION:
 						ReformatSelection();
 						return true;

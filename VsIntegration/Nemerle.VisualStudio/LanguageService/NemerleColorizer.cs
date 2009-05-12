@@ -26,6 +26,12 @@ namespace Nemerle.VisualStudio.LanguageService
 			IsClosed = true;
 		}
 
+		public void SetCurrentLine(int line)
+		{
+			NemerleScanner scanner = (NemerleScanner)Scanner;
+			scanner._currentLine = line;
+		}
+
 		public override int ColorizeLine(int line, int length, IntPtr ptr, int state, uint[] attrs)
 		{
 			NemerleScanner scanner = (NemerleScanner)Scanner;

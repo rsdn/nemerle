@@ -210,6 +210,32 @@ namespace Nemerle.VisualStudio.LanguageService
 			return new NemerleAuthoringSink(this, reason, line, col, maxErrors);
 		}
 
+		public override TokenInfo GetTokenInfo(int line, int col)
+		{
+			//get current line 
+			TokenInfo info = new TokenInfo();
+			var colorizer = GetColorizer() as NemerleColorizer;
+
+			if (colorizer == null)
+				return info;
+
+			colorizer.SetCurrentLine(line);
+
+			//get line info
+			TokenInfo[] lineInfo = colorizer.GetLineInfo(this.GetTextLines(), line, this.ColorState);
+
+			if (lineInfo != null)
+			{
+				//get character info      
+				if (col > 0) 
+					col--;
+
+				this.GetTokenInfoAt(lineInfo, col, ref info);
+			}
+
+			return info;
+		}
+
 #if DEBUG
 		public override void ProcessHiddenRegions(ArrayList hiddenRegions)
 		{
