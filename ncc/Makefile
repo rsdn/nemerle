@@ -81,8 +81,19 @@ NEMERLE_COMPILER_DLL_SRC = \
 	codedom/NemerleCodeProvider.n	 \
 	codedom/NemerleMemberAttributeConverter.n \
 	external/Codec.n		 \
+	external/ExternalMemberInfo/ExternalEventInfo.n	\
+	external/ExternalMemberInfo/ExternalFieldInfo.n	\
+	external/ExternalMemberInfo/ExternalMemberInfo.n	\
+	external/ExternalMemberInfo/ExternalMethodInfo.n	\
+	external/ExternalMemberInfo/ExternalPropertyInfo.n	\
+	external/ExternalType.n		\
+	external/ExternalTypeInfo/ExternalTypeInfo.n		\
+	external/ExternalTypeInfo/ExternalNemerleTypeInfo.n		\
+	external/ExternalTypeInfo/ExternalPrimitiveTypeInfo.n		\
 	external/InternalTypes.n	 \
-	external/LibrariesLoader.n	 \
+	external/LibraryReference.n	 \
+	external/LibraryReferenceManager.n	 \
+	external/NumericKind.n		 \
 	generation/HierarchyEmitter.n	 \
 	generation/ILEmitter.n		 \
 	generation/ImplementsWrapperMaker.n \
