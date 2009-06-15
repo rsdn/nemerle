@@ -22,6 +22,10 @@ namespace Nemerle.VisualStudio.LanguageService
 			: base(null)
 		{
 			_languageService = langService;
+			//TODO: Перенести _defaultEngine в NemerleLanguageService и использовать его
+			_defaultEngine = new Engine(EngineCallbackStub.Default,
+				new ProjectManager(_languageService), new TraceWriter());
+			_defaultEngine.InitDefaulteEngine();
 			_source = (NemerleSource)langService.GetSource(forView);
 		}
 
@@ -29,6 +33,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		int _lastTimeStamp = -1;
 		int _lastSelectedType = -2;
 		int _lastSelectedMember = -2;
+		Engine _defaultEngine;
 
 		#region MS vars
 
@@ -266,18 +271,11 @@ namespace Nemerle.VisualStudio.LanguageService
 		/// </summary>
 		public void SynchronizeDropdownsRsdn(IVsTextView textView, int line, int col)
 		{
-			//TODO: Use fake (cached) Project for parsing purpose
-			//	  if file not in any project. It allows showing combo box
-			//	  for standalone files. We shold cache Project because
-			//	  its creation is expensive operation.
-			if (_dropDownBar == null || _source.ProjectInfo == null)
+			if (_dropDownBar == null)
 				return;
 
 			_textView = textView;
 
-			//bool needUpdate = UpdateDropDownTypes();
-			//needUpdate |= SyncSelectedType();
-			//needUpdate |= SyncSelectedMember();
 			line = line.ToNccLineCoord();
 			col  =  col.ToNccColCoord();
 
@@ -295,10 +293,15 @@ namespace Nemerle.VisualStudio.LanguageService
 				_lastTimeStamp = _source.TimeStamp;
 
 				var list = new List<TopDeclaration>();
+				// Use fake Engine if _source.ProjectInfo == null
+				var engine = _source.ProjectInfo == null ? _defaultEngine : _source.ProjectInfo.Engine;
+				engine.RestoreManagerClassInstance();
+
+				if (_source.FileIndex < 0)
+					_source.FileIndex = Location.GetFileIndex(_source.GetFilePath());
 
 				var decls = AstUtils.GetAllDeclarations(
-						_source.ProjectInfo.Engine.ParseTopDeclarations(
-						new SourceTextManager(_source)));
+					engine.ParseTopDeclarations(new SourceTextManager(_source)));
 
 				foreach (var declAndName in decls)
 				{

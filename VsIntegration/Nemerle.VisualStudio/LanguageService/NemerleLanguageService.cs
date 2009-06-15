@@ -133,13 +133,10 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			ProjectInfo projectInfo = GetProjectInfo(request);
 
-			if (projectInfo == null)
-				return GetDefaultScope(request);
-
-			NemerleSource source = projectInfo.GetSource(request.FileName);
+			var source = (NemerleSource)GetSource(request.View);
 			IVsTextColorState colorState = source.ColorState;
 			Colorizer colorizer = source.GetColorizer();
-			NemerleScanner scanner = (NemerleScanner)colorizer.Scanner;
+			var scanner = (NemerleScanner)colorizer.Scanner;
 			string lineText = source.GetLine(request.Line);
 			scanner.SetSource(lineText, 0);
 
@@ -174,7 +171,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 				return new NemerleAuthoringScope(
 					projectInfo, request.Sink, request.FileName,
-					new SourceTextManager(projectInfo.GetSource(request.FileName)));
+					new SourceTextManager(source)); // projectInfo.GetSource(request.FileName)
 			}
 
 			return GetDefaultScope(request); // we don't find paired token
@@ -382,14 +379,14 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			private static bool IsPairedToken(Token token)
 			{
-				if (token is Token.BeginBrace || token is Token.BeginQuote
+				if (token is Token.BeginBrace  || token is Token.BeginQuote
 					|| token is Token.BeginRound || token is Token.BeginSquare
-					|| token is Token.EndBrace || token is Token.EndQuote
-					|| token is Token.EndRound || token is Token.EndSquare
+					|| token is Token.EndBrace   || token is Token.EndQuote
+					|| token is Token.EndRound   || token is Token.EndSquare
 				)
 					return true;
 
-				Token.Keyword kwd = token as Token.Keyword;
+				var kwd = token as Token.Keyword;
 
 				if (kwd != null && (kwd.name == "if" || kwd.name == "else"))
 					return true;

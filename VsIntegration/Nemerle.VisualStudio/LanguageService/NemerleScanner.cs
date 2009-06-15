@@ -42,6 +42,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				{
 					// TODO: We need to create hidden project for files which are not included
 					// in any project.
+					//TODO: Перенести _defaultEngine в NemerleLanguageService и использовать его
 					engine = new Engine(EngineCallbackStub.Default, 
 						new ProjectManager(_languageService), new TraceWriter());
 					object tmp = engine.Project;
