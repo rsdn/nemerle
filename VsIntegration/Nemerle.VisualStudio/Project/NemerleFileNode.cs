@@ -370,7 +370,7 @@ namespace Nemerle.VisualStudio.Project
 		/// </summary>
 		protected override void DoDefaultAction()
 		{
-			FileDocumentManager manager = GetDocumentManager() as FileDocumentManager;
+			var manager = (FileDocumentManager)GetDocumentManager();
 
 			Debug.Assert(manager != null, "Could not get the FileDocumentManager");
 

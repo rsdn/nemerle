@@ -27,6 +27,7 @@ using VsCommands2K = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
 
 using MSBuild = Microsoft.Build.BuildEngine;
 using System.Diagnostics.CodeAnalysis;
+using Microsoft.VisualStudio.Shell;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -165,7 +166,21 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
-		IVsHierarchy InteropSafeHierarchy
+		System.IServiceProvider _serviceProvider;
+
+		public IServiceProvider GetServiceProvider()
+		{
+			if (_serviceProvider == null)
+			{
+				Microsoft.VisualStudio.OLE.Interop.IServiceProvider site;
+				ErrorHandler.ThrowOnFailure(InteropSafeHierarchy.GetSite(out site));
+				_serviceProvider = new ServiceProvider(site);
+			}
+
+			return _serviceProvider;
+		}
+
+		public IVsHierarchy InteropSafeHierarchy
 		{
 			get
 			{

@@ -1,4 +1,6 @@
 using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.TextManager.Interop;
+using System.Collections.Generic;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
@@ -15,21 +17,32 @@ namespace Nemerle.VisualStudio.LanguageService
 			int           maxErrors)
 			: base(reason, line, col, maxErrors)
 		{
-			_source	= source;
-			_maxErrors = maxErrors;
+			Source    = source;
+			MaxErrors = maxErrors;
+			HiddenRegionsList = new List<NewHiddenRegion>();
 		}
 
-		private int _maxErrors;
-		public  int  MaxErrors
-		{
-			get { return _maxErrors;  }
-			set { _maxErrors = value; }
-		}
+		public int                   MaxErrors     { get;         set; }
+		public NemerleSource         Source        { get; private set; }
+		public List<NewHiddenRegion> HiddenRegionsList { get; private set; }
 
-		private NemerleSource _source;
-		public  NemerleSource  Source
+		public override void AddHiddenRegion(NewHiddenRegion r)
 		{
-			get { return _source; }
+			//if (!HiddenRegions)
+			//	return;
+
+			// Sort the regions by their start positions so that if they add more than 
+			// MaxRegions then they get the outer top level ones first.
+			int i = this.HiddenRegionsList.Count - 1;
+			while (i >= 0)
+			{
+				NewHiddenRegion s = this.HiddenRegionsList[i];
+				if (TextSpanHelper.StartsAfterStartOf(r.tsHiddenText, s.tsHiddenText))
+					break;
+				i--;
+			}
+			
+			HiddenRegionsList.Insert(i + 1, r);
 		}
 	}
 }

@@ -140,10 +140,15 @@ namespace Nemerle.VisualStudio
 		{
 			switch (ch)
 			{
-				case ' ': case '\t': case '\v':
-				case '{': case '}':
-				case '(': case ')':
-				case '[': case ']':
+				case ' ':
+				case '\t':
+				case '\v':
+				case '{':
+				case '}':
+				case '(':
+				case ')':
+				case '[':
+				case ']':
 				case ';':
 					return true;
 
@@ -156,14 +161,14 @@ namespace Nemerle.VisualStudio
 		{
 			TextSpan span = new TextSpan();
 
-			span.iStartLine  = location.Line	  - 1;
-			span.iStartIndex = location.Column	- 1;
-			span.iEndLine	= location.EndLine   - 1;
-			span.iEndIndex   = location.EndColumn - 1;
+			span.iStartLine = location.Line - 1;
+			span.iStartIndex = location.Column - 1;
+			span.iEndLine = location.EndLine - 1;
+			span.iEndIndex = location.EndColumn - 1;
 
 			return span;
 		}
-		
+
 		public static int GetGlyph(TopDeclaration decl)
 		{
 			if (decl == null)
@@ -202,22 +207,22 @@ namespace Nemerle.VisualStudio
 			int kind = 0;
 			int modifier = 0;
 
-			if	  (member is ClassMember.Field)	kind = 7;
+			if (member is ClassMember.Field) kind = 7;
 			else if (member is ClassMember.Property) kind = 17;
 			else if (member is ClassMember.Function) kind = 12;
-			else if (member is ClassMember.Event)	kind = 5;
+			else if (member is ClassMember.Event) kind = 5;
 
 			NemerleAttributes attrs = member.Attributes;
 
 			modifier =
-				Has(attrs, NemerleAttributes.Internal)		   ? 1 :
-				Has(attrs, NemerleAttributes.Protected)		  ? 3 :
-				Has(attrs, NemerleAttributes.Public)			 ? 0 :
+				Has(attrs, NemerleAttributes.Internal) ? 1 :
+				Has(attrs, NemerleAttributes.Protected) ? 3 :
+				Has(attrs, NemerleAttributes.Public) ? 0 :
 				member.DefinedIn is TopDeclaration.VariantOption ? 0 :
 																											 4;
 			return kind * 6 + modifier;
 		}
-		
+
 		private static bool Has(NemerleAttributes attrs, NemerleAttributes value)
 		{
 			return (attrs & value) == value;
@@ -290,24 +295,24 @@ namespace Nemerle.VisualStudio
 		{
 			return Nemerle.Compiler.Utils.AstUtils.GetMemberLabel(member);
 		}
-/*
-		public static RegistryKey VSRegistry_RegistryRoot
-		{
-			get
-			{
-				Microsoft.VisualStudio.Shell.Interop.ILocalRegistry3 ILocalRegistry3 =
-					Microsoft.VisualStudio.Shell.Package.GetGlobalService(typeof(Microsoft.VisualStudio.Shell.Interop.SLocalRegistry))
-					as Microsoft.VisualStudio.Shell.Interop.ILocalRegistry3;
-				string root = null;
-				ILocalRegistry3.GetLocalRegistryRoot(out root);
+		/*
+				public static RegistryKey VSRegistry_RegistryRoot
+				{
+					get
+					{
+						Microsoft.VisualStudio.Shell.Interop.ILocalRegistry3 ILocalRegistry3 =
+							Microsoft.VisualStudio.Shell.Package.GetGlobalService(typeof(Microsoft.VisualStudio.Shell.Interop.SLocalRegistry))
+							as Microsoft.VisualStudio.Shell.Interop.ILocalRegistry3;
+						string root = null;
+						ILocalRegistry3.GetLocalRegistryRoot(out root);
 
-				if(root == null)
-					return null;
+						if(root == null)
+							return null;
 
-				return Registry.LocalMachine.OpenSubKey(root);
-			}
-		}
-*/
+						return Registry.LocalMachine.OpenSubKey(root);
+					}
+				}
+		*/
 		/// <summary>
 		/// Displays the specified message string.
 		/// </summary>
@@ -318,32 +323,47 @@ namespace Nemerle.VisualStudio
 			// Messages are current shown to the trace, not the user.
 			// Change this to a MessageBox to display in the UI.
 			string output = message.Trim();
-			if(prefix.Length > 0)
+			if (prefix.Length > 0)
 			{
 				output = prefix.Trim() + " " + output + Environment.NewLine;
 			}
 			Trace.WriteLine(output);
 		}
 
-        public static string GetRelativePath(string basePath, string subPath)
-        {
-            ErrorHelper.ThrowIsNullOrEmpty(basePath, "basePath");
-            ErrorHelper.ThrowIsNullOrEmpty(subPath, "subPath");
+		public static string GetRelativePath(string basePath, string subPath)
+		{
+			ErrorHelper.ThrowIsNullOrEmpty(basePath, "basePath");
+			ErrorHelper.ThrowIsNullOrEmpty(subPath, "subPath");
 
-            if (!Path.IsPathRooted(basePath))
-                throw new ArgumentException("The 'basePath' is not rooted.");
+			if (!Path.IsPathRooted(basePath))
+				throw new ArgumentException("The 'basePath' is not rooted.");
 
-            if (!Path.IsPathRooted(subPath))
-                return subPath;
+			if (!Path.IsPathRooted(subPath))
+				return subPath;
 
-            if (!StringComparer.OrdinalIgnoreCase.Equals(Path.GetPathRoot(basePath), Path.GetPathRoot(subPath)))
-                return subPath;
+			if (!StringComparer.OrdinalIgnoreCase.Equals(Path.GetPathRoot(basePath), Path.GetPathRoot(subPath)))
+				return subPath;
 
-            if (!basePath.EndsWith(Path.DirectorySeparatorChar.ToString()))
-                basePath += Path.DirectorySeparatorChar;
-            
-            Url url = new Url(basePath);
-            return url.MakeRelative(new Url(subPath));
-        }
+			if (!basePath.EndsWith(Path.DirectorySeparatorChar.ToString()))
+				basePath += Path.DirectorySeparatorChar;
+
+			Url url = new Url(basePath);
+			return url.MakeRelative(new Url(subPath));
+		}
+
+		public static int TimeSince(int start)
+		{
+			int ticks = Environment.TickCount;
+			long t = (long)ticks;
+			long s = (long)start;
+			// ticks wraps around every 29 days from int.MaxValue to int.MinValue, so we have to watch out 
+			// for wrap around!
+			if (ticks < start)
+			{
+				s = s - (long)int.MaxValue;
+				t = t - (long)int.MinValue;
+			}
+			return (int)Math.Min((long)int.MaxValue, t - s);
+		}
 	}
 }

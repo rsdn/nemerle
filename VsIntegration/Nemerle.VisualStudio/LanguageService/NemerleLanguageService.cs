@@ -31,12 +31,26 @@ namespace Nemerle.VisualStudio.LanguageService
 	[Guid(NemerleConstants.LanguageServiceGuidString)]
 	public class NemerleLanguageService : Microsoft.VisualStudio.Package.LanguageService
 	{
-		#region Init
+		#region Fields
 
+		public static Engine DefaultEngine { get; private set; }
+		
+		#endregion
+		
+		#region Init
+		
 		public NemerleLanguageService()
 		{
 			CompiledUnitAstBrowser.ShowLocation += GotoLocation;
 			AstToolControl.ShowLocation += GotoLocation;
+
+			if (DefaultEngine == null)
+			{
+				DefaultEngine = new Engine(EngineCallbackStub.Default,
+					new ProjectManager(this), new TraceWriter());
+
+				DefaultEngine.InitDefaulteEngine();
+			}
 		}
 
 		///<summary>
@@ -81,6 +95,13 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			switch (request.Reason)
 			{
+				case (ParseReason)ParseReason2.CheckRelocatedMember: 
+				                               return CheckRelocatedMember(request);
+				case (ParseReason)ParseReason2.ProcessRegions:
+																			 return ProcessRegions(request);
+				case (ParseReason)ParseReason2.BuildTypeTree:
+																			 return BuildTypeTree(request);
+
 				case ParseReason.Check:        return Check(request);
 
 				case ParseReason.MemberSelect:
@@ -110,8 +131,32 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			return GetDefaultScope(request);
 		}
+
+		private AuthoringScope BuildTypeTree(ParseRequest request)
+		{
+			Trace.WriteLine(">>>> ##### ProcessRegions!");
+			try
+			{
+				ProjectInfo projectInfo = ProjectInfo.FindProject(request.FileName);
+				if (projectInfo == null)
+					return null;
+			
+				projectInfo.Engine.BuildTypeTree();
+
+				// Now compiler messages set to Error List window automatically (by IEngineCallback).
+				// We don't need return it in AuthoringScope.
+				return GetDefaultScope(request);
+			}
+			catch (Exception e)
+			{
+				Trace.WriteLine("!!! ProcessRegions() throw Exception " + e.Message);
+				return GetDefaultScope(request); //	VladD2: 2 IT: Don't re-throw exception here! It leads to check loophole!!!
+			}
+			finally { Trace.WriteLine("<<<< ##### ProcessRegions!"); }
+		}
  
 		#endregion
+
 
 		#region MatchBraces
 
@@ -485,22 +530,33 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region Check
 
-		private AuthoringScope Check(ParseRequest request)
+		private AuthoringScope CheckRelocatedMember(ParseRequest request)
 		{
-			Trace.WriteLine(">>>> ##### Check!");
+			var source = (NemerleSource)GetSource(request.View);
+
+			if (source != null)
+				source.CheckRelocatedMember();
+
+			// Now compiler messages set to Error List window automatically (by IEngineCallback).
+			// We don't need return it in AuthoringScope.
+			return GetDefaultScope(request);
+		}
+
+		private AuthoringScope ProcessRegions(ParseRequest request)
+		{
+			Trace.WriteLine(">>>> ##### ProcessRegions!");
 			try
 			{
 				ProjectInfo projectInfo = ProjectInfo.FindProject(request.FileName);
-
+				//TODO: To eliminate dependence from ProjectInfo.
 				if (projectInfo == null)
 					return null;
 
-				Nemerle.Completion2.Project p = projectInfo.Engine.Project;
-				Debug.Assert(p != null);
+				NemerleSource source = GetSource(request.View) as NemerleSource;
 
-				NemerleSource source = projectInfo.GetSource(request.FileName);
+				if (source == null)
+					return null;
 
-				int  nErrors     = 0;
 				bool allExpanded = source.TimeStamp > 0;
 
 				request.Sink.ProcessHiddenRegions = true;
@@ -515,50 +571,20 @@ namespace Nemerle.VisualStudio.LanguageService
 							var r = new NewHiddenRegion
 							{
 								tsHiddenText = Utils.SpanFromLocation(location),
-								iType        = (int)HIDDEN_REGION_TYPE.hrtCollapsible,
-								dwBehavior   = (int)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled, //.hrbClientControlled;
-								pszBanner    = string.IsNullOrEmpty(text) ? null : text,
-								dwClient     = 25,
-								dwState      = (uint)(allExpanded || isExpanded ?
+								iType = (int)HIDDEN_REGION_TYPE.hrtCollapsible,
+								dwBehavior = (int)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled, //.hrbClientControlled;
+								pszBanner = string.IsNullOrEmpty(text) ? null : text,
+								dwClient = 25,
+								dwState = (uint)(allExpanded || isExpanded ?
 									HIDDEN_REGION_STATE.hrsExpanded : HIDDEN_REGION_STATE.hrsDefault)
 							};
 
 							request.Sink.AddHiddenRegion(r);
 						}
-					},
-					cm =>
-					{
-						var sink = (NemerleAuthoringSink)request.Sink;
-
-						if (++nErrors >= sink.MaxErrors)
-							return false;
-
-						string fileName;
-						TextSpan ts;
-
-						if (cm.Location == Location.Default)
-						{
-							fileName = projectInfo.ProjectFullPath;
-							ts = new TextSpan();
-						}
-						else
-						{
-							fileName = request.FileName;
-							ts = Utils.SpanFromLocation(cm.Location);
-						}
-
-						sink.AddError(
-							fileName,
-							cm.Message.Replace("`", "'"),
-							ts,
-							cm.MessageKind == MessageKind.Error   ? Severity.Error :
-							cm.MessageKind == MessageKind.Warning ? Severity.Warning : Severity.Hint);
-
-						return true;
 					});
 
 				var scope = GetDefaultScope(request);
-				var tool  = AstToolWindow.AstTool;
+				var tool = AstToolWindow.AstTool;
 
 				if (tool != null && tool.IsAutoUpdate)
 					tool.ShowInfo(source);
@@ -567,16 +593,32 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 			catch (Exception e)
 			{
-				Trace.WriteLine("!!! Check() throw Exception " + e.Message);
-				return GetDefaultScope(request);
-				//	VladD2: 2 IT: Don't re-throw exception here!
-				//                It leads to check loophole!!!
-				//throw;
+				Trace.WriteLine("!!! ProcessRegions() throw Exception " + e.Message);
+				return GetDefaultScope(request); //	VladD2: 2 IT: Don't re-throw exception here! It leads to check loophole!!!
 			}
-			finally
+			finally { Trace.WriteLine("<<<< ##### ProcessRegions!"); }
+		}
+
+		private AuthoringScope Check(ParseRequest request)
+		{
+			Trace.WriteLine(">>>> ##### Check!");
+			try
 			{
-				Trace.WriteLine("<<<< ##### Check!");
+				ProjectInfo projectInfo = ProjectInfo.FindProject(request.FileName);
+
+				if (projectInfo == null)
+					return null;
+
+				projectInfo.ChekOneMethodFromMethodsCheckQueue(request.View);
+
+				return GetDefaultScope(request); // Now compiler messages set to Error List window automatically (by IEngineCallback). // We don't need return it in AuthoringScope.
 			}
+			catch (Exception e)
+			{
+				Trace.WriteLine("!!! Check() throw Exception " + e.Message);
+				return GetDefaultScope(request); //	VladD2: 2 IT: Don't re-throw exception here! It leads to check loophole!!!
+			}
+			finally { Trace.WriteLine("<<<< ##### Check!"); }
 		}
 		
 		#endregion
@@ -1023,11 +1065,9 @@ namespace Nemerle.VisualStudio.LanguageService
 				// Tools->Options->Text editor->Nemerle->Tabs
 				//_preferences.IndentStyle = IndentingStyle.Smart;
 
-#if DEBUG
 				//VladD2: Switch on synchronous mode for debugging purpose!
 				//TODO: Comment it if necessary.
 				_preferences.EnableAsyncCompletion = false;
-#endif
 			}
 
 			return _preferences;
@@ -1173,6 +1213,9 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override void OnIdle(bool periodic)
 		{
+			if (LastActiveTextView == null)
+				return;
+
 			Source src = GetSource(LastActiveTextView);
 
 			if (src != null && src.LastParseTime == int.MaxValue)

@@ -98,7 +98,8 @@ namespace Nemerle.VisualStudio.GUI
 			set
 			{
 				_buildTypedtreeCount = value;
-				_buildTypedtreeCountLabel.Text = value.ToString();
+				Action action = () => { _buildTypedtreeCountLabel.Text = value.ToString(); };
+				_buildTypedtreeCountLabel.Invoke(action);
 			}
 		}
 
@@ -107,33 +108,38 @@ namespace Nemerle.VisualStudio.GUI
 			if (!IsAutoUpdate)
 				return;
 
-			_checkCountLabel.Text = (++_checkCount).ToString();
-			_items.Clear();
-			ProjectInfo projectInfo = source.ProjectInfo;
-
-			if (projectInfo == null)
-				return;
-
-			switch (_displayType.SelectedIndex)
+			Action action = () => 
 			{
-				case 0: // Tokens
-					string code = source.GetText();
-					
-					LexerBase lex = new LexerString(projectInfo.Engine, code,
-						new Location(source.FileIndex, 1, 1));
-					//lex.BeginParseFile();
-					lex.Keywords = lex.Manager.CoreEnv.Keywords;
-					AstUtils.FillList(lex, _items);
-					break;
-				case 1: // AST
-					Decl.Namespace ns = projectInfo.Engine.Project.CompileUnits[source.FileIndex];
-					AstUtils.FillList(ns, _items);
-					break;
-			}
+				_checkCountLabel.Text = (++_checkCount).ToString();
+				_items.Clear();
+				ProjectInfo projectInfo = source.ProjectInfo;
 
-			_grid.RowCount = _items.Count;
-			_grid.Invalidate();
-			_grid.Update();
+				if (projectInfo == null)
+					return;
+
+				switch (_displayType.SelectedIndex)
+				{
+					case 0: // Tokens
+						string code = source.GetText();
+						
+						LexerBase lex = new LexerString(projectInfo.Engine, code,
+							new Location(source.FileIndex, 1, 1));
+						//lex.BeginParseFile();
+						lex.Keywords = lex.Manager.CoreEnv.Keywords;
+						AstUtils.FillList(lex, _items);
+						break;
+					case 1: // AST
+						Decl.Namespace ns = projectInfo.Engine.Project.CompileUnits[source.FileIndex];
+						AstUtils.FillList(ns, _items);
+						break;
+				}
+
+				_grid.RowCount = _items.Count;
+				_grid.Invalidate();
+				_grid.Update();
+			};
+
+			_checkCountLabel.Invoke(action);
 		}
 
 		private void _grid_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)

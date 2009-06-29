@@ -250,7 +250,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		private bool WarnAboutErrors(Nemerle.Completion2.Project project)
 		{
 			foreach (var cm in project.Errors)
-				if (cm.MessageKind == MessageKind.Error)
+				if (cm.Kind == MessageKind.Error)
 					return MessageBox.Show(TextEditorWindow, "This project doesn't build. Are you sure you want to proceed?",
 										"",
 										MessageBoxButtons.YesNo,
