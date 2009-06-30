@@ -151,6 +151,7 @@ NEMERLE_COMPILER_DLL_SRC = \
 	typing/Typer.n			 \
 	typing/Typer2.n			 \
 	completion/CodeCompletionEngine.n   \
+	$(wildcard CompilerMessage/*.n) \
 	$(wildcard optimization/*.n) \
 
 
