@@ -158,27 +158,7 @@ NEMERLE_COMPILER_DLL_SRC = \
 NCC_EXE_SRC       = main.n
 
 STDMACROS_DLL_SRC = \
-	../macros/Profiling.n \
-	../macros/xml.n \
-        ../macros/text.n \
-        ../macros/io.n \
-        ../macros/string.n \
-        ../macros/core.n \
-        ../macros/compiler.n \
-        ../macros/assertions.n \
-        ../macros/alias.n \
-	../macros/operators.n \
-	../macros/concurrency.n \
-	../macros/Util.n \
-	../macros/Nemerle.n \
-	../macros/Memoize.n \
-	../macros/Logging.n \
-	../macros/Internals.n \
-	../macros/English.n \
-	../macros/Data.n \
-	../macros/DesignPatterns.n \
-	../macros/AssemblyInfo.n \
-	../macros/Late.n \
+	$(wildcard ../macros/*.n) \
 
 ############################################################
 # OUTPUT
