@@ -1,4 +1,4 @@
-@echo off
+@echo on
 
 IF "%Type%"=="" set Type=Debug
 
@@ -12,6 +12,8 @@ IF NOT "%PROCESSOR_ARCHITEW6432%" == "" goto b64
 set NGen="%SystemRoot%\Microsoft.NET\Framework\v2.0.50727\ngen.exe"
 goto b32
 :b64
+"%NemerleRoot%\ExternalDependences\junction.exe" "%ProgramW6432%\Nemerle" "%ProgramFiles(x86)%\Nemerle"
+:skipJunction
 set NGen="%SystemRoot%\Microsoft.NET\Framework64\v2.0.50727\ngen.exe"
 :b32
 
