@@ -34,6 +34,8 @@ namespace Nemerle.VisualStudio.LanguageService
 		#region Fields
 
 		public static Engine DefaultEngine { get; private set; }
+		public bool IsDisposed { get; private set; }
+		IVsStatusbar _statusbar;
 		
 		#endregion
 		
@@ -41,6 +43,9 @@ namespace Nemerle.VisualStudio.LanguageService
 		
 		public NemerleLanguageService()
 		{
+			if (System.Threading.Thread.CurrentThread.Name == null)
+				System.Threading.Thread.CurrentThread.Name = "UI Thread";
+
 			CompiledUnitAstBrowser.ShowLocation += GotoLocation;
 			AstToolControl.ShowLocation += GotoLocation;
 
@@ -58,8 +63,11 @@ namespace Nemerle.VisualStudio.LanguageService
 		///</summary>
 		public override void Dispose()
 		{
+			IsDisposed = true;
 			try
 			{
+				AbortBackgroundParse();
+
 				foreach (NemerleColorizer colorizer in _colorizers.Values)
 					colorizer.Dispose();
 
@@ -87,6 +95,17 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			if (request == null)
 				throw new ArgumentNullException("request");
+
+			if (request.View == null)
+				return null;
+
+			var source = (NemerleSource)GetSource(request.View);
+
+			if (source == null || source.IsClosed)
+				return null;
+
+			if (source.ProjectInfo != null && source.ProjectInfo.IsCosed)
+				return null;
 
 			Debug.Print(
 				"File '{0}' ParseSource at ({1}:{2}), reason {3}, Timestamp {4}",
@@ -124,35 +143,10 @@ namespace Nemerle.VisualStudio.LanguageService
 					break;
 			}
 
-			NemerleSource source = (NemerleSource)GetSource(request.View);
-
 			if (source != null && source.ScopeCreator != null)
 				return source.ScopeCreator(request);
 
 			return GetDefaultScope(request);
-		}
-
-		private AuthoringScope BuildTypeTree(ParseRequest request)
-		{
-			Trace.WriteLine(">>>> ##### ProcessRegions!");
-			try
-			{
-				ProjectInfo projectInfo = ProjectInfo.FindProject(request.FileName);
-				if (projectInfo == null)
-					return null;
-			
-				projectInfo.Engine.BuildTypeTree();
-
-				// Now compiler messages set to Error List window automatically (by IEngineCallback).
-				// We don't need return it in AuthoringScope.
-				return GetDefaultScope(request);
-			}
-			catch (Exception e)
-			{
-				Trace.WriteLine("!!! ProcessRegions() throw Exception " + e.Message);
-				return GetDefaultScope(request); //	VladD2: 2 IT: Don't re-throw exception here! It leads to check loophole!!!
-			}
-			finally { Trace.WriteLine("<<<< ##### ProcessRegions!"); }
 		}
  
 		#endregion
@@ -261,12 +255,13 @@ namespace Nemerle.VisualStudio.LanguageService
 				// Get tokens of line under text carret into dynamic array.
 				List<ScanTokenInfo> lineToks = GetLineTokens(startLine, true);
 				// Find index of token which located under text carret.
-				int index = FindIndex(lineToks,
-					delegate(ScanTokenInfo x)
-					{ return x.Token.Location.Contains(startLine, startCol); });
+				int index = FindIndex(lineToks, x => x.Token.Location.Contains(startLine, startCol));
+
+				if (index < 0)
+					return;
 
 				// If index is corret get corresponding token.
-				ScanTokenInfo startBraceInfo = index < 0 ? null : lineToks[index];
+				ScanTokenInfo startBraceInfo = lineToks[index];
 				// Remember it, if token have paired token.
 				if (IsPairedToken(startBraceInfo.Token))
 					StartBraceInfo = startBraceInfo;
@@ -532,10 +527,15 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private AuthoringScope CheckRelocatedMember(ParseRequest request)
 		{
-			var source = (NemerleSource)GetSource(request.View);
+			SetStatusBarText("Check changed member...");
+			try
+			{
+				var source = (NemerleSource)GetSource(request.View);
 
-			if (source != null)
-				source.CheckRelocatedMember();
+				if (source != null)
+					source.CheckRelocatedMember();
+			}
+			finally { SetStatusBarText("Check changed member is completed."); }
 
 			// Now compiler messages set to Error List window automatically (by IEngineCallback).
 			// We don't need return it in AuthoringScope.
@@ -544,7 +544,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private AuthoringScope ProcessRegions(ParseRequest request)
 		{
-			Trace.WriteLine(">>>> ##### ProcessRegions!");
+			Debug.WriteLine(">>>> ##### ProcessRegions!");
 			try
 			{
 				ProjectInfo projectInfo = ProjectInfo.FindProject(request.FileName);
@@ -556,6 +556,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 				if (source == null)
 					return null;
+
+				SetStatusBarText("Process regions...");
 
 				bool allExpanded = source.TimeStamp > 0;
 
@@ -596,20 +598,65 @@ namespace Nemerle.VisualStudio.LanguageService
 				Trace.WriteLine("!!! ProcessRegions() throw Exception " + e.Message);
 				return GetDefaultScope(request); //	VladD2: 2 IT: Don't re-throw exception here! It leads to check loophole!!!
 			}
-			finally { Trace.WriteLine("<<<< ##### ProcessRegions!"); }
+			finally 
+			{
+				Debug.WriteLine("<<<< ##### ProcessRegions!");
+				SetStatusBarText("Regions is processed.");
+			}
+		}
+
+		private AuthoringScope BuildTypeTree(ParseRequest request)
+		{
+			Debug.WriteLine(">>>> &&&& Build type tree!");
+			SetStatusBarText("Build type tree (parse types)...");
+			try
+			{
+				ProjectInfo projectInfo = ProjectInfo.FindProject(request.FileName);
+				if (projectInfo == null)
+					return null;
+
+				projectInfo.Engine.BuildTypeTree();
+
+				// Now compiler messages set to Error List window automatically (by IEngineCallback).
+				// We don't need return it in AuthoringScope.
+				return GetDefaultScope(request);
+			}
+			catch (Exception e)
+			{
+				Trace.WriteLine("!!! Build type tree throw Exception " + e.Message);
+				return GetDefaultScope(request); //	VladD2: 2 IT: Don't re-throw exception here! It leads to check loophole!!!
+			}
+			finally
+			{
+				SetStatusBarText("Build type tree (parse types) is completed.");
+				Debug.WriteLine("<<<< &&&& Build type tree!");
+			}
 		}
 
 		private AuthoringScope Check(ParseRequest request)
 		{
-			Trace.WriteLine(">>>> ##### Check!");
+			Trace.WriteLine(">>>> ##### Check! " + DateTime.Now.TimeOfDay);
 			try
 			{
 				ProjectInfo projectInfo = ProjectInfo.FindProject(request.FileName);
 
 				if (projectInfo == null)
 					return null;
+				
+				var fileIndex = Location.GetFileIndex(request.FileName);
+				var line = request.Line + 1; // VS use zero-based coords (we one-based)
+				var col = request.Col + 1;
+				
+				// The background parsing happen relatively rarely (with big pause). 
+				// We try to check maximum of methods as possible for half of second (but it is no more 100).
+				int count = -1;
+				var span = TimeSpan.FromSeconds(0.5);
+				var time = Stopwatch.StartNew();
+				for (int i = 0; time.Elapsed < span && count != 0 && i < 100; i++)
+					count = projectInfo.ChekOneMethodFromMethodsCheckQueue(fileIndex, line, col);
 
-				projectInfo.ChekOneMethodFromMethodsCheckQueue(request.View);
+				SetStatusBarText(count == 0 ? "Check of methods is completed."
+																		: "Checking methods... remain " + count + " methods.");
 
 				return GetDefaultScope(request); // Now compiler messages set to Error List window automatically (by IEngineCallback). // We don't need return it in AuthoringScope.
 			}
@@ -618,7 +665,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				Trace.WriteLine("!!! Check() throw Exception " + e.Message);
 				return GetDefaultScope(request); //	VladD2: 2 IT: Don't re-throw exception here! It leads to check loophole!!!
 			}
-			finally { Trace.WriteLine("<<<< ##### Check!"); }
+			finally { Trace.WriteLine("<<<< ##### Check! " + DateTime.Now.TimeOfDay); }
 		}
 		
 		#endregion
@@ -656,6 +703,8 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			try
 			{
+				SetStatusBarText("Complete word...");
+
 				ProjectInfo projectInfo = GetProjectInfo(request);
 
 				if (projectInfo == null)
@@ -673,6 +722,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				Debug.Assert(false, ex.ToString());
 				Trace.WriteLine(ex);
 			}
+			finally { SetStatusBarText("Complete word done."); }
 
 			return GetDefaultScope(request);
 		}
@@ -922,9 +972,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			CodeWindowManager m = base.CreateCodeWindowManager(codeWindow, source);
 
-			// It compiles the source right after it's loaded.
-			//
-			source.BeginParse();
+			((NemerleSource)source).TryBuildTypeTreeAsync();
 
 			return m;
 		}
@@ -1053,11 +1101,9 @@ namespace Nemerle.VisualStudio.LanguageService
 				_preferences = new LanguagePreferences(Site, typeof(NemerleLanguageService).GUID, Name);
 
 				// Setup default values.
-				//
 				_preferences.ShowNavigationBar	 = true;
 
 				// Load from the registry.
-				//
 				_preferences.Init();
 				_preferences.EnableFormatSelection = true;
 
@@ -1067,7 +1113,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 				//VladD2: Switch on synchronous mode for debugging purpose!
 				//TODO: Comment it if necessary.
-				_preferences.EnableAsyncCompletion = false;
+				//_preferences.EnableAsyncCompletion = false;
 			}
 
 			return _preferences;
@@ -1213,7 +1259,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override void OnIdle(bool periodic)
 		{
-			if (LastActiveTextView == null)
+			if (IsDisposed || LastActiveTextView == null)
 				return;
 
 			Source src = GetSource(LastActiveTextView);
@@ -1272,6 +1318,19 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 		}
 
+		#endregion
+
+		#region StatusBar
+
+		public void SetStatusBarText(string text)
+		{
+			if (_statusbar == null)
+				_statusbar = (IVsStatusbar)GetService(typeof(SVsStatusbar));
+
+			if (_statusbar != null)
+				_statusbar.SetText(text);
+		}
+ 
 		#endregion
 	}
 }

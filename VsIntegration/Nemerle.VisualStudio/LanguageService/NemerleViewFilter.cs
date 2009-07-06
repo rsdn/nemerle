@@ -241,10 +241,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private void RemoveLastHighlighting()
 		{
-			if (Source != null)
-			{
+			if (Source != null && Source.ProjectInfo != null)
 				Source.ProjectInfo.RemoveLastHighlighting(new SourceTextManager(Source));
-			}
 		}
 
 		private bool WarnAboutErrors(Nemerle.Completion2.Project project)

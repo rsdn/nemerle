@@ -99,7 +99,7 @@ namespace Nemerle.VisualStudio.GUI
 			{
 				_buildTypedtreeCount = value;
 				Action action = () => { _buildTypedtreeCountLabel.Text = value.ToString(); };
-				_buildTypedtreeCountLabel.Invoke(action);
+				_buildTypedtreeCountLabel.BeginInvoke(action);
 			}
 		}
 
@@ -139,7 +139,7 @@ namespace Nemerle.VisualStudio.GUI
 				_grid.Update();
 			};
 
-			_checkCountLabel.Invoke(action);
+			_checkCountLabel.BeginInvoke(action);
 		}
 
 		private void _grid_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)

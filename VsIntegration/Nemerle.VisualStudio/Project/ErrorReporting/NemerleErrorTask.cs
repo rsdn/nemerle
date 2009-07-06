@@ -117,6 +117,11 @@ namespace Nemerle.VisualStudio.Package
 			}
 		}
 
+		public override string ToString()
+		{
+			return CompilerMessage.ToString();
+		}
+
 		protected override void OnRemoved(EventArgs e)
 		{
 			if (TextLineMarker != null)

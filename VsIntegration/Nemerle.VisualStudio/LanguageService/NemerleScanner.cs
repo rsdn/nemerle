@@ -6,6 +6,8 @@ using Nemerle.Compiler;
 using Nemerle.Completion2;
 
 using Nemerle.VisualStudio.Project;
+using System;
+using System.Diagnostics;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
@@ -29,15 +31,27 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			if (_lexer == null)
 			{
-				Source source = _languageService.GetSource(_buffer);
+				var source = (NemerleSource)_languageService.GetSource(_buffer);
 
 				if (source == null)
 					return null;
 
 				ProjectInfo projectInfo = ProjectInfo.FindProject(source.GetFilePath());
 
-				Engine engine = projectInfo == null ? NemerleLanguageService.DefaultEngine 
-					                                  : projectInfo.Engine;
+				Engine engine = projectInfo == null ? NemerleLanguageService.DefaultEngine
+																						: projectInfo.Engine;
+
+				if (engine.CoreEnv == null) // Engine not init yet. We mast BuildTypeTree for init it
+				{
+					var request = source.BeginBuildTypeTree(); // We should use Background Persing Thread...
+					if (!request.IsSynchronous)
+					{ // ... and wate result.
+						IAsyncResult result = _languageService.GetParseResult();
+						result.AsyncWaitHandle.WaitOne();
+					}
+					Trace.Assert(engine.CoreEnv != null);
+				}
+
 				_lexer = new ScanLexer(engine);
 			}
 

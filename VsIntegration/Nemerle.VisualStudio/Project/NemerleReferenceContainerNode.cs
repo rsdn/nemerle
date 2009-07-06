@@ -6,6 +6,7 @@ using Microsoft.VisualStudio.Project.Automation;
 using System;
 using System.Diagnostics;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -29,6 +30,23 @@ namespace Nemerle.VisualStudio.Project
 				return null;
 
 			return new NemerleOAReferenceFolderItem((OAProject)this.ProjectMgr.GetAutomationObject(), this);
+		}
+
+		protected override ReferenceNode CreateFileComponent(VSCOMPONENTSELECTORDATA selectorData)
+		{
+			try
+			{
+				return base.CreateFileComponent(selectorData);
+			}
+			catch (NullReferenceException e)
+			{
+				if (e.Message == "The InstalledFilePath is null")
+					throw new ApplicationException("The file '" 
+						+ System.IO.Path.GetFileName(selectorData.bstrFile)
+						+ "' not .Net assembly or correctly installed COM library!");
+				
+				throw;
+			}
 		}
 
 		/// <summary>
@@ -55,7 +73,7 @@ namespace Nemerle.VisualStudio.Project
 					node = new NemerleAssemblyReferenceNode(ProjectMgr, item);
 				else
 					node = new NemerleAssemblyReferenceNode(ProjectMgr, element);
-			}
+				}
 			catch (ArgumentNullException e)
 			{
 				Trace.WriteLine("Exception : " + e.Message);

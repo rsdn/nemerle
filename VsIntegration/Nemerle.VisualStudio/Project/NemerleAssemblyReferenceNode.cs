@@ -8,7 +8,9 @@ namespace Nemerle.VisualStudio.Project
 	class NemerleAssemblyReferenceNode : AssemblyReferenceNode
 	{
 		public NemerleAssemblyReferenceNode(ProjectNode root, ProjectElement e)
-			: base(root, e) { }
+			: base(root, e)
+		{
+		}
 
 		/// <summary>
 		/// Constructor for the AssemblyReferenceNode
@@ -40,6 +42,11 @@ namespace Nemerle.VisualStudio.Project
 			}
 
 			return base.GetGuidProperty(propid, out guid);
+		}
+
+		public override string ToString()
+		{
+			return GetType().Name + ": " + Caption + " (" + Url + ")";
 		}
 	}
 }

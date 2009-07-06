@@ -91,6 +91,19 @@ namespace Nemerle.VisualStudio.Project
 				_projectLocation += "\\";
 		}
 
+		public bool IsCosed { get; private set; }
+
+		public void Close()
+		{
+			if (IsCosed)
+				return;
+
+			IsCosed = true;
+			_projects.Remove(this);
+			if (_languageService.IsDisposed)
+			_languageService.AbortBackgroundParse();
+		}
+
 		public string ProjectName { get { return _projectNode.VSProject.Project.Name; } }
 		
 		int _buildTypedtreeCount;
@@ -239,47 +252,79 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
-		void ChekLastMethodFromMethodsCheckQueue()
-		{
-			// remove last MethodBuilder and compile it
-			var lastIndex = _methodsCheckQueue.Count - 1;
-			
-			if (lastIndex < 0)
-				return;
+		public bool IsMethodsCheckQueueEmpty { get { return _methodsCheckQueue.Count == 0; } }
 
-			var mb = _methodsCheckQueue[lastIndex];
-			if (mb.ToString() == "method Tests.Test1.TestSourceTextManager.GetLine(line : int) : string")
+		/// <summary>Chek one (last) method from methodscheck queue</summary>
+		/// <returns>new count of elements in queue</returns>
+		int ChekLastMethodFromMethodsCheckQueue()
+		{
+			MethodBuilderEx mb = null;
+			var lastIndex = -1;
+
+			lock (_methodsCheckQueue) // lock only when _methodsCheckQueue changed
 			{
-				;
+				Debug.WriteLine("_methodsCheckQueue.Count: " + _methodsCheckQueue.Count);
+				// remove last MethodBuilder and compile it
+				lastIndex = _methodsCheckQueue.Count - 1;
+
+				if (lastIndex < 0)
+					return 0;
+
+				mb = _methodsCheckQueue[lastIndex];
+
+				if (mb.ToString() == "method Tests.Test1.TestSourceTextManager.GetLine(line : int) : string")
+				{
+					;
+				}
+				_methodsCheckQueue.RemoveAt(lastIndex);
 			}
-			_methodsCheckQueue.RemoveAt(lastIndex);
-			mb.EnsureCompiled();
+
+			if (mb != null)
+				mb.EnsureCompiled(); // no lock!
+
+			return lastIndex;
 		}
 
-		public void ChekOneMethodFromMethodsCheckQueue(IVsTextView view)
+		/// <summary>
+		/// Chek one method from methodscheck queue. At first try check methods of current 
+		/// currently active source file.
+		/// </summary>
+		/// <param name="currentFileIndex">
+		/// The index of currently active source file. Use the Location.GetFileIndex() to obtain it.
+		/// </param>
+		/// <returns>new count of elements in queue</returns>
+		public int ChekOneMethodFromMethodsCheckQueue(int currentFileIndex, int line, int col)
 		{
-			var source = (NemerleSource)_languageService.GetSource(view);
+			if (currentFileIndex <= 0)
+				return ChekLastMethodFromMethodsCheckQueue();
 
-			if (source == null || source.FileIndex <= 0)
+			MethodBuilderEx mb = null;
+			int count = 0;
+
+			lock (_methodsCheckQueue) // lock only operations with queue (not compiling)!
 			{
-				ChekLastMethodFromMethodsCheckQueue();
-				return;
+				var methodsFromCurrentView = _methodsCheckQueue.Where(m => m.Location.FileIndex == currentFileIndex); // lazy!
+				var seq = methodsFromCurrentView.GetEnumerator(); // the collection not requre disposing... skip it
+
+				if (seq.MoveNext()) // If is even one element exists...
+				{
+					// Try to find current method.
+					var currMethod = methodsFromCurrentView.Where(m => m.Location.Contains(line, col)).GetEnumerator();
+					if (currMethod.MoveNext())
+						mb = currMethod.Current; // get it...
+					else
+						mb = seq.Current; // get it...
+
+					_methodsCheckQueue.Remove(mb); // and remove from queue.
+					count = _methodsCheckQueue.Count;
+				}
 			}
 
-			var fileIndex = source.FileIndex;
+			if (mb == null) // if no not compiled method bodies
+				return ChekLastMethodFromMethodsCheckQueue();
 
-			lock (_methodsCheckQueue)
-			{
-				var methodsFromCurrentView = _methodsCheckQueue.Where(m => m.BodyLocation.FileIndex == fileIndex);
-				var count                  = methodsFromCurrentView.Count();
-
-				if (count < 1)
-					return;
-
-				var mb = methodsFromCurrentView.Last();
-				_methodsCheckQueue.Remove(mb);
-				mb.EnsureCompiled();
-			}
+			mb.EnsureCompiled();
+			return count;
 		}
 
 		void FillMethodsCheckQueue()
@@ -295,7 +340,10 @@ namespace Nemerle.VisualStudio.Project
 						.Where(mb => mb.IsBodyCompilable));
 
 				lock (_methodsCheckQueue)
+				{
+					_methodsCheckQueue.Clear();
 					_methodsCheckQueue.AddRange(mbsForCompile);
+				}
 			}
 		}
 
@@ -305,6 +353,9 @@ namespace Nemerle.VisualStudio.Project
 			FillMethodsCheckQueue();
 			foreach (var source in GetSources())
 				source.OnProjectReloaded();
+
+			if (messages.Any())
+				_errorList.Show();
 		}
 
 		void IEngineCallback.SetMethodCompilerMessages(MemberBuilder member, IEnumerable<CompilerMessage> messages)
@@ -315,6 +366,12 @@ namespace Nemerle.VisualStudio.Project
 					var memberMsg = task.CompilerMessage as CompilerMessageForMethod;
 					return memberMsg != null && memberMsg.Member == member;
 				});
+
+			var res = _errorList.Tasks.OfType<NemerleErrorTask>().GroupBy(x => x.ToString()).Where(g => g.Count() > 1).ToArray();
+			if (res.Length > 0)
+			{
+				;
+			}
 		}
 
 		void AddNewCompilerMessages(IEnumerable<CompilerMessage> messages)
@@ -425,6 +482,9 @@ namespace Nemerle.VisualStudio.Project
 
 		private void AddAssembleReferenceWatcher(string filePath)
 		{
+			if (!File.Exists(filePath))
+				return;
+
 			string path = Path.GetDirectoryName(filePath);
 			string name = Path.GetFileName(filePath);
 			FileSystemWatcher watcher = new FileSystemWatcher(path, name);
@@ -589,6 +649,15 @@ namespace Nemerle.VisualStudio.Project
 
 			_fileMap.Remove(path);
 			Engine.Sources.Remove(path);
+		}
+
+		public static ProjectInfo FindProject(IVsHierarchy hierarchy)
+		{
+			foreach (ProjectInfo proj in _projects)
+				if (Utilities.IsSameComObject(proj._hierarchy, hierarchy))
+					return proj;
+
+			return null;
 		}
 
 		public static ProjectInfo FindProject(string fileName)

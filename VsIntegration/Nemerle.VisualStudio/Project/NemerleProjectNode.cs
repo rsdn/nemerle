@@ -48,6 +48,12 @@ namespace Nemerle.VisualStudio.Project
 	[Guid(NemerleConstants.ProjectNodeGuidString)]
 	public class NemerleProjectNode : ProjectNode, IVsProjectSpecificEditorMap2
 	{
+		#region Fields
+
+		NemerleLanguageService _languageService;
+		
+		#endregion
+
 		#region Init
 
 		public NemerleProjectNode(NemerlePackage pkg)
@@ -63,13 +69,18 @@ namespace Nemerle.VisualStudio.Project
 			_imageOffset = ImageHandler.ImageList.Images.Count;
 
 			foreach (Image img in NemerleImageList.Images)
-			{
 				ImageHandler.ImageList.Images.Add(img);
-			}
 
 			InitializeCATIDs();
 
 			CanProjectDeleteItems = true;
+		}
+
+		public override int SetSite(Microsoft.VisualStudio.OLE.Interop.IServiceProvider site)
+		{
+			var result = base.SetSite(site);
+			_languageService = Utils.GetService<NemerleLanguageService>(Site);
+			return result;
 		}
 
 		/// <summary>
@@ -515,12 +526,15 @@ namespace Nemerle.VisualStudio.Project
 		protected override void Dispose(bool disposing)
 		{
 			if (!_suppressDispose)
+			{
+				ProjectInfo.Close();
 				base.Dispose(disposing);
+			}
 		}
 
 		public override int Close()
 		{
-			if (null != Site)
+			if (Site != null)
 			{
 				INemerleLibraryManager libraryManager =
 					Site.GetService(typeof(INemerleLibraryManager)) as INemerleLibraryManager;
@@ -539,10 +553,36 @@ namespace Nemerle.VisualStudio.Project
 			finally
 			{
 				_suppressDispose = false;
-				base.Dispose(true);
+				Dispose(true);
 			}
 
 			return result;
+		}
+
+		public override int OpenItem(uint itemId, ref Guid logicalView, IntPtr punkDocDataExisting, out IVsWindowFrame frame)
+		{
+			// Init output params
+			frame = null;
+
+			HierarchyNode n = this.NodeFromItemId(itemId);
+			if(n == null)
+				throw new ArgumentException("parameter must be a valid item id", "itemId");
+
+			// Delegate to the document manager object that knows how to open the item
+			var documentManager = n.GetDocumentManager() as FileDocumentManager;
+			if(documentManager != null)
+			{
+				//HACK: VladD2: If view opened by double click on the Output window, VS try open 
+				// LOGVIEWID_TextView instead of LOGVIEWID_Code. It result in open double view for 
+				// single file. Substituting it by LOGVIEWID_Code...
+				Guid newLogicalView = logicalView == VSConstants.LOGVIEWID_TextView && n is NemerleFileNode
+					? VSConstants.LOGVIEWID_Code : logicalView;
+
+				return documentManager.Open(ref newLogicalView, punkDocDataExisting, out frame, WindowFrameShowAction.Show);
+			}
+
+			// This node does not have an associated document manager and we must fail
+			return VSConstants.E_FAIL;
 		}
 
 		public override void Load(
@@ -560,8 +600,9 @@ namespace Nemerle.VisualStudio.Project
 			// IT: ProjectInfo needs to be created before loading
 			// as we will catch assembly reference adding.
 			//
-			_projectInfo = new ProjectInfo(this, InteropSafeHierarchy, 
-				Utils.GetService<NemerleLanguageService>(Site), filename, location);
+			var langService = Utils.GetService<NemerleLanguageService>(Site);
+
+			_projectInfo = new ProjectInfo(this, InteropSafeHierarchy, langService, filename, location);
 
 			ProjectInfo.Projects.Add(_projectInfo);
 
@@ -586,6 +627,12 @@ namespace Nemerle.VisualStudio.Project
 			// If this is a WPFFlavor-ed project, then add a project-level DesignerContext service to provide
 			// event handler generation (EventBindingProvider) for the XAML designer.
 			OleServiceProvider.AddService(typeof(DesignerContext), DesignerContext, false);
+		}
+
+		public override void PrepareBuild(string config, bool cleanBuild)
+		{
+			if (HasProjectOpened)
+				base.PrepareBuild(config, cleanBuild);
 		}
 
 		/// <summary>

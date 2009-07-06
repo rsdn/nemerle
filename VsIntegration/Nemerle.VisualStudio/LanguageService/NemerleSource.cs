@@ -38,7 +38,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			{
 				ProjectInfo.AddSource(this);
 
-				FileIndex = ProjectInfo.Project.CompileUnits.GetFileIndex(path);
+				FileIndex = Location.GetFileIndex(path);
 
 				ProjectInfo.MakeCompilerMessagesTextMarkers(textLines, FileIndex);
 			}
@@ -47,8 +47,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			if (Scanner != null)
 				Scanner._source = this;
-
-			ReparseDelta  = TimeSpan.FromSeconds(1.5);
 			LastDirtyTime = DateTime.Now;
 		}
 
@@ -58,7 +56,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public     DateTime               LastDirtyTime { get; private set; }
 		public new DateTime               LastParseTime { get; private set; }
-		public     TimeSpan               ReparseDelta  { get; set; }
 		public     NemerleLanguageService Service       { get; private set; }
 		public     NemerleScanner         Scanner       { get; private set; }
 		public     ScopeCreatorCallback   ScopeCreator  { get;         set; }
@@ -140,9 +137,10 @@ namespace Nemerle.VisualStudio.LanguageService
 		public override void OnIdle(bool periodic)
 		{
 			var completionSetIsDisplayed = CompletionSet != null && CompletionSet.IsDisplayed;
-			var methodDataIsDisplayed = MethodData != null && MethodData.IsDisplayed;
-			var projectInfo = ProjectInfo.FindProject(GetFilePath());
-			var engine = projectInfo == null ? null : projectInfo.Engine;
+			var methodDataIsDisplayed    = MethodData != null && MethodData.IsDisplayed;
+			var projectInfo              = ProjectInfo.FindProject(GetFilePath());
+			var engine                   = projectInfo == null ? null : projectInfo.Engine;
+			var reparseDelta             = TimeSpan.FromMilliseconds(LanguageService.Preferences.CodeSenseDelay);
 
 			if (engine != null && !completionSetIsDisplayed && !methodDataIsDisplayed)
 			{
@@ -152,17 +150,17 @@ namespace Nemerle.VisualStudio.LanguageService
 				{
 					var delta = System.DateTime.Now - engine.LastResetAstTime;
 
-					if (delta > ReparseDelta)
+					//var isAsyncCompletion = LanguageService.Preferences.EnableAsyncCompletion;
+					if (delta > reparseDelta)
 					{
-						IVsTextView view = this.Service.GetPrimaryViewForSource(this);
-						BeginParse(0, 0, new TokenInfo(), (ParseReason)ParseReason2.BuildTypeTree,
-							view, new ParseResultHandler(this.HandleParseResponse));
+						TryBuildTypeTreeAsync();
+						return;
 					}
 				}
 			}
 
 			// Kick of a background parse, but only in the periodic intervals
-			if (!periodic || Service == null || Service.LastActiveTextView == null)
+			if (Service == null || Service.LastActiveTextView == null)
 				return;
 
 			if (!_isRegionsProcessed)
@@ -178,7 +176,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			{
 				var delta = DateTime.Now - LastDirtyTime;
 
-				if (delta > ReparseDelta) // нам надо перепарсить исходник!
+				if (delta > reparseDelta) // нам надо перепарсить исходник!
 				{
 					// Don't do background parsing while intellisense completion is going on
 					if (completionSetIsDisplayed || methodDataIsDisplayed)
@@ -197,10 +195,26 @@ namespace Nemerle.VisualStudio.LanguageService
 							IVsTextView view = this.Service.GetPrimaryViewForSource(this);
 							BeginParse(0, 0, new TokenInfo(), (ParseReason)ParseReason2.CheckRelocatedMember,
 								view, new ParseResultHandler(this.HandleParseResponse));
+							return;
 						}
 					}
 				}
 			}
+
+			if (engine == null || !engine.IsProjectAvailable)
+				return;
+
+			if (!projectInfo.IsMethodsCheckQueueEmpty && !Service.IsParsing)
+			{
+				Debug.WriteLine("BeginParse(ParseReason.Check)" + DateTime.Now.TimeOfDay);
+				int line, idx;
+				IVsTextView view = Service.LastActiveTextView;// this.Service.GetPrimaryViewForSource(this);
+				view.GetCaretPos(out line, out idx);
+				BeginParse(line, idx, new TokenInfo(), ParseReason.Check,
+					view, new ParseResultHandler(this.HandleParseResponse));
+				return;
+			}
+
 		}
 
 		internal void CheckRelocatedMember()
@@ -220,40 +234,50 @@ namespace Nemerle.VisualStudio.LanguageService
 			finally { _resetedMember = null; }
 		}
 
+		public void TryBuildTypeTreeAsync()
+		{
+			if (this.ProjectInfo == null || this.ProjectInfo.Engine.IsProjectAvailable)
+				return;
+
+			BeginBuildTypeTree();
+		}
+
+		public ParseRequest BeginBuildTypeTree()
+		{
+			IVsTextView view = this.Service.GetPrimaryViewForSource(this);
+			return BeginParse(0, 0, new TokenInfo(), (ParseReason)ParseReason2.BuildTypeTree,
+				view, new ParseResultHandler(this.HandleParseResponse));
+		}
+
 		/// <include file='doc\Source.uex' path='docs/doc[@for="Source.BeginParse"]/*' />
 		public override void BeginParse()
 		{
-			IVsTextView view = this.Service.GetPrimaryViewForSource(this);
-			this.BeginParse(0, 0, new TokenInfo(), ParseReason.Check, view,
-				new ParseResultHandler(this.HandleParseResponse));
-			this.IsDirty = false;
+			TryBuildTypeTreeAsync();
 		}
 
 		public override void OnChangesCommitted(uint reason, TextSpan[] changedArea)
 		{
-			//var tskProv = GetTaskProvider();
-			//var span = new TextSpan();
-			//span.iStartLine  = 1;
-			//span.iEndLine    = 1;
-			//span.iStartIndex = 1;
-			//span.iEndIndex   = 10;
-			//var error = new DocumentTask(Service.Site, GetTextLines(), MARKERTYPE.MARKER_CODESENSE_ERROR,
-			//  span, GetFilePath());
-			//error.Text = "test";
-			//error.Priority = Microsoft.VisualStudio.Shell.TaskPriority.High;
-			//error.ErrorCategory = Microsoft.VisualStudio.Shell.TaskErrorCategory.Error;
-			//tskProv.Tasks.Add(error);
-			//tskProv.Refresh();
-
 			Debug.WriteLine("OnChangesCommitted");
 		}
 
 		public override void Dispose()
 		{
 			if (ProjectInfo != null)
+			{
 				ProjectInfo.RemoveSource(this);
+				ProjectInfo = null;
+			}
 
 			base.Dispose();
+		}
+
+		public override string ToString()
+		{
+			var name = System.IO.Path.GetFileName(GetFilePath());
+			if (IsClosed)
+				return "NemerleSource: " + name + " (Closed!)";
+			else
+				return "NemerleSource: " + name;
 		}
 
 		public override CommentInfo GetCommentFormat()

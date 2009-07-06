@@ -48,6 +48,8 @@ IF %errors% == yes goto Error
 
 IF "%SkipPhase2%"=="true" goto Success
 
+del d:\MyProjects\log.txt /Q
+
 @echo ### Phase 2 ############################################
 @echo ### Copy new binaries to boot
 copy /Y bin\%Type%\*.dll boot
