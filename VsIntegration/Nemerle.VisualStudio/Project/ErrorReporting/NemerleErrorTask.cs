@@ -1,11 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Data;
-using System.Data.Common;
-using System.Configuration;
-using Microsoft.VisualStudio.Package;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
-using Microsoft.VisualStudio.TeamSystem.Data.UnitTesting;
 using Microsoft.VisualStudio.TextManager.Interop;
 using Microsoft.VisualStudio.Shell;
 using Nemerle.VisualStudio.Project;
@@ -20,7 +13,7 @@ namespace Nemerle.VisualStudio.Package
 		public NemerleErrorTask(ProjectInfo projectInfo, CompilerMessage compilerMessage, EventHandler navigateHandler)
 			: this(projectInfo, compilerMessage)
 		{
-			this.Navigate += navigateHandler;
+			Navigate += navigateHandler;
 		}
 
 		public NemerleErrorTask(ProjectInfo projectInfo, CompilerMessage compilerMessage)
@@ -96,7 +89,7 @@ namespace Nemerle.VisualStudio.Package
 			//      "VS7 #23719/#15312 [CFlaat]: exclude adjacent markers when the target span is non-empty"
 			// So I wonder if we should debug assert on that or try and modify the span
 			// in some way to make it non-empty...
-			ErrorHandler.ThrowOnFailure(buffer.CreateLineMarker((int)markerType, span.iStartLine, span.iStartIndex, 
+			ErrorHandler.ThrowOnFailure(buffer.CreateLineMarker(markerType, span.iStartLine, span.iStartIndex, 
 				span.iEndLine, span.iEndIndex, this, marker));
 
 			_textLineMarker = marker[0];
