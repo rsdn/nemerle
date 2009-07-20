@@ -327,6 +327,15 @@ namespace Nemerle.VisualStudio.Project
 			return count;
 		}
 
+		public void ClearMethodsCheckQueue()
+		{
+			lock (_methodsCheckQueue)
+			{
+				_methodsCheckQueue.Clear();
+
+			}
+		}
+
 		void FillMethodsCheckQueue()
 		{
 			// Get all MethodBuilders and add it into _methodsCheckQueue (for background check)
@@ -358,22 +367,52 @@ namespace Nemerle.VisualStudio.Project
 				_errorList.Show();
 		}
 
+		/// This method need only for debugging purpose.
+		void CheckMemberVersionCorrectness(MethodBuilderEx method)
+		{
+			var treeVer = Engine.TypeTreeVersion;
+			if (method != null)
+			{
+				var methodVer = method.TypeTreeVersion;
+				if (methodVer != treeVer)
+				{
+					Trace.Assert(false, "This should not happen. We have problem with multithreading!");
+					return;
+				}
+			}
+		}
+
 		void IEngineCallback.SetMethodCompilerMessages(MemberBuilder member, IEnumerable<CompilerMessage> messages)
     {
+			CheckMemberVersionCorrectness(member as MethodBuilderEx);
+
 			// Find and clear existent error messages which associated with the 'member'.
 			SetCompilerMessages(messages, task =>
 				{
 					var memberMsg = task.CompilerMessage as CompilerMessageForMethod;
 					return memberMsg != null && memberMsg.Member == member;
 				});
-
-			var res = _errorList.Tasks.OfType<NemerleErrorTask>().GroupBy(x => x.ToString()).Where(g => g.Count() > 1).ToArray();
-			if (res.Length > 0)
-			{
-				;
-			}
+			// Following for debugging purpose:
+			//var res = _errorList.Tasks.OfType<NemerleErrorTask>().GroupBy(x => x.ToString()).Where(g => g.Count() > 1).ToArray();
+			//if (res.Length > 0)
+			//	Test(res, Engine.TypeTreeVersion);
 		}
 
+		void Test(IGrouping<string, NemerleErrorTask>[] errGroups, int typeTreeVersion)
+		{
+			Debug.WriteLine("  Engine.TypeTreeVersion: " + typeTreeVersion);
+			foreach (var g in errGroups)
+			{
+				Debug.WriteLine(g.Key);
+				foreach (var item in g)
+				{
+					var cm = (CompilerMessageForMethod)item.CompilerMessage;
+					var method = (MethodBuilderEx)cm.Member;
+					Debug.WriteLine("  " + method.TypeTreeVersion);
+				}
+			}
+		}
+		
 		void AddNewCompilerMessages(IEnumerable<CompilerMessage> messages)
 		{
 			var newTasks = messages.Select(message => new NemerleErrorTask(this, message, NavigateTo)).ToArray();
@@ -407,9 +446,7 @@ namespace Nemerle.VisualStudio.Project
 				{
 					IVsTextLines buffer = source.GetTextLines();
 					foreach (var task in taskGroup)
-					{
 						task.MakeTextMarker(buffer);
-					}
 				}
 			}
 		}

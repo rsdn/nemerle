@@ -27,33 +27,33 @@ namespace Nemerle.VisualStudio.LanguageService
 		internal			NemerleSource		  _source;
 
 		private  ScanLexer _lexer;
+		internal ScanLexer GetNewLexer()
+		{
+			var source = (NemerleSource)_languageService.GetSource(_buffer);
+
+			if (source == null)
+				return null;
+
+			Engine engine = source.GetEngine();
+
+			if (engine.CoreEnv == null) // Engine not init yet. We mast BuildTypeTree for init it
+			{
+				var request = source.BeginBuildTypeTree(); // We should use Background Persing Thread...
+				if (!request.IsSynchronous)
+				{ // ... and wate result.
+					IAsyncResult result = _languageService.GetParseResult();
+					result.AsyncWaitHandle.WaitOne();
+				}
+				Trace.Assert(engine.CoreEnv != null);
+			}
+
+			return new ScanLexer(engine);
+		}
+
 		internal ScanLexer GetLexer()
 		{
 			if (_lexer == null)
-			{
-				var source = (NemerleSource)_languageService.GetSource(_buffer);
-
-				if (source == null)
-					return null;
-
-				ProjectInfo projectInfo = ProjectInfo.FindProject(source.GetFilePath());
-
-				Engine engine = projectInfo == null ? NemerleLanguageService.DefaultEngine
-																						: projectInfo.Engine;
-
-				if (engine.CoreEnv == null) // Engine not init yet. We mast BuildTypeTree for init it
-				{
-					var request = source.BeginBuildTypeTree(); // We should use Background Persing Thread...
-					if (!request.IsSynchronous)
-					{ // ... and wate result.
-						IAsyncResult result = _languageService.GetParseResult();
-						result.AsyncWaitHandle.WaitOne();
-					}
-					Trace.Assert(engine.CoreEnv != null);
-				}
-
-				_lexer = new ScanLexer(engine);
-			}
+				_lexer = GetNewLexer();
 
 			return _lexer;
 		}

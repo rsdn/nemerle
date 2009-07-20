@@ -16,23 +16,46 @@ using SCG = System.Collections.Generic;
 
 namespace Nemerle.Completion2
 {
-  class Checker
+  public class Checker
   {
-    public this(
-      project         : Project,
-      fileName        : string,
+    public static Check(
       source          : ISource,
-      addHiddenRegion : AddHiddenRegion
+      addHiddenRegion : AddHiddenRegion,
+      decls           : list[Decl],
+      regions         : list[Region]
+    )
+      : void
+    {
+      _ = Checker(source, addHiddenRegion, decls, regions);
+    }
+    
+    private this(
+      source          : ISource,
+      addHiddenRegion : AddHiddenRegion,
+      decls           : list[Decl],
+      regions         : list[Region]
     )
     {
-      _project         = project;
-      _fileName        = fileName;
       _source          = source;
       _addHiddenRegion = addHiddenRegion;
+      _lineCount       = -1;
+      _lastLineIndex   = -1;
+      _afterUsingLine  = int.MaxValue;
+      _fileIndex       = source.FileIndex;
+
+      foreach (r in regions)
+      {
+        def col = GetLine(r.Location.Line).IndexOf('#') + 1;
+        def text = if (r.Text.IsNullOrEmpty()) "#region" else r.Text;
+        _addHiddenRegion(
+          Location(_fileIndex, r.Location.Line, col, r.Location.EndLine, r.Location.EndColumn),
+          text,
+          false);
+      }
+
+      ProcessDecls(decls);
     }
 
-    mutable _project : Project;
-    _fileName        : string;
     _source          : ISource;
     _addHiddenRegion : AddHiddenRegion;
 
@@ -41,6 +64,8 @@ namespace Nemerle.Completion2
     mutable _lineCount      : int;
     mutable _fileIndex      : int;
     mutable _afterUsingLine : int;
+    
+    
 
     GetLine(lineIndex : int) : string 
     {
@@ -141,14 +166,10 @@ namespace Nemerle.Completion2
     {
       when (!loc.IsEmpty)
       {
-        _addHiddenRegion(
-          if (IsNext(loc.Line, loc.Column, ' '))
-            Location(_fileIndex, loc.Line, loc.Column + 1, loc.EndLine, loc.EndColumn)
-          else
-            loc,
-          null,
-          isExpanded);
-
+        def regLoc =  if (IsNext(loc.Line, loc.Column, ' '))
+                        Location(_fileIndex, loc.Line, loc.Column + 1, loc.EndLine, loc.EndColumn)
+                      else loc;
+        _addHiddenRegion(regLoc, null, isExpanded);
         CheckLine(loc.Line);
       }
     }
@@ -241,61 +262,52 @@ namespace Nemerle.Completion2
       loop(locs);
     }
 
+    ProcessExpr(pExpr : PExpr) : void
+    {
+      ExprWalker().Walk(pExpr, fun(info : ExprWalkInfo)
+      {
+        match (info.Node)
+        {
+        | PExpr.DefFunctions(funs) => // { funs : list [Function_decl]; }
+
+          funs.Iter(f =>
+          {
+            mutable loc = f.header.Location.Combine(f.body.Location).TrimStart(f.header.Location, false);
+
+            when (IsNext(loc.Line, loc.Column, ' ') && IsNext(loc.Line, loc.Column + 1, ')'))
+              loc = Location(loc.FileIndex, loc.Line, loc.Column + 1, loc.EndLine, loc.EndColumn);
+
+            when (IsNext(loc.Line, loc.Column, ')'))
+              loc = Location(loc.FileIndex, loc.Line, loc.Column + 1, loc.EndLine, loc.EndColumn);
+
+            AddRegion(loc, false);
+          });
+
+        | PExpr.Match(_, cases, _) => ProcessMatch(cases);
+        | _ => ()
+        }
+      });
+    }
+
     ProcessMethod(method : MethodBuilder) : void
     {
-#if !DEBUG
-      when (_start < Environment.TickCount - 2000)
-        return;
-#endif
-
       when (method.BodyLocation.FileIndex <= 0)
         return;
 
-
-      //method.ResetBody(); //HACK!!!
-      
       ProcessCustomAttributes(method.GetModifiers().GetCustomAttributes());
       
+      //TODO: VladD2: Внутри методов регионы нужно обрабатывать при проверке (Check()) метода, а не тут.
+      // Иначе весь парсинг тел методов будет происходить при каждом изменении тела метода.
       def pExpr = method.BodyParsed;
 
       when (pExpr != null)
-      {
-        ExprWalker().Walk(pExpr, fun(info : ExprWalkInfo)
-        {
-          match (info.Node)
-          {
-          | PExpr.DefFunctions(funs) => // { funs : list [Function_decl]; }
-
-            funs.Iter(f =>
-            {
-              mutable loc = f.header.Location.Combine(f.body.Location).TrimStart(f.header.Location, false);
-
-              when (IsNext(loc.Line, loc.Column, ' ') && IsNext(loc.Line, loc.Column + 1, ')'))
-                loc = Location(loc.FileIndex, loc.Line, loc.Column + 1, loc.EndLine, loc.EndColumn);
-
-              when (IsNext(loc.Line, loc.Column, ')'))
-                loc = Location(loc.FileIndex, loc.Line, loc.Column + 1, loc.EndLine, loc.EndColumn);
-
-              AddRegion(loc, false);
-            });
-
-          | PExpr.Match(_, cases, _) => ProcessMatch(cases);
-          | _ => ()
-          }
-        });
-      }
+        ProcessExpr(pExpr);
 
       AddRegion(method.Location.TrimStart(method.Header.Location, false), true);
     }
 
     ProcessProperty(prop : PropertyBuilder) : void
     {
-    //TODO: We need read preprocessor symbols and add it to completion engine.
-#if !DEBUG
-      when (_start < Environment.TickCount - 2000)
-        return;
-#endif
-
       def getter = prop.GetGetter() :> MethodBuilder;
       def setter = prop.GetSetter() :> MethodBuilder;
 
@@ -323,8 +335,6 @@ namespace Nemerle.Completion2
       add(getter);
       add(setter);
     }
-
-    mutable _start : int;
 
     ProcessCustomAttributes(attrs : list[PExpr]) : void
     {
@@ -359,106 +369,113 @@ namespace Nemerle.Completion2
       
     }
 
-    ProcessBuilder(builder : TypeBuilder) : void
+    ProcessTopDeclaration(topDeclaration : TopDeclaration) : void
     {
-      //VladD2: VariantOption может содержать в себе другие члены.
-      when (builder.IsDelegate || builder.IsVariantOption)
-        return;
+      ProcessCustomAttributes(topDeclaration.GetCustomAttributes());
       
-      foreach (part when part.Location.FileIndex == _fileIndex in builder.AstParts)
+      match (topDeclaration)
       {
-        ProcessCustomAttributes(part.GetCustomAttributes());
-        
-        _addHiddenRegion(
-          Location(
-            _fileIndex,
-            // kliss: Make sure that type name is visible after collapsing its region (also
-            // leaving all attributes visible).
-            // TODO: Collapse all attributes to their own region.
-            part.name.Location.EndLine,
-            part.name.Location.EndColumn,
-            part.Location.EndLine,
-            part.Location.EndColumn),
-          null,
-          true);
-
-        CheckLine(part.Location.Line);
+				| Delegate | Alias => return;
+				| _ => ()
       }
+      
+      // TODO: Collapse all attributes to their own region.
+      _addHiddenRegion(
+        Location(_fileIndex,
+                 topDeclaration.name.Location.EndLine,
+                 topDeclaration.name.Location.EndColumn,
+                 topDeclaration.Location.EndLine,
+                 topDeclaration.Location.EndColumn),
+        null,
+        true);
 
-      // Get regions and errors for methods.
-      //
-      _start = Environment.TickCount;
+      CheckLine(topDeclaration.Location.Line);
 
-      def isProcessed(m) 
+      // Get regions for members.
+
+      def isProcessed(m)
       {
-        !(m.Attributes %&& (NemerleAttributes.SpecialName | NemerleAttributes.Abstract))
-          && m.Location.FileIndex == _fileIndex
+        m.modifiers == null 
+        || !(m.Attributes %&& (NemerleAttributes.SpecialName | NemerleAttributes.Abstract))
       }
-
-      def members = builder.GetDirectMembers();
-      when (members != null)
-        foreach (member in members.Filter(isProcessed))
-        {
-        | method  is MethodBuilder   => ProcessMethod  (method);
-        | prop    is PropertyBuilder => ProcessProperty(prop);
-        | builder is TypeBuilder     => ProcessBuilder (builder)
-        | _                          => ()
-        }
+      
+      match (topDeclaration)
+      {
+				| TopDeclaration.Interface     (methods = decls)
+				| TopDeclaration.Class         (decls   = decls) 
+				| Enum                         (decls   = decls)
+				| TopDeclaration.VariantOption (decls   = decls)
+				| TopDeclaration.Variant       (decls   = decls) =>
+					foreach (member in decls.Filter(isProcessed))
+					{
+						| TypeDeclaration(td) => ProcessTopDeclaration(td)
+						| Field 
+						| Event 
+						| EnumOption => 
+							ProcessCustomAttributes(member.GetCustomAttributes());
+							AddRegion(member.BodyLocation, true);
+						| Property as p => ProcessProperty(p)
+						| Function as f => ProcessFunction(f)
+					}
+				| _ => ()
+      }
     }
 
-    ProcessRegions(decls : list[Decl]) : void
+    ProcessFunction(func : ClassMember.Function) : void
     {
-      //TODO: Регионы пока не релокейтятся. Так что при зменении исходников они должны врать.
-      def regions = _project.CompileUnits.GetRegions(_fileIndex);
+		  ProcessCustomAttributes(func.GetCustomAttributes());
+		  def headerLoc = func.header.Location;
+		  if (headerLoc == Location.Default)
+			  AddRegion(func.BodyLocation, true);
+			else
+			  AddRegion(headerLoc.FromEnd() + func.Location.FromEnd(), true);
+			  
+			when (func.body is FunBody.Parsed(expr))
+			  ProcessExpr(expr);
+    }
 
-      foreach (r in regions)
-      {
-        _addHiddenRegion(
-          Location(
-            _fileIndex,
-            r.Location.Line,
-            GetLine(r.Location.Line).IndexOf('#') + 1,
-            r.Location.EndLine,
-            r.Location.EndColumn),
-          if (r.Text.IsNullOrEmpty()) "#region" else r.Text,
-          false);
-      }
+    ProcessProperty(prop : ClassMember.Property) : void
+    {
+		  ProcessCustomAttributes(prop.GetCustomAttributes());
+		  if (prop.ty == null)
+			  AddRegion(prop.BodyLocation, true);
+			else
+			  AddRegion(prop.ty.Location.FromEnd() + prop.Location.FromEnd(), true);
+			  
+			when (prop.get is Some(ClassMember.Function as f))
+			  ProcessFunction(f);
 
+			when (prop.set is Some(ClassMember.Function as f))
+			  ProcessFunction(f);
+    }
+
+    ProcessDecls(decls : list[Decl]) : void
+    {
       def usings = SCG.List();
 
       foreach (decl in decls)
       {
-      | Decl.Type(builder)
-               when builder.PartsLocation.Exists(l => l.FileIndex == _fileIndex) => 
+				| Decl.Type(ast) => ProcessTopDeclaration(ast)
+				| Using as us => usings.Add(us); //when us.NameLocations.Exists(l => l.FileIndex == _fileIndex) 
+				| Namespace(decls, _, locations, _, _, nsloc, _) => ProcessDecls(decls);
+					match (locations.Find(l => l.FileIndex == _fileIndex))
+					{
+						| Some(loc) =>
 
-        ProcessBuilder(builder)
+							mutable lineStart = loc.EndLine;
+							mutable colStart  = loc.EndColumn;
+							mutable lineEnd   = nsloc.EndLine;
+							mutable colEnd    = nsloc.EndColumn;
 
-      | Using as us when us.NameLocations.Exists(l => l.FileIndex == _fileIndex) => 
+							when (IsNext(lineStart, colStart, ' ')) colStart++;
+							when (IsNext(lineEnd,   colEnd,   '}')) colEnd++;
 
-        usings.Add(us);
+							_addHiddenRegion(Location(_fileIndex, lineStart, colStart, lineEnd, colEnd), null, true);
+							CheckLine(lineStart);
 
-      | Namespace(decls, _, locations, _, _, nsloc, _) => 
-
-        ProcessRegions(decls);
-
-        match (locations.Find(l => l.FileIndex == _fileIndex))
-        {
-        | Some(loc) =>
-
-          mutable lineStart = loc.EndLine;
-          mutable colStart  = loc.EndColumn;
-          mutable lineEnd   = nsloc.EndLine;
-          mutable colEnd    = nsloc.EndColumn;
-
-          when (IsNext(lineStart, colStart, ' ')) colStart++;
-          when (IsNext(lineEnd,   colEnd,   '}')) colEnd++;
-
-          _addHiddenRegion(Location(_fileIndex, lineStart, colStart, lineEnd, colEnd), null, true);
-          CheckLine(lineStart);
-
-        | None => ()
-        }
-      | _ => ()
+						| None => ()
+					}
+				| _ => ()
       }
 
       when (usings.Count > 1)
@@ -503,16 +520,6 @@ namespace Nemerle.Completion2
           _addHiddenRegion(Location(_fileIndex, lineStart, colStart, lineEnd, colEnd), null, true);
         }
       }
-    }
-
-    public Check() : void
-    {
-      _lineCount      = -1;
-      _lastLineIndex  = -1;
-      _afterUsingLine = int.MaxValue;
-      _fileIndex      = _project.CompileUnits.GetFileIndex(_fileName);
-
-      ProcessRegions(_project.CompileUnits[_fileIndex].Decls);
     }
 
     _debug(obj : object) : void

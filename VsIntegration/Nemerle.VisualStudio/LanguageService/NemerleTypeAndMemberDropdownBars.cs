@@ -26,7 +26,6 @@ namespace Nemerle.VisualStudio.LanguageService
 		}
 
 		NemerleSource _source;
-		int _lastTimeStamp = -1;
 		int _lastSelectedType = -2;
 		int _lastSelectedMember = -2;
 
@@ -46,7 +45,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		private IVsTextView _textView;
 
 		/// <summary>The list of types that appear in the type drop down list.</summary>
-		private List<TopDeclaration> _dropDownTypes = new List<TopDeclaration>();
+		private TopDeclaration[] _dropDownTypes = new TopDeclaration[]{};
 
 		/// <summary>The list of types that appear in the member drop down list. </summary>
 		private List<ClassMember> _dropDownMembers = new List<ClassMember>();
@@ -72,7 +71,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			entries = 0;
 			entryType = 0;
 			if (combo == DropClasses && _dropDownTypes != null)
-				entries = (uint)_dropDownTypes.Count;
+				entries = (uint)_dropDownTypes.Length;
 			else if (_dropDownMembers != null)
 				entries = (uint)_dropDownMembers.Count;
 			entryType = (uint)(DropDownItemType.HasText | DropDownItemType.HasFontAttribute | DropDownItemType.HasImage);
@@ -202,7 +201,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public TopDeclaration GetType(int entryIndex)
 		{
-			if (entryIndex < 0 || entryIndex >= _dropDownTypes.Count)
+			if (entryIndex < 0 || entryIndex >= _dropDownTypes.Length)
 				return null;
 
 			return _dropDownTypes[entryIndex];
@@ -283,42 +282,24 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private bool UpdateDropDownTypes()
 		{
-			if (_lastTimeStamp != _source.TimeStamp)
+			var decls = _source.Declarations;
+
+			if (decls == null)
 			{
-				_lastTimeStamp = _source.TimeStamp;
-
-				var list = new List<TopDeclaration>();
-				// Use fake Engine if _source.ProjectInfo == null
-				var engine = _source.ProjectInfo == null ? NemerleLanguageService.DefaultEngine 
-					                                       : _source.ProjectInfo.Engine;
-				engine.RestoreManagerClassInstance();
-
-				if (_source.FileIndex < 0)
-					_source.FileIndex = Location.GetFileIndex(_source.GetFilePath());
-
-				var decls = AstUtils.GetAllDeclarations(
-					engine.ParseTopDeclarations(new SourceTextManager(_source)));
-
-				foreach (var declAndName in decls)
-				{
-					TopDeclaration decl = declAndName.Field1;
-					if (decl.name is Splicable.Name && decl.name.GetName().context != null)
-						list.Add(decl);
-				}
-
-				list.Sort((m1, m2) => string.Compare(m1.Name, m2.Name));
-
-				_dropDownTypes.Clear();
-				_dropDownMembers.Clear();
-				_dropDownTypes.AddRange(list);
-
-				_lastSelectedType = -2;
-				_lastSelectedMember = -2;
-
-				return true;
+				//_source.BeginParseTopDeclaration();
+				return false;
 			}
 
-			return false;
+			if (object.ReferenceEquals(decls, _dropDownTypes))
+				return false;
+
+			System.Diagnostics.Debug.WriteLine("Drop Down Types updated!");
+			_dropDownMembers.Clear();
+			_dropDownTypes      = decls;
+			_lastSelectedType   = -2;
+			_lastSelectedMember = -2;
+
+			return true;
 		}
 
 		/// <summary>
@@ -353,7 +334,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				if (_dropDownMembers.Count > 0)
 					_dropDownMembers.Clear();
 
-				if (selType >= 0 && selType < _dropDownTypes.Count)
+				if (selType >= 0 && selType < _dropDownTypes.Length)
 					_dropDownMembers.AddRange(_dropDownTypes[selType].GetMembers());
 
 				return true;
@@ -366,12 +347,12 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			int selectedType = _lastSelectedType;
 
-			if (selectedType < 0 || selectedType >= _dropDownTypes.Count)
+			if (selectedType < 0 || selectedType >= _dropDownTypes.Length)
 				return false;
 
-			var members = _dropDownTypes[selectedType].GetMembers();
+			//var members = _dropDownTypes[selectedType].GetMembers();
 
-			int selMember = _lastSelectedType < 0 ? -1 : GetSelectedMember(line, col);
+			int selMember = _lastSelectedType < 0 ? -1 : GetSelectedMemberIndex(line, col);
 
 			if (_lastSelectedMember != selMember)
 			{
@@ -404,7 +385,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			int idx = -1;
 			TopDeclaration lastMember = null;
 
-			for (int i = 0; i < _dropDownTypes.Count; i++)
+			for (int i = 0; i < _dropDownTypes.Length; i++)
 			{
 				var member = _dropDownTypes[i];
 
@@ -419,7 +400,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			return idx;
 		}
 
-		private int GetSelectedMember(int line, int col)
+		private int GetSelectedMemberIndex(int line, int col)
 		{
 			int idx = -1;
 			var members = _dropDownMembers;

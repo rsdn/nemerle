@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Linq;
 
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Project;
@@ -12,6 +13,7 @@ using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.TextManager.Interop;
 
 using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
 using Nemerle.Completion2;
 
 using Nemerle.VisualStudio.Project;
@@ -19,6 +21,7 @@ using Nemerle.VisualStudio.Project;
 using VsShell = Microsoft.VisualStudio.Shell.VsShellUtilities;
 using Nemerle.VisualStudio.GUI;
 using Nemerle.Utility;
+using AstUtils = Nemerle.Compiler.Utils.AstUtils;
 
 using Nemerle.VisualStudio.Properties;
 using Microsoft.VisualStudio.Package;
@@ -106,18 +109,19 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			if (source.ProjectInfo != null && source.ProjectInfo.IsCosed)
 				return null;
+			var reason = (int)request.Reason >= 100 ? ((ParseReason2)request.Reason).ToString() : request.Reason.ToString();
 
 			Debug.Print(
 				"File '{0}' ParseSource at ({1}:{2}), reason {3}, Timestamp {4}",
-				Path.GetFileName(request.FileName), request.Line, request.Col, request.Reason,
+				Path.GetFileName(request.FileName), request.Line, request.Col, reason,
 				request.Timestamp);
 
 			switch (request.Reason)
 			{
+				case (ParseReason)ParseReason2.ParseTopDeclaration: 
+				                               return ParseTopDeclaration(request);
 				case (ParseReason)ParseReason2.CheckRelocatedMember: 
 				                               return CheckRelocatedMember(request);
-				case (ParseReason)ParseReason2.ProcessRegions:
-																			 return ProcessRegions(request);
 				case (ParseReason)ParseReason2.BuildTypeTree:
 																			 return BuildTypeTree(request);
 
@@ -244,7 +248,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				Scanner = scanner;
 				Source = source;
 				StartLine = startLine;
-				Lex = scanner.GetLexer();
+				Lex = scanner.GetNewLexer();
 				Lex.SetFileName(source.GetFilePath());
 				ColorState = colorState;
 				
@@ -542,66 +546,98 @@ namespace Nemerle.VisualStudio.LanguageService
 			return GetDefaultScope(request);
 		}
 
-		private AuthoringScope ProcessRegions(ParseRequest request)
+		private AuthoringScope ParseTopDeclaration(ParseRequest request)
 		{
-			Debug.WriteLine(">>>> ##### ProcessRegions!");
+			Debug.WriteLine(">>>> ##### ParseTopDeclaration!");
 			try
 			{
-				ProjectInfo projectInfo = ProjectInfo.FindProject(request.FileName);
-				//TODO: To eliminate dependence from ProjectInfo.
-				if (projectInfo == null)
-					return null;
-
-				NemerleSource source = GetSource(request.View) as NemerleSource;
-
+				var source = GetSource(request.View) as NemerleSource;
 				if (source == null)
 					return null;
 
-				SetStatusBarText("Process regions...");
+				var engine   = source.GetEngine();
 
-				bool allExpanded = source.TimeStamp > 0;
+				if (engine.CoreEnv == null)
+					BuildTypeTree(request);
 
-				request.Sink.ProcessHiddenRegions = true;
+				Trace.Assert(engine.CoreEnv != null);
 
-				projectInfo.Project.Check(
-					request.FileName,
-					new SourceTextManager(source),
-					(location, text, isExpanded) =>
-					{
-						if (location.Line < location.EndLine)
-						{
-							var r = new NewHiddenRegion
-							{
-								tsHiddenText = Utils.SpanFromLocation(location),
-								iType = (int)HIDDEN_REGION_TYPE.hrtCollapsible,
-								dwBehavior = (int)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled, //.hrbClientControlled;
-								pszBanner = string.IsNullOrEmpty(text) ? null : text,
-								dwClient = 25,
-								dwState = (uint)(allExpanded || isExpanded ?
-									HIDDEN_REGION_STATE.hrsExpanded : HIDDEN_REGION_STATE.hrsDefault)
-							};
+				SetStatusBarText("Parse top declarations...");
 
-							request.Sink.AddHiddenRegion(r);
-						}
-					});
+				var sourceManager = new SourceTextManager(source);
+				var compUnit      = engine.ParceCompileUnit(sourceManager);
+				var topDecls      = compUnit.TopDeclarations;
+				var regions       = compUnit.Regions;
+				var decls         = AstUtils.GetAllDeclarations(topDecls);
 
-				var scope = GetDefaultScope(request);
-				var tool = AstToolWindow.AstTool;
+				var declsAry = decls
+					.Where(d => d.name is Splicable.Name && d.name.GetName().context != null)
+					.OrderBy(d => d.Name)
+					.ToArray();
 
-				if (tool != null && tool.IsAutoUpdate)
-					tool.ShowInfo(source);
+				//TODO: VladD2: Реализовать сравнение старого и нового массива TopDeclaration-ов,
+				//              и если методы в них не совпадают (т.е. были добавлены, удалены, 
+				//              изменены методы или у них не совпали локешоны (что скорее ошибка)),
+				//              запустить перепарсивание дерева типов. Это спасет от изменения методов
+				//              которое привело к появлению новых методов или удалению (например, 
+				//              в следствии объеденения) старах.
 
-				return scope;
+				source.Declarations = declsAry;
+
+        // Process regions...
+        SetStatusBarText("Process regions...");
+        var secondTime = source.RegionsLoaded;
+
+        request.Sink.ProcessHiddenRegions = true;
+        AddHiddenRegion addHiddenRegion = (location, text, isExpanded) =>
+          {
+            if (location.Line < location.EndLine)
+            {
+              var r = new NewHiddenRegion
+              {
+                tsHiddenText = Utils.SpanFromLocation(location),
+                iType = (int)HIDDEN_REGION_TYPE.hrtCollapsible,
+                dwBehavior = (int)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled, //.hrbClientControlled;
+                pszBanner = string.IsNullOrEmpty(text) ? null : text,
+                dwClient = 25,
+                dwState = (uint)(secondTime || isExpanded 
+                          ? HIDDEN_REGION_STATE.hrsExpanded : HIDDEN_REGION_STATE.hrsDefault)
+              };
+
+              if (text == "Toplevel typing")
+              {
+                // VladD2: Debug staff
+                var behavior = (HIDDEN_REGION_BEHAVIOR)r.dwBehavior;
+                var dwClient = r.dwClient;
+                var state = (HIDDEN_REGION_STATE)r.dwState;
+                var type = (HIDDEN_REGION_TYPE)r.iType;
+                var text1 = r.pszBanner;
+                var loc = Utils.LocationFromSpan(location.FileIndex, r.tsHiddenText);
+                Debug.Assert(true);
+              }
+              request.Sink.AddHiddenRegion(r);
+            }
+          };
+
+				Checker.Check(sourceManager, addHiddenRegion, compUnit.TopNamespace.Decls, regions);
+
+        //var tool = AstToolWindow.AstTool;
+        //
+        //if (tool != null && tool.IsAutoUpdate)
+        //  tool.ShowInfo(source);
+
+
+				return GetDefaultScope(request);
 			}
 			catch (Exception e)
 			{
-				Trace.WriteLine("!!! ProcessRegions() throw Exception " + e.Message);
+				Trace.WriteLine("!!! ParseTopDeclaration() throw Exception " + e.Message);
 				return GetDefaultScope(request); //	VladD2: 2 IT: Don't re-throw exception here! It leads to check loophole!!!
 			}
 			finally 
 			{
-				Debug.WriteLine("<<<< ##### ProcessRegions!");
-				SetStatusBarText("Regions is processed.");
+				Debug.WriteLine("<<<< ##### ParseTopDeclaration!");
+				SetStatusBarText("Top declarations is parsed.");
 			}
 		}
 
@@ -615,16 +651,17 @@ namespace Nemerle.VisualStudio.LanguageService
 				if (projectInfo == null)
 					return null;
 
+				projectInfo.ClearMethodsCheckQueue();
 				projectInfo.Engine.BuildTypeTree();
 
 				// Now compiler messages set to Error List window automatically (by IEngineCallback).
 				// We don't need return it in AuthoringScope.
-				return GetDefaultScope(request);
+				return null;
 			}
 			catch (Exception e)
 			{
 				Trace.WriteLine("!!! Build type tree throw Exception " + e.Message);
-				return GetDefaultScope(request); //	VladD2: 2 IT: Don't re-throw exception here! It leads to check loophole!!!
+				return null; //	VladD2: 2 IT: Don't re-throw exception here! It leads to check loophole!!!
 			}
 			finally
 			{
@@ -635,14 +672,14 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private AuthoringScope Check(ParseRequest request)
 		{
-			Trace.WriteLine(">>>> ##### Check! " + DateTime.Now.TimeOfDay);
+			Debug.WriteLine(">>>> ##### Check! " + DateTime.Now.TimeOfDay);
 			try
 			{
 				ProjectInfo projectInfo = ProjectInfo.FindProject(request.FileName);
 
 				if (projectInfo == null)
 					return null;
-				
+			
 				var fileIndex = Location.GetFileIndex(request.FileName);
 				var line = request.Line + 1; // VS use zero-based coords (we one-based)
 				var col = request.Col + 1;
@@ -665,7 +702,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				Trace.WriteLine("!!! Check() throw Exception " + e.Message);
 				return GetDefaultScope(request); //	VladD2: 2 IT: Don't re-throw exception here! It leads to check loophole!!!
 			}
-			finally { Trace.WriteLine("<<<< ##### Check! " + DateTime.Now.TimeOfDay); }
+			finally { Debug.WriteLine("<<<< ##### Check! " + DateTime.Now.TimeOfDay); }
 		}
 		
 		#endregion
@@ -801,9 +838,7 @@ namespace Nemerle.VisualStudio.LanguageService
 					request.Sink.StartName(ts, methods.GetName(0));
 				}
 
-				return new NemerleAuthoringScope(
-					ProjectInfo.FindProject(request.FileName),
-					request.Sink, methods);
+				return new NemerleAuthoringScope(projectInfo, request.Sink, methods);
 			}
 
 			return GetDefaultScope(request);
@@ -1076,6 +1111,25 @@ namespace Nemerle.VisualStudio.LanguageService
 				return null;
 		}
 
+		public override void SynchronizeDropdowns()
+		{
+      IVsTextView view = LastActiveTextView;
+      if (view != null)
+				SynchronizeDropdowns(view);
+		}
+
+		public void SynchronizeDropdowns(IVsTextView view)
+		{
+			var mgr = GetCodeWindowManagerForView(view);
+      if (mgr == null || mgr.DropDownHelper == null)
+        return;
+
+      var dropDownHelper = (NemerleTypeAndMemberDropdownBars)mgr.DropDownHelper;
+			int line = -1, col = -1;
+			if (!ErrorHandler.Failed(view.GetCaretPos(out line, out col)))
+				dropDownHelper.SynchronizeDropdownsRsdn(view, line, col);
+		}
+
 		/// <include file='doc\LanguageService.uex' path='docs/doc[@for="LanguageService.OnCaretMoved"]/*' />
 		/// Переопределяем этот метод, чтобы вызвать SynchronizeDropdowns у 
 		/// NemerleTypeAndMemberDropdownBars, а не CodeWindowManager.
@@ -1266,6 +1320,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			if (src != null && src.LastParseTime == int.MaxValue)
 				src.LastParseTime = 0;
+
+			SynchronizeDropdowns();
 
 			base.OnIdle(periodic);
 		}

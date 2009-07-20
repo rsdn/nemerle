@@ -11,6 +11,7 @@ using Nemerle.Compiler;
 using System.Linq;
 using Nemerle.Completion2.CodeFormatting;
 using VsCommands2K = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
+using TopDeclaration = Nemerle.Compiler.Parsetree.TopDeclaration;
 
 using Nemerle.Completion2;
 
@@ -28,7 +29,6 @@ namespace Nemerle.VisualStudio.LanguageService
 		public NemerleSource(NemerleLanguageService service, IVsTextLines textLines, Colorizer colorizer)
 			: base(service, textLines, colorizer)
 		{
-			FileIndex = -1;
 			string path = GetFilePath();
 
 			Service = service;
@@ -37,9 +37,6 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (ProjectInfo != null)
 			{
 				ProjectInfo.AddSource(this);
-
-				FileIndex = Location.GetFileIndex(path);
-
 				ProjectInfo.MakeCompilerMessagesTextMarkers(textLines, FileIndex);
 			}
 
@@ -60,16 +57,34 @@ namespace Nemerle.VisualStudio.LanguageService
 		public     NemerleScanner         Scanner       { get; private set; }
 		public     ScopeCreatorCallback   ScopeCreator  { get;         set; }
 		public     ProjectInfo            ProjectInfo   { get; private set; }
-		public     int                    FileIndex     { get;         set; }
 		public     MethodData             MethodData    { get; private set; }
 		public     int                    TimeStamp     { get; private set; }
+		internal   TopDeclaration[]       Declarations  { get;         set; }
+    public     bool                   RegionsLoaded { get;         set; }
+		public     int                    FileIndex
+		{
+			get
+			{
+				if (_fileIndex <= 0)
+				{
+					var path = GetFilePath();
+
+					if (path.IsNullOrEmpty())
+						return -1;
+
+					_fileIndex = Location.GetFileIndex(path);
+				}
+
+				return _fileIndex;
+			}
+		}
 
 		#endregion
 
 		#region Fields
 
-		bool          _isRegionsProcessed;
 		MemberBuilder _resetedMember;
+		int           _fileIndex = -1;
 
 		#endregion
 
@@ -77,15 +92,16 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override void OnChangeLineText(TextLineChange[] lineChange, int last)
 		{
-      var oldLastDirtyTime = LastDirtyTime;
+			var oldLastDirtyTime = LastDirtyTime;
 			base.OnChangeLineText(lineChange, last);
 			TimeStamp++;
+			BeginParseTopDeclaration();
 
 			//TODO: Сюда нужно вставить код обновляющий локейшоны в дереве типов если редактирование
 			// происходит внутри выражений и обнулять дерево типов в обратоном случае.
 			// Если дерево типов нет, то ничего не делаем.
 
-			string	  fileName	= GetFilePath();
+			string      fileName    = GetFilePath();
 			ProjectInfo projectInfo = ProjectInfo.FindProject(fileName);
 
 			if (projectInfo == null)
@@ -102,11 +118,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				changes.iStartLine   + 1);
 
 			if (resetedMember != null)
-			{
-				//LastDirtyTime = oldLastDirtyTime;
 				_resetedMember = resetedMember;
-			}
-				//this.IsDirty = false;
 
 			if (Scanner != null && Scanner.GetLexer().ClearHoverHighlights())
 			{
@@ -163,15 +175,6 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (Service == null || Service.LastActiveTextView == null)
 				return;
 
-			if (!_isRegionsProcessed)
-			{
-				_isRegionsProcessed = true;
-				IVsTextView view = this.Service.GetPrimaryViewForSource(this);
-				BeginParse(0, 0, new TokenInfo(), (ParseReason)ParseReason2.ProcessRegions,
-					view, new ParseResultHandler(this.HandleParseResponse));
-				return;
-			}
-
 			if (IsDirty && LastDirtyTime >= LastParseTime)
 			{
 				var delta = DateTime.Now - LastDirtyTime;
@@ -192,9 +195,8 @@ namespace Nemerle.VisualStudio.LanguageService
 						if (_resetedMember != null)
 						{
 							LastParseTime = DateTime.Now;
-							IVsTextView view = this.Service.GetPrimaryViewForSource(this);
 							BeginParse(0, 0, new TokenInfo(), (ParseReason)ParseReason2.CheckRelocatedMember,
-								view, new ParseResultHandler(this.HandleParseResponse));
+								GetView(), this.HandleParseResponse);
 							return;
 						}
 					}
@@ -208,7 +210,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			{
 				Debug.WriteLine("BeginParse(ParseReason.Check)" + DateTime.Now.TimeOfDay);
 				int line, idx;
-				IVsTextView view = Service.LastActiveTextView;// this.Service.GetPrimaryViewForSource(this);
+				IVsTextView view = GetView();
 				view.GetCaretPos(out line, out idx);
 				BeginParse(line, idx, new TokenInfo(), ParseReason.Check,
 					view, new ParseResultHandler(this.HandleParseResponse));
@@ -227,7 +229,12 @@ namespace Nemerle.VisualStudio.LanguageService
 					methodBuilder.EnsureCompiled();
 				else
 				{
-					; // здесь нужно разбираться с инициализаторами полей
+					var fieldBuilder = _resetedMember as FieldBuilder;
+					if (fieldBuilder != null)
+					{
+						// здесь нужно разбираться с инициализаторами полей
+						fieldBuilder.EnsureCompiled();
+					}
 				}
 				//BeginParse();
 			}
@@ -244,15 +251,32 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public ParseRequest BeginBuildTypeTree()
 		{
-			IVsTextView view = this.Service.GetPrimaryViewForSource(this);
+			_resetedMember = null;
 			return BeginParse(0, 0, new TokenInfo(), (ParseReason)ParseReason2.BuildTypeTree,
-				view, new ParseResultHandler(this.HandleParseResponse));
+				GetView(), new ParseResultHandler(this.HandleParseResponse));
 		}
 
 		/// <include file='doc\Source.uex' path='docs/doc[@for="Source.BeginParse"]/*' />
 		public override void BeginParse()
 		{
 			TryBuildTypeTreeAsync();
+		}
+
+		public IVsTextView GetView()
+		{
+			if (Service == null)
+				throw new ArgumentNullException("Service", "The Service property of NemerleSource is null!");
+
+			return Service.LastActiveTextView ?? Service.GetPrimaryViewForSource(this);
+		}
+
+		public ParseRequest BeginParseTopDeclaration()
+		{
+			//TODO: VladD2: Хорошо бы добавить остановку предудущей ParseTopDeclaratio-операции,
+			// если она еще не закончена (или находится в очереди) и вызван BeginParseTopDeclaration().
+
+			return BeginParse(0, 0, new TokenInfo(), (ParseReason)ParseReason2.ParseTopDeclaration,
+				GetView(), new ParseResultHandler(this.HandleParseResponse));
 		}
 
 		public override void OnChangesCommitted(uint reason, TextSpan[] changedArea)
@@ -363,6 +387,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public void ProcessHiddenRegions(IList<NewHiddenRegion> hiddenRegions)
 		{
+      //TODO: VladD2: Переписать этот быдлокод!
 #if DEBUG
 			LanguageService.Preferences.MaxRegionTime = 1000 * 60 * 10;
 #endif
@@ -375,46 +400,53 @@ namespace Nemerle.VisualStudio.LanguageService
 			// remove any that do not match the new regions.
 			IVsHiddenTextSession session = GetHiddenTextSession();
 			IVsEnumHiddenRegions ppenum;
-			TextSpan[] aspan = new TextSpan[1];
+			var aspan = new TextSpan[1];
 			aspan[0] = GetDocumentSpan();
-			ErrorHandler.ThrowOnFailure(session.EnumHiddenRegions((uint)FIND_HIDDEN_REGION_FLAGS.FHR_BY_CLIENT_DATA, (uint)HiddenRegionCookie, aspan, out ppenum));
+      ErrorHandler.ThrowOnFailure(session.EnumHiddenRegions((uint)FIND_HIDDEN_REGION_FLAGS.FHR_ALL_REGIONS, (uint)HiddenRegionCookie, aspan, out ppenum));
 			uint fetched;
-			IVsHiddenRegion[] aregion = new IVsHiddenRegion[1];
+			var aregion = new IVsHiddenRegion[1];
 			int matched = 0;
 			int removed = 0;
-			int added = 0;
-			int pos = 0;
+			int added   = 0;
+			int pos     = 0;
 
 			// Create a list of IVsHiddenRegion objects, sorted in the same order that the
 			// authoring sink sorts.  This is necessary because VS core editor does NOT return
 			// the regions in the same order that we add them.
-			ArrayList regions = new ArrayList();
-			ArrayList spans = new ArrayList();
+			var regions = new List<IVsHiddenRegion>();
+      var spans = new List<TextSpan>();
 
 			while (ppenum.Next(1, aregion, out fetched) == NativeMethods.S_OK && fetched == 1)
 			{
-				ErrorHandler.ThrowOnFailure(aregion[0].GetSpan(aspan));
+        var region = aregion[0];
+        int regTypeInt;
+        ErrorHandler.ThrowOnFailure(region.GetType(out regTypeInt));
+        HIDDEN_REGION_TYPE regType = (HIDDEN_REGION_TYPE)regTypeInt;
+        if (regType != HIDDEN_REGION_TYPE.hrtCollapsible)
+          continue;
+
+        ErrorHandler.ThrowOnFailure(region.GetSpan(aspan));
 				TextSpan s = aspan[0];
-				int i = spans.Count - 1;
+        var loc = Utils.LocationFromSpan(FileIndex, s);
+        int i = spans.Count - 1;
 				while (i >= 0)
 				{
-					TextSpan s2 = (TextSpan)spans[i];
+					TextSpan s2 = spans[i];
 					if (TextSpanHelper.StartsAfterStartOf(s, s2))
 						break;
 					i--;
 				}
 				spans.Insert(i + 1, s);
-				regions.Insert(i + 1, aregion[0]);
+				regions.Insert(i + 1, region);
 			}
 
 			// Now merge the list found with the list in the AuthoringSink to figure out
 			// what matches, what needs to be removed, and what needs to be inserted.
-			NewHiddenRegion r = pos < hiddenRegions.Count ? (NewHiddenRegion)hiddenRegions[pos] : new NewHiddenRegion();
+			NewHiddenRegion r = pos < hiddenRegions.Count ? hiddenRegions[pos] : new NewHiddenRegion();
 			for (int i = 0, n = regions.Count; i < n; i++)
 			{
-
-				IVsHiddenRegion region = (IVsHiddenRegion)regions[i];
-				TextSpan span = (TextSpan)spans[i];
+				IVsHiddenRegion region = regions[i];
+				TextSpan span = spans[i];
 
 				// In case we're inserting a new region, scan ahead to matching start line
 				while (r.tsHiddenText.iStartLine < span.iStartLine)
@@ -445,6 +477,20 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 
 			int start = Environment.TickCount;
+      foreach (var item in hiddenRegions)
+      {
+        if (item.pszBanner == "Toplevel typing")
+        {
+          // VladD2: Debug staff
+          var behavior = (HIDDEN_REGION_BEHAVIOR)item.dwBehavior;
+          var dwClient = item.dwClient;
+          var state = (HIDDEN_REGION_STATE)item.dwState;
+          var type = (HIDDEN_REGION_TYPE)item.iType;
+          var text = item.pszBanner;
+          var loc = Utils.LocationFromSpan(FileIndex, item.tsHiddenText);
+          Debug.Assert(true);
+        }
+      }
 			if (hiddenRegions.Count > 0)
 			{
 				int count = hiddenRegions.Count;
@@ -488,6 +534,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			Trace.WriteLine(String.Format(CultureInfo.InvariantCulture, "Hidden Regions: Matched={0}, Removed={1}, Addded={2}/{3} in {4} ms", matched, removed, added, hiddenRegions.Count, diff));
 #endif
 			Marshal.ReleaseComObject(ppenum);
+      this.RegionsLoaded = true;
 		}
 
 		//Banner comparison: in the case of editor controlled region, this is a noop
@@ -652,6 +699,12 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 		}
 
+		//public virtual void MatchBraces(IVsTextView textView, int line, int index, TokenInfo info)
+		//{
+		//  BeginParse(line, index, info, ParseReason.HighlightBraces, textView, 
+		//    HandleMatchBracesResponse);
+		//}
+
 		private void TryHighlightBraces(IVsTextView textView, VsCommands2K command, int line, int idx,
 										TokenInfo tokenInfo)
 		{
@@ -721,9 +774,18 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region Implementation
 
+		public Engine GetEngine()
+		{
+			var projectInfo = ProjectInfo;
+			
+			if (projectInfo == null)
+				return NemerleLanguageService.DefaultEngine;
+
+			return projectInfo.Engine;
+		}
+
 		public void OnProjectReloaded()
 		{
-			_isRegionsProcessed = false;
 		}
 
 		internal static int HiddenRegionCookie = 25;
@@ -732,10 +794,20 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			try
 			{
-				Trace.WriteLine("HandleParseResponse:" + req.Timestamp);
-				if (this.Service == null) return;
+				var reason = (int)req.Reason >= 100 ? ((ParseReason2)req.Reason).ToString() : req.Reason.ToString();
+				Trace.WriteLine("HandleParseResponse: " + reason + " Timestamp: " + req.Timestamp);
+				if (this.Service == null)
+					return;
 
-				if (req.Timestamp == this.ChangeCount)
+				switch (req.Reason)
+				{
+					case (ParseReason)ParseReason2.ParseTopDeclaration:
+						Service.SynchronizeDropdowns(req.View);
+						break;
+					default: break;
+				}
+
+				//if (req.Timestamp == this.ChangeCount)
 				{
 					var sink = (NemerleAuthoringSink)req.Sink;
 					// If the request is out of sync with the buffer, then the error spans

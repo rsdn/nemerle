@@ -114,7 +114,7 @@ namespace Nemerle.VisualStudio.GUI
 				_items.Clear();
 				ProjectInfo projectInfo = source.ProjectInfo;
 
-				if (projectInfo == null)
+				if (projectInfo == null || !projectInfo.Engine.IsProjectAvailable)
 					return;
 
 				switch (_displayType.SelectedIndex)
@@ -129,7 +129,8 @@ namespace Nemerle.VisualStudio.GUI
 						AstUtils.FillList(lex, _items);
 						break;
 					case 1: // AST
-						Decl.Namespace ns = projectInfo.Engine.Project.CompileUnits[source.FileIndex];
+						var ns = projectInfo.Engine.Project.CompileUnits
+							                    .GetTopNamespace(source.FileIndex);
 						AstUtils.FillList(ns, _items);
 						break;
 				}
