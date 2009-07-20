@@ -1,5 +1,5 @@
 @echo off
-rem Copyright (c) 2003-2007 The University of Wroclaw.
+rem Copyright (c) 2003-2009 The University of Wroclaw.
 rem All rights reserved.
 rem
 rem Redistribution and use in source and binary forms, with or without
@@ -31,18 +31,18 @@ rem
 rem Ensure we have all required tools
 rem
 
-if not "%WixDir%"=="" goto wixSet
+if not "%WIX%"=="" goto wixSet
 
 rem Check default wix folder
 if not exist "%ProgramFiles%\Windows Installer XML v3\bin\light.exe" goto wixWow64check
 echo light.exe found in "%ProgramFiles%\Windows Installer XML v3\bin" folder
-set WixDir=%ProgramFiles%\Windows Installer XML v3\bin
+set WIX=%ProgramFiles%\Windows Installer XML v3
 goto wixSet
 
 :wixWow64check
 if not exist "%ProgramFiles(x86)%\Windows Installer XML v3\bin\light.exe" goto errEnvVarWix
 echo light.exe found in "%ProgramFiles(x86)%\Windows Installer XML v3\bin" folder
-set WixDir=%ProgramFiles(x86)%\Windows Installer XML v3\bin
+set WIX=%ProgramFiles(x86)%\Windows Installer XML v3
 
 :wixSet
 
@@ -53,13 +53,13 @@ rem
 set NemerleSetupContent=%~dp0dist
 set MsiFile=%~dp0NemerleSetup.msi
 
-echo Wixing "%WixDir%"
+echo Wixing with "%WIX%"
 
-"%WixDir%\candle.exe" -ext WixNetFxExtension -sw1080 -dPlatform=x86 src/*.wxs
+"%WIX%\bin\candle.exe" -ext WixNetFxExtension -sw1080 -dPlatform=x86 src/*.wxs
 if not errorlevel 0 goto done
 if errorlevel 1 goto done
 
-"%WixDir%\light.exe"  -ext WixNetFxExtension *.wixobj -ext WixUIExtension -out "%MsiFile%" -cultures:en-us
+"%WIX%\bin\light.exe"  -ext WixNetFxExtension *.wixobj -ext WixUIExtension -out "%MsiFile%" -cultures:en-us
 if not errorlevel 0 goto done
 if errorlevel 1 goto done
 
@@ -71,7 +71,7 @@ echo Done.
 goto done
 
 :errEnvVarWix
-echo Please specify environment variable "WixDir".
+echo Please specify environment variable "WIX". F.e. SET WIX=%ProgramFiles%\WIX
 goto done
 
 :done
