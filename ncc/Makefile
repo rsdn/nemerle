@@ -45,35 +45,7 @@ SNK_COMPILER  = -keyfile:../misc/keys/Nemerle.Compiler.snk
 GENERIC_SRC =
 
 NEMERLE_DLL_SRC = \
-	../lib/internal-numbered.n	\
-	../lib/internal-array.n		\
-	../lib/internal.n		\
-	../lib/core.n			\
-	../lib/macros.n			\
-	../lib/getopt.n			\
-	../lib/hashtable.n		\
-	../lib/icloneable.n		\
-	../lib/icollection.n		\
-	../lib/input.n			\
-	../lib/linkedlist.n		\
-	../lib/list.n			\
-	../lib/listenumerator.n		\
-	../lib/option.n			\
-	../lib/queue.n			\
-	../lib/stack.n			\
-	../lib/tree.n			\
-	../lib/heap.n			\
-	../lib/Nemerle.Collections.n			\
-	../lib/Nemerle.Collections.NoLinq.n			\
-	../lib/nstring.n                \
-	../lib/pair.n			\
-	../lib/rlist.n                  \
-	../lib/set.n			\
-	../lib/concurrency.n		\
-	../lib/AssemblyInfo.n           \
-	../lib/LazyValue.n              \
-	../lib/PipeReader.n             \
-	../lib/PipeWriter.n             \
+	$(wildcard ../lib/*.n) \
 
 NEMERLE_COMPILER_DLL_SRC = \
 	CompilationOptions.n		 \
