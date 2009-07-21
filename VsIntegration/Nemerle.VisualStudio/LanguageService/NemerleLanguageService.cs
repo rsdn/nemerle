@@ -599,7 +599,7 @@ namespace Nemerle.VisualStudio.LanguageService
                 iType = (int)HIDDEN_REGION_TYPE.hrtCollapsible,
                 dwBehavior = (int)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled, //.hrbClientControlled;
                 pszBanner = string.IsNullOrEmpty(text) ? null : text,
-                dwClient = 25,
+                dwClient = NemerleSource.HiddenRegionCookie,
                 dwState = (uint)(secondTime || isExpanded 
                           ? HIDDEN_REGION_STATE.hrsExpanded : HIDDEN_REGION_STATE.hrsDefault)
               };

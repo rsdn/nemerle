@@ -267,13 +267,13 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (Service == null)
 				throw new ArgumentNullException("Service", "The Service property of NemerleSource is null!");
 
-			return Service.LastActiveTextView ?? Service.GetPrimaryViewForSource(this);
+			return Service.GetPrimaryViewForSource(this);
 		}
 
 		public ParseRequest BeginParseTopDeclaration()
 		{
 			//TODO: VladD2: Хорошо бы добавить остановку предудущей ParseTopDeclaratio-операции,
-			// если она еще не закончена (или находится в очереди) и вызван BeginParseTopDeclaration().
+      // если она еще не закончена (или находится в очереди) и вызван BeginParseTopDeclaration(). Service.LastActiveTextView использовать нельзя, так как текущим представлением может быть другой файл!
 
 			return BeginParse(0, 0, new TokenInfo(), (ParseReason)ParseReason2.ParseTopDeclaration,
 				GetView(), new ParseResultHandler(this.HandleParseResponse));
@@ -402,7 +402,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			IVsEnumHiddenRegions ppenum;
 			var aspan = new TextSpan[1];
 			aspan[0] = GetDocumentSpan();
-      ErrorHandler.ThrowOnFailure(session.EnumHiddenRegions((uint)FIND_HIDDEN_REGION_FLAGS.FHR_ALL_REGIONS, (uint)HiddenRegionCookie, aspan, out ppenum));
+      ErrorHandler.ThrowOnFailure(session.EnumHiddenRegions((uint)FIND_HIDDEN_REGION_FLAGS.FHR_ALL_REGIONS, HiddenRegionCookie, aspan, out ppenum));
 			uint fetched;
 			var aregion = new IVsHiddenRegion[1];
 			int matched = 0;
@@ -421,8 +421,10 @@ namespace Nemerle.VisualStudio.LanguageService
         var region = aregion[0];
         int regTypeInt;
         ErrorHandler.ThrowOnFailure(region.GetType(out regTypeInt));
+        uint dwData;
+        region.GetClientData(out dwData);
         HIDDEN_REGION_TYPE regType = (HIDDEN_REGION_TYPE)regTypeInt;
-        if (regType != HIDDEN_REGION_TYPE.hrtCollapsible)
+        if (regType != HIDDEN_REGION_TYPE.hrtCollapsible)// || dwData != 0 && dwData != HiddenRegionCookie)
           continue;
 
         ErrorHandler.ThrowOnFailure(region.GetSpan(aspan));
@@ -488,7 +490,7 @@ namespace Nemerle.VisualStudio.LanguageService
           var type = (HIDDEN_REGION_TYPE)item.iType;
           var text = item.pszBanner;
           var loc = Utils.LocationFromSpan(FileIndex, item.tsHiddenText);
-          Debug.Assert(true);
+          break;
         }
       }
 			if (hiddenRegions.Count > 0)
@@ -788,7 +790,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 		}
 
-		internal static int HiddenRegionCookie = 25;
+		public const uint HiddenRegionCookie = 42;
 
 		internal void HandleParseResponse(ParseRequest req)
 		{
@@ -832,7 +834,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			IVsEnumHiddenRegions ppenum;
 			TextSpan[] aspan = new TextSpan[1];
 			aspan[0] = GetDocumentSpan();
-			ErrorHandler.ThrowOnFailure(session.EnumHiddenRegions((uint)FIND_HIDDEN_REGION_FLAGS.FHR_BY_CLIENT_DATA, (uint)NemerleSource.HiddenRegionCookie, aspan, out ppenum));
+			ErrorHandler.ThrowOnFailure(session.EnumHiddenRegions((uint)FIND_HIDDEN_REGION_FLAGS.FHR_ALL_REGIONS, HiddenRegionCookie, aspan, out ppenum));
 			IVsHiddenRegion[] aregion = new IVsHiddenRegion[1];
 			using (new CompoundAction(this, "ToggleAllRegions"))
 			{
