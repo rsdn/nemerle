@@ -63,7 +63,8 @@ NEMERLE_DLL_SRC = \
 	../lib/stack.n			\
 	../lib/tree.n			\
 	../lib/heap.n			\
-	../lib/narray.n			\
+	../lib/Nemerle.Collections.n			\
+	../lib/Nemerle.Collections.NoLinq.n			\
 	../lib/nstring.n                \
 	../lib/pair.n			\
 	../lib/rlist.n                  \
