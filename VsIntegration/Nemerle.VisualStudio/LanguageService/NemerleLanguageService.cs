@@ -564,11 +564,12 @@ namespace Nemerle.VisualStudio.LanguageService
 
 				SetStatusBarText("Parse top declarations...");
 
-				var sourceManager = new SourceTextManager(source);
-				var compUnit      = engine.ParceCompileUnit(sourceManager);
-				var topDecls      = compUnit.TopDeclarations;
-				var regions       = compUnit.Regions;
-				var decls         = AstUtils.GetAllDeclarations(topDecls);
+				var sourceManager  = new SourceTextManager(source);
+				var compUnit       = engine.ParceCompileUnit(sourceManager);
+        source.CompileUnit = compUnit;
+				var topDecls       = compUnit.TopDeclarations;
+				var regions        = compUnit.Regions;
+				var decls          = AstUtils.GetAllDeclarations(topDecls);
 
 				var declsAry = decls
 					.Where(d => d.name is Splicable.Name && d.name.GetName().context != null)
@@ -621,13 +622,21 @@ namespace Nemerle.VisualStudio.LanguageService
 
 				Checker.Check(sourceManager, addHiddenRegion, compUnit.TopNamespace.Decls, regions);
 
+
+        var projectInfo = source.ProjectInfo;
+        if (projectInfo != null)
+        {
+          var isNeedBuildTypesTree = !projectInfo.IsProjectAvailable
+            || projectInfo.Project.IsStructureOfCompileUnitChanged(sourceManager);
+          if (isNeedBuildTypesTree)
+            BuildTypeTree(request);  // это нужно заменить на асинхронную посылку запроса!
+        }
+
         //var tool = AstToolWindow.AstTool;
         //
         //if (tool != null && tool.IsAutoUpdate)
         //  tool.ShowInfo(source);
-
-
-				return GetDefaultScope(request);
+        return GetDefaultScope(request);
 			}
 			catch (Exception e)
 			{

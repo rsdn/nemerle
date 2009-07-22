@@ -61,6 +61,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		public     int                    TimeStamp     { get; private set; }
 		internal   TopDeclaration[]       Declarations  { get;         set; }
     public     bool                   RegionsLoaded { get;         set; }
+    public     CompileUnit            CompileUnit   { get;         set; }
 		public     int                    FileIndex
 		{
 			get

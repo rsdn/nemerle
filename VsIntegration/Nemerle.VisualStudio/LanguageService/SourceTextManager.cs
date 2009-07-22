@@ -20,6 +20,12 @@ namespace Nemerle.VisualStudio.LanguageService
 			_source  = source;
 		}
 
+    public CompileUnit CompileUnit 
+    { 
+      get { return _source.CompileUnit; }
+      set { _source.CompileUnit = value; }
+    }
+    
 		public  IVsTextLines  TextLines
 		{
 			get { return Source.GetTextLines(); }
