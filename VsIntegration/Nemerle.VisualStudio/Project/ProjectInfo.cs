@@ -382,8 +382,28 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
+		class CompilerMessageEqComparer : IEqualityComparer<CompilerMessage>
+		{
+			#region IEqualityComparer<CompilerMessage> Members
+
+			public bool Equals(CompilerMessage x, CompilerMessage y)
+			{
+				return x.Location.Equals(y.Location) && x.Kind == y.Kind && x.Msg == y.Msg;
+			}
+
+			public int GetHashCode(CompilerMessage obj)
+			{
+				return obj.Location.GetHashCode() ^ (obj.Msg == null ? 0 : obj.Msg.GetHashCode());
+			}
+
+			#endregion
+
+			public static readonly CompilerMessageEqComparer Instance = new CompilerMessageEqComparer();
+		}
+
 		void IEngineCallback.SetMethodCompilerMessages(MemberBuilder member, IEnumerable<CompilerMessage> messages)
-    {
+		{
+			messages = messages.Distinct(CompilerMessageEqComparer.Instance);
 			CheckMemberVersionCorrectness(member as MethodBuilderEx);
 
 			// Find and clear existent error messages which associated with the 'member'.

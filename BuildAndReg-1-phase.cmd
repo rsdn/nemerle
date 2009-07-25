@@ -18,6 +18,7 @@ exit /b %1
 :skip
 
 call :err_check %errorlevel%
-set NoPause=false
 IF %errors% == no call Reg.cmd
-
+call :err_check %errorlevel%
+IF %errors% == no call BuildTest.cmd
+pause

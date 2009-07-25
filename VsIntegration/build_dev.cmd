@@ -4,4 +4,4 @@ copy ComInteropHelper.dll "%ProgramFiles%\Nemerle\*.*"
 copy Nemerle*.dll         "%ProgramFiles%\Nemerle\*.*"
 cd ..\..
 
-pause
+IF NOT "%NoPause%"=="true" pause

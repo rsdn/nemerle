@@ -18,6 +18,12 @@ exit /b %1
 
 call :err_check %errorlevel%
 IF %errors% == no call Reg.cmd
+
+call :err_check %errorlevel%
 IF %errors% == no call BuildTest.cmd
+
+call :err_check %errorlevel%
+IF %errors% == no call VsIntegration\build_dev.cmd
+
 pause
 

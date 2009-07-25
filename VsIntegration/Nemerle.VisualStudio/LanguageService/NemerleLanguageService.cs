@@ -566,6 +566,15 @@ namespace Nemerle.VisualStudio.LanguageService
 
 				var sourceManager  = new SourceTextManager(source);
 				var compUnit       = engine.ParceCompileUnit(sourceManager);
+        if (compUnit.ParseCompilerMessages.Any(cm => cm.Msg.Contains("unexpected end of file")))
+        {
+          // The user does type non closed bracket. The AST is be in incorrect state.
+          // We should report errors and stop processing the CompileUnit.
+
+          //TODO: Добавить выдачу сообщений об ошибках парсинга CompileUnit-а!
+          return null;
+        }
+          
         source.CompileUnit = compUnit;
 				var topDecls       = compUnit.TopDeclarations;
 				var regions        = compUnit.Regions;
