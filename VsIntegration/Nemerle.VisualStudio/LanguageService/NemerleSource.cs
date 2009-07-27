@@ -1,28 +1,30 @@
-using System;
-using System.Collections;
-using System.Diagnostics;
-using System.Collections.Generic;
-using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio.Project;
 using Microsoft.VisualStudio.TextManager.Interop;
-//using Nemerle.Builtins;
+using Microsoft.VisualStudio;
+
 using Nemerle.Compiler;
-using System.Linq;
+using Nemerle.Completion2;
 using Nemerle.Completion2.CodeFormatting;
+using Nemerle.VisualStudio.Project;
+
+using System.Collections.Generic;
+using System.Collections;
+using System.Diagnostics;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System;
+
 using VsCommands2K = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
 using TopDeclaration = Nemerle.Compiler.Parsetree.TopDeclaration;
+using Tuple2 = Nemerle.Builtins.Tuple<int, int>;
 
-using Nemerle.Completion2;
-
-using Nemerle.VisualStudio.Project;
-using System.Runtime.InteropServices;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
 	public delegate AuthoringScope ScopeCreatorCallback(ParseRequest request);
 
-	public class NemerleSource : Source
+	public class NemerleSource : Source, ISource
 	{
 		#region Init
 
@@ -41,7 +43,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 
 			Scanner = colorizer.Scanner as NemerleScanner;
-
+			
 			if (Scanner != null)
 				Scanner._source = this;
 			LastDirtyTime = DateTime.Now;
@@ -79,6 +81,10 @@ namespace Nemerle.VisualStudio.LanguageService
 				return _fileIndex;
 			}
 		}
+		public     IVsTextLines           TextLines
+		{
+			get { return GetTextLines(); }
+		}
 
 		#endregion
 
@@ -96,7 +102,8 @@ namespace Nemerle.VisualStudio.LanguageService
 			var oldLastDirtyTime = LastDirtyTime;
 			base.OnChangeLineText(lineChange, last);
 			TimeStamp++;
-			BeginParseTopDeclaration();
+			
+			GetEngine().BeginUpdateCompileUnit(this);
 
 			//TODO: Сюда нужно вставить код обновляющий локейшоны в дереве типов если редактирование
 			// происходит внутри выражений и обнулять дерево типов в обратоном случае.
@@ -105,7 +112,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			string      fileName    = GetFilePath();
 			ProjectInfo projectInfo = ProjectInfo.FindProject(fileName);
 
-			if (projectInfo == null)
+			if (projectInfo == null || !projectInfo.IsProjectAvailable)
 				return;
 
 			TextLineChange changes = lineChange[0];
@@ -166,7 +173,7 @@ namespace Nemerle.VisualStudio.LanguageService
 					//var isAsyncCompletion = LanguageService.Preferences.EnableAsyncCompletion;
 					if (delta > reparseDelta)
 					{
-						TryBuildTypeTreeAsync();
+						//TryBuildTypesTreeAsync();
 						return;
 					}
 				}
@@ -240,27 +247,6 @@ namespace Nemerle.VisualStudio.LanguageService
 				//BeginParse();
 			}
 			finally { _resetedMember = null; }
-		}
-
-		public void TryBuildTypeTreeAsync()
-		{
-			if (this.ProjectInfo == null || this.ProjectInfo.Engine.IsProjectAvailable)
-				return;
-
-			BeginBuildTypeTree();
-		}
-
-		public ParseRequest BeginBuildTypeTree()
-		{
-			_resetedMember = null;
-			return BeginParse(0, 0, new TokenInfo(), (ParseReason)ParseReason2.BuildTypeTree,
-				GetView(), new ParseResultHandler(this.HandleParseResponse));
-		}
-
-		/// <include file='doc\Source.uex' path='docs/doc[@for="Source.BeginParse"]/*' />
-		public override void BeginParse()
-		{
-			TryBuildTypeTreeAsync();
 		}
 
 		public IVsTextView GetView()
@@ -901,6 +887,72 @@ namespace Nemerle.VisualStudio.LanguageService
 				//var len = GetLineLength(lineIndex);
 				SetText(lineIndex, 0, lineIndex + 1, 0, "");
 			}
+		}
+		/// <summary>Get text of line frome text bufer of IDE.</summary>
+		/// <param name="line">Line position (first line is 1).</param>
+		/// <returns>The text of line.</returns>
+		public new string GetLine(int line)
+		{
+			line--; // Convert to zero based index.
+
+#if DEBUG
+			//int lineCount = LineCount;
+
+			//if (line >= lineCount) // just for debugging purpose.
+			//	Debug.Assert(line < lineCount);
+#endif
+
+			return base.GetLine(line);
+		}
+
+		/// <summary>Same as GetText but use Nemerle coordinate sisten (with base 1)</summary>
+		public string GetRegion(int lineStart, int colStart, int lineEnd, int colEnd)
+		{
+			return GetText(lineStart - 1, colStart - 1, lineEnd - 1, colEnd - 1);
+		}
+
+		public string GetRegion(Location loc)
+		{
+			return GetRegion(loc.Line, loc.Column, loc.EndLine, loc.EndColumn);
+		}
+
+		public new int GetPositionOfLineIndex(int line, int col)
+		{
+			return base.GetPositionOfLineIndex(line - 1, col - 1);
+		}
+
+		public Tuple2 GetLineIndexOfPosition(int pos)
+		{
+			int line, col;
+
+			base.GetLineIndexOfPosition(pos, out line, out col);
+
+			return new Tuple2(line + 1, col + 1);
+		}
+
+		public int LineCount
+		{
+			get
+			{
+				int lineCount;
+				int hr1 = base.GetTextLines().GetLineCount(out lineCount);
+				ErrorHandler.ThrowOnFailure(hr1);
+				return lineCount;
+			}
+		}
+
+		#endregion
+
+		#region ISource Members
+
+
+		public void SetRegions(IList<RegionInfo> regions)
+		{
+		}
+
+		public void SetTopDeclarations(TopDeclaration[] topDeclarations)
+		{
+			Declarations = topDeclarations;
 		}
 
 		#endregion

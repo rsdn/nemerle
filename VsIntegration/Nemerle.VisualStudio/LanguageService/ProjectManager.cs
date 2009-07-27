@@ -31,7 +31,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				if (source == null)
 					return base.GetSource(filePath);
 				else
-					return new SourceTextManager(source);
+					return source;
 			}
 		}
 	}

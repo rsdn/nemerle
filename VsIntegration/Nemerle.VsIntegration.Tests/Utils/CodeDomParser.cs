@@ -24,7 +24,7 @@ namespace Nemerle.VsIntegration.Tests
 				"System.Drawing, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a",
 				"System.Windows.Forms, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
 			);
-			Engine engine = new Engine(callback, pm, new TraceWriter());
+			Engine engine = new Engine(callback, pm, new TraceWriter(), false);
 			pm.Engine = engine;
 		}
 

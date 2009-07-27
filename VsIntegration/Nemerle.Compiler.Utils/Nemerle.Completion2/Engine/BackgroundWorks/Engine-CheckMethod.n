@@ -1,0 +1,83 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+using System.Threading;
+using System.Reflection.BindingFlags;
+
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Utils;
+using Nemerle.Compiler.Utils.Async;
+using Nemerle.Imperative;
+using Nemerle.Surround;
+using Nemerle.Utility;
+
+using MethodBuilderEx = Nemerle.Completion2.Factories.IntelliSenseModeMethodBuilder;
+using SCG             = System.Collections.Generic;
+
+namespace Nemerle.Completion2
+{
+	public partial class Engine
+	{
+    //TODO: VladD2: 
+    // 1. Добавить значения текущего source и позиции в нем обновляемых из IDE.
+    // 2. Сортировать _methodsCheckQueue так чтобы в ее начале были методы находящиеся 
+    //    ближе всего к курсору из текущего source (если конечно такие есть).
+    mutable _methodsCheckQueue : SCG.Queue[MethodBuilderEx] = SCG.Queue();
+
+    private BeginCheckMethods(project : Project) : AsyncRequest
+    {
+      // заполняем _methodsCheckQueue
+
+      def typeBuilders = project.NamespaceTree.GetTypeBuilders();
+			def mbsForCompile = typeBuilders.SelectMany(tb =>
+				tb.GetMethods(Public | NonPublic | Instance | Static | DeclaredOnly)
+					.Cast.[MethodBuilderEx]()
+					.Where(mb => mb.IsBodyCompilable));
+
+			lock (_methodsCheckQueue)
+			{
+				_methodsCheckQueue = SCG.Queue(mbsForCompile);
+			}
+
+      // помещаем в очередь работ запрос на обработку первого метода
+
+      def request = AsyncRequest(AsyncRequestType.CheckMembers, this, null, CheckMethod);
+      AsyncWorker.AddWork(request);
+      request
+    }
+
+    private CheckMethod(request : AsyncRequest) : void
+    {
+      AsyncWorker.CheckCurrentThreadIsTheAsyncWorker();
+
+      surroundwith (currentAsyncRequest)
+      try
+      {
+        // берем один метод из очереди....
+        def method = lock (_methodsCheckQueue)
+                      if (_methodsCheckQueue.IsEmpty()) null
+                      else _methodsCheckQueue.Dequeue();
+
+        when (method != null)
+          method.EnsureCompiled(); // типизируем его...
+
+        // сообщения об ошибках полученных в процессе компиляции метода помещаются в очередь 
+        // ответов автоматически (в ReportMemberErrors() вызываемом из геттера BodyTyped).
+
+        def isQueueEmpty = lock (_methodsCheckQueue) _methodsCheckQueue.IsEmpty();
+            
+        unless (isQueueEmpty) // если очередь не пуста ...
+          AsyncWorker.AddWork(request); // помещаем еще один запрос в хвост очереди задач
+      }
+      catch
+      { | e is CompilationAbortedException =>
+          def msg = $"The CheckMethod operation aborted at: $(e.Message)";
+          throw CompilationAbortedException(msg, e);
+      }
+    }
+	}
+}

@@ -417,11 +417,8 @@ namespace Nemerle.VisualStudio.LanguageService
 				{
 					// Quickly compile and find the _exact_ location(s)
 					//
-					Completion2.ProjectManager pm = new Completion2.ProjectManager();
-					Completion2.Engine          e = new Completion2.Engine(
-						EngineCallbackStub.Default, pm, new TraceWriter());
-
-					pm.Engine = e;
+					
+					Completion2.Engine          e = NemerleLanguageService.DefaultEngine;
 
 					foreach (GotoInfo gi in infos)
 						e.Sources.AddOrUpdate(gi.FilePath, File.ReadAllText(gi.FilePath));

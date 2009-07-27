@@ -234,7 +234,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				source.ProjectInfo.HighlightUsages(source.FileIndex,
 													 span.iStartLine,
 													 span.iStartIndex,
-													 new SourceTextManager(source),
+													 source,
 													 true);
 			}
 		}
@@ -242,7 +242,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		private void RemoveLastHighlighting()
 		{
 			if (Source != null && Source.ProjectInfo != null)
-				Source.ProjectInfo.RemoveLastHighlighting(new SourceTextManager(Source));
+				Source.ProjectInfo.RemoveLastHighlighting(Source);
 		}
 
 		private bool WarnAboutErrors(Nemerle.Completion2.Project project)

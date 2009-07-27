@@ -1,7 +1,6 @@
 using Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio.TextManager.Interop;
 
-using Nemerle.Builtins;
 using Nemerle.Compiler;
 using Nemerle.Completion2;
 
@@ -36,14 +35,9 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			Engine engine = source.GetEngine();
 
-			if (engine.CoreEnv == null) // Engine not init yet. We mast BuildTypeTree for init it
+			if (engine.CoreEnv == null) // Engine not init yet. We mast BuildTypesTree for init it
 			{
-				var request = source.BeginBuildTypeTree(); // We should use Background Persing Thread...
-				if (!request.IsSynchronous)
-				{ // ... and wate result.
-					IAsyncResult result = _languageService.GetParseResult();
-					result.AsyncWaitHandle.WaitOne();
-				}
+				engine.BuildTypesTree(); // Building types tree
 				Trace.Assert(engine.CoreEnv != null);
 			}
 
@@ -112,8 +106,7 @@ namespace Nemerle.VisualStudio.LanguageService
 						// kliss: somehow it works wrong way. I disable it for a while. Let's see what happens
 						//if (_currentLine < _envStartLine || _currentLine > _envEndLine)
 						{
-							Tuple<GlobalEnv, TypeBuilder, int, int> ret =
-								project.GetActiveEnv(_source.FileIndex, _currentLine + 1);
+							var ret = project.GetActiveEnv(_source.FileIndex, _currentLine + 1);
 
 							_env		  = ret.Field0;
 							_type		 = ret.Field1;

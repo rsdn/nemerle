@@ -8,7 +8,7 @@ using Microsoft.VisualStudio.TextManager.Interop;
 using Nemerle.Completion2;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
-using Nemerle.Compiler.Utils;
+//using Nemerle.Compiler.Utils;
 
 using VsPkg = Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio;

@@ -39,7 +39,7 @@ namespace ConsoleTest
 			//test.QuickTip_StackOverflow();
 			test.QuickTip_ArgPattern();
 			test.QuickTip_CtorArg();
-			test.Check_partial_region();
+			//test.Check_partial_region();
 			//test.Check_region_location();
 			test.QuickTip_TupleProp();
 			test.QuickTip_TupleMethod();

@@ -2,7 +2,6 @@ using System.Collections.Generic;
 using Microsoft.VisualStudio.Package;
 
 using Nemerle.Completion2;
-using Nemerle.Builtins;
 using Nemerle.Compiler;
 
 namespace Nemerle.VisualStudio.LanguageService
@@ -97,7 +96,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		public override void GetParameterInfo(int index, int parameter,
 			out string name, out string display, out string description)
 		{
-			Tuple<string,string,string> info = _info.GetParameterInfo(index, parameter);
+			var info = _info.GetParameterInfo(index, parameter);
 
 			name        = info.Field0;
 			display     = info.Field1;

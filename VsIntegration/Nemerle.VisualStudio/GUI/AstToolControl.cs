@@ -8,7 +8,6 @@ using System.Windows.Forms;
 using Nemerle.Completion2;
 using CompUtils = Nemerle.Compiler.Utils.Utils;
 using Nemerle.Compiler;
-using Nemerle.Builtins;
 using Nemerle.VisualStudio.Properties;
 using Nemerle.VisualStudio.Project;
 using Nemerle.VisualStudio.LanguageService;

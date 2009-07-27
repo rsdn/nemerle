@@ -4,7 +4,7 @@
 	{
 		CheckRelocatedMember = 100,
 		ProcessRegions,
-		BuildTypeTree,
+		BuildTypesTree,
 		ParseTopDeclaration
 	}
 }

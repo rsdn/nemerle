@@ -15,6 +15,7 @@ using Microsoft.VisualStudio.TextManager.Interop;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Completion2;
+using Nemerle.Compiler.Utils.Async;
 
 using Nemerle.VisualStudio.Project;
 
@@ -55,9 +56,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (DefaultEngine == null)
 			{
 				DefaultEngine = new Engine(EngineCallbackStub.Default,
-					new ProjectManager(this), new TraceWriter());
-
-				DefaultEngine.InitDefaulteEngine();
+					new ProjectManager(this), new TraceWriter(), true);
 			}
 		}
 
@@ -69,6 +68,8 @@ namespace Nemerle.VisualStudio.LanguageService
 			IsDisposed = true;
 			try
 			{
+				AsyncWorker.Stop();
+
 				AbortBackgroundParse();
 
 				foreach (NemerleColorizer colorizer in _colorizers.Values)
@@ -90,67 +91,76 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#endregion
 
+		#region Misc
+
+		public bool IsDefaultEngine(Engine engine)
+		{
+			return engine == DefaultEngine;
+		}
+
+		#endregion
+
 		#region ParseSource
 
 		#region ParseSource()
 
 		public override AuthoringScope ParseSource(ParseRequest request)
 		{
-			if (request == null)
-				throw new ArgumentNullException("request");
+			return null;
+			//if (request == null)
+			//  throw new ArgumentNullException("request");
 
-			if (request.View == null)
-				return null;
+			//if (request.View == null)
+			//  return null;
 
-			var source = (NemerleSource)GetSource(request.View);
+			//var source = (NemerleSource)GetSource(request.View);
 
-			if (source == null || source.IsClosed)
-				return null;
+			//if (source == null || source.IsClosed)
+			//  return null;
 
-			if (source.ProjectInfo != null && source.ProjectInfo.IsCosed)
-				return null;
-			var reason = (int)request.Reason >= 100 ? ((ParseReason2)request.Reason).ToString() : request.Reason.ToString();
+			//if (source.ProjectInfo != null && source.ProjectInfo.IsCosed)
+			//  return null;
+			//var reason = (int)request.Reason >= 100 ? ((ParseReason2)request.Reason).ToString() : request.Reason.ToString();
 
-			Debug.Print(
-				"File '{0}' ParseSource at ({1}:{2}), reason {3}, Timestamp {4}",
-				Path.GetFileName(request.FileName), request.Line, request.Col, reason,
-				request.Timestamp);
+			//Debug.Print(
+			//  "File '{0}' ParseSource at ({1}:{2}), reason {3}, Timestamp {4}",
+			//  Path.GetFileName(request.FileName), request.Line, request.Col, reason,
+			//  request.Timestamp);
 
-			switch (request.Reason)
-			{
-				case (ParseReason)ParseReason2.ParseTopDeclaration: 
-				                               return ParseTopDeclaration(request);
-				case (ParseReason)ParseReason2.CheckRelocatedMember: 
-				                               return CheckRelocatedMember(request);
-				case (ParseReason)ParseReason2.BuildTypeTree:
-																			 return BuildTypeTree(request);
+			//switch (request.Reason)
+			//{
+			//  //case (ParseReason)ParseReason2.ParseTopDeclaration: 
+			//  //                               return ParseTopDeclaration(request);
+			//  //case (ParseReason)ParseReason2.CheckRelocatedMember: 
+			//  //                               return CheckRelocatedMember(request);
+			//  //case (ParseReason)ParseReason2.BuildTypesTree:
+			//  //															 return BuildTypesTree(request);
+			//  //case ParseReason.Check:        return Check(request);
 
-				case ParseReason.Check:        return Check(request);
+			//  case ParseReason.MemberSelect:
+			//  case ParseReason.CompleteWord: return GetCompleteWord(request);
 
-				case ParseReason.MemberSelect:
-				case ParseReason.CompleteWord: return GetCompleteWord(request);
+			//  case ParseReason.Goto:
+			//  case ParseReason.QuickInfo:    return GetMethodScope(request);
 
-				case ParseReason.Goto:
-				case ParseReason.QuickInfo:    return GetMethodScope(request);
+			//  case ParseReason.MethodTip:    return GetMethodTip(request);
 
-				case ParseReason.MethodTip:    return GetMethodTip(request);
+			//  case ParseReason.HighlightBraces:
+			//  case ParseReason.MatchBraces:  return MatchBraces(request);
 
-				case ParseReason.HighlightBraces:
-				case ParseReason.MatchBraces:  return MatchBraces(request);
+			//  case ParseReason.Autos:
+			//  case ParseReason.CodeSpan:
+			//  case ParseReason.DisplayMemberList:
+			//  case ParseReason.None:
+			//  case ParseReason.MemberSelectAndHighlightBraces:
+			//    Trace.WriteLine("Request reason '" + request.Reason + "' not handled.");
+			//    break;
+			//}
 
-				case ParseReason.Autos:
-				case ParseReason.CodeSpan:
-				case ParseReason.DisplayMemberList:
-				case ParseReason.None:
-				case ParseReason.MemberSelectAndHighlightBraces:
-					Trace.WriteLine("Request reason '" + request.Reason + "' not handled.");
-					break;
-			}
+			//if (source != null && source.ScopeCreator != null)
+			//  return source.ScopeCreator(request);
 
-			if (source != null && source.ScopeCreator != null)
-				return source.ScopeCreator(request);
-
-			return GetDefaultScope(request);
+			//return GetDefaultScope(request);
 		}
  
 		#endregion
@@ -212,9 +222,7 @@ namespace Nemerle.VisualStudio.LanguageService
 					Utils.SpanFromLocation(bracketFinder.StartBraceInfo.Token.Location),
 					Utils.SpanFromLocation(matchLocation), 0);
 
-				return new NemerleAuthoringScope(
-					projectInfo, request.Sink, request.FileName,
-					new SourceTextManager(source)); // projectInfo.GetSource(request.FileName)
+				return new NemerleAuthoringScope(projectInfo, request.Sink, request.FileName, source);
 			}
 
 			return GetDefaultScope(request); // we don't find paired token
@@ -546,147 +554,146 @@ namespace Nemerle.VisualStudio.LanguageService
 			return GetDefaultScope(request);
 		}
 
-		private AuthoringScope ParseTopDeclaration(ParseRequest request)
-		{
-			Debug.WriteLine(">>>> ##### ParseTopDeclaration!");
-			try
-			{
-				var source = GetSource(request.View) as NemerleSource;
-				if (source == null)
-					return null;
+		//private AuthoringScope ParseTopDeclaration(ParseRequest request)
+		//{
+		//  Debug.WriteLine(">>>> ##### ParseTopDeclaration!");
+		//  try
+		//  {
+		//    var source = GetSource(request.View) as NemerleSource;
+		//    if (source == null)
+		//      return null;
 
-				var engine   = source.GetEngine();
+		//    var engine   = source.GetEngine();
 
-				if (engine.CoreEnv == null)
-					BuildTypeTree(request);
+		//    if (engine.CoreEnv == null)
+		//      return null;
 
-				Trace.Assert(engine.CoreEnv != null);
+		//    Trace.Assert(engine.CoreEnv != null);
 
-				SetStatusBarText("Parse top declarations...");
+		//    SetStatusBarText("Parse top declarations...");
 
-				var sourceManager  = new SourceTextManager(source);
-				var compUnit       = engine.ParceCompileUnit(sourceManager);
-        if (compUnit.ParseCompilerMessages.Any(cm => cm.Msg.Contains("unexpected end of file")))
-        {
-          // The user does type non closed bracket. The AST is be in incorrect state.
-          // We should report errors and stop processing the CompileUnit.
+		//    var compUnit = engine.ParseCompileUnit(source);
+		//    if (compUnit.ParseCompilerMessages.Any(cm => cm.Msg.Contains("unexpected end of file")))
+		//    {
+		//      // The user does type non closed bracket. The AST is be in incorrect state.
+		//      // We should report errors and stop processing the CompileUnit.
 
-          //TODO: Добавить выдачу сообщений об ошибках парсинга CompileUnit-а!
-          return null;
-        }
+		//      //TODO: Добавить выдачу сообщений об ошибках парсинга CompileUnit-а!
+		//      return null;
+		//    }
           
-        source.CompileUnit = compUnit;
-				var topDecls       = compUnit.TopDeclarations;
-				var regions        = compUnit.Regions;
-				var decls          = AstUtils.GetAllDeclarations(topDecls);
+		//    source.CompileUnit = compUnit;
+		//    var topDecls       = compUnit.TopDeclarations;
+		//    var regions        = compUnit.Regions;
+		//    var decls          = AstUtils.GetAllDeclarations(topDecls);
 
-				var declsAry = decls
-					.Where(d => d.name is Splicable.Name && d.name.GetName().context != null)
-					.OrderBy(d => d.Name)
-					.ToArray();
+		//    var declsAry = decls
+		//      .Where(d => d.name is Splicable.Name && d.name.GetName().context != null)
+		//      .OrderBy(d => d.Name)
+		//      .ToArray();
 
-				//TODO: VladD2: Реализовать сравнение старого и нового массива TopDeclaration-ов,
-				//              и если методы в них не совпадают (т.е. были добавлены, удалены, 
-				//              изменены методы или у них не совпали локешоны (что скорее ошибка)),
-				//              запустить перепарсивание дерева типов. Это спасет от изменения методов
-				//              которое привело к появлению новых методов или удалению (например, 
-				//              в следствии объеденения) старах.
+		//    //TODO: VladD2: Реализовать сравнение старого и нового массива TopDeclaration-ов,
+		//    //              и если методы в них не совпадают (т.е. были добавлены, удалены, 
+		//    //              изменены методы или у них не совпали локешоны (что скорее ошибка)),
+		//    //              запустить перепарсивание дерева типов. Это спасет от изменения методов
+		//    //              которое привело к появлению новых методов или удалению (например, 
+		//    //              в следствии объеденения) старах.
 
-				source.Declarations = declsAry;
+		//    source.Declarations = declsAry;
 
-        // Process regions...
-        SetStatusBarText("Process regions...");
-        var secondTime = source.RegionsLoaded;
+		//    // Process regions...
+		//    SetStatusBarText("Process regions...");
+		//    var secondTime = source.RegionsLoaded;
 
-        request.Sink.ProcessHiddenRegions = true;
-        AddHiddenRegion addHiddenRegion = (location, text, isExpanded) =>
-          {
-            if (location.Line < location.EndLine)
-            {
-              var r = new NewHiddenRegion
-              {
-                tsHiddenText = Utils.SpanFromLocation(location),
-                iType = (int)HIDDEN_REGION_TYPE.hrtCollapsible,
-                dwBehavior = (int)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled, //.hrbClientControlled;
-                pszBanner = string.IsNullOrEmpty(text) ? null : text,
-                dwClient = NemerleSource.HiddenRegionCookie,
-                dwState = (uint)(secondTime || isExpanded 
-                          ? HIDDEN_REGION_STATE.hrsExpanded : HIDDEN_REGION_STATE.hrsDefault)
-              };
+		//    request.Sink.ProcessHiddenRegions = true;
+		//    AddHiddenRegion addHiddenRegion = (location, text, isExpanded) =>
+		//      {
+		//        if (location.Line < location.EndLine)
+		//        {
+		//          var r = new NewHiddenRegion
+		//          {
+		//            tsHiddenText = Utils.SpanFromLocation(location),
+		//            iType = (int)HIDDEN_REGION_TYPE.hrtCollapsible,
+		//            dwBehavior = (int)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled, //.hrbClientControlled;
+		//            pszBanner = string.IsNullOrEmpty(text) ? null : text,
+		//            dwClient = NemerleSource.HiddenRegionCookie,
+		//            dwState = (uint)(secondTime || isExpanded 
+		//                      ? HIDDEN_REGION_STATE.hrsExpanded : HIDDEN_REGION_STATE.hrsDefault)
+		//          };
 
-              if (text == "Toplevel typing")
-              {
-                // VladD2: Debug staff
-                var behavior = (HIDDEN_REGION_BEHAVIOR)r.dwBehavior;
-                var dwClient = r.dwClient;
-                var state = (HIDDEN_REGION_STATE)r.dwState;
-                var type = (HIDDEN_REGION_TYPE)r.iType;
-                var text1 = r.pszBanner;
-                var loc = Utils.LocationFromSpan(location.FileIndex, r.tsHiddenText);
-                Debug.Assert(true);
-              }
-              request.Sink.AddHiddenRegion(r);
-            }
-          };
+		//          if (text == "Toplevel typing")
+		//          {
+		//            // VladD2: Debug staff
+		//            var behavior = (HIDDEN_REGION_BEHAVIOR)r.dwBehavior;
+		//            var dwClient = r.dwClient;
+		//            var state = (HIDDEN_REGION_STATE)r.dwState;
+		//            var type = (HIDDEN_REGION_TYPE)r.iType;
+		//            var text1 = r.pszBanner;
+		//            var loc = Utils.LocationFromSpan(location.FileIndex, r.tsHiddenText);
+		//            Debug.Assert(true);
+		//          }
+		//          request.Sink.AddHiddenRegion(r);
+		//        }
+		//      };
 
-				Checker.Check(sourceManager, addHiddenRegion, compUnit.TopNamespace.Decls, regions);
+		//    Checker.Check(source, addHiddenRegion, compUnit.TopNamespace.Decls, compUnit.Regions);
 
 
-        var projectInfo = source.ProjectInfo;
-        if (projectInfo != null)
-        {
-          var isNeedBuildTypesTree = !projectInfo.IsProjectAvailable
-            || projectInfo.Project.IsStructureOfCompileUnitChanged(sourceManager);
-          if (isNeedBuildTypesTree)
-            BuildTypeTree(request);  // это нужно заменить на асинхронную посылку запроса!
-        }
+		//    var projectInfo = source.ProjectInfo;
+		//    if (projectInfo != null)
+		//    {
+		//      var isNeedBuildTypesTree = !projectInfo.IsProjectAvailable
+		//        || projectInfo.Project.IsStructureOfCompileUnitChanged(source);
+		//      if (isNeedBuildTypesTree)
+		//        engine.BeginBuildTypesTree();
+		//    }
 
-        //var tool = AstToolWindow.AstTool;
-        //
-        //if (tool != null && tool.IsAutoUpdate)
-        //  tool.ShowInfo(source);
-        return GetDefaultScope(request);
-			}
-			catch (Exception e)
-			{
-				Trace.WriteLine("!!! ParseTopDeclaration() throw Exception " + e.Message);
-				return GetDefaultScope(request); //	VladD2: 2 IT: Don't re-throw exception here! It leads to check loophole!!!
-			}
-			finally 
-			{
-				Debug.WriteLine("<<<< ##### ParseTopDeclaration!");
-				SetStatusBarText("Top declarations is parsed.");
-			}
-		}
+		//    //var tool = AstToolWindow.AstTool;
+		//    //
+		//    //if (tool != null && tool.IsAutoUpdate)
+		//    //  tool.ShowInfo(source);
+		//    return GetDefaultScope(request);
+		//  }
+		//  catch (Exception e)
+		//  {
+		//    Trace.WriteLine("!!! ParseTopDeclaration() throw Exception " + e.Message);
+		//    return GetDefaultScope(request); //	VladD2: 2 IT: Don't re-throw exception here! It leads to check loophole!!!
+		//  }
+		//  finally 
+		//  {
+		//    Debug.WriteLine("<<<< ##### ParseTopDeclaration!");
+		//    SetStatusBarText("Top declarations is parsed.");
+		//  }
+		//}
 
-		private AuthoringScope BuildTypeTree(ParseRequest request)
-		{
-			Debug.WriteLine(">>>> &&&& Build type tree!");
-			SetStatusBarText("Build type tree (parse types)...");
-			try
-			{
-				ProjectInfo projectInfo = ProjectInfo.FindProject(request.FileName);
-				if (projectInfo == null)
-					return null;
+		//private AuthoringScope BuildTypesTree(ParseRequest request)
+		//{
+		//  Debug.WriteLine(">>>> &&&& Build type tree!");
+		//  SetStatusBarText("Build type tree (parse types)...");
+		//  try
+		//  {
+		//    ProjectInfo projectInfo = ProjectInfo.FindProject(request.FileName);
+		//    if (projectInfo == null)
+		//      return null;
 
-				projectInfo.ClearMethodsCheckQueue();
-				projectInfo.Engine.BuildTypeTree();
+		//    projectInfo.ClearMethodsCheckQueue();
+		//    projectInfo.Engine.BuildTypesTree();
 
-				// Now compiler messages set to Error List window automatically (by IEngineCallback).
-				// We don't need return it in AuthoringScope.
-				return null;
-			}
-			catch (Exception e)
-			{
-				Trace.WriteLine("!!! Build type tree throw Exception " + e.Message);
-				return null; //	VladD2: 2 IT: Don't re-throw exception here! It leads to check loophole!!!
-			}
-			finally
-			{
-				SetStatusBarText("Build type tree (parse types) is completed.");
-				Debug.WriteLine("<<<< &&&& Build type tree!");
-			}
-		}
+		//    // Now compiler messages set to Error List window automatically (by IEngineCallback).
+		//    // We don't need return it in AuthoringScope.
+		//    return null;
+		//  }
+		//  catch (Exception e)
+		//  {
+		//    Trace.WriteLine("!!! Build type tree throw Exception " + e.Message);
+		//    return null; //	VladD2: 2 IT: Don't re-throw exception here! It leads to check loophole!!!
+		//  }
+		//  finally
+		//  {
+		//    SetStatusBarText("Build type tree (parse types) is completed.");
+		//    Debug.WriteLine("<<<< &&&& Build type tree!");
+		//  }
+		//}
 
 		private AuthoringScope Check(ParseRequest request)
 		{
@@ -746,7 +753,7 @@ namespace Nemerle.VisualStudio.LanguageService
 					projectInfo.HighlightUsages(request.FileName,
 												request.Line,
 												request.Col,
-												new SourceTextManager(projectInfo.GetSource(request.FileName)),
+												projectInfo.GetSource(request.FileName),
 												false);
 		}
 
@@ -767,7 +774,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 				CompletionElem[] overloads = projectInfo.CompleteWord(
 					request.FileName, request.Line, request.Col,
-					new SourceTextManager(projectInfo.GetSource(request.FileName)));
+					projectInfo.GetSource(request.FileName));
 
 				if (overloads.Length > 0)
 					return new NemerleAuthoringScope(projectInfo, request.Sink, overloads);
@@ -805,7 +812,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			return new NemerleAuthoringScope(
 				projectInfo, request.Sink, request.FileName,
-				new SourceTextManager(projectInfo.GetSource(request.FileName)));
+				projectInfo.GetSource(request.FileName));
 		}
  
 		#endregion
@@ -830,7 +837,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			NemerleMethods methods = projectInfo.GetMethodTip(
 				request.FileName, request.Line, col,
-				new SourceTextManager(projectInfo.GetSource(request.FileName)));
+				projectInfo.GetSource(request.FileName));
 
 			if (methods != null)
 			{
@@ -873,7 +880,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (projectInfo != null)
 				return new NemerleAuthoringScope(
 					projectInfo, request.Sink, request.FileName,
-					new SourceTextManager(projectInfo.GetSource(request.FileName)));
+					projectInfo.GetSource(request.FileName));
 
 			return null;
 		}
@@ -1024,9 +1031,6 @@ namespace Nemerle.VisualStudio.LanguageService
 		public override CodeWindowManager CreateCodeWindowManager(IVsCodeWindow codeWindow, Source source)
 		{
 			CodeWindowManager m = base.CreateCodeWindowManager(codeWindow, source);
-
-			((NemerleSource)source).TryBuildTypeTreeAsync();
-
 			return m;
 		}
 
@@ -1331,7 +1335,12 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override void OnIdle(bool periodic)
 		{
-			if (IsDisposed || LastActiveTextView == null)
+			if (IsDisposed)
+				return;
+
+			AsyncWorker.DispatchResponses();			
+
+			if (LastActiveTextView == null)
 				return;
 
 			Source src = GetSource(LastActiveTextView);
