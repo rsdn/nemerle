@@ -372,7 +372,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			throw new NotImplementedException();
 		}
 
-		public void ProcessHiddenRegions(IList<NewHiddenRegion> hiddenRegions)
+		public void ProcessHiddenRegions(List<NewHiddenRegion> hiddenRegions)
 		{
       //TODO: VladD2: Переписать этот быдлокод!
 #if DEBUG
@@ -781,38 +781,38 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		internal void HandleParseResponse(ParseRequest req)
 		{
-			try
-			{
-				var reason = (int)req.Reason >= 100 ? ((ParseReason2)req.Reason).ToString() : req.Reason.ToString();
-				Trace.WriteLine("HandleParseResponse: " + reason + " Timestamp: " + req.Timestamp);
-				if (this.Service == null)
-					return;
+      //try
+      //{
+      //  var reason = (int)req.Reason >= 100 ? ((ParseReason2)req.Reason).ToString() : req.Reason.ToString();
+      //  Trace.WriteLine("HandleParseResponse: " + reason + " Timestamp: " + req.Timestamp);
+      //  if (this.Service == null)
+      //    return;
 
-				switch (req.Reason)
-				{
-					case (ParseReason)ParseReason2.ParseTopDeclaration:
-						Service.SynchronizeDropdowns(req.View);
-						break;
-					default: break;
-				}
+      //  switch (req.Reason)
+      //  {
+      //    case (ParseReason)ParseReason2.ParseTopDeclaration:
+      //      Service.SynchronizeDropdowns(req.View);
+      //      break;
+      //    default: break;
+      //  }
 
-				//if (req.Timestamp == this.ChangeCount)
-				{
-					var sink = (NemerleAuthoringSink)req.Sink;
-					// If the request is out of sync with the buffer, then the error spans
-					// and hidden regions could be wrong, so we ignore this parse and wait 
-					// for the next OnIdle parse.
-					//!!ReportTasks(req.Sink.errors);
-					if (req.Sink.ProcessHiddenRegions)
-						ProcessHiddenRegions(sink.HiddenRegionsList);
-				}
-				this.Service.OnParseComplete(req);
+      //  //if (req.Timestamp == this.ChangeCount)
+      //  {
+      //    var sink = (NemerleAuthoringSink)req.Sink;
+      //    // If the request is out of sync with the buffer, then the error spans
+      //    // and hidden regions could be wrong, so we ignore this parse and wait 
+      //    // for the next OnIdle parse.
+      //    //!!ReportTasks(req.Sink.errors);
+      //    if (req.Sink.ProcessHiddenRegions)
+      //      ProcessHiddenRegions(sink.HiddenRegionsList);
+      //  }
+      //  this.Service.OnParseComplete(req);
 
-			}
-			catch (Exception e)
-			{
-				Trace.WriteLine("HandleParseResponse exception: " + e.Message);
-			}
+      //}
+      //catch (Exception e)
+      //{
+      //  Trace.WriteLine("HandleParseResponse exception: " + e.Message);
+      //}
 		}
 
 		internal void CollapseAllRegions()
@@ -948,6 +948,41 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public void SetRegions(IList<RegionInfo> regions)
 		{
+      
+      var newRegions = regions.Select(ri => 
+        {
+      	  var secondTime = RegionsLoaded;
+          var location   = ri.Location;
+          var text       = ri.Banner;
+          var isExpanded = ri.Expanded;
+
+          var r = new NewHiddenRegion
+          {
+            tsHiddenText = Utils.SpanFromLocation(location),
+            iType = (int)HIDDEN_REGION_TYPE.hrtCollapsible,
+            dwBehavior = (int)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled, //.hrbClientControlled;
+            pszBanner = string.IsNullOrEmpty(text) ? null : text,
+            dwClient = NemerleSource.HiddenRegionCookie,
+            dwState = (uint)(secondTime || isExpanded 
+                      ? HIDDEN_REGION_STATE.hrsExpanded : HIDDEN_REGION_STATE.hrsDefault)
+          };
+
+          if (text == "Toplevel typing")
+          {
+            // VladD2: Debug staff
+            var behavior = (HIDDEN_REGION_BEHAVIOR)r.dwBehavior;
+            var dwClient = r.dwClient;
+            var state = (HIDDEN_REGION_STATE)r.dwState;
+            var type = (HIDDEN_REGION_TYPE)r.iType;
+            var text1 = r.pszBanner;
+            var loc = Utils.LocationFromSpan(location.FileIndex, r.tsHiddenText);
+            Debug.Assert(true);
+          }
+
+          return r;
+        });
+
+      ProcessHiddenRegions(newRegions.ToList());
 		}
 
 		public void SetTopDeclarations(TopDeclaration[] topDeclarations)
