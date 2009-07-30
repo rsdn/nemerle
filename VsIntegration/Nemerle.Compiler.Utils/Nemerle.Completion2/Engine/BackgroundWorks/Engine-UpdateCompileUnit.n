@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -26,34 +27,44 @@ namespace Nemerle.Completion2
 	{
     public BeginUpdateCompileUnit(source : ISource) : AsyncRequest
     {
-      def request = AsyncRequest(AsyncRequestType.UpdateCompileUnit, this, source,
-                      UpdateCompileUnit(_, source));
+      def request = AsyncRequest(AsyncRequestType.UpdateCompileUnit, this, source, UpdateCompileUnit);
       AsyncWorker.AddWork(request);
       request
     }
 
     /// Run by AsyncWorker thread!
     /// Parse CompileUnit. Set CompileUnit to source. Update information about outline regions. 
-    private UpdateCompileUnit(request : AsyncRequest, source : ISource) : void
+    private UpdateCompileUnit(request : AsyncRequest) : void
     {
       surroundwith (currentAsyncRequest)
       try
       {
+        def timer = Stopwatch.StartNew();
         AsyncWorker.CheckCurrentThreadIsTheAsyncWorker();
         _currentAsyncRequest = request;
         _callback.SetStatusText("Update compile unit...");
+        Debug.WriteLine($"UpdateCompileUnit 1 $(timer.Elapsed)"); timer.Reset(); timer.Start();
 
         when (request.Stop)
           return;
 
-			  def compUnit = ParseCompileUnit(source);
+        def fileIndex = request.Source.FileIndex;
+        def code      = request.SourceText; // do't use request.Source.GetText() direct! You mast get text and it version!
+			  def compUnit  = ParseCompileUnit(code, fileIndex);
+        def version   = request.SourceVersion;
+        def source    = request.Source;
+
         source.CompileUnit = compUnit;
+        
+        Debug.WriteLine($"UpdateCompileUnit 2 $(timer.Elapsed)"); timer.Reset(); timer.Start();
+
         when (compUnit.ParseCompilerMessages.Any(cm => cm.Msg.Contains("unexpected end of file")))
         {
           // The user does type non closed bracket. The AST is be in incorrect state.
           // We should report errors and stop processing the CompileUnit.
 
           //TODO: Добавить выдачу сообщений об ошибках парсинга CompileUnit-а!
+          _callback.SetStatusText("Update compile unit aborted (file in inconsistent state).");
           return;
         }
 
@@ -68,7 +79,8 @@ namespace Nemerle.Completion2
 				    .ToArray();
 
 			    //source.Declarations = declsAry;
-          AsyncWorker.AddResponse(() => source.SetTopDeclarations(declsAry));
+          //AsyncWorker.AddResponse(() => source.SetTopDeclarations(declsAry));
+          source.SetTopDeclarations(declsAry);
         }
 
         def rebuildTypesTreeIfStructureChanged(engine, source) : void
@@ -91,17 +103,30 @@ namespace Nemerle.Completion2
 
         collectTopDeclarations(source, compUnit);
 
+        Debug.WriteLine($"UpdateCompileUnit 3 $(timer.Elapsed)"); timer.Reset(); timer.Start();
+
         when (request.Stop)
           return;
 
-			  def regions = RegionsHelper.Collect(source);
-        AsyncWorker.AddResponse(() => source.SetRegions(regions));
+        when (version == source.CurrentVersion)
+        {
+			    def regions = RegionsHelper.Collect(source, version);
+        
+          Debug.WriteLine($"UpdateCompileUnit 4 $(timer.Elapsed)"); timer.Reset(); timer.Start();
+
+          when (version == source.CurrentVersion)
+            AsyncWorker.AddResponse(() => source.SetRegions(regions, version));
+        }
+
+        Debug.WriteLine($"UpdateCompileUnit 5 $(timer.Elapsed)"); timer.Reset(); timer.Start();
 
         when (request.Stop)
           return;
 
         unless (IsDefaultEngine)
           rebuildTypesTreeIfStructureChanged(this, source);
+
+        Debug.WriteLine($"UpdateCompileUnit 6 $(timer.Elapsed)"); timer.Reset(); timer.Start();
       }
       catch
       { | e is CompilationAbortedException =>
@@ -111,7 +136,7 @@ namespace Nemerle.Completion2
       finally { _callback.SetStatusText("Update compile unit is complete."); }
     }
 
-    private ParseCompileUnit(source : ISource) : CompileUnit
+    private ParseCompileUnit(code : string, fileIndex : int) : CompileUnit
     {
       RestoreManagerClassInstance();
       def currentMessages = _currentMessages;
@@ -119,13 +144,10 @@ namespace Nemerle.Completion2
       {
         _currentMessages = List();
 
-        def fileIndex = source.FileIndex;
         _namespaces.Clear();
         _decls        = [];
-        def code      = source.GetText();
         def lexer     = LexerString(this, code, Location(fileIndex, 1, 1));
-        def topDecls  = try { ParsingPipeline(lexer) }
-                       catch { | _ => [] }; //!!! теряем сообщение!
+        def topDecls  = try { ParsingPipeline(lexer) } catch { | _ => [] }; //!!! теряем сообщение!
         def endLoc    = lexer.Location;
         def loc       = Location(fileIndex, 1, 1, endLoc.EndLine, endLoc.EndColumn);
         def insideEnv = match (_decls.Find(_ is Decl.Using))

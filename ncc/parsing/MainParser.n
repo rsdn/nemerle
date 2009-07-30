@@ -220,7 +220,7 @@ namespace Nemerle.Compiler
     public static ParseFunParms(
         [NotNull] env: GlobalEnv, 
         [NotNull] round_group: Token.RoundGroup
-    ): list[Fun_parm] 
+    ) : list[Fun_parm] 
     {
         def parser = MainParser(env);
         parser.push_stream(round_group);
@@ -231,7 +231,7 @@ namespace Nemerle.Compiler
     public static ParseTyVars(
         [NotNull] env: GlobalEnv, 
         [NotNull] sqr_group: Token
-    ): list[PExpr] * PExpr
+    ) : list[PExpr] * PExpr * Location
     {
         def parser = MainParser(env);
         parser.push_stream(sqr_group);
@@ -241,13 +241,12 @@ namespace Nemerle.Compiler
     public static ParseWhereConstraints(
         [NotNull] env: GlobalEnv, 
         [NotNull] tok: Token,
-        [NotNull] tyvars: list[PExpr] * PExpr
-    ): Typarms
+        [NotNull] tyvars: list[PExpr] * PExpr * Location
+    ) : Typarms
     {
         def parser = MainParser(env);
         parser.push_stream(tok);
-        def (tvs,s) = tyvars;
-        parser.parse_where_constraints(tvs,s)
+        parser.parse_where_constraints(tyvars)
     }
 
     
@@ -572,7 +571,7 @@ namespace Nemerle.Compiler
       Name.NameInCurrentColor (id, loc, env)
     }
 
-    TokenMap ['a] (tokens : Token, f : void -> 'a) : list ['a] {
+    TokenMap [T] (tokens : Token, f : void -> T) : list [T] {
       mutable result = [];
       foreach (tok is Token.LooseGroup in tokens) {
         push_stream (tok.Child);
@@ -721,18 +720,25 @@ namespace Nemerle.Compiler
     {
       def tok = get_token ();
       def res =
-        match (tok) {
+        match (tok)
+        {
           | Token.Keyword (key) =>
-            match (key) {
-              | "type" | "class" | "struct" | "module" | "interface" | "enum"
-              | "variant" =>
+            match (key)
+            {
+              | "type" | "class" | "struct" | "module" | "interface" | "enum" | "variant" =>
                 /// first get name of this declartion
                 def name = get_splicable_id ();
                 mutable end_loc = name.Location;
                 // now generic type parameters
-                def tyvars = parse_tyvars ();                  
+                def tyvars = parse_tyvars();
+
+                def (_, _, tyvarsLocation) = tyvars;
+                when (tyvarsLocation != Location.Default)
+                  end_loc = tyvarsLocation;
+
                 def t_extends =
-                  match (peek_token ()) {
+                  match (peek_token ())
+                  {
                     | Token.Operator (":") as colonToc =>
                       def errTypeExpected(loc)
                       {
@@ -744,11 +750,13 @@ namespace Nemerle.Compiler
                       def tok = peek_token ();
 
                       // if type not present.
-                      if (tok == null || tok is Token.BracesGroup || tok is Token.Keyword ("where")) {
+                      if (tok == null || tok is Token.BracesGroup || tok is Token.Keyword ("where"))
+                      {
                         errTypeExpected (colonToc.Location);
                         []
                       }
-                      else match (maybe_parse_ellipsis ()) {
+                      else match (maybe_parse_ellipsis ())
+                      {
                         | Some (e) => [e]
                         | _ =>
                           // parse , separated sequence as one expression
@@ -769,13 +777,16 @@ namespace Nemerle.Compiler
                 parse_top_extensions (mods, MacroTargets.Class);
 
                 mutable members = [];
-                unless (key == "type") {
+                unless (key == "type")
+                {
                   def nextTok = get_token ();
-                  match (nextTok) {
+                  match (nextTok)
+                  {
                     | Token.BracesGroup (children, _) as tok =>
                       end_loc = tok.Location;
                       push_stream (children);
-                      match (maybe_parse_ellipsis ()) {
+                      match (maybe_parse_ellipsis ())
+                      {
                         | Some(e) =>
                           pop_stream ();
                           members = [ClassMember.Field (e.Location, null, null, e)]; // special encoding for <[ decl: class A { ..$mems } ]>
@@ -795,7 +806,8 @@ namespace Nemerle.Compiler
                 }
 
                 def td =
-                  match (key) {
+                  match (key)
+                  {
                     | "class" => TopDeclaration.Class (typarms, t_extends, members)
                     | "struct" =>
                       mods.mods |= NemerleAttributes.Struct;
@@ -819,6 +831,13 @@ namespace Nemerle.Compiler
 
                     | _ => Util.ice ()
                   };
+
+                if (tyvarsLocation != Location.Default)
+                {
+                  td.HeaderLocation        = startLocation + tyvarsLocation;
+                  td.TypeParametrsLocation = tyvarsLocation;
+                }
+                else td.HeaderLocation     = startLocation + name.Location;
 
                 // Add references to TopDeclaration where members is defined.
                 foreach (member in members) 
@@ -862,6 +881,7 @@ namespace Nemerle.Compiler
             }
           | x => Error (x, "expecting type declaration"); TopDeclaration.Delegate (null);
         };
+
       res.modifiers = mods;
       res
     }
@@ -903,14 +923,14 @@ namespace Nemerle.Compiler
 
                   | (Token.SquareGroup, _) =>
                     is_property = true;
-                    ((null, null), parse_parameters ());
+                    ((null, null, Location.Default), parse_parameters ());
 
                   | (Token.RoundGroup, _) =>
-                    ((null, null), parse_parameters ());
+                    ((null, null, Location.Default), parse_parameters ());
 
                   | _ =>
                     is_property = true; // most probably it is a field or property
-                    ((null, null), ([], Location.Default))
+                    ((null, null, Location.Default), ([], Location.Default))
                 }
 
               def ret_type = parse_return_type (true);
@@ -1528,6 +1548,8 @@ namespace Nemerle.Compiler
       from = NList.RevFilter (from, 
         fun (x : Token.SquareGroup)
         {
+          mods.CustomAttributesLocation += x.Location;
+          assert2(mods.CustomAttributesLocation.Line > 0);
           mutable leave = true;
           
           match (x.Child)
@@ -1636,27 +1658,30 @@ namespace Nemerle.Compiler
       loop (NemerleAttributes.None)
     }
 
-    parse_tyvars () : list [PExpr] * PExpr
+    parse_tyvars () : list [PExpr] * PExpr * Location
     {
-      match (peek_token ()) {
+      match (peek_token ())
+      {
         | Token.SquareGroup (null) as t =>
           shift ();
-          Error (t, "expecting type variables"); (null, null)
+          Error (t, "expecting type variables"); (null, null, Location.Default)
           
         | Token.SquareGroup (children) as group =>
           push_stream ((children :> Token.LooseGroup).Child);          
-          match (maybe_parse_ellipsis ()) {
+          match (maybe_parse_ellipsis ())
+          {
             | Some (e) =>
               pop_stream ("type variables");
               shift ();              
-              ([], e)
+              ([], e, group.Location)
 
             | _ =>
               pop_stream ();
               shift (); // now we are after whole '[..]' group
-              (TokenMap (group, parse_expr), PExpr.Void ())
+              (TokenMap (group, parse_expr), PExpr.Void (), group.Location)
           }
-        | _ => (null, null)
+
+        | _ => (null, null, Location.Default)
       };
     }
 
@@ -1664,8 +1689,7 @@ namespace Nemerle.Compiler
      * if yes, it's PType.Spliced with expression describing their list
      * else it's PType.Void ()
      */
-    parse_where_constraints (tyvars : list [PExpr], splicing_type : PExpr) 
-    : Typarms 
+    parse_where_constraints (tyvars : list [PExpr], splicing_type : PExpr, _loc : Location) : Typarms 
     {
       def loop (acc) {
         if (flag_keyword ("where"))
@@ -2241,7 +2265,11 @@ namespace Nemerle.Compiler
       }
     }
 
-    parse_match_case () : MatchCase {
+    parse_match_case () : MatchCase
+    {
+      mutable patternsLocation;
+      mutable arrowLocation;
+
       def loop2 (acc)
       {
         def ReportError (x, res)
@@ -2249,9 +2277,12 @@ namespace Nemerle.Compiler
           Error (x, "'=>' or '|' expected (or incorrect pattern format)");
           NList.Rev (res :: acc)
         }
+       
         def res = parse_expr (TokenStoppers.Pipe | TokenStoppers.Arrow);
-        match (get_token ()) {
-          | Token.Operator ("=>") => NList.Rev (res :: acc)
+
+        match (get_token ())
+        {
+          | Token.Operator ("=>") as arrow => arrowLocation = arrow.Location; NList.Rev (res :: acc)
           | Token.Operator ("|") => loop2 (res :: acc)
           | Token.EndOfGroup as x =>
             match (res) {
@@ -2261,41 +2292,55 @@ namespace Nemerle.Compiler
             }
           | x => ReportError (x, res)
         }
-      };
+      }
+      
       def case_group = (stream :> Token.LooseGroup);
+      
       push_stream (case_group.Child);
       
       // eat pattern part and '=>'
       def pats = 
-        match (peek_token ()) {
-          | Token.Operator ("|") =>
+        match (peek_token ())
+        {
+          | Token.Operator ("|") as tok =>
+            patternsLocation = tok.Location;
             shift ();
-            match (maybe_parse_ellipsis ()) {
-              | Some (e) => expect_operator ("=>");
-                match (peek_token ()) {
+            match (maybe_parse_ellipsis ())
+            {
+              | Some (e) =>
+                arrowLocation = peek_token().Location;
+                expect_operator ("=>");
+                match (peek_token ())
+                {
                   | Token.EndOfGroup | Token.Operator ("|") =>
                     Error (last_tok, "expecting body of match case")
                   | _ => ()
                 }
                 [e]
+
               | None => loop2 ([])
             }
           | _ => loop2 ([])
         };
+
+      unless (pats.IsEmpty)
+        patternsLocation += pats.Last.Location;
+
       // modify beginning of current group to point at match case body  
       case_group.Child = stream; 
       pop_stream ();
 
       def expr =
-        match (parse_expr_sequence (TokenStoppers.Pipe)) {
+        match (parse_expr_sequence (TokenStoppers.Pipe))
+        {
           | [x] => x
           | [] => fatal_error (last_tok, "match case body cannot be empty")
-          | l =>
-            def loc = l.Tail.FoldLeft(l.Head.Location, (e, loc) => loc.Combine(e.Location));
-            PExpr.Sequence (loc.AsGenerated(), l)
+          | exprs =>
+            def loc = exprs.Tail.FoldLeft(exprs.Head.Location, (e, loc) => loc.Combine(e.Location));
+            PExpr.Sequence (loc.AsGenerated(), exprs)
         };
 
-      MatchCase (pats, expr)
+      MatchCase (pats, expr, patternsLocation, arrowLocation)
     }
 
     // parsing of expressions beginning (mostly) with unique keyword
@@ -2532,7 +2577,8 @@ namespace Nemerle.Compiler
             mutable body = try_body; // resulting expression
 
             // exception handlers
-            when (flag_sibling_keyword ("catch")) {
+            when (flag_sibling_keyword ("catch"))
+            {
               def mktry (h : MatchCase, cases) 
               {
                 match (h.patterns) 

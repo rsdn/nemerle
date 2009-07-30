@@ -678,6 +678,7 @@ namespace Nemerle.VisualStudio.Project
 		public void SetStatusText(string text) // implemetn IEngineCallback
 		{
 			LanguageService.SetStatusBarText(text);
+      Debug.WriteLine(text);
 		}
 
 		#region Implementation

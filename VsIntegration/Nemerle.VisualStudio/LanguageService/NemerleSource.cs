@@ -9,7 +9,7 @@ using Nemerle.Completion2.CodeFormatting;
 using Nemerle.VisualStudio.Project;
 
 using System.Collections.Generic;
-using System.Collections;
+//using System.Collections;
 using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -257,14 +257,12 @@ namespace Nemerle.VisualStudio.LanguageService
 			return Service.GetPrimaryViewForSource(this);
 		}
 
-		public ParseRequest BeginParseTopDeclaration()
-		{
-			//TODO: VladD2: Хорошо бы добавить остановку предудущей ParseTopDeclaratio-операции,
-      // если она еще не закончена (или находится в очереди) и вызван BeginParseTopDeclaration(). Service.LastActiveTextView использовать нельзя, так как текущим представлением может быть другой файл!
-
-			return BeginParse(0, 0, new TokenInfo(), (ParseReason)ParseReason2.ParseTopDeclaration,
-				GetView(), new ParseResultHandler(this.HandleParseResponse));
-		}
+    public override ParseRequest BeginParse(int line, int idx, TokenInfo info, ParseReason reason, IVsTextView view, ParseResultHandler callback)
+    {
+      //return base.BeginParse(line, idx, info, reason, view, callback);
+      //Debug.WriteLine("Soutce.BeginParse: " + reason.ToString());
+      return null;
+    }
 
 		public override void OnChangesCommitted(uint reason, TextSpan[] changedArea)
 		{
@@ -365,170 +363,334 @@ namespace Nemerle.VisualStudio.LanguageService
 			return info;
 		}
 
-		public override void ProcessHiddenRegions(ArrayList hiddenRegions)
+		public override void ProcessHiddenRegions(System.Collections.ArrayList hiddenRegions)
 		{
 			// TranslateMe:ss
 			//VladD2: Приходится переписывать реализацию от МС, так как она практически не расширяется как нужно нам.
 			throw new NotImplementedException();
 		}
 
-		public void ProcessHiddenRegions(List<NewHiddenRegion> hiddenRegions)
-		{
-      //TODO: VladD2: Переписать этот быдлокод!
-#if DEBUG
-			LanguageService.Preferences.MaxRegionTime = 1000 * 60 * 10;
-#endif
-			//this.hiddenRegions = hiddenRegions;
+    class TextSpanEqCmp : IEqualityComparer<TextSpan>
+    {
+      public bool Equals(TextSpan x, TextSpan y)
+      {
+        return x.iStartLine == y.iStartLine && x.iEndLine    == y.iEndLine 
+            && x.iEndIndex  == y.iEndIndex  && x.iStartIndex == y.iStartIndex;
+      }
 
-			if (!this.OutliningEnabled)
+      public int GetHashCode(TextSpan x)
+      {
+        return x.iStartLine ^ x.iEndLine ^ x.iEndIndex ^ x.iStartIndex;
+      }
+
+      public static TextSpanEqCmp Instance = new TextSpanEqCmp();
+    }
+
+    public void ProcessHiddenRegions(List<NewHiddenRegion> regions, int sourceVersion)
+		{
+      if (!this.OutliningEnabled)
 				return;
 
-			// Compare the existing regions with the new regions and 
-			// remove any that do not match the new regions.
-			IVsHiddenTextSession session = GetHiddenTextSession();
-			IVsEnumHiddenRegions ppenum;
-			var aspan = new TextSpan[1];
-			aspan[0] = GetDocumentSpan();
-      ErrorHandler.ThrowOnFailure(session.EnumHiddenRegions((uint)FIND_HIDDEN_REGION_FLAGS.FHR_ALL_REGIONS, HiddenRegionCookie, aspan, out ppenum));
-			uint fetched;
-			var aregion = new IVsHiddenRegion[1];
-			int matched = 0;
-			int removed = 0;
-			int added   = 0;
-			int pos     = 0;
+      var timer = Stopwatch.StartNew();
 
-			// Create a list of IVsHiddenRegion objects, sorted in the same order that the
-			// authoring sink sorts.  This is necessary because VS core editor does NOT return
-			// the regions in the same order that we add them.
-			var regions = new List<IVsHiddenRegion>();
-      var spans = new List<TextSpan>();
-
-			while (ppenum.Next(1, aregion, out fetched) == NativeMethods.S_OK && fetched == 1)
-			{
-        var region = aregion[0];
-        int regTypeInt;
-        ErrorHandler.ThrowOnFailure(region.GetType(out regTypeInt));
-        uint dwData;
-        region.GetClientData(out dwData);
-        HIDDEN_REGION_TYPE regType = (HIDDEN_REGION_TYPE)regTypeInt;
-        if (regType != HIDDEN_REGION_TYPE.hrtCollapsible)// || dwData != 0 && dwData != HiddenRegionCookie)
-          continue;
-
-        ErrorHandler.ThrowOnFailure(region.GetSpan(aspan));
-				TextSpan s = aspan[0];
-        var loc = Utils.LocationFromSpan(FileIndex, s);
-        int i = spans.Count - 1;
-				while (i >= 0)
-				{
-					TextSpan s2 = spans[i];
-					if (TextSpanHelper.StartsAfterStartOf(s, s2))
-						break;
-					i--;
-				}
-				spans.Insert(i + 1, s);
-				regions.Insert(i + 1, region);
-			}
-
-			// Now merge the list found with the list in the AuthoringSink to figure out
-			// what matches, what needs to be removed, and what needs to be inserted.
-			NewHiddenRegion r = pos < hiddenRegions.Count ? hiddenRegions[pos] : new NewHiddenRegion();
-			for (int i = 0, n = regions.Count; i < n; i++)
-			{
-				IVsHiddenRegion region = regions[i];
-				TextSpan span = spans[i];
-
-				// In case we're inserting a new region, scan ahead to matching start line
-				while (r.tsHiddenText.iStartLine < span.iStartLine)
-				{
-					pos++;
-					if (pos >= hiddenRegions.Count)
-					{
-						r = new NewHiddenRegion();
-						break;
-					}
-					else
-					{
-						r = (NewHiddenRegion)hiddenRegions[pos];
-					}
-				}
-				if (TextSpanHelper.IsSameSpan(r.tsHiddenText, span) && HasSameBanner(r, region))
-				{
-					// This region is already there.
-					matched++;
-					hiddenRegions.RemoveAt(pos);
-					r = (pos < hiddenRegions.Count) ? (NewHiddenRegion)hiddenRegions[pos] : new NewHiddenRegion();
-				}
-				else
-				{
-					removed++;
-					ErrorHandler.ThrowOnFailure(region.Invalidate((int)CHANGE_HIDDEN_REGION_FLAGS.chrNonUndoable));
-				}
-			}
-
-			int start = Environment.TickCount;
-      foreach (var item in hiddenRegions)
+      IVsEnumHiddenRegions ppenum = null;
+      LockWrite();
+      try
       {
-        if (item.pszBanner == "Toplevel typing")
+        if (CurrentVersion != sourceVersion)
+          return;
+
+        Debug.WriteLine("SetRegions: begin               " + timer.Elapsed); timer.Reset(); timer.Start();
+
+        // Compare the existing regions with the new regions and 
+        // remove any that do not match the new regions.
+        IVsHiddenTextSession session = GetHiddenTextSession();
+        var aspan = new TextSpan[1];
+        aspan[0] = GetDocumentSpan();
+        ErrorHandler.ThrowOnFailure(session.EnumHiddenRegions((uint)FIND_HIDDEN_REGION_FLAGS.FHR_ALL_REGIONS, HiddenRegionCookie, aspan, out ppenum));
+        uint fetched;
+        var aregion = new IVsHiddenRegion[1];
+        int added = 0;
+        int removed = 0;
+
+        // Create a list of IVsHiddenRegion objects, sorted in the same order that the
+        // authoring sink sorts.  This is necessary because VS core editor does NOT return
+        // the regions in the same order that we add them.
+        var regionsMap = new Dictionary<TextSpan, IVsHiddenRegion>(TextSpanEqCmp.Instance);
+
+        while (ppenum.Next(1, aregion, out fetched) == NativeMethods.S_OK && fetched == 1)
         {
-          // VladD2: Debug staff
-          var behavior = (HIDDEN_REGION_BEHAVIOR)item.dwBehavior;
-          var dwClient = item.dwClient;
-          var state = (HIDDEN_REGION_STATE)item.dwState;
-          var type = (HIDDEN_REGION_TYPE)item.iType;
-          var text = item.pszBanner;
-          var loc = Utils.LocationFromSpan(FileIndex, item.tsHiddenText);
-          break;
+          var region = aregion[0];
+          int regTypeInt;
+          ErrorHandler.ThrowOnFailure(region.GetType(out regTypeInt));
+          uint dwData;
+          region.GetClientData(out dwData);
+          HIDDEN_REGION_TYPE regType = (HIDDEN_REGION_TYPE)regTypeInt;
+          if (regType != HIDDEN_REGION_TYPE.hrtCollapsible)// || dwData != 0 && dwData != HiddenRegionCookie)
+            continue;
+
+          ErrorHandler.ThrowOnFailure(region.GetSpan(aspan));
+          TextSpan s = aspan[0];
+          var loc = Utils.LocationFromSpan(FileIndex, s);
+          regionsMap[s] = region;
         }
-      }
-			if (hiddenRegions.Count > 0)
-			{
-				int count = hiddenRegions.Count;
-				// For very large documents this can take a while, so add them in chunks of 
-				// 1000 and stop after 5 seconds. 
-				int maxTime = this.LanguageService.Preferences.MaxRegionTime;
-				int chunkSize = 1000;
-				NewHiddenRegion[] chunk = new NewHiddenRegion[chunkSize];
-				int i = 0;
-				while (i < count && Utils.TimeSince(start) < maxTime)
-				{
-					int j = 0;
-					while (i < count && j < chunkSize)
-					{
-						r = (NewHiddenRegion)hiddenRegions[i];
-						if (!TextSpanHelper.ValidSpan(this, r.tsHiddenText))
-						{
-#if	LANGTRACE
-							Debug.Assert(false, "Invalid span " + r.tsHiddenText.iStartLine + "," + r.tsHiddenText.iStartIndex + "," + r.tsHiddenText.iEndLine + "," + r.tsHiddenText.iEndIndex);
-#endif
-							break;
-						}
-						else
-						{
-							chunk[j] = r;
-							added++;
-						}
-						i++;
-						j++;
-					}
-					int hr = session.AddHiddenRegions((int)CHANGE_HIDDEN_REGION_FLAGS.chrNonUndoable, j, chunk, null);
-					if (ErrorHandler.Failed(hr))
-					{
-						break; // stop adding if we start getting errors.
-					}
-				}
-			}
+
+        Debug.WriteLine("SetRegions: old regions fetched " + timer.Elapsed); timer.Reset(); timer.Start();
+
+        var newRegions = new List<NewHiddenRegion>();
+
+        foreach (var rg in regions)
+          if (!regionsMap.ContainsKey(rg.tsHiddenText))
+            newRegions.Add(rg);
+
+        var newRegiohsMap = new Dictionary<TextSpan, NewHiddenRegion>(regions.Count);
+        foreach (var rg in regions)
+          if (newRegiohsMap.ContainsKey(rg.tsHiddenText))
+          { }
+          else newRegiohsMap[rg.tsHiddenText] = rg;
+
+        foreach (var rg in regionsMap)
+          if (!newRegiohsMap.ContainsKey(rg.Key))
+          {
+            ErrorHandler.ThrowOnFailure(rg.Value.Invalidate((int)CHANGE_HIDDEN_REGION_FLAGS.chrNonUndoable));
+            removed++;
+          }
+
+        Debug.WriteLine("SetRegions: update calculated   " + timer.Elapsed); timer.Reset(); timer.Start();
+
+        int start = Environment.TickCount;
+
+        int invalid = 0;
+        if (newRegions.Count > 0)
+        {
+          int count = newRegions.Count;
+          // For very large documents this can take a while, so add them in chunks of 
+          // 1000 and stop after 5 seconds. 
+          int maxTime = this.LanguageService.Preferences.MaxRegionTime;
+          int chunkSize = 1000;
+          NewHiddenRegion[] chunk = new NewHiddenRegion[chunkSize];
+          int i = 0;
+          while (i < count && Utils.TimeSince(start) < maxTime)
+          {
+            int j = 0;
+            while (i < count && j < chunkSize)
+            {
+              NewHiddenRegion r = newRegions[i];
+              if (!TextSpanHelper.ValidSpan(this, r.tsHiddenText))
+              {
+                //Debug.Assert(false, "Invalid span " + r.tsHiddenText.iStartLine + "," + r.tsHiddenText.iStartIndex + "," 
+                //                     + r.tsHiddenText.iEndLine + "," + r.tsHiddenText.iEndIndex);
+                //break;
+                invalid++;
+              }
+              else
+              {
+                chunk[j] = r;
+                added++;
+              }
+              i++;
+              j++;
+            }
+            int hr = session.AddHiddenRegions((int)CHANGE_HIDDEN_REGION_FLAGS.chrNonUndoable, j, chunk, null);
+            if (ErrorHandler.Failed(hr))
+              break; // stop adding if we start getting errors.
+          }
+        }
+
+        Debug.WriteLine("Removed: " + removed + " For add: " + newRegions.Count + " Really added: " + added + " invalid: " + invalid);
 
 #if PERFTRACE
 			int diff = TimeUtilities.TimeSince(start);
 			Trace.WriteLine(String.Format(CultureInfo.InvariantCulture, "Hidden Regions: Matched={0}, Removed={1}, Addded={2}/{3} in {4} ms", matched, removed, added, hiddenRegions.Count, diff));
 #endif
-			Marshal.ReleaseComObject(ppenum);
+      }
+      finally
+      {
+        UnlockWrite();
+
+        if (ppenum != null)
+          Marshal.ReleaseComObject(ppenum);
+
+        Debug.WriteLine("SetRegions: end                 " + timer.Elapsed);
+      }
+
       this.RegionsLoaded = true;
 		}
 
-		//Banner comparison: in the case of editor controlled region, this is a noop
+//    public void ProcessHiddenRegionsOld(List<NewHiddenRegion> hiddenRegions)
+//    {
+//      //TODO: VladD2: Переписать этот быдлокод!
+//#if DEBUG
+//      LanguageService.Preferences.MaxRegionTime = 1000 * 60 * 10;
+//#endif
+//      //this.hiddenRegions = hiddenRegions;
+
+//      if (!this.OutliningEnabled)
+//        return;
+
+//      var timer = Stopwatch.StartNew();
+//      Debug.WriteLine("SetRegions: begin " + timer.Elapsed);
+
+//      // Compare the existing regions with the new regions and 
+//      // remove any that do not match the new regions.
+//      IVsHiddenTextSession session = GetHiddenTextSession();
+//      IVsEnumHiddenRegions ppenum;
+//      var aspan = new TextSpan[1];
+//      aspan[0] = GetDocumentSpan();
+//      ErrorHandler.ThrowOnFailure(session.EnumHiddenRegions((uint)FIND_HIDDEN_REGION_FLAGS.FHR_ALL_REGIONS, HiddenRegionCookie, aspan, out ppenum));
+//      uint fetched;
+//      var aregion = new IVsHiddenRegion[1];
+//      int matched = 0;
+//      int removed = 0;
+//      int added = 0;
+//      int pos = 0;
+
+//      // Create a list of IVsHiddenRegion objects, sorted in the same order that the
+//      // authoring sink sorts.  This is necessary because VS core editor does NOT return
+//      // the regions in the same order that we add them.
+//      var regions = new List<IVsHiddenRegion>();
+//      var spans = new List<TextSpan>();
+//      var regions2 = new List<IVsHiddenRegion>();
+//      var spans2 = new List<TextSpan>();
+
+//      while (ppenum.Next(1, aregion, out fetched) == NativeMethods.S_OK && fetched == 1)
+//      {
+//        var region = aregion[0];
+//        int regTypeInt;
+//        ErrorHandler.ThrowOnFailure(region.GetType(out regTypeInt));
+//        uint dwData;
+//        region.GetClientData(out dwData);
+//        HIDDEN_REGION_TYPE regType = (HIDDEN_REGION_TYPE)regTypeInt;
+//        if (regType != HIDDEN_REGION_TYPE.hrtCollapsible)// || dwData != 0 && dwData != HiddenRegionCookie)
+//          continue;
+
+//        ErrorHandler.ThrowOnFailure(region.GetSpan(aspan));
+//        TextSpan s = aspan[0];
+//        var loc = Utils.LocationFromSpan(FileIndex, s);
+//        int i = spans.Count - 1;
+//        while (i >= 0)
+//        {
+//          TextSpan s2 = spans[i];
+//          if (TextSpanHelper.StartsAfterStartOf(s, s2))
+//            break;
+//          i--;
+//        }
+//        spans.Insert(i + 1, s);
+//        regions.Insert(i + 1, region);
+
+//        spans2.Add(s);
+//        regions2.Add(region);
+//      }
+
+//      Debug.WriteLine("SetRegions: old regions fetched " + timer.Elapsed);
+
+//      // Now merge the list found with the list in the AuthoringSink to figure out
+//      // what matches, what needs to be removed, and what needs to be inserted.
+//      NewHiddenRegion r = pos < hiddenRegions.Count ? hiddenRegions[pos] : new NewHiddenRegion();
+//      for (int i = 0, n = regions.Count; i < n; i++)
+//      {
+//        IVsHiddenRegion region = regions[i];
+//        TextSpan span = spans[i];
+
+//        // In case we're inserting a new region, scan ahead to matching start line
+//        while (r.tsHiddenText.iStartLine < span.iStartLine)
+//        {
+//          pos++;
+//          if (pos >= hiddenRegions.Count)
+//          {
+//            r = new NewHiddenRegion();
+//            break;
+//          }
+//          else
+//          {
+//            r = (NewHiddenRegion)hiddenRegions[pos];
+//          }
+//        }
+//        if (TextSpanHelper.IsSameSpan(r.tsHiddenText, span) && HasSameBanner(r, region))
+//        {
+//          // This region is already there.
+//          matched++;
+//          hiddenRegions.RemoveAt(pos);
+//          r = (pos < hiddenRegions.Count) ? (NewHiddenRegion)hiddenRegions[pos] : new NewHiddenRegion();
+//        }
+//        else
+//        {
+//          removed++;
+//          ErrorHandler.ThrowOnFailure(region.Invalidate((int)CHANGE_HIDDEN_REGION_FLAGS.chrNonUndoable));
+//        }
+//      }
+
+//      //foreach (var item in hiddenRegions)
+//      //{
+//      //  if (item.pszBanner == "Toplevel typing")
+//      //  {
+//      //    // VladD2: Debug staff
+//      //    var behavior = (HIDDEN_REGION_BEHAVIOR)item.dwBehavior;
+//      //    var dwClient = item.dwClient;
+//      //    var state = (HIDDEN_REGION_STATE)item.dwState;
+//      //    var type = (HIDDEN_REGION_TYPE)item.iType;
+//      //    var text = item.pszBanner;
+//      //    var loc = Utils.LocationFromSpan(FileIndex, item.tsHiddenText);
+//      //    break;
+//      //  }
+//      //}
+
+//      Debug.WriteLine("SetRegions: medged " + timer.Elapsed);
+
+//      int start = Environment.TickCount;
+
+//      if (hiddenRegions.Count > 0)
+//      {
+//        int count = hiddenRegions.Count;
+//        // For very large documents this can take a while, so add them in chunks of 
+//        // 1000 and stop after 5 seconds. 
+//        int maxTime = this.LanguageService.Preferences.MaxRegionTime;
+//        int chunkSize = 1000;
+//        NewHiddenRegion[] chunk = new NewHiddenRegion[chunkSize];
+//        int i = 0;
+//        while (i < count && Utils.TimeSince(start) < maxTime)
+//        {
+//          int j = 0;
+//          while (i < count && j < chunkSize)
+//          {
+//            r = (NewHiddenRegion)hiddenRegions[i];
+//            if (!TextSpanHelper.ValidSpan(this, r.tsHiddenText))
+//            {
+//#if	LANGTRACE
+//              Debug.Assert(false, "Invalid span " + r.tsHiddenText.iStartLine + "," + r.tsHiddenText.iStartIndex + "," + r.tsHiddenText.iEndLine + "," + r.tsHiddenText.iEndIndex);
+//#endif
+//              break;
+//            }
+//            else
+//            {
+//              chunk[j] = r;
+//              added++;
+//            }
+//            i++;
+//            j++;
+//          }
+//          int hr = session.AddHiddenRegions((int)CHANGE_HIDDEN_REGION_FLAGS.chrNonUndoable, j, chunk, null);
+//          if (ErrorHandler.Failed(hr))
+//          {
+//            break; // stop adding if we start getting errors.
+//          }
+//        }
+//      }
+
+//      Debug.WriteLine("SetRegions: end " + timer.Elapsed);
+
+//#if PERFTRACE
+//      int diff = TimeUtilities.TimeSince(start);
+//      Trace.WriteLine(String.Format(CultureInfo.InvariantCulture, "Hidden Regions: Matched={0}, Removed={1}, Addded={2}/{3} in {4} ms", matched, removed, added, hiddenRegions.Count, diff));
+//#endif
+//      Marshal.ReleaseComObject(ppenum);
+//      this.RegionsLoaded = true;
+//    }
+    
+    //Banner comparison: in the case of editor controlled region, this is a noop
 		//otherwise, compare banners
 		//caveat is that GetBanner rountrips null to "...".
+
 		private bool HasSameBanner(NewHiddenRegion r, IVsHiddenRegion region)
 		{
 			uint behavior;
@@ -945,10 +1107,15 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region ISource Members
 
+    public int CurrentVersion { get { return TimeStamp; } }
 
-		public void SetRegions(IList<RegionInfo> regions)
-		{
-      
+    public void LockWrite()       { TextLines.LockBufferEx((uint)BufferLockFlags.BLF_READ); }
+    public void UnlockWrite()     { TextLines.UnlockBufferEx((uint)BufferLockFlags.BLF_READ); }
+    public void LockReadWrite()   { TextLines.LockBufferEx((uint)BufferLockFlags.BLF_READ_AND_WRITE); }
+    public void UnlocReadkWrite() { TextLines.UnlockBufferEx((uint)BufferLockFlags.BLF_READ_AND_WRITE); }
+
+		public void SetRegions(IList<RegionInfo> regions, int sourceVersion)
+    {
       var newRegions = regions.Select(ri => 
         {
       	  var secondTime = RegionsLoaded;
@@ -963,8 +1130,7 @@ namespace Nemerle.VisualStudio.LanguageService
             dwBehavior = (int)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled, //.hrbClientControlled;
             pszBanner = string.IsNullOrEmpty(text) ? null : text,
             dwClient = NemerleSource.HiddenRegionCookie,
-            dwState = (uint)(secondTime || isExpanded 
-                      ? HIDDEN_REGION_STATE.hrsExpanded : HIDDEN_REGION_STATE.hrsDefault)
+            dwState = (uint)(secondTime || isExpanded ? HIDDEN_REGION_STATE.hrsExpanded : HIDDEN_REGION_STATE.hrsDefault)
           };
 
           if (text == "Toplevel typing")
@@ -982,8 +1148,8 @@ namespace Nemerle.VisualStudio.LanguageService
           return r;
         });
 
-      ProcessHiddenRegions(newRegions.ToList());
-		}
+      ProcessHiddenRegions(newRegions.ToList(), sourceVersion);
+    }
 
 		public void SetTopDeclarations(TopDeclaration[] topDeclarations)
 		{
