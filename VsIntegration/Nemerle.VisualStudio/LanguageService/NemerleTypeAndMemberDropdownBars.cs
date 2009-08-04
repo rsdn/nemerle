@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Collections;
 using System.Collections.Generic;
 using Microsoft.VisualStudio.Package;
@@ -335,7 +336,10 @@ namespace Nemerle.VisualStudio.LanguageService
 					_dropDownMembers.Clear();
 
 				if (selType >= 0 && selType < _dropDownTypes.Length)
-					_dropDownMembers.AddRange(_dropDownTypes[selType].GetMembers());
+				{
+					_dropDownMembers.AddRange(_dropDownTypes[selType].GetMembers()
+						.OrderBy(m => m.Name));
+				}
 
 				return true;
 			}

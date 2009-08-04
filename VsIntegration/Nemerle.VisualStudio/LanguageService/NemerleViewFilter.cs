@@ -51,12 +51,28 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 		}
 
+		// previous values of ScrollInfo
+		int _iBar, _iMinUnit, _iMaxUnits, _iVisibleUnits, _iFirstVisibleUnit;
+		IVsTextView _lastView;
+
 		public override void OnChangeScrollInfo(IVsTextView view, int iBar,
 			int iMinUnit, int iMaxUnits, int iVisibleUnits, int iFirstVisibleUnit)
 		{
 			base.OnChangeScrollInfo(view, iBar, iMinUnit, iMaxUnits, iVisibleUnits, iFirstVisibleUnit);
+
+			if (_lastView != view && _iBar == iBar && _iMinUnit == iMinUnit && _iMaxUnits == iMaxUnits 
+				&& _iVisibleUnits == iVisibleUnits && _iFirstVisibleUnit == iFirstVisibleUnit)
+				return;
+
 			Source.TryHighlightBraces(view);
-			ShowAst(view, false);
+
+			//ShowAst(view, false);
+			_lastView          = view;
+			_iBar              = iBar;
+			_iMinUnit          = iMinUnit;
+			_iMaxUnits         = iMaxUnits;
+			_iVisibleUnits     = iVisibleUnits;
+			_iFirstVisibleUnit = iFirstVisibleUnit;
 		}
 
 		protected override int ExecCommand(ref Guid guidCmdGroup, uint nCmdId, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)

@@ -26,17 +26,20 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-using System.Text;
+using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
-using System;
+using System.Text;
 
 using Nemerle.Collections;
 using Nemerle.Utility;
 
+using NStack = Nemerle.Collections.Stack;
+
 namespace Nemerle.Compiler {
 
-public variant Token : System.Collections.Generic.IEnumerable [Token]
+public variant Token : IEnumerable [Token]
 {
   | Identifier { name : string; }
   | QuotedIdentifier { name : string; }
@@ -140,7 +143,7 @@ public variant Token : System.Collections.Generic.IEnumerable [Token]
     }
   }
 
-  public GetEnumerator () : System.Collections.Generic.IEnumerator [Token]
+  public GetEnumerator () : IEnumerator [Token]
   {
     match (this) 
     {
@@ -258,10 +261,15 @@ public abstract class LexerBase : IDisposable
   }
 
   protected mutable isPendingChar : bool;  // is there already some first char
-  protected mutable pendingChar : char;
-  protected mutable line : int;
-  protected mutable col : int;
-  protected mutable file_idx : int;
+  protected mutable pendingChar   : char;
+  protected mutable line          : int;
+  protected mutable col           : int;
+  protected mutable file_idx      : int;
+  protected mutable _linesLengths : List[int] = List(256);
+  
+  public LinesLengths : array[int] { get { _linesLengths.ToArray() } }
+  public LinesCount   : int        { get { _linesLengths.Count - 1 } }
+  public IsEof        : bool       { get; private set; }
   
   protected static opchars : array [bool];  
   public static BaseKeywords : Set [string];
@@ -308,7 +316,7 @@ public abstract class LexerBase : IDisposable
   /** if there was only white chars from beginnig of line */
   protected mutable white_beginning : bool;  
 
-  protected mutable eating_stack : Stack[int]; // stack of states (nested #if)
+  protected mutable eating_stack : NStack[int]; // stack of states (nested #if)
 
   /**
     states:
@@ -345,9 +353,7 @@ public abstract class LexerBase : IDisposable
     public this (name : string) { this.name = name; }
   }
 
-  public class PragmaIndent : System.Exception
-  {
-  }
+  public class PragmaIndent : System.Exception { }
 
   protected this (manager : ManagerClass, fn : string)
   {
@@ -372,7 +378,14 @@ public abstract class LexerBase : IDisposable
   
   public BeginParseFile() : void
   {
+    IsEof                = false;
     is_check_wrong_chars = Manager.Options.Warnings.IsEnabled (10002);
+
+    when (_linesLengths != null)
+    {
+      _linesLengths.Clear();
+      _linesLengths.Add(-1); // fake line!
+    }
   }
 
   protected read_or_eol () : char
@@ -388,7 +401,17 @@ public abstract class LexerBase : IDisposable
 
     match (ch)
     {
-      | '\n' => ++line; col = 1;
+      | '\n' =>
+        if (_linesLengths == null)
+          ++line;
+        else
+        {
+          _linesLengths.Add(col);
+          ++line;
+          when (_linesLengths.Count != line) // maybe it cause by "line" directive...
+            assert2(_linesLengths.Count == line - line_start + line_stack);
+        }
+        col = 1;
 
       | '\t' =>
         ++col;
@@ -402,7 +425,14 @@ public abstract class LexerBase : IDisposable
           when (is_check_wrong_chars)
             Message.Warning (10002, this.Location, "CR character found in input stream");
 
-      | '\0' => ()
+      | '\0' => 
+        unless (IsEof)
+        {
+          IsEof = true;
+
+          when (_linesLengths != null)
+            _linesLengths.Add(col);
+        }
 
       | _ => ++col;
     };
@@ -1077,9 +1107,11 @@ public abstract class LexerBase : IDisposable
             }
               
           | '#' =>
-            if (white_beginning) {
+            if (white_beginning)
+            {
+              def loc = this.Location;
               _ = read ();
-              parse_preprocessor ();
+              parse_preprocessor(loc);
               loop (false)
             }
             else {
@@ -1328,31 +1360,41 @@ public abstract class LexerBase : IDisposable
     line.ToString ()
   }
 
-  parse_preprocessor () : void
+  parse_preprocessor (startLocation : Location) : void
   {
-    def eat_spaces () : void {
+    def eat_spaces () : void
+    {
       mutable c = peek ();
+
       while (Char.IsWhiteSpace (c) && c != '\n') 
       {
         ignore (read ());
         c = peek ();
       }
-    };
-    def read_word () : string {
-      eat_spaces ();
+    }
+    
+    def read_word () : string
+    {
+      eat_spaces();
       def word = StringBuilder ();
-      try {
+      
+      try
+      {
         while (IsIdBeginning (peek_or_white ()) || char.IsDigit (peek_or_white ()))
           _ = word.Append (read ())
-      } catch { _ is LexerBase.Error => () };
+      }
+      catch { _ is LexerBase.Error => () };
+
       word.ToString ()
-    };
+    }
 
     def directive = read_word ();
+
     when (directive == "")
       throw LexerBase.Error ("expected preprocessing directive after `#'");
 
-    match (directive) {
+    match (directive)
+    {
       | "if" =>
         eating_stack.Push (eating_now);
         def now = evaluate_preprocessing_expr (read_to_the_end_of_line ().Trim ());
@@ -1363,7 +1405,8 @@ public abstract class LexerBase : IDisposable
 
       | "elif" =>
         def now = evaluate_preprocessing_expr (read_to_the_end_of_line ().Trim ());
-        match (eating_now) {
+        match (eating_now)
+        {
           | -4 | 4 => throw LexerBase.Error ("unexpected #elif inside region")
           | -3 | 3 => throw LexerBase.Error ("unexpected #elif after #else")
           | 1 => eating_now = if (now) -1 else 1
@@ -1373,18 +1416,21 @@ public abstract class LexerBase : IDisposable
 
       | "else" =>
         eat_spaces ();
+
         when (read_to_the_end_of_line () != "")
           throw LexerBase.Error ("extra tokens after #else");
-        match (eating_now) {
+        match (eating_now)
+        {
           | -4 | 4 => throw LexerBase.Error ("unexpected #else inside region")
           | -3 | 3 => throw LexerBase.Error ("unexpected #else after #else")
-          | 1 => eating_now = -3
+          | 1      => eating_now = -3
           | -1 | 2 => eating_now = 3
-          | _ => throw LexerBase.Error ("unbalanced preprocessing directives")
+          | _      => throw LexerBase.Error ("unbalanced preprocessing directives")
         }
         
       | "endif" =>
         eat_spaces ();
+
         when (read_to_the_end_of_line () != "")
           throw LexerBase.Error ("extra tokens after #endif");
         match (eating_now)
@@ -1397,10 +1443,14 @@ public abstract class LexerBase : IDisposable
 
       | "line" =>
         eat_spaces ();
+
         mutable c = peek_or_white ();
+
         def (new_line, new_file) =
-          if (c == 'd') {
-            if (read_word () == "default") {
+          if (c == 'd')
+          {
+            if (read_word () == "default")
+            {
               eat_spaces ();
               when (read_to_the_end_of_line () != "")
                 throw LexerBase.Error ("extra tokens after directive");
@@ -1409,9 +1459,11 @@ public abstract class LexerBase : IDisposable
             else
               throw LexerBase.Error ("expecting line number or `default' indicator")
           }
-          else {
+          else
+          {
             def num = StringBuilder ();
-            def loop () {
+            def loop ()
+            {
               when (char.IsDigit (c))
               {
                 ignore (num.Append (read ()));
@@ -1419,31 +1471,36 @@ public abstract class LexerBase : IDisposable
                 loop ();
               }
             }
+
             loop ();
+            
             if (num.Length > 0)
               (Int32.Parse (num.ToString ()), read_to_the_end_of_line ().Trim ())
-            else {
+            else
+            {
               Message.Error (this.Location, "expecting line number or `default' indicator");
               _ = read_to_the_end_of_line ();
               (-1, null)
             }
           };
-        if (new_line == -1) {
+
+        if (new_line == -1)
+        {
           when (line_stack != -1)
             line = line - line_start + line_stack;
           file_idx = Location.GetFileIndex (file_real);
           line_stack = -1;
         }
-        else {
+        else
+        {
           // if there is already something on stack, bring real line first
           when (line_stack != -1)
             line = line - line_start + line_stack;
           line_start = new_line;
           line_stack = line;
           line = new_line;
-          when (new_file != "") {
+          when (new_file != "") 
             file_idx = Location.GetFileIndex (new_file);
-          }
         }
 
       | "error" => 
@@ -1455,12 +1512,14 @@ public abstract class LexerBase : IDisposable
       | "region" =>
         eating_stack.Push (eating_now);
         eating_now = if (eating_now > 0) 4 else -4;
-        incompleteRegions ::= Region (this.Location, read_to_the_end_of_line ().Trim ());
+        incompleteRegions ::= Region (startLocation, read_to_the_end_of_line());
 
       | "endregion" =>
         when (eating_now != 4 && eating_now != -4)
           throw LexerBase.Error ("Unexpected #endregion");
+
         eating_now = eating_stack.Pop ();          
+
         match (incompleteRegions)
         {
           | h :: t =>
@@ -1469,6 +1528,7 @@ public abstract class LexerBase : IDisposable
             incompleteRegions = t;
           | [] => throw LexerBase.Error ("Unexpected preprocessor directive")
         }
+
         _ = read_to_the_end_of_line ();
 
       | "define" =>
@@ -1490,7 +1550,8 @@ public abstract class LexerBase : IDisposable
         _ = read_to_the_end_of_line ()
 
       | "pragma" =>
-        match (read_word ()) {
+        match (read_word ())
+        {
           | "warning" =>
             def negate =
               match (read_word ()) {
@@ -1861,6 +1922,16 @@ public class LexerString : LexerBase
     file_idx = loc.FileIndex;
     line = loc.Line;
     col = loc.Column;
+
+    if (line > 0 && col > 0)
+      repeat (line)
+        _linesLengths.Add(-1);
+    else
+    {
+      // this can happen only if it is a ScanLexer!
+      assert2(line == 0 && col == 0 && GetType().Name == "ScanLexer");
+      _linesLengths = null;
+    }
   }
 
   public override Dispose () : void { }
@@ -1883,7 +1954,8 @@ public class LexerString : LexerBase
   
   override protected read_from_input () : char
   {
-    if (pos < reader.Length) {
+    if (pos < reader.Length)
+    {
       def ch = reader[pos];
       ++pos;
       ch

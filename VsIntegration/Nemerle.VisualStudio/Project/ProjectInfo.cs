@@ -211,6 +211,11 @@ namespace Nemerle.VisualStudio.Project
 
 		internal void RemoveSource(NemerleSource source)
 		{
+			var taksForSource = GetTaksForSource(source.FileIndex);
+
+			foreach (var task in taksForSource)
+				task.DisposeTextLineMarker();
+
 			string path = source.GetFilePath();
 			_sourceMap.Remove(path);
 		}
@@ -522,10 +527,16 @@ namespace Nemerle.VisualStudio.Project
 		//  }
 		//}
 
-		internal void MakeCompilerMessagesTextMarkers(IVsTextLines buffer, int fileIndex)
+		IEnumerable<NemerleErrorTask> GetTaksForSource(int fileIndex)
 		{
 			var tasks = _errorList.Tasks.OfType<NemerleErrorTask>();
 			var taksForSource = tasks.Where(t => t.CompilerMessage.Location.FileIndex == fileIndex);
+			return taksForSource;
+		}
+
+		internal void MakeCompilerMessagesTextMarkers(IVsTextLines buffer, int fileIndex)
+		{
+			var taksForSource = GetTaksForSource(fileIndex);
 
 			foreach (var task in taksForSource)
 				task.MakeTextMarker(buffer);

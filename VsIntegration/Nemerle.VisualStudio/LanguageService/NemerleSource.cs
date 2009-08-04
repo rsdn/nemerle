@@ -15,9 +15,11 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System;
 
-using VsCommands2K = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
-using TopDeclaration = Nemerle.Compiler.Parsetree.TopDeclaration;
-using Tuple2 = Nemerle.Builtins.Tuple<int, int>;
+using VsCommands2K      = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
+using TopDeclaration    = Nemerle.Compiler.Parsetree.TopDeclaration;
+using TupleIntInt       = Nemerle.Builtins.Tuple<int, int>;
+using TupleStringInt    = Nemerle.Builtins.Tuple<string, int>;
+using TupleStringIntInt = Nemerle.Builtins.Tuple<string, int, int>;
 
 
 namespace Nemerle.VisualStudio.LanguageService
@@ -97,11 +99,34 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region OnChangeLineText
 
+		string _text;
+
 		public override void OnChangeLineText(TextLineChange[] lineChange, int last)
 		{
 			var oldLastDirtyTime = LastDirtyTime;
 			base.OnChangeLineText(lineChange, last);
 			TimeStamp++;
+			var timer = Stopwatch.StartNew();
+			_text = GetText();
+
+			//Debug.WriteLine("GetText() took: " + timer.Elapsed); timer.Reset(); timer.Start();
+
+			//var engine = GetEngine();
+			//var lexer = new LexerString(engine, _text, new Location(FileIndex, 1, 1, 1, 1));
+			//var preparser = new PreParser(lexer, engine.CoreEnv);
+			//var tokens = preparser.PreParse();
+			//_tokens = tokens;
+
+			//var x = tokens;
+			//Token tok;
+			//do
+			//{
+			//  tok = lex.GetToken();
+			//  _tokens.Add(tok);
+			//}
+			//while (!(tok is Token.EndOfFile));
+
+			//Debug.WriteLine("PreParse() took: " + timer.Elapsed);
 			
 			GetEngine().BeginUpdateCompileUnit(this);
 
@@ -117,16 +142,21 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			TextLineChange changes = lineChange[0];
 			var resetedMember = projectInfo.AddRelocation(
-				fileName,
-				changes.iNewEndIndex + 1,
-				changes.iNewEndLine  + 1,
-				changes.iOldEndIndex + 1,
-				changes.iOldEndLine  + 1,
-				changes.iStartIndex  + 1,
-				changes.iStartLine   + 1);
+			  fileName,
+			  changes.iNewEndIndex + 1,
+			  changes.iNewEndLine  + 1,
+			  changes.iOldEndIndex + 1,
+			  changes.iOldEndLine  + 1,
+			  changes.iStartIndex  + 1,
+			  changes.iStartLine   + 1);
 
 			if (resetedMember != null)
-				_resetedMember = resetedMember;
+			{
+				var method = resetedMember as Nemerle.Completion2.Factories.IntelliSenseModeMethodBuilder;
+				if (method != null)
+					projectInfo.Engine.AddMethodAtFirstCheckQueue(method);
+			}
+			_resetedMember = resetedMember;
 
 			if (Scanner != null && Scanner.GetLexer().ClearHoverHighlights())
 			{
@@ -156,75 +186,80 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override void OnIdle(bool periodic)
 		{
-			var completionSetIsDisplayed = CompletionSet != null && CompletionSet.IsDisplayed;
-			var methodDataIsDisplayed    = MethodData != null && MethodData.IsDisplayed;
-			var projectInfo              = ProjectInfo.FindProject(GetFilePath());
-			var engine                   = projectInfo == null ? null : projectInfo.Engine;
-			var reparseDelta             = TimeSpan.FromMilliseconds(LanguageService.Preferences.CodeSenseDelay);
+			//var completionSetIsDisplayed = CompletionSet != null && CompletionSet.IsDisplayed;
+			//var methodDataIsDisplayed    = MethodData != null && MethodData.IsDisplayed;
+			//var projectInfo              = ProjectInfo.FindProject(GetFilePath());
+			//var engine                   = projectInfo == null ? null : projectInfo.Engine;
+			//var reparseDelta             = TimeSpan.FromMilliseconds(LanguageService.Preferences.CodeSenseDelay);
 
-			if (engine != null && !completionSetIsDisplayed && !methodDataIsDisplayed)
-			{
-				//VladD2: Произсодим парсинг и построение дерева типв если это необходимо и прошло 
-				//        некоторое время.
-				if (periodic && !engine.IsProjectAvailable && engine.LastResetAstTime >= LastParseTime)
-				{
-					var delta = System.DateTime.Now - engine.LastResetAstTime;
+			//if (engine != null && !completionSetIsDisplayed && !methodDataIsDisplayed)
+			//{
+			//  //VladD2: Произсодим парсинг и построение дерева типв если это необходимо и прошло 
+			//  //        некоторое время.
+			//  if (periodic && !engine.IsProjectAvailable && engine.LastResetAstTime >= LastParseTime)
+			//  {
+			//    var delta = System.DateTime.Now - engine.LastResetAstTime;
 
-					//var isAsyncCompletion = LanguageService.Preferences.EnableAsyncCompletion;
-					if (delta > reparseDelta)
-					{
-						//TryBuildTypesTreeAsync();
-						return;
-					}
-				}
-			}
+			//    //var isAsyncCompletion = LanguageService.Preferences.EnableAsyncCompletion;
+			//    if (delta > reparseDelta)
+			//    {
+			//      //TryBuildTypesTreeAsync();
+			//      return;
+			//    }
+			//  }
+			//}
 
-			// Kick of a background parse, but only in the periodic intervals
-			if (Service == null || Service.LastActiveTextView == null)
-				return;
+			//// Kick of a background parse, but only in the periodic intervals
+			//if (Service == null || Service.LastActiveTextView == null)
+			//  return;
 
-			if (IsDirty && LastDirtyTime >= LastParseTime)
-			{
-				var delta = DateTime.Now - LastDirtyTime;
+			//if (IsDirty && LastDirtyTime >= LastParseTime)
+			//{
+			//  var delta = DateTime.Now - LastDirtyTime;
 
-				if (delta > reparseDelta) // нам надо перепарсить исходник!
-				{
-					// Don't do background parsing while intellisense completion is going on
-					if (completionSetIsDisplayed || methodDataIsDisplayed)
-						return;
+			//  if (delta > reparseDelta) // нам надо перепарсить исходник!
+			//  {
+			//    // Don't do background parsing while intellisense completion is going on
+			//    if (completionSetIsDisplayed || methodDataIsDisplayed)
+			//      return;
 
-					if (engine == null || !engine.IsProjectAvailable)
-						return;
+			//    if (engine == null || !engine.IsProjectAvailable)
+			//      return;
 
-					// А здесь нам нужно парсить метод? код которого изменился за это время, чтобы
-					// отображались ошибки внесенные пользователем до прошлого парсинга.
-					if (!Service.IsParsing)
-					{
-						if (_resetedMember != null)
-						{
-							LastParseTime = DateTime.Now;
-							BeginParse(0, 0, new TokenInfo(), (ParseReason)ParseReason2.CheckRelocatedMember,
-								GetView(), this.HandleParseResponse);
-							return;
-						}
-					}
-				}
-			}
+			//    // А здесь нам нужно парсить метод? код которого изменился за это время, чтобы
+			//    // отображались ошибки внесенные пользователем до прошлого парсинга.
+			//    if (!Service.IsParsing)
+			//    {
+			//      if (_resetedMember != null)
+			//      {
+			//        LastParseTime = DateTime.Now;
+			//        BeginParse(0, 0, new TokenInfo(), (ParseReason)ParseReason2.CheckRelocatedMember,
+			//          GetView(), this.HandleParseResponse);
+			//        return;
+			//      }
+			//    }
+			//  }
+			//}
 
-			if (engine == null || !engine.IsProjectAvailable)
-				return;
+			//if (engine == null || !engine.IsProjectAvailable)
+			//  return;
 
-			if (!projectInfo.IsMethodsCheckQueueEmpty && !Service.IsParsing)
-			{
-				Debug.WriteLine("BeginParse(ParseReason.Check)" + DateTime.Now.TimeOfDay);
-				int line, idx;
-				IVsTextView view = GetView();
-				view.GetCaretPos(out line, out idx);
-				BeginParse(line, idx, new TokenInfo(), ParseReason.Check,
-					view, new ParseResultHandler(this.HandleParseResponse));
-				return;
-			}
+			//if (!projectInfo.IsMethodsCheckQueueEmpty && !Service.IsParsing)
+			//{
+			//  Debug.WriteLine("BeginParse(ParseReason.Check)" + DateTime.Now.TimeOfDay);
+			//  int line, idx;
+			//  IVsTextView view = GetView();
+			//  view.GetCaretPos(out line, out idx);
+			//  BeginParse(line, idx, new TokenInfo(), ParseReason.Check,
+			//    view, new ParseResultHandler(this.HandleParseResponse));
+			//  return;
+			//}
+		}
 
+		public override bool OutliningEnabled
+		{
+			get { return base.OutliningEnabled; }
+			set { base.OutliningEnabled = value; }
 		}
 
 		internal void CheckRelocatedMember()
@@ -260,7 +295,37 @@ namespace Nemerle.VisualStudio.LanguageService
     public override ParseRequest BeginParse(int line, int idx, TokenInfo info, ParseReason reason, IVsTextView view, ParseResultHandler callback)
     {
       //return base.BeginParse(line, idx, info, reason, view, callback);
-      //Debug.WriteLine("Soutce.BeginParse: " + reason.ToString());
+			switch (reason)
+			{
+				case ParseReason.Autos:break;
+				case ParseReason.Check:break;
+				case ParseReason.CodeSpan:break;
+				case ParseReason.CompleteWord:break;
+				case ParseReason.DisplayMemberList:break;
+				case ParseReason.Goto:break;
+				case ParseReason.MemberSelect:break;
+				case ParseReason.MemberSelectAndHighlightBraces:break;
+				case ParseReason.MethodTip:break;
+				case ParseReason.None:break;
+				case ParseReason.QuickInfo:break;
+				case ParseReason.HighlightBraces:
+				case ParseReason.MatchBraces:
+					if (Service != null)
+					{
+						string text = this.GetText();
+						string fname = this.GetFilePath();
+						ParseRequest request = this.LanguageService.CreateParseRequest(this, line, idx, info, text, fname, reason, view);
+						request.Callback = callback;
+						request.Timestamp = this.ChangeCount;
+						request.DirtySpan = this.DirtySpan;
+						request.Scope = Service.MatchBraces(request);
+						callback(request);
+						return request;
+					}
+					break;
+				default:break;
+			}
+      Debug.WriteLine("Soutce.BeginParse: " + reason.ToString());
       return null;
     }
 
@@ -386,325 +451,190 @@ namespace Nemerle.VisualStudio.LanguageService
       public static TextSpanEqCmp Instance = new TextSpanEqCmp();
     }
 
+		bool _processingOfHiddenRegions;
+
     public void ProcessHiddenRegions(List<NewHiddenRegion> regions, int sourceVersion)
 		{
       if (!this.OutliningEnabled)
 				return;
 
-      var timer = Stopwatch.StartNew();
+			var timer    = Stopwatch.StartNew();
+			var timerAll = Stopwatch.StartNew();
 
-      IVsEnumHiddenRegions ppenum = null;
-      LockWrite();
-      try
-      {
-        if (CurrentVersion != sourceVersion)
-          return;
+			int added = 0;
+			int removed = 0;
+			int invalid = 0;
 
-        Debug.WriteLine("SetRegions: begin               " + timer.Elapsed); timer.Reset(); timer.Start();
+			//Debug.WriteLine("SetRegions: begin               " + timer.Elapsed); timer.Reset(); timer.Start();
 
-        // Compare the existing regions with the new regions and 
-        // remove any that do not match the new regions.
-        IVsHiddenTextSession session = GetHiddenTextSession();
-        var aspan = new TextSpan[1];
-        aspan[0] = GetDocumentSpan();
-        ErrorHandler.ThrowOnFailure(session.EnumHiddenRegions((uint)FIND_HIDDEN_REGION_FLAGS.FHR_ALL_REGIONS, HiddenRegionCookie, aspan, out ppenum));
-        uint fetched;
-        var aregion = new IVsHiddenRegion[1];
-        int added = 0;
-        int removed = 0;
+			#region Получаем список региотов которые уже есть в редакторе.
 
-        // Create a list of IVsHiddenRegion objects, sorted in the same order that the
-        // authoring sink sorts.  This is necessary because VS core editor does NOT return
-        // the regions in the same order that we add them.
-        var regionsMap = new Dictionary<TextSpan, IVsHiddenRegion>(TextSpanEqCmp.Instance);
+			// Регионы в редакторе могут быть
+			// по двум причинам:
+			// 1. Она билы добавлены предыдущим запуском этого метода.
+			// 2. Они были загружены самим редакторм для востановления состояния состояния 
+			//    (открыты / закрыты) регионов после открытия файла (обычно случается только 
+			//    если файл открывается при открытом Solution).
+			//    При этом студия не востанавливает баннеры, так что их приходится обновлять 
+			//    (см. коментарий к вызову region.SetBanner()).
 
-        while (ppenum.Next(1, aregion, out fetched) == NativeMethods.S_OK && fetched == 1)
-        {
-          var region = aregion[0];
-          int regTypeInt;
-          ErrorHandler.ThrowOnFailure(region.GetType(out regTypeInt));
-          uint dwData;
-          region.GetClientData(out dwData);
-          HIDDEN_REGION_TYPE regType = (HIDDEN_REGION_TYPE)regTypeInt;
-          if (regType != HIDDEN_REGION_TYPE.hrtCollapsible)// || dwData != 0 && dwData != HiddenRegionCookie)
-            continue;
+			IVsEnumHiddenRegions ppenum = null;
+			IVsHiddenTextSession session = GetHiddenTextSession();
+			var aspan = new TextSpan[1];
+			aspan[0] = GetDocumentSpan();
+			ErrorHandler.ThrowOnFailure(session.EnumHiddenRegions((uint)FIND_HIDDEN_REGION_FLAGS.FHR_ALL_REGIONS, HiddenRegionCookie, aspan, out ppenum));
+			uint fetched;
+			var aregion = new IVsHiddenRegion[1];
 
-          ErrorHandler.ThrowOnFailure(region.GetSpan(aspan));
-          TextSpan s = aspan[0];
-          var loc = Utils.LocationFromSpan(FileIndex, s);
-          regionsMap[s] = region;
-        }
+			var oldRegionsMap = new Dictionary<TextSpan, IVsHiddenRegion>(TextSpanEqCmp.Instance);
 
-        Debug.WriteLine("SetRegions: old regions fetched " + timer.Elapsed); timer.Reset(); timer.Start();
+			while (ppenum.Next(1, aregion, out fetched) == NativeMethods.S_OK && fetched == 1)
+			{
+				var region = aregion[0];
+				int regTypeInt;
+				ErrorHandler.ThrowOnFailure(region.GetType(out regTypeInt));
+				uint dwData;
+				region.GetClientData(out dwData);
+				HIDDEN_REGION_TYPE regType = (HIDDEN_REGION_TYPE)regTypeInt;
+				if (regType != HIDDEN_REGION_TYPE.hrtCollapsible)// || dwData != 0 && dwData != HiddenRegionCookie)
+					continue;
 
-        var newRegions = new List<NewHiddenRegion>();
+				ErrorHandler.ThrowOnFailure(region.GetSpan(aspan));
+				TextSpan s = aspan[0];
+				var loc = Utils.LocationFromSpan(FileIndex, s);
+				oldRegionsMap[s] = region;
+			}
 
-        foreach (var rg in regions)
-          if (!regionsMap.ContainsKey(rg.tsHiddenText))
-            newRegions.Add(rg);
+			//Debug.WriteLine("SetRegions: old regions fetched " + timer.Elapsed); timer.Reset(); timer.Start();
 
-        var newRegiohsMap = new Dictionary<TextSpan, NewHiddenRegion>(regions.Count);
-        foreach (var rg in regions)
-          if (newRegiohsMap.ContainsKey(rg.tsHiddenText))
-          { }
-          else newRegiohsMap[rg.tsHiddenText] = rg;
+			#endregion
 
-        foreach (var rg in regionsMap)
-          if (!newRegiohsMap.ContainsKey(rg.Key))
-          {
-            ErrorHandler.ThrowOnFailure(rg.Value.Invalidate((int)CHANGE_HIDDEN_REGION_FLAGS.chrNonUndoable));
-            removed++;
-          }
+			// Обновлять регионы нужно на заблокированном для записи редакторе, иначе, если текст
+			// изменится во время обновления, то мы получим рассинхронизацию, и как следствие,
+			// неопределенное поеведение. По возможности не следует добавлять долгие действия 
+			// в блок расположенный ниже, так как обновление идет в GUI-потоке и медленная работа
+			// может привести к ощутимому неудобству для пользователя.
 
-        Debug.WriteLine("SetRegions: update calculated   " + timer.Elapsed); timer.Reset(); timer.Start();
+			// VS fire ViewFilter.OnChangeScrollInfo event vhen we change regions it lead to many
+			// calls of Source.TryHighlightBraces() which can take much time. Prevent it!
+			_processingOfHiddenRegions = true;
+			LockWrite();
+			try
+			{
+				if (CurrentVersion != sourceVersion)
+					return;
 
-        int start = Environment.TickCount;
+				#region Вычисляем регионы которых небыло в редакторе и обновляем баннеры у старых
 
-        int invalid = 0;
-        if (newRegions.Count > 0)
-        {
-          int count = newRegions.Count;
-          // For very large documents this can take a while, so add them in chunks of 
-          // 1000 and stop after 5 seconds. 
-          int maxTime = this.LanguageService.Preferences.MaxRegionTime;
-          int chunkSize = 1000;
-          NewHiddenRegion[] chunk = new NewHiddenRegion[chunkSize];
-          int i = 0;
-          while (i < count && Utils.TimeSince(start) < maxTime)
-          {
-            int j = 0;
-            while (i < count && j < chunkSize)
-            {
-              NewHiddenRegion r = newRegions[i];
-              if (!TextSpanHelper.ValidSpan(this, r.tsHiddenText))
-              {
-                //Debug.Assert(false, "Invalid span " + r.tsHiddenText.iStartLine + "," + r.tsHiddenText.iStartIndex + "," 
-                //                     + r.tsHiddenText.iEndLine + "," + r.tsHiddenText.iEndIndex);
-                //break;
-                invalid++;
-              }
-              else
-              {
-                chunk[j] = r;
-                added++;
-              }
-              i++;
-              j++;
-            }
-            int hr = session.AddHiddenRegions((int)CHANGE_HIDDEN_REGION_FLAGS.chrNonUndoable, j, chunk, null);
-            if (ErrorHandler.Failed(hr))
-              break; // stop adding if we start getting errors.
-          }
-        }
+				var newRegions = new List<NewHiddenRegion>();
 
-        Debug.WriteLine("Removed: " + removed + " For add: " + newRegions.Count + " Really added: " + added + " invalid: " + invalid);
+				foreach (var rg in regions)
+				{
+					IVsHiddenRegion region;
+					if (oldRegionsMap.TryGetValue(rg.tsHiddenText, out region))
+					{
+						// Регион с такими же координатами уже был в редактре...
 
-#if PERFTRACE
-			int diff = TimeUtilities.TimeSince(start);
-			Trace.WriteLine(String.Format(CultureInfo.InvariantCulture, "Hidden Regions: Matched={0}, Removed={1}, Addded={2}/{3} in {4} ms", matched, removed, added, hiddenRegions.Count, diff));
-#endif
+						// Похоже VS, при закрытии файла, запоминает только расположение регионов, 
+						// но не их баннеры. Нам нужно обновить баннер если они не совпадают.
+						// Кроме того баннеры нужно обновлять когда они физически меняются (пользователем).
+						string banner;
+						region.GetBanner(out banner);
+						if (rg.pszBanner != banner && !(banner == "..." && rg.pszBanner.IsNullOrEmpty()))
+							region.SetBanner(rg.pszBanner);
+					}
+					else
+						newRegions.Add(rg); // Регион новый! Запоминаем его...
+				}
+
+				//Debug.WriteLine("SetRegions: calc new reg & up b " + timer.Elapsed); timer.Reset(); timer.Start();
+				
+				#endregion
+
+				#region Вычисляем список устаревших регионов и удаляем их
+
+				var newRegiohsMap = new Dictionary<TextSpan, NewHiddenRegion>(regions.Count);
+
+				// Формируем "мап" новых регионов. .ToDictianary() не применим, так как он 
+				// генерирует исключение при попытке добавить элемент с уже существующим ключем.
+				foreach (var rg in regions)
+					if (newRegiohsMap.ContainsKey(rg.tsHiddenText))
+					{ }
+					else newRegiohsMap[rg.tsHiddenText] = rg;
+
+				foreach (var rg in oldRegionsMap)
+				{
+					if (!newRegiohsMap.ContainsKey(rg.Key))
+					{ // Чтарый регион не совпадает по местоположению ни с одним из новых. Удаляем его!
+						ErrorHandler.ThrowOnFailure(rg.Value.Invalidate((int)CHANGE_HIDDEN_REGION_FLAGS.chrNonUndoable));
+						removed++;
+					}
+				}
+
+				//Debug.WriteLine("SetRegions: bad regions removed " + timer.Elapsed); timer.Reset(); timer.Start();
+
+				#endregion
+
+				#region Добавляем регионы которых не было в редакторе
+
+				int start = Environment.TickCount;
+
+				if (newRegions.Count > 0)
+				{
+					int count = newRegions.Count;
+					// For very large documents this can take a while, so add them in chunks of 
+					// 1000 and stop after 5 seconds. 
+					int maxTime = this.LanguageService.Preferences.MaxRegionTime;
+					int chunkSize = 1000;
+					NewHiddenRegion[] chunk = new NewHiddenRegion[chunkSize];
+					int i = 0;
+					while (i < count && Utils.TimeSince(start) < maxTime)
+					{
+						int j = 0;
+						while (i < count && j < chunkSize)
+						{
+							NewHiddenRegion r = newRegions[i];
+							if (!TextSpanHelper.ValidSpan(this, r.tsHiddenText))
+							{
+								//Debug.Assert(false, "Invalid span " + r.tsHiddenText.iStartLine + "," + r.tsHiddenText.iStartIndex + "," 
+								//                     + r.tsHiddenText.iEndLine + "," + r.tsHiddenText.iEndIndex);
+								//break;
+								invalid++;
+							}
+							else
+							{
+								chunk[j] = r;
+								added++;
+							}
+							i++;
+							j++;
+						}
+						int hr = session.AddHiddenRegions((int)CHANGE_HIDDEN_REGION_FLAGS.chrNonUndoable, j, chunk, null);
+						if (ErrorHandler.Failed(hr))
+							break; // stop adding if we start getting errors.
+					}
+				}
+
+				//Debug.WriteLine("SetRegions: new regions added   " + timer.Elapsed); timer.Reset(); timer.Start();
+
+				//Debug.WriteLine("Removed: " + removed + " For add: " + newRegions.Count + " Really added: " + added + " invalid: " + invalid);
+				
+				#endregion
       }
       finally
       {
         UnlockWrite();
+				_processingOfHiddenRegions = false;
 
         if (ppenum != null)
           Marshal.ReleaseComObject(ppenum);
 
-        Debug.WriteLine("SetRegions: end                 " + timer.Elapsed);
+				//Debug.WriteLine("SetRegions: end (took all)      " + timerAll.Elapsed);
       }
 
       this.RegionsLoaded = true;
 		}
-
-//    public void ProcessHiddenRegionsOld(List<NewHiddenRegion> hiddenRegions)
-//    {
-//      //TODO: VladD2: Переписать этот быдлокод!
-//#if DEBUG
-//      LanguageService.Preferences.MaxRegionTime = 1000 * 60 * 10;
-//#endif
-//      //this.hiddenRegions = hiddenRegions;
-
-//      if (!this.OutliningEnabled)
-//        return;
-
-//      var timer = Stopwatch.StartNew();
-//      Debug.WriteLine("SetRegions: begin " + timer.Elapsed);
-
-//      // Compare the existing regions with the new regions and 
-//      // remove any that do not match the new regions.
-//      IVsHiddenTextSession session = GetHiddenTextSession();
-//      IVsEnumHiddenRegions ppenum;
-//      var aspan = new TextSpan[1];
-//      aspan[0] = GetDocumentSpan();
-//      ErrorHandler.ThrowOnFailure(session.EnumHiddenRegions((uint)FIND_HIDDEN_REGION_FLAGS.FHR_ALL_REGIONS, HiddenRegionCookie, aspan, out ppenum));
-//      uint fetched;
-//      var aregion = new IVsHiddenRegion[1];
-//      int matched = 0;
-//      int removed = 0;
-//      int added = 0;
-//      int pos = 0;
-
-//      // Create a list of IVsHiddenRegion objects, sorted in the same order that the
-//      // authoring sink sorts.  This is necessary because VS core editor does NOT return
-//      // the regions in the same order that we add them.
-//      var regions = new List<IVsHiddenRegion>();
-//      var spans = new List<TextSpan>();
-//      var regions2 = new List<IVsHiddenRegion>();
-//      var spans2 = new List<TextSpan>();
-
-//      while (ppenum.Next(1, aregion, out fetched) == NativeMethods.S_OK && fetched == 1)
-//      {
-//        var region = aregion[0];
-//        int regTypeInt;
-//        ErrorHandler.ThrowOnFailure(region.GetType(out regTypeInt));
-//        uint dwData;
-//        region.GetClientData(out dwData);
-//        HIDDEN_REGION_TYPE regType = (HIDDEN_REGION_TYPE)regTypeInt;
-//        if (regType != HIDDEN_REGION_TYPE.hrtCollapsible)// || dwData != 0 && dwData != HiddenRegionCookie)
-//          continue;
-
-//        ErrorHandler.ThrowOnFailure(region.GetSpan(aspan));
-//        TextSpan s = aspan[0];
-//        var loc = Utils.LocationFromSpan(FileIndex, s);
-//        int i = spans.Count - 1;
-//        while (i >= 0)
-//        {
-//          TextSpan s2 = spans[i];
-//          if (TextSpanHelper.StartsAfterStartOf(s, s2))
-//            break;
-//          i--;
-//        }
-//        spans.Insert(i + 1, s);
-//        regions.Insert(i + 1, region);
-
-//        spans2.Add(s);
-//        regions2.Add(region);
-//      }
-
-//      Debug.WriteLine("SetRegions: old regions fetched " + timer.Elapsed);
-
-//      // Now merge the list found with the list in the AuthoringSink to figure out
-//      // what matches, what needs to be removed, and what needs to be inserted.
-//      NewHiddenRegion r = pos < hiddenRegions.Count ? hiddenRegions[pos] : new NewHiddenRegion();
-//      for (int i = 0, n = regions.Count; i < n; i++)
-//      {
-//        IVsHiddenRegion region = regions[i];
-//        TextSpan span = spans[i];
-
-//        // In case we're inserting a new region, scan ahead to matching start line
-//        while (r.tsHiddenText.iStartLine < span.iStartLine)
-//        {
-//          pos++;
-//          if (pos >= hiddenRegions.Count)
-//          {
-//            r = new NewHiddenRegion();
-//            break;
-//          }
-//          else
-//          {
-//            r = (NewHiddenRegion)hiddenRegions[pos];
-//          }
-//        }
-//        if (TextSpanHelper.IsSameSpan(r.tsHiddenText, span) && HasSameBanner(r, region))
-//        {
-//          // This region is already there.
-//          matched++;
-//          hiddenRegions.RemoveAt(pos);
-//          r = (pos < hiddenRegions.Count) ? (NewHiddenRegion)hiddenRegions[pos] : new NewHiddenRegion();
-//        }
-//        else
-//        {
-//          removed++;
-//          ErrorHandler.ThrowOnFailure(region.Invalidate((int)CHANGE_HIDDEN_REGION_FLAGS.chrNonUndoable));
-//        }
-//      }
-
-//      //foreach (var item in hiddenRegions)
-//      //{
-//      //  if (item.pszBanner == "Toplevel typing")
-//      //  {
-//      //    // VladD2: Debug staff
-//      //    var behavior = (HIDDEN_REGION_BEHAVIOR)item.dwBehavior;
-//      //    var dwClient = item.dwClient;
-//      //    var state = (HIDDEN_REGION_STATE)item.dwState;
-//      //    var type = (HIDDEN_REGION_TYPE)item.iType;
-//      //    var text = item.pszBanner;
-//      //    var loc = Utils.LocationFromSpan(FileIndex, item.tsHiddenText);
-//      //    break;
-//      //  }
-//      //}
-
-//      Debug.WriteLine("SetRegions: medged " + timer.Elapsed);
-
-//      int start = Environment.TickCount;
-
-//      if (hiddenRegions.Count > 0)
-//      {
-//        int count = hiddenRegions.Count;
-//        // For very large documents this can take a while, so add them in chunks of 
-//        // 1000 and stop after 5 seconds. 
-//        int maxTime = this.LanguageService.Preferences.MaxRegionTime;
-//        int chunkSize = 1000;
-//        NewHiddenRegion[] chunk = new NewHiddenRegion[chunkSize];
-//        int i = 0;
-//        while (i < count && Utils.TimeSince(start) < maxTime)
-//        {
-//          int j = 0;
-//          while (i < count && j < chunkSize)
-//          {
-//            r = (NewHiddenRegion)hiddenRegions[i];
-//            if (!TextSpanHelper.ValidSpan(this, r.tsHiddenText))
-//            {
-//#if	LANGTRACE
-//              Debug.Assert(false, "Invalid span " + r.tsHiddenText.iStartLine + "," + r.tsHiddenText.iStartIndex + "," + r.tsHiddenText.iEndLine + "," + r.tsHiddenText.iEndIndex);
-//#endif
-//              break;
-//            }
-//            else
-//            {
-//              chunk[j] = r;
-//              added++;
-//            }
-//            i++;
-//            j++;
-//          }
-//          int hr = session.AddHiddenRegions((int)CHANGE_HIDDEN_REGION_FLAGS.chrNonUndoable, j, chunk, null);
-//          if (ErrorHandler.Failed(hr))
-//          {
-//            break; // stop adding if we start getting errors.
-//          }
-//        }
-//      }
-
-//      Debug.WriteLine("SetRegions: end " + timer.Elapsed);
-
-//#if PERFTRACE
-//      int diff = TimeUtilities.TimeSince(start);
-//      Trace.WriteLine(String.Format(CultureInfo.InvariantCulture, "Hidden Regions: Matched={0}, Removed={1}, Addded={2}/{3} in {4} ms", matched, removed, added, hiddenRegions.Count, diff));
-//#endif
-//      Marshal.ReleaseComObject(ppenum);
-//      this.RegionsLoaded = true;
-//    }
     
-    //Banner comparison: in the case of editor controlled region, this is a noop
-		//otherwise, compare banners
-		//caveat is that GetBanner rountrips null to "...".
-
-		private bool HasSameBanner(NewHiddenRegion r, IVsHiddenRegion region)
-		{
-			uint behavior;
-			region.GetBehavior(out behavior);
-			if (behavior == (uint)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled && r.dwBehavior == (uint)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled)
-			{
-				return true; //the banner text is always a fixed string, which is "..." by default
-			}
-			string currBanner;
-			region.GetBanner(out currBanner);
-			//<STRIP>DevDiv185498: Regression from RTM: Collapsed portions of XAML do not stay collapsed</STRIP>
-			return r.pszBanner == currBanner || (r.pszBanner == null && currBanner == "...");
-		}
-
 		public override void ReformatSpan(EditArray mgr, TextSpan span)
 		{
 			string filePath = GetFilePath();
@@ -753,7 +683,8 @@ namespace Nemerle.VisualStudio.LanguageService
 				new char[] {'(', ')'},
 				new char[] {'\'', '\''},
 				new char[] {'[', ']'},
-				new char[] {'"', '"'}
+				new char[] {'"', '"'},
+				new char[] {'<', '>'}
 			};
 
 		private bool IsOpeningPairedChar(char ch)
@@ -850,11 +781,200 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 		}
 
-		//public virtual void MatchBraces(IVsTextView textView, int line, int index, TokenInfo info)
-		//{
-		//  BeginParse(line, index, info, ParseReason.HighlightBraces, textView, 
-		//    HandleMatchBracesResponse);
-		//}
+//    internal void HandleMatchBracesResponse(ParseRequest req)
+//    {
+//      try
+//      {
+//        if (Service == null)
+//          return;
+
+//        // Normalize the spans, and weed out empty ones, since there's no point
+//        // trying to highlight an empty span.
+//        var normalized = new System.Collections.ArrayList();
+//        foreach (TextSpan span in req.Sink.Spans)
+//        {
+//          TextSpan norm = span;
+//          TextSpanHelper.Normalize(ref norm, this.TextLines);
+//          if (!TextSpanHelper.ValidSpan(this, norm))
+//          {
+//            Debug.Assert(false, "Invalid text span");
+//          }
+//          else if (!TextSpanHelper.IsEmpty(norm))
+//          {
+//            normalized.Add(norm);
+//          }
+//        }
+
+//        if (normalized.Count == 0)
+//          return;
+
+//        //transform spanList into an array of spans
+//        TextSpan[] spans = (TextSpan[])normalized.ToArray(typeof(TextSpan));
+
+//        //highlight
+//        ErrorHandler.ThrowOnFailure(req.View.HighlightMatchingBrace((uint)this.service.Preferences.HighlightMatchingBraceFlags, (uint)spans.Length, spans));
+//        //try to show the matching line in the statusbar
+//        if (spans.Length > 0 && Service.Preferences.EnableShowMatchingBrace)
+//        {
+//          IVsStatusbar statusBar = (IVsStatusbar)service.Site.GetService(typeof(SVsStatusbar));
+//          if (statusBar != null)
+//          {
+//            TextSpan span = spans[0];
+//            bool found = false;
+//            // Gather up the other side of the brace match so we can 
+//            // display the text in the status bar. There could be more than one
+//            // if MatchTriple was involved, in which case we merge them.
+//            for (int i = 0, n = spans.Length; i < n; i++)
+//            {
+//              TextSpan brace = spans[i];
+//              if (brace.iStartLine != req.Line)
+//              {
+//                if (brace.iEndLine != brace.iStartLine)
+//                {
+//                  brace.iEndLine = brace.iStartLine;
+//                  brace.iEndIndex = this.GetLineLength(brace.iStartLine);
+//                }
+//                if (!found)
+//                {
+//                  span = brace;
+//                }
+//                else if (brace.iStartLine == span.iStartLine)
+//                {
+//                  span = TextSpanHelper.Merge(span, brace);
+//                }
+//                found = true;
+//              }
+//            }
+//            if (found)
+//            {
+//              Debug.Assert(TextSpanHelper.IsPositive(span));
+//              string text = this.GetText(span);
+
+//              int start;
+//              int len = text.Length;
+
+//              for (start = 0; start < len && Char.IsWhiteSpace(text[start]); start++) ;
+
+//              if (start < span.iEndIndex)
+//              {
+//                if (text.Length > 80)
+//                {
+//                  text = String.Format(CultureInfo.CurrentUICulture, SR.GetString(SR.Truncated), text.Substring(0, 80));
+//                }
+//                text = String.Format(CultureInfo.CurrentUICulture, SR.GetString(SR.BraceMatchStatus), text);
+//                ErrorHandler.ThrowOnFailure(statusBar.SetText(text));
+//              }
+//            }
+//          }
+//        }
+//#if LANGTRACE
+//            } catch (Exception e) {
+//                Trace.WriteLine("HandleMatchBracesResponse exception: " + e.Message);
+//#endif
+//      }
+//      catch
+//      {
+//      }
+//    }
+
+
+		public override void GetPairExtents(IVsTextView view, int line, int col, out TextSpan span)
+		{
+			var spanAry = GetMatchingBraces(false, line, col);
+
+			if (spanAry.Length == 2)
+				{
+					if (TextSpanHelper.ContainsInclusive(spanAry[0], line, col))
+						span = spanAry[1];
+					else
+						span = spanAry[0];
+				}
+				else
+					span = new TextSpan();
+			
+		}
+
+		/// <summary>
+		/// Match paired tokens. Run in GUI thread synchronously!
+		/// </summary>
+		/// <param name="textView">Current view</param>
+		/// <param name="line">zero based index of line</param>
+		/// <param name="index">zero based index of char</param>
+		/// <param name="info"></param>
+		public override void MatchBraces(IVsTextView view, int line, int index, TokenInfo info)
+		{
+			LockWrite();
+			try
+			{
+				var spanAry = GetMatchingBraces(false, line, index);
+				if (spanAry.Length > 0)
+					ErrorHandler.ThrowOnFailure(view.HighlightMatchingBrace(
+						(uint)Service.Preferences.HighlightMatchingBraceFlags, (uint)spanAry.Length, spanAry));
+			}
+			finally { UnlockWrite(); }
+		}
+
+		/// <summary>
+		/// Match paired tokens. Run in GUI thread synchronously!
+		/// </summary>
+		/// <param name="textView">Current view</param>
+		/// <param name="isMatchBraces">match or highlight mraces</param>
+		/// <param name="line">zero based index of line</param>
+		/// <param name="index">zero based index of char</param>
+		/// <param name="info">Token information</param>
+		public TextSpan[] GetMatchingBraces(bool isMatchBraces, int line, int index)
+		{
+			var nline = line  + 1; // one based number of line
+			var ncol  = index + 1; // one based number of column
+
+			string fname = this.GetFilePath();
+
+			// Steps: 
+			// 1. Find token under text caret.
+			// 2. Determine that it is a paired token.
+			// 3. Determine paired token.
+			// 4. Find paired token in the source file.
+			// 5. Set info about paired tokens Sink and return it in AuthoringScope.
+
+			#region Init vars
+
+			var source = this;
+			IVsTextColorState colorState = source.ColorState;
+			Colorizer colorizer = source.GetColorizer();
+			var scanner = (NemerleScanner)colorizer.Scanner;
+			string lineText = source.GetLine(nline);
+			scanner.SetSource(lineText, 0);
+
+			#endregion
+
+			// Steps: 1-3
+			BracketFinder bracketFinder = new BracketFinder(source, nline, ncol, scanner, colorState);
+
+			// 4. Find paired token in the source file.
+			var matchBraceInfo = bracketFinder.FindMatchBraceInfo();
+
+			if (matchBraceInfo != null)
+			{
+				// 5. Set info about paired tokens Sink and return it in AuthoringScope.
+
+				// Fix a bug in MPF: Correct location of left token.
+				// It need for correct navigation (to left side of token).
+				//
+				Token matchToken = matchBraceInfo.Token;
+				//Location matchLocation = isMatchBraces && !BracketFinder.IsOpenToken(matchToken)
+				//	? matchToken.Location.FromEnd() : matchToken.Location;
+				Location matchLocation = matchToken.Location;
+
+				// Set tokens position info
+
+				var startSpan = Utils.SpanFromLocation(bracketFinder.StartBraceInfo.Token.Location);
+				var endSpan   = Utils.SpanFromLocation(matchLocation);
+
+				return new TextSpan[] { startSpan, endSpan };
+			}
+
+			return new TextSpan[0];
+		}
 
 		private void TryHighlightBraces(IVsTextView textView, VsCommands2K command, int line, int idx,
 										TokenInfo tokenInfo)
@@ -880,6 +1000,9 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public void TryHighlightBraces(IVsTextView textView)
 		{
+			if (_processingOfHiddenRegions)
+				return;
+
 			var colorizer = GetColorizer() as NemerleColorizer;
 			if (colorizer != null && colorizer.IsClosed)
 				return;
@@ -1083,13 +1206,13 @@ namespace Nemerle.VisualStudio.LanguageService
 			return base.GetPositionOfLineIndex(line - 1, col - 1);
 		}
 
-		public Tuple2 GetLineIndexOfPosition(int pos)
+		public TupleIntInt GetLineIndexOfPosition(int pos)
 		{
 			int line, col;
 
 			base.GetLineIndexOfPosition(pos, out line, out col);
 
-			return new Tuple2(line + 1, col + 1);
+			return new TupleIntInt(line + 1, col + 1);
 		}
 
 		public int LineCount
@@ -1109,6 +1232,20 @@ namespace Nemerle.VisualStudio.LanguageService
 
     public int CurrentVersion { get { return TimeStamp; } }
 
+		public TupleStringInt GetTextAndCurrentVersion()
+    {
+			LockWrite();
+			try { return new TupleStringInt(GetText(), CurrentVersion); }
+			finally { UnlockWrite(); }
+    }
+
+		public TupleStringIntInt GetTextCurrentVersionAndFileIndex()
+    {
+			LockWrite();
+			try { return new TupleStringIntInt(GetText(), CurrentVersion, FileIndex); }
+			finally { UnlockWrite(); }
+    }
+
     public void LockWrite()       { TextLines.LockBufferEx((uint)BufferLockFlags.BLF_READ); }
     public void UnlockWrite()     { TextLines.UnlockBufferEx((uint)BufferLockFlags.BLF_READ); }
     public void LockReadWrite()   { TextLines.LockBufferEx((uint)BufferLockFlags.BLF_READ_AND_WRITE); }
@@ -1127,7 +1264,7 @@ namespace Nemerle.VisualStudio.LanguageService
           {
             tsHiddenText = Utils.SpanFromLocation(location),
             iType = (int)HIDDEN_REGION_TYPE.hrtCollapsible,
-            dwBehavior = (int)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled, //.hrbClientControlled;
+            dwBehavior = (int)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled, //.hrbClientControlled
             pszBanner = string.IsNullOrEmpty(text) ? null : text,
             dwClient = NemerleSource.HiddenRegionCookie,
             dwState = (uint)(secondTime || isExpanded ? HIDDEN_REGION_STATE.hrsExpanded : HIDDEN_REGION_STATE.hrsDefault)

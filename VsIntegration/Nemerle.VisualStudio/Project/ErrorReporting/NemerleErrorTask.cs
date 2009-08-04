@@ -164,7 +164,7 @@ namespace Nemerle.VisualStudio.Package
 			return VSConstants.S_OK;
 		}
 
-		void DisposeTextLineMarker()
+		public void DisposeTextLineMarker()
 		{
 			if (TextLineMarker != null)
 			{
