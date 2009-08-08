@@ -310,18 +310,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				case ParseReason.QuickInfo:break;
 				case ParseReason.HighlightBraces:
 				case ParseReason.MatchBraces:
-					if (Service != null)
-					{
-						string text = this.GetText();
-						string fname = this.GetFilePath();
-						ParseRequest request = this.LanguageService.CreateParseRequest(this, line, idx, info, text, fname, reason, view);
-						request.Callback = callback;
-						request.Timestamp = this.ChangeCount;
-						request.DirtySpan = this.DirtySpan;
-						request.Scope = Service.MatchBraces(request);
-						callback(request);
-						return request;
-					}
+          Trace.Assert(false);
 					break;
 				default:break;
 			}
@@ -901,7 +890,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		/// <param name="line">zero based index of line</param>
 		/// <param name="index">zero based index of char</param>
 		/// <param name="info"></param>
-		public override void MatchBraces(IVsTextView view, int line, int index, TokenInfo info)
+    public bool HighlightBraces(IVsTextView view, int line, int index, TokenInfo info)
 		{
 			LockWrite();
 			try
@@ -910,6 +899,8 @@ namespace Nemerle.VisualStudio.LanguageService
 				if (spanAry.Length > 0)
 					ErrorHandler.ThrowOnFailure(view.HighlightMatchingBrace(
 						(uint)Service.Preferences.HighlightMatchingBraceFlags, (uint)spanAry.Length, spanAry));
+
+        return spanAry.Length > 0;
 			}
 			finally { UnlockWrite(); }
 		}
@@ -926,6 +917,14 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			var nline = line  + 1; // one based number of line
 			var ncol  = index + 1; // one based number of column
+
+      if (CompileUnit.SourceVersion == CurrentVersion)
+      {
+        Location first, last;
+
+        if (CompileUnit.GetMatchingBraces(FileIndex, nline, ncol, out first, out last))
+          return new TextSpan[] { Utils.SpanFromLocation(first), Utils.SpanFromLocation(last) };
+      }
 
 			string fname = this.GetFilePath();
 
@@ -976,7 +975,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			return new TextSpan[0];
 		}
 
-		private void TryHighlightBraces(IVsTextView textView, VsCommands2K command, int line, int idx,
+		private bool TryHighlightBraces(IVsTextView textView, VsCommands2K command, int line, int idx,
 										TokenInfo tokenInfo)
 		{
 			// Highlight brace to the left from the caret
@@ -987,14 +986,17 @@ namespace Nemerle.VisualStudio.LanguageService
 					Service.Preferences.EnableMatchBracesAtCaret)) 
 				{		
 					//if (!this.LanguageService.IsParsing)
-					MatchBraces(textView, line, idx, tokenInfo);
+					return HighlightBraces(textView, line, idx, tokenInfo);
 				}
 			}
+
+      return false;
 		}
+
 		private void TryHighlightBraces(IVsTextView textView, VsCommands2K command, int line, int idx,
 										TokenInfo tokenBeforeCaret, TokenInfo tokenAfterCaret)
 		{
-			TryHighlightBraces(textView, command, line, idx + 1, tokenAfterCaret);
+			//if (!TryHighlightBraces(textView, command, line, idx + 1, tokenAfterCaret))
 			TryHighlightBraces(textView, command, line, idx, tokenBeforeCaret);
 		}
 
