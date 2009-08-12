@@ -20,6 +20,7 @@ using TopDeclaration    = Nemerle.Compiler.Parsetree.TopDeclaration;
 using TupleIntInt       = Nemerle.Builtins.Tuple<int, int>;
 using TupleStringInt    = Nemerle.Builtins.Tuple<string, int>;
 using TupleStringIntInt = Nemerle.Builtins.Tuple<string, int, int>;
+using Nemerle.VisualStudio.Package;
 
 
 namespace Nemerle.VisualStudio.LanguageService
@@ -92,14 +93,11 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region Fields
 
-		MemberBuilder _resetedMember;
 		int           _fileIndex = -1;
 
 		#endregion
 
 		#region OnChangeLineText
-
-		string _text;
 
 		public override void OnChangeLineText(TextLineChange[] lineChange, int last)
 		{
@@ -107,56 +105,20 @@ namespace Nemerle.VisualStudio.LanguageService
 			base.OnChangeLineText(lineChange, last);
 			TimeStamp++;
 			var timer = Stopwatch.StartNew();
-			_text = GetText();
 
-			//Debug.WriteLine("GetText() took: " + timer.Elapsed); timer.Reset(); timer.Start();
+      ProjectInfo projectInfo = this.ProjectInfo;
 
-			//var engine = GetEngine();
-			//var lexer = new LexerString(engine, _text, new Location(FileIndex, 1, 1, 1, 1));
-			//var preparser = new PreParser(lexer, engine.CoreEnv);
-			//var tokens = preparser.PreParse();
-			//_tokens = tokens;
+      // Add request for relocation...
+      if (projectInfo != null && projectInfo.IsProjectAvailable && !projectInfo.IsDocumentOpening)
+      {
+        TextLineChange changes = lineChange[0];
 
-			//var x = tokens;
-			//Token tok;
-			//do
-			//{
-			//  tok = lex.GetToken();
-			//  _tokens.Add(tok);
-			//}
-			//while (!(tok is Token.EndOfFile));
-
-			//Debug.WriteLine("PreParse() took: " + timer.Elapsed);
-			
-			GetEngine().BeginUpdateCompileUnit(this);
-
-			//TODO: Сюда нужно вставить код обновляющий локейшоны в дереве типов если редактирование
-			// происходит внутри выражений и обнулять дерево типов в обратоном случае.
-			// Если дерево типов нет, то ничего не делаем.
-
-			string      fileName    = GetFilePath();
-			ProjectInfo projectInfo = ProjectInfo.FindProject(fileName);
-
-			if (projectInfo == null || !projectInfo.IsProjectAvailable)
-				return;
-
-			TextLineChange changes = lineChange[0];
-			var resetedMember = projectInfo.AddRelocation(
-			  fileName,
-			  changes.iNewEndIndex + 1,
-			  changes.iNewEndLine  + 1,
-			  changes.iOldEndIndex + 1,
-			  changes.iOldEndLine  + 1,
-			  changes.iStartIndex  + 1,
-			  changes.iStartLine   + 1);
-
-			if (resetedMember != null)
-			{
-				var method = resetedMember as Nemerle.Completion2.Factories.IntelliSenseModeMethodBuilder;
-				if (method != null)
-					projectInfo.Engine.AddMethodAtFirstCheckQueue(method);
-			}
-			_resetedMember = resetedMember;
+        projectInfo.Engine.BeginUpdateCompileUnit(this,
+          changes.iNewEndIndex + 1, changes.iNewEndLine + 1,
+          changes.iOldEndIndex + 1, changes.iOldEndLine + 1,
+          changes.iStartIndex + 1, changes.iStartLine + 1); // Add request for reparse & update info about CompileUnit
+      }
+      else GetEngine().BeginUpdateCompileUnit(this, 0, 0, 0, 0, 0, 0); // We not need relocation
 
 			if (Scanner != null && Scanner.GetLexer().ClearHoverHighlights())
 			{
@@ -186,102 +148,12 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override void OnIdle(bool periodic)
 		{
-			//var completionSetIsDisplayed = CompletionSet != null && CompletionSet.IsDisplayed;
-			//var methodDataIsDisplayed    = MethodData != null && MethodData.IsDisplayed;
-			//var projectInfo              = ProjectInfo.FindProject(GetFilePath());
-			//var engine                   = projectInfo == null ? null : projectInfo.Engine;
-			//var reparseDelta             = TimeSpan.FromMilliseconds(LanguageService.Preferences.CodeSenseDelay);
-
-			//if (engine != null && !completionSetIsDisplayed && !methodDataIsDisplayed)
-			//{
-			//  //VladD2: Произсодим парсинг и построение дерева типв если это необходимо и прошло 
-			//  //        некоторое время.
-			//  if (periodic && !engine.IsProjectAvailable && engine.LastResetAstTime >= LastParseTime)
-			//  {
-			//    var delta = System.DateTime.Now - engine.LastResetAstTime;
-
-			//    //var isAsyncCompletion = LanguageService.Preferences.EnableAsyncCompletion;
-			//    if (delta > reparseDelta)
-			//    {
-			//      //TryBuildTypesTreeAsync();
-			//      return;
-			//    }
-			//  }
-			//}
-
-			//// Kick of a background parse, but only in the periodic intervals
-			//if (Service == null || Service.LastActiveTextView == null)
-			//  return;
-
-			//if (IsDirty && LastDirtyTime >= LastParseTime)
-			//{
-			//  var delta = DateTime.Now - LastDirtyTime;
-
-			//  if (delta > reparseDelta) // нам надо перепарсить исходник!
-			//  {
-			//    // Don't do background parsing while intellisense completion is going on
-			//    if (completionSetIsDisplayed || methodDataIsDisplayed)
-			//      return;
-
-			//    if (engine == null || !engine.IsProjectAvailable)
-			//      return;
-
-			//    // А здесь нам нужно парсить метод? код которого изменился за это время, чтобы
-			//    // отображались ошибки внесенные пользователем до прошлого парсинга.
-			//    if (!Service.IsParsing)
-			//    {
-			//      if (_resetedMember != null)
-			//      {
-			//        LastParseTime = DateTime.Now;
-			//        BeginParse(0, 0, new TokenInfo(), (ParseReason)ParseReason2.CheckRelocatedMember,
-			//          GetView(), this.HandleParseResponse);
-			//        return;
-			//      }
-			//    }
-			//  }
-			//}
-
-			//if (engine == null || !engine.IsProjectAvailable)
-			//  return;
-
-			//if (!projectInfo.IsMethodsCheckQueueEmpty && !Service.IsParsing)
-			//{
-			//  Debug.WriteLine("BeginParse(ParseReason.Check)" + DateTime.Now.TimeOfDay);
-			//  int line, idx;
-			//  IVsTextView view = GetView();
-			//  view.GetCaretPos(out line, out idx);
-			//  BeginParse(line, idx, new TokenInfo(), ParseReason.Check,
-			//    view, new ParseResultHandler(this.HandleParseResponse));
-			//  return;
-			//}
 		}
 
 		public override bool OutliningEnabled
 		{
 			get { return base.OutliningEnabled; }
 			set { base.OutliningEnabled = value; }
-		}
-
-		internal void CheckRelocatedMember()
-		{
-			try
-			{
-				var methodBuilder = _resetedMember as Nemerle.Completion2.Factories.IntelliSenseModeMethodBuilder;
-
-				if (methodBuilder != null)
-					methodBuilder.EnsureCompiled();
-				else
-				{
-					var fieldBuilder = _resetedMember as FieldBuilder;
-					if (fieldBuilder != null)
-					{
-						// здесь нужно разбираться с инициализаторами полей
-						fieldBuilder.EnsureCompiled();
-					}
-				}
-				//BeginParse();
-			}
-			finally { _resetedMember = null; }
 		}
 
 		public IVsTextView GetView()
@@ -1000,22 +872,42 @@ namespace Nemerle.VisualStudio.LanguageService
 			TryHighlightBraces(textView, command, line, idx, tokenBeforeCaret);
 		}
 
+    int _oldLine = -1;
+    int _oldIdx  = -1;
+    IVsTextView _oldTextView;
+
 		public void TryHighlightBraces(IVsTextView textView)
 		{
 			if (_processingOfHiddenRegions)
 				return;
 
-			var colorizer = GetColorizer() as NemerleColorizer;
+      if (Service == null || !Service.Preferences.EnableMatchBraces || !Service.Preferences.EnableMatchBracesAtCaret)
+        return;
+
+      if (CompileUnit == null || CompileUnit.SourceVersion != CurrentVersion)
+        return;
+
+      var colorizer = GetColorizer() as NemerleColorizer;
 			if (colorizer != null && colorizer.IsClosed)
 				return;
 			
 			int line, idx;
 			textView.GetCaretPos(out line, out idx);
 
-			TokenInfo tokenBeforeCaret = GetTokenInfo(line, idx);
-			TokenInfo tokenAfterCaret = GetTokenInfo(line, idx + 1);
+      if (Utilities.IsSameComObject(_oldTextView, textView) && _oldLine == line && _oldIdx == idx)
+        return;
 
-			TryHighlightBraces(textView, VsCommands2K.UP, line, idx, tokenBeforeCaret, tokenAfterCaret);
+      _oldTextView = textView;
+      _oldLine = line;
+      _oldIdx  = idx;
+
+			TokenInfo tokenBeforeCaret = GetTokenInfo(line, idx);
+      TokenInfo tokenAfterCaret = GetTokenInfo(line, idx + 1);
+
+      if ((tokenAfterCaret.Trigger & TokenTriggers.MatchBraces) != 0)
+        HighlightBraces(textView, line, idx + 1, tokenAfterCaret);
+      else if ((tokenBeforeCaret.Trigger & TokenTriggers.MatchBraces) != 0)
+        HighlightBraces(textView, line, idx, tokenBeforeCaret);
 		}
 
 		private void HandlePairedSymbols(IVsTextView textView, VsCommands2K command, int line, int idx, char ch)
@@ -1049,6 +941,14 @@ namespace Nemerle.VisualStudio.LanguageService
 		#endregion
 
 		#region Implementation
+
+    public void OnSetFocus(IVsTextView view)
+    {
+      _oldLine = -1; // we should reset it. otherwise the TryHighlightBraces don't highlight braces
+      _oldIdx = -1;
+
+      TryHighlightBraces(view);
+    }
 
 		public Engine GetEngine()
 		{
@@ -1293,8 +1193,69 @@ namespace Nemerle.VisualStudio.LanguageService
 		public void SetTopDeclarations(TopDeclaration[] topDeclarations)
 		{
 			Declarations = topDeclarations;
+      TryHighlightBraces(GetView());
 		}
 
 		#endregion
-	}
+
+    private static string NemerleErrorTaskToString(NemerleErrorTask task)
+    {
+      const string PosibleOverloadPref = "  Posible overload: ";
+      const string RelatedMessage1Pref = "  (related message)";
+      const string RelatedMessage2Pref = "    (related message)";
+
+      CompilerMessage cm = task.CompilerMessage;
+      string msg = cm.Msg;
+
+      if (msg.EndsWith("[simple require]") && msg.Contains(':'))
+        msg = msg.Substring(0, msg.LastIndexOf(':'));
+
+      if (msg.StartsWith(RelatedMessage1Pref))
+        return "  " + msg.Substring(RelatedMessage1Pref.Length);
+
+      if (msg.StartsWith(RelatedMessage2Pref))
+        return "    " + msg.Substring(RelatedMessage2Pref.Length);
+
+      switch (cm.Kind)
+      {
+        case MessageKind.Error: msg = "Error: " + msg; break;
+        case MessageKind.Hint:
+          if (msg.StartsWith(PosibleOverloadPref))
+            msg = "   " + msg.Substring(PosibleOverloadPref.Length);
+          else
+            msg = "Hint: " + msg;
+          break;
+        case MessageKind.Warning: msg = "Warning: " + msg; break;
+        default: break;
+      }
+
+
+      return msg;
+    }
+
+    internal int GetDataTipText(TextSpan[] textSpan, out string hintText)
+    {
+      hintText = null;
+
+      var projectInfo = ProjectInfo;
+
+      if (projectInfo == null)
+        return (int)TipSuccesses.TIP_S_ONLYIFNOMARKER;
+
+      var loc = Utils.LocationFromSpan(FileIndex, textSpan[0]);
+
+      var tasks = projectInfo.FindTaks(t => t.CompilerMessage.Location.Contains(loc)).ToList();
+      if (tasks.Count == 0)
+        return VSConstants.E_FAIL;
+
+      var locAgg = tasks.Aggregate(Location.Default, (loc1, t) => loc1.Combine(t.CompilerMessage.Location));
+      var tasksMsgs = tasks.Select(t => NemerleErrorTaskToString(t)).ToArray();
+
+      textSpan[0] = Utils.SpanFromLocation(locAgg);
+      hintText = string.Join(Environment.NewLine, tasksMsgs);
+
+      //return (int)TipSuccesses.TIP_S_ONLYIFNOMARKER;
+      return VSConstants.S_OK;
+    }
+  }
 }

@@ -16,6 +16,7 @@ using Nemerle.VisualStudio.GUI;
 using VsCommands2K = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
 using Microsoft.VisualStudio.Project.Automation;
 using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Project;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
@@ -26,11 +27,25 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 		}
 
+    public override int GetDataTipText(TextSpan[] aspan, out string textValue)
+    {
+      textValue = null;
+      if (Source == null || Source.LanguageService == null || !Source.LanguageService.Preferences.EnableQuickInfo)
+        return NativeMethods.E_FAIL;
+
+      return Source.GetDataTipText(aspan, out textValue);
+    }
+
 		public override void OnSetFocus(IVsTextView view)
 		{
-			ShowAst(view, true);
+			//ShowAst(view, true);
 			base.OnSetFocus(view);
-		}
+    
+      var source = Source;
+
+      if (source != null)
+        source.OnSetFocus(view); // notify source
+    }
 
 		private void ShowAst(IVsTextView view, bool showInfo)
 		{
@@ -51,29 +66,36 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 		}
 
-		// previous values of ScrollInfo
-		int _iBar, _iMinUnit, _iMaxUnits, _iVisibleUnits, _iFirstVisibleUnit;
-		IVsTextView _lastView;
+		//// previous values of ScrollInfo
+		//int _iBar, _iMinUnit, _iMaxUnits, _iVisibleUnits, _iFirstVisibleUnit;
+		//IVsTextView _lastView;
 
 		public override void OnChangeScrollInfo(IVsTextView view, int iBar,
 			int iMinUnit, int iMaxUnits, int iVisibleUnits, int iFirstVisibleUnit)
 		{
 			base.OnChangeScrollInfo(view, iBar, iMinUnit, iMaxUnits, iVisibleUnits, iFirstVisibleUnit);
 
-			if (_lastView != view && _iBar == iBar && _iMinUnit == iMinUnit && _iMaxUnits == iMaxUnits 
-				&& _iVisibleUnits == iVisibleUnits && _iFirstVisibleUnit == iFirstVisibleUnit)
-				return;
+      //if (Utilities.IsSameComObject(_lastView, view) && _iBar == iBar && _iMinUnit == iMinUnit && _iMaxUnits == iMaxUnits
+      //  && _iVisibleUnits == iVisibleUnits && _iFirstVisibleUnit == iFirstVisibleUnit)
+      //{
+      //  //SetOldScrollInfo(view, iBar, iMinUnit, iMaxUnits, iVisibleUnits, iFirstVisibleUnit);
+      //  return;
+      //}
 
 			Source.TryHighlightBraces(view);
 
-			//ShowAst(view, false);
-			_lastView          = view;
-			_iBar              = iBar;
-			_iMinUnit          = iMinUnit;
-			_iMaxUnits         = iMaxUnits;
-			_iVisibleUnits     = iVisibleUnits;
-			_iFirstVisibleUnit = iFirstVisibleUnit;
+      //SetOldScrollInfo(view, iBar, iMinUnit, iMaxUnits, iVisibleUnits, iFirstVisibleUnit);
 		}
+
+    //void SetOldScrollInfo(IVsTextView view, int iBar, int iMinUnit, int iMaxUnits, int iVisibleUnits, int iFirstVisibleUnit)
+    //{
+    //  _lastView = view;
+    //  _iBar = iBar;
+    //  _iMinUnit = iMinUnit;
+    //  _iMaxUnits = iMaxUnits;
+    //  _iVisibleUnits = iVisibleUnits;
+    //  _iFirstVisibleUnit = iFirstVisibleUnit;
+    //}
 
 		protected override int ExecCommand(ref Guid guidCmdGroup, uint nCmdId, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
 		{
@@ -161,9 +183,16 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			Trace.Assert(txt == null, "Implement the menu!\r\nID: " + txt);
 
-
-			return base.ExecCommand(ref guidCmdGroup, nCmdId, nCmdexecopt, pvaIn, pvaOut);
+      _executingCommand = (VsCommands2K)nCmdId;
+      try
+      {
+        var result = base.ExecCommand(ref guidCmdGroup, nCmdId, nCmdexecopt, pvaIn, pvaOut);
+        return result;
+      }
+      finally { _executingCommand = 0; }
 		}
+
+    VsCommands2K _executingCommand;
 
 		private IEnumerable<string> CollectFileNames(EnvDTE.DTE dte)
 		{

@@ -25,16 +25,18 @@ namespace Nemerle.Completion2
 {
 	public partial class Engine
 	{
-    public BeginUpdateCompileUnit(source : ISource) : AsyncRequest
+    public BeginUpdateCompileUnit(source : ISource, newEndIndex : int, newEndLine : int, oldEndIndex : int, oldEndLine : int, startIndex : int, startLine : int) : AsyncRequest
     {
-      def request = AsyncRequest(AsyncRequestType.UpdateCompileUnit, this, source, UpdateCompileUnit);
+      def request = AsyncRequest(AsyncRequestType.UpdateCompileUnit, this, source, UpdateCompileUnit(_, 
+        newEndIndex, newEndLine, oldEndIndex, oldEndLine, startIndex, startLine));
       AsyncWorker.AddWork(request);
       request
     }
 
     /// Run by AsyncWorker thread!
     /// Parse CompileUnit. Set CompileUnit to source. Update information about outline regions. 
-    private UpdateCompileUnit(request : AsyncRequest) : void
+    private UpdateCompileUnit(request : AsyncRequest, 
+      newEndIndex : int, newEndLine : int, oldEndIndex : int, oldEndLine : int, startIndex : int, startLine : int) : void
     {
       surroundwith (currentAsyncRequest)
       try
@@ -47,9 +49,18 @@ namespace Nemerle.Completion2
 
         when (request.Stop)
           return;
+        
+        def source   = request.Source;
 
-			  def compUnit  = ParseCompileUnit(request.Source);
-        def source    = request.Source;
+        //TODO: VladD2: Попробовать выполнять релокешон в отдельном потоке (из пула потоков). 
+        //      Это должно быть особенно эффективно на машинах имеющих более двух процссоров! 
+        def resetedMember = 
+          if (IsProjectAvailable && !IsDefaultEngine && newEndIndex != 0)
+            Project.AddRelocation(source.FileIndex, newEndIndex, newEndLine, 
+              oldEndIndex, oldEndLine, startIndex, startLine) :> Factories.IntelliSenseModeMethodBuilder;
+          else null;
+
+			  def compUnit = ParseCompileUnit(request.GetTextCurrentVersionAndFileIndex());
 
         source.CompileUnit = compUnit;
         
@@ -80,7 +91,7 @@ namespace Nemerle.Completion2
           source.SetTopDeclarations(declsAry);
         }
 
-        def rebuildTypesTreeIfStructureChanged(engine, source) : void
+        def isNeedRebuildTypesTree(engine, source) : bool
         {
 			    // Сравненивает старый и новый CompileUnit, и если их структура не совпадает (т.е. были 
 			    // добавлены, удалены, изменены методы), запустить парсинг дерева типов. 
@@ -94,8 +105,7 @@ namespace Nemerle.Completion2
                                        engine.Project.IsStructureOfCompileUnitChanged(source)
                                      else
                                        true;
-          when (isNeedBuildTypesTree)
-					  ignore(engine.BeginBuildTypesTree());
+          isNeedBuildTypesTree
         }
 
         collectTopDeclarations(source, compUnit);
@@ -119,11 +129,13 @@ namespace Nemerle.Completion2
 
         //Debug.WriteLine($"UpdateCompileUnit 5 $(timer.Elapsed)"); timer.Reset(); timer.Start();
 
-        when (request.Stop)
-          return;
-
-        unless (IsDefaultEngine)
-          rebuildTypesTreeIfStructureChanged(this, source);
+        when (!request.Stop && !IsDefaultEngine)
+        {
+          if (isNeedRebuildTypesTree(this, source))
+					  ignore(BeginBuildTypesTree());
+          else when (resetedMember != null)
+            AddMethodAtFirstCheckQueue(resetedMember); // Add request for typing of relocated method body
+        }
 
         //Debug.WriteLine($"UpdateCompileUnit 6 $(timer.Elapsed)"); timer.Reset(); timer.Start();
       }
@@ -135,11 +147,10 @@ namespace Nemerle.Completion2
       finally { _callback.SetStatusText("Update compile unit is complete."); }
     }
 
-    private ParseCompileUnit(source : ISource) : CompileUnit
+    private ParseCompileUnit(code : string, sourceVersion : int, fileIndex : int) : CompileUnit
     {
       RestoreManagerClassInstance();
-      // Get source code, current source version and file index by one transaction!
-      def (code, sourceVersion, fileIndex) = source.GetTextCurrentVersionAndFileIndex();
+      _isCompileUnit = true;
       def currentMessages = _currentMessages;
       try
       {
@@ -151,9 +162,11 @@ namespace Nemerle.Completion2
         def topDecls     = try { ParsingPipeline(lexer) } catch { | _ => [] }; //!!! теряем сообщение!
         def endLoc       = lexer.Location;
         def loc          = Location(fileIndex, 1, 1, endLoc.EndLine, endLoc.EndColumn);
+        def openLoc      = Location(fileIndex, 1, 1, 1, 1);
+        def closeLoc     = Location(fileIndex, endLoc.EndLine, endLoc.EndColumn, endLoc.EndLine, endLoc.EndColumn);
         def insideEnv    = match (_decls.Find(_ is Decl.Using))
                            { | Some(Decl.Using as u) => u.AfterEnv | _ => CoreEnv };
-        def topNs        = Decl.Namespace(loc, _decls.Rev(), [], [], CoreEnv, insideEnv, loc, topDecls);
+        def topNs        = Decl.Namespace(loc, _decls.Rev(), [], [], CoreEnv, insideEnv, openLoc, openLoc, closeLoc, topDecls);
         
         assert2(_namespaces.Count == 0);
 
@@ -188,13 +201,22 @@ namespace Nemerle.Completion2
         addTypes(topNs, topDecls);
         //assert2(lexer.IsEof);
         
-        CompileUnit(topNs, topDecls.Rev(), lexer.Regions.Rev(), _currentMessages.NToArray(),
+        def cu = CompileUnit(topNs, topDecls.Rev(), lexer.Regions.Rev(), _currentMessages.UpCastToArray(),
                     lexer.LinesLengths, sourceVersion, fileIndex);
+
+        foreach (msg in cu.ParseCompilerMessages)
+          msg.CompileUnit = cu;
+
+        _callback.SetCompilerMessageForCompileUnit(cu);
+
+        cu
       }
       finally
       {
-        when (currentMessages != null && _currentMessages.Count > 0)
-          currentMessages.AddRange(_currentMessages);
+        _isCompileUnit = false;
+
+        //when (currentMessages != null && _currentMessages.Count > 0)
+        //  currentMessages.AddRange(_currentMessages);
 
         _currentMessages = currentMessages;
         _decls           = [];
