@@ -21,6 +21,8 @@ using TupleIntInt       = Nemerle.Builtins.Tuple<int, int>;
 using TupleStringInt    = Nemerle.Builtins.Tuple<string, int>;
 using TupleStringIntInt = Nemerle.Builtins.Tuple<string, int, int>;
 using Nemerle.VisualStudio.Package;
+using System.Text;
+using Nemerle.Compiler.Utils.Async;
 
 
 namespace Nemerle.VisualStudio.LanguageService
@@ -116,7 +118,7 @@ namespace Nemerle.VisualStudio.LanguageService
         projectInfo.Engine.BeginUpdateCompileUnit(this,
           changes.iNewEndIndex + 1, changes.iNewEndLine + 1,
           changes.iOldEndIndex + 1, changes.iOldEndLine + 1,
-          changes.iStartIndex + 1, changes.iStartLine + 1); // Add request for reparse & update info about CompileUnit
+          changes.iStartIndex  + 1, changes.iStartLine  + 1); // Add request for reparse & update info about CompileUnit
       }
       else GetEngine().BeginUpdateCompileUnit(this, 0, 0, 0, 0, 0, 0); // We not need relocation
 
@@ -208,7 +210,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override string ToString()
 		{
-			var name = System.IO.Path.GetFileName(GetFilePath());
+      var name = Location.GetFileName(FileIndex);
 			if (IsClosed)
 				return "NemerleSource: " + name + " (Closed!)";
 			else
@@ -762,17 +764,20 @@ namespace Nemerle.VisualStudio.LanguageService
 		/// <param name="line">zero based index of line</param>
 		/// <param name="index">zero based index of char</param>
 		/// <param name="info"></param>
-    public bool HighlightBraces(IVsTextView view, int line, int index, TokenInfo info)
+    public bool HighlightBraces(IVsTextView view, int line, int index)
 		{
 			LockWrite();
 			try
 			{
 				var spanAry = GetMatchingBraces(false, line, index);
-				if (spanAry.Length > 0)
-					ErrorHandler.ThrowOnFailure(view.HighlightMatchingBrace(
-						(uint)Service.Preferences.HighlightMatchingBraceFlags, (uint)spanAry.Length, spanAry));
+        if (spanAry.Length == 2 && TextSpanHelper.ValidSpan(this, spanAry[0]) && TextSpanHelper.ValidSpan(this, spanAry[1]))
+        {
+          // No check result! 
+          view.HighlightMatchingBrace((uint)Service.Preferences.HighlightMatchingBraceFlags, (uint)spanAry.Length, spanAry);
+          return true;
+        }
 
-        return spanAry.Length > 0;
+        return false;
 			}
 			finally { UnlockWrite(); }
 		}
@@ -858,7 +863,7 @@ namespace Nemerle.VisualStudio.LanguageService
 					Service.Preferences.EnableMatchBracesAtCaret)) 
 				{		
 					//if (!this.LanguageService.IsParsing)
-					return HighlightBraces(textView, line, idx, tokenInfo);
+					return HighlightBraces(textView, line, idx);
 				}
 			}
 
@@ -905,9 +910,9 @@ namespace Nemerle.VisualStudio.LanguageService
       TokenInfo tokenAfterCaret = GetTokenInfo(line, idx + 1);
 
       if ((tokenAfterCaret.Trigger & TokenTriggers.MatchBraces) != 0)
-        HighlightBraces(textView, line, idx + 1, tokenAfterCaret);
+        HighlightBraces(textView, line, idx + 1);
       else if ((tokenBeforeCaret.Trigger & TokenTriggers.MatchBraces) != 0)
-        HighlightBraces(textView, line, idx, tokenBeforeCaret);
+        HighlightBraces(textView, line, idx);
 		}
 
 		private void HandlePairedSymbols(IVsTextView textView, VsCommands2K command, int line, int idx, char ch)
@@ -1198,64 +1203,194 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#endregion
 
-    private static string NemerleErrorTaskToString(NemerleErrorTask task)
+		private static string TextOfCompilerMessage(CompilerMessage cm)
     {
-      const string PosibleOverloadPref = "  Posible overload: ";
-      const string RelatedMessage1Pref = "  (related message)";
-      const string RelatedMessage2Pref = "    (related message)";
+      var text = new StringBuilder(256);
 
-      CompilerMessage cm = task.CompilerMessage;
-      string msg = cm.Msg;
+  	  switch (cm.Kind)
+		  {
+			  case MessageKind.Error:   text.Append("Error: ");   break;
+			  case MessageKind.Hint:    text.Append("Hint: ");    break;
+			  case MessageKind.Warning: text.Append("Warning: "); break;
+			  default: break;
+		  }
 
-      if (msg.EndsWith("[simple require]") && msg.Contains(':'))
-        msg = msg.Substring(0, msg.LastIndexOf(':'));
-
-      if (msg.StartsWith(RelatedMessage1Pref))
-        return "  " + msg.Substring(RelatedMessage1Pref.Length);
-
-      if (msg.StartsWith(RelatedMessage2Pref))
-        return "    " + msg.Substring(RelatedMessage2Pref.Length);
-
-      switch (cm.Kind)
-      {
-        case MessageKind.Error: msg = "Error: " + msg; break;
-        case MessageKind.Hint:
-          if (msg.StartsWith(PosibleOverloadPref))
-            msg = "   " + msg.Substring(PosibleOverloadPref.Length);
-          else
-            msg = "Hint: " + msg;
-          break;
-        case MessageKind.Warning: msg = "Warning: " + msg; break;
-        default: break;
-      }
-
-
-      return msg;
+      TextOfCompilerMessage(cm, false, text, 0);
+      return text.ToString();
     }
 
-    internal int GetDataTipText(TextSpan[] textSpan, out string hintText)
+    /// <summary>
+    /// Return information about token which coordinates intersect with point (line, index)
+    /// </summary>
+    /// <param name="line">zero based index of line</param>
+    /// <param name="index">zero based index of char</param>
+    /// <returns>Token coordinate or span initialised with -1, if no token intersect with point</returns>
+    public TextSpan GetTokenSpan(int line, int index)
+    {
+      //VladD2: VS требует от нас TextSpan содержащий координаты участка текста к которому относится hint.
+      // В дальнейшем, если курсор мыши не выходит за этот TextSpan, VS не предпринимает попытки показать другой хинт,
+      // даже если с нашей точки зрения требуется отображать другую информацию. Чтобы VS не "помогала" нам, вычисляем
+      // локешон токена лежащего под запрашиваемой точкой и передаем его студии. Это приведет ктому, что VS будет 
+      // повторно запрашивать hint, если курсор покинет пределы текущего токена.
+      var token = GetTokenInfo(line, index + 1);  // GetTokenInfo() выдает информацию о предыдущем токене! +1 заставляет ее брать следующий
+      if (token == null)
+        return new TextSpan() { iEndIndex = -1, iStartLine = -1, iStartIndex = -1, iEndLine = -1 };
+
+      var start = token.StartIndex;
+      var end = token.EndIndex + 1; //VladD2: Неизвесно из каких соображений GetTokenInfo() вычитает еденицу из EndIndex. Учитываем это!
+      var hintSpan = new TextSpan() { iStartLine = line, iStartIndex = start, iEndLine = line, iEndIndex = end };
+      
+      return hintSpan;
+    }
+
+		private static void TextOfCompilerMessage(CompilerMessage cm, bool isRelated, StringBuilder text, int indent)
+		{
+			const string PosibleOverloadPref = "  Posible overload: ";
+
+      if (cm.Msg.EndsWith("overload defination"))
+        return;
+
+      if (indent > 0)
+      {
+        text.AppendLine();
+        text.Append(' ', indent);
+      }
+
+      indent += 2;
+		
+			string msg = cm.Msg;
+
+      var len   = msg.EndsWith("[simple require]") && msg.Contains(':') ? msg.LastIndexOf(':') : msg.Length;
+      var start = msg.StartsWith(PosibleOverloadPref) ? PosibleOverloadPref.Length : 0;
+
+      text.Append(msg.Substring(start, len - start));
+
+			if (cm.IsRelatedMessagesPresent)
+				foreach (var related in cm.RelatedMessages)
+					TextOfCompilerMessage(related, true, text, indent);
+		}
+
+    private static string NemerleErrorTaskToString(NemerleErrorTask task)
+    {
+      return TextOfCompilerMessage(task.CompilerMessage);
+    }
+
+    QuickTipInfoAsyncRequest _tipAsyncRequest;
+
+    internal int GetDataTipText(IVsTextView view, TextSpan[] textSpan, out string hintText)
     {
       hintText = null;
+      var loc = Utils.LocationFromSpan(FileIndex, textSpan[0]);
 
       var projectInfo = ProjectInfo;
 
       if (projectInfo == null)
         return (int)TipSuccesses.TIP_S_ONLYIFNOMARKER;
 
-      var loc = Utils.LocationFromSpan(FileIndex, textSpan[0]);
+      if (_tipAsyncRequest == null || _tipAsyncRequest.Line != loc.Line || _tipAsyncRequest.Column != loc.Column)
+      {
+        _tipAsyncRequest = projectInfo.Engine.BeginGetQuickTipInfo(this, loc.Line, loc.Column);
+        return VSConstants.E_PENDING;
+      }
+      else if (!_tipAsyncRequest.IsCompleted)
+        return VSConstants.E_PENDING;
+      else
+      {
+        QuickTipInfo tipInfo = _tipAsyncRequest.QuickTipInfo;
+        _tipAsyncRequest = null;
 
-      var tasks = projectInfo.FindTaks(t => t.CompilerMessage.Location.Contains(loc)).ToList();
-      if (tasks.Count == 0)
-        return VSConstants.E_FAIL;
+        if (LanguageService.IsDebugging)
+        {
+          if (NeedDebugDataTip(tipInfo, textSpan))
+          {
+            hintText = "";
+            return (int)TipSuccesses2.TIP_S_NODEFAULTTIP;
+          }
+        }
 
-      var locAgg = tasks.Aggregate(Location.Default, (loc1, t) => loc1.Combine(t.CompilerMessage.Location));
-      var tasksMsgs = tasks.Select(t => NemerleErrorTaskToString(t)).ToArray();
+        var span = textSpan[0];
 
-      textSpan[0] = Utils.SpanFromLocation(locAgg);
-      hintText = string.Join(Environment.NewLine, tasksMsgs);
+        //QuickTipInfo tipInfo = engine.GetQuickTipInfo(FileIndex, loc.Line, loc.Column);
 
-      //return (int)TipSuccesses.TIP_S_ONLYIFNOMARKER;
-      return VSConstants.S_OK;
+        //Debug.WriteLine(loc.ToVsOutputStringFormat() + "GetDataTipText()");
+        var tasks = projectInfo.FindTaks(t => t.CompilerMessage.Location.Contains(loc) && !t.CompilerMessage.IsRelated).ToList();
+
+        if (tasks.Count == 0 && tipInfo == null)
+          return (int)TipSuccesses.TIP_S_ONLYIFNOMARKER;
+
+        var hintSpan = GetTokenSpan(span.iStartLine, span.iStartIndex);
+
+        if (tipInfo != null)
+        {
+          hintText = tipInfo.Text;
+
+          if (TextSpanHelper.IsEmpty(hintSpan))
+            hintSpan = Utils.SpanFromLocation(tipInfo.Location);
+        }
+
+        if (tasks.Count > 0)
+        {
+          var locAgg = tasks.Aggregate(Location.Default, (loc1, t) => loc1.Combine(t.CompilerMessage.Location));
+          var tasksMsgs = tasks.Select(t => NemerleErrorTaskToString(t));//.ToArray();
+
+          //Debug.WriteLine(token.Type.ToString());
+          if (TextSpanHelper.IsEmpty(hintSpan))
+            hintSpan = Utils.SpanFromLocation(locAgg);
+
+          if (hintText != null)
+            hintText += Environment.NewLine;
+
+          hintText += "------ Compiler messages ------" + Environment.NewLine + tasksMsgs.Join(Environment.NewLine);
+        }
+
+        textSpan[0] = hintSpan; // если не задать не пустой span пересекающийся с исхдным, VS не покажет hint.
+
+        //Debug.WriteLine(Utils.LocationFromSpan(FileIndex, span).ToVsOutputStringFormat() + "result GetDataTipText() text:");
+        //Debug.WriteLine(hintText);
+
+        return VSConstants.S_OK;
+      }
+    }
+
+    private bool NeedDebugDataTip(QuickTipInfo quickTipInfo, TextSpan[] textSpan)
+    {
+      IVsTextLines textLines = GetTextLines();
+
+      // Now, check if the debugger is running and has anything to offer
+      try
+      {
+        Microsoft.VisualStudio.Shell.Interop.IVsDebugger debugger = LanguageService.GetIVsDebugger();
+
+        if (debugger == null || !LanguageService.IsDebugging || quickTipInfo == null || quickTipInfo.Location.IsEmpty)
+          return false;
+
+        string expr = null;
+        var    loc  = quickTipInfo.Location;
+
+        if (quickTipInfo.IsExpr)
+        {
+          expr = quickTipInfo.TExpr.ToString();
+          loc  = quickTipInfo.TExpr.Location;
+        }
+
+        var debugSpan = new TextSpan[1] { Utils.SpanFromLocation(loc) };
+
+        string debugTextTip = null;
+        int hr = debugger.GetDataTipValue(textLines, debugSpan, expr, out debugTextTip);
+
+        if (hr == (int)TipSuccesses2.TIP_S_NODEFAULTTIP)
+        {
+          textSpan[0] = debugSpan[0];
+          return true;
+        }
+
+        Debug.Assert(false);
+      }
+      catch (System.Runtime.InteropServices.COMException)
+      {
+      }
+
+      return false;
     }
   }
 }

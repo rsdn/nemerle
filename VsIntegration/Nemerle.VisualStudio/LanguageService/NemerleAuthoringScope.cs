@@ -94,19 +94,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override string GetDataTipText(int line, int col, out TextSpan span)
 		{
-			span = new TextSpan();
-
-			QuickTipInfo info = _project.GetQuickTip(_filePath, line, col, _sourceText);
-
-			if (info == null)
-				return null;
-
-			span.iStartLine  = info.LineStart;
-			span.iEndLine    = info.LineEnd;
-			span.iStartIndex = info.ColStart;
-			span.iEndIndex   = info.ColEnd;
-
-			return info.Text;
+      throw new NotImplementedException("this method should not be called!");
 		}
 
 		public override string Goto(

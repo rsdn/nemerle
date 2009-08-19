@@ -743,14 +743,16 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (IsDisposed)
 				return;
 
-			var maxTime = TimeSpan.FromSeconds(0.1);
-			var timer = Stopwatch.StartNew();
+      if (periodic)
+      {
+        var maxTime = TimeSpan.FromSeconds(0.05);
+        var timer = Stopwatch.StartNew();
 
-			AsyncWorker.DispatchResponses();
+        AsyncWorker.DispatchResponses();
 
-			while (timer.Elapsed < maxTime && AsyncWorker.DoSynchronously())
-				;
-
+        while (timer.Elapsed < maxTime && AsyncWorker.DoSynchronously())
+          ;
+      }
 			//if (LastActiveTextView == null)
 			//  return;
 

@@ -365,5 +365,15 @@ namespace Nemerle.VisualStudio
 			}
 			return (int)Math.Min((long)int.MaxValue, t - s);
 		}
+
+    public static string ToVsOutputStringFormat(this Location loc)
+    {
+      var res = loc.File + "(" + loc.Line + "," + loc.Column;
+
+      if (loc.EndLine > loc.Line || loc.EndLine == loc.Line && loc.EndColumn > loc.Column)
+        res += "," + loc.EndLine + "," + loc.EndColumn;
+
+      return res + "): ";
+    }
 	}
 }

@@ -17,18 +17,19 @@ using Nemerle.Surround;
                           _currentAsyncRequest = request, 
                           {
                             _currentAsyncRequest = null;
-                            request.MarkAsCompleted();
                           })]
 
 
 namespace Nemerle.Completion2
 {
+  using MethodBuilderEx = Factories.IntelliSenseModeMethodBuilder;
+
 	public partial class Engine
 	{
-    public BeginUpdateCompileUnit(source : ISource, newEndIndex : int, newEndLine : int, oldEndIndex : int, oldEndLine : int, startIndex : int, startLine : int) : AsyncRequest
+    public BeginUpdateCompileUnit(source : ISource, newEndChar : int, newEndLine : int, oldEndChar : int, oldEndLine : int, startChar : int, startLine : int) : AsyncRequest
     {
       def request = AsyncRequest(AsyncRequestType.UpdateCompileUnit, this, source, UpdateCompileUnit(_, 
-        newEndIndex, newEndLine, oldEndIndex, oldEndLine, startIndex, startLine));
+        newEndChar, newEndLine, oldEndChar, oldEndLine, startChar, startLine));
       AsyncWorker.AddWork(request);
       request
     }
@@ -36,7 +37,7 @@ namespace Nemerle.Completion2
     /// Run by AsyncWorker thread!
     /// Parse CompileUnit. Set CompileUnit to source. Update information about outline regions. 
     private UpdateCompileUnit(request : AsyncRequest, 
-      newEndIndex : int, newEndLine : int, oldEndIndex : int, oldEndLine : int, startIndex : int, startLine : int) : void
+      newEndChar : int, newEndLine : int, oldEndChar : int, oldEndLine : int, startChar : int, startLine : int) : void
     {
       surroundwith (currentAsyncRequest)
       try
@@ -50,15 +51,51 @@ namespace Nemerle.Completion2
         when (request.Stop)
           return;
         
-        def source   = request.Source;
+        def source    = request.Source;
+        def fileIndex = source.FileIndex;
 
         //TODO: VladD2: Попробовать выполнять релокешон в отдельном потоке (из пула потоков). 
         //      Это должно быть особенно эффективно на машинах имеющих более двух процссоров! 
-        def resetedMember = 
-          if (IsProjectAvailable && !IsDefaultEngine && newEndIndex != 0)
-            Project.AddRelocation(source.FileIndex, newEndIndex, newEndLine, 
-              oldEndIndex, oldEndLine, startIndex, startLine) :> Factories.IntelliSenseModeMethodBuilder;
-          else null;
+        mutable resetedMember;
+        mutable resetedMemberParsed;
+
+        when (!IsDefaultEngine && newEndChar != 0)
+        {
+          def project = this.Project;
+          
+          when (project != null)
+          {
+            def compileUnit = project.CompileUnits[fileIndex];
+            def lineDelta   = newEndLine - oldEndLine;
+            def charDelta   = newEndChar - oldEndChar;
+
+            def needRelocation = match (compileUnit.FindMember(startLine, startChar))
+            {
+              | Some(m is ClassMember.Function) =>
+                def innerLoc = m.BodyInnerLocation;
+
+                if (innerLoc.Contains(startLine, startChar))
+                {
+                  resetedMemberParsed = m;
+                  resetedMember       = m.Builder :> MethodBuilderEx;
+                  // Не делаем релокешон если локешон метода не меняется!
+                  def newLoc = Completion.Relocate(innerLoc, oldEndLine, oldEndChar, lineDelta, charDelta);
+                  resetedMember.ResetCodeCache();
+                  newLoc != innerLoc
+                }
+                else true
+
+              | _x => true
+            }
+            
+            when (needRelocation)
+              compileUnit.TopNamespace.Relocate(fileIndex, oldEndLine, oldEndChar, lineDelta, charDelta);
+            //TODO: Relocate: Regions & ParseCompilerMessages (А надо ли если мы все время получаем ноый CompileUnit?)
+          }
+        }
+
+        when (request.Stop)
+          return;
 
 			  def compUnit = ParseCompileUnit(request.GetTextCurrentVersionAndFileIndex());
 
@@ -87,8 +124,8 @@ namespace Nemerle.Completion2
 				    .ToArray();
 
 			    //source.Declarations = declsAry;
-          //AsyncWorker.AddResponse(() => source.SetTopDeclarations(declsAry));
-          source.SetTopDeclarations(declsAry);
+          AsyncWorker.AddResponse(() => source.SetTopDeclarations(declsAry));
+          //source.SetTopDeclarations(declsAry);
         }
 
         def isNeedRebuildTypesTree(engine, source) : bool
@@ -144,7 +181,11 @@ namespace Nemerle.Completion2
           def msg = $"The update CompileUnit operation aborted at: $(e.Message)";
           throw CompilationAbortedException(msg, e);
       }
-      finally { _callback.SetStatusText("Update compile unit is complete."); }
+      finally
+      {
+        _callback.SetStatusText("Update compile unit is complete.");
+        request.MarkAsCompleted();
+      }
     }
 
     private ParseCompileUnit(code : string, sourceVersion : int, fileIndex : int) : CompileUnit
@@ -207,7 +248,8 @@ namespace Nemerle.Completion2
         foreach (msg in cu.ParseCompilerMessages)
           msg.CompileUnit = cu;
 
-        _callback.SetCompilerMessageForCompileUnit(cu);
+        AsyncWorker.AddResponse(() => _callback.SetCompilerMessageForCompileUnit(cu));
+        //_callback.SetCompilerMessageForCompileUnit(cu);
 
         cu
       }

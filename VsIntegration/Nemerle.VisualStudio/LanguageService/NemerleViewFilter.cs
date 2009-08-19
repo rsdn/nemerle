@@ -25,16 +25,92 @@ namespace Nemerle.VisualStudio.LanguageService
 		public NemerleViewFilter(CodeWindowManager mgr, IVsTextView view)
 			: base(mgr, view)
 		{
-		}
+    }
+
+    #region GetDataTipText
 
     public override int GetDataTipText(TextSpan[] aspan, out string textValue)
     {
+      //VladD2: —тратеги€ отображени€ хинта:
+      // ” нас есть два основных режима отображени€ хинтов 1. ¬о врем€ разработки. 2. ¬о врем€ отладки.
+      // ¬ любом случае, данные описывающие текущий элемент формируютс€ в теневом потоке.
+      // ¬ них формируетс€ строка котора€ будет оторбажатьс€ и описание выражений на которых указывает курсор (aspan[0]).
+      //  огда хинт сформирован провер€ем не под отладчиком ли мы и если под отладчиктом, то пытаемс€ пон€ть,
+      // что конкретно нужно отображать - hint с информацией о выражении, или DataHint который отображает значение выражени€
+      // при отладке.
+
       textValue = null;
       if (Source == null || Source.LanguageService == null || !Source.LanguageService.Preferences.EnableQuickInfo)
         return NativeMethods.E_FAIL;
 
-      return Source.GetDataTipText(aspan, out textValue);
+      return Source.GetDataTipText(TextView, aspan, out textValue);
     }
+
+    /// <include file='doc\ViewFilter.uex' path='docs/doc[@for="ViewFilter.GetFullDataTipText"]/*' />
+    /// <summary>This method checks to see if the IVsDebugger is running, and if so, 
+    /// calls it to get additional information about the current token and returns a combined result.
+    /// You can return an HRESULT here like TipSuccesses2.TIP_S_NODEFAULTTIP.</summary>
+    public override int GetFullDataTipText(string textValue, TextSpan ts, out string fullTipText)
+    {
+      IVsTextLines textLines;
+      fullTipText = textValue;
+
+      ErrorHandler.ThrowOnFailure(this.TextView.GetBuffer(out textLines));
+
+      // Now, check if the debugger is running and has anything to offer
+      try
+      {
+        Microsoft.VisualStudio.Shell.Interop.IVsDebugger debugger = Source.LanguageService.GetIVsDebugger();
+
+        if (debugger != null && Source.LanguageService.IsDebugging)
+        {
+          TextSpan[] tsdeb = new TextSpan[1] { new TextSpan() };
+          if (!TextSpanHelper.IsEmpty(ts))
+          {
+            // While debugging we always want to evaluate the expression user is hovering over
+            ErrorHandler.ThrowOnFailure(TextView.GetWordExtent(ts.iStartLine, ts.iStartIndex, (uint)WORDEXTFLAGS.WORDEXT_FINDEXPRESSION, tsdeb));
+            // If it failed to find something, then it means their is no expression so return S_FALSE
+            if (TextSpanHelper.IsEmpty(tsdeb[0]))
+            {
+              return NativeMethods.S_FALSE;
+            }
+          }
+          string debugTextTip = null;
+          int hr = debugger.GetDataTipValue(textLines, tsdeb, null, out debugTextTip);
+          fullTipText = debugTextTip;
+          if (hr == (int)TipSuccesses2.TIP_S_NODEFAULTTIP)
+          {
+            return hr;
+          }
+          if (!string.IsNullOrEmpty(debugTextTip) && debugTextTip != textValue)
+          {
+            // The debugger in this case returns "=value [type]" which we can
+            // append to the variable name so we get "x=value[type]" as the full tip.
+            int i = debugTextTip.IndexOf('=');
+            if (i >= 0)
+            {
+              string spacer = (i < debugTextTip.Length - 1 && debugTextTip[i + 1] == ' ') ? " " : "";
+              fullTipText = textValue + spacer + debugTextTip.Substring(i);
+            }
+          }
+        }
+#if LANGTRACE
+            } catch (COMException e) {
+                Trace.WriteLine("COMException: GetDataTipValue, errorcode=" + e.ErrorCode);
+#else
+      }
+      catch (System.Runtime.InteropServices.COMException)
+      {
+#endif
+      }
+      
+      if (string.IsNullOrEmpty(fullTipText))
+        fullTipText = textValue;
+
+      return NativeMethods.S_OK;
+    }
+ 
+    #endregion
 
 		public override void OnSetFocus(IVsTextView view)
 		{

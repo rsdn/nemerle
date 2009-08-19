@@ -513,6 +513,20 @@ namespace Nemerle.Compiler
       loop ([f ()])
     }
 
+    ParseClassMembers[T](first : Token, parentType : string) : SCG.List[ClassMember]
+    {
+      push_stream(first);
+
+      def members = SCG.List();
+
+      while (stream != null) 
+        ParseClassMember(parentType, members);
+      
+      pop_stream("type member");
+
+      members
+    }
+
     process_groups [T] (first : Token, name : string, f : void -> T) : list [T]
       where T : class
     {
@@ -530,23 +544,6 @@ namespace Nemerle.Compiler
       members.Rev ()
     }
 
-    process_groups [T] (first : Token, name : string, f : void -> SCG.IEnumerable[T]) : list [T]
-      where T : class
-    {
-      push_stream(first);
-      def members = SCG.List();
-      
-      while (stream != null) 
-      {
-        def childs = f();
-        when (childs != null)
-          members.AddRange(childs);
-      }
-      
-      pop_stream(name);
-      members.ToList()
-    }
-    
     #endregion Utility functions operating on current token stream
 
     static fatal_error (tok : Token, msg : string) : PExpr {
@@ -776,7 +773,7 @@ namespace Nemerle.Compiler
                 def typarms = parse_where_constraints (tyvars);
                 parse_top_extensions (mods, MacroTargets.Class);
 
-                mutable members = [];
+                mutable members = SCG.List();
                 mutable bodyBracesGroup;
 
                 unless (key == "type")
@@ -793,15 +790,14 @@ namespace Nemerle.Compiler
                       {
                         | Some(e) =>
                           pop_stream ();
-                          members = [ClassMember.Field (e.Location, null, null, e)]; // special encoding for <[ decl: class A { ..$mems } ]>
+                          members.Add(ClassMember.Field (e.Location, null, null, e)); // special encoding for <[ decl: class A { ..$mems } ]>
                           
                         | _ =>
                           pop_stream ();
-                          when (key == "variant") in_variant = true;
-                          members = process_groups (children, "type member", ParseClassMember); 
-                          when (members.Exists (_ is ClassMember.TypeDeclaration (TopDeclaration.Delegate (null))))
-                            members = members.Filter (m => !(m 
-                              is ClassMember.TypeDeclaration (TopDeclaration.Delegate (null))));
+                          when (key == "variant")
+                            in_variant = true;
+                          members = ParseClassMembers(children, key);
+                          _ = members.RemoveAll(_ is ClassMember.TypeDeclaration (TopDeclaration.Delegate(null)));
                           in_variant = false
                       }
 
@@ -809,19 +805,21 @@ namespace Nemerle.Compiler
                   }
                 }
 
+                def members2 = members.NToList();
+
                 def td =
                   match (key)
                   {
-                    | "class" => TopDeclaration.Class (typarms, t_extends, members)
+                    | "class" => TopDeclaration.Class (typarms, t_extends, members2)
                     | "struct" =>
                       mods.mods |= NemerleAttributes.Struct;
-                      TopDeclaration.Class (typarms, t_extends, members)
+                      TopDeclaration.Class (typarms, t_extends, members2)
 
                     | "module" =>
                       mods.mods |= NemerleAttributes.Static;
                       foreach (m when !(m is ClassMember.TypeDeclaration) in members)
                         m.modifiers.mods |= NemerleAttributes.Static;
-                      TopDeclaration.Class (typarms, t_extends, members)
+                      TopDeclaration.Class (typarms, t_extends, members2)
 
                     | "type" =>
                       expect_operator ("=");
@@ -829,29 +827,14 @@ namespace Nemerle.Compiler
                       expect_empty ("type alias declaration");
                       TopDeclaration.Alias (typarms, t)
 
-                    | "interface" => TopDeclaration.Interface (typarms, t_extends, members)
-                    | "variant" => TopDeclaration.Variant (typarms, t_extends, members)
-                    | "enum" => TopDeclaration.Enum (typarms, t_extends, members)
+                    | "interface" => TopDeclaration.Interface (typarms, t_extends, members2)
+                    | "variant" => TopDeclaration.Variant (typarms, t_extends, members2)
+                    | "enum" => TopDeclaration.Enum (typarms, t_extends, members2)
 
                     | _ => Util.ice ()
                   };
 
-                when (bodyBracesGroup != null)
-                {
-                  def loc = bodyBracesGroup.Location;
-
-                  if (bodyBracesGroup.generated)
-                  {
-                    td.BodyOpenTokenLocation  = loc.FromStart();
-                    td.BodyCloseTokenLocation = loc.FromEnd();
-                    td.IsIndentationSyntax    = true;
-                  }
-                  else
-                  {
-                    td.BodyOpenTokenLocation  = Location(loc.FileIndex, loc.Line,    loc.Column,        loc.Line,    loc.Column + 1);
-                    td.BodyCloseTokenLocation = Location(loc.FileIndex, loc.EndLine, loc.EndColumn - 1, loc.EndLine, loc.EndColumn);
-                  }
-                }
+                InitBodyLocations(td, bodyBracesGroup);
 
                 if (tyvarsLocation != Location.Default)
                 {
@@ -907,21 +890,27 @@ namespace Nemerle.Compiler
       res
     }
 
-    ParseClassMember () : SCG.IEnumerable[ClassMember]
+    ParseClassMember (parentType : string, members : SCG.List[ClassMember]) : void
     {
       def start_tok = get_token ();
+
       match (start_tok) 
       {
         | Token.LooseGroup (toks) =>
           push_stream (toks);
+          
           mutable customs = get_customs ();
           def mods = Modifiers (get_modifiers (), []);
 
           mutable parsed_some_top_extension = false;
           def collect_type_macro_inv = Modifiers();
+          
           parse_top_extensions (collect_type_macro_inv, MacroTargets.All & ~MacroTargets.Parameter);
-          when (!collect_type_macro_inv.IsEmpty) {
+
+          when (!collect_type_macro_inv.IsEmpty)
+          {
             parsed_some_top_extension = true;
+
             foreach (type_macro_attr in collect_type_macro_inv.GetCustomAttributes())
                 mods.AddCustomAttribute(type_macro_attr)
           }
@@ -952,15 +941,14 @@ namespace Nemerle.Compiler
                   | _ =>
                     is_property = true; // most probably it is a field or property
                     ((null, null, Location.Default), ([], Location.Default))
-                }
+                };
 
               def ret_type = parse_return_type (true);
               def typarms  = parse_where_constraints (tyvars);
 
               if (is_property)
                 // property can contain embedded (nested) fields we should take it into account
-                foreach (mem when mem != null in parse_property (start_tok.Location, mods, customs, id, ret_type, parms, typarms))
-                  yield mem;
+                parse_property (parentType, members, start_tok.Location, mods, customs, id, ret_type, parms, typarms);
               else
               {
                 def header = Fun_header (start_tok.Location.FromStart() + parmsloc + ret_type.Location,
@@ -974,7 +962,7 @@ namespace Nemerle.Compiler
                 take_attributes_out (ref customs, System.AttributeTargets.Method %| System.AttributeTargets.ReturnValue, true, mods);
                 def met = parse_method (header, mods);
                 when (met != null)
-                  yield met;
+                  members.Add(met);
               }
 
             | Token.Keyword ("this") =>
@@ -988,13 +976,13 @@ namespace Nemerle.Compiler
               take_attributes_out (ref customs, System.AttributeTargets.Method, true, mods);
               def mem = parse_method (header, mods);
               when (mem != null)
-                yield mem;
+                members.Add(mem);
 
             | Token.Keyword ("event") =>
               shift ();
               def mem = parse_event (start_tok.Location.FromStart(), mods, customs);
               when (mem != null)
-                yield mem;
+                members.Add(mem);
 
             | Token.Operator ("|") =>
               shift ();
@@ -1006,7 +994,7 @@ namespace Nemerle.Compiler
                 Error (tok, "modifiers not allowed on options"); 
               def mem = parse_option (mods);
               when (mem != null)
-                yield mem;
+                members.Add(mem);
               
             | Token.EndOfGroup as end when parsed_some_top_extension =>
               take_attributes_out (ref customs, System.AttributeTargets.Method, true, mods);
@@ -1019,7 +1007,7 @@ namespace Nemerle.Compiler
               loc = start_tok.Location, body = FunBody.Parsed(<[]>), implemented = []);
               def mem = dummy_method;
               when (mem != null)
-                yield mem;
+                members.Add(mem);
                 
             | _ =>
               take_attributes_out (ref customs, System.AttributeTargets.Class, true, mods);
@@ -1029,7 +1017,7 @@ namespace Nemerle.Compiler
                                                      modifiers = td.modifiers, 
                                                      td = td);
               when (mem != null)
-                yield mem;
+                members.Add(mem);
           }
             
           pop_stream ("class member");
@@ -1047,7 +1035,7 @@ namespace Nemerle.Compiler
       parse_top_extensions (modifiers, MacroTargets.Method);
 
       mutable loc        = h.Location;
-      mutable bodyTokens = null;
+      mutable bodyBracesGroup;
       
       def tok          = peek_token();
       def bodyLocation = if (tok == null) loc.FromEnd() else CalcTokenLocation(tok);
@@ -1059,7 +1047,7 @@ namespace Nemerle.Compiler
             shift ();
 
             loc += brac.Location;
-            bodyTokens = brac;
+            bodyBracesGroup = brac;
             //// we skip body parsing in completion mode,
             ///// to save time and ignore errors
             //if (Manager.IsIntelliSenseMode)
@@ -1072,6 +1060,7 @@ namespace Nemerle.Compiler
           | Token.EndOfGroup as tok =>
             loc += tok.Location;
             FunBody.Abstract ()
+
           | Token.Operator ("$") =>
             def expr = parse_spliced_expr ();
             loc += expr.Location;
@@ -1082,32 +1071,66 @@ namespace Nemerle.Compiler
           | x => Error (x, "expecting method body"); FunBody.Abstract ();
         };
 
-      def member = ClassMember.Function (header = h, name = h.name,  modifiers = modifiers,
+      def method = ClassMember.Function (header = h, name = h.name,  modifiers = modifiers,
                                          loc = loc, body = body, implemented = impl);
-      member._env = env;
+      InitBodyLocations(method, bodyBracesGroup);
+      method._env = env;
       //when (Manager.IsIntelliSenseMode)
       //{
-        member._tokens       = bodyTokens;
-        member._bodyLocation = bodyLocation;
+        //method._tokens       = bodyTokens;
+        method._bodyLocation = bodyLocation;
       //}
-      member
+      method
+    }
+
+    static InitBodyLocations(member : MemberBase, bodyBracesGroup : Token.BracesGroup) : void
+    {
+      when (bodyBracesGroup != null)
+      {
+        def loc = bodyBracesGroup.Location;
+
+        if (bodyBracesGroup.generated)
+        {
+          member.BodyOpenTokenLocation  = loc.FromStart();
+          member.BodyCloseTokenLocation = loc.FromEnd();
+          member.IsIndentationSyntax    = true;
+        }
+        else
+        {
+          member.BodyOpenTokenLocation  = Location(loc.FileIndex, loc.Line,    loc.Column,        loc.Line,    loc.Column + 1);
+          member.BodyCloseTokenLocation = Location(loc.FileIndex, loc.EndLine, loc.EndColumn - 1, loc.EndLine, loc.EndColumn);
+        }
+      }
+    }
+
+    TryPeekBracesGroup() : Token.BracesGroup
+    {
+      match (peek_token())
+      {
+        | Token.BracesGroup as bg => bg
+        | _ => null
+      }
     }
 
     parse_option (modifiers : Modifiers) : ClassMember
     {
-      def make_option (id : Splicable, children, loc) {
-        if (in_variant) {
+      def make_option (id : Splicable, children, loc)
+      {
+        if (in_variant)
+        {
           def members =
-            if (children != null)
-              process_groups (children, "elements of variant option", ParseClassMember);
+            if (children != null) ParseClassMembers(children, "variant option").NToList()
             else [];
-          def td = TopDeclaration.VariantOption (name = id, loc = loc,
+
+          def td = TopDeclaration.VariantOption (name      = id, loc = loc,
                                                  modifiers = modifiers,
-                                                 decls = members,
-                                                 typarms = null);
+                                                 decls     = members,
+                                                 typarms   = null);
+
           ClassMember.TypeDeclaration (loc = loc, name = null, modifiers = null, td = td)
         }
-        else {
+        else
+        {
           when (children != null)
             Error (children, "only variant types can hold options with members");
           ClassMember.EnumOption (id.Location, id, modifiers, None ());
@@ -1143,14 +1166,21 @@ namespace Nemerle.Compiler
       };
     }
 
-    parse_property (startLocation : Location, mods : Modifiers, 
-                    mutable customs : list [Token.SquareGroup],
-                    id : Splicable, ret_type : PExpr, parms : list [Fun_parm],
-                    typarms : Typarms) : SCG.IEnumerable[ClassMember]
+    parse_property (parentType    : string,
+                    members       : SCG.List[ClassMember],
+                    startLocation : Location,
+                    mods          : Modifiers, 
+            mutable customs       : list[Token.SquareGroup],
+                    id            : Splicable, 
+                    ret_type      : PExpr, 
+                    parms         : list[Fun_parm],
+                    typarms       : Typarms
+    )
+      : void
     {
-      def redirect (parsedFieldName, uniqueFieldName, getterOrFetterFunc)
+      def redirect (parsedFieldName, uniqueFieldName, getterOrSetterFunc)
       {
-        match (getterOrFetterFunc)
+        match (getterOrSetterFunc)
         {
           | Some(ClassMember.Function(_, _, FunBody.Parsed(bodyExpr)) as func) =>
             def newBody = Util.locate(bodyExpr.Location, 
@@ -1167,14 +1197,11 @@ namespace Nemerle.Compiler
       }
 
       def loc = startLocation + ret_type.Location;
-      /// When we parse some member we can find nested declarations.
-      /// If it is found we add reference on it into additionalMembers.
-      mutable additionalMembers : SCG.List[ClassMember] = null;
       mutable impl = [];
       when (flag_keyword ("implements"))
         impl = comma_separated_list (fun () { parse_expr (TokenStoppers.All) });
 
-      def res = 
+      def parsedMember = 
       match (peek_token ()) 
       {
         | Token.BracesGroup(_, generated) as group =>
@@ -1185,14 +1212,15 @@ namespace Nemerle.Compiler
 
           def plain_name = match (id) { | Splicable.Name (n) => n.Id | _ => "" };
           
-          def prop_ty = match (parms) {
-            | [parm]     => Util.locate (parm.Location + ret_type.Location, 
-                              <[ $(parm.ty) -> $ret_type ]>)
-            | []         => ret_type
-            | first :: _ => def input_parms = parms.Map (_.ty);
-                            Util.locate (first.Location + ret_type.Location,
-                              <[ @* (..$input_parms) -> $ret_type ]>)
-          }
+          def prop_ty = match (parms)
+            {
+              | [parm]     => Util.locate (parm.Location + ret_type.Location, 
+                                <[ $(parm.ty) -> $ret_type ]>)
+              | []         => ret_type
+              | first :: _ => def input_parms = parms.Map (_.ty);
+                              Util.locate (first.Location + ret_type.Location,
+                                <[ @* (..$input_parms) -> $ret_type ]>)
+            };
 
           def makeBodyLocation(gLoc, generated)
           {
@@ -1227,12 +1255,14 @@ namespace Nemerle.Compiler
 
                       def method_atts = Modifiers (mymods, []);
                       take_attributes_out (ref mycustoms, System.AttributeTargets.Method, true, method_atts);
+                      def bodyBracesGroup = TryPeekBracesGroup();
                       parse_top_extensions (method_atts, MacroTargets.Method);
                       
                       def (kind, bd) = parse_accessor_body ([], impl);
                       def name = Splicable.Name (mkname ("get_" + plain_name));
                       def fh = Fun_header (nametok.Location.AsGenerated(), name, ret_type, parms);
                       def member = ClassMember.Function(loc2.AsGenerated(), fh.name, method_atts, fh, kind, bd);
+                      InitBodyLocations(member, bodyBracesGroup);
                       member._bodyLocation = bodyLocation;
                       member._env = env;
                       getter = Some (member);
@@ -1242,7 +1272,8 @@ namespace Nemerle.Compiler
                       unless (setter.IsNone)
                         Message.Error ("property cannot have multiple setters");
 
-                      def method_atts = Modifiers (mymods, []);                        
+                      def method_atts = Modifiers (mymods, []);
+                      def bodyBracesGroup = TryPeekBracesGroup();
                       take_attributes_out (ref mycustoms, System.AttributeTargets.Method, false, method_atts);
                       parse_top_extensions (method_atts, MacroTargets.Method);                      
 
@@ -1257,6 +1288,7 @@ namespace Nemerle.Compiler
                       def fh = Fun_header (toks.Location + nametok.Location, 
                                            typarms, name, PExpr.Void (), setter_parms);
                       def member = ClassMember.Function(loc2.AsGenerated(), fh.name, method_atts, fh, kind, bd);
+                      InitBodyLocations(member, bodyBracesGroup);
                       member._bodyLocation = bodyLocation;
                       member._env = env;
                       setter = Some (member);
@@ -1276,15 +1308,12 @@ namespace Nemerle.Compiler
                       
                       
                       when (redirectedNames == null)
-                      {
                         redirectedNames   = SCG.List();
-                        additionalMembers = SCG.List();
-                      }
                         
                       redirectedNames.Add((parsedFieldName, uniqueFieldName));
                       
                       parsedField._env = env;
-                      additionalMembers.Add(parsedField);
+                      members.Add(parsedField);
                       
                       match (peek_token ()) 
                       {
@@ -1333,6 +1362,14 @@ namespace Nemerle.Compiler
               redirect(parsedFieldName, uniqueFieldName, prop.get);
             }
 
+          unless (parentType == "interface")
+          {
+            def field = TryExpandAutoproperty(prop);
+
+            when (field != null)
+              members.Add(field);
+          }
+
           prop
 
         | Token.Operator ("=") as toc =>
@@ -1361,29 +1398,72 @@ namespace Nemerle.Compiler
         | t => Error (t, "expecting `;' or `{ }' in field / property declaration"); null
       }
 
-      when (res != null)
-        res._env = env;
-        
-      if (additionalMembers == null) [res]
-      else 
+      when (parsedMember != null)
       {
-        additionalMembers.Add(res);
-        additionalMembers
+        parsedMember._env = env;
+        members.Add(parsedMember);
       }
     }
 
+    public static TryExpandAutoproperty(prop : ClassMember.Property) : ClassMember.Field
+    {
+      // Support autoproperty (see C# 3.0 specification).
+      if (!(prop.Attributes %&& (NemerleAttributes.Abstract | NemerleAttributes.Extern)) && prop.dims.IsEmpty)
+      {
+        match (prop.get, prop.set)
+        {
+          | (Some(ClassMember.Function(_, _, FunBody.Abstract) as getr), 
+             Some(ClassMember.Function(_, _, FunBody.Abstract) as setr)) =>
+
+            mutable mods = NemerleAttributes.Mutable %| (prop.Attributes & NemerleAttributes.Static);
+
+            def ignored = prop.modifiers.ParsedCustomAttributes.Exists(fun(x) { 
+                | PExpr.Ref(name) => name.Id == "RecordIgnore" 
+                | _ => false });
+            
+            mutable custAttrs = [<[ System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.RootHidden) ]>];
+
+            when (ignored)
+              custAttrs ::= <[ RecordIgnore ]>;
+
+            def meta = Modifiers(mods, custAttrs);
+
+            //System.Diagnostics.Debug.Assert(!ignored);
+            //System.Diagnostics.Debug.Assert(!(Name == "SimpleSourceTextManager" && prop.Name == "CompileUnit"));
+            //when (Name.Contains("CompilerMessageForCompileUnit"))// && prop.Name == "CompileUnit"
+            //  System.Diagnostics.Debug.Assert(false);
+
+            def fieldName = Macros.NewSymbol (prop.Name);
+
+            getr.Body = <[ $(fieldName : name) ]>;
+            setr.Body = <[ $(fieldName : name) = value ]>;
+
+            <[ decl: ..$meta $(fieldName : name) : $(prop.ty); ]>
+
+          | _ => null
+        }
+      }
+      else null
+    }
+
+
+
     static CalcTokenLocation(tok : Token) : Location
     {
-      assert2(tok != null);
-      def start = tok.Location;
-
-      def findLast(tok)
+      if (tok == null)
+        Location.Default
+      else
       {
-        if (tok.Next == null) tok.Location
-        else                  findLast(tok.Next)
-      }
+        def start = tok.Location;
 
-      start + findLast(tok)
+        def findLast(tok)
+        {
+          if (tok.Next == null) tok.Location
+          else                  findLast(tok.Next)
+        }
+
+        start + findLast(tok)
+      }
     }
 
     /** Parse event definition from the place after 'event' keyword
@@ -1433,11 +1513,13 @@ namespace Nemerle.Compiler
                     take_attributes_out (ref mycustoms, System.AttributeTargets.Parameter, true, par_atts);
                     def method_parms = [Fun_parm (val_n, ret_type, par_atts)];
                     
+                    def bodyBracesGroup = TryPeekBracesGroup();
                     def (kind, bd) = parse_accessor_body (method_parms, []);
                     def mloc = (nametok.Location + LocationStack.Top()).AsGenerated();
                     def name = Splicable.Name (nametok.Location, mkname (i + "_" + plain_name));
                     def fh = Fun_header (mloc, name, PExpr.Void (mloc), method_parms);
                     def method = ClassMember.Function (mloc, name, method_atts, fh, kind, bd);
+                    InitBodyLocations(method, bodyBracesGroup);
                     method._env = env;
                     if (i == "remove")
                       remove = method;
@@ -2801,14 +2883,24 @@ namespace Nemerle.Compiler
               | "case"  => SyntaxElement.MatchCase (parse_match_case ())
               | "parameter" => SyntaxElement.Parameter (push ("quoted parameter", parse_parameter))
               | "decl" =>
-                match (ParseClassMember().ToList())
+                def members = SCG.List();
+                
+                ParseClassMember("decl", members);
+
+                if (members.Count == 1)
+                  SyntaxElement.ClassMember(members[0])
+                else if (members.Count > 1)
                 {
-                  | [one] => SyntaxElement.ClassMember(one)
-                  | _ => SyntaxElement.Expression(fatal_error(group, "expecting single member declaration in quotated code"))
+                  Message.Error(members[1].Location, 
+                    "expecting single member declaration in quotated code (autoproperty & embeded fields not allowed here)");
+                  SyntaxElement.ClassMember(members[0])
                 }
+                else
+                  SyntaxElement.Expression(fatal_error(group, "expecting single member declaration in quotated code"));
                 
               | _ => SyntaxElement.Expression (fatal_error (tok, "bad quotation type"))
             }
+
           PExpr.Quoted (tok.Location, element)
 
         | x =>

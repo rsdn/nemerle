@@ -401,22 +401,6 @@ namespace Nemerle.VisualStudio.Project
 			return Engine.CompleteWord(filePath, line + 1, col + 1, source);
 		}
 
-		public QuickTipInfo GetQuickTip(string filePath, int line, int col, ISource source)
-		{
-			ErrorHelper.ThrowIfPathNullOrEmpty(filePath, "filePath");
-
-			Debug.WriteLine(">>>> ##### GetQuickTip!");
-
-			QuickTipInfo info = Project.GetQuickTipInfo(filePath, line + 1, col + 1);
-
-			if (info != null)
-				info.Text = info.Text.Replace(_projectLocation, "");
-
-			Debug.WriteLine("<<<< ##### GetQuickTip!");
-
-			return info;
-		}
-
 		public GotoInfo[] GetGoto(string filePath, int line, int col, ISource source)
 		{
 			Debug.WriteLine(">>>> ##### GetGoto!");
