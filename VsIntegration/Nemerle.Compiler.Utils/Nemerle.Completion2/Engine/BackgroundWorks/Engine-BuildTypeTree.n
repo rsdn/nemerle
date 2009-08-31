@@ -25,10 +25,15 @@ namespace Nemerle.Completion2
 
     public BeginBuildTypesTree() : AsyncRequest
     {
-      IsBuildTypesTreeInProgress = true;
-      def request = AsyncRequest(AsyncRequestType.BuildTypesTree, this, null, BuildTypesTree);
-      AsyncWorker.AddWork(request);
-      request
+      if (_optionsHasBeenRead)
+      {
+        IsBuildTypesTreeInProgress = true;
+        def request = AsyncRequest(AsyncRequestType.BuildTypesTree, this, null, BuildTypesTree);
+        AsyncWorker.AddWork(request);
+        request
+      }
+      else
+        BeginReloadProject();
     }
 
     /// Build TypesTree synchronously. Avoid call this method! Use BeginBuildTypesTree() instead.
@@ -42,7 +47,9 @@ namespace Nemerle.Completion2
           _ = AsyncWorker.DoSynchronously();
       }
       else
-        _ = ProjectAvailableEvent.WaitOne()
+        _ = ProjectAvailableEvent.WaitOne();
+
+      assert (IsProjectAvailable);
     }
 
     /// Run by AsyncWorker thread!
@@ -71,15 +78,20 @@ namespace Nemerle.Completion2
 
           RestoreManagerClassInstance();
 
-          InitCompiler();
-
           // we must clean the nodes from current program - note that this 
           // behaviour is automatically provided by Run, but completion
           // engine does not use it at the moment.. :(
           if (Options.PersistentLibraries)
+          {
             LibrariesManager.RemoveInternalExtensionMethods();
+            InitCompiler();
+          }
           else
           {
+            def output = Output;
+            ResetCompilerState(Options);
+            InitEngine(output);
+
             // Get assembly references from IDE.
             def asmRefs = _callback.GetAssemblyReferences().ToArray();
             // Update library list.
@@ -87,6 +99,8 @@ namespace Nemerle.Completion2
 
             try
             {
+              InitCompiler();
+
               mutable ex;
 
               foreach (asm in asmRefs) // Add all asseblies into compiler
@@ -114,7 +128,7 @@ namespace Nemerle.Completion2
                   }
                   else $"Error: $(e.Message)\r\n\r\n";
 
-                _callback.ShowMessage(errorMag, MessageType.Error);
+                AsyncWorker.AddResponse(() => _callback.ShowMessage(errorMag, MessageType.Error));
             }
           }
           
@@ -126,7 +140,12 @@ namespace Nemerle.Completion2
           _namespaces.Clear();
           _decls = null;
           _compileUnits = null;
-          this.Hierarchy = TypesManager (this);
+          
+          //if (this.Hierarchy == null)
+            this.Hierarchy = TypesManager(this);
+          //else
+          //  this.Hierarchy.Init();
+
           _isCanBeReset = true;
         }
 
@@ -138,7 +157,6 @@ namespace Nemerle.Completion2
         when (request.Stop)
           throw CompilationAbortedException("after init");
 
-        def projSources = ProjectSources;
         def expandArray(ary, newLen, expandFactor = 1)
         {
           if (newLen > ary.Length)
@@ -152,11 +170,24 @@ namespace Nemerle.Completion2
         
         _compileUnits = array(Nemerle.Compiler.Location.GetIndexArrayLength());
 
-        foreach (fileIndex in Sources.GetFileIndices())
+        foreach (source in _callback.GetSources())
         {
+          def sourceStemp = source.GetTextCurrentVersionAndFileIndex();
+          def (_, version, fileIndex) = sourceStemp;
+          
+          when (source.RelocationRequestsQueue != null && source.RelocationRequestsQueue.Count > 0)
+            RemoveOldRequests(source.RelocationRequestsQueue, version);
+
           _compileUnits = expandArray(_compileUnits, fileIndex + 1, 2);
-          def source = projSources.GetSource(fileIndex);
-          _compileUnits[fileIndex] = ParseCompileUnit(source.GetTextCurrentVersionAndFileIndex());
+
+          def newCompileUnit       = ParseCompileUnit(sourceStemp);
+          source.CompileUnit       = newCompileUnit;
+          //when (source.RelocationRequestsQueue != null)
+          //{
+          //  CollectAndApplyTopDeclarations(source, newCompileUnit);
+          //  CollectAndApplyRegions(source, newCompileUnit);
+          //}
+          _compileUnits[fileIndex] = newCompileUnit;
 
           when (request.Stop)
             throw CompilationAbortedException("parsing of top level AST");
@@ -171,7 +202,7 @@ namespace Nemerle.Completion2
               {
                 //Output.WriteLine($"------- $topDecl: $(topDecl.Name)");
                 //Output.WriteLine(topDecl.Location);
-                when (topDecl.name is Splicable.Name && topDecl.ParsedName.context != null)
+                when (topDecl.name is Splicable.Name && topDecl.PName.context != null)
                   ScanningPipeline(topDecl);
 
                 when (request.Stop)
@@ -211,6 +242,10 @@ namespace Nemerle.Completion2
       { | e is CompilationAbortedException =>
           def msg = $"The building of TypesTree operation aborted at: $(e.Message)";
           throw CompilationAbortedException(msg, e);
+        | e =>
+          unless (AsyncWorker.IsRunSynchronously) 
+            ignore(ProjectAvailableEvent.Set());
+          _ = e; throw;
       }
       finally
       {
@@ -227,7 +262,7 @@ namespace Nemerle.Completion2
 
         IsBuildTypesTreeInProgress = false;
 
-        request.MarkAsCompleted();
+        //request.MarkAsCompleted();
 
         unless (AsyncWorker.IsRunSynchronously) 
           when (IsProjectAvailable)

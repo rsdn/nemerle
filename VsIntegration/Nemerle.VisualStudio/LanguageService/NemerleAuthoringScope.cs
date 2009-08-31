@@ -355,7 +355,7 @@ namespace Nemerle.VisualStudio.LanguageService
 							// We are interested in unique files only.
 							//
 							if (File.Exists(documents[0].URL) &&
-								infos.Find(delegate(GotoInfo item) { return item.FilePath == documents[0].URL; }) == null)
+								infos.Find(item => item.FilePath == documents[0].URL) == null)
 							{
 								infos.Add(new GotoInfo(documents[0].URL, new Nemerle.Compiler.Location(0, lines[0], columns[0], endLines[0], endColumns[0])));
 							}
@@ -408,8 +408,12 @@ namespace Nemerle.VisualStudio.LanguageService
 					
 					Completion2.Engine          e = NemerleLanguageService.DefaultEngine;
 
-					foreach (GotoInfo gi in infos)
-						e.Sources.AddOrUpdate(gi.FilePath, File.ReadAllText(gi.FilePath));
+          Trace.Assert("не реализовано" == null);
+
+          //TODO: VladD2: 
+
+					//foreach (GotoInfo gi in infos)
+					//	e.Sources.AddOrUpdate(gi.FilePath, File.ReadAllText(gi.FilePath));
 
 					GotoInfo[] exactInfo = e.Project.GetGotoInfo(info.Member);
 

@@ -83,9 +83,13 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 				return VSConstants.E_INVALIDARG;
 			}
 
+      var projNode = (NemerleProjectNode)this.ProjectMgr;
+
 			SetConfigProperty(Consts.DefineConstants, defineConstants);
 			SetConfigProperty(Consts.OutputPath, outputPath);
 			IsDirty = false;
+
+      projNode.ProjectInfo.Engine.BeginReloadProject();
 
 			return VSConstants.S_OK;
 		}

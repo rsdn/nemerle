@@ -26,48 +26,38 @@ namespace Nemerle.Completion2
 
 	public partial class Engine
 	{
-    public BeginUpdateCompileUnit(source : ISource, newEndChar : int, newEndLine : int, oldEndChar : int, oldEndLine : int, startChar : int, startLine : int) : AsyncRequest
+    public BeginUpdateCompileUnit(source : ISource) : AsyncRequest
     {
-      def request = AsyncRequest(AsyncRequestType.UpdateCompileUnit, this, source, UpdateCompileUnit(_, 
-        newEndChar, newEndLine, oldEndChar, oldEndLine, startChar, startLine));
+      def request = AsyncRequest(AsyncRequestType.UpdateCompileUnit, this, source, UpdateCompileUnit);
       AsyncWorker.AddWork(request);
       request
     }
 
-    /// Run by AsyncWorker thread!
-    /// Parse CompileUnit. Set CompileUnit to source. Update information about outline regions. 
-    private UpdateCompileUnit(request : AsyncRequest, 
-      newEndChar : int, newEndLine : int, oldEndChar : int, oldEndLine : int, startChar : int, startLine : int) : void
+    private TryRelocate(source : ISource) : MethodBuilderEx
     {
-      surroundwith (currentAsyncRequest)
-      try
+      def fileIndex = source.FileIndex;
+      mutable resetedMember;
+      mutable resetedMemberParsed;
+      mutable lastRelocationVersion = -1;
+
+      when (!IsDefaultEngine)
       {
-        //def timer = Stopwatch.StartNew();
-        AsyncWorker.CheckCurrentThreadIsTheAsyncWorker();
-        _currentAsyncRequest = request;
-        _callback.SetStatusText("Update compile unit...");
-        //Debug.WriteLine($"UpdateCompileUnit 1 $(timer.Elapsed)"); timer.Reset(); timer.Start();
-
-        when (request.Stop)
-          return;
+        def project = this.Project;
         
-        def source    = request.Source;
-        def fileIndex = source.FileIndex;
-
-        //TODO: VladD2: Попробовать выполнять релокешон в отдельном потоке (из пула потоков). 
-        //      Это должно быть особенно эффективно на машинах имеющих более двух процссоров! 
-        mutable resetedMember;
-        mutable resetedMemberParsed;
-
-        when (!IsDefaultEngine && newEndChar != 0)
+        when (project != null)
         {
-          def project = this.Project;
-          
-          when (project != null)
+          def relocationRequests = GetRelocationRequests(source.RelocationRequestsQueue);
+
+          foreach (rel in relocationRequests)
           {
-            def compileUnit = project.CompileUnits[fileIndex];
+            lastRelocationVersion = rel.SourceVersion;
+            def newEndLine  = rel.NewEndLine; def newEndChar = rel.NewEndChar;
+            def oldEndLine  = rel.OldEndLine; def oldEndChar = rel.OldEndChar;
+            def startLine   = rel.StartLine;  def startChar  = rel.StartChar;
             def lineDelta   = newEndLine - oldEndLine;
             def charDelta   = newEndChar - oldEndChar;
+
+            def compileUnit = project.CompileUnits[fileIndex];
 
             def needRelocation = match (compileUnit.FindMember(startLine, startChar))
             {
@@ -77,6 +67,7 @@ namespace Nemerle.Completion2
                 if (innerLoc.Contains(startLine, startChar))
                 {
                   resetedMemberParsed = m;
+                  assert2(resetedMember == null || resetedMember : object == m.Builder);
                   resetedMember       = m.Builder :> MethodBuilderEx;
                   // Не делаем релокешон если локешон метода не меняется!
                   def newLoc = Completion.Relocate(innerLoc, oldEndLine, oldEndChar, lineDelta, charDelta);
@@ -93,85 +84,129 @@ namespace Nemerle.Completion2
             //TODO: Relocate: Regions & ParseCompilerMessages (А надо ли если мы все время получаем ноый CompileUnit?)
           }
         }
+      }
+
+      resetedMember
+    }
+    
+    static CollectAndApplyTopDeclarations(source : ISource, compUnit : CompileUnit) : void
+    {
+	    def topDecls       = compUnit.TopDeclarations;
+	    def decls          = AstUtils.GetAllDeclarations(topDecls);
+
+	    def declsAry = decls
+		    .Where(d => d.name is Splicable.Name && d.name.GetName().context != null)
+		    .OrderBy(d => d.Name)
+		    .ToArray();
+
+	    //source.Declarations = declsAry;
+      AsyncWorker.AddResponse(() => source.SetTopDeclarations(declsAry));
+      //source.SetTopDeclarations(declsAry);
+    }
+    
+    static CollectAndApplyRegions(source : ISource, compUnit : CompileUnit) : void
+    {
+      def version = compUnit.SourceVersion;
+      
+      when (version == source.CurrentVersion 
+         && !compUnit.ParseCompilerMessages.Any(cm => cm.Msg.Contains("parse error")))
+      {
+        def regions = RegionsHelper.Collect(compUnit);
+      
+        //Debug.WriteLine($"UpdateCompileUnit 4 $(timer.Elapsed)"); timer.Reset(); timer.Start();
+
+        when (version == source.CurrentVersion)
+          AsyncWorker.AddResponse(() => source.SetRegions(regions, version));
+      }
+    }    
+
+    /// Run by AsyncWorker thread!
+    /// Parse CompileUnit. Set CompileUnit to source. Update information about outline regions. 
+    private UpdateCompileUnit(request : AsyncRequest) : void
+    {
+      surroundwith (currentAsyncRequest)
+      try
+      {
+        //def timer = Stopwatch.StartNew();
+        AsyncWorker.CheckCurrentThreadIsTheAsyncWorker();
+        _currentAsyncRequest = request;
+        _callback.SetStatusText("Update compile unit...");
+        //Debug.WriteLine($"UpdateCompileUnit 1 $(timer.Elapsed)"); timer.Reset(); timer.Start();
+
+        when (request.Stop)
+          return;
+        
+        def sourceStemp = request.GetTextCurrentVersionAndFileIndex();
+        def (_, version, _) = sourceStemp;
+        def source    = request.Source;
 
         when (request.Stop)
           return;
 
-			  def compUnit = ParseCompileUnit(request.GetTextCurrentVersionAndFileIndex());
+			  def compUnit = ParseCompileUnit(sourceStemp);
 
         source.CompileUnit = compUnit;
         
         //Debug.WriteLine($"UpdateCompileUnit 2 $(timer.Elapsed)"); timer.Reset(); timer.Start();
+        def isStopingMsg(msg) { msg.Contains("unexpected end of file") || msg.Contains("Newline in constant") }
+        def errors = compUnit.ParseCompilerMessages;
 
-        when (compUnit.ParseCompilerMessages.Any(cm => cm.Msg.Contains("unexpected end of file")))
+        when (errors.Any(cm => isStopingMsg(cm.Msg)))
         {
-          // The user does type non closed bracket. The AST is be in incorrect state.
+          // The user does type non closed bracket or quote. The AST is be in incorrect state.
           // We should report errors and stop processing the CompileUnit.
-
-          //TODO: Добавить выдачу сообщений об ошибках парсинга CompileUnit-а!
           _callback.SetStatusText("Update compile unit aborted (file in inconsistent state).");
           return;
         }
 
-        def collectTopDeclarations(source, compUnit) : void
-        {
-			    def topDecls       = compUnit.TopDeclarations;
-			    def decls          = AstUtils.GetAllDeclarations(topDecls);
-
-			    def declsAry = decls
-				    .Where(d => d.name is Splicable.Name && d.name.GetName().context != null)
-				    .OrderBy(d => d.Name)
-				    .ToArray();
-
-			    //source.Declarations = declsAry;
-          AsyncWorker.AddResponse(() => source.SetTopDeclarations(declsAry));
-          //source.SetTopDeclarations(declsAry);
-        }
-
-        def isNeedRebuildTypesTree(engine, source) : bool
-        {
-			    // Сравненивает старый и новый CompileUnit, и если их структура не совпадает (т.е. были 
-			    // добавлены, удалены, изменены методы), запустить парсинг дерева типов. 
-			    // Парсинг дерева типов так же запускается если оно не существует к этому моменту.
-          def isNeedBuildTypesTree = if (engine.IsProjectAvailable)
-            //TODO: VladD2: Возможно в IsStructureOfCompileUnitChanged нужно передавать еще 
-            // старое значение CompileUnit-а (то что было в source.CompileUnit до его обновления).
-            // Иначе сравнение будет всегда происходить с CompileUnit-ом полученым при построении
-            // дерева типов и это может привести черт знает к чему. В общем нужно продумать стратегию
-            // проверки изменения структуры CompileUnit-а!!!
-                                       engine.Project.IsStructureOfCompileUnitChanged(source)
-                                     else
-                                       true;
-          isNeedBuildTypesTree
-        }
-
-        collectTopDeclarations(source, compUnit);
+        CollectAndApplyTopDeclarations(source, compUnit);
 
         //Debug.WriteLine($"UpdateCompileUnit 3 $(timer.Elapsed)"); timer.Reset(); timer.Start();
 
         when (request.Stop)
           return;
 
-        def version = compUnit.SourceVersion;
+        //def version = compUnit.SourceVersion;
+        assert2(version == compUnit.SourceVersion);
 
-        when (version == source.CurrentVersion)
-        {
-			    def regions = RegionsHelper.Collect(compUnit);
-        
-          //Debug.WriteLine($"UpdateCompileUnit 4 $(timer.Elapsed)"); timer.Reset(); timer.Start();
-
-          when (version == source.CurrentVersion)
-            AsyncWorker.AddResponse(() => source.SetRegions(regions, version));
-        }
+        CollectAndApplyRegions(source, compUnit);
 
         //Debug.WriteLine($"UpdateCompileUnit 5 $(timer.Elapsed)"); timer.Reset(); timer.Start();
 
         when (!request.Stop && !IsDefaultEngine)
         {
+          def isNeedRebuildTypesTree(engine, source) : bool
+          {
+			      // Сравненивает старый и новый CompileUnit, и если их структура не совпадает (т.е. были 
+			      // добавлены, удалены, изменены методы), запустить парсинг дерева типов. 
+			      // Парсинг дерева типов так же запускается если оно не существует к этому моменту.
+            def isNeedBuildTypesTree = if (engine.IsProjectAvailable)
+              //TODO: VladD2: Возможно в IsStructureOfCompileUnitChanged нужно передавать еще 
+              // старое значение CompileUnit-а (то что было в source.CompileUnit до его обновления).
+              // Иначе сравнение будет всегда происходить с CompileUnit-ом полученым при построении
+              // дерева типов и это может привести черт знает к чему. В общем нужно продумать стратегию
+              // проверки изменения структуры CompileUnit-а!!!
+                                         engine.Project.IsStructureOfCompileUnitChanged(source)
+                                       else
+                                         true;
+            isNeedBuildTypesTree
+          }
+          
           if (isNeedRebuildTypesTree(this, source))
 					  ignore(BeginBuildTypesTree());
-          else when (resetedMember != null)
-            AddMethodAtFirstCheckQueue(resetedMember); // Add request for typing of relocated method body
+          else lock (source.RelocationRequestsQueue)
+          {
+            when (source.RelocationRequestsQueue.Count == 0)
+              return;
+              
+            when (source.RelocationRequestsQueue.Last().SourceVersion != version)
+              return;
+           
+            def resetedMember = TryRelocate(source);
+
+            when (resetedMember != null)
+              AddMethodAtFirstCheckQueue(resetedMember); // Add request for typing of relocated method body
+          }
         }
 
         //Debug.WriteLine($"UpdateCompileUnit 6 $(timer.Elapsed)"); timer.Reset(); timer.Start();

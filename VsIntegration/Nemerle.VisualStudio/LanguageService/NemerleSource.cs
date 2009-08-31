@@ -43,7 +43,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			if (ProjectInfo != null)
 			{
-				ProjectInfo.AddSource(this);
+        ProjectInfo.AddEditableSource(this);
 				ProjectInfo.MakeCompilerMessagesTextMarkers(textLines, FileIndex);
 			}
 
@@ -58,24 +58,25 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region Properties
 
-		public     DateTime               LastDirtyTime { get; private set; }
-		public new DateTime               LastParseTime { get; private set; }
-		public     NemerleLanguageService Service       { get; private set; }
-		public     NemerleScanner         Scanner       { get; private set; }
-		public     ScopeCreatorCallback   ScopeCreator  { get;         set; }
-		public     ProjectInfo            ProjectInfo   { get; private set; }
-		public     MethodData             MethodData    { get; private set; }
-		public     int                    TimeStamp     { get; private set; }
-		internal   TopDeclaration[]       Declarations  { get;         set; }
-    public     bool                   RegionsLoaded { get;         set; }
-    public     CompileUnit            CompileUnit   { get;         set; }
-		public     int                    FileIndex
+		public     DateTime                LastDirtyTime { get; private set; }
+		public new DateTime                LastParseTime { get; private set; }
+		public     NemerleLanguageService  Service       { get; private set; }
+		public     NemerleScanner          Scanner       { get; private set; }
+		public     ScopeCreatorCallback    ScopeCreator  { get;         set; }
+		public     ProjectInfo             ProjectInfo   { get; private set; }
+		public     MethodData              MethodData    { get; private set; }
+		public     int                     TimeStamp     { get; private set; }
+		internal   TopDeclaration[]        Declarations  { get;         set; }
+    public     bool                    RegionsLoaded { get;         set; }
+    public     CompileUnit             CompileUnit   { get;         set; }
+
+		public     int                     FileIndex
 		{
 			get
 			{
 				if (_fileIndex <= 0)
 				{
-					var path = GetFilePath();
+					var path = base.GetFilePath();
 
 					if (path.IsNullOrEmpty())
 						return -1;
@@ -86,7 +87,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				return _fileIndex;
 			}
 		}
-		public     IVsTextLines           TextLines
+		public     IVsTextLines            TextLines
 		{
 			get { return GetTextLines(); }
 		}
@@ -95,7 +96,9 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region Fields
 
-		int           _fileIndex = -1;
+		int                      _fileIndex               = -1;
+		List<RelocationRequest>  _relocationRequestsQueue = new List<RelocationRequest>();
+    QuickTipInfoAsyncRequest _tipAsyncRequest;
 
 		#endregion
 
@@ -110,17 +113,31 @@ namespace Nemerle.VisualStudio.LanguageService
 
       ProjectInfo projectInfo = this.ProjectInfo;
 
-      // Add request for relocation...
-      if (projectInfo != null && projectInfo.IsProjectAvailable && !projectInfo.IsDocumentOpening)
+      if (projectInfo == null)
+      {
+        GetEngine().BeginUpdateCompileUnit(this);
+        return;
+      }
+
+      if (projectInfo.IsDocumentOpening)
+      {
+        //TODO: –еализовать считывание информации о регионах и структуре файла на базе CompileUnit-а получаемого при парсинге.
+        projectInfo.Engine.BeginUpdateCompileUnit(this); 
+        return;
+      }
+
+      if (projectInfo.IsProjectAvailable)
       {
         TextLineChange changes = lineChange[0];
 
-        projectInfo.Engine.BeginUpdateCompileUnit(this,
-          changes.iNewEndIndex + 1, changes.iNewEndLine + 1,
-          changes.iOldEndIndex + 1, changes.iOldEndLine + 1,
-          changes.iStartIndex  + 1, changes.iStartLine  + 1); // Add request for reparse & update info about CompileUnit
+        Engine.AddRelocationRequest(RelocationRequestsQueue,
+          FileIndex, CurrentVersion,
+          changes.iNewEndLine + 1, changes.iNewEndIndex + 1,
+          changes.iOldEndLine + 1, changes.iOldEndIndex + 1,
+          changes.iStartLine + 1, changes.iStartIndex + 1);
       }
-      else GetEngine().BeginUpdateCompileUnit(this, 0, 0, 0, 0, 0, 0); // We not need relocation
+
+      projectInfo.Engine.BeginUpdateCompileUnit(this); // Add request for reparse & update info about CompileUnit
 
 			if (Scanner != null && Scanner.GetLexer().ClearHoverHighlights())
 			{
@@ -134,7 +151,12 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region Overrides
 
-		public override bool IsDirty
+    public override string GetFilePath()
+    {
+      return Location.GetFileName(FileIndex);
+    }
+
+    public override bool IsDirty
 		{
 			get { return base.IsDirty; }
 			set
@@ -201,7 +223,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			if (ProjectInfo != null)
 			{
-				ProjectInfo.RemoveSource(this);
+        ProjectInfo.RemoveEditableSource(this);
 				ProjectInfo = null;
 			}
 
@@ -782,6 +804,27 @@ namespace Nemerle.VisualStudio.LanguageService
 			finally { UnlockWrite(); }
 		}
 
+    private CompileUnit TryGetCompileUnit()
+    {
+      var compileUnit = CompileUnit;
+
+      try
+      {
+
+        if (compileUnit == null && ProjectInfo != null)
+        {
+          var project = ProjectInfo.Project;
+          if (project != null)
+            compileUnit = project.CompileUnits[FileIndex];
+        }
+
+      }
+      catch { }  // exceptions can be cause by coloring lexer which work in UI thread
+
+      return compileUnit;
+    }
+
+
 		/// <summary>
 		/// Match paired tokens. Run in GUI thread synchronously!
 		/// </summary>
@@ -794,12 +837,13 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			var nline = line  + 1; // one based number of line
 			var ncol  = index + 1; // one based number of column
+      var compileUnit = TryGetCompileUnit();
 
-      if (CompileUnit.SourceVersion == CurrentVersion)
+      if (compileUnit != null && compileUnit.SourceVersion == CurrentVersion)
       {
         Location first, last;
 
-        if (CompileUnit.GetMatchingBraces(FileIndex, nline, ncol, out first, out last))
+        if (compileUnit.GetMatchingBraces(FileIndex, nline, ncol, out first, out last))
           return new TextSpan[] { Utils.SpanFromLocation(first), Utils.SpanFromLocation(last) };
       }
 
@@ -889,7 +933,9 @@ namespace Nemerle.VisualStudio.LanguageService
       if (Service == null || !Service.Preferences.EnableMatchBraces || !Service.Preferences.EnableMatchBracesAtCaret)
         return;
 
-      if (CompileUnit == null || CompileUnit.SourceVersion != CurrentVersion)
+      var compileUnit = TryGetCompileUnit();
+
+      if (compileUnit == null || compileUnit.SourceVersion != CurrentVersion)
         return;
 
       var colorizer = GetColorizer() as NemerleColorizer;
@@ -963,10 +1009,6 @@ namespace Nemerle.VisualStudio.LanguageService
 				return NemerleLanguageService.DefaultEngine;
 
 			return projectInfo.Engine;
-		}
-
-		public void OnProjectReloaded()
-		{
 		}
 
 		public const uint HiddenRegionCookie = 42;
@@ -1051,22 +1093,27 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private void RenameSymbolsInternal(string newName, GotoInfo[] usages)
 		{
-			var distinctFiles = (from us in usages
-								 select us.Location.File).Distinct();
+      var distinctFilesIndices = (from us in usages select us.Location.FileIndex).Distinct();
 
-			foreach (string filePath in distinctFiles)
+			foreach (var fileIndex in distinctFilesIndices)
 			{
-				var tmpFilePath = filePath;
-				var mgr = new EditArray(ProjectInfo.GetSource(tmpFilePath), null, true, "Renaming");
-				var thisFileUsages = from use in usages
-									 where use.Location.File == tmpFilePath
-									 select use;
+        var source = ProjectInfo.GetSource(fileIndex) as NemerleSource;
+        //VladD2: Ётот код рассчитывает на то, что все исходники в которых производ€тс€ изменени€ открыты в редакторах VS!
+        //VladD2: Ёто не верное предположение! 
+        //TODO: Ќужно переписать этот код так, чтобы он выполн€лс€ без ошибок при любом исходе.
+        // “ут есть два пути: 1) открывать все файлы в редакторах, 2) создать еще одну реализацию EditArray котора€ умела 
+        // бы работать с ISource. ѕри этом нужно как-то поддерживать Undo/Redo.
+        Trace.Assert(source != null);
+
+        var mgr = new EditArray(source, null, true, "Renaming");
+				var thisFileUsages = from use in usages where use.Location.FileIndex == fileIndex select use;
 
 				foreach (var usage in thisFileUsages)
 				{
 					var span = Utils.SpanFromLocation(usage.Location);
 					mgr.Add(new EditSpan(span, newName));
 				}
+
 				mgr.ApplyEdits();
 			}
 		}
@@ -1201,19 +1248,30 @@ namespace Nemerle.VisualStudio.LanguageService
       TryHighlightBraces(GetView());
 		}
 
+    //public RelocationRequest[] GetRelocationRequests()
+    //{
+    //  return Engine.GetRelocationRequests(RelocationRequestsQueue).ToArray();
+    //}
+    public List<RelocationRequest> RelocationRequestsQueue
+    {
+      get { return _relocationRequestsQueue; }
+    }
+
 		#endregion
 
-		private static string TextOfCompilerMessage(CompilerMessage cm)
+    #region TipText
+
+    private static string TextOfCompilerMessage(CompilerMessage cm)
     {
       var text = new StringBuilder(256);
 
-  	  switch (cm.Kind)
-		  {
-			  case MessageKind.Error:   text.Append("Error: ");   break;
-			  case MessageKind.Hint:    text.Append("Hint: ");    break;
-			  case MessageKind.Warning: text.Append("Warning: "); break;
-			  default: break;
-		  }
+      switch (cm.Kind)
+      {
+        case MessageKind.Error: text.Append("Error: "); break;
+        case MessageKind.Hint: text.Append("Hint: "); break;
+        case MessageKind.Warning: text.Append("Warning: "); break;
+        default: break;
+      }
 
       TextOfCompilerMessage(cm, false, text, 0);
       return text.ToString();
@@ -1239,13 +1297,13 @@ namespace Nemerle.VisualStudio.LanguageService
       var start = token.StartIndex;
       var end = token.EndIndex + 1; //VladD2: Ќеизвесно из каких соображений GetTokenInfo() вычитает еденицу из EndIndex. ”читываем это!
       var hintSpan = new TextSpan() { iStartLine = line, iStartIndex = start, iEndLine = line, iEndIndex = end };
-      
+
       return hintSpan;
     }
 
-		private static void TextOfCompilerMessage(CompilerMessage cm, bool isRelated, StringBuilder text, int indent)
-		{
-			const string PosibleOverloadPref = "  Posible overload: ";
+    private static void TextOfCompilerMessage(CompilerMessage cm, bool isRelated, StringBuilder text, int indent)
+    {
+      const string PosibleOverloadPref = "  Posible overload: ";
 
       if (cm.Msg.EndsWith("overload defination"))
         return;
@@ -1257,25 +1315,23 @@ namespace Nemerle.VisualStudio.LanguageService
       }
 
       indent += 2;
-		
-			string msg = cm.Msg;
 
-      var len   = msg.EndsWith("[simple require]") && msg.Contains(':') ? msg.LastIndexOf(':') : msg.Length;
+      string msg = cm.Msg;
+
+      var len = msg.EndsWith("[simple require]") && msg.Contains(':') ? msg.LastIndexOf(':') : msg.Length;
       var start = msg.StartsWith(PosibleOverloadPref) ? PosibleOverloadPref.Length : 0;
 
       text.Append(msg.Substring(start, len - start));
 
-			if (cm.IsRelatedMessagesPresent)
-				foreach (var related in cm.RelatedMessages)
-					TextOfCompilerMessage(related, true, text, indent);
-		}
+      if (cm.IsRelatedMessagesPresent)
+        foreach (var related in cm.RelatedMessages)
+          TextOfCompilerMessage(related, true, text, indent);
+    }
 
     private static string NemerleErrorTaskToString(NemerleErrorTask task)
     {
       return TextOfCompilerMessage(task.CompilerMessage);
     }
-
-    QuickTipInfoAsyncRequest _tipAsyncRequest;
 
     internal int GetDataTipText(IVsTextView view, TextSpan[] textSpan, out string hintText)
     {
@@ -1365,12 +1421,12 @@ namespace Nemerle.VisualStudio.LanguageService
           return false;
 
         string expr = null;
-        var    loc  = quickTipInfo.Location;
+        var loc = quickTipInfo.Location;
 
         if (quickTipInfo.IsExpr)
         {
           expr = quickTipInfo.TExpr.ToString();
-          loc  = quickTipInfo.TExpr.Location;
+          loc = quickTipInfo.TExpr.Location;
         }
 
         var debugSpan = new TextSpan[1] { Utils.SpanFromLocation(loc) };
@@ -1391,6 +1447,8 @@ namespace Nemerle.VisualStudio.LanguageService
       }
 
       return false;
-    }
+    } 
+
+    #endregion
   }
 }

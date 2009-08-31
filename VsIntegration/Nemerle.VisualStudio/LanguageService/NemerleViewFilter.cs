@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 using Microsoft.VisualStudio;
@@ -159,6 +160,9 @@ namespace Nemerle.VisualStudio.LanguageService
       //}
 
 			Source.TryHighlightBraces(view);
+      //var service = Source.LanguageService as NemerleLanguageService;
+      //if (service != null)
+      //  service.SynchronizeDropdowns(view);
 
       //SetOldScrollInfo(view, iBar, iMinUnit, iMaxUnits, iVisibleUnits, iFirstVisibleUnit);
 		}
@@ -237,12 +241,13 @@ namespace Nemerle.VisualStudio.LanguageService
 
 							frm.SetFiles(names);
 							frm.ShowDialog(TextEditorWindow);
-							if (frm.SelectedFileName != null)
+							if (frm.DialogResult == DialogResult.OK)
 							{
 								var srv = Source.LanguageService as NemerleLanguageService;
 								if (srv != null)
 								{
-									var loc = new Location(frm.SelectedFileName, 1, 0, 3, 10);
+                  // illegal location prevent change of caret position
+									var loc = new Location(frm.SelectedFileName, 0, 0, 0, 0);
 									srv.GotoLocation(loc);
 								}
 							}
@@ -273,11 +278,11 @@ namespace Nemerle.VisualStudio.LanguageService
 		private IEnumerable<string> CollectFileNames(EnvDTE.DTE dte)
 		{
 			List<string> result = new List<string>();
-			foreach (EnvDTE.Project prj in dte.Solution.Projects)
-			{
+			
+      foreach (EnvDTE.Project prj in dte.Solution.Projects)
 				result.AddRange(CollectFileNamesRecursively(prj.ProjectItems));
-			}
-			return result;
+
+      return result;
 		}
 
 		private IEnumerable<string> CollectFileNamesRecursively(EnvDTE.ProjectItems items)
@@ -286,11 +291,15 @@ namespace Nemerle.VisualStudio.LanguageService
 			{
 				foreach (EnvDTE.ProjectItem item in items)
 				{
-					if (!(item is OAFileItem || item is OAFolderItem))
-						continue;
+					//if (!(item is OAFileItem || item is OAFolderItem))
+					//	continue;
 
-					for (short i = 1; i < item.FileCount; ++i)
-						yield return item.get_FileNames(i);
+          for (short i = 1; i <= item.FileCount; ++i)
+          {
+            var path = item.get_FileNames(i);
+            if (!Path.GetExtension(path).Equals(".dll", StringComparison.OrdinalIgnoreCase) && File.Exists(path))
+              yield return item.get_FileNames(i);
+          }
 					//yield return fileItem..Name;
 					foreach (var s in CollectFileNamesRecursively(item.ProjectItems))
 						yield return s;

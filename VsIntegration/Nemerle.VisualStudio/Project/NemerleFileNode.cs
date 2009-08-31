@@ -273,7 +273,7 @@ namespace Nemerle.VisualStudio.Project
 
         #region Overridden Properties
 
-        protected internal override DocumentManager GetDocumentManager()
+    protected internal override DocumentManager GetDocumentManager()
 		{
 			return new NemerleFileDocumentManager(this);
 		}

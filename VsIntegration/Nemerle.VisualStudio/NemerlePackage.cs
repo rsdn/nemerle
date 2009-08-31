@@ -398,7 +398,7 @@ namespace Nemerle.VisualStudio
 			return 0;
 		}
 
-		public int  FPreTranslateMessage(MSG[] pMsg)                        { return 1; }
+		public int  FPreTranslateMessage(MSG[] pMsg)                        { return 0; }
 		public int  FQueryTerminate     (int fPromptUser)                   { return 1; }
 
 		public void OnAppActivate       (int fActive, uint dwOtherThreadID) {}

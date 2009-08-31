@@ -16,16 +16,17 @@ namespace Nemerle.VsIntegration.Tests
 		[SetUp]
 		public void SetUp()
 		{
-			ProjectManager pm = new ProjectManager();
 			EngineCallbackStub callback = new EngineCallbackStub(
+        new [] {
 				"mscorlib",
 				"System",
 				"System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089",
 				"System.Drawing, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a",
-				"System.Windows.Forms, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+				"System.Windows.Forms, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089" },
+        new string[0]
 			);
-			Engine engine = new Engine(callback, pm, new TraceWriter(), false);
-			pm.Engine = engine;
+			
+      Engine engine = new Engine(callback, new TraceWriter(), false);
 		}
 
 		[Test]

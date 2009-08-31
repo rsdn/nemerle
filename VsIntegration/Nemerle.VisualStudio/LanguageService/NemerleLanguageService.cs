@@ -55,8 +55,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			if (DefaultEngine == null)
 			{
-				DefaultEngine = new Engine(EngineCallbackStub.Default,
-					new ProjectManager(this), new TraceWriter(), true);
+				DefaultEngine = new Engine(EngineCallbackStub.Default, new TraceWriter(), true);
 			}
 		}
 
@@ -266,12 +265,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private ProjectInfo GetProjectInfo(ParseRequest request)
 		{
-			ProjectInfo projectInfo = ProjectInfo.FindProject(request.FileName);
-
-			if (projectInfo != null)
-				projectInfo.UpdateFile(request);
-
-			return projectInfo;
+      return ProjectInfo.FindProject(request.FileName);
 		}
 
 		#endregion
@@ -798,7 +792,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			ErrorHandler.ThrowOnFailure(docFrame.Show());
 
-			if (textView != null)
+      if (textView != null && loc.Line != 0)
 			{
 				try
 				{
