@@ -656,7 +656,7 @@ namespace Nemerle.VisualStudio.LanguageService
 							int lintIndex;
 							int columnInxex;
 							ErrorHandler.ThrowOnFailure(TextView.GetCaretPos(out lintIndex, out columnInxex));
-              Source.Completion(TextView, lintIndex, columnInxex);
+              Source.Completion(TextView, lintIndex, columnInxex, false);
 							return true;
 						}
 					case VsCommands2K.FORMATSELECTION:

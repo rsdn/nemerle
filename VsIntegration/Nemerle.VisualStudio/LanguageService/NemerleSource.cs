@@ -151,11 +151,11 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region Overrides
 
-    public void Completion(IVsTextView textView, int lintIndex, int columnIndex)
+    public void Completion(IVsTextView textView, int lintIndex, int columnIndex, bool byTokenTrigger)
     {
       CompletionElem[] result = GetEngine().Completion(this, lintIndex + 1, columnIndex + 1);
       var decls = new NemerleDeclarations(result);
-      this.CompletionSet.Init(textView, decls, true);
+      this.CompletionSet.Init(textView, decls, !byTokenTrigger);
     }
 
     public override string GetFilePath()
@@ -655,13 +655,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			//HandlePairedSymbols(textView, command, line, idx, ch);
 
 			if ((tokenBeforeCaret.Trigger & TokenTriggers.MemberSelect) != 0 && (command == VsCommands2K.TYPECHAR))
-			{
-				ParseReason reason = ((tokenBeforeCaret.Trigger & TokenTriggers.MatchBraces) == TokenTriggers.MatchBraces) ?
-					ParseReason.MemberSelectAndHighlightBraces :
-					ParseReason.MemberSelect;
-
-				Completion(textView, tokenBeforeCaret, reason);
-			}
+        Completion(textView, line, idx, true);
 			TryHighlightBraces(textView, command, line, idx, tokenBeforeCaret, tokenAfterCaret);
 
 			if (!MethodData.IsDisplayed &&
