@@ -653,11 +653,10 @@ namespace Nemerle.VisualStudio.LanguageService
 				{
 					case VsCommands2K.COMPLETEWORD:
 						{
-							int line;
-							int col;
-							ErrorHandler.ThrowOnFailure(TextView.GetCaretPos(out line, out col));
-							var tokenInfo = Source.GetTokenInfo(line, col);
-							Source.Completion(TextView, tokenInfo, ParseReason.CompleteWord);
+							int lintIndex;
+							int columnInxex;
+							ErrorHandler.ThrowOnFailure(TextView.GetCaretPos(out lintIndex, out columnInxex));
+              Source.Completion(TextView, lintIndex, columnInxex);
 							return true;
 						}
 					case VsCommands2K.FORMATSELECTION:

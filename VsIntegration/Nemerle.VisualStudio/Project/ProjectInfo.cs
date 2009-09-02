@@ -406,13 +406,6 @@ namespace Nemerle.VisualStudio.Project
       internal set { _isDocumentOpening = value; }
     }
 
-
-    public CompletionElem[] CompleteWord(string filePath, int line, int col, ISource source)
-    {
-      ErrorHelper.ThrowIfPathNullOrEmpty(filePath, "filePath");
-      return Engine.CompleteWord(filePath, line + 1, col + 1, source);
-    }
-
     public GotoInfo[] GetGoto(string filePath, int line, int col, ISource source)
     {
       Debug.WriteLine(">>>> ##### GetGoto!");

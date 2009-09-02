@@ -151,6 +151,13 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region Overrides
 
+    public void Completion(IVsTextView textView, int lintIndex, int columnIndex)
+    {
+      CompletionElem[] result = GetEngine().Completion(this, lintIndex + 1, columnIndex + 1);
+      var decls = new NemerleDeclarations(result);
+      this.CompletionSet.Init(textView, decls, true);
+    }
+
     public override string GetFilePath()
     {
       return Location.GetFileName(FileIndex);
