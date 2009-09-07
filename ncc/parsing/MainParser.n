@@ -176,6 +176,26 @@ namespace Nemerle.Compiler
         parser.parse_expr (TokenStoppers.None);
       }
     }
+
+    public static ParseMember([NotNull] env        : GlobalEnv,
+                              [NotNull] lexer      : LexerBase,
+                                        parentType : string) : SCG.List[ClassMember]
+    {
+      def preparser = PreParser (lexer, env);
+      def tokens = preparser.PreParse ();
+      def parser = MainParser (env);
+       
+      if (tokens.Child == null)
+          null
+      else
+      {
+        parser.push_stream (tokens.Child :> Token.LooseGroup);
+        
+        def members = SCG.List(4);
+        parser.ParseClassMember(parentType, members);
+        members
+      }
+    }
     
     /// Parse function body expression given lexer producing its content 
     /// and context in which this expression is situated.
@@ -957,6 +977,9 @@ namespace Nemerle.Compiler
                 mods.AddCustomAttribute(type_macro_attr)
           }
 
+          mutable prmsOpenLoc;
+          mutable prmsCloseLoc;
+
           def tok = peek_token ();
           match (tok) 
           {
@@ -985,16 +1008,21 @@ namespace Nemerle.Compiler
                     ((null, null, Location.Default), ([], Location.Default))
                 };
 
+              prmsOpenLoc  = Location(parmsloc, parmsloc.Line,    parmsloc.Column,        
+                                                parmsloc.Line,    parmsloc.Column + 1);
+              prmsCloseLoc = Location(parmsloc, parmsloc.EndLine, parmsloc.EndColumn - 1, 
+                                                parmsloc.EndLine, parmsloc.EndColumn);
               def ret_type = parse_return_type (true);
               def typarms  = parse_where_constraints (tyvars);
 
               if (is_property)
                 // property can contain embedded (nested) fields we should take it into account
-                parse_property (parentType, members, start_tok.Location, mods, customs, id, ret_type, parms, typarms);
+                parse_property (parentType, members, start_tok.Location, mods, customs, id, ret_type, 
+                                parms, typarms, prmsOpenLoc, prmsCloseLoc);
               else
               {
                 def header = PFunHeader (start_tok.Location.FromStart() + parmsloc + ret_type.Location,
-                                         typarms, id, ret_type, parms);
+                                         typarms, id, ret_type, parms, prmsOpenLoc, prmsCloseLoc);
                 when (ret_type is <[ _ ]>)
                   ret_type.Location = header.Location;
 
@@ -1007,8 +1035,13 @@ namespace Nemerle.Compiler
             | Token.Keyword ("this") =>
               shift ();
               def (parms, paramsLoc) = parse_parameters ();
+              prmsOpenLoc  = Location(paramsLoc, paramsLoc.Line,    paramsLoc.Column,
+                                                 paramsLoc.Line,    paramsLoc.Column + 1);
+              prmsCloseLoc = Location(paramsLoc, paramsLoc.EndLine, paramsLoc.EndColumn - 1, 
+                                                 paramsLoc.EndLine, paramsLoc.EndColumn);
               def header = PFunHeader (start_tok.Location.FromStart() + paramsLoc,
-                                       Typarms.Empty, MkSplicableName(".ctor", tok.Location), PExpr.Void(), parms);
+                                       Typarms.Empty, MkSplicableName(".ctor", tok.Location), 
+                                       PExpr.Void(), parms, prmsOpenLoc, prmsCloseLoc);
               take_attributes_out (ref customs, System.AttributeTargets.Method, true, mods);
               def mem = parse_method (header, mods);
               when (mem != null)
@@ -1035,7 +1068,8 @@ namespace Nemerle.Compiler
             | Token.EndOfGroup as end when parsed_some_top_extension =>
               take_attributes_out (ref customs, System.AttributeTargets.Method, true, mods);
               def loc = start_tok.Location.Combine(end.Location).AsGenerated();
-              def h = PFunHeader(loc, Typarms.Empty, MkTempSplicableName("custom_member", "custom_member", loc), PExpr.Void(), []);
+              def tmpName = MkTempSplicableName("custom_member", "custom_member", loc);
+              def h = PFunHeader(loc, Typarms.Empty, tmpName, PExpr.Void(), []);
               def dummy_method = ClassMember.Function (header = h, name = h.ParsedSplicableName,  modifiers = mods,
                                     loc = loc, body = FunBody.Parsed(<[]>), implemented = []);
               members.Add(dummy_method);
@@ -1092,11 +1126,26 @@ namespace Nemerle.Compiler
             new_group_beginning ();
             result
 
-          | x => Error (x, "expecting method body"); FunBody.Abstract ();
+          | x => 
+            Error(x, "expecting method body");
+
+            match (x.Next)
+            {
+              | Token.BracesGroup as brac => // recovery after bug...
+                shift();
+                shift();
+                loc += brac.Location;
+                bodyBracesGroup = brac;
+                FunBody.Parsed (ParseBlock (brac, h.Parameters))
+
+              | _ => FunBody.Abstract ()
+            }
         };
 
       def method = ClassMember.Function (header = h, name = h.ParsedSplicableName,  modifiers = modifiers,
                                          loc = loc, body = body, implemented = impl);
+      method.ParsedImplemented = impl;
+      method.ParsedBody        = body;
       InitBodyLocations(method, bodyBracesGroup, bodyLocation);
       method._env = env;
       method
@@ -1220,7 +1269,10 @@ namespace Nemerle.Compiler
                     id            : Splicable, 
                     ret_type      : PExpr, 
                     parms         : list[PParameter],
-                    typarms       : Typarms
+                    typarms       : Typarms,
+                    prmsOpenLoc   : Location,
+                    prmsCloseLoc  : Location
+
     )
       : void
     {
@@ -1295,10 +1347,11 @@ namespace Nemerle.Compiler
                       take_attributes_out (ref mycustoms, System.AttributeTargets.Method, true, method_atts);
                       parse_top_extensions (method_atts, MacroTargets.Method);
                       def bodyBracesGroup = TryPeekBracesGroup();
-                      def (kind, bd) = parse_accessor_body ([], impl);
+                      def (kind, body) = parse_accessor_body ([], impl);
                       def name = MkSplicableName("get_" + plain_name, genLoc);
                       def fh = PFunHeader(genLoc, name, ret_type, parms);
-                      def member = ClassMember.Function(loc2.AsGenerated(), fh.ParsedSplicableName, method_atts, fh, kind, bd);
+                      def member = ClassMember.Function(loc2.AsGenerated(), fh.ParsedSplicableName, method_atts, fh, kind, body);
+                      member.ParsedBody = body;
                       InitBodyLocations(member, bodyBracesGroup);
                       member._env = env;
                       getter = Some (member);
@@ -1319,10 +1372,11 @@ namespace Nemerle.Compiler
                       def setter_parms = parms + [PParameter (val_n, ret_type, par_atts)];
 
                       def bodyBracesGroup = TryPeekBracesGroup();
-                      def (kind, bd) = parse_accessor_body (setter_parms, impl);
+                      def (kind, body) = parse_accessor_body (setter_parms, impl);
                       def name = MkSplicableName("set_" + plain_name, genLoc);
                       def fh = PFunHeader(genLoc, typarms, name, PExpr.Void(), setter_parms);
-                      def member = ClassMember.Function(loc2.AsGenerated(), fh.ParsedSplicableName, method_atts, fh, kind, bd);
+                      def member = ClassMember.Function(loc2.AsGenerated(), fh.ParsedSplicableName, method_atts, fh, kind, body);
+                      member.ParsedBody = body;
                       InitBodyLocations(member, bodyBracesGroup);
                       member._env = env;
                       setter = Some (member);
@@ -1392,6 +1446,9 @@ namespace Nemerle.Compiler
           def prop = ClassMember.Property (loc + group.Location, id, mods, 
             ret_type, prop_ty, parms, getter, setter);
 
+          prop.ParsedParametersOpenLocation  = prmsOpenLoc;
+          prop.ParsedParametersCloseLocation = prmsCloseLoc;
+                    
           InitBodyLocations(prop, group);
 
           when (redirectedNames != null) 
@@ -1561,11 +1618,12 @@ namespace Nemerle.Compiler
                     def method_parms = [PParameter (val_n, ret_type, par_atts)];
                     
                     def bodyBracesGroup = TryPeekBracesGroup();
-                    def (kind, bd) = parse_accessor_body (method_parms, []);
+                    def (kind, body) = parse_accessor_body (method_parms, []);
                     def name = MkSplicableName(i + "_" + plain_name, plain_name, genLoc);
                     def fh = PFunHeader (genLoc, name, PExpr.Void (), method_parms);
                     def method = ClassMember.Function (CombineLocations(nametok, bodyBracesGroup), 
-                                   name, method_atts, fh, kind, bd);
+                                   name, method_atts, fh, kind, body);
+                    method.ParsedBody = body;
                     InitBodyLocations(method, bodyBracesGroup);
                     method._env = env;
                     if (i == "remove")
@@ -1928,8 +1986,11 @@ namespace Nemerle.Compiler
       def (parms, parmsloc) = parse_parameters (allow_patterns = allow_patterns);
       def ret_type = parse_return_type (true);
       def typarms  = parse_where_constraints (tyvars);
-
-      PFunHeader(name.Location + parmsloc + ret_type.Location, typarms, name, ret_type, parms)
+      def g = parmsloc;
+      def prmsOpenLoc  = Location(g, g.Line,    g.Column,        g.Line,    g.Column + 1);
+      def prmsCloseLoc = Location(g, g.EndLine, g.EndColumn - 1, g.EndLine, g.EndColumn);
+      def loc = name.Location + parmsloc + ret_type.Location;
+      PFunHeader(loc, typarms, name, ret_type, parms, prmsOpenLoc, prmsCloseLoc)
     }
 
 
@@ -1959,7 +2020,7 @@ namespace Nemerle.Compiler
             
           | Token.RoundGroup as tok when allow_patterns =>
             pattern = parse_expr ();
-            Splicable.Name (tok.Location, Macros.NewSymbol ("pat"));
+            Splicable.Name (tok.Location, Macros.NewSymbol ("pat")); //TODO: change this for intellisece mode
             
           | _ => get_splicable_id ()
         };
@@ -2660,10 +2721,14 @@ namespace Nemerle.Compiler
           | Token.Keyword ("fun") =>
             def tyvars   = parse_tyvars ();
             def (parms, parmsloc) = parse_parameters (allow_patterns = true, allow_omit = true);
+            def g = parmsloc;
+            def prmsOpenLoc  = Location(g, g.Line,    g.Column,        g.Line,    g.Column + 1);
+            def prmsCloseLoc = Location(g, g.EndLine, g.EndColumn - 1, g.EndLine, g.EndColumn);
             def ret_type = parse_return_type (true);
             def typarms  = parse_where_constraints (tyvars);
             def h        = PFunHeader (loc.Combine(parmsloc).Combine(ret_type.Location), typarms, 
-                                       MkSplicableName("", tok.Location), ret_type, parms);
+                                       MkSplicableName("", tok.Location), ret_type, parms,
+                                       prmsOpenLoc, prmsCloseLoc);
             def expr     = parse_block (parms);
             PExpr.Lambda (h.Location.Combine(expr.Location), Function_decl (h, expr))
 

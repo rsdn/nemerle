@@ -209,7 +209,7 @@ namespace Nemerle.Completion2
           
           if (index < 0)
             (false, [])
-          else if (toks[index] is Keyword("override"))
+          else if (toks[index] is Keyword("override") || toks[index] is Keyword("using"))
             (false, [toks[index]])
           else
             // Get list of completion tokens. It can be situated on the interval
@@ -227,15 +227,8 @@ namespace Nemerle.Completion2
                   else typeExpr.Head.Location + typeExpr.Last.Location;
         def typeName = if (typeExpr is []) "" else source.GetRegion(loc);
         def code = /*prefix +*/ typeName;
-        def result = CompleteType(env, code, loc, line, col/* + prefix.Length*/);
-        if (result == null)
-        {
-          Trace.WriteLine("### RunCompletionEngine() (type enforcement completion) return null!");
-          TopKeywords
-        }
-        else if ("void".StartsWithIgnoreCase(typeName) || typeName.TrimEnd() == "")
-          MakeCompletionList(result).Append(CompletionElem(0, "void", "type System.Void", null));
-        else MakeCompletionList(result)
+        def result = CompleteInTypeExpr(env, code, loc, line, col/* + prefix.Length*/);
+        result
       }
 
       def completeOverrides()
@@ -273,8 +266,16 @@ namespace Nemerle.Completion2
 
       def (ok, tokens) = tryGetTypeEnforcementExpressionTokens();
       
-      if (ok) completeTypeEnforcement(env, tokens)
-      else if (tokens is [Keyword("override")]) completeOverrides()
+      if (ok)
+        completeTypeEnforcement(env, tokens)
+      else if (tokens is [Keyword("override")])
+        completeOverrides()
+      else if (tokens is [Keyword("using")])
+      {
+        def loc = tokens.Head.Location;
+        def decl = Project.GetActiveDecl(fileIndex, loc.EndLine, loc.EndColumn);
+        CompleteInUsing(decl :> Decl.Using, fileIndex, line, col, source);
+      }
       else TopKeywords
     }
 
@@ -294,7 +295,12 @@ namespace Nemerle.Completion2
           def elems = SCG.List ();
           def elems2 = elems;
           _ = elems2;
-          def tobj = typer.TypeExpr (obj);
+          def tobj = 
+            match (typer.TryTyping(() => typer.TypeExpr(obj)))
+            {
+              | TExpr.Error => typer.TypeName(obj)
+              | e => e
+            };
           def tobj2 = tobj;
           _ = tobj2;
           def typeHint = tobj.Type.Hint;
@@ -308,7 +314,7 @@ namespace Nemerle.Completion2
           def tryInterpretAsGlobals()
           {
             def nss = this.CoreEnv.NameTree.NamespaceTree :: name.GetEnv(env).OpenNamespaces;
-            Completion.AddTypesAndNamespaces (elems, nss, obj, name, false);
+            Completion.AddTypesAndNamespaces (elems, nss, obj, name, false, false);
           }
 
           def tryInterpretAsQualifiedName() : void
@@ -404,7 +410,7 @@ namespace Nemerle.Completion2
           // add namespaces and types
 
           def nss = this.CoreEnv.NameTree.NamespaceTree :: name.GetEnv(env).OpenNamespaces;
-          Completion.AddTypesAndNamespaces (elems, nss, null, name, false);
+          Completion.AddTypesAndNamespaces (elems, nss, null, name, false, false);
             
           // Try wait for all types has been resolved.
           def delayed = typer.DelayAction(typer.Solver.FreshTyVar(), Typer.DelayedLambdaAction(fun(failLoudly) {
@@ -446,7 +452,7 @@ namespace Nemerle.Completion2
 
           def nss = this.CoreEnv.NameTree.NamespaceTree 
             :: name.GetEnv(this.CoreEnv).OpenNamespaces;
-          Completion.AddTypesAndNamespaces (elems, nss, obj, name, true);
+          Completion.AddTypesAndNamespaces (elems, nss, obj, name, true, true);
 
           throw CompletionResult (elems, name.Id);
 
@@ -504,7 +510,7 @@ namespace Nemerle.Completion2
 
           def nss = this.CoreEnv.NameTree.NamespaceTree 
             :: name.GetEnv(this.CoreEnv).OpenNamespaces;
-          Completion.AddTypesAndNamespaces (elems, nss, obj, name, true);
+          Completion.AddTypesAndNamespaces (elems, nss, obj, name, true, true);
           
           throw CompletionResult (elems, name.Id);
 
@@ -558,6 +564,80 @@ namespace Nemerle.Completion2
       }
     }
 
+    public CompleteInTypeExpr (
+      [NotNull]         env                : GlobalEnv, 
+      [NotNull]         content            : string,
+                        methodBodyLocation : Location,
+                        completionMarkLine : int,
+                        completionMarkChar : int
+    )
+      : array[CompletionElem]
+    {
+        def result = CompleteType(env, content, methodBodyLocation, completionMarkLine, completionMarkChar);
+
+        if (result == null)
+        {
+          Trace.WriteLine("### RunCompletionEngine() (type enforcement completion) return null!");
+          TopKeywords
+        }
+        else if ("void".StartsWithIgnoreCase(content) || content.TrimEnd() == "")
+          MakeCompletionList(result).Append(CompletionElem(0, "void", "type System.Void", null));
+        else MakeCompletionList(result)
+    }
+
+    public CompleteInMember(
+      [NotNull] env                : GlobalEnv, 
+      [NotNull] source             : ISource,
+      [NotNull] parentType         : TypeBuilder,
+                methodLocation     : Location,
+                completionMarkLine : int,
+                completionMarkChar : int
+    )
+      : array[CompletionElem]
+    {
+      try
+      {
+        _isCompletionInProgress = true;
+        def lexer = GetCompletionLexer(source, methodLocation, completionMarkLine, completionMarkChar);
+        //TODO: заменить "class" на распознование реального типа из parentType!
+        def members = MainParser.ParseMember(env, lexer, "class");
+        
+        when (members != null && members.Count > 0)
+        {
+          //TODO: реализовать создание билдеров для всех типов членов!
+          def mb = Factories.IntelliSenseModeMethodBuilder(parentType, members[0] :> ClassMember.Function);
+          foreach (impl in mb.Ast.implemented)
+          {
+            match (impl)
+            {
+              | PExpr.Member(obj, Splicable.HalfId(name)) =>
+                def ty = env.MonoBindType(obj);
+                if (ty.IsInterface)
+                {
+                  def ti = ty.TypeInfo;
+                  def elems = SCG.List();
+                  def members = ti.LookupMember(name.Id, true);
+                  foreach (m in members)
+                    elems.Add(Elem.Member(m));
+                  when (elems.Count > 0)
+                    throw CompletionResult(elems, name.Id);
+                }
+                else
+                  _ = env.MonoBindType(impl);
+
+              | PExpr.Member(expr, _)
+              | PExpr.ToComplete as expr => _ = env.MonoBindType(expr)
+              | _ => ()
+            }
+          }
+        }
+        
+        StrsToCompletionElems(["where", "implements"], GlyphType.Snippet :> int, "keyword")
+      }
+      catch { | e is CompletionResult => Engine.MakeCompletionList(e) }
+      finally { _isCompletionInProgress = false; }
+    }
+    
     public CompleteType (
       [NotNull]         env                : GlobalEnv, 
       [NotNull]         content            : string,
@@ -581,7 +661,7 @@ namespace Nemerle.Completion2
         try
         {
           def pExpr = MainParser.ParseExpr(env, lexer, false);
-          def _x = env.MonoBindType(pExpr)
+          def _x = env.MonoBindType(pExpr) //FixMe: Надо использовать BindType (не Mono)!
         }
         catch
         {
@@ -616,7 +696,7 @@ namespace Nemerle.Completion2
     {
       def code = source.GetRegion(loc);
       def lex = LexerString(this, code, loc);
-      lex.BeginParseFile();
+      //lex.BeginParseFile();
       lex.Keywords = lex.Manager.CoreEnv.Keywords;
       lex
     }
@@ -645,7 +725,7 @@ namespace Nemerle.Completion2
     {
       def code = source.GetRegion(loc);
       def lex = LexerCompletion(this, code, loc, completionMarkLine, completionMarkChar);
-      lex.BeginParseFile();
+      //lex.BeginParseFile();
       lex.Keywords = lex.Manager.CoreEnv.Keywords;
       lex
     }
