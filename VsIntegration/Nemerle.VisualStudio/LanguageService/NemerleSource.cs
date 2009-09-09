@@ -1441,7 +1441,7 @@ namespace Nemerle.VisualStudio.LanguageService
           return true;
         }
 
-        Debug.Assert(false);
+        //Debug.Assert(false);
       }
       catch (System.Runtime.InteropServices.COMException)
       {
