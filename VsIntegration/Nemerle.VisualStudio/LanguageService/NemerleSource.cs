@@ -195,6 +195,16 @@ namespace Nemerle.VisualStudio.LanguageService
 			return Service.GetPrimaryViewForSource(this);
 		}
 
+    public override void MethodTip(IVsTextView textView, int line, int index, TokenInfo info)
+    {
+      var result = GetEngine().BeginGetMethodTipInfo(this, line + 1, index + 1);
+      result.AsyncWaitHandle.WaitOne();
+      if (result.Stop || !result.MethodTipInfo.HasTip)
+        return;
+
+      //result.MethodTipInfo
+    }
+
     public override ParseRequest BeginParse(int line, int idx, TokenInfo info, ParseReason reason, IVsTextView view, ParseResultHandler callback)
     {
       //return base.BeginParse(line, idx, info, reason, view, callback);
@@ -1339,14 +1349,9 @@ namespace Nemerle.VisualStudio.LanguageService
       hintText = null;
       var loc = Utils.LocationFromSpan(FileIndex, textSpan[0]);
 
-      var projectInfo = ProjectInfo;
-
-      if (projectInfo == null)
-        return (int)TipSuccesses.TIP_S_ONLYIFNOMARKER;
-
       if (_tipAsyncRequest == null || _tipAsyncRequest.Line != loc.Line || _tipAsyncRequest.Column != loc.Column)
       {
-        _tipAsyncRequest = projectInfo.Engine.BeginGetQuickTipInfo(this, loc.Line, loc.Column);
+        _tipAsyncRequest = GetEngine().BeginGetQuickTipInfo(this, loc.Line, loc.Column);
         return VSConstants.E_PENDING;
       }
       else if (!_tipAsyncRequest.IsCompleted)
@@ -1370,7 +1375,13 @@ namespace Nemerle.VisualStudio.LanguageService
         //QuickTipInfo tipInfo = engine.GetQuickTipInfo(FileIndex, loc.Line, loc.Column);
 
         //Debug.WriteLine(loc.ToVsOutputStringFormat() + "GetDataTipText()");
-        var tasks = projectInfo.FindTaks(t => t.CompilerMessage.Location.Contains(loc) && !t.CompilerMessage.IsRelated).ToList();
+				var projectInfo = ProjectInfo;
+
+				if (projectInfo == null)
+					return (int)TipSuccesses.TIP_S_ONLYIFNOMARKER;
+				var tasks = projectInfo == null
+					? new List<NemerleErrorTask>(0)
+					: projectInfo.FindTaks(t => t.CompilerMessage.Location.Contains(loc) && !t.CompilerMessage.IsRelated).ToList();
 
         if (tasks.Count == 0 && tipInfo == null)
           return (int)TipSuccesses.TIP_S_ONLYIFNOMARKER;

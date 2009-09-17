@@ -429,7 +429,7 @@ namespace Nemerle.VisualStudio.Project
       Debug.WriteLine(">>>> ##### GetMethodTip!");
       ErrorHelper.ThrowIfPathNullOrEmpty(filePath, "filePath");
 
-      MethodTipInfo info = Project.GetMethodTip(filePath, line + 1, col + 1, source);
+      MethodTipInfo info = Project.GetMethodTip(source, line + 1, col + 1);
       NemerleMethods result = info != null ? new NemerleMethods(info) : null;
       Debug.WriteLine("<<<< ##### GetMethodTip!");
       return result;
