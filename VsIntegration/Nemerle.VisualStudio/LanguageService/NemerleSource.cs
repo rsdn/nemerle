@@ -199,10 +199,19 @@ namespace Nemerle.VisualStudio.LanguageService
     {
       var result = GetEngine().BeginGetMethodTipInfo(this, line + 1, index + 1);
       result.AsyncWaitHandle.WaitOne();
-      if (result.Stop || !result.MethodTipInfo.HasTip)
+      if (result.Stop)
         return;
+      if (result.MethodTipInfo == null || !result.MethodTipInfo.HasTip)
+      {
+        MethodData.Dismiss();
+        return;
+      }
 
-      //result.MethodTipInfo
+      var methods = new NemerleMethods(result.MethodTipInfo);
+
+      var span = result.MethodTipInfo.StartName.Combine(result.MethodTipInfo.EndParameters).ToTextSpan();
+      MethodData.Refresh(textView, methods, result.MethodTipInfo.ParameterIndex, span);
+      Debug.WriteLine("MethodTip");
     }
 
     public override ParseRequest BeginParse(int line, int idx, TokenInfo info, ParseReason reason, IVsTextView view, ParseResultHandler callback)

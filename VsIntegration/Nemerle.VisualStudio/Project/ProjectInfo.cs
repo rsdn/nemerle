@@ -424,17 +424,6 @@ namespace Nemerle.VisualStudio.Project
       return result;
     }
 
-    public NemerleMethods GetMethodTip(string filePath, int line, int col, ISource source)
-    {
-      Debug.WriteLine(">>>> ##### GetMethodTip!");
-      ErrorHelper.ThrowIfPathNullOrEmpty(filePath, "filePath");
-
-      MethodTipInfo info = Project.GetMethodTip(source, line + 1, col + 1);
-      NemerleMethods result = info != null ? new NemerleMethods(info) : null;
-      Debug.WriteLine("<<<< ##### GetMethodTip!");
-      return result;
-    }
-
     #region HighlightUsages
 
     internal void HighlightUsages(StringOrInt filePathOrIndex, int line, int column, ISource source, bool isPermanent)
