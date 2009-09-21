@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using Nemerle.Assertions;
 using Nemerle.Collections;
 using Nemerle.Compiler;
+using Nemerle.Compiler.Token;
 using Nemerle.Compiler.Utils;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
@@ -684,31 +685,64 @@ namespace Nemerle.Completion2
       }
     }
 
+    [RecordIgnore] mutable _previousMethodHintData : option[int * int * Location * CompletionResult] = None();
+
     GetMethodTip(method : MethodBuilder, line : int, col : int, source : ISource) : MethodTipInfo
     {
       def loc = method.BodyLocation;
       
       if (loc.Contains(line, col)) // completion in method body
       {
-        def timer    = Stopwatch.StartNew();
-        def bodyCode = source.GetRegion(loc.Line, loc.Column, loc.EndLine, loc.EndColumn);
+        def timer = Stopwatch.StartNew();
+        source.LockWrite();
+        def (fileIndex, version, bodyCode) = 
+        try
+        {
+          (source.FileIndex,
+          source.CurrentVersion,
+          source.GetRegion(loc.Line, loc.Column, loc.EndLine, loc.EndColumn))
+        } finally { source.UnlockWrite(); };
+        
         def finder   = TokenFinder();
         def tokens   = finder.Find(method.BodyTokens, line, col);
 
         Debug.WriteLine($"Comlete took $(timer.Elapsed)");
-
-        def findMethodNameToken(tokens)
+        def findMethodNameToken(tokens) : option[_]
         {
-          | (Token.RoundGroup as parms) :: (Token.Identifier as id) :: tail => 
-              def loc = parms.Location;
+          def tokenToListRev(token, acc = [])
+          {
+            if (token == null) acc
+            else tokenToListRev(token.Next, token :: acc)
+          }
+          retBlock :
+          {
+            foreach (token in tokens)
+            {
+              | LooseGroup(children) =>
+                def tokenList = tokenToListRev(children);
+                def loop (tokenList)
+                {
+                  | (RoundGroup as parms) :: ((RoundGroup(LooseGroup(Identifier as id)) :: _) as tail)
+                  | (RoundGroup as parms) :: ((RoundGroup(Identifier as id) :: _) as tail)
+                  | (RoundGroup as parms) :: ((Identifier as id) :: tail)
+                  | (RoundGroup as parms) :: ((x :: _) as tail) with id = Identifier(x.Location, "") => 
+                      def loc = parms.Location;
+                      
+                      if (loc.Contains(line, col) && !(loc.Line == line && loc.Column == col || loc.EndLine == line && loc.EndColumn == col))
+                        retBlock(Some(id, parms));
+                      else
+                        loop(tail); // we outside parameters list...
 
-              if (loc.Line == line && loc.Column == col || loc.EndLine == line && loc.EndColumn == col) // we outside parameters list...
-                findMethodNameToken(tail)
-              else
-                Some((id, parms))
+                  | _ :: tail => loop(tail)
+                  | _ => ()
+                }
 
-          | _ :: tail => findMethodNameToken(tail)
-          | []        => None()
+                loop(tokenList);
+              | _ => ()
+            }
+
+            None()
+          }
         }
 
         match (findMethodNameToken(tokens))
@@ -716,7 +750,17 @@ namespace Nemerle.Completion2
           | Some((id, paramsGroup)) =>
             def name = id.name;
             def locName = id.Location;
-            def result = Engine.RunCompletionEngine(method, bodyCode, loc, locName.EndLine, locName.EndColumn);
+            
+            def result = if (_previousMethodHintData.IsSome)
+              {
+                def (prevFileIndex, prevVer, prevLoc, prevRes) = _previousMethodHintData.UnSome();
+                
+                if (prevFileIndex == fileIndex && prevVer == version && prevLoc == paramsGroup.Location)
+                  prevRes
+                else
+                  Engine.RunCompletionEngine(method, bodyCode, loc, locName.EndLine, locName.EndColumn);
+              }
+              else Engine.RunCompletionEngine(method, bodyCode, loc, locName.EndLine, locName.EndColumn);
 
             if (result != null)
             {
@@ -724,7 +768,9 @@ namespace Nemerle.Completion2
 
               def cmpName(m : IMethod)
               {
-                if (m.Name == ".ctor" || m.Name == "..ctor")
+                if (name == "")
+                  true
+                else if (m.Name == ".ctor" || m.Name == "..ctor")
                   m.DeclaringType.Name == name
                 else
                   m.Name == name
@@ -756,6 +802,8 @@ namespace Nemerle.Completion2
 
                     xparms.Length - yparms.Length;
                   });
+                  
+                _previousMethodHintData = Some(fileIndex, version, paramsGroup.Location, result);
                 
                 def calcActiveParam(param, index = 0)
                 {
@@ -787,16 +835,9 @@ namespace Nemerle.Completion2
                   {
                     method.EnsureCompiled();
                     def (eLoc, pExpr, tExpr) = ExprFinder().FindExact(method.BodyParsed, method.BodyTyped, locName, true);
-
-                    //def (_loc, _pexpr, texpr) = 
-                    //  this.FindObject(typeDecl, locName.FileIndex, locName.EndLine, 
-                    //    locName.EndColumn, true);
-                      
                     def index = overloads.FindIndex(o => o.Member == tExpr);
                     _ = eLoc; _ = pExpr; _ = tExpr; _ = activeParam;
                     index
-                    //_ = res;
-                    //0
                   };
                 
                 def tip = OverloadsMethodTipInfo(overloads, id, paramsGroup, defaultMethodIndex, activeParam);
