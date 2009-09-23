@@ -14,6 +14,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System;
+using System.Reflection;
 
 using VsCommands2K      = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
 using TopDeclaration    = Nemerle.Compiler.Parsetree.TopDeclaration;
@@ -23,6 +24,8 @@ using TupleStringIntInt = Nemerle.Builtins.Tuple<string, int, int>;
 using Nemerle.VisualStudio.Package;
 using System.Text;
 using Nemerle.Compiler.Utils.Async;
+using Nemerle.VisualStudio.GUI;
+using System.Windows.Forms;
 
 
 namespace Nemerle.VisualStudio.LanguageService
@@ -214,6 +217,89 @@ namespace Nemerle.VisualStudio.LanguageService
       Debug.WriteLine("MethodTip");
     }
 
+		public void Goto(IVsTextView view, bool gotoDefinition, int lineIndex, int colIndex)
+		{
+			#region MyRegion // TODO: try use VS window
+			/*
+			IVsUIShell shell = _project.ProjectNode.Package.GetService<IVsUIShell, SVsUIShell>();
+
+			Guid		   guid = new Guid(ToolWindowGuids.ObjectSearchResultsWindow);
+			IVsWindowFrame frame;
+
+			shell.FindToolWindow(
+				(uint)__VSFINDTOOLWIN.FTW_fForceCreate,
+				ref guid,
+				out frame);
+
+			if (frame != null)
+			{
+				object obj;
+				frame.GetProperty((int)__VSFPROPID.VSFPROPID_ExtWindowObject, out obj);
+
+				obj.ToString();
+
+				EnvDTE.Window window = (EnvDTE.Window)obj;
+
+				guid = typeof(IVsObjectListOwner).GUID;
+				IntPtr ptr;
+				frame.QueryViewInterface(ref guid, out ptr);
+
+				IVsObjectListOwner lst = Marshal.GetObjectForIUnknown(ptr) as IVsObjectListOwner;
+
+				int isv = lst.IsVisible();
+
+				lst.ClearCachedData((int)_VSOBJLISTOWNERCACHEDDATAKINDS.LOCDK_SELECTEDNAVINFO);
+
+				guid = typeof(IVsObjectSearchPane).GUID;
+				frame.QueryViewInterface(ref guid, out ptr);
+
+				IVsObjectSearchPane pane = Marshal.GetObjectForIUnknown(ptr) as IVsObjectSearchPane;
+
+				frame.Show();
+			}
+			*/
+			#endregion
+
+      var engine  = GetEngine();
+      var project = engine.Project;
+			var line    = lineIndex + 1;
+			var col     = colIndex + 1;
+
+      if (project == null)
+        return;
+
+			GotoInfo[] infos = gotoDefinition
+        ? project.GetDefinition(this.FileIndex, line, col)
+        : project.GetUsages(this.FileIndex, line, col);
+
+			if (infos == null || infos.Length == 0)
+				return;
+
+			if (!infos[0].HasLocation && infos[0].Member != null)
+			{
+				Debug.Assert(infos.Length == 1, "Multiple unknown locations are unexpected");
+				GotoInfo[] infoFromPdb = NemerleGoto.LookupLocationsFromPdb(infos[0], ProjectInfo);
+
+				infos = infoFromPdb == null
+          ? NemerleGoto.GenerateSource(infos, engine)
+          : infoFromPdb;
+			}
+
+      var langSrvc = (NemerleLanguageService)LanguageService;
+
+			if (infos.Length == 1)
+        langSrvc.GotoLocation(infos[0].Location);
+			else if (infos.Length > 0)
+			{
+				var textEditorWnd = NativeWindow.FromHandle(view.GetWindowHandle());
+
+				using (GotoUsageForm popup = new GotoUsageForm(infos))
+					if (popup.ShowDialog(textEditorWnd) == DialogResult.OK)
+            langSrvc.GotoLocation(popup.Result.Location);
+			}
+		}
+
+
     public override ParseRequest BeginParse(int line, int idx, TokenInfo info, ParseReason reason, IVsTextView view, ParseResultHandler callback)
     {
       //return base.BeginParse(line, idx, info, reason, view, callback);
@@ -309,8 +395,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override AuthoringSink CreateAuthoringSink(ParseReason reason, int line, int col)
 		{
-			int maxErrors = LanguageService.Preferences.MaxErrorMessages;
-			return new NemerleAuthoringSink(this, reason, line, col, maxErrors);
+      Trace.Assert(false, "We don't using MS infrastructure of background parsing now. This code should not be called!");
+      throw new NotImplementedException("This should not be heppen!");
 		}
 
 		public override TokenInfo GetTokenInfo(int line, int col)

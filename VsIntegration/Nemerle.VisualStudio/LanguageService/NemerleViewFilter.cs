@@ -14,6 +14,7 @@ using Nemerle.Completion2.CodeFormatting;
 using Nemerle.VisualStudio.Project;
 using Nemerle.VisualStudio.GUI;
 
+using VsCommands = Microsoft.VisualStudio.VSConstants.VSStd97CmdID;
 using VsCommands2K = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
 using Microsoft.VisualStudio.Project.Automation;
 using Microsoft.VisualStudio.Package;
@@ -27,6 +28,28 @@ namespace Nemerle.VisualStudio.LanguageService
 			: base(mgr, view)
 		{
     }
+
+		public override void HandleGoto(VsCommands cmd)
+		{
+			int line, col;
+
+			// Get the caret position
+			ErrorHandler.ThrowOnFailure(this.TextView.GetCaretPos(out line, out col));
+			bool gotoDefinition = false;
+			switch (cmd)
+			{
+				case VSConstants.VSStd97CmdID.GotoDecl:
+				case VSConstants.VSStd97CmdID.GotoDefn: gotoDefinition = true; break;
+
+				case VSConstants.VSStd97CmdID.GotoRef:
+					Trace.WriteLine("GoToReference() not implemenred yet");
+					break;
+				default: Trace.Assert(false);	break;
+			}
+
+			Source.Goto(TextView, gotoDefinition, line, col);
+		}
+
 
     #region GetDataTipText
 
@@ -396,7 +419,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			int lineIndex;
 			int colIndex;
 			TextView.GetCaretPos(out lineIndex, out colIndex);
-			GotoInfo[] definitions = proj.GetDefinition(Source.GetFilePath(),
+			GotoInfo[] definitions = proj.GetDefinition(Source.FileIndex,
 																	 lineIndex + 1,
 																	 colIndex);
 			if (definitions == null || definitions.Length == 0)
@@ -420,7 +443,7 @@ namespace Nemerle.VisualStudio.LanguageService
 					var initLocation = tuple.Field1;
 					var replacement = Source.GetText(Utils.SpanFromLocation(initLocation));
 					var shouldEmbrace = tuple.Field2;
-					var usages = proj.GetUsages(Source.GetFilePath(),
+					var usages = proj.GetUsages(Source.FileIndex,
 														 lineIndex + 1,
 														 colIndex)
 											.Where(usage => usage.UsageType == UsageType.Usage)
@@ -463,7 +486,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			int lineIndex;
 			int colIndex;
 			TextView.GetCaretPos(out lineIndex, out colIndex);
-			var allUsages = proj.GetUsages(Source.GetFilePath(), lineIndex + 1, colIndex);
+			var allUsages = proj.GetUsages(Source.FileIndex, lineIndex + 1, colIndex);
 			var usages = allUsages.Distinct().ToArray();
 			if (usages == null || usages.Length == 0)
 				return;

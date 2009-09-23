@@ -141,13 +141,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private AuthoringScope GetDefaultScope(ParseRequest request)
 		{
-			ProjectInfo projectInfo = ProjectInfo.FindProject(request.FileName);
-
-			if (projectInfo != null)
-				return new NemerleAuthoringScope(
-					projectInfo, request.Sink, request.FileName,
-					projectInfo.GetSource(request.FileName));
-
+      Trace.Assert(false, "We don't using MS infrastructure of background parsing now. This code should not be called!");
+      //throw new NotImplementedException("This should not be heppen!");
 			return null;
 		}
 

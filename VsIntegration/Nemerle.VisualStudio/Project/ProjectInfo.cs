@@ -406,24 +406,6 @@ namespace Nemerle.VisualStudio.Project
       internal set { _isDocumentOpening = value; }
     }
 
-    public GotoInfo[] GetGoto(string filePath, int line, int col, ISource source)
-    {
-      Debug.WriteLine(">>>> ##### GetGoto!");
-      ErrorHelper.ThrowIfPathNullOrEmpty(filePath, "filePath");
-      GotoInfo[] result = Project.GetDefinition(filePath, line + 1, col + 1);
-      Debug.WriteLine("<<<< ##### GetGoto!");
-      return result;
-    }
-
-    public GotoInfo[] GetUsages(string filePath, int line, int col, ISource source)
-    {
-      Debug.WriteLine(">>>> ##### GetUsages!");
-      ErrorHelper.ThrowIfPathNullOrEmpty(filePath, "filePath");
-      GotoInfo[] result = Project.GetUsages(filePath, line + 1, col + 1);
-      Debug.WriteLine("<<<< ##### GetUsages!");
-      return result;
-    }
-
     #region HighlightUsages
 
     internal void HighlightUsages(StringOrInt filePathOrIndex, int line, int column, ISource source, bool isPermanent)
