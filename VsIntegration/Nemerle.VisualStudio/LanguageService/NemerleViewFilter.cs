@@ -19,6 +19,7 @@ using VsCommands2K = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
 using Microsoft.VisualStudio.Project.Automation;
 using Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio.Project;
+using Nemerle.Compiler.Utils.Async;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
@@ -413,15 +414,17 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			if (Source == null) return;
 			var proj = Source.ProjectInfo.Project;
+			var engine = Source.ProjectInfo.Engine;
 
 			if(!WarnAboutErrors(proj)) return;
 
 			int lineIndex;
 			int colIndex;
 			TextView.GetCaretPos(out lineIndex, out colIndex);
-			GotoInfo[] definitions = proj.GetDefinition(Source.FileIndex,
+      GotoInfo[] definitions = engine.GetGotoInfo(Source,
 																	 lineIndex + 1,
-																	 colIndex);
+																	 colIndex,
+                                   Nemerle.Compiler.Utils.Async.GotoKind.Definition);
 			if (definitions == null || definitions.Length == 0)
 				return;
 
@@ -443,9 +446,10 @@ namespace Nemerle.VisualStudio.LanguageService
 					var initLocation = tuple.Field1;
 					var replacement = Source.GetText(Utils.SpanFromLocation(initLocation));
 					var shouldEmbrace = tuple.Field2;
-					var usages = proj.GetUsages(Source.FileIndex,
+          var usages = engine.GetGotoInfo(Source,
 														 lineIndex + 1,
-														 colIndex)
+														 colIndex,
+                             GotoKind.Usages)
 											.Where(usage => usage.UsageType == UsageType.Usage)
 											.ToArray();
 					using (var frm = new InlineRefactoringPreview(proj))
@@ -480,13 +484,14 @@ namespace Nemerle.VisualStudio.LanguageService
 		private void RunRenameRefactoring()
 		{
 			if (Source == null) return;
-			var proj = Source.ProjectInfo.Project;
+      var proj   = Source.ProjectInfo.Project;
+      var engine = Source.ProjectInfo.Engine;
 			if(!WarnAboutErrors(proj)) return;
 
 			int lineIndex;
 			int colIndex;
 			TextView.GetCaretPos(out lineIndex, out colIndex);
-			var allUsages = proj.GetUsages(Source.FileIndex, lineIndex + 1, colIndex);
+      var allUsages = engine.GetGotoInfo(Source, lineIndex + 1, colIndex, GotoKind.Usages);
 			var usages = allUsages.Distinct().ToArray();
 			if (usages == null || usages.Length == 0)
 				return;

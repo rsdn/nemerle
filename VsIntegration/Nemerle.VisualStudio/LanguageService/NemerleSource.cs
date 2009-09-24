@@ -268,9 +268,9 @@ namespace Nemerle.VisualStudio.LanguageService
       if (project == null)
         return;
 
-			GotoInfo[] infos = gotoDefinition
-        ? project.GetDefinition(this.FileIndex, line, col)
-        : project.GetUsages(this.FileIndex, line, col);
+      GotoInfo[] infos = gotoDefinition
+        ? engine.GetGotoInfo(this, line, col, GotoKind.Definition)
+        : engine.GetGotoInfo(this, line, col, GotoKind.Usages);
 
 			if (infos == null || infos.Length == 0)
 				return;

@@ -63,6 +63,9 @@ namespace Nemerle.VisualStudio.LanguageService
 				type.FullName, Path.GetFileName(info.FilePath),
 				type.Assembly.GetName().Version, Process.GetCurrentProcess().Id);
 
+      if (File.Exists(tempFileName))
+        File.Delete(tempFileName);
+
 			// Delete previously generated file, if any.
 			//
 			////if (_temporaryFileRef != null)
