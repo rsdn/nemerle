@@ -51,9 +51,9 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
       Debug.Assert(infos != null && infos.Length == 1, "GenerateSource lacks required parameter");
       GotoInfo info = infos[0];
-      Debug.Assert(info != null && info.Member != null, "GenerateSource lacks required parameter");
+      Debug.Assert(info != null && info.MemberInfo != null, "GenerateSource lacks required parameter");
 
-			MemberInfo mi = info.Member;
+      MemberInfo mi = info.MemberInfo;
 			Type type = (mi.MemberType == MemberTypes.TypeInfo || mi.MemberType == MemberTypes.NestedType) 
         ? (Type)mi : mi.DeclaringType;
 
@@ -73,7 +73,7 @@ namespace Nemerle.VisualStudio.LanguageService
       GotoInfo[] resulr = new GotoInfo[0];
 
 			using (TextWriter w = new StreamWriter(tempFileName))
-        resulr = new GotoInfo[]{ engine.GenerateCode(type, info.Member, w) };
+        resulr = new GotoInfo[] { engine.GenerateCode(type, info.MemberInfo, w) };
 
 			// Made this file 'DeleteOnClose'.
 			//
@@ -91,7 +91,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
     internal static GotoInfo[] LookupLocationsFromPdb(GotoInfo info, ProjectInfo projectInfo)
 		{
-			Debug.Assert(info != null && info.Member != null, "LookupLocationsFromPdb lacks required parameter");
+      Debug.Assert(info != null && info.MemberInfo != null, "LookupLocationsFromPdb lacks required parameter");
 
 			if (string.IsNullOrEmpty(info.FilePath) || !File.Exists(info.FilePath))
 				return null;
@@ -116,14 +116,14 @@ namespace Nemerle.VisualStudio.LanguageService
 				if (hr == VSConstants.S_OK)
 				{
 					ptrMetaDataImport = Marshal.GetIUnknownForObject(unkMetaDataImport);
-					binder = new SymBinder();
-					reader = binder.GetReader(ptrMetaDataImport, info.FilePath, null);
-					documents = new ISymbolDocument[1];
-					lines = new int[1];
-					columns = new int[1];
-					endLines = new int[1];
-					endColumns = new int[1];
-					offsets = new int[1];
+					binder            = new SymBinder();
+					reader            = binder.GetReader(ptrMetaDataImport, info.FilePath, null);
+					documents         = new ISymbolDocument[1];
+					lines             = new int[1];
+					columns           = new int[1];
+					endLines          = new int[1];
+					endColumns        = new int[1];
+					offsets           = new int[1];
 				}
 				else
 				{
@@ -132,11 +132,11 @@ namespace Nemerle.VisualStudio.LanguageService
 					return null;
 				}
 
-				switch (info.Member.MemberType)
+        switch (info.MemberInfo.MemberType)
 				{
 					case MemberTypes.Constructor:
 					case MemberTypes.Method:
-						MethodBase mb = (MethodBase)info.Member;
+            MethodBase mb = (MethodBase)info.MemberInfo;
 
 						// Abstract methods does not contain any code.
 						//
@@ -147,16 +147,16 @@ namespace Nemerle.VisualStudio.LanguageService
 						break;
 
 					case MemberTypes.Property:
-						PropertyInfo pi = (PropertyInfo)info.Member;
+            PropertyInfo pi = (PropertyInfo)info.MemberInfo;
 						methods.AddRange(pi.GetAccessors(true));
 						break;
 
 					case MemberTypes.Field:
-						methods.AddRange(info.Member.DeclaringType.GetMethods(DeclaredMembers));
+            methods.AddRange(info.MemberInfo.DeclaringType.GetMethods(DeclaredMembers));
 						break;
 
 					case MemberTypes.Event:
-						EventInfo ei = (EventInfo)info.Member;
+            EventInfo ei = (EventInfo)info.MemberInfo;
 						methods.Add(ei.GetAddMethod(true));
 						methods.Add(ei.GetRemoveMethod(true));
 						methods.Add(ei.GetRaiseMethod(true));
@@ -165,11 +165,11 @@ namespace Nemerle.VisualStudio.LanguageService
 
 					case MemberTypes.TypeInfo:
 					case MemberTypes.NestedType:
-						Type t = (Type)info.Member;
+            Type t = (Type)info.MemberInfo;
 						methods.AddRange(t.GetMethods(DeclaredMembers));
 						break;
 					default:
-						Trace.Fail("Unexpected MemberType " + info.Member.MemberType);
+            Trace.Fail("Unexpected MemberType " + info.MemberInfo.MemberType);
 						break;
 				}
 
@@ -187,12 +187,11 @@ namespace Nemerle.VisualStudio.LanguageService
 						{
 							method.GetSequencePoints(offsets, documents, lines, columns, endLines, endColumns);
 
+              var path = documents[0].URL;
 							// We are interested in unique files only.
-							//
-							if (File.Exists(documents[0].URL) &&
-								infos.Find(item => item.FilePath == documents[0].URL) == null)
+              if (File.Exists(path) && infos.Find(item => item.FilePath == path) == null)
 							{
-								infos.Add(new GotoInfo(documents[0].URL, new Nemerle.Compiler.Location(0, lines[0], columns[0], endLines[0], endColumns[0])));
+                infos.Add(new GotoInfo(path, new Nemerle.Compiler.Location(path, lines[0], columns[0], endLines[0], endColumns[0])));
 							}
 						}
 					}
@@ -226,7 +225,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			// In case of a Method we already succeeded.
 			//
-			if (info.Member is MethodBase)
+      if (info.MemberInfo is MethodBase)
 			{
 				Debug.Assert(infos.Count < 2, "Partial method is not expected.");
 				return infos.ToArray();
@@ -245,12 +244,12 @@ namespace Nemerle.VisualStudio.LanguageService
 
 					Trace.Assert("не реализовано" == null);
 
-					//TODO: VladD2: 
+					//TODO: VladD2: нужно отпарсить файл и найти там искомый элемент
 
 					//foreach (GotoInfo gi in infos)
 					//	e.Sources.AddOrUpdate(gi.FilePath, File.ReadAllText(gi.FilePath));
 
-					GotoInfo[] exactInfo = e.Project.GetGotoInfo(info.Member);
+          GotoInfo[] exactInfo = e.Project.GetGotoInfo(info.MemberInfo);
 
 					if (null != exactInfo && exactInfo.Length > 0)
 						return exactInfo;

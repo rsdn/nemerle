@@ -662,13 +662,13 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			span.iStartLine  = loc.Line - 1;
 			span.iStartIndex = loc.Column - 1;
-			span.iEndLine	= loc.EndLine - 1;
+			span.iEndLine	   = loc.EndLine - 1;
 			span.iEndIndex   = loc.EndColumn - 1;
 
-			uint		   itemID;
+			uint		       itemID;
 			IVsUIHierarchy hierarchy;
 			IVsWindowFrame docFrame;
-			IVsTextView	textView;
+			IVsTextView	   textView;
 
 			VsShell.OpenDocument(Site, loc.File, VSConstants.LOGVIEWID_Code, 
 				out hierarchy, out itemID, out docFrame, out textView);
