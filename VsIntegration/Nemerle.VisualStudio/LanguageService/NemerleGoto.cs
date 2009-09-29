@@ -12,6 +12,7 @@ using Microsoft.VisualStudio.TextManager.Interop;
 using System.Runtime.CompilerServices;
 using Location = Nemerle.Compiler.Location;
 using Nemerle.VisualStudio.Project;
+using Microsoft.VisualStudio.Shell.Interop;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
@@ -39,13 +40,6 @@ namespace Nemerle.VisualStudio.LanguageService
 		}
 
 		#endregion
-
-		// Configurable option:
-		//
-		// When true, all files recovered from the .pdb will be recompiled to find real location.
-		// When false, the relevant method locations will be returned.
-		//
-		private static readonly bool _findExactLocation = true;
 
     internal static GotoInfo[] GenerateSource(GotoInfo[] infos, Engine engine)
 		{
@@ -89,12 +83,13 @@ namespace Nemerle.VisualStudio.LanguageService
       return resulr;
 		}
 
-    internal static GotoInfo[] LookupLocationsFromPdb(GotoInfo info, ProjectInfo projectInfo)
+    internal static GotoInfo[] LookupLocationsFromPdb(GotoInfo info, IVsSmartOpenScope vsSmartOpenScope)
 		{
       Debug.Assert(info != null && info.MemberInfo != null, "LookupLocationsFromPdb lacks required parameter");
+      var sources = new Dictionary<string, Location>();
 
 			if (string.IsNullOrEmpty(info.FilePath) || !File.Exists(info.FilePath))
-				return null;
+				return new GotoInfo[0];
 
 			object unkMetaDataImport;
 			IntPtr ptrMetaDataImport = IntPtr.Zero;
@@ -106,12 +101,12 @@ namespace Nemerle.VisualStudio.LanguageService
 			int[] endLines;
 			int[] endColumns;
 			int[] offsets;
-			var infos = new List<GotoInfo>();
 			var methods = new List<MethodBase>();
+      Type ty = null;
 
 			try
 			{
-        int hr = projectInfo.SmartOpenScope.OpenScope(info.FilePath, 0, ref IID_MetaDataImport, out unkMetaDataImport);
+        int hr = vsSmartOpenScope.OpenScope(info.FilePath, 0, ref IID_MetaDataImport, out unkMetaDataImport);
 
 				if (hr == VSConstants.S_OK)
 				{
@@ -129,7 +124,8 @@ namespace Nemerle.VisualStudio.LanguageService
 				{
 					Debug.WriteLineIf(TS.TraceWarning,
 						string.Format("Failed to obtain MetaDataImport from VS, hr 0x{0:X8}", hr), TS.DisplayName);
-					return null;
+
+				  return new GotoInfo[0];
 				}
 
         switch (info.MemberInfo.MemberType)
@@ -165,13 +161,15 @@ namespace Nemerle.VisualStudio.LanguageService
 
 					case MemberTypes.TypeInfo:
 					case MemberTypes.NestedType:
-            Type t = (Type)info.MemberInfo;
-						methods.AddRange(t.GetMethods(DeclaredMembers));
+            ty = (Type)info.MemberInfo;
+            methods.AddRange(ty.GetMethods(DeclaredMembers));
+            methods.AddRange(ty.GetConstructors(DeclaredMembers));
 						break;
 					default:
             Trace.Fail("Unexpected MemberType " + info.MemberInfo.MemberType);
 						break;
 				}
+
 
 				foreach (MethodBase mb in methods)
 				{
@@ -189,9 +187,16 @@ namespace Nemerle.VisualStudio.LanguageService
 
               var path = documents[0].URL;
 							// We are interested in unique files only.
-              if (File.Exists(path) && infos.Find(item => item.FilePath == path) == null)
+              if (File.Exists(path) && (ty == null || mb.DeclaringType.Equals(ty)))
 							{
-                infos.Add(new GotoInfo(path, new Nemerle.Compiler.Location(path, lines[0], columns[0], endLines[0], endColumns[0])));
+                Location value;
+                if (sources.TryGetValue(path, out value))
+                {
+                  if ((value.Column == 0 || value.Line == 0) && lines[0] != 0 && columns[0] != 0)
+                    sources[path] = new Location(path, lines[0], columns[0], endLines[0], endColumns[0]);
+                }
+                else
+                  sources.Add(path, new Location(path, lines[0], columns[0], endLines[0], endColumns[0]));
 							}
 						}
 					}
@@ -218,60 +223,7 @@ namespace Nemerle.VisualStudio.LanguageService
 					Marshal.Release(ptrMetaDataImport);
 			}
 
-			// No sources were found
-			//
-			if (infos.Count == 0)
-				return null;
-
-			// In case of a Method we already succeeded.
-			//
-      if (info.MemberInfo is MethodBase)
-			{
-				Debug.Assert(infos.Count < 2, "Partial method is not expected.");
-				return infos.ToArray();
-			}
-
-			// TODO: implement other languages than Nemerle
-			//
-			if (_findExactLocation && infos[0].FilePath.EndsWith(NemerleConstants.FileExtension, StringComparison.OrdinalIgnoreCase))
-			{
-				try
-				{
-					// Quickly compile and find the _exact_ location(s)
-					//
-
-					Completion2.Engine e = NemerleLanguageService.DefaultEngine;
-
-					Trace.Assert("не реализовано" == null);
-
-					//TODO: VladD2: нужно отпарсить файл и найти там искомый элемент
-
-					//foreach (GotoInfo gi in infos)
-					//	e.Sources.AddOrUpdate(gi.FilePath, File.ReadAllText(gi.FilePath));
-
-          GotoInfo[] exactInfo = e.Project.GetGotoInfo(info.MemberInfo);
-
-					if (null != exactInfo && exactInfo.Length > 0)
-						return exactInfo;
-				}
-				catch (Exception ex)
-				{
-					// This is definitelly unreachable, but since we have a backup route, it make sence.
-					//
-					Trace.WriteLineIf(TS.TraceError,
-						string.Format("({0}) {1}", info.Member.Name, ex.Message), TS.DisplayName);
-				}
-				finally
-				{
-					// Nemerle.Compiler.ManagerClass.Instance is a singletone. Actually, it's a bug.
-					// Quick'n'durty solution is 'save and revert when done'
-					//
-				}
-
-				// Fall through to backup route
-			}
-
-			return infos.ToArray();
+      return sources.Select(x => new GotoInfo(x.Key, x.Value)).ToArray();
 		}
 	}
 }

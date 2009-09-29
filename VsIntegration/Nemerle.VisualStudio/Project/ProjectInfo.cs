@@ -158,11 +158,6 @@ namespace Nemerle.VisualStudio.Project
       get { return _projects; }
     }
 
-    public IVsSmartOpenScope SmartOpenScope
-    {
-      get { return (IVsSmartOpenScope)ProjectNode.Site.GetService(typeof(SVsSmartOpenScope)); }
-    }
-
     #region Project References
 
     List<ReferenceNode> _assemblyReferences = new List<ReferenceNode>();
@@ -314,6 +309,13 @@ namespace Nemerle.VisualStudio.Project
     IEnumerable<ISource> IIdeProject.GetSources()
     {
       return _sources;
+    }
+
+    public GotoInfo[] LookupLocationsFromDebugInformation(GotoInfo info)
+    { 
+      var vsSmartOpenScope = (IVsSmartOpenScope)ProjectNode.Site.GetService(typeof(SVsSmartOpenScope));
+
+      return NemerleGoto.LookupLocationsFromPdb(info, vsSmartOpenScope);
     }
 
     #endregion

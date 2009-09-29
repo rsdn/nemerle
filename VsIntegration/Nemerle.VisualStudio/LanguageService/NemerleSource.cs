@@ -275,15 +275,27 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (infos == null || infos.Length == 0)
 				return;
 
-			if (!infos[0].HasLocation && infos[0].Member != null)
-			{
-				Debug.Assert(infos.Length == 1, "Multiple unknown locations are unexpected");
-				GotoInfo[] infoFromPdb = NemerleGoto.LookupLocationsFromPdb(infos[0], ProjectInfo);
+      if (!infos[0].HasLocation && infos[0].Member != null)
+      {
+        var inf = infos[0];
+        Debug.Assert(infos.Length == 1, "Multiple unknown locations are unexpected");
+        GotoInfo[] infoFromPdb = ProjectInfo.LookupLocationsFromDebugInformation(inf);
 
-				infos = infoFromPdb == null
+        foreach (GotoInfo item in infoFromPdb)
+        {
+          var cu = engine.ParseCompileUnit(new FileNemerleSource(Location.GetFileIndex(item.FilePath)));
+          var res = TryGetGotoInfoForMemberFromSource(inf.Member, cu);
+          if (res.Length > 0)
+          {
+            infoFromPdb = res;
+            break;
+          }
+        }
+
+        infos = infoFromPdb.Length == 0
           ? NemerleGoto.GenerateSource(infos, engine)
           : infoFromPdb;
-			}
+      }
 
       var langSrvc = (NemerleLanguageService)LanguageService;
 
@@ -299,6 +311,54 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 		}
 
+    private GotoInfo[] TryGetGotoInfoForMemberFromSource(IMember member, CompileUnit cu)
+    {
+      var ty = member as Nemerle.Compiler.TypeInfo;
+
+      if (ty == null)
+        ty = member.DeclaringType;
+
+      var td = FindTopDeclaration(ty, cu);
+
+      if (td == null)
+        return new GotoInfo[0];
+      else
+        return new[] { new GotoInfo(Location.GetFileName(cu.FileIndex), td.NameLocation) };
+    }
+
+    private TopDeclaration FindTopDeclaration(TypeInfo ty, CompileUnit cu)
+    {
+      var fullName = ty.FullName;
+
+      foreach (var td in cu.TopDeclarations)
+      {
+        if (td.FullQualifiedName == fullName)
+          return td;
+
+        foreach (var td2 in td.GetAllInnerTypes())
+        {
+          if (td2.FullQualifiedName == fullName)
+            return td2;
+        }
+      }
+
+      return null;
+    }
+
+    private static string GetFullName(TopDeclaration td)
+    {
+      var splName = td.ParsedSplicableName as Nemerle.Compiler.Parsetree.Splicable.Name;
+
+      if (splName == null || splName.body.context == null)
+        return null;
+
+      var nsName = splName.body.context.CurrentNamespace.GetDisplayName();
+
+      if (nsName.IsNullOrEmpty())
+        return td.Name;
+      else
+        return nsName + "." + td.Name;
+    }
 
     public override ParseRequest BeginParse(int line, int idx, TokenInfo info, ParseReason reason, IVsTextView view, ParseResultHandler callback)
     {
