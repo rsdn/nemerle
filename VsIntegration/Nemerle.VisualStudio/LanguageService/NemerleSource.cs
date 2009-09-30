@@ -26,6 +26,7 @@ using System.Text;
 using Nemerle.Compiler.Utils.Async;
 using Nemerle.VisualStudio.GUI;
 using System.Windows.Forms;
+using Nemerle.Compiler.Parsetree;
 
 
 namespace Nemerle.VisualStudio.LanguageService
@@ -277,21 +278,9 @@ namespace Nemerle.VisualStudio.LanguageService
 
       if (!infos[0].HasLocation && infos[0].Member != null)
       {
-        var inf = infos[0];
         Debug.Assert(infos.Length == 1, "Multiple unknown locations are unexpected");
-        GotoInfo[] infoFromPdb = ProjectInfo.LookupLocationsFromDebugInformation(inf);
-
-        foreach (GotoInfo item in infoFromPdb)
-        {
-          var cu = engine.ParseCompileUnit(new FileNemerleSource(Location.GetFileIndex(item.FilePath)));
-          var res = TryGetGotoInfoForMemberFromSource(inf.Member, cu);
-          if (res.Length > 0)
-          {
-            infoFromPdb = res;
-            break;
-          }
-        }
-
+        var inf = infos[0];
+        GotoInfo[] infoFromPdb = TryFindGotoInfoByDebugInfo(engine, inf);
         infos = infoFromPdb.Length == 0
           ? NemerleGoto.GenerateSource(infos, engine)
           : infoFromPdb;
@@ -306,14 +295,61 @@ namespace Nemerle.VisualStudio.LanguageService
 				var textEditorWnd = NativeWindow.FromHandle(view.GetWindowHandle());
 
 				using (GotoUsageForm popup = new GotoUsageForm(infos))
-					if (popup.ShowDialog(textEditorWnd) == DialogResult.OK)
+          if ((textEditorWnd == null ? popup.ShowDialog() : popup.ShowDialog(textEditorWnd)) == DialogResult.OK)
             langSrvc.GotoLocation(popup.Result.Location);
 			}
 		}
 
-    private GotoInfo[] TryGetGotoInfoForMemberFromSource(IMember member, CompileUnit cu)
+    /// <summary>
+    /// Этот метод пытается найти позиции перехода на основании имеющехся типов считанных из других сборок,
+    /// анализа .pdb-файлов (файлов содежащих отладочную информацию) и парсинга исходников.
+    /// </summary>
+    /// <param name="engine"></param>
+    /// <param name="inf"></param>
+    /// <returns></returns>
+    /// <remarks>
+    /// Описание проблемы:
+    /// К сожалению .pdb-файлы не содержат полной информации о местоположениях тиопов. Местоположения содержатся
+    /// только для методов (так как именно они подвергаются отладке). Нам же нужно находить не так же типы 
+    /// (причем типы могут располагаться более чем в одном файле). Поэтому поступаем следующим образом...
+    /// 1. Извлекаем тип для которого нужно получить информацию для перехода. Это может быть или непосредственно
+    /// член на котрый осуществляетя переход, или тип в котором объявлен этот член (если перход идет на член 
+    /// отличный от типа.
+    /// 2. Получаем полный список членов в котором типа полученного на шаге 1.
+    /// 3. Получаем местоположения членов (вместе с путем к файлу). Местоположения могут быть не полными. Например, 
+    /// может быть задан только путь к файлу, а позиция в файле может быть не верной (при этом, в колонке 
+    /// содержится 0). Если мы нашли местопложение для искомого члена и оно корректно, то используем его 
+    /// (на этом поиск нужно прекратить). В противном случае переходим к следующему шагу.
+    /// 4. Мы получили список файлов в которых может содежаться искомый член. Парсим каждый из файлов 
+    /// и ищем в них тип в котором объявлен нужный нам член. Если член и есть тип, то завершаем обработку
+    /// и возвращаем местположения типа (тип может быть обявлен более чем в одном файле).
+    /// В противном случае переходим к следующему шагу.
+    /// 5. Ищем в типе наденом на шаге 5 член с именем совпадающим с искомым (взятым из IMember). Если найдено
+    /// более одного члена, то производит отсев наиболее подходящего. Для этого последовательно проверяем список
+    /// аргументов, возвращаемое значение и т.п.
+    /// </remarks>
+    private GotoInfo[] TryFindGotoInfoByDebugInfo(Engine engine, GotoInfo inf)
     {
+      GotoInfo[] infoFromPdb = ProjectInfo.LookupLocationsFromDebugInformation(inf);
+      List<GotoInfo> result = new List<GotoInfo>();
+
+      foreach (GotoInfo item in infoFromPdb)
+      {
+        var cu = engine.ParseCompileUnit(new FileNemerleSource(Location.GetFileIndex(item.FilePath)));
+        var res = TryGetGotoInfoForMemberFromSource(inf.Member, item.Location, cu);
+
+        if (res.Length > 0)
+          result.AddRange(res);
+      }
+
+      return result.ToArray();
+    }
+
+    private GotoInfo[] TryGetGotoInfoForMemberFromSource(IMember member, Location loc, CompileUnit cu)
+    {
+      Trace.Assert(member != null);
       var ty = member as Nemerle.Compiler.TypeInfo;
+      var soughtIsType = ty != null;
 
       if (ty == null)
         ty = member.DeclaringType;
@@ -322,13 +358,75 @@ namespace Nemerle.VisualStudio.LanguageService
 
       if (td == null)
         return new GotoInfo[0];
-      else
+      else if (soughtIsType)
         return new[] { new GotoInfo(Location.GetFileName(cu.FileIndex), td.NameLocation) };
+      else
+      {
+        var name = member.Name;
+        var file = Location.GetFileName(cu.FileIndex);
+        var members = td.GetMembers().Where(m => string.Equals(m.Name, name, StringComparison.Ordinal)).ToArray();
+
+        if (members.Length == 1)
+          return new[] { new GotoInfo(file, members[0].NameLocation) };
+
+        var isProp = member is IProperty;
+
+        members = td.GetMembers().Where(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)
+          // Макро [Accessor] может изменять имя свойства. Учитываем это...
+          || (isProp && string.Equals(m.Name.Replace("_", ""), name, StringComparison.OrdinalIgnoreCase))).ToArray();
+
+        if (members.Length > 0)
+        {
+          if (loc.Column > 0)
+          {
+            var members2 = members.Where(m => m.Location.Contains(loc)).ToArray();
+            if (members2.Length > 0)
+              return members2.Select(m => new GotoInfo(file, m.NameLocation)).ToArray();
+            else
+              return new[] { new GotoInfo(file, td.NameLocation) };
+          }
+          else if (members.Length == 1)
+            return new[] { new GotoInfo(file, members[0].NameLocation) };
+          else
+            return FindBastMember(members, member).Select(m => new GotoInfo(file, m.NameLocation)).ToArray();
+        }
+
+        // Ищем член (функцию, свойство, поле...)
+        if (soughtIsType)
+          return new[] { new GotoInfo(file, td.NameLocation) };
+        else
+          return new GotoInfo[0];
+      }
+    }
+
+    private ClassMember[] FindBastMember(ClassMember[] members, IMember member)
+    {
+      var method = member as IMethod;
+
+      if (method != null)
+        return FindBastMethod(members, method);
+
+      return members;
+    }
+
+    private ClassMember[] FindBastMethod(ClassMember[] members, IMethod method)
+    {
+      var parms = method.GetParameters();
+      var parmsCount = parms.Length;
+
+      var methods = members.Where(m => m is ClassMember.Function).Cast<ClassMember.Function>().ToArray();
+
+      var methods2 = methods.Where(m => m.header.ParsedParameters.Length == parmsCount).ToArray();
+
+      if (methods2.Length == 1)
+        return methods2;
+
+      return methods2;
     }
 
     private TopDeclaration FindTopDeclaration(TypeInfo ty, CompileUnit cu)
     {
-      var fullName = ty.FullName;
+      var fullName = ty.FrameworkTypeName.Replace("+", ".");//ty.FullName;
 
       foreach (var td in cu.TopDeclarations)
       {
