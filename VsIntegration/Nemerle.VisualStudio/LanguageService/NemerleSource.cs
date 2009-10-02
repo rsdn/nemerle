@@ -276,27 +276,29 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (infos == null || infos.Length == 0)
 				return;
 
+      string captiopn = null;
+
       if (!infos[0].HasLocation && infos[0].Member != null)
       {
         Debug.Assert(infos.Length == 1, "Multiple unknown locations are unexpected");
         var inf = infos[0];
         GotoInfo[] infoFromPdb = TryFindGotoInfoByDebugInfo(engine, inf);
         infos = infoFromPdb.Length == 0
-          ? NemerleGoto.GenerateSource(infos, engine)
+          ? NemerleGoto.GenerateSource(infos, engine, out captiopn)
           : infoFromPdb;
       }
 
       var langSrvc = (NemerleLanguageService)LanguageService;
 
 			if (infos.Length == 1)
-        langSrvc.GotoLocation(infos[0].Location);
+        langSrvc.GotoLocation(infos[0].Location, captiopn);
 			else if (infos.Length > 0)
 			{
 				var textEditorWnd = NativeWindow.FromHandle(view.GetWindowHandle());
 
 				using (GotoUsageForm popup = new GotoUsageForm(infos))
           if ((textEditorWnd == null ? popup.ShowDialog() : popup.ShowDialog(textEditorWnd)) == DialogResult.OK)
-            langSrvc.GotoLocation(popup.Result.Location);
+            langSrvc.GotoLocation(popup.Result.Location, captiopn);
 			}
 		}
 

@@ -656,7 +656,12 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region ShowLocation event handler
 
-		public void GotoLocation(Location loc)
+    public void GotoLocation(Location loc)
+    {
+      GotoLocation(loc, null);
+    }
+		
+    public void GotoLocation(Location loc, string caption)
 		{
 			TextSpan span = new TextSpan();
 
@@ -674,6 +679,9 @@ namespace Nemerle.VisualStudio.LanguageService
 				out hierarchy, out itemID, out docFrame, out textView);
 
 			ErrorHandler.ThrowOnFailure(docFrame.Show());
+
+      if (caption != null)
+        ErrorHandler.ThrowOnFailure(docFrame.SetProperty((int)__VSFPROPID.VSFPROPID_OwnerCaption, caption));
 
       if (textView != null && loc.Line != 0)
 			{

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Diagnostics.SymbolStore;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using System.IO;
 using Nemerle.Completion2;
 using Microsoft.VisualStudio;
@@ -41,7 +42,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#endregion
 
-    internal static GotoInfo[] GenerateSource(GotoInfo[] infos, Engine engine)
+    internal static GotoInfo[] GenerateSource(GotoInfo[] infos, Engine engine, out string captiopn)
 		{
       Debug.Assert(infos != null && infos.Length == 1, "GenerateSource lacks required parameter");
       GotoInfo info = infos[0];
@@ -51,36 +52,36 @@ namespace Nemerle.VisualStudio.LanguageService
 			Type type = (mi.MemberType == MemberTypes.TypeInfo || mi.MemberType == MemberTypes.NestedType) 
         ? (Type)mi : mi.DeclaringType;
 
+      captiopn = type.Name + "[from metadata]";
+
 			Debug.WriteLineIf(TS.TraceVerbose, string.Format("Generating source for ({0})", type.FullName), TS.DisplayName);
 
 			string tempFileName = string.Format("{0}{1}${2}v{3}${4}.n", Path.GetTempPath(),
 				type.FullName, Path.GetFileName(info.FilePath),
 				type.Assembly.GetName().Version, Process.GetCurrentProcess().Id);
 
-      if (File.Exists(tempFileName))
-        File.Delete(tempFileName);
+      string text = null;
 
-			// Delete previously generated file, if any.
-			//
-			////if (_temporaryFileRef != null)
-			////	_temporaryFileRef.Close();
+      if (File.Exists(tempFileName))
+        text = File.ReadAllText(tempFileName, Encoding.UTF8);
+
       GotoInfo[] resulr = new GotoInfo[0];
 			var fileIndex = Location.GetFileIndex(tempFileName);
 
-			using (TextWriter w = new StreamWriter(tempFileName))
-				resulr = new GotoInfo[] { engine.GenerateCode(info.Member, fileIndex, w) };
+      using (TextWriter w = new StringWriter())
+      {
+        resulr = new GotoInfo[] { engine.GenerateCode(info.Member, fileIndex, w) };
+        var newText = w.ToString();
+        var needSave = text == null || !string.Equals(newText, text, StringComparison.Ordinal);
+        if (needSave)
+        {
+          if (text != null)
+            File.SetAttributes(tempFileName, FileAttributes.Normal);
+          File.WriteAllText(tempFileName, newText, Encoding.UTF8);
+          File.SetAttributes(tempFileName, FileAttributes.ReadOnly | FileAttributes.Temporary);
+        }
+      }
 
-			// Made this file 'DeleteOnClose'.
-			//
-			////_temporaryFileRef = new FileStream(tempFileName, FileMode.Open,
-			////	FileAccess.Read, FileShare.ReadWrite, 4096, FileOptions.DeleteOnClose);
-
-			// Mark this file is not editable.
-			//
-			////File.SetAttributes(tempFileName, FileAttributes.ReadOnly | FileAttributes.Temporary);
-
-			// Now Visual studio can open this file.
-			//
 			return resulr;
 		}
 
