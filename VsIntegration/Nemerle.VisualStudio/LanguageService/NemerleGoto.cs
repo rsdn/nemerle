@@ -65,9 +65,10 @@ namespace Nemerle.VisualStudio.LanguageService
 			////if (_temporaryFileRef != null)
 			////	_temporaryFileRef.Close();
       GotoInfo[] resulr = new GotoInfo[0];
+			var fileIndex = Location.GetFileIndex(tempFileName);
 
 			using (TextWriter w = new StreamWriter(tempFileName))
-        resulr = new GotoInfo[] { engine.GenerateCode(type, info.MemberInfo, w) };
+				resulr = new GotoInfo[] { engine.GenerateCode(info.Member, fileIndex, w) };
 
 			// Made this file 'DeleteOnClose'.
 			//
@@ -76,11 +77,11 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			// Mark this file is not editable.
 			//
-			File.SetAttributes(tempFileName, FileAttributes.ReadOnly | FileAttributes.Temporary);
+			////File.SetAttributes(tempFileName, FileAttributes.ReadOnly | FileAttributes.Temporary);
 
 			// Now Visual studio can open this file.
 			//
-      return resulr;
+			return resulr;
 		}
 
     internal static GotoInfo[] LookupLocationsFromPdb(GotoInfo info, IVsSmartOpenScope vsSmartOpenScope)
