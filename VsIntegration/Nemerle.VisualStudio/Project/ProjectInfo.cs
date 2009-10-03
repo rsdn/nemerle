@@ -410,11 +410,14 @@ namespace Nemerle.VisualStudio.Project
 
     #region HighlightUsages
 
-    internal void HighlightUsages(StringOrInt filePathOrIndex, int line, int column, ISource source, bool isPermanent)
+    internal void HighlightUsages(string filePath, int line, int column, ISource source, bool isPermanent)
+    {
+      HighlightUsages(Location.GetFileIndex(filePath), line, column, source, isPermanent);
+    }
+
+    internal void HighlightUsages(int fileIndex, int line, int column, ISource source, bool isPermanent)
     {
       Debug.WriteLine(">>>> ##### HighlightUsages!");
-      if (filePathOrIndex.IsString)
-        ErrorHelper.ThrowIfPathNullOrEmpty(filePathOrIndex.StringValue, "filePath");
       var nsource = source as NemerleSource;
 
       if (nsource == null)
@@ -423,10 +426,7 @@ namespace Nemerle.VisualStudio.Project
       ScanLexer lexer = nsource.Scanner.GetNewLexer();
       if (lexer == null)
         return;
-      if (filePathOrIndex.IsString)
-        Project.HighlightUsages(lexer, filePathOrIndex.StringValue, line + 1, column + 1, isPermanent);
-      else
-        Project.HighlightUsages(lexer, filePathOrIndex.IntValue, line + 1, column + 1, isPermanent);
+      Project.HighlightUsages(lexer, fileIndex, line + 1, column + 1, isPermanent);
       nsource.Recolorize(1, source.LineCount);
       Debug.WriteLine("<<<< ##### HighlightUsages!");
     }
