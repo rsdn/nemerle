@@ -537,7 +537,7 @@ namespace Nemerle.VisualStudio.Project
 
     IEnumerable<string> IIdeProject.GetAssemblyReferences()
     {
-      ResetAssembleReferenceWatchers();
+      ResetAssembleReferenceWatchers(); //TODO: Этот метод нельзя вызывать из рабочего потока!!!
 
       foreach (ReferenceNode node in _assemblyReferences)
       {
