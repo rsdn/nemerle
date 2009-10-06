@@ -1,0 +1,320 @@
+﻿using System;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Parsetree.PExpr;
+using Nemerle.Compiler.Token;
+
+namespace LRPEGCC
+{
+  /// <summary>
+  /// Description of Parsing.
+  /// </summary>
+  module Parsing
+  {
+    public ParseRules(startRule : string, rules : PExpr) : Grammar
+    {
+      match (rules)
+      { // Match grammar { ... } RawToken macro (defined above)
+      | MacroCall(name, _ns, [SyntaxElement.RawToken(LooseGroup(BracesGroup(tokens, _)))]) => // Name * NamespaceTree.Node * list [SyntaxElement]
+        if (name.Id != "grammar")
+          ReportCriticalUnexpected(rules, "grammar { ... }")
+        else
+          Parsing.ParseEbnf(tokens, Grammar(startRule))
+        
+      | Sequence(rules) => Parsing.ParsePExpr(rules, Grammar(startRule))
+      | rule            => ReportCriticalUnexpected(rule, "grammar { ... } of { ... }")
+      }
+    }
+
+    public ParseEbnf(token : Token, grammar : Grammar) : Grammar
+    {
+      #region Grammar rules
+      // Rule            = RuleName Eq OrderedChoice
+      // OrderedChoice   = Sequence ( '/' Sequence)*
+      // Sequence        = PredicateRule+
+      // PredicateRule   = ('!' / '&')? CardinalityRule
+      // CardinalityRule = SimpleRule ('?' / '+' / '*')?
+      // SimpleRule      = RuleName / Range / Char / String / '(' OrderedChoice ')' / Empty
+      // RuleName        = Token.Identifier(name)
+      // Char            = Token.CharLiteral
+      // String          = Token.StringLiteral
+      // Range           = Token.SquareGroup(LooseGroup(CharLiteral, Operator(".."), CharLiteral))
+      // Eq              = Token.Operator("=")
+      // Empty           = Token.Identifier("Empty")
+      #endregion Grammar rules
+      #region Parse sequence helpers
+      
+      def parseZeroOrMeny(
+        tok            : Token,
+        parseDelemiter : Token -> Token,
+        parseParser    : Token -> Rule * Token
+      )
+        : list[Rule] * Token
+      {
+        def tok1 = match (tok)
+          {
+            | LooseGroup(child) => child
+            | _ => tok
+          };
+
+        def (seq, nextTok) = parseParser(tok1);
+        
+        def loop(tok, acc) : list[Rule] * Token
+        {
+          assert2(tok != null);
+          def nextTok1 = if (parseDelemiter == null) tok else parseDelemiter(tok);
+            
+          if (nextTok1 == null)
+            (acc, tok) // predicate not matched
+          else
+          {
+            def (seq, nextTok2) = parseParser(nextTok1);
+            if (seq == null)           (acc, nextTok2)
+            else if (nextTok2 == null) (seq :: acc, null)
+            else                       loop(nextTok2, seq :: acc)
+          }
+        }
+        
+        if (seq == null)
+          ([], tok)
+        else if (nextTok == null)
+          ([seq], nextTok)
+        else
+        {
+          def (res, nextTok) = loop(nextTok, [seq]);
+          (res.Rev(), nextTok)
+        }
+      }
+
+      def parseOneOrMeny(
+        tok : Token,
+        parseDelemiter : Token -> Token,
+        parseParser    : Token -> Rule * Token,
+        expected : string
+      ) : list[Rule] * Token
+      {
+        def result = parseZeroOrMeny(tok, parseDelemiter, parseParser);
+        
+        when (result[0].IsEmpty)
+          _ = ReportCriticalUnexpected(tok, expected);
+          
+        result
+      }
+      
+      #endregion Parse sequence helpers
+      #region Rules parsing
+      
+      // RuleName        = Token.Identifier(name)
+      def parseRuleName(tok : Token) : Rule * Token
+      {
+        | Operator(name) | Identifier(name) => (Rule.Call(name), tok.Next)
+        | _ => ReportCriticalUnexpected(tok, "name of rule")
+      }
+      // Range           = Token.SquareGroup(LooseGroup(CharLiteral, Operator(".."), CharLiteral))
+      and parseRange(tok : Token) : Rule * Token
+      {
+        | SquareGroup(entry) =>
+          def parseEntry(entry : Token, set : RangeSet) : RangeSet
+          {
+            match (entry)
+            {
+              | LooseGroup(CharLiteral
+                where (Next = Operator where (name = "..", Next = CharLiteral as ch2)) as ch1) =>
+                
+                def resSet = set.AddRange(ch1.value, ch2.value);
+                if (entry.Next == null) resSet
+                else                    parseEntry(entry.Next, resSet)
+                  
+              | CharLiteral(ch) => 
+                def resSet = set.AddRange(ch, ch);
+                if (entry.Next == null) resSet
+                else                    parseEntry(entry.Next, resSet)
+                
+              | _ => ReportCriticalUnexpected(entry, "startChar .. endChar or char")
+            }
+          }
+          
+          def set = parseEntry(entry, RangeSet());
+          (Rule.Chars([set]), tok.Next)
+          
+        | _ => ReportCriticalUnexpected(tok, "[ ... ]")
+      }
+      // SimpleRule      = RuleName / Range / '(' OrderedChoice ')' / Empty
+      and parseSimpleRule(tok : Token) : Rule * Token
+      {
+        | SquareGroup as group        => (parseRange(group)[0], group.Next)
+        | Identifier(_)               => parseRuleName(tok)
+        | RoundGroup as group         => (parseOrderedChoice(group.Child)[0], group.Next)
+        | StringLiteral(value = str)  => (Rule.Chars(str.Map(ch => RangeSet().AddRange(ch, ch))), tok.Next)
+        | CharLiteral(ch)             => (Rule.Chars([RangeSet().AddRange(ch, ch)]), tok.Next)
+        | null                        => (Rule.Sequence([]), null)
+        | _                           => (null, tok)
+      }
+      // CardinalityRule = SimpleRule ('?' / '+' / '*')?
+      and parseCardinalityRule(tok : Token) : Rule * Token
+      {
+        def (innerRule, nextTok2) = parseSimpleRule(tok);
+        
+        match (nextTok2)
+        {
+          | Operator("?") => (Rule.RepeatMinMax(0, 1, innerRule), nextTok2.Next)
+          | Operator("+") => (Rule.RepeatMin(1, innerRule),       nextTok2.Next)
+          | Operator("*") => (Rule.RepeatMin(0, innerRule),       nextTok2.Next)
+          | _             => (innerRule, nextTok2)
+        }
+      }
+      // PredicateRule   = ('!' / '&')? CardinalityRule
+      and parsePredicateRule(tok : Token) : Rule * Token
+      {
+        def (rule, nextTok1) =
+          match (tok)
+          {
+           | Operator("!") => (Rule.Not : Rule -> Rule, tok.Next)
+           | Operator("&") => (Rule.And : Rule -> Rule, tok.Next)
+           | _             => (null,     tok)
+          };
+          
+        def (innerRule, nextTok2) = parseCardinalityRule(nextTok1);
+        if (rule == null) (innerRule,       nextTok2)
+        else              (rule(innerRule), nextTok2)
+      }
+      // Sequence        = PredicateRule+
+      and parseSequence(tok : Token) : Rule * Token
+      {
+        def  (seqs, nextTok) = parseOneOrMeny(tok, null, parsePredicateRule, "PredicateRule");
+        (Rule.Sequence(seqs), nextTok)
+      }
+      // OrderedChoice   = Sequence ( '/' Sequence)*
+      and parseOrderedChoice(tok : Token) : Rule * Token
+      {
+        def parseSlash(tok : Token) : Token
+        {
+          | Operator("/") => 
+            if (tok.Next == null) ReportCriticalUnexpected(tok, "expexted rule")
+            else tok.Next
+            
+          | _             => null
+        }
+      
+        def  (seqs, nextTok) = parseOneOrMeny(tok, parseSlash, parseSequence, "sequence");
+        (Rule.Choice(seqs), nextTok)
+      }
+      // Rule            = RuleName Eq OrderedChoice
+      def parseRule(tok : Token) : string * Rule
+      {
+      | LooseGroup(Identifier 
+            where (name = _, Next = Operator  where (name = "=", Next = ruleBody)) as id) =>
+            
+        def (rule, nextTok) = parseOrderedChoice(ruleBody);
+        
+        when (nextTok != null)
+          _ = ReportUnexpected(nextTok, "EOF");
+        
+        (id.ToString(), rule)
+        
+      | _ => ReportCriticalUnexpected(token, "rule-name = rule-body;")
+      }
+      def parseGramar(grammar : Grammar, token : Token) : Grammar
+      {
+        def (name, rule) = parseRule(token);
+        
+        if (rule == null)
+          grammar
+        else if (token.Next == null)
+          grammar.Add(name, rule)
+        else
+          parseGramar(grammar.Add(name, rule), token.Next)
+      }
+      
+      #endregion Rules parsing
+      
+      parseGramar(grammar, token)
+    }
+
+    public ParsePExpr(rules : list[PExpr], grammar : Grammar) : Grammar
+    {
+      def toInt(expr : PExpr) : int
+      {
+      | <[ $(val : int) ]> => val
+      | _                  => ReportUnexpected(expr, "character literal", 0)
+      }
+      def toChar(expr : PExpr) : char
+      {
+      | <[ $(val : char) ]> => val;
+      | _                   => ReportUnexpected(expr, "character literal", '\0')
+      }
+      def transformRule(_ : PExpr) : Rule
+      {
+      | <[ And($rule) ]>                => Rule.And(transformRule(rule))
+      | <[ Not($rule) ]>                => Rule.Not(transformRule(rule))
+      | <[ $(str : string) ]>           => Rule.Chars(str.Map(ch => RangeSet().AddRange(ch, ch)))
+      | <[ $(ch  : char) ]>             => Rule.Chars([RangeSet().AddRange(ch, ch)])
+      | <[ Range($from, $to) ]>         => Rule.Chars([RangeSet().AddRange(toChar(from), toChar(to))])
+      | <[ OneOrMany($rule) ]>          => Rule.RepeatMin(1, transformRule(rule))
+      | <[ ZeroOrMany($rule) ]>         => Rule.RepeatMin(0, transformRule(rule))
+      | <[ AtLeast($from, $rule) ]>     => Rule.RepeatMin(toInt(from), transformRule(rule))
+      | <[ ZeroOrOne($rule) ]>          => Rule.RepeatMinMax(0, 1, transformRule(rule))
+      | <[ FromTo($from, $to, $rule) ]> => Rule.RepeatMinMax(toInt(from), toInt(to), transformRule(rule))
+      | <[ Seq(..$rules) ]>             => Rule.Sequence(rules.Map(transformRule))
+      | <[ Or(..$rules) ]>              => Rule.Choice(rules.Map(transformRule))
+      | <[ $name(..$rules) ]>           => Rule.Capture(name.ToString(), Rule.Sequence(rules.Map(transformRule)))
+      | Ref(name)                       => Rule.Call(name.Id)
+      | rule                            => ReportCriticalUnexpected(rule, "rule")
+      }
+      
+      def result = rules.Fold(grammar, fun(rule, grammar)
+      {
+        match (rule)
+        {
+        | <[ $name = $rule; ]> =>
+          grammar.Add(name.ToString(), transformRule(rule));
+        | rule => ReportCriticalUnexpected(rule, "def x = rule;")
+        }
+      });
+      
+      result
+    }
+
+    #region Error handling
+    
+    ReportCriticalUnexpected[T](token : Token, expected : string) : T
+    {
+      ReportUnexpected(token, expected);
+      throw ArgumentException()
+    }
+
+    ReportUnexpected(token : Token, expected : string) : void
+    {
+      Message.Error(token.Location, $"expected $expected but found $token ($(token.GetType().Name))");
+    }
+    
+    //ReportUnexpected[T](token : Token, expected : string, defaultVal : T) : T
+    //{
+    //  ReportUnexpected(token, expected);
+    //  defaultVal
+    //}
+
+    ReportUnexpected(expr : PExpr, expected : string) : void
+    {
+      Message.Error(expr.Location, $"expected $expected but found $expr ($(expr.GetType().Name))");
+    }
+
+    ReportUnexpected[T](expr : PExpr, expected : string, defaultVal : T) : T
+    {
+      ReportUnexpected(expr, expected);
+      defaultVal
+    }
+
+    ReportCriticalUnexpected[T](expr : PExpr, expected : string) : T
+    {
+      ReportUnexpected(expr, expected);
+      throw ArgumentException()
+    }
+    
+    #endregion
+  }
+}
