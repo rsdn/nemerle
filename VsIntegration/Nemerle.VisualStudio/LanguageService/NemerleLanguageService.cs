@@ -117,24 +117,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			return false;
 		}
 
-		// HiglightUsages finds usages of a token and highlights it.
-		// It needs a file index and a location of a cursor
-		private void HighlightUsages(ParseRequest request)
-		{
-			ProjectInfo projectInfo = GetProjectInfo(request);
-
-			if (projectInfo == null)
-				return;
-
-			if (Settings.Default.HighlightUsages)
-				if (!Settings.Default.HighlightUsagesUnlessTerminalSession || !NowIsTerminalSession())
-					projectInfo.HighlightUsages(request.FileName,
-												request.Line,
-												request.Col,
-												projectInfo.GetSource(request.FileName),
-												false);
-		}
-
+		
 		#endregion
     		
 		#region Utils

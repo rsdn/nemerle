@@ -383,13 +383,10 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (source != null)
 			{
 				TextSpan span = GetSelection();
-				if (source.ProjectInfo == null)
-					throw new ApplicationException("Source.ProjectInfo equals null.");
-				source.ProjectInfo.HighlightUsages(source.FileIndex,
-													 span.iStartLine,
-													 span.iStartIndex,
-													 source,
-													 true);
+        if (source.ProjectInfo == null)
+          return;
+
+        source.GetEngine().BeginHighlightUsages(source, span.iStartLine + 1, span.iStartIndex + 1);
 			}
 		}
 

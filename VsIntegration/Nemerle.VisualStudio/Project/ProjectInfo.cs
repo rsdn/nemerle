@@ -27,6 +27,7 @@ using IOleServiceProvider = Microsoft.VisualStudio.OLE.Interop.IServiceProvider;
 using Microsoft.VisualStudio.TextManager.Interop;
 using BndFlgs = System.Reflection.BindingFlags;
 using MethodBuilderEx = Nemerle.Completion2.Factories.IntelliSenseModeMethodBuilder;
+using Tuple = Nemerle.Builtins.Tuple<Nemerle.Compiler.Location, int>;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -410,34 +411,13 @@ namespace Nemerle.VisualStudio.Project
 
     #region HighlightUsages
 
-    internal void HighlightUsages(string filePath, int line, int column, ISource source, bool isPermanent)
-    {
-      HighlightUsages(Location.GetFileIndex(filePath), line, column, source, isPermanent);
-    }
-
-    internal void HighlightUsages(int fileIndex, int line, int column, ISource source, bool isPermanent)
-    {
-      Debug.WriteLine(">>>> ##### HighlightUsages!");
-      var nsource = source as NemerleSource;
-
-      if (nsource == null)
-        return;
-
-      ScanLexer lexer = nsource.Scanner.GetNewLexer();
-      if (lexer == null)
-        return;
-      Project.HighlightUsages(lexer, fileIndex, line + 1, column + 1, isPermanent);
-      nsource.Recolorize(1, source.LineCount);
-      Debug.WriteLine("<<<< ##### HighlightUsages!");
-    }
-
     internal void RemoveLastHighlighting(ISource source)
     {
       Debug.WriteLine(">>>> ##### RemoveLastHighlighting!");
       var nsource = source as NemerleSource;
       if (nsource == null)
         return;
-      ScanLexer lexer = nsource.Scanner.GetNewLexer();
+      ScanLexer lexer = nsource.Scanner.GetLexer();
       if (lexer == null)
         return;
       lexer.RemoveLastHighlighting();
@@ -565,6 +545,29 @@ namespace Nemerle.VisualStudio.Project
       LanguageService.SetStatusBarText(text);
       Debug.WriteLine(text);
     }
+
+    public void SetHighlights(ISource source, IEnumerable<GotoInfo> highlights)
+    {
+      var isPermanent = false;
+
+      var nsource = source as NemerleSource;
+
+      if (nsource == null)
+        return;
+
+      ScanLexer lexer = nsource.Scanner.GetLexer();
+
+      if (lexer == null)
+        return;
+
+      if(isPermanent)
+        lexer.AddHighlighting(highlights);
+      else
+        lexer.SetHoverHighlights(highlights);
+
+      nsource.Recolorize(1, source.LineCount);
+    }
+
 
     #region Implementation
 
