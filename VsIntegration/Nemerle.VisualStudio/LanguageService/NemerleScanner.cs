@@ -38,7 +38,9 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (engine.CoreEnv == null) // Engine not init yet. We mast BuildTypesTree for init it
 			{
 				engine.BeginBuildTypesTree(); // Building types tree
-				throw new System.Exception("engine.CoreEnv == null");
+				System.Threading.Thread.Sleep(1000);
+				if (engine.CoreEnv == null)
+					return null;
 			}
 
 			return new ScanLexer(engine);
