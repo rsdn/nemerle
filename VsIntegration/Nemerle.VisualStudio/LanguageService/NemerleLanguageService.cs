@@ -641,10 +641,10 @@ namespace Nemerle.VisualStudio.LanguageService
 
     public void GotoLocation(Location loc)
     {
-      GotoLocation(loc, null);
+      GotoLocation(loc, null, false);
     }
 		
-    public void GotoLocation(Location loc, string caption)
+    public void GotoLocation(Location loc, string caption, bool asReadonly)
 		{
 			TextSpan span = new TextSpan();
 
@@ -661,10 +661,18 @@ namespace Nemerle.VisualStudio.LanguageService
 			VsShell.OpenDocument(Site, loc.File, VSConstants.LOGVIEWID_Code, 
 				out hierarchy, out itemID, out docFrame, out textView);
 
-			ErrorHandler.ThrowOnFailure(docFrame.Show());
+			if (asReadonly)
+			{
+				IVsTextLines buffer;
+				ErrorHandler.ThrowOnFailure(textView.GetBuffer(out buffer));
+				IVsTextStream stream = (IVsTextStream)buffer;
+				stream.SetStateFlags((uint)BUFFERSTATEFLAGS.BSF_USER_READONLY);
+			}
 
       if (caption != null)
         ErrorHandler.ThrowOnFailure(docFrame.SetProperty((int)__VSFPROPID.VSFPROPID_OwnerCaption, caption));
+
+			ErrorHandler.ThrowOnFailure(docFrame.Show());
 
       if (textView != null && loc.Line != 0)
 			{

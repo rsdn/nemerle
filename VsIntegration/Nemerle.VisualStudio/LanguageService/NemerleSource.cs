@@ -291,14 +291,14 @@ namespace Nemerle.VisualStudio.LanguageService
       var langSrvc = (NemerleLanguageService)LanguageService;
 
 			if (infos.Length == 1)
-        langSrvc.GotoLocation(infos[0].Location, captiopn);
+				langSrvc.GotoLocation(infos[0].Location, captiopn, captiopn != null);
 			else if (infos.Length > 0)
 			{
 				var textEditorWnd = NativeWindow.FromHandle(view.GetWindowHandle());
 
 				using (GotoUsageForm popup = new GotoUsageForm(infos))
           if ((textEditorWnd == null ? popup.ShowDialog() : popup.ShowDialog(textEditorWnd)) == DialogResult.OK)
-            langSrvc.GotoLocation(popup.Result.Location, captiopn);
+						langSrvc.GotoLocation(popup.Result.Location, captiopn, captiopn != null);
 			}
 		}
 
