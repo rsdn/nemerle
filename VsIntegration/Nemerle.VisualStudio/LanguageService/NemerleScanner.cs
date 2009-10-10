@@ -37,8 +37,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			if (engine.CoreEnv == null) // Engine not init yet. We mast BuildTypesTree for init it
 			{
-				engine.BuildTypesTree(); // Building types tree
-				Trace.Assert(engine.CoreEnv != null);
+				engine.BeginBuildTypesTree(); // Building types tree
+				throw new System.Exception("engine.CoreEnv == null");
 			}
 
 			return new ScanLexer(engine);
@@ -64,9 +64,9 @@ namespace Nemerle.VisualStudio.LanguageService
 			_lastColor   = (TokenColor)info.Color;
 			_colorizeEnd = info.ColorizeEnd;
 
-			tokenInfo.Color	  = _lastColor;
-			tokenInfo.Type	   = (TokenType)	info.Type;
-			tokenInfo.Trigger	= (TokenTriggers)info.Triggers;
+			tokenInfo.Color	     = _lastColor;
+			tokenInfo.Type	     = (TokenType)	info.Type;
+			tokenInfo.Trigger	   = (TokenTriggers)info.Triggers;
 			tokenInfo.StartIndex = info.Token.Location.Column	- 1;
 			tokenInfo.EndIndex   = info.Token.Location.EndColumn - 2;
 
@@ -103,13 +103,12 @@ namespace Nemerle.VisualStudio.LanguageService
 							_envEndLine  = -1;
 						}
 
-						// kliss: somehow it works wrong way. I disable it for a while. Let's see what happens
-						//if (_currentLine < _envStartLine || _currentLine > _envEndLine)
+						if (project != null)
 						{
 							var ret = project.GetActiveEnv(_source.FileIndex, _currentLine + 1);
 
-							_env		  = ret.Field0;
-							_type		 = ret.Field1;
+							_env		      = ret.Field0;
+							_type		      = ret.Field1;
 							_envStartLine = ret.Field2 - 1;
 							_envEndLine   = ret.Field3 - 1;
 						}
