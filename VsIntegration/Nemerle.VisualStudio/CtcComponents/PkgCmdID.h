@@ -63,6 +63,8 @@ PURPOSE, MERCHANTABILITY, OR NON-INFRINGEMENT.
 
 #define cmdIdSourceOutlinerWindow	0x3113
 
+#define cmdIdIplementInterface	0x3114
+
 /////////////////////////////////////////////////////////////////////
 // Bitmaps
 //

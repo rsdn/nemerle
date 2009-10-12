@@ -13,6 +13,7 @@ using Nemerle.Compiler;
 using Nemerle.Completion2.CodeFormatting;
 using Nemerle.VisualStudio.Project;
 using Nemerle.VisualStudio.GUI;
+using TupleIntInt = Nemerle.Builtins.Tuple<int, int>;
 
 using VsCommands = Microsoft.VisualStudio.VSConstants.VSStd97CmdID;
 using VsCommands2K = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
@@ -20,6 +21,9 @@ using Microsoft.VisualStudio.Project.Automation;
 using Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio.Project;
 using Nemerle.Compiler.Utils.Async;
+using Microsoft.VisualStudio.Shell;
+using System.ComponentModel.Design;
+using System.Runtime.InteropServices;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
@@ -167,39 +171,50 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 		}
 
-		//// previous values of ScrollInfo
-		//int _iBar, _iMinUnit, _iMaxUnits, _iVisibleUnits, _iFirstVisibleUnit;
-		//IVsTextView _lastView;
+		Dictionary<IntPtr, TupleIntInt> _viewsCarretInfo = new Dictionary<IntPtr, TupleIntInt>();
 
 		public override void OnChangeScrollInfo(IVsTextView view, int iBar,
 			int iMinUnit, int iMaxUnits, int iVisibleUnits, int iFirstVisibleUnit)
 		{
 			base.OnChangeScrollInfo(view, iBar, iMinUnit, iMaxUnits, iVisibleUnits, iFirstVisibleUnit);
 
-      //if (Utilities.IsSameComObject(_lastView, view) && _iBar == iBar && _iMinUnit == iMinUnit && _iMaxUnits == iMaxUnits
-      //  && _iVisibleUnits == iVisibleUnits && _iFirstVisibleUnit == iFirstVisibleUnit)
-      //{
-      //  //SetOldScrollInfo(view, iBar, iMinUnit, iMaxUnits, iVisibleUnits, iFirstVisibleUnit);
-      //  return;
-      //}
+			var viewUnknown = Utilities.QueryInterfaceIUnknown(view);
+			if (viewUnknown != IntPtr.Zero)
+				Marshal.Release(viewUnknown);
 
-			Source.TryHighlightBraces(view);
-      //var service = Source.LanguageService as NemerleLanguageService;
-      //if (service != null)
-      //  service.SynchronizeDropdowns(view);
-
-      //SetOldScrollInfo(view, iBar, iMinUnit, iMaxUnits, iVisibleUnits, iFirstVisibleUnit);
+			TupleIntInt pos;
+			var posExists = _viewsCarretInfo.TryGetValue(viewUnknown, out pos);
+			int line, idx;
+			if (view.GetCaretPos(out line, out idx) == VSConstants.S_OK)
+			{
+				if (!posExists || pos.Field0 != line || pos.Field1 != idx)
+				{
+					// pos was changed
+					_viewsCarretInfo[viewUnknown] = new TupleIntInt(line, idx);
+					Source.CaretChanged(view, line, idx);
+					//Source.TryHighlightBraces1(view);
+					//Debug.WriteLine("pos was changed line=" + line + " col=" + idx);
+				}
+			}
 		}
 
-    //void SetOldScrollInfo(IVsTextView view, int iBar, int iMinUnit, int iMaxUnits, int iVisibleUnits, int iFirstVisibleUnit)
-    //{
-    //  _lastView = view;
-    //  _iBar = iBar;
-    //  _iMinUnit = iMinUnit;
-    //  _iMaxUnits = iMaxUnits;
-    //  _iVisibleUnits = iVisibleUnits;
-    //  _iFirstVisibleUnit = iFirstVisibleUnit;
-    //}
+		public override void ShowContextMenu(int menuId, Guid groupGuid, IOleCommandTarget target, int x, int y)
+		{
+			var service = Source.Service;
+			var menuService = (OleMenuCommandService)service.GetService(typeof(IMenuCommandService));
+			if (menuService == null || service.IsMacroRecordingOn())
+				return;
+
+			var id = new CommandID(groupGuid, menuId);
+			menuService.ShowContextMenu(id, x, y);
+
+			return;
+		}
+
+		public override void OnChangeCaretLine(IVsTextView view, int line, int col)
+		{
+			base.OnChangeCaretLine(view, line, col);
+		}
 
 		protected override int ExecCommand(ref Guid guidCmdGroup, uint nCmdId, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
 		{
@@ -211,6 +226,9 @@ namespace Nemerle.VisualStudio.LanguageService
 			string txt = null;
 			switch((MenuCmd.CmdId)nCmdId)
 			{
+				case MenuCmd.CmdId.IplementInterface:
+
+					break;
 				case MenuCmd.CmdId.SetAsMain: 
 					txt = "cmdidSetAsMain"; 
 					break;
@@ -616,11 +634,62 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		protected override int QueryCommandStatus(ref Guid guidCmdGroup, uint nCmdId)
 		{
-			if (guidCmdGroup == VSConstants.VSStd2K &&
-				nCmdId == (uint)VSConstants.VSStd2KCmdID.INSERTSNIPPET ||
-				nCmdId == (uint)VSConstants.VSStd2KCmdID.SURROUNDWITH)
+			if (guidCmdGroup == VSConstants.VSStd2K)
 			{
-				return (int)(OLECMDF.OLECMDF_SUPPORTED | OLECMDF.OLECMDF_ENABLED);
+				var cmdId = (VSConstants.VSStd2KCmdID)nCmdId;
+
+				if (cmdId == VSConstants.VSStd2KCmdID.INSERTSNIPPET
+				 || cmdId == VSConstants.VSStd2KCmdID.SURROUNDWITH)
+				{
+					return (int)(OLECMDF.OLECMDF_SUPPORTED | OLECMDF.OLECMDF_ENABLED);
+				}
+			}
+
+			if (guidCmdGroup == Microsoft.VisualStudio.Shell.VsMenus.guidStandardCommandSet97)
+			{
+				//object objCaption;
+				//GetProperty(itemid, (int)__VSHPROPID.VSHPROPID_Caption, out objCaption);
+
+				//if (objCaption.ToString().Equals("MyItems", StringComparison.CurrentCultureIgnoreCase))
+				//{
+				//  // make Properties command invisible.
+				//  prgCmds[0].cmdf = (uint)OLECMDF.OLECMDF_SUPPORTED | (uint)OLECMDF.OLECMDF_INVISIBLE;
+				//  return VSConstants.S_OK;
+				//}
+				//return (int)OLECMDF.OLECMDF_SUPPORTED | (int)OLECMDF.OLECMDF_INVISIBLE; //OLECMDF_SUPPORTED OLECMDF_ENABLED
+			}
+
+			//return (int)OLECMDF.OLECMDF_SUPPORTED | (int)OLECMDF.OLECMDF_INVISIBLE; //OLECMDF_SUPPORTED OLECMDF_ENABLED
+
+			if (guidCmdGroup == MenuCmd.guidNemerleProjectCmdSet)
+			{
+				MenuCmd.CmdId x = (MenuCmd.CmdId)nCmdId;
+				switch (x)
+				{
+					case MenuCmd.CmdId.ESC:
+					case MenuCmd.CmdId.SetAsMain:
+					case MenuCmd.CmdId.ExtendSelection:
+					case MenuCmd.CmdId.ShrinkSelection:
+					case MenuCmd.CmdId.FindInheritors:
+					case MenuCmd.CmdId.Rename:
+					case MenuCmd.CmdId.Inline:
+					case MenuCmd.CmdId.Options:
+					case MenuCmd.CmdId.AstToolWindow:
+					case MenuCmd.CmdId.AddHighlighting:
+					case MenuCmd.CmdId.RemoveLastHighlighting:
+					case MenuCmd.CmdId.FindInheritorsCtxt:
+					case MenuCmd.CmdId.GoToFile:
+					case MenuCmd.CmdId.GoToType:
+					case MenuCmd.CmdId.SourceOutlinerWindow:
+						break;
+					case MenuCmd.CmdId.IplementInterface:
+
+						return (int)OLECMDF.OLECMDF_SUPPORTED | (int)OLECMDF.OLECMDF_ENABLED; //OLECMDF_SUPPORTED OLECMDF_ENABLED
+
+					default:
+
+						break;
+				}
 			}
 
 			return base.QueryCommandStatus(ref guidCmdGroup, nCmdId);

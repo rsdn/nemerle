@@ -36,7 +36,9 @@ namespace Nemerle.VisualStudio.Project
 			GoToFile = 0x3111,
 			GoToType = 0x3112,
 
-			SourceOutlinerWindow = 0x3113
+			SourceOutlinerWindow = 0x3113,
+
+			IplementInterface = 0x3114
 		};
 
 		static CommandID MakeCmd(CmdId id) { return new CommandID(guidNemerleProjectCmdSet, (int)id); }

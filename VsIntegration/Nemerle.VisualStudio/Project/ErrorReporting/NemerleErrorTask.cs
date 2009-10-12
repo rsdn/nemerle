@@ -151,9 +151,10 @@ namespace Nemerle.VisualStudio.Package
 			if (commandFlags != null && commandFlags.Length > 0)
 				commandFlags[0] = 0;
 			if (text != null && text.Length > 0)
-				text[0] = null;
+				text[0] = "aaaa";
 
 			return VSConstants.E_NOTIMPL;
+			//return VSConstants.S_OK;
 		}
 
 		int IVsTextMarkerClient.GetTipText(IVsTextMarker pMarker, string[] tipText)

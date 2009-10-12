@@ -31,8 +31,6 @@ using Nemerle.Compiler.Parsetree;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
-	public delegate AuthoringScope ScopeCreatorCallback(ParseRequest request);
-
 	public class NemerleSource : Source, ISource
 	{
 		#region Init
@@ -66,7 +64,6 @@ namespace Nemerle.VisualStudio.LanguageService
 		public new DateTime                LastParseTime { get; private set; }
 		public     NemerleLanguageService  Service       { get; private set; }
 		public     NemerleScanner          Scanner       { get; private set; }
-		public     ScopeCreatorCallback    ScopeCreator  { get;         set; }
 		public     ProjectInfo             ProjectInfo   { get; private set; }
 		public     MethodData              MethodData    { get; private set; }
 		public     int                     TimeStamp     { get; private set; }
@@ -1162,6 +1159,33 @@ namespace Nemerle.VisualStudio.LanguageService
 			return new TextSpan[0];
 		}
 
+		NemerleTextMarkerClient marker;
+
+		private void TryAddTextMarkers(IVsTextView textView, int line, int col)
+		{
+			var compileUnit = CompileUnit;
+
+			if (compileUnit != null)
+			{
+				var member = compileUnit.FindMember(line, col);
+				if (member.IsSome && member.Value.NameLocation.Contains(line, col))
+				{
+					if (marker != null)
+						marker.Dispose();
+
+					marker = new NemerleTextMarkerClient(GetTextLines(), member.Value.NameLocation);
+					Debug.WriteLine(member.Value.NameLocation.ToVsOutputStringFormat()
+						+ " Caret over class name (" + member.Value.Name + ")");
+				}
+			}
+		}
+
+		public void CaretChanged(IVsTextView textView, int lineIdx, int colIdx)
+		{
+			TryHighlightBraces1(textView);
+			TryAddTextMarkers(textView, lineIdx + 1, colIdx + 1);
+		}
+
 		private bool TryHighlightBraces(IVsTextView textView, VsCommands2K command, int line, int idx,
 										TokenInfo tokenInfo)
 		{
@@ -1187,11 +1211,12 @@ namespace Nemerle.VisualStudio.LanguageService
 			TryHighlightBraces(textView, command, line, idx, tokenBeforeCaret);
 		}
 
+
     int _oldLine = -1;
     int _oldIdx  = -1;
     IVsTextView _oldTextView;
 
-		public void TryHighlightBraces(IVsTextView textView)
+		public void TryHighlightBraces1(IVsTextView textView)
 		{
 			if (_processingOfHiddenRegions)
 				return;
@@ -1264,7 +1289,7 @@ namespace Nemerle.VisualStudio.LanguageService
       _oldLine = -1; // we should reset it. otherwise the TryHighlightBraces don't highlight braces
       _oldIdx = -1;
 
-      TryHighlightBraces(view);
+      TryHighlightBraces1(view);
     }
 
 		public Engine GetEngine()
@@ -1511,7 +1536,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		public void SetTopDeclarations(TopDeclaration[] topDeclarations)
 		{
 			Declarations = topDeclarations;
-      TryHighlightBraces(GetView());
+      TryHighlightBraces1(GetView());
 		}
 
     //public RelocationRequest[] GetRelocationRequests()
