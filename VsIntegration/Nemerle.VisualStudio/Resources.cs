@@ -82,6 +82,8 @@ namespace Nemerle.VisualStudio
 		internal const string DefaultNamespaceDescription       = "DefaultNamespaceDescription";
 		internal const string DefineConstants                   = "DefineConstants";
 		internal const string DefineConstantsDescription        = "DefineConstantsDescription";
+		internal const string DecumentationFile                 = "DecumentationFile";
+		internal const string DecumentationFileDescription      = "DecumentationFileDescription";
 		internal const string GeneralCaption                    = "GeneralCaption";
 		internal const string OutputFile                        = "OutputFile";
 		internal const string OutputFileDescription             = "OutputFileDescription";

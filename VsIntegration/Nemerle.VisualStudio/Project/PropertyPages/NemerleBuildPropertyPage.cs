@@ -11,6 +11,7 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 	{
 		public const string DefineConstants = "DefineConstants";
 		public const string OutputPath = "OutputPath";
+		public const string DocumentationFile = "DocumentationFile";
 	}
 
 	[ComVisible(true)]
@@ -21,7 +22,7 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 
 		public NemerleBuildPropertyPage()
 		{
-			Name = SR.BuildCaption;
+			Name = Resources.BuildCaption;
 		}
 		
 		#endregion
@@ -30,7 +31,8 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 
 		private string defineConstants;
 		private string outputPath;
-		
+		private string docFile;
+
 		#endregion
 
 		#region properties
@@ -44,14 +46,27 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 			set { defineConstants = value; IsDirty = true; }
 		}
 
+		[SRCategoryAttribute(SR.BuildCaption)]
+		[SRDisplayName(SR.DecumentationFile)]
+		[SRDescriptionAttribute(SR.DecumentationFileDescription)]
+		public string DecumentationFile
+		{
+			get { return docFile; }
+			set
+			{
+				docFile = string.IsNullOrEmpty(value)? null: value;
+				IsDirty = true;
+			}
+		}
+
 		[RefreshProperties(RefreshProperties.All)]
 		[SRCategoryAttribute(SR.BuildCaption)]
 		[LocDisplayName(MSSR.OutputPath)]
 		[SRDescriptionAttribute(MSSR.OutputPathDescription)]
 		public string OutputPath
 		{
-			get { return this.outputPath; }
-			set { this.outputPath = value; this.IsDirty = true; }
+			get { return outputPath; }
+			set { outputPath = value; IsDirty = true; }
 		}
 
 		[SRCategoryAttribute(SR.BuildCaption)]
@@ -71,25 +86,27 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 			if (ProjectMgr != null)
 			{
 				defineConstants = GetPropertyValue(Consts.DefineConstants);
-				outputPath = GetPropertyValue(Consts.OutputPath);
+				outputPath      = GetPropertyValue(Consts.OutputPath);
+				docFile         = GetPropertyValue(Consts.DocumentationFile);
 			}
 		}
 
 		protected override int ApplyChanges()
 		{
-			if (this.ProjectMgr == null)
+			if (ProjectMgr == null)
 			{
-				Debug.Assert(false);
+				Debug.Fail("No project manager?!");
 				return VSConstants.E_INVALIDARG;
 			}
 
-      var projNode = (NemerleProjectNode)this.ProjectMgr;
+			var projNode = (NemerleProjectNode)ProjectMgr;
 
 			SetConfigProperty(Consts.DefineConstants, defineConstants);
 			SetConfigProperty(Consts.OutputPath, outputPath);
+			SetPropertyValue (Consts.DocumentationFile, docFile);
 			IsDirty = false;
 
-      projNode.ProjectInfo.Engine.BeginReloadProject();
+			projNode.ProjectInfo.Engine.BeginReloadProject();
 
 			return VSConstants.S_OK;
 		}
