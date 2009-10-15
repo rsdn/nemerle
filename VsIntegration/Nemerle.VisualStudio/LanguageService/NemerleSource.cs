@@ -1159,7 +1159,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			return new TextSpan[0];
 		}
 
-		NemerleTextMarkerClient marker;
+		//NemerleTextMarkerClient marker;
 
 		private void TryAddTextMarkers(IVsTextView textView, int line, int col)
 		{
@@ -1170,10 +1170,10 @@ namespace Nemerle.VisualStudio.LanguageService
 				var member = compileUnit.FindMember(line, col);
 				if (member.IsSome && member.Value.NameLocation.Contains(line, col))
 				{
-					if (marker != null)
-						marker.Dispose();
+          //if (marker != null)
+          //  marker.Dispose();
 
-					marker = new NemerleTextMarkerClient(GetTextLines(), member.Value.NameLocation);
+          //marker = new NemerleTextMarkerClient(GetTextLines(), member.Value.NameLocation);
 					Debug.WriteLine(member.Value.NameLocation.ToVsOutputStringFormat()
 						+ " Caret over class name (" + member.Value.Name + ")");
 				}
