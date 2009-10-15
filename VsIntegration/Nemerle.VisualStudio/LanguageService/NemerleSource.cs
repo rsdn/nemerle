@@ -1159,37 +1159,40 @@ namespace Nemerle.VisualStudio.LanguageService
 			return new TextSpan[0];
 		}
 
-		//NemerleTextMarkerClient marker;
+		NemerleTextMarkerClient marker;
 
 		private void TryAddTextMarkers(IVsTextView textView, int line, int col)
 		{
       var smartTegShowed = false;
 			var compileUnit = CompileUnit;
 
-			if (compileUnit != null)
+      if (marker != null)
+        marker.Dispose();
+
+      if (compileUnit != null)
 			{
 				var member = compileUnit.FindMember(line, col);
 
 				if (member.IsSome && member.Value.NameLocation.Contains(line, col))
 				{
-          var smartTagWin = Service.GetSmartTagTipWindow();
-          //var hr3 = _smartTagWin.Dismiss();
-          //Debug.Assert(hr3 == VSConstants.S_OK, "_smartTagWin.Dismiss()");
-          var hr2 = smartTagWin.SetSmartTagData(new NemerleSmartTagData(this, member.Value.NameLocation));
-          Debug.Assert(hr2 == VSConstants.S_OK, "_smartTagWin.SetSmartTagData(...)");
 
-          var viewEx = (IVsTextViewEx)textView;
-          var hr4 = viewEx.UpdateSmartTagWindow(smartTagWin, 0);
-          Debug.Assert(hr4 == VSConstants.S_OK, "viewEx.UpdateSmartTagWindow(smartTagWin, 0)");
-          if (hr4 == VSConstants.S_OK)
-            smartTegShowed = true;
+          marker = new NemerleTextMarkerClient(GetTextLines(), member.Value.NameLocation);
 
-          //if (marker != null)
-          //  marker.Dispose();
+          //var smartTagWin = Service.GetSmartTagTipWindow();
+          ////var hr3 = _smartTagWin.Dismiss();
+          ////Debug.Assert(hr3 == VSConstants.S_OK, "_smartTagWin.Dismiss()");
+          //var hr2 = smartTagWin.SetSmartTagData(new NemerleSmartTagData(this, member.Value.NameLocation));
+          //Debug.Assert(hr2 == VSConstants.S_OK, "_smartTagWin.SetSmartTagData(...)");
 
-          //marker = new NemerleTextMarkerClient(GetTextLines(), member.Value.NameLocation);
-					Debug.WriteLine(member.Value.NameLocation.ToVsOutputStringFormat()
-						+ " Caret over class name (" + member.Value.Name + ")");
+          //var viewEx = (IVsTextViewEx)textView;
+          //var hr4 = viewEx.UpdateSmartTagWindow(smartTagWin, 0);
+          //Debug.Assert(hr4 == VSConstants.S_OK, "viewEx.UpdateSmartTagWindow(smartTagWin, 0)");
+          //if (hr4 == VSConstants.S_OK)
+          //  smartTegShowed = true;
+
+
+					//Debug.WriteLine(member.Value.NameLocation.ToVsOutputStringFormat()
+					//	+ " Caret over class name (" + member.Value.Name + ")");
 				}
 			}
 

@@ -11,10 +11,22 @@ namespace Nemerle.VisualStudio.LanguageService
 {
 	class NemerleTextMarkerClient : IVsTextMarkerClient, IDisposable
 	{
+    static int markerType = 0;
+
 		public NemerleTextMarkerClient(IVsTextLines buffer, Location loc)
 		{
 			var markerRef = new IVsTextLineMarker[1];
-			var iMarkerType = (int)MARKERTYPE.MARKER_BOOKMARK;
+      if (markerType > (int)MARKERTYPE2.DEF_MARKER_COUNT_NEW)
+        markerType = 0;
+
+      if (markerType > (int)MARKERTYPE.DEF_MARKER_COUNT)
+        Debug.WriteLine("MARKERTYPE2: " + Enum.Format(typeof(MARKERTYPE2), markerType, "F"));
+      else
+        Debug.WriteLine("MARKERTYPE: " + Enum.Format(typeof(MARKERTYPE), markerType, "F"));
+
+      var iMarkerType = markerType; // (int)MARKERTYPE2.MARKER_TRACK_NONSAVE;
+      markerType++;
+      
 			var hr = buffer.CreateLineMarker(iMarkerType, loc.Line - 1, loc.Column - 1, 
 				         loc.EndLine - 1, loc.EndColumn - 1, this, markerRef);
 
@@ -26,7 +38,8 @@ namespace Nemerle.VisualStudio.LanguageService
 				string[] ss = new string[1];
 				uint i;
 				TextLineMarker.GetVisualStyle(out i);
-				TextLineMarker.SetVisualStyle((uint)MARKERVISUAL.MV_SEL_MARGIN_GLYPH);
+				//TextLineMarker.SetVisualStyle((uint)MARKERVISUAL.MV_SEL_MARGIN_GLYPH);
+        Debug.Assert(true);
 			}
 		}
 
@@ -74,12 +87,16 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			if (TextLineMarker != null)
 			{
+        TextLineMarker.Invalidate();
 				TextLineMarker.UnadviseClient();
 				TextLineMarker = null;
 			}
 		}
 
-		void IVsTextMarkerClient.MarkerInvalidated() { DisposeTextLineMarker(); }
+		void IVsTextMarkerClient.MarkerInvalidated()
+    {
+      //DisposeTextLineMarker();
+    }
 
 		int IVsTextMarkerClient.OnAfterMarkerChange(IVsTextMarker pMarker)
 		{
