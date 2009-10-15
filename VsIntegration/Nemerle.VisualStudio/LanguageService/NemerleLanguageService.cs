@@ -40,13 +40,18 @@ namespace Nemerle.VisualStudio.LanguageService
 		public static Engine DefaultEngine { get; private set; }
 		public bool IsDisposed { get; private set; }
 		IVsStatusbar _statusbar;
+    readonly NemerlePackage _package;
+    IVsSmartTagTipWindow _smartTagWin;
 		
 		#endregion
 		
 		#region Init
 		
-		public NemerleLanguageService()
+		public NemerleLanguageService(NemerlePackage package)
 		{
+      Debug.Assert(package != null, "package != null");
+      _package = package;
+
 			if (System.Threading.Thread.CurrentThread.Name == null)
 				System.Threading.Thread.CurrentThread.Name = "UI Thread";
 
@@ -90,6 +95,26 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#endregion
 
+    #region MyRegion
+
+    public IVsSmartTagTipWindow GetSmartTagTipWindow()
+    {
+      NemerlePackage pkg = _package;
+
+      if (_smartTagWin == null)
+      {
+        Type typeSTagWin = typeof(VsSmartTagTipWindowClass);
+        Guid clsidSTagWin = typeSTagWin.GUID;
+        Guid iidSTagWin = typeof(IVsSmartTagTipWindow).GUID;
+        _smartTagWin = pkg.CreateInstance(ref clsidSTagWin, ref iidSTagWin, typeSTagWin) as IVsSmartTagTipWindow;
+        Debug.Assert(_smartTagWin != null);
+      }
+
+      return _smartTagWin;
+    }
+
+    #endregion
+
 		#region Misc
 
 		public bool IsDefaultEngine(Engine engine)
@@ -101,41 +126,11 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region ParseSource
 
-		#region ParseSource()
-
 		public override AuthoringScope ParseSource(ParseRequest request)
 		{
 			return null; // At now we not use Microsoft implementation of parse thread!
 		}
- 
-		#endregion
     	
-		#region Highlight
-
-		private bool NowIsTerminalSession()
-		{
-			return false;
-		}
-
-		
-		#endregion
-    		
-		#region Utils
-
-		private AuthoringScope GetDefaultScope(ParseRequest request)
-		{
-      Trace.Assert(false, "We don't using MS infrastructure of background parsing now. This code should not be called!");
-      //throw new NotImplementedException("This should not be heppen!");
-			return null;
-		}
-
-		private ProjectInfo GetProjectInfo(ParseRequest request)
-		{
-      return ProjectInfo.FindProject(request.FileName);
-		}
-
-		#endregion
-
 		#endregion
 
 		#region Colorizing
@@ -279,8 +274,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private int classNameCounter = 0;
 
-		public override ExpansionFunction CreateExpansionFunction(
-			ExpansionProvider provider, string functionName)
+		public override ExpansionFunction CreateExpansionFunction(ExpansionProvider provider, string functionName)
 		{
 			ExpansionFunction function = null;
 
@@ -451,10 +445,6 @@ namespace Nemerle.VisualStudio.LanguageService
 				// TODO: Find out how to enable "Smart" radio option in 
 				// Tools->Options->Text editor->Nemerle->Tabs
 				//_preferences.IndentStyle = IndentingStyle.Smart;
-
-				//VladD2: Switch on synchronous mode for debugging purpose!
-				//TODO: Comment it if necessary.
-				//_preferences.EnableAsyncCompletion = false;
 			}
 
 			return _preferences;

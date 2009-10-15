@@ -182,7 +182,7 @@ namespace Nemerle.VisualStudio
 		{
 			if (serviceType == typeof(NemerleLanguageService))
 			{
-				NemerleLanguageService language = new NemerleLanguageService();
+				NemerleLanguageService language = new NemerleLanguageService(this);
 
 				language.SetSite(this);
 				RegisterForIdleTime();

@@ -1163,13 +1163,27 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private void TryAddTextMarkers(IVsTextView textView, int line, int col)
 		{
+      var smartTegShowed = false;
 			var compileUnit = CompileUnit;
 
 			if (compileUnit != null)
 			{
 				var member = compileUnit.FindMember(line, col);
+
 				if (member.IsSome && member.Value.NameLocation.Contains(line, col))
 				{
+          var smartTagWin = Service.GetSmartTagTipWindow();
+          //var hr3 = _smartTagWin.Dismiss();
+          //Debug.Assert(hr3 == VSConstants.S_OK, "_smartTagWin.Dismiss()");
+          var hr2 = smartTagWin.SetSmartTagData(new NemerleSmartTagData(this, member.Value.NameLocation));
+          Debug.Assert(hr2 == VSConstants.S_OK, "_smartTagWin.SetSmartTagData(...)");
+
+          var viewEx = (IVsTextViewEx)textView;
+          var hr4 = viewEx.UpdateSmartTagWindow(smartTagWin, 0);
+          Debug.Assert(hr4 == VSConstants.S_OK, "viewEx.UpdateSmartTagWindow(smartTagWin, 0)");
+          if (hr4 == VSConstants.S_OK)
+            smartTegShowed = true;
+
           //if (marker != null)
           //  marker.Dispose();
 
@@ -1178,6 +1192,13 @@ namespace Nemerle.VisualStudio.LanguageService
 						+ " Caret over class name (" + member.Value.Name + ")");
 				}
 			}
+
+      if (!smartTegShowed)
+      {
+        var smartTagWin = Service.GetSmartTagTipWindow();
+        var viewEx = (IVsTextViewEx)textView;
+        var hr4 = viewEx.UpdateSmartTagWindow(smartTagWin, (uint)TipWindowFlags.UTW_DISMISS);
+      }
 		}
 
 		public void CaretChanged(IVsTextView textView, int lineIdx, int colIdx)
@@ -1446,20 +1467,6 @@ namespace Nemerle.VisualStudio.LanguageService
 			return GetRegion(loc.Line, loc.Column, loc.EndLine, loc.EndColumn);
 		}
 
-		public new int GetPositionOfLineIndex(int line, int col)
-		{
-			return base.GetPositionOfLineIndex(line - 1, col - 1);
-		}
-
-		public TupleIntInt GetLineIndexOfPosition(int pos)
-		{
-			int line, col;
-
-			base.GetLineIndexOfPosition(pos, out line, out col);
-
-			return new TupleIntInt(line + 1, col + 1);
-		}
-
 		public int LineCount
 		{
 			get
@@ -1548,7 +1555,21 @@ namespace Nemerle.VisualStudio.LanguageService
       get { return _relocationRequestsQueue; }
     }
 
-		#endregion
+    public new int GetPositionOfLineIndex(int line, int col)
+    {
+      return base.GetPositionOfLineIndex(line - 1, col - 1);
+    }
+
+    public TupleIntInt GetLineIndexOfPosition(int pos)
+    {
+      int line, col;
+
+      base.GetLineIndexOfPosition(pos, out line, out col);
+
+      return new TupleIntInt(line + 1, col + 1);
+    }
+
+    #endregion
 
     #region TipText
 
