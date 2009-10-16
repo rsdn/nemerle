@@ -24,6 +24,7 @@ using Nemerle.Compiler.Utils.Async;
 using Microsoft.VisualStudio.Shell;
 using System.ComponentModel.Design;
 using System.Runtime.InteropServices;
+using Nemerle.VisualStudio;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
@@ -54,8 +55,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			Source.Goto(TextView, gotoDefinition, line, col);
 		}
-
-
+		
     #region GetDataTipText
 
     public override int GetDataTipText(TextSpan[] aspan, out string textValue)
@@ -218,6 +218,13 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		protected override int ExecCommand(ref Guid guidCmdGroup, uint nCmdId, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
 		{
+			const uint ShowSmartTag = 147;
+			if (guidCmdGroup == VSConstants.VSStd2K && nCmdId == ShowSmartTag)
+			{
+				Source.TryShowTypeNameSmartTag(TextView);
+				return VSConstants.S_OK;
+			}
+
 			// hi_octane : found a lot of mistakes comparing the switch
 			// ids with PkgCmdID.h and NemerleMenus.cs
 			// decided modify the code

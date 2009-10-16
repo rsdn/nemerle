@@ -11,24 +11,17 @@ namespace Nemerle.VisualStudio.LanguageService
 {
 	class NemerleTextMarkerClient : IVsTextMarkerClient, IDisposable
 	{
-    static int markerType = 0;
+		public IVsTextLineMarker TextLineMarker { get; internal set; }
+		public Location Location { get; private set; }
 
 		public NemerleTextMarkerClient(IVsTextLines buffer, Location loc)
 		{
+			Location = loc;
+
 			var markerRef = new IVsTextLineMarker[1];
-      if (markerType > (int)MARKERTYPE2.DEF_MARKER_COUNT_NEW)
-        markerType = 0;
 
-      if (markerType > (int)MARKERTYPE.DEF_MARKER_COUNT)
-        Debug.WriteLine("MARKERTYPE2: " + Enum.Format(typeof(MARKERTYPE2), markerType, "F"));
-      else
-        Debug.WriteLine("MARKERTYPE: " + Enum.Format(typeof(MARKERTYPE), markerType, "F"));
-
-      var iMarkerType = markerType; // (int)MARKERTYPE2.MARKER_TRACK_NONSAVE;
-      markerType++;
-      
-			var hr = buffer.CreateLineMarker(iMarkerType, loc.Line - 1, loc.Column - 1, 
-				         loc.EndLine - 1, loc.EndColumn - 1, this, markerRef);
+			var hr = buffer.CreateLineMarker((int)MARKERTYPE2.MARKER_SMARTTAG_FACTOID, 
+				loc.Line - 1, loc.Column - 1, loc.EndLine - 1, loc.EndColumn - 1, this, markerRef);
 
 			Debug.Assert(hr == 0);
 
@@ -42,8 +35,6 @@ namespace Nemerle.VisualStudio.LanguageService
         Debug.Assert(true);
 			}
 		}
-
-		public IVsTextLineMarker TextLineMarker { get; internal set; }
 
 		#region IDisposable Members
 

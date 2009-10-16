@@ -16,11 +16,19 @@ using System.Text;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.Win32;
 using System.Diagnostics;
+using Microsoft.VisualStudio;
 
 namespace Nemerle.VisualStudio
 {
 	static class Utils
 	{
+		public static TextPoint GetCaretTextPoint(this IVsTextView textView)
+		{
+			int line, idx;
+			ErrorHandler.ThrowOnFailure(textView.GetCaretPos(out line, out idx));
+			return new TextPoint(line + 1, idx + 1);
+		}
+
 		public static string GetTypeGuidAsString(HierarchyNode node)
 		{
 			Guid guid;
