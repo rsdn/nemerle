@@ -1161,8 +1161,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public void TryShowTypeNameSmartTag(IVsTextView textView)
 		{
-			var pt = textView.GetCaretTextPoint();
-			if (_typeNameMarker == null || !_typeNameMarker.Location.Contains(pt.Line, pt.Column))
+			if (_typeNameMarker == null)
 				return;
 
 			var smartTagWin = Service.GetSmartTagTipWindow();
@@ -1183,7 +1182,10 @@ namespace Nemerle.VisualStudio.LanguageService
 			var compileUnit = CompileUnit;
 
 			if (_typeNameMarker != null)
+			{
 				_typeNameMarker.Dispose();
+				_typeNameMarker = null;
+			}
 
       if (compileUnit != null)
 			{
@@ -1191,13 +1193,13 @@ namespace Nemerle.VisualStudio.LanguageService
 
 				if (member.IsSome && member.Value.NameLocation.Contains(line, col))
 				{
-
 					_typeNameMarker = new NemerleTextMarkerClient(GetTextLines(), member.Value.NameLocation);
 
 					//Debug.WriteLine(member.Value.NameLocation.ToVsOutputStringFormat()
 					//	+ " Caret over class name (" + member.Value.Name + ")");
 				}
 			}
+
 
       var smartTagWin = Service.GetSmartTagTipWindow();
       var viewEx = (IVsTextViewEx)textView;
@@ -1655,7 +1657,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
       if (_tipAsyncRequest == null || _tipAsyncRequest.Line != loc.Line || _tipAsyncRequest.Column != loc.Column)
       {
-				TryShowTypeNameSmartTag(view);
+				if (_typeNameMarker != null && _typeNameMarker.Location.Contains(loc.Line, loc.Column))
+					TryShowTypeNameSmartTag(view);
 				_tipAsyncRequest = GetEngine().BeginGetQuickTipInfo(this, loc.Line, loc.Column);
         return VSConstants.E_PENDING;
       }
