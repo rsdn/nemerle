@@ -1169,7 +1169,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (_typeNameMarker == null)
 				return;
 
-			var loc = _typeNameMarker.Location;
+      var loc = _typeNameMarker.Location;
 			Service.ShowSmartTag(textView, showMenu, loc,
 				MenuCmd.CmdId.SmartTagContextMenu, cmdId =>
 				{

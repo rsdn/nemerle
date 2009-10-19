@@ -33,7 +33,7 @@ namespace Nemerle.VisualStudio.LanguageService
 	/// This is the base class for a language service that supplies language features including syntax highlighting, brace matching, auto-completion, IntelliSense support, and code snippet expansion.
 	///</summary>
 	[Guid(NemerleConstants.LanguageServiceGuidString)]
-	public class NemerleLanguageService : Microsoft.VisualStudio.Package.LanguageService
+  public class NemerleLanguageService : Microsoft.VisualStudio.Package.LanguageService, IVsTipWindow
 	{
 		#region Fields
 
@@ -734,5 +734,34 @@ namespace Nemerle.VisualStudio.LanguageService
 		}
  
 		#endregion
-	}
+
+    #region IVsTipWindow Members
+
+    void IVsTipWindow.Dismiss()
+    {
+      throw new NotImplementedException();
+    }
+
+    int IVsTipWindow.GetContextStream(out int piPos, out int piLength)
+    {
+      throw new NotImplementedException();
+    }
+
+    int IVsTipWindow.GetSizePreferences(Microsoft.VisualStudio.OLE.Interop.RECT[] prcCtxBounds, TIPSIZEDATA[] pSizeData)
+    {
+      throw new NotImplementedException();
+    }
+
+    int IVsTipWindow.Paint(IntPtr hdc, Microsoft.VisualStudio.OLE.Interop.RECT[] prc)
+    {
+      throw new NotImplementedException();
+    }
+
+    int IVsTipWindow.WndProc(IntPtr hwnd, uint iMsg, IntPtr wParam, IntPtr lParam)
+    {
+      throw new NotImplementedException();
+    }
+
+    #endregion
+  }
 }

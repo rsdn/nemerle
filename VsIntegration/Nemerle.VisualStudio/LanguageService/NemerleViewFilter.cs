@@ -396,7 +396,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			foreach (var cm in project.Errors)
 				if (cm.Kind == MessageKind.Error)
-					return MessageBox.Show(TextEditorWindow, "This project doesn't build. Are you sure you want to proceed?",
+					return MessageBox.Show(TextEditorWindow, "The project contaions error[s]. Are you sure you want to proceed (it's unsafe!)?",
 										"",
 										MessageBoxButtons.YesNo,
 										MessageBoxIcon.Exclamation) == DialogResult.Yes;
@@ -476,29 +476,34 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private void RunRenameRefactoring()
 		{
-			if (Source == null) return;
+			if (Source == null || Source.ProjectInfo == null)
+        return;
       var proj   = Source.ProjectInfo.Project;
       var engine = Source.ProjectInfo.Engine;
-			if(!WarnAboutErrors(proj)) return;
+			if(!WarnAboutErrors(proj))
+        return;
 
 			int lineIndex;
 			int colIndex;
 			TextView.GetCaretPos(out lineIndex, out colIndex);
-      var allUsages = engine.GetGotoInfo(Source, lineIndex + 1, colIndex, GotoKind.Usages);
+      var allUsages = engine.GetGotoInfo(Source, lineIndex + 1, colIndex + 1, GotoKind.Usages);
 			var usages = allUsages.Distinct().ToArray();
-			if (usages == null || usages.Length == 0)
-				return;
+      if (usages == null || usages.Length == 0)
+      {
+        Source.ProjectInfo.ShowMessage("No symbol to rename", MessageType.Error);
+        return;
+      }
 
 			var definitionCount = usages.Count(usage => usage.UsageType == UsageType.Definition);
 			if(definitionCount == 0)
 			{
-				MessageBox.Show(TextEditorWindow, "Cannot find definition.");
+        Source.ProjectInfo.ShowMessage("Cannot find definition.", MessageType.Error);
 				return;
 			}
 			if(definitionCount > 1)
 			{
-				MessageBox.Show(TextEditorWindow, "More than one definition found. Must be error in Find Usages.");
-				return;
+        Source.ProjectInfo.ShowMessage("More than one definition found. Must be error in Find Usages.", MessageType.Error);
+        return;
 			}
 
 			using (var frm = new RenameRefactoringDlg(proj, usages))
