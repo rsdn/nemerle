@@ -92,5 +92,26 @@ namespace Nemerle.VisualStudio
 		{
 			ThrowIsNullOrEmpty(filePath, paramName, "Path can't be empty.");
 		}
+
+		public static bool Failed(int hr)
+		{
+			return Microsoft.VisualStudio.ErrorHandler.Failed(hr);
+		}
+
+		public static bool Succeeded(int hr)
+		{
+			return Microsoft.VisualStudio.ErrorHandler.Succeeded(hr);
+		}
+
+		public static int ThrowOnFailure(int hr)
+		{
+			return Microsoft.VisualStudio.ErrorHandler.ThrowOnFailure(hr);
+		}
+
+		public static int ThrowOnFailure(int hr, params int[] expectedHRFailure)
+		{
+			return Microsoft.VisualStudio.ErrorHandler.ThrowOnFailure(hr, expectedHRFailure);
+		}
+
 	}
 }

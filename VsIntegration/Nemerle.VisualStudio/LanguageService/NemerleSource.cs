@@ -1159,20 +1159,43 @@ namespace Nemerle.VisualStudio.LanguageService
 			return new TextSpan[0];
 		}
 
-		public void TryShowTypeNameSmartTag(IVsTextView textView)
+		void RefactorindMenuHandler(MenuCmd.CmdId cmdId)
+		{
+			ProjectInfo.ShowMessage("Refactoring: " + cmdId, MessageType.Info);
+		}
+
+		public void ShowTypeNameSmartTag(IVsTextView textView, bool showMenu)
 		{
 			if (_typeNameMarker == null)
 				return;
 
-			var smartTagWin = Service.GetSmartTagTipWindow();
-			//var hr3 = _smartTagWin.Dismiss();
-			//Debug.Assert(hr3 == VSConstants.S_OK, "_smartTagWin.Dismiss()");
-			var hr2 = smartTagWin.SetSmartTagData(new NemerleSmartTagData(this, _typeNameMarker.Location));
-			Debug.Assert(hr2 == VSConstants.S_OK, "_smartTagWin.SetSmartTagData(...)");
-
-			var viewEx = (IVsTextViewEx)textView;
-			var hr4 = viewEx.UpdateSmartTagWindow(smartTagWin, 0);
-			Debug.Assert(hr4 == VSConstants.S_OK, "viewEx.UpdateSmartTagWindow(smartTagWin, 0)");
+			var loc = _typeNameMarker.Location;
+			Service.ShowSmartTag(textView, showMenu, loc,
+				MenuCmd.CmdId.SmartTagContextMenu, cmdId =>
+				{
+					switch (cmdId)
+					{
+						case MenuCmd.CmdId.ImplementInterface:
+							// Реализация методов интерфейсов и переопределение методов базового типа.
+							// Мы не можем обращаться к типизированному АСТ. Поэтмоу мы должны сформировать
+							// запрос на вычисление списка членов которые нужно реализовать.
+							// Когда список будет сформирован, нужно:
+							// 1. Софрмировать текст методов.
+							// 2. Сгенерировать для них текст.
+							// 3. Найти метсо куда можно вставить текст.
+							// 4. Определить отбику и добавить ее к сгенерированному тексту.
+							// 5. Встав полученый текс в место найденное на шаге 3.
+							var engine = GetEngine();
+							if (!engine.IsDefaultEngine)
+								engine.BeginFindUnimplementedMembers(this, loc.Line, loc.Column);
+							break;
+						case MenuCmd.CmdId.OverrideMembers:
+							break;
+						default:
+							Debug.Assert(false);
+							break;
+					}
+				});
 		}
 
 		NemerleTextMarkerClient _typeNameMarker;
@@ -1191,7 +1214,8 @@ namespace Nemerle.VisualStudio.LanguageService
 			{
 				var member = compileUnit.FindMember(line, col);
 
-				if (member.IsSome && member.Value.NameLocation.Contains(line, col))
+				if (member.IsSome && member.Value.NameLocation.Contains(line, col)
+					&& (member.Value is TopDeclaration.Class || member.Value is TopDeclaration.Variant))
 				{
 					_typeNameMarker = new NemerleTextMarkerClient(GetTextLines(), member.Value.NameLocation);
 
@@ -1200,10 +1224,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				}
 			}
 
-
-      var smartTagWin = Service.GetSmartTagTipWindow();
-      var viewEx = (IVsTextViewEx)textView;
-      var hr4 = viewEx.UpdateSmartTagWindow(smartTagWin, (uint)TipWindowFlags.UTW_DISMISS);
+			Service.HideSmartTag(textView);
 		}
 
 		public void CaretChanged(IVsTextView textView, int lineIdx, int colIdx)
@@ -1658,7 +1679,7 @@ namespace Nemerle.VisualStudio.LanguageService
       if (_tipAsyncRequest == null || _tipAsyncRequest.Line != loc.Line || _tipAsyncRequest.Column != loc.Column)
       {
 				if (_typeNameMarker != null && _typeNameMarker.Location.Contains(loc.Line, loc.Column))
-					TryShowTypeNameSmartTag(view);
+					ShowTypeNameSmartTag(view, false);
 				_tipAsyncRequest = GetEngine().BeginGetQuickTipInfo(this, loc.Line, loc.Column);
         return VSConstants.E_PENDING;
       }
@@ -1723,6 +1744,9 @@ namespace Nemerle.VisualStudio.LanguageService
 
         //Debug.WriteLine(Utils.LocationFromSpan(FileIndex, span).ToVsOutputStringFormat() + "result GetDataTipText() text:");
         //Debug.WriteLine(hintText);
+
+				Microsoft.VisualStudio.OLE.Interop.POINT[] ppt = new Microsoft.VisualStudio.OLE.Interop.POINT[1];
+				view.GetPointOfLineColumn(hintSpan.iStartLine, hintSpan.iStartIndex, ppt);
 
         return VSConstants.S_OK;
       }

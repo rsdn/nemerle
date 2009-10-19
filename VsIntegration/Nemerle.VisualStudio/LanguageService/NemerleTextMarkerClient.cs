@@ -45,7 +45,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#endregion
 
-
 		#region IVsTextMarkerClient Members
 
 		int IVsTextMarkerClient.ExecMarkerCommand(IVsTextMarker pMarker, int iItem)

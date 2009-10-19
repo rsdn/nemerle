@@ -17,6 +17,11 @@ using Nemerle.VisualStudio.Properties;
 using Nemerle.VisualStudio.Project.PropertyPages;
 using Nemerle.VisualStudio.WPFProviders;
 using Nemerle.VisualStudio.GUI.SourceOutliner;
+using Microsoft.VisualStudio.TextManager.Interop;
+using System.Collections.Generic;
+using System.Windows.Forms;
+using Nemerle.Compiler;
+using System.IO;
 
 namespace Nemerle.VisualStudio
 {
@@ -134,6 +139,9 @@ namespace Nemerle.VisualStudio
 		private uint                  _componentID;
 		private NemerleLibraryManager _libraryManager;
 		private SourceOutlinerToolWindow _sourceOutlinerToolWindow;
+		public OleMenuCommand RefactoringMenu { get; private set; }
+		public OleMenuCommand SelectionExtend { get; private set; }
+		public OleMenuCommand SelectionShrink { get; private set; }
 
 		#endregion
 
@@ -160,15 +168,41 @@ namespace Nemerle.VisualStudio
 
 		private void RegisterNemerleCommands()
 		{
+			// Add our command handlers for menu (commands must exist in the .vsct file)
 			OleMenuCommandService menuService = GetService(typeof(IMenuCommandService)) as OleMenuCommandService;
+
+			//if (menuService != null)
+			//{
+			//  RegisterCommand(menuService, MenuCmd.AstToolWindow, OnAstToolWindowShow);
+			//  RegisterCommand(menuService, MenuCmd.SourceOutlinerWindow, OnSourceOutlinerWindowShow);
+			//}
+			//else
+			//  Trace.WriteLine("Command Service is null!");
 
 			if (menuService != null)
 			{
-				RegisterCommand(menuService, MenuCmd.AstToolWindow,   OnAstToolWindowShow);
-				RegisterCommand(menuService, MenuCmd.SourceOutlinerWindow, OnSourceOutlinerWindowShow);
+				// Create the command for the menu item.
+				RefactoringMenu = RegisterOleMenuCommand(menuService, MenuCmd.CmdId.RefactoringTopMenu, false, null);
+				SelectionExtend = RegisterOleMenuCommand(menuService, MenuCmd.CmdId.ExtendSelection, false, null);
+				SelectionShrink = RegisterOleMenuCommand(menuService, MenuCmd.CmdId.ShrinkSelection, false, null);
+				SelectionExtend.Enabled = false;
+				SelectionShrink.Enabled = false;
+				RegisterOleMenuCommand(menuService, MenuCmd.CmdId.GoToFile, true, (o, e) => GotoFile());
 			}
-			else
-				Trace.WriteLine("Command Service is null!");
+		}
+
+		private static OleMenuCommand RegisterOleMenuCommand(
+			OleMenuCommandService service, 
+			MenuCmd.CmdId id, 
+			bool visible, 
+			EventHandler handler)
+		{
+			var commandID = new CommandID(MenuCmd.guidNemerleProjectCmdSet, (int)id);
+			var command = new OleMenuCommand(handler, commandID);
+			command.Visible = visible;
+			service.AddCommand(command);
+			//Debug.WriteLine(string.Format("Menu command {0} added", command));
+			return command;
 		}
 
 		private static void RegisterCommand(OleMenuCommandService service, CommandID commandId, EventHandler handler)
@@ -176,6 +210,67 @@ namespace Nemerle.VisualStudio
 			MenuCommand command = new MenuCommand(handler, commandId);
 			service.AddCommand(command);
 			//Debug.WriteLine(string.Format("Menu command {0} added", command));
+		}
+
+		//public IWin32Window TextEditorWindow
+		//{
+		//  get { return null; }
+		//}
+
+		private void GotoFile()
+		{
+			using (var frm = new GoToFileForm())
+			{
+				var dte = GetService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
+				if (dte != null)
+				{
+					var names = CollectFileNames(dte);
+
+					frm.SetFiles(names);
+					if (frm.ShowDialog() == DialogResult.OK)
+					{
+						var srv = (NemerleLanguageService)GetService(typeof(NemerleLanguageService));
+						if (srv != null)
+						{
+							// illegal location prevent change of caret position
+							var loc = new Location(frm.SelectedFileName, 0, 0, 0, 0);
+							srv.GotoLocation(loc);
+						}
+					}
+				}
+			}
+		}
+
+		private IEnumerable<string> CollectFileNames(EnvDTE.DTE dte)
+		{
+			List<string> result = new List<string>();
+
+			foreach (EnvDTE.Project prj in dte.Solution.Projects)
+				result.AddRange(CollectFileNamesRecursively(prj.ProjectItems));
+
+			return result;
+		}
+
+		private IEnumerable<string> CollectFileNamesRecursively(EnvDTE.ProjectItems items)
+		{
+			if (items != null)
+			{
+				foreach (EnvDTE.ProjectItem item in items)
+				{
+					//if (!(item is OAFileItem || item is OAFolderItem))
+					//	continue;
+
+					for (short i = 1; i <= item.FileCount; ++i)
+					{
+						var path = item.get_FileNames(i);
+						if (!Path.GetExtension(path).Equals(".dll", StringComparison.OrdinalIgnoreCase) && File.Exists(path))
+							yield return item.get_FileNames(i);
+					}
+					//yield return fileItem..Name;
+					foreach (var s in CollectFileNamesRecursively(item.ProjectItems))
+						yield return s;
+				}
+			}
 		}
 
 		private object CreateService(IServiceContainer container, Type serviceType)
@@ -385,9 +480,11 @@ namespace Nemerle.VisualStudio
 		public int FDoIdle(uint grfidlef)
 		{
 			NemerleLanguageService lang = GetService(typeof(NemerleLanguageService)) as NemerleLanguageService;
-			
+
+			var isPeriodic = (grfidlef & (uint)_OLEIDLEF.oleidlefPeriodic) != 0;
+
 			if (lang != null)
-				lang.OnIdle((grfidlef & (uint)_OLEIDLEF.oleidlefPeriodic) != 0);
+				lang.OnIdle(isPeriodic);
 
 			if (_libraryManager != null)
 				_libraryManager.OnIdle();

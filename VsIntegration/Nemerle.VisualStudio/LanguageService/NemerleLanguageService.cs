@@ -40,7 +40,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		public static Engine DefaultEngine { get; private set; }
 		public bool IsDisposed { get; private set; }
 		IVsStatusbar _statusbar;
-    readonly NemerlePackage _package;
+		public NemerlePackage Package { get; private set; }
     IVsSmartTagTipWindow _smartTagWin;
 		
 		#endregion
@@ -50,7 +50,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		public NemerleLanguageService(NemerlePackage package)
 		{
       Debug.Assert(package != null, "package != null");
-      _package = package;
+			Package = package;
 
 			if (System.Threading.Thread.CurrentThread.Name == null)
 				System.Threading.Thread.CurrentThread.Name = "UI Thread";
@@ -95,11 +95,51 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#endregion
 
-    #region MyRegion
+		#region SmartTags Support
 
-    public IVsSmartTagTipWindow GetSmartTagTipWindow()
+		internal void ShowSmartTag(IVsTextView textView, bool showMenu, Location loc, Guid cmdSet, MenuCmd.CmdId contextMenuId, Action<MenuCmd.CmdId> exec, Func<MenuCmd.CmdId, uint> queryStatus)
+		{
+			ErrorHelper.ThrowIsNull(exec, "exec");
+
+			var smartTagWin = GetSmartTagTipWindow();
+			var source = (NemerleSource)GetSource(textView);
+			Debug.Assert(source != null, "source == null");
+
+			var pos = source.GetPositionOfLineIndex(loc.Line, loc.Column);
+			var endPos = source.GetPositionOfLineIndex(loc.EndLine, loc.EndColumn);
+			var length = endPos - pos;
+
+			var smartTagData = new NemerleSmartTagData(pos, length, cmdSet, exec, queryStatus);
+			ErrorHelper.ThrowOnFailure(smartTagWin.SetSmartTagData(smartTagData));
+
+			const uint ShouContextMenu = 16; //TODO:  зунать реальную константу и заменить ею это магическое число
+			var shouContextMenu = showMenu ? ShouContextMenu : 0;
+
+			var viewEx = (IVsTextViewEx)textView;
+			ErrorHelper.ThrowOnFailure(viewEx.UpdateSmartTagWindow(smartTagWin, shouContextMenu));
+		}
+
+		internal void ShowSmartTag(IVsTextView textView, bool showMenu, Location loc, MenuCmd.CmdId contextMenuId, Action<MenuCmd.CmdId> exec, Func<MenuCmd.CmdId, uint> queryStatus)
+		{
+			ShowSmartTag(textView, showMenu, loc, MenuCmd.guidNemerleProjectCmdSet, contextMenuId, exec, queryStatus);
+		}
+
+		internal void ShowSmartTag(IVsTextView textView, bool showMenu, Location loc, MenuCmd.CmdId contextMenuId, Action<MenuCmd.CmdId> exec)
+		{
+			ShowSmartTag(textView, showMenu, loc, MenuCmd.guidNemerleProjectCmdSet, contextMenuId, exec, null);
+		}
+
+		internal void HideSmartTag(IVsTextView textView)
+		{
+			var smartTagWin = GetSmartTagTipWindow();
+			var viewEx = (IVsTextViewEx)textView;
+			ErrorHelper.ThrowOnFailure(viewEx.UpdateSmartTagWindow(smartTagWin, 
+				(uint)TipWindowFlags.UTW_DISMISS));
+		}
+
+		IVsSmartTagTipWindow GetSmartTagTipWindow()
     {
-      NemerlePackage pkg = _package;
+			NemerlePackage pkg = Package;
 
       if (_smartTagWin == null)
       {

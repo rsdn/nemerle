@@ -546,6 +546,14 @@ namespace Nemerle.VisualStudio.Project
       Debug.WriteLine(text);
     }
 
+    public void AddUnimplementedMembers(ISource source, TypeBuilder ty, IEnumerable<IMember> unimplementedMembers)
+		{
+			using (var form = new ImplementMembersForm((NemerleSource)source, ty, unimplementedMembers))
+			{
+				form.ShowDialog();
+			}
+		}
+
     public void SetHighlights(ISource source, IEnumerable<GotoInfo> highlights)
     {
       var isPermanent = false;

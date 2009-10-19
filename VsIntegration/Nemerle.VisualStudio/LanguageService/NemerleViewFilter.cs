@@ -58,6 +58,11 @@ namespace Nemerle.VisualStudio.LanguageService
 		
     #region GetDataTipText
 
+		public override TextTipData CreateTextTipData()
+		{
+			return base.CreateTextTipData();
+		}
+
     public override int GetDataTipText(TextSpan[] aspan, out string textValue)
     {
       //VladD2: Стратегия отображения хинта:
@@ -140,9 +145,29 @@ namespace Nemerle.VisualStudio.LanguageService
     }
  
     #endregion
+		public override void OnKillFocus(IVsTextView view)
+		{
+			var pkg = Source.Service.Package;
+			pkg.RefactoringMenu.Visible = false;
+			pkg.SelectionExtend.Visible = false;
+			pkg.SelectionShrink.Visible = false;
+			pkg.SelectionExtend.Enabled = false;
+			pkg.SelectionShrink.Enabled = false;
+
+			Debug.WriteLine("OnKillFocus(IVsTextView view)");
+			base.OnKillFocus(view);
+		}
 
 		public override void OnSetFocus(IVsTextView view)
 		{
+			var pkg = Source.Service.Package;
+			pkg.RefactoringMenu.Visible = true;
+			pkg.SelectionExtend.Visible = true;
+			pkg.SelectionShrink.Visible = true;
+			pkg.SelectionExtend.Enabled = true;
+			pkg.SelectionShrink.Enabled = true;
+
+			Debug.WriteLine("OnSetFocus(IVsTextView view)");
 			//ShowAst(view, true);
 			base.OnSetFocus(view);
     
@@ -218,10 +243,11 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		protected override int ExecCommand(ref Guid guidCmdGroup, uint nCmdId, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
 		{
+			//Debug.WriteLine(guidCmdGroup + " " + nCmdId);
 			const uint ShowSmartTag = 147;
 			if (guidCmdGroup == VSConstants.VSStd2K && nCmdId == ShowSmartTag)
 			{
-				Source.TryShowTypeNameSmartTag(TextView);
+				Source.ShowTypeNameSmartTag(TextView, true);
 				return VSConstants.S_OK;
 			}
 
@@ -280,29 +306,6 @@ namespace Nemerle.VisualStudio.LanguageService
 					if(nCmdId == (int)MenuCmd.CmdId.ESC) // ESC
 						break; // go trocess ESC
 					return VSConstants.S_OK;
-				case MenuCmd.CmdId.GoToFile:
-					using (var frm = new GoToFileForm())
-					{
-						var dte = Source.ProjectInfo.ProjectNode.ProjectMgr.Site.GetService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
-						if (dte != null)
-						{
-							var names = CollectFileNames(dte);
-
-							frm.SetFiles(names);
-							frm.ShowDialog(TextEditorWindow);
-							if (frm.DialogResult == DialogResult.OK)
-							{
-								var srv = Source.LanguageService as NemerleLanguageService;
-								if (srv != null)
-								{
-                  // illegal location prevent change of caret position
-									var loc = new Location(frm.SelectedFileName, 0, 0, 0, 0);
-									srv.GotoLocation(loc);
-								}
-							}
-						}
-					}
-					return VSConstants.S_OK;
 				case MenuCmd.CmdId.SourceOutlinerWindow:
 					{
 						if(Source != null)
@@ -323,38 +326,6 @@ namespace Nemerle.VisualStudio.LanguageService
 		}
 
     VsCommands2K _executingCommand;
-
-		private IEnumerable<string> CollectFileNames(EnvDTE.DTE dte)
-		{
-			List<string> result = new List<string>();
-			
-      foreach (EnvDTE.Project prj in dte.Solution.Projects)
-				result.AddRange(CollectFileNamesRecursively(prj.ProjectItems));
-
-      return result;
-		}
-
-		private IEnumerable<string> CollectFileNamesRecursively(EnvDTE.ProjectItems items)
-		{
-			if (items != null)
-			{
-				foreach (EnvDTE.ProjectItem item in items)
-				{
-					//if (!(item is OAFileItem || item is OAFolderItem))
-					//	continue;
-
-          for (short i = 1; i <= item.FileCount; ++i)
-          {
-            var path = item.get_FileNames(i);
-            if (!Path.GetExtension(path).Equals(".dll", StringComparison.OrdinalIgnoreCase) && File.Exists(path))
-              yield return item.get_FileNames(i);
-          }
-					//yield return fileItem..Name;
-					foreach (var s in CollectFileNamesRecursively(item.ProjectItems))
-						yield return s;
-				}
-			}
-		}
 
 		private List<Location> _selectionsStack;
 

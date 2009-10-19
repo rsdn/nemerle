@@ -7,35 +7,47 @@ using Microsoft.VisualStudio.OLE.Interop;
 using Nemerle.VisualStudio.GUI.Native;
 using Nemerle.Compiler;
 using Microsoft.VisualStudio;
+using Nemerle.VisualStudio.Project;
+using T = Nemerle.VisualStudio.Project.MenuCmd.CmdId;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
-  class NemerleSmartTagData : IVsSmartTagData
+	class NemerleSmartTagData : IVsSmartTagData, IOleCommandTarget
   {
-    readonly NemerleSource _source;
-    readonly Location _loc;
+    readonly Guid          _cmdSet;
+    readonly int           _pos;
+		readonly int           _length;
+		readonly Action<T>     _exec;
+		readonly Func<T, uint>  _queryStatus;
 
-    public NemerleSmartTagData(NemerleSource source, Location loc)
+
+		public NemerleSmartTagData(int pos, int length, Guid cmdSet, Action<T> exec, Func<T, uint> queryStatus)
     {
-      _source = source;
-      _loc = loc;
+			ErrorHelper.ThrowIsNull(cmdSet, "cmdSet");
+
+			_cmdSet      = cmdSet;
+			_pos         = pos;
+			_length      = length;
+			_exec        = exec;
+			_queryStatus = queryStatus;
     }
 
     #region IVsSmartTagData Members
 
     int IVsSmartTagData.GetContextMenuInfo(out Guid guidID, out int nMenuID, out IOleCommandTarget pCmdTarget)
     {
-      guidID = Guid.Empty;
-      nMenuID = 0;
-      pCmdTarget = null;
-      return VSConstants.E_NOTIMPL;
+			guidID = MenuCmd.guidNemerleProjectCmdSet;
+			nMenuID = (int)MenuCmd.CmdId.SmartTagContextMenu;
+      pCmdTarget = this;
+
+      return VSConstants.S_OK;
     }
 
     int IVsSmartTagData.GetContextStream(out int pos, out int length)
     {
-      pos = _source.GetPositionOfLineIndex(_loc.Line, _loc.Column);
-      var endPos   = _source.GetPositionOfLineIndex(_loc.EndLine, _loc.EndColumn);
-      length = endPos - pos;
+			pos = _pos;
+      length = _length;
+
       return VSConstants.S_OK;
     }
 
@@ -47,8 +59,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
     int IVsSmartTagData.GetTimerInterval(out int time)
     {
-      time = -1;
-      return VSConstants.E_NOTIMPL;
+      time = 0;
+      return VSConstants.S_OK;
     }
 
     int IVsSmartTagData.GetTipText(out string pbstrTipText)
@@ -79,5 +91,26 @@ namespace Nemerle.VisualStudio.LanguageService
     }
 
     #endregion
-  }
+
+		#region IOleCommandTarget Members
+
+		int IOleCommandTarget.Exec(ref Guid pguidCmdGroup, uint nCmdID, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
+		{
+			if (_exec != null && pguidCmdGroup == _cmdSet)
+				_exec((T)nCmdID);
+
+			return VSConstants.S_OK;
+		}
+
+		int IOleCommandTarget.QueryStatus(ref Guid pguidCmdGroup, uint cCmds, OLECMD[] prgCmds, IntPtr pCmdText)
+		{
+			if (_queryStatus != null && _cmdSet == pguidCmdGroup)
+				for (int i = 0; i < prgCmds.Length; i++)
+					prgCmds[i].cmdf = _queryStatus((T)prgCmds[i].cmdID);
+
+			return VSConstants.S_OK;
+		}
+
+		#endregion
+	}
 }

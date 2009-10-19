@@ -14,15 +14,25 @@ namespace Nemerle.VisualStudio.Project
 		{
 			ESC = 103,
 
+			// Menus
+
+			RefactoringTopMenu   = 0x0100,
+			SmartTagContextMenu  = 0x0101,
+
+			// Comands IDs
+
+			Rename                   = 0x2003,
+			Inline                   = 0x2004,
+			ExtendSelection          = 0x2005,
+			ShrinkSelection          = 0x2006,
+			GoToFile                 = 0x2007,
+			ImplementInterface       = 0x2008,
+			OverrideMembers          = 0x2009,
+
 			SetAsMain = 0x3001,
 
-			ExtendSelection = 0x3101,
-			ShrinkSelection = 0x3102,
 
 			FindInheritors = 0x3103,
-
-			Rename = 0x3104,
-			Inline = 0x3105,
 
 			Options = 0x3106,
 
@@ -33,7 +43,6 @@ namespace Nemerle.VisualStudio.Project
 
 			FindInheritorsCtxt = 0x3110,
 
-			GoToFile = 0x3111,
 			GoToType = 0x3112,
 
 			SourceOutlinerWindow = 0x3113,
