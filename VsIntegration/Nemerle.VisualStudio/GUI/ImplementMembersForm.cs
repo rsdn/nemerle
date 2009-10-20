@@ -98,6 +98,9 @@ namespace Nemerle.VisualStudio.GUI
     {
       var row = _grid.Rows[e.RowIndex];
 
+      if (row.Tag == null)
+        return;
+
       switch (_grid.Columns[e.ColumnIndex].Name)
       {
         case "AccessMods": case "ImplName":
@@ -150,5 +153,29 @@ namespace Nemerle.VisualStudio.GUI
 		{
 
 		}
+
+
+
+    private void pbImplement_Click(object sender, EventArgs e)
+    {
+      var res = _grid.Rows.Cast<DataGridViewRow>().Where(r => r.Tag != null)
+        .GroupBy(r => ((IMember)r.Tag).DeclaringType, r => 
+          new 
+          { 
+            Member     = ((IMember)r.Tag), 
+            Explicit   = (bool)r.Cells["Explicit"].Value,
+            AccessMods = (string)r.Cells["AccessMods"].Value,
+            ImplName   = (string)r.Cells["ImplName"].Value
+          });
+
+      var res2 = res.ToArray();
+
+      foreach (var item in res2)
+      {
+        Debug.WriteLine(item.Key);
+        foreach (var item2 in item)
+          Debug.WriteLine("    " + item2);
+      }
+    }
 	}
 }

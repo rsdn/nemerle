@@ -112,8 +112,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			var smartTagData = new NemerleSmartTagData(pos, length, cmdSet, exec, queryStatus);
 			ErrorHelper.ThrowOnFailure(smartTagWin.SetSmartTagData(smartTagData));
 
-			const uint ShouContextMenu = 16; //TODO:  зунать реальную константу и заменить ею это магическое число
-			var shouContextMenu = showMenu ? ShouContextMenu : 0;
+      var shouContextMenu = showMenu ? (uint)TipWindowFlags2.UTW_EXPANDED : 0;
 
 			var viewEx = (IVsTextViewEx)textView;
 			ErrorHelper.ThrowOnFailure(viewEx.UpdateSmartTagWindow(smartTagWin, shouContextMenu));

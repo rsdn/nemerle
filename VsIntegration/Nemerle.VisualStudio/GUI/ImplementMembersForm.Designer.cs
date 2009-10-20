@@ -32,14 +32,14 @@
       this.pbImplement = new System.Windows.Forms.Button();
       this.pbCancel = new System.Windows.Forms.Button();
       this._grid = new System.Windows.Forms.DataGridView();
-      this.panel1 = new System.Windows.Forms.Panel();
-      this.imageList1 = new System.Windows.Forms.ImageList(this.components);
       this.ItfMemberNameCol = new System.Windows.Forms.DataGridViewTextBoxColumn();
       this.AddImplCol = new System.Windows.Forms.DataGridViewCheckBoxColumn();
       this.Explicit = new System.Windows.Forms.DataGridViewCheckBoxColumn();
       this.AccessMods = new System.Windows.Forms.DataGridViewComboBoxColumn();
       this.ImplName = new System.Windows.Forms.DataGridViewTextBoxColumn();
       this.Signature = new System.Windows.Forms.DataGridViewTextBoxColumn();
+      this.panel1 = new System.Windows.Forms.Panel();
+      this.imageList1 = new System.Windows.Forms.ImageList(this.components);
       ((System.ComponentModel.ISupportInitialize)(this._grid)).BeginInit();
       this.panel1.SuspendLayout();
       this.SuspendLayout();
@@ -53,6 +53,7 @@
       this.pbImplement.TabIndex = 0;
       this.pbImplement.Text = "&Implement";
       this.pbImplement.UseVisualStyleBackColor = true;
+      this.pbImplement.Click += new System.EventHandler(this.pbImplement_Click);
       // 
       // pbCancel
       // 
@@ -82,22 +83,6 @@
       this._grid.Name = "_grid";
       this._grid.Size = new System.Drawing.Size(620, 362);
       this._grid.TabIndex = 6;
-      // 
-      // panel1
-      // 
-      this.panel1.Controls.Add(this.pbCancel);
-      this.panel1.Controls.Add(this.pbImplement);
-      this.panel1.Dock = System.Windows.Forms.DockStyle.Bottom;
-      this.panel1.Location = new System.Drawing.Point(0, 362);
-      this.panel1.Name = "panel1";
-      this.panel1.Size = new System.Drawing.Size(620, 38);
-      this.panel1.TabIndex = 7;
-      // 
-      // imageList1
-      // 
-      this.imageList1.ColorDepth = System.Windows.Forms.ColorDepth.Depth24Bit;
-      this.imageList1.ImageSize = new System.Drawing.Size(16, 16);
-      this.imageList1.TransparentColor = System.Drawing.Color.Magenta;
       // 
       // ItfMemberNameCol
       // 
@@ -150,6 +135,22 @@
       this.Signature.SortMode = System.Windows.Forms.DataGridViewColumnSortMode.NotSortable;
       this.Signature.Width = 58;
       // 
+      // panel1
+      // 
+      this.panel1.Controls.Add(this.pbCancel);
+      this.panel1.Controls.Add(this.pbImplement);
+      this.panel1.Dock = System.Windows.Forms.DockStyle.Bottom;
+      this.panel1.Location = new System.Drawing.Point(0, 362);
+      this.panel1.Name = "panel1";
+      this.panel1.Size = new System.Drawing.Size(620, 38);
+      this.panel1.TabIndex = 7;
+      // 
+      // imageList1
+      // 
+      this.imageList1.ColorDepth = System.Windows.Forms.ColorDepth.Depth24Bit;
+      this.imageList1.ImageSize = new System.Drawing.Size(16, 16);
+      this.imageList1.TransparentColor = System.Drawing.Color.Magenta;
+      // 
       // ImplementMembersForm
       // 
       this.AcceptButton = this.pbImplement;
@@ -163,7 +164,7 @@
       this.MinimizeBox = false;
       this.Name = "ImplementMembersForm";
       this.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
-      this.Text = "ImplementMembersForm";
+      this.Text = "Implement unimplemented members of implemented interfaces";
       this.Load += new System.EventHandler(this.ImplementMembersForm_Load);
       ((System.ComponentModel.ISupportInitialize)(this._grid)).EndInit();
       this.panel1.ResumeLayout(false);
