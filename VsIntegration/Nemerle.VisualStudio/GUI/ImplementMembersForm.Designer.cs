@@ -29,6 +29,7 @@
 		private void InitializeComponent()
 		{
       this.components = new System.ComponentModel.Container();
+      System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(ImplementMembersForm));
       this.pbImplement = new System.Windows.Forms.Button();
       this.pbCancel = new System.Windows.Forms.Button();
       this._grid = new System.Windows.Forms.DataGridView();
@@ -161,8 +162,10 @@
       this.Controls.Add(this._grid);
       this.Controls.Add(this.panel1);
       this.DataBindings.Add(new System.Windows.Forms.Binding("ClientSize", global::Nemerle.VisualStudio.Properties.Settings.Default, "ImplementMembersSize", true, System.Windows.Forms.DataSourceUpdateMode.OnPropertyChanged));
+      this.Icon = ((System.Drawing.Icon)(resources.GetObject("$this.Icon")));
       this.MinimizeBox = false;
       this.Name = "ImplementMembersForm";
+      this.ShowInTaskbar = false;
       this.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
       this.Text = "Implement unimplemented members of implemented interfaces";
       this.Load += new System.EventHandler(this.ImplementMembersForm_Load);

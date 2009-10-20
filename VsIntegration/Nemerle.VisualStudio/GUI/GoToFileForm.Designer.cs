@@ -28,6 +28,7 @@
         /// </summary>
         private void InitializeComponent()
         {
+          System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(GoToFileForm));
           this.cbFiles = new System.Windows.Forms.ComboBox();
           this.tbOk = new System.Windows.Forms.Button();
           this.tbCancel = new System.Windows.Forms.Button();
@@ -74,6 +75,7 @@
           this.Controls.Add(this.tbOk);
           this.Controls.Add(this.cbFiles);
           this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedSingle;
+          this.Icon = ((System.Drawing.Icon)(resources.GetObject("$this.Icon")));
           this.MinimizeBox = false;
           this.Name = "GoToFileForm";
           this.ShowInTaskbar = false;
