@@ -169,13 +169,49 @@ namespace Nemerle.VisualStudio.GUI
           });
 
       var res2 = res.ToArray();
+      var sb = new StringBuilder();
 
       foreach (var item in res2)
       {
-        Debug.WriteLine(item.Key);
+        sb.AppendLine("//" + item.Key + ":");
+
         foreach (var item2 in item)
-          Debug.WriteLine("    " + item2);
+        {
+          sb.AppendLine(Nemerle.Compiler.Utils.Utils.GenerateMemberImplementation(
+            _source.FileIndex, item2.Member, item2.Explicit, item2.AccessMods, item2.ImplName));
+
+        }
       }
+
+      sb.Replace(" { get; set; }", @"
+{
+  get
+  {
+    System.NotImplementedException()
+  }
+  set
+  {
+    _ = value~
+    System.NotImplementedException()
+  }
+}").Replace(" { get; }", @"
+{
+  get
+  {
+    System.NotImplementedException()
+  }
+}").Replace(" { set; }", @"
+{
+  set
+  {
+    System.NotImplementedException()
+  }
+}").Replace(";", @"
+{
+  System.NotImplementedException()
+}").Replace("~", ";");
+
+      Debug.WriteLine(sb.ToString());
     }
 	}
 }
