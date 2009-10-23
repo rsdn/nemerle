@@ -9,6 +9,7 @@ using System.Windows.Forms;
 using Nemerle.VisualStudio.LanguageService;
 using Nemerle.Compiler;
 using System.Diagnostics;
+using TypeMembers = System.Collections.Generic.KeyValuePair<Nemerle.Compiler.MType.Class, Nemerle.Compiler.IMember>;
 
 namespace Nemerle.VisualStudio.GUI
 {
@@ -34,11 +35,19 @@ namespace Nemerle.VisualStudio.GUI
       if (_unimplementedMembers == null)
         return;
 
+      //var _ty.GetDirectSuperTypes().GroupJoin(_unimplementedMembers, itf => itf.tycon, m => m.DeclaringType,
+      //  (t, ms) => new { Ty = t, Members = ms });
+      var implItfs = _ty.GetDirectSuperTypes().Where(t => t.IsInterface);
 			var itfs = _unimplementedMembers.GroupBy(m => m.DeclaringType);
-			FillTable(itfs);
+      var res = implItfs.Join(itfs, t => t.tycon, itf => itf.Key, (t, itf) => new { Group = itf, Ty = t });
+      var ht = new Dictionary<MType.Class, IMember[]>();
+      foreach (var item in res)
+        ht[item.Ty] = ReplaceGettersAndSettersByProperties(item.Group);
+
+      FillTable(ht);
 		}
-		
-		void FillTable(IEnumerable<IGrouping<TypeInfo, IMember>> itfs)
+
+    void FillTable(Dictionary<MType.Class, IMember[]> itfs)
 		{
       _grid.CellPainting += CellPainting;
       _grid.CellValueChanged += CellValueChanged;
@@ -57,9 +66,7 @@ namespace Nemerle.VisualStudio.GUI
 				var row = _grid.Rows[rowIndex];
 				row.Cells[0].Style.Font = new Font(_grid.DefaultCellStyle.Font, FontStyle.Bold);
 
-        var mems = ReplaceGettersAndSettersByProperties(item);
-
-        foreach (var m in mems)
+        foreach (var m in item.Value)
 				{
           var name = m.Name;
 
@@ -72,7 +79,10 @@ namespace Nemerle.VisualStudio.GUI
           row.Cells["AccessMods"].Style.ForeColor = gray;
           row.Cells["ImplName"].Style.ForeColor = gray;
           row.Cells["Signature"].Style.ForeColor = gray;
-					row.Tag = m;
+          //var x0 = item.Key.TypeOfMember(item.Value[0]);
+          //var x1 = item.Key.TypeOfMember(item.Value[1]);
+          //var x2 = item.Key.TypeOfMember(item.Value[2]);
+          row.Tag = item;
 				}
 			}
 		}
@@ -134,7 +144,7 @@ namespace Nemerle.VisualStudio.GUI
 
       if (e.ColumnIndex == 0 && row.Tag != null)
       {
-        var member   = (IMember)row.Tag;
+        var member   = ((TypeMembers)row.Tag).Value;
         var imgIndex = Nemerle.Compiler.Utils.Utils.GetGlyphIndex(member);
 
         e.Paint(r, e.PaintParts);
@@ -159,59 +169,33 @@ namespace Nemerle.VisualStudio.GUI
     private void pbImplement_Click(object sender, EventArgs e)
     {
       var res = _grid.Rows.Cast<DataGridViewRow>().Where(r => r.Tag != null)
-        .GroupBy(r => ((IMember)r.Tag).DeclaringType, r => 
+        .GroupBy(r => ((TypeMembers)r.Tag).Key, r => 
           new 
-          { 
-            Member     = ((IMember)r.Tag), 
+          {
+            Type       = ((TypeMembers)r.Tag).Key,
+            Member     = ((TypeMembers)r.Tag).Value, 
             Explicit   = (bool)r.Cells["Explicit"].Value,
             AccessMods = (string)r.Cells["AccessMods"].Value,
             ImplName   = (string)r.Cells["ImplName"].Value
           });
 
-      var res2 = res.ToArray();
-      var sb = new StringBuilder();
+      var res2   = res.ToArray();
+      var writer = new System.IO.StringWriter();
 
       foreach (var item in res2)
       {
-        sb.AppendLine("//" + item.Key + ":");
+        writer.WriteLine("//" + item.Key + ":");
 
         foreach (var item2 in item)
         {
-          sb.AppendLine(Nemerle.Compiler.Utils.Utils.GenerateMemberImplementation(
-            _source.FileIndex, item2.Member, item2.Explicit, item2.AccessMods, item2.ImplName));
+          Nemerle.Compiler.Utils.Utils.GenerateMemberImplementation(writer,
+            _source.FileIndex, item.Key, item2.Member, item2.Explicit, item2.AccessMods, item2.ImplName);
 
+          writer.WriteLine();
         }
       }
 
-      sb.Replace(" { get; set; }", @"
-{
-  get
-  {
-    System.NotImplementedException()
-  }
-  set
-  {
-    _ = value~
-    System.NotImplementedException()
-  }
-}").Replace(" { get; }", @"
-{
-  get
-  {
-    System.NotImplementedException()
-  }
-}").Replace(" { set; }", @"
-{
-  set
-  {
-    System.NotImplementedException()
-  }
-}").Replace(";", @"
-{
-  System.NotImplementedException()
-}").Replace("~", ";");
-
-      Debug.WriteLine(sb.ToString());
+      Debug.WriteLine(writer.GetStringBuilder().Replace("\t", "  ").ToString());
     }
 	}
 }
