@@ -17,11 +17,38 @@ using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.Win32;
 using System.Diagnostics;
 using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.Package;
 
 namespace Nemerle.VisualStudio
 {
 	static class Utils
 	{
+		public static string GetLiadingSpaces(this string text)
+		{
+			return text.Substring(0, text.Length - text.TrimStart(' ', '\t').Length);
+		}
+
+		public static string MakeIndentString(this LanguagePreferences pref)
+		{
+			string indent = null;
+
+			if (pref.InsertTabs)
+			{
+				var spacesNeeded = pref.IndentSize % pref.TabSize;
+				var tabsNeeded = pref.IndentSize / pref.TabSize;
+
+				if (tabsNeeded > 0)
+					indent = new string('\t', tabsNeeded);
+
+				if (spacesNeeded > 0)
+					indent = new string('\t', tabsNeeded);
+			}
+			else
+				indent = new string(' ', pref.IndentSize);
+
+			return indent ?? "";
+		}
+
 		public static TextPoint GetCaretTextPoint(this IVsTextView textView)
 		{
 			int line, idx;

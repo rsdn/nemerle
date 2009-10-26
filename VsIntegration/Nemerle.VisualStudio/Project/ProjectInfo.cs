@@ -554,6 +554,14 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
+    public void AddOverrideMembers(ISource source, TypeBuilder ty, IEnumerable<IMember> notOverriden)
+		{
+			using (var form = new ImplementMembersForm((NemerleSource)source, ty, notOverriden))
+			{
+				form.ShowDialog();
+			}
+		}
+
     public void SetHighlights(ISource source, IEnumerable<GotoInfo> highlights)
     {
       var isPermanent = false;

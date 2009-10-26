@@ -1185,11 +1185,18 @@ namespace Nemerle.VisualStudio.LanguageService
 							// 3. Найти метсо куда можно вставить текст.
 							// 4. Определить отбику и добавить ее к сгенерированному тексту.
 							// 5. Встав полученый текс в место найденное на шаге 3.
-							var engine = GetEngine();
-							if (!engine.IsDefaultEngine)
-								engine.BeginFindUnimplementedMembers(this, loc.Line, loc.Column);
+							{
+								var engine = GetEngine();
+								if (!engine.IsDefaultEngine)
+									engine.BeginFindUnimplementedMembers(this, loc.Line, loc.Column);
+							}
 							break;
 						case MenuCmd.CmdId.OverrideMembers:
+							{
+								var engine = GetEngine();
+								if (!engine.IsDefaultEngine)
+									engine.BeginFindMethodsToOverride(this, loc.Line, loc.Column);
+							}
 							break;
 						default:
 							Debug.Assert(false);
