@@ -1,28 +1,44 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
 using System.Drawing;
 using System.Linq;
 using System.Text;
 using System.Windows.Forms;
+using Nemerle.Completion2;
 using Nemerle.VisualStudio.LanguageService;
 using Nemerle.Compiler;
 using System.Diagnostics;
 using NUtils = Nemerle.Compiler.Utils.Utils;
-using BFld = System.Reflection.BindingFlags;
 using TypeMembers = System.Collections.Generic.KeyValuePair<Nemerle.Compiler.MType.Class, Nemerle.Compiler.IMember>;
 using Microsoft.VisualStudio.Package;
-using Microsoft.VisualStudio.TextManager.Interop;
 
 namespace Nemerle.VisualStudio.GUI
 {
-	public partial class ImplementMembersForm : Form
+  // ReSharper disable LocalizableElement
+  // ReSharper disable PossibleNullReferenceException
+  public partial class ImplementMembersForm : Form
 	{
 		readonly NemerleSource _source;
 		readonly TypeBuilder _ty;
 		readonly IEnumerable<IMember> _unimplementedMembers;
-    int _imageSize;
+	  readonly int _imageSize;
+
+    class MemberImplInfo
+    {
+      public readonly IMember Member;
+      public readonly bool Explicit;
+      public readonly string AccessModifier;
+      public readonly string ImplementationName;
+
+
+      public MemberImplInfo(IMember member, bool @explicit, string accessModifier, string implementationName)
+      {
+        Member = member;
+        Explicit = @explicit;
+        AccessModifier = accessModifier;
+        ImplementationName = implementationName;
+      }
+    }
 
 		public ImplementMembersForm(NemerleSource source, TypeBuilder ty, IEnumerable<IMember> unimplementedMembers)
 		{
@@ -32,46 +48,61 @@ namespace Nemerle.VisualStudio.GUI
 			
       InitializeComponent();
 
+      #region Init events hendlers
+
+      _grid.CellPainting += CellPainting;
+      _grid.CellValueChanged += CellValueChanged;
+      _grid.CellValidating += CellValidating;
+      _grid.CurrentCellDirtyStateChanged += CurrentCellDirtyStateChanged;
+      
+      #endregion
+      #region Init ImageList
+
       imageList1.Images.AddStrip(Resources.SO_TreeViewIcons);
       _imageSize = imageList1.ImageSize.Width;
       Debug.Assert(imageList1.ImageSize.Width == imageList1.ImageSize.Height);
+      
+      #endregion
 
       if (_unimplementedMembers == null)
         return;
 
-      //var _ty.GetDirectSuperTypes().GroupJoin(_unimplementedMembers, itf => itf.tycon, m => m.DeclaringType,
-      //  (t, ms) => new { Ty = t, Members = ms });
+		  FillTable(MakeTypeMembersMap());
+		}
+
+    /// <summary>
+    /// Групирует члены по типам в которых они объявлены и возвращает результат.
+    /// При этом типы являются подстановочными типами (а не просто TypeInf), что позволяет
+    /// создать для них корректные реализации (с верными значениями параметров типов).
+    /// </summary>
+    private Dictionary<MType.Class, IMember[]> MakeTypeMembersMap()
+    {
       var implItfs = _ty.GetDirectSuperTypes().Where(t => t.IsInterface);
-			var itfs = _unimplementedMembers.GroupBy(m => m.DeclaringType);
+      var itfs = _unimplementedMembers.GroupBy(m => m.DeclaringType);
       var res = implItfs.Join(itfs, t => t.tycon, itf => itf.Key, (t, itf) => new { Group = itf, Ty = t });
+
       var ht = new Dictionary<MType.Class, IMember[]>();
       foreach (var item in res)
         ht[item.Ty] = ReplaceGettersAndSettersByProperties(item.Group);
 
-			var baseTypes = itfs.Where(g => !g.Key.IsInterface);
-			var tbTy = ty.GetMemType();
+      var baseTypes = itfs.Where(g => !g.Key.IsInterface);
 
-			foreach (var baseType in baseTypes)
-				ht[baseType.Key.GetMemType()] = ReplaceGettersAndSettersByProperties(baseType);
+      foreach (var baseType in baseTypes)
+        ht[baseType.Key.GetMemType()] = ReplaceGettersAndSettersByProperties(baseType);
 
-      FillTable(ht);
-		}
+      return ht;
+    }
 
-    void FillTable(Dictionary<MType.Class, IMember[]> itfs)
+    void FillTable(Dictionary<MType.Class, IMember[]> typeMembersesMap)
 		{
-      _grid.CellPainting                 += CellPainting;
-      _grid.CellValueChanged             += CellValueChanged;
-      _grid.CellValidating               += CellValidating;
-      _grid.CurrentCellDirtyStateChanged += CurrentCellDirtyStateChanged;
-      
-      var accessModaCol = (DataGridViewComboBoxColumn)_grid.Columns["AccessMods"];
-			var explicitCol   = (DataGridViewCheckBoxColumn)_grid.Columns["Explicit"];
-			var implName      = (DataGridViewTextBoxColumn) _grid.Columns["ImplName"];
+      var accessModaCol = AccessModifierColumn();
+			var explicitCol   = ExplicitColumn();
+			var implName      = ImplementationNameColumn();
 
 			accessModaCol.Items.AddRange("public", "private", "protected", "internal", "protected internal");
-			_grid.Rows.Add("All", true);
+			//_grid.Rows.Add("All", true);
 
-			var haveInterfaces = itfs.Any(x => x.Key.IsInterface);
+			var haveInterfaces = HaveInterfaces(typeMembersesMap);
 
 			if (!haveInterfaces)
 			{
@@ -79,7 +110,7 @@ namespace Nemerle.VisualStudio.GUI
 				Text = "Override members of base types";
 			}
 
-			foreach (var item in itfs)
+			foreach (var item in typeMembersesMap)
 			{
 				var isInterface = item.Key.IsInterface;
 				var sifix = isInterface ? " (interface)" : " (base type)";
@@ -90,21 +121,26 @@ namespace Nemerle.VisualStudio.GUI
         foreach (var m in item.Value)
 				{
           var name = m.Name;
-          rowIndex = _grid.Rows.Add(m.Name, true, false, null, m.Name, m);
+          rowIndex = _grid.Rows.Add(name, true, false, null, name, m);
 					row = _grid.Rows[rowIndex];
 					var implementByDefault = isInterface || (m.Attributes & NemerleAttributes.Abstract) != 0;
-					row.Cells["AddImplCol"].Value = implementByDefault;
+          ImplementCell(row).Value = implementByDefault;
 					row.Cells[0].Style.Padding = new Padding(_imageSize * 2, 0, 0, 0);
+
           var gray = Color.FromKnownColor(KnownColor.GrayText);
-          var explicitCell = (DataGridViewCheckBoxCell)row.Cells["Explicit"];
-          
-          row.Cells["AccessMods"].Style.ForeColor = gray;
-          row.Cells["ImplName"].Style.ForeColor = gray;
-          row.Cells["Signature"].Style.ForeColor = gray;
+
+          AccessModifierCell    (row).Style.ForeColor = gray;
+          ImplementationNameCell(row).Style.ForeColor = gray;
+          SignatureCell         (row).Style.ForeColor = gray;
 					row.Tag = new TypeMembers(item.Key, m);
 				}
 			}
-		}
+    }
+
+    private static bool HaveInterfaces(Dictionary<MType.Class, IMember[]> typeMembersesMap)
+    {
+      return typeMembersesMap.Any(x => x.Key.IsInterface);
+    }
 
     private static IMember[] ReplaceGettersAndSettersByProperties(IGrouping<TypeInfo, IMember> item)
     {
@@ -120,8 +156,16 @@ namespace Nemerle.VisualStudio.GUI
         _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
     }
 
+// ReSharper disable MemberCanBeMadeStatic.Local
     void CellValidating(object sender, DataGridViewCellValidatingEventArgs e)
     {
+    }
+// ReSharper restore MemberCanBeMadeStatic.Local
+
+    bool IsExplisitImplColumn(int colIndex)
+    {
+      var name = _grid.Columns[colIndex].Name;
+      return name == "AccessModifier" || name == "ImplementationName";
     }
 
     void CellValueChanged(object sender, DataGridViewCellEventArgs e)
@@ -131,27 +175,22 @@ namespace Nemerle.VisualStudio.GUI
       if (row.Tag == null)
         return;
 
-      switch (_grid.Columns[e.ColumnIndex].Name)
-      {
-        case "AccessMods": case "ImplName":
-          row.Cells["Explicit"].Value = true;
-          break;
-        default:
-          break;
-      }
+      if (IsExplisitImplColumn(e.ColumnIndex))
+          ExplicitCell(row).Value = true;
 
-      var isImpl = (bool)row.Cells["AddImplCol"].Value;
-      var isExplicit = (bool)row.Cells["Explicit"].Value;
+      var isImpl    = ImplementCellValue(row);
+      var isExplicit = ExplicitCellValue(row);
 
-      row.Cells["Explicit"].Style.ForeColor = Color.FromKnownColor(isImpl ? KnownColor.WindowText : KnownColor.GrayText);
+      ExplicitCell(row).Style.ForeColor = Color.FromKnownColor(isImpl ? KnownColor.WindowText : KnownColor.GrayText);
 
       var color = Color.FromKnownColor(isImpl && isExplicit ? KnownColor.WindowText : KnownColor.GrayText);
-      row.Cells["AccessMods"].Style.ForeColor = color;
-      row.Cells["ImplName"].Style.ForeColor   = color;
-      row.Cells["Signature"].Style.ForeColor  = color;
+      AccessModifierCell(row).Style.ForeColor = color;
+      ImplementationNameCell(row).Style.ForeColor   = color;
+      SignatureCell(row).Style.ForeColor  = color;
     
       _grid.Invalidate();
     }
+
 
     void CellPainting(object sender, DataGridViewCellPaintingEventArgs e)
     {
@@ -187,117 +226,139 @@ namespace Nemerle.VisualStudio.GUI
 		
     private void pbImplement_Click(object sender, EventArgs e)
     {
-			var newLine = Environment.NewLine;
-
-			var res = _grid.Rows.Cast<DataGridViewRow>()
-				.Where(r => r.Tag != null && (bool)r.Cells["AddImplCol"].Value)
-        .GroupBy(r => ((TypeMembers)r.Tag).Key, r => 
-          new 
-          {
-            Type       = ((TypeMembers)r.Tag).Key,
-            Member     = ((TypeMembers)r.Tag).Value, 
-            Explicit   = (bool)r.Cells["Explicit"].Value,
-            AccessMods = (string)r.Cells["AccessMods"].Value,
-            ImplName   = (string)r.Cells["ImplName"].Value
-          });
-
-      var stubs    = res.ToArray();
-			var laggSrv = _source.LanguageService;
-			var pref    = laggSrv.Preferences;
-
-			_source.LockWrite();
-			var sufix = stubs.Length > 1 ? "s" : "";
-			var editArray = new EditArray(_source, null, true, "implement interface" + sufix + " stub" + sufix);
-			try
-			{
-
-				foreach (var stub in stubs)
-				{
-					var writer = new System.IO.StringWriter();
-					var itfMems = stub.ToArray();
-					var isInterface = stub.Key.IsInterface;
-					var ty = _ty.GetMemType();
-
-					foreach (var item2 in itfMems)
-					{
-						if (isInterface)
-							NUtils.GenerateMemberImplementation(writer, _source.FileIndex,
-								stub.Key, item2.Member, item2.Explicit, item2.AccessMods, item2.ImplName);
-						else
-						{
-							var am = (item2.Member.Attributes | NemerleAttributes.Override)
-								& ~(NemerleAttributes.Abstract | NemerleAttributes.Virtual);
-							var acessMods = am.ToString().ToLower().Replace(",", "");
-
-							NUtils.GenerateMemberImplementation(writer, _source.FileIndex,
-								ty, item2.Member, false, acessMods, "");
-						}
-
-						writer.WriteLine();
-					}
-
-					var sb = writer.GetStringBuilder();
-					//sb.Length -= Environment.NewLine.Length;
-					if (!pref.InsertTabs && pref.IndentSize == 1)
-						sb.Replace("\t", pref.MakeIndentString());
-
-					TextPoint pt = new TextPoint();
-					string indent = null;
-
-					var member = NUtils.GetLastImplementedMembersOfInterface(_ty, stub.Key);
-
-					if (member.IsSome)
-					{
-						// Используем meber.Value для получения места вставки
-						var endLine = member.Value.Location.EndLine;
-						var text = _source.GetLine(endLine);
-						indent = text.GetLiadingSpaces();
-						pt = new TextPoint(endLine + 1, 1);
-						//TODO: Этот код рассчитывает на то, что за членом не идет многострочного коментария
-						// или другого члена. Надо бы сделать реализацию не закладывающуюся на это.
-					}
-					else // Ни одного члена этого интерфейса не реализовано в классе...
-					{
-						// Оборачиваем реализуемые методы в #region
-						sb.Insert(0, "#region " + stub.Key + "  Members" + newLine + newLine);
-						sb.AppendLine("#endregion " + stub.Key + "  Members" + newLine);
-						// Вставляем описание интерфейса в конец класса
-						var endLine = _ty.Location.EndLine;
-						var text = _source.GetLine(endLine);
-						indent = text.GetLiadingSpaces();
-						pt = new TextPoint(endLine, 1);
-						indent += pref.MakeIndentString();
-						//TODO: Этот код рассчитывает на то, что конец типа распологается на отдельной строке.
-						// Надо бы сделать реализацию не закладывающуюся на это.
-					}
-
-					sb.Insert(0, indent);
-					sb.Replace("\n", "\n" + indent);
-					TrimEnd(sb);
-
-					Location inertLoc = new Location(_source.FileIndex, pt, pt);
-					TextSpan span = inertLoc.ToTextSpan();
-
-					editArray.Add(new EditSpan(span, sb.ToString()));
-					//_source.SetText(span, sb.ToString());
-				}
-
-				editArray.ApplyEdits();
-				Close();
-			}
-			catch (Exception ex)
-			{
-				_source.ProjectInfo.ShowMessage("Error: " + ex.Message, Nemerle.Completion2.MessageType.Error);
-			}
-			finally
-			{
-				editArray.Dispose();
-				_source.UnlockWrite();
-			}
-
-      //Debug.WriteLine(writer.GetStringBuilder().Replace("\t", "  ").ToString());
+      InsertStabsIntoSource();
     }
 
+    private void InsertStabsIntoSource()
+    {
+      var res = _grid.Rows.Cast<DataGridViewRow>()
+        .Where(r => r.Tag != null && (bool)ImplementCell(r).Value)
+        .GroupBy(r => ((TypeMembers)r.Tag).Key, r =>
+            new MemberImplInfo(
+              ((TypeMembers)r.Tag).Value, 
+              ExplicitCellValue(r),
+              AccessModifierCellValue(r),
+              ImplementationNameCellValue(r)
+              ));
+
+      var stubs    = res.ToArray();
+      var laggSrv = _source.LanguageService;
+      var pref    = laggSrv.Preferences;
+      var sufix = stubs.Length > 1 ? "s" : "";
+      var editArray = new EditArray(_source, null, true, "implement interface" + sufix + " stub" + sufix);
+
+      _source.LockWrite();
+      try
+      {
+        MakeChanges(stubs, pref, editArray);
+        editArray.ApplyEdits();
+        Close();
+      }
+      catch (Exception ex)
+      {
+        _source.ProjectInfo.ShowMessage("Error: " + ex.Message, MessageType.Error);
+      }
+      finally
+      {
+        editArray.Dispose();
+        _source.UnlockWrite();
+      }
+    }
+
+// ReSharper disable ParameterTypeCanBeEnumerable.Local
+    private void MakeChanges(IGrouping<MType.Class, MemberImplInfo>[] stubs, LanguagePreferences pref, EditArray editArray)
+// ReSharper restore ParameterTypeCanBeEnumerable.Local
+    {
+      var newLine = Environment.NewLine;
+
+      foreach (var stub in stubs)
+      {
+        var sb = MakeStubsForTypeMembers(stub);
+
+        //sb.Length -= Environment.NewLine.Length;
+        if (!pref.InsertTabs && pref.IndentSize == 1)
+          sb.Replace("\t", pref.MakeIndentString());
+
+        TextPoint pt;
+        string indent;
+
+        var lastImplementedMembers = NUtils.GetLastImplementedMembersOfInterface(_ty, stub.Key);
+
+        #region Calc indent and insertion point
+
+        if (lastImplementedMembers.IsSome)
+        {
+          // Используем meber.Value для получения места вставки
+          var endLine = lastImplementedMembers.Value.Location.EndLine;
+          var text = _source.GetLine(endLine);
+          indent = text.GetLiadingSpaces();
+          pt = new TextPoint(endLine + 1, 1);
+          //TODO: Этот код рассчитывает на то, что за членом не идет многострочного коментария
+          // или другого члена. Надо бы сделать реализацию не закладывающуюся на это.
+        }
+        else // Ни одного члена этого интерфейса не реализовано в классе...
+        {
+          // Оборачиваем реализуемые методы в #region
+          sb.Insert(0, "#region " + stub.Key + "  Members" + newLine + newLine);
+          sb.AppendLine("#endregion " + stub.Key + "  Members" + newLine);
+          // Вставляем описание интерфейса в конец класса
+          var endLine = _ty.Location.EndLine;
+          var text = _source.GetLine(endLine);
+          indent = text.GetLiadingSpaces();
+          pt = new TextPoint(endLine, 1);
+          indent += pref.MakeIndentString();
+          //TODO: Этот код рассчитывает на то, что конец типа распологается на отдельной строке.
+          // Надо бы сделать реализацию не закладывающуюся на это.
+        }
+        
+        #endregion
+
+        sb.Insert(0, indent);
+        sb.Replace("\n", "\n" + indent);
+        TrimEnd(sb);
+
+        var inertLoc = new Location(_source.FileIndex, pt, pt);
+        var span     = inertLoc.ToTextSpan();
+
+        editArray.Add(new EditSpan(span, sb.ToString()));
+      }
+    }
+
+    private StringBuilder MakeStubsForTypeMembers(IGrouping<MType.Class, MemberImplInfo> stubInfos)
+    {
+      var writer = new System.IO.StringWriter();
+      var members = stubInfos.ToArray();
+      var isInterface = stubInfos.Key.IsInterface;
+      var ty = isInterface ? stubInfos.Key : _ty.GetMemType();
+
+      foreach (var memberImplInfo in members)
+      {
+        var member = memberImplInfo.Member;
+        var @explicit = memberImplInfo.Explicit;
+        var accessModifier = memberImplInfo.AccessModifier;
+        var implementationName = memberImplInfo.ImplementationName;
+
+        if (isInterface)
+          NUtils.GenerateMemberImplementation(writer, _source.FileIndex,
+                                              ty, member, @explicit, accessModifier, implementationName);
+        else
+        {
+          var am = (member.Attributes | NemerleAttributes.Override)
+                   & ~(NemerleAttributes.Abstract | NemerleAttributes.Virtual);
+          var acessMods = am.ToString().ToLower().Replace(",", "");
+
+          NUtils.GenerateMemberImplementation(writer, _source.FileIndex,
+                                              ty, member, false, acessMods, "");
+        }
+
+        writer.WriteLine();
+      }
+
+      return writer.GetStringBuilder();
+    }
+
+    #region Utils
+    
 		static void TrimEnd(StringBuilder sb)
 		{
 			for (int i = sb.Length - 1; i > 0; i--)
@@ -310,5 +371,72 @@ namespace Nemerle.VisualStudio.GUI
 				}
 			}
 		}
+    
+    private DataGridViewTextBoxColumn ImplementationNameColumn()
+    {
+      return (DataGridViewTextBoxColumn)_grid.Columns["ImplementationName"];
+    }
+
+    private DataGridViewCheckBoxColumn ExplicitColumn()
+    {
+      return (DataGridViewCheckBoxColumn)_grid.Columns["Explicit"];
+    }
+
+    private DataGridViewComboBoxColumn AccessModifierColumn()
+    {
+      return (DataGridViewComboBoxColumn)_grid.Columns["AccessModifier"];
+    }
+
+    private static DataGridViewCell SignatureCell(DataGridViewRow row)
+    {
+      return row.Cells["Signature"];
+    }
+
+    private static string SignatureCellValue(DataGridViewRow row)
+    {
+      return (string)SignatureCell(row).Value;
+    }
+
+    private static DataGridViewCell ImplementationNameCell(DataGridViewRow row)
+    {
+      return row.Cells["ImplementationName"];
+    }
+
+    private static string ImplementationNameCellValue(DataGridViewRow row)
+    {
+      return (string)ImplementationNameCell(row).Value;
+    }
+
+    private static DataGridViewCell AccessModifierCell(DataGridViewRow row)
+    {
+      return row.Cells["AccessModifier"];
+    }
+
+    private static string AccessModifierCellValue(DataGridViewRow row)
+    {
+      return (string)AccessModifierCell(row).Value;
+    }
+
+    private static DataGridViewCell ImplementCell(DataGridViewRow row)
+    {
+      return row.Cells["Implement"];
+    }
+
+    private static bool ImplementCellValue(DataGridViewRow row)
+    {
+      return (bool)ImplementCell(row).Value;
+    }
+
+    private static DataGridViewCell ExplicitCell(DataGridViewRow row)
+    {
+      return row.Cells["Explicit"];
+    }
+
+    private static bool ExplicitCellValue(DataGridViewRow row)
+    {
+      return (bool)ExplicitCell(row).Value;
+    }
+
+    #endregion
 	}
 }

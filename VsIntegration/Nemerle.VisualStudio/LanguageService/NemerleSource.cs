@@ -9,12 +9,10 @@ using Nemerle.Completion2.CodeFormatting;
 using Nemerle.VisualStudio.Project;
 
 using System.Collections.Generic;
-//using System.Collections;
 using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System;
-using System.Reflection;
 
 using VsCommands2K      = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
 using TopDeclaration    = Nemerle.Compiler.Parsetree.TopDeclaration;
@@ -61,7 +59,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		#region Properties
 
 		public     DateTime                LastDirtyTime { get; private set; }
-		public new DateTime                LastParseTime { get; private set; }
+		//public new DateTime                LastParseTime { get; private set; }
 		public     NemerleLanguageService  Service       { get; private set; }
 		public     NemerleScanner          Scanner       { get; private set; }
 		public     ProjectInfo             ProjectInfo   { get; private set; }
@@ -97,8 +95,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region Fields
 
+	  readonly List<RelocationRequest>  _relocationRequestsQueue = new List<RelocationRequest>();
 		int                      _fileIndex               = -1;
-		List<RelocationRequest>  _relocationRequestsQueue = new List<RelocationRequest>();
     QuickTipInfoAsyncRequest _tipAsyncRequest;
 
 		#endregion
@@ -347,55 +345,56 @@ namespace Nemerle.VisualStudio.LanguageService
     private GotoInfo[] TryGetGotoInfoForMemberFromSource(IMember member, Location loc, CompileUnit cu)
     {
       Trace.Assert(member != null);
-      var ty = member as Nemerle.Compiler.TypeInfo;
+      var ty = (TypeInfo)member;
       var soughtIsType = ty != null;
 
       if (ty == null)
+// ReSharper disable PossibleNullReferenceException
         ty = member.DeclaringType;
+// ReSharper restore PossibleNullReferenceException
 
       var td = FindTopDeclaration(ty, cu);
 
       if (td == null)
         return new GotoInfo[0];
-      else if (soughtIsType)
+      
+      if (soughtIsType)
         return new[] { new GotoInfo(Location.GetFileName(cu.FileIndex), td.NameLocation) };
-      else
+
+      var name = member.Name;
+      var file = Location.GetFileName(cu.FileIndex);
+      var members = td.GetMembers().Where(m => string.Equals(m.Name, name, StringComparison.Ordinal)).ToArray();
+
+      if (members.Length == 1)
+        return new[] { new GotoInfo(file, members[0].NameLocation) };
+
+      var isProp = member is IProperty;
+
+      members = td.GetMembers().Where(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)
+                                           // Макро [Accessor] может изменять имя свойства. Учитываем это...
+                                           || (isProp && string.Equals(m.Name.Replace("_", ""), name, StringComparison.OrdinalIgnoreCase))).ToArray();
+
+      if (members.Length > 0)
       {
-        var name = member.Name;
-        var file = Location.GetFileName(cu.FileIndex);
-        var members = td.GetMembers().Where(m => string.Equals(m.Name, name, StringComparison.Ordinal)).ToArray();
-
-        if (members.Length == 1)
-          return new[] { new GotoInfo(file, members[0].NameLocation) };
-
-        var isProp = member is IProperty;
-
-        members = td.GetMembers().Where(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)
-          // Макро [Accessor] может изменять имя свойства. Учитываем это...
-          || (isProp && string.Equals(m.Name.Replace("_", ""), name, StringComparison.OrdinalIgnoreCase))).ToArray();
-
-        if (members.Length > 0)
+        if (loc.Column > 0)
         {
-          if (loc.Column > 0)
-          {
-            var members2 = members.Where(m => m.Location.Contains(loc)).ToArray();
-            if (members2.Length > 0)
-              return members2.Select(m => new GotoInfo(file, m.NameLocation)).ToArray();
-            else
-              return new[] { new GotoInfo(file, td.NameLocation) };
-          }
-          else if (members.Length == 1)
-            return new[] { new GotoInfo(file, members[0].NameLocation) };
+          var members2 = members.Where(m => m.Location.Contains(loc)).ToArray();
+          if (members2.Length > 0)
+            return members2.Select(m => new GotoInfo(file, m.NameLocation)).ToArray();
           else
-            return FindBastMember(members, member).Select(m => new GotoInfo(file, m.NameLocation)).ToArray();
+            return new[] { new GotoInfo(file, td.NameLocation) };
         }
-
-        // Ищем член (функцию, свойство, поле...)
-        if (soughtIsType)
-          return new[] { new GotoInfo(file, td.NameLocation) };
+        else if (members.Length == 1)
+          return new[] { new GotoInfo(file, members[0].NameLocation) };
         else
-          return new GotoInfo[0];
+          return FindBastMember(members, member).Select(m => new GotoInfo(file, m.NameLocation)).ToArray();
       }
+
+      // Ищем член (функцию, свойство, поле...)
+      if (soughtIsType)
+        return new[] { new GotoInfo(file, td.NameLocation) };
+      else
+        return new GotoInfo[0];
     }
 
     private ClassMember[] FindBastMember(ClassMember[] members, IMember member)
