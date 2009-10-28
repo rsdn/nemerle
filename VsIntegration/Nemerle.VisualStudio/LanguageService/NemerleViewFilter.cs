@@ -708,14 +708,14 @@ namespace Nemerle.VisualStudio.LanguageService
 		public override bool HandlePreExec(
 			ref Guid guidCmdGroup, uint nCmdId, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
 		{
-			VsCommands2K cmd = (VsCommands2K)nCmdId;
+			var cmd = (VsCommands2K)nCmdId;
 
-			// we're goona to erase some symbol from existence. 
-			// In some cases we need to know what it was (auto-deletion of paired token)
-			if (cmd == VsCommands2K.BACKSPACE)
-				Source.RememberCharBeforeCaret(TextView);
-			else
-				Source.ClearRememberedChar();
+      //// we're goona to erase some symbol from existence. 
+      //// In some cases we need to know what it was (auto-deletion of paired token)
+      //if (cmd == VsCommands2K.BACKSPACE)
+      //  Source.RememberCharBeforeCaret(TextView);
+      //else
+      //  Source.ClearRememberedChar();
 
 			_startLine = -1;
 

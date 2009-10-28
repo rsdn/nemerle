@@ -1,3 +1,4 @@
+using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio.Project;
 using Microsoft.VisualStudio.TextManager.Interop;
@@ -26,6 +27,7 @@ using Nemerle.VisualStudio.GUI;
 using System.Windows.Forms;
 using Nemerle.Compiler.Parsetree;
 
+// ReSharper disable LocalizableElement
 
 namespace Nemerle.VisualStudio.LanguageService
 {
@@ -36,7 +38,9 @@ namespace Nemerle.VisualStudio.LanguageService
 		public NemerleSource(NemerleLanguageService service, IVsTextLines textLines, Colorizer colorizer)
 			: base(service, textLines, colorizer)
 		{
+// ReSharper disable DoNotCallOverridableMethodsInConstructor
 			string path = GetFilePath();
+// ReSharper restore DoNotCallOverridableMethodsInConstructor
 
 			Service = service;
 			ProjectInfo = ProjectInfo.FindProject(path);
@@ -105,12 +109,12 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override void OnChangeLineText(TextLineChange[] lineChange, int last)
 		{
-			var oldLastDirtyTime = LastDirtyTime;
+			//var oldLastDirtyTime = LastDirtyTime;
 			base.OnChangeLineText(lineChange, last);
 			TimeStamp++;
-			var timer = Stopwatch.StartNew();
+			//var timer = Stopwatch.StartNew();
 
-      ProjectInfo projectInfo = this.ProjectInfo;
+      ProjectInfo projectInfo = ProjectInfo;
 
       if (projectInfo == null)
       {
@@ -154,7 +158,7 @@ namespace Nemerle.VisualStudio.LanguageService
     {
       CompletionElem[] result = GetEngine().Completion(this, lintIndex + 1, columnIndex + 1);
       var decls = new NemerleDeclarations(result);
-      this.CompletionSet.Init(textView, decls, !byTokenTrigger);
+      CompletionSet.Init(textView, decls, !byTokenTrigger);
     }
 
     public override string GetFilePath()
@@ -162,7 +166,7 @@ namespace Nemerle.VisualStudio.LanguageService
       return Location.GetFileName(FileIndex);
     }
 
-    public override bool IsDirty
+	  public override bool IsDirty
 		{
 			get { return base.IsDirty; }
 			set
@@ -170,7 +174,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				Debug.WriteLine("IsDirty = " + value);
 				base.IsDirty = value;
 				if (value)
-					LastDirtyTime = System.DateTime.Now;
+					LastDirtyTime = DateTime.Now;
 				//else
 				//	LastParseTime = System.DateTime.Now;
 			}
@@ -180,16 +184,10 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 		}
 
-		public override bool OutliningEnabled
-		{
-			get { return base.OutliningEnabled; }
-			set { base.OutliningEnabled = value; }
-		}
-
 		public IVsTextView GetView()
 		{
 			if (Service == null)
-				throw new ArgumentNullException("Service", "The Service property of NemerleSource is null!");
+				throw new InvalidOperationException("The Service property of NemerleSource is null!");
 
 			return Service.GetPrimaryViewForSource(this);
 		}
@@ -291,7 +289,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			{
 				var textEditorWnd = NativeWindow.FromHandle(view.GetWindowHandle());
 
-				using (GotoUsageForm popup = new GotoUsageForm(infos))
+				using (var popup = new GotoUsageForm(infos))
           if ((textEditorWnd == null ? popup.ShowDialog() : popup.ShowDialog(textEditorWnd)) == DialogResult.OK)
 						langSrvc.GotoLocation(popup.Result.Location, captiopn, captiopn != null);
 			}
@@ -328,7 +326,7 @@ namespace Nemerle.VisualStudio.LanguageService
     private GotoInfo[] TryFindGotoInfoByDebugInfo(Engine engine, GotoInfo inf)
     {
       GotoInfo[] infoFromPdb = ProjectInfo.LookupLocationsFromDebugInformation(inf);
-      List<GotoInfo> result = new List<GotoInfo>();
+      var result = new List<GotoInfo>();
 
       foreach (GotoInfo item in infoFromPdb)
       {
@@ -342,10 +340,10 @@ namespace Nemerle.VisualStudio.LanguageService
       return result.ToArray();
     }
 
-    private GotoInfo[] TryGetGotoInfoForMemberFromSource(IMember member, Location loc, CompileUnit cu)
+    private static GotoInfo[] TryGetGotoInfoForMemberFromSource(IMember member, Location loc, CompileUnit cu)
     {
       Trace.Assert(member != null);
-      var ty = (TypeInfo)member;
+      var ty = member as TypeInfo;
       var soughtIsType = ty != null;
 
       if (ty == null)
@@ -379,25 +377,25 @@ namespace Nemerle.VisualStudio.LanguageService
         if (loc.Column > 0)
         {
           var members2 = members.Where(m => m.Location.Contains(loc)).ToArray();
+          
           if (members2.Length > 0)
             return members2.Select(m => new GotoInfo(file, m.NameLocation)).ToArray();
-          else
-            return new[] { new GotoInfo(file, td.NameLocation) };
+          
+          return new[] { new GotoInfo(file, td.NameLocation) };
         }
-        else if (members.Length == 1)
+        
+        if (members.Length == 1)
           return new[] { new GotoInfo(file, members[0].NameLocation) };
-        else
-          return FindBastMember(members, member).Select(m => new GotoInfo(file, m.NameLocation)).ToArray();
+        
+        return FindBastMember(members, member).Select(m => new GotoInfo(file, m.NameLocation)).ToArray();
       }
 
-      // Ищем член (функцию, свойство, поле...)
-      if (soughtIsType)
-        return new[] { new GotoInfo(file, td.NameLocation) };
-      else
-        return new GotoInfo[0];
+      return new GotoInfo[0]; // ничего не нашли
     }
 
-    private ClassMember[] FindBastMember(ClassMember[] members, IMember member)
+// ReSharper disable ParameterTypeCanBeEnumerable.Local
+// ReSharper disable ReturnTypeCanBeEnumerable.Local
+    private static ClassMember[] FindBastMember(ClassMember[] members, IMember member)
     {
       var method = member as IMethod;
 
@@ -407,7 +405,7 @@ namespace Nemerle.VisualStudio.LanguageService
       return members;
     }
 
-    private ClassMember[] FindBastMethod(ClassMember[] members, IMethod method)
+    private static ClassMember[] FindBastMethod(ClassMember[] members, IMethod method)
     {
       var parms = method.GetParameters();
       var parmsCount = parms.Length;
@@ -421,8 +419,10 @@ namespace Nemerle.VisualStudio.LanguageService
 
       return methods2;
     }
+// ReSharper restore ReturnTypeCanBeEnumerable.Local
+// ReSharper restore ParameterTypeCanBeEnumerable.Local
 
-    private TopDeclaration FindTopDeclaration(TypeInfo ty, CompileUnit cu)
+    private static TopDeclaration FindTopDeclaration(TypeInfo ty, CompileUnit cu)
     {
       var fullName = ty.FrameworkTypeName.Replace("+", ".");//ty.FullName;
 
@@ -441,20 +441,20 @@ namespace Nemerle.VisualStudio.LanguageService
       return null;
     }
 
-    private static string GetFullName(TopDeclaration td)
-    {
-      var splName = td.ParsedSplicableName as Nemerle.Compiler.Parsetree.Splicable.Name;
+    //private static string GetFullName(TopDeclaration td)
+    //{
+    //  var splName = td.ParsedSplicableName as Nemerle.Compiler.Parsetree.Splicable.Name;
 
-      if (splName == null || splName.body.context == null)
-        return null;
+    //  if (splName == null || splName.body.context == null)
+    //    return null;
 
-      var nsName = splName.body.context.CurrentNamespace.GetDisplayName();
+    //  var nsName = splName.body.context.CurrentNamespace.GetDisplayName();
 
-      if (nsName.IsNullOrEmpty())
-        return td.Name;
-      else
-        return nsName + "." + td.Name;
-    }
+    //  if (nsName.IsNullOrEmpty())
+    //    return td.Name;
+    //  else
+    //    return nsName + "." + td.Name;
+    //}
 
     public override ParseRequest BeginParse(int line, int idx, TokenInfo info, ParseReason reason, IVsTextView view, ParseResultHandler callback)
     {
@@ -478,7 +478,8 @@ namespace Nemerle.VisualStudio.LanguageService
 					break;
 				default:break;
 			}
-      Debug.WriteLine("Soutce.BeginParse: " + reason.ToString());
+
+      Debug.WriteLine("Soutce.BeginParse: " + reason);
       return null;
     }
 
@@ -501,22 +502,16 @@ namespace Nemerle.VisualStudio.LanguageService
 		public override string ToString()
 		{
       var name = Location.GetFileName(FileIndex);
-			if (IsClosed)
+			
+      if (IsClosed)
 				return "NemerleSource: " + name + " (Closed!)";
-			else
-				return "NemerleSource: " + name;
+			
+      return "NemerleSource: " + name;
 		}
 
 		public override CommentInfo GetCommentFormat()
 		{
-			CommentInfo commentInfo = new CommentInfo();
-
-			commentInfo.UseLineComments = true;
-			commentInfo.LineStart	   = "//";
-			commentInfo.BlockStart	  = "/*";
-			commentInfo.BlockEnd		= "*/";
-
-			return commentInfo;
+		  return new CommentInfo { UseLineComments = true, LineStart = "//", BlockStart = "/*", BlockEnd = "*/" };
 		}
 
 		public override TextSpan CommentLines(TextSpan span, string lineComment)
@@ -558,7 +553,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		public override TokenInfo GetTokenInfo(int line, int col)
 		{
 			//get current line 
-			TokenInfo info = new TokenInfo();
+			var info = new TokenInfo();
 			var colorizer = GetColorizer() as NemerleColorizer;
 
 			if (colorizer == null)
@@ -567,7 +562,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			colorizer.SetCurrentLine(line);
 
 			//get line info
-			TokenInfo[] lineInfo = colorizer.GetLineInfo(this.GetTextLines(), line, this.ColorState);
+			TokenInfo[] lineInfo = colorizer.GetLineInfo(GetTextLines(), line, ColorState);
 
 			if (lineInfo != null)
 			{
@@ -575,7 +570,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				if (col > 0) 
 					col--;
 
-				this.GetTokenInfoAt(lineInfo, col, ref info);
+				GetTokenInfoAt(lineInfo, col, ref info);
 			}
 
 			return info;
@@ -601,22 +596,18 @@ namespace Nemerle.VisualStudio.LanguageService
         return x.iStartLine ^ x.iEndLine ^ x.iEndIndex ^ x.iStartIndex;
       }
 
-      public static TextSpanEqCmp Instance = new TextSpanEqCmp();
+      public static readonly TextSpanEqCmp Instance = new TextSpanEqCmp();
     }
 
 		bool _processingOfHiddenRegions;
 
     public void ProcessHiddenRegions(List<NewHiddenRegion> regions, int sourceVersion)
 		{
-      if (!this.OutliningEnabled)
+      if (!OutliningEnabled)
 				return;
 
-			var timer    = Stopwatch.StartNew();
-			var timerAll = Stopwatch.StartNew();
-
-			int added = 0;
-			int removed = 0;
-			int invalid = 0;
+      //var timer    = Stopwatch.StartNew();
+      //var timerAll = Stopwatch.StartNew();
 
 			//Debug.WriteLine("SetRegions: begin               " + timer.Elapsed); timer.Reset(); timer.Start();
 
@@ -631,33 +622,43 @@ namespace Nemerle.VisualStudio.LanguageService
 			//    При этом студия не востанавливает баннеры, так что их приходится обновлять 
 			//    (см. коментарий к вызову region.SetBanner()).
 
-			IVsEnumHiddenRegions ppenum = null;
 			IVsHiddenTextSession session = GetHiddenTextSession();
 			var aspan = new TextSpan[1];
 			aspan[0] = GetDocumentSpan();
-			ErrorHandler.ThrowOnFailure(session.EnumHiddenRegions((uint)FIND_HIDDEN_REGION_FLAGS.FHR_ALL_REGIONS, HiddenRegionCookie, aspan, out ppenum));
-			uint fetched;
-			var aregion = new IVsHiddenRegion[1];
-
+      var aregion = new IVsHiddenRegion[1];
 			var oldRegionsMap = new Dictionary<TextSpan, IVsHiddenRegion>(TextSpanEqCmp.Instance);
+			IVsEnumHiddenRegions ppenum = null;
 
-			while (ppenum.Next(1, aregion, out fetched) == NativeMethods.S_OK && fetched == 1)
-			{
-				var region = aregion[0];
-				int regTypeInt;
-				ErrorHandler.ThrowOnFailure(region.GetType(out regTypeInt));
-				uint dwData;
-				region.GetClientData(out dwData);
-				HIDDEN_REGION_TYPE regType = (HIDDEN_REGION_TYPE)regTypeInt;
-				if (regType != HIDDEN_REGION_TYPE.hrtCollapsible)// || dwData != 0 && dwData != HiddenRegionCookie)
-					continue;
+      try
+      {
+        
+        ErrorHandler.ThrowOnFailure(session.EnumHiddenRegions((uint)FIND_HIDDEN_REGION_FLAGS.FHR_ALL_REGIONS, HiddenRegionCookie, aspan, out ppenum));
 
-				ErrorHandler.ThrowOnFailure(region.GetSpan(aspan));
-				TextSpan s = aspan[0];
-				var loc = Utils.LocationFromSpan(FileIndex, s);
-				oldRegionsMap[s] = region;
-			}
+        uint fetched;
 
+        while (ppenum.Next(1, aregion, out fetched) == NativeMethods.S_OK && fetched == 1)
+        {
+          var region = aregion[0];
+          int regTypeInt;
+          ErrorHandler.ThrowOnFailure(region.GetType(out regTypeInt));
+          uint dwData;
+          region.GetClientData(out dwData);
+          var regType = (HIDDEN_REGION_TYPE)regTypeInt;
+          if (regType != HIDDEN_REGION_TYPE.hrtCollapsible)// || dwData != 0 && dwData != HiddenRegionCookie)
+            continue;
+
+          ErrorHandler.ThrowOnFailure(region.GetSpan(aspan));
+          TextSpan s = aspan[0];
+          //var loc = Utils.LocationFromSpan(FileIndex, s);
+          oldRegionsMap[s] = region;
+        }
+
+      }
+      finally
+      {
+        if (ppenum != null)
+          Marshal.ReleaseComObject(ppenum);
+      }
 			//Debug.WriteLine("SetRegions: old regions fetched " + timer.Elapsed); timer.Reset(); timer.Start();
 
 			#endregion
@@ -720,7 +721,7 @@ namespace Nemerle.VisualStudio.LanguageService
 					if (!newRegiohsMap.ContainsKey(rg.Key))
 					{ // Чтарый регион не совпадает по местоположению ни с одним из новых. Удаляем его!
 						ErrorHandler.ThrowOnFailure(rg.Value.Invalidate((int)CHANGE_HIDDEN_REGION_FLAGS.chrNonUndoable));
-						removed++;
+						//removed++;
 					}
 				}
 
@@ -737,14 +738,14 @@ namespace Nemerle.VisualStudio.LanguageService
 					int count = newRegions.Count;
 					// For very large documents this can take a while, so add them in chunks of 
 					// 1000 and stop after 5 seconds. 
-					int maxTime = this.LanguageService.Preferences.MaxRegionTime;
-					int chunkSize = 1000;
-					NewHiddenRegion[] chunk = new NewHiddenRegion[chunkSize];
+					int maxTime = LanguageService.Preferences.MaxRegionTime;
+					const int ChunkSize = 1000;
+					var chunk = new NewHiddenRegion[ChunkSize];
 					int i = 0;
 					while (i < count && Utils.TimeSince(start) < maxTime)
 					{
 						int j = 0;
-						while (i < count && j < chunkSize)
+						while (i < count && j < ChunkSize)
 						{
 							NewHiddenRegion r = newRegions[i];
 							if (!TextSpanHelper.ValidSpan(this, r.tsHiddenText))
@@ -752,12 +753,12 @@ namespace Nemerle.VisualStudio.LanguageService
 								//Debug.Assert(false, "Invalid span " + r.tsHiddenText.iStartLine + "," + r.tsHiddenText.iStartIndex + "," 
 								//                     + r.tsHiddenText.iEndLine + "," + r.tsHiddenText.iEndIndex);
 								//break;
-								invalid++;
+								//invalid++;
 							}
 							else
 							{
 								chunk[j] = r;
-								added++;
+								//added++;
 							}
 							i++;
 							j++;
@@ -779,13 +780,10 @@ namespace Nemerle.VisualStudio.LanguageService
         UnlockWrite();
 				_processingOfHiddenRegions = false;
 
-        if (ppenum != null)
-          Marshal.ReleaseComObject(ppenum);
-
 				//Debug.WriteLine("SetRegions: end (took all)      " + timerAll.Elapsed);
       }
 
-      this.RegionsLoaded = true;
+      RegionsLoaded = true;
 		}
     
 		public override void ReformatSpan(EditArray mgr, TextSpan span)
@@ -794,12 +792,12 @@ namespace Nemerle.VisualStudio.LanguageService
 			ProjectInfo projectInfo = ProjectInfo.FindProject(filePath);
 			Engine engine = projectInfo.Engine;
 
-			ReformatSpan_internal(mgr, span, engine, filePath);
+			ReformatSpanInternal(mgr, span, engine, filePath);
 			//ReformatSpan_internal(mgr, span, engine, filePath);
 			//ReformatSpan_internal(mgr, span, engine, filePath);
 			//base.ReformatSpan(mgr, span);
 		}
-		private static void ReformatSpan_internal(EditArray _mgr, TextSpan span, Engine engine, string filePath)
+		private static void ReformatSpanInternal(EditArray mgr, TextSpan span, Engine engine, string filePath)
 		{
 			List<FormatterResult> results =
 				Formatter.FormatSpan(span.iStartLine + 1,
@@ -808,18 +806,23 @@ namespace Nemerle.VisualStudio.LanguageService
 						   span.iEndIndex + 1,
 						   engine,
 						   filePath);
-			EditArray mgr = new EditArray(_mgr.Source, _mgr.TextView, true, "formatting");
-			foreach (FormatterResult res in results)
-			{
-				TextSpan loc = new TextSpan();
-				loc.iStartIndex = res.StartCol - 1;
-				loc.iStartLine = res.StartLine - 1;
-				loc.iEndIndex = res.EndCol - 1;
-				loc.iEndLine = res.EndLine - 1;
+		  using (var editArray = new EditArray(mgr.Source, mgr.TextView, true, "formatting"))
+		  {
+		    foreach (FormatterResult res in results)
+		    {
+		      var loc = new TextSpan
+	                  {
+	                    iStartIndex = res.StartCol - 1,
+	                    iStartLine  = res.StartLine - 1,
+	                    iEndIndex   = res.EndCol - 1,
+	                    iEndLine    = res.EndLine - 1
+	                  };
 
-				mgr.Add(new EditSpan(loc, res.ReplacementString));
-			}
-			mgr.ApplyEdits();
+		      editArray.Add(new EditSpan(loc, res.ReplacementString));
+		    }
+
+		    editArray.ApplyEdits();
+		  }
 		}
 
 		public override MethodData CreateMethodData()
@@ -827,97 +830,20 @@ namespace Nemerle.VisualStudio.LanguageService
 			return MethodData = base.CreateMethodData();
 		}
 
-		#region Paired chars insertion and deletion
-
-		// TODO: maybe refactor this part so that it will share code with BracketFinder
-		private readonly static char[][] _pairedChars = new char[][]
-			{
-				new char[] {'{', '}'},
-				new char[] {'(', ')'},
-				new char[] {'\'', '\''},
-				new char[] {'[', ']'},
-				new char[] {'"', '"'},
-				new char[] {'<', '>'}
-			};
-
-		private bool IsOpeningPairedChar(char ch)
-		{
-			foreach (char[] charPair in _pairedChars)
-			{
-				if(charPair[0] == ch)
-					return true;
-			}
-			return false;
-		}
-
-		private bool IsClosingPairedChar(char ch)
-		{
-			foreach (char[] charPair in _pairedChars)
-			{
-				if(charPair[1] == ch)
-					return true;
-			}
-			return false;
-		}
-		
-		private char GetClosingChar(char ch)
-		{
-			foreach (char[] charPair in _pairedChars)
-			{
-				if(charPair[0] == ch)
-					return charPair[1];
-			}
-			throw new ApplicationException("Paired char not found for '" + ch + "'");
-		}
-
-		private char _rememberedChar;
-
-		public void RememberCharBeforeCaret(IVsTextView textView)
-		{
-			int line;
-			int idx;
-			textView.GetCaretPos(out line, out idx);
-			if(idx > 0)
-				_rememberedChar = GetText(line, idx - 1, line, idx)[0];
-		}
-
-		public void ClearRememberedChar()
-		{
-			_rememberedChar = (char) 0;
-		}
-
-
-		#endregion
-
-		private void RemoveCharAt(int line, int idx)
-		{
-			SetText(line, idx, line, idx + 1, "");
-		}
-
 		public override void OnCommand(IVsTextView textView, VsCommands2K command, char ch)
 		{
 			if (textView == null || Service == null || !Service.Preferences.EnableCodeSense)
 				return;
 
-			bool backward = (command == VsCommands2K.BACKSPACE || command == VsCommands2K.BACKTAB ||
-				command == VsCommands2K.LEFT || command == VsCommands2K.LEFT_EXT);
-
 			int line, idx;
 			textView.GetCaretPos(out line, out idx);
 
-			//ScanLexer sl = ((NemerleScanner) (GetColorizer().Scanner)).GetLexer();
-			
-			//Tuple<GlobalEnv, TypeBuilder, int, int> ret =
-			//	ProjectInfo.Project.GetActiveEnv(FileIndex, line + 1);
-			//sl.SetLine(line + 1, source, 0, ret.Field0, ret.Field1);
 			TokenInfo tokenBeforeCaret = GetTokenInfo(line, idx);
-			TokenInfo tokenAfterCaret = GetTokenInfo(line, idx + 1);
-
-			//HandlePairedSymbols(textView, command, line, idx, ch);
-
+			
 			if ((tokenBeforeCaret.Trigger & TokenTriggers.MemberSelect) != 0 && (command == VsCommands2K.TYPECHAR))
         Completion(textView, line, idx, true);
-			TryHighlightBraces(textView, command, line, idx, tokenBeforeCaret, tokenAfterCaret);
+			
+      TryHighlightBraces(textView, command, line, idx, tokenBeforeCaret);
 
 			if (!MethodData.IsDisplayed &&
 				(tokenBeforeCaret.Trigger & TokenTriggers.MethodTip) != 0 &&
@@ -928,126 +854,22 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 		}
 
-//    internal void HandleMatchBracesResponse(ParseRequest req)
-//    {
-//      try
-//      {
-//        if (Service == null)
-//          return;
-
-//        // Normalize the spans, and weed out empty ones, since there's no point
-//        // trying to highlight an empty span.
-//        var normalized = new System.Collections.ArrayList();
-//        foreach (TextSpan span in req.Sink.Spans)
-//        {
-//          TextSpan norm = span;
-//          TextSpanHelper.Normalize(ref norm, this.TextLines);
-//          if (!TextSpanHelper.ValidSpan(this, norm))
-//          {
-//            Debug.Assert(false, "Invalid text span");
-//          }
-//          else if (!TextSpanHelper.IsEmpty(norm))
-//          {
-//            normalized.Add(norm);
-//          }
-//        }
-
-//        if (normalized.Count == 0)
-//          return;
-
-//        //transform spanList into an array of spans
-//        TextSpan[] spans = (TextSpan[])normalized.ToArray(typeof(TextSpan));
-
-//        //highlight
-//        ErrorHandler.ThrowOnFailure(req.View.HighlightMatchingBrace((uint)this.service.Preferences.HighlightMatchingBraceFlags, (uint)spans.Length, spans));
-//        //try to show the matching line in the statusbar
-//        if (spans.Length > 0 && Service.Preferences.EnableShowMatchingBrace)
-//        {
-//          IVsStatusbar statusBar = (IVsStatusbar)service.Site.GetService(typeof(SVsStatusbar));
-//          if (statusBar != null)
-//          {
-//            TextSpan span = spans[0];
-//            bool found = false;
-//            // Gather up the other side of the brace match so we can 
-//            // display the text in the status bar. There could be more than one
-//            // if MatchTriple was involved, in which case we merge them.
-//            for (int i = 0, n = spans.Length; i < n; i++)
-//            {
-//              TextSpan brace = spans[i];
-//              if (brace.iStartLine != req.Line)
-//              {
-//                if (brace.iEndLine != brace.iStartLine)
-//                {
-//                  brace.iEndLine = brace.iStartLine;
-//                  brace.iEndIndex = this.GetLineLength(brace.iStartLine);
-//                }
-//                if (!found)
-//                {
-//                  span = brace;
-//                }
-//                else if (brace.iStartLine == span.iStartLine)
-//                {
-//                  span = TextSpanHelper.Merge(span, brace);
-//                }
-//                found = true;
-//              }
-//            }
-//            if (found)
-//            {
-//              Debug.Assert(TextSpanHelper.IsPositive(span));
-//              string text = this.GetText(span);
-
-//              int start;
-//              int len = text.Length;
-
-//              for (start = 0; start < len && Char.IsWhiteSpace(text[start]); start++) ;
-
-//              if (start < span.iEndIndex)
-//              {
-//                if (text.Length > 80)
-//                {
-//                  text = String.Format(CultureInfo.CurrentUICulture, SR.GetString(SR.Truncated), text.Substring(0, 80));
-//                }
-//                text = String.Format(CultureInfo.CurrentUICulture, SR.GetString(SR.BraceMatchStatus), text);
-//                ErrorHandler.ThrowOnFailure(statusBar.SetText(text));
-//              }
-//            }
-//          }
-//        }
-//#if LANGTRACE
-//            } catch (Exception e) {
-//                Trace.WriteLine("HandleMatchBracesResponse exception: " + e.Message);
-//#endif
-//      }
-//      catch
-//      {
-//      }
-//    }
-
-
 		public override void GetPairExtents(IVsTextView view, int line, int col, out TextSpan span)
 		{
 			var spanAry = GetMatchingBraces(false, line, col);
 
-			if (spanAry.Length == 2)
-				{
-					if (TextSpanHelper.ContainsInclusive(spanAry[0], line, col))
-						span = spanAry[1];
-					else
-						span = spanAry[0];
-				}
-				else
-					span = new TextSpan();
-			
+		  if (spanAry.Length == 2)
+		    span = TextSpanHelper.ContainsInclusive(spanAry[0], line, col) ? spanAry[1] : spanAry[0];
+		  else
+		    span = new TextSpan();
 		}
 
 		/// <summary>
 		/// Match paired tokens. Run in GUI thread synchronously!
 		/// </summary>
-		/// <param name="textView">Current view</param>
+		/// <param name="view">Current view</param>
 		/// <param name="line">zero based index of line</param>
 		/// <param name="index">zero based index of char</param>
-		/// <param name="info"></param>
     public bool HighlightBraces(IVsTextView view, int line, int index)
 		{
 			LockWrite();
@@ -1081,7 +903,9 @@ namespace Nemerle.VisualStudio.LanguageService
         }
 
       }
+// ReSharper disable EmptyGeneralCatchClause
       catch { }  // exceptions can be cause by coloring lexer which work in UI thread
+// ReSharper restore EmptyGeneralCatchClause
 
       return compileUnit;
     }
@@ -1090,11 +914,9 @@ namespace Nemerle.VisualStudio.LanguageService
 		/// <summary>
 		/// Match paired tokens. Run in GUI thread synchronously!
 		/// </summary>
-		/// <param name="textView">Current view</param>
 		/// <param name="isMatchBraces">match or highlight mraces</param>
 		/// <param name="line">zero based index of line</param>
 		/// <param name="index">zero based index of char</param>
-		/// <param name="info">Token information</param>
 		public TextSpan[] GetMatchingBraces(bool isMatchBraces, int line, int index)
 		{
 			var nline = line  + 1; // one based number of line
@@ -1106,10 +928,8 @@ namespace Nemerle.VisualStudio.LanguageService
         Location first, last;
 
         if (compileUnit.GetMatchingBraces(FileIndex, nline, ncol, out first, out last))
-          return new TextSpan[] { Utils.SpanFromLocation(first), Utils.SpanFromLocation(last) };
+          return new[] { Utils.SpanFromLocation(first), Utils.SpanFromLocation(last) };
       }
-
-			string fname = this.GetFilePath();
 
 			// Steps: 
 			// 1. Find token under text caret.
@@ -1130,7 +950,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			#endregion
 
 			// Steps: 1-3
-			BracketFinder bracketFinder = new BracketFinder(source, nline, ncol, scanner, colorState);
+			var bracketFinder = new BracketFinder(source, nline, ncol, scanner, colorState);
 
 			// 4. Find paired token in the source file.
 			var matchBraceInfo = bracketFinder.FindMatchBraceInfo();
@@ -1152,18 +972,13 @@ namespace Nemerle.VisualStudio.LanguageService
 				var startSpan = Utils.SpanFromLocation(bracketFinder.StartBraceInfo.Token.Location);
 				var endSpan   = Utils.SpanFromLocation(matchLocation);
 
-				return new TextSpan[] { startSpan, endSpan };
+				return new[] { startSpan, endSpan };
 			}
 
 			return new TextSpan[0];
 		}
 
-		void RefactorindMenuHandler(MenuCmd.CmdId cmdId)
-		{
-			ProjectInfo.ShowMessage("Refactoring: " + cmdId, MessageType.Info);
-		}
-
-		public void ShowTypeNameSmartTag(IVsTextView textView, bool showMenu)
+	  public void ShowTypeNameSmartTag(IVsTextView textView, bool showMenu)
 		{
 			if (_typeNameMarker == null)
 				return;
@@ -1239,7 +1054,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			TryAddTextMarkers(textView, lineIdx + 1, colIdx + 1);
 		}
 
-		private bool TryHighlightBraces(IVsTextView textView, VsCommands2K command, int line, int idx,
+		private void TryHighlightBraces(IVsTextView textView, VsCommands2K command, int line, int idx,
 										TokenInfo tokenInfo)
 		{
 			// Highlight brace to the left from the caret
@@ -1247,23 +1062,16 @@ namespace Nemerle.VisualStudio.LanguageService
 			{
 				if ( (command != VsCommands2K.BACKSPACE) && 
 					(/*(command == VsCommands2K.TYPECHAR) ||*/
-					Service.Preferences.EnableMatchBracesAtCaret)) 
-				{		
-					//if (!this.LanguageService.IsParsing)
-					return HighlightBraces(textView, line, idx);
+					Service.Preferences.EnableMatchBracesAtCaret))
+				{
+				  //if (!this.LanguageService.IsParsing)
+				  HighlightBraces(textView, line, idx);
+				  return;
 				}
 			}
 
-      return false;
+		  return;
 		}
-
-		private void TryHighlightBraces(IVsTextView textView, VsCommands2K command, int line, int idx,
-										TokenInfo tokenBeforeCaret, TokenInfo tokenAfterCaret)
-		{
-			//if (!TryHighlightBraces(textView, command, line, idx + 1, tokenAfterCaret))
-			TryHighlightBraces(textView, command, line, idx, tokenBeforeCaret);
-		}
-
 
     int _oldLine = -1;
     int _oldIdx  = -1;
@@ -1305,33 +1113,33 @@ namespace Nemerle.VisualStudio.LanguageService
         HighlightBraces(textView, line, idx);
 		}
 
-		private void HandlePairedSymbols(IVsTextView textView, VsCommands2K command, int line, int idx, char ch)
-		{
-			// insert paired symbols here
-			if(command == VsCommands2K.TYPECHAR)
-			{
-				if(IsOpeningPairedChar(ch))
-				{
-					SetText(line, idx, line, idx, GetClosingChar(ch).ToString());
-					textView.SetCaretPos(line, idx);
-				}
-				// if we just typed closing char and the char after caret is the same then we just remove 
-				// one of them
-				if(IsClosingPairedChar(ch))
-				{
-					char charAfterCaret = GetText(line, idx, line, idx + 1)[0];
-					if (ch == charAfterCaret/*IsClosingPairedChar(charAfterCaret)*/)
-						RemoveCharAt(line, idx);
-				}
-			}
-			// delete closing char if opened char was just backspaced and closing one is right next
-			if(command == VsCommands2K.BACKSPACE)
-			{
-				char closingChar = GetText(line, idx, line, idx + 1)[0];
-				if(IsOpeningPairedChar(_rememberedChar) && IsClosingPairedChar(closingChar))
-					RemoveCharAt(line, idx);
-			}
-		}
+    //private void HandlePairedSymbols(IVsTextView textView, VsCommands2K command, int line, int idx, char ch)
+    //{
+    //  // insert paired symbols here
+    //  if(command == VsCommands2K.TYPECHAR)
+    //  {
+    //    if(IsOpeningPairedChar(ch))
+    //    {
+    //      SetText(line, idx, line, idx, GetClosingChar(ch).ToString());
+    //      textView.SetCaretPos(line, idx);
+    //    }
+    //    // if we just typed closing char and the char after caret is the same then we just remove 
+    //    // one of them
+    //    if(IsClosingPairedChar(ch))
+    //    {
+    //      char charAfterCaret = GetText(line, idx, line, idx + 1)[0];
+    //      if (ch == charAfterCaret/*IsClosingPairedChar(charAfterCaret)*/)
+    //        RemoveCharAt(line, idx);
+    //    }
+    //  }
+    //  // delete closing char if opened char was just backspaced and closing one is right next
+    //  if(command == VsCommands2K.BACKSPACE)
+    //  {
+    //    char closingChar = GetText(line, idx, line, idx + 1)[0];
+    //    if(IsOpeningPairedChar(_rememberedChar) && IsClosingPairedChar(closingChar))
+    //      RemoveCharAt(line, idx);
+    //  }
+    //}
 
 		#endregion
 
@@ -1397,10 +1205,10 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			IVsHiddenTextSession session = GetHiddenTextSession();
 			IVsEnumHiddenRegions ppenum;
-			TextSpan[] aspan = new TextSpan[1];
+			var aspan = new TextSpan[1];
 			aspan[0] = GetDocumentSpan();
 			ErrorHandler.ThrowOnFailure(session.EnumHiddenRegions((uint)FIND_HIDDEN_REGION_FLAGS.FHR_ALL_REGIONS, HiddenRegionCookie, aspan, out ppenum));
-			IVsHiddenRegion[] aregion = new IVsHiddenRegion[1];
+			var aregion = new IVsHiddenRegion[1];
 			using (new CompoundAction(this, "ToggleAllRegions"))
 			{
 				uint fetched;
@@ -1435,7 +1243,9 @@ namespace Nemerle.VisualStudio.LanguageService
 				RenameSymbolsInternal(newName, usages);
 		}
 
+// ReSharper disable ParameterTypeCanBeEnumerable.Local
 		private void RenameSymbolsInternal(string newName, GotoInfo[] usages)
+// ReSharper restore ParameterTypeCanBeEnumerable.Local
 		{
       var distinctFilesIndices = (from us in usages select us.Location.FileIndex).Distinct();
 
@@ -1450,7 +1260,8 @@ namespace Nemerle.VisualStudio.LanguageService
         Trace.Assert(source != null);
 
         var mgr = new EditArray(source, null, true, "Renaming");
-				var thisFileUsages = from use in usages where use.Location.FileIndex == fileIndex select use;
+			  int index = fileIndex;
+			  var thisFileUsages = usages.Where(use => use.Location.FileIndex == index);
 
 				foreach (var usage in thisFileUsages)
 				{
@@ -1504,7 +1315,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			get
 			{
 				int lineCount;
-				int hr1 = base.GetTextLines().GetLineCount(out lineCount);
+				int hr1 = GetTextLines().GetLineCount(out lineCount);
 				ErrorHandler.ThrowOnFailure(hr1);
 				return lineCount;
 			}
@@ -1550,21 +1361,21 @@ namespace Nemerle.VisualStudio.LanguageService
             iType = (int)HIDDEN_REGION_TYPE.hrtCollapsible,
             dwBehavior = (int)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled, //.hrbClientControlled
             pszBanner = string.IsNullOrEmpty(text) ? null : text,
-            dwClient = NemerleSource.HiddenRegionCookie,
+            dwClient = HiddenRegionCookie,
             dwState = (uint)(secondTime || isExpanded ? HIDDEN_REGION_STATE.hrsExpanded : HIDDEN_REGION_STATE.hrsDefault)
           };
 
-          if (text == "Toplevel typing")
-          {
-            // VladD2: Debug staff
-            var behavior = (HIDDEN_REGION_BEHAVIOR)r.dwBehavior;
-            var dwClient = r.dwClient;
-            var state = (HIDDEN_REGION_STATE)r.dwState;
-            var type = (HIDDEN_REGION_TYPE)r.iType;
-            var text1 = r.pszBanner;
-            var loc = Utils.LocationFromSpan(location.FileIndex, r.tsHiddenText);
-            Debug.Assert(true);
-          }
+          //if (text == "Toplevel typing")
+          //{
+          //  // VladD2: Debug staff
+          //  var behavior = (HIDDEN_REGION_BEHAVIOR)r.dwBehavior;
+          //  var dwClient = r.dwClient;
+          //  var state = (HIDDEN_REGION_STATE)r.dwState;
+          //  var type = (HIDDEN_REGION_TYPE)r.iType;
+          //  var text1 = r.pszBanner;
+          //  var loc = Utils.LocationFromSpan(location.FileIndex, r.tsHiddenText);
+          //  Debug.Assert(true);
+          //}
 
           return r;
         });
@@ -1578,10 +1389,6 @@ namespace Nemerle.VisualStudio.LanguageService
       TryHighlightBraces1(GetView());
 		}
 
-    //public RelocationRequest[] GetRelocationRequests()
-    //{
-    //  return Engine.GetRelocationRequests(RelocationRequestsQueue).ToArray();
-    //}
     public List<RelocationRequest> RelocationRequestsQueue
     {
       get { return _relocationRequestsQueue; }
@@ -1617,7 +1424,7 @@ namespace Nemerle.VisualStudio.LanguageService
         default: break;
       }
 
-      TextOfCompilerMessage(cm, false, text, 0);
+      TextOfCompilerMessage(cm, text, 0);
       return text.ToString();
     }
 
@@ -1636,16 +1443,16 @@ namespace Nemerle.VisualStudio.LanguageService
       // повторно запрашивать hint, если курсор покинет пределы текущего токена.
       var token = GetTokenInfo(line, index + 1);  // GetTokenInfo() выдает информацию о предыдущем токене! +1 заставляет ее брать следующий
       if (token == null)
-        return new TextSpan() { iEndIndex = -1, iStartLine = -1, iStartIndex = -1, iEndLine = -1 };
+        return new TextSpan { iEndIndex = -1, iStartLine = -1, iStartIndex = -1, iEndLine = -1 };
 
       var start = token.StartIndex;
       var end = token.EndIndex + 1; //VladD2: Неизвесно из каких соображений GetTokenInfo() вычитает еденицу из EndIndex. Учитываем это!
-      var hintSpan = new TextSpan() { iStartLine = line, iStartIndex = start, iEndLine = line, iEndIndex = end };
+      var hintSpan = new TextSpan { iStartLine = line, iStartIndex = start, iEndLine = line, iEndIndex = end };
 
       return hintSpan;
     }
 
-    private static void TextOfCompilerMessage(CompilerMessage cm, bool isRelated, StringBuilder text, int indent)
+    private static void TextOfCompilerMessage(CompilerMessage cm, StringBuilder text, int indent)
     {
       const string PosibleOverloadPref = "  Posible overload: ";
 
@@ -1669,7 +1476,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
       if (cm.IsRelatedMessagesPresent)
         foreach (var related in cm.RelatedMessages)
-          TextOfCompilerMessage(related, true, text, indent);
+          TextOfCompilerMessage(related, text, indent);
     }
 
     private static string NemerleErrorTaskToString(NemerleErrorTask task)
@@ -1689,73 +1496,69 @@ namespace Nemerle.VisualStudio.LanguageService
 				_tipAsyncRequest = GetEngine().BeginGetQuickTipInfo(this, loc.Line, loc.Column);
         return VSConstants.E_PENDING;
       }
-      else if (!_tipAsyncRequest.IsCompleted)
+      if (!_tipAsyncRequest.IsCompleted)
         return VSConstants.E_PENDING;
-      else
+
+      var tipInfo = _tipAsyncRequest.QuickTipInfo;
+      _tipAsyncRequest = null;
+
+      if (LanguageService.IsDebugging)
       {
-        QuickTipInfo tipInfo = _tipAsyncRequest.QuickTipInfo;
-        _tipAsyncRequest = null;
-
-        if (LanguageService.IsDebugging)
+        if (NeedDebugDataTip(tipInfo, textSpan))
         {
-          if (NeedDebugDataTip(tipInfo, textSpan))
-          {
-            hintText = "";
-            return (int)TipSuccesses2.TIP_S_NODEFAULTTIP;
-          }
+          hintText = "";
+          return (int)TipSuccesses2.TIP_S_NODEFAULTTIP;
         }
-
-        var span = textSpan[0];
-
-        //QuickTipInfo tipInfo = engine.GetQuickTipInfo(FileIndex, loc.Line, loc.Column);
-
-        //Debug.WriteLine(loc.ToVsOutputStringFormat() + "GetDataTipText()");
-				var projectInfo = ProjectInfo;
-
-				if (projectInfo == null)
-					return (int)TipSuccesses.TIP_S_ONLYIFNOMARKER;
-				var tasks = projectInfo == null
-					? new List<NemerleErrorTask>(0)
-					: projectInfo.FindTaks(t => t.CompilerMessage.Location.Contains(loc) && !t.CompilerMessage.IsRelated).ToList();
-
-        if (tasks.Count == 0 && tipInfo == null)
-          return (int)TipSuccesses.TIP_S_ONLYIFNOMARKER;
-
-        var hintSpan = GetTokenSpan(span.iStartLine, span.iStartIndex);
-
-        if (tipInfo != null)
-        {
-          hintText = tipInfo.Text;
-
-          if (TextSpanHelper.IsEmpty(hintSpan))
-            hintSpan = Utils.SpanFromLocation(tipInfo.Location);
-        }
-
-        if (tasks.Count > 0)
-        {
-          var locAgg = tasks.Aggregate(Location.Default, (loc1, t) => loc1.Combine(t.CompilerMessage.Location));
-          var tasksMsgs = tasks.Select(t => NemerleErrorTaskToString(t));//.ToArray();
-
-          //Debug.WriteLine(token.Type.ToString());
-          if (TextSpanHelper.IsEmpty(hintSpan))
-            hintSpan = Utils.SpanFromLocation(locAgg);
-
-          if (hintText != null)
-            hintText += Environment.NewLine;
-
-          hintText += "------ Compiler messages ------" + Environment.NewLine + tasksMsgs.Join(Environment.NewLine);
-        }
-
-        textSpan[0] = hintSpan; // если не задать не пустой span пересекающийся с исхдным, VS не покажет hint.
-
-        //Debug.WriteLine(Utils.LocationFromSpan(FileIndex, span).ToVsOutputStringFormat() + "result GetDataTipText() text:");
-        //Debug.WriteLine(hintText);
-
-				Microsoft.VisualStudio.OLE.Interop.POINT[] ppt = new Microsoft.VisualStudio.OLE.Interop.POINT[1];
-				view.GetPointOfLineColumn(hintSpan.iStartLine, hintSpan.iStartIndex, ppt);
-
-        return VSConstants.S_OK;
       }
+
+      var span = textSpan[0];
+
+      //QuickTipInfo tipInfo = engine.GetQuickTipInfo(FileIndex, loc.Line, loc.Column);
+
+      //Debug.WriteLine(loc.ToVsOutputStringFormat() + "GetDataTipText()");
+      var projectInfo = ProjectInfo;
+
+      if (projectInfo == null)
+        return (int)TipSuccesses.TIP_S_ONLYIFNOMARKER;
+
+      var tasks = projectInfo.FindTaks(t => t.CompilerMessage.Location.Contains(loc) && !t.CompilerMessage.IsRelated).ToList();
+
+      if (tasks.Count == 0 && tipInfo == null)
+        return (int)TipSuccesses.TIP_S_ONLYIFNOMARKER;
+
+      var hintSpan = GetTokenSpan(span.iStartLine, span.iStartIndex);
+
+      if (tipInfo != null)
+      {
+        hintText = tipInfo.Text;
+
+        if (TextSpanHelper.IsEmpty(hintSpan))
+          hintSpan = Utils.SpanFromLocation(tipInfo.Location);
+      }
+
+      if (tasks.Count > 0)
+      {
+        var locAgg = tasks.Aggregate(Location.Default, (loc1, t) => loc1.Combine(t.CompilerMessage.Location));
+        var tasksMsgs = tasks.Select(t => NemerleErrorTaskToString(t));//.ToArray();
+
+        //Debug.WriteLine(token.Type.ToString());
+        if (TextSpanHelper.IsEmpty(hintSpan))
+          hintSpan = Utils.SpanFromLocation(locAgg);
+
+        if (hintText != null)
+          hintText += Environment.NewLine;
+
+        hintText += "------ Compiler messages ------" + Environment.NewLine + tasksMsgs.Join(Environment.NewLine);
+      }
+
+      textSpan[0] = hintSpan; // если не задать не пустой span пересекающийся с исхдным, VS не покажет hint.
+
+      //Debug.WriteLine(Utils.LocationFromSpan(FileIndex, span).ToVsOutputStringFormat() + "result GetDataTipText() text:");
+      //Debug.WriteLine(hintText);
+
+      view.GetPointOfLineColumn(hintSpan.iStartLine, hintSpan.iStartIndex, new POINT[1]);
+
+      return VSConstants.S_OK;
     }
 
     private bool NeedDebugDataTip(QuickTipInfo quickTipInfo, TextSpan[] textSpan)
@@ -1779,9 +1582,9 @@ namespace Nemerle.VisualStudio.LanguageService
           loc = quickTipInfo.TExpr.Location;
         }
 
-        var debugSpan = new TextSpan[1] { Utils.SpanFromLocation(loc) };
+        var debugSpan = new[] { Utils.SpanFromLocation(loc) };
 
-        string debugTextTip = null;
+        string debugTextTip;
         int hr = debugger.GetDataTipValue(textLines, debugSpan, expr, out debugTextTip);
 
         if (hr == (int)TipSuccesses2.TIP_S_NODEFAULTTIP)
@@ -1792,7 +1595,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
         //Debug.Assert(false);
       }
-      catch (System.Runtime.InteropServices.COMException)
+      catch (COMException)
       {
       }
 
