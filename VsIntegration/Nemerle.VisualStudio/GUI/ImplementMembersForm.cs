@@ -102,9 +102,7 @@ namespace Nemerle.VisualStudio.GUI
 			accessModaCol.Items.AddRange("public", "private", "protected", "internal", "protected internal");
 			//_grid.Rows.Add("All", true);
 
-			var haveInterfaces = HaveInterfaces(typeMembersesMap);
-
-			if (!haveInterfaces)
+      if (!HaveInterfaces(typeMembersesMap))
 			{
 				implName.Visible = explicitCol.Visible = accessModaCol.Visible = false;
 				Text = "Override members of base types";
@@ -231,38 +229,38 @@ namespace Nemerle.VisualStudio.GUI
 
     private void InsertStabsIntoSource()
     {
-      var res = _grid.Rows.Cast<DataGridViewRow>()
-        .Where(r => r.Tag != null && (bool)ImplementCell(r).Value)
-        .GroupBy(r => ((TypeMembers)r.Tag).Key, r =>
-            new MemberImplInfo(
-              ((TypeMembers)r.Tag).Value, 
-              ExplicitCellValue(r),
-              AccessModifierCellValue(r),
-              ImplementationNameCellValue(r)
-              ));
-
-      var stubs    = res.ToArray();
-      var laggSrv = _source.LanguageService;
-      var pref    = laggSrv.Preferences;
-      var sufix = stubs.Length > 1 ? "s" : "";
-      var editArray = new EditArray(_source, null, true, "implement interface" + sufix + " stub" + sufix);
+      var methodStubInfos = ReadMethodStubInfosFromDataGrideView().ToArray();
+      var laggSrv         = _source.LanguageService;
+      var pref            = laggSrv.Preferences;
+      var sufix           = methodStubInfos.Length > 1 ? "s" : "";
+      var editArray       = new EditArray(_source, null, true, "implement interface" + sufix + " stub" + sufix);
 
       _source.LockWrite();
       try
       {
-        MakeChanges(stubs, pref, editArray);
+        MakeChanges(methodStubInfos, pref, editArray);
         editArray.ApplyEdits();
         Close();
       }
-      catch (Exception ex)
-      {
-        _source.ProjectInfo.ShowMessage("Error: " + ex.Message, MessageType.Error);
-      }
+      catch (Exception ex) { _source.ProjectInfo.ShowMessage("Error: " + ex.Message, MessageType.Error); }
       finally
       {
         editArray.Dispose();
         _source.UnlockWrite();
       }
+    }
+
+    private IEnumerable<IGrouping<MType.Class, MemberImplInfo>> ReadMethodStubInfosFromDataGrideView()
+    {
+      return _grid.Rows.Cast<DataGridViewRow>()
+        .Where(r => r.Tag != null && (bool)ImplementCell(r).Value)
+        .GroupBy(r => ((TypeMembers)r.Tag).Key, r =>
+                                                new MemberImplInfo(
+                                                  ((TypeMembers)r.Tag).Value, 
+                                                  ExplicitCellValue(r),
+                                                  AccessModifierCellValue(r),
+                                                  ImplementationNameCellValue(r)
+                                                  ));
     }
 
 // ReSharper disable ParameterTypeCanBeEnumerable.Local
@@ -275,9 +273,23 @@ namespace Nemerle.VisualStudio.GUI
       {
         var sb = MakeStubsForTypeMembers(stub);
 
-        //sb.Length -= Environment.NewLine.Length;
+        // На данном этапе в "sb" находится текст заглушек для членов тела которых отбиты одной табуляцией на отступ.
+        // Заменяем этот табы на отступ указанный в настройках студии для Nemerle.
+        // TODO: Надо сразу генерировать правлиьные отступы, а не пользоваться табами, так как отступы
+        // могут быть не кратными размеру табуляции. При этом отступы должны дополняться пробелами.
+        // подроности смотри в MakeIndentString().
+
         if (!pref.InsertTabs && pref.IndentSize == 1)
           sb.Replace("\t", pref.MakeIndentString());
+
+        // Кроме того члены не имеют отсупа от левого края. Отступ должен совпадать с отступом
+        // типа в который помещаются плюс один отступ.
+        // Кроме того пользователю будет удобно если добавляемые члены будут добавлены после 
+        // последнего члена того же (т.е. типа чьи члены реализуются) типа уже имеющегося в данном типе.
+        // Таким образом мы должны попытаться найти уже реализованные типы. В них найти самый послединй,
+        // и вставить новые члены после него. Если в текущем типе (_ty) еще не было реализовано членов
+        // подтипа (например, интерфейса) к которому относятся добавляемые члены, то производим вставку
+        // в конец текущего типа.
 
         TextPoint pt;
         string indent;
@@ -318,9 +330,7 @@ namespace Nemerle.VisualStudio.GUI
         TrimEnd(sb);
 
         var inertLoc = new Location(_source.FileIndex, pt, pt);
-        var span     = inertLoc.ToTextSpan();
-
-        editArray.Add(new EditSpan(span, sb.ToString()));
+        editArray.Add(new EditSpan(inertLoc.ToTextSpan(), sb.ToString()));
       }
     }
 
@@ -343,6 +353,7 @@ namespace Nemerle.VisualStudio.GUI
                                               ty, member, @explicit, accessModifier, implementationName);
         else
         {
+          // Генерируем override-методы. Для них нужно сформировать правильны модификатор доступа.
           var am = (member.Attributes | NemerleAttributes.Override)
                    & ~(NemerleAttributes.Abstract | NemerleAttributes.Virtual);
           var acessMods = am.ToString().ToLower().Replace(",", "");
@@ -351,7 +362,7 @@ namespace Nemerle.VisualStudio.GUI
                                               ty, member, false, acessMods, "");
         }
 
-        writer.WriteLine();
+        writer.WriteLine(); // разделяем члены пустой строкой
       }
 
       return writer.GetStringBuilder();
