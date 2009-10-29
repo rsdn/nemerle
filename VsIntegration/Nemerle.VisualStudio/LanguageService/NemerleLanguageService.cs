@@ -27,6 +27,7 @@ using AstUtils = Nemerle.Compiler.Utils.AstUtils;
 using Nemerle.VisualStudio.Properties;
 using Microsoft.VisualStudio.Package;
 
+// ReSharper disable LocalizableElement
 namespace Nemerle.VisualStudio.LanguageService
 {
 	///<summary>
@@ -631,6 +632,9 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			if (IsDisposed)
 				return;
+
+      foreach (var prj in ProjectInfo.Projects)
+        prj.Engine.OnIdle();
 
       if (periodic)
       {

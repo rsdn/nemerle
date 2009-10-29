@@ -8,6 +8,7 @@ using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Project;
+using System.Linq;
 
 using Nemerle.VisualStudio.LanguageService;
 using Nemerle.VisualStudio.Project;
@@ -160,6 +161,16 @@ namespace Nemerle.VisualStudio
 		{
 			base.Initialize();
 
+      foreach (var listener in Trace.Listeners.OfType<DefaultTraceListener>())
+        listener.AssertUiEnabled = false;
+
+      foreach (var listener in Debug.Listeners.OfType<DefaultTraceListener>())
+        listener.AssertUiEnabled = false;
+
+		  //Debug.Assert(false);
+		  //Trace.Listeners.Clear();
+		  //Trace.Listeners.Clear();
+
 			RegisterProjectFactory(new NemerleProjectFactory(this));
 			RegisterEditorFactory (new NemerleEditorFactory (this));
 			RegisterProjectFactory(new NemerleWPFProjectFactory(this));
@@ -207,7 +218,7 @@ namespace Nemerle.VisualStudio
 
 		private static void RegisterCommand(OleMenuCommandService service, CommandID commandId, EventHandler handler)
 		{
-			MenuCommand command = new MenuCommand(handler, commandId);
+			var command = new MenuCommand(handler, commandId);
 			service.AddCommand(command);
 			//Debug.WriteLine(string.Format("Menu command {0} added", command));
 		}

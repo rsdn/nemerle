@@ -111,7 +111,7 @@ namespace Nemerle.VisualStudio.Project
     {
       if (IsCosed)
         return;
-
+      Engine.Close();
       IsCosed = true;
       _projects.Remove(this);
       _errorList.Tasks.Clear();

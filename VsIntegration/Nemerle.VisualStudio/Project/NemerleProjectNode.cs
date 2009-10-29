@@ -628,7 +628,7 @@ namespace Nemerle.VisualStudio.Project
       // event handler generation (EventBindingProvider) for the XAML designer.
       OleServiceProvider.AddService(typeof(DesignerContext), DesignerContext, false);
 
-      _projectInfo.BeginReloadProject();
+      //_projectInfo.BeginReloadProject();
     }
 
     public override void PrepareBuild(string config, bool cleanBuild)

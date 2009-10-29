@@ -154,7 +154,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			pkg.SelectionExtend.Enabled = false;
 			pkg.SelectionShrink.Enabled = false;
 
-			Debug.WriteLine("OnKillFocus(IVsTextView view)");
+			//Debug.WriteLine("OnKillFocus(IVsTextView view)");
 			base.OnKillFocus(view);
 		}
 
@@ -167,7 +167,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			pkg.SelectionExtend.Enabled = true;
 			pkg.SelectionShrink.Enabled = true;
 
-			Debug.WriteLine("OnSetFocus(IVsTextView view)");
+			//Debug.WriteLine("OnSetFocus(IVsTextView view)");
 			//ShowAst(view, true);
 			base.OnSetFocus(view);
     
