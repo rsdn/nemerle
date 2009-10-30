@@ -216,12 +216,12 @@ namespace Nemerle.VisualStudio
 			return command;
 		}
 
-		private static void RegisterCommand(OleMenuCommandService service, CommandID commandId, EventHandler handler)
-		{
-			var command = new MenuCommand(handler, commandId);
-			service.AddCommand(command);
-			//Debug.WriteLine(string.Format("Menu command {0} added", command));
-		}
+    //private static void RegisterCommand(OleMenuCommandService service, CommandID commandId, EventHandler handler)
+    //{
+    //  var command = new MenuCommand(handler, commandId);
+    //  service.AddCommand(command);
+    //  //Debug.WriteLine(string.Format("Menu command {0} added", command));
+    //}
 
 		//public IWin32Window TextEditorWindow
 		//{

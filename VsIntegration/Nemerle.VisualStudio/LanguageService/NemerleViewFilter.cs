@@ -80,7 +80,6 @@ namespace Nemerle.VisualStudio.LanguageService
       return Source.GetDataTipText(TextView, aspan, out textValue);
     }
 
-    /// <include file='doc\ViewFilter.uex' path='docs/doc[@for="ViewFilter.GetFullDataTipText"]/*' />
     /// <summary>This method checks to see if the IVsDebugger is running, and if so, 
     /// calls it to get additional information about the current token and returns a combined result.
     /// You can return an HRESULT here like TipSuccesses2.TIP_S_NODEFAULTTIP.</summary>
@@ -98,7 +97,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
         if (debugger != null && Source.LanguageService.IsDebugging)
         {
-          TextSpan[] tsdeb = new TextSpan[1] { new TextSpan() };
+          var tsdeb = new TextSpan[1] { new TextSpan() };
           if (!TextSpanHelper.IsEmpty(ts))
           {
             // While debugging we always want to evaluate the expression user is hovering over
@@ -290,12 +289,7 @@ namespace Nemerle.VisualStudio.LanguageService
 					ShowOptions();
 					return VSConstants.S_OK;
 				case MenuCmd.CmdId.AstToolWindow: // AstToolWindow
-					{
-						//this.CodeWindowManager.LanguageService.
-						NemerleSource source = Source as NemerleSource;
-						if (source != null)
-							source.ProjectInfo.ProjectNode.Package.OnAstToolWindowShow(null, null);
-					}
+          Source.ProjectInfo.ProjectNode.Package.OnAstToolWindowShow(null, null);
 					return VSConstants.S_OK;
 				case MenuCmd.CmdId.AddHighlighting: // cmdIdAddHighlighting
 					HighlightSymbol();
@@ -303,6 +297,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				case MenuCmd.CmdId.ESC: // ESC
 				case MenuCmd.CmdId.RemoveLastHighlighting: // cmdIdRemoveLastHighlighting
 					RemoveLastHighlighting();
+          Source.Service.Hint.Close();
 					if(nCmdId == (int)MenuCmd.CmdId.ESC) // ESC
 						break; // go trocess ESC
 					return VSConstants.S_OK;

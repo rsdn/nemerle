@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Drawing;
+//using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -18,7 +18,8 @@ using Nemerle.Completion2;
 using Nemerle.Compiler.Utils.Async;
 
 using Nemerle.VisualStudio.Project;
-
+using WpfHint;
+using Color = System.Drawing.Color;
 using VsShell = Microsoft.VisualStudio.Shell.VsShellUtilities;
 using Nemerle.VisualStudio.GUI;
 using Nemerle.Utility;
@@ -26,6 +27,7 @@ using AstUtils = Nemerle.Compiler.Utils.AstUtils;
 
 using Nemerle.VisualStudio.Properties;
 using Microsoft.VisualStudio.Package;
+using System.Windows;
 
 // ReSharper disable LocalizableElement
 namespace Nemerle.VisualStudio.LanguageService
@@ -34,7 +36,7 @@ namespace Nemerle.VisualStudio.LanguageService
 	/// This is the base class for a language service that supplies language features including syntax highlighting, brace matching, auto-completion, IntelliSense support, and code snippet expansion.
 	///</summary>
 	[Guid(NemerleConstants.LanguageServiceGuidString)]
-  public class NemerleLanguageService : Microsoft.VisualStudio.Package.LanguageService, IVsTipWindow
+  public class NemerleLanguageService : Microsoft.VisualStudio.Package.LanguageService
 	{
 		#region Fields
 
@@ -60,9 +62,9 @@ namespace Nemerle.VisualStudio.LanguageService
 			AstToolControl.ShowLocation += GotoLocation;
 
 			if (DefaultEngine == null)
-			{
 				DefaultEngine = new Engine(EngineCallbackStub.Default, new TraceWriter(), true);
-			}
+
+      Hint = new Hint();
 		}
 
 		///<summary>
@@ -249,7 +251,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		};
 
-		Dictionary<IVsTextLines, NemerleColorizer> _colorizers = new Dictionary<IVsTextLines,NemerleColorizer>();
+	  readonly Dictionary<IVsTextLines, NemerleColorizer> _colorizers = new Dictionary<IVsTextLines,NemerleColorizer>();
 
 		public override Colorizer GetColorizer(IVsTextLines buffer)
 		{
@@ -740,30 +742,43 @@ namespace Nemerle.VisualStudio.LanguageService
 
     #region IVsTipWindow Members
 
-    void IVsTipWindow.Dismiss()
-    {
-      throw new NotImplementedException();
-    }
+	  public Hint Hint { get; private set; }
 
-    int IVsTipWindow.GetContextStream(out int piPos, out int piLength)
-    {
-      throw new NotImplementedException();
-    }
+    public bool ShowHint(IVsTextView view, TextSpan hintSpan, string hintText)
+	  {
+	    var hWnd = view.GetWindowHandle();
 
-    int IVsTipWindow.GetSizePreferences(Microsoft.VisualStudio.OLE.Interop.RECT[] prcCtxBounds, TIPSIZEDATA[] pSizeData)
-    {
-      throw new NotImplementedException();
-    }
+	    int lineHeight;
+      ErrorHelper.ThrowOnFailure(view.GetLineHeight(out lineHeight));
+      
+	    var ptStart = new Microsoft.VisualStudio.OLE.Interop.POINT[1];
+	    var ptEnd   = new Microsoft.VisualStudio.OLE.Interop.POINT[1];
+	    ErrorHelper.ThrowOnFailure(view.GetPointOfLineColumn(hintSpan.iStartLine, hintSpan.iStartIndex, ptStart));
+	    ErrorHelper.ThrowOnFailure(view.GetPointOfLineColumn(hintSpan.iEndLine, hintSpan.iEndIndex, ptEnd));
 
-    int IVsTipWindow.Paint(IntPtr hdc, Microsoft.VisualStudio.OLE.Interop.RECT[] prc)
-    {
-      throw new NotImplementedException();
-    }
+      NemerleNativeMethods.ClientToScreen(hWnd, ref ptStart[0]);
+      NemerleNativeMethods.ClientToScreen(hWnd, ref ptEnd[0]);
 
-    int IVsTipWindow.WndProc(IntPtr hwnd, uint iMsg, IntPtr wParam, IntPtr lParam)
-    {
-      throw new NotImplementedException();
-    }
+      var hintXml = "<hint>" + hintText.Replace("<unknown>", "&lt;unknown&gt;").Replace("\r", "")
+        .Replace("\n", "<lb/>") + "</hint>";
+
+      var rect = new Rect(new Point(ptStart[0].x, ptStart[0].y), new Point(ptEnd[0].x, ptEnd[0].y + lineHeight));
+
+      if (Hint.IsOpen)
+      {
+        if (Hint.PlacementRect == rect)
+        {
+          Hint.Text = hintXml;
+	        return true;
+        }
+
+        Hint.Close();
+      }
+
+      Hint.Show(hWnd, rect, hintXml);
+
+	    return true;
+	  }
 
     #endregion
   }
