@@ -45,8 +45,13 @@ namespace WpfHint
       set
       {
         _text = value;
-        if (_hintWindow == null) return;
-        foreach (Window window in _hintWindow.OwnedWindows) window.Close();
+        
+        if (_hintWindow == null)
+          return;
+
+        foreach (Window window in _hintWindow.OwnedWindows)
+          window.Close();
+
         _hintWindow.Text = _text;
       }
     }
@@ -89,7 +94,7 @@ namespace WpfHint
       _hintWindow = new HintWindow(this, ht) { Text = _text };
       new WindowInteropHelper(_hintWindow) { Owner = _hintSource.Owner };
       _hintWindow.Closed += HintWindowClosed;
-			_hintWindow.MaxHeight = 1000.0;//System.Windows.Forms.Screen.FromRectangle(PlacementRect).WorkingArea.
+			_hintWindow.MaxHeight = 800.0;//System.Windows.Forms.Screen.FromRectangle(PlacementRect).WorkingArea.
 
       _hintWindow.WrapWidth = _wrapWidth;
       _hintWindow.Show();

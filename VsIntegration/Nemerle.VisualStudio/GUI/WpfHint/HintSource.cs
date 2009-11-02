@@ -1,8 +1,9 @@
 using System;
+using System.Diagnostics;
 
 namespace WpfHint
 {
-  internal class HintSource
+  internal class HintSource : IDisposable
   {
     private Win32.Callback _ownerWndProc;
     private Win32.Callback _rootWndProc;
@@ -21,6 +22,8 @@ namespace WpfHint
 
     public void SubClass(IntPtr owner)
     {
+      Debug.WriteLine("SubClass(): " + owner);
+
       var pt = Win32.GetCursorPos();
       var pt1 = new Win32.POINT(pt.X, pt.Y);
 
@@ -48,11 +51,18 @@ namespace WpfHint
 
     public void UnSubClass()
     {
+      Debug.WriteLine("UnSubClass(): " + _owner);
       if (_owner != IntPtr.Zero && _oldOwner != null)
+      {
+        _oldOwner = null;
         Win32.SetWindowLong(_owner, Win32.GWL_WNDPROC, _oldOwner);
+      }
 
       if (_root != IntPtr.Zero && _oldRoot != null)
+      {
         Win32.SetWindowLong(_root, Win32.GWL_WNDPROC, _oldRoot);
+        _oldRoot = null;
+      }
     }
 
     private int WndProc(IntPtr hwnd, int msg, int wParam, int lParam)
@@ -79,5 +89,20 @@ namespace WpfHint
 
       return Win32.CallWindowProc(_oldRoot, hwnd, msg, wParam, lParam);
     }
+
+    #region Implementation of IDisposable
+
+
+    ~HintSource()
+    {
+      Dispose();
+    }
+
+    public void Dispose()
+    {
+      UnSubClass();
+    }
+
+    #endregion
   }
 }
