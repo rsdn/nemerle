@@ -38,8 +38,19 @@ namespace WinFormTestHint
       var rt  = but.RectangleToScreen(but.ClientRectangle);
 
       hint.WrapWidth = Int32.Parse(textBox1.Text);
-      hint.Show(IntPtr.Zero, new Rect(rt.Left, rt.Top, rt.Width, rt.Height), richTextBox1.Text);
+			var rect = new Rect(rt.Left, rt.Top, rt.Width, rt.Height);
+			hint.Show(IntPtr.Zero, rect, GetHintContent, richTextBox1.Text);
     }
+
+		string GetHintContent(string key)
+		{
+			switch (key)
+			{
+				case "int":    return "<hint>System.<b>Int32</b>!!!</hint>";
+				case "string": return "<hint>System.String!!!</hint>";
+				default:       return "<hint>key '" + key + "' not found!</hint>";
+			}
+		}
 
     void timer_Tick(object sender, EventArgs e)
     {

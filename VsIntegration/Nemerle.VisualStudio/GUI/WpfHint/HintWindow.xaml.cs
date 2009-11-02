@@ -34,7 +34,7 @@ namespace WpfHint
       {
         text = value;
         var root = HintParser.Parse(value);
-        var fe = HintBuilder.Build(root);
+				var fe = HintBuilder.Build(root, hint);
         border.Child = fe;
       }
     }
@@ -89,23 +89,33 @@ namespace WpfHint
     private void OnClick(object sender, RoutedEventArgs e)
     {
       var hc = e.Source as HintControl;
-      if (hc == null) return;
-      if (hc.Handler != null) hint.RaiseClick(hc.Handler);
+      
+			if (hc == null)
+				return;
+
+      if (hc.Handler != null)
+				hint.RaiseClick(hc.Handler);
     }
 
     private void OnMouseHover(object sender, RoutedEventArgs e)
     {
       var hc = e.Source as HintControl;
-      if (hc == null) return;
-      if (hc.Hint != null) ShowSubHint(hc, hc.Hint);
+      if (hc == null)
+				return;
+
+      if (hc.Hint != null)
+				ShowSubHint(hc, hc.Hint);
     }
 
     private void ShowSubHint(FrameworkElement el, string hintText)
     {
       var ht = HintRoot.Create(el);
+
       foreach (HintWindow window in OwnedWindows)
       {
-        if (!window.hintRoot.Equals(ht)) continue;
+        if (!window.hintRoot.Equals(ht))
+					continue;
+
         ht.Dispose();
         return;
       }

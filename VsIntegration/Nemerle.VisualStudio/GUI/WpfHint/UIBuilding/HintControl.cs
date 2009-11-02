@@ -1,81 +1,97 @@
 ﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System;
 
 namespace WpfHint.UIBuilding
 {
-    internal class HintControl : TextBlock
-    {
-        #region ClickEvent
+	internal class HintControl : TextBlock
+	{
+		#region ClickEvent
 
-        public static readonly RoutedEvent ClickEvent =
-            EventManager.RegisterRoutedEvent(
-                "Click",
-                RoutingStrategy.Bubble,
-                typeof (RoutedEventHandler),
-                typeof (HintControl));
+		public static readonly RoutedEvent ClickEvent =
+				EventManager.RegisterRoutedEvent(
+						"Click",
+						RoutingStrategy.Bubble,
+						typeof(RoutedEventHandler),
+						typeof(HintControl));
 
-        public static void AddClickHandler(DependencyObject d, RoutedEventHandler handler)
-        {
-            var element = d as UIElement;
-            if (element != null) element.AddHandler(ClickEvent, handler);
-        }
+		public static void AddClickHandler(DependencyObject d, RoutedEventHandler handler)
+		{
+			var element = d as UIElement;
+			if (element != null)
+				element.AddHandler(ClickEvent, handler);
+		}
 
 
-        public static void RemoveClickHandler(DependencyObject d, RoutedEventHandler handler)
-        {
-            var element = d as UIElement;
-            if (element != null) element.RemoveHandler(ClickEvent, handler);
-        }
+		public static void RemoveClickHandler(DependencyObject d, RoutedEventHandler handler)
+		{
+			var element = d as UIElement;
 
-        #endregion
+			if (element != null)
+				element.RemoveHandler(ClickEvent, handler);
+		}
 
-        #region MouseHover
+		#endregion
 
-        public static readonly RoutedEvent MouseHoverEvent =
-            EventManager.RegisterRoutedEvent(
-                "MouseHover",
-                RoutingStrategy.Bubble,
-                typeof (RoutedEventHandler),
-                typeof (HintControl));
+		#region MouseHover
 
-        public static void AddMouseHoverHandler(DependencyObject d, RoutedEventHandler handler)
-        {
-            var element = d as UIElement;
-            if (element != null) element.AddHandler(MouseHoverEvent, handler);
-        }
+		public static readonly RoutedEvent MouseHoverEvent =
+				EventManager.RegisterRoutedEvent(
+						"MouseHover",
+						RoutingStrategy.Bubble,
+						typeof(RoutedEventHandler),
+						typeof(HintControl));
 
-        public static void RemoveMouseHoverHandler(DependencyObject d, RoutedEventHandler handler)
-        {
-            var element = d as UIElement;
-            if (element != null) element.RemoveHandler(MouseHoverEvent, handler);
-        }
+		public static void AddMouseHoverHandler(DependencyObject d, RoutedEventHandler handler)
+		{
+			var element = d as UIElement;
+			if (element != null) element.AddHandler(MouseHoverEvent, handler);
+		}
 
-        #endregion
+		public static void RemoveMouseHoverHandler(DependencyObject d, RoutedEventHandler handler)
+		{
+			var element = d as UIElement;
+			if (element != null) element.RemoveHandler(MouseHoverEvent, handler);
+		}
 
-        private readonly Span span;
-        public string Handler { get; private set; }
-        public string Hint { get; private set; }
-        public new InlineCollection Inlines { get { return span.Inlines; } }
+		#endregion
 
-        public HintControl(string hintText, string handler)
-        {
-            Hint = hintText;
-            Handler = handler;
+		private readonly Span span;
+		public string Handler { get; private set; }
+		private string _hintKey;
+		public string Hint
+		{
+			get { return HintTextLookup(_hintKey); }
+		}
+		public new InlineCollection Inlines { get { return span.Inlines; } }
+		private Func<string, string> HintTextLookup;
 
-            MouseEnter += delegate { RaiseEvent(new RoutedEventArgs(MouseHoverEvent)); };
+		public HintControl(string hintKey, Func<string, string> hintTextLookup, string handler)
+		{
+			HintTextLookup = hintTextLookup;
+			_hintKey       = hintKey;
+			Handler        = handler;
 
-            if (handler != null)
-            {
-                var hLink = new Hyperlink { Focusable = false };
-                hLink.Click += delegate { RaiseEvent(new RoutedEventArgs(ClickEvent)); };
-                span = hLink;
-            }
-            else
-            {
-                span = new Span();
-            }
-            base.Inlines.Add(span);
-        }
-    }
+			MouseEnter += delegate { RaiseEvent(new RoutedEventArgs(MouseHoverEvent)); };
+
+			if (handler != null)
+			{
+				var hLink = new Hyperlink { Focusable = false };
+				hLink.Click += 
+					delegate
+					{
+						RaiseEvent(new RoutedEventArgs(ClickEvent));
+					};
+				span = hLink;
+			}
+			else
+			{
+				span = new Span();
+			}
+			base.Inlines.Add(span);
+		}
+
+		public HintControl(string hintText, string handler) : this(hintText, x => x, handler) { }
+	}
 }

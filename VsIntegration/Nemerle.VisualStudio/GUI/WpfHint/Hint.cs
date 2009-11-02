@@ -10,8 +10,9 @@ namespace WpfHint
     private HintSource _hintSource;
     private string _text;
     private double _wrapWidth = 400.0;
+		private Func<string, string> _getHintContent;
 
-    public event Action<Hint, string> Click;
+		public event Action<Hint, string> Click;
     public event Action<Hint> Closed;
 
     /// <summary>
@@ -58,14 +59,22 @@ namespace WpfHint
         _hintWindow.Close();
     }
 
-    public void Show(IntPtr owner, Rect placementRect, string text)
+		public void Show(IntPtr owner, Rect placementRect, Func<string, string> getHintContent, string text)
     {
-      PlacementRect = placementRect;
-      Text          = text;
-      Show(owner);
+      PlacementRect   = placementRect;
+      Text            = text;
+			_getHintContent = getHintContent;
+
+			try
+			{
+				Show(owner);
+			}
+			catch
+			{
+			}
     }
 
-    public void Show(IntPtr owner)
+    private void Show(IntPtr owner)
     {
       if (_hintWindow != null)
         throw new NotSupportedException("Hint already shown");
@@ -80,6 +89,7 @@ namespace WpfHint
       _hintWindow = new HintWindow(this, ht) { Text = _text };
       new WindowInteropHelper(_hintWindow) { Owner = _hintSource.Owner };
       _hintWindow.Closed += HintWindowClosed;
+			_hintWindow.MaxHeight = 1000.0;//System.Windows.Forms.Screen.FromRectangle(PlacementRect).WorkingArea.
 
       _hintWindow.WrapWidth = _wrapWidth;
       _hintWindow.Show();
@@ -93,9 +103,18 @@ namespace WpfHint
       if (Closed != null) Closed(this);
     }
 
-    internal void RaiseClick(string handler)
+		internal string RaiseGetHintContent(string key)
+		{
+			if (_getHintContent != null)
+				return _getHintContent(key);
+
+			return key;
+		}
+		
+		internal void RaiseClick(string handler)
     {
-      if (Click != null) Click(this, handler);
+      if (Click != null)
+				Click(this, handler);
     }
   }
 }

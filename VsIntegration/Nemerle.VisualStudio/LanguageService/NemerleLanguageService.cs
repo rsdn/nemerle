@@ -65,6 +65,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				DefaultEngine = new Engine(EngineCallbackStub.Default, new TraceWriter(), true);
 
       Hint = new Hint();
+			Hint.WrapWidth = 900.1;
 		}
 
 		///<summary>
@@ -744,7 +745,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 	  public Hint Hint { get; private set; }
 
-    public bool ShowHint(IVsTextView view, TextSpan hintSpan, string hintText)
+		public bool ShowHint(IVsTextView view, TextSpan hintSpan, Func<string, string> getHintContent, string hintText)
 	  {
 	    var hWnd = view.GetWindowHandle();
 
@@ -775,7 +776,7 @@ namespace Nemerle.VisualStudio.LanguageService
         Hint.Close();
       }
 
-      Hint.Show(hWnd, rect, hintXml);
+      Hint.Show(hWnd, rect, getHintContent, hintXml);
 
 	    return true;
 	  }

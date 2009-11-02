@@ -1557,7 +1557,7 @@ namespace Nemerle.VisualStudio.LanguageService
       //Debug.WriteLine(Utils.LocationFromSpan(FileIndex, span).ToVsOutputStringFormat() + "result GetDataTipText() text:");
       //Debug.WriteLine(hintText);
 
-      if (Service.ShowHint(view, hintSpan, hintText))
+			if (Service.ShowHint(view, hintSpan, tipInfo.GetHintContent, hintText))
         return (int)TipSuccesses2.TIP_S_NODEFAULTTIP;
       
       return VSConstants.S_OK;

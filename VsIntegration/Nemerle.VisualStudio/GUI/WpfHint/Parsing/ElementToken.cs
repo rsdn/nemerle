@@ -42,7 +42,12 @@ namespace WpfHint.Parsing
 
     public override string ToString()
     {
-      return "<" + Name + ">" + Tokens.Aggregate("", (a, o) => a + o) + "</" + Name + ">";
+			var attrs = Attributes.Count <= 0 ? "" : Attributes.Aggregate(" ", 
+				(acc, e) => acc + " " + e.Key + "='" + e.Value + "'");
+      return
+					"<" + Name + attrs + ">" 
+						+ Tokens.Aggregate("", (a, o) => a + o) 
+				+ "</" + Name + ">";
     }
 
 
