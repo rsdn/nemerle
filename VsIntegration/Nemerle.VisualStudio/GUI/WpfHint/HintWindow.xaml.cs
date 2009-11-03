@@ -64,6 +64,7 @@ namespace WpfHint
       // window props
       Left = 0;
       Top = 0;
+      MaxHeight = 800;
       SizeToContent = SizeToContent.WidthAndHeight;
       Opacity = 1;
 
@@ -186,16 +187,13 @@ namespace WpfHint
                              SystemParameters.VirtualScreenHeight * dy);
 
       var pos = rect.BottomLeft;
+
       if (rect.Bottom + size.Height > scrSize.Height)
-      {
         pos.Y = rect.Top - size.Height;
-      }
 
       if (rect.Left + size.Width > scrSize.Width)
-      {
         pos.X = scrSize.Width - size.Width;
-      }
-
+      
       if (pos.Y < 0) pos.Y = 0;
       if (pos.X < 0) pos.X = 0;
 
