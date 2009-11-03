@@ -182,8 +182,8 @@ namespace WpfHint
       var rect = hintRoot.ActiveRect;
 
       var size = new Size(ActualWidth * dx, ActualHeight * dy);
-      var scrSize = new Size(SystemParameters.PrimaryScreenWidth * dx,
-                             SystemParameters.PrimaryScreenHeight * dy);
+      var scrSize = new Size(SystemParameters.VirtualScreenWidth * dx,
+                             SystemParameters.VirtualScreenHeight * dy);
 
       var pos = rect.BottomLeft;
       if (rect.Bottom + size.Height > scrSize.Height)
@@ -196,9 +196,12 @@ namespace WpfHint
         pos.X = scrSize.Width - size.Width;
       }
 
+      if (pos.Y < 0) pos.Y = 0;
+      if (pos.X < 0) pos.X = 0;
+
       // update location
       this.Left = pos.X / dx;
-      this.Top = pos.Y / dy;
+      this.Top  = pos.Y / dy;
     }
 
     #endregion
