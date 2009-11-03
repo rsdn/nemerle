@@ -13,6 +13,7 @@ using System.Windows.Shapes;
 using System.Windows.Threading;
 using WpfHint.Parsing;
 using WpfHint.UIBuilding;
+using System.Diagnostics;
 
 namespace WpfHint
 {
@@ -33,9 +34,17 @@ namespace WpfHint
       set
       {
         text = value;
-        var root = HintParser.Parse(value);
-				var fe = HintBuilder.Build(root, hint);
-        border.Child = fe;
+
+        try
+        {
+          var root = HintParser.Parse(value);
+          var fe = HintBuilder.Build(root, hint);
+          border.Child = fe;
+        }
+        catch (Exception ex)
+        {
+          Trace.WriteLine(ex);
+        }
       }
     }
 

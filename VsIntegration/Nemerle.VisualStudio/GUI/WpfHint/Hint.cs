@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Windows;
 using System.Windows.Interop;
+using System.Diagnostics;
 
 namespace WpfHint
 {
@@ -110,8 +111,16 @@ namespace WpfHint
 
 		internal string RaiseGetHintContent(string key)
 		{
-			if (_getHintContent != null)
-				return _getHintContent(key);
+      try
+      {
+        if (_getHintContent != null)
+          return _getHintContent(key);
+      }
+      catch (Exception ex)
+      {
+        Trace.WriteLine(ex);
+        return "<hint><font color=\"Red\"><b>Exception throw when do hint text lookup:</b></font><lb/>" + ex.Message + "</hint>";
+      }
 
 			return key;
 		}
