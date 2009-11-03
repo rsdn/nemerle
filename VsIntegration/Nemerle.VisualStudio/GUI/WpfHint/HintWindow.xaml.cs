@@ -65,7 +65,7 @@ namespace WpfHint
       Left = 0;
       Top = 0;
       SizeToContent = SizeToContent.WidthAndHeight;
-      Opacity = 0.9;
+      Opacity = 1;
 
       timer.Tick += OnTimerTick;
       LayoutUpdated += OnLayoutUpdated;
