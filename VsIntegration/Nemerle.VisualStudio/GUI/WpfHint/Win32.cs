@@ -36,6 +36,7 @@ namespace WpfHint
 		public const int WM_MOUSEMOVE = 0x0200;
 		public const int WM_MOUSELEAVE = 0x02A3;
 		public const int WM_MOUSEHOVER = 0x02A1;
+    public const int WM_MOVE = 0x0003;
 		public const int GWL_WNDPROC = -4;
 
 		[DllImport("user32.dll")]

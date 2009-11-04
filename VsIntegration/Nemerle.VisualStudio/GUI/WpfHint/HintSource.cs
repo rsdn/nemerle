@@ -92,7 +92,7 @@ namespace WpfHint
 			// Otherwise UnSubClass() will be remove (hide) current messege.
 			int result = Win32.CallWindowProc(_oldRoot, hwnd, msg, wParam, lParam);
 
-			if ((msg == Win32.WM_ACTIVATE || msg == Win32.WM_ACTIVATEAPP) && Activate != null)
+      if ((msg == Win32.WM_ACTIVATE || msg == Win32.WM_MOVE || msg == Win32.WM_ACTIVATEAPP) && Activate != null)
 				Activate();
 
 			return result;
