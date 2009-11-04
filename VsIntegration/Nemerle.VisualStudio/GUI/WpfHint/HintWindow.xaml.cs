@@ -17,191 +17,205 @@ using System.Diagnostics;
 
 namespace WpfHint
 {
-  /// <summary>
-  /// Interaction logic for HintWindow.xaml
-  /// </summary>
-  internal partial class HintWindow
-  {
-    private readonly Hint hint;
-    private readonly HintRoot hintRoot;
-    private readonly DispatcherTimer timer =
-        new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+	/// <summary>
+	/// Interaction logic for HintWindow.xaml
+	/// </summary>
+	internal partial class HintWindow
+	{
+		private readonly Hint            _hint;
+		private readonly HintRoot        _hintRoot;
+		private readonly DispatcherTimer _timer = new DispatcherTimer 
+		                                          { Interval = TimeSpan.FromMilliseconds(1000) };
+		private          string          _text;
 
-    private string text;
-    public string Text
-    {
-      get { return text; }
-      set
-      {
-        text = value;
+		public string Text
+		{
+			get { return _text; }
+			set
+			{
+				_text = value;
 
-        try
-        {
-          var root = HintParser.Parse(value);
-          var fe = HintBuilder.Build(root, hint);
-          border.Child = fe;
-        }
-        catch (Exception ex)
-        {
-          Trace.WriteLine(ex);
-        }
-      }
-    }
+				try
+				{
+					var root = HintParser.Parse(value);
+					var fe = HintBuilder.Build(root, _hint);
+					border.Child = fe;
+				}
+				catch (Exception ex)
+				{
+					Trace.WriteLine(ex);
+				}
+			}
+		}
 
-    public double WrapWidth
-    {
-      get { return ((HintDecorator)border.Child).WrapWidth; }
-      set { ((HintDecorator)border.Child).WrapWidth = value; }
-    }
+		public double WrapWidth
+		{
+			get { return ((HintDecorator)border.Child).WrapWidth; }
+			set { ((HintDecorator)border.Child).WrapWidth = value; }
+		}
 
-    public HintWindow(Hint hint, HintRoot root)
-    {
-      InitializeComponent();
+		public HintWindow(Hint hint, HintRoot root)
+		{
+			InitializeComponent();
 
-      this.hint = hint;
-      hintRoot = root;
+			this._hint    = hint;
+			_hintRoot     = root;
 
-      // window props
-      Left = 0;
-      Top = 0;
-      MaxHeight = 800;
-      SizeToContent = SizeToContent.WidthAndHeight;
-      Opacity = 1;
+			// window props
+			Left          = 0;
+			Top           = 0;
+			MaxHeight     = 800;
+			SizeToContent = SizeToContent.WidthAndHeight;
+			Opacity       = 1;
 
-      timer.Tick += OnTimerTick;
-      LayoutUpdated += OnLayoutUpdated;
-      MouseLeave += OnMouseLeave;
-      hintRoot.MouseLeave += TestMouseOver;
-      MouseRightButtonUp += MouseButtonEventHandler;
+			_timer.Tick          += OnTimerTick;
+			LayoutUpdated        += OnLayoutUpdated;
+			MouseLeave           += OnMouseLeave;
+			_hintRoot.MouseLeave += RestartCloseTimer;
+			MouseRightButtonUp   += MouseButtonEventHandler;
 
-      HintControl.AddClickHandler(this, OnClick);
-      HintControl.AddMouseHoverHandler(this, OnMouseHover);
-    }
+			HintControl.AddClickHandler(this, OnClick);
+			HintControl.AddMouseHoverHandler(this, OnMouseHover);
+		}
 
-    protected override void OnClosed(EventArgs e)
-    {
-      hintRoot.MouseLeave -= TestMouseOver;
-      MouseLeave -= OnMouseLeave;
+		protected override void OnInitialized(EventArgs e)
+		{
+			base.OnInitialized(e);
+			RestartCloseTimer();
+		}
 
-      timer.Stop();
-      hintRoot.Dispose();
-      base.OnClosed(e);
-    }
+		protected override void OnClosed(EventArgs e)
+		{
+			_hintRoot.MouseLeave -= RestartCloseTimer;
+			MouseLeave           -= OnMouseLeave;
 
-    #region HintControl event handling
+			_timer.Stop();
+			_hintRoot.Dispose();
+			base.OnClosed(e);
+		}
 
-    private void MouseButtonEventHandler(object sender, MouseButtonEventArgs e)
-    {
-      if (e.ChangedButton == MouseButton.Right && e.ButtonState == MouseButtonState.Released)
-        Close();
-    }
+		#region HintControl event handling
 
-    private void OnClick(object sender, RoutedEventArgs e)
-    {
-      var hc = e.Source as HintControl;
-      
+		private void MouseButtonEventHandler(object sender, MouseButtonEventArgs e)
+		{
+			if (e.ChangedButton == MouseButton.Right && e.ButtonState == MouseButtonState.Released)
+				Close();
+		}
+
+		private void OnClick(object sender, RoutedEventArgs e)
+		{
+			var hc = e.Source as HintControl;
+			
 			if (hc == null)
 				return;
 
-      if (hc.Handler != null)
-				hint.RaiseClick(hc.Handler);
-    }
+			if (hc.Handler != null)
+				_hint.RaiseClick(hc.Handler);
+		}
 
-    private void OnMouseHover(object sender, RoutedEventArgs e)
-    {
-      var hc = e.Source as HintControl;
-      if (hc == null)
+		private void OnMouseHover(object sender, RoutedEventArgs e)
+		{
+			var hc = e.Source as HintControl;
+			if (hc == null)
 				return;
 
-      if (hc.Hint != null)
+			if (hc.Hint != null)
 				ShowSubHint(hc, hc.Hint);
-    }
+		}
 
-    private void ShowSubHint(FrameworkElement el, string hintText)
-    {
-      var ht = HintRoot.Create(el);
+		private void ShowSubHint(FrameworkElement el, string hintText)
+		{
+			var ht = HintRoot.Create(el);
 
-      foreach (HintWindow window in OwnedWindows)
-      {
-        if (!window.hintRoot.Equals(ht))
+			foreach (HintWindow window in OwnedWindows)
+			{
+				if (!window._hintRoot.Equals(ht))
+				{
+					window.Close();
 					continue;
+				}
 
-        ht.Dispose();
-        return;
-      }
+				ht.Dispose();
+				return;
+			}
 
-      var wnd = new HintWindow(hint, ht) { Text = hintText, Owner = this };
-      wnd.Show();
-    }
+			var wnd = new HintWindow(_hint, ht) { Text = hintText, Owner = this };
+			wnd.Show();
+		}
 
-    #endregion
+		#endregion
 
-    #region Mouse leave checking
+		#region Mouse leave checking
 
-    void OnMouseLeave(object sender, MouseEventArgs e)
-    {
-      TestMouseOver();
-    }
+		void OnMouseLeave(object sender, MouseEventArgs e)
+		{
+			RestartCloseTimer();
+		}
 
-    void TestMouseOver()
-    {
-      // restart timer
-      timer.Stop();
-      timer.Start();
-    }
+		public void RestartCloseTimer()
+		{
+			// restart timer
+			_timer.Stop();
+			_timer.Start();
+		}
 
-    void OnTimerTick(object sender, EventArgs e)
-    {
-      timer.Stop();
+		void OnTimerTick(object sender, EventArgs e)
+		{
+			_timer.Stop();
 
-      if (OwnedWindows.Count > 0) return;
-      if (IsMouseOver) return;
-      if (hintRoot.IsMouseOver) return;
+			if (OwnedWindows.Count > 0 || IsMouseOver || _hintRoot.IsMouseOver)
+			{
+				_timer.Start();
+				return;
+			}
 
-      this.Close();
-      var owner = Owner as HintWindow;
-      if (owner != null) owner.TestMouseOver();
-    }
+			this.Close();
+			
+			var owner = Owner as HintWindow;
 
-    #endregion
+			if (owner != null)
+				owner.OnTimerTick(sender, e);
+		}
 
-    #region Window layout relative to screen
+		#endregion
 
-    void OnLayoutUpdated(object sender, EventArgs e)
-    {
-      var dx = 1.0;
-      var dy = 1.0;
+		#region Window layout relative to screen
 
-      var src = PresentationSource.FromVisual(this);
-      if (src != null)
-      {
-        var m = src.CompositionTarget.TransformToDevice;
-        dx = m.M11;
-        dy = m.M22;
-      }
+		void OnLayoutUpdated(object sender, EventArgs e)
+		{
+			var dx = 1.0;
+			var dy = 1.0;
 
-      var rect = hintRoot.ActiveRect;
+			var src = PresentationSource.FromVisual(this);
+			if (src != null)
+			{
+				var m = src.CompositionTarget.TransformToDevice;
+				dx = m.M11;
+				dy = m.M22;
+			}
 
-      var size = new Size(ActualWidth * dx, ActualHeight * dy);
-      var scrSize = new Size(SystemParameters.VirtualScreenWidth * dx,
-                             SystemParameters.VirtualScreenHeight * dy);
+			var rect = _hintRoot.ActiveRect;
 
-      var pos = rect.BottomLeft;
+			var size = new Size(ActualWidth * dx, ActualHeight * dy);
+			var scrSize = new Size(SystemParameters.VirtualScreenWidth * dx,
+					                   SystemParameters.VirtualScreenHeight * dy);
 
-      if (rect.Bottom + size.Height > scrSize.Height)
-        pos.Y = rect.Top - size.Height;
+			var pos = rect.BottomLeft;
 
-      if (rect.Left + size.Width > scrSize.Width)
-        pos.X = scrSize.Width - size.Width;
-      
-      if (pos.Y < 0) pos.Y = 0;
-      if (pos.X < 0) pos.X = 0;
+			if (rect.Bottom + size.Height > scrSize.Height)
+				pos.Y = rect.Top - size.Height;
 
-      // update location
-      this.Left = pos.X / dx;
-      this.Top  = pos.Y / dy;
-    }
+			if (rect.Left + size.Width > scrSize.Width)
+				pos.X = scrSize.Width - size.Width;
+			
+			if (pos.Y < 0) pos.Y = 0;
+			if (pos.X < 0) pos.X = 0;
 
-    #endregion
-  }
+			// update location
+			this.Left = pos.X / dx;
+			this.Top  = pos.Y / dy;
+		}
+
+		#endregion
+	}
 }
