@@ -202,6 +202,8 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			base.OnChangeScrollInfo(view, iBar, iMinUnit, iMaxUnits, iVisibleUnits, iFirstVisibleUnit);
 
+			Source.Service.Hint.Close();
+
 			var viewUnknown = Utilities.QueryInterfaceIUnknown(view);
 			if (viewUnknown != IntPtr.Zero)
 				Marshal.Release(viewUnknown);
