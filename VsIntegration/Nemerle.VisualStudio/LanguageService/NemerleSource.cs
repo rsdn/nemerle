@@ -1487,6 +1487,10 @@ namespace Nemerle.VisualStudio.LanguageService
     internal int GetDataTipText(IVsTextView view, TextSpan[] textSpan, out string hintText)
     {
       hintText = null;
+
+			if (Service.IsSmartTagActive)
+				return (int)TipSuccesses2.TIP_S_NODEFAULTTIP;
+
       var loc = Utils.LocationFromSpan(FileIndex, textSpan[0]);
 
       if (_tipAsyncRequest == null || _tipAsyncRequest.Line != loc.Line || _tipAsyncRequest.Column != loc.Column)

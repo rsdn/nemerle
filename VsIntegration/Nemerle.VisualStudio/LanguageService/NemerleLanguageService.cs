@@ -40,6 +40,7 @@ namespace Nemerle.VisualStudio.LanguageService
 	{
 		#region Fields
 
+		public bool IsSmartTagActive { get; private set; }
 		public static Engine DefaultEngine { get; private set; }
 		public bool IsDisposed { get; private set; }
 		IVsStatusbar _statusbar;
@@ -113,13 +114,16 @@ namespace Nemerle.VisualStudio.LanguageService
 			var endPos = source.GetPositionOfLineIndex(loc.EndLine, loc.EndColumn);
 			var length = endPos - pos;
 
-			var smartTagData = new NemerleSmartTagData(pos, length, cmdSet, exec, queryStatus);
+			var smartTagData = new NemerleSmartTagData(pos, length, cmdSet, exec, queryStatus,
+				() => IsSmartTagActive = false);
 			ErrorHelper.ThrowOnFailure(smartTagWin.SetSmartTagData(smartTagData));
 
       var shouContextMenu = showMenu ? (uint)TipWindowFlags2.UTW_EXPANDED : 0;
 
 			var viewEx = (IVsTextViewEx)textView;
 			ErrorHelper.ThrowOnFailure(viewEx.UpdateSmartTagWindow(smartTagWin, shouContextMenu));
+
+			IsSmartTagActive = true;
 		}
 
 		internal void ShowSmartTag(IVsTextView textView, bool showMenu, Location loc, MenuCmd.CmdId contextMenuId, Action<MenuCmd.CmdId> exec, Func<MenuCmd.CmdId, uint> queryStatus)
@@ -149,7 +153,7 @@ namespace Nemerle.VisualStudio.LanguageService
         Type typeSTagWin = typeof(VsSmartTagTipWindowClass);
         Guid clsidSTagWin = typeSTagWin.GUID;
         Guid iidSTagWin = typeof(IVsSmartTagTipWindow).GUID;
-        _smartTagWin = pkg.CreateInstance(ref clsidSTagWin, ref iidSTagWin, typeSTagWin) as IVsSmartTagTipWindow;
+        _smartTagWin = (IVsSmartTagTipWindow)pkg.CreateInstance(ref clsidSTagWin, ref iidSTagWin, typeSTagWin);
         Debug.Assert(_smartTagWin != null);
       }
 

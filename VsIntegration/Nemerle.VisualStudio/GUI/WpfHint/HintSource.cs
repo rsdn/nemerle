@@ -67,8 +67,10 @@ namespace WpfHint
 
     private int WndProc(IntPtr hwnd, int msg, int wParam, int lParam)
     {
-      if ((msg == Win32.WM_KEYDOWN || msg == Win32.WM_MOUSEWHEEL) && Activate != null)
-        Activate();
+			int result = Win32.CallWindowProc(_oldOwner, hwnd, msg, wParam, lParam);
+
+			if ((msg == Win32.WM_KEYDOWN || msg == Win32.WM_MOUSEWHEEL) && Activate != null)
+				Activate();
 
       if ((msg == Win32.WM_LBUTTONDOWN || msg == Win32.WM_RBUTTONDOWN) && Activate != null)
         Activate();
@@ -79,15 +81,17 @@ namespace WpfHint
       if (msg == Win32.WM_MOUSELEAVE && MouseLeave != null)
         MouseLeave();
 
-      return Win32.CallWindowProc(_oldOwner, hwnd, msg, wParam, lParam);
+			return result;
     }
 
     private int RootWndProc(IntPtr hwnd, int msg, int wParam, int lParam)
     {
+			int result = Win32.CallWindowProc(_oldRoot, hwnd, msg, wParam, lParam);
+
       if ((msg == Win32.WM_ACTIVATE || msg == Win32.WM_ACTIVATEAPP) && Activate != null)
         Activate();
 
-      return Win32.CallWindowProc(_oldRoot, hwnd, msg, wParam, lParam);
+			return result;
     }
 
     #region Implementation of IDisposable
