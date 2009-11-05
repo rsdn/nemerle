@@ -13,7 +13,9 @@ namespace WpfHint.UIBuilding
   {
     public static FrameworkElement Build(RootToken rootToken, Hint hint)
     {
-			return new HintDecorator { Child = new TextBlock().Fill(rootToken, hint) };
+      var textBlock = new TextBlock().Fill(rootToken, hint);
+      textBlock.TextWrapping = TextWrapping.WrapWithOverflow;
+      return new HintDecorator { Child = textBlock };
     }
 
 		private static Span Fill(this Span span, ElementToken token, Hint hint)
