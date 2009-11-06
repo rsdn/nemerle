@@ -1,0 +1,337 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+using System.Text;
+
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Completion2;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
+using Nemerle.Utility;
+
+using TExpr = Nemerle.Compiler.Typedtree.TExpr;
+
+namespace Nemerle.Compiler.Utils
+{
+	module HintHelper
+	{
+    public MakeTextHintForReferenceTExpr(expr : TExpr) : string * Func[string, string]
+    {
+      def makeText(expr : TExpr)
+      {
+        //| TExpr.ConstantObjectRef(_, _o)
+        //| TExpr.StaticPropertyRef(_, _o)
+        //| TExpr.FieldMember      (_, _o)
+        //| TExpr.PropertyMember   (_, _o)
+        
+        | LocalFunRef(decl, tyArgs) as fRef => MakeTextHintForTExprLocalFunRef(fRef, decl, tyArgs)
+        | FieldMember(obj, fld) => MakeTextHintForTExprFieldMember(obj, fld)
+          
+        | TExpr.MethodRef(obj, method, typeArgs, notvirtual) => 
+          MakeTextHintForTExprMethodRef(expr, obj, method, typeArgs, notvirtual)
+          
+        //| TExpr.LocalFunRef         (_o, _)
+        //| TExpr.StaticRef(MType.Class(ti, tyArgs1), method is IField, tyArgs2) =>
+        //| TExpr.StaticRef(MType.Class(ti, tyArgs1), method is IProperty, tyArgs2) =>
+        | TExpr.StaticRef(MType.Class(ti, tyArgs1), method is IMethod, tyArgs2) =>
+          MakeTextHintForTExprStaticRef(expr, ti, tyArgs1, method, tyArgs2)
+          
+        | _ => (expr.ToString(), null)
+      }
+      
+      makeText(expr)
+    }
+
+    MakeTextHintForTExprLocalFunRef(
+      expr   : TExpr.LocalFunRef,
+      func   : LocalValue,
+      tyArgs : list[TyVar]
+    )
+      : string * Func[string, string]
+    {
+      def kind = func.ValueKind :> LocalValue.Kind.Function;
+
+      def cnv = SubHintForType();
+       //FIXME: Для функции makeMethodInfo не создается фолдинг-регион!
+       // def makeMethodInfo(cnv : Utils.Convert, inferred : bool, declTy : MType.Class, method : IMethod, (argsTypes, retType) : list[TyVar] * TyVar) : string { null }
+      def methodType() : string
+      {
+        MakeFuncHint(cnv, false, kind.header, p => p.Name, 
+          func.Type.Fix().FunReturnTypeAndParms().UnSome(), null);
+      }
+      def inferredType() : string
+      {
+        MakeFuncHint(cnv, true, kind.header, p => p.Name,
+          expr.Type.Fix().FunReturnTypeAndParms().UnSome(), null);
+      }
+
+      def definedIn = func.DefinedIn.ToString();
+
+      mutable text;
+      
+      foreach (use in func.UsedIn)
+      {
+        when (use.ToString() != definedIn)
+        {
+          text += $"<lb/>defined in $definedIn";
+          break;
+        }
+      }
+
+      def methodInfo = if (tyArgs.IsEmpty) "(local function) " + methodType()
+                       else "(generic local function) " + methodType() 
+                            + "<lb/> Inferred: " + inferredType();
+
+      (methodInfo + text, cnv.GetDelayedHintHendler())
+    }
+
+    internal MakeTyParamsToTyArgsMap(
+      tyParams : list[StaticTyVar], 
+      tyArgs   : list[TyVar], 
+      tyMap    : Hashtable[string, TyVar]
+    )          : Hashtable[string, TyVar]
+    {
+      NList.FoldLeft2(tyParams, tyArgs, tyMap, 
+        fun(tyParam, tyArg, tyMap){ tyMap[tyParam.Name] = tyArg; tyMap });
+    }
+    
+    /*[Flags]
+    enum TypeFormat
+    {
+      | Normal
+      | NoExpandTypeArgs
+    }*/
+
+    public MakeTextForType(ti : TypeInfo, tyArgs : list[TyVar]) : string * string * string
+    {
+      def tyMap = MakeTyParamsToTyArgsMap(ti.Typarms, tyArgs, Hashtable());
+      def tyToStr(tyParamBame : string)
+      {
+        tyMap[tyParamBame].ToString()
+      }
+      def makeStrForType(ti : TypeInfo) : string * string * string * _
+      {
+        def (prefix1, prefix2, prefix3, usedTyParams) = 
+          if (ti.DeclaringType != null) makeStrForType(ti.DeclaringType)
+          else 
+          {
+            def ns = ti.NamespaceNode.Parent.GetDisplayName();
+            (ns, ns, ns, [])
+          };
+        def tyParmsNames : list[string] = ti.Typarms.Map(_.Name);
+        def unusdTyParams = tyParmsNames.ExcludeLazy(usedTyParams).ToList();
+        def newUsedTyParams = usedTyParams + tyParmsNames;
+        def name = ti.Name;
+        def (str1, str2, str3) = 
+          if (unusdTyParams.IsEmpty()) (name, name, name)
+          else ($<#$name[..$(unusdTyParams; ", "; tyToStr)]#>, $<#$name[..$unusdTyParams]#>, name);
+
+        if (prefix1.IsNullOrEmpty()) 
+          (str1, str2, str3, newUsedTyParams)
+        else 
+          ($"$prefix1.$str1", $"$prefix2.$str2", $"$prefix3.$str3", newUsedTyParams)
+      }
+      
+      def (str1, str2, str3, _) = makeStrForType(ti);
+      
+      (str1, str2, str3)
+    }
+
+    MakeFuncHint(
+      cnv      : Utils.Convert,
+      inferred : bool,
+      header   : TFunHeader,
+      mkName   : TParameter -> string,
+      sign     : list[TyVar] * TyVar,
+      doc      : XmlDocInfo) : string
+    {
+      def (argsTypes, retType) = sign;
+      def parms = header.parms;
+      def retTyStr = cnv.TypeVarToString(retType);
+      def argsStrs  = parms.Map2Lazy(argsTypes, 
+        (p, t) => $"<pname>$(mkName(p))</pname> <ptype>: $(cnv.TypeVarToString(t))</ptype>");
+      _ = doc;
+      def name      = "<b>" + header.Name + "</b>";
+      //def isCtor    = name.Contains(".ctor");
+      def tyParams = header.typarms;
+      def methodTyParams = if (inferred || tyParams.IsEmpty) "" else $<#[..$tyParams]#>;
+
+      $<#$name$methodTyParams(<params>..$argsStrs</params>) : $retTyStr#>
+    }
+        
+    MakeMethodHint(
+      cnv      : Utils.Convert,
+      inferred : bool,
+      declTy   : TyVar,
+      method   : IMethod,
+      sign     : list[TyVar] * TyVar,
+      doc      : XmlDocInfo) : string
+    {
+      mutable counter = -1;
+      def ext()
+      {
+        counter++;
+        if (counter == 0 && method.IsExtension) "<keyword>this</keyword> "
+        else null
+      }
+      def mkName(p : TParameter) : string
+      {
+        def name = p.Name;
+        match (if (doc == null) null else doc.Params.Find((k, _) => k == name))
+        {
+          | Some((_, txt)) => $"$(ext())<hint value='name'>$txt</hint>" 
+          | _ => ext() + name
+        }        
+      }
+      def tyShort = cnv.TypeVarToString(declTy);
+      def txt     = MakeFuncHint(cnv, inferred, method.Header, mkName, sign, doc);
+      def mods    = MakeAccessModifiers(method);
+
+      mods + tyShort + "." + txt
+    }
+
+    public static MakeAccessModifiers(ti : IMember) : string
+    {
+      def mods = 
+        match (ti)
+        {
+          | ti is TypeInfo when ti.IsInterface => ti.Attributes & ~NemerleAttributes.Abstract
+          | _ => ti.Attributes
+        };
+      def mods = mods.ToString().ToLower().Replace(",", "");
+      $"<keyword>$mods</keyword> "
+    }
+
+    public MakeTextHintForTExprStaticRef(
+      expr    : TExpr, 
+      ti      : TypeInfo, 
+      tyArgs1 : list[TyVar],
+      method  : IMethod,
+      tyArgs2 : list[TyVar]
+    ) : string * Func[string, string]
+    {
+      def doc = GetDoc(method);
+      def cnv = SubHintForType();
+       //FIXME: Для функции makeMethodInfo не создается фолдинг-регион!
+       // def makeMethodInfo(cnv : Utils.Convert, inferred : bool, declTy : MType.Class, method : IMethod, (argsTypes, retType) : list[TyVar] * TyVar) : string { null }
+      def methodType() : string
+      {
+        MakeMethodHint(cnv, false, ti.GetMemType(), method, 
+          method.GetMemType().FunReturnTypeAndParms(method), doc);
+      }
+      def inferredType() : string
+      {
+        MakeMethodHint(cnv, true, MType.Class(ti, tyArgs1), method, 
+          expr.ty.FixedValue.FunReturnTypeAndParms(method), doc);
+      }
+
+
+      def makeTyParamsInfo()
+      {
+        def makeTyParamsToTyArgsMap()
+        {
+          def tyMap = MakeTyParamsToTyArgsMap(ti.Typarms, tyArgs1, Hashtable());
+          MakeTyParamsToTyArgsMap(method.Header.typarms, tyArgs2, tyMap);
+        }
+
+        def tyParams = ti.Typarms + method.Header.typarms;
+        def tyMap    = makeTyParamsToTyArgsMap();
+        def f = p => $"<pname>$p</pname> <ptype>is $(cnv.TypeVarToString(tyMap[p.ToString()]))</ptype>";
+        $<#<params>..$(tyParams; ", "; f)</params>#>
+      }
+      def tyParamsInfo = makeTyParamsInfo();
+
+      def methodInfo = if (tyArgs1.IsEmpty && tyArgs2.IsEmpty) "The <b>static method</b> call:\n" + methodType()
+                       else "The generic <b>static method</b> call. Source method type is:\n" 
+                       + methodType() + "\n\nInferred type:\n" + inferredType() + "\n\nType parameters: " 
+                       + tyParamsInfo;
+      def res = methodInfo + GetDocText(doc);
+      (res, cnv.GetDelayedHintHendler())
+    }
+ 
+    public MakeTextHintForTExprMethodRef(
+      expr       : TExpr, 
+      obj        : TExpr, 
+      method     : IMethod, 
+      typeArgs   : list [TyVar], 
+      _notvirtual : bool
+    ) : string * Func[string, string]
+    {
+      def cnv = SubHintForType();
+      def doc = GetDoc(method);
+    
+      def (_ti, tyArgs1) =
+        match(obj.Type.Hint)
+        {
+          | Some(MType.Class(ti, arg)) => (ti, arg)
+          | Some(MType.Array(ty, _)) => (null, [ty])
+          | _ => (null, [])
+        };
+    
+      _ = typeArgs;
+      
+      def methodType() : string
+      {
+        //MakeMethodHint(cnv, false, ti.GetMemType(), method, 
+        //  method.GetMemType().FunReturnTypeAndParms(method));
+        MakeMethodHint(cnv, false, method.DeclaringType.GetMemType(), method, 
+          method.GetMemType().FunReturnTypeAndParms(method), doc)
+      }
+      def inferredType() : string
+      {
+        MakeMethodHint(cnv, true, obj.Type, method, expr.ty.FixedValue.FunReturnTypeAndParms(method), doc)
+      }
+
+      def res = (if (tyArgs1.IsEmpty && typeArgs.IsEmpty) "The <b>instance method</b> call:\n" + methodType()
+                 else "The generic <b>instance method</b> call. Source method type is:\n" 
+                 + methodType() + "\n\nInferred type:\n" + inferredType() 
+                 //+ "\n\nType parameters: " + tyParamsInfo
+                 )
+                 + GetDocText(doc);
+      
+      (res, cnv.GetDelayedHintHendler())
+    }
+
+    public MakeTextHintForTExprFieldMember(obj : TExpr, fld : IField) : string * Func[string, string]
+    {
+      def cnv = SubHintForType();
+      def doc = GetDoc(fld);
+        
+      def ty = obj.Type.Fix().TypeOfMember(fld);
+      def res = "Instace field: " + cnv.TypeVarToString(obj.Type) + ".<b>" + fld.Name + "</b> : " 
+          + cnv.TypeVarToString(ty)
+          + GetDocText(doc);
+              
+      (res, cnv.GetDelayedHintHendler())
+    }
+
+    //private static GetDocText(mtype : MType, location : Location) : string
+    //{
+    //  def info = XmlDocReader.GetInfo(mtype.TypeInfo, location);
+
+    //  if (info != null) "\n" + info.GetText() else ""
+    //}
+
+    private static GetDocText(member : IMember, location : Location) : string
+    {
+      def info = XmlDocReader.GetInfo(member, location);
+
+      if (info != null) $"<lb/><b><hint value='Documetnation'>$(info.GetText())</hint></b>" 
+      else ""
+    }
+
+    private static GetDoc(member : IMember) : XmlDocInfo
+    {
+      XmlDocReader.GetInfo(member, member.Location)
+    }
+
+    private static GetDocText(info : XmlDocInfo) : string
+    {
+      if (info != null) $"<lb/><b><hint value='Documetnation'>$(info.GetText())</hint></b>" 
+      else ""
+    }
+  }
+}
