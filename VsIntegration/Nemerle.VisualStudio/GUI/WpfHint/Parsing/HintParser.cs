@@ -20,8 +20,8 @@ namespace WpfHint.Parsing
 
         static void RemoveWhitespaces(RootToken rt, RangeList list)
         {
-            var i1 = Clear(rt.StartIndex, rt, list);
-            ClearRange(i1, rt.EndIndex, list);
+            //var i1 = Clear(rt.StartIndex, rt, list);
+            //ClearRange(i1, rt.EndIndex, list);
         }
 
         static int Clear(int i1, ElementToken root, RangeList list)
