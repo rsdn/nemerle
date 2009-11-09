@@ -46,6 +46,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		IVsStatusbar _statusbar;
 		public NemerlePackage Package { get; private set; }
     IVsSmartTagTipWindow _smartTagWin;
+		public bool ContextMenuActive { get; set; }
 		
 		#endregion
 		
@@ -751,6 +752,9 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public bool ShowHint(IVsTextView view, TextSpan hintSpan, Func<string, string> getHintContent, string hintText)
 	  {
+			if (ContextMenuActive)
+				return false;
+
 	    var hWnd = view.GetWindowHandle();
 
 	    int lineHeight;

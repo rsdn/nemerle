@@ -227,13 +227,25 @@ namespace Nemerle.VisualStudio.LanguageService
 		public override void ShowContextMenu(int menuId, Guid groupGuid, IOleCommandTarget target, int x, int y)
 		{
 			var service = Source.Service;
-			var menuService = (OleMenuCommandService)service.GetService(typeof(IMenuCommandService));
-			if (menuService == null || service.IsMacroRecordingOn())
-				return;
 
-			var id = new CommandID(groupGuid, menuId);
-			menuService.ShowContextMenu(id, x, y);
+			service.ContextMenuActive = true;
 
+			try
+			{
+				service.Hint.Close();
+
+				var menuService = (OleMenuCommandService)service.GetService(typeof(IMenuCommandService));
+				if (menuService == null || service.IsMacroRecordingOn())
+					return;
+
+				var id = new CommandID(groupGuid, menuId);
+				menuService.ShowContextMenu(id, x, y);
+
+			}
+			finally
+			{
+				service.ContextMenuActive = false;
+			}
 			return;
 		}
 
