@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 
@@ -15,6 +16,11 @@ namespace Nemerle.VisualStudio.Project
 			: base(node)
 		{
 		}
+
+    public new string Extension
+    {
+      get { return Path.GetExtension(Node.Url); }
+    }
 
 		[Browsable(false)]
 		public string Url

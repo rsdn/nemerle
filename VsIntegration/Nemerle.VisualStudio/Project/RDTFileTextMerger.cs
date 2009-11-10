@@ -197,7 +197,7 @@ namespace Nemerle.VisualStudio.Project
 		private void ProcessFileChangesHelper(ProcessFileChangesFunc processFunc)
 		{
 			string filePath = _fileNode.GetMkDocument();
-
+      // http://blogs.msdn.com/allend/archive/2004/08/20/217958.aspx
 			IVsRunningDocumentTable rdt = _fileNode.ProjectMgr.GetService(typeof(SVsRunningDocumentTable)) as IVsRunningDocumentTable;
 
 			// (kberes) Shouldn't this be an InvalidOperationException instead with some not to annoying errormessage to the user?

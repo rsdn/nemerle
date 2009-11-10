@@ -808,9 +808,9 @@ namespace Nemerle.VisualStudio.Project
       // еще кучи ManagerClass. “ак же организовать отложенную инициализауию, так чтобы она происхдила
       // только когда CodeDomProvider запрашиваетс€ студией.
 
-      //if (IsCodeFile(include) && item.ItemName == "Compile")
-      //	newNode.OleServiceProvider.AddService(typeof(SVSMDCodeDomProvider),
-      //		new NemerleVSMDProvider( newNode.CodeDomProvider ), false);
+      if (IsCodeFile(include) && item.ItemName == "Compile")
+        newNode.OleServiceProvider.AddService(typeof(SVSMDCodeDomProvider),
+          new NemerleVSMDProvider(newNode), false);
 
       return newNode;
     }
@@ -833,7 +833,7 @@ namespace Nemerle.VisualStudio.Project
 
       if (IsCodeFile(include) && item.ItemName == "Compile")
         newNode.OleServiceProvider.AddService(typeof(SVSMDCodeDomProvider),
-          new NemerleVSMDProvider(newNode.CodeDomProvider), false);
+          new NemerleVSMDProvider(newNode), false);
 
       return newNode;
     }

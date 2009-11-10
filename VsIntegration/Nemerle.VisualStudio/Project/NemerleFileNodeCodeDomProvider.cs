@@ -193,6 +193,7 @@ namespace Nemerle.VisualStudio.Project
 
 		public override CodeCompileUnit Parse(TextReader codeStream)
 		{
+      var code = codeStream.ReadToEnd();
 			// AKhropov - in fact codeStream is ignored for now
 			string mainFilePath = PathOfMainFile();
 
@@ -200,10 +201,13 @@ namespace Nemerle.VisualStudio.Project
 
 			if (projectInfo != null)
 			{
-				// TODO : can _project change for _fileNode?
-				return _codeDomParser.CreateCodeCompileUnit(
-					projectInfo.Project, mainFilePath,
-					(IsFormSubType) ? PathOfDesignerFile() : null);
+        var designerIndex = Location.GetFileIndex(PathOfDesignerFile());
+
+        return projectInfo.Engine.CreateCodeCompileUnit(projectInfo.GetSource(mainFilePath), designerIndex);
+        // TODO : can _project change for _fileNode?
+				//return _codeDomParser.CreateCodeCompileUnit(
+				//	projectInfo.Project, mainFilePath,
+				//	(IsFormSubType) ? PathOfDesignerFile() : null);
 			}
 			else
 				return null;

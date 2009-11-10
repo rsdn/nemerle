@@ -311,9 +311,9 @@ namespace Nemerle.VisualStudio.Project
 
 					IServiceContainer serviceContainer = (IServiceContainer)GetService(typeof(IServiceContainer));
 					if(serviceContainer != null)
-						serviceContainer.AddService(typeof(CodeDomProvider), codeDomProvider);
+						serviceContainer.AddService(typeof(System.CodeDom.Compiler.CodeDomProvider), codeDomProvider);
 				}
-				*/
+				//*/
 
 				return Marshal.GetIUnknownForObject(docView);
 			}
