@@ -15,6 +15,7 @@ using Nemerle.Compiler;
 using NCU = Nemerle.Compiler.Utils;
 
 using Nemerle.VisualStudio.LanguageService;
+using System.Diagnostics;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -217,45 +218,55 @@ namespace Nemerle.VisualStudio.Project
 
 		#region Generator implementation
 
-		public override void GenerateCodeFromCompileUnit(CodeCompileUnit e, TextWriter w, CodeGeneratorOptions o)
+		public override void GenerateCodeFromCompileUnit(CodeCompileUnit codeCompileUnit, TextWriter writer, CodeGeneratorOptions options)
 		{
-			if (o == null)
-				o = GetCodeGeneratorOptions();
+			if (options == null)
+				options = GetCodeGeneratorOptions();
 
-			if (IsFormSubType)
-			{
-				string mainFilePath = PathOfMainFile();
-				string designerFilePath = PathOfDesignerFile();
+      ProjectInfo projectInfo = ProjectInfo.FindProject(PathOfMainFile());
 
-				// Find designer FileNode
-				NemerleDependentFileNode designerFileNode = 
-					_fileNode.FindChild(designerFilePath) as NemerleDependentFileNode;
+      if (projectInfo == null)
+        throw new ApplicationException("The component is not in the project!");
 
-				if (designerFileNode == null)
-					throw new ApplicationException("Can't find designer file node");
+      var changes = projectInfo.Engine.MergeCodeCompileUnit(codeCompileUnit);
 
-				// Distribute changes to Form.n and Form.designer.n files
-				using (RDTFileTextMerger mainMerger = new RDTFileTextMerger(_fileNode))
-				using (RDTFileTextMerger designerMerger = new RDTFileTextMerger(designerFileNode))
-				{
-					//ProjectInfo.FindProject(designerFilePath).Project.CompileUnits.
-					ProjectInfo projectInfo = ProjectInfo.FindProject(mainFilePath);
-					if (projectInfo == null)
-						throw new ApplicationException("The component is not in the project!");
+      foreach (var item in changes)
+        Trace.WriteLine(item);
 
-					_codeDomGenerator.MergeFormCodeFromCompileUnit(
-						projectInfo.Project,
-						mainFilePath, designerFilePath,
-						e, mainMerger, designerMerger, o);
-				}
-			}
-			else
-				using (StringWriter sw = new StringWriter())
-				{
-					(_codeDomGenerator as ICodeGenerator).GenerateCodeFromCompileUnit(e, sw, o);
+      //if (IsFormSubType)
+      //{
+      //  string mainFilePath = PathOfMainFile();
+      //  string designerFilePath = PathOfDesignerFile();
 
-					UpdateGeneratedCodeFile(sw.ToString(), PathOfMainFile());
-				}
+      //  // Find designer FileNode
+      //  NemerleDependentFileNode designerFileNode = 
+      //    _fileNode.FindChild(designerFilePath) as NemerleDependentFileNode;
+
+      //  if (designerFileNode == null)
+      //    throw new ApplicationException("Can't find designer file node");
+
+      //  // Distribute changes to Form.n and Form.designer.n files
+      //  using (RDTFileTextMerger mainMerger = new RDTFileTextMerger(_fileNode))
+      //  using (RDTFileTextMerger designerMerger = new RDTFileTextMerger(designerFileNode))
+      //  {
+      //    //ProjectInfo.FindProject(designerFilePath).Project.CompileUnits.
+      //    ProjectInfo projectInfo = ProjectInfo.FindProject(mainFilePath);
+      //    if (projectInfo == null)
+      //      throw new ApplicationException("The component is not in the project!");
+
+      //    _codeDomGenerator.MergeFormCodeFromCompileUnit(
+      //      projectInfo.Project,
+      //      mainFilePath, designerFilePath,
+      //      codeCompileUnit, mainMerger, designerMerger, options);
+      //  }
+      //}
+      //else
+      //  using (StringWriter sw = new StringWriter())
+      //  {
+      //    ((ICodeGenerator)_codeDomGenerator).GenerateCodeFromCompileUnit(codeCompileUnit, sw, options);
+
+      //    UpdateGeneratedCodeFile(sw.ToString(), PathOfMainFile());
+      //  }
 		}
 
 		private CodeGeneratorOptions GetCodeGeneratorOptions()
