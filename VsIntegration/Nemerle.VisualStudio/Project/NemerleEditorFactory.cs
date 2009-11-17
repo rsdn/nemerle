@@ -259,10 +259,10 @@ namespace Nemerle.VisualStudio.Project
 
 		IntPtr CreateFormView(
 			IVsHierarchy hierarchy,
-			uint		 itemid,
+			uint		     itemid,
 			IVsTextLines textLines,
 			ref string   editorCaption,
-			ref Guid	 cmdUI)
+			ref Guid	   cmdUI)
 		{
 			// Request the Designer Service.
 			//
@@ -276,12 +276,32 @@ namespace Nemerle.VisualStudio.Project
 
 			bool loaderInitalized = false;
 
+			string name;
+			hierarchy.GetCanonicalName(itemid, out name);
+			var prj = ProjectInfo.FindProject(hierarchy);
+			var childName = System.IO.Path.ChangeExtension(name, ".Designer.n");
+			//var cur = (NemerleFileNode)prj.ProjectNode.FindChild(name);
+			var child = (NemerleDependentFileNode)prj.ProjectNode.FindChild(childName);
+			if (child != null)
+			{
+				var designer = (System.ComponentModel.Design.Serialization.IDesignerLoaderService)designerLoader;
+				child.Designer = designer;
+			}
+			
+			//Nemerle.VisualStudio.LanguageService.Nemerle
+			//var langSrvs = (Nemerle.VisualStudio.LanguageService.NemerleLanguageService)GetService(typeof(Nemerle.VisualStudio.LanguageService.NemerleLanguageService));
+			//var source = langSrvs.GetSource(textLines);
+
 			try
 			{
 				// Initialize designer loader.
-				//
-				designerLoader.Initialize(
-					_serviceProvider.GetService(typeof(IOleServiceProvider)), hierarchy, (int)itemid, textLines);
+				//Guid g = Guid.Empty;
+				//IntPtr hn;
+				//uint x;
+				//var hr = hierarchy. GetNestedHierarchy(itemid, ref g, out hn, out x);
+
+				var service = _serviceProvider.GetService(typeof(IOleServiceProvider));
+				designerLoader.Initialize(service, hierarchy, (int)itemid, textLines);
 
 				loaderInitalized = true;
 

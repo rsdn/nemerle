@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Text;
 using Microsoft.VisualStudio.Project;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.Windows.Design.Host;
+using Nemerle.VisualStudio.WPFProviders;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -22,6 +24,9 @@ namespace Nemerle.VisualStudio.Project
 		}
 
 		#endregion
+
+		public System.ComponentModel.Design.Serialization.IDesignerLoaderService Designer
+		{ get; internal set; }
 
 		// Called since the FileNode.ImageIndex returns -1 by default.
 		//
@@ -50,5 +55,48 @@ namespace Nemerle.VisualStudio.Project
 		}
 
 		#endregion
+
+		#region Members
+
+		private DesignerContext _designerContext;
+
+		protected internal DesignerContext DesignerContext
+		{
+			get
+			{
+				if (_designerContext == null)
+				{
+					//Set the EventBindingProvider for this XAML file so the designer will call it
+					//when event handlers need to be generated
+					_designerContext = new DesignerContext { EventBindingProvider = new NemerleEventBindingProvider(this) };
+				}
+
+				return _designerContext;
+			}
+		}
+
+		internal OleServiceProvider.ServiceCreatorCallback ServiceCreator
+		{
+			get { return new OleServiceProvider.ServiceCreatorCallback(this.CreateServices); }
+		}
+
+		private object CreateServices(Type serviceType)
+		{
+			object service = null;
+
+			if (typeof(EnvDTE.ProjectItem) == serviceType)
+				service = GetAutomationObject();
+			else if (typeof(DesignerContext) == serviceType)
+				service = this.DesignerContext;
+
+			return service;
+		}
+
+		#endregion
+
+		protected override NodeProperties CreatePropertiesObject()
+		{
+			return new NemerleFileNodeProperties(this);
+		}
 	}
 }

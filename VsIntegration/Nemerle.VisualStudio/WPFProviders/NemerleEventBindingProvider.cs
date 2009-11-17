@@ -15,6 +15,7 @@ using Microsoft.VisualStudio.TextManager.Interop;
 using Microsoft.Windows.Design.Host;
 
 using Nemerle.VisualStudio.Project;
+using Microsoft.VisualStudio.Project;
 
 namespace Nemerle.VisualStudio.WPFProviders
 {
@@ -28,9 +29,9 @@ namespace Nemerle.VisualStudio.WPFProviders
 	public class NemerleEventBindingProvider : EventBindingProvider
 	{
 		private IVsProject3     _project;
-		private NemerleFileNode _nFile;
+		private FileNode _nFile;
 
-		internal NemerleEventBindingProvider(NemerleFileNode nFile)
+		internal NemerleEventBindingProvider(FileNode nFile)
 		{
 			_nFile   = nFile;
 			_project = nFile.ProjectMgr;
@@ -38,6 +39,7 @@ namespace Nemerle.VisualStudio.WPFProviders
 
 		public override bool AddEventHandler(EventDescription eventDescription, string objectName, string methodName)
 		{
+			//FixMe: VladD2: Какая-то питоновская чушь! Надо разобраться и переписать.
 			const string Init = "__init__";
 
 			//This is not the most optimal solution for WPF since we will call FindLogicalNode for each event handler,
@@ -273,8 +275,8 @@ namespace Nemerle.VisualStudio.WPFProviders
 		/// <returns>The CodeDomDocDataAdapter for the .n file that corresponds to the active xaml file</returns>
 		CodeDomDocDataAdapter GetDocDataAdapterForNemerleFile()
 		{
-			var codeDom = (new ServiceProvider(_nFile.OleServiceProvider, true)).GetService(typeof(SVSMDCodeDomProvider)) as IVSMDCodeDomProvider;
-			var data    = new DocData((_project as NemerleProjectNode).ProjectMgr.Site, _nFile.Url);
+			var codeDom = (IVSMDCodeDomProvider)(new ServiceProvider(_nFile.OleServiceProvider, true)).GetService(typeof(SVSMDCodeDomProvider));
+			var data = new DocData(((NemerleProjectNode)_project).ProjectMgr.Site, _nFile.Url);
 
 			return new CodeDomDocDataAdapter((_project as NemerleProjectNode).ProjectMgr.Site, data);
 		}

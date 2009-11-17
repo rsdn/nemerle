@@ -19,7 +19,12 @@ namespace Nemerle.VisualStudio.Project
 
     public new string Extension
     {
-      get { return Path.GetExtension(Node.Url); }
+			get 
+			{
+				//throw new NotImplementedException();
+				//return ".Designer.n";
+				return Path.GetExtension(Node.Url);
+			}
     }
 
 		[Browsable(false)]

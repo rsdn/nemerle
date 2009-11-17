@@ -2,7 +2,7 @@
 using System.IO;
 using System.CodeDom;
 using System.CodeDom.Compiler;
-
+using System.Linq;
 using System.Runtime.InteropServices;
 
 using Microsoft.VisualStudio;
@@ -13,9 +13,11 @@ using Microsoft.VisualStudio.TextManager.Interop;
 
 using Nemerle.Compiler;
 using NCU = Nemerle.Compiler.Utils;
+using CodeGenerator = Nemerle.Compiler.Utils.FormCodeDomGenerator;
 
 using Nemerle.VisualStudio.LanguageService;
 using System.Diagnostics;
+using Nemerle.VisualStudio.Helpers;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -194,7 +196,7 @@ namespace Nemerle.VisualStudio.Project
 
 		public override CodeCompileUnit Parse(TextReader codeStream)
 		{
-      var code = codeStream.ReadToEnd();
+      //var code = codeStream.ReadToEnd();
 			// AKhropov - in fact codeStream is ignored for now
 			string mainFilePath = PathOfMainFile();
 
@@ -203,8 +205,15 @@ namespace Nemerle.VisualStudio.Project
 			if (projectInfo != null)
 			{
         var designerIndex = Location.GetFileIndex(PathOfDesignerFile());
-
-        return projectInfo.Engine.CreateCodeCompileUnit(projectInfo.GetSource(mainFilePath), designerIndex);
+				var source = projectInfo.GetSource(mainFilePath);
+				var nSource = source as NemerleSource;
+				if (nSource != null)
+				{
+					//var xx =  Site.GetService(typeof(Microsoft.VisualStudio.Shell.Design.Serialization.DesignerDocDataService));
+					//var xx = source.Service.GetService(typeof(Microsoft.VisualStudio.Shell.Design.Serialization.DesignerDocDataService));
+					//var xx = _fileNode.GetService(typeof(System.ComponentModel.Design.Serialization.IDesignerLoaderHost));
+				}
+				return projectInfo.Engine.CreateCodeCompileUnit(source, designerIndex);
         // TODO : can _project change for _fileNode?
 				//return _codeDomParser.CreateCodeCompileUnit(
 				//	projectInfo.Project, mainFilePath,
@@ -230,8 +239,29 @@ namespace Nemerle.VisualStudio.Project
 
       var changes = projectInfo.Engine.MergeCodeCompileUnit(codeCompileUnit);
 
-      foreach (var item in changes)
-        Trace.WriteLine(item);
+			using (var helper = new NemerleProjectSourcesButchEditHelper(projectInfo, "form designer update"))
+			{
+				var text = CodeGenerator.ToString(changes.NewInitializeComponentStatements);
+				// обновляем исходники...
+				helper.ReplaseMethodBody(changes.InitializeComponent, text);
+
+				helper.ApplyEdits();
+			}
+
+
+
+			//var baseFileIndex = changes.InitializeComponent.NameLocation.FileIndex;
+			
+			//var fileInexes = new[] { baseFileIndex }
+			//  .Concat(changes.DelitedFields.Select(f => f.Location.FileIndex)).Distinct()
+			//  .ToArray();
+
+			//var sourcesMap = fileInexes.ToDictionary(x => x, x =>
+			//  projectInfo.GetEditableSource(x, WindowFrameShowAction.DoNotShow));
+
+			//var editArraysMap = sourcesMap.ToDictionary(x => x.Key,
+			//  x => new NemerleSourceButchEditHelper(x.Value, null, true, ""));
+
 
       //if (IsFormSubType)
       //{

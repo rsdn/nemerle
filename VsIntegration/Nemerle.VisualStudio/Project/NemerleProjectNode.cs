@@ -220,6 +220,7 @@ namespace Nemerle.VisualStudio.Project
     }
 
     private DesignerContext _designerContext;
+
     protected internal DesignerContext DesignerContext
     {
       get
@@ -227,8 +228,20 @@ namespace Nemerle.VisualStudio.Project
         //Set the RuntimeNameProvider so the XAML designer will call it when items are added to
         //a design surface. Since the provider does not depend on an item context, we provide it at 
         //the project level.
-        return _designerContext ??
-          (_designerContext = new DesignerContext() { RuntimeNameProvider = new NemerleRuntimeNameProvider() });
+
+				if (_designerContext != null)
+					return _designerContext;
+
+
+				_designerContext = 
+					new DesignerContext()
+					{
+						RuntimeNameProvider = new NemerleRuntimeNameProvider(),
+						//EventBindingProvider = new NemerleEventBindingProvider()
+						
+					};
+
+        return _designerContext;
       }
     }
 
@@ -797,20 +810,25 @@ namespace Nemerle.VisualStudio.Project
 
       string include = item.GetMetadata(ProjectFileConstants.Include);
 
-      newNode.OleServiceProvider.AddService(typeof(EnvDTE.Project), ProjectMgr.GetAutomationObject(), false);
-      newNode.OleServiceProvider.AddService(typeof(EnvDTE.ProjectItem), newNode.GetAutomationObject(), false);
-      newNode.OleServiceProvider.AddService(typeof(VSLangProj.VSProject), this.VSProject, false);
+			var provider = newNode.OleServiceProvider;
 
-      //VladD2: Этот код (добавления CodeDomProvider-а) дико тормозил, так как для каждого
-      // файла проекта создавался одтедльный экзепляр провайдера. Провайдер за каким-то черотом
-      // унаследован от ManagerClass и каждый раз инициализирует компилятор (грузит все типы).
-      //TODO: Переписать CodeDomProvider так чтобы он использовал систему типов проекта, не создавал
-      // еще кучи ManagerClass. Так же организовать отложенную инициализауию, так чтобы она происхдила
-      // только когда CodeDomProvider запрашивается студией.
+			provider.AddService(typeof(EnvDTE.Project), ProjectMgr.GetAutomationObject(), false);
+			provider.AddService(typeof(EnvDTE.ProjectItem), newNode.ServiceCreator, false);
+			provider.AddService(typeof(VSLangProj.VSProject), this.VSProject, false);
+
+			if (!string.IsNullOrEmpty(include) && Path.GetExtension(include).Equals(".xaml", StringComparison.OrdinalIgnoreCase))
+			{
+				//Create a DesignerContext for the XAML designer for this file
+				newNode.OleServiceProvider.AddService(typeof(DesignerContext), newNode.ServiceCreator, false);
+			}
+
+			if (newNode.IsFormSubType)
+			{
+				newNode.OleServiceProvider.AddService(typeof(DesignerContext), newNode.ServiceCreator, false);
+			}
 
       if (IsCodeFile(include) && item.ItemName == "Compile")
-        newNode.OleServiceProvider.AddService(typeof(SVSMDCodeDomProvider),
-          new NemerleVSMDProvider(newNode), false);
+				provider.AddService(typeof(SVSMDCodeDomProvider), new NemerleVSMDProvider(newNode), false);
 
       return newNode;
     }
@@ -827,9 +845,11 @@ namespace Nemerle.VisualStudio.Project
       NemerleDependentFileNode newNode = new NemerleDependentFileNode(this, item);
       string include = item.GetMetadata(ProjectFileConstants.Include);
 
-      newNode.OleServiceProvider.AddService(typeof(EnvDTE.Project), ProjectMgr.GetAutomationObject(), false);
-      newNode.OleServiceProvider.AddService(typeof(EnvDTE.ProjectItem), newNode.GetAutomationObject(), false);
-      newNode.OleServiceProvider.AddService(typeof(VSLangProj.VSProject), this.VSProject, false);
+			var provider = newNode.OleServiceProvider;
+
+			provider.AddService(typeof(EnvDTE.Project), ProjectMgr.GetAutomationObject(), false);
+			provider.AddService(typeof(EnvDTE.ProjectItem), newNode.GetAutomationObject(), false);
+			provider.AddService(typeof(VSLangProj.VSProject), this.VSProject, false);
 
       if (IsCodeFile(include) && item.ItemName == "Compile")
         newNode.OleServiceProvider.AddService(typeof(SVSMDCodeDomProvider),
@@ -1213,5 +1233,52 @@ namespace Nemerle.VisualStudio.Project
     }
 
     #endregion
-  }
+
+		#region Methods
+
+		//TODO: VladD2: Реализовать код-дом-провайдер для проекта.
+
+		//private Microsoft.VisualStudio.Designer.Interfaces.IVSMDCodeDomProvider _codeDomProvider;
+		//
+		///// <summary>
+		///// Retreive the CodeDOM provider
+		///// </summary>
+		//protected internal Microsoft.VisualStudio.Designer.Interfaces.IVSMDCodeDomProvider CodeDomProvider
+		//{
+		//  get
+		//  {
+		//    if (_codeDomProvider == null)
+		//      _codeDomProvider = new VSMDPythonProvider(this.VSProject);
+		//    return _codeDomProvider;
+		//  }
+		//}
+
+		internal OleServiceProvider.ServiceCreatorCallback ServiceCreator
+		{
+			get { return new OleServiceProvider.ServiceCreatorCallback(this.CreateServices); }
+		}
+	
+		/// <summary>
+		/// Creates the services exposed by this project.
+		/// </summary>
+		private object CreateServices(Type serviceType)
+		{
+			object service = null;
+			//if (typeof(SVSMDCodeDomProvider) == serviceType)
+			//  service = this.CodeDomProvider;
+			//else if (typeof(System.CodeDom.Compiler.CodeDomProvider) == serviceType)
+			//  service = this.CodeDomProvider.CodeDomProvider;
+			//else 
+			if (typeof(DesignerContext) == serviceType)
+				service = this.DesignerContext;
+			else if (typeof(VSLangProj.VSProject) == serviceType)
+				service = this.VSProject;
+			else if (typeof(EnvDTE.Project) == serviceType)
+				service = this.GetAutomationObject();
+
+			return service;
+		}
+
+		#endregion
+	}
 }

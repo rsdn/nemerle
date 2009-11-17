@@ -204,6 +204,30 @@ namespace Nemerle.VisualStudio
 			return span;
 		}
 
+		public static TextSpan ToTextSpan(this TextPoint point)
+		{
+			TextSpan span = new TextSpan();
+
+			span.iStartLine  = point.Line   - 1;
+			span.iStartIndex = point.Column - 1;
+			span.iEndLine    = point.Line   - 1;
+			span.iEndIndex   = point.Column - 1;
+
+			return span;
+		}
+
+		public static TextSpan ToTextSpan(TextPoint startPoint, TextPoint endPoint)
+		{
+			TextSpan span = new TextSpan();
+
+			span.iStartLine  = startPoint.Line   - 1;
+			span.iStartIndex = startPoint.Column - 1;
+			span.iEndLine    = endPoint.Line     - 1;
+			span.iEndIndex  = endPoint.Column    - 1;
+
+			return span;
+		}
+
 		public static int GetGlyph(TopDeclaration decl)
 		{
 			if (decl == null)

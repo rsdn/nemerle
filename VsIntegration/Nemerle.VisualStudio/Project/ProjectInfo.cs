@@ -242,6 +242,75 @@ namespace Nemerle.VisualStudio.Project
       _sources.Remove(source);
     }
 
+
+
+		public NemerleSource GetEditableSource(int fileIndex, WindowFrameShowAction action)
+		{
+			ISource source;
+
+			if (!_sourceMap.TryGetValue(fileIndex, out source))
+				throw new ApplicationException("File not in project");
+
+			var nemerleSource = source as NemerleSource;
+
+			if (nemerleSource != null)
+				return nemerleSource;
+
+			return OpenEditableSource(fileIndex, action);
+		}
+
+		NemerleSource OpenEditableSource(int fileIndex, WindowFrameShowAction action)
+		{
+			IVsWindowFrame frame = OpenWindowFrame(fileIndex, action);
+
+			if (frame == null)
+				throw new ApplicationException("frame (IVsWindowFrame) is null");
+
+			object docData;
+			frame.GetProperty((int)__VSFPROPID.VSFPROPID_DocData, out docData);
+
+			// Get the VsTextBuffer
+			var buffer = docData as VsTextBuffer;
+
+			if (buffer == null)
+			{
+				var bufferProvider = docData as IVsTextBufferProvider;
+
+				if (bufferProvider != null)
+				{
+					IVsTextLines lines;
+					ErrorHandler.ThrowOnFailure(bufferProvider.GetTextBuffer(out lines));
+
+					var source = LanguageService.CreateSource(lines);
+
+					return (NemerleSource)source;
+				}
+			}
+			else
+			{
+				var lines = (IVsTextLines)buffer;
+				var source = LanguageService.CreateSource(lines);
+				return (NemerleSource)source;
+			}
+
+
+			throw new ApplicationException("can't retrive IVsTextLines from IVsWindowFrame");
+		}
+
+		IVsWindowFrame OpenWindowFrame(int fileIndex, WindowFrameShowAction action)
+		{
+			var path = Location.GetFileName(fileIndex);
+			var node = (FileNode)_projectNode.FindChild(path);
+			var manager = (FileDocumentManager)node.GetDocumentManager();
+
+			IVsWindowFrame frame;
+			// Open the document in rdt.
+			ErrorHandler.ThrowOnFailure(manager.Open(false, false, VSConstants.LOGVIEWID_Code,
+				out frame, action));
+
+			return frame;
+		}
+
     public ISource GetSource(int fileIndex)
     {
       ISource source;

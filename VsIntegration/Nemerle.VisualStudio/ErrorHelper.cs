@@ -73,6 +73,12 @@ namespace Nemerle.VisualStudio
 			ThrowIsNull(value, paramName, null);
 		}
 
+		public static void ThrowIfFalse(bool condition, string paramName)
+		{
+			if (!condition)
+				throw new ArgumentException(paramName);
+		}
+
 		/// <summary>
 		/// Throws ArgumentNullException when value is null.
 		/// </summary>
