@@ -25,9 +25,6 @@ namespace Nemerle.VisualStudio.Project
 
 		#endregion
 
-		public System.ComponentModel.Design.Serialization.IDesignerLoaderService Designer
-		{ get; internal set; }
-
 		// Called since the FileNode.ImageIndex returns -1 by default.
 		//
 		public override object GetIconHandle(bool open)

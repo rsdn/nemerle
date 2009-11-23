@@ -18,6 +18,8 @@ using CodeGenerator = Nemerle.Compiler.Utils.FormCodeDomGenerator;
 using Nemerle.VisualStudio.LanguageService;
 using System.Diagnostics;
 using Nemerle.VisualStudio.Helpers;
+using Microsoft.VisualStudio.Shell.Design.Serialization;
+using Nemerle.Compiler.Parsetree;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -196,28 +198,37 @@ namespace Nemerle.VisualStudio.Project
 
 		public override CodeCompileUnit Parse(TextReader codeStream)
 		{
-      //var code = codeStream.ReadToEnd();
-			// AKhropov - in fact codeStream is ignored for now
+			// codeStream  используется для получения DesignerDocDataService...
 			string mainFilePath = PathOfMainFile();
 
 			ProjectInfo projectInfo = ProjectInfo.FindProject(mainFilePath);
 
 			if (projectInfo != null)
 			{
-        var designerIndex = Location.GetFileIndex(PathOfDesignerFile());
-				var source = projectInfo.GetSource(mainFilePath);
-				var nSource = source as NemerleSource;
-				if (nSource != null)
+				var source          = projectInfo.GetSource(mainFilePath);
+				var provider        = (IServiceProvider)codeStream;
+				var docDataService  = (DesignerDocDataService)provider.GetService(typeof(DesignerDocDataService));
+
+				var result          = projectInfo.Engine.CreateCodeCompileUnit(source);
+
+				var codeCompileUnit = result.CodeCompileUnit;
+
+				// Дизайнер форм должен следить за изменением файлов в которых расположен
+				// класс формы. Чтобы он знал за какакими файлами нужно следить, информацию 
+				// о них нужно запихать в RelatedDocDataCollection и поместить ссылку на ее
+				// в codeCompileUnit.UserData[typeof(RelatedDocDataCollection)].
+				var relatedDocDatas = new RelatedDocDataCollection();
+
+				foreach (int index in result.FilesIndices)
 				{
-					//var xx =  Site.GetService(typeof(Microsoft.VisualStudio.Shell.Design.Serialization.DesignerDocDataService));
-					//var xx = source.Service.GetService(typeof(Microsoft.VisualStudio.Shell.Design.Serialization.DesignerDocDataService));
-					//var xx = _fileNode.GetService(typeof(System.ComponentModel.Design.Serialization.IDesignerLoaderHost));
+					var filePath = Location.GetFileName(index);
+					var data     = docDataService.GetFileDocData(filePath, FileAccess.Read, null);
+					relatedDocDatas.Add(data);
 				}
-				return projectInfo.Engine.CreateCodeCompileUnit(source, designerIndex);
-        // TODO : can _project change for _fileNode?
-				//return _codeDomParser.CreateCodeCompileUnit(
-				//	projectInfo.Project, mainFilePath,
-				//	(IsFormSubType) ? PathOfDesignerFile() : null);
+
+				codeCompileUnit.UserData[typeof(RelatedDocDataCollection)] = relatedDocDatas;
+
+				return codeCompileUnit;
 			}
 			else
 				return null;
@@ -243,60 +254,33 @@ namespace Nemerle.VisualStudio.Project
 			{
 				var text = CodeGenerator.ToString(changes.NewInitializeComponentStatements);
 				// обновляем исходники...
-				helper.ReplaseMethodBody(changes.InitializeComponent, text);
+				var initializeComponent = changes.InitializeComponent;
+				helper.ReplaseMethodBody(initializeComponent, text);
+
+				var mainFilePath = PathOfMainFile();
+				var mainFileIndex = Location.GetFileIndex(mainFilePath);
+				var ty = initializeComponent.DefinedIn.TypeBuilder;
+				var x = new TopDeclaration[0];
+				var mainPart = ty.AstParts.First(td => td.Location.FileIndex == mainFileIndex);
+
+				foreach (CodeMemberField codeMemberField in changes.InsertedFields)
+					helper.AddField(initializeComponent.DefinedIn, codeMemberField);
+
+				foreach (CodeMemberMethod codeMemberMethod in changes.InsertedMethods)
+					helper.AddMethod(mainPart, codeMemberMethod, changes.Declaration);
+
+				foreach (ClassMember.Field field in changes.DelitedFields)
+					helper.RemoveField(field);
 
 				helper.ApplyEdits();
+
+				var relatedDocDatas = (RelatedDocDataCollection)codeCompileUnit.UserData[typeof(RelatedDocDataCollection)];
+				foreach (DocData docData in relatedDocDatas)
+				{
+					docData.Modify();
+					break;
+				}
 			}
-
-
-
-			//var baseFileIndex = changes.InitializeComponent.NameLocation.FileIndex;
-			
-			//var fileInexes = new[] { baseFileIndex }
-			//  .Concat(changes.DelitedFields.Select(f => f.Location.FileIndex)).Distinct()
-			//  .ToArray();
-
-			//var sourcesMap = fileInexes.ToDictionary(x => x, x =>
-			//  projectInfo.GetEditableSource(x, WindowFrameShowAction.DoNotShow));
-
-			//var editArraysMap = sourcesMap.ToDictionary(x => x.Key,
-			//  x => new NemerleSourceButchEditHelper(x.Value, null, true, ""));
-
-
-      //if (IsFormSubType)
-      //{
-      //  string mainFilePath = PathOfMainFile();
-      //  string designerFilePath = PathOfDesignerFile();
-
-      //  // Find designer FileNode
-      //  NemerleDependentFileNode designerFileNode = 
-      //    _fileNode.FindChild(designerFilePath) as NemerleDependentFileNode;
-
-      //  if (designerFileNode == null)
-      //    throw new ApplicationException("Can't find designer file node");
-
-      //  // Distribute changes to Form.n and Form.designer.n files
-      //  using (RDTFileTextMerger mainMerger = new RDTFileTextMerger(_fileNode))
-      //  using (RDTFileTextMerger designerMerger = new RDTFileTextMerger(designerFileNode))
-      //  {
-      //    //ProjectInfo.FindProject(designerFilePath).Project.CompileUnits.
-      //    ProjectInfo projectInfo = ProjectInfo.FindProject(mainFilePath);
-      //    if (projectInfo == null)
-      //      throw new ApplicationException("The component is not in the project!");
-
-      //    _codeDomGenerator.MergeFormCodeFromCompileUnit(
-      //      projectInfo.Project,
-      //      mainFilePath, designerFilePath,
-      //      codeCompileUnit, mainMerger, designerMerger, options);
-      //  }
-      //}
-      //else
-      //  using (StringWriter sw = new StringWriter())
-      //  {
-      //    ((ICodeGenerator)_codeDomGenerator).GenerateCodeFromCompileUnit(codeCompileUnit, sw, options);
-
-      //    UpdateGeneratedCodeFile(sw.ToString(), PathOfMainFile());
-      //  }
 		}
 
 		private CodeGeneratorOptions GetCodeGeneratorOptions()

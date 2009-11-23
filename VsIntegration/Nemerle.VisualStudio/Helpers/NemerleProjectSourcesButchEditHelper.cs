@@ -4,8 +4,10 @@ using System.Linq;
 using System.Text;
 using Nemerle.VisualStudio.Project;
 using Nemerle.Compiler;
+using Nemerle.Compiler.Utils;
 using Microsoft.VisualStudio.Project;
 using Nemerle.Compiler.Parsetree;
+using System.CodeDom;
 
 namespace Nemerle.VisualStudio.Helpers
 {
@@ -57,7 +59,7 @@ namespace Nemerle.VisualStudio.Helpers
 				item.ApplyEdits();
 		}
 
-		static bool IsAllCharsIsSpaces(string text)
+		public static bool IsAllCharsIsSpaces(string text)
 		{
 			for (int i = 0; i < text.Length; i++)
 			{
@@ -88,24 +90,71 @@ namespace Nemerle.VisualStudio.Helpers
 			return new string(ary);
 		}
 
-		public void ReplaseMethodBody(ClassMember.Function function, string text)
+		string CalcIndent(Location memLoc)
 		{
-			var memLoc = function.Location;
 			var helper = GetHelper(memLoc.FileIndex);
 			var source = helper.Source;
 			var firstLine = source.GetLine(memLoc.Line);
 			var prefixSpaces = firstLine.Substring(0, memLoc.Column - 1);
-			var nl = Environment.NewLine;
-			prefixSpaces = ReplaceNonSpaceWithSpace(prefixSpaces);
+			return ReplaceNonSpaceWithSpace(ReplaceNonSpaceWithSpace(prefixSpaces));
+		}
+
+		public void Add(Location parent, Location inner, string text)
+		{
+			var prefixSpaces = CalcIndent(parent);
 			var bodyPrefix = prefixSpaces + _ident;
 			const StringComparison op = StringComparison.Ordinal;
+			var nl = Environment.NewLine;
 			var text2 = text.StartsWith("\r", op) || text.StartsWith("\n", op)
 									? text : nl + text;
 			var text3 = text2.TrimEnd('\r', '\n', ' ', '\t');
 			var text4 = text3.Replace("\n", "\n" + bodyPrefix);
 			var text5 = text4 + nl + prefixSpaces;
 
-			Add(function.BodyInnerLocation, text5);
+			Add(inner, text5);
+		}
+
+		public void ReplaseMethodBody(ClassMember.Function function, string text)
+		{
+			Add(function.Location, function.BodyInnerLocation, text);
+		}
+
+		internal void AddField(TopDeclaration topDeclaration, CodeMemberField codeMemberField)
+		{
+			string text = FormCodeDomGenerator.ToString(codeMemberField);
+			Add(topDeclaration.Location, topDeclaration.BodyCloseTokenLocation.FromStart(), text);
+		}
+
+		internal void AddMethod(
+			TopDeclaration      topDeclaration,
+			CodeMemberMethod    codeMemberMethod,
+			CodeTypeDeclaration declaration)
+		{
+			string text = FormCodeDomGenerator.ToString(codeMemberMethod, declaration);
+			Add(topDeclaration.Location, topDeclaration.BodyCloseTokenLocation.FromStart(), text);
+		}
+
+		internal void RemoveField(ClassMember.Field field)
+		{
+			var memLoc = field.Location;
+			var helper = GetHelper(memLoc.FileIndex);
+			var source = helper.Source;
+			var firstLineText = source.GetLine(memLoc.Line);
+			var prefix = firstLineText.Substring(0, memLoc.Column - 1);
+			int endLine = memLoc.EndLine;
+			int endCol = memLoc.EndColumn;
+			var startCol = IsAllCharsIsSpaces(prefix) ? 1 : memLoc.Column;
+			var endLineText = source.GetLine(memLoc.EndLine);
+			var x = endCol - 1;
+			var sufix = endLineText.Substring(x, endLineText.Length - x);
+			var lineCount = source.LineCount;
+
+			while (endLine + 1 < lineCount && IsAllCharsIsSpaces(sufix))
+			{
+				endLine++;
+				endCol = 1;
+				sufix = source.GetLine(memLoc.EndLine);
+			}
 		}
 	}
 }

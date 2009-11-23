@@ -265,40 +265,18 @@ namespace Nemerle.VisualStudio.Project
 			ref Guid	   cmdUI)
 		{
 			// Request the Designer Service.
-			//
 			IVSMDDesignerService designerService = (IVSMDDesignerService)GetService(typeof(IVSMDDesignerService));
 
 			// Create loader for the designer.
-			//
 			IVSMDDesignerLoader designerLoader = 
 				(IVSMDDesignerLoader)designerService.CreateDesignerLoader(
 					"Microsoft.VisualStudio.Designer.Serialization.VSDesignerLoader");
 
 			bool loaderInitalized = false;
 
-			string name;
-			hierarchy.GetCanonicalName(itemid, out name);
-			var prj = ProjectInfo.FindProject(hierarchy);
-			var childName = System.IO.Path.ChangeExtension(name, ".Designer.n");
-			//var cur = (NemerleFileNode)prj.ProjectNode.FindChild(name);
-			var child = (NemerleDependentFileNode)prj.ProjectNode.FindChild(childName);
-			if (child != null)
-			{
-				var designer = (System.ComponentModel.Design.Serialization.IDesignerLoaderService)designerLoader;
-				child.Designer = designer;
-			}
-			
-			//Nemerle.VisualStudio.LanguageService.Nemerle
-			//var langSrvs = (Nemerle.VisualStudio.LanguageService.NemerleLanguageService)GetService(typeof(Nemerle.VisualStudio.LanguageService.NemerleLanguageService));
-			//var source = langSrvs.GetSource(textLines);
-
 			try
 			{
 				// Initialize designer loader.
-				//Guid g = Guid.Empty;
-				//IntPtr hn;
-				//uint x;
-				//var hr = hierarchy. GetNestedHierarchy(itemid, ref g, out hn, out x);
 
 				var service = _serviceProvider.GetService(typeof(IOleServiceProvider));
 				designerLoader.Initialize(service, hierarchy, (int)itemid, textLines);
@@ -306,34 +284,17 @@ namespace Nemerle.VisualStudio.Project
 				loaderInitalized = true;
 
 				// Create the designer.
-				//
 				IVSMDDesigner designer = designerService.CreateDesigner(
 					_serviceProvider.GetService(typeof (IOleServiceProvider)), designerLoader);
 
 				// Get editor caption.
-				//
 				editorCaption = designerLoader.GetEditorCaption((int)READONLYSTATUS.ROSTATUS_Unknown);
 
 				// Get view from designer.
-				//
 				object docView = designer.View;
 
 				// Get command guid from designer.
-				//
 				cmdUI = designer.CommandGuid;
-
-				/*
-				IVSMDCodeDomCreator codeDomCreator = designerService as IVSMDCodeDomCreator;
-
-				if(codeDomCreator != null)
-				{
-					IVSMDCodeDomProvider codeDomProvider = codeDomCreator.CreateCodeDomProvider(hierarchy, (int)itemid);
-
-					IServiceContainer serviceContainer = (IServiceContainer)GetService(typeof(IServiceContainer));
-					if(serviceContainer != null)
-						serviceContainer.AddService(typeof(System.CodeDom.Compiler.CodeDomProvider), codeDomProvider);
-				}
-				//*/
 
 				return Marshal.GetIUnknownForObject(docView);
 			}
@@ -345,6 +306,7 @@ namespace Nemerle.VisualStudio.Project
 				//
 				if (loaderInitalized)
 					designerLoader.Dispose();
+
 				throw;
 			}
 		}
