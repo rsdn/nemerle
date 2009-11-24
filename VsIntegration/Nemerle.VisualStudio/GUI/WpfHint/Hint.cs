@@ -10,7 +10,7 @@ namespace WpfHint
 		private HintWindow _hintWindow;
 		private HintSource _hintSource;
 		private string _text;
-		private double _wrapWidth = 400.0;
+		private double _wrapWidth = 1200.0;
 		private Func<string, string> _getHintContent;
 
 		public event Action<Hint, string> Click;
@@ -95,7 +95,8 @@ namespace WpfHint
 			_hintWindow = new HintWindow(this, ht) { Text = _text };
 			new WindowInteropHelper(_hintWindow) { Owner = _hintSource.Owner };
 			_hintWindow.Closed += HintWindowClosed;
-			_hintWindow.MaxHeight = 800.0;//System.Windows.Forms.Screen.FromRectangle(PlacementRect).WorkingArea.
+			_hintWindow.MaxHeight = 1200.0;//System.Windows.Forms.Screen.FromRectangle(PlacementRect).WorkingArea.
+      _wrapWidth = 1200.0;
 
 			_hintWindow.WrapWidth = _wrapWidth;
 			_hintWindow.Show();

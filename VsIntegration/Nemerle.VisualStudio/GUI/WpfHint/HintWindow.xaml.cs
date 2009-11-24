@@ -64,7 +64,7 @@ namespace WpfHint
 			// window props
 			Left          = 0;
 			Top           = 0;
-			MaxHeight     = 800;
+			MaxHeight     = 1200;
 			SizeToContent = SizeToContent.WidthAndHeight;
 			Opacity       = 1;
 
