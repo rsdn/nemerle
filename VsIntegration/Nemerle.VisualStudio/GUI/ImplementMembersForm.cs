@@ -78,14 +78,14 @@ namespace Nemerle.VisualStudio.GUI
     private Dictionary<MType.Class, IMember[]> MakeTypeMembersMap()
     {
       var implItfs = _ty.GetDirectSuperTypes().Where(t => t.IsInterface);
-      var itfs = _unimplementedMembers.GroupBy(m => m.DeclaringType);
-      var res = implItfs.Join(itfs, t => t.tycon, itf => itf.Key, (t, itf) => new { Group = itf, Ty = t });
+      var types = _unimplementedMembers.GroupBy(m => m.DeclaringType);
+      var res = implItfs.Join(types, t => t.tycon, itf => itf.Key, (t, itf) => new { Group = itf, Ty = t });
 
       var ht = new Dictionary<MType.Class, IMember[]>();
       foreach (var item in res)
         ht[item.Ty] = ReplaceGettersAndSettersByProperties(item.Group);
 
-      var baseTypes = itfs.Where(g => !g.Key.IsInterface);
+      var baseTypes = types.Where(g => !g.Key.IsInterface);
 
       foreach (var baseType in baseTypes)
         ht[baseType.Key.GetMemType()] = ReplaceGettersAndSettersByProperties(baseType);
