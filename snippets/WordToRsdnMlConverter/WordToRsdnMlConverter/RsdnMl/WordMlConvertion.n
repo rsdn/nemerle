@@ -1,0 +1,370 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Console;
+using System.IO.Path;
+using System.Linq;
+using System.Xml.Linq;
+using System.Xml.XPath;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Utility;
+using Utilities;
+
+partial class RsdnMl
+{
+  Get_pStyle(e : XElement) : string
+  {
+    def pStyle = e.Element(pPrName).Element(pStyleName);
+    //def pStyle2 = e.XPathSelectElement("./pPr/pStyle");
+      
+    def val = pStyle.Attribute(valName);
+    def newTagName =
+      match (val.Value)
+      {
+        | "Paragraph" | "Normal" | "Обычный"                            => "P"
+        | "H1" | "1" | "Heading 1" | "Заголовок 1" | "Title"            => "H1"
+        | "H2" | "2" | "Heading 2" | "Заголовок 2" | "Subtitle"         => "H2"
+        | "H3" | "3" | "Heading 3" | "Заголовок 3" | "PARTHeader"       => "H3"
+        | "H4" | "4" | "Heading 4" | "Заголовок 4" | "SECTIONHeader"    => "H4"
+        | "H5" | "5" | "Heading 5" | "Заголовок 5" | "SUBSECTIONHeader" => "H5"
+        | "H6" | "6" | "Heading 6" | "Заголовок 6"                      => "H6"
+        | "Epigraph"                                                    => "Epigraph"
+        | "Code"                                                        => "CODE"
+        | "Name"                                                        => "NAME"
+        | "Note"                                                        => "NOTE"
+        | "OL"                                                          => "OL"
+        | "Tip"                                                         => "TIP"
+        | "UL"                                                          => "UL"
+        | "Warning"                                                     => "WARNING"
+        | "Metadata"                                                    => "P"
+        | name when name == CaptionStyleId                              => "NAME" 
+        | name                                                          =>
+          def styleName = styleIdToNameMap[name];
+          Error(paraIndex, $"Не поддерживаемый стиль параграфа: '$styleName'!");
+          name
+      };
+        
+    newTagName
+  }
+
+  PicToTag(e : XElement) : Tag
+  {
+    picIndex++;
+    def img = Tag.Text("IMG", Format.None, "");
+    def ns = XNamespace.Get("urn:schemas-microsoft-com:vml");
+    def imagedata = e.Element(ns + "shape").Element(ns + "imagedata");
+    mutable src = imagedata.Attribute("src").Value;
+    def ext = GetExtension(src);
+    when (src.StartsWith("wordml://", StringComparison.OrdinalIgnoreCase))
+    {
+      def base64Str   = e.Element(ns_w + "binData").Value;
+      def data        = Convert.FromBase64String(base64Str);
+      def picFileName = imagedata.Attribute(titleName).Value;
+      def nameWoExt   = GetFileNameWithoutExtension(path);
+      def dirName     = nameWoExt + "Pics/";
+      src             = dirName + picFileName + ext;
+      def picPath     = Combine(dir, src);
+      
+      _ = IO.Directory.CreateDirectory(Combine(dir, dirName));
+      IO.File.WriteAllBytes(picPath, data);
+    }
+    
+    match (ext.ToLowerInvariant())
+    {
+      | ".png" | ".gif" | ".jpg"| ".jpeg" => () // OK
+      | _ => Error(paraIndex, $"Не поддерживаймый формат картинок '$ext' (картинка # $picIndex)");
+    }
+    
+    img.Attrs["src"] = src;
+    img
+  }
+  
+  RToTag(e : XElement, parent : XElement) : IEnumerable[Tag]
+  {
+    def getTextStyle(e : XElement) : string * Format
+    {
+      def rStyle = e.Element(rStyleName);
+      def getScript() : Format
+      {
+        def se = e.Element(vertAlignName);
+        if (se != null) 
+          match (se.Attribute(valName).Value)
+          {
+            | "superscript" => Format.Superscript
+            | "subscript"   => Format.Subscript
+            | _             => Format.None
+          } 
+        else Format.None
+      }
+      def getFormat(name : XName, value : Format) : Format
+      {
+        if (e.Element(name) != null) value else Format.None
+      }
+      def b      = getFormat(bName, Format.Bold);
+      def i      = getFormat(iName, Format.Italic);
+      def u      = getFormat(uName, Format.Underline);
+      def script = getScript();
+      def style1 = if (rStyle == null) "" else rStyle.Attribute(valName).Value;
+      def style2 = 
+        match (style1)
+        {
+          | "KEYWORD"        => "KEYWORD"
+          | "NUMBER"         => "NUMBER"
+          | "PREPROCESSOR"   => "PREPROCESSOR"
+          | "STRING"         => "STRING"
+          | "ACCENT"         => "ACCENT"
+          | "COMMENT"        => "COMMENT"
+          | "CodeNone"       => ""
+          | ""               => ""
+          | name when name == HyperlinkStyleId => "" // Hyperlink / Гиперссылка
+          | name when name == AnnotationReferenceStyleId => "" // CommentReference
+          | name             =>
+            Error(paraIndex, 
+              $"Не поддерживаемый стиль символов: '$(styleIdToNameMap[name])' (строка '$(e.Value)')!");
+            name
+        }
+      
+      (style2, b | i | u | script)
+    }
+  
+    def es = e.Elements().NToList();
+    
+    def (es,  (style, format)) =
+      match (es)
+      {
+        | h :: tail when isName(h, "rPr") => (tail, getTextStyle(h))
+        | _                               => (es, ("", Format.None))
+      };
+    
+    def content = List();
+    mutable errors = false;
+    
+    foreach (e in es)
+    {
+      if (ns_w == e.Name.Namespace)
+        match (e.Name.LocalName)
+        {
+          | "br"            => paraIndex++; content.Add(Tag.P("BR", []));
+          | "softHyphen"    => content.Add(Tag.Text(style, format, "­")); // Осторожно! В строке юникодный символ!
+          | "noBreakHyphen" => content.Add(Tag.Text(style, format, "‑")); // Осторожно! В строке юникодный символ!
+          | "tab"           => content.Add(Tag.Text(style, format, "  "));
+          | "t"             => content.Add(Tag.Text(style, format, e.Value));
+          | "pict"          => content.Add(PicToTag(e));
+          | "fldChar" 
+          | "instrText"     => () // игнорируем
+          | _               => errors = true; ErrorUnsuportedTag(e);
+
+        }
+      else if (isName2(e, annotationName))
+      {
+        def typeProp = e.Attribute(typeName).Value;
+        match (typeProp)
+        {
+          | "Word.Comment" => () // игнорируем
+          | _                     => 
+            //assert2(false);
+            Error(paraIndex + 1, $"Не поддерживаемый тип аннтоации Word ML: $typeProp");
+            content.Add(Tag.Text(style, format, ""));
+        }
+      }
+      else
+      {
+        errors = true;
+        ErrorUnsuportedTag(e);
+      }
+    }
+    
+    when (errors)
+    {
+      Console.ForegroundColor = ConsoleColor.Cyan;
+      Error(paraIndex, $"Код тега (абзаца) содержащего недопустимые теги (приведенные выше):\n$parent");
+      Console.ResetColor();
+    }
+      
+    content
+  }
+  
+  HlinkToTag(e : XElement) : Tag
+  {
+    def content    = List();
+    
+    foreach (se in e.Elements().OnlyWordMl().Where(x => x.Name.LocalName == "r"))
+      content.AddRange(RToTag(se, e));
+    
+    def a = Tag.P("A", content.NToList());
+    a.Attrs["href"] = e.Attribute(destName).Value;
+    a
+  }
+  
+  PToTag(e : XElement) : Tag.P
+  {
+    def tags      = e.Elements();
+    def styleName = Get_pStyle(e);
+    def content   = List();
+    
+    foreach (se in tags)
+    {
+      def ns = se.Name.Namespace;
+      if (ns == ns_w)
+        match (se.Name.LocalName)
+        {
+          | "r"     => content.AddRange(RToTag(se, e));
+          | "pPr"   => () // ignore it
+          | "hlink" => content.Add(HlinkToTag(se));
+          | _       => ErrorUnsuportedTag(se);
+        }
+      else if (ns == ns_aml)
+        match (se.Name.LocalName)
+        {
+          | "annotation" =>
+            def typeProp = se.Attribute(typeName).Value;
+            match (typeProp)
+            {
+              | "Word.Deletion"       => () // игнорируем
+              | "Word.Comment.Start"  | "Word.Comment.End"  => () // игнорируем
+              | "Word.Bookmark.Start" | "Word.Bookmark.End" => () // игнорируем
+              | "Word.Insertion"      =>
+                foreach (sse in se.Element(contentName).Elements())
+                  content.AddRange(RToTag(sse, e));
+                  
+              | _                     => ErrorUnsuportedTag(se);
+            }
+          
+          | _            => ErrorUnsuportedTag(se);
+        }
+      else
+        ErrorUnsuportedTag(se);
+    }
+    
+    paraIndex++;
+    def xxx = paraIndex;
+    _ = xxx;
+    
+         if (isList(styleName))  Tag.P(styleName, [Tag.P("LI", content.NToList())])
+    else if (isPanel(styleName)) Tag.P(styleName, [Tag.P("P", content.NToList())])
+    else                         Tag.P(styleName, content.NToList())
+  }
+  
+  TblToTag(e : XElement) : Tag
+  {
+    def readAndSetProp(tag : Tag, attrName : string, elem : XElement, propType : XName, propName : XName) : void
+    {
+      def propElem = elem.Element(propType);
+      
+      when (propElem != null)
+      {
+        def prop = propElem.Element(propName);
+        
+        when (prop != null)
+          tag.Attrs[attrName] = prop.Attribute(valName).Value;
+      }
+    }
+    def readProp(elem : XElement, propType : XName, propName : XName) : string
+    {
+      def propElem = elem.Element(propType);
+      
+      if (propElem != null)
+      {
+        def prop = propElem.Element(propName);
+        
+        if (prop != null)
+        {
+          def attr = prop.Attribute(valName);
+          if (attr == null) "" 
+          else              prop.Attribute(valName).Value
+        }
+        else
+          null
+      }
+      else null
+    }
+    
+    //WriteLine("\n" + e.Name.LocalName + ": " + e.ToString());
+    def trs = List();
+    
+    def rows = e.Elements(trName).ToArray();
+    def tbl = array(rows.Length);
+    
+    when (rows.Length > 0)
+    {
+      // Создаем двумерный массив описывающий таблицу.
+      foreach (rowIndex in [0 .. rows.Length - 1])
+        tbl[rowIndex] = rows[rowIndex].Elements(tcName).ToArray();
+
+      def colCount = tbl.MapLazy(_.Length).Max();
+      def rowSpanMap = array(rows.Length); // > 0 - кол. соедененных ячеек, < 0 - игнорировать колонку
+      foreach (rowIndex in [0 .. rows.Length - 1])
+        rowSpanMap[rowIndex] = array.[int](colCount); // инициаилизируем двумерный массив нулями
+      
+      // Перебераем ячейки в порядке клонки -> строки...
+      foreach (colIndex in [0 .. colCount - 1])
+      {
+        mutable rowSpanStartIndex = -1;
+        mutable vmergeCound = 0;
+
+        foreach (rowIndex in [0 .. rows.Length - 1])
+        {
+          when (colIndex >= tbl[rowIndex].Length)
+            continue;
+          
+          def tc     = tbl[rowIndex][colIndex];
+          def vmerge = readProp(tc, tcPrName, vmergeName);
+
+          if (vmerge == "restart") // начало соеденяемых колонок...
+          {
+            rowSpanStartIndex = rowIndex;
+            vmergeCound++;
+          }
+          else if (vmerge == "") // продолжение соеденения колонк...
+          {
+            rowSpanMap[rowIndex][colIndex] = -1;
+            vmergeCound++;
+            
+            when (rowIndex == rows.Length - 1)
+              rowSpanMap[rowSpanStartIndex][colIndex] = vmergeCound;
+          }
+          else when (vmergeCound > 0) // окончание соеденения колокнок.
+          { 
+            rowSpanMap[rowSpanStartIndex][colIndex] = vmergeCound;
+            vmergeCound = 0;
+          }
+        }
+      }
+      
+      foreach (rowIndex in [0 .. rows.Length - 1])
+      {
+        def tcs = List();
+        
+        foreach (colIndex in [0 .. colCount - 1])
+        {
+          def rowSpan = rowSpanMap[rowIndex][colIndex];
+          
+          when (rowSpan < 0)
+            continue;
+
+          when (colIndex >= tbl[rowIndex].Length)
+            continue;
+            
+          def ps = List();
+          def tc = tbl[rowIndex][colIndex];
+          
+          foreach (p1 in tc.Elements(pName))
+            ps.Add(PToTag(p1));
+
+          def tdTag = Tag.P("td", ps.NToList());
+          
+          readAndSetProp(tdTag, "colspan", tc, tcPrName, gridSpanName);
+          
+          when (rowSpan > 0)
+            tdTag.Attrs["rowspan"] = rowSpan.ToString();
+            
+          tcs.Add(tdTag);
+        }
+      
+        trs.Add(Tag.P("tr", tcs.NToList()));
+      }        
+    }
+    
+    Tag.P("TABLE", trs.NToList())
+  }
+}
