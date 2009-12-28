@@ -752,6 +752,11 @@ namespace Nemerle.VisualStudio.Project
 
       parentNode.AddChild(child);
 
+			var projectInfo = ProjectInfo;
+
+			if (projectInfo != null)
+				projectInfo.Engine.BeginBuildTypesTree();
+
       //// TODO : Revisit the VSADDFILEFLAGS here. Can it be a nested project?
       //this.tracker.OnItemAdded(fileName, VSADDFILEFLAGS.VSADDFILEFLAGS_NoFlags);
     }
