@@ -178,9 +178,12 @@ namespace Nemerle.VisualStudio.Package
 
 		int IVsTextMarkerClient.OnAfterMarkerChange(IVsTextMarker pMarker)
 		{
+			//var owner = Owner;
+			//Owner = null;
 			var span = Span;
 			Line     = span.iStartLine;
 			Column   = span.iStartIndex;
+			//Owner = owner;
 			return VSConstants.S_OK;
 		}
 

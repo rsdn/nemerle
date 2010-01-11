@@ -42,7 +42,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#endregion
 
-    internal static GotoInfo[] GenerateSource(GotoInfo[] infos, Engine engine, out string captiopn)
+    internal static GotoInfo[] GenerateSource(GotoInfo[] infos, IEngine engine, out string captiopn)
 		{
       Debug.Assert(infos != null && infos.Length == 1, "GenerateSource lacks required parameter");
       GotoInfo info = infos[0];

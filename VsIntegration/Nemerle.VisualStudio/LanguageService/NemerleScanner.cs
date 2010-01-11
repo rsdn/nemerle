@@ -33,17 +33,12 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (source == null)
 				return null;
 
-			Engine engine = source.GetEngine();
+			var engine = source.GetEngine();
 
-			if (engine.CoreEnv == null) // Engine not init yet. We mast BuildTypesTree for init it
-			{
-        if (!engine.IsBuildTypesTreeInProgress && engine.IsNeedBuildTypesTree)
-          engine.RequestOnBuildTypesTree();
-					
-        return null;
-			}
-
-			return new ScanLexer(engine);
+			if (engine.RequestOnInitEngine())
+				return new ScanLexer((ManagerClass)engine);
+			else
+				return null;
 		}
 
 		internal ScanLexer GetLexer()
@@ -75,11 +70,8 @@ namespace Nemerle.VisualStudio.LanguageService
 			return !info.IsEndOfLine;
 		}
 
-		Nemerle.Completion2.Project _prevProject;
 		GlobalEnv				   _env;
 		TypeBuilder				 _type;
-		int						 _envStartLine;
-		int						 _envEndLine = -1;
 
 		public void SetSource(string source, int offset)
 		{
@@ -93,26 +85,12 @@ namespace Nemerle.VisualStudio.LanguageService
 				{
 					if (_source != null && _source.ProjectInfo != null)
 					{
-#pragma warning disable 618 // Obsolete
-						Nemerle.Completion2.Project project = _source.ProjectInfo.Engine.RawProject;
-#pragma warning restore 618
+						var ret = _source.ProjectInfo.Engine.GetActiveEnv(_source.FileIndex, _currentLine + 1);
 
-						// Project is set to null after it's recompiled.
-						//
-						if (_prevProject != project)
+						if (ret.Field0 != null)
 						{
-							_prevProject = project;
-							_envEndLine  = -1;
-						}
-
-						if (project != null)
-						{
-							var ret = project.GetActiveEnv(_source.FileIndex, _currentLine + 1);
-
-							_env		      = ret.Field0;
-							_type		      = ret.Field1;
-							_envStartLine = ret.Field2 - 1;
-							_envEndLine   = ret.Field3 - 1;
+							_env = ret.Field0;
+							_type = ret.Field1;
 						}
 					}
 				}

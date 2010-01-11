@@ -32,7 +32,7 @@ namespace Nemerle.VisualStudio.GUI
 						text = "???";
 				}
 				else
-					text = gotoInfo.GetLineOfCode(project.Project).Trim().Replace("\t", "  ");
+					text = gotoInfo.GetLineOfCode(project.Engine).Trim().Replace("\t", "  ");
 
 				ListViewItem lvi = new ListViewItem(new string[]
 				{

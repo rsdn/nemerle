@@ -106,7 +106,7 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 			SetPropertyValue (Consts.DocumentationFile, docFile);
 			IsDirty = false;
 
-			projNode.ProjectInfo.Engine.BeginReloadProject();
+			projNode.ProjectInfo.Engine.RequestOnReloadProject();
 
 			return VSConstants.S_OK;
 		}

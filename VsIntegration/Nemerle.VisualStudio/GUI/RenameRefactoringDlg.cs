@@ -14,14 +14,14 @@ namespace Nemerle.VisualStudio.GUI
 {
 	public partial class RenameRefactoringDlg : Form
 	{
-		public RenameRefactoringDlg(Nemerle.Completion2.Project project, GotoInfo[] usages)
+		public RenameRefactoringDlg(Nemerle.Completion2.IEngine engine, GotoInfo[] usages)
 		{
 			InitializeComponent();
 			_usages = usages;
-			FillUsagesTextBox(project);
+			FillUsagesTextBox(engine);
 		}
 
-		private void FillUsagesTextBox(Nemerle.Completion2.Project project)
+		private void FillUsagesTextBox(Nemerle.Completion2.IEngine engine)
 		{
 			string currentFileName = null;
 			var lastTextLength = 0;
@@ -44,7 +44,7 @@ namespace Nemerle.VisualStudio.GUI
 					lastTextLength = rtbFoundUsages.Text.Length;
 				}
 				var strUsageLine = loc.Line.ToString();
-				var line = string.Format("{0}: {1}\n", strUsageLine, usage.GetLineOfCode(project));
+				var line = string.Format("{0}: {1}\n", strUsageLine, usage.GetLineOfCode(engine));
 				rtbFoundUsages.AppendText(line);
 
 				int lineStart = lastTextLength;

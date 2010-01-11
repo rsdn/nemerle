@@ -39,6 +39,7 @@ namespace Nemerle.VisualStudio.Project
     HierarchyListener _listener;
     public NemerleLanguageService LanguageService { get; private set; }
     readonly ErrorListProvider _errorList;
+		public int ErrorCount { get { return _errorList.Tasks.Count; } }
 
     readonly SourceMap _sourceMap = new SourceMap();
     readonly List<ISource> _sources = new List<ISource>();
@@ -64,7 +65,7 @@ namespace Nemerle.VisualStudio.Project
       _projectNode = projectNode;
       _hierarchy = hierarchy;
 
-      _engine = new Engine(this, new TraceWriter(), false); // it enables parser working.
+      _engine = EngineFactory.Create(this, new TraceWriter(), false); // it enables parser working.
 
       Engine.TypedtreeCreated += delegate
       {
@@ -125,11 +126,11 @@ namespace Nemerle.VisualStudio.Project
     int _buildTypedtreeCount;
     readonly List<MethodBuilderEx> _methodsCheckQueue = new List<MethodBuilderEx>(100);
 
-    private Engine _engine;
-    public Engine Engine
+    private IEngine _engine;
+    public IEngine Engine
     {
       [DebuggerNonUserCode]
-      get { ManagerClass.Instance = _engine; return _engine; }
+			get { ManagerClass.Instance = (ManagerClass)_engine; return _engine; }
     }
 
     private NemerleProjectNode _projectNode;
@@ -166,7 +167,7 @@ namespace Nemerle.VisualStudio.Project
     public void AddAssembly(ReferenceNode node)
     {
       _assemblyReferences.Add(node);
-      Engine.Reset();
+			Engine.RequestOnReloadProject();
     }
 
     public void RemoveAssembly(ReferenceNode node)
@@ -174,7 +175,7 @@ namespace Nemerle.VisualStudio.Project
       bool res = _assemblyReferences.Remove(node);
       Debug.Assert(res, "Can't remove assembly reference '"
         + node.Caption + "' (" + node.Url + ")");
-      Engine.Reset();
+			Engine.RequestOnReloadProject();
     }
 
     /// <summary>Watchers for project assemble reference.</summary>
@@ -204,7 +205,7 @@ namespace Nemerle.VisualStudio.Project
 
     void watcher_Changed(object sender, FileSystemEventArgs e)
     {
-      Engine.Reset();
+			Engine.RequestOnReloadProject();
     }
 
     #endregion
@@ -459,16 +460,11 @@ namespace Nemerle.VisualStudio.Project
       get { return Engine.IsProjectAvailable; }
     }
 
-    public void ResetNamespaceTree()
-    {
-      Engine.ResetNamespaceTree();
-    }
-
-    public Nemerle.Completion2.Project Project
+    /*public Nemerle.Completion2.Project Project
     {
       [DebuggerStepThrough]
       get { return Engine.Project; }
-    }
+    }*/
 
     bool _isDocumentOpening;
 
@@ -564,6 +560,22 @@ namespace Nemerle.VisualStudio.Project
         return msg != null && msg.CompileUnit.FileIndex == fileIndex;
       });
     }
+
+		void IIdeProject.TypesTreeCreated()
+		{
+			foreach (ISource source in _sources)
+			{
+				var nemerleSource = source as NemerleSource;
+
+				if (nemerleSource != null)
+				{
+					var lineCount = nemerleSource.GetLineCount();
+
+					if (lineCount > 0)
+						nemerleSource.Recolorize(0, lineCount - 1);
+				}
+			}
+		}
 
     void IIdeProject.SetMethodCompilerMessages(MemberBuilder member, IEnumerable<CompilerMessage> messages)
     {
@@ -829,10 +841,6 @@ namespace Nemerle.VisualStudio.Project
 
         mb = _methodsCheckQueue[lastIndex];
 
-        if (mb.ToString() == "method Tests.Test1.TestSourceTextManager.GetLine(line : int) : string")
-        {
-          ;
-        }
         _methodsCheckQueue.RemoveAt(lastIndex);
       }
 

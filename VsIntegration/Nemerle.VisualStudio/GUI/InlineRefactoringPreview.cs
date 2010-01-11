@@ -29,7 +29,7 @@ namespace Nemerle.VisualStudio.GUI
 				var loc = usage.Location;
 
 				var strUsageLine = loc.Line.ToString();
-				var line = string.Format("{0}: {1}\n", strUsageLine, usage.GetLineOfCode(_project));
+				var line = string.Format("{0}: {1}\n", strUsageLine, usage.GetLineOfCode(_project.Engine));
 				rtbFoundUsages.AppendText(line);
 
 				int lineStart = prevTextLength;

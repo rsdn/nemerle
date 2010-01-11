@@ -365,14 +365,16 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private void ExpandSelection()
 		{
-			TextSpan selection = GetSelection();
-			if (!SelectionIsInStack(selection))
-			{
-				_selectionsStack = GetSelectionsStack(selection);
-				AddWordSpan(selection);
-				_currentSelection = _selectionsStack.Count;
-			}
-			CurrentSelection--;
+			//TODO: В этом нужно разбираться и или выкидывать, или реализовывать по человечески
+
+			//TextSpan selection = GetSelection();
+			//if (!SelectionIsInStack(selection))
+			//{
+			//  _selectionsStack = GetSelectionsStack(selection);
+			//  AddWordSpan(selection);
+			//  _currentSelection = _selectionsStack.Count;
+			//}
+			//CurrentSelection--;
 		}
 
 		private void ShrinkSelection()
@@ -401,95 +403,107 @@ namespace Nemerle.VisualStudio.LanguageService
 				Source.ProjectInfo.RemoveLastHighlighting(Source);
 		}
 
-		private bool WarnAboutErrors(Nemerle.Completion2.Project project)
+		private bool WarnAboutErrors()
 		{
-			foreach (var cm in project.Errors)
-				if (cm.Kind == MessageKind.Error)
-					return MessageBox.Show(TextEditorWindow, "The project contaions error[s]. Are you sure you want to proceed (it's unsafe!)?",
-										"",
-										MessageBoxButtons.YesNo,
-										MessageBoxIcon.Exclamation) == DialogResult.Yes;
+			var projectInfo = Source.ProjectInfo;
+
+			if (projectInfo == null)
+				return false;
+
+			if (projectInfo.ErrorCount > 0)
+				return MessageBox.Show(TextEditorWindow, 
+					"The project contaions error[s]. Are you sure you want to proceed (it's unsafe!)?",
+					"",
+					MessageBoxButtons.YesNo,
+					MessageBoxIcon.Exclamation
+					) == DialogResult.Yes;
+
 			return true;
 		}
 
 		private void RunInlineRefactoring()
 		{
-			if (Source == null) return;
-			var proj = Source.ProjectInfo.Project;
-			var engine = Source.ProjectInfo.Engine;
+			//TODO: Создать задачу для данного вида рефакторинга и перенести эту реализацию в нее
 
-			if(!WarnAboutErrors(proj)) return;
+			//if (Source == null)
+			//  return;
 
-			int lineIndex;
-			int colIndex;
-			TextView.GetCaretPos(out lineIndex, out colIndex);
-      GotoInfo[] definitions = engine.GetGotoInfo(Source,
-																	 lineIndex + 1,
-																	 colIndex,
-                                   Nemerle.Compiler.Utils.Async.GotoKind.Definition);
-			if (definitions == null || definitions.Length == 0)
-				return;
+			//var proj = Source.ProjectInfo.Project;
+			//var engine = Source.ProjectInfo.Engine;
 
-			if (definitions.Length > 1)
-			{
-				MessageBox.Show(TextEditorWindow, "More than one definition found. Cannot inline.");
-				return;
-			}
+			//if(!WarnAboutErrors(proj))
+			//  return;
 
-			if (proj.CanInlineExpressionAt(definitions[0]))
-			{
-				HighlightSymbol();
+			//int lineIndex;
+			//int colIndex;
+			//TextView.GetCaretPos(out lineIndex, out colIndex);
+			//GotoInfo[] definitions = engine.GetGotoInfo(Source,
+			//                             lineIndex + 1,
+			//                             colIndex + 1,
+			//                             Nemerle.Compiler.Utils.Async.GotoKind.Definition);
+			//if (definitions == null || definitions.Length == 0)
+			//  return;
 
-				using (var undoTransaction = new LinkedUndoTransaction("Inline refactoring", Source.Service.Site))
-				{
-					// replacing usages with initializer
-					var tuple = proj.GetReplacementStringForInline(definitions[0]);
-					var defLocation = tuple.Field0;
-					var initLocation = tuple.Field1;
-					var replacement = Source.GetText(Utils.SpanFromLocation(initLocation));
-					var shouldEmbrace = tuple.Field2;
-          var usages = engine.GetGotoInfo(Source,
-														 lineIndex + 1,
-														 colIndex,
-                             GotoKind.Usages)
-											.Where(usage => usage.UsageType == UsageType.Usage)
-											.ToArray();
-					using (var frm = new InlineRefactoringPreview(proj))
-					{
-						frm.Usages = usages;
-						frm.ExpressionToInline = shouldEmbrace
-													? string.Format("({0})", replacement)
-													: replacement;
-						if (frm.ShowDialog(TextEditorWindow) != DialogResult.OK)
-						{
-							RemoveLastHighlighting();
-							return;
-						}
-					}
-					Source.RenameSymbols(replacement, usages, false);
+			//if (definitions.Length > 1)
+			//{
+			//  MessageBox.Show(TextEditorWindow, "More than one definition found. Cannot inline.");
+			//  return;
+			//}
 
-					// replacing definition with empty string
-					Source.RenameSymbols("", new[] { new GotoInfo(defLocation) });
+			//if (proj.CanInlineExpressionAt(definitions[0]))
+			//{
+			//  HighlightSymbol();
 
-					Source.DeleteEmptyStatementAt(defLocation.Line - 1);
+			//  using (var undoTransaction = new LinkedUndoTransaction("Inline refactoring", Source.Service.Site))
+			//  {
+			//    // replacing usages with initializer
+			//    var tuple = proj.GetReplacementStringForInline(definitions[0]);
+			//    var defLocation = tuple.Field0;
+			//    var initLocation = tuple.Field1;
+			//    var replacement = Source.GetText(Utils.SpanFromLocation(initLocation));
+			//    var shouldEmbrace = tuple.Field2;
+			//    var usages = engine.GetGotoInfo(Source,
+			//                       lineIndex + 1,
+			//                       colIndex,
+			//                       GotoKind.Usages)
+			//                .Where(usage => usage.UsageType == UsageType.Usage)
+			//                .ToArray();
+			//    using (var frm = new InlineRefactoringPreview(proj))
+			//    {
+			//      frm.Usages = usages;
+			//      frm.ExpressionToInline = shouldEmbrace
+			//                    ? ("(" + replacement + ")")
+			//                    : replacement;
+			//      if (frm.ShowDialog(TextEditorWindow) != DialogResult.OK)
+			//      {
+			//        RemoveLastHighlighting();
+			//        return;
+			//      }
+			//    }
+			//    Source.RenameSymbols(replacement, usages, false);
 
-					undoTransaction.Commit();
-				}
-				RemoveLastHighlighting();
-			}
-			else
-			{
-				MessageBox.Show(TextEditorWindow, "Only simple def's can be inlined at the moment.");
-			}
+			//    // replacing definition with empty string
+			//    Source.RenameSymbols("", new[] { new GotoInfo(defLocation) });
+
+			//    Source.DeleteEmptyStatementAt(defLocation.Line - 1);
+
+			//    undoTransaction.Commit();
+			//  }
+			//  RemoveLastHighlighting();
+			//}
+			//else
+			//{
+			//  MessageBox.Show(TextEditorWindow, "Only simple def's can be inlined at the moment.");
+			//}
 		}
 
 		private void RunRenameRefactoring()
 		{
 			if (Source == null || Source.ProjectInfo == null)
         return;
-      var proj   = Source.ProjectInfo.Project;
+
       var engine = Source.ProjectInfo.Engine;
-			if(!WarnAboutErrors(proj))
+			if(!WarnAboutErrors())
         return;
 
 			int lineIndex;
@@ -515,7 +529,7 @@ namespace Nemerle.VisualStudio.LanguageService
         return;
 			}
 
-			using (var frm = new RenameRefactoringDlg(proj, usages))
+			using (var frm = new RenameRefactoringDlg(engine, usages))
 			{
 				if (frm.ShowDialog(TextEditorWindow) == DialogResult.OK)
 				{
@@ -530,25 +544,25 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (Source == null)
 				return;
 
-			NemerleLanguageService ourLanguageService = Source.LanguageService as NemerleLanguageService;
+			var ourLanguageService = Source.LanguageService as NemerleLanguageService;
+
 			if (ourLanguageService == null)
 				return;
 
 			int lineIndex;
 			int colIndex;
 			TextView.GetCaretPos(out lineIndex, out colIndex);
-			GotoInfo[] infos =
-				Source.ProjectInfo.Project.GetInheritors(Source.FileIndex, lineIndex + 1, colIndex + 1);
+			var line = lineIndex + 1;
+			var col = colIndex + 1;
+			var infos = Source.ProjectInfo.Engine.GetInheritorsGotoInfo(Source, line, col);
 
 			// If we have only one found usage, then jump directly to it.
 			if (infos.Length == 1)
 				ourLanguageService.GotoLocation(infos[0].Location);
 			else if (infos.Length > 0) // otherwise show a form to let user select entry manually
-			{
 				using (GotoUsageForm popup = new GotoUsageForm(infos))
 					if (popup.ShowDialog(TextEditorWindow) == DialogResult.OK)
 						ourLanguageService.GotoLocation(popup.Result.Location);
-			}
 		}
 
 		private bool SelectionIsInStack(TextSpan selection)
@@ -602,19 +616,19 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 		}
 
-		private List<Location> GetSelectionsStack(TextSpan span)
-		{
-			NemerleSource source = Source as NemerleSource;
-			if (source != null)
-			{
-				Location current = Utils.LocationFromSpan(source.FileIndex, span);
-				List<Location> stack = new List<Location>();
-				stack.AddRange(source.ProjectInfo.Project.GetEnclosingLocationsChain(current).ToArray());
-				return stack;
-			}
-			else
-				return null;
-		}
+		//private List<Location> GetSelectionsStack(TextSpan span)
+		//{
+		//  NemerleSource source = Source as NemerleSource;
+		//  if (source != null)
+		//  {
+		//    Location current = Utils.LocationFromSpan(source.FileIndex, span);
+		//    List<Location> stack = new List<Location>();
+		//    stack.AddRange(source.ProjectInfo.Project.GetEnclosingLocationsChain(current).ToArray());
+		//    return stack;
+		//  }
+		//  else
+		//    return null;
+		//}
 
 		//public override int GetWordExtent(int line, int index, uint flags, TextSpan[] span)
 		//{

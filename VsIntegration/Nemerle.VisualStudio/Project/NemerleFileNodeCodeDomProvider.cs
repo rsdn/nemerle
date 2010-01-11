@@ -2,6 +2,7 @@
 using System.IO;
 using System.CodeDom;
 using System.CodeDom.Compiler;
+using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
 
@@ -13,6 +14,7 @@ using Microsoft.VisualStudio.TextManager.Interop;
 
 using Nemerle.Compiler;
 using NCU = Nemerle.Compiler.Utils;
+using TupleStringIntInt = Nemerle.Builtins.Tuple<string, int, int>;
 using CodeGenerator = Nemerle.Compiler.Utils.FormCodeDomGenerator;
 
 using Nemerle.VisualStudio.LanguageService;
@@ -218,15 +220,20 @@ namespace Nemerle.VisualStudio.Project
 				// о них нужно запихать в RelatedDocDataCollection и поместить ссылку на ее
 				// в codeCompileUnit.UserData[typeof(RelatedDocDataCollection)].
 				var relatedDocDatas = new RelatedDocDataCollection();
+				var sourcesInf = new List<TupleStringIntInt>();
 
 				foreach (int index in result.FilesIndices)
 				{
-					var filePath = Location.GetFileName(index);
-					var data     = docDataService.GetFileDocData(filePath, FileAccess.Read, null);
+					var filePath     = Location.GetFileName(index);
+					var data         = docDataService.GetFileDocData(filePath, FileAccess.Read, null);
 					relatedDocDatas.Add(data);
+
+					var textVerIndex = projectInfo.GetSource(index).GetTextCurrentVersionAndFileIndex();
+					sourcesInf.Add(textVerIndex);
 				}
 
 				codeCompileUnit.UserData[typeof(RelatedDocDataCollection)] = relatedDocDatas;
+				codeCompileUnit.UserData["NemerleSources"] = sourcesInf;
 
 				return codeCompileUnit;
 			}
@@ -249,6 +256,7 @@ namespace Nemerle.VisualStudio.Project
         throw new ApplicationException("The component is not in the project!");
 
       var changes = projectInfo.Engine.MergeCodeCompileUnit(codeCompileUnit);
+			var sourcesInf = (List<TupleStringIntInt>)codeCompileUnit.UserData["NemerleSources"];
 
 			using (var helper = new NemerleProjectSourcesButchEditHelper(projectInfo, "form designer update"))
 			{

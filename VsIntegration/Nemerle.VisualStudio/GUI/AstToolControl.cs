@@ -121,16 +121,16 @@ namespace Nemerle.VisualStudio.GUI
 					case 0: // Tokens
 						string code = source.GetText();
 						
-						LexerBase lex = new LexerString(projectInfo.Engine, code,
+						LexerBase lex = new LexerString((ManagerClass)projectInfo.Engine, code,
 							new Location(source.FileIndex, 1, 1));
 						//lex.BeginParseFile();
 						lex.Keywords = lex.Manager.CoreEnv.Keywords;
 						AstUtils.FillList(lex, _items);
 						break;
 					case 1: // AST
-						var ns = projectInfo.Engine.Project.CompileUnits
-							                    .GetTopNamespace(source.FileIndex);
-						AstUtils.FillList(ns, _items);
+						//var ns = projectInfo.Engine.Project.CompileUnits
+						//	                    .GetTopNamespace(source.FileIndex);
+						//AstUtils.FillList(ns, _items);
 						break;
 				}
 

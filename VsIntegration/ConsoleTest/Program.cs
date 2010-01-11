@@ -64,14 +64,9 @@ namespace ConsoleTest
 			test.Complete_type_escalation();
 			test.Complete_qualidend();
 			test.Complete_GlabalNs_in_NestedNs();
-			test.FindByLocation_Ns1_Ns2_Ns3_ClassInNestenNs();
-			test.FindByLocation_Method_Class2_Method();
 			test.CompleteInType_1();
 			test.CompleteInUsing_1();
 			test.FindByLocation_Method_Main();
-			test.FindByLocation_Method_Main_2();
-			test.FindByLocation_Type_XStruct();
-			test.FindByLocation_using();
 		}
 	}
 }

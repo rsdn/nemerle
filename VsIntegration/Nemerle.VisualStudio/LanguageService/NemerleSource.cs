@@ -133,7 +133,7 @@ namespace Nemerle.VisualStudio.LanguageService
       {
         TextLineChange changes = lineChange[0];
 
-        Engine.AddRelocationRequest(RelocationRequestsQueue,
+				RelocationQueue.AddRelocationRequest(RelocationRequestsQueue,
           FileIndex, CurrentVersion,
           changes.iNewEndLine + 1, changes.iNewEndIndex + 1,
           changes.iOldEndLine + 1, changes.iOldEndIndex + 1,
@@ -153,6 +153,36 @@ namespace Nemerle.VisualStudio.LanguageService
 		#endregion
 
 		#region Overrides
+
+		public override TextSpan UncommentLines(TextSpan span, string lineComment)
+		{
+			// Remove line comments
+			int clen    = lineComment.Length;
+			var editMgr = new EditArray(this, null, true, "UncommentLines");
+
+			for (int line = span.iStartLine; line <= span.iEndLine; line++)
+			{
+				int    i    = this.ScanToNonWhitespaceChar(line);
+				string text = base.GetLine(line);
+
+				if ((i + clen) <= text.Length && text.Substring(i, clen) == lineComment)
+				{
+					var es = new EditSpan(new TextSpan(){
+											iEndLine    = line, iStartLine = line, 
+											iStartIndex = i,    iEndIndex  = i + clen 
+										}, "");
+					editMgr.Add(es); // remove line comment.
+
+					if (line == span.iStartLine && span.iStartIndex != 0)
+						span.iStartIndex = i;
+				}
+			}
+
+			editMgr.ApplyEdits();
+
+			span.iStartIndex = 0;
+			return span;
+		}
 
     public void Completion(IVsTextView textView, int lintIndex, int columnIndex, bool byTokenTrigger)
     {
@@ -255,12 +285,8 @@ namespace Nemerle.VisualStudio.LanguageService
 			#endregion
 
       var engine  = GetEngine();
-      var project = engine.Project;
 			var line    = lineIndex + 1;
 			var col     = colIndex + 1;
-
-      if (project == null)
-        return;
 
       GotoInfo[] infos = gotoDefinition
         ? engine.GetGotoInfo(this, line, col, GotoKind.Definition)
@@ -323,14 +349,14 @@ namespace Nemerle.VisualStudio.LanguageService
     /// более одного члена, то производит отсев наиболее подходящего. Для этого последовательно проверяем список
     /// аргументов, возвращаемое значение и т.п.
     /// </remarks>
-    private GotoInfo[] TryFindGotoInfoByDebugInfo(Engine engine, GotoInfo inf)
+    private GotoInfo[] TryFindGotoInfoByDebugInfo(IEngine engine, GotoInfo inf)
     {
       GotoInfo[] infoFromPdb = ProjectInfo.LookupLocationsFromDebugInformation(inf);
       var result = new List<GotoInfo>();
 
       foreach (GotoInfo item in infoFromPdb)
       {
-        var cu = engine.ParseCompileUnit(new FileNemerleSource(Location.GetFileIndex(item.FilePath)));
+        var cu = engine.ParseCompileUnit(engine.GetSource(Location.GetFileIndex(item.FilePath)));
         var res = TryGetGotoInfoForMemberFromSource(inf.Member, item.Location, cu);
 
         if (res.Length > 0)
@@ -519,24 +545,38 @@ namespace Nemerle.VisualStudio.LanguageService
 			// Calculate minimal position of non-space char
 			// at lines in selected span.
 			var minNonEmptyPosition = 0;
+
 			for (var i = span.iStartLine; i <= span.iEndLine; ++i)
 			{
-				var line = GetLine(i);
-				if (line.Trim().Length <= 0) continue;
+				var line = base.GetLine(i);
+
+				if (line.Trim().Length <= 0)
+					continue;
+
 				var spaceLen = line.Replace(line.TrimStart(), "").Length;
+
 				if (minNonEmptyPosition == 0 || spaceLen < minNonEmptyPosition)
 					minNonEmptyPosition = spaceLen;
 			}
 
 			// insert line comment at calculated position.
 			var editMgr = new EditArray(this, null, true, "CommentLines");
+
 			for (var i = span.iStartLine; i <= span.iEndLine; ++i)
 			{
-				var commentSpan = new TextSpan();
-				commentSpan.iStartLine = commentSpan.iEndLine = i;
-				commentSpan.iStartIndex = commentSpan.iEndIndex = minNonEmptyPosition;
-				editMgr.Add(new EditSpan(commentSpan, lineComment));
+				var text = base.GetLine(i);
+
+				if (minNonEmptyPosition <= text.Length && text.Trim().Length > 0)
+				{
+					var commentSpan = new TextSpan();
+
+					commentSpan.iStartLine = commentSpan.iEndLine = i;
+					commentSpan.iStartIndex = commentSpan.iEndIndex = minNonEmptyPosition;
+
+					editMgr.Add(new EditSpan(commentSpan, lineComment));
+				}
 			}
+
 			editMgr.ApplyEdits();
 
 			// adjust original span to fit comment symbols
@@ -790,14 +830,14 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			string filePath = GetFilePath();
 			ProjectInfo projectInfo = ProjectInfo.FindProject(filePath);
-			Engine engine = projectInfo.Engine;
+			IEngine engine = projectInfo.Engine;
 
 			ReformatSpanInternal(mgr, span, engine, filePath);
 			//ReformatSpan_internal(mgr, span, engine, filePath);
 			//ReformatSpan_internal(mgr, span, engine, filePath);
 			//base.ReformatSpan(mgr, span);
 		}
-		private static void ReformatSpanInternal(EditArray mgr, TextSpan span, Engine engine, string filePath)
+		private static void ReformatSpanInternal(EditArray mgr, TextSpan span, IEngine engine, string filePath)
 		{
 			List<FormatterResult> results =
 				Formatter.FormatSpan(span.iStartLine + 1,
@@ -891,7 +931,7 @@ namespace Nemerle.VisualStudio.LanguageService
     private CompileUnit TryGetCompileUnit()
     {
       var compileUnit = CompileUnit;
-
+			/*
       try
       {
 
@@ -906,7 +946,7 @@ namespace Nemerle.VisualStudio.LanguageService
 // ReSharper disable EmptyGeneralCatchClause
       catch { }  // exceptions can be cause by coloring lexer which work in UI thread
 // ReSharper restore EmptyGeneralCatchClause
-
+			*/
       return compileUnit;
     }
 
@@ -1153,7 +1193,7 @@ namespace Nemerle.VisualStudio.LanguageService
       TryHighlightBraces1(view);
     }
 
-		public Engine GetEngine()
+		public IEngine GetEngine()
 		{
 			var projectInfo = ProjectInfo;
 			
@@ -1326,13 +1366,6 @@ namespace Nemerle.VisualStudio.LanguageService
 		#region ISource Members
 
     public int CurrentVersion { get { return TimeStamp; } }
-
-		public TupleStringInt GetTextAndCurrentVersion()
-    {
-			LockWrite();
-			try { return new TupleStringInt(GetText(), CurrentVersion); }
-			finally { UnlockWrite(); }
-    }
 
 		public TupleStringIntInt GetTextCurrentVersionAndFileIndex()
     {
@@ -1561,7 +1594,8 @@ namespace Nemerle.VisualStudio.LanguageService
       //Debug.WriteLine(Utils.LocationFromSpan(FileIndex, span).ToVsOutputStringFormat() + "result GetDataTipText() text:");
       //Debug.WriteLine(hintText);
 
-			Service.ShowHint(view, hintSpan, tipInfo.GetHintContent, hintText);
+			if (hintText != null)
+				Service.ShowHint(view, hintSpan, tipInfo.GetHintContent, hintText);
 
 			return (int)TipSuccesses2.TIP_S_NODEFAULTTIP;
     }

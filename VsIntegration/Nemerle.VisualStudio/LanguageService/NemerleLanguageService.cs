@@ -41,7 +41,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		#region Fields
 
 		public bool IsSmartTagActive { get; private set; }
-		public static Engine DefaultEngine { get; private set; }
+		public static IEngine DefaultEngine { get; private set; }
 		public bool IsDisposed { get; private set; }
 		IVsStatusbar _statusbar;
 		public NemerlePackage Package { get; private set; }
@@ -64,7 +64,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			AstToolControl.ShowLocation += GotoLocation;
 
 			if (DefaultEngine == null)
-				DefaultEngine = new Engine(EngineCallbackStub.Default, new TraceWriter(), true);
+				DefaultEngine = EngineFactory.Create(EngineCallbackStub.Default, new TraceWriter(), true);
 
       Hint = new Hint();
 			Hint.WrapWidth = 900.1;
@@ -165,7 +165,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region Misc
 
-		public bool IsDefaultEngine(Engine engine)
+		public bool IsDefaultEngine(IEngine engine)
 		{
 			return engine == DefaultEngine;
 		}
