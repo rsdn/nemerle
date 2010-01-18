@@ -1595,7 +1595,7 @@ namespace Nemerle.VisualStudio.LanguageService
       //Debug.WriteLine(hintText);
 
 			if (hintText != null)
-				Service.ShowHint(view, hintSpan, tipInfo.GetHintContent, hintText);
+				Service.ShowHint(view, hintSpan, tipInfo == null ? null : tipInfo.GetHintContent, hintText);
 
 			return (int)TipSuccesses2.TIP_S_NODEFAULTTIP;
     }
