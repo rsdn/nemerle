@@ -1,0 +1,263 @@
+﻿using System;
+
+using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Collections;
+
+using PT = Nemerle.Compiler.Parsetree;
+using TT = Nemerle.Compiler.Typedtree;
+
+namespace Nemerle.Extensions {
+
+    public macro AnonymousClassCtor(params ctor_def : array[expr]) 
+        syntax("new", "(", ctor_def, ")" )
+    {
+        AnonymousMacroImpl.MakeAnonymousClassCtor(Macros.ImplicitCTX(), NList.ToList(ctor_def))
+    }
+
+/*  EXPERIMENTAL: make anonymous class projection
+
+    public macro AnonymousClassProjection(e : expr, params ctor_def : array[expr]) 
+        syntax("new", "[", ctor_def, "]", "(", e, ")")
+    {
+        AnonymousMacroImpl.MakeAnonymousClassProjection(Macros.ImplicitCTX(), e, NList.ToList(ctor_def))
+    }
+*/
+    internal module AnonymousMacroImpl {
+
+        [Record]
+        private class ParsedFieldInfo {
+            [Accessor] private field : PT.Name;
+            [Accessor] private value : PT.PExpr;
+            [Accessor] private typed_value : TT.TExpr;
+        }
+
+        [Record]
+        private class FieldInfo {
+            [Accessor] private field : PT.Name;
+            [Accessor] private field_type : PT.PExpr;
+            [Accessor] private parsed : ParsedFieldInfo;
+
+            public PropertyName : string {
+                get { field.ToString() }
+            }
+
+            public FieldName : string {
+                get { "_" + field.ToString() }
+            }
+        }
+
+        private GetAnonymousClassName(fields : list[FieldInfo]) : string
+            requires !NList.IsEmpty(fields)
+        {
+            // may be mangling should be more complex...
+            fields.FoldLeft(System.Text.StringBuilder("_N_Anonymous"),
+                (f, sb) => sb.Append("_").Append(f.PropertyName).Append("<").Append(f.FieldType.ToString().Replace(".", "'")).Append(">"))
+            .ToString()
+        }
+
+        private BuildAnonymousClass(typer : Typer, name : string, fields : list[FieldInfo]) : TypeInfo
+            requires !NList.IsEmpty(fields)
+        {
+            match(typer.Env.LookupType([name])) {
+                | Some(ty) => ty
+                | None() => {
+                    // fields and properties declaration
+                    def tuple_type = match(fields) {
+                        | f :: [] => f.FieldType
+                        | _ => def t = <[ int * string ]>;
+                            PT.PExpr.Call(t.func, fields.Map(f => f.FieldType))
+                    }
+
+                    def members = fields.Map(f => <[ decl :
+                                [Nemerle.Utility.Accessor($(f.PropertyName : usesite))]
+                                private $(f.FieldName : usesite) : $(f.FieldType);
+                        ]>);
+
+                    // GetFields override
+                    def members = {
+                        def field_array_name = Macros.NewSymbol("field_array");
+                        def field_array = fields.Map(f => <[ $(f.PropertyName : string) ]>);
+                        <[ decl: 
+                                private static $(field_array_name : name) : array[string] = array[ ..$field_array ];
+                        ]> :: <[ decl:
+                                protected override ___GetFields() : array[string] { $(field_array_name : name) }
+                        ]> :: members
+                    }
+
+
+                    // GetValues implementation
+                    def members = match(fields) {
+                        | f :: [] => 
+                            <[ decl:
+                                protected override ___GetValues() : $tuple_type { this.$(f.FieldName : usesite) }
+                            ]> :: members
+                        | _ =>
+                            def values = fields.Map(f => <[ this.$(f.FieldName : usesite) ]>);
+                            <[ decl:
+                                protected override ___GetValues() : $tuple_type { ( ..$values ) }
+                            ]> :: members
+                    }
+
+
+                    // Explicit type conversion (copy from Anonymous[T])
+                    def members = <[ decl:
+                            public static @:> ([Nemerle.Assertions.NotNull] obj : $(name : usesite)) : $tuple_type {
+                                obj.___GetValues()
+                            }
+                        ]> :: members;
+
+
+                    // GetFieldValue implementation 
+                    def members = {
+                        def cases = fields.FoldRight([<[ case : | _ => null ]>],
+                            (f, cases) => <[ case: | $(f.PropertyName : string) => this.$(f.FieldName : usesite) : object ]> :: cases );
+                        <[ decl:
+                                protected override ___GetFieldValue(field : string) : object {
+                                    match(field) { ..$cases }
+                                }
+                        ]> :: members
+                    }
+
+
+                    // ToString implementation
+                    def members = {
+                        def sb_name = Macros.NewSymbol("sb");
+                        mutable is_first = true;
+                        def sb_list = fields.Map(f => <[ 
+                            _ = $(sb_name : name)
+                                .Append($(if(is_first) { is_first = false; <[ " " : string ]> } else <[ ", " : string ]> ))
+                                .Append($(f.PropertyName + " = " : string))
+                                .Append(this.$(f.FieldName : usesite)) ]> );
+                        <[ decl:
+                                public override ToString() : string {
+                                    def $(sb_name : name) = System.Text.StringBuilder("{");
+                                    { ..$sb_list }
+                                    $(sb_name : name).Append(" }") .ToString()
+                                }
+                        ]> :: members
+                    }
+
+
+                    // Format string for debugger view
+                    def debugger_display_fmt = {
+                        mutable is_first = true;
+                        fields.FoldLeft(System.Text.StringBuilder("\\{"),
+                            (f, sb) => (if(is_first) { is_first = false; sb.Append(" ") } else sb.Append(", "))
+                                .Append($"$(f.PropertyName) = {$(f.PropertyName)}")
+                        ).Append(" \\}").ToString()
+                    }
+
+
+                    // Entire class definition is placed in global namespace
+                    def aclass = typer.Manager.CoreEnv.Define(<[ decl:
+                            [Record,
+                                System.Diagnostics.DebuggerNonUserCode,
+                                System.Diagnostics.DebuggerDisplay( $(debugger_display_fmt : string) )]
+                            internal sealed class $(name : usesite) : Nemerle.Extensions.Anonymous[$tuple_type] {
+                                ..$members
+                            }
+                        ]>);
+                    unless(typer.InErrorMode)
+                        aclass.Compile();
+                    aclass
+                }
+            }
+        }
+
+        public MakeAnonymousClassCtor(typer : Typer, ctor_def : list[PT.PExpr]) : PT.PExpr {
+            def fields = ctor_def.FoldRight([], fun(cd, acc) {
+                def append_field_info(field_init) {
+                    | <[ $(field : name) = $value ]> => ParsedFieldInfo(field, value, typer.TypeExpr(value)) :: acc
+                    | _ => Message.Error($"Expected 'a = foo()' got '$cd'."); acc
+                }
+            
+                match(cd) {
+                    | PT.PExpr.Member(_, member) as member_access =>
+                        append_field_info(<[ $(member.GetName() : name) = $member_access ]>)
+                    | _ => append_field_info(cd)
+                }
+            });
+
+            def delay_callback(last_chance) {
+                def is_typed = fields.FoldLeft(true, (f, is_typed) => is_typed && f.TypedValue.Type.Hint.IsSome);
+                if (is_typed || last_chance) {
+                    unless(is_typed)
+                        Message.Warning("Compiler was unable to infer types of expressions inside anonymous type initializer.");
+                    Some(make_anonymous_class_ctor(
+                        fields.Map(f => FieldInfo(
+                            f.Field,
+                            match(f.TypedValue.Type.Hint) {
+                                | Some(ty) => PT.PExpr.TypedType(ty.DeepFix())
+                                | None() => <[ object ]>
+                            },
+                            f) ) ) )
+                } else
+                    None()
+            }
+            and make_anonymous_class_ctor(fields : list[FieldInfo]) {
+                | [] => <[ Nemerle.Extensions.Anonymous.[int]() ]>
+
+                | f :: [] => 
+                    def name = GetAnonymousClassName(f :: []);
+                    def ty = BuildAnonymousClass(typer, name, f :: []);
+                    <[ $(ty.FullName : usesite) ( $(f.Parsed.TypedValue : typed) ) ]>
+
+                | _ => 
+                    def name = GetAnonymousClassName(fields);
+                    def ty = BuildAnonymousClass(typer, name, fields);
+                    <[ $(ty.FullName : usesite) ( ..$(fields.Map(f => PT.PExpr.Typed(f.Parsed.TypedValue))) ) ]>
+            }
+
+            typer.DelayMacro(delay_callback)
+        }
+
+/*  EXPERIMENTAL: make anonymous class projection
+
+        public MakeAnonymousClassProjection(typer : Typer, e : PT.PExpr, ctor_def : list[PT.PExpr]) : PT.PExpr {
+            def fields = ctor_def.FoldRight([], fun(cd, acc) {
+                match(cd) {
+                    | <[ $(field : name) : $type_value ]> => FieldInfo(field, type_value, null) :: acc
+                    | _ => Message.Error($"Expected 'a : SomeType' got '$cd'."); acc
+                }
+            });
+            
+            def e_type = typer.TypeExpr(e);
+            
+            def delay_callback(last_chance) {
+                def is_typed = e_type.Type.Hint.IsSome;
+                if(is_typed || last_chance) {
+                    unless(is_typed) 
+                        Message.Warning("Compiler was unable to infer type inside anonymous type projection expression.");
+                    Some(make_anonymous_class_projection())
+                } else
+                    None()
+            }
+            and make_anonymous_class_projection() {
+                match(fields) {
+                    | [] => <[ $e :> Nemerle.Extensions.IAnonymous ]>
+
+                    | _ => 
+                        def name = GetAnonymousClassName(fields);
+                        def ty = BuildAnonymousClass(typer, name, fields);
+                        def exp = Macros.NewSymbol("e");
+                        def ctor_args = fields.Map(f => <[ $(exp : name)[$(f.FieldName : string)] :> $(f.FieldType) ]>);
+                        <[
+                            match($e) {
+                                | $(exp : name) is $(ty.FullName : usesite) => $(exp : name)
+                                | $(exp : name) is Nemerle.Extensions.IAnonymous => $(ty.FullName : usesite)( ..$ctor_args )
+                                | _ => throw System.InvalidCastException("Anonymous class can't be created from specified source.")
+                            }
+                        ]>
+                }
+            }
+            
+            typer.DelayMacro(delay_callback)
+        }
+*/
+
+    }
+
+}
