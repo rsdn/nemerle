@@ -28,19 +28,41 @@ namespace Nemerle.Extensions {
             public FieldName : string { get { "_" + field.ToString() } }
         }
 
-        private GetAnonymousClassName(fields : list[FieldInfo]) : string
-            requires !NList.IsEmpty(fields)
-        {
+        public MakeAnonymousClassCtor(typer : Typer, ctor_def : list[PT.PExpr]) : PT.PExpr {
+            def fields = ctor_def.FoldRight([], fun(cd, acc) {
+                def append_field_info(field_init) {
+                    | <[ $(field : name) = $value ]> => FieldInfo(Macros.NewSymbol(field.Id), field, value) :: acc
+                    | _ => Message.Error($"Expected 'a = foo()' got '$cd'."); acc
+                }
+                match(cd) {
+                    | PT.PExpr.Member(_, member) as member_access =>
+                        append_field_info(<[ $(member.GetName() : name) = $member_access ]>)
+                    | _ => append_field_info(cd)
+                }
+            });
+            def name = GetAnonymousClassName(fields);
+            def ty = BuildAnonymousClass(typer, name, fields);
+            <[ $(ty.FullName : usesite) ( ..$(fields.Map(f => f.Value) ) ) ]>
+        }
+
+        private GetAnonymousClassName(fields : list[FieldInfo]) : string {
             fields.FoldLeft(System.Text.StringBuilder("_N_Anonymous"),
                 (f, sb) => sb.Append("_<").Append(f.PropertyName).Append(">"))
             .ToString()
+        }
+
+        private equality_comparer(t : PT.PExpr) : PT.PExpr {
+            <[ System.Collections.Generic.EqualityComparer.[ $t ].Default ]>
+        }
+
+        private equality_comparer(t : PT.Name) : PT.PExpr {
+            <[ System.Collections.Generic.EqualityComparer.[ $(t : name) ].Default ]>
         }
 
         private BuildAnonymousClass(typer : Typer, name : string, fields : list[FieldInfo]) : TypeInfo {
             match(typer.Env.LookupType([name])) {
                 | Some(ty) => ty
                 | None() => {
-
                     // Entire class definition is placed in global namespace
                     def aclass = {
                         // Format string for debugger view
@@ -63,20 +85,72 @@ namespace Nemerle.Extensions {
                                 <[ decl:
                                     [Record,
                                         System.Diagnostics.DebuggerDisplay( $(debugger_display_fmt : string) )]
-                                    internal sealed class $(name : usesite) : Nemerle.Extensions.Anonymous {
+                                    internal sealed class $(name : usesite) : Nemerle.Extensions.IAnonymous {
                                         ..$members
                                     }
                                 ]>
                             | _ =>
+                                def generic_args_decl = fields.Map(f => PT.Splicable.Name(f.GenericArg));
                                 <[ decl:
                                     [Record,
                                         System.Diagnostics.DebuggerDisplay( $(debugger_display_fmt : string) )]
-                                    internal sealed class $(name : usesite) [ ..$(fields.Map(f => PT.Splicable.Name(f.GenericArg))) ] : Nemerle.Extensions.Anonymous {
+                                    internal sealed class $(name : usesite) [ ..$generic_args_decl ] : Nemerle.Extensions.IAnonymous {
                                         ..$members
                                     }
                                 ]>
                         })
                     }
+
+                    def generic_args = fields.Map(f => <[ $(f.GenericArg : name) ]>);
+
+                    // GetFields() implementation
+                    {
+                        def field_array_name = Macros.NewSymbol("field_array");
+                        def field_array = fields.Map(f => <[ $(f.PropertyName : string) ]>);
+                        aclass.Define(<[ decl: 
+                                private static $(field_array_name : name) : System.Collections.ObjectModel.ReadOnlyCollection[string] = System.Collections.ObjectModel.ReadOnlyCollection(array[ ..$field_array ]);
+                        ]>);
+                        aclass.Define(<[ decl:
+                                GetFields() : System.Collections.ObjectModel.ReadOnlyCollection[string] implements Nemerle.Extensions.IAnonymous.GetFields {
+                                    $(field_array_name : name)
+                                }
+                        ]>);
+                    }
+
+
+                    // Item indexer implementation
+                    {
+                        def body = match(fields) {
+                            | [] => <[ ignore(field); null ]>
+                            | _ =>
+                                def cases = fields.FoldRight([<[ case : | _ => null ]>],
+                                    (f, cases) => <[ case: | $(f.PropertyName : string) => this.$(f.FieldName : usesite) : object ]> :: cases );
+                                <[ match(field) { ..$cases } ]>
+                        }
+                        aclass.Define(<[ decl:
+                                Item[field : string] : object implements Nemerle.Extensions.IAnonymous.Item {
+                                    get { $body }
+                                }
+                        ]>);
+                    }
+
+
+                    // GetContent implementation 
+                    {
+                        def body = match(fields) {
+                            | [] => <[ null ]>
+                            | field :: [] => <[ this.$(field.FieldName : usesite) : object ]>
+                            | _ =>
+                                def tuple_args = fields.Map(f => <[ this.$(f.FieldName : usesite) ]>);
+                                <[ Nemerle.Builtins.Tuple.[ ..$generic_args ] ( ..$tuple_args ) : object ]>
+                        }
+                        aclass.Define(<[ decl:
+                                GetContent() : object implements Nemerle.Extensions.IAnonymous.GetContent {
+                                    $body 
+                                }
+                        ]>);
+                    }
+
 
                     // ToString implementation
                     {
@@ -96,51 +170,130 @@ namespace Nemerle.Extensions {
                         ]>);
                     }
 
-                    //___GetFields override
+                    // GetHashCode implementation, I think that it is better that StructuralHashCode
                     {
-                        def field_array_name = Macros.NewSymbol("field_array");
-                        def field_array = fields.Map(f => <[ $(f.PropertyName : string) ]>);
-                        aclass.Define(<[ decl: 
-                                private static $(field_array_name : name) : array[string] = array[ ..$field_array ];
-                        ]>);
-                        aclass.Define(<[ decl:
-                                protected override ___GetFields() : array[string] {
-                                    $(field_array_name : name)
-                                }
-                        ]>);
+                        def hash_method = match(fields) {
+                            | [] => <[ decl:
+                                    public override GetHashCode() : int { 0 }
+                                ]>
+                            | _ =>
+                                def (p1, p2) = HashHelper.GetPrimePair(fields.Length);
+                                def body = fields.Map(f => <[
+                                    hash = unchecked( ($(p2 : int) * hash)
+                                        + $(equality_comparer(f.GenericArg)).GetHashCode(this.$(f.FieldName : usesite)) ) ]>);
+                                <[ decl:
+                                    public override GetHashCode() : int { 
+                                        mutable hash : int = $(p1 : int);
+                                        { ..$body }
+                                        hash
+                                    }
+                                ]>
+                        }
+                        aclass.Define(hash_method);
                     }
 
-                    //___GetFieldValue override
-                    {
-                        def cases = fields.FoldRight([<[ case : | _ => null ]>],
-                            (f, cases) => <[ case: | $(f.PropertyName : string) => this.$(f.FieldName : usesite) : object ]> :: cases );
-                        aclass.Define(<[ decl:
-                                protected override ___GetFieldValue(field : string) : object {
-                                   match(field) { ..$cases }
-                                }
-                        ]>);
-                    }
+                    def equals_generic_body = fields.FoldLeft(<[ true ]>, (f, acc) => <[
+                        $acc && $(equality_comparer(f.GenericArg)).Equals(this.$(f.FieldName : usesite), other.$(f.FieldName : usesite))
+                    ]>);
 
-                    //___GetValues override
+                    def equals_anonymous_body = <[
+                        this.GetType().FullName.Equals(other.GetType().FullName)
+                            && $(equality_comparer( <[object]> )).Equals( (this : Nemerle.Extensions.IAnonymous).GetContent(), other.GetContent())
+                    ]>;
+
+                    // Equals(other : object) implementation
                     {
                         def body = match(fields) {
-                            //| [] => <[ string.Empty ]>
-                            | field :: [] => <[ this.$(field.FieldName : usesite) ]>
+                            | [] => <[
+                                    match(other) {
+                                        | _ is $(name : usesite) => true
+                                        | other is Nemerle.Extensions.IAnonymous => (other.GetFields().Count == 0)
+                                        | _ => false
+                                    }
+                                ]>
                             | _ =>
-                                def generic_args = fields.Map(f => <[ $(f.GenericArg : name) ]>);
-                                def tuple_args = fields.Map(f => <[ this.$(f.FieldName : usesite) ]>);
-                                <[ Nemerle.Builtins.Tuple.[ ..$generic_args ] ( ..$tuple_args ) ]>
+                                <[
+                                    match(other) {
+                                        | other is $(name : usesite).[ ..$generic_args ] => $equals_generic_body
+                                        | other is Nemerle.Extensions.IAnonymous => $equals_anonymous_body
+                                        | _ => false
+                                    }
+                                ]>
                         }
                         aclass.Define(<[ decl:
-                                protected override ___GetValues() : object {
-                                   $body
-                                }
+                            public override Equals(other : object) : bool { $body }
                         ]>);
                     }
+
+                    // Equals(other : IAnonymous) implementation
+                    {
+                        def body = match(fields) {
+                            | [] => <[
+                                    match(other) {
+                                        | _ is $(name : usesite) => true
+                                        | _ => !ReferenceEquals(null, other) && (other.GetFields().Count == 0)
+                                    }
+                                ]>
+                            | _ => <[ 
+                                    match(other) {
+                                        | other is $(name : usesite).[ ..$generic_args ] => $equals_generic_body
+                                        | _ => !ReferenceEquals(null, other) && $equals_anonymous_body
+                                    }
+                                ]>
+                        }
+                        aclass.Define(<[ decl:
+                            Equals(other : IAnonymous) : bool implements System.IEquatable[Nemerle.Extensions.IAnonymous].Equals {
+                                $body
+                            }
+                        ]>);
+                    }
+
+
+                    // Typed Equals implementation
+                    {
+                        def (ty, body) = match(fields) {
+                            | [] =>
+                                (<[ $(name : usesite) ]>,
+                                    <[ !ReferenceEquals(null, other) ]>)
+                            | _ =>
+                                (<[ $(name : usesite) [ ..$generic_args ] ]>,
+                                    <[ !ReferenceEquals(null, other) && $equals_generic_body ]>)
+                        }
+                        aclass.Define(<[ decl:
+                            public Equals(other : $ty) : bool { $body }
+                        ]>);
+                    }
+
+
+                    // Equality operation
+                    {
+                        def define_op(a, b, t) {
+                            aclass.Define(<[ decl:
+                                public static @== (a : $a, b : $b) : bool { $(equality_comparer(t)).Equals(a, b) }
+                            ]>);
+                            aclass.Define(<[ decl:
+                                public static @!= (a : $a, b : $b) : bool { ! $(equality_comparer(t)).Equals(a, b) }
+                            ]>);
+                        }
+
+                        def ty = match(fields) {
+                            | [] => <[ $(name : usesite) ]>
+                            | _ => <[ $(name : usesite) [ ..$generic_args ] ]>
+                        }
+                        def an = <[ Nemerle.Extensions.IAnonymous ]>;
+                        def ob = <[ object ]>;
+                        
+                        define_op(ty, ty, ty);
+                        define_op(ty, an, an);
+                        define_op(an, ty, an);
+                        define_op(ty, ob, ob);
+                        define_op(ob, ty, ob);
+                    }
+
 
                     // Tuple explicit cast
                     match(fields) {
-                        //| [] => ()
+                        | [] => ()
                         | field :: [] =>
                             aclass.Define(<[ decl:
                                 public static @:> ([Nemerle.Assertions.NotNull] obj : $(name : usesite)[ $(field.GenericArg : name) ]) : $(field.GenericArg : name) {
@@ -148,7 +301,6 @@ namespace Nemerle.Extensions {
                                 }
                             ]>)
                         | _ =>
-                            def generic_args = fields.Map(f => <[ $(f.GenericArg : name) ]>);
                             def tuple_args = fields.Map(f => <[ obj.$(f.FieldName : usesite) ]>);
                             aclass.Define(<[ decl:
                                 public static @:> ([Nemerle.Assertions.NotNull] obj : $(name : usesite)[ ..$generic_args ]) : Nemerle.Builtins.Tuple[ ..$generic_args ] {
@@ -156,35 +308,8 @@ namespace Nemerle.Extensions {
                                 }
                             ]>)
                     }
-                    /*
-                    aclass.AddImplementedInterface(<[ Nemerle.Extensions.IAnonymous ]>);
-
-                    // Fields property implementation
-                    {
-                        def field_array_name = Macros.NewSymbol("field_array");
-                        def field_array = fields.Map(f => <[ $(f.PropertyName : string) ]>);
-                        aclass.Define(<[ decl: 
-                                private static $(field_array_name : name) : array[string] = array[ ..$field_array ];
-                        ]>);
-                        aclass.Define(<[ decl:
-                                Fields : array[string] implements Nemerle.Extensions.IAnonymous.Fields {
-                                    get { $(field_array_name : name) }
-                                }
-                        ]>);
-                    }
 
 
-                    // Item indexer implementation
-                    {
-                        def cases = fields.FoldRight([<[ case : | _ => null ]>],
-                            (f, cases) => <[ case: | $(f.PropertyName : string) => this.$(f.FieldName : usesite) : object ]> :: cases );
-                        aclass.Define(<[ decl:
-                                Item[field : string] : object implements Nemerle.Extensions.IAnonymous.Item {
-                                    get { match(field) { ..$cases } }
-                                }
-                        ]>);
-                    }
-                    */
                     unless(typer.InErrorMode)
                         aclass.Compile();
                     aclass
@@ -192,25 +317,21 @@ namespace Nemerle.Extensions {
             }
         }
 
-        public MakeAnonymousClassCtor(typer : Typer, ctor_def : list[PT.PExpr]) : PT.PExpr {
-            def fields = ctor_def.FoldRight([], fun(cd, acc) {
-                def append_field_info(field_init) {
-                    | <[ $(field : name) = $value ]> => FieldInfo(Macros.NewSymbol(field.Id), field, value) :: acc
-                    | _ => Message.Error($"Expected 'a = foo()' got '$cd'."); acc
-                }
-                match(cd) {
-                    | PT.PExpr.Member(_, member) as member_access =>
-                        append_field_info(<[ $(member.GetName() : name) = $member_access ]>)
-                    | _ => append_field_info(cd)
-                }
-            });
-            match(fields) {
-                | [] => <[ Nemerle.Extensions.Anonymous() ]>
-                | _ =>
-                    def name = GetAnonymousClassName(fields);
-                    def ty = BuildAnonymousClass(typer, name, fields);
-                    <[ $(ty.FullName : usesite) ( ..$(fields.Map(f => f.Value) ) ) ]>
-            }
+    }
+
+    internal module HashHelper {
+
+        private primes : array[int] = array[
+            885551, 959773, 909287, 842801,
+            791081, 966041, 728647, 967139,
+            912869, 801137, 804511, 913943,
+            914461, 700127, 940421, 962561,
+            756127, 757927, 953789, 954181 ];
+
+        public GetPrimePair(x : int) : int * int {
+            def half_len = primes.Length / 2;
+            def pos = x % half_len;
+            (primes[pos], primes[pos + half_len])
         }
     }
 

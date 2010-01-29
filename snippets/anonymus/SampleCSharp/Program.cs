@@ -24,7 +24,7 @@ namespace Sample {
 
 
 			Console.WriteLine("Indexing:");
-			foreach (var field in o.Fields) {
+			foreach (var field in o.GetFields()) {
 				Console.WriteLine("{0} = {1}", field, o[field]);
 			}
 			Console.WriteLine();
@@ -32,7 +32,7 @@ namespace Sample {
 
 			var test = "X";
 			Console.WriteLine("Is there field '{0}'?", test);
-			Console.WriteLine(Array.Exists(o.Fields, f => f == test) ? "yes" : "no");
+			Console.WriteLine(o.GetFields().Contains(test) ? "yes" : "no");
 			Console.WriteLine();
 
 
