@@ -1122,6 +1122,9 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (_processingOfHiddenRegions)
 				return;
 
+			if (textView == null)
+				return;
+
       if (Service == null || !Service.Preferences.EnableMatchBraces || !Service.Preferences.EnableMatchBracesAtCaret)
         return;
 
