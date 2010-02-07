@@ -258,14 +258,26 @@ namespace Nemerle.VisualStudio.Project
       var changes = projectInfo.Engine.MergeCodeCompileUnit(codeCompileUnit);
 			var sourcesInf = (List<TupleStringIntInt>)codeCompileUnit.UserData["NemerleSources"];
 
+			// Для упрощения реализации генерации кода при генерации кода не происходит 
+			// обновление сгенерированных ранее веток CodeDom-а. Однако дизайнер форм может 
+			// вызывать генерацию кода по CodeDom-у множество раз. При этом он не пытается перечитать
+			// содержимое формы, если только пользователь вручную не изменим файлы в которые 
+			// сериализуется форма. При первой сериалзиции фалы хранящие код формы изменяются,
+			// и при повтоной попытке серилизовать CodeDom формы элементы CodeDom-а будут 
+			// указывать на неверные позиции, так как предыдущая сериализация изменила код.
+			// Чтобы не мучиться с синхронизацией перед сериализацией просто востанавливается 
+			// состояние (которое было на момент генерации CodeDom-элементов) файлов содержащих код 
+			// формы. 
+			// Если один из файлов будет изменен пользователем, то CodeDom будет автоматически пересоздан.
+			// Таким образом изменение файла могут быть вызваны только сериализацией CodeDom-а в код.
 			foreach (var si in sourcesInf)
 			{
 				var fileIndex = si.Field2;
 				var fileVertion = si.Field1;
 				var code = si.Field0;
 				var source = projectInfo.GetEditableSource(fileIndex, WindowFrameShowAction.DoNotShow);
-				if (source.CurrentVersion + 1 != fileVertion) //FIXME: Версия в CurrentVersion на еденицу меньше чем должна быть (или наоборот)
-					source.SetText(code);
+				if (source.CurrentVersion != fileVertion)
+					source.SetText(code); // файл изменился с момента генерации по нему CodeDom-а! Восстанавливаем его.
 			}
 
 			using (var helper = new NemerleProjectSourcesButchEditHelper(projectInfo, "form designer update"))

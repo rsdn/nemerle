@@ -484,27 +484,32 @@ namespace Nemerle.Compiler.Utils
     
     ToTypeRef(tyVar : TyVar) : CodeTypeReference
     {
-      def ty = tyVar.Fix();
-      
-      if (ty.IsFixed)
+      _manager.Solver.PushState();
+      try
       {
-        def makeTypeArgs(args) { args.MapToArray(ToTypeRef) }
+        def ty = tyVar.Fix();
         
-        match (ty)
+        if (ty.IsFixed)
         {
-          | Class(tycon, args)   => ToTypeRef(tycon, args)
-          | TyVarRef(tyvar)      => CodeTypeReference(tyvar.Name)
-          | Fun(_from, _to)      => CodeTypeReference(typeof(object)) // HACK: Not supported by C#
-          | Tuple(args)          => 
-            CodeTypeReference("Nemerle.Builtins.Tuple", makeTypeArgs(args))
-          | Array(tyVar, rank)   => CodeTypeReference(ToTypeRef(tyVar), rank)
-          | Void                 => CodeTypeReference(typeof(void))
-          | Ref(_tyVar)
-          | Out(_tyVar)          => throw ApplicationException("Ref/Out not supported")
-          | Intersection(_types) => CodeTypeReference(typeof(object))
+          def makeTypeArgs(args) { args.MapToArray(ToTypeRef) }
+          
+          match (ty)
+          {
+            | Class(tycon, args)   => ToTypeRef(tycon, args)
+            | TyVarRef(tyvar)      => CodeTypeReference(tyvar.Name)
+            | Fun(_from, _to)      => CodeTypeReference(typeof(object)) // HACK: Not supported by C#
+            | Tuple(args)          => 
+              CodeTypeReference("Nemerle.Builtins.Tuple", makeTypeArgs(args))
+            | Array(tyVar, rank)   => CodeTypeReference(ToTypeRef(tyVar), rank)
+            | Void                 => CodeTypeReference(typeof(void))
+            | Ref(_tyVar)
+            | Out(_tyVar)          => throw ApplicationException("Ref/Out not supported")
+            | Intersection(_types) => CodeTypeReference(typeof(object))
+          }
         }
+        else CodeTypeReference(typeof(object))
       }
-      else CodeTypeReference(typeof(object))
+      finally { _manager.Solver.PopState(); }
     }
     
     ToTypeRef(typeInfo : Nemerle.Compiler.TypeInfo, typeParams : list[TyVar]) : CodeTypeReference
@@ -559,6 +564,49 @@ namespace Nemerle.Compiler.Utils
                                               parms.MapToArray(ToExpression));
           }
 
+        | <[ + $expr ]> => ToExpression(expr)
+        | <[ - $expr ]> => 
+          def result = ToExpression(expr);
+          match (result)
+          {
+            | cde is CodePrimitiveExpression => 
+              match (cde.Value)
+              {
+                | val is int     => CodePrimitiveExpression(-val)
+                | val is long    => CodePrimitiveExpression(-val)
+                | val is short   => CodePrimitiveExpression(-val)
+                | val is decimal => CodePrimitiveExpression(-val)
+                | val is double  => CodePrimitiveExpression(-val)
+                | val is float   => CodePrimitiveExpression(-val)
+                | _              => CodeBinaryOperatorExpression(CodePrimitiveExpression(0), CodeBinaryOperatorType.Subtract, cde)
+              }
+            | _ => CodeBinaryOperatorExpression(CodePrimitiveExpression(0), CodeBinaryOperatorType.Subtract, result)
+          }
+          
+        | PExpr.Literal(literal) =>
+          match (literal)
+          {
+            | Void => CodeTypeReferenceExpression("void")
+            | Null with val = null : object | String(val) | Float (val) | Double (val)
+            | Decimal (val) | Char (val) | Bool (val) => CodePrimitiveExpression(val)
+            | Integer(val, is_negative, _treat_as) => 
+              def val = val :> long;
+              def val = if (is_negative) -val else val;
+              def it = _manager.InternalType;
+              def res = if (_treat_as.Equals(it.Int32))  CodePrimitiveExpression(val :> int)
+                   else if (_treat_as.Equals(it.UInt32)) CodePrimitiveExpression(val :> uint)
+                   else if (_treat_as.Equals(it.Int16))  CodePrimitiveExpression(val :> short)
+                   else if (_treat_as.Equals(it.UInt16)) CodePrimitiveExpression(val :> ushort)
+                   else if (_treat_as.Equals(it.SByte))  CodePrimitiveExpression(val :> sbyte)
+                   else if (_treat_as.Equals(it.Byte))   CodePrimitiveExpression(val :> byte)
+                   else                                  CodePrimitiveExpression(val);
+              
+              res
+              
+            | Enum (_val : Literal.Integer, ty : TypeInfo, field : IField) =>
+              CodeFieldReferenceExpression(CodeTypeReferenceExpression(ty.FullName), field.Name)
+          }
+        
         | <[ $func(..$parms) ]> => // TODO: Add support of ctor's
           CodeMethodInvokeExpression(
             CodeMethodReferenceExpression(null, func.ToString()),
@@ -588,22 +636,6 @@ namespace Nemerle.Compiler.Utils
 
         | PExpr.Ref(name) => CodeVariableReferenceExpression(name.ToString())
         
-        | PExpr.Literal(literal) =>
-          match (literal)
-          {
-            | Void => CodeTypeReferenceExpression("void")
-            | Null with val = null : object | String(val) | Float (val) | Double (val)
-            | Decimal (val) | Char (val) | Bool (val) 
-                        => CodePrimitiveExpression(val)
-            | Integer(val, is_negative, _treat_as) => 
-              def val = val :> long;
-              def val = if (is_negative) -val else val;
-              CodePrimitiveExpression(val)
-              
-            | Enum (_val : Literal.Integer, ty : TypeInfo, field : IField) =>
-              CodeFieldReferenceExpression(CodeTypeReferenceExpression(ty.FullName), field.Name)
-          }
-        
         | <[ $sourceExpr :> $_ ]> =>
           def tExpr = expr.TypedObject :> TExpr.TypeConversion;
           CodeCastExpression(ToTypeRef(tExpr.MType()), ToExpression(sourceExpr))
@@ -629,6 +661,17 @@ namespace Nemerle.Compiler.Utils
     {
       Debug.WriteLine($"[Form Designer]: Not suported expression: '$expr' ($(expr.GetType().Name))");
       CodeSnippetExpression(expr.ToString())
+    }
+
+    GetInferredType(expr : PExpr) : CodeTypeReference
+    {
+      match (expr.TypedObject)
+      {
+        | tExpr is TExpr      => ToTypeRef(tExpr.Type)
+        | val   is LocalValue => ToTypeRef(val.Type)
+        | ty    is TyVar      => ToTypeRef(ty)
+        | _                   => throw NotSupportedException($"can't inferr type for '$expr' expression")
+      }
     }
 
     protected ToStatements(expr : PExpr) : IEnumerable[CodeStatement]
@@ -671,23 +714,24 @@ namespace Nemerle.Compiler.Utils
           def (expr, tyRef) = 
             match (expr)
             {
-            | PExpr.TypeEnforcement (expr, ty) => (expr, ToCodeTypeReference (ty));
-            | _ => (expr, CodeTypeReference ());
-            }
+              | PExpr.TypeEnforcement(expr, ty) => (expr, GetInferredType(ty))
+              | _                               => (expr, GetInferredType(expr));
+            };        
+
 
           def name =
             match (expr)
             {
-            | PExpr.Ref (name) => name.Id;
-            | _                => throw NotSupportedException($"$expr not supported");
-            }
+              | PExpr.Ref(name) => name.Id;
+              | _               => throw NotSupportedException($"$expr not supported");
+            };
 
           def statement = 
             match (val)
             {
-            | null => CodeVariableDeclarationStatement(tyRef, name);
-            | _    => CodeVariableDeclarationStatement(tyRef, name, ToExpression(val))
-            }
+              | null => CodeVariableDeclarationStatement(tyRef, name);
+              | _    => CodeVariableDeclarationStatement(tyRef, name, ToExpression(val))
+            };
 
           statement.UserData["mutable"] = isMutable;
           yield statement;
