@@ -148,13 +148,34 @@ namespace Nemerle.VisualStudio.Helpers
 			var x = endCol - 1;
 			var sufix = endLineText.Substring(x, endLineText.Length - x);
 			var lineCount = source.LineCount;
+			var startLine = memLoc.Line;
 
+			// Коамилятор не всегда учитывает точку с запятой в местоположении выражения.
+			// Компенсируем эту проблему удаляя точку с запятой из начала строки.
+			if (sufix.StartsWith(";"))
+			{
+				sufix = sufix.Substring(1);
+				endCol++;
+			}
+
+			// Если нет других выражений в начале строки содержащей удаляемое выражение, то 
+			// удаляем все пустые строки перед ней.
+			if (startCol == 1)
+				while (startLine - 1 > 1 && IsAllCharsIsSpaces(source.GetLine(startLine - 1)))
+					startLine--;
+
+			// Если в конце строки нет других выражений, то продлеваем локешон до начала 
+			// следующей строки и удаляем все пустые строки идущие за данной строкой.
 			while (endLine + 1 < lineCount && IsAllCharsIsSpaces(sufix))
 			{
 				endLine++;
 				endCol = 1;
-				sufix = source.GetLine(memLoc.EndLine);
+				sufix = source.GetLine(endLine);
 			}
+
+			var delLoc = new Location(memLoc.FileIndex, startLine, startCol, endLine, endCol);
+
+			helper.Add(delLoc, "");
 		}
 	}
 }

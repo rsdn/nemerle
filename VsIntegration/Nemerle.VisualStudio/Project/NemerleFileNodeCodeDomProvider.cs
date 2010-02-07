@@ -258,6 +258,16 @@ namespace Nemerle.VisualStudio.Project
       var changes = projectInfo.Engine.MergeCodeCompileUnit(codeCompileUnit);
 			var sourcesInf = (List<TupleStringIntInt>)codeCompileUnit.UserData["NemerleSources"];
 
+			foreach (var si in sourcesInf)
+			{
+				var fileIndex = si.Field2;
+				var fileVertion = si.Field1;
+				var code = si.Field0;
+				var source = projectInfo.GetEditableSource(fileIndex, WindowFrameShowAction.DoNotShow);
+				if (source.CurrentVersion + 1 != fileVertion) //FIXME: Версия в CurrentVersion на еденицу меньше чем должна быть (или наоборот)
+					source.SetText(code);
+			}
+
 			using (var helper = new NemerleProjectSourcesButchEditHelper(projectInfo, "form designer update"))
 			{
 				var text = CodeGenerator.ToString(changes.NewInitializeComponentStatements);
