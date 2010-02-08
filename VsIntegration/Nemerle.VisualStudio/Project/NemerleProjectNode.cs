@@ -764,17 +764,22 @@ namespace Nemerle.VisualStudio.Project
 		private bool TryFindParentFileNode(HierarchyNode root, string child, out HierarchyNode parent)
 		{
 			parent = root;
-			var relationIndex = child.IndexOf(root.NameRelationSeparator);
 
-			if (relationIndex < 0)
+			// truncate child file extension (".n", ".resx", etc)
+			var childNameWithoutExtension = Path.GetFileNameWithoutExtension(child);
+
+			// look for suffix position (".Designer", etc)
+			var suffixIndex = childNameWithoutExtension.LastIndexOf(root.NameRelationSeparator);
+			if (suffixIndex < 0)
 				return false;
 
-			var parentName = string.Format("{0}.n", child.Substring(0, relationIndex));
+			var parentName = string.Format("{0}.n", childNameWithoutExtension.Substring(0, suffixIndex));
+	
+			var parentPath = Path.Combine(Path.GetDirectoryName(child), parentName);
 
-			parent = root.FindChild(parentName);
+			parent = root.FindChild(parentPath);
 			return parent != null;
 		}
-
 
 		/// <summary>
 		/// Evaluates if a file is an Nemerle code file based on is extension
