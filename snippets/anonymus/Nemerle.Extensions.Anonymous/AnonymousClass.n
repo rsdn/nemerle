@@ -14,7 +14,7 @@ namespace Nemerle.Extensions {
     public macro AnonymousClassNormalCtor(params ctor_def : array[expr]) 
         syntax("new", "(", ctor_def, ")")
     {
-        AnonymousMacroImpl.MakeAnonymousClassNormalCtor(Macros.ImplicitCTX(), NList.ToList(ctor_def))
+        AnonymousClassImpl.MakeNormalCtor(Macros.ImplicitCTX(), NList.ToList(ctor_def))
     }
 
     public macro AnonymousClassTupleCtor(e) 
@@ -24,14 +24,14 @@ namespace Nemerle.Extensions {
             | <[ $left.$right ]> => <[ $(decorate(left)).$right ]>
             | <[ $left.$right(..$args) ]> => <[ $(decorate(left)).$right(..$args) ]>
             | <[ [ ..$ctor_def ] ( ..$ctor_arg ) ]> => 
-                AnonymousMacroImpl.MakeAnonymousClassTupleCtor(Macros.ImplicitCTX(), ctor_def, ctor_arg)
+                AnonymousClassImpl.MakeTupleCtor(Macros.ImplicitCTX(), ctor_def, ctor_arg)
             | _ =>
                 Message.FatalError("Usage: 'new [a, b, c](x, y, z)' or 'new [a, b, c](t)' where 't' is tuple.")
         }
         decorate(e)
     }
 
-    internal module AnonymousMacroImpl {
+    internal module AnonymousClassImpl {
 
         [Record]
         private class FieldInfo {
@@ -50,7 +50,7 @@ namespace Nemerle.Extensions {
             }
         }
 
-        public MakeAnonymousClassNormalCtor(typer : Typer, ctor_def : list[PT.PExpr]) : PT.PExpr {
+        public MakeNormalCtor(typer : Typer, ctor_def : list[PT.PExpr]) : PT.PExpr {
             def fields = ctor_def.FoldRight([], fun(cd, acc) {
                 def append_field_info(field_init) {
                     | <[ $(field : name) = $value ]> => FieldInfo(field, value) :: acc
@@ -62,11 +62,11 @@ namespace Nemerle.Extensions {
                     | _ => append_field_info(cd)
                 }
             });
-            def ty = FindOrBuildAnonymousClass(typer, fields);
+            def ty = FindOrBuildClass(typer, fields);
             <[ $(ty.FullName : usesite) ( ..$(fields.Map(f => f.Value) ) ) ]>
         }
 
-        public MakeAnonymousClassTupleCtor(typer : Typer, ctor_def : list[PT.PExpr], args : list[PT.PExpr]) : PT.PExpr {
+        public MakeTupleCtor(typer : Typer, ctor_def : list[PT.PExpr], args : list[PT.PExpr]) : PT.PExpr {
             def fields = ctor_def.FoldRight([], fun(cd, acc) {
                 def append_field_info(field_init) {
                     | <[ $(field : name) ]> => FieldInfo(field, <[ () ]>) :: acc
@@ -78,7 +78,7 @@ namespace Nemerle.Extensions {
                     | _ => append_field_info(cd)
                 }
             });
-            def ty = FindOrBuildAnonymousClass(typer, fields);
+            def ty = FindOrBuildClass(typer, fields);
             match(args, fields) {
                 | ([], []) =>
                     <[ $(ty.FullName : usesite) ( ) ]>
@@ -91,18 +91,18 @@ namespace Nemerle.Extensions {
             }
         }
 
-        private FindOrBuildAnonymousClass(typer : Typer, fields : list[FieldInfo]) : TypeInfo {
-            def name = fields.FoldLeft("_N_Anonymous", (f, s) => s + "_<" + f.PropertyName + ">");
+        private FindOrBuildClass(typer : Typer, fields : list[FieldInfo]) : TypeInfo {
+            def name = fields.FoldLeft("_N_Anonymous_", (f, name) => name + $"<$(f.PropertyName)>_");
             match(typer.Env.LookupType([name])) {
                 | Some(ty) => ty
-                | None() => BuildAnonymousClass(typer, name, fields)
+                | None() => BuildClass(typer, name, fields)
             }
         }
 
         private MIN_TUPLE_SIZE : int = 2;
         private MAX_TUPLE_SIZE : int = 20;
 
-        private BuildAnonymousClass(typer : Typer, name : string, fields : list[FieldInfo]) : TypeInfo {
+        private BuildClass(typer : Typer, name : string, fields : list[FieldInfo]) : TypeInfo {
             def generic_args = fields.Map(f => <[ $(f.GenericArg : name) ]>);
             def ty_name = <[ $(name : usesite) ]>;
             def ty_ref = match(fields) {
@@ -118,9 +118,10 @@ namespace Nemerle.Extensions {
             def ty = {
                 // Format string for debugger view
                 def debugger_display_fmt = {
-                    def (_, fmt) = fields.FoldLeft( (" ", ""),
-                        (f, (div, fmt)) => (", ", fmt + div + f.PropertyName + " = {" + f.PropertyName + "}") );
-                    "\\{" + fmt + " \\}"
+                    def field_fmt(f) {
+                        $"$(f.PropertyName) = {$(f.PropertyName)}"
+                    }
+                    $<#\{ ..$(fields; ", "; field_fmt) \}#>
                 }
 
                 // fields and properties declaration
@@ -192,7 +193,9 @@ namespace Nemerle.Extensions {
                     | [] => <[ null ]>
                     | field :: [] => <[ this.$(field.FieldName : usesite) ]>
                     | fields when can_be_tuple(fields) => <[ ToTuple() ]>
-                    | _ => <[ null ]>
+                    | _ =>
+                        def list_items = fields.Map(f => <[ this.$(f.FieldName : usesite) : object ]>);
+                        <[ [ ..$list_items ] ]>
                 }
                 ty.Define(<[ decl:
                         GetContent() : object implements $anonymous_ref.GetContent {
@@ -201,31 +204,30 @@ namespace Nemerle.Extensions {
                 ]>);
             }
 
-            // Tuple constructor
+            // Tuple interop
             match(fields) {
                 | [] | _ :: [] => ()
                 | fields when can_be_tuple(fields) =>
-                    def (_, body) = fields.FoldRight((fields.Length - 1, []),
-                        (f, (index, args)) => (index - 1, <[ this.$(f.FieldName : usesite) = tuple.$(("Field" + index.ToString()) : usesite); ]> :: args));
-                    ty.Define(<[ decl:
-                        public this(tuple : Nemerle.Builtins.Tuple[ ..$generic_args ] ) {
-                            ..$body
-                        }
-                    ]>);
-                | _ => ()
-            }
-
-            // ToTuple method
-            match(fields) {
-                | [] | _ :: [] => ()
-                | fields when can_be_tuple(fields) =>
-                    def tuple_args = fields.Map(f => <[ this.$(f.FieldName : usesite) ]>);
-                    ty.Define(<[ decl:
-                        public ToTuple() : Nemerle.Builtins.Tuple[ ..$generic_args ] {
-                            Nemerle.Builtins.Tuple( ..$tuple_args )
-                        }
-                    ]>);
-               | _ => Message.Warning("Anonymous class contains too many fields to be convertable to tuple.");
+                    // Tuple-overloaded constructor
+                    {
+                        def (_, body) = fields.FoldRight((fields.Length - 1, []),
+                            (f, (index, args)) => (index - 1, <[ this.$(f.FieldName : usesite) = tuple.$(("Field" + index.ToString()) : usesite); ]> :: args));
+                        ty.Define(<[ decl:
+                            public this(tuple : Nemerle.Builtins.Tuple[ ..$generic_args ] ) {
+                                ..$body
+                            }
+                        ]>);
+                    }
+                    // ToTuple method
+                    {
+                        def tuple_args = fields.Map(f => <[ this.$(f.FieldName : usesite) ]>);
+                        ty.Define(<[ decl:
+                            public ToTuple() : Nemerle.Builtins.Tuple[ ..$generic_args ] {
+                                Nemerle.Builtins.Tuple( ..$tuple_args )
+                            }
+                        ]>);
+                    }
+                | _ => Message.Warning("Anonymous class contains too many fields to be convertible to tuple.");
             }
 
             // ToString implementation
@@ -257,13 +259,13 @@ namespace Nemerle.Extensions {
                 ty.Define(<[ decl: public override GetHashCode() : int { $body } ]>);
             }
 
-            def equals_generic_body = fields.FoldLeft(<[ true ]>, (f, acc) => <[
-                $acc && $(equality_comparer(PT.PExpr.Ref(f.GenericArg))).Equals(this.$(f.FieldName : usesite), other.$(f.FieldName : usesite))
+            def equals_generic_body = fields.FoldLeft(<[ true ]>, (f, body) => <[
+                $body && $(equality_comparer(PT.PExpr.Ref(f.GenericArg))).Equals(this.$(f.FieldName : usesite), other.$(f.FieldName : usesite))
             ]>);
 
             def equals_anonymous_body = <[
                 this.GetType().FullName.Equals(other.GetType().FullName)
-                    && $(equality_comparer( <[object]> )).Equals( (this : $anonymous_ref).GetContent(), other.GetContent())
+                    && $(equality_comparer(<[object]>)).Equals( (this : $anonymous_ref).GetContent(), other.GetContent() )
             ]>;
 
             // Equals(other : object) implementation
