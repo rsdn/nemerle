@@ -290,7 +290,7 @@ out.$(STAGE)/Nemerle.Compiler.$(OUTF_STAGE)dll: \
 out.$(STAGE)/Nemerle.Macros.dll: $(COMPILER_DEP) out.$(STAGE)/Nemerle.$(OUTF_STAGE)dll \
 		out.$(STAGE)/Nemerle.Compiler.$(OUTF_STAGE)dll $(STDMACROS_DLL_SRC)
 	$(COMP) "[$(STAGE)]" Nemerle.Macros.dll
-	$(Q)$(RUN_COMPILER) -r System.Data -target-library $(SNK_COMPILER) -out:$@ \
+	$(Q)$(RUN_COMPILER) -r System.Data -r System.Windows.Forms -target-library $(SNK_COMPILER) -out:$@ \
 		-reference:out.$(STAGE)/Nemerle.$(OUTF_STAGE)dll \
 		-reference:out.$(STAGE)/Nemerle.Compiler.$(OUTF_STAGE)dll \
 		$(GENERIC_SRC) $(STDMACROS_DLL_SRC)
@@ -317,7 +317,7 @@ doc-xml:
 	-ref:out.stage3/Nemerle.dll -doc Nemerle.Compiler.xml
 	$(COMP) "[with xml doc generation]" Nemerle.Macros.xml
 	$(Q)$(RUN_COMPILER) -target-library -out:temp.dll $(STDMACROS_DLL_SRC) \
-	-ref:out.stage3/Nemerle.dll -ref:System.Data -ref:out.stage3/Nemerle.Compiler.dll -doc Nemerle.Macros.xml
+	-ref:out.stage3/Nemerle.dll -ref:System.Data -ref:System.Windows.Forms -ref:out.stage3/Nemerle.Compiler.dll -doc Nemerle.Macros.xml
 	$(Q)rm temp.dll
 
 

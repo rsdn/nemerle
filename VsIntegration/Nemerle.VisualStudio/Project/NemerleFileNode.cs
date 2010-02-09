@@ -26,7 +26,8 @@ namespace Nemerle.VisualStudio.Project
 {
 	class NemerleFileNode : FileNode, IProjectSourceNode
 	{
-		#region ctors
+    
+    #region ctors
 
 		internal NemerleFileNode(ProjectNode root, ProjectElement e)
 			: this(root, e, false) { }
@@ -54,12 +55,28 @@ namespace Nemerle.VisualStudio.Project
 
 			// HasDesigner property is not virtual, so we have to set it up in the ctor.
 			InferHasDesignerFromSubType();
+
+      var url = this.Url;
+      var ext = Path.GetExtension(url);
+
+      if (ext.Equals(".resx", StringComparison.InvariantCultureIgnoreCase))
+      {
+        url = Path.GetFullPath(this.Url);
+        var path = Path.GetDirectoryName(url);
+        var name = Path.GetFileName(url);
+        _watcher = new FileSystemWatcher(path, name);
+        _watcher.NotifyFilter = NotifyFilters.LastWrite;
+        _watcher.Changed += watcher_Changed;
+        _watcher.EnableRaisingEvents = true;
+      }
 		}
 
 		#endregion
 
 		#region Fields
 
+    bool _isDisposed;
+    FileSystemWatcher _watcher;
 		SelectionElementValueChangedListener _selectionChangedListener;
 		NemerleOAFileItem _automationObject;
 
@@ -335,6 +352,27 @@ namespace Nemerle.VisualStudio.Project
 
 		#region overridden methods
 
+    protected override void Dispose(bool disposing)
+    {
+      if (_isDisposed)
+        return;
+
+      try
+      {
+        if (_watcher != null)
+        {
+          _watcher.Changed -= watcher_Changed;
+          _watcher.Dispose();
+          _watcher = null;
+        }
+      }
+      catch
+      {
+        base.Dispose(disposing);
+        _isDisposed = true;
+      }
+    }
+
 		public override int Close()
 		{
 			if (_selectionChangedListener != null)
@@ -544,6 +582,13 @@ namespace Nemerle.VisualStudio.Project
 		#endregion
 
 		#region Members
+
+    private void watcher_Changed(object sender, FileSystemEventArgs e)
+    {
+      var nProj = (NemerleProjectNode)ProjectMgr;
+      Trace.Assert(nProj != null);
+      nProj.ProjectInfo.Engine.RequestOnBuildTypesTree();
+    }
 
 		internal OleServiceProvider.ServiceCreatorCallback ServiceCreator
 		{

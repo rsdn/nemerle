@@ -63,6 +63,12 @@ namespace Nemerle.VisualStudio.Project
       _errorList = new ErrorListProvider(languageService.Site);
       ProjectFullPath = Path.GetFullPath(fileName);
       _projectNode = projectNode;
+      for (int i = 0; i < _projectNode.VSProject.Project.Properties.Count; i++)
+      {
+        Debug.WriteLine(_projectNode.VSProject.Project.Properties.Item(i + 1).Name + ": ");
+        //Debug.WriteLine(_projectNode.VSProject.Project.Properties.Item(i + 1).Value);
+      }
+      Debug.WriteLine(_projectNode.VSProject.Project.Properties.Item("DefaultNamespace").Name + ": ");
       _hierarchy = hierarchy;
 
       _engine = EngineFactory.Create(this, new TraceWriter(), false); // it enables parser working.
@@ -122,6 +128,10 @@ namespace Nemerle.VisualStudio.Project
     }
 
     public string ProjectName { get { return _projectNode.VSProject.Project.Name; } }
+
+    public string ProjectFullName { get { return _projectNode.VSProject.Project.FullName; } }
+
+    public string RootNamespace { get { return _projectNode.VSProject.Project.Properties.Item("DefaultNamespace").Value.ToString(); } }
 
     int _buildTypedtreeCount;
     readonly List<MethodBuilderEx> _methodsCheckQueue = new List<MethodBuilderEx>(100);
