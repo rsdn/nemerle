@@ -763,21 +763,42 @@ namespace Nemerle.VisualStudio.Project
 
 		private bool TryFindParentFileNode(HierarchyNode root, string child, out HierarchyNode parent)
 		{
-			parent = root;
+			parent = null;
 
-			// truncate child file extension (".n", ".resx", etc)
-			var childNameWithoutExtension = Path.GetFileNameWithoutExtension(child);
+			var childName = Path.GetFileName(child);
+			var childDirectory = Path.GetDirectoryName(child);
 
-			// look for suffix position (".Designer", etc)
-			var suffixIndex = childNameWithoutExtension.LastIndexOf(root.NameRelationSeparator);
-			if (suffixIndex < 0)
-				return false;
+			// the standart layout, used for most file types (aspx, ashx, master, xaml etc)
+			// + - page.aspx
+			// |   + - page.aspx.n
+			// |   + - page.aspx.designer.n
+			var parentName = Path.GetFileNameWithoutExtension(childName);
+			while (parentName.IndexOf('.') > 0 && parent == null)
+			{
+				parent = root.FindChild(Path.Combine(childDirectory, parentName));
+				parentName = Path.GetFileNameWithoutExtension(parentName);
+			}
 
-			var parentName = string.Format("{0}.n", childNameWithoutExtension.Substring(0, suffixIndex));
-	
-			var parentPath = Path.Combine(Path.GetDirectoryName(child), parentName);
+			if (parent == null)
+			{
+				// Windows forms layout:
+				// + - form.n
+				// |   + - form.designer.n
 
-			parent = root.FindChild(parentPath);
+				var childNameWithoutExtension = Path.GetFileNameWithoutExtension(child);
+
+				// look for suffix position (".Designer", etc)
+				var suffixIndex = childNameWithoutExtension.LastIndexOf(root.NameRelationSeparator);
+				if (suffixIndex < 0)
+					return false;
+
+				parentName = string.Format("{0}.n", childNameWithoutExtension.Substring(0, suffixIndex));
+
+				var parentPath = Path.Combine(childDirectory, parentName);
+
+				parent = root.FindChild(parentPath);
+			}
+
 			return parent != null;
 		}
 
