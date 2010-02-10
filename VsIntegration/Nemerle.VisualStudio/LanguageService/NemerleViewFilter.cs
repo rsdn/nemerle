@@ -717,14 +717,16 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private TextSpan GetRealSelectionSpan()
 		{
+			// GetSelection() inverts negative spans (bug #1176)
+			TextSpan ts = GetSelection();
+
 			// workaround for bug #1050
 			// TextView.GetSelection adds caret position to the selection span,
 			// so when we select whole block of text (caret is at the first column),
 			// one extra line is added to the selection (where the caret is left)
-			TextSpan ts = new TextSpan();
-			TextView.GetSelection(out ts.iStartLine, out ts.iStartIndex, out ts.iEndLine, out ts.iEndIndex);
 			if (ts.iEndIndex == 0 && ts.iEndLine - ts.iStartLine > 0)
 				ts.iEndLine--;
+
 			return ts;
 		}
 
