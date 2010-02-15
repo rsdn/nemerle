@@ -100,11 +100,6 @@ namespace Nemerle.VisualStudio.Project
 
 		public override void AddChild(HierarchyNode node)
 		{
-			EventSinkCollection map = this.ProjectMgr.ItemIdMap;
-
-			// make sure the node is in the map.
-			Object nodeWithSameID = this.ProjectMgr.ItemIdMap[node.ID];
-
 			base.AddChild(node);
 
 			NemerleProjectNode project = ProjectMgr as NemerleProjectNode;

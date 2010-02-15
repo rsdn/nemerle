@@ -44,7 +44,7 @@ namespace Nemerle.VisualStudio.Project
 				}
 			}
 
-			return null; // no throw exception as in MPF implementation!
+			throw new NotImplementedException(); // no throw exception as in MPF implementation!
 		}
 	}
 }

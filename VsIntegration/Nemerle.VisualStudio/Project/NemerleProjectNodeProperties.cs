@@ -30,6 +30,23 @@ namespace Nemerle.VisualStudio.Project
 			get { return (NemerleProjectNode)(Node.ProjectMgr); }
 		}
 
+    [Browsable(false)]
+    // Обход странного поведения студии. В Microsoft.VisualStudio.Shell.Design.Serialization.ConfigurationHelperService()
+    // производится безусловное считывание значения свойства Company и AssemblyVersion
+    public string Company
+		{
+			get { return null; }
+		}
+
+    //[SRCategoryAttribute("Misc")]
+    //[LocDisplayName("AssemblyVersion")]
+    //[SRDescriptionAttribute("Тестируем разную хрень 2")]
+    [Browsable(false)]
+    public string AssemblyVersion
+		{
+			get { return null; }
+		}
+
 		[Browsable(false)]
 		public string OutputFileName
 		{

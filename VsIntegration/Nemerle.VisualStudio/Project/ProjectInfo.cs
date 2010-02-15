@@ -63,12 +63,6 @@ namespace Nemerle.VisualStudio.Project
       _errorList = new ErrorListProvider(languageService.Site);
       ProjectFullPath = Path.GetFullPath(fileName);
       _projectNode = projectNode;
-      for (int i = 0; i < _projectNode.VSProject.Project.Properties.Count; i++)
-      {
-        Debug.WriteLine(_projectNode.VSProject.Project.Properties.Item(i + 1).Name + ": ");
-        //Debug.WriteLine(_projectNode.VSProject.Project.Properties.Item(i + 1).Value);
-      }
-      Debug.WriteLine(_projectNode.VSProject.Project.Properties.Item("DefaultNamespace").Name + ": ");
       _hierarchy = hierarchy;
 
       _engine = EngineFactory.Create(this, new TraceWriter(), false); // it enables parser working.
@@ -118,6 +112,8 @@ namespace Nemerle.VisualStudio.Project
     {
       if (IsCosed)
         return;
+
+      ResetAssembleReferenceWatchers();
       Engine.Close();
       IsCosed = true;
       _projects.Remove(this);
@@ -170,23 +166,92 @@ namespace Nemerle.VisualStudio.Project
       get { return _projects; }
     }
 
-    #region Project References
+    #region Assemble Reference Managment
 
-    List<ReferenceNode> _assemblyReferences = new List<ReferenceNode>();
+    #region Assembly References helpers
+
+    public void AddAssembly(List<string> assemblies, ReferenceNode node, string type)
+    {
+      //TODO: Проследить что где-то добавляется вочер для сборки!
+      var path = GetAssemblyReferencesString(node);
+
+      if (!string.IsNullOrEmpty(path))
+      {
+        assemblies.Add(path);
+        AddAssembleReferenceWatcher(path);
+      }
+      else
+        Debug.Assert(false, "Can't add " + type + "assembly reference '" + node.Caption + "' (" + node.Url + ")");
+
+      Engine.RequestOnReloadProject();
+    }
+
+    public void RemoveAssembly(List<string> assemblies, ReferenceNode node, string type)
+    {
+      //TODO: Проследить что где-то удаляется вочер для сборки!
+      var path = GetAssemblyReferencesString(node);
+
+      if (!string.IsNullOrEmpty(path))
+      {
+        RemoveAssembleReferenceWatcher(path);
+        bool res = assemblies.Remove(path);
+
+        Debug.Assert(res, "Can't remove " + type + "assembly reference '" + node.Caption + "' (" + node.Url + ")");
+      }
+      else
+        Debug.Assert(false, "Can't remove " + type + "assembly reference '" + node.Caption + "' (" + node.Url + ")");
+
+      Engine.RequestOnReloadProject();
+    }
+
+    #endregion
+
+    #region Assembly References
+
+    List<string> _assemblyReferences = new List<string>();
+
+    IEnumerable<string> IIdeProject.GetAssemblyReferences()
+    {
+      return _assemblyReferences.ToArray();
+    }
 
     public void AddAssembly(ReferenceNode node)
     {
-      _assemblyReferences.Add(node);
-			Engine.RequestOnReloadProject();
+      AddAssembly(_assemblyReferences, node, "");
     }
 
     public void RemoveAssembly(ReferenceNode node)
     {
-      bool res = _assemblyReferences.Remove(node);
-      Debug.Assert(res, "Can't remove assembly reference '"
-        + node.Caption + "' (" + node.Url + ")");
-			Engine.RequestOnReloadProject();
+      RemoveAssembly(_assemblyReferences, node, "");
     }
+
+    #endregion
+
+    #region MacroAssembly References
+
+    List<string> _macroAssemblyReferences = new List<string>();
+
+    IEnumerable<string> IIdeProject.GetMacroAssemblyReferences()
+    {
+      return _macroAssemblyReferences.ToArray();
+    }
+
+    public void AddMacroAssembly(ReferenceNode node)
+    {
+      AddAssembly(_macroAssemblyReferences, node, "macro ");
+    }
+
+    public void RemoveMacroAssembly(ReferenceNode node)
+    {
+      RemoveAssembly(_macroAssemblyReferences, node, "macro ");
+    }
+
+    #endregion
+
+    #region Assemble Reference Watchers
+
+    // Assemble Watcher-ы используются для слежением за изменением файлов сборок.
+    // При изменении файла автоматически производится запрос на перезагрузку проекта.
 
     /// <summary>Watchers for project assemble reference.</summary>
     List<FileSystemWatcher> _assembleReferenceWatchers = new List<FileSystemWatcher>();
@@ -194,7 +259,9 @@ namespace Nemerle.VisualStudio.Project
     private void AddAssembleReferenceWatcher(string filePath)
     {
       if (!File.Exists(filePath))
-        return;
+      {
+        Debug.WriteLine("Assemble " + filePath + " does not exists!");
+      }
 
       string path = Path.GetDirectoryName(filePath);
       string name = Path.GetFileName(filePath);
@@ -203,6 +270,25 @@ namespace Nemerle.VisualStudio.Project
       watcher.Changed += watcher_Changed;
       _assembleReferenceWatchers.Add(watcher);
       watcher.EnableRaisingEvents = true;
+    }
+
+    void RemoveAssembleReferenceWatcher(string filePath)
+    {
+      if (!File.Exists(filePath))
+      {
+        Debug.WriteLine("Assemble " + filePath + " does not exists!");
+      }
+      string path = Path.GetDirectoryName(filePath);
+      string name = Path.GetFileName(filePath);
+
+      var index = _assembleReferenceWatchers.FindIndex(w => w.Path == path && w.Filter == name);
+
+      if (index >= 0)
+      {
+        FileSystemWatcher watcher = _assembleReferenceWatchers[index];
+        watcher.Dispose();
+        _assembleReferenceWatchers.RemoveAt(index);
+      }
     }
 
     void ResetAssembleReferenceWatchers()
@@ -215,9 +301,11 @@ namespace Nemerle.VisualStudio.Project
 
     void watcher_Changed(object sender, FileSystemEventArgs e)
     {
-			Engine.RequestOnReloadProject();
+      Engine.RequestOnReloadProject();
     }
 
+    #endregion
+    
     #endregion
 
     internal void AddEditableSource(NemerleSource source)
@@ -606,29 +694,20 @@ namespace Nemerle.VisualStudio.Project
       //	Test(res, Engine.TypesTreeVersion);
     }
 
-    IEnumerable<string> IIdeProject.GetAssemblyReferences()
+    public static string GetAssemblyReferencesString(ReferenceNode node)
     {
-      ResetAssembleReferenceWatchers(); //TODO: Этот метод нельзя вызывать из рабочего потока!!!
-
-      foreach (ReferenceNode node in _assemblyReferences)
+      string assemblyId = null;
+      var prjRef = node as ProjectReferenceNode;
+      if (prjRef != null) // Is project reference...
+        assemblyId = prjRef.ReferencedProjectOutputPath; // calc real assembly name.
+      else if (node.Url != null) //IT: if dll does not exist, the Url will be null.
+        assemblyId = node.Url;
+      else
       {
-        string assemblyId = null;
-        var prjRef = node as ProjectReferenceNode;
-        if (prjRef != null) // Is project reference...
-          assemblyId = prjRef.ReferencedProjectOutputPath; // calc real assembly name.
-        else if (node.Url != null) //IT: if dll does not exist, the Url will be null.
-          assemblyId = node.Url;
-        else
-        {
-          //TODO: Notify user about reference does not exist. 
-        }
-
-        if (assemblyId != null)
-        {
-          AddAssembleReferenceWatcher(assemblyId);
-          yield return assemblyId;
-        }
+        //TODO: Notify user about reference does not exist. 
       }
+
+      return assemblyId;
     }
 
     public void SetStatusText(string text) // implemetn IIdeProject

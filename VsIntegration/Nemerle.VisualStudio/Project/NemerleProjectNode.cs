@@ -318,6 +318,33 @@ namespace Nemerle.VisualStudio.Project
 
 		#region Overridden Methods
 
+		protected internal override void ProcessReferences()
+    {
+      IReferenceContainer container = GetReferenceContainer();
+      if (null == container)
+      {
+        // Process References
+        ReferenceContainerNode referencesFolder = CreateReferenceContainerNode();
+        if (null == referencesFolder)
+        {
+          // This project type does not support references or there is a problem
+          // creating the reference container node.
+          // In both cases there is no point to try to process references, so exit.
+          return;
+        }
+        this.AddChild(referencesFolder);
+        container = referencesFolder;
+
+        var macroReferencesFolder = new NemerleMacroReferenceContainerNode(this);
+        this.AddChild(macroReferencesFolder);
+
+        macroReferencesFolder.LoadReferencesFromBuildProject(BuildProject);
+      }
+
+      // Load the referernces.
+      container.LoadReferencesFromBuildProject(BuildProject);
+    }
+
 		protected internal override void ProcessFolders()
 		{
 			// Process Folders (useful to persist empty folder)
@@ -1002,6 +1029,58 @@ namespace Nemerle.VisualStudio.Project
 
 			return VSConstants.S_OK;
 		}
+
+    #region IVsComponentUser methods
+
+    public IReferenceContainer GetMacroReferenceContainer()
+    {
+      return (IReferenceContainer)this.FindChild(NemerleMacroReferenceContainerNode.ReferencesNodeVirtualName);
+    }
+
+    /// <summary>
+    /// Add Components to the Project.
+    /// Used by the environment to add components specified by the user in the Component Selector dialog 
+    /// to the specified project
+    /// </summary>
+    /// <param name="dwAddCompOperation">The component operation to be performed.</param>
+    /// <param name="cComponents">Number of components to be added</param>
+    /// <param name="rgpcsdComponents">array of component selector data</param>
+    /// <param name="hwndDialog">Handle to the component picker dialog</param>
+    /// <param name="pResult">Result to be returned to the caller</param>
+    public override int AddComponent(VSADDCOMPOPERATION dwAddCompOperation, uint cComponents, System.IntPtr[] rgpcsdComponents, System.IntPtr hwndDialog, VSADDCOMPRESULT[] pResult)
+    {
+      //initalize the out parameter
+      pResult[0] = VSADDCOMPRESULT.ADDCOMPRESULT_Success;
+
+      var selectedNodes = GetSelectedNodes();
+
+      IReferenceContainer references = selectedNodes.Count == 1 && selectedNodes[0] is NemerleMacroReferenceContainerNode
+                                        ? GetMacroReferenceContainer()
+                                        : GetReferenceContainer();
+
+      if (null == references)
+      {
+        // This project does not support references or the reference container was not created.
+        // In both cases this operation is not supported.
+        return VSConstants.E_NOTIMPL;
+      }
+      for (int cCount = 0; cCount < cComponents; cCount++)
+      {
+        VSCOMPONENTSELECTORDATA selectorData = new VSCOMPONENTSELECTORDATA();
+        IntPtr ptr = rgpcsdComponents[cCount];
+        selectorData = (VSCOMPONENTSELECTORDATA)Marshal.PtrToStructure(ptr, typeof(VSCOMPONENTSELECTORDATA));
+        if (null == references.AddReferenceFromSelectorData(selectorData))
+        {
+          //Skip further proccessing since a reference has to be added
+          pResult[0] = VSADDCOMPRESULT.ADDCOMPRESULT_Failure;
+          return VSConstants.S_OK;
+        }
+      }
+      return VSConstants.S_OK;
+    }
+
+    #endregion
+
 
 		protected override ConfigProvider CreateConfigProvider()
 		{

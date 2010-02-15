@@ -62,7 +62,8 @@ namespace Nemerle.VisualStudio
 		{
 			public const int NemerleSource  = 0;
 			public const int NemerleProject = 1;
-			public const int NemerleForm    = 2;
+      public const int NemerleForm = 2;
+      public const int NemerleMacroReferences = 3;
 		}
 	}
 }
