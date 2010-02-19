@@ -36,8 +36,22 @@ namespace WpfHint
 		public const int WM_MOUSEMOVE = 0x0200;
 		public const int WM_MOUSELEAVE = 0x02A3;
 		public const int WM_MOUSEHOVER = 0x02A1;
-    public const int WM_MOVE = 0x0003;
+        public const int WM_MOVE = 0x0003;
 		public const int GWL_WNDPROC = -4;
+
+        public static IntPtr SetWindowProc(IntPtr hwnd, IntPtr newProc)
+        {
+            return (IntPtr) SetWindowLong(hwnd, Win32.GWL_WNDPROC, (int)newProc);
+        }
+
+        public static IntPtr SetWindowProc(IntPtr hwnd, Callback newProc)
+        {
+            IntPtr ptr = Marshal.GetFunctionPointerForDelegate(newProc);
+            return ptr = SetWindowProc(hwnd, ptr);
+
+            //this throwed InvalidFunctionPointerInDelegateException
+            //return (Callback)Marshal.GetDelegateForFunctionPointer(ptr, typeof(Callback)); 
+        }
 
 		[DllImport("user32.dll")]
 		public static extern bool ClientToScreen(IntPtr hWnd, POINT[] lpPoint);
@@ -45,10 +59,13 @@ namespace WpfHint
 		public static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
 
 		[DllImport("user32.dll", CallingConvention = CallingConvention.StdCall, EntryPoint = "SetWindowLong", CharSet = CharSet.Auto)]
-		public static extern Callback SetWindowLong(IntPtr hwnd, int nIndex, Callback dwNewLong);
+        public static extern int SetWindowLong(IntPtr hwnd, int nIndex, int dwNewLong);
 
 		[DllImport("user32.dll", CallingConvention = CallingConvention.StdCall, EntryPoint = "CallWindowProc", CharSet = CharSet.Auto)]
-		public static extern int CallWindowProc(Callback lpPrevWndFunc, IntPtr hwnd, int msg, int wParam, int lParam);
+        public static extern int CallWindowProc(Callback lpPrevWndFunc, IntPtr hwnd, int msg, int wParam, int lParam);
+
+        [DllImport("user32.dll", CallingConvention = CallingConvention.StdCall, EntryPoint = "CallWindowProc", CharSet = CharSet.Auto)]
+        public static extern int CallWindowProc(IntPtr lpPrevWndFunc, IntPtr hwnd, int msg, int wParam, int lParam);
 
 		[DllImport("user32.dll")]
 		public static extern IntPtr WindowFromPoint(POINT Point);

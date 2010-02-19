@@ -8,8 +8,8 @@ namespace WpfHint
 		private Win32.Callback _ownerWndProc;
 		private Win32.Callback _rootWndProc;
 
-		private Win32.Callback _oldRoot;
-		private Win32.Callback _oldOwner;
+        private IntPtr _oldRoot;
+        private IntPtr _oldOwner;
 
 		private IntPtr _owner;   // text editor window handle
 		private IntPtr _root;    // main window handle (visual studio)
@@ -37,13 +37,15 @@ namespace WpfHint
 				throw new NullReferenceException("Can't find root");
 
 			_ownerWndProc = WndProc;
-			_oldOwner = Win32.SetWindowLong(_owner, Win32.GWL_WNDPROC, _ownerWndProc);
+			//_oldOwner = Win32.SetWindowLong(_owner, Win32.GWL_WNDPROC, _ownerWndProc);
+            _oldOwner = Win32.SetWindowProc(_owner, _ownerWndProc);
 
 			if (_oldOwner == null)
 				throw new InvalidOperationException("Failed subclass");
 
 			_rootWndProc = RootWndProc;
-			_oldRoot = Win32.SetWindowLong(_root, Win32.GWL_WNDPROC, _rootWndProc);
+            //_oldRoot = Win32.SetWindowLong(_root, Win32.GWL_WNDPROC, _rootWndProc);
+            _oldRoot = Win32.SetWindowProc(_root, _rootWndProc);
 
 			if (_rootWndProc == null)
 				throw new InvalidOperationException("Failed subclass");
@@ -52,16 +54,16 @@ namespace WpfHint
 		public void UnSubClass()
 		{
 			Debug.WriteLine("UnSubClass(): " + _owner);
-			if (_owner != IntPtr.Zero && _oldOwner != null)
+            if (_owner != IntPtr.Zero && _oldOwner != IntPtr.Zero)
 			{
-				Win32.SetWindowLong(_owner, Win32.GWL_WNDPROC, _oldOwner);
-				_oldOwner = null;
+				Win32.SetWindowProc(_owner, _oldOwner);
+                _oldOwner = IntPtr.Zero;
 			}
 
-			if (_root != IntPtr.Zero && _oldRoot != null)
+            if (_root != IntPtr.Zero && _oldRoot != IntPtr.Zero)
 			{
-				Win32.SetWindowLong(_root, Win32.GWL_WNDPROC, _oldRoot);
-				_oldRoot = null;
+				Win32.SetWindowProc(_root, _oldRoot);
+                _oldRoot = IntPtr.Zero;
 			}
 		}
 
