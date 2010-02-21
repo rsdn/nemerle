@@ -8,8 +8,8 @@ namespace WpfHint
 		private Win32.Callback _ownerWndProc;
 		private Win32.Callback _rootWndProc;
 
-        private IntPtr _oldRoot;
-        private IntPtr _oldOwner;
+					private IntPtr _oldRoot;
+					private IntPtr _oldOwner;
 
 		private IntPtr _owner;   // text editor window handle
 		private IntPtr _root;    // main window handle (visual studio)
@@ -37,33 +37,31 @@ namespace WpfHint
 				throw new NullReferenceException("Can't find root");
 
 			_ownerWndProc = WndProc;
-			//_oldOwner = Win32.SetWindowLong(_owner, Win32.GWL_WNDPROC, _ownerWndProc);
-            _oldOwner = Win32.SetWindowProc(_owner, _ownerWndProc);
+								_oldOwner = Win32.SetWindowProc(_owner, _ownerWndProc);
 
-			if (_oldOwner == null)
+			if (_oldOwner == IntPtr.Zero)
 				throw new InvalidOperationException("Failed subclass");
 
 			_rootWndProc = RootWndProc;
-            //_oldRoot = Win32.SetWindowLong(_root, Win32.GWL_WNDPROC, _rootWndProc);
-            _oldRoot = Win32.SetWindowProc(_root, _rootWndProc);
+								_oldRoot = Win32.SetWindowProc(_root, _rootWndProc);
 
-			if (_rootWndProc == null)
+			if (_oldRoot == IntPtr.Zero)
 				throw new InvalidOperationException("Failed subclass");
 		}
 
 		public void UnSubClass()
 		{
 			Debug.WriteLine("UnSubClass(): " + _owner);
-            if (_owner != IntPtr.Zero && _oldOwner != IntPtr.Zero)
+								if (_owner != IntPtr.Zero && _oldOwner != IntPtr.Zero)
 			{
 				Win32.SetWindowProc(_owner, _oldOwner);
-                _oldOwner = IntPtr.Zero;
+										_oldOwner = IntPtr.Zero;
 			}
 
-            if (_root != IntPtr.Zero && _oldRoot != IntPtr.Zero)
+								if (_root != IntPtr.Zero && _oldRoot != IntPtr.Zero)
 			{
 				Win32.SetWindowProc(_root, _oldRoot);
-                _oldRoot = IntPtr.Zero;
+										_oldRoot = IntPtr.Zero;
 			}
 		}
 
@@ -94,9 +92,11 @@ namespace WpfHint
 			// Otherwise UnSubClass() will be remove (hide) current messege.
 			int result = Win32.CallWindowProc(_oldRoot, hwnd, msg, wParam, lParam);
 
-      if ((msg == Win32.WM_ACTIVATE || msg == Win32.WM_MOVE || msg == Win32.WM_ACTIVATEAPP) && Activate != null)
+						if ((msg == Win32.WM_ACTIVATE || msg == Win32.WM_MOVE || msg == Win32.WM_ACTIVATEAPP) && 
+				Activate != null)
+			{
 				Activate();
-
+			}
 			return result;
 		}
 
