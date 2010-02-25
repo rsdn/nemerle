@@ -53,6 +53,9 @@ namespace Nemerle.VisualStudio.Project
 
       // Set a default HintPath for msbuild to be able to resolve the reference.
       ItemNode.SetMetadata(ProjectFileConstants.HintPath, relativePath);
+
+      // ѕредотвращаем копирование макро-сборки в каталог собираемого проекта
+      ItemNode.SetMetadata(ProjectFileConstants.Private, "False");
     }
 
     void VerifyMacroAssembly()

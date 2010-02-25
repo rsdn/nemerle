@@ -38,6 +38,8 @@ namespace Nemerle.VisualStudio.Project
     {
       base.BindReferenceData();
       this.ItemNode.ItemName = NemerleMacroReferenceContainerNode.ReferencesNodeVirtualName;
+      // Предотвращаем копирование макро-сборки в каталог собираемого проекта
+      ItemNode.SetMetadata(ProjectFileConstants.Private, "False");
     }
 
     void VerifyMacroAssembly()
