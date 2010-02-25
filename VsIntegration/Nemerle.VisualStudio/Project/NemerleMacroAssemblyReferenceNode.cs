@@ -47,8 +47,12 @@ namespace Nemerle.VisualStudio.Project
       ItemNode.SetMetadata(ProjectFileConstants.Name, AssemblyName.Name);
       ItemNode.SetMetadata(ProjectFileConstants.AssemblyName, Path.GetFileName(Url));
 
+      var fullFilePath    = Path.GetFullPath(Url);
+      var fullProjectPath = Path.GetFullPath(ProjectMgr.ProjectFolder);
+      var relativePath    = Utils.GetRelativePath(fullProjectPath, fullFilePath);
+
       // Set a default HintPath for msbuild to be able to resolve the reference.
-      ItemNode.SetMetadata(ProjectFileConstants.HintPath, Url);
+      ItemNode.SetMetadata(ProjectFileConstants.HintPath, relativePath);
     }
 
     void VerifyMacroAssembly()

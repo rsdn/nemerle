@@ -2,6 +2,7 @@ using Microsoft.VisualStudio.Project;
 using Microsoft.VisualStudio;
 using System;
 using Microsoft.VisualStudio.Shell.Interop;
+using System.IO;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -40,9 +41,24 @@ namespace Nemerle.VisualStudio.Project
 				guid = this.ItemTypeGuid;
 				return VSConstants.S_OK;
 			}
-
+      
 			return base.GetGuidProperty(propid, out guid);
 		}
+
+    protected override void BindReferenceData()
+    {
+      base.BindReferenceData();
+
+      // Делаем HintPath относительным путем... 
+      // Это позволит переносить проекты с машины на машину без изменений.
+
+      var fullFilePath = Path.GetFullPath(Url);
+      var fullProjectPath = Path.GetFullPath(ProjectMgr.ProjectFolder);
+      var relativePath = Utils.GetRelativePath(fullProjectPath, fullFilePath);
+
+      // Set a default HintPath for msbuild to be able to resolve the reference.
+      ItemNode.SetMetadata(ProjectFileConstants.HintPath, relativePath);
+    }
 
 		public override string ToString()
 		{
