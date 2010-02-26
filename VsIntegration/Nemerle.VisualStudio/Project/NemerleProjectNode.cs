@@ -1034,7 +1034,7 @@ namespace Nemerle.VisualStudio.Project
 
     public IReferenceContainer GetMacroReferenceContainer()
     {
-      return (IReferenceContainer)this.FindChild(NemerleMacroReferenceContainerNode.ReferencesNodeVirtualName);
+      return (IReferenceContainer)this.FindChild(NemerleMacroReferenceContainerNode.MacroReferencesNodeVirtualName);
     }
 
     /// <summary>

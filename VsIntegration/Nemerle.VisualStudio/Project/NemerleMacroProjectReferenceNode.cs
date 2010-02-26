@@ -37,7 +37,7 @@ namespace Nemerle.VisualStudio.Project
     protected override void BindReferenceData()
     {
       base.BindReferenceData();
-      this.ItemNode.ItemName = NemerleMacroReferenceContainerNode.ReferencesNodeVirtualName;
+      this.ItemNode.ItemName = NemerleConstants.MacroProjectReference;
       // Предотвращаем копирование макро-сборки в каталог собираемого проекта
       ItemNode.SetMetadata(ProjectFileConstants.Private, "False");
     }
@@ -81,7 +81,7 @@ namespace Nemerle.VisualStudio.Project
     {
       VerifyMacroAssembly();
 
-      ReferenceContainerNode referencesFolder = this.ProjectMgr.FindChild(NemerleMacroReferenceContainerNode.ReferencesNodeVirtualName) as ReferenceContainerNode;
+      ReferenceContainerNode referencesFolder = (ReferenceContainerNode)((NemerleProjectNode)this.ProjectMgr).GetMacroReferenceContainer();
       Debug.Assert(referencesFolder != null, "Could not find the References node");
 
       CannotAddReferenceErrorMessage referenceErrorMessageHandler = null;

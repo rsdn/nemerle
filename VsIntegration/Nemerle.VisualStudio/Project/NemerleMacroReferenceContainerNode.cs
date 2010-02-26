@@ -7,19 +7,20 @@ using System;
 using System.Diagnostics;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using System.Security;
 
 namespace Nemerle.VisualStudio.Project
 {
   class NemerleMacroReferenceContainerNode : NemerleReferenceContainerNode
 	{
-    internal new const string ReferencesNodeVirtualName = "MacroReference";
+    internal const string MacroReferencesNodeVirtualName = NemerleConstants.MacroReference;
     
     #region ctor
 
     public NemerleMacroReferenceContainerNode(ProjectNode root)
       : base(root)
 		{
-      this.VirtualNodeName = ReferencesNodeVirtualName;
+      this.VirtualNodeName = MacroReferencesNodeVirtualName;
     }
 
 		#endregion
@@ -35,7 +36,7 @@ namespace Nemerle.VisualStudio.Project
       get { return "Macro References"; }
     }
 
-    private static string[] _supportedReferenceTypes = new[] { ReferencesNodeVirtualName };
+    private static string[] _supportedReferenceTypes = new[] { NemerleConstants.MacroReference, NemerleConstants.MacroProjectReference };
 
     protected override string[] SupportedReferenceTypes
     {
@@ -44,14 +45,12 @@ namespace Nemerle.VisualStudio.Project
 
     protected override ReferenceNode CreateReferenceNode(string referenceType, ProjectElement element)
     {
-      if (referenceType == ReferencesNodeVirtualName)
-        return this.CreateAssemblyReferenceNode(element);
-      //else if (referenceType == ProjectFileConstants.ProjectReference)
-      //{
-      //  node = this.CreateProjectReferenceNode(element);
-      //}
-
-      return base.CreateReferenceNode(referenceType, element);
+      switch (referenceType)
+      {
+        case NemerleConstants.MacroReference:        return this.CreateAssemblyReferenceNode(element);
+        case NemerleConstants.MacroProjectReference: return this.CreateProjectReferenceNode(element);
+        default:                                     return base.CreateReferenceNode(referenceType, element);
+      }
     }
 
     /// <summary>
@@ -82,11 +81,11 @@ namespace Nemerle.VisualStudio.Project
         node = File.Exists(item) ? new NemerleMacroAssemblyReferenceNode(ProjectMgr, item)
                                  : new NemerleMacroAssemblyReferenceNode(ProjectMgr, element);
       }
-      catch (ArgumentNullException e) { Trace.WriteLine("Exception : " + e.Message); }
-      catch (FileNotFoundException e) { Trace.WriteLine("Exception : " + e.Message); }
+      catch (ArgumentNullException   e) { Trace.WriteLine("Exception : " + e.Message); }
+      catch (FileNotFoundException   e) { Trace.WriteLine("Exception : " + e.Message); }
       catch (BadImageFormatException e) { Trace.WriteLine("Exception : " + e.Message); }
-      catch (FileLoadException e) { Trace.WriteLine("Exception : " + e.Message); }
-      catch (System.Security.SecurityException e) { Trace.WriteLine("Exception : " + e.Message); }
+      catch (FileLoadException       e) { Trace.WriteLine("Exception : " + e.Message); }
+      catch (SecurityException       e) { Trace.WriteLine("Exception : " + e.Message); }
 
       return node;
     }
