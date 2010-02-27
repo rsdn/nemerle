@@ -12,6 +12,7 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 		public const string DefineConstants = "DefineConstants";
 		public const string OutputPath = "OutputPath";
 		public const string DocumentationFile = "DocumentationFile";
+		public const string DebugSymbols = "DebugSymbols";
 	}
 
 	[ComVisible(true)]
@@ -32,6 +33,7 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 		private string defineConstants;
 		private string outputPath;
 		private string docFile;
+		private bool debugSymbols;
 
 		#endregion
 
@@ -76,6 +78,14 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 		{
 			get { return Evaluate(outputPath); }
 		}
+		[SRCategoryAttribute(SR.BuildCaption)]
+		[SRDisplayName(SR.DebugSymbols)]
+		[SRDescriptionAttribute(SR.DebugSymbolsDescription)]
+		public bool DebugSymbols
+		{
+			get { return debugSymbols; }
+			set { debugSymbols = value; IsDirty = true; }
+		}
 
 		#endregion
 
@@ -85,9 +95,26 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 		{
 			if (ProjectMgr != null)
 			{
-				defineConstants = GetPropertyValue(Consts.DefineConstants);
-				outputPath      = GetPropertyValue(Consts.OutputPath);
-				docFile         = GetPropertyValue(Consts.DocumentationFile);
+				defineConstants   = GetPropertyValue(Consts.DefineConstants);
+				outputPath        = GetPropertyValue(Consts.OutputPath);
+				docFile           = GetPropertyValue(Consts.DocumentationFile);
+
+				var s = GetPropertyValue(Consts.DebugSymbols);
+				var found = bool.TryParse(s, out debugSymbols);
+				
+				// default behavior of msbuild when "DebugSymbols" element is not defined
+				if (found == false)
+				{
+					debugSymbols = false;
+					foreach (var c in this.GetProjectConfigurations())
+					{
+						if(c.ConfigName == "Debug")
+						{
+							debugSymbols = true;
+							break;
+						}
+					}
+				}
 			}
 		}
 
@@ -104,6 +131,10 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 			SetConfigProperty(Consts.DefineConstants, defineConstants);
 			SetConfigProperty(Consts.OutputPath, outputPath);
 			SetPropertyValue (Consts.DocumentationFile, docFile);
+			var s = "false";
+			if (debugSymbols == true)
+				s = "true";
+			SetConfigProperty(Consts.DebugSymbols, s);
 			IsDirty = false;
 
 			projNode.ProjectInfo.Engine.RequestOnReloadProject();
