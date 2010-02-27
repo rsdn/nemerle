@@ -697,9 +697,11 @@ namespace Nemerle.VisualStudio.Project
     public static string GetAssemblyReferencesString(ReferenceNode node)
     {
       string assemblyId = null;
-      var prjRef = node as ProjectReferenceNode;
+      var prjRef = node as NemerleProjectReferenceNode;
       if (prjRef != null) // Is project reference...
+      {
         assemblyId = prjRef.ReferencedProjectOutputPath; // calc real assembly name.
+      }
       else if (node.Url != null) //IT: if dll does not exist, the Url will be null.
         assemblyId = node.Url;
       else

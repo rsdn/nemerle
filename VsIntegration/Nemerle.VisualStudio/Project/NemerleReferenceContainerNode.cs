@@ -57,7 +57,15 @@ namespace Nemerle.VisualStudio.Project
 			return new NemerleProjectReferenceNode(this.ProjectMgr, element);
 		}
 
-		protected override AssemblyReferenceNode CreateAssemblyReferenceNode(ProjectElement element)
+    /// <summary>
+    /// Create a Project to Project reference given a VSCOMPONENTSELECTORDATA structure
+    /// </summary>
+    protected override ProjectReferenceNode CreateProjectReferenceNode(VSCOMPONENTSELECTORDATA selectorData)
+    {
+      return new NemerleProjectReferenceNode(this.ProjectMgr, selectorData.bstrTitle, selectorData.bstrFile, selectorData.bstrProjRef);
+    }
+    
+    protected override AssemblyReferenceNode CreateAssemblyReferenceNode(ProjectElement element)
 		{
 			// VladD2:
 			// ReferenceContainerNode does not support reference to files (instead of

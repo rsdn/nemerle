@@ -31,6 +31,11 @@ namespace Nemerle.VisualStudio.Project
 
 		#endregion
 
+    protected override NodeProperties CreatePropertiesObject()
+    {
+      return new NemerleProjectReferencesProperties(this, "Macro Project Reference Properties");
+    }
+
     /// <summary>
     /// Links a reference node to the project file.
     /// </summary>

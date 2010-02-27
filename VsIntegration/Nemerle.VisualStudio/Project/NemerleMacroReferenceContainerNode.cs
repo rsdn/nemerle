@@ -54,6 +54,13 @@ namespace Nemerle.VisualStudio.Project
     }
 
     /// <summary>
+    /// Creates a project reference node given an existing project element.
+    /// </summary>
+    protected override ProjectReferenceNode CreateProjectReferenceNode(ProjectElement element)
+    {
+      return new NemerleMacroProjectReferenceNode(this.ProjectMgr, element);
+    }
+    /// <summary>
     /// Create a Project to Project reference given a VSCOMPONENTSELECTORDATA structure
     /// </summary>
     protected override ProjectReferenceNode CreateProjectReferenceNode(VSCOMPONENTSELECTORDATA selectorData)

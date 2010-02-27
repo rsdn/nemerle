@@ -41,7 +41,7 @@ namespace Nemerle.VisualStudio.Project
       // The constructor for the AssemblyReference node will create a default project item. In that case the Item is null.
       // We need to specify here the correct project element. 
       if (ItemNode == null || ItemNode.Item == null)
-        ItemNode = new ProjectElement(ProjectMgr, AssemblyName.FullName, NemerleMacroReferenceContainerNode.ReferencesNodeVirtualName);
+        ItemNode = new ProjectElement(ProjectMgr, AssemblyName.FullName, NemerleConstants.MacroReference);
 
       // Set the basic information we know about
       ItemNode.SetMetadata(ProjectFileConstants.Name, AssemblyName.Name);
@@ -83,7 +83,7 @@ namespace Nemerle.VisualStudio.Project
     {
       VerifyMacroAssembly();
 
-      ReferenceContainerNode referencesFolder = this.ProjectMgr.FindChild(NemerleMacroReferenceContainerNode.ReferencesNodeVirtualName) as ReferenceContainerNode;
+      ReferenceContainerNode referencesFolder = (ReferenceContainerNode)((NemerleProjectNode)this.ProjectMgr).GetMacroReferenceContainer();
       Debug.Assert(referencesFolder != null, "Could not find the References node");
 
       CannotAddReferenceErrorMessage referenceErrorMessageHandler = null;

@@ -157,9 +157,63 @@ namespace Nemerle.VisualStudio
 			container.AddService(typeof(INemerleLibraryManager), CreateService, true);
 		}
 
+    class MySolutionListener : SolutionListener
+    {
+      public MySolutionListener(System.IServiceProvider serviceProvider) : base(serviceProvider) { }
+
+      public override int OnAfterOpenSolution(object pUnkReserved, int fNewSolution)
+      {
+        EnvDTE.DTE dte = (EnvDTE.DTE)ServiceProvider.GetService(typeof(EnvDTE.DTE));
+
+        // Из-за того, что при создании NemerleMacroProjectReferenceNode и NemerleMacroAssemblyReferenceNode
+        // при открытии проектов dte.Solution.Projects еще не содержал проектов добавление ссылок 
+        // на проекты того же солюшена закончились неудачей. Производим повторную попытку добавить 
+        // ссылки на проекты в ProjectInfo...
+
+        foreach (EnvDTE.Project prj in dte.Solution.Projects)
+        {
+          foreach (EnvDTE.ProjectItem item in prj.ProjectItems)
+            System.Diagnostics.Trace.WriteLine(item.Name);
+
+          var oaProj = prj as Microsoft.VisualStudio.Project.Automation.OAProject;
+
+          if (oaProj == null)
+            continue;
+
+          var nProj = oaProj.Project as NemerleProjectNode;
+
+          if (nProj == null)
+            continue;
+
+          var mrc = (NemerleMacroReferenceContainerNode)nProj.GetMacroReferenceContainer();
+          var projectInfo = nProj.ProjectInfo;
+
+          var macroProjectRefs = new List<NemerleMacroProjectReferenceNode>();
+          mrc.FindNodesOfType(macroProjectRefs);
+          foreach (var item in macroProjectRefs)
+            projectInfo.AddMacroAssembly(item);
+
+          var rc = (NemerleReferenceContainerNode)nProj.GetReferenceContainer();
+          var macroRefs = new List<NemerleProjectReferenceNode>();
+          rc.FindNodesOfType(macroRefs);
+          foreach (var item in macroRefs)
+            projectInfo.AddAssembly(item);
+
+          System.Diagnostics.Trace.WriteLine(nProj.Caption);
+        }
+
+        return base.OnAfterOpenSolution(pUnkReserved, fNewSolution);
+      }
+    }
+
+    MySolutionListener _mySolutionListener;
+    
 		protected override void Initialize()
 		{
 			base.Initialize();
+
+      _mySolutionListener = new MySolutionListener(this);
+      _mySolutionListener.Init();
 
       foreach (var listener in Trace.Listeners.OfType<DefaultTraceListener>())
         listener.AssertUiEnabled = false;
@@ -443,6 +497,8 @@ namespace Nemerle.VisualStudio
 		{
 			try
 			{
+        _mySolutionListener.Dispose();
+
 				if (_componentID != 0)
 				{
 					IOleComponentManager mgr = GetIOleComponentManager();

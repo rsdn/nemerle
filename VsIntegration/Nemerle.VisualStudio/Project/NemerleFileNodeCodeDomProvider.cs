@@ -113,87 +113,6 @@ namespace Nemerle.VisualStudio.Project
 					".Designer" + NemerleConstants.FileExtension);
 		}
 
-		// AKhropov : I had to grab some code from FileNode implementation because it was protected there
-		void UpdateGeneratedCodeFile(string data, string filePath)
-		{
-			IVsRunningDocumentTable rdt = _fileNode.ProjectMgr.GetService(typeof(SVsRunningDocumentTable)) as IVsRunningDocumentTable;
-
-			// (kberes) Shouldn't this be an InvalidOperationException instead with some not to annoying errormessage to the user?
-			if (rdt == null)
-			{
-				ErrorHandler.ThrowOnFailure(VSConstants.E_FAIL);
-			}
-
-			IVsHierarchy hier;
-			uint itemid, cookie;
-			IntPtr docData = IntPtr.Zero;
-			//Getting a edit lock on the document. Must be released later.
-			ErrorHandler.ThrowOnFailure(rdt.FindAndLockDocument((uint)(_VSRDTFLAGS.RDT_EditLock), filePath, out hier, out itemid, out docData, out cookie));
-			if (docData != IntPtr.Zero)
-			{
-				IVsPersistDocData persistDocData = Marshal.GetObjectForIUnknown(docData) as IVsPersistDocData;
-				Marshal.Release(docData);
-
-				try
-				{
-					// Try to get the Text lines
-					IVsTextLines srpTextLines = persistDocData as IVsTextLines;
-					if (srpTextLines == null)
-					{
-						// Try getting a text buffer provider first
-						IVsTextBufferProvider srpTextBufferProvider = persistDocData as IVsTextBufferProvider;
-						if (srpTextBufferProvider != null)
-						{
-							ErrorHandler.ThrowOnFailure(srpTextBufferProvider.GetTextBuffer(out srpTextLines));
-						}
-						// TODO : handle null case
-					}
-
-					int endLine, endIndex;
-					srpTextLines.GetLastLineIndex(out endLine, out endIndex);
-
-					// Lock the buffer before changing its content.
-					ErrorHandler.ThrowOnFailure(srpTextLines.LockBuffer());
-					try
-					{
-						GCHandle handle = GCHandle.Alloc(data, GCHandleType.Pinned);
-						try
-						{
-							TextSpan[] span = new TextSpan[1];
-							ErrorHandler.ThrowOnFailure(srpTextLines.ReplaceLines(0, 0, endLine, endIndex, handle.AddrOfPinnedObject(), data.Length, span));
-						}
-						finally
-						{
-							// Free the memory.
-							handle.Free();
-						}
-					}
-					finally
-					{
-						// Make sure that the buffer is unlocked also in case of exception.
-						srpTextLines.UnlockBuffer();
-					}
-				}
-				finally
-				{
-					ErrorHandler.ThrowOnFailure(rdt.UnlockDocument((uint)(_VSRDTFLAGS.RDT_ReadLock | _VSRDTFLAGS.RDT_Unlock_NoSave), cookie));
-				}
-			}
-			else
-			{
-				using (StreamWriter sw = new StreamWriter(filePath,false))
-				{
-					sw.Write( data );
-				}
-
-				EnvDTE.ProjectItem projectItem = _fileNode.GetAutomationObject() as EnvDTE.ProjectItem;
-				if (projectItem != null && (_fileNode.ProjectMgr.FindChild(_fileNode.FileName) == null))
-				{
-					projectItem.ProjectItems.AddFromFile(filePath);
-				}
-			}
-		}
-
 		#endregion
 
 		#region Parser implementation
@@ -371,7 +290,6 @@ namespace Nemerle.VisualStudio.Project
 
 		public override string FileExtension
 		{
-			// TODO: Extension with '.' ?
 			get { return NemerleConstants.FileExtension; }
 		}
 
