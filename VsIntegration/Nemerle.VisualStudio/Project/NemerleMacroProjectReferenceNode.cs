@@ -84,6 +84,9 @@ namespace Nemerle.VisualStudio.Project
     /// </summary>
     public override void AddReference()
     {
+      if (this.ProjectMgr == null)
+        return;
+
       VerifyMacroAssembly();
 
       ReferenceContainerNode referencesFolder = (ReferenceContainerNode)((NemerleProjectNode)this.ProjectMgr).GetMacroReferenceContainer();
@@ -106,6 +109,8 @@ namespace Nemerle.VisualStudio.Project
       this.ItemNode.RefreshProperties();
 
       referencesFolder.AddChild(this);
+
+      //this.ProjectMgr.AddBuildDependency(this.buildDependency);
 
       return;
     }
