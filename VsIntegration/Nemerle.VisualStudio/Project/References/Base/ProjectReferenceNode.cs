@@ -140,6 +140,9 @@ namespace Microsoft.VisualStudio.Project
 						EnvDTE.Property pathProperty = null;
 						try
 						{
+							if (prj.Properties == null) // VladD2: Fix бага в реализации MS. 
+								continue;
+
 							pathProperty = prj.Properties.Item("FullPath");
 							if(null == pathProperty)
 							{
@@ -157,6 +160,9 @@ namespace Microsoft.VisualStudio.Project
 						// Get the name of the project file.
 						try
 						{
+							if (prj.Properties == null)
+								continue;
+
 							fileNameProperty = prj.Properties.Item("FileName");
 							if(null == fileNameProperty)
 							{
@@ -196,41 +202,33 @@ namespace Microsoft.VisualStudio.Project
 			get
 			{
 				// Make sure that the referenced project implements the automation object.
-				if(null == this.ReferencedProjectObject)
-				{
+				if (null == this.ReferencedProjectObject)
 					return null;
-				}
 
 				// Get the configuration manager from the project.
 				EnvDTE.ConfigurationManager confManager = this.ReferencedProjectObject.ConfigurationManager;
-				if(null == confManager)
-				{
+				if (null == confManager)
 					return null;
-				}
 
 				// Get the active configuration.
 				EnvDTE.Configuration config = confManager.ActiveConfiguration;
-				if(null == config)
-				{
+				if (null == config)
 					return null;
-				}
 
 				// Get the output path for the current configuration.
 				EnvDTE.Property outputPathProperty = config.Properties.Item("OutputPath");
-				if(null == outputPathProperty)
-				{
+				if (null == outputPathProperty)
 					return null;
-				}
 
 				string outputPath = outputPathProperty.Value.ToString();
 
 				// Ususally the output path is relative to the project path, but it is possible
 				// to set it as an absolute path. If it is not absolute, then evaluate its value
 				// based on the project directory.
-				if(!System.IO.Path.IsPathRooted(outputPath))
+				if (!Path.IsPathRooted(outputPath))
 				{
-					string projectDir = System.IO.Path.GetDirectoryName(referencedProjectFullPath);
-					outputPath = System.IO.Path.Combine(projectDir, outputPath);
+					string projectDir = Path.GetDirectoryName(referencedProjectFullPath);
+					outputPath = Path.Combine(projectDir, outputPath);
 				}
 
 				// Now get the name of the assembly from the project.
@@ -240,16 +238,15 @@ namespace Microsoft.VisualStudio.Project
 				{
 					assemblyNameProperty = this.ReferencedProjectObject.Properties.Item("OutputFileName");
 				}
-				catch(ArgumentException)
+				catch (ArgumentException)
 				{
 				}
 
-				if(null == assemblyNameProperty)
-				{
+				if (null == assemblyNameProperty)
 					return null;
-				}
+
 				// build the full path adding the name of the assembly to the output path.
-				outputPath = System.IO.Path.Combine(outputPath, assemblyNameProperty.Value.ToString());
+				outputPath = Path.Combine(outputPath, assemblyNameProperty.Value.ToString());
 
 				return outputPath;
 			}

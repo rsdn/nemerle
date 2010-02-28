@@ -114,5 +114,11 @@ namespace Nemerle.VisualStudio.Project
 
       return;
     }
-  }
+	
+		public override object GetIconHandle(bool open)
+		{
+			//TODO: Shou special icon
+			return base.GetIconHandle(open);
+		}
+	}
 }
