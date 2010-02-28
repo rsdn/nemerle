@@ -9,7 +9,7 @@ using Nemerle.VisualStudio.LanguageService;
 using Nemerle.Compiler;
 using System.Diagnostics;
 using NUtils = Nemerle.Compiler.Utils.Utils;
-using TypeMembers = System.Collections.Generic.KeyValuePair<Nemerle.Compiler.MType.Class, Nemerle.Compiler.IMember>;
+using TypeMembers = System.Collections.Generic.KeyValuePair<Nemerle.Compiler.FixedType.Class, Nemerle.Compiler.IMember>;
 using Microsoft.VisualStudio.Package;
 
 namespace Nemerle.VisualStudio.GUI
@@ -75,13 +75,13 @@ namespace Nemerle.VisualStudio.GUI
     /// При этом типы являются подстановочными типами (а не просто TypeInf), что позволяет
     /// создать для них корректные реализации (с верными значениями параметров типов).
     /// </summary>
-    private Dictionary<MType.Class, IMember[]> MakeTypeMembersMap()
+    private Dictionary<FixedType.Class, IMember[]> MakeTypeMembersMap()
     {
       var implItfs = _ty.GetDirectSuperTypes().Where(t => t.IsInterface);
       var types = _unimplementedMembers.GroupBy(m => m.DeclaringType);
       var res = implItfs.Join(types, t => t.tycon, itf => itf.Key, (t, itf) => new { Group = itf, Ty = t });
 
-      var ht = new Dictionary<MType.Class, IMember[]>();
+      var ht = new Dictionary<FixedType.Class, IMember[]>();
       foreach (var item in res)
         ht[item.Ty] = ReplaceGettersAndSettersByProperties(item.Group);
 
@@ -93,7 +93,7 @@ namespace Nemerle.VisualStudio.GUI
       return ht;
     }
 
-    void FillTable(Dictionary<MType.Class, IMember[]> typeMembersesMap)
+    void FillTable(Dictionary<FixedType.Class, IMember[]> typeMembersesMap)
 		{
       var accessModaCol = AccessModifierColumn();
 			var explicitCol   = ExplicitColumn();
@@ -135,7 +135,7 @@ namespace Nemerle.VisualStudio.GUI
 			}
     }
 
-    private static bool HaveInterfaces(Dictionary<MType.Class, IMember[]> typeMembersesMap)
+    private static bool HaveInterfaces(Dictionary<FixedType.Class, IMember[]> typeMembersesMap)
     {
       return typeMembersesMap.Any(x => x.Key.IsInterface);
     }
@@ -250,7 +250,7 @@ namespace Nemerle.VisualStudio.GUI
       }
     }
 
-    private IEnumerable<IGrouping<MType.Class, MemberImplInfo>> ReadMethodStubInfosFromDataGrideView()
+    private IEnumerable<IGrouping<FixedType.Class, MemberImplInfo>> ReadMethodStubInfosFromDataGrideView()
     {
       return _grid.Rows.Cast<DataGridViewRow>()
         .Where(r => r.Tag != null && (bool)ImplementCell(r).Value)
@@ -264,7 +264,7 @@ namespace Nemerle.VisualStudio.GUI
     }
 
 // ReSharper disable ParameterTypeCanBeEnumerable.Local
-    private void MakeChanges(IGrouping<MType.Class, MemberImplInfo>[] stubs, LanguagePreferences pref, EditArray editArray)
+    private void MakeChanges(IGrouping<FixedType.Class, MemberImplInfo>[] stubs, LanguagePreferences pref, EditArray editArray)
 // ReSharper restore ParameterTypeCanBeEnumerable.Local
     {
       var newLine = Environment.NewLine;
@@ -334,7 +334,7 @@ namespace Nemerle.VisualStudio.GUI
       }
     }
 
-    private StringBuilder MakeStubsForTypeMembers(IGrouping<MType.Class, MemberImplInfo> stubInfos)
+    private StringBuilder MakeStubsForTypeMembers(IGrouping<FixedType.Class, MemberImplInfo> stubInfos)
     {
       var writer = new System.IO.StringWriter();
       var members = stubInfos.ToArray();
