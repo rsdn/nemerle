@@ -466,11 +466,14 @@ namespace Nemerle.VisualStudio.Project
           options.DefineConstant(define);
       }
 
-      options.ColorMessages = false;
-      options.IgnoreConfusion = true;
+      options.ColorMessages    = false;
+      options.IgnoreConfusion  = true;
       options.GreedyReferences = GetBoolProp("GreedyReferences");
-      options.DoNotLoadStdlib = NoStdLib;
-      options.DoNotLoadMacros = NoStdMacros;
+      options.DoNotLoadStdlib  = NoStdLib;
+      options.DoNotLoadMacros  = NoStdMacros;
+			options.OutputFileName   = ProjectName;
+			options.ProjectPath      = ProjectFullName;
+			options.RootNamespace    = RootNamespace;
 
       return options;
     }

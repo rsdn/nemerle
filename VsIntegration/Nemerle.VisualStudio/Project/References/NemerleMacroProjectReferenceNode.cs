@@ -110,7 +110,7 @@ namespace Nemerle.VisualStudio.Project
 
       referencesFolder.AddChild(this);
 
-      //this.ProjectMgr.AddBuildDependency(this.buildDependency);
+			this.ProjectMgr.AddBuildDependency(this.buildDependency);
 
       return;
     }
