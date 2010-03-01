@@ -131,10 +131,8 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 			SetConfigProperty(Consts.DefineConstants, defineConstants);
 			SetConfigProperty(Consts.OutputPath, outputPath);
 			SetPropertyValue (Consts.DocumentationFile, docFile);
-			var s = "false";
-			if (debugSymbols == true)
-				s = "true";
-			SetConfigProperty(Consts.DebugSymbols, s);
+            SetConfigProperty(Consts.DebugSymbols, debugSymbols.ToString().ToLower());
+
 			IsDirty = false;
 
 			projNode.ProjectInfo.Engine.RequestOnReloadProject();
