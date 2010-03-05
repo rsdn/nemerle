@@ -274,17 +274,24 @@ namespace Nemerle.VisualStudio.GUI.SourceOutliner
                     {
                         case vsCMElement.vsCMElementFunction:
                             CodeFunction codeFunction = ((CodeFunction)element);
-							if(element is CodeTypeFunctionMember)
+							if(element is CodeDomCodeFunction)
 								strName = codeFunction.get_Prototype((int)vsCMPrototype.vsCMPrototypeParamTypes | (int)vsCMPrototype.vsCMPrototypeType);
 							else
 								strName = codeFunction.get_Prototype((int)vsCMPrototype.vsCMPrototypeParamTypes);
                             break;
 
 						case vsCMElement.vsCMElementVariable:
+							CodeDomCodeVariable codeTypeVariable = element as CodeDomCodeVariable;
+							if (codeTypeVariable != null)
+								strName = codeTypeVariable.get_Prototype((int)(int)vsCMPrototype.vsCMPrototypeType);
+							else
+								strName = element.Name;
+							break;
+
 						case vsCMElement.vsCMElementProperty:
-							CodeTypeMemberElement codeTypeMember = element as CodeTypeMemberElement;
-							if(codeTypeMember != null)
-								strName = codeTypeMember.get_Prototype((int)(int)vsCMPrototype.vsCMPrototypeType);
+							CodeDomCodeProperty codeTypeProperty = element as CodeDomCodeProperty;
+							if (codeTypeProperty != null)
+								strName = codeTypeProperty.get_Prototype((int)(int)vsCMPrototype.vsCMPrototypeType);
 							else
 								strName = element.Name;
 							break;

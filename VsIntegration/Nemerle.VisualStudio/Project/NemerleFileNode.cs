@@ -106,7 +106,7 @@ namespace Nemerle.VisualStudio.Project
 		}
 
 		private DesignerContext _designerContext;
-		protected internal DesignerContext DesignerContext
+		protected internal virtual DesignerContext DesignerContext
 		{
 			get
 			{

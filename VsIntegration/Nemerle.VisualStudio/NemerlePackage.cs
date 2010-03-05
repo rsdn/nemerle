@@ -89,7 +89,8 @@ namespace Nemerle.VisualStudio
 	[ProvideObject           (typeof(NemerleGeneralPropertyPage))]
 	[ProvideObject           (typeof(NemerleDebugPropertyPage))]
 	[ProvideObject           (typeof(NemerleBuildPropertyPage))]
-	[ProvideEditorExtension  (typeof(NemerleEditorFactory), NemerleConstants.FileExtension, 32)]
+	[ProvideObject           (typeof(NemerleWACodeBehindEventBinding))]
+	[ProvideEditorExtension(typeof(NemerleEditorFactory), NemerleConstants.FileExtension, 32)]
 	
 	// Attention! These guids are magic numbers provided by Microsoft. Don't change them.
 	//
@@ -129,7 +130,7 @@ namespace Nemerle.VisualStudio
 	[WAProvideLanguageProperty(typeof(WANemerleProjectFactory), "CodeFileExtension",       NemerleConstants.FileExtension)]
 	[WAProvideLanguageProperty(typeof(WANemerleProjectFactory), "TemplateFolder",          NemerleConstants.LanguageId)]
 	[WAProvideLanguageProperty(typeof(WANemerleProjectFactory), "CodeBehindCodeGenerator", NemerleConstants.WACodeBehindCodeGeneratorGuidString)]
-	[WAProvideLanguageProperty(typeof(WANemerleProjectFactory), "CodeBehindEventBinding",  NemerleConstants.CSCodeBehindEventBindingGuidString)]
+	[WAProvideLanguageProperty(typeof(WANemerleProjectFactory), "CodeBehindEventBinding", typeof(NemerleWACodeBehindEventBinding))]
 
 	#endregion
 

@@ -50,6 +50,7 @@ namespace Nemerle.VisualStudio
 		public const string DebugPropertyPageGuidString              = "EDCC3B89-0BAD-11DB-BC1A-00112FDE8B61";
 		public const string CSCodeBehindEventBindingGuidString       = "349C5856-65DF-11DA-9384-00065B846F21";
 		public const string WACodeBehindCodeGeneratorGuidString      = "349c5859-65df-11da-9384-00065b846f21";
+		public const string NemerleWACodeBehindEventBindingGuidString = "99A7DAC8-2FEE-4E25-8339-DD716A811524";
 
 		public const string IntellisenseProviderGuidString           = "A8B57672-DC5E-4915-A31A-B1C428B29FE1";
 

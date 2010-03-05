@@ -23,5 +23,13 @@ namespace Nemerle.VisualStudio.Project
 		{
 			get { return new OAProjectItems(this, Project); }
 		}
+
+		public override EnvDTE.Properties Properties
+		{
+			get
+			{
+				return new NemerleOAProperties(this.Project.NodeProperties);
+			}
+		}
 	}
 }

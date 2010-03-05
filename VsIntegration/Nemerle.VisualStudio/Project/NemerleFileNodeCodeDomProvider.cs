@@ -127,8 +127,14 @@ namespace Nemerle.VisualStudio.Project
 			if (projectInfo != null)
 			{
 				var source          = projectInfo.GetSource(mainFilePath);
-				var provider        = (IServiceProvider)codeStream;
-				var docDataService  = (DesignerDocDataService)provider.GetService(typeof(DesignerDocDataService));
+				DesignerDocDataService docDataService = null;
+
+				// IServiceProvider передается только при вызове метода Parse() дизайнером Windows Forms
+				if (codeStream is IServiceProvider)
+				{
+					var provider = (IServiceProvider)codeStream;
+					docDataService = (DesignerDocDataService)provider.GetService(typeof(DesignerDocDataService));
+				}
 
 				var result          = projectInfo.Engine.CreateCodeCompileUnit(source);
 
@@ -144,8 +150,12 @@ namespace Nemerle.VisualStudio.Project
 				foreach (int index in result.FilesIndices)
 				{
 					var filePath     = Location.GetFileName(index);
-					var data         = docDataService.GetFileDocData(filePath, FileAccess.Read, null);
-					relatedDocDatas.Add(data);
+
+					if (docDataService != null)
+					{
+						var data = docDataService.GetFileDocData(filePath, FileAccess.Read, null);
+						relatedDocDatas.Add(data);
+					}
 
 					var textVerIndex = projectInfo.GetSource(index).GetTextCurrentVersionAndFileIndex();
 					sourcesInf.Add(textVerIndex);
@@ -169,12 +179,12 @@ namespace Nemerle.VisualStudio.Project
 			if (options == null)
 				options = GetCodeGeneratorOptions();
 
-      ProjectInfo projectInfo = ProjectInfo.FindProject(PathOfMainFile());
+			ProjectInfo projectInfo = ProjectInfo.FindProject(PathOfMainFile());
 
-      if (projectInfo == null)
-        throw new ApplicationException("The component is not in the project!");
+			if (projectInfo == null)
+				throw new ApplicationException("The component is not in the project!");
 
-      var changes = projectInfo.Engine.MergeCodeCompileUnit(codeCompileUnit);
+			var changes = projectInfo.Engine.MergeCodeCompileUnit(codeCompileUnit);
 			var sourcesInf = (List<TupleStringIntInt>)codeCompileUnit.UserData["NemerleSources"];
 
 			// Для упрощения реализации генерации кода при генерации кода не происходит 
@@ -201,19 +211,23 @@ namespace Nemerle.VisualStudio.Project
 
 			using (var helper = new NemerleProjectSourcesButchEditHelper(projectInfo, "form designer update"))
 			{
-				var text = CodeGenerator.ToString(changes.NewInitializeComponentStatements);
-				// обновляем исходники...
+				var definedIn = changes.Declaration.UserData["Member"] as TopDeclaration;
 				var initializeComponent = changes.InitializeComponent;
-				helper.ReplaseMethodBody(initializeComponent, text);
+				var typeBuilder = definedIn.TypeBuilder;
 
 				var mainFilePath = PathOfMainFile();
 				var mainFileIndex = Location.GetFileIndex(mainFilePath);
-				var ty = initializeComponent.DefinedIn.TypeBuilder;
-				var x = new TopDeclaration[0];
-				var mainPart = ty.AstParts.First(td => td.Location.FileIndex == mainFileIndex);
+				var mainPart = typeBuilder.AstParts.First(td => td.Location.FileIndex == mainFileIndex);
+
+				if (initializeComponent != null)
+				{
+					var text = CodeGenerator.ToString(changes.NewInitializeComponentStatements);
+					// обновляем исходники...
+					helper.ReplaseMethodBody(initializeComponent, text);
+				}
 
 				foreach (CodeMemberField codeMemberField in changes.InsertedFields)
-					helper.AddField(initializeComponent.DefinedIn, codeMemberField);
+					helper.AddField(definedIn, codeMemberField);
 
 				foreach (CodeMemberMethod codeMemberMethod in changes.InsertedMethods)
 					helper.AddMethod(mainPart, codeMemberMethod, changes.Declaration);
@@ -224,10 +238,13 @@ namespace Nemerle.VisualStudio.Project
 				helper.ApplyEdits();
 
 				var relatedDocDatas = (RelatedDocDataCollection)codeCompileUnit.UserData[typeof(RelatedDocDataCollection)];
-				foreach (DocData docData in relatedDocDatas)
+				if (relatedDocDatas != null)
 				{
-					docData.Modify();
-					break;
+					foreach (DocData docData in relatedDocDatas)
+					{
+						docData.Modify();
+						break;
+					}
 				}
 			}
 		}

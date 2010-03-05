@@ -896,7 +896,7 @@ namespace Nemerle.VisualStudio.Project
 		/// </summary>
 		/// <param name="item">msbuild item</param>
 		/// <returns>dependent file node</returns>
-		public override DependentFileNode CreateDependentFileNode(ProjectElement item)
+		public override FileNode CreateDependentFileNode(ProjectElement item)
 		{
 			ErrorHelper.ThrowIsNull(item, "item");
 

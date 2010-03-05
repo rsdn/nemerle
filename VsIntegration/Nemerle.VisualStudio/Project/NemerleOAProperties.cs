@@ -16,6 +16,18 @@ namespace Nemerle.VisualStudio.Project
 		{
 		}
 
+		protected override void AddProperty(System.Reflection.PropertyInfo propertyInfo)
+		{
+			// Поддержка свойств с точкой в названии (например "WebApplication.DebugStartAction")
+			// Необходимо для поддержки ASP.NET MVC проектов. 
+			// Мастер создания ASP.NET MVC проектов прерывает работу, если не находит свойств 
+			// с именами "WebApplication.DebugStartAction" и "WebApplication.StartPageUrl"
+			// 
+			// Эта реализация просто заменяет символ подчеркивания на точку, позволяя _иммитировать_ такие свойства,
+			// хотя правильнее было бы достучаться до реальных свойств веб-проекта, но как это сделать я пока не знаю.
+			this.Properties.Add(propertyInfo.Name.Replace("_", "."), new OAProperty(this, propertyInfo));
+		}
+
 		/// <summary>
 		/// Returns an indexed member of a Properties collection. 
 		/// </summary>

@@ -33,6 +33,13 @@ namespace Nemerle.VisualStudio.Project
 			get { return "file:///" + Node.Url; }
 		}
 
+		// Студия запрашивает значение параметр Url используя разный стиль наименования (URL или Url)
+		[Browsable(false)]
+		public string URL
+		{
+			get { return this.Url; }
+		}
+
 		[Browsable(false)]
 		public string SubType
 		{

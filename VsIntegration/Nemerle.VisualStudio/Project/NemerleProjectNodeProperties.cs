@@ -30,19 +30,19 @@ namespace Nemerle.VisualStudio.Project
 			get { return (NemerleProjectNode)(Node.ProjectMgr); }
 		}
 
-    [Browsable(false)]
-    // Обход странного поведения студии. В Microsoft.VisualStudio.Shell.Design.Serialization.ConfigurationHelperService()
-    // производится безусловное считывание значения свойства Company и AssemblyVersion
-    public string Company
+		[Browsable(false)]
+		// Обход странного поведения студии. В Microsoft.VisualStudio.Shell.Design.Serialization.ConfigurationHelperService()
+		// производится безусловное считывание значения свойства Company и AssemblyVersion
+		public string Company
 		{
 			get { return null; }
 		}
 
-    //[SRCategoryAttribute("Misc")]
-    //[LocDisplayName("AssemblyVersion")]
-    //[SRDescriptionAttribute("Тестируем разную хрень 2")]
-    [Browsable(false)]
-    public string AssemblyVersion
+		//[SRCategoryAttribute("Misc")]
+		//[LocDisplayName("AssemblyVersion")]
+		//[SRDescriptionAttribute("Тестируем разную хрень 2")]
+		[Browsable(false)]
+		public string AssemblyVersion
 		{
 			get { return null; }
 		}
@@ -126,6 +126,16 @@ namespace Nemerle.VisualStudio.Project
 			get { return GetPropertyValue(ManifestCertificateThumbprintPropertyName); }
 			set { Node.ProjectMgr.SetProjectProperty(ManifestCertificateThumbprintPropertyName, value); }
 		}
+
+		[Browsable(false)]
+		// see AddProperty.NemerleOAProperties()
+		public int WebApplication_DebugStartAction
+		{ get; set; }
+
+		[Browsable(false)]
+		// see AddProperty.NemerleOAProperties()
+		public string WebApplication_StartPageUrl
+		{ get; set; }
 
 		#endregion
 	}
