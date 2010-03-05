@@ -55,7 +55,8 @@ namespace Nemerle.VisualStudio
 		ShowCompletion        = true,
 		ShowMatchingBrace     = true,
 		ShowDropDownOptions   = true,
-		EnableFormatSelection = true
+		EnableFormatSelection = true,
+		ShowSmartIndent       = true
 		)]
 	[ProvideLanguageExtension(typeof(NemerleLanguageService), NemerleConstants.FileExtension)]
 	[ProvideProjectFactory(typeof(NemerleProjectFactory),

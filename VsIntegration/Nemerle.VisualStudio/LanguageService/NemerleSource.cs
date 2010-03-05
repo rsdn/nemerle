@@ -56,6 +56,8 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (Scanner != null)
 				Scanner._source = this;
 			LastDirtyTime = DateTime.Now;
+
+			SmartIndent = new NemerleSmartIndentation(this);
 		}
 
 		#endregion
@@ -70,8 +72,9 @@ namespace Nemerle.VisualStudio.LanguageService
 		public     MethodData              MethodData    { get; private set; }
 		public     int                     TimeStamp     { get; private set; }
 		internal   TopDeclaration[]        Declarations  { get;         set; }
-    public     bool                    RegionsLoaded { get;         set; }
-    public     CompileUnit             CompileUnit   { get;         set; }
+		public     bool                    RegionsLoaded { get;         set; }
+		public     CompileUnit             CompileUnit   { get;         set; }
+		internal NemerleSmartIndentation   SmartIndent   { get; private set; }
 
 		public     int                     FileIndex
 		{
@@ -877,6 +880,9 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			int line, idx;
 			textView.GetCaretPos(out line, out idx);
+
+			if (ch == '}')
+				SmartIndent.At(line);
 
 			TokenInfo tokenBeforeCaret = GetTokenInfo(line, idx);
 			

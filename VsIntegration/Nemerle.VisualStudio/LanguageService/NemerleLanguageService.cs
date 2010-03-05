@@ -485,14 +485,11 @@ namespace Nemerle.VisualStudio.LanguageService
 
 				// Setup default values.
 				_preferences.ShowNavigationBar	 = true;
+				_preferences.EnableFormatSelection = true;
+				_preferences.IndentStyle = IndentingStyle.Smart;
 
 				// Load from the registry.
 				_preferences.Init();
-				_preferences.EnableFormatSelection = true;
-
-				// TODO: Find out how to enable "Smart" radio option in 
-				// Tools->Options->Text editor->Nemerle->Tabs
-				//_preferences.IndentStyle = IndentingStyle.Smart;
 			}
 
 			return _preferences;

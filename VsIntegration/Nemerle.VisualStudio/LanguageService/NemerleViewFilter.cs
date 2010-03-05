@@ -830,23 +830,11 @@ namespace Nemerle.VisualStudio.LanguageService
 		// 3. When typing enter in the middle of expression.
 		public override bool HandleSmartIndent()
 		{
-			// TODO: Minimal functionality is to find what caret position should be,
-			// and to insert needed whitespace to move all the text that is after caret
-			// to the position after preferred caret position.
+            int line;
+            int idx;
+            TextView.GetCaretPos(out line, out idx);
 
-            //int line;
-            //int idx;
-            //TextView.GetCaretPos(out line, out idx);
-
-            //string filePath = Source.GetFilePath();
-            //ProjectInfo projectInfo = ProjectInfo.FindProject(filePath);
-            //Engine engine = projectInfo.Engine;
-
-            //List<FormatterResult> results = Formatter.FormatExpressionAt(engine, filePath, line + 1, idx + 1);
-            //ApplyFormatterResults(results);
-
-			//MessageBox.Show(TextEditorWindow, "Caret pos in HandleSmartIndent: " + line + ":" + col);
-			return false;
+			return Source.SmartIndent.At(line);
 		}
 
 		public override void HandlePostExec(
