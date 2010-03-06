@@ -13,8 +13,8 @@ namespace Nemerle.VisualStudio.LanguageService
 	class NemerleSmartIndentation
 	{
 		private NemerleSource _source;
-		private bool _useTabs = true;
-		private int _tabSize = 4;
+		private bool          _useTabs = false;
+		private int           _tabSize = 2;
 		private static readonly char[] _indentTokens = new char[] { '{', ':', '|' };
 
 		public NemerleSmartIndentation(NemerleSource source)
