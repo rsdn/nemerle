@@ -4,18 +4,20 @@ using Microsoft.Cci.MutableCodeModel;
 
 namespace Test.CodeGeneration.CCI
 {
-    public class MutuallyRecursiveTypes : ICodeGenerator
+    public class MutuallyRecursiveTypes : CciGenerator
     {
-        public string Run(string tempFolder)
+        public MutuallyRecursiveTypes() : base(TestNames.MutuallyRecursiveTypes)
         {
-            var host = new PeReader.DefaultHost();
-            var nt = host.NameTable;
-            var mscorlib = host.LoadAssembly(host.CoreAssemblySymbolicIdentity);
-            const string fileName = "cci.mutuallyrecursivetypes.dll";
+        }
+
+        protected override Assembly  Generate()
+        {
+            var nt = Host.NameTable;
+            var mscorlib = Host.LoadAssembly(Host.CoreAssemblySymbolicIdentity);
             var assembly = new Assembly
                                {
-                                   Name = nt.GetNameFor("cci.mutuallyrecursivetypes"),
-                                   ModuleName = nt.GetNameFor(fileName),
+                                   Name = nt.GetNameFor(AssemblyName),
+                                   ModuleName = nt.GetNameFor(DllName),
                                    Kind = ModuleKind.DynamicallyLinkedLibrary,
                                    TargetRuntimeVersion = mscorlib.TargetRuntimeVersion,
                                    MetadataFormatMajorVersion = 2
@@ -31,7 +33,7 @@ namespace Test.CodeGeneration.CCI
                              {
                                  ContainingUnitNamespace = rootNamespace,
                                  Name = nt.GetNameFor("<Module>"),
-                                 InternFactory = host.InternFactory,
+                                 InternFactory = Host.InternFactory,
                                  IsClass = true
                              };
             assembly.AllTypes.Add(module);
@@ -41,13 +43,13 @@ namespace Test.CodeGeneration.CCI
                             {
                                 ContainingUnitNamespace = rootNamespace,
                                 Name = nt.GetNameFor("X"),
-                                InternFactory = host.InternFactory,
+                                InternFactory = Host.InternFactory,
                                 IsClass = true
                             };
             var typeParameter = new GenericTypeParameter
                                     {
                                         Name = nt.GetNameFor("T"),
-                                        InternFactory = host.InternFactory,
+                                        InternFactory = Host.InternFactory,
                                         IsClass = true,
                                         DefiningType = xType
                                     };
@@ -58,7 +60,7 @@ namespace Test.CodeGeneration.CCI
                             {
                                 ContainingUnitNamespace = rootNamespace,
                                 Name = nt.GetNameFor("A"),
-                                InternFactory = host.InternFactory,
+                                InternFactory = Host.InternFactory,
                                 IsClass = true
                             };
             assembly.AllTypes.Add(aType);
@@ -67,19 +69,15 @@ namespace Test.CodeGeneration.CCI
                             {
                                 ContainingUnitNamespace = rootNamespace,
                                 Name = nt.GetNameFor("B"),
-                                InternFactory = host.InternFactory,
+                                InternFactory = Host.InternFactory,
                                 IsClass = true
                             };
             assembly.AllTypes.Add(bType);
 
-            aType.BaseClasses.Add(new GenericTypeInstanceReference { GenericType = xType, GenericArguments = { bType }, InternFactory = host.InternFactory });
-            bType.BaseClasses.Add(new GenericTypeInstanceReference { GenericType = xType, GenericArguments = { aType }, InternFactory = host.InternFactory });
+            aType.BaseClasses.Add(new GenericTypeInstanceReference { GenericType = xType, GenericArguments = { bType }, InternFactory = Host.InternFactory });
+            bType.BaseClasses.Add(new GenericTypeInstanceReference { GenericType = xType, GenericArguments = { aType }, InternFactory = Host.InternFactory });
 
-            var resultPath = Path.Combine(tempFolder, fileName);
-            using (var fs = File.Create(resultPath))
-                PeWriter.WritePeToStream(assembly, host, fs);
-            return resultPath;
+            return assembly;
         }
-
     }
 }

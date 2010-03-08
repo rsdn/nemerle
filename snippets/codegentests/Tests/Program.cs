@@ -1,6 +1,7 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using Test.CodeGeneration.Verification;
 using Microsoft.Cci;
 
@@ -21,6 +22,13 @@ namespace Test.CodeGeneration
                 new CCI.MutuallyRecursiveTypes(), 
                 new Cecil.MutuallyRecursiveTypes(), 
                 new SRE.MutuallyRecursiveTypes()
+                );
+
+            Run(
+                GenericBaseClassAndOverrideOfNonPublicVirtualMethod(tempFolder),
+                new CCI.GenericBaseClassAndOverrideOfNonPublicVirtualMethod(),
+                new Cecil.GenericBaseClassAndOverrideOfNonPublicVirtualMethod(),
+                new SRE.GenericBaseClassAndOverrideOfNonPublicVirtualMethod()
                 );
         }
 
@@ -53,14 +61,47 @@ namespace Test.CodeGeneration
                              Assert.Equals(baseType.GenericType.ResolvedType.GenericParameters.Single().Name, "T");
                          };
             return new TestCase(
-                "MutuallyRecursiveTypes",
+                MethodBase.GetCurrentMethod().Name, 
+                tempFolder, s => Assert.Assembly(s)
+                                     .Type("X", 1, t => Assert.True(t.IsGeneric && t.GenericParameterCount == 1)).Complete()
+                                     .Type("A", t => getChecker("B")(t)).Complete()
+                                     .Type("B", t => getChecker("A")(t)).Complete());
+        }
+
+        static TestCase GenericBaseClassAndOverrideOfNonPublicVirtualMethod(string tempFolder)
+        {
+            /*
+             * class A<T>
+             * {
+             *      protected virtual T Get() { return default(T); }
+             * }
+             * 
+             * class B : A<string>
+             * {
+             *      protected override string Get() { return "1";}
+             * }
+             */
+
+            return new TestCase(
+                MethodBase.GetCurrentMethod().Name,
+                tempFolder, 
                 s => Assert.Assembly(s)
-                         .Type("X", 1, t => Assert.True(t.IsGeneric && t.GenericParameterCount == 1)).Complete()
-                         .Type("A", t => getChecker("B")(t)).Complete()
-                         .Type("B", t => getChecker("A")(t)).Complete(), 
-                tempFolder);
+                        .Type("A", 1, t => Assert.True(t.IsGeneric && t.GenericParameterCount == 1))
+                            .Method("Get")
+                                .Definition(m =>
+                                                {
+                                                    Assert.True(m.IsVirtual);
+                                                    Assert.True(m.Visibility == TypeMemberVisibility.Assembly);
+                                                    Assert.True(m.Body.LocalVariables.Single().Type.ResolvedType == m.ContainingType.ResolvedType.GenericParameters.Single());
+                                                }));
         }
 
         #endregion
+    }
+
+    public class X<T>
+    {
+        protected virtual T Get() {
+            return default(T); }
     }
 }

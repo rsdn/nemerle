@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Cci;
 
@@ -6,6 +7,24 @@ namespace Test.CodeGeneration.Verification
 {
     public static class Assert
     {
+        public static void Body(IMethodBody body, params IOperation[] operations)
+        {
+            if (body.Operations.Count() != operations.Count())
+                throw new VerificationException("Incorrect number of instructions");
+
+            var ok = body.Operations.Zip(operations, (x, y) => new {x, y}).All(o => o.x.Equals(o.y));
+            if (!ok)
+                throw new VerificationException("Incorrect method body content");
+        }
+
+        static IEnumerable<T3> Zip<T1, T2, T3>(this IEnumerable<T1> first, IEnumerable<T2> second, Func<T1, T2, T3> f)
+        {
+            using(var e1 = first.GetEnumerator())
+            using (var e2 = second.GetEnumerator())
+                if (e1.MoveNext() && e2.MoveNext())
+                    yield return f(e1.Current, e2.Current);
+        }
+
         public static AssemblyVerifier Assembly(string assemblyPath)
         {
             var env = new TestHostEnvironment();

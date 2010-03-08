@@ -10,7 +10,7 @@ namespace Test.CodeGeneration
         private readonly Action<string> verifier;
         private readonly string tempFolder;
 
-        public TestCase(string description, Action<string> verifier, string tempFolder)
+        public TestCase(string description, string tempFolder, Action<string> verifier)
         {
             this.Description = description;
             this.tempFolder = tempFolder;
