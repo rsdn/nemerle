@@ -5,16 +5,19 @@ using System.Reflection.Emit;
 
 namespace Test.CodeGeneration.SRE
 {
-    class MutuallyRecursiveTypes : ICodeGenerator
+    class MutuallyRecursiveTypes : SREGenerator
     {
-        public string Run(string tempFolder)
+        public MutuallyRecursiveTypes() 
+            : base(TestNames.MutuallyRecursiveTypes)
+        {
+        }
+
+        protected override AssemblyBuilder  Generate()
         {
             throw new NotSupportedException("Not supported yet");
-            const string name = "sre.mutuallyrecusivetypes";
-            const string fileName = name + ".dll";
 
             var asmBuilder = AppDomain.CurrentDomain.DefineDynamicAssembly(
-                new AssemblyName(name),
+                new AssemblyName(AssemblyName),
                 AssemblyBuilderAccess.RunAndSave
                 );
 
@@ -24,7 +27,7 @@ namespace Test.CodeGeneration.SRE
 
             try
             {
-                var moduleBuilder = asmBuilder.DefineDynamicModule(name, fileName);
+                var moduleBuilder = asmBuilder.DefineDynamicModule(AssemblyName, DllName);
                 var xType = moduleBuilder.DefineType("X", TypeAttributes.Class);
                 xType.DefineGenericParameters("T");
                 xType.CreateType();
@@ -36,10 +39,7 @@ namespace Test.CodeGeneration.SRE
 
                 aType.CreateType();
                 bType.CreateType();
-
-                var resultPath = Path.Combine(tempFolder, fileName);
-                asmBuilder.Save(fileName);
-                return resultPath;
+                return asmBuilder;
             }
             finally
             {

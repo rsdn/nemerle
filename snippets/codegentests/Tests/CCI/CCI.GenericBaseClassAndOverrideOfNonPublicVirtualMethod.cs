@@ -5,7 +5,8 @@ namespace Test.CodeGeneration.CCI
 {
     class GenericBaseClassAndOverrideOfNonPublicVirtualMethod : CciGenerator
     {
-        public GenericBaseClassAndOverrideOfNonPublicVirtualMethod() : base(TestNames.GenericBaseTypeAndNonPublicOverride)
+        public GenericBaseClassAndOverrideOfNonPublicVirtualMethod() 
+            : base(TestNames.GenericBaseTypeAndNonPublicOverride)
         {
         }
 

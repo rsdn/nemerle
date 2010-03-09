@@ -6,20 +6,17 @@ using Microsoft.Cci.MutableCodeModel;
 
 namespace Test.CodeGeneration.CCI
 {
-    public abstract class CciGenerator : ICodeGenerator
+    public abstract class CciGenerator : CodeGenerator
     {
         protected CciGenerator(string testName)
+            :base("cci." + testName)
         {
-            AssemblyName = "cci." + testName;
             Host = new PeReader.DefaultHost();
         }
 
-        protected string DllName { get { return AssemblyName + ".dll"; } }
-        protected string ExeName { get { return AssemblyName + ".exe"; } }
-        protected string AssemblyName { get; private set; }
         protected IMetadataReaderHost Host { get; private set; }
 
-        public string Run(string tempFolder)
+        public override string Run(string tempFolder)
         {
             var assembly = Generate();
             var fileName = assembly.Kind == ModuleKind.DynamicallyLinkedLibrary ? DllName : ExeName;

@@ -32,7 +32,7 @@ namespace Test.CodeGeneration
                 );
         }
 
-        private static void Run(TestCase testCase, ICodeGenerator cci, ICodeGenerator cecil, ICodeGenerator sre)
+        private static void Run(TestCase testCase, CodeGenerator cci, CodeGenerator cecil, CodeGenerator sre)
         {
             Console.WriteLine("===Starting {0}", testCase.Description);
             Console.WriteLine("     CCI");
@@ -97,11 +97,5 @@ namespace Test.CodeGeneration
         }
 
         #endregion
-    }
-
-    public class X<T>
-    {
-        protected virtual T Get() {
-            return default(T); }
     }
 }

@@ -3,12 +3,16 @@ using Mono.Cecil;
 
 namespace Test.CodeGeneration.Cecil
 {
-    class MutuallyRecursiveTypes : ICodeGenerator
+    class MutuallyRecursiveTypes : CecilGenerator
     {
-        public string Run(string tempFolder)
+        public MutuallyRecursiveTypes() 
+            : base(TestNames.MutuallyRecursiveTypes)
         {
-            const string fileName = "cecil.mutuallyrecursivetypes.dll";
-            var assembly = AssemblyFactory.DefineAssembly(fileName, TargetRuntime.NET_2_0, AssemblyKind.Dll);
+        }
+
+        protected override AssemblyDefinition  Generate()
+        {
+            var assembly = AssemblyFactory.DefineAssembly(DllName, TargetRuntime.NET_2_0, AssemblyKind.Dll);
 
             var objectTypeRef = assembly.MainModule.Import(typeof (object));
             var module = assembly.MainModule;
@@ -35,9 +39,7 @@ namespace Test.CodeGeneration.Cecil
             module.Types.Add(bType);
             bType.Module = module;
 
-            var resultPath = Path.Combine(tempFolder, fileName);
-            AssemblyFactory.SaveAssembly(assembly, resultPath);
-            return resultPath;
+            return assembly;
         }
     }
 }

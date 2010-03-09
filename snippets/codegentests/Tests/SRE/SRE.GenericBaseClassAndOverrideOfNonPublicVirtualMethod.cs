@@ -1,12 +1,18 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Reflection.Emit;
 using System.Text;
 
 namespace Test.CodeGeneration.SRE
 {
-    class GenericBaseClassAndOverrideOfNonPublicVirtualMethod : ICodeGenerator
+    class GenericBaseClassAndOverrideOfNonPublicVirtualMethod : SREGenerator
     {
-        public string Run(string tempFolder)
+        public GenericBaseClassAndOverrideOfNonPublicVirtualMethod() 
+            : base(TestNames.GenericBaseTypeAndNonPublicOverride)
+        {
+        }
+
+        protected override AssemblyBuilder Generate()
         {
             throw new NotImplementedException();
         }

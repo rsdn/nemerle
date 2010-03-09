@@ -19,7 +19,7 @@ namespace Test.CodeGeneration
 
         public string Description { get; private set; }
 
-        public void Run(ICodeGenerator codeGenerator)
+        public void Run(CodeGenerator codeGenerator)
         {
             try
             {
