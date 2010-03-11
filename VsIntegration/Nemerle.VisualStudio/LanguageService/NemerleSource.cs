@@ -881,7 +881,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			int line, idx;
 			textView.GetCaretPos(out line, out idx);
 
-			if (ch == '}')
+			if (LanguageService.Preferences.IndentStyle == IndentingStyle.Smart && ch == '}')
 				SmartIndent.At(line);
 
 			TokenInfo tokenBeforeCaret = GetTokenInfo(line, idx);
