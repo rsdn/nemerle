@@ -18,7 +18,7 @@ exit /b %1
 :skip
 
 call :err_check %errorlevel%
-IF %errors% == no call Reg.cmd
+IF %errors% == no call Reg-bins.cmd
 call :err_check %errorlevel%
 IF %errors% == no call BuildTest.cmd
 pause

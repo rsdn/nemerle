@@ -3,6 +3,6 @@
 set Type=Release
 
 call BuildAndReg.cmd
-call Reg.cmd
+call Reg-bins.cmd
 
 IF NOT "%NoPause%"=="true" pause
