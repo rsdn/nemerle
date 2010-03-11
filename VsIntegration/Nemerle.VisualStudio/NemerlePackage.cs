@@ -23,6 +23,7 @@ using System.Collections.Generic;
 using System.Windows.Forms;
 using Nemerle.Compiler;
 using System.IO;
+using Nemerle.VisualStudio.RegistrationAttributes;
 
 namespace Nemerle.VisualStudio
 {
@@ -69,6 +70,7 @@ namespace Nemerle.VisualStudio
 		// from including the working directory as a valid template path
 		@".\NullPath",
 		LanguageVsTemplate = NemerleConstants.LanguageName)]
+	[ProvideCodeDomProvider(typeof(NemerleProjectFactory), typeof(Nemerle.Compiler.Utils.NemerleCodeDomProvider))]
 	[ProvideProjectFactory(typeof(NemerleWPFProjectFactory),
 		null,
 		null,

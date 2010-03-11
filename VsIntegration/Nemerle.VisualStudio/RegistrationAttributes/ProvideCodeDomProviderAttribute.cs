@@ -7,6 +7,9 @@ using System.Globalization;
 
 namespace Nemerle.VisualStudio.RegistrationAttributes
 {
+	// Регистрирует в реестре CodeDomProvider. 
+	// Запись в реестре используется методом  
+	// Microsoft.VisualStudio.Designer.Shell.DesignerService.DesignerService.CreateProviderFromRegistry(...)
 	class ProvideCodeDomProviderAttribute : RegistrationAttribute
 	{
 		private const string _valueName = "CodeDomProvider";
