@@ -509,8 +509,10 @@ namespace Nemerle.VisualStudio.LanguageService
 			int lineIndex;
 			int colIndex;
 			TextView.GetCaretPos(out lineIndex, out colIndex);
+      
       var allUsages = engine.GetGotoInfo(Source, lineIndex + 1, colIndex + 1, GotoKind.Usages);
 			var usages = allUsages.Distinct().ToArray();
+
       if (usages == null || usages.Length == 0)
       {
         Source.ProjectInfo.ShowMessage("No symbol to rename", MessageType.Error);
@@ -518,25 +520,20 @@ namespace Nemerle.VisualStudio.LanguageService
       }
 
 			var definitionCount = usages.Count(usage => usage.UsageType == UsageType.Definition);
-			if(definitionCount == 0)
+
+      if(definitionCount == 0)
 			{
         Source.ProjectInfo.ShowMessage("Cannot find definition.", MessageType.Error);
 				return;
-			}
-			if(definitionCount > 1)
-			{
-        Source.ProjectInfo.ShowMessage("More than one definition found. Must be error in Find Usages.", MessageType.Error);
-        return;
 			}
 
 			using (var frm = new RenameRefactoringDlg(engine, usages))
 			{
 				if (frm.ShowDialog(TextEditorWindow) == DialogResult.OK)
-				{
 					Source.RenameSymbols(frm.NewName, usages);
-				}
 			}
-			RemoveLastHighlighting();
+
+      RemoveLastHighlighting();
 		}
 
 		private void FindInheritors()
