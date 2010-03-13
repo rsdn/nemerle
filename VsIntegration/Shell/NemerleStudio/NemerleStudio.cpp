@@ -10,7 +10,7 @@ typedef int (__cdecl  *STARTFCN)(LPSTR, LPWSTR, int, GUID *, WCHAR *pszSettings)
 typedef int (__cdecl  *SETUPFCN)(LPSTR, LPWSTR, GUID *);
 typedef int (__cdecl  *REMOVEFCN)(LPSTR, LPWSTR);
 
-#define wzAppPath L"NemerleStudio-0.9.4"
+#define wzAppPath L"NemerleStudio-1.0.0"
 
 void ShowNoComponentError(HINSTANCE hInstance)
 {
