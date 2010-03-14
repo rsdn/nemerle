@@ -16,7 +16,7 @@ namespace Nemerle.VisualStudio.FileCodeModel
 			: base(dte, parent, name, bases, interfaces, access)
 		{ }
 
-        [SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "0#dte")]
+		[SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "0#dte")]
 		public CodeDomCodeVariant(DTE dte, CodeElement parent, CodeTypeDeclaration declaration)
 			: base(dte, parent, declaration)
 		{ }

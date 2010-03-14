@@ -16,38 +16,44 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using EnvDTE;
 
-namespace Nemerle.VisualStudio.FileCodeModel {
-    [ComVisible(true)]
-    [SuppressMessage("Microsoft.Interoperability", "CA1409:ComVisibleTypesShouldBeCreatable")]
-    [SuppressMessage("Microsoft.Interoperability", "CA1405:ComVisibleTypeBaseTypesShouldBeComVisible")]
-    public class CodeDomCodeTypeRef : CodeDomCodeElement<CodeTypeReference>, CodeTypeRef {
-        [SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "0#dte")]
-        public CodeDomCodeTypeRef(DTE dte, string name)
-            : base(dte, name) {
-            CodeObject = new CodeTypeReference(name);
-            CodeObject.UserData[CodeKey] = this;
-        }
+namespace Nemerle.VisualStudio.FileCodeModel
+{
+	[ComVisible(true)]
+	[SuppressMessage("Microsoft.Interoperability", "CA1409:ComVisibleTypesShouldBeCreatable")]
+	[SuppressMessage("Microsoft.Interoperability", "CA1405:ComVisibleTypeBaseTypesShouldBeComVisible")]
+	public class CodeDomCodeTypeRef : CodeDomCodeElement<CodeTypeReference>, CodeTypeRef
+	{
+		[SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "0#dte")]
+		public CodeDomCodeTypeRef(DTE dte, string name)
+			: base(dte, name)
+		{
+			CodeObject = new CodeTypeReference(name);
+			CodeObject.UserData[CodeKey] = this;
+		}
 
-        [SuppressMessage("Microsoft.Interoperability", "CA1407:AvoidStaticMembersInComVisibleTypes")]
-        public static CodeTypeReference ToCodeTypeReference(CodeTypeRef typeRef) {
-            if (null == typeRef) {
-                throw new ArgumentNullException("typeRef");
-            }
-            CodeDomCodeTypeRef cdTypeRef = typeRef as CodeDomCodeTypeRef;
-            if (cdTypeRef != null) return cdTypeRef.CodeObject;
+		[SuppressMessage("Microsoft.Interoperability", "CA1407:AvoidStaticMembersInComVisibleTypes")]
+		public static CodeTypeReference ToCodeTypeReference(CodeTypeRef typeRef)
+		{
+			if (null == typeRef)
+			{
+				throw new ArgumentNullException("typeRef");
+			}
+			CodeDomCodeTypeRef cdTypeRef = typeRef as CodeDomCodeTypeRef;
+			if (cdTypeRef != null) return cdTypeRef.CodeObject;
 
-            CodeTypeReference ctr = new CodeTypeReference();
-            ctr.BaseType = typeRef.AsFullName;
-            if (typeRef.Rank != 0) {
-                ctr.ArrayRank = typeRef.Rank;
-                ctr.ArrayElementType = ToCodeTypeReference(typeRef.ElementType);
-            }
-            ctr.UserData[CodeKey] = cdTypeRef;
-            return ctr;
-        }
+			CodeTypeReference ctr = new CodeTypeReference();
+			ctr.BaseType = typeRef.AsFullName;
+			if (typeRef.Rank != 0)
+			{
+				ctr.ArrayRank = typeRef.Rank;
+				ctr.ArrayElementType = ToCodeTypeReference(typeRef.ElementType);
+			}
+			ctr.UserData[CodeKey] = cdTypeRef;
+			return ctr;
+		}
 
-        [SuppressMessage("Microsoft.Interoperability", "CA1407:AvoidStaticMembersInComVisibleTypes")]
-        [SuppressMessage("Microsoft.Design", "CA1011:ConsiderPassingBaseTypesAsParameters")]
+		[SuppressMessage("Microsoft.Interoperability", "CA1407:AvoidStaticMembersInComVisibleTypes")]
+		[SuppressMessage("Microsoft.Design", "CA1011:ConsiderPassingBaseTypesAsParameters")]
 		public static CodeDomCodeTypeRef FromCodeTypeReference(DTE dte, CodeTypeReference typeRef)
 		{
 			if (null == typeRef)
@@ -60,88 +66,109 @@ namespace Nemerle.VisualStudio.FileCodeModel {
 			return saved == null ? new CodeDomCodeTypeRef(dte, typeRef.BaseType) : (CodeDomCodeTypeRef)saved;
 		}
 
-        #region CodeTypeRef Members
+		#region CodeTypeRef Members
 
-        public string AsFullName {
-            get { return CodeObject.BaseType; }
-        }
+		public string AsFullName
+		{
+			get { return CodeObject.BaseType; }
+		}
 
-        public string AsString {
-            get { return CodeObject.BaseType; }
-        }
+		public string AsString
+		{
+			get { return CodeObject.BaseType; }
+		}
 
-        public CodeType CodeType {
-            get {
-                throw new NotImplementedException();
-            }
-            [SuppressMessage("Microsoft.Naming", "CA1725:ParameterNamesShouldMatchBaseDeclaration", MessageId = "0#")]
-            set {
-                throw new NotImplementedException();
-            }
-        }
+		public CodeType CodeType
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			[SuppressMessage("Microsoft.Naming", "CA1725:ParameterNamesShouldMatchBaseDeclaration", MessageId = "0#")]
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
 
-        public CodeTypeRef CreateArrayType(int Rank) {
-            throw new NotImplementedException();
-        }
+		public CodeTypeRef CreateArrayType(int Rank)
+		{
+			throw new NotImplementedException();
+		}
 
-        public CodeTypeRef ElementType {
-            get {
-                throw new NotImplementedException();
-            }
-            [SuppressMessage("Microsoft.Naming", "CA1725:ParameterNamesShouldMatchBaseDeclaration", MessageId = "0#")]
-            set {
-                throw new NotImplementedException();
-            }
-        }
+		public CodeTypeRef ElementType
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			[SuppressMessage("Microsoft.Naming", "CA1725:ParameterNamesShouldMatchBaseDeclaration", MessageId = "0#")]
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
 
-        public object Parent {
-            get { throw new NotImplementedException(); }
-        }
+		public object Parent
+		{
+			get { throw new NotImplementedException(); }
+		}
 
-        public int Rank {
-            get {
-                return CodeObject.ArrayRank;
-            }
-            [SuppressMessage("Microsoft.Naming", "CA1725:ParameterNamesShouldMatchBaseDeclaration", MessageId = "0#")]
-            set {
-                CodeObject.ArrayRank = value;
+		public int Rank
+		{
+			get
+			{
+				return CodeObject.ArrayRank;
+			}
+			[SuppressMessage("Microsoft.Naming", "CA1725:ParameterNamesShouldMatchBaseDeclaration", MessageId = "0#")]
+			set
+			{
+				CodeObject.ArrayRank = value;
 
-                CommitChanges();
-            }
-        }
+				CommitChanges();
+			}
+		}
 
-        public vsCMTypeRef TypeKind {
-            get { throw new NotImplementedException(); }
-        }
+		public vsCMTypeRef TypeKind
+		{
+			get { throw new NotImplementedException(); }
+		}
 
-        #endregion
+		#endregion
 
-        public override object ParentElement {
-            get { return null; }
-        }
+		public override object ParentElement
+		{
+			get { return null; }
+		}
 
-        public override CodeElements Children {
-            get { return null; }
-        }
+		public override CodeElements Children
+		{
+			get { return null; }
+		}
 
-        public override CodeElements Collection {
-            get { return null; }
-        }
+		public override CodeElements Collection
+		{
+			get { return null; }
+		}
 
-        public override string FullName {
-            get { return CodeObject.BaseType; }
-        }
+		public override string FullName
+		{
+			get { return CodeObject.BaseType; }
+		}
 
-        public override vsCMInfoLocation InfoLocation {
-            get { return vsCMInfoLocation.vsCMInfoLocationNone; }
-        }
+		public override vsCMInfoLocation InfoLocation
+		{
+			get { return vsCMInfoLocation.vsCMInfoLocationNone; }
+		}
 
-        public override vsCMElement Kind {
-            get { return vsCMElement.vsCMElementOther; }
-        }
+		public override vsCMElement Kind
+		{
+			get { return vsCMElement.vsCMElementOther; }
+		}
 
-        public override ProjectItem ProjectItem {
-            get { return null; }
-        }
-    }
+		public override ProjectItem ProjectItem
+		{
+			get { return null; }
+		}
+	}
 }

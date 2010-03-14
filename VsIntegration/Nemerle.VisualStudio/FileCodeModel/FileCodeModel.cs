@@ -113,7 +113,7 @@ namespace Nemerle.VisualStudio.FileCodeModel
 					DTE.UndoContext.Close();
 			}
 		}
-	
+
 		#region FileCodeModel Members
 
 		/// <summary>

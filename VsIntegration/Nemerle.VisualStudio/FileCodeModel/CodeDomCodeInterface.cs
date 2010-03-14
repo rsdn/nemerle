@@ -17,64 +17,73 @@ using System.CodeDom.Compiler;
 using System.Runtime.InteropServices;
 
 using EnvDTE;
-namespace Nemerle.VisualStudio.FileCodeModel {
-    [ComVisible(true)]
-    [SuppressMessage("Microsoft.Interoperability", "CA1409:ComVisibleTypesShouldBeCreatable")]
-    [SuppressMessage("Microsoft.Interoperability", "CA1405:ComVisibleTypeBaseTypesShouldBeComVisible")]
-    public class CodeDomCodeInterface : CodeDomCodeType<CodeTypeDeclaration>, CodeInterface {
-        [SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "0#dte")]
-        public CodeDomCodeInterface(DTE dte, CodeElement parent, string name, object baseType, vsCMAccess access)
-            : base(dte, parent, name) {
+namespace Nemerle.VisualStudio.FileCodeModel
+{
+	[ComVisible(true)]
+	[SuppressMessage("Microsoft.Interoperability", "CA1409:ComVisibleTypesShouldBeCreatable")]
+	[SuppressMessage("Microsoft.Interoperability", "CA1405:ComVisibleTypeBaseTypesShouldBeComVisible")]
+	public class CodeDomCodeInterface : CodeDomCodeType<CodeTypeDeclaration>, CodeInterface
+	{
+		[SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "0#dte")]
+		public CodeDomCodeInterface(DTE dte, CodeElement parent, string name, object baseType, vsCMAccess access)
+			: base(dte, parent, name)
+		{
 
-            CodeObject = new CodeTypeDeclaration(name);
-            CodeObject.IsInterface = true;
-            CodeObject.UserData[CodeKey] = this;
+			CodeObject = new CodeTypeDeclaration(name);
+			CodeObject.IsInterface = true;
+			CodeObject.UserData[CodeKey] = this;
 
-            if (baseType != System.Reflection.Missing.Value) {
-                baseType = new object[] { baseType };
-            }
+			if (baseType != System.Reflection.Missing.Value)
+			{
+				baseType = new object[] { baseType };
+			}
 
-            Initialize(System.Reflection.Missing.Value, baseType, access);
-        }
+			Initialize(System.Reflection.Missing.Value, baseType, access);
+		}
 
-        [SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "0#dte")]
-        [SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "2#decl")]
-        public CodeDomCodeInterface(DTE dte, CodeElement parent, CodeTypeDeclaration decl)
-            : base(dte, parent, (decl==null) ? null : decl.Name) {
-            
-            CodeObject = decl;
-        }
+		[SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "0#dte")]
+		[SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "2#decl")]
+		public CodeDomCodeInterface(DTE dte, CodeElement parent, CodeTypeDeclaration decl)
+			: base(dte, parent, (decl == null) ? null : decl.Name)
+		{
 
-        #region CodeInterface Members
+			CodeObject = decl;
+		}
 
-        public CodeFunction AddFunction(string Name, vsCMFunction Kind, object Type, object Position, vsCMAccess Access) {
-            CodeDomCodeFunction codeFunc = new CodeDomCodeFunction(DTE, this, Name, Kind, Type, Access);
+		#region CodeInterface Members
 
-            CodeObject.Members.Insert(PositionToIndex(Position), codeFunc.CodeObject);
+		public CodeFunction AddFunction(string Name, vsCMFunction Kind, object Type, object Position, vsCMAccess Access)
+		{
+			CodeDomCodeFunction codeFunc = new CodeDomCodeFunction(DTE, this, Name, Kind, Type, Access);
+
+			CodeObject.Members.Insert(PositionToIndex(Position), codeFunc.CodeObject);
 
 
-            CommitChanges();
-            return codeFunc;
-        }
+			CommitChanges();
+			return codeFunc;
+		}
 
-        public CodeProperty AddProperty(string GetterName, string PutterName, object Type, object Position, vsCMAccess Access, object Location) {
-            //!!! parent
-            CodeDomCodeProperty res = new CodeDomCodeProperty(DTE, null, GetterName, PutterName, Type, Access);
+		public CodeProperty AddProperty(string GetterName, string PutterName, object Type, object Position, vsCMAccess Access, object Location)
+		{
+			//!!! parent
+			CodeDomCodeProperty res = new CodeDomCodeProperty(DTE, null, GetterName, PutterName, Type, Access);
 
-            CodeObject.Members.Insert(PositionToIndex(Position), res.CodeObject);
+			CodeObject.Members.Insert(PositionToIndex(Position), res.CodeObject);
 
-            CommitChanges();
-            return res;
-        }
+			CommitChanges();
+			return res;
+		}
 
-        #endregion
+		#endregion
 
-        public override vsCMElement Kind {
-            get {
-                return vsCMElement.vsCMElementInterface;
-            }
-        }
+		public override vsCMElement Kind
+		{
+			get
+			{
+				return vsCMElement.vsCMElementInterface;
+			}
+		}
 
-    }
+	}
 
 }

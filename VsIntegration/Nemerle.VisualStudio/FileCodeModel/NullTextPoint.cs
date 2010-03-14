@@ -6,17 +6,17 @@ namespace Nemerle.VisualStudio.FileCodeModel
 {
 	internal class NullTextPoint : TextPoint
 	{
-		public DTE          DTE                { get { return null; } }
-		public TextDocument Parent             { get { return null; } }
-		public int          Line               { get { return 1; } }
-		public int          LineCharOffset     { get { return 0; } }
-		public int          AbsoluteCharOffset { get { return 0; } }
-		public int          DisplayColumn      { get { return 0; } }
-		public bool         AtEndOfDocument    { get { return false; } }
-		public bool         AtStartOfDocument  { get { return true; } }
-		public bool         AtEndOfLine        { get { return false; } }
-		public bool         AtStartOfLine      { get { return true; } }
-		public int          LineLength         { get { return 0; } }
+		public DTE DTE { get { return null; } }
+		public TextDocument Parent { get { return null; } }
+		public int Line { get { return 1; } }
+		public int LineCharOffset { get { return 0; } }
+		public int AbsoluteCharOffset { get { return 0; } }
+		public int DisplayColumn { get { return 0; } }
+		public bool AtEndOfDocument { get { return false; } }
+		public bool AtStartOfDocument { get { return true; } }
+		public bool AtEndOfLine { get { return false; } }
+		public bool AtStartOfLine { get { return true; } }
+		public int LineLength { get { return 0; } }
 
 		bool TextPoint.EqualTo(TextPoint Point)
 		{
