@@ -68,8 +68,8 @@ namespace Nemerle.VisualStudio.LanguageService
 		public NemerleColorableItem(
 			string displayName, COLORINDEX foreColor, COLORINDEX backColor, Color hiForeColor, Color hiBackColor, FONTFLAGS fontFlags)
 			: base(
-				"Nemerle - " + displayName,
-				"Nemerle - " + displayName,
+			    displayName,
+				displayName,
 				foreColor,   backColor,
 				hiForeColor, hiBackColor,
 				fontFlags)
