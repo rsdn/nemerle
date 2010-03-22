@@ -4,7 +4,7 @@ IF "%Type%"=="" set Type=Debug
 
 set NemerleBin=%~dp0bin\%Type%
 set NemerleRoot=%~dp0.
-set GacUtil="%VS80COMNTOOLS%..\..\SDK\v2.0\Bin\gacutil.exe"
+set GacUtil="%VS90COMNTOOLS%..\..\SDK\v2.0\Bin\gacutil.exe"
 set NemerleInstall=%ProgramFiles%\Nemerle
 
 IF NOT "%PROCESSOR_ARCHITECTURE%" == "x86" goto b64
@@ -27,7 +27,7 @@ exit /b %1
 
 
 @echo NemerleInstall=%NemerleInstall%
-@echo VS80COMNTOOLS=%VS80COMNTOOLS%
+@echo VS90COMNTOOLS=%VS90COMNTOOLS%
 @echo GacUtil=%GacUtil%
 @echo NGen=%NGen%
 @echo NemerleBin=%NemerleBin%
