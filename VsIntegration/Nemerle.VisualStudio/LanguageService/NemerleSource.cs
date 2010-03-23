@@ -885,19 +885,10 @@ namespace Nemerle.VisualStudio.LanguageService
 				SmartIndent.At(line);
 
 			TokenInfo tokenBeforeCaret = GetTokenInfo(line, idx);
-			
-			if ((tokenBeforeCaret.Trigger & TokenTriggers.MemberSelect) != 0 && (command == VsCommands2K.TYPECHAR))
-        Completion(textView, line, idx, true);
-			
+						
       TryHighlightBraces(textView, command, line, idx, tokenBeforeCaret);
 
-			if (!MethodData.IsDisplayed &&
-				(tokenBeforeCaret.Trigger & TokenTriggers.MethodTip) != 0 &&
-				command == VsCommands2K.TYPECHAR &&
-				Service.Preferences.ParameterInformation)
-			{
-				MethodTip(textView, line, idx, tokenBeforeCaret);
-			}
+			//VladD2: We do not trigger MethodTip and Completion on type because it's very slow!
 		}
 
 		public override void GetPairExtents(IVsTextView view, int line, int col, out TextSpan span)
