@@ -837,6 +837,17 @@ namespace Nemerle.VisualStudio.LanguageService
 		public override void HandlePostExec(
 			ref Guid guidCmdGroup, uint nCmdId, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut, bool bufferWasChanged)
 		{
+			switch (nCmdId)
+			{
+				case 1990:
+				case 140:
+				case 684:
+				case 337:
+				case 1627:
+					break;
+				default:
+					break;
+			}
 			VsCommands2K cmd = (VsCommands2K)nCmdId;
 			// Special handling of "Toggle all outlining" command
 			if (guidCmdGroup == typeof(VsCommands2K).GUID)

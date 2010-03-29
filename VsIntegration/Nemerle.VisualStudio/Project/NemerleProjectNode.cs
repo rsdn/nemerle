@@ -318,6 +318,74 @@ namespace Nemerle.VisualStudio.Project
 
 		#region Overridden Methods
 
+
+		public override ProjectOptions GetProjectOptions(string config)
+		{
+			// Woraround of bug in ProjectNode.GetProjectOptions()
+			// This reset "options" field.
+			SetProjectFileDirty(IsProjectFileDirty);
+			
+			return base.GetProjectOptions(config);
+		}
+
+		protected override int InternalExecCommand(Guid cmdGroup, uint cmdId, uint cmdExecOpt, IntPtr vaIn, IntPtr vaOut, CommandOrigin commandOrigin)
+		{
+			if (cmdGroup == Microsoft.VisualStudio.Shell.VsMenus.guidStandardCommandSet97)
+			{
+				switch ((VsCommands)cmdId)
+				{
+					case VsCommands.StartNoDebug:
+						//ConfigProvider.ConfigName 
+						var automationObject = (EnvDTE.Project)this.GetAutomationObject();
+						var currentConfigName = Utilities.GetActiveConfigurationName(automationObject);
+						
+						ProjectMgr.SetConfiguration(currentConfigName);
+						
+						var path = ProjectMgr.GetProjectProperty("StartProgram");
+
+						if (string.IsNullOrEmpty(path))
+							path = ProjectMgr.GetOutputAssembly(currentConfigName);
+						
+						var cmdArgs = ProjectMgr.GetProjectProperty("CmdArgs");
+						var workingDirectory = ProjectMgr.GetProjectProperty("WorkingDirectory");
+						
+						if (!string.IsNullOrEmpty(workingDirectory) || !Path.IsPathRooted(workingDirectory))
+							workingDirectory = Path.Combine(ProjectMgr.BaseURI.AbsoluteUrl, workingDirectory);
+
+						var cmdFilePath = Path.Combine(Path.GetDirectoryName(path), Path.GetTempFileName());
+						cmdFilePath = Path.ChangeExtension(cmdFilePath, "cmd");
+						File.WriteAllText(cmdFilePath, "@echo off\n" + path + " " + cmdArgs + "\npause");
+
+						var psi = new ProcessStartInfo(cmdFilePath);
+
+						if (string.IsNullOrEmpty(workingDirectory))
+							psi.WorkingDirectory = Path.GetDirectoryName(path);
+						else if (Directory.Exists(workingDirectory))
+							psi.WorkingDirectory = workingDirectory;
+						else
+							throw new ApplicationException("The working directory '" + workingDirectory + "' not exists.");
+
+						//if (string.IsNullOrEmpty(cmdArgs))
+						//	psi.Arguments = cmdArgs;
+
+						var process = System.Diagnostics.Process.Start(psi);
+
+						Action action = () =>
+							{
+								process.WaitForExit(20000);
+								File.Delete(cmdFilePath);
+							};
+
+						action.BeginInvoke(null, null);
+
+						return VSConstants.S_OK;
+					default:
+						break;
+				}
+			}
+			return base.InternalExecCommand(cmdGroup, cmdId, cmdExecOpt, vaIn, vaOut, commandOrigin);
+		}
+
 		protected internal override void ProcessReferences()
     {
       IReferenceContainer container = GetReferenceContainer();

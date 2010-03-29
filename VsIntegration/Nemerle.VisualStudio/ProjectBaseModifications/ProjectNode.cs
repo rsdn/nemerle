@@ -5799,7 +5799,7 @@ namespace Microsoft.VisualStudio.Project
 
 			string outputtype = GetProjectProperty(ProjectFileConstants.OutputType, false);
 
-			if(outputtype == "library")
+			if(string.Compare(outputtype, "Library", StringComparison.InvariantCultureIgnoreCase) == 0)
 			{
 				outputtype = outputtype.ToLowerInvariant();
 				name += ".dll";
