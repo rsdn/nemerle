@@ -17,6 +17,7 @@ using Microsoft.Windows.Design.Host;
 
 using Nemerle.VisualStudio.LanguageService;
 using Nemerle.VisualStudio.Project.PropertyPages;
+using Nemerle.VisualStudio.Helpers;
 using Nemerle.VisualStudio.WPFProviders;
 
 using PkgUtils = Microsoft.VisualStudio.Project.Utilities;
@@ -335,7 +336,6 @@ namespace Nemerle.VisualStudio.Project
 				switch ((VsCommands)cmdId)
 				{
 					case VsCommands.StartNoDebug:
-						//ConfigProvider.ConfigName 
 						var automationObject = (EnvDTE.Project)this.GetAutomationObject();
 						var currentConfigName = Utilities.GetActiveConfigurationName(automationObject);
 						
@@ -345,38 +345,53 @@ namespace Nemerle.VisualStudio.Project
 
 						if (string.IsNullOrEmpty(path))
 							path = ProjectMgr.GetOutputAssembly(currentConfigName);
-						
+
+						if (!File.Exists(path))
+							throw new ApplicationException("The start program '" + path + "' not exists!");
+
+						if (string.Compare( Path.GetExtension(path), ".dll", StringComparison.InvariantCultureIgnoreCase) == 0)
+							throw new ApplicationException("The start program '" + path + "' is DLL!");
+
+						var isConsole = PEReader.IsConsole(path);
+												
 						var cmdArgs = ProjectMgr.GetProjectProperty("CmdArgs");
 						var workingDirectory = ProjectMgr.GetProjectProperty("WorkingDirectory");
 						
-						if (!string.IsNullOrEmpty(workingDirectory) || !Path.IsPathRooted(workingDirectory))
+						if (!string.IsNullOrEmpty(workingDirectory) && !Path.IsPathRooted(workingDirectory))
 							workingDirectory = Path.Combine(ProjectMgr.BaseURI.AbsoluteUrl, workingDirectory);
 
-						var cmdFilePath = Path.Combine(Path.GetDirectoryName(path), Path.GetTempFileName());
-						cmdFilePath = Path.ChangeExtension(cmdFilePath, "cmd");
-						File.WriteAllText(cmdFilePath, "@echo off\n" + path + " " + cmdArgs + "\npause");
-
-						var psi = new ProcessStartInfo(cmdFilePath);
-
 						if (string.IsNullOrEmpty(workingDirectory))
-							psi.WorkingDirectory = Path.GetDirectoryName(path);
-						else if (Directory.Exists(workingDirectory))
-							psi.WorkingDirectory = workingDirectory;
-						else
+							workingDirectory = Path.GetDirectoryName(path);
+
+						if (!Directory.Exists(workingDirectory))
 							throw new ApplicationException("The working directory '" + workingDirectory + "' not exists.");
 
-						//if (string.IsNullOrEmpty(cmdArgs))
-						//	psi.Arguments = cmdArgs;
+						var psi = new ProcessStartInfo();
+						string cmdFilePath = null;
+
+						if (isConsole)
+						{
+							// Make temp cmd-file and run it...
+							cmdFilePath = Path.Combine(Path.GetDirectoryName(path), Path.GetTempFileName());
+							cmdFilePath = Path.ChangeExtension(cmdFilePath, "cmd");
+							File.WriteAllText(cmdFilePath, "@echo off\n" + path + " " + cmdArgs + "\npause");
+							psi.FileName = cmdFilePath;
+						}
+						else
+						{
+							psi.FileName = path;
+							psi.Arguments = cmdArgs;
+						}
+
+						psi.WorkingDirectory = workingDirectory;
 
 						var process = System.Diagnostics.Process.Start(psi);
 
-						Action action = () =>
-							{
-								process.WaitForExit(20000);
-								File.Delete(cmdFilePath);
-							};
-
-						action.BeginInvoke(null, null);
+						if (isConsole)
+						{ // destroy temp cmd-file
+							Action action = () => { process.WaitForExit(20000); File.Delete(cmdFilePath); };
+							action.BeginInvoke(null, null);
+						}
 
 						return VSConstants.S_OK;
 					default:
