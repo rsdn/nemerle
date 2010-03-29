@@ -340,17 +340,37 @@ namespace Nemerle.VisualStudio.Project
 						var currentConfigName = Utilities.GetActiveConfigurationName(automationObject);
 						
 						ProjectMgr.SetConfiguration(currentConfigName);
-						
+
+						EnvDTE.DTE dte = (EnvDTE.DTE)ProjectMgr.GetService(typeof(EnvDTE.DTE));
+						dte.ExecuteCommand("File.SaveAll", "");
+
+						bool ok;
+						ProjectMgr.BuildTarget("Build", out ok);
+
+						if (!ok)
+						{
+							var message = "There were build errors. Would you like to continue and run the last successful build?";
+							OLEMSGICON icon = OLEMSGICON.OLEMSGICON_QUERY;
+							OLEMSGBUTTON buttons = OLEMSGBUTTON.OLEMSGBUTTON_YESNO;
+							OLEMSGDEFBUTTON defaultButton = OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST;
+							var res = VsShellUtilities.ShowMessageBox(ProjectMgr.Site,
+								message, NemerleConstants.ProductName, icon, buttons, defaultButton);
+
+							if (res == NativeMethods.IDNO)
+								return VSConstants.S_OK;
+						}
+
 						var path = ProjectMgr.GetProjectProperty("StartProgram");
 
 						if (string.IsNullOrEmpty(path))
 							path = ProjectMgr.GetOutputAssembly(currentConfigName);
 
 						if (!File.Exists(path))
-							throw new ApplicationException("The start program '" + path + "' not exists!");
+							throw new ApplicationException("Visual Studio cannot start debugging because the debug target '" 
+								+ path + "' is missing. Please build the project and retry, or set the OutputPath and AssemblyName properties appropriately to point at the correct location for the target assembly.");
 
-						if (string.Compare( Path.GetExtension(path), ".dll", StringComparison.InvariantCultureIgnoreCase) == 0)
-							throw new ApplicationException("The start program '" + path + "' is DLL!");
+						if (string.Compare(Path.GetExtension(path), ".dll", StringComparison.InvariantCultureIgnoreCase) == 0)
+							throw new ApplicationException("A project with an Output Type of Class Library cannot be started directly.\nAlso you can't use DLL as debug target.\n\nIn order to debug this project, add an executable project to this solution which references the library project. Set the executable project as the startup project.");
 
 						var isConsole = PEReader.IsConsole(path);
 												
