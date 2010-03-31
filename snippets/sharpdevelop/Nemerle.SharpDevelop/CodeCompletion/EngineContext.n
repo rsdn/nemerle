@@ -1,8 +1,10 @@
 ﻿using System;
+using System.Windows.Forms;
 using SCG = System.Collections.Generic;
 
 using ICSharpCode.Core;
 using ICSharpCode.SharpDevelop.Project;
+using ICSharpCode.TextEditor.Document;
 
 using Nemerle.Assertions;
 using Nemerle.Completion2;
@@ -15,55 +17,120 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
 
         internal this(project : IProject) {
             this.project = project;
-            this.engine = EngineFactory.Create(this, System.Console.Out, false);
+            this.engine = EngineFactory.Create(this, TraceWriter(), false);
+
+            ProjectService.ProjectItemAdded += OnProjectServiceProjectItemAdded;
+            ProjectService.ProjectItemRemoved += OnProjectServiceProjectItemRemoved;
+            Application.Idle += OnApplicationIdle;
+
+            Reload();
         }
 
-        protected override Finalize() : void {
-            Dispose();
-        }
+        sync_obj : object = object();
 
-        [Accessor]
-        private engine : IEngine;
+        [Accessor] engine : IEngine;
 
-        [Accessor]
-        private project : IProject;
+        [Accessor] project : IProject;
 
-        #region Disposable
-        [Accessor]
-        mutable disposed : bool = false;
+        sources : SCG.List[Source] = SCG.List();
+        source_map : SCG.Dictionary[int, Source] = SCG.Dictionary();
+        mutable source_index_counter : int = 0;
 
-        public Dispose() : void {
-            unless(disposed) {
-
+        private FindSource(item : ProjectItem) : bool * Source {
+            foreach(source in sources) {
+                when(ReferenceEquals(source.Item, item))
+                    Nemerle.Imperative.Return( (true, source) )
             }
-            disposed = true;
+            (false, null)
         }
-        #endregion
+
+        private AddSourceNoCheck(item : ProjectItem) : ISource {
+            def next_file_index() {
+                def index = source_index_counter;
+                source_index_counter += 1;
+                index
+            }
+            def source = Source(item, next_file_index());
+            sources.Add(source);
+            source_map[source.FileIndex] = source;
+            source
+        }
+
+        private AddSource(item : ProjectItem) : ISource {
+            match(FindSource(item)) {
+                | (true, source) => source
+                | (false, _) =>
+                    def source = AddSourceNoCheck(item);
+                    _ = engine.BeginReloadProject();
+                    source
+            }
+        }
+
+        private RemoveSource(item : ProjectItem) : bool {
+            match(FindSource(item)) {
+                | (true, source) =>
+                    _ = sources.Remove(source);
+                    _ = source_map.Remove(source.FileIndex);
+                    _ = engine.BeginReloadProject();
+                    true
+                | (false, _) =>
+                    false
+            }
+        }
+
+        private Clear() : void {
+            sources.Clear();
+            source_map.Clear();
+        }
+
+        public Reload() : void  {
+            lock(sync_obj) {
+                Clear();
+                foreach(item in project.GetItemsOfType(ItemType.Compile)) {
+                    _ = AddSourceNoCheck(item)
+                }
+                _ = engine.BeginReloadProject();
+            }
+        }
 
         #region IIdeProject
 
         public GetAssemblyReferences() : SCG.IEnumerable[string] {
-            ["mscorlib",
-             "System",
-             "System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089",
-             "System.Drawing, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a",
-             "System.Windows.Forms, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"]
+            foreach(item is ReferenceProjectItem in project.GetItemsOfType(ItemType.Reference)) {
+                yield item.AssemblyName.FullName
+            }
         }
 
         public GetMacroAssemblyReferences() : SCG.IEnumerable[string] {
-            []
+            foreach(item is MacroReferenceProjectItem in project.GetItemsOfType(ItemTypeExt.MacroReference)) {
+                yield item.AssemblyName.FullName
+            }
         }
 
         public GetOptions() : CompilationOptions {
-            CompilationOptions()
+            def opt = CompilationOptions();
+
+            opt.GreedyReferences = false;
+            opt.ColorMessages    = false;
+            opt.IgnoreConfusion  = true;
+
+            opt
         }
 
         public GetSource(fileIndex : int) : ISource {
-            null
+            lock(sync_obj) {
+                mutable source;
+                if(source_map.TryGetValue(fileIndex, out source))
+                    source
+                else
+                    null
+            }
         }
 
         public GetSources() : SCG.IEnumerable[ISource] {
-            []
+            lock(sync_obj) {
+                sources.ToArray()
+            }
         }
 
         public ClearAllCompilerMessages() : void {
@@ -98,6 +165,90 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
         }
 
         public TypesTreeCreated() : void {
+        }
+
+        #endregion
+
+
+        #region File load/unload handlers
+
+        internal NotifyFileOpened(fileName : string, document : IDocument) : void {
+            lock(sync_obj) {
+                foreach(source in sources) {
+                    match(source.Item) {
+                        | item is FileProjectItem when item.FileName == fileName =>
+                            source.Document = document;
+                        | _ => ()
+                    }
+                }
+            }
+        }
+
+        internal NotifyFileClosed(document : IDocument) : void {
+            lock(sync_obj) {
+                foreach(source in sources) {
+                    when(ReferenceEquals(source.Document, document))
+                        source.Document = null;
+                }
+            }
+        }
+
+        #endregion
+
+
+        #region Event handlers
+
+        private OnProjectServiceProjectItemAdded(_ : object, e : ProjectItemEventArgs) : void {
+            when(ReferenceEquals(e.ProjectItem.Project, project)
+                && e.ProjectItem.ItemType == ItemType.Compile) {
+                lock(sync_obj) {
+                    _ = AddSource(e.ProjectItem);
+                }
+            }
+        }
+
+        private OnProjectServiceProjectItemRemoved(_ : object, e : ProjectItemEventArgs) : void {
+            when(ReferenceEquals(e.ProjectItem.Project, project)
+                && e.ProjectItem.ItemType == ItemType.Compile) {
+                lock(sync_obj) {
+                    _ = RemoveSource(e.ProjectItem);
+                }
+            }
+        }
+
+        private OnApplicationIdle(_ : object, _ : EventArgs) : void {
+            lock(sync_obj) {
+                engine.OnIdle();
+            }
+        }
+
+        #endregion
+
+
+        #region Disposable
+
+        [Accessor] mutable disposed : bool = false;
+
+        public Dispose() : void {
+            lock(sync_obj) {
+                unless(disposed) {
+                    try {
+                        engine.Close();
+                    } finally {
+                        Clear();
+
+                        ProjectService.ProjectItemAdded -= OnProjectServiceProjectItemAdded;
+                        ProjectService.ProjectItemRemoved -= OnProjectServiceProjectItemRemoved;
+                        Application.Idle -= OnApplicationIdle;
+
+                        disposed = true;
+                    }
+                }
+            }
+        }
+
+        protected override Finalize() : void {
+            Dispose();
         }
 
         #endregion
