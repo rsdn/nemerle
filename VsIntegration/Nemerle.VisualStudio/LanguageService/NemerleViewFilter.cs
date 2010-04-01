@@ -850,14 +850,15 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 			VsCommands2K cmd = (VsCommands2K)nCmdId;
 			// Special handling of "Toggle all outlining" command
-			if (guidCmdGroup == typeof(VsCommands2K).GUID)
+            //CodingUnit: 2010.02.19 normal action back in Toggle All Outlining
+			/*if (guidCmdGroup == typeof(VsCommands2K).GUID)
 			{
 				if ((VsCommands2K)nCmdId == VsCommands2K.OUTLN_TOGGLE_ALL)
 				{
 					Source.CollapseAllRegions();
 					return;
 				}
-			}
+			}*/
 
 			base.HandlePostExec(ref guidCmdGroup, nCmdId, nCmdexecopt, pvaIn, pvaOut, bufferWasChanged);
 
