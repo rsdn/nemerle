@@ -9,6 +9,7 @@ using ICSharpCode.TextEditor.Document;
 using Nemerle.Assertions;
 using Nemerle.Completion2;
 using Nemerle.Compiler;
+using Nemerle.Compiler.Utils.Async;
 using Nemerle.Utility;
 
 namespace Nemerle.SharpDevelop.CodeCompletion {
@@ -26,37 +27,29 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
             Reload();
         }
 
-        sync_obj : object = object();
-
         [Accessor] engine : IEngine;
+
+        [Accessor] sync_root : object = object();
 
         [Accessor] project : IProject;
 
-        sources : SCG.List[Source] = SCG.List();
         source_map : SCG.Dictionary[int, Source] = SCG.Dictionary();
-        mutable source_index_counter : int = 0;
 
-        private FindSource(item : ProjectItem) : bool * Source {
-            foreach(source in sources) {
+        private FindSource(item : FileProjectItem) : bool * Source {
+            foreach(source in source_map.Values) {
                 when(ReferenceEquals(source.Item, item))
                     Nemerle.Imperative.Return( (true, source) )
             }
             (false, null)
         }
 
-        private AddSourceNoCheck(item : ProjectItem) : ISource {
-            def next_file_index() {
-                def index = source_index_counter;
-                source_index_counter += 1;
-                index
-            }
-            def source = Source(item, next_file_index());
-            sources.Add(source);
-            source_map[source.FileIndex] = source;
+        private AddSourceNoCheck(item : FileProjectItem) : ISource {
+            def source = Source(this, item);
+            source_map.Add(source.FileIndex, source);
             source
         }
 
-        private AddSource(item : ProjectItem) : ISource {
+        private AddSource(item : FileProjectItem) : ISource {
             match(FindSource(item)) {
                 | (true, source) => source
                 | (false, _) =>
@@ -66,30 +59,41 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
             }
         }
 
-        private RemoveSource(item : ProjectItem) : bool {
+        private RemoveSource(item : FileProjectItem) : bool {
             match(FindSource(item)) {
                 | (true, source) =>
-                    _ = sources.Remove(source);
-                    _ = source_map.Remove(source.FileIndex);
-                    _ = engine.BeginReloadProject();
-                    true
+                    source_map.Remove(source.FileIndex)
+
                 | (false, _) =>
                     false
             }
         }
 
         private Clear() : void {
-            sources.Clear();
             source_map.Clear();
         }
 
+        mutable reload_project_async : AsyncRequest = null;
+
         public Reload() : void  {
-            lock(sync_obj) {
-                Clear();
-                foreach(item in project.GetItemsOfType(ItemType.Compile)) {
-                    _ = AddSourceNoCheck(item)
+            lock(sync_root) {
+                when(null == reload_project_async || reload_project_async.IsCompleted) {
+                    Clear();
+                    foreach(item is FileProjectItem in project.GetItemsOfType(ItemType.Compile)) {
+                        _ = AddSourceNoCheck(item)
+                    }
+                    reload_project_async = engine.BeginReloadProject();
                 }
-                _ = engine.BeginReloadProject();
+            }
+        }
+
+        mutable build_types_tree_async : AsyncRequest = null;
+
+        public BuildTypesTree() : void {
+            lock(sync_root) {
+                when(null == build_types_tree_async || build_types_tree_async.IsCompleted) {
+                    build_types_tree_async = engine.BeginBuildTypesTree();
+                }
             }
         }
 
@@ -118,18 +122,16 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
         }
 
         public GetSource(fileIndex : int) : ISource {
-            lock(sync_obj) {
-                mutable source;
-                if(source_map.TryGetValue(fileIndex, out source))
-                    source
-                else
-                    null
+            lock(sync_root) {
+                source_map[fileIndex - 1]
             }
         }
 
         public GetSources() : SCG.IEnumerable[ISource] {
-            lock(sync_obj) {
-                sources.ToArray()
+            lock(sync_root) {
+                def sources = array(source_map.Count);
+                source_map.Values.CopyTo(sources, 0);
+                sources
             }
         }
 
@@ -173,20 +175,17 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
         #region File load/unload handlers
 
         internal NotifyFileOpened(fileName : string, document : IDocument) : void {
-            lock(sync_obj) {
-                foreach(source in sources) {
-                    match(source.Item) {
-                        | item is FileProjectItem when item.FileName == fileName =>
-                            source.Document = document;
-                        | _ => ()
-                    }
+            lock(sync_root) {
+                foreach(source in source_map.Values) {
+                    when(source.Item.FileName == fileName)
+                        source.Document = document;
                 }
             }
         }
 
         internal NotifyFileClosed(document : IDocument) : void {
-            lock(sync_obj) {
-                foreach(source in sources) {
+            lock(sync_root) {
+                foreach(source in source_map.Values) {
                     when(ReferenceEquals(source.Document, document))
                         source.Document = null;
                 }
@@ -201,8 +200,13 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
         private OnProjectServiceProjectItemAdded(_ : object, e : ProjectItemEventArgs) : void {
             when(ReferenceEquals(e.ProjectItem.Project, project)
                 && e.ProjectItem.ItemType == ItemType.Compile) {
-                lock(sync_obj) {
-                    _ = AddSource(e.ProjectItem);
+
+                match(e.ProjectItem) {
+                    | item is FileProjectItem =>
+                        lock(sync_root) {
+                            _ = AddSource(item);
+                        }
+                    | _ => ();
                 }
             }
         }
@@ -210,14 +214,19 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
         private OnProjectServiceProjectItemRemoved(_ : object, e : ProjectItemEventArgs) : void {
             when(ReferenceEquals(e.ProjectItem.Project, project)
                 && e.ProjectItem.ItemType == ItemType.Compile) {
-                lock(sync_obj) {
-                    _ = RemoveSource(e.ProjectItem);
+
+                match(e.ProjectItem) {
+                    | item is FileProjectItem =>
+                        lock(sync_root) {
+                            _ = RemoveSource(item);
+                        }
+                    | _ => ();
                 }
             }
         }
 
         private OnApplicationIdle(_ : object, _ : EventArgs) : void {
-            lock(sync_obj) {
+            lock(sync_root) {
                 engine.OnIdle();
             }
         }
@@ -230,7 +239,7 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
         [Accessor] mutable disposed : bool = false;
 
         public Dispose() : void {
-            lock(sync_obj) {
+            lock(sync_root) {
                 unless(disposed) {
                     try {
                         engine.Close();
