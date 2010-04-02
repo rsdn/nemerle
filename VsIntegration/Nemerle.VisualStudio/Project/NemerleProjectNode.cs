@@ -330,32 +330,23 @@ namespace Nemerle.VisualStudio.Project
 			return base.GetProjectOptions(config);
 		}
 
-		static void StartNoDebug(EnvDTE.DTE dte)
+		/// <summary>Run project output without debugging.</summary>
+		/// <returns>true - if it's OK</returns>
+		static bool StartNoDebug(EnvDTE.DTE dte)
 		{
-			var startupProjects = (object[])dte.Solution.SolutionBuild.StartupProjects;
+			var startupProjects   = (object[])dte.Solution.SolutionBuild.StartupProjects;
 
 			if (startupProjects.Length < 1)
 				throw new ApplicationException("No startup projects.");
 
 			var startupProjectName = (string)startupProjects[0];
+			var nemerleOAProject   = dte.Solution.Item(startupProjectName) as NemerleOAProject;
 
-			var projects = dte.Solution.Projects;
-			ProjectNode startupProject = null;
+			if (nemerleOAProject == null)
+				return false;
 
-			foreach (object p in projects)
-			{
-				var project = p as NemerleOAProject;
-
-				if (project != null && project.UniqueName == startupProjectName)
-					startupProject = project.Project;
-			}
-
-			if (startupProject == null)
-				throw new ApplicationException("No startup projects.");
-
-			var automationObject = (EnvDTE.Project)startupProject.GetAutomationObject();
-			var currentConfigName = Utilities.GetActiveConfigurationName(automationObject);
-			var projectNode = startupProject.ProjectMgr;
+			var projectNode        = nemerleOAProject.Project.ProjectMgr;
+			var currentConfigName  = Utilities.GetActiveConfigurationName(nemerleOAProject);
 
 			projectNode.SetConfiguration(currentConfigName);
 
@@ -374,7 +365,7 @@ namespace Nemerle.VisualStudio.Project
 					message, NemerleConstants.ProductName, icon, buttons, defaultButton);
 
 				if (res == NativeMethods.IDNO)
-					return;
+					return true;
 			}
 
 			var path = projectNode.GetProjectProperty("StartProgram");
@@ -426,6 +417,8 @@ namespace Nemerle.VisualStudio.Project
 
 			if (isConsole)
 				DeleteTempCmdFile(process, cmdFilePath);
+
+			return true;
 		}
 
 		static void DeleteTempCmdFile(OsProcess process, string cmdFilePath)
@@ -442,12 +435,15 @@ namespace Nemerle.VisualStudio.Project
 				{
 					case VsCommands.StartNoDebug:
 						EnvDTE.DTE dte = (EnvDTE.DTE)ProjectMgr.GetService(typeof(EnvDTE.DTE));
-						StartNoDebug(dte);
-						return VSConstants.S_OK;
+						if (StartNoDebug(dte))
+							return VSConstants.S_OK;
+						else
+							break;
 					default:
 						break;
 				}
 			}
+
 			return base.InternalExecCommand(cmdGroup, cmdId, cmdExecOpt, vaIn, vaOut, commandOrigin);
 		}
 
