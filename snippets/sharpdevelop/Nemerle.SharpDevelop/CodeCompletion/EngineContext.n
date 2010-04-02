@@ -3,6 +3,7 @@ using System.Windows.Forms;
 using SCG = System.Collections.Generic;
 
 using ICSharpCode.Core;
+using ICSharpCode.SharpDevelop;
 using ICSharpCode.SharpDevelop.Project;
 using ICSharpCode.TextEditor.Document;
 
@@ -20,9 +21,14 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
             this.project = project;
             this.engine = EngineFactory.Create(this, TraceWriter(), false);
 
-            ProjectService.ProjectItemAdded += OnProjectServiceProjectItemAdded;
-            ProjectService.ProjectItemRemoved += OnProjectServiceProjectItemRemoved;
+            ProjectService.ProjectItemAdded += OnProjectItemAdded;
+            ProjectService.ProjectItemRemoved += OnProjectItemRemoved;
             Application.Idle += OnApplicationIdle;
+            match(project) {
+                | project is AbstractProject =>
+                    project.ActiveConfigurationChanged += OnActiveConfigurationChanged;
+                | _ => ();
+            }
 
             Reload();
         }
@@ -54,7 +60,7 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
                 | (true, source) => source
                 | (false, _) =>
                     def source = AddSourceNoCheck(item);
-                    _ = engine.BeginReloadProject();
+                    engine.RequestOnBuildTypesTree();
                     source
             }
         }
@@ -62,7 +68,9 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
         private RemoveSource(item : FileProjectItem) : bool {
             match(FindSource(item)) {
                 | (true, source) =>
-                    source_map.Remove(source.FileIndex)
+                    _ = source_map.Remove(source.FileIndex);
+                    engine.RequestOnBuildTypesTree();
+                    true
 
                 | (false, _) =>
                     false
@@ -83,16 +91,6 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
                         _ = AddSourceNoCheck(item)
                     }
                     reload_project_async = engine.BeginReloadProject();
-                }
-            }
-        }
-
-        mutable build_types_tree_async : AsyncRequest = null;
-
-        public BuildTypesTree() : void {
-            lock(sync_root) {
-                when(null == build_types_tree_async || build_types_tree_async.IsCompleted) {
-                    build_types_tree_async = engine.BeginBuildTypesTree();
                 }
             }
         }
@@ -118,12 +116,38 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
             opt.ColorMessages    = false;
             opt.IgnoreConfusion  = true;
 
+            match(project) {
+                | project is MSBuildBasedProject =>
+                    def constants_str = project.GetProperty("", "", "DefineConstants");
+                    unless(string.IsNullOrEmpty(constants_str)) {
+                        def constants = constants_str.Split(array[";", " "], StringSplitOptions.RemoveEmptyEntries);
+                        foreach(c in constants) {
+                            opt.DefineConstant(c);
+                        }
+                    }
+                | _ => ();
+            }
+
             opt
         }
 
         public GetSource(fileIndex : int) : ISource {
             lock(sync_root) {
-                source_map[fileIndex - 1]
+                mutable source;
+                if(source_map.TryGetValue(fileIndex, out source))
+                    source
+                else
+                    null
+            }
+        }
+
+        public GetSource(fileName : string) : Source {
+            lock(sync_root) {
+                mutable source;
+                if(source_map.TryGetValue(Location.GetFileIndex(fileName), out source))
+                    source
+                else
+                    null
             }
         }
 
@@ -145,12 +169,18 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
         }
 
         public SetStatusText(text : string) : void {
+            StatusBarService.SetMessage(text);
         }
 
         public SetTopLevelCompilerMessages(messages : SCG.IEnumerable[CompilerMessage]) : void {
         }
 
         public ShowMessage(message : string, messageType : MessageType) : void {
+            match(messageType) {
+                | Error     => MessageService.ShowError(message)
+                | Warning   => MessageService.ShowWarning(message)
+                | Hint | Info | _  => MessageService.ShowMessage(message)
+            }
         }
 
         public LookupLocationsFromDebugInformation(info : GotoInfo) : array[GotoInfo] {
@@ -197,38 +227,49 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
 
         #region Event handlers
 
-        private OnProjectServiceProjectItemAdded(_ : object, e : ProjectItemEventArgs) : void {
-            when(ReferenceEquals(e.ProjectItem.Project, project)
-                && e.ProjectItem.ItemType == ItemType.Compile) {
+        private OnActiveConfigurationChanged(_ : object, e : EventArgs) : void {
+            Reload();
+        }
 
-                match(e.ProjectItem) {
-                    | item is FileProjectItem =>
-                        lock(sync_root) {
-                            _ = AddSource(item);
-                        }
-                    | _ => ();
-                }
+        private OnProjectItemAdded(_ : object, e : ProjectItemEventArgs) : void {
+            when(ReferenceEquals(e.ProjectItem.Project, project)) {
+                if(ItemType.Compile == e.ProjectItem.ItemType)
+                    match(e.ProjectItem) {
+                        | item is FileProjectItem =>
+                            lock(sync_root) {
+                                _ = AddSource(item);
+                            }
+                        | _ => ();
+                    }
+                else
+                    ReloadEngineOnReferenceChange(e.ProjectItem);
             }
         }
 
-        private OnProjectServiceProjectItemRemoved(_ : object, e : ProjectItemEventArgs) : void {
-            when(ReferenceEquals(e.ProjectItem.Project, project)
-                && e.ProjectItem.ItemType == ItemType.Compile) {
+        private OnProjectItemRemoved(_ : object, e : ProjectItemEventArgs) : void {
+            when(ReferenceEquals(e.ProjectItem.Project, project)) {
+                if(ItemType.Compile == e.ProjectItem.ItemType)
+                    match(e.ProjectItem) {
+                        | item is FileProjectItem =>
+                            lock(sync_root) {
+                                _ = RemoveSource(item);
+                            }
+                        | _ => ();
+                    }
+                else
+                    ReloadEngineOnReferenceChange(e.ProjectItem);
+            }
+        }
 
-                match(e.ProjectItem) {
-                    | item is FileProjectItem =>
-                        lock(sync_root) {
-                            _ = RemoveSource(item);
-                        }
-                    | _ => ();
-                }
+        private ReloadEngineOnReferenceChange(item : ProjectItem) : void {
+            when(ItemType.Reference == item.ItemType
+                || ItemTypeExt.MacroReference == item.ItemType) {
+                _ = engine.BeginReloadProject();
             }
         }
 
         private OnApplicationIdle(_ : object, _ : EventArgs) : void {
-            lock(sync_root) {
-                engine.OnIdle();
-            }
+            engine.OnIdle();
         }
 
         #endregion
@@ -246,9 +287,14 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
                     } finally {
                         Clear();
 
-                        ProjectService.ProjectItemAdded -= OnProjectServiceProjectItemAdded;
-                        ProjectService.ProjectItemRemoved -= OnProjectServiceProjectItemRemoved;
+                        ProjectService.ProjectItemAdded -= OnProjectItemAdded;
+                        ProjectService.ProjectItemRemoved -= OnProjectItemRemoved;                        
                         Application.Idle -= OnApplicationIdle;
+                        match(project) {
+                            | project is AbstractProject =>
+                                project.ActiveConfigurationChanged -= OnActiveConfigurationChanged;
+                            | _ => ();
+                        }
 
                         disposed = true;
                     }
