@@ -27,6 +27,7 @@ using VsCommands = Microsoft.VisualStudio.VSConstants.VSStd97CmdID;
 using VsCommands2K = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
 
 using MSBuild = Microsoft.Build.BuildEngine;
+using OsProcess = System.Diagnostics.Process;
 using System.Diagnostics.CodeAnalysis;
 using Microsoft.VisualStudio.Shell;
 
@@ -329,6 +330,110 @@ namespace Nemerle.VisualStudio.Project
 			return base.GetProjectOptions(config);
 		}
 
+		static void StartNoDebug(EnvDTE.DTE dte)
+		{
+			var startupProjects = (object[])dte.Solution.SolutionBuild.StartupProjects;
+
+			if (startupProjects.Length < 1)
+				throw new ApplicationException("No startup projects.");
+
+			var startupProjectName = (string)startupProjects[0];
+
+			var projects = dte.Solution.Projects;
+			ProjectNode startupProject = null;
+
+			foreach (object p in projects)
+			{
+				var project = p as NemerleOAProject;
+
+				if (project != null && project.UniqueName == startupProjectName)
+					startupProject = project.Project;
+			}
+
+			if (startupProject == null)
+				throw new ApplicationException("No startup projects.");
+
+			var automationObject = (EnvDTE.Project)startupProject.GetAutomationObject();
+			var currentConfigName = Utilities.GetActiveConfigurationName(automationObject);
+			var projectNode = startupProject.ProjectMgr;
+
+			projectNode.SetConfiguration(currentConfigName);
+
+			dte.ExecuteCommand("File.SaveAll", "");
+
+			bool ok;
+			projectNode.BuildTarget("Build", out ok);
+
+			if (!ok)
+			{
+				var message = "There were build errors. Would you like to continue and run the last successful build?";
+				OLEMSGICON icon = OLEMSGICON.OLEMSGICON_QUERY;
+				OLEMSGBUTTON buttons = OLEMSGBUTTON.OLEMSGBUTTON_YESNO;
+				OLEMSGDEFBUTTON defaultButton = OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST;
+				var res = VsShellUtilities.ShowMessageBox(projectNode.Site,
+					message, NemerleConstants.ProductName, icon, buttons, defaultButton);
+
+				if (res == NativeMethods.IDNO)
+					return;
+			}
+
+			var path = projectNode.GetProjectProperty("StartProgram");
+
+			if (string.IsNullOrEmpty(path))
+				path = projectNode.GetOutputAssembly(currentConfigName);
+
+			if (!File.Exists(path))
+				throw new ApplicationException("Visual Studio cannot start debugging because the debug target '"
+					+ path + "' is missing. Please build the project and retry, or set the OutputPath and AssemblyName properties appropriately to point at the correct location for the target assembly.");
+
+			if (string.Compare(Path.GetExtension(path), ".dll", StringComparison.InvariantCultureIgnoreCase) == 0)
+				throw new ApplicationException("A project with an Output Type of Class Library cannot be started directly.\nAlso you can't use DLL as debug target.\n\nIn order to debug this project, add an executable project to this solution which references the library project. Set the executable project as the startup project.");
+
+			var isConsole = PEReader.IsConsole(path);
+
+			var cmdArgs = projectNode.GetProjectProperty("CmdArgs");
+			var workingDirectory = projectNode.GetProjectProperty("WorkingDirectory");
+
+			if (!string.IsNullOrEmpty(workingDirectory) && !Path.IsPathRooted(workingDirectory))
+				workingDirectory = Path.Combine(projectNode.BaseURI.AbsoluteUrl, workingDirectory);
+
+			if (string.IsNullOrEmpty(workingDirectory))
+				workingDirectory = Path.GetDirectoryName(path);
+
+			if (!Directory.Exists(workingDirectory))
+				throw new ApplicationException("The working directory '" + workingDirectory + "' not exists.");
+
+			var psi = new ProcessStartInfo();
+			string cmdFilePath = null;
+
+			if (isConsole)
+			{
+				// Make temp cmd-file and run it...
+				cmdFilePath = Path.Combine(Path.GetDirectoryName(path), Path.GetTempFileName());
+				cmdFilePath = Path.ChangeExtension(cmdFilePath, "cmd");
+				File.WriteAllText(cmdFilePath, "@echo off\n" + path + " " + cmdArgs + "\npause");
+				psi.FileName = cmdFilePath;
+			}
+			else
+			{
+				psi.FileName = path;
+				psi.Arguments = cmdArgs;
+			}
+
+			psi.WorkingDirectory = workingDirectory;
+
+			var process = OsProcess.Start(psi);
+
+			if (isConsole)
+				DeleteTempCmdFile(process, cmdFilePath);
+		}
+
+		static void DeleteTempCmdFile(OsProcess process, string cmdFilePath)
+		{
+			Action action = () => { process.WaitForExit(20000); File.Delete(cmdFilePath); };
+			action.BeginInvoke(null, null);
+		}
+
 		protected override int InternalExecCommand(Guid cmdGroup, uint cmdId, uint cmdExecOpt, IntPtr vaIn, IntPtr vaOut, CommandOrigin commandOrigin)
 		{
 			if (cmdGroup == Microsoft.VisualStudio.Shell.VsMenus.guidStandardCommandSet97)
@@ -336,83 +441,8 @@ namespace Nemerle.VisualStudio.Project
 				switch ((VsCommands)cmdId)
 				{
 					case VsCommands.StartNoDebug:
-						var automationObject = (EnvDTE.Project)this.GetAutomationObject();
-						var currentConfigName = Utilities.GetActiveConfigurationName(automationObject);
-						
-						ProjectMgr.SetConfiguration(currentConfigName);
-
 						EnvDTE.DTE dte = (EnvDTE.DTE)ProjectMgr.GetService(typeof(EnvDTE.DTE));
-						dte.ExecuteCommand("File.SaveAll", "");
-
-						bool ok;
-						ProjectMgr.BuildTarget("Build", out ok);
-
-						if (!ok)
-						{
-							var message = "There were build errors. Would you like to continue and run the last successful build?";
-							OLEMSGICON icon = OLEMSGICON.OLEMSGICON_QUERY;
-							OLEMSGBUTTON buttons = OLEMSGBUTTON.OLEMSGBUTTON_YESNO;
-							OLEMSGDEFBUTTON defaultButton = OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST;
-							var res = VsShellUtilities.ShowMessageBox(ProjectMgr.Site,
-								message, NemerleConstants.ProductName, icon, buttons, defaultButton);
-
-							if (res == NativeMethods.IDNO)
-								return VSConstants.S_OK;
-						}
-
-						var path = ProjectMgr.GetProjectProperty("StartProgram");
-
-						if (string.IsNullOrEmpty(path))
-							path = ProjectMgr.GetOutputAssembly(currentConfigName);
-
-						if (!File.Exists(path))
-							throw new ApplicationException("Visual Studio cannot start debugging because the debug target '" 
-								+ path + "' is missing. Please build the project and retry, or set the OutputPath and AssemblyName properties appropriately to point at the correct location for the target assembly.");
-
-						if (string.Compare(Path.GetExtension(path), ".dll", StringComparison.InvariantCultureIgnoreCase) == 0)
-							throw new ApplicationException("A project with an Output Type of Class Library cannot be started directly.\nAlso you can't use DLL as debug target.\n\nIn order to debug this project, add an executable project to this solution which references the library project. Set the executable project as the startup project.");
-
-						var isConsole = PEReader.IsConsole(path);
-												
-						var cmdArgs = ProjectMgr.GetProjectProperty("CmdArgs");
-						var workingDirectory = ProjectMgr.GetProjectProperty("WorkingDirectory");
-						
-						if (!string.IsNullOrEmpty(workingDirectory) && !Path.IsPathRooted(workingDirectory))
-							workingDirectory = Path.Combine(ProjectMgr.BaseURI.AbsoluteUrl, workingDirectory);
-
-						if (string.IsNullOrEmpty(workingDirectory))
-							workingDirectory = Path.GetDirectoryName(path);
-
-						if (!Directory.Exists(workingDirectory))
-							throw new ApplicationException("The working directory '" + workingDirectory + "' not exists.");
-
-						var psi = new ProcessStartInfo();
-						string cmdFilePath = null;
-
-						if (isConsole)
-						{
-							// Make temp cmd-file and run it...
-							cmdFilePath = Path.Combine(Path.GetDirectoryName(path), Path.GetTempFileName());
-							cmdFilePath = Path.ChangeExtension(cmdFilePath, "cmd");
-							File.WriteAllText(cmdFilePath, "@echo off\n" + path + " " + cmdArgs + "\npause");
-							psi.FileName = cmdFilePath;
-						}
-						else
-						{
-							psi.FileName = path;
-							psi.Arguments = cmdArgs;
-						}
-
-						psi.WorkingDirectory = workingDirectory;
-
-						var process = System.Diagnostics.Process.Start(psi);
-
-						if (isConsole)
-						{ // destroy temp cmd-file
-							Action action = () => { process.WaitForExit(20000); File.Delete(cmdFilePath); };
-							action.BeginInvoke(null, null);
-						}
-
+						StartNoDebug(dte);
 						return VSConstants.S_OK;
 					default:
 						break;
