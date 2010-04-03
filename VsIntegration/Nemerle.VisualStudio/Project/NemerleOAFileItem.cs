@@ -37,7 +37,7 @@ namespace Nemerle.VisualStudio.Project
 		/// </summary>
 		public override EnvDTE.FileCodeModel FileCodeModel
 		{
-			get { return new NemerleFileCodeModel(DTE, this, Node); }
+			get { return new NemerleFileCodeModel(this, Node); }
 		}
 
 		public override Window Open(string viewKind)

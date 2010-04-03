@@ -82,11 +82,11 @@ namespace Nemerle.VisualStudio
 		ShowOnlySpecifiedTemplatesVsTemplate = false)]
 	// ContainedLanguage support.
 	//
-	//[RegistrationAttributes.ProvideIntellisenseProvider(typeof(LanguageService.ContainedLanguage.NemerleIntellisenseProvider),
-	//	NemerleConstants.LanguageId + "CodeProvider",
-	//	NemerleConstants.LanguageName,
-	//	NemerleConstants.FileExtension, NemerleConstants.LanguageId, NemerleConstants.LanguageId)]
-	//[ProvideObject(typeof(LanguageService.ContainedLanguage.NemerleIntellisenseProvider))]
+	[Nemerle.VisualStudio.RegistrationAttributes.ProvideIntellisenseProvider(typeof(NemerleIntellisenseProvider),
+		NemerleConstants.LanguageId + "CodeProvider",
+		NemerleConstants.LanguageName,
+		NemerleConstants.FileExtension, NemerleConstants.LanguageId, NemerleConstants.LanguageId)]
+	[ProvideObject(typeof(NemerleIntellisenseProvider))]
 
 	[ProvideMenuResource(1000, 1)]
 	[ProvideObject           (typeof(NemerleGeneralPropertyPage))]

@@ -28,7 +28,7 @@ using Nemerle.VisualStudio;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
-	class NemerleViewFilter : ViewFilter
+	partial class NemerleViewFilter : ViewFilter
 	{
 		public NemerleViewFilter(CodeWindowManager mgr, IVsTextView view)
 			: base(mgr, view)

@@ -42,77 +42,26 @@ namespace Nemerle.VisualStudio.FileCodeModel
 	///     3. The user uses the FileCodeModel to add members to the document.
 	/// 
 	/// </summary>
-	internal class NemerleFileCodeModel : SimpleCodeElement, EnvDTE.FileCodeModel
+	internal abstract class FileCodeModelBase : SimpleCodeElement, EnvDTE.FileCodeModel
 	{
-		private readonly FileNode _node;
-		private NemerleOAFileItem _projectItem;
-		private DTE _dte;
-		private CodeCompileUnit ccu;
+		private ProjectItem _projectItem;
+		private CodeCompileUnit _ccu;
 		private CodeDomCodeNamespace vsTopNamespace; // top-level CodeModel namespace
 		private CDCodeNamespace topNamespace;   // top level CodeDom namespace
 
-		public NemerleFileCodeModel(DTE dte, NemerleOAFileItem projectItem, FileNode node)
-			: base(dte, node.Url)
+		public FileCodeModelBase(ProjectItem projectItem)
+			: base(projectItem.DTE, "")
 		{
-			_node = node;
 			_projectItem = projectItem;
-			_dte = dte;
 		}
 
-		protected CodeDomProvider GetCodeDomProvider()
+		protected CodeCompileUnit CompileUnit
 		{
-			if (_node is NemerleFileNode)
-				return ((NemerleFileNode)_node).CodeDomProvider;
-			else
-			{
-				// более универсальный способ получить CodeDomProvider. Скопирован из примера интеграции IronPython
-				using (ServiceProvider sp = new ServiceProvider(_node.OleServiceProvider))
-				{
-					IVSMDCodeDomProvider smdProvider = sp.GetService(typeof(SVSMDCodeDomProvider)) as IVSMDCodeDomProvider;
-
-					if (null == smdProvider)
-						return null;
-
-					return smdProvider.CodeDomProvider as CodeDomProvider;
-				}
-			}
+			get { return _ccu; }
+			set { _ccu = value; }
 		}
 
-		/// <summary>
-		/// performs lazy initialization to ensure our current code model is up-to-date.
-		/// 
-		/// If we haven't yet created our CodeDom backing we'll create it for the 1st time.  If we've
-		/// created our backing, but some elements have been changed that we haven't yet reparsed
-		/// then we'll reparse & merge any of the appropriate changes.
-		/// </summary>
-		private void Initialize()
-		{
-			var codeDomProvider = GetCodeDomProvider();
-			var projectInfo = Nemerle.VisualStudio.Project.ProjectInfo.FindProject(_node.Url);
-
-			projectInfo.Engine.ProcessPendingTypesTreeRequest();
-
-			ccu = codeDomProvider.Parse(null);
-		}
-
-		internal void FlushChanges()
-		{
-			bool contextAlreadyOpenned = DTE.UndoContext.IsOpen;
-			if (!contextAlreadyOpenned)
-				DTE.UndoContext.Open("Undo Code Merge", false);
-
-			try
-			{
-				var codeDomProvider = GetCodeDomProvider();
-
-				codeDomProvider.GenerateCodeFromCompileUnit(ccu, null, null);
-			}
-			finally
-			{
-				if (!contextAlreadyOpenned)
-					DTE.UndoContext.Close();
-			}
-		}
+		protected abstract void Initialize();
 
 		#region FileCodeModel Members
 
@@ -175,18 +124,18 @@ namespace Nemerle.VisualStudio.FileCodeModel
 			VSCodeNamespace after = Position as VSCodeNamespace;
 			if (after != null)
 			{
-				for (int i = 0; i < ccu.Namespaces.Count; i++)
+				for (int i = 0; i < _ccu.Namespaces.Count; i++)
 				{
-					if (ccu.Namespaces[i].UserData[CodeKey] == after)
+					if (_ccu.Namespaces[i].UserData[CodeKey] == after)
 					{
-						ccu.Namespaces.Insert(i + 1, cn);
+						_ccu.Namespaces.Insert(i + 1, cn);
 					}
 				}
 			}
 			else
 			{
 				int index = (int)Position - 1;
-				ccu.Namespaces.Insert(index, cn);
+				_ccu.Namespaces.Insert(index, cn);
 			}
 
 
@@ -204,7 +153,7 @@ namespace Nemerle.VisualStudio.FileCodeModel
 			Initialize();
 
 			CodeElement res;
-			foreach (CDCodeNamespace cn in ccu.Namespaces)
+			foreach (CDCodeNamespace cn in _ccu.Namespaces)
 			{
 				if (Scope == vsCMElement.vsCMElementNamespace)
 				{
@@ -264,7 +213,7 @@ namespace Nemerle.VisualStudio.FileCodeModel
 				Initialize();
 
 				CodeDomCodeElements res = new CodeDomCodeElements(DTE, this);
-				foreach (CDCodeNamespace member in ccu.Namespaces)
+				foreach (CDCodeNamespace member in _ccu.Namespaces)
 				{
 					EnsureNamespaceLinked(member);
 
@@ -288,11 +237,6 @@ namespace Nemerle.VisualStudio.FileCodeModel
 			}
 		}
 
-		public ProjectItem Parent
-		{
-			get { return _projectItem; }
-		}
-
 		/// <summary>
 		/// Removes an element from the namespace.
 		/// </summary>
@@ -303,7 +247,7 @@ namespace Nemerle.VisualStudio.FileCodeModel
 
 			int index = ((CodeDomCodeElements)CodeElements).IndexOf((SimpleCodeElement)Element);
 
-			ccu.Namespaces.RemoveAt(index);
+			_ccu.Namespaces.RemoveAt(index);
 		}
 
 		public CodeDelegate AddDelegate(string Name, object Type, object Position, vsCMAccess Access)
@@ -383,9 +327,9 @@ namespace Nemerle.VisualStudio.FileCodeModel
 		[SuppressMessage("Microsoft.Performance", "CA1811:AvoidUncalledPrivateCode")]
 		internal void UpdatePositions(int fromLine, int lines, int chars)
 		{
-			if (ccu == null) Initialize();
+			if (_ccu == null) Initialize();
 
-			foreach (CDCodeNamespace cn in ccu.Namespaces)
+			foreach (CDCodeNamespace cn in _ccu.Namespaces)
 			{
 				foreach (CodeTypeDeclaration ctd in cn.Types)
 				{
@@ -736,12 +680,6 @@ namespace Nemerle.VisualStudio.FileCodeModel
 			get { return vsCMElement.vsCMElementModule; }
 		}
 
-		public override ProjectItem ProjectItem
-		{
-			get { return _projectItem; }
-		}
-
-
 		/// <summary>
 		/// Ensures that we have a top-level namespace (cached in our topNamespace field)
 		/// </summary>
@@ -751,7 +689,7 @@ namespace Nemerle.VisualStudio.FileCodeModel
 			{
 				vsTopNamespace = new CodeDomCodeNamespace(DTE, String.Empty, this);
 
-				foreach (CDCodeNamespace ns in ccu.Namespaces)
+				foreach (CDCodeNamespace ns in _ccu.Namespaces)
 				{
 					if (String.IsNullOrEmpty(ns.Name))
 					{
@@ -763,12 +701,24 @@ namespace Nemerle.VisualStudio.FileCodeModel
 				if (topNamespace == null)
 				{
 					topNamespace = new CDCodeNamespace(String.Empty);
-					ccu.Namespaces.Add(topNamespace);
+					_ccu.Namespaces.Add(topNamespace);
 				}
 
 				vsTopNamespace.CodeObject = topNamespace;
 				topNamespace.UserData[CodeKey] = vsTopNamespace;
 			}
 		}
+
+		public override ProjectItem ProjectItem
+		{
+			get { return _projectItem; }
+		}
+
+		public ProjectItem Parent
+		{
+			get { return _projectItem; }
+		}
+
+		internal abstract void FlushChanges();
 	}
 }

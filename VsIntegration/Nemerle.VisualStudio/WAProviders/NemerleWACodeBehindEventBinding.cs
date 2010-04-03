@@ -108,7 +108,194 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region Implementation
 
-		protected virtual ProjectItem GetProjectItem(string document, string codeBehind, string codeBehindFile)
+		private delegate int ExecuteInternalDelegate();
+		private int WrapAndExecuteInternal(ExecuteInternalDelegate execute)
+		{
+			if (this._executing)
+				return NativeMethods.E_FAIL;
+
+			int result = 0;
+			try
+			{
+				this._executing = true;
+				result = execute();
+			}
+			catch
+			{
+				result = NativeMethods.E_FAIL;
+			}
+			finally
+			{
+				this._executing = false;
+			}
+
+			return result;
+		}
+
+		protected int CreateEventHandler(string document, string codeBehind, string codeBehindFile, string className, string objectTypeName, string eventName, string eventHandlerName)
+		{
+			var binder = GetBinder(document, codeBehind, codeBehindFile);
+			if (binder == null)
+				return NativeMethods.E_FAIL;
+
+			CodeFunction codeFunction = null;
+			UndoContext undoContext = binder.FileCodeModel.DTE.UndoContext;
+			if (undoContext != null)
+			{
+				if (!undoContext.IsOpen)
+				{
+					undoContext.Open(eventHandlerName, false);
+				}
+				else
+				{
+					undoContext = null;
+				}
+			}
+			try
+			{
+				codeFunction = binder.CreateEventHandler(codeBehindFile, className, objectTypeName, eventName, eventHandlerName);
+
+				EditPoint point = codeFunction.StartPoint.CreateEditPoint();
+				if (point != null)
+				{
+					point.SmartFormat(codeFunction.EndPoint);
+				}
+
+				return NativeMethods.S_OK;
+			}
+			finally
+			{
+				if (undoContext != null)
+				{
+					if (codeFunction != null)
+					{
+						undoContext.Close();
+
+						var nemerleFileCodeModel = binder.FileCodeModel as Nemerle.VisualStudio.FileCodeModel.NemerleFileCodeModel;
+						if (nemerleFileCodeModel != null)
+						{
+							nemerleFileCodeModel.FlushChanges();
+						}
+					}
+					else
+					{
+						undoContext.SetAborted();
+					}
+				}
+			}
+		}
+
+		protected int CreateUniqueEventHandlerName(string document, string codeBehind, string codeBehindFile, string className, string objectName, string eventName, out string eventHandlerName)
+		{
+			eventHandlerName = null;
+
+			var binder = GetBinder(document, codeBehind, codeBehindFile);
+			if (binder == null)
+				return NativeMethods.E_FAIL;
+
+			eventHandlerName = binder.CreateUniqueEventHandlerName(className, objectName, eventName);
+			return NativeMethods.S_OK;
+		}
+
+		protected int GetCompatibleEventHandlers(string document, string codeBehind, string codeBehindFile, string className, string objectTypeName, string eventName, out string[] eventHandlerNames)
+		{
+			eventHandlerNames = null;
+
+			var binder = GetBinder(document, codeBehind, codeBehindFile);
+			if (binder == null)
+				return NativeMethods.E_FAIL;
+
+			eventHandlerNames = binder.GetCompatibleEventHandlers(className, objectTypeName, eventName);
+
+			return NativeMethods.S_OK;
+		}
+
+		protected int IsExistingEventHandler(string document, string codeBehind, string codeBehindFile, string className, string objectTypeName, string eventName, string eventHandlerName, out bool isExistingEventHandler)
+		{
+			isExistingEventHandler = false;
+
+			var binder = GetBinder(document, codeBehind, codeBehindFile);
+			if (binder == null)
+				return NativeMethods.E_FAIL;
+
+			var function = binder.FindEventHandler(className, objectTypeName, eventName, eventHandlerName);
+			isExistingEventHandler = function != null;
+
+			return NativeMethods.S_OK;
+		}
+
+		protected int ShowEventHandler(string document, string codeBehind, string codeBehindFile, string className, string objectTypeName, string eventName, string eventHandlerName)
+		{
+			var projectItem = GetProjectItem(document, codeBehind, codeBehindFile);
+
+			var binder = GetBinder(projectItem);
+			if (binder == null)
+				return NativeMethods.E_FAIL;
+
+			projectItem.Open(EnvDTE.Constants.vsViewKindCode);
+
+			var function = binder.FindEventHandler(className, objectTypeName, eventName, eventHandlerName);
+
+			if (function != null)
+			{
+				bool prevLineIsEmpty = true;
+				EditPoint point = function.EndPoint.CreateEditPoint();
+				point.LineUp(1);
+				string lines = point.GetLines(point.Line, (int)(point.Line + 1));
+				for (int i = 0; i < lines.Length; i++)
+				{
+					if (!char.IsWhiteSpace(lines[i]))
+					{
+						prevLineIsEmpty = false;
+						break;
+					}
+				}
+
+				Document document2 = projectItem.Document;
+				if (document2 != null)
+				{
+					Window activeWindow = document2.ActiveWindow;
+					if (activeWindow != null)
+					{
+						TextSelection selection = activeWindow.Selection as TextSelection;
+						if (selection != null)
+						{
+							selection.MoveToPoint(function.EndPoint, false);
+							if (prevLineIsEmpty)
+							{
+								selection.StartOfLine(vsStartOfLineOptions.vsStartOfLineOptionsFirstText, false);
+								int virtualCharOffset = selection.AnchorPoint.VirtualCharOffset;
+								selection.LineUp(false, 1);
+								if (selection.AnchorPoint.VirtualCharOffset <= virtualCharOffset)
+								{
+									int indentSize = 4;
+									TextDocument document3 = document2 as TextDocument;
+									if (document3 != null)
+									{
+										indentSize = document3.IndentSize;
+									}
+									selection.MoveToLineAndOffset(selection.AnchorPoint.Line, (int)(virtualCharOffset + indentSize), false);
+								}
+							}
+							else
+							{
+								selection.LineUp(false, 1);
+								//selection.StartOfLine(vsStartOfLineOptions.vsStartOfLineOptionsFirstColumn, false);
+								selection.EndOfLine(false);
+							}
+						}
+					}
+				}
+			}
+
+			return NativeMethods.S_OK;
+		}
+
+		#endregion
+
+		#region Helper methods
+
+		private ProjectItem GetProjectItem(string document, string codeBehind, string codeBehindFile)
 		{
 			// grabbed from Microsoft.VisualStudio.Web.Application.VsHierarchyItem.ctor(IVsHierarchy hier)
 			IVsProject project = _hierarchy as IVsProject;
@@ -134,462 +321,30 @@ namespace Nemerle.VisualStudio.LanguageService
 			return null;
 		}
 
-		protected virtual int ShowEventHandler(string document, string codeBehind, string codeBehindFile, string className, string objectTypeName, string eventName, string eventHandlerName)
+		private NemerleCodeBehindEventBinder GetBinder(string document, string codeBehind, string codeBehindFile)
 		{
-			ProjectItem projectItem = GetProjectItem(document, codeBehind, codeBehindFile);
+			var projectItem = GetProjectItem(document, codeBehind, codeBehindFile);
+
+			return GetBinder(projectItem);
+		}
+
+		private NemerleCodeBehindEventBinder GetBinder(EnvDTE.ProjectItem projectItem)
+		{
 			if (projectItem == null)
-				return NativeMethods.E_FAIL;
+				return null;
 
-			projectItem.Open(EnvDTE.Constants.vsViewKindCode);
+			if (projectItem.FileCodeModel == null)
+				return null;
 
-			EnvDTE.FileCodeModel fileCodeModel = projectItem.FileCodeModel;
-			if (fileCodeModel != null)
+			ITypeResolutionService typeResolutionService = null;
+			if (this._serviceProvider != null)
 			{
-				CodeClass codeClass = FindClass(fileCodeModel.CodeElements, className);
-				if (codeClass != null)
-				{
-					CodeFunction function = FindEventHandler(codeClass, objectTypeName, eventName, eventHandlerName);
-					if (function != null)
-					{
-						bool flag = true;
-						EditPoint point = function.EndPoint.CreateEditPoint();
-						point.LineUp(1);
-						string lines = point.GetLines(point.Line, (int)(point.Line + 1));
-						for (int i = 0; i < lines.Length; i++)
-						{
-							if (!char.IsWhiteSpace(lines[i]))
-							{
-								flag = false;
-								break;
-							}
-						}
-
-						Document document2 = projectItem.Document;
-						if (document2 != null)
-						{
-							Window activeWindow = document2.ActiveWindow;
-							if (activeWindow != null)
-							{
-								TextSelection selection = activeWindow.Selection as TextSelection;
-								if (selection != null)
-								{
-									selection.MoveToPoint(function.EndPoint, false);
-									if (flag)
-									{
-										selection.StartOfLine(vsStartOfLineOptions.vsStartOfLineOptionsFirstText, false);
-										int virtualCharOffset = selection.AnchorPoint.VirtualCharOffset;
-										selection.LineUp(false, 1);
-										if (selection.AnchorPoint.VirtualCharOffset <= virtualCharOffset)
-										{
-											int indentSize = 4;
-											TextDocument document3 = document2 as TextDocument;
-											if (document3 != null)
-											{
-												indentSize = document3.IndentSize;
-											}
-											selection.MoveToLineAndOffset(selection.AnchorPoint.Line, (int)(virtualCharOffset + indentSize), false);
-										}
-									}
-									else
-									{
-										selection.LineUp(false, 1);
-										//selection.StartOfLine(vsStartOfLineOptions.vsStartOfLineOptionsFirstColumn, false);
-										selection.EndOfLine(false);
-									}
-								}
-							}
-						}
-					}
-				}
+				DynamicTypeService typeService = this._serviceProvider.GetService(typeof(DynamicTypeService)) as DynamicTypeService;
+				if (typeService != null)
+					typeResolutionService = typeService.GetTypeResolutionService(this._hierarchy);
 			}
 
-			return NativeMethods.S_OK;
-		}
-
-		protected virtual int IsExistingEventHandler(string document, string codeBehind, string codeBehindFile, string className, string objectTypeName, string eventName, string eventHandlerName, out bool isExistingEventHandler)
-		{
-			isExistingEventHandler = false;
-
-			ProjectItem projectItem = GetProjectItem(document, codeBehind, codeBehindFile);
-			if (projectItem != null)
-			{
-				EnvDTE.FileCodeModel fileCodeModel = projectItem.FileCodeModel;
-				if (fileCodeModel != null)
-				{
-					CodeClass class2 = this.FindClass(fileCodeModel.CodeElements, className);
-					if (class2 != null)
-					{
-						if (this.FindEventHandler(class2, objectTypeName, eventName, eventHandlerName) != null)
-							isExistingEventHandler = true;
-					}
-				}
-			}
-
-			return NativeMethods.S_OK;
-		}
-
-		protected virtual CodeFunction FindEventHandler(CodeClass codeClass, string objectTypeName, string eventName, string eventHandlerName)
-		{
-			if (codeClass != null)
-			{
-				string eventHandlerSignature = GetEventHandlerSignature(objectTypeName, eventName);
-
-				foreach (CodeElement element in codeClass.Members)
-				{
-					CodeFunction codeFunction = element as CodeFunction;
-					if (codeFunction != null)
-					{
-						string name = codeFunction.Name;
-						if (!string.IsNullOrEmpty(name) && string.Compare(name, eventHandlerName, StringComparison.InvariantCulture) == 0)
-						{
-							string functionSignature = GetFunctionSignature(codeFunction);
-
-							if (string.Compare(eventHandlerSignature, functionSignature, StringComparison.InvariantCulture) == 0)
-								return codeFunction;
-						}
-					}
-				}
-			}
-
-			return null;
-		}
-
-		protected virtual string GetFunctionSignature(CodeFunction codeFunction)
-		{
-			string signature = null;
-
-			if (codeFunction != null)
-			{
-				signature = codeFunction.Type.AsFullName;
-				if (string.IsNullOrEmpty(signature))
-				{
-					signature = "System.Void";
-				}
-	
-				foreach (CodeElement element in codeFunction.Parameters)
-				{
-					CodeParameter parameter = element as CodeParameter;
-					if (parameter != null)
-					{
-						signature = signature + "," + parameter.Type.AsFullName;
-					}
-				}
-			}
-
-			return signature;
-		}
-
-		protected virtual string GetEventHandlerSignature(string objectTypeName, string eventName)
-		{
-			string returnTypeName = null;
-			string[] paramTypeNames = null;
-			string[] paramNames = null;
-			string signature = null;
-
-			this.GetEventHandlerSignature(objectTypeName, eventName, out returnTypeName, out paramTypeNames, out paramNames);
-
-			signature = returnTypeName;
-
-			if (paramTypeNames != null)
-			{
-				for (int i = 0; i < paramTypeNames.Length; i++)
-				{
-					signature = signature + "," + paramTypeNames[i];
-				}
-			}
-
-			return signature;
-		}
-
-		protected virtual void GetEventHandlerSignature(string objectTypeName, string eventName, out string returnTypeName, out string[] paramTypeNames, out string[] paramNames)
-		{
-			returnTypeName = null;
-			paramTypeNames = null;
-			paramNames = null;
-
-			Type type = this.TypeResolutionService.GetType(objectTypeName);
-			if (type != null)
-			{
-				EventInfo info = type.GetEvent(eventName);
-				if (info != null)
-				{
-					Type eventHandlerType = info.EventHandlerType;
-					if (eventHandlerType != null)
-					{
-						MethodInfo method = eventHandlerType.GetMethod("Invoke");
-						if (method != null)
-						{
-							var list = new List<string>();
-							var list2 = new List<string>();
-							
-							foreach (ParameterInfo info3 in method.GetParameters())
-							{
-								list.Add(this.VsFormatType(info3.ParameterType.FullName));
-								list2.Add(info3.Name);
-							}
-							
-							paramTypeNames = list.ToArray();
-							paramNames = list2.ToArray();
-							
-							returnTypeName = this.VsFormatType(method.ReturnType.FullName);
-							
-							if (string.IsNullOrEmpty(returnTypeName))
-							{
-								returnTypeName = "System.Void";
-							}
-						}
-					}
-				}
-			}
-		}
-
-		protected virtual int GetCompatibleEventHandlers(string document, string codeBehind, string codeBehindFile, string className, string objectTypeName, string eventName, out string[] eventHandlerNames)
-		{
-			eventHandlerNames = null;
-
-			ProjectItem projectItem = GetProjectItem(document, codeBehind, codeBehindFile);
-			if (projectItem != null)
-			{
-				EnvDTE.FileCodeModel fileCodeModel = projectItem.FileCodeModel;
-				if (fileCodeModel != null)
-				{
-					CodeClass class2 = this.FindClass(fileCodeModel.CodeElements, className);
-					if (class2 != null)
-					{
-						string eventHandlerSignature = GetEventHandlerSignature(objectTypeName, eventName);
-						var list = new List<string>();
-
-						foreach (CodeElement element in class2.Members)
-						{
-							CodeFunction codeFunction = element as CodeFunction;
-							if (codeFunction != null)
-							{
-								string name = codeFunction.Name;
-								if (!string.IsNullOrEmpty(name))
-								{
-									string str3 = GetFunctionSignature(codeFunction);
-									if (string.Compare(eventHandlerSignature, str3, StringComparison.Ordinal) == 0)
-									{
-										list.Add(name);
-									}
-								}
-							}
-						}
-						if (list.Count > 0)
-						{
-							eventHandlerNames = list.ToArray();
-						}
-					}
-				}
-			}
-
-			return NativeMethods.S_OK;
-		}
-		
-		protected virtual int CreateUniqueEventHandlerName(string document, string codeBehind, string codeBehindFile, string className, string objectName, string eventName, out string eventHandlerName)
-		{
-			eventHandlerName = null;
-
-			ProjectItem projectItem = GetProjectItem(document, codeBehind, codeBehindFile);
-			if (projectItem != null)
-			{
-				EnvDTE.FileCodeModel fileCodeModel = projectItem.FileCodeModel;
-				if (fileCodeModel != null)
-				{
-					CodeClass class2 = this.FindClass(fileCodeModel.CodeElements, className);
-					if (class2 != null)
-					{
-						System.Collections.Specialized.StringDictionary dictionary = new System.Collections.Specialized.StringDictionary();
-						foreach (CodeElement element in class2.Members)
-						{
-							string name = element.Name;
-							if (!string.IsNullOrEmpty(name))
-							{
-								dictionary[name] = name;
-							}
-						}
-						string str2 = objectName + "_" + eventName;
-						int num = 0;
-						eventHandlerName = str2;
-						while (dictionary[eventHandlerName] != null)
-						{
-							num = (int)(num + 1);
-							eventHandlerName = str2 + ((int)num).ToString(CultureInfo.InvariantCulture);
-						}
-					}
-				}
-			}
-			return 0;
-		}
-
-		protected virtual int CreateEventHandler(string document, string codeBehind, string codeBehindFile, string className, string objectTypeName, string eventName, string eventHandlerName)
-		{
-			int hr = NativeMethods.E_FAIL;
-
-			ProjectItem projectItem = GetProjectItem(document, codeBehind, codeBehindFile);
-			if (projectItem != null)
-			{
-				EnvDTE.FileCodeModel fileCodeModel = projectItem.FileCodeModel;
-				if (fileCodeModel != null)
-				{
-					CodeClass class2 = this.FindClass(fileCodeModel.CodeElements, className);
-
-					if ((class2 != null) && !string.IsNullOrEmpty(eventHandlerName))
-					{
-						string str;
-						string[] strArray;
-						string[] strArray2;
-						this.GetEventHandlerSignature(objectTypeName, eventName, out str, out strArray2, out strArray);
-						UndoContext undoContext = class2.DTE.UndoContext;
-						if (undoContext != null)
-						{
-							if (!undoContext.IsOpen)
-							{
-								undoContext.Open(eventHandlerName, false);
-							}
-							else
-							{
-								undoContext = null;
-							}
-						}
-						try
-						{
-							if (string.IsNullOrEmpty(str))
-							{
-								str = "System.Void";
-							}
-							vsCMFunction vsCMFunctionFunction = vsCMFunction.vsCMFunctionFunction;
-							if (str == "System.Void")
-							{
-								vsCMFunctionFunction = vsCMFunction.vsCMFunctionSub;
-							}
-							CodeFunction codeFunction = class2.AddFunction(eventHandlerName, vsCMFunctionFunction, str, -1, vsCMAccess.vsCMAccessProtected, codeBehindFile);
-							if ((codeFunction != null) && (strArray2 != null))
-							{
-								for (int i = 0; i < strArray2.Length; i++)
-								{
-									codeFunction.AddParameter("_" + strArray[i], strArray2[i], -1);
-								}
-							}
-							EditPoint point = codeFunction.StartPoint.CreateEditPoint();
-							if (point != null)
-							{
-								point.SmartFormat(codeFunction.EndPoint);
-							}
-							hr = 0;
-						}
-						finally
-						{
-							if (undoContext != null)
-							{
-								if (hr >= 0)
-								{
-									undoContext.Close();
-
-									var nemerleFileCodeModel = fileCodeModel as Nemerle.VisualStudio.FileCodeModel.NemerleFileCodeModel;
-									if (nemerleFileCodeModel != null)
-									{
-										nemerleFileCodeModel.FlushChanges();
-									}
-								}
-								else
-								{
-									undoContext.SetAborted();
-								}
-							}
-						}
-					}
-				}
-			}
-
-			return hr;
-		}
-
-		protected virtual CodeClass FindClass(CodeElements codeElements, string className)
-		{
-			if ((codeElements != null) && !string.IsNullOrEmpty(className))
-			{
-				foreach (CodeElement element in codeElements)
-				{
-					switch (element.Kind)
-					{
-						case vsCMElement.vsCMElementClass:
-							{
-								CodeClass class2 = element as CodeClass;
-								if ((class2 == null) || string.Compare(class2.FullName, className, StringComparison.Ordinal) != 0)
-								{
-									continue;
-								}
-								return class2;
-							}
-						case vsCMElement.vsCMElementNamespace:
-							{
-								CodeNamespace namespace2 = element as CodeNamespace;
-								if (namespace2 == null)
-								{
-									continue;
-								}
-								CodeClass class3 = this.FindClass(namespace2.Children, className);
-								if (class3 == null)
-								{
-									continue;
-								}
-								return class3;
-							}
-					}
-				}
-			}
-			return null;
-		}
-
-		protected ITypeResolutionService TypeResolutionService
-		{
-			get
-			{
-				ITypeResolutionService typeResolutionService = null;
-				if (this._serviceProvider != null)
-				{
-					DynamicTypeService service2 = this._serviceProvider.GetService(typeof(DynamicTypeService)) as DynamicTypeService;
-					if (service2 != null)
-					{
-						typeResolutionService = service2.GetTypeResolutionService(this._hierarchy);
-					}
-				}
-				return typeResolutionService;
-			}
-		}
-
-		protected virtual string VsFormatType(string fullTypeName)
-		{
-			if (fullTypeName != null)
-			{
-				return fullTypeName.Replace('+', '.');
-			}
-			return null;
-		}
-
-		private delegate int ExecuteInternalDelegate();
-		private int WrapAndExecuteInternal(ExecuteInternalDelegate execute)
-		{
-			if (this._executing)
-				return NativeMethods.E_FAIL;
-
-			int result = 0;
-			try
-			{
-				this._executing = true;
-				result = execute();
-			}
-			catch
-			{
-				result = NativeMethods.E_FAIL;
-			}
-			finally
-			{
-				this._executing = false;
-			}
-
-			return result;
+			return new NemerleCodeBehindEventBinder(projectItem.FileCodeModel, typeResolutionService);
 		}
 
 		#endregion

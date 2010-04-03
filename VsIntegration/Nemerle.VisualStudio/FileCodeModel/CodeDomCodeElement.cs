@@ -25,8 +25,6 @@ namespace Nemerle.VisualStudio.FileCodeModel
 	public abstract class CodeDomCodeElement<CodeTypeType> : SimpleCodeElement, ICodeDomElement
 		where CodeTypeType : CodeObject
 	{
-
-
 		private CodeTypeType codeObj;
 
 		[SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "0#dte")]
@@ -55,15 +53,7 @@ namespace Nemerle.VisualStudio.FileCodeModel
 		{
 			get
 			{
-				var member = CodeObject.UserData["Member"] as Nemerle.Compiler.Parsetree.MemberBase;
-				if (member != null && member.Location != null)
-				{
-					return new CodeDomTextPoint(GetTextDocument(),
-						member.Location.EndColumn,
-						member.Location.EndLine);
-				}
-
-				return new NullTextPoint();
+				return GetEndPoint(vsCMPart.vsCMPartWhole);
 			}
 		}
 
@@ -71,26 +61,92 @@ namespace Nemerle.VisualStudio.FileCodeModel
 		{
 			get
 			{
-				var member = CodeObject.UserData["Member"] as Nemerle.Compiler.Parsetree.MemberBase;
-				if (member != null && member.Location != null)
-				{
-					return new CodeDomTextPoint(GetTextDocument(),
-						member.Location.Column,
-						member.Location.Line);
-				}
-
-				return new NullTextPoint();
+				return GetStartPoint(vsCMPart.vsCMPartWhole);
 			}
 		}
 
-		public override TextPoint GetEndPoint(vsCMPart Part)
+		public override TextPoint GetEndPoint(vsCMPart part)
 		{
-			return EndPoint;
+			TextPoint point = null;
+			var member = CodeObject.UserData["Member"] as Nemerle.Compiler.Parsetree.MemberBase;
+			if (member != null)
+			{
+				if(part == vsCMPart.vsCMPartBody && member.BodyLocation != null)
+					point = new CodeDomTextPoint(GetTextDocument(), member.BodyLocation.EndColumn, member.BodyLocation.EndLine);
+				else if (part == vsCMPart.vsCMPartNavigate && member.BodyLocation != null)
+					point = GetNavigationPoint(member.BodyLocation);
+				else if(member.Location != null)
+					point = new CodeDomTextPoint(GetTextDocument(), member.Location.EndColumn, member.Location.EndLine);
+			}
+
+			return (point != null) ? point : new NullTextPoint();
 		}
 
-		public override TextPoint GetStartPoint(vsCMPart Part)
+		public override TextPoint GetStartPoint(vsCMPart part)
 		{
-			return StartPoint;
+			TextPoint point = null;
+			var member = CodeObject.UserData["Member"] as Nemerle.Compiler.Parsetree.MemberBase;
+			if (member != null)
+			{
+				if (part == vsCMPart.vsCMPartBody && member.BodyLocation != null)
+					point = new CodeDomTextPoint(GetTextDocument(), member.BodyLocation.Column, member.BodyLocation.Line);
+				else if (part == vsCMPart.vsCMPartNavigate && member.BodyLocation != null)
+					point = GetNavigationPoint(member.BodyLocation);
+				else if (member.Location != null)
+					point = new CodeDomTextPoint(GetTextDocument(), member.Location.Column, member.Location.Line);
+			}
+
+			return (point != null) ? point : new NullTextPoint();
+		}
+
+		// The location in the source code to which the insertion point moves when you double-click an element in Designer or Class View.
+		private TextPoint GetNavigationPoint(Nemerle.Compiler.Location bodyLocation)
+		{
+			TextPoint point = null;
+ 
+			if (bodyLocation.Line < bodyLocation.EndLine) // тело метода состоит более чем из одной строки
+			{
+				var tmpPoint = new CodeDomTextPoint(GetTextDocument(), bodyLocation.Column, bodyLocation.Line);
+				var editPoint = tmpPoint.CreateEditPoint();
+
+				// предпоследняя строка тела метода
+				var lines = editPoint.GetLines(bodyLocation.EndLine, bodyLocation.EndLine + 1);
+
+				if (lines.Trim(' ', '\t').Length > 0) // если предпоследняя строка состоит не только из пробельных символов
+				{
+					if (bodyLocation.Line == bodyLocation.EndLine - 1) 
+						// тело метода состоит из двух строк
+						// установим курсор на последней позиции предпоследней строки
+						// void foo() 
+						// {_
+						// }
+						point = new CodeDomTextPoint(GetTextDocument(), bodyLocation.Column, bodyLocation.EndLine - 1);
+					else 
+						// тело метода состоит из более чем двух строк
+						// установим курсор на перед первым непробельныи символом предпоследней строки
+						// void foo() 
+						// {
+						//     _source 
+						// }
+						point = new CodeDomTextPoint(GetTextDocument(), lines.Length - lines.TrimStart(' ', '\t').Length, bodyLocation.EndLine - 1);
+				}
+				else
+					// если предпоследняя строка - пустая (состоит тлько из пробельных симвлов)
+					// установим курсор на последнюю позицию предпоследней строки
+					// void foo() 
+					// {
+					//     _
+					// }
+					point = new CodeDomTextPoint(GetTextDocument(), lines.Length, bodyLocation.EndLine - 1);
+			}
+			else
+				// тело метода стостоит только из одной строки
+				// установим курсор на позицию за началом тела метода
+				// void foo() 
+				// {_    }
+				point = new CodeDomTextPoint(GetTextDocument(), bodyLocation.Column, bodyLocation.Line);
+
+			return point;
 		}
 
 		public CodeTypeType CodeObject
@@ -223,7 +279,7 @@ namespace Nemerle.VisualStudio.FileCodeModel
 		protected void CommitChanges()
 		{
 			object curParent = ParentElement;
-			while (!(curParent is NemerleFileCodeModel))
+			while (!(curParent is EnvDTE.FileCodeModel))
 			{
 				curParent = ((ICodeDomElement)curParent).ParentElement;
 				NemerleFileCodeModel fcm = curParent as NemerleFileCodeModel;
