@@ -30,13 +30,17 @@ using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Compiler.SolverMacros;
 using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
 using Nemerle.Surround;
 using Nemerle.Utility;
+
+using System;
 
 using PT = Nemerle.Compiler.Parsetree;
 using SCG = System.Collections.Generic;
 
-namespace Nemerle.Compiler {
+namespace Nemerle.Compiler
+{
 
 [Nemerle.Compiler.SupportRelocation]
 public partial class TypeBuilder : TypeInfo
@@ -167,10 +171,13 @@ public partial class TypeBuilder : TypeInfo
     when (par != null)
       typarms_count += par.TyparmsCount;
 
-    if (this._ast is PT.TopDeclaration.Interface)
-      this.tydecl = TypeDeclaration.Interface ();
-    else
-      this.tydecl = TypeDeclaration.Class (); // may change later (in bind_types)
+    this.tydecl = 
+      match (_ast)
+      {
+        | Interface => TypeDeclaration.Interface()
+        | Alias     => TypeDeclaration.Alias(null)
+        | _         => TypeDeclaration.Class() // may change later (in bind_types)
+      };
 
     instance_ctor_occured = (attributes %&& (NemerleAttributes.Struct %| NemerleAttributes.Static))
                             || IsModule || instance_ctor_occured || IsInterface || is_enum;
@@ -1066,216 +1073,259 @@ public partial class TypeBuilder : TypeInfo
       Util.locate (tb.loc, tb.make_tyenvs ());
   }
 
+  mutable _nestingLevel : int;
 
-  /**
-   * Bind type expressions occurring in type declarations. This
-   * includes [extends] type, [implements] list, and aliased type
-   * in case of type alias declaration.
-   *
-   * <remarks>
-   *   Binding type expression refers to rewriting [Parsetree.Type]
-   *   into [Typedtree.TType], which involves resolving names of type
-   *   constructors (to [TypeInfo] objects) and type variables (to [Tyvar.T]
-   *   objects).
-   * </remarks>
-   */
-  protected internal bind_types () : void
+  [Record] class RecursiveTypeDefinition : Exception { public Name : string;  }
+
+  /// Bind type expressions occurring in type declarations. This
+  /// includes [extends] type, [implements] list, and aliased type
+  /// in case of type alias declaration.
+  ///
+  /// <remarks>
+  ///   Binding type expression refers to rewriting [Parsetree.Type]
+  ///   into [Typedtree.TType], which involves resolving names of type
+  ///   constructors (to [TypeInfo] objects) and type variables (to [Tyvar.T]
+  ///   objects).
+  /// </remarks>
+  protected internal bind_types() : void
   {
-    def td = this._ast;
-    is_obsolete = HasAttribute (InternalType.Obsolete_tc);
-    this.tenv = this.tenv.CopyWithObsolete (!is_obsolete);    
+    when (this.tydecl is TypeDeclaration.Alias(ty) when ty != null)
+      return; // already was binded
 
-    this.tydecl =
-      match (td) {
-        | PT.TopDeclaration.Class => TypeDeclaration.Class ()
-        | PT.TopDeclaration.Alias (t) =>
-          def ttype = this.tenv.BindFixedType (this.GlobalEnv, this, t, check_parms = false);
-          TypeDeclaration.Alias (ttype)
-
-        | PT.TopDeclaration.Interface => TypeDeclaration.Interface ()
-        | PT.TopDeclaration.Enum => TypeDeclaration.Enum ()
-        | PT.TopDeclaration.Variant =>
-          TypeDeclaration.Variant (NList.Map (variant_options, fun (x : TypeBuilder) : TypeInfo { x }))
-        | PT.TopDeclaration.VariantOption => TypeDeclaration.VariantOption ()
-        | PT.TopDeclaration.Delegate | PT.TopDeclaration.Macro =>
-          Util.ice ("this top declaration shouldn't survive to typing")        
-      };
-
-    def nested_tyvars_subst =
-      if (enclosing_type == null || enclosing_type.typarms is [] || typarms is []) null
-      else {
-        def sub = Subst ();
-        def par_typarms = enclosing_type.typarms;
-        //Message.Debug ($"my typarms=$typarms vs eclosing=$par_typarms");
-        NList.Iter2 (typarms.FirstN (par_typarms.Length), par_typarms, fun (t, pt) {
-          sub.Add (pt, FixedType.StaticTypeVarRef (t))
-        });
-        sub
-      }
-
-    def bind_to_class (t : PT.PExpr) {
-      match (this.tenv.BindFixedType (this.GlobalEnv,
-                                 enclosing_type,
-                                 t, check_parms = false)) {
-        | FixedType.Class as tcl => 
-          if (nested_tyvars_subst == null) tcl
-          else nested_tyvars_subst.Apply (tcl) :> FixedType.Class
-
-        | _ => 
-          Message.FatalError2 (t.Location, "derived or implemented type must be a class");
-          null
-      };
+    when (_nestingLevel > 0)
+    {
+      Message.Error(NameLocation, $"The type '$this' has recursive definition.");
+      throw RecursiveTypeDefinition(FullName);
     }
 
-    this.t_implements = [];
-    match (td) {
-      | PT.TopDeclaration.VariantOption =>
-        this.parent_type = 
-          FixedType.Class (enclosing_type, 
-                       typarms.Map (fun (x) { FixedType.StaticTypeVarRef (x) }));
+    _nestingLevel++;
 
-      | PT.TopDeclaration.Class (t_extends = hd :: tl)
-      | PT.TopDeclaration.Interface (t_extends = hd :: tl)
-      | PT.TopDeclaration.Variant (t_extends = hd :: tl)
-      | PT.TopDeclaration.Enum (t_extends = hd :: tl) =>
-        def hd1 = bind_to_class (hd);
-        def itfs = SCG.List();
-        if (hd1 == null)
-          this.parent_type = null
-        else if (hd1.tycon.IsInterface)
+    try
+    {
+      def td = this._ast;
+      is_obsolete = HasAttribute (InternalType.Obsolete_tc);
+      this.tenv = this.tenv.CopyWithObsolete (!is_obsolete);    
+
+      this.tydecl =
+        match (td)
         {
-          itfs.Add(hd1);
-          this.parent_type = null
-        }
-        else
-          this.parent_type = hd1; 
+          | PT.TopDeclaration.Class         => TypeDeclaration.Class ()
+          | PT.TopDeclaration.Alias(t)      =>
+            match (this.tydecl)
+            {
+              | TypeDeclaration.Alias(null) =>
+                def ttype = this.tenv.BindFixedType(this.GlobalEnv, this, t, check_parms = false);
+                TypeDeclaration.Alias(ttype)
 
-        foreach (itf in tl)
-        {
-          def bindItf = bind_to_class (itf);
-          when (bindItf != null)
-            itfs.Add(bindItf);
-        }
-
-        this.t_implements = itfs.ToList();
-
-      | _ => this.parent_type = null
-    };
-
-    // merge types implemented by partial parts of this class into this TypeBuilder
-    foreach (part in partial_parts) {
-      match (part) {
-        | PT.TopDeclaration.Interface (t_extends = hd :: tail)        
-        | PT.TopDeclaration.Class (t_extends = hd :: tail)
-        | PT.TopDeclaration.Variant (t_extends = hd :: tail) =>
-          def hd' = bind_to_class (hd);
-          def added_ifaces =
-            if (hd'.tycon.IsInterface)
-              [hd']
-            else {
-              // if base class exists in both parts, it must be the same
-              match (parent_type) {
-                | null => parent_type = hd'
-                | t =>
-                  unless (t.tycon.Equals (hd'.tycon))
-                    Message.Error (part.Location, $"Partial declarations of"
-                                   " `$(FullName)' must not specify different base classes")
-              }
-              [];
+              | _ => Util.ice("The 'tydecl' field of alias must have TypeDeclaration.Alias(null) type.")
             }
-          // here we merge new interface, removing already declared ones (no errors here)
-          foreach (iface when iface != null in added_ifaces + NList.RevMap (tail, bind_to_class)) {
-            mutable should_add = true;
-            foreach (existing in t_implements)
-              when (existing.tycon.Equals (iface.tycon)) should_add = false;
 
-            when (should_add) t_implements = iface :: t_implements;
+          | PT.TopDeclaration.Interface     => TypeDeclaration.Interface ()
+          | PT.TopDeclaration.Enum          => TypeDeclaration.Enum ()
+          | PT.TopDeclaration.Variant       =>
+            TypeDeclaration.Variant(variant_options.Map(fun (x : TypeBuilder) : TypeInfo { x }))
+
+          | PT.TopDeclaration.VariantOption => TypeDeclaration.VariantOption ()
+          | PT.TopDeclaration.Delegate 
+          | PT.TopDeclaration.Macro         => Util.ice ("this top declaration shouldn't survive to typing")        
+        };
+
+      def nested_tyvars_subst =
+        if (enclosing_type == null || enclosing_type.typarms is [] || typarms is []) null
+        else {
+          def sub = Subst ();
+          def par_typarms = enclosing_type.typarms;
+          //Message.Debug ($"my typarms=$typarms vs eclosing=$par_typarms");
+          NList.Iter2 (typarms.FirstN (par_typarms.Length), par_typarms, fun (t, pt) {
+            sub.Add (pt, FixedType.StaticTypeVarRef (t))
+          });
+          sub
+        }
+
+      def bind_to_class (t : PT.PExpr) {
+        match (this.tenv.BindFixedType (this.GlobalEnv,
+                                   enclosing_type,
+                                   t, check_parms = false)) {
+          | FixedType.Class as tcl => 
+            if (nested_tyvars_subst == null) tcl
+            else nested_tyvars_subst.Apply (tcl) :> FixedType.Class
+
+          | _ => 
+            Message.FatalError2 (t.Location, "derived or implemented type must be a class");
+            null
+        };
+      }
+
+      this.t_implements = [];
+      match (td) {
+        | PT.TopDeclaration.VariantOption =>
+          this.parent_type = 
+            FixedType.Class (enclosing_type, 
+                         typarms.Map (fun (x) { FixedType.StaticTypeVarRef (x) }));
+
+        | PT.TopDeclaration.Class (t_extends = hd :: tl)
+        | PT.TopDeclaration.Interface (t_extends = hd :: tl)
+        | PT.TopDeclaration.Variant (t_extends = hd :: tl)
+        | PT.TopDeclaration.Enum (t_extends = hd :: tl) =>
+          def hd1 = bind_to_class (hd);
+          def itfs = SCG.List();
+          if (hd1 == null)
+            this.parent_type = null
+          else if (hd1.tycon.IsInterface)
+          {
+            itfs.Add(hd1);
+            this.parent_type = null
+          }
+          else
+            this.parent_type = hd1; 
+
+          foreach (itf in tl)
+          {
+            def bindItf = bind_to_class (itf);
+            when (bindItf != null)
+              itfs.Add(bindItf);
           }
 
-        | _ => ()
+          this.t_implements = itfs.ToList();
+
+        | _ => this.parent_type = null
+      };
+
+      // merge types implemented by partial parts of this class into this TypeBuilder
+      foreach (part in partial_parts)
+      {
+        match (part)
+        {
+          | PT.TopDeclaration.Interface (t_extends = hd :: tail)        
+          | PT.TopDeclaration.Class (t_extends = hd :: tail)
+          | PT.TopDeclaration.Variant (t_extends = hd :: tail) =>
+            def hd' = bind_to_class (hd);
+            def added_ifaces =
+              if (hd'.tycon.IsInterface)
+                [hd']
+              else
+              {
+                // if base class exists in both parts, it must be the same
+                match (parent_type)
+                {
+                  | null => parent_type = hd'
+                  | t =>
+                    unless (t.tycon.Equals (hd'.tycon))
+                      Message.Error(part.Location, $"Partial declarations of `$(FullName)' must not specify different base classes")
+                }
+
+                []
+              };
+
+            // here we merge new interface, removing already declared ones (no errors here)
+            foreach (iface when iface != null in added_ifaces + NList.RevMap (tail, bind_to_class))
+            {
+              mutable should_add = true;
+
+              foreach (existing in t_implements)
+                when (existing.tycon.Equals(iface.tycon))
+                  should_add = false;
+
+              when (should_add)
+                t_implements = iface :: t_implements;
+            }
+
+          | _ => ()
+        }
       }
-    }
 
-    // detect non-interfaces
-    foreach (t in t_implements)
-      unless (t.tycon.IsInterface)
-        Message.Error ($"base class `$t' must be specified as first");
-    
-    when (is_enum)  handle_underlying_enum_type ();
+      // detect non-interfaces
+      foreach (t in t_implements)
+        unless (t.tycon.IsInterface)
+          Message.Error ($"base class `$t' must be specified as first");
+      
+      when (is_enum)
+        handle_underlying_enum_type ();
 
-    when (IsStruct)
-    {      
-      // make sure no bogus attributes have been specified
-      def access_mask = NemerleAttributes.AccessModifiers %| NemerleAttributes.Struct | NemerleAttributes.Partial;
-      when ((attributes %& ~access_mask) != NemerleAttributes.None)
-        Message.Error (loc, "structures are only allowed to have access specifiers as attributes");
+      when (IsStruct)
+      {      
+        // make sure no bogus attributes have been specified
+        def access_mask = NemerleAttributes.AccessModifiers %| NemerleAttributes.Struct | NemerleAttributes.Partial;
+        when ((attributes %& ~access_mask) != NemerleAttributes.None)
+          Message.Error (loc, "structures are only allowed to have access specifiers as attributes");
 
-      // mark the structure as sealed
-      attributes |= NemerleAttributes.Sealed;
-    }
+        // mark the structure as sealed
+        attributes |= NemerleAttributes.Sealed;
+      }
 
-    match (parent_type) {
-      | null =>
-        unless (IsInterface || IsAlias) {
-          parent_type = 
-            // make the structure inherit from System.ValueType                           
-            if (IsStruct)
-              InternalType.ValueType;
-            else 
-              InternalType.Object;
-        }
-
-      | tclass =>
-        if (IsInterface) {
-          Message.Error (loc, "interfaces are not allowed to inherit from other types");
-          parent_type = null;
-        }
-        else
-          when (parent_type.tycon.GetTydecl () is TypeDeclaration.Variant &&
-                !(tydecl is TypeDeclaration.VariantOption)) {
-            // change current type, so we don't get junk warnings about GetVariantCode
-            tydecl = TypeDeclaration.Class (); 
-            Message.Error (loc, "cannot use variant as base type");
+      match (parent_type)
+      {
+        | null =>
+          unless (IsInterface || IsAlias)
+          {
+            parent_type = 
+              // make the structure inherit from System.ValueType                           
+              if (IsStruct)
+                InternalType.ValueType;
+              else 
+                InternalType.Object;
           }
 
-        when (IsStruct) {
-          Message.Error (loc, "structures are not allowed to inherit from other types");
-          parent_type = InternalType.ValueType
+        | tclass =>
+          if (IsInterface)
+          {
+            Message.Error (loc, "interfaces are not allowed to inherit from other types");
+            parent_type = null;
+          }
+          else when (parent_type.tycon.GetTydecl () is TypeDeclaration.Variant 
+            && !(tydecl is TypeDeclaration.VariantOption))
+          {
+              // change current type, so we don't get junk warnings about GetVariantCode
+              tydecl = TypeDeclaration.Class (); 
+              Message.Error (loc, "cannot use variant as base type");
+          }
+
+          when (IsStruct)
+          {
+            Message.Error (loc, "structures are not allowed to inherit from other types");
+            parent_type = InternalType.ValueType
+          }
+
+          when (tclass.tycon.IsSealed)
+          {
+            Message.Error (loc, "cannot extend sealed class");
+            parent_type = InternalType.Object
+          }
+          when (tclass.tycon.Attributes %&& NemerleAttributes.Static)
+            Message.Error (loc, "cannot derive from module");
+      }
+
+      // construct this.iterate_first - enclosing type plus transitive closure of all base types
+      def iterate_first = Hashtable ();
+
+      foreach (ty : FixedType.Class in GetDirectSuperTypes ())
+        match (ty.tycon)
+        {
+          | tb is TypeBuilder =>
+            iterate_first.Set (tb, tb)
+          | _ => ()
         }
-        when (tclass.tycon.IsSealed) {
-          Message.Error (loc, "cannot extend sealed class");
-          parent_type = InternalType.Object
+
+      def first = if (enclosing_type != null) [enclosing_type] else [];
+      this.iterate_first = iterate_first.Fold (first, fun (_, ti, acc) { ti :: acc });
+
+      foreach (x in contained_types)
+        Util.locate (x.loc, x.bind_types ());
+      
+      // check variance limitation to interface/delegate type
+      if (IsInterface || IsDelegate)
+        unless (typarms.IsEmpty)
+          foreach (ty in GetDirectSuperTypes ())
+            unless (MethodBuilder.check_variance_valid (ty, 1)) 
+              Message.Error ($"incorrect usage of generic parameters in `$ty' - supertypes must behave covariantly");
+      else
+        foreach (t when t.IsCovariant || t.IsContravariant in typarms)
+        {
+          Message.Error (".NET runtime allows specifying co/contravariant generic parameters only on interfaces and delegates");
+          Message.Hint ("vote here to change this miserable state: http://connect.microsoft.com/VisualStudio/feedback/ViewFeedback.aspx?FeedbackID=94145");
         }
-        when (tclass.tycon.Attributes %&& NemerleAttributes.Static)
-          Message.Error (loc, "cannot derive from module");
     }
-
-    // construct this.iterate_first - enclosing type plus transitive closure of all base types
-    def iterate_first = Hashtable ();
-
-    foreach (ty : FixedType.Class in GetDirectSuperTypes ())
-      match (ty.tycon) {
-        | tb is TypeBuilder =>
-          iterate_first.Set (tb, tb)
-        | _ => ()
-      }
-
-    def first = if (enclosing_type != null) [enclosing_type] else [];
-    this.iterate_first = iterate_first.Fold (first, fun (_, ti, acc) { ti :: acc });
-
-    foreach (x in contained_types) Util.locate (x.loc, x.bind_types ());
-    
-    // check variance limitation to interface/delegate type
-    if (IsInterface || IsDelegate)
-      unless (typarms.IsEmpty)
-        foreach (ty in GetDirectSuperTypes ())
-          unless (MethodBuilder.check_variance_valid (ty, 1)) 
-            Message.Error ($"incorrect usage of generic parameters in `$ty' - supertypes must behave covariantly");
-    else
-      foreach (t when t.IsCovariant || t.IsContravariant in typarms) {
-        Message.Error (".NET runtime allows specifying co/contravariant generic parameters only on interfaces and delegates");
-        Message.Hint ("vote here to change this miserable state: http://connect.microsoft.com/VisualStudio/feedback/ViewFeedback.aspx?FeedbackID=94145");
-      }
+    finally { _nestingLevel--; }
   }
 
   internal construct_subtyping_map () : void
