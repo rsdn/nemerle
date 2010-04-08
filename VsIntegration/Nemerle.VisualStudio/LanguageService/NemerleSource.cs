@@ -901,7 +901,29 @@ namespace Nemerle.VisualStudio.LanguageService
 						
       TryHighlightBraces(textView, command, line, idx, tokenBeforeCaret);
 
-			//VladD2: We do not trigger MethodTip and Completion on type because it's very slow!
+			//VladD2: We do not trigger MethodTip on type because it's very slow!
+
+			// This code open completion list if user enter '.'.
+			if ((tokenBeforeCaret.Trigger & TokenTriggers.MemberSelect) != 0 && (command == VsCommands2K.TYPECHAR))
+			{
+				var spaces = new[] { '\t', ' ', '\u000B', '\u000C' };
+				var str = GetText(line, 0, line, idx - 1).Trim(spaces);
+
+				while (str.Length <= 0 && line > 0) // skip empy lines
+				{
+					line--;
+					str = GetLine(line + 1).Trim(spaces);
+				}
+
+				if (str.Length > 0)
+				{
+					var lastChar = str[str.Length - 1];
+
+					// Don't show completion list if previous char not one of following:
+					if (char.IsLetterOrDigit(lastChar) || lastChar == ')' || lastChar == ']')
+						Completion(textView, line, idx, true);
+				}
+			}
 		}
 
 		public override void GetPairExtents(IVsTextView view, int line, int col, out TextSpan span)
