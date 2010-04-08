@@ -22,11 +22,46 @@ namespace RincMetadataGenerator
     public PageCount : int    { get; private set; }
     public Creator   : string { get; private set; }
     
-    [RecordIgnore]         _pagesRegex  : Regex = Regex(@"(\d\d)-(\d\d)-.*", RegexOptions.Compiled);
-    [RecordIgnore] mutable _errorsCache : array[string];
-    [RecordIgnore]         _errors      : List[string] = List();
+    [RecordIgnore]         _pagesRegex        : Regex = Regex(@"(\d\d)-(\d\d)-.*", RegexOptions.Compiled);
+    [RecordIgnore] mutable _errorsCache       : array[Error];
+    [RecordIgnore]         _errors            : List[Error] = List();
+
+    [RecordIgnore] static  _authorAttrMap : Hashtable[string, string * string] = Hashtable(array[
+              ("e-mail",              (null,                 null                  )),
+              ("rsdn-profile",        ("Профиля на rsdn.ru", "Profile on rsdn.ru")),
+              ("phone",               ("Телефон",            "Phone"               )), 
+              ("address",             ("Адрес",              "Adress"              )),
+              ("place-of-employment", ("Место работы",       "Place of employment" )),
+              ("job",                 ("Должность",          "Job"                 )),
+              ("place-of-study",      ("Место учебы",        "Place of study"      )),
+              ("scientific-degree",   ("Научная степень",    "Scientific degree"   )),
+              ("scientific-rank",     ("Научное звание",     "Scientific rank"     )),
+              ]);
+              
+    GetAuthorAttrs(author : XElement, forEnu : bool) : string
+    {
+      def strs = _authorAttrMap.Keys.Map(GetAuthorAttr(author, _, forEnu)).Filter(s => !string.IsNullOrEmpty(s));
+      $<#..$(strs; ". ")#>
+    }
     
-    public Errors    : array[string]
+    GetAuthorAttr(author : XElement, attributeName : string, forEnu : bool) : string
+    {
+      def attr = author.Attribute(attributeName);
+      
+      when (attr == null)
+        return "";
+        
+      def (rus, enu) = _authorAttrMap[attributeName];
+      def prefix = if (forEnu) enu else rus;
+      
+      if (prefix == null || string.IsNullOrEmpty(attr.Value))
+        ""
+      else
+        prefix + ": " + if (attributeName == "rsdn-profile") $"http://rsdn.ru/Users/$(attr.Value).aspx"
+                        else attr.Value
+    }
+    
+    public Errors    : array[Error]
     {
       get
       {
@@ -37,9 +72,9 @@ namespace RincMetadataGenerator
       }
     }
     
-    Error(text : string) : void
+    AddError(path : string, message : string) : void
     {
-      _errors.Add(text);
+      _errors.Add(Error(message, path));
     }
     
     public Generate() : string
@@ -120,6 +155,10 @@ namespace RincMetadataGenerator
         
     ReadArticleMetadata(path : string) : XElement
     {
+      def error(message : string) : void { AddError(path, message); }
+      //[RecordIgnore] mutable _currntArticlePath : string;
+      //SetCurrntArticlePath(articlePath : string) : void { _currntArticlePath = articlePath; }
+    
       def doc = XDocument.Load(path);
       
       when (doc.Root.Name != "ARTICLE")
@@ -130,21 +169,23 @@ namespace RincMetadataGenerator
       
       when (pages.Groups.Count != 3)
       {
-        Error($"Имя файла ($fileName) должно начинаться с номера страниц. Например: 03-10-SomeProduct.xml.");
+        error($"Имя файла ($fileName) должно начинаться с номера страниц. Например: 03-10-SomeProduct.xml.");
         return XElement("none");
       }
       
       def root        = doc.Root;
       def dummy       = XElement("dummy"); 
+      def dummyAttr   = XAttribute("dummy", ""); 
       def rus         = XAttribute("lang", "RUS");
       def eng         = XAttribute("lang", "ENG");
+      def isEmpty(str : string) : bool { string.IsNullOrEmpty(str) }
       def get(tagName : string) : XElement
       {
         def tag = root.Element(tagName);
         
         if (tag == null)
         {
-          Error($"Тег $tagName не задан в документе '$path'");
+          error($"Тег $tagName не задан в документе '$path'");
           dummy
         }
         else
@@ -153,6 +194,11 @@ namespace RincMetadataGenerator
       def getVal(tagName) : string
       {
         get(tagName).Value
+      }
+      def getAttr(tag : XElement, attrName : string) : string
+      {
+        def val = (tag.Attribute(attrName) ?? dummyAttr).Value.Trim();
+        val
       }
       
       def arttitles(root : XElement) : XElement
@@ -168,7 +214,7 @@ namespace RincMetadataGenerator
         def keywords    = getVal("KEYWORDS");
         
         when (keywords.Contains(","))
-          Error($<#В файл "$fileName" ключевые разделены недопустимым символом (запятой ","). Ключевые слова должны быть разделены символом точа с запятой ";".#>);
+          error($<#В файл "$fileName" ключевые разделены недопустимым символом (запятой ","). Ключевые слова должны быть разделены символом точа с запятой ";".#>);
         
         def keywords    = keywords.Split(array[';'], StringSplitOptions.RemoveEmptyEntries);
         if (keywords.Length == 0)
@@ -180,13 +226,69 @@ namespace RincMetadataGenerator
           XElement("keywords", XElement("kwdGroup", elems.NToArray()))
         }
       }
+      def abstracts() : XElement
+      {
+        def text    = getVal("ABSTRACT").Trim();
+        
+        if (isEmpty(text))
+        {
+          error($<#В файл "$fileName" не заполена "Аннотация".#>);
+          XElement("noabstracts", "")
+        }
+        else
+          XElement("abstracts", XElement("abstract", array[rus : object, text]))
+      }
+      def authors() : XElement
+      {
+        def authors = root.Elements("AUTHOR").NToArray();
+        
+        when (authors.Length == 0)
+          error($<#В файл "$fileName" не указано ни одного автора.#>);
+        // <AUTHOR e-mail="dvyukov@gmail.com" rsdn-profile="38267" place-of-study="МГТУ им. Н. Э. Баумана" 
+        // Scientific-rank="маг. техн." href="http://www.rsdn.ru/Users/38267.aspx">Вьюков Дмитрий Сергеевич</AUTHOR>
+        mutable i = 0;
+        
+        def author(a : XElement) : XElement
+        {
+          i++;
+          def fio = a.Value.Trim();
+          if (isEmpty(fio) || !fio.Contains(" "))
+          {
+            error($<#В файл "$fileName" некорректно заполено поле "ФИО". В нем должны содержаться: фамилия, имя и отчество авторов в именительном подеже.#>);
+            dummy
+          }
+          else
+          {
+            def firstSpaceIndex = fio.IndexOfAny(array[' ', '\t']);
+            def surname         = XElement("surname",     fio.Substring(0, firstSpaceIndex));
+            def fname           = XElement("fname",       fio.Substring(firstSpaceIndex));
+            def auwork          = getAttr(a, "place-of-employment");
+            def auwork          = if (isEmpty(auwork)) getAttr(a, "place-of-study") else auwork;
+            when (isEmpty(auwork))
+              error($<#В файл "$fileName" в информации об авторе "$fio" не заполнены обязательные поля "Место работы" или "Место учебы".#>);
+            def auwork          = XElement("auwork", auwork);
+            def auemail         = getAttr(a, "e-mail");
+            when (isEmpty(auemail))
+              error($<#В файл "$fileName" в информации об авторе "$fio" не заполнены обязательные полe "E-Mail".#>);
+            def auinf           = XElement("auinf", GetAuthorAttrs(a, forEnu = false));
+            def auemail         = XElement("auemail", auemail);
+            def individInfo     = XElement("individInfo", array[rus, surname, fname, auinf, auwork, auemail]);
+            def author          = XElement("author", array[XAttribute("authornum", i), individInfo]);
+            author
+          }
+        }
+        
+        XElement("authors", authors.MapToArray(author))
+      }
       def keywords    = keywords();
+      def abstracts   = abstracts();
+      def authors     = authors();
       def arttitles   = arttitles(root);
       def startPage   = XElement("fpageart", pages.Groups[1]);
       def endPage     = XElement("lpageart", pages.Groups[2]);
       def fpdf        = XElement("fpdf", Path.ChangeExtension(fileName, ".pdf"));
       def article     = XElement("article", 
-        array[startPage, endPage, arttitles, keywords, fpdf]);
+        array[startPage, endPage, authors, arttitles, abstracts, keywords, fpdf]);
 
       article
     }
