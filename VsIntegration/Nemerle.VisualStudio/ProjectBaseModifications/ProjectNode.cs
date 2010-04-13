@@ -1124,6 +1124,10 @@ namespace Microsoft.VisualStudio.Project
 				// Use the same icon as if the folder was closed
 				case __VSHPROPID.VSHPROPID_OpenFolderIconIndex:
 					return GetProperty((int)__VSHPROPID.VSHPROPID_IconIndex);
+
+				case __VSHPROPID.VSHPROPID_DefaultNamespace:
+					TokenProcessor processor = new TokenProcessor();
+					return processor.GetFileNamespace(this.Url, this);
 			}
 
 			switch((__VSHPROPID2)propId)
