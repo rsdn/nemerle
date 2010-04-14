@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Threading;
 using System.Windows.Forms;
 using SCG = System.Collections.Generic;
 
@@ -14,12 +15,13 @@ using Nemerle.Completion2;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Utils.Async;
 using Nemerle.Utility;
+using Nemerle.SharpDevelop.Editor;
 
 namespace Nemerle.SharpDevelop.CodeCompletion {
 
     public sealed class EngineContext : IIdeProject, IDisposable {
 
-        internal this([NotNull] project : IProject) {
+        private this([NotNull] project : IProject) {
             this.project = project;
             this.engine = EngineFactory.Create(this, TraceWriter(), false);
 
@@ -31,6 +33,10 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
                     project.ActiveConfigurationChanged += OnActiveConfigurationChanged;
                 | _ => ();
             }
+
+            ReloadSources();
+
+            LoggingService.Debug($"Engine context created for project $project.");
         }
 
         [Accessor] engine : IEngine;
@@ -41,34 +47,35 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
 
         source_map : SCG.Dictionary[int, Source] = SCG.Dictionary();
 
-        private FindSource(item : FileProjectItem) : bool * Source {
-            foreach(source in source_map.Values) {
-                when(ReferenceEquals(source.Item, item))
-                    Nemerle.Imperative.Return( (true, source) )
-            }
-            (false, null)
+        private FindSource(file_name : string) : bool * Source {
+            mutable source;
+            if(source_map.TryGetValue(Location.GetFileIndex(file_name), out source))
+                (true, source)
+            else
+                (false, null)
         }
 
-        private AddSourceNoCheck(item : FileProjectItem) : ISource {
-            def source = Source(this, item);
+        private AddSourceNoCheck(file_name : string) : Source {
+            def source = Source(this, file_name);
             source_map.Add(source.FileIndex, source);
             source
         }
 
-        private AddSource(item : FileProjectItem) : ISource {
-            match(FindSource(item)) {
+        private AddSource(file_name : string) : Source {
+            match(FindSource(file_name)) {
                 | (true, source) => source
                 | (false, _) =>
-                    def source = AddSourceNoCheck(item);
+                    def source = AddSourceNoCheck(file_name);
                     engine.RequestOnBuildTypesTree();
                     source
             }
         }
 
-        private RemoveSource(item : FileProjectItem) : bool {
-            match(FindSource(item)) {
+        private RemoveSource(file_name : string) : bool {
+            match(FindSource(file_name)) {
                 | (true, source) =>
                     _ = source_map.Remove(source.FileIndex);
+                    source.Dispose();
                     engine.RequestOnBuildTypesTree();
                     true
 
@@ -84,15 +91,20 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
             source_map.Clear();
         }
 
+        private ReloadSources() : void {
+            Clear();
+            foreach(item is FileProjectItem in project.GetItemsOfType(ItemType.Compile)) {
+                _ = AddSourceNoCheck(item.FileName)
+            }
+        }
+
         mutable reload_project_async : AsyncRequest = null;
 
-        public Reload() : void  {
+        public Reload(reload_sources : bool) : void {
             lock(sync_root) {
                 when(null == reload_project_async || reload_project_async.IsCompleted) {
-                    Clear();
-                    foreach(item is FileProjectItem in project.GetItemsOfType(ItemType.Compile)) {
-                        _ = AddSourceNoCheck(item)
-                    }
+                    when(reload_sources)
+                        ReloadSources();
                     reload_project_async = engine.BeginReloadProject();
                 }
             }
@@ -235,11 +247,19 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
         }
 
         public ShowMessage(message : string, messageType : MessageType) : void {
+#if DEBUG
             match(messageType) {
                 | Error     => MessageService.ShowError(message)
                 | Warning   => MessageService.ShowWarning(message)
                 | Hint | Info | _  => MessageService.ShowMessage(message)
             }
+#else
+            match(messageType) {
+                | Error     => LoggingService.Error(message)
+                | Warning   => LoggingService.Warn(message)
+                | Hint | Info | _  => LoggingService.Info(message)
+            }
+#endif
         }
 
         public LookupLocationsFromDebugInformation(_info : GotoInfo) : array[GotoInfo] {
@@ -256,6 +276,7 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
         }
 
         public TypesTreeCreated() : void {
+            LoggingService.Info("Types tree created")
         }
 
         #endregion
@@ -263,16 +284,16 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
 
         #region File load/unload handlers
 
-        internal NotifyFileOpened(fileName : string, document : IDocument, editor : TextEditorControl) : void {
+        private NotifyFileOpenedInternal(fileName : string, document : IDocument, editor : TextEditorControl) : void {
             lock(sync_root) {
-                foreach(source in source_map.Values) {
-                    when(source.Item.FileName == fileName)
-                        source.DocumentAndEditor = (document, editor);
+                match(FindSource(fileName)) {
+                    | (true, source) => source.DocumentAndEditor = (document, editor);
+                    | _ => ();
                 }
             }
         }
 
-        internal NotifyFileClosed(document : IDocument, editor : TextEditorControl) : void {
+        private NotifyFileClosedInternal(document : IDocument, editor : TextEditorControl) : void {
             lock(sync_root) {
                 foreach(source in source_map.Values) {
                     when((document, editor).Equals(source.DocumentAndEditor))
@@ -287,7 +308,7 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
         #region Event handlers
 
         private OnActiveConfigurationChanged(_ : object, _ : EventArgs) : void {
-            Reload();
+            Reload(true);
         }
 
         private OnProjectItemAdded(_ : object, e : ProjectItemEventArgs) : void {
@@ -296,7 +317,11 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
                     match(e.ProjectItem) {
                         | item is FileProjectItem =>
                             lock(sync_root) {
-                                _ = AddSource(item);
+                                def source = AddSource(item.FileName);
+                                match(NemerleSourceDisplayBinding.FindOpenedDocument(source.FileName)) {
+                                    | (true, document, editor) => source.DocumentAndEditor = (document, editor);
+                                    | _ => ();
+                                }
                             }
                         | _ => ();
                     }
@@ -311,7 +336,7 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
                     match(e.ProjectItem) {
                         | item is FileProjectItem =>
                             lock(sync_root) {
-                                _ = RemoveSource(item);
+                                _ = RemoveSource(item.FileName);
                             }
                         | _ => ();
                     }
@@ -358,8 +383,14 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
                             | _ => ();
                         }
 
+                        lock(context_table) {
+                            _ = context_table.Remove(project)
+                        }
+
                         disposed = true;
                         GC.SuppressFinalize(this);
+
+                        LoggingService.Debug($"Engine context disposed for project $project.");
                     }
                 }
             }
@@ -367,6 +398,54 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
 
         protected override Finalize() : void {
             Dispose();
+        }
+
+        #endregion
+
+
+        #region Static Members
+
+        private static context_table : SCG.Dictionary[IProject, EngineContext] = SCG.Dictionary();
+
+        public static CreateContext([NotNull]project : IProject) : EngineContext {
+            lock(context_table) {
+                mutable context;
+                unless(context_table.TryGetValue(project, out context)) {
+                    context = EngineContext(project);
+                    context_table[project] = context;
+                }
+                context
+            }
+        }
+
+        public static GetContext([NotNull]project : IProject) : EngineContext {
+            lock(context_table) {
+                mutable context;
+                if(context_table.TryGetValue(project, out context)) 
+                    context
+                else
+                    null
+            }
+        }
+
+        public static NotifyFileOpened(fileName : string, document : IDocument, editor : TextEditorControl) : void {
+            _ = ThreadPool.QueueUserWorkItem(fun(_) {
+                lock(context_table) {
+                    foreach(context in context_table.Values) {
+                        context.NotifyFileOpenedInternal(fileName, document, editor)
+                    }
+                }
+            });
+        }
+
+        public static NotifyFileClosed(document : IDocument, editor : TextEditorControl) : void {
+            _ = ThreadPool.QueueUserWorkItem(fun(_) {
+                lock(context_table) {
+                    foreach(context in context_table.Values) {
+                        context.NotifyFileClosedInternal(document, editor)
+                    }
+                }
+            });
         }
 
         #endregion

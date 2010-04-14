@@ -5,7 +5,5 @@ To build Binding you have to:
    and define SharpDevelopSrc environment variable
 3) build #Develop
 
-For correct working Binding requires Nemerle environment variable
-which points to Nemerle installation directory (usally C:\Program Files\Nemerle).
 
 Ensure that Nemerle.dll, Nemerle.Macros.dll, Nemerle.Compiler.dll are stored in GAC.
