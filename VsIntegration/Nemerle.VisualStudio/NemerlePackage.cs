@@ -176,8 +176,8 @@ namespace Nemerle.VisualStudio
 
         foreach (EnvDTE.Project prj in dte.Solution.Projects)
         {
-          foreach (EnvDTE.ProjectItem item in prj.ProjectItems)
-            System.Diagnostics.Trace.WriteLine(item.Name);
+          //foreach (EnvDTE.ProjectItem item in prj.ProjectItems)
+          //  System.Diagnostics.Trace.WriteLine(item.Name);
 
           var oaProj = prj as Microsoft.VisualStudio.Project.Automation.OAProject;
 
