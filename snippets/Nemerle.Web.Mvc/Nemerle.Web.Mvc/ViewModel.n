@@ -1,0 +1,182 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Extensions;
+using PT = Nemerle.Compiler.Parsetree;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+using System.Web.Mvc;
+
+namespace Nemerle.Web.Mvc
+{
+
+  macro Model()
+  {
+    ViewModelImpl.GetViewModel(Macros.ImplicitCTX());
+  }
+
+  macro ViewModelCtor(view_name, master_name, params args : array[expr])
+  syntax("model", "(", args, ")", Optional("view", view_name), Optional("master", master_name))
+  {
+    ViewModelImpl.BuildViewModel(Macros.ImplicitCTX(), view_name, master_name, NList.ToList(args));
+  }
+
+  module ViewModelImpl
+  {
+
+    model_key : string = "_N_Model";
+
+    public BuildViewModel(typer : Typer, view_name : PT.PExpr, master_name : PT.PExpr, args : list[PT.PExpr]) : PT.PExpr
+    {
+      //unless(typer.Manager.IsIntelliSenseMode)
+      //  _ = System.Diagnostics.Debugger.Launch();
+
+      def controller = {
+        def ty_name = typer.CurrentTypeBuilder.Name;
+        regexp match(ty_name) {
+          | @"(?<name>.*?)Controller" => name
+          | _ => ty_name
+        }
+      }
+
+      def view = match(view_name) {
+                   | null => typer.CurrentMethodBuilder.Name
+                   | <[ $(name : string) ]> => if(string.IsNullOrEmpty(name))
+                                                 typer.CurrentMethodBuilder.Name
+                                               else
+                                                 name
+                   | _ => Message.FatalError(view_name.Location, "Expected string literal for View name.")
+                 }
+
+      def master = match(master_name) {
+                     | null => ""
+                     | <[ $(name : string) ]> => name
+                     | _ => Message.FatalError(master_name.Location, "Expected string literal for Master name.")
+                   }
+
+      def args = NList.FoldRight(args, [], fun(arg, acc) {
+        match(arg) {
+          | <[ $(field : name) = $value ]> => (field, value) :: acc
+          | <[ _.$(field : name) ]> => (field, arg) :: acc
+          | <[ $(field : name) ]> => (field, arg) :: acc
+          | _ => Message.Warning(arg.Location, "Expected model parameter initailizer in form: `x = foo()'"); acc
+        }
+      });
+
+      def view_engine_host = {
+        def key = "ViewEngineHost";
+        match(typer.Manager.UserData[key]) {
+          | null =>
+            def host = ViewEngineHost(System.IO.Path.GetDirectoryName(typer.Manager.Options.ProjectPath));
+            typer.Manager.UserData[key] = host;
+            host
+          | host => host :> ViewEngineHost
+        }
+      }
+
+      def model = {
+        def build_name(view_path) {
+          "_N_" + view_path.ToLower().Replace("~/", "").Replace("/", "_").Replace(".", "_")
+        }
+        match(view_engine_host.FindView(controller, view, master)) {
+          | (false, _) =>
+            Message.Warning(view_name.Location, $"View `$view_name' not found.");
+            build_name(view)
+          | (true, view_path) =>
+            build_name(view_path)
+        }
+      }
+
+      def build_code(model_ty) {
+        match(args) {
+          | [] =>
+            <[
+              this.View($(view : string), $(master : string))
+            ]>
+          | _ =>
+            def ctor_args = if(typer.Manager.IsIntelliSenseMode) [] else args.Map( ((name, value)) => <[ $(name : name) = $value ]> );
+            <[
+              this.ViewData[$(model_key : string)] = $(model_ty.Name : usesite)( ..$ctor_args );
+              this.View($(view : string), $(master : string))
+            ]>
+        }
+      }
+
+      match(typer.Env.LookupType([model])) {
+        | Some(ty) => build_code(ty)
+        | None =>
+          def tb = typer.Manager.CoreEnv.Define(<[ decl:
+            public class $(model : usesite) { }
+          ]>);
+          def compile_and_build() {
+            unless(Message.ErrorCount > 0)
+              tb.Compile();
+            build_code(tb)
+          }
+          def infer_args_and_build(names, targs) {
+            typer.DelayMacro(fun(fail_loudly) {
+              def define_members(names_and_tys) {
+                def prop_infos = names_and_tys.Map( ((name, ty)) => new(ty, field = Macros.NewSymbol(name.ToString()), prop = name) );
+                { // ctor
+                  def ctor_args = prop_infos.Map( info => <[ parameter: $(info.prop : name) : $(info.ty : typed) ]> );
+                  def ctor_body = prop_infos.Map( info => <[ this.$(info.field : name) = $(info.prop : name) ]> );
+                  tb.Define(<[ decl:
+                    public this( ..$ctor_args ) { ..$ctor_body }
+                  ]>);
+                }
+                { // fields and properties
+                  foreach(info in prop_infos) {
+                    tb.Define(<[ decl:
+                      private $(info.field : name) : $(info.ty : typed)
+                    ]>);
+                    tb.Define(<[ decl:
+                      public $(info.prop : name) : $(info.ty : typed) {
+                        get { this.$(info.field : name) }
+                      }
+                    ]>);
+                  }
+                }
+              }
+
+              match(targs.Type.Hint) {
+                | None => 
+                  when(fail_loudly)
+                    Message.Error("Compiler can't infer type of model arguments.");
+                  None()
+
+                | Some(FixedType.Tuple(tys)) =>
+                  define_members(NList.Combine(names, tys.Map( _.Fix())));
+                  Some(compile_and_build())
+
+                | Some(ty) =>
+                  define_members([(names.Head, ty)]);
+                  Some(compile_and_build())
+              }
+            })
+          }
+          match(args) {
+            | [] => compile_and_build()
+            | _ =>
+              if(typer.Manager.IsIntelliSenseMode) {
+                compile_and_build()
+              } else {
+                def (names, values) = args.Split();
+                infer_args_and_build(names, typer.TypeExpr(<[ (..$values) ]>))
+              }
+          }
+      }
+    }
+
+    public GetViewModel(typer : Typer) : PT.PExpr
+    {
+      def model_ty_name = "_N_" + typer.CurrentTypeBuilder.Name;
+      <[ this.ViewData[$(model_key : string)] :> $(model_ty_name : usesite) ]>
+    }
+
+  }
+
+}
