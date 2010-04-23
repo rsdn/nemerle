@@ -1,0 +1,145 @@
+﻿using System;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using PT = Nemerle.Compiler.Parsetree;
+using TT = Nemerle.Compiler.Typedtree;
+using SCG = System.Collections.Generic;
+using LE = System.Linq.Enumerable;
+
+namespace Snippets
+{
+    public macro NewObjectExpression(body)
+    syntax("newobj", body)
+    {
+        NewObjectImpl.Run(Macros.ImplicitCTX(), body)
+    }
+
+    internal module NewObjectImpl
+    {
+        [Record]
+        class InterfaceInfo
+        {
+            [Accessor] private interfaceDecl : PT.PExpr.Ref;
+            [Accessor] private genericArgs : list[PT.PExpr];
+            [Accessor] private methods : list[MethodInfo];
+        }
+
+        [Record]
+        class MethodInfo
+        {
+            [Accessor] private name : PT.Name;
+            [Accessor] private impl : PT.Name;
+        }
+
+
+    public Run(typer : Typer, expr : PT.PExpr) : PT.PExpr
+    {
+        // System.Diagnostics.Debugger.Break();
+        def interfaces = match(expr)
+        {
+            | <[({.. $body})]> => body.Map(fun(_) 
+            {
+                | <[ $(ifc)[.. $(genericArgs)] : {..$(methods)}]> 
+                | <[ $(ifc) : {.. $(methods) } ]> with genericArgs = [] =>
+                    InterfaceInfo(ifc :> PT.PExpr.Ref, genericArgs, methods.Map(fun(_)
+                    {
+                        | <[ $(l : name) = $(r : name)]> => MethodInfo(l, r)
+                        | _ => Message.FatalError("incorrect method declaration")
+                    }));
+                | _ => Message.FatalError("incorrect interface definition")
+            })
+            | _ => Message.FatalError("incorrect object expression")
+        }
+
+        def createCtor(fields : list[PT.ClassMember.Field]) {
+            def ctorParams = fields.Map(fun(p) {
+                <[ parameter: $(p.name) : $(p.ty)]>
+            });
+            def assigns = ctorParams.Zip(fields).Map(fun(p, f)   {
+                <[this.$(f.Name : usesite) = $(p.name.GetName() : name)]>
+            });
+            <[decl: public this(..$ctorParams) {.. $assigns} ]>
+        }        
+
+        def implementedInterfaces = SCG.List();
+        def fields = SCG.List();
+        def members = SCG.List();
+        def locals = SCG.List();
+
+        foreach(ifc in interfaces)
+        {
+            // interface can be used directly if it has no generic arguments or no wildcards
+            def canUseDirectly = ifc.GenericArgs.ForAll(fun(_){ | PT.PExpr.Wildcard => false | _ => true});
+            unless(canUseDirectly)
+                Message.FatalError("Inferred parameters and wildcards are not supported yet");
+
+            def reconstructedDecl = if (ifc.GenericArgs.Length == 0) <[$(ifc.InterfaceDecl)]> else <[$(ifc.InterfaceDecl)[.. $(ifc.GenericArgs)]]>;
+            //def actualType = match (typer.BindFixedType(reconstructedDecl))
+            //{    
+            //    | FixedType.Class(typedef, tyVars) => 
+            //        (typedef, tyVars)
+            //    | _ => Message.FatalError("!!")
+            //};
+
+            implementedInterfaces.Add(reconstructedDecl);
+
+            foreach(m in ifc.Methods) 
+            {
+                def impl = match (typer.LocalContext.FindLocal(m.Impl))
+                {
+                    | Some(x) => match(x.ValueKind) 
+                                 {
+                                   | LocalValue.Kind.Function(f, _) => f
+                                   | _ => Message.FatalError("Incorrect kind of local variable, local function expected")
+                                 }
+                    | _ => Message.FatalError($"local function $(m.Impl) not found")
+                };
+
+                def fieldName = Macros.NewSymbol(impl.Name);
+                def field = <[decl: 
+                    private $(fieldName : name) : $(impl.decl.Type : typed);
+                ]>;
+    /*
+                    def methodName = Macros.NewSymbol(m.Name.ParcedId);
+                    $(methodName : name)(..$(impl.ParametersDeclarations)) : $(impl.RetType : typed) implements $(reconstructedDecl).$(m.Name : name)
+                    {
+                        this.$(fieldName : name)(..$(impl.ParametersReferences))
+                    };
+    */
+                def method = <[decl:
+                    public $(m.Name : name)(..$(impl.ParametersDeclarations)) : $(impl.RetType : typed) 
+                    {
+                        this.$(fieldName : name)(..$(impl.ParametersReferences))
+                    };
+                ]>;
+
+                locals.Add(<[ $(m.Impl : name) ]>);
+                members.Add(field);
+                members.Add(method);
+                fields.Add(field)
+            };
+        }
+
+        def className = Macros.NewSymbol("ObjectExpression");
+
+        members.Add(createCtor(fields.ToList()));
+        def impl = typer.Env.Define(<[decl:
+            internal sealed class $(className.Id :  usesite) : ..$(implementedInterfaces.ToList())
+            {
+            ..$(members.ToList())
+            }
+        ]>
+        ); 
+        unless(typer.InErrorMode)
+            impl.Compile();
+            
+        <[$(impl.FullName : usesite)(..$(locals.ToList())) : $(implementedInterfaces[0])]>
+        }
+    }
+
+}
