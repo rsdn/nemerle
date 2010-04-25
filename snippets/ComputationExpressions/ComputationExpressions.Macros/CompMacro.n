@@ -229,6 +229,8 @@ namespace Nemerle.ComputationExpressions
       
       TryCatch (body, <[ $(e : name) => $p ]>)
     }
+    
+    public abstract Using (expr : PExpr, name : PExpr, body : PExpr) : PExpr;
   }
 
   /// <summary>
@@ -265,7 +267,7 @@ namespace Nemerle.ComputationExpressions
     
     public override Bind (expr : PExpr, name : PExpr, cont : PExpr) : PExpr
     {
-      <[ $builder.Bind ($expr, ($name) => $cont) ]>
+      <[ $builder.Bind ($expr, $name => $cont) ]>
     }
     
     public override Delay (expr : PExpr) : PExpr
@@ -306,6 +308,11 @@ namespace Nemerle.ComputationExpressions
     protected override TryCatch (body : PExpr, cont : PExpr) : PExpr
     {
       <[ $builder.TryCatch ($builder.Delay (() => $body), $cont) ]>
+    }
+    
+    public override Using (expr : PExpr, name : PExpr, body : PExpr) : PExpr
+    {
+      <[ $builder.Using ($expr, $name => $body) ]>
     }
   }
   
@@ -691,6 +698,28 @@ namespace Nemerle.ComputationExpressions
                     Message.FatalError (expr.Location, "Invalid repeat expression.");
                 };
                 
+              | "using" =>
+                match (parms)
+                {
+                  | Expression (body) :: Expression (sec) :: tail =>
+                    
+                    def extract (expr : SyntaxElement)
+                    {
+                      | Expression (body) => body 
+                      | _ => Message.FatalError (expr.Location, "Expected an expression.")
+                    }
+                    
+                    match (sec)
+                      {
+                        | <[ match ($(null)) { ..$cases } ]> => 
+                          transformUsing (expr, body, cases, tail.Map (extract))
+                        | _ =>
+                          transformUsing (expr, body, [], sec :: tail.Map (extract))
+                      }
+                  | _ =>
+                    Message.FatalError (expr.Location, "Invalid using expression.");
+                }
+                
               | _ => 
                 (expr, false)
             }
@@ -765,6 +794,96 @@ namespace Nemerle.ComputationExpressions
             def body = if (isComp) body else <[ $body; $(builder.Zero ()) ]>;
               
             (builder.TryCatch (body, ps), true)
+        }
+      }
+      and transformUsing (expr : PExpr, body : PExpr, cases : list [MatchCase], binding : list [PExpr])
+      {
+        // Transforms the using block and returns a tuple of two values: the result of
+        // transformation and a flag indicating whether this result is a computation (monad).
+
+        def (body, isComp) = transform (body, false);
+        
+        def cs = cases.Map (fun (c)
+          {
+            | <[ case: $(x : name) is $exc => $exp ]> =>
+              def (p, f) = transform (exp, false);
+              (TryCase.Catch (Splicable.Name (x), exc, p), f)
+            
+            | <[ case: $(x : name) => $exp ]> =>
+              def (p, f) = transform (exp, false);
+              (TryCase.Catch (Splicable.Name (x), <[ System.Exception ]>, p), f)
+            
+            | _ => 
+              Message.FatalError ("expected simple catch pattern: '| x is Exception => body'");
+          });
+          
+        def bs = binding.Map (fun (expr)
+          {
+            | <[ mutable _ = _ ]>
+            | DefMutable (_, _) =>
+            
+              Message.FatalError (expr.Location, "A mutable reference makes no sense for "
+                "the using block that is converted to a computation. Use def instead or "
+                "declare a mutable reference outside or inside the using block.")
+                         
+            | <[ def $(str : name) = $e ]> 
+            | <[ $(str : name) = $e ]> =>
+              (e, <[ $(str : name) ]>, false)
+            
+            | MacroCall (name, _, parms) when name.Id == "defcomp" =>
+              match (parms)
+              {
+                | [Expression (Assign (<[ $(str : name) ]>, e))] => (e, <[ $(str : name) ]>, true)
+                | _ => Message.FatalError (expr.Location, "Invalid defcomp expression.")
+              }
+            
+            | e =>
+              def x = Macros.NewSymbol ();
+              (e, <[ $(x : name) ]>, false)
+          });
+          
+        match (isComp || cs.Exists ((_, f) => f) || bs.Exists ((_, _, f) => f))
+        {
+          | false => (expr, false)
+          | true =>
+          
+            // We must return a computation.
+          
+            def ps = cs.Map (fun (c, f)
+              {
+                match (f)
+                {
+                  | false =>
+                    match (c : TryCase)
+                    {
+                      | Catch (exn, exn_ty, handler) => 
+                        TryCase.Catch (exn, exn_ty, <[ $handler; $(builder.Zero ()) ]>)
+                      | _ => 
+                        Message.FatalError ("Internal error.")
+                    }
+                    
+                  | true => c
+                }
+              });
+              
+            def body = 
+              if (isComp) body else <[ $body; $(builder.Zero ()) ]>;
+            
+            def body =
+              match (ps)
+              {
+                | [] => body
+                | _ => builder.TryCatch (body, ps)
+              }
+              
+            def body = bs.FoldRight (body, ((e, name, isComp), acc) =>
+              match (isComp)
+              {
+                | false => builder.Using (e, name, acc)
+                | true => builder.Bind (e, name, builder.Using (name, name, acc))
+              });
+            
+            (body, true)
         }
       }
       
