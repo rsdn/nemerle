@@ -31,14 +31,12 @@ module FSharpAsync =
 
     type FSharpAsyncBuilder () =
     
-        let zero = async.Return (FakeVoid.Value)
-        
-        let unifier = fun _ -> async.Return ()
+        let zero = async.Return ()
     
         member x.Bind (m, k: Function<'a, Async<'b>>) =
             async.Bind (m, fun a -> k.apply (a))
             
-        member x.Bind (m: Async<FakeVoid>, k: Function<Async<'a>>) =
+        member x.Bind (m: Async<unit>, k: Function<Async<'a>>) =
             async.Bind (m, fun _ -> k.apply ())
             
         member x.Zero () = zero
@@ -55,14 +53,14 @@ module FSharpAsync =
         member x.Using (g, k: Function<'a, Async<'b>>) =
             async.Using (g, fun a -> k.apply (a))
             
-        member x.While (p: Function<bool>, m: Async<FakeVoid>) =
-            async.Combine (async.While ((fun () -> p.apply ()), async.Bind (m, unifier)), zero)
+        member x.While (p: Function<bool>, m: Async<unit>) =
+            async.While ((fun () -> p.apply ()), m)
             
-        member x.ForEach (coll, k: Function<'a, Async<FakeVoid>>) =
-            async.Combine (async.For (coll, (fun a -> async.Bind (k.apply (a), unifier))), zero)
+        member x.ForEach (coll, k: Function<'a, Async<unit>>) =
+            async.For (coll, (fun a -> k.apply (a)))
             
-        member x.Combine (m1: Async<FakeVoid>, m2) =
-            async.Combine (async.Bind (m1, unifier), m2)
+        member x.Combine (m1: Async<unit>, m2) =
+            async.Combine (m1, m2)
             
         member x.TryFinally (m, h: FunctionVoid) =
             async.TryFinally (m, fun () -> h.apply_void ())
@@ -71,6 +69,3 @@ module FSharpAsync =
             async.TryWith (m, fun e -> k.apply (e))        
 
     let fsasync = new FSharpAsyncBuilder ()
-    
-    let FromAsyncUnit (m: Async<unit>) =
-        async.Bind (m, fun () -> async.Return (FakeVoid.Value))
