@@ -27,9 +27,6 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
             this.engine = EngineFactory.Create(this, TraceWriter(), false);
             this.engine.TypedtreeCreated += OnTypedTreeCreated;
 
-            ProjectService.ProjectItemAdded += OnProjectItemAdded;
-            ProjectService.ProjectItemRemoved += OnProjectItemRemoved;
-            Application.Idle += OnApplicationIdle;
             match(project) {
                 | project is AbstractProject =>
                     project.ActiveConfigurationChanged += OnActiveConfigurationChanged;
@@ -49,12 +46,12 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
 
         source_map : SCG.Dictionary[int, Source] = SCG.Dictionary();
 
-        private FindSource(file_name : string) : bool * Source {
+        private FindSource(file_name : string) : option[Source] {
             mutable source;
             if(source_map.TryGetValue(Location.GetFileIndex(file_name), out source))
-                (true, source)
+                Some(source)
             else
-                (false, null)
+                None()
         }
 
         private AddSourceNoCheck(file_name : string) : Source {
@@ -65,8 +62,8 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
 
         private AddSource(file_name : string) : Source {
             match(FindSource(file_name)) {
-                | (true, source) => source
-                | (false, _) =>
+                | Some(source) => source
+                | _ =>
                     def source = AddSourceNoCheck(file_name);
                     engine.RequestOnBuildTypesTree();
                     source
@@ -75,14 +72,13 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
 
         private RemoveSource(file_name : string) : bool {
             match(FindSource(file_name)) {
-                | (true, source) =>
+                | Some(source) =>
                     _ = source_map.Remove(source.FileIndex);
                     source.Dispose();
                     engine.RequestOnBuildTypesTree();
                     true
 
-                | (false, _) =>
-                    false
+                | _ => false
             }
         }
 
@@ -285,17 +281,20 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
         #endregion
 
 
+        #region Notification handlers
+
         private OnTypedTreeCreated(_ : object, _ : EventArgs) : void {
             LoggingService.Debug($"Type tree built for project $project");
         }
 
-
-        #region File load\unload handlers
+        private OnActiveConfigurationChanged(_ : object, _ : EventArgs) : void {
+            Reload(true);
+        }
 
         private NotifyFileOpenedInternal(fileName : string, document : IDocument, editor : TextEditorControl) : void {
             lock(sync_root) {
                 match(FindSource(fileName)) {
-                    | (true, source) => source.DocumentAndEditor = (document, editor);
+                    | Some(source) => source.DocumentAndEditor = (document, editor);
                     | _ => ();
                 }
             }
@@ -310,47 +309,24 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
             }
         }
 
-        #endregion
-
-
-        #region Event handlers
-
-        private OnActiveConfigurationChanged(_ : object, _ : EventArgs) : void {
-            Reload(true);
-        }
-
-        private OnProjectItemAdded(_ : object, e : ProjectItemEventArgs) : void {
-            when(ReferenceEquals(e.ProjectItem.Project, project)) {
-                if(ItemType.Compile == e.ProjectItem.ItemType)
-                    match(e.ProjectItem) {
-                        | item is FileProjectItem =>
-                            lock(sync_root) {
-                                def source = AddSource(item.FileName);
-                                match(NemerleSourceDisplayBinding.FindOpenedDocument(source.FileName)) {
-                                    | (true, document, editor) => source.DocumentAndEditor = (document, editor);
-                                    | _ => ();
-                                }
-                            }
+        private NotifyProjectItemAddedInternal(item : ProjectItem) : void {
+            | item is FileProjectItem when item.ItemType == ItemType.Compile =>
+                lock(sync_root) {
+                    def source = AddSource(item.FileName);
+                    match(NemerleSourceDisplayBinding.FindOpenedDocument(source.FileName)) {
+                        | (true, document, editor) => source.DocumentAndEditor = (document, editor);
                         | _ => ();
                     }
-                else
-                    ReloadEngineOnReferenceChange(e.ProjectItem);
-            }
+                }
+            | _ => ReloadEngineOnReferenceChange(item);
         }
 
-        private OnProjectItemRemoved(_ : object, e : ProjectItemEventArgs) : void {
-            when(ReferenceEquals(e.ProjectItem.Project, project)) {
-                if(ItemType.Compile == e.ProjectItem.ItemType)
-                    match(e.ProjectItem) {
-                        | item is FileProjectItem =>
-                            lock(sync_root) {
-                                _ = RemoveSource(item.FileName);
-                            }
-                        | _ => ();
-                    }
-                else
-                    ReloadEngineOnReferenceChange(e.ProjectItem);
-            }
+        private NotifyProjectItemRemovedInternal(item : ProjectItem) : void {
+            | item is FileProjectItem when item.ItemType == ItemType.Compile =>
+                lock(sync_root) {
+                    _ = RemoveSource(item.FileName);
+                }
+            | _ => ReloadEngineOnReferenceChange(item);
         }
 
         private ReloadEngineOnReferenceChange(item : ProjectItem) : void {
@@ -362,58 +338,42 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
             }
         }
 
-        private OnApplicationIdle(_ : object, _ : EventArgs) : void {
-            engine.OnIdle();
-        }
-
         #endregion
 
 
         #region Disposable
 
-        [Accessor] mutable disposed : bool = false;
-
         public Dispose() : void {
-            lock(sync_root) {
-                unless(disposed) {
-                    try {
-                        unless(null == engine)
-                            engine.Close();
-                    } finally {
-                        Clear();
-
-                        ProjectService.ProjectItemAdded -= OnProjectItemAdded;
-                        ProjectService.ProjectItemRemoved -= OnProjectItemRemoved;
-                        Application.Idle -= OnApplicationIdle;
-                        match(project) {
-                            | project is AbstractProject =>
-                                project.ActiveConfigurationChanged -= OnActiveConfigurationChanged;
-                            | _ => ();
-                        }
-
-                        lock(context_table) {
-                            _ = context_table.Remove(project)
-                        }
-
-                        disposed = true;
-                        GC.SuppressFinalize(this);
-
-                        LoggingService.Debug($"Engine context disposed for project $project.");
-                    }
-                }
+            lock(context_table) {
+                _ = context_table.Remove(project)
             }
-        }
 
-        protected override Finalize() : void {
-            Dispose();
+            lock(sync_root) {
+                match(project) {
+                    | project is AbstractProject =>
+                        project.ActiveConfigurationChanged -= OnActiveConfigurationChanged;
+                    | _ => ();
+                }
+                unless(null == engine)
+                    engine.Close();
+                Clear();
+            }
+
+            LoggingService.Debug($"Engine context disposed for project $project.");
         }
 
         #endregion
 
 
-        #region Static Members
+        #region Static members and global even handlers
 
         private static context_table : SCG.Dictionary[IProject, EngineContext] = SCG.Dictionary();
+
+        static this() {
+            Application.Idle += OnApplicationIdle;
+            ProjectService.ProjectItemAdded += OnProjectItemAdded;
+            ProjectService.ProjectItemRemoved += OnProjectItemRemoved;
+        }
 
         public static CreateContext([NotNull]project : IProject) : EngineContext {
             lock(context_table) {
@@ -439,9 +399,8 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
         public static NotifyFileOpened(fileName : string, document : IDocument, editor : TextEditorControl) : void {
             _ = ThreadPool.QueueUserWorkItem(fun(_) {
                 lock(context_table) {
-                    foreach(context in context_table.Values) {
+                    foreach(context in context_table.Values)
                         context.NotifyFileOpenedInternal(fileName, document, editor)
-                    }
                 }
             });
         }
@@ -449,11 +408,39 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
         public static NotifyFileClosed(document : IDocument, editor : TextEditorControl) : void {
             _ = ThreadPool.QueueUserWorkItem(fun(_) {
                 lock(context_table) {
-                    foreach(context in context_table.Values) {
+                    foreach(context in context_table.Values)
                         context.NotifyFileClosedInternal(document, editor)
-                    }
                 }
             });
+        }
+
+        private static OnApplicationIdle(_ : object, _ : EventArgs) : void {
+            _ = ThreadPool.QueueUserWorkItem(fun(_) {
+                lock(context_table) {
+                    foreach(context in context_table.Values)
+                        context.engine.OnIdle();
+                }
+            });
+        }
+
+        private static OnProjectItemAdded(_ : object, e : ProjectItemEventArgs) : void {
+            lock(context_table) {
+                def item = e.ProjectItem;
+                def project = item.Project;
+
+                foreach(pair when ReferenceEquals(project, pair.Key) in context_table)
+                    pair.Value.NotifyProjectItemAddedInternal(item);
+            }
+        }
+
+        private static OnProjectItemRemoved(_ : object, e : ProjectItemEventArgs) : void {
+            lock(context_table) {
+                def item = e.ProjectItem;
+                def project = item.Project;
+
+                foreach(pair when ReferenceEquals(project, pair.Key) in context_table)
+                    pair.Value.NotifyProjectItemRemovedInternal(item);
+            }
         }
 
         #endregion
