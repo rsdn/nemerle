@@ -31,15 +31,14 @@ module FSharpAsync =
 
     type FSharpAsyncBuilder () =
     
-        let zero = async.Return ()
-    
         member x.Bind (m, k: Function<'a, Async<'b>>) =
             async.Bind (m, fun a -> k.apply (a))
             
         member x.Bind (m: Async<unit>, k: Function<Async<'a>>) =
             async.Bind (m, fun _ -> k.apply ())
             
-        member x.Zero () = zero
+        member x.Zero () = 
+            async.Zero ()
         
         member x.Delay (k : Function<Async<'a>>) = 
             async.Delay (fun () -> k.apply ())
