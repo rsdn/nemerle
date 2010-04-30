@@ -3,6 +3,7 @@ using System.Windows.Forms;
 using SCG = System.Collections.Generic;
 
 using ICSharpCode.Core;
+using ICSharpCode.SharpDevelop.Debugging;
 using ICSharpCode.SharpDevelop.Gui;
 using ICSharpCode.TextEditor;
 using ICSharpCode.TextEditor.Document;
@@ -12,6 +13,7 @@ using Nemerle.Completion2;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Utility;
+using Nemerle.SharpDevelop.Editor;
 
 namespace Nemerle.SharpDevelop.CodeCompletion {
 
@@ -20,16 +22,20 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
         public this([NotNull] source : Source, [NotNull] document : IDocument, [NotNull] editor : TextEditorControl) {
             this.source = source;
             this.document = document;
+            this.editor = editor;
             this.document.DocumentAboutToBeChanged += OnDocumentAboutToBeChanged;
             this.document.DocumentChanged += OnDocumentChanged;
-            this.caret_handler = TextAreaHandler(editor, OnCaretPositionChanged, OnTooltipRequested);
+            this.editor.ActiveTextAreaControlChanged += OnActiveTextAreaControlChanged;
+            SubscribeTextAreaEvents(editor.ActiveTextAreaControl);
         }
 
         source : Source;
 
-        caret_handler : TextAreaHandler;
+        editor : TextEditorControl;
 
         [Accessor] document : IDocument;
+
+        #region ISource
 
         [Accessor] mutable current_version : int = 0;
 
@@ -107,6 +113,42 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
             })
         }
 
+        #endregion
+
+
+        #region TextArea switching
+
+        text_areas : SCG.List[TextAreaControl] = SCG.List();
+
+        private OnActiveTextAreaControlChanged(_ : object, _ : EventArgs) : void {
+            SubscribeTextAreaEvents(editor.ActiveTextAreaControl); 
+        }
+
+        private SubscribeTextAreaEvents(text_area : TextAreaControl) : void {
+            unless(text_areas.Contains(text_area)) {
+                text_area.Caret.PositionChanged += OnPositionChanged;
+                text_area.TextArea.ToolTipRequest += OnToolTipRequest;
+            }
+        }
+
+        #endregion
+
+
+        #region Caret moving handling
+
+        private OnPositionChanged(sender : object, _ : EventArgs) : void {
+            match(sender) {
+                | caret is Caret =>
+                    source.Context.Engine.SetTextCursorLocation(source.FileIndex, caret.Line + 1, caret.Column + 1);
+                | _ => ();
+            }
+        }
+
+        #endregion
+
+
+        #region Document update handling
+
         mutable old_end_loc : TextLocation;
         mutable old_end_offset : int;
         mutable old_text_length : int;
@@ -132,84 +174,40 @@ namespace Nemerle.SharpDevelop.CodeCompletion {
                 start_loc.Line + 1, start_loc.Column + 1);
         }
 
-        private OnCaretPositionChanged(line : int, column : int) : void {
-            source.Context.Engine.SetTextCursorLocation(source.FileIndex, line + 1, column + 1);
+        #endregion
+
+
+        #region Tooltip show handing
+
+        private OnToolTipRequest(_ : object, e : ToolTipRequestEventArgs) : void {
+            def loc = e.LogicalPosition;
+            if(!e.ToolTipShown
+                && e.InDocument
+                && 0 < loc.Column
+                && loc.Column < document.GetLineSegment(loc.Line).Length) {
+
+                def request = source.Context.Engine.BeginGetQuickTipInfo(source, loc.Line + 1, loc.Column + 1);
+                while(!request.IsCompleted) {
+                    Application.DoEvents();
+                }
+                WpfTooltipService.ShowTooltip(request.QuickTipInfo, editor.ActiveTextAreaControl.TextArea, loc);
+            } else {
+                WpfTooltipService.CloseTooltip();
+            }
         }
 
-        private OnTooltipRequested(e : ToolTipRequestEventArgs) : void {
-            // This is bad :(
-            def request = source.Context.Engine.BeginGetQuickTipInfo(source, e.LogicalPosition.Line + 1, e.LogicalPosition.Column + 1);
-            while(!request.IsCompleted) {
-                Application.DoEvents();
-            }
-            match(request.QuickTipInfo) {
-                | null => ();
-                | tip_info => e.ShowToolTip(tip_info.Text);
-            }
-        }
+        #endregion
+
 
         #region Disposable
 
         public Dispose() : void {
             document.DocumentAboutToBeChanged -= OnDocumentAboutToBeChanged;
             document.DocumentChanged -= OnDocumentChanged;
-            caret_handler.Dispose();
-        }
-
-        #endregion
-
-        #region Utils
-
-        private sealed class TextAreaHandler : IDisposable {
-
-            public this(editor : TextEditorControl, caret_changed : int * int -> void, tooltip_request_handler : ToolTipRequestEventArgs -> void) {
-                this.editor = editor;
-                this.caret_changed = caret_changed;
-                this.tooltip_request_handler = tooltip_request_handler;
-                this.editor.ActiveTextAreaControlChanged += OnActiveTextAreaControlChanged;
-                SubscribeEvents(editor.ActiveTextAreaControl);
-            }
-
-            editor : TextEditorControl;
-
-            caret_changed : int * int -> void;
-
-            tooltip_request_handler : ToolTipRequestEventArgs -> void;
-
-            text_areas : SCG.List[TextAreaControl] = SCG.List();
-
-            private OnActiveTextAreaControlChanged(_ : object, _ : EventArgs) : void {
-                SubscribeEvents(editor.ActiveTextAreaControl);
-            }
-
-            private SubscribeEvents(text_area : TextAreaControl) : void {
-                unless(text_areas.Contains(text_area)) {
-                    text_area.Caret.PositionChanged += OnPositionChanged;
-                    text_area.TextArea.ToolTipRequest += OnToolTipRequest;
-                }
-            }
-
-            private OnPositionChanged(sender : object, _ : EventArgs) : void {
-                match(sender) {
-                    | caret is Caret => caret_changed(caret.Line, caret.Column);
-                    | _ => ();
-                }
-            }
-
-            private OnToolTipRequest(_ : object, e : ToolTipRequestEventArgs) : void {
-                when(!e.ToolTipShown
-                    && e.InDocument
-                    && e.LogicalPosition.Column > 0
-                    && e.LogicalPosition.Column < editor.ActiveTextAreaControl.Document.GetLineSegment(e.LogicalPosition.Line).Length) {
-                    tooltip_request_handler(e);
-                }
-            }
-
-            public Dispose() : void {
-                foreach(text_area in text_areas) {
-                    text_area.Caret.PositionChanged -= OnPositionChanged;
-                }
-                editor.ActiveTextAreaControlChanged -= OnActiveTextAreaControlChanged;
+            editor.ActiveTextAreaControlChanged -= OnActiveTextAreaControlChanged;
+            foreach(text_area in text_areas) {
+                text_area.Caret.PositionChanged -= OnPositionChanged;
+                text_area.TextArea.ToolTipRequest -= OnToolTipRequest;
             }
         }
 
