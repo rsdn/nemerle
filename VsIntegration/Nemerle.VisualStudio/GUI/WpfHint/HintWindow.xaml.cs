@@ -207,9 +207,6 @@ namespace WpfHint
 
 			if (rect.Left + size.Width > scrSize.Width)
 				pos.X = scrSize.Width - size.Width;
-			
-			if (pos.Y < 0) pos.Y = 0;
-			if (pos.X < 0) pos.X = 0;
 
 			// update location
 			this.Left = pos.X / dx;
