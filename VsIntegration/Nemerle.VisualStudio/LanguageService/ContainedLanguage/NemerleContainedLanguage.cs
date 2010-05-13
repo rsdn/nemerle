@@ -14,6 +14,12 @@ using ErrorHandler = Microsoft.VisualStudio.ErrorHandler;
 using System.ComponentModel.Design;
 using Microsoft.VisualStudio.Shell.Design;
 
+using Nemerle.Compiler;
+using Nemerle.Completion2;
+using Nemerle.VisualStudio.Project;
+using Microsoft.VisualStudio.Project.Automation;
+using EnvDTE;
+
 namespace Nemerle.VisualStudio.LanguageService
 {
 	/// <summary>
@@ -25,8 +31,9 @@ namespace Nemerle.VisualStudio.LanguageService
 	/// </summary>
 	public partial class NemerleContainedLanguage : IVsContainedLanguage, IVsContainedCode
 	{
-		private EnvDTE.ProjectItem _projectItem = null;
+		private ProjectItem _projectItem = null;
 		private string _filePath = null;
+		private ProjectInfo _projectInfo = null;
 		private IVsHierarchy _hierarchy = null;
 		private IVsTextBufferCoordinator bufferCoordinator;
 		[SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields")]
@@ -35,6 +42,9 @@ namespace Nemerle.VisualStudio.LanguageService
 		private NemerleLanguageService language;
 		private uint itemId;
 		private ITypeResolutionService _typeResolutionService;
+		private DocumentEvents _documentEvents;
+		private _dispDocumentEvents_DocumentClosingEventHandler _documentClosingEventHandler;
+		private CodeWindowManager _windowManager = null;
 
 		public NemerleContainedLanguage(IVsTextBufferCoordinator bufferCoordinator, NemerleIntellisenseProvider intellisenseProject, uint itemId, IVsHierarchy pHierarchy)
 		{
@@ -57,6 +67,12 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (prop != null)
 				_filePath = prop.Value as string;
 
+			var project = _projectItem.ContainingProject as NemerleOAProject;
+			if(project != null)
+			{
+				_projectInfo = ((NemerleProjectNode)project.Project).ProjectInfo;
+			}
+	
 			_typeResolutionService = null;
 			DynamicTypeService typeService = LanguageService.GetService(typeof(DynamicTypeService)) as DynamicTypeService;
 			if (typeService != null)
@@ -65,12 +81,16 @@ namespace Nemerle.VisualStudio.LanguageService
 			this.bufferCoordinator = bufferCoordinator;
 			this.intellisenseProject = intellisenseProject;
 			this.itemId = itemId;
+
 			// Make sure that the secondary buffer uses the IronPython language service.
 			IVsTextLines buffer;
 			ErrorHandler.ThrowOnFailure(bufferCoordinator.GetSecondaryBuffer(out buffer));
+
 			Guid languageGuid;
 			this.GetLanguageServiceID(out languageGuid);
 			ErrorHandler.ThrowOnFailure(buffer.SetLanguageServiceID(ref languageGuid));
+
+			_documentClosingEventHandler = new _dispDocumentEvents_DocumentClosingEventHandler(OnDocumentClosing);
 		}
 
 		public int GetColorizer(out IVsColorizer ppColorizer)
@@ -95,32 +115,74 @@ namespace Nemerle.VisualStudio.LanguageService
 		public int GetTextViewFilter(IVsIntellisenseHost pISenseHost, IOleCommandTarget pNextCmdTarget, out IVsTextViewFilter pTextViewFilter)
 		{
 			pTextViewFilter = null;
-			return VSConstants.E_NOTIMPL;
 
-			//IVsTextLines buffer;
-			//ErrorHandler.ThrowOnFailure(bufferCoordinator.GetSecondaryBuffer(out buffer));
+			IVsTextLines buffer;
+			ErrorHandler.ThrowOnFailure(bufferCoordinator.GetSecondaryBuffer(out buffer));
 
-			//bool doOutlining = LanguageService.Preferences.AutoOutlining;
-			//LanguageService.Preferences.AutoOutlining = false;
+			var secondaryFileIndex = Location.GetFileIndex(FilePathUtilities.GetFilePath(buffer));
+			var primaryFileindex = Location.GetFileIndex(_filePath);
 
-			//NemerleSource source = LanguageService.CreateSource(buffer) as NemerleSource;
-			//LanguageService.Preferences.AutoOutlining = doOutlining;
+			bool doOutlining = LanguageService.Preferences.AutoOutlining;
+			LanguageService.Preferences.AutoOutlining = false;
 
-			//CodeWindowManager windowMgr = LanguageService.CreateCodeWindowManager(null, source);
+			if (LanguageService.GetSource(buffer) == null)
+			{
+				// создаем и регистрируем в проекте временный source, чтобы не сломалась логика  
+				// конструктора NemerleSource (см вызов LanguageService.GetOrCreateSource) 
+				_projectInfo.ReplaseOrAddSource(new FileNemerleSource(secondaryFileIndex));
+			}
+			
+			NemerleSource source = LanguageService.GetOrCreateSource(buffer) as NemerleSource;
+			source.SetBufferCoordinator(bufferCoordinator);
 
-			//language.AddCodeWindowManager(windowMgr);
+			_projectInfo.Engine.RequestOnBuildTypesTree();
+	
+			LanguageService.Preferences.AutoOutlining = doOutlining;
 
-			//TextViewWrapper view = new TextViewWrapper(languageHost, pISenseHost, bufferCoordinator, pNextCmdTarget);
-			//windowMgr.OnNewView(view);
+			_windowManager = LanguageService.CreateCodeWindowManager(null, source);
 
-			//// language.AddSpecialSource(source, view); // from python
+			language.AddCodeWindowManager(_windowManager);
 
-			//pTextViewFilter = view.InstalledFilter;
-			//NemerleViewFilter nemerleFilter = pTextViewFilter as NemerleViewFilter;
-			//if (null != nemerleFilter)
-			//    nemerleFilter.BufferCoordinator = this.bufferCoordinator;
+			// увеличиваем внутренний счетчик openCount, для того чтобы впоследствии корректно отработала логика закрытия соурса
+			source.Open();
 
-			//return VSConstants.S_OK;
+			TextViewWrapper view = new TextViewWrapper(languageHost, pISenseHost, bufferCoordinator, pNextCmdTarget, source);
+			_windowManager.OnNewView(view);
+
+			pTextViewFilter = view.InstalledFilter;
+			NemerleViewFilter nemerleFilter = pTextViewFilter as NemerleViewFilter;
+			if (null != nemerleFilter)
+				nemerleFilter.BufferCoordinator = this.bufferCoordinator;
+
+			// сохраним значение DocumentEvents в переменной класса, чтобы исключить преждевременное уничтожение 
+			// объекта и автоматическоей отписывание от событий. 
+			// 
+			// Источник решения:
+			// PRB: Visual Studio .NET events being disconnected from add-in (http://www.mztools.com/articles/2005/mz2005012.aspx) 
+			_documentEvents = _projectItem.DTE.Events.get_DocumentEvents(_projectItem.Document);
+
+			_documentEvents.DocumentClosing += _documentClosingEventHandler;
+
+			return VSConstants.S_OK;
+		}
+
+		// После закрытия aspx файла исключим автосгенерированный исходник из списка компиляции проекта
+		void OnDocumentClosing(EnvDTE.Document document)
+		{
+			if (Location.GetFileIndex(document.FullName) == Location.GetFileIndex(_filePath))
+			{
+				try
+				{
+					if (_windowManager != null)
+						// RemoveAdornments вызывает уничтожение (close и dispose) view filter и source, связанных с _windowManager
+						_windowManager.RemoveAdornments();
+				}
+				finally
+				{
+					_windowManager = null;
+					_documentEvents.DocumentClosing -= _documentClosingEventHandler;
+				}
+			}
 		}
 
 		public int Refresh(uint dwRefreshMode)
@@ -150,7 +212,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			IVsTextLines buffer;
 			ErrorHandler.ThrowOnFailure(bufferCoordinator.GetSecondaryBuffer(out buffer));
-			ppEnum = null; //new CodeBlocksEnumerator(buffer); 
+			ppEnum = new CodeBlocksEnumerator(buffer); 
 			return VSConstants.S_OK;
 		}
 

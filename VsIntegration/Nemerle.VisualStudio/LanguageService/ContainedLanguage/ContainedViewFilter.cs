@@ -15,12 +15,11 @@ namespace Nemerle.VisualStudio.LanguageService
 	/// </summary>
 	internal partial class NemerleViewFilter
 	{
-		private IVsTextBufferCoordinator bufferCoordinator;
-
+		private IVsTextBufferCoordinator _bufferCoordinator;
 		internal IVsTextBufferCoordinator BufferCoordinator
 		{
-			get { return this.bufferCoordinator; }
-			set { this.bufferCoordinator = value; }
+			get { return _bufferCoordinator; }
+			set { _bufferCoordinator = value; }
 		}
 
 		public override ExpansionProvider GetExpansionProvider()
@@ -114,7 +113,29 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			try
 			{
-				this.bufferCoordinator = null;
+				_bufferCoordinator = null;
+
+				// Базовая реализация base.Dispose() предполагает, что значение внутреннего поля textView 
+				// является COM объектом и безусловно вызывает для него Marshal.ReleaseComObject.
+				// Но для Contained Language в качестве view используется TextViewWrapper, который не является
+				// COM объектом, что приводит к генерации исключения внутри base.Dispose() и 
+				// преждевременному выходу из функции.
+				// 
+				// Поэтому деинициализаируем textView вручную и обнулим значение поля. Это отменит вызов ReleaseComObject
+
+				// HACK: обнулим значение приватного поля textView, если его значение имеет тип TextViewWrapper
+				var textViewFieldInfo = this.GetType().BaseType.GetField("textView", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+				if (textViewFieldInfo != null)
+				{
+					var textView = (IVsTextView)textViewFieldInfo.GetValue(this);
+
+					if (textView is TextViewWrapper)
+					{
+						textView.CloseView();
+						textViewFieldInfo.SetValue(this, null);
+					}
+				}
+
 				base.Dispose();
 			}
 			catch (Exception)

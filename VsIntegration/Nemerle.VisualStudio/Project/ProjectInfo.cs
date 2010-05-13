@@ -31,315 +31,315 @@ using Tuple = Nemerle.Builtins.Tuple<Nemerle.Compiler.Location, int>;
 
 namespace Nemerle.VisualStudio.Project
 {
-  public class ProjectInfo : IIdeProject
-  {
-    private static Collection<ProjectInfo> _projects = new Collection<ProjectInfo>();
+	public class ProjectInfo : IIdeProject
+	{
+		private static Collection<ProjectInfo> _projects = new Collection<ProjectInfo>();
 
-    public string ProjectFullPath { get; private set; }
-    HierarchyListener _listener;
-    public NemerleLanguageService LanguageService { get; private set; }
-    readonly ErrorListProvider _errorList;
+		public string ProjectFullPath { get; private set; }
+		HierarchyListener _listener;
+		public NemerleLanguageService LanguageService { get; private set; }
+		readonly ErrorListProvider _errorList;
 		public int ErrorCount { get { return _errorList.Tasks.Count; } }
 
-    readonly SourceMap _sourceMap = new SourceMap();
-    readonly List<ISource> _sources = new List<ISource>();
+		readonly SourceMap _sourceMap = new SourceMap();
+		readonly List<ISource> _sources = new List<ISource>();
 
-    private string _projectLocation;
+		private string _projectLocation;
 
-    public ProjectInfo(
-      NemerleProjectNode projectNode,
-      IVsHierarchy hierarchy,
-      NemerleLanguageService languageService,
-      string fileName,
-      string location
-    )
-    {
-      ErrorHelper.ThrowIsNull(languageService, "languageService");
-      ErrorHelper.ThrowIsNull(projectNode, "projectNode");
-      ErrorHelper.ThrowIsNull(hierarchy, "hierarchy");
-      Debug.Assert(projectNode.Site != null);
+		public ProjectInfo(
+		  NemerleProjectNode projectNode,
+		  IVsHierarchy hierarchy,
+		  NemerleLanguageService languageService,
+		  string fileName,
+		  string location
+		)
+		{
+			ErrorHelper.ThrowIsNull(languageService, "languageService");
+			ErrorHelper.ThrowIsNull(projectNode, "projectNode");
+			ErrorHelper.ThrowIsNull(hierarchy, "hierarchy");
+			Debug.Assert(projectNode.Site != null);
 
-      LanguageService = languageService;
-      _errorList = new ErrorListProvider(languageService.Site);
-      ProjectFullPath = Path.GetFullPath(fileName);
-      _projectNode = projectNode;
-      _hierarchy = hierarchy;
+			LanguageService = languageService;
+			_errorList = new ErrorListProvider(languageService.Site);
+			ProjectFullPath = Path.GetFullPath(fileName);
+			_projectNode = projectNode;
+			_hierarchy = hierarchy;
 
-      _engine = EngineFactory.Create(this, new TraceWriter(), false); // it enables parser working.
+			_engine = EngineFactory.Create(this, new TraceWriter(), false); // it enables parser working.
 
-      Engine.TypedtreeCreated += delegate
-      {
-        _buildTypedtreeCount++;
-        AstToolWindow tool = AstToolWindow.AstTool;
-        if (tool != null)
-          tool.BuildTypedtreeCount = _buildTypedtreeCount;
-      };
+			Engine.TypedtreeCreated += delegate
+			{
+				_buildTypedtreeCount++;
+				AstToolWindow tool = AstToolWindow.AstTool;
+				if (tool != null)
+					tool.BuildTypedtreeCount = _buildTypedtreeCount;
+			};
 
-      if (!string.IsNullOrEmpty(location))
-        _projectLocation = location;
-      else
-        _projectLocation = Path.GetDirectoryName(fileName);
+			if (!string.IsNullOrEmpty(location))
+				_projectLocation = location;
+			else
+				_projectLocation = Path.GetDirectoryName(fileName);
 
-      if (!_projectLocation.EndsWith("\\"))
-        _projectLocation += "\\";
-    }
+			if (!_projectLocation.EndsWith("\\"))
+				_projectLocation += "\\";
+		}
 
-    public void OpenAllFiles()
-    {
-      var nodes = new List<NemerleFileNode>();
-      ProjectNode.FindNodesOfType<NemerleFileNode>(nodes);
+		public void OpenAllFiles()
+		{
+			var nodes = new List<NemerleFileNode>();
+			ProjectNode.FindNodesOfType<NemerleFileNode>(nodes);
 
-      foreach (NemerleFileNode node in nodes)
-      {
-        var manager = (FileDocumentManager)node.GetDocumentManager();
+			foreach (NemerleFileNode node in nodes)
+			{
+				var manager = (FileDocumentManager)node.GetDocumentManager();
 
-        Debug.Assert(manager != null, "Could not get the FileDocumentManager");
+				Debug.Assert(manager != null, "Could not get the FileDocumentManager");
 
-        IVsWindowFrame frame;
+				IVsWindowFrame frame;
 
-        manager.Open(false, false, VSConstants.LOGVIEWID_Code, out frame, WindowFrameShowAction.Show);
-      }
-    }
+				manager.Open(false, false, VSConstants.LOGVIEWID_Code, out frame, WindowFrameShowAction.Show);
+			}
+		}
 
-    public void BeginReloadProject()
-    {
-      _engine.BeginReloadProject();
-    }
+		public void BeginReloadProject()
+		{
+			_engine.BeginReloadProject();
+		}
 
-    public bool IsCosed { get; private set; }
+		public bool IsCosed { get; private set; }
 
-    public void Close()
-    {
-      if (IsCosed)
-        return;
+		public void Close()
+		{
+			if (IsCosed)
+				return;
 
-      ResetAssembleReferenceWatchers();
-      Engine.Close();
-      IsCosed = true;
-      _projects.Remove(this);
-      _errorList.Tasks.Clear();
-      _sources.Clear();
-      _sourceMap.Clear();
-      //TODO: VladD2: Удалить из очередей AsyncWorker все запросы и ответы связанные с данным проектом!
-    }
+			ResetAssembleReferenceWatchers();
+			Engine.Close();
+			IsCosed = true;
+			_projects.Remove(this);
+			_errorList.Tasks.Clear();
+			_sources.Clear();
+			_sourceMap.Clear();
+			//TODO: VladD2: Удалить из очередей AsyncWorker все запросы и ответы связанные с данным проектом!
+		}
 
-    public string ProjectName { get { return _projectNode.VSProject.Project.Name; } }
+		public string ProjectName { get { return _projectNode.VSProject.Project.Name; } }
 
-    public string ProjectFullName { get { return _projectNode.VSProject.Project.FullName; } }
+		public string ProjectFullName { get { return _projectNode.VSProject.Project.FullName; } }
 
-    public string RootNamespace { get { return _projectNode.VSProject.Project.Properties.Item("DefaultNamespace").Value.ToString(); } }
+		public string RootNamespace { get { return _projectNode.VSProject.Project.Properties.Item("DefaultNamespace").Value.ToString(); } }
 
-    int _buildTypedtreeCount;
-    readonly List<MethodBuilderEx> _methodsCheckQueue = new List<MethodBuilderEx>(100);
+		int _buildTypedtreeCount;
+		readonly List<MethodBuilderEx> _methodsCheckQueue = new List<MethodBuilderEx>(100);
 
-    private IEngine _engine;
-    public IEngine Engine
-    {
-      [DebuggerNonUserCode]
+		private IEngine _engine;
+		public IEngine Engine
+		{
+			[DebuggerNonUserCode]
 			get { ManagerClass.Instance = (ManagerClass)_engine; return _engine; }
-    }
+		}
 
-    private NemerleProjectNode _projectNode;
-    public NemerleProjectNode ProjectNode { get { return _projectNode; } }
+		private NemerleProjectNode _projectNode;
+		public NemerleProjectNode ProjectNode { get { return _projectNode; } }
 
-    bool GetBoolProp(string name) { return Utils.IsTrue(ProjectNode.BuildProject, name); }
+		bool GetBoolProp(string name) { return Utils.IsTrue(ProjectNode.BuildProject, name); }
 
-    public bool RunDebugger { get { return GetBoolProp("RunDebugger"); } }
+		public bool RunDebugger { get { return GetBoolProp("RunDebugger"); } }
 
-    public bool NoStdLib { get { return GetBoolProp("NoStdLib"); } }
-    public bool NoStdMacros { get { return GetBoolProp("NoStdMacros"); } }
+		public bool NoStdLib { get { return GetBoolProp("NoStdLib"); } }
+		public bool NoStdMacros { get { return GetBoolProp("NoStdMacros"); } }
 
-    IVsHierarchy _hierarchy;
+		IVsHierarchy _hierarchy;
 
-    public void InitListener()
-    {
-      _listener = new HierarchyListener(_hierarchy);
+		public void InitListener()
+		{
+			_listener = new HierarchyListener(_hierarchy);
 
-      _listener.ItemAdded += FileAdded;
-      _listener.ItemDeleted += FileDeleted;
+			_listener.ItemAdded += FileAdded;
+			_listener.ItemDeleted += FileDeleted;
 
-      _listener.StartListening(true);
-    }
+			_listener.StartListening(true);
+		}
 
-    public static Collection<ProjectInfo> Projects
-    {
-      get { return _projects; }
-    }
+		public static Collection<ProjectInfo> Projects
+		{
+			get { return _projects; }
+		}
 
-    #region Assemble Reference Managment
+		#region Assemble Reference Managment
 
-    #region Assembly References helpers
+		#region Assembly References helpers
 
-    public void AddAssembly(List<string> assemblies, ReferenceNode node, string type)
-    {
-      //TODO: Проследить что где-то добавляется вочер для сборки!
-      var path = GetAssemblyReferencesString(node);
+		public void AddAssembly(List<string> assemblies, ReferenceNode node, string type)
+		{
+			//TODO: Проследить что где-то добавляется вочер для сборки!
+			var path = GetAssemblyReferencesString(node);
 
-      if (!string.IsNullOrEmpty(path))
-      {
-        assemblies.Add(path);
-        AddAssembleReferenceWatcher(path);
-      }
-      else
-        Debug.Assert(false, "Can't add " + type + "assembly reference '" + node.Caption + "' (" + node.Url + ")");
+			if (!string.IsNullOrEmpty(path))
+			{
+				assemblies.Add(path);
+				AddAssembleReferenceWatcher(path);
+			}
+			else
+				Debug.Assert(false, "Can't add " + type + "assembly reference '" + node.Caption + "' (" + node.Url + ")");
 
-      Engine.RequestOnReloadProject();
-    }
+			Engine.RequestOnReloadProject();
+		}
 
-    public void RemoveAssembly(List<string> assemblies, ReferenceNode node, string type)
-    {
-      //TODO: Проследить что где-то удаляется вочер для сборки!
-      var path = GetAssemblyReferencesString(node);
+		public void RemoveAssembly(List<string> assemblies, ReferenceNode node, string type)
+		{
+			//TODO: Проследить что где-то удаляется вочер для сборки!
+			var path = GetAssemblyReferencesString(node);
 
-      if (!string.IsNullOrEmpty(path))
-      {
-        RemoveAssembleReferenceWatcher(path);
-        bool res = assemblies.Remove(path);
+			if (!string.IsNullOrEmpty(path))
+			{
+				RemoveAssembleReferenceWatcher(path);
+				bool res = assemblies.Remove(path);
 
-        Debug.Assert(res, "Can't remove " + type + "assembly reference '" + node.Caption + "' (" + node.Url + ")");
-      }
-      else
-        Debug.Assert(false, "Can't remove " + type + "assembly reference '" + node.Caption + "' (" + node.Url + ")");
+				Debug.Assert(res, "Can't remove " + type + "assembly reference '" + node.Caption + "' (" + node.Url + ")");
+			}
+			else
+				Debug.Assert(false, "Can't remove " + type + "assembly reference '" + node.Caption + "' (" + node.Url + ")");
 
-      Engine.RequestOnReloadProject();
-    }
+			Engine.RequestOnReloadProject();
+		}
 
-    #endregion
+		#endregion
 
-    #region Assembly References
+		#region Assembly References
 
-    List<string> _assemblyReferences = new List<string>();
+		List<string> _assemblyReferences = new List<string>();
 
-    IEnumerable<string> IIdeProject.GetAssemblyReferences()
-    {
-      return _assemblyReferences.ToArray();
-    }
+		IEnumerable<string> IIdeProject.GetAssemblyReferences()
+		{
+			return _assemblyReferences.ToArray();
+		}
 
-    public void AddAssembly(ReferenceNode node)
-    {
-      AddAssembly(_assemblyReferences, node, "");
-    }
+		public void AddAssembly(ReferenceNode node)
+		{
+			AddAssembly(_assemblyReferences, node, "");
+		}
 
-    public void RemoveAssembly(ReferenceNode node)
-    {
-      RemoveAssembly(_assemblyReferences, node, "");
-    }
+		public void RemoveAssembly(ReferenceNode node)
+		{
+			RemoveAssembly(_assemblyReferences, node, "");
+		}
 
-    #endregion
+		#endregion
 
-    #region MacroAssembly References
+		#region MacroAssembly References
 
-    List<string> _macroAssemblyReferences = new List<string>();
+		List<string> _macroAssemblyReferences = new List<string>();
 
-    IEnumerable<string> IIdeProject.GetMacroAssemblyReferences()
-    {
-      return _macroAssemblyReferences.ToArray();
-    }
+		IEnumerable<string> IIdeProject.GetMacroAssemblyReferences()
+		{
+			return _macroAssemblyReferences.ToArray();
+		}
 
-    public void AddMacroAssembly(ReferenceNode node)
-    {
-      AddAssembly(_macroAssemblyReferences, node, "macro ");
-    }
+		public void AddMacroAssembly(ReferenceNode node)
+		{
+			AddAssembly(_macroAssemblyReferences, node, "macro ");
+		}
 
-    public void RemoveMacroAssembly(ReferenceNode node)
-    {
-      RemoveAssembly(_macroAssemblyReferences, node, "macro ");
-    }
+		public void RemoveMacroAssembly(ReferenceNode node)
+		{
+			RemoveAssembly(_macroAssemblyReferences, node, "macro ");
+		}
 
-    #endregion
+		#endregion
 
-    #region Assemble Reference Watchers
+		#region Assemble Reference Watchers
 
-    // Assemble Watcher-ы используются для слежением за изменением файлов сборок.
-    // При изменении файла автоматически производится запрос на перезагрузку проекта.
+		// Assemble Watcher-ы используются для слежением за изменением файлов сборок.
+		// При изменении файла автоматически производится запрос на перезагрузку проекта.
 
-    /// <summary>Watchers for project assemble reference.</summary>
-    List<FileSystemWatcher> _assembleReferenceWatchers = new List<FileSystemWatcher>();
+		/// <summary>Watchers for project assemble reference.</summary>
+		List<FileSystemWatcher> _assembleReferenceWatchers = new List<FileSystemWatcher>();
 
-    private void AddAssembleReferenceWatcher(string filePath)
-    {
-      if (!File.Exists(filePath))
-      {
-        Debug.WriteLine("Assemble " + filePath + " does not exists!");
-      }
+		private void AddAssembleReferenceWatcher(string filePath)
+		{
+			if (!File.Exists(filePath))
+			{
+				Debug.WriteLine("Assemble " + filePath + " does not exists!");
+			}
 
-      string path = Path.GetDirectoryName(filePath);
-      string name = Path.GetFileName(filePath);
-      FileSystemWatcher watcher = new FileSystemWatcher(path, name);
-      watcher.NotifyFilter = NotifyFilters.LastWrite;
-      watcher.Changed += watcher_Changed;
-      _assembleReferenceWatchers.Add(watcher);
-      watcher.EnableRaisingEvents = true;
-    }
+			string path = Path.GetDirectoryName(filePath);
+			string name = Path.GetFileName(filePath);
+			FileSystemWatcher watcher = new FileSystemWatcher(path, name);
+			watcher.NotifyFilter = NotifyFilters.LastWrite;
+			watcher.Changed += watcher_Changed;
+			_assembleReferenceWatchers.Add(watcher);
+			watcher.EnableRaisingEvents = true;
+		}
 
-    void RemoveAssembleReferenceWatcher(string filePath)
-    {
-      if (!File.Exists(filePath))
-      {
-        Debug.WriteLine("Assemble " + filePath + " does not exists!");
-      }
-      string path = Path.GetDirectoryName(filePath);
-      string name = Path.GetFileName(filePath);
+		void RemoveAssembleReferenceWatcher(string filePath)
+		{
+			if (!File.Exists(filePath))
+			{
+				Debug.WriteLine("Assemble " + filePath + " does not exists!");
+			}
+			string path = Path.GetDirectoryName(filePath);
+			string name = Path.GetFileName(filePath);
 
-      var index = _assembleReferenceWatchers.FindIndex(w => w.Path == path && w.Filter == name);
+			var index = _assembleReferenceWatchers.FindIndex(w => w.Path == path && w.Filter == name);
 
-      if (index >= 0)
-      {
-        FileSystemWatcher watcher = _assembleReferenceWatchers[index];
-        watcher.Dispose();
-        _assembleReferenceWatchers.RemoveAt(index);
-      }
-    }
+			if (index >= 0)
+			{
+				FileSystemWatcher watcher = _assembleReferenceWatchers[index];
+				watcher.Dispose();
+				_assembleReferenceWatchers.RemoveAt(index);
+			}
+		}
 
-    void ResetAssembleReferenceWatchers()
-    {
-      foreach (FileSystemWatcher watcher in _assembleReferenceWatchers)
-        watcher.Dispose();
+		void ResetAssembleReferenceWatchers()
+		{
+			foreach (FileSystemWatcher watcher in _assembleReferenceWatchers)
+				watcher.Dispose();
 
-      _assembleReferenceWatchers.Clear();
-    }
+			_assembleReferenceWatchers.Clear();
+		}
 
-    void watcher_Changed(object sender, FileSystemEventArgs e)
-    {
-      Engine.RequestOnReloadProject();
-    }
+		void watcher_Changed(object sender, FileSystemEventArgs e)
+		{
+			Engine.RequestOnReloadProject();
+		}
 
-    #endregion
-    
-    #endregion
+		#endregion
 
-    internal void AddEditableSource(NemerleSource source)
-    {
-      ReplaseOrAddSource(source);
-    }
+		#endregion
 
-    void ReplaseOrAddSource(ISource source)
-    {
-      var fileIndex = source.FileIndex;
-      ISource old;
-      if (_sourceMap.TryGetValue(fileIndex, out old))
-        _sources.Remove(old);
+		internal void AddEditableSource(NemerleSource source)
+		{
+			ReplaseOrAddSource(source);
+		}
 
-      _sourceMap[fileIndex] = source;
-      _sources.Add(source);
-    }
+		internal void ReplaseOrAddSource(ISource source)
+		{
+			var fileIndex = source.FileIndex;
+			ISource old;
+			if (_sourceMap.TryGetValue(fileIndex, out old))
+				_sources.Remove(old);
 
-    internal void RemoveEditableSource(NemerleSource source)
-    {
-      var fileIndex = source.FileIndex;
-      var taksForSource = GetTaksForSource(source.FileIndex);
+			_sourceMap[fileIndex] = source;
+			_sources.Add(source);
+		}
 
-      foreach (var task in taksForSource)
-        task.DisposeTextLineMarker();
+		internal void RemoveEditableSource(NemerleSource source)
+		{
+			var fileIndex = source.FileIndex;
+			var taksForSource = GetTaksForSource(source.FileIndex);
 
-      ReplaseOrAddSource(new FileNemerleSource(fileIndex));
-    }
+			foreach (var task in taksForSource)
+				task.DisposeTextLineMarker();
 
-    internal void RemoveSource(ISource source)
-    {
-      _sourceMap.Remove(source.FileIndex);
-      _sources.Remove(source);
-    }
+			ReplaseOrAddSource(new FileNemerleSource(fileIndex));
+		}
+
+		internal void RemoveSource(ISource source)
+		{
+			_sourceMap.Remove(source.FileIndex);
+			_sources.Remove(source);
+		}
 
 
 
@@ -410,257 +410,257 @@ namespace Nemerle.VisualStudio.Project
 			return frame;
 		}
 
-    public ISource GetSource(int fileIndex)
-    {
-      ISource source;
-      return _sourceMap.TryGetValue(fileIndex, out source) ? source : null;
-    }
+		public ISource GetSource(int fileIndex)
+		{
+			ISource source;
+			return _sourceMap.TryGetValue(fileIndex, out source) ? source : null;
+		}
 
-    public ISource GetSource(string filePath)
-    {
-      return GetSource(Location.GetFileIndex(filePath));
-    }
+		public ISource GetSource(string filePath)
+		{
+			return GetSource(Location.GetFileIndex(filePath));
+		}
 
-    public bool IsFileInProject(string filePath)
-    {
-      return IsFileInProject(Location.GetFileIndex(filePath));
-    }
+		public bool IsFileInProject(string filePath)
+		{
+			return IsFileInProject(Location.GetFileIndex(filePath));
+		}
 
-    public bool IsFileInProject(int fileIndex)
-    {
-      return _sourceMap.ContainsKey(fileIndex);
-    }
+		public bool IsFileInProject(int fileIndex)
+		{
+			return _sourceMap.ContainsKey(fileIndex);
+		}
 
-    private static NemerleFileNodeProperties GetNodeProperties(IVsHierarchy hierarchy, uint itemID)
-    {
-      ErrorHelper.ThrowIsNull(hierarchy, "hierarchy");
+		private static NemerleFileNodeProperties GetNodeProperties(IVsHierarchy hierarchy, uint itemID)
+		{
+			ErrorHelper.ThrowIsNull(hierarchy, "hierarchy");
 
-      object propertyValue;
-      int hr = hierarchy.GetProperty(itemID, (int)__VSHPROPID.VSHPROPID_BrowseObject, out propertyValue);
+			object propertyValue;
+			int hr = hierarchy.GetProperty(itemID, (int)__VSHPROPID.VSHPROPID_BrowseObject, out propertyValue);
 
-      if (hr != VSConstants.S_OK)
-        throw new ArgumentException("Can't obtain VSHPROPID_BrowseObject for item with ID "
-          + itemID, "itemID", new Win32Exception(hr));
+			if (hr != VSConstants.S_OK)
+				throw new ArgumentException("Can't obtain VSHPROPID_BrowseObject for item with ID "
+				  + itemID, "itemID", new Win32Exception(hr));
 
-      NemerleFileNodeProperties properties = propertyValue as NemerleFileNodeProperties;
+			NemerleFileNodeProperties properties = propertyValue as NemerleFileNodeProperties;
 
-      if (properties == null)
-        return new NemerleFileNodeProperties(((NodeProperties)propertyValue).Node);
-      else
-        return properties;
-    }
+			if (properties == null)
+				return new NemerleFileNodeProperties(((NodeProperties)propertyValue).Node);
+			else
+				return properties;
+		}
 
-    #region IIdeProject
+		#region IIdeProject
 
-    CompilationOptions IIdeProject.GetOptions()
-    {
-      var options = new CompilationOptions();
+		CompilationOptions IIdeProject.GetOptions()
+		{
+			var options = new CompilationOptions();
 
-      string defineConstants = _projectNode.GetProjectProperty("DefineConstants", false);
+			string defineConstants = _projectNode.GetProjectProperty("DefineConstants", false);
 
-      if (!string.IsNullOrEmpty(defineConstants))
-      {
-        var defines = defineConstants.Replace(" \t\r\n", String.Empty).Split(';');
+			if (!string.IsNullOrEmpty(defineConstants))
+			{
+				var defines = defineConstants.Replace(" \t\r\n", String.Empty).Split(';');
 
-        foreach (var define in defines)
-          options.DefineConstant(define);
-      }
+				foreach (var define in defines)
+					options.DefineConstant(define);
+			}
 
-      options.ColorMessages    = false;
-      options.IgnoreConfusion  = true;
-      options.GreedyReferences = GetBoolProp("GreedyReferences");
-      options.DoNotLoadStdlib  = NoStdLib;
-      options.DoNotLoadMacros  = NoStdMacros;
-			options.OutputFileName   = ProjectName;
-			options.ProjectPath      = ProjectFullName;
-			options.RootNamespace    = RootNamespace;
+			options.ColorMessages = false;
+			options.IgnoreConfusion = true;
+			options.GreedyReferences = GetBoolProp("GreedyReferences");
+			options.DoNotLoadStdlib = NoStdLib;
+			options.DoNotLoadMacros = NoStdMacros;
+			options.OutputFileName = ProjectName;
+			options.ProjectPath = ProjectFullName;
+			options.RootNamespace = RootNamespace;
 
-      return options;
-    }
+			return options;
+		}
 
-    IEnumerable<ISource> IIdeProject.GetSources()
-    {
-      return _sources;
-    }
+		IEnumerable<ISource> IIdeProject.GetSources()
+		{
+			return _sources;
+		}
 
-    public GotoInfo[] LookupLocationsFromDebugInformation(GotoInfo info)
-    { 
-      var vsSmartOpenScope = (IVsSmartOpenScope)ProjectNode.Site.GetService(typeof(SVsSmartOpenScope));
+		public GotoInfo[] LookupLocationsFromDebugInformation(GotoInfo info)
+		{
+			var vsSmartOpenScope = (IVsSmartOpenScope)ProjectNode.Site.GetService(typeof(SVsSmartOpenScope));
 
-      return NemerleGoto.LookupLocationsFromPdb(info, vsSmartOpenScope);
-    }
+			return NemerleGoto.LookupLocationsFromPdb(info, vsSmartOpenScope);
+		}
 
-    #endregion
+		#endregion
 
-    private void FileAdded(object sender, HierarchyEventArgs ergs)
-    {
-      Debug.Assert(ergs.TextBuffer == null);
+		private void FileAdded(object sender, HierarchyEventArgs ergs)
+		{
+			Debug.Assert(ergs.TextBuffer == null);
 
-      IVsHierarchy hierarchy = (IVsHierarchy)sender;
-      NemerleFileNodeProperties nodeProps = GetNodeProperties(hierarchy, ergs.ItemID);
+			IVsHierarchy hierarchy = (IVsHierarchy)sender;
+			NemerleFileNodeProperties nodeProps = GetNodeProperties(hierarchy, ergs.ItemID);
 
-      if (nodeProps.BuildAction != BuildAction.Compile)
-        return;
+			if (nodeProps.BuildAction != BuildAction.Compile)
+				return;
 
-      string path = ergs.FileName;
+			string path = ergs.FileName;
 
-      ISource source = (NemerleSource)LanguageService.GetSource(path);
+			ISource source = (NemerleSource)LanguageService.GetSource(path);
 
-      try
-      {
-        if (source == null)
-          source = new FileNemerleSource(Location.GetFileIndex(path));
+			try
+			{
+				if (source == null)
+					source = new FileNemerleSource(Location.GetFileIndex(path));
 
-        _sourceMap.Add(source.FileIndex, source);
-        _sources.Add(source);
-      }
-      catch (Exception ex)
-      {
-        SetCompilerMessages(new[] {new CompilerMessage(Location.Default, ex.Message, 
+				_sourceMap.Add(source.FileIndex, source);
+				_sources.Add(source);
+			}
+			catch (Exception ex)
+			{
+				SetCompilerMessages(new[] {new CompilerMessage(Location.Default, ex.Message, 
 					MessageKind.Error, Engine, false)}, null);
-      }
-    }
+			}
+		}
 
-    private void FileDeleted(object sender, HierarchyEventArgs ergs)
-    {
-      Debug.Assert(ergs.TextBuffer == null);
+		private void FileDeleted(object sender, HierarchyEventArgs ergs)
+		{
+			Debug.Assert(ergs.TextBuffer == null);
 
-      string path = ergs.FileName;
-      var fileIndex = Location.GetFileIndex(path);
+			string path = ergs.FileName;
+			var fileIndex = Location.GetFileIndex(path);
 
-      if (IsFileInProject(fileIndex))
-      {
-        var source = GetSource(fileIndex);
-        _sourceMap.Remove(fileIndex);
-        _sources.Remove(source);
-      }
-    }
+			if (IsFileInProject(fileIndex))
+			{
+				var source = GetSource(fileIndex);
+				_sourceMap.Remove(fileIndex);
+				_sources.Remove(source);
+			}
+		}
 
-    public static ProjectInfo FindProject(IVsHierarchy hierarchy)
-    {
-      foreach (ProjectInfo proj in _projects)
-        if (Utilities.IsSameComObject(proj._hierarchy, hierarchy))
-          return proj;
+		public static ProjectInfo FindProject(IVsHierarchy hierarchy)
+		{
+			foreach (ProjectInfo proj in _projects)
+				if (Utilities.IsSameComObject(proj._hierarchy, hierarchy))
+					return proj;
 
-      return null;
-    }
+			return null;
+		}
 
-    public static ProjectInfo FindProject(string fileName)
-    {
-      ErrorHelper.ThrowIfPathNullOrEmpty(fileName, "fileName");
+		public static ProjectInfo FindProject(string fileName)
+		{
+			ErrorHelper.ThrowIfPathNullOrEmpty(fileName, "fileName");
 
-      foreach (ProjectInfo proj in _projects)
-        if (proj.IsFileInProject(fileName))
-          return proj;
+			foreach (ProjectInfo proj in _projects)
+				if (proj.IsFileInProject(fileName))
+					return proj;
 
-      return null;
-    }
+			return null;
+		}
 
-    public bool IsProjectAvailable
-    {
-      get { return Engine.IsProjectAvailable; }
-    }
+		public bool IsProjectAvailable
+		{
+			get { return Engine.IsProjectAvailable; }
+		}
 
-    /*public Nemerle.Completion2.Project Project
-    {
-      [DebuggerStepThrough]
-      get { return Engine.Project; }
-    }*/
+		/*public Nemerle.Completion2.Project Project
+		{
+		  [DebuggerStepThrough]
+		  get { return Engine.Project; }
+		}*/
 
-    bool _isDocumentOpening;
+		bool _isDocumentOpening;
 
-    public bool IsDocumentOpening
-    {
-      get { return _isDocumentOpening; }
-      internal set { _isDocumentOpening = value; }
-    }
+		public bool IsDocumentOpening
+		{
+			get { return _isDocumentOpening; }
+			internal set { _isDocumentOpening = value; }
+		}
 
-    #region HighlightUsages
+		#region HighlightUsages
 
-    internal void RemoveLastHighlighting(ISource source)
-    {
-      Debug.WriteLine(">>>> ##### RemoveLastHighlighting!");
-      var nsource = source as NemerleSource;
-      if (nsource == null)
-        return;
-      ScanLexer lexer = nsource.Scanner.GetLexer();
-      if (lexer == null)
-        return;
-      lexer.RemoveLastHighlighting();
-      nsource.Recolorize(1, source.LineCount);
-      Debug.WriteLine("<<<< ##### HighlightUsages!");
-    }
+		internal void RemoveLastHighlighting(ISource source)
+		{
+			Debug.WriteLine(">>>> ##### RemoveLastHighlighting!");
+			var nsource = source as NemerleSource;
+			if (nsource == null)
+				return;
+			ScanLexer lexer = nsource.Scanner.GetLexer();
+			if (lexer == null)
+				return;
+			lexer.RemoveLastHighlighting();
+			nsource.Recolorize(1, source.LineCount);
+			Debug.WriteLine("<<<< ##### HighlightUsages!");
+		}
 
-    #endregion
+		#endregion
 
-    public IEnumerable<NemerleErrorTask> FindTaks(Func<NemerleErrorTask, bool> predicate)
-    {
-      var tasks = _errorList.Tasks.OfType<NemerleErrorTask>();
-      var taksForSource = tasks.Where(predicate);
-      return taksForSource;
-    }
+		public IEnumerable<NemerleErrorTask> FindTaks(Func<NemerleErrorTask, bool> predicate)
+		{
+			var tasks = _errorList.Tasks.OfType<NemerleErrorTask>();
+			var taksForSource = tasks.Where(predicate);
+			return taksForSource;
+		}
 
-    IEnumerable<NemerleErrorTask> GetTaksForSource(int fileIndex)
-    {
-      var tasks = _errorList.Tasks.OfType<NemerleErrorTask>();
-      var taksForSource = tasks.Where(t => t.CompilerMessage.Location.FileIndex == fileIndex);
-      return taksForSource;
-    }
+		IEnumerable<NemerleErrorTask> GetTaksForSource(int fileIndex)
+		{
+			var tasks = _errorList.Tasks.OfType<NemerleErrorTask>();
+			var taksForSource = tasks.Where(t => t.CompilerMessage.Location.FileIndex == fileIndex);
+			return taksForSource;
+		}
 
-    internal void MakeCompilerMessagesTextMarkers(IVsTextLines buffer, int fileIndex)
-    {
-      var taksForSource = GetTaksForSource(fileIndex);
+		internal void MakeCompilerMessagesTextMarkers(IVsTextLines buffer, int fileIndex)
+		{
+			var taksForSource = GetTaksForSource(fileIndex);
 
-      foreach (var task in taksForSource)
-        task.MakeTextMarker(buffer);
-    }
+			foreach (var task in taksForSource)
+				task.MakeTextMarker(buffer);
+		}
 
-    #region IIdeProject Members
+		#region IIdeProject Members
 
-    public void ShowMessage(string message, MessageType messageType)
-    {
-      OLEMSGICON icon = OLEMSGICON.OLEMSGICON_CRITICAL;
-      switch (messageType)
-      {
-        case MessageType.Error: icon = OLEMSGICON.OLEMSGICON_CRITICAL; break;
-        case MessageType.Hint: icon = OLEMSGICON.OLEMSGICON_INFO; break;
-        case MessageType.Info: icon = OLEMSGICON.OLEMSGICON_INFO; break;
-        case MessageType.Warning: icon = OLEMSGICON.OLEMSGICON_WARNING; break;
-      }
-      OLEMSGBUTTON buttons = OLEMSGBUTTON.OLEMSGBUTTON_OK;
-      OLEMSGDEFBUTTON defaultButton = OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST;
-      VsShellUtilities.ShowMessageBox(ProjectNode.ProjectMgr.Site,
-        message, NemerleConstants.ProductName, icon, buttons, defaultButton);
-    }
+		public void ShowMessage(string message, MessageType messageType)
+		{
+			OLEMSGICON icon = OLEMSGICON.OLEMSGICON_CRITICAL;
+			switch (messageType)
+			{
+				case MessageType.Error: icon = OLEMSGICON.OLEMSGICON_CRITICAL; break;
+				case MessageType.Hint: icon = OLEMSGICON.OLEMSGICON_INFO; break;
+				case MessageType.Info: icon = OLEMSGICON.OLEMSGICON_INFO; break;
+				case MessageType.Warning: icon = OLEMSGICON.OLEMSGICON_WARNING; break;
+			}
+			OLEMSGBUTTON buttons = OLEMSGBUTTON.OLEMSGBUTTON_OK;
+			OLEMSGDEFBUTTON defaultButton = OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST;
+			VsShellUtilities.ShowMessageBox(ProjectNode.ProjectMgr.Site,
+			  message, NemerleConstants.ProductName, icon, buttons, defaultButton);
+		}
 
-    void IIdeProject.ClearAllCompilerMessages()
-    {
-      lock (_errorList.Tasks)
-      {
-        _errorList.SuspendRefresh();
-        try
-        {
-          ClearCompilerMessgesTasks(x => true);
-        }
-        finally { _errorList.ResumeRefresh(); }
-      }
-    }
+		void IIdeProject.ClearAllCompilerMessages()
+		{
+			lock (_errorList.Tasks)
+			{
+				_errorList.SuspendRefresh();
+				try
+				{
+					ClearCompilerMessgesTasks(x => true);
+				}
+				finally { _errorList.ResumeRefresh(); }
+			}
+		}
 
-    void IIdeProject.SetTopLevelCompilerMessages(IEnumerable<CompilerMessage> messages)
-    {
-      SetCompilerMessages(messages, null);
-    }
+		void IIdeProject.SetTopLevelCompilerMessages(IEnumerable<CompilerMessage> messages)
+		{
+			SetCompilerMessages(messages, null);
+		}
 
-    void IIdeProject.SetCompilerMessageForCompileUnit(CompileUnit compileUnit)
-    {
-      var fileIndex = compileUnit.FileIndex;
+		void IIdeProject.SetCompilerMessageForCompileUnit(CompileUnit compileUnit)
+		{
+			var fileIndex = compileUnit.FileIndex;
 
-      SetCompilerMessages(compileUnit.ParseCompilerMessages, task =>
-      {
-        var msg = task.CompilerMessage as CompilerMessageForCompileUnit;
-        return msg != null && msg.CompileUnit.FileIndex == fileIndex;
-      });
-    }
+			SetCompilerMessages(compileUnit.ParseCompilerMessages, task =>
+			{
+				var msg = task.CompilerMessage as CompilerMessageForCompileUnit;
+				return msg != null && msg.CompileUnit.FileIndex == fileIndex;
+			});
+		}
 
 		void IIdeProject.TypesTreeCreated()
 		{
@@ -678,50 +678,93 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
-    void IIdeProject.SetMethodCompilerMessages(MemberBuilder member, IEnumerable<CompilerMessage> messages)
-    {
-      if (!IsMemberVersionCorrect(member))
-        return;
+		// Транслирует привязку сообщения к позиции в secondary файле в привязку к позиции в primary файле.
+		// Primary файл - исходный aspx, secondary - автосгенерированный по нему исходный код на Немерле
+		private CompilerMessage TranslateSecondarySourceMessage(CompilerMessage message)
+		{
+			var source = GetSource(message.Location.FileIndex) as NemerleSource;
 
-      //messages = messages.Distinct(CompilerMessageEqComparer.Instance);
+			if (source != null && source.IsSecondarySource)
+			{
+				var primaryLocation = source.MapSecondaryToPrimaryLocation(message.Location);
 
-      // Find and clear existent error messages which associated with the 'member'.
-      SetCompilerMessages(messages, task =>
-      {
-        var memberMsg = task.CompilerMessage as CompilerMessageForMethod;
-        return memberMsg != null && memberMsg.Member == member;
-      });
-      // Following for debugging purpose:
-      //var res = _errorList.Tasks.OfType<NemerleErrorTask>().GroupBy(x => x.ToString()).Where(g => g.Count() > 1).ToArray();
-      //if (res.Length > 0)
-      //	Test(res, Engine.TypesTreeVersion);
-    }
+				if (primaryLocation.Line == 1 && primaryLocation.Column == 1) // && message.Kind == MessageKind.Error)
+				{
+					// Исключим из списка сообщения, относящиеся исключительно к автосгенерированному (по исходному aspx) файлу.
+					// Как правило такие сообщения вызваны не совсем корректной работой кодогенератора, 
+					// использующего в design time упрощенный режим генерации
+					return null;
+				}
 
-    public static string GetAssemblyReferencesString(ReferenceNode node)
-    {
-      string assemblyId = null;
-      var prjRef = node as NemerleProjectReferenceNode;
-      if (prjRef != null) // Is project reference...
-      {
-        assemblyId = prjRef.ReferencedProjectOutputPath; // calc real assembly name.
-      }
-      else if (node.Url != null) //IT: if dll does not exist, the Url will be null.
-        assemblyId = node.Url;
-      else
-      {
-        //TODO: Notify user about reference does not exist. 
-      }
+				CompilerMessage translatedMessage = null;
 
-      return assemblyId;
-    }
+				if (message is CompilerMessageForMethod)
+				{
+					var methodMessage = (CompilerMessageForMethod)message;
+					translatedMessage = new CompilerMessageForMethod(primaryLocation, methodMessage.Msg, methodMessage.Kind, methodMessage.Engin, methodMessage.IsRelated, methodMessage.Member);
+				}
+				else if (message is CompilerMessageForCompileUnit)
+				{
+					var unitMessage = (CompilerMessageForCompileUnit)message;
+					translatedMessage = new CompilerMessageForCompileUnit(primaryLocation, unitMessage.Msg, unitMessage.Kind, unitMessage.Engin, unitMessage.IsRelated);
+					((CompilerMessageForCompileUnit)translatedMessage).CompileUnit = unitMessage.CompileUnit;
+				}
+				else
+					translatedMessage = new CompilerMessage(primaryLocation, message.Msg, message.Kind, message.Engin, message.IsRelated);
 
-    public void SetStatusText(string text) // implemetn IIdeProject
-    {
-      LanguageService.SetStatusBarText(text);
-      Debug.WriteLine(text);
-    }
+				// трансляции позиций для вложенных сообщений
+				translatedMessage.RelatedMessages.AddRange(message.RelatedMessages.Select(m => TranslateSecondarySourceMessage(m)).Where(m => m != null));
 
-    public void AddUnimplementedMembers(ISource source, TypeBuilder ty, IEnumerable<IMember> unimplementedMembers)
+				return translatedMessage;
+			}
+			else
+				return message;
+		}
+
+		void IIdeProject.SetMethodCompilerMessages(MemberBuilder member, IEnumerable<CompilerMessage> messages)
+		{
+			if (!IsMemberVersionCorrect(member))
+				return;
+
+			//messages = messages.Distinct(CompilerMessageEqComparer.Instance);
+
+			// Find and clear existent error messages which associated with the 'member'.
+			SetCompilerMessages(messages, task =>
+			{
+				var memberMsg = task.CompilerMessage as CompilerMessageForMethod;
+				return memberMsg != null && memberMsg.Member == member;
+			});
+			// Following for debugging purpose:
+			//var res = _errorList.Tasks.OfType<NemerleErrorTask>().GroupBy(x => x.ToString()).Where(g => g.Count() > 1).ToArray();
+			//if (res.Length > 0)
+			//	Test(res, Engine.TypesTreeVersion);
+		}
+
+		public static string GetAssemblyReferencesString(ReferenceNode node)
+		{
+			string assemblyId = null;
+			var prjRef = node as NemerleProjectReferenceNode;
+			if (prjRef != null) // Is project reference...
+			{
+				assemblyId = prjRef.ReferencedProjectOutputPath; // calc real assembly name.
+			}
+			else if (node.Url != null) //IT: if dll does not exist, the Url will be null.
+				assemblyId = node.Url;
+			else
+			{
+				//TODO: Notify user about reference does not exist. 
+			}
+
+			return assemblyId;
+		}
+
+		public void SetStatusText(string text) // implemetn IIdeProject
+		{
+			LanguageService.SetStatusBarText(text);
+			Debug.WriteLine(text);
+		}
+
+		public void AddUnimplementedMembers(ISource source, TypeBuilder ty, IEnumerable<IMember> unimplementedMembers)
 		{
 			using (var form = new ImplementMembersForm((NemerleSource)source, ty, unimplementedMembers))
 			{
@@ -729,7 +772,7 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
-    public void AddOverrideMembers(ISource source, TypeBuilder ty, IEnumerable<IMember> notOverriden)
+		public void AddOverrideMembers(ISource source, TypeBuilder ty, IEnumerable<IMember> notOverriden)
 		{
 			using (var form = new ImplementMembersForm((NemerleSource)source, ty, notOverriden))
 			{
@@ -737,240 +780,254 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
-    public void SetHighlights(ISource source, IEnumerable<GotoInfo> highlights)
-    {
-      var isPermanent = false;
+		public void SetHighlights(ISource source, IEnumerable<GotoInfo> highlights)
+		{
+			var isPermanent = false;
 
-      var nsource = source as NemerleSource;
+			var nsource = source as NemerleSource;
 
-      if (nsource == null)
-        return;
+			if (nsource == null)
+				return;
 
-      ScanLexer lexer = nsource.Scanner.GetLexer();
+			ScanLexer lexer = nsource.Scanner.GetLexer();
 
-      if (lexer == null)
-        return;
+			if (lexer == null)
+				return;
 
-      if(isPermanent)
-        lexer.AddHighlighting(highlights);
-      else
-        lexer.SetHoverHighlights(highlights);
+			if (isPermanent)
+				lexer.AddHighlighting(highlights);
+			else
+				lexer.SetHoverHighlights(highlights);
 
-      nsource.Recolorize(1, source.LineCount);
-    }
+			nsource.Recolorize(1, source.LineCount);
+		}
 
 
-    #region Implementation
+		#region Implementation
 
-    /// This method need only for debugging purpose.
-    bool IsMemberVersionCorrect(MemberBuilder member)
-    {
-      var method = member as MethodBuilderEx;
-      if (method == null)
-      {
-        Debug.Assert(false);
-        return false;
-      }
+		/// This method need only for debugging purpose.
+		bool IsMemberVersionCorrect(MemberBuilder member)
+		{
+			var method = member as MethodBuilderEx;
+			if (method == null)
+			{
+				Debug.Assert(false);
+				return false;
+			}
 
-      var treeVer = Engine.TypesTreeVersion;
-      var methodVer = method.TypesTreeVersion;
+			var treeVer = Engine.TypesTreeVersion;
+			var methodVer = method.TypesTreeVersion;
 
-      if (methodVer != treeVer)
-      {
-        //Trace.Assert(false, "This should not happen. We have problem with multithreading!");
-        return false;
-      }
+			if (methodVer != treeVer)
+			{
+				//Trace.Assert(false, "This should not happen. We have problem with multithreading!");
+				return false;
+			}
 
-      return true;
-    }
+			return true;
+		}
 
-    class CompilerMessageEqComparer : IEqualityComparer<CompilerMessage>
-    {
-      #region IEqualityComparer<CompilerMessage> Members
+		class CompilerMessageEqComparer : IEqualityComparer<CompilerMessage>
+		{
+			#region IEqualityComparer<CompilerMessage> Members
 
-      public bool Equals(CompilerMessage x, CompilerMessage y)
-      {
-        return x.Location.Equals(y.Location) && x.Kind == y.Kind && x.Msg == y.Msg;
-      }
+			public bool Equals(CompilerMessage x, CompilerMessage y)
+			{
+				return x.Location.Equals(y.Location) && x.Kind == y.Kind && x.Msg == y.Msg;
+			}
 
-      public int GetHashCode(CompilerMessage obj)
-      {
-        return obj.Location.GetHashCode() ^ (obj.Msg == null ? 0 : obj.Msg.GetHashCode());
-      }
+			public int GetHashCode(CompilerMessage obj)
+			{
+				return obj.Location.GetHashCode() ^ (obj.Msg == null ? 0 : obj.Msg.GetHashCode());
+			}
 
-      #endregion
+			#endregion
 
-      public static readonly CompilerMessageEqComparer Instance = new CompilerMessageEqComparer();
-    }
+			public static readonly CompilerMessageEqComparer Instance = new CompilerMessageEqComparer();
+		}
 
-    /// try add text markers (markers visualise errors in editor).
-    void TryAddTextMarkers(IEnumerable<NemerleErrorTask> tasks)
-    {
-      var taskGroups = tasks.GroupBy(t => t.CompilerMessage.Location.FileIndex);
+		/// try add text markers (markers visualise errors in editor).
+		void TryAddTextMarkers(IEnumerable<NemerleErrorTask> tasks)
+		{
+			var taskGroups = tasks.GroupBy(t => t.CompilerMessage.Location.FileIndex);
 
-      foreach (var taskGroup in taskGroups)
-      {
-        var source = GetSource(taskGroup.Key) as NemerleSource;
+			foreach (var taskGroup in taskGroups)
+			{
+				IVsTextLines buffer = null;
 
-        if (source != null)
-        {
-          IVsTextLines buffer = source.GetTextLines();
-          foreach (var task in taskGroup)
-            task.MakeTextMarker(buffer);
-        }
-      }
-    }
+				// Маркеры для сообщений, сгенерированных при компиляции secondary 
+				// файлов, должны устанавливаться в primary буфере
+				if (NemerleSource.HasSecondarySource(taskGroup.Key))
+				{
+					var secondarySource = GetSource(NemerleSource.GetSecondaryFileIndex(taskGroup.Key)) as NemerleSource;
+					if (secondarySource != null)
+						buffer = secondarySource.GetPrimaryTextLines();
+				}
+				else
+				{
+					var source = GetSource(taskGroup.Key) as NemerleSource;
+					if (source != null)
+						buffer = source.GetTextLines();
+				}
 
-    private void NavigateTo(object sender, EventArgs arguments)
-    {
-      var task = sender as NemerleErrorTask;
+				if (buffer != null)
+				{
+					foreach (var task in taskGroup)
+						task.MakeTextMarker(buffer);
+				}
+			}
+		}
 
-      if (task == null)
-        throw new ArgumentException("sender");
+		private void NavigateTo(object sender, EventArgs arguments)
+		{
+			var task = sender as NemerleErrorTask;
 
-      // Get the doc data for the task's document
-      if (String.IsNullOrEmpty(task.Document))
-        return;
+			if (task == null)
+				throw new ArgumentException("sender");
 
-      var serviceProvider = ProjectNode.GetServiceProvider();
+			// Get the doc data for the task's document
+			if (String.IsNullOrEmpty(task.Document))
+				return;
 
-      IVsUIShellOpenDocument openDoc = serviceProvider.GetService(
-        typeof(IVsUIShellOpenDocument)) as IVsUIShellOpenDocument;
+			var serviceProvider = ProjectNode.GetServiceProvider();
 
-      if (openDoc == null)
-        return;
+			IVsUIShellOpenDocument openDoc = serviceProvider.GetService(
+			  typeof(IVsUIShellOpenDocument)) as IVsUIShellOpenDocument;
 
-      IVsWindowFrame frame;
-      IOleServiceProvider sp;
-      IVsUIHierarchy hier;
-      uint itemid;
-      Guid logicalView = VSConstants.LOGVIEWID_Code;
+			if (openDoc == null)
+				return;
 
-      if (ErrorHandler.Failed(openDoc.OpenDocumentViaProject(
-        task.Document, ref logicalView, out sp, out hier, out itemid, out frame))
-        || frame == null
-      )
-        return;
+			IVsWindowFrame frame;
+			IOleServiceProvider sp;
+			IVsUIHierarchy hier;
+			uint itemid;
+			Guid logicalView = VSConstants.LOGVIEWID_Code;
 
-      object docData;
-      frame.GetProperty((int)__VSFPROPID.VSFPROPID_DocData, out docData);
+			if (ErrorHandler.Failed(openDoc.OpenDocumentViaProject(
+			  task.Document, ref logicalView, out sp, out hier, out itemid, out frame))
+			  || frame == null
+			)
+				return;
 
-      // Get the VsTextBuffer
-      VsTextBuffer buffer = docData as VsTextBuffer;
-      if (buffer == null)
-      {
-        IVsTextBufferProvider bufferProvider = docData as IVsTextBufferProvider;
-        if (bufferProvider != null)
-        {
-          IVsTextLines lines;
-          ErrorHandler.ThrowOnFailure(bufferProvider.GetTextBuffer(out lines));
-          buffer = lines as VsTextBuffer;
-          Debug.Assert(buffer != null, "IVsTextLines does not implement IVsTextBuffer");
+			object docData;
+			frame.GetProperty((int)__VSFPROPID.VSFPROPID_DocData, out docData);
 
-          if (buffer == null)
-            return;
-        }
-      }
+			// Get the VsTextBuffer
+			VsTextBuffer buffer = docData as VsTextBuffer;
+			if (buffer == null)
+			{
+				IVsTextBufferProvider bufferProvider = docData as IVsTextBufferProvider;
+				if (bufferProvider != null)
+				{
+					IVsTextLines lines;
+					ErrorHandler.ThrowOnFailure(bufferProvider.GetTextBuffer(out lines));
+					buffer = lines as VsTextBuffer;
+					Debug.Assert(buffer != null, "IVsTextLines does not implement IVsTextBuffer");
 
-      // Finally, perform the navigation.
-      IVsTextManager mgr = serviceProvider.GetService(
-        typeof(VsTextManagerClass)) as IVsTextManager;
+					if (buffer == null)
+						return;
+				}
+			}
 
-      if (mgr == null)
-        return;
+			// Finally, perform the navigation.
+			IVsTextManager mgr = serviceProvider.GetService(
+			  typeof(VsTextManagerClass)) as IVsTextManager;
 
-      var span = task.Span;
+			if (mgr == null)
+				return;
 
-      mgr.NavigateToLineAndColumn(buffer, ref logicalView,
-        span.iStartLine, span.iStartIndex, span.iEndLine, span.iEndIndex);
-    }
+			var span = task.Span;
 
-    /// <summary>Clear tasks generated by compiler messeges which associated with this project.</summary>
-    void ClearCompilerMessgesTasks(Predicate<NemerleErrorTask> predicate)
-    {
-      var tasks = _errorList.Tasks;
+			mgr.NavigateToLineAndColumn(buffer, ref logicalView,
+			  span.iStartLine, span.iStartIndex, span.iEndLine, span.iEndIndex);
+		}
 
-      for (int i = 0; i < tasks.Count; i++)
-      {
-        var errorTask = tasks[i] as NemerleErrorTask;
-        if (errorTask != null && errorTask.ProjectInfo == this)
-          if (predicate(errorTask))
-            tasks.RemoveAt(i--);
-      }
-    }
+		/// <summary>Clear tasks generated by compiler messeges which associated with this project.</summary>
+		void ClearCompilerMessgesTasks(Predicate<NemerleErrorTask> predicate)
+		{
+			var tasks = _errorList.Tasks;
 
-    void SetCompilerMessages(IEnumerable<CompilerMessage> messages, Predicate<NemerleErrorTask> predicate)
-    {
-      lock (_errorList.Tasks)
-      {
-        _errorList.SuspendRefresh();
-        try
-        {
-          if (predicate != null)
-            ClearCompilerMessgesTasks(predicate);
+			for (int i = 0; i < tasks.Count; i++)
+			{
+				var errorTask = tasks[i] as NemerleErrorTask;
+				if (errorTask != null && errorTask.ProjectInfo == this)
+					if (predicate(errorTask))
+						tasks.RemoveAt(i--);
+			}
+		}
 
-          AddNewCompilerMessages(messages);
-        }
-        finally { _errorList.ResumeRefresh(); }
-      }
-    }
+		void SetCompilerMessages(IEnumerable<CompilerMessage> messages, Predicate<NemerleErrorTask> predicate)
+		{
+			lock (_errorList.Tasks)
+			{
+				_errorList.SuspendRefresh();
+				try
+				{
+					if (predicate != null)
+						ClearCompilerMessgesTasks(predicate);
 
-    public bool IsMethodsCheckQueueEmpty { get { return _methodsCheckQueue.Count == 0; } }
+					AddNewCompilerMessages(messages.Select(m => TranslateSecondarySourceMessage(m)).Where(m => m != null));
+				}
+				finally { _errorList.ResumeRefresh(); }
+			}
+		}
 
-    /// <summary>Chek one (last) method from methodscheck queue</summary>
-    /// <returns>new count of elements in queue</returns>
-    int ChekLastMethodFromMethodsCheckQueue()
-    {
-      MethodBuilderEx mb = null;
-      var lastIndex = -1;
+		public bool IsMethodsCheckQueueEmpty { get { return _methodsCheckQueue.Count == 0; } }
 
-      lock (_methodsCheckQueue) // lock only when _methodsCheckQueue changed
-      {
-        Debug.WriteLine("_methodsCheckQueue.Count: " + _methodsCheckQueue.Count);
-        // remove last MethodBuilder and compile it
-        lastIndex = _methodsCheckQueue.Count - 1;
+		/// <summary>Chek one (last) method from methodscheck queue</summary>
+		/// <returns>new count of elements in queue</returns>
+		int ChekLastMethodFromMethodsCheckQueue()
+		{
+			MethodBuilderEx mb = null;
+			var lastIndex = -1;
 
-        if (lastIndex < 0)
-          return 0;
+			lock (_methodsCheckQueue) // lock only when _methodsCheckQueue changed
+			{
+				Debug.WriteLine("_methodsCheckQueue.Count: " + _methodsCheckQueue.Count);
+				// remove last MethodBuilder and compile it
+				lastIndex = _methodsCheckQueue.Count - 1;
 
-        mb = _methodsCheckQueue[lastIndex];
+				if (lastIndex < 0)
+					return 0;
 
-        _methodsCheckQueue.RemoveAt(lastIndex);
-      }
+				mb = _methodsCheckQueue[lastIndex];
 
-      if (mb != null)
-        mb.EnsureCompiled(); // no lock!
+				_methodsCheckQueue.RemoveAt(lastIndex);
+			}
 
-      return lastIndex;
-    }
+			if (mb != null)
+				mb.EnsureCompiled(); // no lock!
 
-    void AddNewCompilerMessages(IEnumerable<CompilerMessage> messages)
-    {
-      var newTasks = messages.Select(message => new NemerleErrorTask(this, message, NavigateTo)).ToArray();
+			return lastIndex;
+		}
 
-      foreach (var message in newTasks)
-        _errorList.Tasks.Add(message);
+		void AddNewCompilerMessages(IEnumerable<CompilerMessage> messages)
+		{
+			var newTasks = messages.Select(message => new NemerleErrorTask(this, message, NavigateTo)).ToArray();
 
-      TryAddTextMarkers(newTasks);
-    }
+			foreach (var message in newTasks)
+				_errorList.Tasks.Add(message);
 
-    //void Test(IGrouping<string, NemerleErrorTask>[] errGroups, int typeTreeVersion)
-    //{
-    //  Debug.WriteLine("  Engine.TypesTreeVersion: " + typeTreeVersion);
-    //  foreach (var g in errGroups)
-    //  {
-    //    Debug.WriteLine(g.Key);
-    //    foreach (var item in g)
-    //    {
-    //      var cm = (CompilerMessageForMethod)item.CompilerMessage;
-    //      var method = (MethodBuilderEx)cm.Member;
-    //      Debug.WriteLine("  " + method.TypesTreeVersion);
-    //    }
-    //  }
-    //}
+			TryAddTextMarkers(newTasks);
+		}
 
-    #endregion
+		//void Test(IGrouping<string, NemerleErrorTask>[] errGroups, int typeTreeVersion)
+		//{
+		//  Debug.WriteLine("  Engine.TypesTreeVersion: " + typeTreeVersion);
+		//  foreach (var g in errGroups)
+		//  {
+		//    Debug.WriteLine(g.Key);
+		//    foreach (var item in g)
+		//    {
+		//      var cm = (CompilerMessageForMethod)item.CompilerMessage;
+		//      var method = (MethodBuilderEx)cm.Member;
+		//      Debug.WriteLine("  " + method.TypesTreeVersion);
+		//    }
+		//  }
+		//}
 
-    #endregion
-  }
+		#endregion
+
+		#endregion
+	}
 }

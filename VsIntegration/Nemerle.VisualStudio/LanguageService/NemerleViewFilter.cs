@@ -77,7 +77,14 @@ namespace Nemerle.VisualStudio.LanguageService
       if (Source == null || Source.LanguageService == null || !Source.LanguageService.Preferences.EnableQuickInfo)
         return NativeMethods.E_FAIL;
 
-      return Source.GetDataTipText(TextView, aspan, out textValue);
+	  // Check if we have to convert the text span for the secondary buffer.
+	  TextSpan[] convertedSpan = new TextSpan[1];
+	  if(BufferCoordinator == null)
+		  convertedSpan[0] = aspan[0];
+	  else
+		  ErrorHandler.ThrowOnFailure(BufferCoordinator.MapPrimaryToSecondarySpan(aspan[0], convertedSpan));
+
+	  return Source.GetDataTipText(TextView, convertedSpan, out textValue);
     }
 
     /// <summary>This method checks to see if the IVsDebugger is running, and if so, 
