@@ -125,7 +125,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			bool doOutlining = LanguageService.Preferences.AutoOutlining;
 			LanguageService.Preferences.AutoOutlining = false;
 
-			if (LanguageService.GetSource(buffer) == null)
+			if (_projectInfo != null && LanguageService.GetSource(buffer) == null)
 			{
 				// создаем и регистрируем в проекте временный source, чтобы не сломалась логика  
 				// конструктора NemerleSource (см вызов LanguageService.GetOrCreateSource) 
@@ -135,7 +135,10 @@ namespace Nemerle.VisualStudio.LanguageService
 			NemerleSource source = LanguageService.GetOrCreateSource(buffer) as NemerleSource;
 			source.SetBufferCoordinator(bufferCoordinator);
 
-			_projectInfo.Engine.RequestOnBuildTypesTree();
+			if (_projectInfo != null)
+			{
+				_projectInfo.Engine.RequestOnBuildTypesTree();
+			}
 	
 			LanguageService.Preferences.AutoOutlining = doOutlining;
 
