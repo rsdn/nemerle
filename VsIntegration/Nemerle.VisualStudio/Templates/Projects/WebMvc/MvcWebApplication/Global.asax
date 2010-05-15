@@ -1,1 +1,1 @@
-﻿<%@ Application Codebehind="Global.asax.cs" Inherits="MvcApplication.MvcApplication" Language="Nemerle" %>
+﻿<%@ Application Codebehind="Global.asax.n" Inherits="$safeprojectname$.MvcApplication" Language="Nemerle" %>
