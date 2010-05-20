@@ -11,26 +11,49 @@ namespace Nemerle.ComputationExpressions.Async
 {
   public abstract class AsyncJobBase
   {
-    public enum JobState
+    public module JobState
     {
-      | Ready
-      | SwitchContext
-      | Wait
-      | Canceled
+      public Ready         = 0;
+      public SwitchContext = 1;
+      public Wait          = 2;
+      public Canceled      = 3;
     }
 
     public ExecutionContext : ExecutionContext { get; set; }
-    public State : JobState { get; set; }
-    internal mutable NextJob : AsyncJobBase = null;
+
+    protected mutable volatile _state : int = JobState.Ready;
+    public SetState(newState : int) : void
+    {
+      def state = _state;
+      when (state != JobState.Canceled && state != newState)
+      {
+        def prevState = Threading.Interlocked.CompareExchange(ref _state, newState, state);
+        when (prevState != state)
+          SetState(newState);
+      }
+    }
+
+    public Cancel() : void
+    {
+      SetState(JobState.Canceled);
+      Start();
+    }
+
+    public IsReady : bool
+    {
+      get { _state == JobState.Ready }
+    }
 
     public ExecWhileReady[A](mutable async : Async[A], res : ref A) : Async[A]
     {
-      while (State == JobState.Ready && async != null)
+      while (_state == JobState.Ready && async != null)
         async = async.Exec(this, ref res);
       async;
     }
 
     public abstract Start() : void;
+
+    internal mutable NextJob : AsyncJobBase = null;
   }
 
   internal class AsyncJob[A] : AsyncJobBase
@@ -45,7 +68,6 @@ namespace Nemerle.ComputationExpressions.Async
     {
       this.async = async;
       ExecutionContext = executionContext;
-      State = JobState.Ready;
       RunCache = Run;
     }
 
@@ -60,7 +82,7 @@ namespace Nemerle.ComputationExpressions.Async
       lock (syncRoot)
       {
         mutable res;
-        State = JobState.Ready;
+        SetState(JobState.Ready);
         try
         {
           async = ExecWhileReady(async, ref res);
@@ -71,20 +93,28 @@ namespace Nemerle.ComputationExpressions.Async
             result.SetException(ex);
             return;
         }
-        match (State)
+        match (_state)
         {
-          | Ready         =>
+          | JobState.Ready         =>
             assert2(async == null);
             result.SetValue(res);
 
-          | SwitchContext =>
+          | JobState.SwitchContext =>
             Start();
             Console.Error.WriteLine($"Context switch. Thread id = $(Threading.Thread.CurrentThread.ManagedThreadId)");
 
-          | Wait          =>
+          | JobState.Wait          =>
             Console.Error.WriteLine($"Async operation wait. Thread id = $(Threading.Thread.CurrentThread.ManagedThreadId)");
 
-          | Canceled      =>
+          | JobState.Canceled      =>
+            result.SetResult(AsyncResult.Canceled());
+            when (async != null)
+            {
+              async.Cancel();
+              async = null;
+            }
+
+          | _ =>
             throw NotImplementedException();
         }
       }
