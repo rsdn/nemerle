@@ -193,8 +193,9 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public void Completion(IVsTextView textView, int lintIndex, int columnIndex, bool byTokenTrigger)
 		{
-			CompletionElem[] result = GetEngine().Completion(this, lintIndex + 1, columnIndex + 1);
-			var decls = new NemerleDeclarations(result);
+			var result = GetEngine().Completion(this, lintIndex + 1, columnIndex + 1);
+
+			var decls = new NemerleDeclarations(result.CompletionElems, result.ComlitionLocation);
 			CompletionSet.Init(textView, decls, !byTokenTrigger);
 		}
 

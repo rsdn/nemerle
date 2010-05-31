@@ -4,17 +4,37 @@ using Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio.TextManager.Interop;
 
 using Nemerle.Completion2;
+using Nemerle.Compiler;
+using System.Diagnostics;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
 	public class NemerleDeclarations : Declarations
 	{
 		readonly CompletionElem[] _overloadPossibility;
+		readonly Location         _comlitionLocation;
 
-		public NemerleDeclarations(CompletionElem[] overloadPossibility)
+		public NemerleDeclarations(CompletionElem[] overloadPossibility, Location comlitionLocation)
 		{
 			_overloadPossibility = overloadPossibility;
+			_comlitionLocation = comlitionLocation;
 			Sort();
+		}
+
+		public override bool GetInitialExtent(IVsTextView textView, out int line, out int startIdx, out int endIdx)
+		{
+			if (_comlitionLocation != Location.Default)
+			{
+				Debug.Assert(_comlitionLocation.Line == _comlitionLocation.EndLine);
+
+				line     = _comlitionLocation.Line      - 1;
+				startIdx = _comlitionLocation.Column    - 1;
+				endIdx   = _comlitionLocation.EndColumn - 1;
+
+				return true;
+			}
+
+			return base.GetInitialExtent(textView, out line, out startIdx, out endIdx);
 		}
 
 		public override int GetCount()
