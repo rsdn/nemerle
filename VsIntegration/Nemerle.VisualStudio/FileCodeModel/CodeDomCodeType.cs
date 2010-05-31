@@ -180,6 +180,17 @@ namespace Nemerle.VisualStudio.FileCodeModel
 			}
 		}
 
+		private bool IsExternalDeclared(CodeTypeMember member)
+		{
+			var nemerleMember = member.UserData["Member"] as Nemerle.Compiler.Parsetree.MemberBase;
+			var projectItem = this.ProjectItem.Object as Microsoft.VisualStudio.Project.Automation.OAVSProjectItem;
+
+			if (nemerleMember != null && projectItem != null && projectItem.FileNode != null)
+				return string.Compare(nemerleMember.Location.File, projectItem.FileNode.Url, StringComparison.InvariantCultureIgnoreCase) != 0;
+			else
+				return false;
+		}
+
 		public CodeElements Members
 		{
 			[SuppressMessage("Microsoft.Performance", "CA1800:DoNotCastUnnecessarily")]
@@ -188,36 +199,40 @@ namespace Nemerle.VisualStudio.FileCodeModel
 				CodeDomCodeElements res = new CodeDomCodeElements(DTE, this);
 				foreach (CodeTypeMember member in CodeObject.Members)
 				{
-					if (member.UserData[CodeKey] == null)
+					// Вернем только элементы, объявленные в том же файле, для которого вызван CompileUnit
+					if (!IsExternalDeclared(member))
 					{
-						if (member is CodeMemberEvent)
+						if (member.UserData[CodeKey] == null)
 						{
-							//member.UserData[CodeKey] = new CodeDomCode
+							if (member is CodeMemberEvent)
+							{
+								//member.UserData[CodeKey] = new CodeDomCode
+							}
+							else if (member is CodeMemberField)
+							{
+								CodeMemberField cmf = member as CodeMemberField;
+								member.UserData[CodeKey] = new CodeDomCodeVariable(this, cmf);
+							}
+							else if (member is CodeMemberMethod)
+							{
+								CodeMemberMethod cmm = member as CodeMemberMethod;
+								member.UserData[CodeKey] = new CodeDomCodeFunction(this, cmm);
+							}
+							else if (member is CodeMemberProperty)
+							{
+								CodeMemberProperty cmp = member as CodeMemberProperty;
+								member.UserData[CodeKey] = new CodeDomCodeProperty(this, cmp);
+							}
+							else if (member is CodeSnippetTypeMember)
+							{
+							}
+							else if (member is CodeTypeDeclaration)
+							{
+							}
 						}
-						else if (member is CodeMemberField)
-						{
-							CodeMemberField cmf = member as CodeMemberField;
-							member.UserData[CodeKey] = new CodeDomCodeVariable(this, cmf);
-						}
-						else if (member is CodeMemberMethod)
-						{
-							CodeMemberMethod cmm = member as CodeMemberMethod;
-							member.UserData[CodeKey] = new CodeDomCodeFunction(this, cmm);
-						}
-						else if (member is CodeMemberProperty)
-						{
-							CodeMemberProperty cmp = member as CodeMemberProperty;
-							member.UserData[CodeKey] = new CodeDomCodeProperty(this, cmp);
-						}
-						else if (member is CodeSnippetTypeMember)
-						{
-						}
-						else if (member is CodeTypeDeclaration)
-						{
-						}
-					}
 
-					res.Add((CodeElement)member.UserData[CodeKey]);
+						res.Add((CodeElement)member.UserData[CodeKey]);
+					}
 				}
 				return res;
 			}
