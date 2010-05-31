@@ -408,13 +408,6 @@ namespace Nemerle.Compiler
 
       public override ToString () : string { $"$DtKind" }
 
-      public static IsMemberLocationCorrect(x : OverloadPossibility) : bool
-      {
-        def memLoc  = x.Member.Location;
-        //TODO: VladD2: Maybe try to resolve reference on dll's in IDE-mode? We can forward it into generated file or into Object Browser
-        memLoc.Line != 0 && System.IO.File.Exists(memLoc.File)
-      }
-
       public GetDescriptionForError () : list [Location * string]
       {
         def loc = this.Location;
@@ -429,7 +422,7 @@ namespace Nemerle.Compiler
           {
             overloads2 ::= (loc, $"  Posible overload: $o");
 
-            when (IsMemberLocationCorrect(o))
+            when (Typer.IsMemberLocationCorrect(o))
               overloads2 ::= (o.Member.Location.FromStart(), "overload defination");
           }
 
@@ -511,200 +504,34 @@ namespace Nemerle.Compiler
           Util.cassert (kind.filtering_expression : object == e : object)
       }
 
-      ResolveOverload (overloads : list [OverloadPossibility], 
-                       parms : list [Parm], expected : TypeVar)
-                       : list [OverloadPossibility]
+      FilteringExpressionHack(parms : list[Parm]) : void
       {
-        def solver = typer.solver;
-        def messenger = solver.CurrentMessenger;
-
-        foreach (overload in overloads)
-          overload.UsedLastTime = false;
-
-        def has_untyped_parm = parms.Exists (p => p.expr.Type.Hint.IsNone);
-
-        def try_type (overload : OverloadPossibility, final) 
-        {
-          def parms = parms;
-          def parms2 = if (overload.ExtensionMethodObject == null) parms
-            else Parm (overload.ExtensionMethodObject) :: parms;
-          def ct = CallTyper (typer, overload.Compile (), parms2, expected);
-          ct.overload_possibility = overload;
-          ct.is_final = final;
-          ct.is_var_args = overload.VarArgs;
-          overload.ResetOverloadSelectionStuff ();
-          ////Debug.WriteLine($"#Begin FunctionCalled:'$(ct.FunctionCalled)' final:$final expected=$expected");
-          ////Debug.WriteLine($"# --- overload_possibility:'$(ct.overload_possibility)'");
-          ////foreach (arg in parms2)
-          ////  Debug.WriteLine($" ... type:'$(arg.expr.Type)' required_type:'$(arg.required_type)' expr: '$(Typer.RemoveNL(arg.expr))'");
-          ////Debug.Indent();
-          
-          ct.Run ();
-
-          ////Debug.Unindent();
-          ////foreach (arg in parms2)
-          ////  Debug.WriteLine($" ... type:'$(arg.expr.Type)' required_type:'$(arg.required_type)' expr: '$(Typer.RemoveNL(arg.expr))'");
-
-          def result = if (ct.result == null || (overload.VarArgs && !ct.used_var_args))
-            TExpr.Error ()
-          else
-          {
-            unless (ct.result is TExpr.Error)
-            {
-              overload.PermutationArray = ct.GetPermutationArray ();
-              overload.UsedDefaultParms = ct.used_default_parms;
-            }
-
-            ct.result
-          };
-
-          ////Debug.WriteLine($"#End FunctionCalled:'$(ct.FunctionCalled)' OK:$(!(result is TExpr.Error))");
-
-          result
-        }
-
-        def print_error_message (overload : OverloadPossibility) 
-        {
-          when (messenger.NeedMessage)
-          {
-            when (Speculative)
-              solver.PushState();
-
-            messenger.NeedMessage = true;
-            // We retry operation to output error messages.
-            _ = try_type (overload, final = !Speculative);
-            
-            when (Speculative)
-              solver.PopState ();
-          }
-        }
-
-        match (OverloadPossibility.OnlyPossible(overloads, null, typer)) 
-        {
-          | [] => []
-          | overloads =>
-            mutable ok = [];
-
-            // Message.Debug ($ "try type: $overloads");
-            foreach (overload in overloads)
-            {
-              solver.PushState();
-              try
-              { 
-                unless (IsError (try_type (overload, final = false)))
-                  ok ::= overload;
-              } 
-              finally 
-              { 
-                solver.PopState(); 
-              }
-            }
-            // Message.Debug ($ "res: $ok");
-            
-            def makeArgsTypes() { parms.Map(p => p.expr.Type) }
-            
-            match (if (ok.Length > 1) typer.GetBestOverloads(ok, makeArgsTypes()) else ok)
-            {
-              | [] =>
-                if (messenger.NeedMessage) 
-                  match (overloads) 
-                  {
-                    | [o] => print_error_message(o);
-                    | _ =>
-                      def loc = match (PExpr)
-                        {
-                          | PT.PExpr.Member(_, member) => member.Location
-                          | _ => LocationStack.Top()
-                        };
-
-                      Util.locate(loc,
-                      {
-                        surroundwith (related_messages)
-                        {
-                          ReportError (messenger, "each overload has an error during call:");
-                          mutable cnt = 1;
-                          foreach (o in overloads) 
-                          {
-                            surroundwith (related_messages)
-                            {
-                              ReportError (messenger, $<#overload #$cnt, "$o" fail because:#>);
-                              print_error_message (o);
-                              when (IsMemberLocationCorrect(o))
-                                Message.Hint(o.Member.Location.FromStart(), "overload defination");
-                            }
-                            ++cnt;
-                          }
-                        }
-                      });
-                  }
-                else
-                  messenger.MarkError();
-                []
-
-              /*
-                In general we do not commit to a single, best overload when we still
-                have some parameters that have no Hint (which means they are of a totally
-                unknown type), except:
-                  - when it is the only possible overload, 
-                  - we're in a special second pass of delayed typings or 
-                  - it is == or !=. 
-
-                The last part is a hack, it might be a good idea to
-                commit to a single overload also in some other cases
-                but the comparison operators seem to be crucial.
-
-                Bug #770.
-              */
-
-              | [one] as result when ok is [_]
-                                     || !has_untyped_parm 
-                                     || typer.BadnessAllowed > 0 
-                                     || one.Member.Name == "op_Equality" 
-                                     || one.Member.Name == "op_Inequality" 
-                =>
-                // if this typing is speculative, then we should not do final typeng.
-                // It prevent change some types.
-                if (this.Speculative)
-                  result
-                else match (try_type (one, final = true)) 
-                {
-                  | TExpr.Call (_func, _parms, _) as _tCall =>
-                    def call = this.DtKind.filtering_expression;
-                    // VladD2: This is a hack! 
-                    // Copy original TExpr.Call. We should safe it for next speculative typing 
-                    // processes (delayed typing).
-                    def copy = TExpr.Call(call.func, call.parms, call.is_tail);
-                    copy.ty = call.ty;
-                    // Set copy to filter
-                    this.DtKind.filtering_expression = copy;
-                    // This change source TExpr.Call wich been made while parsing.
-                    // TODO: This is a dirty hack. We mast remove it.
-                    call.parms = _parms;
-
-                    one.UsedLastTime = true;
-                    result
-
-                  | e => 
-                    _ = e;
-                    //assert2(false);
-                    overloads
-                }
-
-              // This is important -- we only drop the clearly evil
-              // solutions. We leave the less general ones (dropped by 
-              // GetBestOverloads), as it is possible we will need them 
-              // later.
-              //
-              // However we still mark only the best overloads in case we want
-              // an error message later.
-              | lst => 
-                foreach (o in lst)
-                  o.UsedLastTime = true;
-                ok 
-            }
-        }
+        def call = this.DtKind.filtering_expression;
+        // VladD2: This is a hack! 
+        // Copy original TExpr.Call. We should safe it for next speculative typing 
+        // processes (delayed typing).
+        def copy = TExpr.Call(call.func, call.parms, call.is_tail);
+        copy.ty = call.ty;
+        // Set copy to filter
+        this.DtKind.filtering_expression = copy;
+        // This change source TExpr.Call wich been made while parsing.
+        // TODO: This is a dirty hack. We mast remove it.
+        call.parms = parms;
       }
 
+      ResolveOverload(overloads : list [OverloadPossibility], parms : list [Parm], expected : TypeVar)
+        : list [OverloadPossibility]
+      {
+        def loc = 
+          match (PExpr)
+          {
+            | PT.PExpr.Member(_, member) => member.Location
+            | _                          => LocationStack.Top()
+          };
+
+        def res = typer.ResolveOverload(overloads, parms, expected, Speculative, loc, FilteringExpressionHack);
+        res
+      }
 
       LookupOperatorIn (bound : FixedType, name : string) : list [OverloadPossibility]
       {
@@ -860,7 +687,7 @@ namespace Nemerle.Compiler
                 res2
               }
               else if (typer.Expect (expected, expr.func.Type, "overloaded function call"))
-                ResolveOverload (overloads, expr.parms, expr.Type)
+                ResolveOverload(overloads, expr.parms, expr.Type)
               else [];
 
             when (o1.Length != overloads.Length || o1.Length == 1)
