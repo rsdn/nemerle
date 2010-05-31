@@ -10,7 +10,7 @@ namespace Nemerle.VisualStudio.Project
 	[CLSCompliant(false)]
 	[Guid(NemerleConstants.ProjectNodePropertiesGuidString)]
 	[ClassInterface(ClassInterfaceType.AutoDual)]
-	public class NemerleProjectNodeProperties : ProjectNodeProperties
+	public class NemerleProjectNodeProperties : ProjectNodeProperties, VSLangProj.ProjectProperties
 	{
 		#region ctors
 
@@ -136,6 +136,358 @@ namespace Nemerle.VisualStudio.Project
 		// see AddProperty.NemerleOAProperties()
 		public string WebApplication_StartPageUrl
 		{ get; set; }
+
+		#endregion
+
+		// ћетод Microsoft.VisualStudio.Web.Application.WAProject.DoProjectLoadInitialization() прерываетс€ по ошибке, если 
+		// NemerleProjectNodeProperties не реализует интерфейс VSLangProj.ProjectProperties
+		// ќт этого интерфейса нужно только одно свойства - ActiveConfigurationSettings
+		//
+		// Ѕез успешной отработки DoProjectLoadInitialization не полностью работает поддержка веб-проектов,
+		// например не подцепл€ютс€ префиксы контролов, объ€вленные в web.config файле (секци€ <system.web><pages><controls>)
+		#region ProjectProperties Members
+
+		VSLangProj.ProjectConfigurationProperties VSLangProj.ProjectProperties.ActiveConfigurationSettings
+		{
+			get { return null; }
+		}
+
+		string VSLangProj.ProjectProperties.AbsoluteProjectDirectory
+		{
+			get { throw new NotImplementedException(); }
+		}
+
+		string VSLangProj.ProjectProperties.ActiveFileSharePath
+		{
+			get { throw new NotImplementedException(); }
+		}
+
+		VSLangProj.prjWebAccessMethod VSLangProj.ProjectProperties.ActiveWebAccessMethod
+		{
+			get { throw new NotImplementedException(); }
+		}
+
+		string VSLangProj.ProjectProperties.ApplicationIcon
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		string VSLangProj.ProjectProperties.AssemblyKeyContainerName
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		string VSLangProj.ProjectProperties.AssemblyName
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		string VSLangProj.ProjectProperties.AssemblyOriginatorKeyFile
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		VSLangProj.prjOriginatorKeyMode VSLangProj.ProjectProperties.AssemblyOriginatorKeyMode
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		VSLangProj.prjScriptLanguage VSLangProj.ProjectProperties.DefaultClientScript
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		VSLangProj.prjHTMLPageLayout VSLangProj.ProjectProperties.DefaultHTMLPageLayout
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		string VSLangProj.ProjectProperties.DefaultNamespace
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		VSLangProj.prjTargetSchema VSLangProj.ProjectProperties.DefaultTargetSchema
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		bool VSLangProj.ProjectProperties.DelaySign
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		string VSLangProj.ProjectProperties.ExtenderCATID
+		{
+			get { throw new NotImplementedException(); }
+		}
+
+		object VSLangProj.ProjectProperties.ExtenderNames
+		{
+			get { throw new NotImplementedException(); }
+		}
+
+		string VSLangProj.ProjectProperties.FileName
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		string VSLangProj.ProjectProperties.FileSharePath
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		string VSLangProj.ProjectProperties.FullPath
+		{
+			get { throw new NotImplementedException(); }
+		}
+
+		bool VSLangProj.ProjectProperties.LinkRepair
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		string VSLangProj.ProjectProperties.LocalPath
+		{
+			get { throw new NotImplementedException(); }
+		}
+
+		string VSLangProj.ProjectProperties.OfflineURL
+		{
+			get { throw new NotImplementedException(); }
+		}
+
+		VSLangProj.prjCompare VSLangProj.ProjectProperties.OptionCompare
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		VSLangProj.prjOptionExplicit VSLangProj.ProjectProperties.OptionExplicit
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		VSLangProj.prjOptionStrict VSLangProj.ProjectProperties.OptionStrict
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		string VSLangProj.ProjectProperties.OutputFileName
+		{
+			get { throw new NotImplementedException(); }
+		}
+
+		VSLangProj.prjOutputType VSLangProj.ProjectProperties.OutputType
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		VSLangProj.prjProjectType VSLangProj.ProjectProperties.ProjectType
+		{
+			get { throw new NotImplementedException(); }
+		}
+
+		string VSLangProj.ProjectProperties.ReferencePath
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		string VSLangProj.ProjectProperties.RootNamespace
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		string VSLangProj.ProjectProperties.ServerExtensionsVersion
+		{
+			get { throw new NotImplementedException(); }
+		}
+
+		string VSLangProj.ProjectProperties.StartupObject
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		string VSLangProj.ProjectProperties.URL
+		{
+			get { throw new NotImplementedException(); }
+		}
+
+		VSLangProj.prjWebAccessMethod VSLangProj.ProjectProperties.WebAccessMethod
+		{
+			get
+			{
+				throw new NotImplementedException();
+			}
+			set
+			{
+				throw new NotImplementedException();
+			}
+		}
+
+		string VSLangProj.ProjectProperties.WebServer
+		{
+			get { throw new NotImplementedException(); }
+		}
+
+		string VSLangProj.ProjectProperties.WebServerVersion
+		{
+			get { throw new NotImplementedException(); }
+		}
+
+		string VSLangProj.ProjectProperties.__id
+		{
+			get { throw new NotImplementedException(); }
+		}
+
+		object VSLangProj.ProjectProperties.__project
+		{
+			get { throw new NotImplementedException(); }
+		}
+
+		object VSLangProj.ProjectProperties.get_Extender(string ExtenderName)
+		{
+			throw new NotImplementedException();
+		}
 
 		#endregion
 	}
