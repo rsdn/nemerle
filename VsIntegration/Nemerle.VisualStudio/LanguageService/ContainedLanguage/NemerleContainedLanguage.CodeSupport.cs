@@ -1,4 +1,4 @@
-using System;
+п»їusing System;
 using System.CodeDom;
 using System.CodeDom.Compiler;
 using System.Diagnostics.CodeAnalysis;
@@ -20,7 +20,7 @@ namespace Nemerle.VisualStudio.LanguageService
 	{
 		private string _codeBehindFile = null;
 
-		// TODO: заменить на получение имени файла из арибута aspx страницы
+		// TODO: Р·Р°РјРµРЅРёС‚СЊ РЅР° РїРѕР»СѓС‡РµРЅРёРµ РёРјРµРЅРё С„Р°Р№Р»Р° РёР· Р°СЂРёР±СѓС‚Р° aspx СЃС‚СЂР°РЅРёС†С‹
 		private string CodeBehindFile
 		{
 			get

@@ -1,4 +1,4 @@
-using System;
+п»їusing System;
 using Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio.TextManager.Interop;
 
@@ -115,15 +115,15 @@ namespace Nemerle.VisualStudio.LanguageService
 			{
 				_bufferCoordinator = null;
 
-				// Базовая реализация base.Dispose() предполагает, что значение внутреннего поля textView 
-				// является COM объектом и безусловно вызывает для него Marshal.ReleaseComObject.
-				// Но для Contained Language в качестве view используется TextViewWrapper, который не является
-				// COM объектом, что приводит к генерации исключения внутри base.Dispose() и 
-				// преждевременному выходу из функции.
+				// Р‘Р°Р·РѕРІР°СЏ СЂРµР°Р»РёР·Р°С†РёСЏ base.Dispose() РїСЂРµРґРїРѕР»Р°РіР°РµС‚, С‡С‚Рѕ Р·РЅР°С‡РµРЅРёРµ РІРЅСѓС‚СЂРµРЅРЅРµРіРѕ РїРѕР»СЏ textView 
+				// СЏРІР»СЏРµС‚СЃСЏ COM РѕР±СЉРµРєС‚РѕРј Рё Р±РµР·СѓСЃР»РѕРІРЅРѕ РІС‹Р·С‹РІР°РµС‚ РґР»СЏ РЅРµРіРѕ Marshal.ReleaseComObject.
+				// РќРѕ РґР»СЏ Contained Language РІ РєР°С‡РµСЃС‚РІРµ view РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ TextViewWrapper, РєРѕС‚РѕСЂС‹Р№ РЅРµ СЏРІР»СЏРµС‚СЃСЏ
+				// COM РѕР±СЉРµРєС‚РѕРј, С‡С‚Рѕ РїСЂРёРІРѕРґРёС‚ Рє РіРµРЅРµСЂР°С†РёРё РёСЃРєР»СЋС‡РµРЅРёСЏ РІРЅСѓС‚СЂРё base.Dispose() Рё 
+				// РїСЂРµР¶РґРµРІСЂРµРјРµРЅРЅРѕРјСѓ РІС‹С…РѕРґСѓ РёР· С„СѓРЅРєС†РёРё.
 				// 
-				// Поэтому деинициализаируем textView вручную и обнулим значение поля. Это отменит вызов ReleaseComObject
+				// РџРѕСЌС‚РѕРјСѓ РґРµРёРЅРёС†РёР°Р»РёР·Р°РёСЂСѓРµРј textView РІСЂСѓС‡РЅСѓСЋ Рё РѕР±РЅСѓР»РёРј Р·РЅР°С‡РµРЅРёРµ РїРѕР»СЏ. Р­С‚Рѕ РѕС‚РјРµРЅРёС‚ РІС‹Р·РѕРІ ReleaseComObject
 
-				// HACK: обнулим значение приватного поля textView, если его значение имеет тип TextViewWrapper
+				// HACK: РѕР±РЅСѓР»РёРј Р·РЅР°С‡РµРЅРёРµ РїСЂРёРІР°С‚РЅРѕРіРѕ РїРѕР»СЏ textView, РµСЃР»Рё РµРіРѕ Р·РЅР°С‡РµРЅРёРµ РёРјРµРµС‚ С‚РёРї TextViewWrapper
 				var textViewFieldInfo = this.GetType().BaseType.GetField("textView", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
 				if (textViewFieldInfo != null)
 				{

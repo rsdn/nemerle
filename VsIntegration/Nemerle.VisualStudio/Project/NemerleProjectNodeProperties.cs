@@ -1,4 +1,4 @@
-using System;
+п»їusing System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 
@@ -31,8 +31,8 @@ namespace Nemerle.VisualStudio.Project
 		}
 
 		[Browsable(false)]
-		// Обход странного поведения студии. В Microsoft.VisualStudio.Shell.Design.Serialization.ConfigurationHelperService()
-		// производится безусловное считывание значения свойства Company и AssemblyVersion
+		// РћР±С…РѕРґ СЃС‚СЂР°РЅРЅРѕРіРѕ РїРѕРІРµРґРµРЅРёСЏ СЃС‚СѓРґРёРё. Р’ Microsoft.VisualStudio.Shell.Design.Serialization.ConfigurationHelperService()
+		// РїСЂРѕРёР·РІРѕРґРёС‚СЃСЏ Р±РµР·СѓСЃР»РѕРІРЅРѕРµ СЃС‡РёС‚С‹РІР°РЅРёРµ Р·РЅР°С‡РµРЅРёСЏ СЃРІРѕР№СЃС‚РІР° Company Рё AssemblyVersion
 		public string Company
 		{
 			get { return null; }
@@ -40,7 +40,7 @@ namespace Nemerle.VisualStudio.Project
 
 		//[SRCategoryAttribute("Misc")]
 		//[LocDisplayName("AssemblyVersion")]
-		//[SRDescriptionAttribute("Тестируем разную хрень 2")]
+		//[SRDescriptionAttribute("РўРµСЃС‚РёСЂСѓРµРј СЂР°Р·РЅСѓСЋ С…СЂРµРЅСЊ 2")]
 		[Browsable(false)]
 		public string AssemblyVersion
 		{
@@ -76,8 +76,8 @@ namespace Nemerle.VisualStudio.Project
 			return prop.Value;
 		}
 
-		//TODO: Проверить, что эта фигня возвращает то что нужно! 
-		// Возможно здесь нужно собирать путь по кускам.
+		//TODO: РџСЂРѕРІРµСЂРёС‚СЊ, С‡С‚Рѕ СЌС‚Р° С„РёРіРЅСЏ РІРѕР·РІСЂР°С‰Р°РµС‚ С‚Рѕ С‡С‚Рѕ РЅСѓР¶РЅРѕ! 
+		// Р’РѕР·РјРѕР¶РЅРѕ Р·РґРµСЃСЊ РЅСѓР¶РЅРѕ СЃРѕР±РёСЂР°С‚СЊ РїСѓС‚СЊ РїРѕ РєСѓСЃРєР°Рј.
 		[Browsable(false)]
 		public string OutputPath
 		{
@@ -139,12 +139,12 @@ namespace Nemerle.VisualStudio.Project
 
 		#endregion
 
-		// Метод Microsoft.VisualStudio.Web.Application.WAProject.DoProjectLoadInitialization() прерывается по ошибке, если 
-		// NemerleProjectNodeProperties не реализует интерфейс VSLangProj.ProjectProperties
-		// От этого интерфейса нужно только одно свойства - ActiveConfigurationSettings
+		// РњРµС‚РѕРґ Microsoft.VisualStudio.Web.Application.WAProject.DoProjectLoadInitialization() РїСЂРµСЂС‹РІР°РµС‚СЃСЏ РїРѕ РѕС€РёР±РєРµ, РµСЃР»Рё 
+		// NemerleProjectNodeProperties РЅРµ СЂРµР°Р»РёР·СѓРµС‚ РёРЅС‚РµСЂС„РµР№СЃ VSLangProj.ProjectProperties
+		// РћС‚ СЌС‚РѕРіРѕ РёРЅС‚РµСЂС„РµР№СЃР° РЅСѓР¶РЅРѕ С‚РѕР»СЊРєРѕ РѕРґРЅРѕ СЃРІРѕР№СЃС‚РІР° - ActiveConfigurationSettings
 		//
-		// Без успешной отработки DoProjectLoadInitialization не полностью работает поддержка веб-проектов,
-		// например не подцепляются префиксы контролов, объявленные в web.config файле (секция <system.web><pages><controls>)
+		// Р‘РµР· СѓСЃРїРµС€РЅРѕР№ РѕС‚СЂР°Р±РѕС‚РєРё DoProjectLoadInitialization РЅРµ РїРѕР»РЅРѕСЃС‚СЊСЋ СЂР°Р±РѕС‚Р°РµС‚ РїРѕРґРґРµСЂР¶РєР° РІРµР±-РїСЂРѕРµРєС‚РѕРІ,
+		// РЅР°РїСЂРёРјРµСЂ РЅРµ РїРѕРґС†РµРїР»СЏСЋС‚СЃСЏ РїСЂРµС„РёРєСЃС‹ РєРѕРЅС‚СЂРѕР»РѕРІ, РѕР±СЉСЏРІР»РµРЅРЅС‹Рµ РІ web.config С„Р°Р№Р»Рµ (СЃРµРєС†РёСЏ <system.web><pages><controls>)
 		#region ProjectProperties Members
 
 		VSLangProj.ProjectConfigurationProperties VSLangProj.ProjectProperties.ActiveConfigurationSettings

@@ -1,4 +1,4 @@
-/***************************************************************************
+п»ї/***************************************************************************
 
 Copyright (c) Microsoft Corporation. All rights reserved.
 This code is licensed under the Visual Studio SDK license terms.
@@ -98,13 +98,13 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private IVsTextView GetPrimaryView()
 		{
-			// HACK: считаем, что primary view - это активное в данный момент представление.
-			// Это корректно, в случае если функция GetPrimaryView вызывается для отображении тултипов
+			// HACK: СЃС‡РёС‚Р°РµРј, С‡С‚Рѕ primary view - СЌС‚Рѕ Р°РєС‚РёРІРЅРѕРµ РІ РґР°РЅРЅС‹Р№ РјРѕРјРµРЅС‚ РїСЂРµРґСЃС‚Р°РІР»РµРЅРёРµ.
+			// Р­С‚Рѕ РєРѕСЂСЂРµРєС‚РЅРѕ, РІ СЃР»СѓС‡Р°Рµ РµСЃР»Рё С„СѓРЅРєС†РёСЏ GetPrimaryView РІС‹Р·С‹РІР°РµС‚СЃСЏ РґР»СЏ РѕС‚РѕР±СЂР°Р¶РµРЅРёРё С‚СѓР»С‚РёРїРѕРІ
 			IVsTextView activeView = null;
 			IVsTextManager vsTextMgr = (IVsTextManager)ProjectInfo.Projects[0].LanguageService.GetService(typeof(SVsTextManager));
 			vsTextMgr.GetActiveView(1, null, out activeView);
 
-			return activeView != this ? activeView : null; // подстрахуемся от бесконечного рекурсивного обращения к самому себе
+			return activeView != this ? activeView : null; // РїРѕРґСЃС‚СЂР°С…СѓРµРјСЃСЏ РѕС‚ Р±РµСЃРєРѕРЅРµС‡РЅРѕРіРѕ СЂРµРєСѓСЂСЃРёРІРЅРѕРіРѕ РѕР±СЂР°С‰РµРЅРёСЏ Рє СЃР°РјРѕРјСѓ СЃРµР±Рµ
 		}
 
 		#region IVsTextView Members

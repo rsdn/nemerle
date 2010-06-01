@@ -1,4 +1,4 @@
-using System;
+п»їusing System;
 using System.CodeDom;
 using System.CodeDom.Compiler;
 using System.Collections.Generic;
@@ -127,8 +127,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			if (_projectInfo != null && LanguageService.GetSource(buffer) == null)
 			{
-				// создаем и регистрируем в проекте временный source, чтобы не сломалась логика  
-				// конструктора NemerleSource (см вызов LanguageService.GetOrCreateSource) 
+				// СЃРѕР·РґР°РµРј Рё СЂРµРіРёСЃС‚СЂРёСЂСѓРµРј РІ РїСЂРѕРµРєС‚Рµ РІСЂРµРјРµРЅРЅС‹Р№ source, С‡С‚РѕР±С‹ РЅРµ СЃР»РѕРјР°Р»Р°СЃСЊ Р»РѕРіРёРєР°  
+				// РєРѕРЅСЃС‚СЂСѓРєС‚РѕСЂР° NemerleSource (СЃРј РІС‹Р·РѕРІ LanguageService.GetOrCreateSource) 
 				_projectInfo.ReplaseOrAddSource(new FileNemerleSource(secondaryFileIndex));
 			}
 			
@@ -146,7 +146,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			language.AddCodeWindowManager(_windowManager);
 
-			// увеличиваем внутренний счетчик openCount, для того чтобы впоследствии корректно отработала логика закрытия соурса
+			// СѓРІРµР»РёС‡РёРІР°РµРј РІРЅСѓС‚СЂРµРЅРЅРёР№ СЃС‡РµС‚С‡РёРє openCount, РґР»СЏ С‚РѕРіРѕ С‡С‚РѕР±С‹ РІРїРѕСЃР»РµРґСЃС‚РІРёРё РєРѕСЂСЂРµРєС‚РЅРѕ РѕС‚СЂР°Р±РѕС‚Р°Р»Р° Р»РѕРіРёРєР° Р·Р°РєСЂС‹С‚РёСЏ СЃРѕСѓСЂСЃР°
 			source.Open();
 
 			TextViewWrapper view = new TextViewWrapper(languageHost, pISenseHost, bufferCoordinator, pNextCmdTarget, source);
@@ -157,10 +157,10 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (null != nemerleFilter)
 				nemerleFilter.BufferCoordinator = this.bufferCoordinator;
 
-			// сохраним значение DocumentEvents в переменной класса, чтобы исключить преждевременное уничтожение 
-			// объекта и автоматическоей отписывание от событий. 
+			// СЃРѕС…СЂР°РЅРёРј Р·РЅР°С‡РµРЅРёРµ DocumentEvents РІ РїРµСЂРµРјРµРЅРЅРѕР№ РєР»Р°СЃСЃР°, С‡С‚РѕР±С‹ РёСЃРєР»СЋС‡РёС‚СЊ РїСЂРµР¶РґРµРІСЂРµРјРµРЅРЅРѕРµ СѓРЅРёС‡С‚РѕР¶РµРЅРёРµ 
+			// РѕР±СЉРµРєС‚Р° Рё Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРѕРµР№ РѕС‚РїРёСЃС‹РІР°РЅРёРµ РѕС‚ СЃРѕР±С‹С‚РёР№. 
 			// 
-			// Источник решения:
+			// РСЃС‚РѕС‡РЅРёРє СЂРµС€РµРЅРёСЏ:
 			// PRB: Visual Studio .NET events being disconnected from add-in (http://www.mztools.com/articles/2005/mz2005012.aspx) 
 			_documentEvents = _projectItem.DTE.Events.get_DocumentEvents(_projectItem.Document);
 
@@ -169,7 +169,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			return VSConstants.S_OK;
 		}
 
-		// После закрытия aspx файла исключим автосгенерированный исходник из списка компиляции проекта
+		// РџРѕСЃР»Рµ Р·Р°РєСЂС‹С‚РёСЏ aspx С„Р°Р№Р»Р° РёСЃРєР»СЋС‡РёРј Р°РІС‚РѕСЃРіРµРЅРµСЂРёСЂРѕРІР°РЅРЅС‹Р№ РёСЃС…РѕРґРЅРёРє РёР· СЃРїРёСЃРєР° РєРѕРјРїРёР»СЏС†РёРё РїСЂРѕРµРєС‚Р°
 		void OnDocumentClosing(EnvDTE.Document document)
 		{
 			if (Location.GetFileIndex(document.FullName) == Location.GetFileIndex(_filePath))
@@ -177,7 +177,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				try
 				{
 					if (_windowManager != null)
-						// RemoveAdornments вызывает уничтожение (close и dispose) view filter и source, связанных с _windowManager
+						// RemoveAdornments РІС‹Р·С‹РІР°РµС‚ СѓРЅРёС‡С‚РѕР¶РµРЅРёРµ (close Рё dispose) view filter Рё source, СЃРІСЏР·Р°РЅРЅС‹С… СЃ _windowManager
 						_windowManager.RemoveAdornments();
 				}
 				finally

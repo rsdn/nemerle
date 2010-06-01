@@ -1,4 +1,4 @@
-/***************************************************************************
+п»ї/***************************************************************************
 
 Copyright (c) Microsoft Corporation. All rights reserved.
 This code is licensed under the Visual Studio SDK license terms.
@@ -199,7 +199,7 @@ namespace Nemerle.VisualStudio.FileCodeModel
 				CodeDomCodeElements res = new CodeDomCodeElements(DTE, this);
 				foreach (CodeTypeMember member in CodeObject.Members)
 				{
-					// Вернем только элементы, объявленные в том же файле, для которого вызван CompileUnit
+					// Р’РµСЂРЅРµРј С‚РѕР»СЊРєРѕ СЌР»РµРјРµРЅС‚С‹, РѕР±СЉСЏРІР»РµРЅРЅС‹Рµ РІ С‚РѕРј Р¶Рµ С„Р°Р№Р»Рµ, РґР»СЏ РєРѕС‚РѕСЂРѕРіРѕ РІС‹Р·РІР°РЅ CompileUnit
 					if (!IsExternalDeclared(member))
 					{
 						if (member.UserData[CodeKey] == null)
