@@ -118,7 +118,11 @@ namespace Nemerle.VisualStudio.Helpers
 		{
 			var h = GetHelper(function.BodyCloseTokenLocation.FileIndex);
 			var closeBrecket = h.Source.GetText(function.BodyCloseTokenLocation.ToTextSpan());
-			System.Diagnostics.Debug.Assert(closeBrecket == "}");
+			if (closeBrecket != "}")
+			{
+				System.Windows.Forms.MessageBox.Show("Internal Nemerle WinForms Designer Error!");
+				throw new ArgumentException("closeBrecket != \"}\"");
+			}
 			Add(function.Location, function.BodyInnerLocation, text);
 		}
 
