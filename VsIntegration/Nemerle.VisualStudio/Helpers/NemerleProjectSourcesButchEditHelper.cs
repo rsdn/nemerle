@@ -116,6 +116,9 @@ namespace Nemerle.VisualStudio.Helpers
 
 		public void ReplaseMethodBody(ClassMember.Function function, string text)
 		{
+			var h = GetHelper(function.BodyCloseTokenLocation.FileIndex);
+			var closeBrecket = h.Source.GetText(function.BodyCloseTokenLocation.ToTextSpan());
+			System.Diagnostics.Debug.Assert(closeBrecket == "}");
 			Add(function.Location, function.BodyInnerLocation, text);
 		}
 
@@ -157,12 +160,6 @@ namespace Nemerle.VisualStudio.Helpers
 				sufix = sufix.Substring(1);
 				endCol++;
 			}
-
-			// Если нет других выражений в начале строки содержащей удаляемое выражение, то 
-			// удаляем все пустые строки перед ней.
-			if (startCol == 1)
-				while (startLine - 1 > 1 && IsAllCharsIsSpaces(source.GetLine(startLine - 1)))
-					startLine--;
 
 			// Если в конце строки нет других выражений, то продлеваем локешон до начала 
 			// следующей строки и удаляем все пустые строки идущие за данной строкой.

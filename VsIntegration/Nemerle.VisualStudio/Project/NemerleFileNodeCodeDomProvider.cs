@@ -224,6 +224,7 @@ namespace Nemerle.VisualStudio.Project
 					var text = CodeGenerator.ToString(changes.NewInitializeComponentStatements);
 					// обновляем исходники...
 					helper.ReplaseMethodBody(initializeComponent, text);
+					definedIn = initializeComponent.DefinedIn;
 				}
 
 				foreach (CodeMemberField codeMemberField in changes.InsertedFields)
