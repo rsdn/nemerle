@@ -8,6 +8,7 @@ using Nemerle.Compiler.Utils;
 using Microsoft.VisualStudio.Project;
 using Nemerle.Compiler.Parsetree;
 using System.CodeDom;
+using System.Drawing;
 
 namespace Nemerle.VisualStudio.Helpers
 {
@@ -138,7 +139,9 @@ namespace Nemerle.VisualStudio.Helpers
 			CodeTypeDeclaration declaration)
 		{
 			string text = FormCodeDomGenerator.ToString(codeMemberMethod, declaration);
-			Add(topDeclaration.Location, topDeclaration.BodyCloseTokenLocation.FromStart(), text);
+			var loc = topDeclaration.BodyCloseTokenLocation.FromStart();
+      codeMemberMethod.UserData[typeof(Point)] = new Point(loc.Column + 3, loc.Line + _ident.Length);
+			Add(topDeclaration.Location, loc, text);
 		}
 
 		internal void RemoveField(ClassMember.Field field)
