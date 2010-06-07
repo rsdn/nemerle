@@ -36,7 +36,8 @@ namespace Nemerle.VisualStudio.Project
 		{
 			try
 			{
-				return base.CreateFileComponent(selectorData);
+				var node = base.CreateFileComponent(selectorData);
+				return node;
 			}
 			catch (NullReferenceException e)
 			{
@@ -64,7 +65,39 @@ namespace Nemerle.VisualStudio.Project
     {
       return new NemerleProjectReferenceNode(this.ProjectMgr, selectorData.bstrTitle, selectorData.bstrFile, selectorData.bstrProjRef);
     }
-    
+
+		protected override AssemblyReferenceNode CreateAssemblyReferenceNode(string fileName)
+		{
+			NemerleAssemblyReferenceNode node = null;
+
+			try
+			{
+				node = new NemerleAssemblyReferenceNode(ProjectMgr, fileName);
+			}
+			catch (ArgumentNullException e)
+			{
+				Trace.WriteLine("Exception : " + e.Message);
+			}
+			catch (FileNotFoundException e)
+			{
+				Trace.WriteLine("Exception : " + e.Message);
+			}
+			catch (BadImageFormatException e)
+			{
+				Trace.WriteLine("Exception : " + e.Message);
+			}
+			catch (FileLoadException e)
+			{
+				Trace.WriteLine("Exception : " + e.Message);
+			}
+			catch (System.Security.SecurityException e)
+			{
+				Trace.WriteLine("Exception : " + e.Message);
+			}
+
+			return node;
+		}
+
     protected override AssemblyReferenceNode CreateAssemblyReferenceNode(ProjectElement element)
 		{
 			// VladD2:
@@ -81,7 +114,7 @@ namespace Nemerle.VisualStudio.Project
 					node = new NemerleAssemblyReferenceNode(ProjectMgr, item);
 				else
 					node = new NemerleAssemblyReferenceNode(ProjectMgr, element);
-				}
+			}
 			catch (ArgumentNullException e)
 			{
 				Trace.WriteLine("Exception : " + e.Message);

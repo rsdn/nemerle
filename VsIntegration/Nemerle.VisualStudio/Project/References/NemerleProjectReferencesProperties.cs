@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using Microsoft.VisualStudio.Project;
 using System.Runtime.InteropServices;
+using System.ComponentModel;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -22,6 +23,20 @@ namespace Nemerle.VisualStudio.Project
     #endregion
 
 		#region overriden
+
+		[LocDisplayName("HintPath")]
+		[SRCategoryAttribute("Misc")]
+		[SRDescriptionAttribute("ssssssssssss")]
+		[Browsable(true)]
+		[AutomationBrowsable(true)]
+		public string HintPath
+		{
+			get
+			{
+				var value = Node.ItemNode.Item.GetMetadata("HintPath");
+				return value;
+			}
+		}
 		
     public override string FullPath
 		{

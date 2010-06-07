@@ -20,6 +20,11 @@ namespace Nemerle.VisualStudio.Project
 		{
 		}
 
+		protected override void BindReferenceData()
+		{
+			base.BindReferenceData();
+		}
+
 		/// <summary>
 		/// constructor for the NemerleProjectReferenceNode
 		/// </summary>
@@ -33,7 +38,6 @@ namespace Nemerle.VisualStudio.Project
     protected override NodeProperties CreatePropertiesObject()
     {
       return new NemerleProjectReferencesProperties(this, "Project Reference Properties");
-      //return new ProjectReferencesProperties(this);
     }
 
 		public override object GetIconHandle(bool open)

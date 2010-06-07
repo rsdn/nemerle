@@ -3,6 +3,7 @@ using Microsoft.VisualStudio;
 using System;
 using Microsoft.VisualStudio.Shell.Interop;
 using System.IO;
+using Nemerle.VisualStudio.Project.References;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -11,6 +12,11 @@ namespace Nemerle.VisualStudio.Project
 		public NemerleAssemblyReferenceNode(ProjectNode root, ProjectElement e)
 			: base(root, e)
 		{
+		}
+
+		protected override NodeProperties CreatePropertiesObject()
+		{
+			return new NemerleReferenceNodeProperties(this);
 		}
 
 		/// <summary>
@@ -49,15 +55,30 @@ namespace Nemerle.VisualStudio.Project
     {
       base.BindReferenceData();
 
-      // Делаем HintPath относительным путем... 
-      // Это позволит переносить проекты с машины на машину без изменений.
-
+			string path = null;
       var fullFilePath = Path.GetFullPath(Url);
-      var fullProjectPath = Path.GetFullPath(ProjectMgr.ProjectFolder);
-      var relativePath = Utils.GetRelativePath(fullProjectPath, fullFilePath);
+			// Пробуем определить не является ли путь путем указанным в переменной среды окружения Nemerle...
+			var dir = Path.GetFullPath(Path.GetDirectoryName(fullFilePath));
+			var envVar = Environment.GetEnvironmentVariable("Nemerle");
+			
+			if (!string.IsNullOrEmpty(envVar))
+			{
+				envVar = Path.GetFullPath(envVar);
+				if (string.Equals(dir, envVar, StringComparison.InvariantCultureIgnoreCase))
+					path = Path.Combine("$(Nemerle)\\", Path.GetFileName(fullFilePath));
+			}
+
+			if (path == null)
+			{
+				// Делаем HintPath относительным путем... 
+				// Это позволит переносить проекты с машины на машину без изменений.
+
+				var fullProjectPath = Path.GetFullPath(ProjectMgr.ProjectFolder);
+				path = Utils.GetRelativePath(fullProjectPath, fullFilePath);
+			}
 
       // Set a default HintPath for msbuild to be able to resolve the reference.
-      ItemNode.SetMetadata(ProjectFileConstants.HintPath, relativePath);
+			ItemNode.SetMetadata(ProjectFileConstants.HintPath, path);
     }
 
 		public override string ToString()
