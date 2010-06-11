@@ -127,7 +127,7 @@ namespace Nemerle.VisualStudio.Project
 
 		public string ProjectFullName { get { return _projectNode.VSProject.Project.FullName; } }
 
-		public string RootNamespace { get { return _projectNode.VSProject.Project.Properties.Item("DefaultNamespace").Value.ToString(); } }
+		public string RootNamespace { get { return (_projectNode.VSProject.Project.Properties.Item("DefaultNamespace").Value ?? "").ToString(); } }
 
 		int _buildTypedtreeCount;
 		readonly List<MethodBuilderEx> _methodsCheckQueue = new List<MethodBuilderEx>(100);

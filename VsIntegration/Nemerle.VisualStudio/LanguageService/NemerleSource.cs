@@ -364,7 +364,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			foreach (GotoInfo item in infoFromPdb)
 			{
-				var cu = engine.ParseCompileUnit(engine.GetSource(Location.GetFileIndex(item.FilePath)));
+				var cu = engine.ParseCompileUnit(new FileNemerleSource(item.Location.FileIndex));
 				var res = TryGetGotoInfoForMemberFromSource(inf.Member, item.Location, cu);
 
 				if (res.Length > 0)
@@ -388,7 +388,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			var td = FindTopDeclaration(ty, cu);
 
 			if (td == null)
-				return new GotoInfo[0];
+				return new[] { new GotoInfo(loc, UsageType.GeneratedDefinition) };
 
 			if (soughtIsType)
 				return new[] { new GotoInfo(Location.GetFileName(cu.FileIndex), td.NameLocation) };
@@ -424,7 +424,15 @@ namespace Nemerle.VisualStudio.LanguageService
 				return FindBastMember(members, member).Select(m => new GotoInfo(file, m.NameLocation)).ToArray();
 			}
 
-			return new GotoInfo[0]; // ничего не нашли
+			// ничего не нашли
+
+			if (td != null) // но у нас есть тип в котором объявлен член...
+				return new[] { new GotoInfo(td.NameLocation) }; // возвращаем его имя!
+
+			if (loc.IsEmpty)
+				return new GotoInfo[0];
+
+			return new[] { new GotoInfo(loc, UsageType.GeneratedDefinition) }; // если все обломалось, вернем хотя бы что-то (правда, вряд ли это будте корректным результатом)
 		}
 
 		// ReSharper disable ParameterTypeCanBeEnumerable.Local
