@@ -402,7 +402,7 @@ namespace Nemerle.VisualStudio.Project
 				// Make temp cmd-file and run it...
 				cmdFilePath = Path.Combine(Path.GetDirectoryName(path), Path.GetTempFileName());
 				cmdFilePath = Path.ChangeExtension(cmdFilePath, "cmd");
-				File.WriteAllText(cmdFilePath, "@echo off\n" + path + " " + cmdArgs + "\npause");
+				File.WriteAllText(cmdFilePath, "@echo off\n\"" + path + "\" " + cmdArgs + "\npause");
 				psi.FileName = cmdFilePath;
 			}
 			else
