@@ -1,0 +1,417 @@
+﻿using Nemerle.Compiler;
+using Nemerle.Imperative;
+using Rsdn.Janus.Framework;
+using System.Collections.Generic;
+using System.Console;
+using System.Convert;
+using System.IO.Path;
+using System.IO;
+using System.Text.RegularExpressions;
+using System.Xml;
+using System;
+// Провайдеры методов-расширений:
+using Nemerle.Utility; // Родные методы-расширения Nemerle
+using System.Linq;     // Пространство имен LINQ to Object
+using System.Xml.Linq; // Пространство имен LINQ to XML
+
+using PT = Nemerle.Compiler.Parsetree;
+using Hashtable = Nemerle.Collections.Hashtable;
+
+namespace NReporter
+{
+module Program
+{
+  static this()
+  {
+    // RusNumber - класс (написанный на C#), преобразующий числа в строки 
+    // прописью на русском языке.
+    def t = typeof(RusNumber);
+    // Добавляем описание функций, используемых в скрипте.
+    // Если вам понадобится расширить список поддерживаемых функций,
+    // просто добавьте описание функции здесь.
+    ScriptFuncs.RegistrFunc(t, "ToRubles",      "РублиПрописью", 1);
+    ScriptFuncs.RegistrFunc(t, "RusSpelledOut", "СуммаПрописью", 2);
+    ScriptFuncs.RegistrFunc(t, "RusSpelledOut", "СуммаПрописью", 5);
+    ScriptFuncs.RegistrFunc(typeof(Utils),  "Len",           "Len",     1);
+    ScriptFuncs.RegistrFunc(typeof(Utils),  "Round",         "Round",   1);
+    ScriptFuncs.RegistrFunc(typeof(Utils),  "Round",         "Round",   2);
+    ScriptFuncs.RegistrFunc(typeof(string), "IsNullOrEmpty", "IsEmpty", 1);
+  }
+  
+  Main(args : array[string]) : void
+  {
+    match (args.Length)
+    {
+        // Если аргумент один, то не печатаем документы
+      | 1 with skipPrint = false  
+      | 2 with skipPrint = args[1].ToLower() == "skip-print" => 
+          try { DoReport(args[0], skipPrint) }
+          catch
+          {
+            | e is Exception =>
+              def printExceptionsList(exc, prefix = " ")
+              {
+                WriteLine(prefix + exc.Message);
+                when (e.InnerException != null)
+                  printExceptionsList(e.InnerException, prefix + " ");
+              }
+              
+              Console.ForegroundColor = ConsoleColor.Yellow;
+              WriteLine("Во время работы программы произошло исключение:");
+              Console.ForegroundColor = ConsoleColor.Red;
+              printExceptionsList(e);
+              Console.ResetColor();
+          }
+          
+      | _ => WriteLine(
+        "Usage: NReporter.exe path-to-specification-file [skip-print]\n"
+        "skip-print - skip print of a generated documents (only generate it)")
+    }
+    
+    WriteLine("Готово!...");
+    _ = ReadLine();
+  }
+  
+  DoReport(specPath : string, skipPrint : bool) : void
+  {
+    def messages = HashSet();
+    def error  (msg) { _ = messages.Add($"Ошибка: $msg"); }
+    def warning(msg) { _ = messages.Add($"Предупреждение: $msg"); }
+    def spec = XElement.Load(specPath); // Загружаем спецификацию из файла
+    def specDir = GetDirectoryName(specPath);
+    def specFileName = GetFileNameWithoutExtension(specPath);
+    
+    /// Функция, получающая текстовое значение XML-элемента с заданным именем
+    def val(elem, tagName) { elem.Element(tagName).Value }
+
+    def propertyVars   = Hashtable(); // список свойств из файла спецификации
+    def rxOptions      = RegexOptions.Compiled | RegexOptions.Singleline;
+    def findWhiteSpace = Regex(@" {2,}", rxOptions);
+    /// Считывает вложенные теги и формирует из них словарь (хэш-таблицу),
+    /// где ключем является сумма имен тегов (имя переменной), 
+    /// а значением - его содержимое.
+    /// Например, если есть теги:
+    /// <Товар><Имя>Товар 1</Имя><Количество>2</Количество></Товар>,
+    /// то эта функция заполнит словарь переменными:
+    /// "Товар_Имя"="Товар 1"
+    /// "Товар_Количество"="2"
+    /// где до знака '=' идет имя переменной, а после - ее значение.
+    def fillDic(elem : XElement, dictionary, prefix = "")
+    {
+      when (elem.Name == "Рубрики")
+      {
+            assert(true);
+      }
+      def name = prefix + elem.Name.LocalName;
+      if (elem.HasElements)
+      {
+        def prefixSubElem = name + "_";
+        foreach (subElem in elem.Elements())
+          fillDic(subElem, dictionary, prefixSubElem);
+      }
+      else // Удаляем дублирующиеся пробелы перед тем как запомнить значение.
+        dictionary[name] = findWhiteSpace.Replace(elem.Value, " ").Trim().Replace("\n", "\r\n");
+    }
+    
+    def loadProperties(spec)
+    {
+      // Считываем значения переменных, расположенных в разделе Properties, 
+      // и формируем из них словарь. Значения этого словаря будут 
+      // подставляться при каждой обработке шаблона (для каждого Item).
+      foreach(propertyElem in spec.Element("Properties").Elements())
+        fillDic(propertyElem, propertyVars);
+    }
+    def loadIncludePaths()
+    {
+      def includes = spec.Element("Includes").ElementsEx("Include");
+      includes.Map(elem => Combine(specDir, elem.Value))
+    }
+
+    foreach(includePath in loadIncludePaths())
+      loadProperties(XElement.Load(includePath));
+      
+    loadProperties(spec); // Загружаем свойства из главной спецификации
+
+    def loadTemplateInfo()
+    {
+      def template = spec.Element("Template");
+      def templatePath = Combine(specDir, val(template, "Path")); // Путь к файлу шаблона
+      def templateText = IO.File.ReadAllText(templatePath); // Текст шаблона
+      def templateInfo = template.Element("Info"); // Доп. информация
+      (templateText, templatePath, templateInfo)
+    }
+    def (templateText, templatePath, templateInfo) = loadTemplateInfo();
+    def extention           = GetExtension(templatePath);
+    // С помощью этого регулярного выражения в тексте шаблона будут 
+    // находиться заполнители, подлежащие замене.
+    // Заполнители - это имена переменных, обрамленные знаками ##.
+    // Имена могут состоять из букв, цифр и знаков '_'. 
+    def findPlaceholders    = Regex(@"##((?:\w|\d|_)+)##", rxOptions);
+    // Переменные, используемые внутри значений других переменных
+    def referencedVars      = HashSet(); 
+    def unknownPlaceholders = HashSet(); // Найденные неизвестные заполнители
+    // compilerHost - это движок компилятора Nemerle. Он 
+    // требуется для реализации интерпретатора выражений (ниже).
+    def compilerHost        = CompilerHost();
+    // Формирует отчет для заданного элемента (Item-а) и, если skipPrint
+    // равен true, печатает его содержимое.
+    def makeReport(item : XElement, num : int)
+    {
+      // Вычисляет все переменные (вхождения словаря), содержащие $-выражения
+      // $-выражение может быть двух видов: $ИмяПеременной или $(выражение).
+      // Их вхождения заменяются значениями соответствующих переменных 
+      // или результатом вычисленичя выражений.
+      def calcVarsValues(dic, num : int)
+      {
+        def calcOneVarValue(name, recursionSet = HashSet())
+        {
+          def value = dic[name];
+          when (value.Contains('$'))
+          {
+            def calcSplice(_spliceExpr : PT.PExpr) : object
+            {
+              | <[ Convert.ToString($expr) ]> =>
+                def calcPExpr(expr) : object
+                {
+                  | <[ $e1 == $e2 ]> => calcOper(e1, _ == _, e2)
+                  | <[ $e1 != $e2 ]> => calcOper(e1, _ != _, e2)
+                  | <[ $e1 >  $e2 ]> => calcOper(e1, _ >  _, e2)
+                  | <[ $e1 <  $e2 ]> => calcOper(e1, _ <  _, e2)
+                  | <[ $e1 >= $e2 ]> => calcOper(e1, _ >= _, e2)
+                  | <[ $e1 <= $e2 ]> => calcOper(e1, _ <= _, e2)
+                  | <[ $e1 +  $e2 ]> => calcOper(e1, _ +  _, e2)
+                  | <[ $e1 -  $e2 ]> => calcOper(e1, _ -  _, e2)
+                  | <[ $e1 *  $e2 ]> => calcOper(e1, _ *  _, e2)
+                  | <[ $e1 /  $e2 ]> =>
+                    def div(x, y)
+                    {
+                      if (y == 0.0) 
+                        { error($"дление на ноль в переменной '$name'."); 0.0 }
+                      else
+                        x / y;
+                    }
+                    calcOper(e1, div,   e2) 
+                  | <[ if ($cond) $trueExpr else $falseExpr ]> => 
+                    def condResult = calcPExpr(cond);
+                    if (ToBoolean(condResult)) calcPExpr(trueExpr)
+                    else                            calcPExpr(falseExpr)
+                    
+                  // $name() распознает вызов функции без аргументов,
+                  // а конструкция $"$name" преобразует имя функции к строке.
+                  // Таким образом, данный образец распознает вызов функции 
+                  // НомерЭлемента() и возвращает вместо него значение num.
+                  // num - это порядковый номер печатаемого отчета.
+                  | <[ $name() ]> when $"$name" == "НомерЭлемента" => num
+                  | <[ $name(..$args) ]> => // Вызов функции
+                    ScriptFuncs.Call($"$name", args.MapToArray(calcPExpr),
+                      messages)
+
+                  | Ref(name) => // Ссылка на переменную
+                    def varName = $"$name";
+                    
+                    if (dic.Contains(varName))
+                    {
+                      _ = referencedVars.Add(varName);
+                      calcOneVarValue(varName, recursionSet);
+                      dic[varName];
+                    }
+                    else 
+                    {
+                      error($"Переменная '$varName' не объявлена!");
+                      "0"
+                    }
+                    
+                  | Literal(Literal.Double(x))                 => x
+                  | Literal(Literal.String(x))                 => x
+                  | Literal(Literal.Bool(x))                   => x
+                  | Literal(Literal.Integer(x, isNegative, _)) =>
+                    def x = ToInt64(x);
+                    if (isNegative) -x else x
+                    
+                  | _                                          => ""
+                }
+                and calcOper[T](
+                  e1   : PT.PExpr, 
+                  oper : double * double -> T, 
+                  e2   : PT.PExpr
+                ) : object
+                {
+                  def r1 = calcPExpr(e1);
+                  def r2 = calcPExpr(e2);
+                  oper(ToDouble(r1), ToDouble(r2))
+                }
+                
+                calcPExpr(expr)
+                
+              | term => 
+                error($"Конструкция '$term' не поддерживается");
+                "#Ошибка!#"
+            }
+
+            def startLoc = Location(specPath, 1, 1, 1, 1);
+            // make_splice_distribution - производит парсинг строки
+            // выявляя в ней $-выражения. На выходе он возвращает список 
+            // состоящий из строковых литералов (запакаованные в 
+            // вариант-вхождение StrPart.Lit), выражений (запакованные 
+            // в StrPart.Expr) и др. вхождения StrPart которые не интересны 
+            // в данном случае.
+            def res = StringTemplate.Helper.make_splice_distribution(value, startLoc, 
+              StringTemplate.StringType.Recursive, compilerHost.CoreEnv);
+              
+            def sb = Text.StringBuilder();
+            
+            foreach (part in res.Rev())
+            {
+              | Lit(str   : string)        => _ = sb.Append(str)
+              | Expr(expr : PT.PExpr)      => _ = sb.Append(calcSplice(expr))
+              | NewLine                    => _ = sb.AppendLine()
+              | IndentedExpr(indent, expr) => _ = sb.Append(indent);
+                                              _ = sb.Append(calcSplice(expr))
+              | _ => error($"Конструкция '$part' не поддерживается");
+            }
+            
+            if (!recursionSet.Add(name))
+            {
+              dic[name] = "!!!Рекурсивное определение переменной!!!";
+              error($"Переменная '$name' имеет рекурсивное объявление! "
+                  + $"В рекурсии участвуют: ..$recursionSet");
+            } // Вычисленное значение помещаем обратно в словарь.
+            else dic[name] = sb.ToString();
+          }
+        }
+        
+        foreach (varName in dic.Keys.ToArray())
+          calcOneVarValue(varName);
+      }
+      
+      // Производит замену заполнителей на значение совпадающих с именем 
+      // переменных в тексте шаблона.
+      // dictionary - словарь, содержащий ассоциативный список переменных
+      // и их значений (для обрабатываемого элемента Item-а).
+      def doReplace(dictionary) : string
+      {
+        // Выводим список неиспользованных переменных. 
+        // Переменная считается используемой, если ее имя совпадает с 
+        // заполнителем из шаблона или на нее есть ссылка внутри другой 
+        // переменной.
+        // Это позволит пользователям выявить ошибки в именах заполнителей.
+        def notRefVars = HashSet(dictionary.Keys);
+        notRefVars.ExceptWith(referencedVars);
+        foreach (var when !templateText.Contains($"##$var##") in notRefVars)
+          warning($"В шаблоне не найдена переменная: $var");
+        // Производим замену заполнителей значениями переменных имеющих имя
+        // совпадающее с именем заполнителя. Для этого используется 
+        // перегруженный вариант метода Regex.Replace() принимающий лямбду 
+        // "evaluator". Ей передается найденное значение (тип Match). 
+        // Ожидается, что она вернет значение, которое надо подставить 
+        // вместо найденного вхождения.
+        findPlaceholders.Replace(templateText, matchPlaceholder =>
+          match (dictionary.TryGetValue(matchPlaceholder.Groups[1].Value))
+          { // TryGetValue возвращает кортеж, состоящий из значения переменной
+            // и true, если значение найдено, и false, если нет.
+            | (varValue, true)  => varValue
+            | (_,       false) => _ = 
+              unknownPlaceholders.Add(matchPlaceholder.Value);
+              matchPlaceholder.Value
+          });
+      }
+      // Инициализируем значение словаря переменных, подлежащих замене,
+      // списком свойств (общих для всех элементов).
+      def allVars = Hashtable(propertyVars);
+      // Добавляем в словарь переменные, специфичные для отдельного отчета.
+      // Таким образом, после этой операции allVars будет содержать
+      // список переменных, полученных из раздела Properties, объедененный 
+      // со списком переменных, полученых для конкретного отчета из 
+      // раздела Items.
+      foreach (reportElem in item.Elements())
+        fillDic(reportElem, allVars, item.Name.LocalName + "_");
+        
+      calcVarsValues(allVars, num);
+        
+      // Формируем полный путь к файлу отчета.
+      def dir = Combine(specDir, specFileName);
+      
+      //when (Directory.Exists(dir))
+      //  Directory.Delete(dir, true);
+      
+      _ = Directory.CreateDirectory(dir);
+      // Значение атрибута "id" будет использоваться для формирования 
+      // имени файла, генерируемого для данного элемента.
+      def reportPath = Combine(dir, item.Attribute("id").Value + extention);
+      // Производим замену заполнителей значениями соответствующих 
+      // переменных.
+      def resultText = doReplace(allVars);
+      // Записываем сгенерированный отчет в файл.
+      File.WriteAllText(reportPath, resultText, Text.Encoding.UTF8);
+      
+      reportPath
+    }
+
+
+    using (def appPrinter = if (skipPrint) null 
+                            else GetPrinter(templatePath))
+    {
+      when (appPrinter != null)
+        appPrinter.ReadTemplateInfo(templateInfo);
+      
+      // Перебираем все элементы, вложенные в элемент Items, формируем
+      // и печатаем для каждого из них отдельный отчет.
+      def items = spec.Element("Items").Elements().ToList();
+      foreach (i in [0..items.Count - 1])
+      {
+        def item = items[i];
+        
+        unless (item.Descendants().Any(e => e.Name.LocalName == "NoPrint"))
+        {
+          def reportPath = makeReport(item, i + 1);
+
+          when (appPrinter != null)
+            appPrinter.Print(reportPath); // Печатаем отчет...
+        }
+      }
+    }
+
+    // Вываодим на консоль список заполнителей, не совпадающих ни с 
+    // одним именем переменной.
+    foreach (placeholder in unknownPlaceholders.OrderBy(x => x))
+      warning($"Найден неизвестный заполнитель '$placeholder'!");
+    
+    def printMessagese(filter) 
+    {
+      foreach (msg in messages.FilterLazy(filter).OrderBy(x => x))
+        WriteLine(msg);
+    }
+    
+    // Выводим список ошибок (красным цветом)
+    Console.ForegroundColor = ConsoleColor.Red;
+    printMessagese(_.StartsWith("Ошибка:"));
+    // Выводим список предупреждений (стандартным цветом)
+    Console.ResetColor();
+    printMessagese(x => !x.StartsWith("Ошибка:"));
+  }
+
+  GetPrinter(templatePath : string) : IPrinter
+  {
+    when (GetExtension(templatePath).ToLower() == "txt")
+      return null; // Печать txt-файлов пока не поддерживается
+      
+    // Читаем XML-теги, и если среди них есть ProcessingInstruction, 
+    // с именем mso-application, пытаемся определить тип приложения, 
+    // создавшего этот документ.
+    def res = RawXml.ReadLazy(templatePath).Find(data => 
+           data.NodeType == XmlNodeType.ProcessingInstruction
+        || data.NodeType == XmlNodeType.Element);
+
+    match (res)
+    {
+      | Some(x) when x.NodeType == XmlNodeType.Element => null // Нет <? ?>
+      | Some(x) when x.Name == "mso-application" => // Файл MS Ofice
+        if      (x.Value == <#progid="Excel.Sheet"#>)   ExcelPrinter()
+        else if (x.Value == <#progid="Word.Document"#>) WordPrinter()
+        else                                            null
+      // Здесь можно добавить другие приложения-принтеры
+      | _ => null 
+    }
+  }
+}
+} // namespace NReporter
