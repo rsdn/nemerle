@@ -112,7 +112,7 @@ namespace Nemerle.VisualStudio.Project
 			{
 				if (_designerContext == null)
 				{
-					NemerleFileNode nFile = Parent.FindChild(Url.Replace(".xaml", ".n")) as NemerleFileNode;
+					NemerleFileNode nFile = Parent.FindChild(Url.Replace(".xaml", ".xaml.n")) as NemerleFileNode;
 
 					if (nFile == null)
 						nFile = Parent.FindChild(Path.ChangeExtension(Url, ".Designer.n")) as NemerleFileNode;
