@@ -89,6 +89,9 @@ namespace Nemerle.VisualStudio.LanguageService
 					var path = base.GetFilePath();
 
 					if (path.IsNullOrEmpty())
+						path = GetStubFileForSecondaryBuffer(this.GetTextLines());
+
+					if (path.IsNullOrEmpty())
 						return -1;
 
 					_fileIndex = Location.GetFileIndex(path);
@@ -542,6 +545,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 					if(source != null)
 						ProjectInfo.RemoveSource(source);
+
+					RemoveStubFileForSecondaryBuffer(GetTextLines());
 				}
 
 				ProjectInfo = null;

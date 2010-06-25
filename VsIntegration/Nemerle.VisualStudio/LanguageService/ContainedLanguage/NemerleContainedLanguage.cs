@@ -119,7 +119,12 @@ namespace Nemerle.VisualStudio.LanguageService
 			IVsTextLines buffer;
 			ErrorHandler.ThrowOnFailure(bufferCoordinator.GetSecondaryBuffer(out buffer));
 
-			var secondaryFileIndex = Location.GetFileIndex(FilePathUtilities.GetFilePath(buffer));
+			var secondaryFilePath = FilePathUtilities.GetFilePath(buffer);
+
+			if (secondaryFilePath == null)
+				secondaryFilePath = NemerleSource.GetStubFileForSecondaryBuffer(buffer);
+
+			var secondaryFileIndex = Location.GetFileIndex(secondaryFilePath);
 			var primaryFileindex = Location.GetFileIndex(_filePath);
 
 			bool doOutlining = LanguageService.Preferences.AutoOutlining;

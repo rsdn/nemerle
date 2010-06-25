@@ -295,12 +295,20 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 			TextSpan[] convertedSpans = new TextSpan[cSpans];
 			TextSpan[] workingCopy = new TextSpan[1];
-			for (int i = 0; i < cSpans; ++i)
+
+			try
 			{
-				ErrorHandler.ThrowOnFailure(bufferCoordinator.MapSecondaryToPrimarySpan(rgBaseSpans[i], workingCopy));
-				convertedSpans[i] = workingCopy[0];
+				for (int i = 0; i < cSpans; ++i)
+				{
+					ErrorHandler.ThrowOnFailure(bufferCoordinator.MapSecondaryToPrimarySpan(rgBaseSpans[i], workingCopy));
+					convertedSpans[i] = workingCopy[0];
+				}
+				return intellisenseHost.HighlightMatchingBrace(dwFlags, cSpans, convertedSpans);
 			}
-			return intellisenseHost.HighlightMatchingBrace(dwFlags, cSpans, convertedSpans);
+			catch 
+			{
+				return VSConstants.E_FAIL;
+			}
 		}
 
 		public int Initialize(IVsTextLines pBuffer, IntPtr hwndParent, uint InitFlags, INITVIEW[] pInitView)
