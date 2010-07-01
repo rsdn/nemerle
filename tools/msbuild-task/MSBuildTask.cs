@@ -76,10 +76,17 @@ namespace Nemerle.Tools.MSBuildTask
             set { Bag["CheckIntegerOverflow"] = value; }
         }
 
+        #if MONO
+        protected override string ToolName
+        {
+            get { return "ncc.bat"; }
+        }
+        #else
         protected override string ToolName
         {
             get { return "ncc.exe"; }
         }
+        #endif
 
         private string FindExecutable(string toolName)
         {
