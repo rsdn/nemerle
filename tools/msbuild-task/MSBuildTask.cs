@@ -79,7 +79,12 @@ namespace Nemerle.Tools.MSBuildTask
         #if MONO
         protected override string ToolName
         {
-            get { return "ncc.bat"; }
+            get { 
+                if(Environment.OSVersion.VersionString.Contains("Windows"))
+                    return "ncc.bat";
+                else
+                    return "ncc";
+            }
         }
         #else
         protected override string ToolName
