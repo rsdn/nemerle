@@ -30,20 +30,23 @@ namespace Nemerle.Xml
     prefixedName   : Splicable = xmlName s ':' s xmlName;
     unprefixedName : Splicable = xmlName;
     qualifiedName  : Splicable = (prefixedName / unprefixedName) s;
-    tagName        : Splicable = qualifiedName;
+    tagName        : Splicable = qualifiedName / splice / spliceList;
     
     spliceBody1                = identifier;
     noBracket                  = !('(' / ')') any;
-    spliceBody2                = '(' s (noBracket / spliceBody2)* ')' s;
+    spliceBody2                = '(' s (noBracket / spliceBody2)* ')';
     spliceBody                 = spliceBody1 / spliceBody2;
-    splice         : Splicable =        '$' spliceBody;
-    spliceList     : Splicable = ".." s '$' spliceBody;
+    splice         : Splicable =        '$' spliceBody s;
+    spliceList     : Splicable = ".." s '$' spliceBody s;
+    //controlAttrs   : Splicable = whenAttr / unlessAttr / foreachAttr;
+    //TODO:Реализовать управляющие конструции.
+    controlAttrs   : Splicable = '$' ("when" / "unless" / "foreach") s spliceBody2 s;
     splicedTag     : XmlAst    = splice / spliceList;
     
     
     tagOpen        : TagOpen   = '<' s tagName attr* '>' s;
     //tagCloseError  : TagClose  = '<' s '/' s tagName ERROR;
-    tagClose       : TagClose  = '<' s '/' s tagName '>' s;
+    tagClose       : TagClose  = '<' s '/' s tagName? '>' s;
     tagEmpty       : XmlAst    = '<' s tagName attr* '/' s '>' s;
     //tagError       : XmlAst    = '<' s tagName ERROR;
     
@@ -57,7 +60,7 @@ namespace Nemerle.Xml
     attrValue3     : Splicable = attrValue2 / attrValue1;
     attrValue      : Splicable = (attrValue3 / splice) s;
     attr1          : XmlAst    = qualifiedName '=' s attrValue;
-    attrSplice     : XmlAst    = splice / spliceList;
+    attrSplice     : XmlAst    = controlAttrs / splice / spliceList;
     attr           : XmlAst    = attr1 / attrSplice;
     start          : XmlAst    = s tag !any;
   })]
@@ -162,12 +165,12 @@ namespace Nemerle.Xml
     }
 
     //splice         : Splicable =        '$' spliceBody;
-    splice(_ : NToken, expr : NToken) : Splicable
+    splice(_ : NToken, expr : NToken, _ : NToken) : Splicable
     {
       Splicable.Expr(expr.StartPos, expr.EndPos, expr.GetText())
     }
     //spliceList     : Splicable = ".." s '$' spliceBody;
-    spliceList(_ : NToken, _ : NToken, _ : NToken, expr : NToken) : Splicable
+    spliceList(_ : NToken, _ : NToken, _ : NToken, expr : NToken, _ : NToken) : Splicable
     {
       Splicable.ListExpr(expr.StartPos, expr.EndPos, expr.GetText())
     }
@@ -180,7 +183,7 @@ namespace Nemerle.Xml
       {
         | Expr(expr)     => TagSplice(splice.StartPos, splice.EndPos, expr, false)
         | ListExpr(expr) => TagSplice(splice.StartPos, splice.EndPos, expr, true)
-        | PrefiedName | Value => assert(false);
+        | ControlExpr | PrefiedName | Value => assert(false);
       }
     }
     //tagOpen        : TagOpen   = '<' s qualifiedName attr* '>' s;
@@ -191,9 +194,15 @@ namespace Nemerle.Xml
     }
 
     //tagClose       : TagClose  = '<' s '/' s qualifiedName '>' s;
-    tagClose(lt : NToken, _ : NToken, _ : NToken, _ : NToken, id : VToken[Splicable], gt : NToken, _ : NToken) : TagClose
+    tagClose(lt : NToken, _ : NToken, _ : NToken, _ : NToken, id : option[VToken[Splicable]], gt : NToken, _ : NToken) : TagClose
     {
-      TagClose(lt.StartPos, gt.EndPos, id.Value)
+      def value =
+        match (id)
+        {
+          | Some(x) => x.Value
+          | _       => Splicable.Value(-1, -1, "")
+        };
+      TagClose(lt.StartPos, gt.EndPos, value)
     }
     
     //tagEmpty       : Tag       = '<' s qualifiedName attr* '/' s '>' s;
@@ -210,8 +219,14 @@ namespace Nemerle.Xml
     tagFull(tagOpen : VToken[TagOpen], content : List[VToken[XmlAst]], tagClose: VToken[TagClose]) : XmlAst
     {
       def open = tagOpen.Value;
-      when (!open.ident.Equals(tagClose.Value.ident))
-        Message.FatalError(ToLocation(tagClose.Value.ident), $"Open and close tag of $(open.ident) element is different.");
+      def closeIdent = tagClose.Value.ident;
+      
+      unless (closeIdent is Splicable.Value("") || open.ident.Equals(tagClose.Value.ident))
+      {
+        Message.Error(ToLocation(open.ident), "Tag was not closed.");
+        Message.FatalError(ToLocation(tagClose.Value.ident), $"Expecting end tag </$(open.ident)>.");
+      }
+        
       def cont = open.attrs.Map(x => x) + content.Map(_.Value);
       Tag(tagOpen.StartPos, tagClose.EndPos, open.ident, cont)
     }
@@ -238,6 +253,14 @@ namespace Nemerle.Xml
     {
       Attr(id.Value.StartPos, value.Value.EndPos, id.Value, value.Value)
     }
+    
+    //controlAttrs   : Splicable = '$' ("foreach" / "unless" / "foreach") s spliceBody2 s;
+    controlAttrs(_ : NToken, exprName : NToken, _ : NToken, body : NToken, _ : NToken) : Splicable
+    {
+      Splicable.ControlExpr(body.StartPos, body.EndPos, exprName.GetText(), 
+        exprName.StartPos, body.GetText())
+    }
+    
     //attrSplice     : XmlAst    = splice;
     attrSplice(splice : VToken[Splicable]) : XmlAst
     {
@@ -245,8 +268,12 @@ namespace Nemerle.Xml
 
       match (splice)
       {
-        | Expr(expr)     => AttrSplice(splice.StartPos, splice.EndPos, expr, false)
-        | ListExpr(expr) => AttrSplice(splice.StartPos, splice.EndPos, expr, true)
+        | Expr(expr)     => AttrSplice(splice.StartPos, splice.EndPos, expr, SpliceType.Expr)
+        | ListExpr(expr) => AttrSplice(splice.StartPos, splice.EndPos, expr, SpliceType.List)
+        | ControlExpr("foreach", _, expr) => AttrSplice(splice.StartPos, splice.EndPos, expr, SpliceType.Foreach)
+        | ControlExpr("when",    _, expr) => AttrSplice(splice.StartPos, splice.EndPos, expr, SpliceType.When)
+        | ControlExpr("unless",  _, expr) => AttrSplice(splice.StartPos, splice.EndPos, expr, SpliceType.Unless)
+        | ControlExpr                     => assert(false)
         | PrefiedName | Value => assert(false);
       }
     }

@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.Xml.Linq;
 using L = System.Xml.Linq;
 using X = Nemerle.Xml;
+using SCG = System.Collections.Generic;
 using NColl = Nemerle.Collections.NCollectionsExtensions;
 
 namespace Nemerle.Xml
@@ -39,24 +40,28 @@ namespace Nemerle.Xml
 
     SplicablePExprName(value : X.Splicable, nsVars : Set[string]) : PExpr
     {
+      Util.locate(ToLocation(value),
       match (value)
       {
         | Splicable.PrefiedName(ns, name) => DefineXmlnsImpl.MakeXNameFieldRef(_typer, ToLocation(value), ns, name, nsVars)
         | Splicable.Value(value)          => <[ L.XName.Get($(value : string)) ]>
         | Splicable.Expr(expr)            => Parse(ToLocation(value), expr)
         | Splicable.ListExpr              => Message.FatalError(<#The "..$" not supportend in name context.#>);
-      }
+        | Splicable.ControlExpr           => assert(false)
+      })
     }
     
     SplicablePExprStr(value : X.Splicable) : PExpr
     {
+      Util.locate(ToLocation(value),
       match (value)
       {
         | Splicable.PrefiedName     => Message.FatalError(<#A value can't be a prefixed name.#>);
         | Splicable.Value(value)    => <[ $(value : string) ]>
         | Splicable.Expr(expr)      => Parse(ToLocation(value), expr)          
         | Splicable.ListExpr(_expr) => Message.FatalError(<#The "..$" not supportend in name context.#>);
-      }
+        | Splicable.ControlExpr     => assert(false)
+      })
     }
     public Transform(xmlAst : XmlAst, nsVars : Set[string]) : PExpr
     {
@@ -84,6 +89,33 @@ namespace Nemerle.Xml
           
         | Text(Splicable.Value(value))  => <[ L.XText($(value : string)) ]>
         | Text(_)  => assert(false);
+        | Tag(name, XmlAst.AttrSplice(expr, SpliceType.Foreach) as c :: content) =>
+          def tag     = XmlAst.Tag(xmlAst.StartPos, xmlAst.EndPos, name, content);
+          def tagExpr = TransformImpl(tag, nsVars);
+          def header = Parse(ToLocation(c), expr);
+          <[  { 
+                def lst = SCG.List();
+                
+                foreach ($header)
+                {
+                  def tag = $tagExpr;
+                  
+                  when (tag != null)
+                    lst.Add(tag);
+                }
+                  
+                lst.ToArray()
+              } ]>
+          
+        | Tag(name, XmlAst.AttrSplice(expr, SpliceType.When)   as c :: content) with isWhen = true
+        | Tag(name, XmlAst.AttrSplice(expr, SpliceType.Unless) as c :: content) with isWhen = false
+          => 
+          def tag     = XmlAst.Tag(xmlAst.StartPos, xmlAst.EndPos, name, content);
+          def tagExpr = TransformImpl(tag, nsVars);
+          def cond1 = Parse(ToLocation(c), expr);
+          def cond2 = if (isWhen) cond1 else <[ ! $cond1 ]>;
+          <[ if ($cond2) $tagExpr else null ]>
+        
         | Tag(name, content)            => 
           mutable nsVars2 = nsVars;
           def (nsAttrDef, cont, xmlNsVars) = content.Fold(([], [], []), (x, (nsAttrDef, cont, nsVarsDef)) => 
@@ -102,41 +134,51 @@ namespace Nemerle.Xml
                 Message.Error(<#An embedded expression cannot be used here.#>);
                 (nsAttrDef, cont, nsVarsDef)
                 
+              | XmlAst.AttrSplice(_expr, SpliceType.When) => (nsAttrDef, x :: cont, nsVarsDef)
               | _ => (nsAttrDef, x :: cont, nsVarsDef)
             });
 
-          def name = SplicablePExprName(name, nsVars2);
+          def nameExpr1 = SplicablePExprName(name, nsVars2);
+          def nameExpr2 = Util.locate(ToLocation(name), <[ $nameExpr1 : L.XName ]>);
           def cont = nsAttrDef + cont.Map(x => <[ $(Transform(x, nsVars2)) : object ]>);
-          def expr = xmlNsVars + [<[ L.XElement($name, array[..$cont]); ]>];
+          def expr = xmlNsVars + [<[ L.XElement($nameExpr2, array[..$cont]); ]>];
           <[ { ..$expr } ]>
           
         | TagSplice(expr, false)        => 
           def expr = Parse(ToLocation(xmlAst), expr);
-          def tExpr = _typer.TypeExpr(expr);
-          _ = _typer.DelayMacro(_ => 
-            match (tExpr.Type.Hint)
-            {
-              | Some(ty) => 
-                //def tExpr = tExpr;
-                Macros.DefineCTX(_typer);
-                def attrTy = <[ ttype: System.Xml.Linq.XAttribute ]>;
+          // TODO: Отладить проверку типа у сплайса утрибута "Тип не должен быть XAttribute".
+          // На сегодня _typer.TypeExpr(expr) не видит переменных объявленных внутри $foreach,
+          // так как они парсятся динамически.
+          
+          //def tExpr = _typer.TypeExpr(expr);
+          //_ = _typer.DelayMacro(_ => 
+          //  match (tExpr.Type.Hint)
+          //  {
+          //    | Some(ty) => 
+          //      //def tExpr = tExpr;
+          //      Macros.DefineCTX(_typer);
+          //      def attrTy = <[ ttype: System.Xml.Linq.XAttribute ]>;
                 
-                when (ty.TryRequire(attrTy))
-                  Message.Error(expr.Location, $"The content of XML elementd can't have $attrTy type");
+          //      when (ty.TryRequire(attrTy))
+          //        Message.Error(expr.Location, $"The content of XML elementd can't have $attrTy type");
 
-                Some(expr)
+          //      Some(expr)
                 
-              | None => None()
-            });
+          //    | None => None()
+          //  });
             
           expr
           
         | TagSplice(expr, true)         => <[ NColl.NToArray($(Parse(ToLocation(xmlAst), expr))) ]>
-        | AttrSplice(expr, false)       => <[ $(Parse(ToLocation(xmlAst), expr)) : L.XAttribute ]>
-        | AttrSplice(expr, true)        => 
+        | AttrSplice(expr, SpliceType.Expr) => <[ $(Parse(ToLocation(xmlAst), expr)) : L.XAttribute ]>
+        | AttrSplice(expr, SpliceType.List) => 
           def x = Parse(ToLocation(xmlAst), expr);
           //assert2(false);
           <[ NColl.NToArray.[L.XAttribute]($(x) : IEnumerable[L.XAttribute]) ]> 
+        | AttrSplice(_, SpliceType.Foreach)
+        | AttrSplice(_, SpliceType.When)
+        | AttrSplice(_, SpliceType.Unless)  => 
+          Message.FatalError("Control instraction must place before attributes.");
       }
     }
   }
