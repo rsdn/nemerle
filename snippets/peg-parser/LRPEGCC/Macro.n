@@ -8,6 +8,7 @@ using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Parsetree.PExpr;
 using Nemerle.Compiler.Token;
+using Nemerle.Imperative;
 
 using LRPEGCC.GrammarCreator;
 
@@ -61,6 +62,8 @@ namespace LRPEGCC
         def rule          = grammar.GetRule(name);
         rule.UpdateIndecis();
         def body          = compiler.CompileRule(rule);
+        
+        CheckRuleMethodHandler(name, grammar, tb, typer);
         
         def resultType : PExpr = // Make type parametr name
           match (rule)
@@ -152,6 +155,93 @@ namespace LRPEGCC
           if (pos < 0) None() else Some(res)
         }
       ]>);
+    }
+    
+    private CheckRuleMethodHandler(ruleName : RuleRef, grammar : Grammar, tb : TypeBuilder, typer : Typer) : void
+    {
+      def rule = grammar.GetRule(ruleName);
+      def mems = tb.GetParsedMembers(false).Filter(m => m.Name == ruleName.Id);
+      
+      match (rule)
+      {   // Capture with defined type. User must define handler for it!
+        | Rule.Capture(argType = RuleType.NType(ty), rule = rule) => 
+          def tTy = typer.BindFixedType(ty);
+          def methods = mems.MapFiltered(_ is ClassMember.Function, _ :> ClassMember.Function);
+          
+          def unpacParams(rule : Rule) : list[Rule]
+          {
+            | Rule.Sequence(rules) => rules
+            | _ => [rule]
+          }
+          def nTokTy = FixedType.Class(typer.Manager.LookupTypeInfo("Nemerle.Peg.NToken", 0), []);
+          def vTokTc = typer.Manager.LookupTypeInfo("Nemerle.Peg.VToken", 1);
+          def ruleToType(rule : Rule) : FixedType
+          {
+            | Call(name)                                =>
+              def subRule = grammar.GetRule(name);
+              match (subRule)
+              {
+                | Rule.Capture(argType = RuleType.NType(ty)) =>
+                  def tTy = typer.BindFixedType(ty);
+                  FixedType.Class(vTokTc, [tTy])
+                  
+                | _ => nTokTy
+              }
+
+            | Choice(rule :: _)          => ruleToType(rule)
+            | Choice(_)                  => assert(false)
+            | Sequence(rules)            => FixedType.Tuple(rules.Map(x => ruleToType(x)))
+            | RepeatMin(0, rule)         => makeLoopTy(rule) // rule*
+            | RepeatMin(1, rule)         => makeLoopTy(rule) // rule+
+            | RepeatMin(_, rule)         => makeLoopTy(rule)
+            | RepeatMinMax(0, 1, rule)   => FixedType.Class(typer.Manager.LookupTypeInfo("Nemerle.Core.option", 1), [ruleToType(rule)]) // rule?
+            | RepeatMinMax(_, _, rule)   => makeLoopTy(rule)
+            | Chars                      => nTokTy
+            | Not(rule)                  => ruleToType(rule)
+            | And(rule)                  => ruleToType(rule)
+            | Capture(_, _, _, rule)     => ruleToType(rule)
+            | CaptureNamedTerminalSymbol => nTokTy
+            | ExtensionPoint             => assert(false)
+          }
+          and makeLoopTy(rule)
+          {
+            FixedType.Class(typer.Manager.LookupTypeInfo("System.Collections.Generic.List", 1), [ruleToType(rule)])
+          }
+          def errorMsg(ruleName, types, tTy)
+          {
+            $<#You need define method-handler for "$ruleName" rule with signature: $ruleName(_ : ..$(types; ", _ : ")) : $tTy#>
+          }
+          
+          def topRules = unpacParams(rule);
+          def types    = topRules.Map(ruleToType);
+
+          match (methods)
+          {
+            | [m] => 
+              def parms = m.header.Parameters;
+              if (parms.Length == types.Length)
+              {
+                foreach ((need, p) in types.ZipLazy(parms))
+                {
+                  def real = typer.BindFixedType(p.Type);
+                  
+                  unless (need.TryUnify(real))
+                  {
+                    Message.Error(p.Location, $<#The parameter "$(p.Name)" has wrong type $real (need type $need).#>);
+                    Message.Error(p.Location, errorMsg(ruleName, types, tTy));
+                    break;
+                  }
+                }
+              }
+              else
+                Message.Error(m.Location, $<#The method-handler of rule "$ruleName" must have $(types.Length) parameters. $(errorMsg(ruleName, types, tTy))#>)
+              
+            | m :: _ => Message.Error(m.Location, "Overloading not supported for rule method-handler");
+            | []     => Message.Error(ty.Location, errorMsg(ruleName, types, tTy));
+          }
+          
+        | _ => ()
+      }
     }
 
     private CreateSimpleParseMethod(rule : Rule.Capture, compiler : RuleCompiler, tb : TypeBuilder) : void
