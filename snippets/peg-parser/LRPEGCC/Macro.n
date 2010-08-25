@@ -26,8 +26,7 @@ namespace LRPEGCC
     try
     {
       // TODO: Check is subclass of ParserBase
-      unless(Macros.Manager().IsIntelliSenseMode)
-        GrammarImpl.MakeParser(Macros.ImplicitCTX(), tb, startRule, rules);
+      GrammarImpl.MakeParser(Macros.ImplicitCTX(), tb, startRule, rules);
     }
     catch
     {
@@ -43,7 +42,7 @@ namespace LRPEGCC
   {
     public MakeParser(typer : Typer, tb : TypeBuilder, startRule : PExpr, rules : PExpr) : void
     {
-      def grammar = CreateGrammar(typer, tb, startRule, rules);
+      def (parsedGrammar, grammar) = CreateGrammar(typer, tb, startRule, rules);
         
       def compiler = RuleCompiler(typer);
       
@@ -57,14 +56,20 @@ namespace LRPEGCC
             Message.Error(tb.Location,  "Start rule must be a capture rule");
             <[ object ]>
         };
+        
+      
+      foreach (name in parsedGrammar.Names)
+        MakeGotoInfos(name, parsedGrammar, tb, typer);
 
       foreach (name in grammar.Names)
       {
-        def rule          = grammar.GetRule(name);
+        def rule = grammar.GetRule(name);
         rule.UpdateIndecis();
-        def body          = compiler.CompileRule(rule);
-        
+
         CheckRuleMethodHandler(name, grammar, tb, typer);
+        
+        def body          = if (typer.Manager.IsIntelliSenseMode) <[ _ = pos; _ = result; _ = text ]>
+                            else compiler.CompileRule(rule);
         
         def resultType : PExpr = // Make type parametr name
           match (rule)
@@ -171,14 +176,65 @@ namespace LRPEGCC
       ]>);
     }
 
+    private static GetGotoMap(tb : TypeBuilder) : Hashtable[Location, Location]
+    {
+      mutable gotoMap = tb.UserData["GoToInfoMap"] :> Hashtable[Location, Location];
+      
+      when (gotoMap == null)
+      {
+        gotoMap = Hashtable();
+        tb.UserData["GoToInfoMap"] = gotoMap;
+      }
+      gotoMap
+    }
+    
+    private MakeGotoInfos(ruleName : RuleRef, grammar : Grammar, tb : TypeBuilder, typer : Typer) : void
+    {
+      def rule = grammar.GetRule(ruleName);
+      def gotoMap = GetGotoMap(tb);
+      def getRuleLocation(ruleRef : RuleRef) : Location
+      {
+        match (grammar.GetRule(ruleRef))
+        {
+          | Rule.Capture              (name = name)
+          | CaptureNamedTerminalSymbol(name = name)
+          | ExtensionPoint            (name = name) => name.Location
+          | _                                       => Location.Default
+        }
+      }
+      def makeGotoRuleDef(r : Rule) : void
+      {
+        | Choice(rules)                       => foreach (r in rules) makeGotoRuleDef(r)
+        | Sequence(rules)                     => foreach (r in rules) makeGotoRuleDef(r)
+        | Call(name)                          => gotoMap[name.Location] = getRuleLocation(name)
+        | RepeatMin(_, rule)                  => makeGotoRuleDef(rule)
+        | RepeatMinMax(_, _, rule)            => makeGotoRuleDef(rule)
+        | Chars                               => ()
+        | Not(rule)                           => makeGotoRuleDef(rule)
+        | And(rule)                           => makeGotoRuleDef(rule)
+        | Capture(name, _, _, _)              => gotoMap[name.Location] = getRuleLocation(name)
+        | CaptureNamedTerminalSymbol(name, _) => gotoMap[name.Location] = getRuleLocation(name)
+        | ExtensionPoint                      => ()
+      }
+      
+      when (typer.Manager.IsIntelliSenseMode)
+        match (rule)
+        { // skip top capture...
+          | Capture(_, _, _, rule)              => makeGotoRuleDef(rule);
+          | CaptureNamedTerminalSymbol(_, rule) => makeGotoRuleDef(rule);
+          | _                                   => makeGotoRuleDef(rule);
+        }
+    }
+
     private CheckRuleMethodHandler(ruleName : RuleRef, grammar : Grammar, tb : TypeBuilder, typer : Typer) : void
     {
+      def gotoMap = GetGotoMap(tb);
       def rule = grammar.GetRule(ruleName);
       def mems = tb.GetParsedMembers(true).Filter(m => m.Name == ruleName.Id);
       
       match (rule)
       {   // Capture with defined type. User must define handler for it!
-        | Rule.Capture(argType = RuleType.NType(ty), rule = rule) => 
+        | Rule.Capture(argType = RuleType.NType(ty), rule = rule, name = name) => 
           def tTy = typer.BindFixedType(ty);
           def methods = mems.MapFiltered(_ is ClassMember.Function, _ :> ClassMember.Function);
           
@@ -240,13 +296,18 @@ namespace LRPEGCC
             //assert2(false);
             $<#You need define method-handler for "$ruleName" rule with signature: $ruleName(_ : ..$(types; ", _ : ")) : $tTy#>
           }
-          
           def topRules = unpacParams(rule);
           def types    = topRules.Filter(isNotPredicate).Map(ruleToType);
 
           match (methods)
           {
             | [m] => 
+              when (typer.Manager.IsIntelliSenseMode)
+              {
+                gotoMap[name.Location]  = m.NameLocation;
+                gotoMap[m.NameLocation] = name.Location;
+              }
+
               def parms = m.header.Parameters;
               if (parms.Length == types.Length)
               {

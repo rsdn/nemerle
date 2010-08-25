@@ -684,6 +684,17 @@ namespace Nemerle.VisualStudio.LanguageService
 		
     public void GotoLocation(Location loc, string caption, bool asReadonly)
 		{
+			//TODO: VladD2: Разобраться почему этот код вызывает вылет
+			//IVsUIShell uiShell = this.GetService(typeof(SVsUIShell)) as IVsUIShell;
+			//if (uiShell != null)
+			//{
+			//  IVsWindowFrame frame;
+			//  string data;
+			//  object unknown;
+			//  ErrorHandler.ThrowOnFailure(uiShell.GetCurrentBFNavigationItem(out frame, out data, out unknown));
+			//  ErrorHandler.ThrowOnFailure(uiShell.AddNewBFNavigationItem(frame, data, unknown, 0));
+			//}
+
 			TextSpan span = new TextSpan();
 
 			span.iStartLine  = loc.Line - 1;

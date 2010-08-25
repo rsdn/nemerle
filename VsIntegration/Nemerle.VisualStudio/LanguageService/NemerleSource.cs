@@ -1267,42 +1267,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public const uint HiddenRegionCookie = 42;
 
-		internal void HandleParseResponse(ParseRequest req)
-		{
-			//try
-			//{
-			//  var reason = (int)req.Reason >= 100 ? ((ParseReason2)req.Reason).ToString() : req.Reason.ToString();
-			//  Trace.WriteLine("HandleParseResponse: " + reason + " Timestamp: " + req.Timestamp);
-			//  if (this.Service == null)
-			//    return;
-
-			//  switch (req.Reason)
-			//  {
-			//    case (ParseReason)ParseReason2.ParseTopDeclaration:
-			//      Service.SynchronizeDropdowns(req.View);
-			//      break;
-			//    default: break;
-			//  }
-
-			//  //if (req.Timestamp == this.ChangeCount)
-			//  {
-			//    var sink = (NemerleAuthoringSink)req.Sink;
-			//    // If the request is out of sync with the buffer, then the error spans
-			//    // and hidden regions could be wrong, so we ignore this parse and wait 
-			//    // for the next OnIdle parse.
-			//    //!!ReportTasks(req.Sink.errors);
-			//    if (req.Sink.ProcessHiddenRegions)
-			//      ProcessHiddenRegions(sink.HiddenRegionsList);
-			//  }
-			//  this.Service.OnParseComplete(req);
-
-			//}
-			//catch (Exception e)
-			//{
-			//  Trace.WriteLine("HandleParseResponse exception: " + e.Message);
-			//}
-		}
-
 		internal void CollapseAllRegions()
 		{
 			IVsHiddenTextSession session = GetHiddenTextSession();
@@ -1316,6 +1280,15 @@ namespace Nemerle.VisualStudio.LanguageService
 				uint fetched;
 				while (ppenum.Next(1, aregion, out fetched) == NativeMethods.S_OK && fetched == 1)
 				{
+					var region = aregion[0];
+					int regTypeInt;
+					ErrorHandler.ThrowOnFailure(region.GetType(out regTypeInt));
+					uint dwData;
+					region.GetClientData(out dwData);
+					var regType = (HIDDEN_REGION_TYPE)regTypeInt;
+					if (regType != HIDDEN_REGION_TYPE.hrtCollapsible)// || dwData != 0 && dwData != HiddenRegionCookie)
+						continue;
+
 					uint dwState;
 					aregion[0].GetState(out dwState);
 					//dwState &= ~(uint)HIDDEN_REGION_STATE.hrsExpanded;
