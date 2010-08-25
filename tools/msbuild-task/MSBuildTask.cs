@@ -65,6 +65,7 @@ namespace Nemerle.Tools.MSBuildTask
         public bool         RunDebugger             { get; set; }
         public string       ProjectPath             { get; set; }
         public string       RootNamespace           { get; set; }
+        public int          CompilerStackSize       { get; set; }
         public ITaskItem[]  MacroReferences   
         {
             get { return (ITaskItem[]) Bag["MacroReferences"]; }
@@ -75,7 +76,8 @@ namespace Nemerle.Tools.MSBuildTask
             get { return (bool) Bag["CheckIntegerOverflow"]; }
             set { Bag["CheckIntegerOverflow"] = value; }
         }
-
+        
+        
         #if MONO
         protected override string ToolName
         {
@@ -202,6 +204,8 @@ namespace Nemerle.Tools.MSBuildTask
             commandLine.AppendPlusOrMinusSwitch("\n/debug",         base.Bag, "EmitDebugInformation");
             commandLine.AppendSwitchIfNotNull  ("\n/project-path:", this.ProjectPath);
             commandLine.AppendSwitchIfNotNull  ("\n/root-namespace:", this.RootNamespace);
+            if(CompilerStackSize > 0)
+                commandLine.AppendSwitchIfNotNull  ("\n/stack-size:", this.CompilerStackSize.ToString());
 
             // Not supported options:
             //commandLine.AppendSwitchWithInteger("\n/codepage:", base.Bag, "CodePage");
