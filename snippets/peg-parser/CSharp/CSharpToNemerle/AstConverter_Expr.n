@@ -1,0 +1,209 @@
+﻿using System;
+using SCG = System.Collections.Generic;
+
+using Nemerle.Assertions;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+
+using PT = Nemerle.Compiler.Parsetree;
+using PEG = Nemerle.Peg;
+using CS = CSharpParser;
+
+namespace CSharpToNemerle
+{
+  public partial class AstConverter
+  {
+    ConvertExpr(x : CS.Expr) : PT.PExpr
+    {
+      def loc = x.NLocation();
+      match(x) {
+        | Alias(id)
+        | Ref(id) =>
+          ConvertExpr(id)
+  
+        | Member(expr, Ref(id)) =>
+          PT.PExpr.Member(loc, ConvertExpr(expr), MakeSplicableName(id))
+  
+        | PointerMember =>
+          Message.Error(loc, "pointer member access is not supported");
+          PT.PExpr.Error(loc)
+  
+        | TypeArguments(expr, args) =>
+          PT.PExpr.GenericSpecifier(loc, ConvertExpr(expr), args.Map(ConvertExpr))
+
+        | Literal(lit) =>
+          PT.PExpr.Literal(loc, ConvertLiteral(lit))
+
+        | This =>
+          PT.PExpr.This(loc)
+
+        | Base =>
+          PT.PExpr.Base(loc)
+
+        | TypeRef(typeRef) =>
+          ConvertExpr(typeRef)
+
+        | TypeOf(typeRef) =>
+          PT.PExpr.Typeof(loc, ConvertExpr(typeRef))
+
+        | Checked(expr, true) =>
+          Util.locate(loc, <[ checked { $(ConvertExpr(expr)) } ]>)
+
+        | Checked(expr, false) =>
+          Util.locate(loc, <[ unchecked { $(ConvertExpr(expr)) } ]>)
+
+        | DefaultValue(typeRef) =>
+          Util.locate(loc, <[ Nemerle.Extensions.DefaultValue($(ConvertExpr(typeRef))) ]>)
+
+        | SizeOf =>
+          Message.Error(loc, "sizeof() is not supported");
+          PT.PExpr.Error(loc)
+/*
+        | Function(_, true, _, body) =>
+          PT.PExpr.Error(loc)
+
+        | Function(parms, false, _, body) =>
+          PT.PExpr.Error(loc)
+*/
+        | Call(expr, args) =>
+          PT.PExpr.Call(loc, ConvertExpr(expr), args.Map(ConvertExpr))
+
+        | Indexer(expr, args) =>
+          PT.PExpr.Indexer(loc, ConvertExpr(expr), args.Map(ConvertExpr))
+
+        | UnaryOperator(expr, op, _) =>
+          PT.PExpr.Call(loc, ConvertExpr(op), [ConvertExpr(expr)])
+
+        | BinaryOperator(left, right, op) =>
+          PT.PExpr.Call(loc, ConvertExpr(op), [ConvertExpr(left), ConvertExpr(right)])
+
+        | ConditionalOperator(cond, trueExpr, null) =>
+          Util.locate(loc, <[ when($(ConvertExpr(cond))) $(ConvertExpr(trueExpr)) ]>)
+
+        | ConditionalOperator(cond, trueExpr, falseExpr) =>
+          Util.locate(loc, <[ if($(ConvertExpr(cond))) $(ConvertExpr(trueExpr)) else $(ConvertExpr(falseExpr)) ]>)
+
+        | CastOperator(expr, typeRef) =>
+          PT.PExpr.TypeConversion(loc, ConvertExpr(expr), ConvertExpr(typeRef))
+
+        | Assign(to, value, op) when op.Id == "=" =>
+          PT.PExpr.Assign(loc, ConvertExpr(to), ConvertExpr(value))
+
+        | Assign(to, value, op) =>
+          PT.PExpr.Call(loc, ConvertExpr(op), [ConvertExpr(to), ConvertExpr(value)])
+
+        | _ =>
+          Message.Error(loc, "invalid expression");
+          PT.PExpr.Error(loc)
+      }
+    }
+
+    ConvertExpr(id : CS.Identifier) : PT.PExpr
+    {
+      PT.PExpr.Ref(id.NLocation(), MakeName(id))
+    }
+
+    ConvertExpr(x : CS.TypeRef) : PT.PExpr
+    {
+      def loc = x.NLocation();
+      match(x) {
+        | BuiltIn("void") =>
+          PT.PExpr.Void(loc)
+
+        | BuiltIn(name) =>
+          PT.PExpr.Ref(MakeName(name, loc))
+
+        | Name(expr) =>
+          ConvertExpr(expr)
+
+        | Array(expr, dim) => 
+          PT.PExpr.Array(loc, PT.PExpr.Literal(Literal.Integer(dim :> ulong, false, null)), ConvertExpr(expr))
+
+        | Generic(expr, dim) =>
+          mutable args = [];
+          for(mutable i = 0; i < dim; ++i)
+            args ::= PT.PExpr.Wildcard(loc);
+          PT.PExpr.GenericSpecifier(loc, ConvertExpr(expr), args)
+
+        | Pointer =>
+          Message.Error(loc, "pointers are not supported");
+          PT.PExpr.Error(loc)
+      }
+    }
+
+    ConvertExpr(arg : CS.FunctionArgument) : PT.PExpr
+    {
+      def argValue = ConvertExpr(arg.Value);
+
+      def expr =
+        if(null != arg.Name)
+          PT.PExpr.Assign(arg.NLocation(), PT.PExpr.Ref(MakeName(arg.Name)), argValue)
+        else
+          argValue;
+
+      match(arg.Modifier) {
+        | Normal => expr
+        | Ref => PT.PExpr.ParmByRef(expr)
+        | Out => PT.PExpr.ParmOut(expr)
+      }
+    }
+
+    ConvertLiteral(x : CS.Literal) : Literal
+    {
+      | Null            => Literal.Null()
+      | Boolean(val)    => Literal.Bool(val)
+      | Char(val)       => Literal.Char(val)
+      | String(val, _)  => Literal.String(val)
+      | Integer(val, _, suffix) =>
+        match(suffix.ToUpperInvariant()) {
+          | "UL" | "LU" => Literal.Integer(val, false, manager.InternalType.UInt64)
+          | "L"         => Literal.Integer(val, false, manager.InternalType.Int64)
+          | _           =>
+            Message.Error(x.NLocation(), $"invalid literal suffix `$suffix'");
+            Literal.Integer(val, false, null)
+        }
+      | Real(mantissa, exponent, suffix) =>
+        def rawVal = mantissa + exponent;
+        match(suffix.ToUpperInvariant()) {
+          | "M" =>
+            mutable val;
+            if(decimal.TryParse(rawVal, out val))
+              Literal.Decimal(val)
+            else {
+              Message.Error(x.NLocation(), $"invalid decimal literal `$rawVal'");
+              Literal.Decimal(0.0M)
+            }
+          | "D" =>
+            mutable val;
+            if(double.TryParse(rawVal, out val))
+              Literal.Double(val)
+            else {
+              Message.Error(x.NLocation(), $"invalid double literal `$rawVal'");
+              Literal.Double(0.0D)
+            }
+          | "F" =>
+            mutable val;
+            if(float.TryParse(rawVal, out val))
+              Literal.Float(val)
+            else {
+              Message.Error(x.NLocation(), $"invalid float literal `$rawVal'");
+              Literal.Float(0.0F)
+            }
+          | _ =>
+            mutable valF;
+            mutable valD;
+            mutable valM;
+            if(float.TryParse(rawVal, out valF))
+              Literal.Float(valF)
+            else if(double.TryParse(rawVal, out valD))
+              Literal.Double(valD)
+            else if(decimal.TryParse(rawVal, out valM))
+              Literal.Decimal(valM)
+            else {
+              Message.Error(x.NLocation(), $"invalid floating point literal `$rawVal'");
+              Literal.Float(0.0F)
+            }
+        }
+    }
+  }
+}

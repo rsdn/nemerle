@@ -2,7 +2,7 @@
 
 namespace CSharpToNemerle.Test
 {
-  public class Foo
+  public class Foo<T> where T : new()
   {
     public void DoSomething()
     {
