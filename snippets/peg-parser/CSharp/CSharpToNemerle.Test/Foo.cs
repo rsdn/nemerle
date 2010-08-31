@@ -13,7 +13,7 @@ namespace CSharpToNemerle.Test
     }
   }
 
-  partial static class Program 
+  static partial class Program 
   {
     void TestPartial()
     {
