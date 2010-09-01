@@ -1,5 +1,7 @@
 ﻿using System;
 using System.Console;
+using SCG = System.Collections.Generic;
+using LIST = System.Collections.Generic.List<int>;
 
 namespace CSharpToNemerle.Test
 {
@@ -13,11 +15,13 @@ namespace CSharpToNemerle.Test
 
   public class Foo<T> where T : new()
   {
-    public void DoSomething(int x, string p = "class: ")
+    public void DoSomething(int x, global::System.String p = "class: ")
     {
       if(x > 0)
         System.Console.WriteLine("x is greater than 0.");
-      WriteLine("Generic " + p + typeof(T).FullName);
+      delegate(string p) {
+        WriteLine("Generic " + p + typeof(T).FullName);
+      }(p);
     }
   }
 
@@ -26,6 +30,11 @@ namespace CSharpToNemerle.Test
     void TestPartial()
     {
       Console.WriteLine("Partial works!");
+    }
+
+    void TestAlias()
+    {
+      Console.WriteLine(typeof(LIST));
     }
   }
 }
