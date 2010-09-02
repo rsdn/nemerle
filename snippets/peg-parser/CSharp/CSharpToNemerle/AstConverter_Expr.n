@@ -105,8 +105,38 @@ namespace CSharpToNemerle
         | Assign(to, value, op) =>
           PT.PExpr.Call(loc, ConvertExpr(op), [ConvertExpr(to), ConvertExpr(value)])
 
+        | NewObject(objType, args, null) =>
+          PT.PExpr.Call(loc, ConvertExpr(objType), args.Map(ConvertExpr))
+
+        | NewObject(objType, args, init) =>
+          def ctor = PT.PExpr.Call(loc, ConvertExpr(objType), args.Map(ConvertExpr));
+          ConvertInitializer(ctor, init)
+
+        | NewArray(_, args, _, null)
+        | NewArray(_, args, _, CS.VariableInitializer.Complex([])) =>
+          PT.PExpr.EmptyArray(loc, args.Map(ConvertExpr))
+
+        | NewArray(elementType, args, rank, CS.VariableInitializer.Complex as init) =>
+          unless(args.IsEmpty)
+            Message.Warning(args.Head.NLocation() + args.Last.NLocation(), "array size arguments are ignored");
+          PT.PExpr.Array(loc, Util.locate(loc, <[ $(rank : int) ]>), ConvertArrayElement(init, elementType))
+
+        | NewAnonymous(CS.VariableInitializer.Complex(seq)) =>
+          def seq = seq.FoldLeft([], (expr : CS.VariableInitializer, acc) =>
+            match(expr) {
+              | Expr(expr) => ConvertExpr(expr) :: acc
+              | _ =>
+                Message.Error(expr.NLocation(), "expression expected in anonymous type constructor");
+                acc
+            }).Rev();
+          Util.locate(loc, <[ Nemerle.Extensions.AnonymousClassNormalCtor( ..$seq ) ]>)
+
+        | Query =>
+          Message.Error(loc, "not implemented");
+          PT.PExpr.Error(loc)
+
         | _ =>
-          _ = System.Diagnostics.Debugger.Launch();
+          //assert2(false);
           Message.Error(loc, "invalid expression");
           PT.PExpr.Error(loc)
       }
@@ -124,6 +154,10 @@ namespace CSharpToNemerle
         | BuiltIn("void") =>
           PT.PExpr.Void(loc)
 
+        | BuiltIn("dynamic") =>
+          Message.Error(loc, "`dynamic' type is not supported");
+          PT.PExpr.Error(loc)
+
         | BuiltIn(name) =>
           PT.PExpr.Ref(MakeName(name, loc))
 
@@ -131,7 +165,9 @@ namespace CSharpToNemerle
           ConvertExpr(expr)
 
         | Array(expr, dim) =>
-          PT.PExpr.Array(loc, PT.PExpr.Literal(Literal.Integer(dim :> ulong, false, manager.InternalType.Int32)), ConvertExpr(expr))
+          def rank = PT.PExpr.Literal(loc, Literal.Integer(unchecked(dim :> ulong), false, manager.InternalType.Int32));
+          def args = PT.PExpr.ListLiteral(loc, [ConvertExpr(expr)]);
+          PT.PExpr.Array(loc, rank, args)
 
         | Generic(expr, dim) =>
           mutable args = [];
@@ -219,6 +255,89 @@ namespace CSharpToNemerle
               Literal.Float(0.0F)
             }
         }
+    }
+
+    ConvertInitializer(ctor : PT.PExpr, init : CS.VariableInitializer) : PT.PExpr
+    {
+      def loc = init.NLocation();
+      match(init) {
+        | Complex([]) => ctor
+
+        // object initializer
+        | Complex((Expr(CS.Expr.Assign) :: _) as seq) =>
+          Util.locate(loc, {
+            def tmp = Macros.NewSymbol("tmp");
+            def seq = seq.FoldLeft([], (expr : CS.VariableInitializer, acc) =>
+              match(expr) {
+                | Expr(CS.Expr.Assign(CS.Expr.Ref(to), from, op)) when op.Id == "="  =>
+                  def init = Util.locate(expr.NLocation(), <[ $(tmp : name).$(MakeSplicableName(to)) = $(ConvertExpr(from)) ]>);
+                  init :: acc
+  
+                | _ =>
+                  Message.Error(expr.NLocation(), "assignment statement `name = expression' expected in object initializer sequence");
+                  acc
+              }).Rev();
+
+            <[
+              def $(tmp : name) = $ctor;
+              { ..$seq }
+              $(tmp : name)
+            ]>
+          });
+
+        // collection initializer
+        | Complex(seq) =>
+          Util.locate(loc, {
+            def tmp = Macros.NewSymbol("tmp");
+            def seq = seq.FoldLeft([], (expr, acc) =>
+              match(expr) {
+                | CS.VariableInitializer.Expr(CS.Expr.Assign) =>
+                  Message.Error(expr.NLocation(), "assignment expression is not allowed in collection initializer");
+                  acc
+  
+                | CS.VariableInitializer.Expr(expr) =>
+                  def init = Util.locate(expr.NLocation(), <[ $(tmp : name).Add($(ConvertExpr(expr))) ]>);
+                  init :: acc
+  
+                | _ =>
+                  Message.Error(expr.NLocation(), "expression expected in object initializer sequence");
+                  acc
+              }).Rev();
+            <[
+              def $(tmp : name) = $ctor;
+              { ..$seq }
+              $(tmp : name)
+            ]>
+          });
+
+        | _ =>
+          Message.Error(loc, "initializer expression expected");
+          ctor
+      }
+    }
+
+    ConvertArrayElement(expr : CS.VariableInitializer, elementType : CS.TypeRef) : PT.PExpr
+    {
+      def loc = expr.NLocation();
+      match(expr) {
+        | Expr(expr) when null != elementType =>
+          PT.PExpr.TypeEnforcement(loc, ConvertExpr(expr), ConvertExpr(elementType));
+
+        | Expr(expr) =>
+          ConvertExpr(expr)
+
+        | Complex([]) => 
+          PT.PExpr.ListLiteral(loc, [])
+
+        | Complex(first :: others) =>
+          def first = ConvertArrayElement(first, elementType);
+          def others = others.Map(ConvertArrayElement(_, null));
+          PT.PExpr.ListLiteral(loc, first :: others)
+
+        | _ =>
+          Message.Error(loc, "array element expected");
+          PT.PExpr.Error(loc)
+      }
     }
   }
 }
