@@ -45,6 +45,10 @@ namespace CSharpToNemerle.Test
   public class Magic {
     [Nemerle.Utility.Accessor(flags = WantSetter)] int a;
     [Nemerle.Utility.Accessor(flags = WantSetter)] string b;
+    public override string ToString()
+    {
+      return string.Format(@"a is {0}, b is ""{1}""", a, b);
+    }
   }
   
   static partial class Program 
@@ -69,7 +73,7 @@ namespace CSharpToNemerle.Test
     void TestMagic() 
     {
       Magic m = new Magic { A = 10, B = "s" };
-      Console.WriteLine("magic: a is {0}, b is {1}", m.A, m.B);
+      Console.WriteLine("magic: {0}", m);
     }
   }
 }
