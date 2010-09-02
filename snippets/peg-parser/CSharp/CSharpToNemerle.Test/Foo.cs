@@ -15,6 +15,8 @@ namespace CSharpToNemerle.Test
 
   public class Foo<T> where T : new()
   {
+    const string F = "Generic ";
+
     public void DoSomething(int x, global::System.String p = "class: ")
     {
       if(x > 0) {
@@ -23,7 +25,7 @@ namespace CSharpToNemerle.Test
       }
       delegate(string p) {
         Console.WriteLine("p Length is {0}", p.Length);
-        WriteLine("Generic " + p + typeof(T).FullName);
+        WriteLine(F + p + typeof(T).FullName);
       }(p);
       const int a = 10;
       var b = x + a,
