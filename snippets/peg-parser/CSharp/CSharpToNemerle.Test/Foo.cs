@@ -66,6 +66,8 @@ namespace CSharpToNemerle.Test
   
   static partial class Program 
   {
+    static Program() { }
+
     void TestAlias()
     {
       Console.WriteLine("Alias LIST is {0}", typeof(LIST));
