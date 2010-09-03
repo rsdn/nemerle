@@ -15,6 +15,17 @@ namespace CSharpToNemerle.Test
 
   public class Foo<T> where T : new()
   {
+    public Foo() : base() {  }
+    ~Foo() {}
+
+    public event EventHandler Bar;
+
+    private EventHandler bla;
+    public event EventHandler Bla {
+      add { bla = (EventHandler) Delegate.Combine(bla, value); }
+      remove { bla = (EventHandler) Delegate.Remove(bla, value); }
+    }
+
     const string F = "Generic ";
 
     public void DoSomething(int x, global::System.String p = "class: ")
@@ -46,10 +57,10 @@ namespace CSharpToNemerle.Test
   // some magic!
   public class Magic {
     [Nemerle.Utility.Accessor(flags = WantSetter)] int a;
-    [Nemerle.Utility.Accessor(flags = WantSetter)] string b;
+    public string B { get; set; }
     public override string ToString()
     {
-      return string.Format(@"a is {0}, b is ""{1}""", a, b);
+      return string.Format(@"a is {0}, b is ""{1}""", a, B);
     }
   }
   
@@ -76,6 +87,17 @@ namespace CSharpToNemerle.Test
     {
       Magic m = new Magic { A = 10, B = "s" };
       Console.WriteLine("magic: {0}", m);
+    }
+
+    void TestFor(int count) 
+    {
+      for(int i = 0, j = 5; i < count; ++i, ++j)
+        Console.WriteLine("i = {0}, j = {1}", i, j);
+    }
+
+    void TestNullCheckOperator(string str)
+    {
+      Console.WriteLine("Null-checkin operator: {0}", str ?? "was null :)");
     }
   }
 }

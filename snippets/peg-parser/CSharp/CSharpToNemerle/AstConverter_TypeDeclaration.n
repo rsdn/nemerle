@@ -104,35 +104,36 @@ namespace CSharpToNemerle
 
       match(decl) {
         | Class(baseTypes, members) =>
-          PT.TopDeclaration.Class(loc, name, mods, typarms, baseTypes.Map(ConvertExpr), members.Map(ConvertTypeMember))
+          PT.TopDeclaration.Class(loc, name, mods, typarms, baseTypes.Map(ConvertExpr), members.Map(ConvertTypeMember(_, decl.Name)))
 
         | Struct(baseTypes, members) =>
           mods.mods |= NemerleAttributes.Struct;
-          PT.TopDeclaration.Class(loc, name, mods, typarms, baseTypes.Map(ConvertExpr), members.Map(ConvertTypeMember))
+          PT.TopDeclaration.Class(loc, name, mods, typarms, baseTypes.Map(ConvertExpr), members.Map(ConvertTypeMember(_, decl.Name)))
 
         | Interface(baseTypes, members) =>
-          PT.TopDeclaration.Interface(loc, name, mods, typarms, baseTypes.Map(ConvertExpr), members.Map(ConvertTypeMember))
+          PT.TopDeclaration.Interface(loc, name, mods, typarms, baseTypes.Map(ConvertExpr), members.Map(ConvertTypeMember(_, decl.Name)))
 
         | Delegate(returnType, formalParameters) =>
           def header = PT.PFunHeader(loc, typarms, name, ConvertExpr(returnType), formalParameters.Map(ConvertParam));
           PT.TopDeclaration.Delegate(loc, name, mods, typarms, header)
 
         | Enum(null, members) =>
-          PT.TopDeclaration.Enum(loc, name, mods, typarms, [], members.Map(ConvertTypeMember))
+          PT.TopDeclaration.Enum(loc, name, mods, typarms, [], members.Map(ConvertTypeMember(_, decl.Name)))
 
         | Enum(baseType, members) =>
-          PT.TopDeclaration.Enum(loc, name, mods, typarms, [ConvertExpr(baseType)], members.Map(ConvertTypeMember))
+          PT.TopDeclaration.Enum(loc, name, mods, typarms, [ConvertExpr(baseType)], members.Map(ConvertTypeMember(_, decl.Name)))
       }
     }
 
-    ConvertTypeMember(member : CS.TypeMember) : PT.ClassMember
+    ConvertTypeMember(member : CS.TypeMember, typeName : CS.Identifier) : PT.ClassMember
     {
       def loc = member.NLocation();
       def mods = ConvertModifiers(member.Attributes, member.Modifiers);
-      match(member) {
+      def member = match(member) {
         | Constant(name, memberType, value) =>
           def value = ConvertExpr(value);
           mods.AddCustomAttribute(Util.locate(loc, <[ Nemerle.InternalMacros.StaticInitializer($value) ]>));
+          mods.mods |= NemerleAttributes.Static;
           PT.ClassMember.Field(loc, MakeSplicableName(name), mods, ConvertExpr(memberType), value)
 
         | Field(name, memberType, null) =>
@@ -141,10 +142,10 @@ namespace CSharpToNemerle
           PT.ClassMember.Field(loc, MakeSplicableName(name), mods, ConvertExpr(memberType))
 
         | Field(name, memberType, CS.VariableInitializer.Expr(value)) =>
-          unless(member.Modifiers.Exists(_ is CS.Modifier.Readonly))
-            mods.mods |= NemerleAttributes.Mutable;
           def value = ConvertExpr(value);
           mods.AddCustomAttribute(Util.locate(loc, <[ Nemerle.InternalMacros.StaticInitializer($value) ]>));
+          unless(member.Modifiers.Exists(_ is CS.Modifier.Readonly))
+            mods.mods |= NemerleAttributes.Mutable;
           PT.ClassMember.Field(loc, MakeSplicableName(name), mods, ConvertExpr(memberType), value)
 
         | Field(name, memberType, _) =>
@@ -175,11 +176,14 @@ namespace CSharpToNemerle
           method.IsExtension = formalParameters.Exists(HasThisModifier);
           method
 
-        | Property(CS.Expr.Ref(id),                         memberType, getter, setter) with iface = null
-        | Property(CS.Expr.Member(iface, CS.Expr.Ref(id)),  memberType, getter, setter)
-        | Property(_,                                       memberType, getter, setter) with (id = null, iface = null) =>
+        | Property(CS.Expr.Ref(id),                           memberType,                   getter, setter) with (iface = null,             formalParameters = [])
+        | Property(CS.Expr.Member(iface, CS.Expr.Ref(id)),    memberType,                   getter, setter) with (                          formalParameters = [])
+        | Property(_,                                         memberType,                   getter, setter) with (iface = null, id = null,  formalParameters = [])
+        | Indexer(CS.Expr.This as th,                         memberType, formalParameters, getter, setter) with (iface = null, id = CS.Identifier(th.Location, "Item"))
+        | Indexer(CS.Expr.Member(iface, CS.Expr.This as th),  memberType, formalParameters, getter, setter) with (              id = CS.Identifier(th.Location, "Item"))
+        | Indexer(_,                                          memberType, formalParameters, getter, setter) with (iface = null, id = null) =>
           def name = match(id) {
-            | null => Message.FatalError(loc, "bad method name")
+            | null => Message.FatalError(loc, "bad property name")
             | _ => MakeSplicableName(id)
           }
           def memberType = ConvertExpr(memberType);
@@ -187,13 +191,105 @@ namespace CSharpToNemerle
             | null => []
             | _ => [ConvertExpr(iface)]
           }
+          def parms = formalParameters.Map(ConvertParam);
 
-          //TODO: handle getters and setters
+          def convertAccessor(accessor, prefix, returnType, parms) {
+            match(accessor) {
+              | null => None()
+              | _ =>
+                def loc = accessor.NLocation();
+                def mods = ConvertModifiers(accessor.Attributes, accessor.Modifiers);
+                def name = PT.Splicable.Name(MakeName(prefix + id.Id, id.NLocation()));
+                def header = PT.PFunHeader(loc, name, returnType, parms);
+                def body= match(accessor.Body : CS.Statement) {
+                  | Empty => FunBody.Abstract()
+                  | _     => FunBody.Parsed(ConvertExpr(accessor.Body))
+                }
+                PT.ClassMember.Function(loc, name, mods, header, iface, body)  |> WithCurrentEnv |> Some
+            }
+          }
 
-          PT.ClassMember.Property(loc, name, mods, memberType, [], None(), None(), iface)
+          def getter = convertAccessor(getter, "get_", memberType, []);
+          def setter = {
+            def setterLoc = setter.NLocation();
+            convertAccessor(setter, "set_", PT.PExpr.Void(setterLoc),
+              parms + [ PT.PParameter(
+                  loc   = setterLoc,
+                  name  = PT.Splicable.Name(MakeName("value", setterLoc)),
+                  ty    = memberType,
+                  modifiers = Modifiers(NemerleAttributes.Mutable, [])) ])
+          }
 
-        | Event
-        | Indexer  => Message.FatalError(loc, "not implemented")
+          PT.ClassMember.Property(loc, name, mods, memberType, parms, getter, setter, iface)
+
+        | Event(CS.Expr.Ref(id),                        memberType, adder, remover, init) with iface = null
+        | Event(CS.Expr.Member(iface, CS.Expr.Ref(id)), memberType, adder, remover, init)
+        | Event(_,                                      memberType, adder, remover, init) with (id = null, iface = null) =>
+          def name = match(id) {
+            | null => Message.FatalError(loc, "bad event name")
+            | _ => MakeSplicableName(id)
+          }
+          def memberType = ConvertExpr(memberType);
+          def iface = match(iface) {
+            | null => []
+            | _ => [ConvertExpr(iface)]
+          }
+          when(null != init)
+            Message.Error(init.NLocation(), "event cannot have initial value");
+
+          def createEventField() {
+            def name = PT.Splicable.Name(MakeName("_N_event_field_of_" + id.Id, id.NLocation()));
+            def mods = Modifiers(NemerleAttributes.Private %| NemerleAttributes.Mutable, []);
+            PT.ClassMember.Field(loc, name, mods, memberType) |> WithCurrentEnv
+          }
+          def createEventAccessor(prefix) {
+            def name = PT.Splicable.Name(MakeName(prefix + id.Id, id.NLocation()));
+            def header = PT.PFunHeader(
+              loc         = loc,
+              name        = name,
+              returnType  = PT.PExpr.Void(loc),
+              parameters  = [ PT.PParameter(
+                  loc   = loc,
+                  name  = PT.Splicable.Name(MakeName("value", loc)),
+                  ty    = memberType,
+                  modifiers = Modifiers(NemerleAttributes.Mutable, [])) ]);
+            PT.ClassMember.Function(loc, name, mods, header, iface, FunBody.Parsed(PT.PExpr.Void(loc))) |> WithCurrentEnv
+          }
+          def convertEventAccessor(accessor, prefix) {
+            def loc = accessor.NLocation();
+            unless(accessor.Modifiers.IsEmpty)
+              Message.Error(loc, "event accessor cannot have any modifiers");
+            def mods = ConvertModifiers(accessor.Attributes, []);
+            def name = PT.Splicable.Name(MakeName(prefix + id.Id, id.NLocation()));
+            def header = PT.PFunHeader(
+              loc         = loc,
+              name        = name,
+              returnType  = PT.PExpr.Void(loc),
+              parameters  = [ PT.PParameter(
+                  loc   = loc,
+                  name  = PT.Splicable.Name(MakeName("value", loc)),
+                  ty    = memberType,
+                  modifiers = Modifiers(NemerleAttributes.Mutable, [])) ]);
+            def body = match(accessor.Body : CS.Statement) {
+              | Empty => FunBody.Abstract()
+              | _     => FunBody.Parsed(ConvertExpr(accessor.Body))
+            }
+            PT.ClassMember.Function(loc, name, mods, header, iface, body) |> WithCurrentEnv
+          }
+
+          def (field, adder, remover) = match(adder, remover) {
+            | (null, null) =>
+              (createEventField(), createEventAccessor("add_"), createEventAccessor("remove_"))
+
+            | (null, _)
+            | (_, null) =>
+              Message.Error(loc, "both of event accessors `add' and `remove' must be specified");
+              (createEventField(), createEventAccessor("add_"), createEventAccessor("remove_"))
+
+            | _ =>
+              (null, convertEventAccessor(adder, "add_"), convertEventAccessor(remover, "remove_"))
+          }
+          PT.ClassMember.Event(loc, name, mods, memberType, field, adder, remover)
 
         | Operator(id, returnType, formalParameters, body) =>
           //TODO: check overloadable operator name and args
@@ -203,12 +299,53 @@ namespace CSharpToNemerle
             | Empty => FunBody.Abstract()
             | _ => FunBody.Parsed(ConvertExpr(body))
           }
-          def method = PT.ClassMember.Function(loc, name, mods, header, [], body);
-          method.IsExtension = formalParameters.Exists(HasThisModifier);
-          method
+          PT.ClassMember.Function(loc, name, mods, header, [], body)
 
-        | Destructor
-        | Constructor => Message.FatalError(loc, "not implemented")
+        | Constructor(CS.Expr.Ref(id),  formalParameters, init, body)
+        | Constructor(_,                formalParameters, init, body) with id = null =>
+          def name = match(id) {
+            | null => Message.FatalError(loc, "bad constructor name")
+            | _ =>
+              def idLoc = id.NLocation();
+              when(id.Id != typeName.Id)
+                Message.Error(idLoc, "constructor name must be equal to type name");
+              PT.Splicable.Name(MakeName(".ctor", idLoc))
+          }
+          def header = PT.PFunHeader(loc, PT.Typarms.Empty, name, PT.PExpr.Void(loc), formalParameters.Map(ConvertParam));
+          def body = match(body, init) {
+            | (Empty, Default) => FunBody.Abstract()
+            | _ =>
+              def initLoc = init.NLocation();
+              match(init) {
+                | Default =>
+                  FunBody.Parsed(ConvertExpr(body))
+                | This(args)
+                  with otherCtor = PT.PExpr.Call(initLoc, PT.PExpr.This(initLoc), args.Map(ConvertExpr))
+                | Base(args)
+                  with otherCtor = PT.PExpr.Call(initLoc, PT.PExpr.Base(initLoc), args.Map(ConvertExpr)) =>
+                  FunBody.Parsed(PT.PExpr.Sequence(body.NLocation(), [otherCtor, ConvertExpr(body)]))
+              }
+          }
+          PT.ClassMember.Function(loc, name, mods, header, [], body)
+
+        | Destructor(CS.Expr.Ref(id), formalParameters, body)
+        | Destructor(_,               formalParameters, body) with id = null =>
+          //TODO: check dtor modifiers
+          mods.mods |= NemerleAttributes.Override %| NemerleAttributes.Protected;
+          def name = match(id) {
+            | null => Message.FatalError(loc, "bad destructor name")
+            | _ =>
+              def idLoc = id.NLocation();
+              when(id.Id != typeName.Id)
+                Message.Error(idLoc, "destructor name must be equal to type name");
+              PT.Splicable.Name(MakeName("Finalize", idLoc))
+          }
+          def header = PT.PFunHeader(loc, PT.Typarms.Empty, name, PT.PExpr.Void(loc), formalParameters.Map(ConvertParam));
+          def body = match(body) {
+            | Empty => FunBody.Abstract()
+            | _ => FunBody.Parsed(ConvertExpr(body))
+          }
+          PT.ClassMember.Function(loc, name, mods, header, [], body)
 
         | EnumOption(name, null) =>
           PT.ClassMember.EnumOption(loc, MakeSplicableName(name), mods, None())
@@ -219,7 +356,9 @@ namespace CSharpToNemerle
         | TypeDeclaration(decl) =>
           def ndecl = ConvertTypeDeclaration(decl);
           PT.ClassMember.TypeDeclaration(ndecl.loc, ndecl.name, ndecl.modifiers, ndecl)
+
       }
+      member |> WithCurrentEnv
     }
 
     ConvertParam(parm : CS.FormalParameter) : PT.PParameter
