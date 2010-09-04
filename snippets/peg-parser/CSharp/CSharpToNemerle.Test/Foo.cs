@@ -1,4 +1,5 @@
 ﻿using System;
+using System.ComponentModel;
 using System.Console;
 using SCG = System.Collections.Generic;
 using LIST = System.Collections.Generic.List<int>;
@@ -57,7 +58,20 @@ namespace CSharpToNemerle.Test
   // some magic!
   public class Magic {
     [Nemerle.Utility.Accessor(flags = WantSetter)] int a;
-    public string B { get; set; }
+
+    [property:Description("only property")]
+    [Description("only property too")]
+    [method:Description("both accessors")]
+    public string B {
+        [Description("getter")]
+        get;
+
+        [method:Description("setter")]
+        [param:Description("value parameter")]
+        set;
+    }
+
+    [return:Description("shuold be on return value")]
     public override string ToString()
     {
       return string.Format(@"a is {0}, b is ""{1}""", a, B);

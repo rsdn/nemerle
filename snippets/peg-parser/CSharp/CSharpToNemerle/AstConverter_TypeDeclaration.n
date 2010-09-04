@@ -48,15 +48,10 @@ namespace CSharpToNemerle
             flags //TODO: deal with Readonly
         }
       });
-      def attrs = attributes.Map(fun(atb) {
-        match(atb.Target : CS.CustomAttributeTarget) {
-          | Default => ()
-          | _ =>
-            // TODO: deal with attribute target
-            Message.Warning(atb.Target.NLocation(), "custom attribute target is ignored")
-        }
-        PT.PExpr.Call(atb.NLocation(), ConvertExpr(atb.Name), atb.Args.Map(ConvertExpr))
-      });
+      // it is strange, but Nemerle does not save target of attribute
+      def attrs = attributes.Map(
+        atb => PT.PExpr.Call(atb.NLocation(), ConvertExpr(atb.Name), atb.Args.Map(ConvertExpr)));
+
       Modifiers(flags, attrs)
     }
 
@@ -98,7 +93,7 @@ namespace CSharpToNemerle
     ConvertTypeDeclaration(decl : CS.TypeDeclaration) : PT.TopDeclaration
     {
       def loc = decl.NLocation();
-      def mods = ConvertModifiers(decl.Attributes, decl.Modifiers);
+      def mods = ConvertModifiers(TakeOutAndCheckAttributes.[CS.CustomAttributeTarget.Type](decl.Attributes), decl.Modifiers);
       def name = MakeSplicableName(decl.Name);
       def typarms = ConvertTyparms(decl.TypeParameters, decl.Constraints);
 
@@ -128,21 +123,24 @@ namespace CSharpToNemerle
     ConvertTypeMember(member : CS.TypeMember, typeName : CS.Identifier) : PT.ClassMember
     {
       def loc = member.NLocation();
-      def mods = ConvertModifiers(member.Attributes, member.Modifiers);
+      mutable pool = PrepareAttributes(member.Attributes);
       def member = match(member) {
         | Constant(name, memberType, value) =>
           def value = ConvertExpr(value);
+          def mods = ConvertModifiers(TakeOutAttributes.[CS.CustomAttributeTarget.Field](ref pool), member.Modifiers);
           mods.AddCustomAttribute(Util.locate(loc, <[ Nemerle.InternalMacros.StaticInitializer($value) ]>));
           mods.mods |= NemerleAttributes.Static;
           PT.ClassMember.Field(loc, MakeSplicableName(name), mods, ConvertExpr(memberType), value)
 
         | Field(name, memberType, null) =>
+          def mods = ConvertModifiers(TakeOutAttributes.[CS.CustomAttributeTarget.Field](ref pool), member.Modifiers);
           unless(member.Modifiers.Exists(_ is CS.Modifier.Readonly))
             mods.mods |= NemerleAttributes.Mutable;
           PT.ClassMember.Field(loc, MakeSplicableName(name), mods, ConvertExpr(memberType))
 
         | Field(name, memberType, CS.VariableInitializer.Expr(value)) =>
           def value = ConvertExpr(value);
+          def mods = ConvertModifiers(TakeOutAttributes.[CS.CustomAttributeTarget.Field](ref pool), member.Modifiers);
           mods.AddCustomAttribute(Util.locate(loc, <[ Nemerle.InternalMacros.StaticInitializer($value) ]>));
           unless(member.Modifiers.Exists(_ is CS.Modifier.Readonly))
             mods.mods |= NemerleAttributes.Mutable;
@@ -150,15 +148,18 @@ namespace CSharpToNemerle
 
         | Field(name, memberType, _) =>
           Message.Error(loc, "bad field initializer");
+          def mods = ConvertModifiers(TakeOutAttributes.[CS.CustomAttributeTarget.Field](ref pool), member.Modifiers);
           PT.ClassMember.Field(loc, MakeSplicableName(name), mods, ConvertExpr(memberType))
 
         | FixedSizeBuffer(name, elementType, _) =>
           Message.Error(loc, "fixed size buffers are not supported");
+          def mods = ConvertModifiers(TakeOutAttributes.[CS.CustomAttributeTarget.Field](ref pool), member.Modifiers);
           PT.ClassMember.Field(loc, MakeSplicableName(name), mods, ConvertExpr(elementType))
 
         | Method(CS.Expr.Ref(id),                         returnType, formalParameters, typeParameters, constraints, body) with iface = null
         | Method(CS.Expr.Member(iface, CS.Expr.Ref(id)),  returnType, formalParameters, typeParameters, constraints, body)
         | Method(_,                                       returnType, formalParameters, typeParameters, constraints, body) with (id = null, iface = null) =>
+          def mods = ConvertModifiers(TakeOutAttributes.[CS.CustomAttributeTarget.Method, CS.CustomAttributeTarget.Return](ref pool), member.Modifiers);
           def name = match(id) {
             | null => Message.FatalError(loc, "bad method name")
             | _ => MakeSplicableName(id)
@@ -182,6 +183,7 @@ namespace CSharpToNemerle
         | Indexer(CS.Expr.This as th,                         memberType, formalParameters, getter, setter) with (iface = null, id = CS.Identifier(th.Location, "Item"))
         | Indexer(CS.Expr.Member(iface, CS.Expr.This as th),  memberType, formalParameters, getter, setter) with (              id = CS.Identifier(th.Location, "Item"))
         | Indexer(_,                                          memberType, formalParameters, getter, setter) with (iface = null, id = null) =>
+          def mods = ConvertModifiers(TakeOutAttributes.[CS.CustomAttributeTarget.Property](ref pool), member.Modifiers);
           def name = match(id) {
             | null => Message.FatalError(loc, "bad property name")
             | _ => MakeSplicableName(id)
@@ -193,31 +195,45 @@ namespace CSharpToNemerle
           }
           def parms = formalParameters.Map(ConvertParam);
 
+          mutable accessorPool = []; // we cant pass ref-values to local functions
+
           def convertAccessor(accessor, prefix, returnType, parms) {
-            match(accessor) {
-              | null => None()
-              | _ =>
-                def loc = accessor.NLocation();
-                def mods = ConvertModifiers(accessor.Attributes, accessor.Modifiers);
-                def name = MakeSplicableName(prefix + id.Id, id.NLocation());
-                def header = PT.PFunHeader(loc, name, returnType, parms);
-                def body= match(accessor.Body : CS.Statement) {
-                  | Empty => FunBody.Abstract()
-                  | _     => FunBody.Parsed(ConvertExpr(accessor.Body))
-                }
-                PT.ClassMember.Function(loc, name, mods, header, iface, body)  |> WithCurrentEnv |> Some
+            def loc = accessor.NLocation();
+            def attrs = TakeOutParentAttributes.[CS.CustomAttributeTarget.Method, CS.CustomAttributeTarget.Return](ref pool)
+                      + TakeOutAttributes.[CS.CustomAttributeTarget.Method, CS.CustomAttributeTarget.Return](ref accessorPool);
+            def mods = ConvertModifiers(attrs, accessor.Modifiers);
+            def name = MakeSplicableName(prefix + id.Id, id.NLocation());
+            def header = PT.PFunHeader(loc, name, returnType, parms);
+            def body= match(accessor.Body : CS.Statement) {
+              | Empty => FunBody.Abstract()
+              | _     => FunBody.Parsed(ConvertExpr(accessor.Body))
             }
+            CheckAttributes(accessorPool);
+            PT.ClassMember.Function(loc, name, mods, header, iface, body)  |> WithCurrentEnv
           }
 
-          def getter = convertAccessor(getter, "get_", memberType, []);
-          def setter = {
-            def setterLoc = setter.NLocation();
-            convertAccessor(setter, "set_", PT.PExpr.Void(setterLoc),
-              parms + [ PT.PParameter(
-                  loc   = setterLoc,
-                  name  = MakeSplicableName("value", setterLoc),
-                  ty    = memberType,
-                  modifiers = Modifiers(NemerleAttributes.Mutable, [])) ])
+          def getter = match(getter) {
+            | null => None()
+            | _ =>
+              accessorPool = PrepareAttributes(getter.Attributes);
+              convertAccessor(getter, "get_", memberType, parms) |> Some
+          }
+
+          def setter = match(setter) {
+            | null => None()
+            | _  =>
+              accessorPool = PrepareAttributes(setter.Attributes);
+              def setterLoc = setter.NLocation();
+              convertAccessor(setter, "set_", PT.PExpr.Void(setterLoc),
+                parms + [ PT.PParameter(
+                    loc   = setterLoc,
+                    name  = MakeSplicableName("value", setterLoc),
+                    ty    = memberType,
+                    modifiers = {
+                      def attrs = TakeOutParentAttributes.[CS.CustomAttributeTarget.Param](ref accessorPool);
+                      def mods = ConvertModifiers(attrs, []);
+                      mods.mods |= NemerleAttributes.Mutable;
+                      mods }) ]) |> Some
           }
 
           PT.ClassMember.Property(loc, name, mods, memberType, parms, getter, setter, iface)
@@ -225,6 +241,7 @@ namespace CSharpToNemerle
         | Event(CS.Expr.Ref(id),                        memberType, adder, remover, init) with iface = null
         | Event(CS.Expr.Member(iface, CS.Expr.Ref(id)), memberType, adder, remover, init)
         | Event(_,                                      memberType, adder, remover, init) with (id = null, iface = null) =>
+          def mods = ConvertModifiers(TakeOutAttributes.[CS.CustomAttributeTarget.Event](ref pool), member.Modifiers);
           def name = match(id) {
             | null => Message.FatalError(loc, "bad event name")
             | _ => MakeSplicableName(id)
@@ -243,12 +260,15 @@ namespace CSharpToNemerle
                 MakeSplicableName("_N_event_field_of_" + id.Id, id.NLocation());
               else
                 MakeSplicableName(Util.tmpname("event_field_of_" + id.Id), id.NLocation());
-            def mods = Modifiers(NemerleAttributes.Private %| NemerleAttributes.Mutable, []);
+            def attrs = TakeOutParentAttributes.[CS.CustomAttributeTarget.Field](ref pool);
+            def mods = ConvertModifiers(attrs, []);
+            mods.mods = NemerleAttributes.Private %| NemerleAttributes.Mutable;
             PT.ClassMember.Field(loc, name, mods, memberType) |> WithCurrentEnv
           }
           def createEventAccessor(prefix) {
             def name = MakeSplicableName(prefix + id.Id, id.NLocation());
-            def mods = ConvertModifiers(member.Attributes, []);
+            def attrs = TakeOutParentAttributes.[CS.CustomAttributeTarget.Method](ref pool);
+            def mods = ConvertModifiers(attrs, []);
             def header = PT.PFunHeader(
               loc         = loc,
               name        = name,
@@ -257,14 +277,21 @@ namespace CSharpToNemerle
                   loc   = loc,
                   name  = MakeSplicableName("value", loc),
                   ty    = memberType,
-                  modifiers = Modifiers(NemerleAttributes.Mutable, [])) ]);
+                  modifiers = {
+                    def attrs = TakeOutParentAttributes.[CS.CustomAttributeTarget.Param](ref pool);
+                    def mods = ConvertModifiers(attrs, []);
+                    mods.mods |= NemerleAttributes.Mutable;
+                    mods }) ]);
             PT.ClassMember.Function(loc, name, mods, header, iface, null) |> WithCurrentEnv
           }
           def convertEventAccessor(accessor, prefix) {
             def loc = accessor.NLocation();
             unless(accessor.Modifiers.IsEmpty)
               Message.Error(loc, "event accessor cannot have any modifiers");
-            def mods = ConvertModifiers(accessor.Attributes, []);
+            mutable accessorPool = PrepareAttributes(accessor.Attributes);
+            def attrs = TakeOutParentAttributes.[CS.CustomAttributeTarget.Method](ref pool)
+                      + TakeOutAttributes.[CS.CustomAttributeTarget.Method](ref accessorPool);
+            def mods = ConvertModifiers(attrs, []);
             def name = MakeSplicableName(prefix + id.Id, id.NLocation());
             def header = PT.PFunHeader(
               loc         = loc,
@@ -274,11 +301,16 @@ namespace CSharpToNemerle
                   loc   = loc,
                   name  = MakeSplicableName("value", loc),
                   ty    = memberType,
-                  modifiers = Modifiers(NemerleAttributes.Mutable, [])) ]);
+                  modifiers = {
+                    def attrs = TakeOutParentAttributes.[CS.CustomAttributeTarget.Param](ref accessorPool);
+                    def mods = ConvertModifiers(attrs, []);
+                    mods.mods |= NemerleAttributes.Mutable;
+                    mods }) ]);
             def body = match(accessor.Body : CS.Statement) {
               | Empty => FunBody.Abstract()
               | _     => FunBody.Parsed(ConvertExpr(accessor.Body))
             }
+            CheckAttributes(accessorPool);
             PT.ClassMember.Function(loc, name, mods, header, iface, body) |> WithCurrentEnv
           }
 
@@ -298,6 +330,7 @@ namespace CSharpToNemerle
 
         | Operator(id, returnType, formalParameters, body) =>
           //TODO: check overloadable operator name and args
+          def mods = ConvertModifiers(TakeOutAttributes.[CS.CustomAttributeTarget.Method, CS.CustomAttributeTarget.Return](ref pool), member.Modifiers);
           def name = MakeSplicableName(id);
           def header = PT.PFunHeader(loc, PT.Typarms.Empty, name, ConvertExpr(returnType), formalParameters.Map(ConvertParam));
           def body = match(body) {
@@ -308,6 +341,7 @@ namespace CSharpToNemerle
 
         | Constructor(CS.Expr.Ref(id),  formalParameters, init, body)
         | Constructor(_,                formalParameters, init, body) with id = null =>
+          def mods = ConvertModifiers(TakeOutAttributes.[CS.CustomAttributeTarget.Method](ref pool), member.Modifiers);
           def name = match(id) {
             | null => Message.FatalError(loc, "bad constructor name")
             | _ =>
@@ -336,6 +370,7 @@ namespace CSharpToNemerle
         | Destructor(CS.Expr.Ref(id), formalParameters, body)
         | Destructor(_,               formalParameters, body) with id = null =>
           //TODO: check dtor modifiers
+          def mods = ConvertModifiers(TakeOutAttributes.[CS.CustomAttributeTarget.Method](ref pool), member.Modifiers);
           mods.mods |= NemerleAttributes.Override %| NemerleAttributes.Protected;
           def name = match(id) {
             | null => Message.FatalError(loc, "bad destructor name")
@@ -353,16 +388,19 @@ namespace CSharpToNemerle
           PT.ClassMember.Function(loc, name, mods, header, [], body)
 
         | EnumOption(name, null) =>
+          def mods = ConvertModifiers(TakeOutAttributes.[CS.CustomAttributeTarget.Field](ref pool), member.Modifiers);
           PT.ClassMember.EnumOption(loc, MakeSplicableName(name), mods, None())
 
         | EnumOption(name, value) =>
+          def mods = ConvertModifiers(TakeOutAttributes.[CS.CustomAttributeTarget.Field](ref pool), member.Modifiers);
           PT.ClassMember.EnumOption(loc, MakeSplicableName(name), mods, Some(ConvertExpr(value)))
 
         | TypeDeclaration(decl) =>
+          pool = []; // prevent attribute checking
           def ndecl = ConvertTypeDeclaration(decl);
           PT.ClassMember.TypeDeclaration(ndecl.loc, ndecl.name, ndecl.modifiers, ndecl)
-
       }
+      CheckAttributes(pool);
       member |> WithCurrentEnv
     }
 
@@ -370,7 +408,7 @@ namespace CSharpToNemerle
     {
       def loc = parm.NLocation();
       def parmName = MakeSplicableName(parm.Name);
-      def parmMods = ConvertModifiers(parm.Attributes, []);
+      def parmMods = ConvertModifiers(TakeOutAndCheckAttributes.[CS.CustomAttributeTarget.Param](parm.Attributes), []);
       parmMods.mods |= NemerleAttributes.Mutable;
       mutable parmTy =
         match(parm.ParameterType) {
