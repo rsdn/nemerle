@@ -1,6 +1,7 @@
 ﻿using System;
 using System.ComponentModel;
 using System.Console;
+using System.Linq;
 using SCG = System.Collections.Generic;
 using LIST = System.Collections.Generic.List<int>;
 
@@ -111,6 +112,31 @@ namespace CSharpToNemerle.Test
         Console.WriteLine("i = {0}, j = {1}", i, j);
     }
 
+    void TestLinq()
+    {
+        //magic!!
+        var Scores = new SCG.List() {
+            new { name = "Оля",  score = 97 },
+            new { name = "Петя", score = 60 },
+            new { name = "Вася", score = 92 },
+            new { name = "Маша", score = 81 }
+        };
+
+        // Create the query.
+        var queryHighScores =
+            from rec in Scores
+            where rec.score > 80
+            orderby rec.score descending, rec.name
+            select rec;
+
+        // Execute the query.
+        foreach (var rec in queryHighScores)
+        {
+          Console.WriteLine(rec);
+        }
+        Console.WriteLine();
+    }
+    
     void TestNullCheckOperator(string str)
     {
       Console.WriteLine("Null-checkin operator: {0}", str ?? "was null :)");
