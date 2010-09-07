@@ -10,7 +10,7 @@ namespace CSharpToNemerle.Test
   public delegate T X<T>(int a, T b) where T : class;
 
   public interface IVarianceTest<out T> {
-    void Bar(T x);
+    T Bar();
   }
   
   public enum A {
