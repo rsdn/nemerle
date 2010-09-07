@@ -103,12 +103,12 @@ namespace Nemerle.Compiler
     mutable guards          : array[TExpr];
     mutable guardUsed       : array[bool];
     jump_out_id : int;
-    _typer3 : Typer3;
+    typer3 : Typer3;
 
     public this (t : TypeVar, val : TExpr, mcs : list [Match_case], typer3 : Typer3)
     {
       Manager = t.Manager;
-      _typer3 = typer3;
+      this.typer3 = typer3;
       this.tyvar = t;
       this.val = val;
       this.cases = mcs;
@@ -227,6 +227,91 @@ namespace Nemerle.Compiler
 
         Sequence (assign_expr, expr)
 
+      | IfEq(rootPath, DecisionTreeBuilder.Con.Lit(lit1), Decision.Success,
+          IfEq(rootPath2, DecisionTreeBuilder.Con.Lit(lit2), Decision.Success,
+            IfEq(rootPath3, DecisionTreeBuilder.Con.Lit(lit3), Decision.Success, _)))
+        when lit1.AsInt.IsSome
+            && lit2.AsInt.IsSome
+            && lit3.AsInt.IsSome
+            && rootPath.Equals(rootPath2)
+            && rootPath.Equals(rootPath3) =>
+
+        def selectSwitchCases(decision : Decision, cases : list[int * Decision])
+        {
+          match(decision)
+          {
+            | IfEq(path, DecisionTreeBuilder.Con.Lit(lit), Decision.Success, if_false) as case
+              when lit.AsInt.IsSome
+                  && rootPath.Equals(path) =>
+              def case = (lit.AsInt.Value, case);
+              def (default, cases) = selectSwitchCases(if_false, cases);
+              (default, case :: cases)
+
+            | _ =>
+              (decision, cases)
+          }
+        }
+        def (default, cases) = selectSwitchCases(decision, []);
+        def caseClusters = {
+          // turn [2,1,5,6,20,7,10,21,22,3]
+          // into [[1,2,3], [5,6,7], [10], [20,21,22]]
+
+          def casesDescending = cases.Sort(((a, _), (b, _)) => b.CompareTo(a));
+          casesDescending.Tail.FoldLeft([[casesDescending.Head]],
+            fun(case, (((nextCase :: _) as cases) :: otherClusters))
+            {
+              if(unchecked(nextCase[0] - case[0]) == 1) // cases should differ by one
+                (case :: cases) :: otherClusters
+              else
+                [case] :: cases :: otherClusters
+            })
+        }
+
+        def buildSwitch(matchingValue : TExpr) : TExpr
+        {
+          caseClusters.FoldRight(compile(default), fun(cases, default)
+          {
+            match(cases)
+            {
+              | [] =>
+                Util.ice("got empty list of switch cases");
+
+              | [(_, Decision.IfEq(_, DecisionTreeBuilder.Con.Lit(lit), if_true, if_false))] =>
+                def true_expr  = compile (if_true);
+                def cmp_expr = emit_compare_with (matchingValue, lit);
+                If (cmp_expr, true_expr, default, get_debug_loc (if_true), get_debug_loc (if_false))
+
+              | [(_, node)] =>
+                Util.ice($"unexpected decision tree node `$node'")
+
+              | _ =>
+                def (switchExpr, delta) = match(cases.Head[0])
+                {
+                  | 0 =>
+                    (matchingValue, 0)
+                  | delta =>
+                    def deltaLit = Literal.Integer(System.Math.Abs(delta) :> ulong, delta < 0, InternalType.Int32);
+                    def switchExpr = TExpr.Call(
+                      InternalType.Int32,
+                      TExpr.OpCode("-.f"),  // unchecked subtract
+                      [Parm(matchingValue),
+                       Parm(TExpr.Literal(deltaLit))],
+                      false);
+                    (switchExpr, delta)
+                }
+                def cases = cases.Map(fun(_)
+                {
+                  | (index, Decision.IfEq(_, DecisionTreeBuilder.Con.Lit, if_true, _)) =>
+                    (index - delta, compile(if_true))
+                  | (_, node) =>
+                    Util.ice($"unexpected decision tree node `$node'")
+                });
+                Switch(switchExpr, Some(default), cases)
+            }
+          })
+        }
+        typer3.WithCached(get_path_expression(rootPath), buildSwitch)
+
       | IfEq (_, DecisionTreeBuilder.Con.Guard, Decision.Success(res_id) as if_true, if_false) =>
         def true_expr  = compile (if_true);
         def false_expr = compile (if_false);
@@ -235,31 +320,28 @@ namespace Nemerle.Compiler
           { // if guards used more then one time we must prevent inlining of embeded calls
             def preventInlining(expr : TExpr) : TExpr
             {
-              match (expr)
-              {
-                | TExpr.Call(func = TExpr.LocalFunRef(decl, _))
-                | TExpr.Call(func = TExpr.LocalRef(decl)) =>
-                  match (decl.ValKind)
-                  {
-                    | LocalValue.Kind.Function(hd, _) =>
-                      match (hd.usage)
-                      {
-                        | FunctionUsage.UsedJustOnce     => 
-                          hd.usage = FunctionUsage.Used;
+              | TExpr.Call(func = TExpr.LocalFunRef(decl, _))
+              | TExpr.Call(func = TExpr.LocalRef(decl)) =>
+                match (decl.ValKind)
+                {
+                  | LocalValue.Kind.Function(hd, _) =>
+                    match (hd.usage)
+                    {
+                      | FunctionUsage.UsedJustOnce     => 
+                        hd.usage = FunctionUsage.Used;
 
-                          _typer3.EmitStaticLocalFunction(hd);
+                        typer3.EmitStaticLocalFunction(hd);
 
-                        | FunctionUsage.NotUsed          => Util.ice()
-                        | FunctionUsage.Used 
-                        | FunctionUsage.UsedAsFirstClass => ()
-                      }
-                      null
+                      | FunctionUsage.NotUsed          => Util.ice()
+                      | FunctionUsage.Used 
+                      | FunctionUsage.UsedAsFirstClass => ()
+                    }
+                    null
 
-                    | _ => null
-                  }
+                  | _ => null
+                }
 
-                | _ => null
-              }
+              | _ => null
             }
 
             guards[res_id].Walk(preventInlining);
@@ -542,6 +624,16 @@ namespace Nemerle.Compiler
     static If (cond : TExpr, e1 : TExpr, e2 : TExpr, l1 : Location, l2 : Location) : TExpr
     {
       TExpr.If (e1.Type, cond, e1, e2, l1, l2)
+    }
+
+    static Switch(indexing_expr : TExpr, default : option[TExpr], cases : list[int * TExpr]) : TExpr
+    {
+      def ty = match(default, cases) {
+        | (Some(expr), _)
+        | (_, (_, expr) :: _) => expr.ty
+        | _ => FixedType.Void()
+      }
+      TExpr.Switch(ty, indexing_expr, default, cases);
     }
 
     static Cast (expr : TExpr, ty : TypeVar) : TExpr
