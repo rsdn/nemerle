@@ -227,20 +227,164 @@ namespace Nemerle.Compiler
 
         Sequence (assign_expr, expr)
 
-      | IfEq(rootPath, DecisionTreeBuilder.Con.Lit(lit1), Decision.Success,
-          IfEq(rootPath2, DecisionTreeBuilder.Con.Lit(lit2), Decision.Success,
-            IfEq(rootPath3, DecisionTreeBuilder.Con.Lit(lit3), Decision.Success, _)))
+      | IfEq(rootPath, DecisionTreeBuilder.Con.Variant(var1), _,
+          IfEq(rootPath2, DecisionTreeBuilder.Con.Variant(var2), _,
+            IfEq(rootPath3, DecisionTreeBuilder.Con.Variant(var3), _, _)))
+        when null != var1.BaseType
+            && var1.BaseType.Equals(var2.BaseType)
+            && var1.BaseType.Equals(var3.BaseType)
+            && rootPath.Equals(rootPath2)
+            && rootPath.Equals(rootPath3) =>
+        def selectSwitchCases(decision : Decision, cases : list[int * Decision]) : Decision * list[int * Decision]
+        {
+          match(decision)
+          {
+            | IfEq(path, DecisionTreeBuilder.Con.Variant(var), _, if_false) as case
+              when var1.BaseType.Equals(var.BaseType)
+                  && rootPath.Equals(path) =>
+              def case = (var.VariantOptionCode, case);
+              def (default, cases) = selectSwitchCases(if_false, cases);
+              (default, case :: cases)
+
+            | _ =>
+              (decision, cases)
+          }
+        }
+        def (default, cases) = selectSwitchCases(decision, []);
+        def caseClusters = {
+          // turn [2,1,5,6,20,7,10,21,22,3]
+          // into [[1,2,3], [5,6,7], [10], [20,21,22]]
+
+          def casesDescending = cases.Sort(((a, _), (b, _)) => b.CompareTo(a));
+          casesDescending.Tail.FoldLeft([[casesDescending.Head]],
+            fun(case, (((nextCase :: _) as cases) :: otherClusters))
+            {
+              match(unchecked(nextCase[0] - case[0]))
+              {
+                | 1 =>
+                  // cases should differ by one
+                  (case :: cases) :: otherClusters
+                | 2 =>
+                  // fill single missing slot, 'null' will be interpreted as goto to default block
+                  (case :: (case[0] + 1, null) :: cases) :: otherClusters
+                | 3 =>
+                  // fill two missing slots
+                  (case :: (case[0] + 1, null) :: (case[0] + 2, null) :: cases) :: otherClusters
+                | _ =>
+                  [case] :: cases :: otherClusters
+              }
+            })
+        }
+
+        def buildSwitch(matchingValue : TExpr) : TExpr
+        {
+          caseClusters.FoldRight(compile(default), fun(cases : list[int * Decision], default : TExpr)
+          {
+            match(cases)
+            {
+              | [] =>
+                Util.ice("got empty list of switch cases");
+
+              | [(_, Decision.IfEq(_, DecisionTreeBuilder.Con.Variant(var), if_true, if_false))] =>
+                def true_expr  = compile (if_true);
+
+                def constant_object =
+                  if (var.GetConstantObject () != null)
+                    get_constant_object (var, matchingValue.Type)
+                  else
+                    None ();
+
+                match (constant_object) {
+                  | Some ((from, field)) => 
+                    def sref = TExpr.StaticRef (from, from, field, []);
+                    def cond = TExpr.Call (InternalType.Boolean, TExpr.OpCode ("==.ref"),
+                                           [Parm (matchingValue), Parm (sref)], false);
+                    If (cond, true_expr, default, get_debug_loc (if_true), get_debug_loc (if_false))
+
+                  | None =>
+                    def has_type_expr = HasType (matchingValue, var);
+                    If (has_type_expr, true_expr, default, get_debug_loc (if_true), get_debug_loc (if_false))
+                }
+
+              | [(_, node)] =>
+                Util.ice($"unexpected decision tree node `$node'")
+
+              | _ =>
+                def (switchExpr, delta) = match(cases.Head[0])
+                {
+                  | 0 =>
+                    (matchingValue, 0)
+                  | delta =>
+                    def switchExpr = TExpr.Call(
+                      InternalType.Int32,
+                      TExpr.OpCode("-.f"),  // unchecked subtract
+                      [Parm(matchingValue),
+                       Parm(TExpr.Literal(InternalType.Int32, Literal.FromInt(delta)))],
+                      false);
+                    (switchExpr, delta)
+                }
+                def (cases, default) = cases.FoldRight(([], default), fun(case, (cases, default))
+                {
+                  match(case)
+                  {
+                    | (index, null) => // handle missing slot
+                      def (label, default) = match(default)
+                      {
+                        | TExpr.Goto(id, _)
+                        | TExpr.Label(id, _) =>
+                          (TExpr.Goto(default.Type, id, 0), default)
+
+                        | _ =>
+                          def id = Util.next_id (Manager);
+                          (TExpr.Goto(default.Type, id, 0), TExpr.Label(default.Location, default.Type, id, default))
+                      }
+                      ((index - delta, label) :: cases, default)
+
+                    | (index, Decision.IfEq(_, DecisionTreeBuilder.Con.Variant, if_true, _)) =>
+                      ((index - delta, compile(if_true)) :: cases, default)
+
+                    | (_, node) =>
+                      Util.ice($"unexpected decision tree node `$node'")
+                  }
+                });
+                Switch(switchExpr, Some(default), cases)
+            }
+          })
+        }
+        def variantCodeMeth = match(var1.BaseType.LookupMember("_N_GetVariantCode"))
+        {
+          | [one is IMethod] => one
+          | x => Util.ice($"cannot select _N_GetVariantCode method from list $x")
+        }
+
+        def variantCodeExpr = TExpr.Call(
+          InternalType.Int32,
+          TExpr.MethodRef(
+            ty          = variantCodeMeth.GetMemType(),
+            obj         = get_path_expression(rootPath),
+            meth        = variantCodeMeth,
+            type_parms  = [],
+            notvirtual  = false
+          ),
+          [],
+          false);
+        typer3.WithCached(variantCodeExpr, buildSwitch)
+
+
+      | IfEq(rootPath, DecisionTreeBuilder.Con.Lit(lit1), _,
+          IfEq(rootPath2, DecisionTreeBuilder.Con.Lit(lit2), _,
+            IfEq(rootPath3, DecisionTreeBuilder.Con.Lit(lit3), _, _)))
         when lit1.AsInt.IsSome
             && lit2.AsInt.IsSome
             && lit3.AsInt.IsSome
             && rootPath.Equals(rootPath2)
             && rootPath.Equals(rootPath3) =>
 
-        def selectSwitchCases(decision : Decision, cases : list[int * Decision])
+        def selectSwitchCases(decision : Decision, cases : list[int * Decision]) : Decision * list[int * Decision]
         {
           match(decision)
           {
-            | IfEq(path, DecisionTreeBuilder.Con.Lit(lit), Decision.Success, if_false) as case
+            | IfEq(path, DecisionTreeBuilder.Con.Lit(lit), _, if_false) as case
               when lit.AsInt.IsSome
                   && rootPath.Equals(path) =>
               def case = (lit.AsInt.Value, case);
@@ -260,16 +404,26 @@ namespace Nemerle.Compiler
           casesDescending.Tail.FoldLeft([[casesDescending.Head]],
             fun(case, (((nextCase :: _) as cases) :: otherClusters))
             {
-              if(unchecked(nextCase[0] - case[0]) == 1) // cases should differ by one
-                (case :: cases) :: otherClusters
-              else
-                [case] :: cases :: otherClusters
+              match(unchecked(nextCase[0] - case[0]))
+              {
+                | 1 =>
+                  // cases should differ by one
+                  (case :: cases) :: otherClusters
+                | 2 =>
+                  // fill single missing slot, 'null' will be interpreted as goto to default block
+                  (case :: (case[0] + 1, null) :: cases) :: otherClusters
+                | 3 =>
+                  // fill two missing slots
+                  (case :: (case[0] + 1, null) :: (case[0] + 2, null) :: cases) :: otherClusters
+                | _ =>
+                  [case] :: cases :: otherClusters
+              }
             })
         }
 
         def buildSwitch(matchingValue : TExpr) : TExpr
         {
-          caseClusters.FoldRight(compile(default), fun(cases, default)
+          caseClusters.FoldRight(compile(default), fun(cases : list[int * Decision], default : TExpr)
           {
             match(cases)
             {
@@ -290,21 +444,37 @@ namespace Nemerle.Compiler
                   | 0 =>
                     (matchingValue, 0)
                   | delta =>
-                    def deltaLit = Literal.Integer(System.Math.Abs(delta) :> ulong, delta < 0, InternalType.Int32);
                     def switchExpr = TExpr.Call(
                       InternalType.Int32,
                       TExpr.OpCode("-.f"),  // unchecked subtract
                       [Parm(matchingValue),
-                       Parm(TExpr.Literal(deltaLit))],
+                       Parm(TExpr.Literal(InternalType.Int32, Literal.FromInt(delta)))],
                       false);
                     (switchExpr, delta)
                 }
-                def cases = cases.Map(fun(_)
+                def (cases, default) = cases.FoldRight(([], default), fun(case, (cases, default))
                 {
-                  | (index, Decision.IfEq(_, DecisionTreeBuilder.Con.Lit, if_true, _)) =>
-                    (index - delta, compile(if_true))
-                  | (_, node) =>
-                    Util.ice($"unexpected decision tree node `$node'")
+                  match(case)
+                  {
+                    | (index, null) => // handle missing slot
+                      def (label, default) = match(default)
+                      {
+                        | TExpr.Goto(id, _)
+                        | TExpr.Label(id, _) =>
+                          (TExpr.Goto(default.Type, id, 0), default)
+
+                        | _ =>
+                          def id = Util.next_id (Manager);
+                          (TExpr.Goto(default.Type, id, 0), TExpr.Label(default.Location, default.Type, id, default))
+                      }
+                      ((index - delta, label) :: cases, default)
+
+                    | (index, Decision.IfEq(_, DecisionTreeBuilder.Con.Lit, if_true, _)) =>
+                      ((index - delta, compile(if_true)) :: cases, default)
+
+                    | (_, node) =>
+                      Util.ice($"unexpected decision tree node `$node'")
+                  }
                 });
                 Switch(switchExpr, Some(default), cases)
             }
@@ -628,12 +798,17 @@ namespace Nemerle.Compiler
 
     static Switch(indexing_expr : TExpr, default : option[TExpr], cases : list[int * TExpr]) : TExpr
     {
-      def ty = match(default, cases) {
-        | (Some(expr), _)
-        | (_, (_, expr) :: _) => expr.ty
-        | _ => FixedType.Void()
+      def ty = match(default) {
+        | Some(expr) => expr.Type
+        | _ => null
       }
-      TExpr.Switch(ty, indexing_expr, default, cases);
+      def ty = cases.FoldLeft(ty, fun((_, case), ty) {
+        match(ty) {
+          | null  => case.Type
+          | _     => ty
+        }
+      });
+      TExpr.Switch(ty, indexing_expr, default, cases)
     }
 
     static Cast (expr : TExpr, ty : TypeVar) : TExpr
