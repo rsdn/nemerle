@@ -19,124 +19,91 @@ namespace LRPEGCC
   /// Description of UnnamedTerminalSymbolsSplitter.
   /// </summary>
   module GrammarCreator
-  {  
+  {
     private static UnnamedRuleString = "unnamed_rule"; 
-  
+
     public CreateGrammar(typer : Typer, _ : TypeBuilder, startRule : PExpr, rules : PExpr) : Grammar * Grammar
     {
       def parsedGrammar = Parsing.ParseRules(typer, RuleRef(startRule.Location, startRule.ToString()), rules);
-      def grammarWithUnnamedTerminalSymbols = SplitUnnamedTerminalSymbols(parsedGrammar);
-      def optimizedGrammar = Optimizer.OptimizeGrammar(grammarWithUnnamedTerminalSymbols);
-              
-      //Print(optimizedGrammar);
-      
+      def grammarWithArgumentCaptures = AddArgumentCaptures(parsedGrammar);
+      def optimizedGrammar = Optimizer.OptimizeGrammar(grammarWithArgumentCaptures);
+
       (parsedGrammar, optimizedGrammar)
-    }    
-    
-    //private Print(grammar : Grammar) : void
-    //{
-    //  using(def f = System.IO.StreamWriter("grammar.txt"))
-    //    f.WriteLine(grammar.ToString());
-    //}
-    
-    // this function replaces usages of terminal symbols in the right part of nonterminal rules by the call and created the terminal rule for this call
-    private SplitUnnamedTerminalSymbols(grammar : Grammar) : Grammar
+    }
+
+    private AddArgumentCaptures(grammar : Grammar) : Grammar
     {
-      mutable newGrammar = Grammar(grammar.StartRuleName);
-      
-      foreach(name in grammar.Names)
+      def optimizeType(ty : RuleType)
       {
-        def rule = grammar.GetRule(name);
+        | Option(Chars)=> RuleType.Chars()
+        | List(None)   => RuleType.None()
+        | Option(None) => RuleType.None()
+        | Tuple([])    => RuleType.None()
+        | Tuple([ty])  => ty
+        | _            => ty
+      }
+      def makeRes(rule, ty)
+      {
+        def ty = optimizeType(ty);
+        (Rule.Capture(CaptureKind.Argument(ty), rule), ty);
+      }
+      def addCaptures(rule : Rule) : Rule * RuleType
+      {
+        | Choice(rules)                =>
+          def rules = rules.Map(addCaptures);
+          def (ty::_types) = rules.Map(t => t[1]); //TODO: Check _types
+          def rules = rules.Map(t => t[0]);
+          makeRes(Rule.Choice(rules), ty);
 
-        def (newRule, newRules) = SplitUnnamedTerminalSymbols(rule);
+        | Sequence(rules)              =>
+          def rules = rules.Map(addCaptures);
+          def types = rules.Map(t => t[1]).Filter(ty => !(ty is RuleType.None));
+          def rules = rules.Map(t => t[0]);
+          def ty = RuleType.Tuple(types);
+          makeRes(Rule.Sequence(rules), ty);
 
-        newGrammar = newGrammar.Add(name, newRule);
+        | Call(name)                   =>
+          def ty = match (grammar.GetRule(name))
+          {
+            | Capture(Handler(_, _, ty), _) => ty
+            | _                             => RuleType.Chars()
+          };
+          makeRes(Rule.Call(name), ty);
 
-        foreach (Rule.Capture(_, RuleType.Range, _) as r in newRules)
+        | RepeatMinMax(0, 1, rule) =>
+          def (rule, ty) = addCaptures(rule);
+          makeRes(Rule.RepeatMinMax(0, 1, rule), RuleType.Option(ty));
+
+        | RepeatMinMax(min, max, rule) =>
+          def (rule, ty) = addCaptures(rule);
+          makeRes(Rule.RepeatMinMax(min, max, rule), RuleType.List(ty));
+
+        | RepeatMin(min, rule)         =>
+          def (rule, ty) = addCaptures(rule);
+          makeRes(Rule.RepeatMin(min, rule), RuleType.List(ty));
+
+        | Chars(chars)                 =>
+          makeRes(Rule.Chars(chars), RuleType.Chars());
+
+        | Not | And                    => (rule, RuleType.None())
+        | Capture                      => throw ArgumentException();
+        | ExtensionPoint               => throw NotImplementedException()
+      }
+
+      grammar.Names.Fold(Grammar(grammar.StartRuleName), (name, newGrammar) =>
+      {
+        def rule = match (grammar.GetRule(name))
         {
-          newGrammar = newGrammar.Add(r.name, r);
+          | Capture(Handler(name, None, retType), rule) =>
+            def (rule, argType) = addCaptures(rule);
+            Rule.Capture(CaptureKind.Handler(name, argType, retType), rule)
+
+          | Capture => throw ArgumentException();
+
+          | rule => rule
         }
-      }
-      newGrammar
-    }
-        
-    // this function replaces usages of terminal symbols in the right part of nonterminal 
-    // rules by the call and created the terminal rule for this call
-    // returns : (a , b)
-    // a - modified nonterminal rule
-    // b - list of new terminal rules called from a
-    private SplitUnnamedTerminalSymbols(rule : Rule) : Rule * list[Rule]
-    {  
-      if(CanBeSplited(rule))
-      {
-        def name = RuleRef(Location.Default, tmpname(UnnamedRuleString));
-        def r1   = Rule.Capture(name, RuleType.Range(), rule);
-        def r2   = Rule.Call(name);
-        
-        (r2, [r1])      
-      }
-      else 
-      {
-        match(rule)
-        {
-          | Capture(_, _, r)
-          | RepeatMin(_, r)
-          | RepeatMinMax(_, _, r)   =>
-            def (newRule, splitedList) = SplitUnnamedTerminalSymbols(r);
-              
-            def retRule =
-              match(rule)
-              {
-                | Capture(n, t, _)      => Rule.Capture(n, t, newRule);
-                | RepeatMin(a, _)       => Rule.RepeatMin(a, newRule);
-                | RepeatMinMax(a, b, _) => Rule.RepeatMinMax(a, b, newRule);
-                | _                     => assert(false);
-              };
-            
-            (retRule, splitedList)
-          
-          | Sequence(rules)
-          | Choice(rules)           =>
-            mutable newRules : list[Rule] = [];
-            mutable splitedRules = [];
-            
-            foreach(r in rules)
-            {          
-              def (newRule, splitedList) = SplitUnnamedTerminalSymbols(r);
-              
-              newRules = newRules + [newRule];
-              splitedRules = splitedRules + splitedList;          
-            }
-            
-            def retRule = 
-              match(rule)
-              {
-                | Sequence(_) => Rule.Sequence(newRules);
-                | Choice(_)   => Rule.Choice(newRules);
-                | _           => assert(false);
-              };
-            
-            (retRule, splitedRules);
-            
-          | _                       => (rule, []) 
-        } 
-      }
-    }
-    
-    /// Determins whether the rule is terminal (combination of terminal symbols 
-    /// whithout calling any rule)
-    private CanBeSplited(rule : Rule) : bool
-    {
-      | Chars                       => true
-      | Capture                     
-      | Not                  
-      | And                  
-      | Call                        => false
-      | RepeatMin(_, rule)          
-      | RepeatMinMax(_, _, rule)    => CanBeSplited(rule)
-      | Sequence(rules)             
-      | Choice(rules)               => !rules.Exists(r => !CanBeSplited(r))
-      | ExtensionPoint              => throw NotImplementedException();
+        newGrammar.Add(name, rule);
+      })
     }
   }
 }

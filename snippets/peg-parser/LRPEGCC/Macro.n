@@ -34,6 +34,7 @@ namespace LRPEGCC
         def loc = if(e.Location != Location.Default) e.Location else tb.Location;
         Message.Error(loc,  e.Message);
       | e is Exception =>
+        //assert2(false, e.ToString());
         Message.Error(tb.Location,  $"Exception $e");
     }
   }
@@ -45,13 +46,11 @@ namespace LRPEGCC
       def (parsedGrammar, grammar) = CreateGrammar(typer, tb, startRule, rules);
         
       def compiler = RuleCompiler(typer);
-      
-      mutable str = "";
-      
+
       def tyParam = 
         match (grammar.GetRule(grammar.StartRuleName))
         {
-          | Rule.Capture(retType = RuleType.NType(ty)) => ty
+          | Rule.Capture(Handler(retType = RuleType.NType(ty)), _) => ty
           | _ => 
             Message.Error(tb.Location,  "Start rule must be a capture rule");
             <[ object ]>
@@ -64,26 +63,23 @@ namespace LRPEGCC
       foreach (name in grammar.Names)
       {
         def rule = grammar.GetRule(name);
-        rule.UpdateIndecis();
 
         CheckRuleMethodHandler(name, grammar, tb, typer);
-        
+
         def body          = if (typer.Manager.IsIntelliSenseMode) <[ _ = pos; _ = result; _ = text ]>
                             else compiler.CompileRule(rule);
-        
+
         def resultType : PExpr = // Make type parametr name
           match (rule)
           {
-            | Rule.Capture(retType = RuleType.Range())   => <[ Nemerle.Peg.NToken ]>
-            | Rule.Capture(retType = RuleType.NType(ty)) => <[ Nemerle.Peg.VToken[$ty] ]>
-            | Rule.Capture(retType = argType) as c => 
-              Message.Error($"Wrong return type ($argType) in '$(c.name)' rule");
+            | Rule.Capture(Handler(retType = RuleType.NType(ty)), _) => <[ Nemerle.Peg.VToken[$ty] ]>
+            | Rule.Capture as c => 
+              Message.Error($"PEG implementation error. Wrong Capture '$(c)'");
               <[ Nemerle.Peg.NToken ]>
             | _                                          =>
-              Message.Error($"Top level rule must be Capture. ($(rule.GetType().Name) $rule)");
               <[ Nemerle.Peg.NToken ]>
           };
-        
+
         def method = <[decl:
           private $(compiler.DecorateRuleName(name.Id) : dyn)(pos : int, result : ref $resultType, text : string) : int
           {
@@ -93,28 +89,20 @@ namespace LRPEGCC
           }
         ]>;
         _ = tb.DefineWithSource(method);
-        str = str + method.ToString() + "\n" + body.ToString() + "\n\n";
-        
+
         //create parse method for single capture rule
         unless (name.Equals(grammar.StartRuleName))
         {
           match (rule)
           {
-            | Rule.Capture(_, RuleType.Range, _) => ()
-            | Rule.Capture as r => CreateSimpleParseMethod(r, compiler, tb);
-            | _                 => ();
+            | Rule.Capture(Handler(name, _, NType(retType)), _) => CreateSimpleParseMethod(name, retType, compiler, tb);
+            | Rule.Capture => assert2(false);
+            | _ => ();
           }
         }
       }
 
       CreateStartParseMethods(grammar.StartRuleName.Id, tyParam, compiler, tb);
-      
-      tb.Define(<[decl:
-        public override ToString() : string
-        {
-          $(str : string);
-        }
-      ]>);
 
       tb.Define(<[decl:
         private mutable _maxRollbackPos : int;
@@ -205,30 +193,31 @@ namespace LRPEGCC
       {
         match (grammar.GetRule(ruleRef))
         {
-          | Rule.Capture   (name = name)
+          | Rule.Capture   (Handler(name = name), _)
           | ExtensionPoint (name = name) => name.Location
           | _                            => Location.Default
         }
       }
       def makeGotoRuleDef(r : Rule) : void
       {
-        | Choice(rules)            => foreach (r in rules) makeGotoRuleDef(r)
-        | Sequence(rules)          => foreach (r in rules) makeGotoRuleDef(r)
-        | Call(name)               => gotoMap[name.Location] = getRuleLocation(name)
-        | RepeatMin(_, rule)       => makeGotoRuleDef(rule)
-        | RepeatMinMax(_, _, rule) => makeGotoRuleDef(rule)
-        | Chars                    => ()
-        | Not(rule)                => makeGotoRuleDef(rule)
-        | And(rule)                => makeGotoRuleDef(rule)
-        | Capture(name, _,  _)     => gotoMap[name.Location] = getRuleLocation(name)
-        | ExtensionPoint           => ()
+        | Choice(rules)                       => foreach (r in rules) makeGotoRuleDef(r)
+        | Sequence(rules)                     => foreach (r in rules) makeGotoRuleDef(r)
+        | Call(name)                          => gotoMap[name.Location] = getRuleLocation(name)
+        | RepeatMin(_, rule)                  => makeGotoRuleDef(rule)
+        | RepeatMinMax(_, _, rule)            => makeGotoRuleDef(rule)
+        | Chars                               => ()
+        | Not(rule)                           => makeGotoRuleDef(rule)
+        | And(rule)                           => makeGotoRuleDef(rule)
+        | Capture(Handler(name, _, _), rule)  => gotoMap[name.Location] = getRuleLocation(name); makeGotoRuleDef(rule)
+        | Capture(_, rule)                    => makeGotoRuleDef(rule)
+        | ExtensionPoint                      => ()
       }
       
       when (typer.Manager.IsIntelliSenseMode)
         match (rule)
         { // skip top capture...
-          | Capture(_, _, rule) => makeGotoRuleDef(rule);
-          | _                   => makeGotoRuleDef(rule);
+          | Capture(_, rule) => makeGotoRuleDef(rule);
+          | _                => makeGotoRuleDef(rule);
         }
     }
 
@@ -237,78 +226,32 @@ namespace LRPEGCC
       def gotoMap = GetGotoMap(tb);
       def rule = grammar.GetRule(ruleName);
       def mems = tb.GetParsedMembers(true).Filter(m => m.Name == ruleName.Id);
-      
+
+      def ruleTypeToNType(_ : RuleType)
+      {
+        | Chars        => FixedType.Class(typer.Manager.LookupTypeInfo("Nemerle.Peg.NToken", 0), []);
+        | NType(ty)    => FixedType.Class(typer.Manager.LookupTypeInfo("Nemerle.Peg.VToken", 1), [typer.BindFixedType(ty)])
+        | List(ty)     => FixedType.Class(typer.Manager.LookupTypeInfo("System.Collections.Generic.List", 1), [ruleTypeToNType(ty)])
+        | Option(ty)   => FixedType.Class(typer.Manager.LookupTypeInfo("Nemerle.Core.option", 1), [ruleTypeToNType(ty)])
+        | Tuple(types) => FixedType.Tuple(types.Map(ruleTypeToNType))
+        | None         => throw ArgumentException();
+      }
       match (rule)
       {   // Capture with defined type. User must define handler for it!
-        | Rule.Capture(name, RuleType.NType(ty), rule) => 
-          def tTy = typer.BindFixedType(ty);
+        | Rule.Capture(Handler(name, argType, NType(ty)), _) =>
+          def tTy     = typer.BindFixedType(ty);
           def methods = mems.MapFiltered(_ is ClassMember.Function, _ :> ClassMember.Function);
-          
-          def isNotPredicate(rule : Rule) : bool
+          def types   = match (argType)
           {
-            | Rule.And | Rule.Not => false
-            | _ => true
+            | Tuple(types) => types.Map(ruleTypeToNType);
+            | ty           => [ruleTypeToNType(ty)];
           }
-          def unpacParams(rule : Rule) : list[Rule]
-          {
-            | Rule.Sequence(rules) => rules.Filter(isNotPredicate)
-            | Rule.And | Rule.Not => []
-            | _ => [rule]
-          }
-          def nTokTy = FixedType.Class(typer.Manager.LookupTypeInfo("Nemerle.Peg.NToken", 0), []);
-          def vTokTc = typer.Manager.LookupTypeInfo("Nemerle.Peg.VToken", 1);
-          def ruleToType(rule : Rule) : FixedType
-          {
-            | Call(name)                                =>
-              def subRule = grammar.GetRule(name);
-              match (subRule)
-              {
-                | Rule.Capture(retType = RuleType.NType(ty)) =>
-                  def tTy = typer.BindFixedType(ty);
-                  FixedType.Class(vTokTc, [tTy])
-                  
-                | _ => nTokTy
-              }
 
-            | Choice(rule :: _)          => ruleToType(rule)
-            | Choice(_)                  => assert(false)
-            | Sequence(rules)            => 
-              def types = rules.Filter(isNotPredicate).Map(x => ruleToType(x) : TypeVar);
-              match (types)
-              {
-                | [ty] => ty.Fix()
-                | []   => FixedType.Void()
-                | _    => FixedType.Tuple(types)
-              }
-              
-            | RepeatMin(0, rule)         => makeLoopTy(rule) // rule*
-            | RepeatMin(1, rule)         => makeLoopTy(rule) // rule+
-            | RepeatMin(_, rule)         => makeLoopTy(rule)
-            | RepeatMinMax(0, 1, rule)   => FixedType.Class(typer.Manager.LookupTypeInfo("Nemerle.Core.option", 1), [ruleToType(rule)]) // rule?
-            | RepeatMinMax(_, _, rule)   => makeLoopTy(rule)
-            | Chars                      => nTokTy
-            | Not(rule)                  => ruleToType(rule)
-            | And(rule)                  => ruleToType(rule)
-            | Capture(_, RuleType.NType(ty), _) => 
-              def tTy = typer.BindFixedType(ty);
-              FixedType.Class(vTokTc, [tTy])
-
-            | Capture(_, RuleType.Range, _)=> nTokTy
-            | Capture(_, _, _)           => assert(false)
-            | ExtensionPoint             => assert(false)
-          }
-          and makeLoopTy(rule)
-          {
-            FixedType.Class(typer.Manager.LookupTypeInfo("System.Collections.Generic.List", 1), [ruleToType(rule)])
-          }
           def errorMsg(ruleName, types, tTy)
           {
             //assert2(false);
             $<#You need define method-handler for "$ruleName" rule with signature: $ruleName(_ : ..$(types; ", _ : ")) : $tTy#>
           }
-          def topRules = unpacParams(rule);
-          def types    = topRules.Filter(isNotPredicate).Map(ruleToType);
-
           match (methods)
           {
             | [m] => 
@@ -345,39 +288,33 @@ namespace LRPEGCC
       }
     }
 
-    private CreateSimpleParseMethod(rule : Rule.Capture, compiler : RuleCompiler, tb : TypeBuilder) : void
+    private CreateSimpleParseMethod(ruleName : RuleRef, ty : PExpr, compiler : RuleCompiler, tb : TypeBuilder) : void
     {
-      def ruleName = rule.name;
       def methodName = "ParseRule_" + ruleName.Id;
-      
-      match (rule.retType)
-      {
-        | RuleType.NType(ty)  =>      
-          def parseMethod1 = <[decl:
-            public $(methodName : dyn)(startPos : int, text : string) : option[$ty]
-            {
-              mutable result : Nemerle.Peg.VToken[$ty];
-              
-              def pos = $(compiler.DecorateRuleName(ruleName.Id) : dyn)(startPos, ref result, text);
-              
-              if (pos < 0) 
-                None() 
-              else 
-                Some(result.Value)
-            }
-          ]>;
-          def parseMethod2 = <[decl:
-            public $(methodName : dyn)(text : string) : option[$ty]
-            {
-              $(methodName : dyn)(0, text)
-            }
-          ]>;
-        
-          _ = tb.DefineWithSource(parseMethod1);
-          _ = tb.DefineWithSource(parseMethod2);
+
+      def parseMethod1 = <[decl:
+        public $(methodName : dyn)(startPos : int, text : string) : option[$ty]
+        {
+          mutable result : Nemerle.Peg.VToken[$ty];
           
-        | _                   => assert(false);
-      };
+          def pos = $(compiler.DecorateRuleName(ruleName.Id) : dyn)(startPos, ref result, text);
+          
+          if (pos < 0) 
+            None() 
+          else 
+            Some(result.Value)
+        }
+      ]>;
+
+      def parseMethod2 = <[decl:
+        public $(methodName : dyn)(text : string) : option[$ty]
+        {
+          $(methodName : dyn)(0, text)
+        }
+      ]>;
+
+      _ = tb.DefineWithSource(parseMethod1);
+      _ = tb.DefineWithSource(parseMethod2);
     }
   }
 }

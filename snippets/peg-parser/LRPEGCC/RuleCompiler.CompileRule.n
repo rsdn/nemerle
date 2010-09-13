@@ -14,142 +14,137 @@ namespace LRPEGCC
   {
     _typer    : Typer;
     _isDebug  : bool;
-    
+
     public this(typer : Typer)
     {
       _typer    = typer;
       _isDebug  = _typer.Manager.Options.IsConstantDefined("DEBUG");
     }
-    
+
     public CompileRule(ruleToCompile : Rule) : PExpr
     {
-      mutable recursionLevel = 0;
-      def tokenVars : SCG.List[PExpr] = SCG.List();
-      mutable subruleNestingLevel = -1;
-      mutable nestingLevel = -1;
-      def makeVarRef(rule : Rule) : PExpr.Ref
-      {
-        def varName = $"token_L$(subruleNestingLevel)_$(rule.Index)";
-        def varRef = <[ $(varName : dyn) ]>;
-        varRef
-      }
-      def prepandExprs(exprs : list[PExpr], mainExpr : PExpr.Sequence) : PExpr
+      def prepandExprs(exprs : list[PExpr], mainExpr : PExpr.Sequence) : PExpr.Sequence
       {
         match (mainExpr)
         {
           | <[ { ..$nestedExprs } ]> => <[ { ..$(exprs + nestedExprs) } ]>
         }
       }
-      def compile(currentRule : Rule, isTrminalCapture : bool) : PExpr
+
+      def defVars(exprs : list[string], mainExpr : PExpr.Sequence) : PExpr.Sequence
       {
-        recursionLevel++;
-        when (recursionLevel > 500)
-          assert(false, "Stack overflow");
-        nestingLevel++;
-        def prevSubruleNestingLevel = subruleNestingLevel;
-        def debugString = if (_isDebug) $"$(currentRule.GetType().Name)[$(currentRule.Index)] (sl:$subruleNestingLevel): $currentRule" else "";
-        def debugExpr   = if (_isDebug) <[ _ = $(debugString : string); ]> else <[ () ]>;
-        def makeVariableNames(subrule : Rule) : list[string]
+        def vars = exprs.Map(var => <[ mutable $(var : dyn); ]>);
+        match (mainExpr)
         {
-          def isNotPredicate(rule : Rule) : bool
-          {
-            | Rule.And | Rule.Not => false
-            | _ => true
-          }
-          def varCount   =  {
-            def countVars(_) {
-              | Rule.Sequence(rules) => rules.Count(isNotPredicate)
-              | Rule.Choice(r :: _) => countVars(r)
-              | _ => 1
+          | <[ { ..$nestedExprs } ]> => <[ { ..$(vars + nestedExprs) } ]>
+        }
+      }
+
+      mutable varCount = 0;
+      def newVar()
+      {
+        ++varCount;
+        $"token_$(varCount)";
+      }
+
+      def makeVariables(subrule : Rule) : list[string]
+      {
+        match (subrule)
+        {
+          | Capture(Handler(_, _, ty), _)
+          | Capture(Argument(ty), _)
+            =>
+            match (ty)
+            {
+              | Tuple(types) => types.Map(_ => newVar())
+              | None         => []
+              | _            => [newVar()]
             }
-            countVars(subrule)
-          }
-          def upperBound = varCount - 1;
-          def varNames   = $[$"token_L$(subruleNestingLevel)_$i" | i in [0 .. upperBound]]; // Generate variables
-          varNames
+          | _ => []
         }
-        def makeSubruleCode(rule : Rule, subrule : Rule, isTrminalCapture : bool, 
-                            makeInitExpr    : PExpr               -> PExpr, 
-                            makeSetExpr     : PExpr * list[PExpr] -> PExpr,
-                            makeSetNoneExpr : PExpr               -> PExpr) 
-          : list[PExpr] * PExpr * PExpr * PExpr
+      }
+      def makeSubruleCode(results         : list[string],
+                          subrule         : Rule,
+                          makeInitExpr    : PExpr               -> PExpr,
+                          makeSetExpr     : PExpr * list[PExpr] -> PExpr,
+                          makeSetNoneExpr : PExpr               -> PExpr)
+        : list[PExpr] * PExpr * PExpr * PExpr
+      {
+        match (results)
         {
-          def varRef          = makeVarRef(rule); // this line must precede to subruleNestingLevel++
-          subruleNestingLevel++; // it will be automatically restored after return from compile().
-          def varNames        = makeVariableNames(subrule);
-          // Add variables (by one for each subrule)
-          def variables       = if (isTrminalCapture) []
-                                else $[<[ mutable $(name : dyn); ]> | name in varNames];
-          def variableRefs    = $[<[ $(name : dyn) ]> | name in varNames];
-            
-          def initList        = if (isTrminalCapture) <[ () ]> else makeInitExpr(varRef);
-          def setExpr         = if (isTrminalCapture) <[ () ]> else makeSetExpr(varRef, variableRefs);
-          def setNoneExpr     = if (isTrminalCapture) <[ () ]> else makeSetNoneExpr(varRef);
-          def initialising    = debugExpr :: initList :: variables;
-          def ruleCode        = compile(subrule, isTrminalCapture);
-          (initialising, setExpr, setNoneExpr, ruleCode)
+          | [] =>
+            ([], <[ () ]>, <[ () ]>, compile(subrule, []))
+
+          | [result] =>
+            def result          = <[ $(result : dyn) ]>;
+            def variables       = makeVariables(subrule);
+            def ruleCode        = compile(subrule, variables);
+            def initList        = makeInitExpr(result);
+            def setExpr         = makeSetExpr(result, variables.Map(var => <[ $(var : dyn) ]>));
+            def setNoneExpr     = makeSetNoneExpr(result);
+            def initialising    = initList :: variables.Map(var => <[ mutable $(var : dyn); ]>);
+            (initialising, setExpr, setNoneExpr, ruleCode)
+
+          | _ => throw ArgumentException();
         }
-        def makeListCode(rule : Rule, subrule : Rule, isTrminalCapture : bool) : list[PExpr] * PExpr * PExpr
-        {
-          def (initialising, setExpr, _setNoneExpr, rule) = 
-            makeSubruleCode(rule, subrule, isTrminalCapture, 
-                          varRef                 => <[ $varRef = SCG.List(); ]>, 
-                          (varRef, variableRefs) => <[ $varRef.Add(..$variableRefs); ]>,
-                          _                      => <[ () ]>);
-          (initialising, setExpr, rule)
-        }
-        
-        def result = match (currentRule)
+      }
+      and makeListCode(results      : list[string],
+                       subrule      : Rule)
+        : list[PExpr] * PExpr * PExpr
+      {
+        def (initialising, setExpr, _setNoneExpr, rule) =
+          makeSubruleCode(results, subrule,
+                        varRef                 => <[ $varRef = SCG.List(); ]>, 
+                        (varRef, variableRefs) => <[ $varRef.Add(..$variableRefs); ]>,
+                        _                      => <[ () ]>);
+        (initialising, setExpr, rule)
+      }
+      and compile(currentRule : Rule, results : list[string]) : PExpr
+      {
+        def code = match (currentRule)
         {
           | And(rule)              =>
-            def rule = compile(rule, true);
             <[
               {
-                $debugExpr;
-                
-                def newPos = $rule;
-                
+                def newPos = $(compile(rule, []));
                 if (newPos >= 0) pos else -1;
               }
             ]>
 
-          | Not(Chars([RangeSet where (Ranges = [RangeSet.Range.Plain(char.MinValue, char.MaxValue)])])) // !any
-                                   => 
+          | Not(Chars([RangeSet where (Ranges = [RangeSet.Range.Plain(char.MinValue, char.MaxValue)])])) => // !any
             <[
               {
-                $debugExpr;
-                
                 if (pos >= text.Length) pos else -1;
               }
             ]>
 
           | Not(rule)              =>
-            //assert2(false);
-            def rule = compile(rule, true);
             <[
               {
-                $debugExpr;
-                
-                def newPos = $rule;
-                
+                def newPos = $(compile(rule, []));
                 if (newPos < 0) pos else -1;
               }
             ]>
 
-          | Call(name) as rule     => 
-            //assert2(name != "attr");
-            if (isTrminalCapture)
-              <[  { 
-                    $debugExpr;
+          | Call(name)             =>
+            match (results)
+            {
+              | [] =>
+                <[
+                  {
                     mutable ignoreResult;
-                    
                     $(DecorateRuleName(name.Id) : dyn)(pos, ref ignoreResult, text);
-                  } ]>
-            else
-              <[  {
-                    $debugExpr;
-                    $(DecorateRuleName(name.Id) : dyn)(pos, ref $(makeVarRef(rule)), text);
-                  } ]>
+                  }
+                ]>
+              | [result] =>
+                <[
+                  {
+                    $(DecorateRuleName(name.Id) : dyn)(pos, ref $(result : dyn), text);
+                  }
+                ]>
+              | _ => throw ArgumentException();
+            }
+
           | Chars(chars)           =>
             def testChar(rset)
             {
@@ -236,11 +231,21 @@ namespace LRPEGCC
             def len = chars.Length;
             def check = if (len > 1) <[pos + $((len - 1) : int)]> else <[pos]>;
 
-            <[
-              $debugExpr;
-
-              if ($check < text.Length) $(generate(chars)) else -1
-            ]>
+            match (results)
+            {
+              | [] =>
+                <[
+                  if ($check < text.Length) $(generate(chars)) else -1
+                ]>
+              | [result] =>
+                <[
+                  def newPos = if ($check < text.Length) $(generate(chars)) else -1;
+                  when (newPos >= 0)
+                    $(result : dyn) = Nemerle.Peg.NToken(pos, newPos, text, "<unnamed>");
+                  newPos
+                ]>
+              | _ => throw ArgumentException();
+            }
 
           | Choice(rules)          =>
             def generate(_)
@@ -254,18 +259,16 @@ namespace LRPEGCC
                     if (newPos < 0) $(generate(rules)) else newPos;
                   }
                 ]>
-                
+
               | []            => throw ArgumentException();
             }
-            
-            def result = generate(rules.Map(compile(_, isTrminalCapture)));
-            def exprs = [<[ $debugExpr; ]>, result];
-            <[ { ..$exprs } ]>
+
+            generate(rules.Map(compile(_, results)));
 
           | RepeatMinMax(0, 1, subrule)    =>
-            def (initialising, setExpr, setNoneExpr, ruleCode) = 
-              makeSubruleCode(currentRule, subrule, isTrminalCapture, 
-                              _                      => <[ () ]>, 
+            def (initialising, setExpr, setNoneExpr, ruleCode) =
+              makeSubruleCode(results, subrule,
+                              _                      => <[ () ]>,
                               (varRef, variableRefs) => <[ $varRef = Some(..$variableRefs); ]>,
                               varRef                 => <[ $varRef = None(); ]>);
             prepandExprs(initialising, <[
@@ -286,7 +289,7 @@ namespace LRPEGCC
             ]>)
 
           | RepeatMinMax(minCount, maxCount, subrule)    =>
-            def (initialising, addTokensToList, ruleCode) = makeListCode(currentRule, subrule, isTrminalCapture);
+            def (initialising, addTokensToList, ruleCode) = makeListCode(results, subrule);
             prepandExprs(initialising, <[
               {
                 def rep(count, pos)
@@ -296,7 +299,7 @@ namespace LRPEGCC
                   else
                   {
                     def newPos = $ruleCode;
-                    
+
                     if (newPos >= 0)
                     {
                       $addTokensToList;
@@ -308,20 +311,20 @@ namespace LRPEGCC
                       -1
                    }
                 }
-                
+
                 rep(0, pos);
               }
             ]>);
 
           | RepeatMin(0, subrule)    =>
-            def (initialising, addTokensToList, ruleCode) = makeListCode(currentRule, subrule, isTrminalCapture);
-            
+            def (initialising, addTokensToList, ruleCode) = makeListCode(results, subrule);
+
             prepandExprs(initialising, <[
               {
                 def rep(pos : int)
                 {
                   def newPos = $ruleCode;
-                  
+
                   if (newPos >= 0)
                   {
                     $addTokensToList;
@@ -330,24 +333,24 @@ namespace LRPEGCC
                   else
                     pos
                 }
-                
+
                 rep(pos)
               }
             ]>)
 
           | RepeatMin(minCount, subrule)    =>
-            def (initialising, addTokensToList, ruleCode) = makeListCode(currentRule, subrule, isTrminalCapture);
-            
+            def (initialising, addTokensToList, ruleCode) = makeListCode(results, subrule);
+
             prepandExprs(initialising, <[
               {
                 def rep(count, pos)
                 {
                   def newPos = $ruleCode;
-                  
+
                   if (newPos >= 0)
                   {
                     $addTokensToList;
-                    
+
                     rep(count + 1, newPos)
                   }
                   else if (count >= $(minCount : int))
@@ -355,93 +358,118 @@ namespace LRPEGCC
                   else
                     -1
                 }
-                
+
                 rep(0, pos)
               }
             ]>)
 
           | Sequence(subrules)        =>
-            def generate(_rules : list[PExpr]) : PExpr
+            def generate(rules : list[Rule], results : list[string]) : PExpr
             {
-              | [ruleCode]        => ruleCode
-              | ruleCode :: rules =>
-                <[
+              match (rules)
+              {
+                | [rule]        => compile(rule, results);
+                | rule :: rules =>
+                  match (rule)
                   {
-                    def pos = $ruleCode;
-                    
-                    if (pos >= 0) $(generate(rules)) else -1
+                    | Capture(Handler(_, _, ty), _) when !(ty is RuleType.None)
+                    | Capture(Argument(ty), _)      when !(ty is RuleType.None)
+                      =>
+                      def (result :: results) = results;
+                      def ruleCode = compile(rule, [result]);
+                      <[
+                        {
+                          def pos = $ruleCode;
+                          if (pos >= 0) $(generate(rules, results)) else -1
+                        }
+                      ]>
+
+                    | _ =>
+                      def ruleCode = compile(rule, []);
+                      <[
+                        {
+                          def pos = $ruleCode;
+                          if (pos >= 0) $(generate(rules, results)) else -1
+                        }
+                      ]>
                   }
-                ]>
-                
-              | []                =>  <[ pos ]>;
+
+                | []                =>  <[ { pos } ]>;
+              }
             }
-            
-            def code   = generate(subrules.Map(compile(_, isTrminalCapture)));
-            def result = [<[ $debugExpr; ]>, code];
-            <[ { ..$result } ]>
 
-          | Capture(name, RuleType.Range, subrule) =>
-            //assert2(name.Id != "singleQuoteLiteral");
-            def varRef     =  if (nestingLevel > 0) makeVarRef(currentRule);
-                              else                  <[ $("result" : dyn) ]>;
-            def subRuesCode = compile(subrule, isTrminalCapture = true);
-            def setToken = 
-              if (isTrminalCapture) <[ (); ]>;
-              else <[
-                if (newPos >= 0)
-                  $varRef = Nemerle.Peg.NToken(pos, newPos, text, $(name.Id : string));
-                else
-                  SetMaxRollbackPos(pos);
-                   ]>;
+            generate(subrules, results);
 
-            <[
-              {
-                $debugExpr;
-                def newPos = $subRuesCode;
+          | Capture(Argument(Chars), subrule) =>
+            def code = compile(subrule, []);
+            match (results)
+            {
+              | []       => code;
+              | [result] =>
+                <[
+                  def newPos = $code;
+                  when (newPos >= 0)
+                    $(result : dyn) = Nemerle.Peg.NToken(pos, newPos, text, "<unnamed>");
+                  newPos;
+                ]>
+              | _ => throw ArgumentException();
+            }
 
-                $setToken;
-                
-                newPos
-              }
-            ]>
+          | Capture(Argument, subrule) =>
+            compile(subrule, results);
 
-          | Capture(name, _, subrule)              with isTrminalCapture = false =>
-            //assert2(name != "inputError");
-            def varRef       =  if (nestingLevel > 0) makeVarRef(currentRule);
-                                else                  <[ $("result" : dyn) ]>;
-            subruleNestingLevel++; // it will be automatically restored after return from compile().
-            def varNames     = makeVariableNames(subrule);
-            // Add variables (by one for each subrule)
-            def variables    = $[<[ mutable $(name : dyn); ]> | name in varNames];
-            def variableRefs = $[<[ $(name : dyn) ]> | name in varNames];
-            def initialising = debugExpr :: variables;
-            def subRuesCode  = compile(subrule, isTrminalCapture);
-            // TODO: Надо сделат так, чтобы переменные генерируемые в Sequence не попадали в блок
-            prepandExprs(initialising, <[
-              {
-                def newPos = $subRuesCode;
-              
-                if (newPos >= 0)
-                  $varRef = Nemerle.Peg.VToken(pos, newPos, text, $(name.Id : string), $(name.Id : dyn)(..$variableRefs));
-                else
-                  SetMaxRollbackPos(pos);
-                
-                newPos
-              }
-            ]>)
-          
+          | Capture(Handler(name, _, _), subrule) =>
+            match (results)
+            {
+              | []       => compile(subrule, [])
+              | [result] =>
+                def varNames     = makeVariables(subrule);
+                def subRuesCode  = compile(subrule, varNames);
+                defVars(varNames, <[
+                  {
+                    def newPos = $subRuesCode;
+
+                    if (newPos >= 0)
+                      $(result : dyn) = Nemerle.Peg.VToken(pos, newPos, text, $(name.Id : string), $(name.Id : dyn)(..$(varNames.Map(var => <[ $(var : dyn) ]>))));
+                    else
+                      SetMaxRollbackPos(pos);
+
+                    newPos
+                  }
+                ]>)
+              | _        => throw ArgumentException()
+            }
           | ExtensionPoint         => throw NotImplementedException();
         }
-        
-        recursionLevel--;
-        subruleNestingLevel = prevSubruleNestingLevel;
-        nestingLevel--;
-        result
+
+        if (_isDebug)
+        {
+          def s = $"$currentRule";
+          <[
+            {
+              _ = $(s : string);
+              $code;
+            }
+          ]>
+        }
+        else
+          code
       } // end of compile()
-      
-      def code = compile(ruleToCompile, false);
-      tokenVars.Add(code);
-      <[ { ..$(tokenVars.NToList()) } ]>
+
+      match (ruleToCompile)
+      {
+        | Capture(Handler, _) =>
+          compile(ruleToCompile, ["result"])
+
+        | _ =>
+          def code = compile(ruleToCompile, []);
+          <[
+            def newPos = $code;
+            when (newPos >= 0)
+              result = Nemerle.Peg.NToken(pos, newPos, text, "<>");
+            newPos;
+          ]>
+      }
     }
   }
 }
