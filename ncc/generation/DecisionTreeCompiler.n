@@ -13,7 +13,7 @@
  *    3. The name of the University may not be used to endorse or promote
  *       products derived from this software without specific prior
  *       written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
  * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
  * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
@@ -104,6 +104,7 @@ namespace Nemerle.Compiler
     mutable guardUsed       : array[bool];
     jump_out_id : int;
     typer3 : Typer3;
+    optimize_variant_matching : bool; // option for generating `switch' opcode for pattern matching over variants
 
     public this (t : TypeVar, val : TExpr, mcs : list [Match_case], typer3 : Typer3)
     {
@@ -113,6 +114,12 @@ namespace Nemerle.Compiler
       this.val = val;
       this.cases = mcs;
       this.jump_out_id = Util.next_id (Manager);
+      this.optimize_variant_matching =
+        match(Manager.Options.Optimize)
+        {
+          | null => true // TODO: CHANGE TO FALSE
+          | optimize => optimize["variant_match"] == 1
+        }
 
       def builder = DecisionTreeBuilder (mcs);
 
@@ -150,7 +157,7 @@ namespace Nemerle.Compiler
             guards          = array(i);
             guardUsed       = array(i);
         }
-      } 
+      }
       and walk_patterns (i, effect, patterns, cases)
       {
         match (patterns)
@@ -219,7 +226,7 @@ namespace Nemerle.Compiler
 
       | Assign (path, decl, dtree) =>
         def path_expr   = get_path_expression (path);
-        def assign_expr = TExpr.Assign (TExpr.LocalRef (decl.Type, decl), 
+        def assign_expr = TExpr.Assign (TExpr.LocalRef (decl.Type, decl),
                                         Cast (path_expr, decl.Type));
 
         def loc  = get_debug_loc (decision);
@@ -227,137 +234,6 @@ namespace Nemerle.Compiler
         def expr = if (loc.IsEmpty) expr else TExpr.DebugInfo (loc, null, expr, null);
 
         Sequence (assign_expr, expr)
-
-      | IfEq(rootPath, DecisionTreeBuilder.Con.Variant(var1), _,
-          IfEq(rootPath2, DecisionTreeBuilder.Con.Variant(var2), _,
-            IfEq(rootPath3, DecisionTreeBuilder.Con.Variant(var3), _, _))) as decision
-        when null != var1.BaseType
-            && var1.BaseType.Equals(var2.BaseType)
-            && var1.BaseType.Equals(var3.BaseType)
-            && rootPath.Equals(rootPath2)
-            && rootPath.Equals(rootPath3) =>
-
-        def rootPathExpr = get_path_expression(rootPath);
-        def varTy = match(var1.GetFreshType())
-        {
-          | FixedType.Class (_, []) as ty => ty
-          | ty =>
-            rootPathExpr.Type.ForceProvide (ty);
-            ty
-        }
-        def (variantCodeMethName, variantCodeMethType, parmExpr) = match(rootPathExpr.Type.Fix()) 
-        {
-          | FixedType.Class as rootPathType when var1.BaseType.Equals(rootPathType.TypeInfo) =>
-            ("_N_GetVariantCodeSafe",
-              FixedType.Fun(rootPathType, 1, InternalType.Int32),
-              rootPathExpr)
-          | _ =>
-            ("_N_GetVariantCodeObject",
-              FixedType.Fun(InternalType.Object, 1, InternalType.Int32),
-              Cast(rootPathExpr, InternalType.Object))
-        }
-        def variantCodeMeth = Typer3.SingleMemberLookup(var1.BaseType, variantCodeMethName);
-
-        def variantCodeExpr = TExpr.Call(
-          InternalType.Int32,
-          TExpr.StaticRef(
-            ty    = variantCodeMethType,
-            from  = varTy,
-            mem   = variantCodeMeth,
-            type_parms = []),
-          [Parm(parmExpr)],
-          false);
-
-        typer3.WithCached(variantCodeExpr, fun(matchingValue)
-        {
-          compile_switch(matchingValue, decision,
-            caseSelector = 
-              fun(desision : DecisionTreeBuilder.Decision.IfEq) : bool * int
-              {
-                match(desision.con)
-                {
-                  | DecisionTreeBuilder.Con.Variant(var)
-                    when var1.BaseType.Equals(var.BaseType) =>
-                    (true, var.VariantOptionCode)
-
-                  | _ => (false, 0)
-                }
-              },
-
-            compileSingleCase =
-              fun(_matchingValue : TExpr, decision : DecisionTreeBuilder.Decision.IfEq, default : TExpr) : TExpr
-              {
-                match(decision.con)
-                {
-                  | DecisionTreeBuilder.Con.Variant(var) =>
-                    def path_expr  = get_path_expression(decision.path);
-                    def true_expr  = compile(decision.if_true);
-
-                    def constant_object =
-                      if (var.GetConstantObject () != null)
-                        get_constant_object(var, path_expr.Type)
-                      else
-                        None ();
-
-                    match (constant_object)
-                    {
-                      | Some ((from, field)) => 
-                        def sref = TExpr.StaticRef(from, from, field, []);
-                        def cond = TExpr.Call(InternalType.Boolean, TExpr.OpCode ("==.ref"),
-                                               [Parm (path_expr), Parm (sref)], false);
-                        If(cond, true_expr, default, get_debug_loc (decision.if_true), get_debug_loc (decision.if_false))
-
-                      | None =>
-                        def has_type_expr = HasType(path_expr, var);
-                        If(has_type_expr, true_expr, default, get_debug_loc (decision.if_true), get_debug_loc (decision.if_false))
-                    }
-
-                  | _ => Util.ice($"unexpected decision tree node `$decision'")
-                }
-              })
-        })
-
-      | IfEq(rootPath, DecisionTreeBuilder.Con.Lit(lit1), _,
-          IfEq(rootPath2, DecisionTreeBuilder.Con.Lit(lit2), _,
-            IfEq(rootPath3, DecisionTreeBuilder.Con.Lit(lit3), _, _))) as decision
-        when lit1.AsRawInt.IsSome
-            && lit2.AsRawInt.IsSome
-            && lit3.AsRawInt.IsSome
-            && rootPath.Equals(rootPath2)
-            && rootPath.Equals(rootPath3) =>
-
-        typer3.WithCached(get_path_expression(rootPath), fun(matchingValue)
-        {
-          compile_switch(matchingValue, decision,
-            caseSelector = 
-              fun(decision : DecisionTreeBuilder.Decision.IfEq) : bool * int
-              {
-                match(decision.con)
-                {
-                  | DecisionTreeBuilder.Con.Lit(lit) =>
-                    match(lit.AsRawInt)
-                    {
-                      | Some(value) => (true, value)
-                      | _ => (false, 0)
-                    }
-                  | _ => (false, 0)
-                }
-              },
-
-            compileSingleCase =
-              fun(matchingValue : TExpr, decision : DecisionTreeBuilder.Decision.IfEq, default : TExpr) : TExpr
-              {
-                match(decision.con)
-                {
-                  | DecisionTreeBuilder.Con.Lit(lit) =>
-                    def true_expr  = compile (decision.if_true);
-                    def cmp_expr = emit_compare_with (matchingValue, lit);
-                    If(cmp_expr, true_expr, default, get_debug_loc (decision.if_true), get_debug_loc (decision.if_false))
-
-                  | _ => Util.ice($"unexpected decision tree node `$decision'")
-                }
-              })
-        })
 
       | IfEq (_, DecisionTreeBuilder.Con.Guard, Decision.Success(res_id) as if_true, if_false) =>
         def true_expr  = compile (if_true);
@@ -374,13 +250,13 @@ namespace Nemerle.Compiler
                   | LocalValue.Kind.Function(hd, _) =>
                     match (hd.usage)
                     {
-                      | FunctionUsage.UsedJustOnce     => 
+                      | FunctionUsage.UsedJustOnce     =>
                         hd.usage = FunctionUsage.Used;
 
                         typer3.EmitStaticLocalFunction(hd);
 
                       | FunctionUsage.NotUsed          => Util.ice()
-                      | FunctionUsage.Used 
+                      | FunctionUsage.Used
                       | FunctionUsage.UsedAsFirstClass => ()
                     }
                     null
@@ -401,47 +277,220 @@ namespace Nemerle.Compiler
 
         If (guard, true_expr, false_expr, get_debug_loc(if_true), get_debug_loc(if_false))
 
-      | IfEq (path, con, if_true, if_false) => 
-        def path_expr  = get_path_expression (path);
-        def true_expr  = compile (if_true);
-        def false_expr = compile (if_false);
-        match (con)
-        {
-          | Variant (ti) =>
-            def constant_object =
-              if (ti.GetConstantObject () != null)
-                get_constant_object (ti, path_expr.Type)
-              else
-                None ();
+      | IfEq as decision => compile_ifeq(decision)
 
-            match (constant_object) {
-              | Some ((from, field)) => 
-                def sref = TExpr.StaticRef (from, from, field, []);
-                def cond = TExpr.Call (InternalType.Boolean, TExpr.OpCode ("==.ref"),
-                                       [Parm (path_expr), Parm (sref)], false);
-                If (cond, true_expr, false_expr, get_debug_loc (if_true), get_debug_loc (if_false))
-
-              | None =>
-                def has_type_expr = HasType (path_expr, ti);
-                If (has_type_expr, true_expr, false_expr, get_debug_loc (if_true), get_debug_loc (if_false))
-            }
-
-          | Lit (lit) =>
-            def cmp_expr = emit_compare_with (path_expr, lit);
-            If (cmp_expr, true_expr, false_expr, get_debug_loc (if_true), get_debug_loc (if_false))
-
-          | Type (t) => 
-            def has_type_expr = TExpr.HasType (path_expr, t);
-            If (has_type_expr, true_expr, false_expr, get_debug_loc (if_true), get_debug_loc (if_false))
-
-          | _ => assert (false);
-        }
+      | _ => assert (false);
     }
 
-    compile_switch( matchingValue     : TExpr,
+    compile_ifeq(decision : DecisionTreeBuilder.Decision.IfEq) : TExpr
+    {
+      def compile_variant(var, path_expr, true_expr, false_expr, true_loc, false_loc)
+      {
+        def constant_object =
+          if (var.GetConstantObject() != null)
+            get_constant_object(var, path_expr.Type)
+          else
+            None();
+
+        match (constant_object)
+        {
+          | Some((from, field)) =>
+            def sref = TExpr.StaticRef(from, from, field, []);
+            def cond = TExpr.Call (InternalType.Boolean, TExpr.OpCode ("==.ref"),
+                                   [Parm (path_expr), Parm (sref)], false);
+            If (cond, true_expr, false_expr, true_loc, false_loc)
+
+          | None =>
+            def has_type_expr = HasType (path_expr, var);
+            If (has_type_expr, true_expr, false_expr, true_loc, false_loc)
+        }
+      }
+      def compile_literal(lit, path_expr, true_expr, false_expr, true_loc, false_loc)
+      {
+        def cmp_expr = emit_compare_with (path_expr, lit);
+        If (cmp_expr, true_expr, false_expr, true_loc, false_loc)
+      }
+
+      match(decision.con)
+      {
+        | Type(t) =>
+          def path_expr  = get_path_expression(decision.path);
+          def true_expr  = compile(decision.if_true);
+          def false_expr = compile(decision.if_false);
+
+          def has_type_expr = TExpr.HasType(path_expr, t);
+          If (has_type_expr, true_expr, false_expr, get_debug_loc(decision.if_true), get_debug_loc(decision.if_false))
+
+        | Variant(rootVar) =>
+          def switch =
+            if(optimize_variant_matching)
+              match(decision.if_false)
+              {
+                | IfEq(path1, DecisionTreeBuilder.Con.Variant(var1), _,
+                    IfEq(path2, DecisionTreeBuilder.Con.Variant(var2), _, _))
+                  when rootVar.BaseType.Equals(var1.BaseType)
+                      && rootVar.BaseType.Equals(var2.BaseType)
+                      && decision.path.Equals(path1)
+                      && decision.path.Equals(path2) =>
+                  def rootPathExpr = get_path_expression(decision.path);
+                  def varTy = match(rootVar.GetFreshType())
+                  {
+                    | FixedType.Class (_, []) as ty => ty
+                    | ty =>
+                      rootPathExpr.Type.ForceProvide (ty);
+                      ty
+                  }
+                  def (variantCodeMethName, variantCodeMethType, parmExpr) = match(rootPathExpr.Type.Fix())
+                  {
+                    | FixedType.Class as rootPathType when rootVar.BaseType.Equals(rootPathType.TypeInfo) =>
+                      ("_N_GetVariantCodeSafe",
+                        FixedType.Fun(rootPathType, 1, InternalType.Int32),
+                        rootPathExpr)
+                    | _ =>
+                      ("_N_GetVariantCodeObject",
+                        FixedType.Fun(InternalType.Object, 1, InternalType.Int32),
+                        Cast(rootPathExpr, InternalType.Object))
+                  }
+                  def variantCodeMeth = Typer3.SingleMemberLookup(rootVar.BaseType, variantCodeMethName);
+
+                  def variantCodeExpr = TExpr.Call(
+                    InternalType.Int32,
+                    TExpr.StaticRef(
+                      ty    = variantCodeMethType,
+                      from  = varTy,
+                      mem   = variantCodeMeth,
+                      type_parms = []),
+                    [Parm(parmExpr)],
+                    false);
+
+                  compile_switch(variantCodeExpr, decision,
+                    caseSelector =
+                      fun(decision : DecisionTreeBuilder.Decision.IfEq) : bool * int
+                      {
+                        match(decision.con)
+                        {
+                          | DecisionTreeBuilder.Con.Variant(var)
+                            when rootVar.BaseType.Equals(var.BaseType) =>
+                            (true, var.VariantOptionCode)
+
+                          | _ => (false, 0)
+                        }
+                      },
+
+                    compileSingleCase =
+                      fun(decision : DecisionTreeBuilder.Decision.IfEq, default : TExpr) : TExpr
+                      {
+                        match(decision.con)
+                        {
+                          | DecisionTreeBuilder.Con.Variant(var) =>
+                            def path_expr  = get_path_expression(decision.path);
+                            def true_expr  = compile(decision.if_true);
+                            compile_variant(var, path_expr, true_expr, default, get_debug_loc(decision.if_true), get_debug_loc(decision.if_false))
+
+                          | _ => Util.ice($"unexpected decision tree node `$decision'")
+                        }
+                      }
+                  ) // compile_switch
+                | _ => null
+              }
+            else null;
+
+          match(switch)
+          {
+            | null =>
+              def path_expr  = get_path_expression (decision.path);
+              def true_expr  = compile(decision.if_true);
+              def false_expr = compile(decision.if_false);
+              compile_variant(rootVar, path_expr, true_expr, false_expr, get_debug_loc(decision.if_true), get_debug_loc(decision.if_false))
+
+            | _ => switch
+          }
+
+        | Lit(rootLit) =>
+          def switch =
+            if(rootLit.AsRawInt.IsSome)
+              match(decision.if_false)
+              {
+                | IfEq(path1, DecisionTreeBuilder.Con.Lit(lit1), _,
+                    IfEq(path2, DecisionTreeBuilder.Con.Lit(lit2), _, _))
+                  when lit1.AsRawInt.IsSome
+                      && lit2.AsRawInt.IsSome
+                      && decision.path.Equals(path1)
+                      && decision.path.Equals(path2) =>
+                  compile_switch(get_path_expression(decision.path), decision,
+                    caseSelector =
+                      fun(decision : DecisionTreeBuilder.Decision.IfEq) : bool * int
+                      {
+                        match(decision.con)
+                        {
+                          | DecisionTreeBuilder.Con.Lit(lit) =>
+                            match(lit.AsRawInt)
+                            {
+                              | Some(value) => (true, value)
+                              | _ => (false, 0)
+                            }
+                          | _ => (false, 0)
+                        }
+                      },
+
+                    compileSingleCase =
+                      fun(switchExpr : TExpr, decision : DecisionTreeBuilder.Decision.IfEq, default : TExpr) : TExpr
+                      {
+                        match(decision.con)
+                        {
+                          | DecisionTreeBuilder.Con.Lit(lit) =>
+                            def true_expr  = compile(decision.if_true);
+                            compile_literal(lit, switchExpr, true_expr, default, get_debug_loc(decision.if_true), get_debug_loc(decision.if_false))
+
+                          | _ => Util.ice($"unexpected decision tree node `$decision'")
+                        }
+                      }
+                  ) // compile_switch
+                | _ => null
+              }
+            else null;
+
+          match(switch)
+          {
+            | null =>
+              def path_expr  = get_path_expression(decision.path);
+              def true_expr  = compile(decision.if_true);
+              def false_expr = compile(decision.if_false);
+              compile_literal(rootLit, path_expr, true_expr, false_expr, get_debug_loc(decision.if_true), get_debug_loc(decision.if_false))
+
+            | _ => switch
+          }
+
+        | _ => assert (false)
+      }
+    }
+
+    compile_switch( switchExpr        : TExpr,
+                    root              : DecisionTreeBuilder.Decision.IfEq,
+                    caseSelector      : DecisionTreeBuilder.Decision.IfEq -> bool * int,
+                    compileSingleCase : DecisionTreeBuilder.Decision.IfEq * TExpr -> TExpr) : TExpr
+    {
+      compile_switch(switchExpr, root, caseSelector, SingleSwitchCaseHandler.NonRequiredSwitchExpr(compileSingleCase))
+    }
+
+    compile_switch( switchExpr        : TExpr,
                     root              : DecisionTreeBuilder.Decision.IfEq,
                     caseSelector      : DecisionTreeBuilder.Decision.IfEq -> bool * int,
                     compileSingleCase : TExpr * DecisionTreeBuilder.Decision.IfEq * TExpr -> TExpr) : TExpr
+    {
+      compile_switch(switchExpr, root, caseSelector, SingleSwitchCaseHandler.RequiredSwitchExpr(compileSingleCase))
+    }
+
+    private variant SingleSwitchCaseHandler
+    {
+      | NonRequiredSwitchExpr { handler : DecisionTreeBuilder.Decision.IfEq * TExpr -> TExpr }
+      | RequiredSwitchExpr    { handler : TExpr * DecisionTreeBuilder.Decision.IfEq * TExpr -> TExpr }
+    }
+
+    compile_switch( switchExpr        : TExpr,
+                    root              : DecisionTreeBuilder.Decision.IfEq,
+                    caseSelector      : DecisionTreeBuilder.Decision.IfEq -> bool * int,
+                    compileSingleCase : SingleSwitchCaseHandler) : TExpr
     {
       def selectCases(decision)
       {
@@ -484,61 +533,91 @@ namespace Nemerle.Compiler
           })
       }
 
-      caseClusters.FoldRight(compile(default), fun(cases : list[int * DecisionTreeBuilder.Decision.IfEq], default : TExpr)
+      mutable switchExprIsUsed = false;
+
+      def result = typer3.WithCached(switchExpr, fun(switchExpr)
       {
-        match(cases)
+        caseClusters.FoldRight(compile(default), fun(cases : list[int * DecisionTreeBuilder.Decision.IfEq], default : TExpr)
         {
-          | [] =>
-            Util.ice("got empty list of switch cases");
+          match(cases)
+          {
+            | [] =>
+              Util.ice("got empty list of switch cases");
 
-          | [(_, decision)] =>
-            // don't create switch for one case
-            compileSingleCase(matchingValue, decision, default)
-
-          | [(_, decision1), (_, decision2)]
-          | [(_, decision1), (_, null), (_, decision2)]
-          | [(_, decision1), (_, null), (_, null), (_, decision2)] =>
-            // don't create switch for two cases
-            compileSingleCase(matchingValue, decision1, compileSingleCase(matchingValue, decision2, default))
-
-          | _ =>
-            def (switchExpr, delta) = match(cases.Head[0])
-            {
-              | 0 =>
-                (matchingValue, 0)
-              | delta =>
-                def switchExpr = TExpr.Call(
-                  InternalType.Int32,
-                  TExpr.OpCode("-.f"),  // unchecked subtract
-                  [Parm(matchingValue),
-                   Parm(TExpr.Literal(InternalType.Int32, Literal.FromInt(delta)))],
-                  false);
-                (switchExpr, delta)
-            }
-            def (cases, default) = cases.FoldRight(([], default), fun(case, (cases, default))
-            {
-              match(case)
+            | [(_, decision)] =>
+              // don't create switch for one case
+              match(compileSingleCase)
               {
-                | (index, null) => // handle missing slot
-                  def (label, default) = match(default)
-                  {
-                    | TExpr.Goto(id, _)
-                    | TExpr.Label(id, _) =>
-                      (TExpr.Goto(default.Type, id, 0), default)
+                | NonRequiredSwitchExpr(handler) =>
+                  handler(decision, default)
 
-                    | _ =>
-                      def id = Util.next_id (Manager);
-                      (TExpr.Goto(default.Type, id, 0), TExpr.Label(default.Location, default.Type, id, default))
-                  }
-                  ((index - delta, label) :: cases, default)
-
-                | (index, decision) =>
-                  ((index - delta, compile(decision.if_true)) :: cases, default)
+                | RequiredSwitchExpr(handler) =>
+                  switchExprIsUsed = true;
+                  handler(switchExpr, decision, default)
               }
-            });
-            Switch(switchExpr, Some(default), cases)
+
+            | [(_, decision1), (_, decision2)]
+            | [(_, decision1), (_, null), (_, decision2)]
+            | [(_, decision1), (_, null), (_, null), (_, decision2)] =>
+              // don't create switch for two cases
+              match(compileSingleCase)
+              {
+                | NonRequiredSwitchExpr(handler) =>
+                  handler(decision1, handler(decision2, default))
+
+                | RequiredSwitchExpr(handler) =>
+                  switchExprIsUsed = true;
+                  handler(switchExpr, decision1, handler(switchExpr, decision2, default))
+              }
+
+            | _ =>
+              switchExprIsUsed = true;
+              def (normalizedSwitchExpr, delta) = match(cases.Head[0])
+              {
+                | 0 =>
+                  (switchExpr, 0)
+                | delta =>
+                  def normalizedSwitchExpr = TExpr.Call(
+                    InternalType.Int32,
+                    TExpr.OpCode("-.f"),  // unchecked subtract
+                    [Parm(switchExpr),
+                     Parm(TExpr.Literal(InternalType.Int32, Literal.FromInt(delta)))],
+                    false);
+                  (normalizedSwitchExpr, delta)
+              }
+              def (cases, default) = cases.FoldRight(([], default), fun(case, (cases, default))
+              {
+                match(case)
+                {
+                  | (index, null) => // handle missing slot
+                    def (label, default) = match(default)
+                    {
+                      | TExpr.Goto(id, _)
+                      | TExpr.Label(id, _) =>
+                        (TExpr.Goto(default.Type, id, 0), default)
+
+                      | _ =>
+                        def id = Util.next_id (Manager);
+                        (TExpr.Goto(default.Type, id, 0), TExpr.Label(default.Location, default.Type, id, default))
+                    }
+                    ((index - delta, label) :: cases, default)
+
+                  | (index, decision) =>
+                    ((index - delta, compile(decision.if_true)) :: cases, default)
+                }
+              });
+              Switch(normalizedSwitchExpr, Some(default), cases)
+          }
+        })
+      });
+      if(switchExprIsUsed)
+        result
+      else
+        match(result : TExpr)
+        {
+          | DefValIn(_, _, body) => body // don't compute switchExpr
+          | _ => result
         }
-      })
     }
 
     get_debug_loc (decision : Decision) : Location
@@ -549,7 +628,7 @@ namespace Nemerle.Compiler
         {
           | Success
           | Assign =>
-            decision.MarkDebug(); 
+            decision.MarkDebug();
             decision.Location;
           | _ =>
             Location.Default;
@@ -567,11 +646,11 @@ namespace Nemerle.Compiler
       path.AccessExpr
     }
 
-    // construct TExpr that will load object referenced by path on 
+    // construct TExpr that will load object referenced by path on
     // the VM stack
     build_path_expression (path : Path) : TExpr
     {
-      | Here => 
+      | Here =>
         //val.loc = Location.Default; // try to not confuse debugger with back reference location
         val
 
@@ -617,7 +696,7 @@ namespace Nemerle.Compiler
       mutable num_paths = 0;
       mutable longest_path = 0;
 
-      def make_stats (decision : Decision, path_len, 
+      def make_stats (decision : Decision, path_len,
                       mutable was_here_before)
       {
         when (! was_here_before)
@@ -662,7 +741,7 @@ namespace Nemerle.Compiler
       def to_string (decision : Decision, indent)
       {
         match (shared_nodes.Get (decision)) {
-          | Some (id) => 
+          | Some (id) =>
             if (color)
               $"$(indent)\e[01;34m-> *$(id)*\e[0m\n"
             else $"$(indent)-> *$(id)*\n"
@@ -674,7 +753,7 @@ namespace Nemerle.Compiler
                 shared_nodes.Add (decision, id);
                 if (color)
                   $"  \e[01;34m(*$(id)*)\e[0m\n"
-                else 
+                else
                   $"  (*$(id)*)\n"
               } else "\n";
 
@@ -710,7 +789,7 @@ namespace Nemerle.Compiler
       match (member) {
         | field is IField =>
           TExpr.FieldMember (ty, val, field)
-          
+
         | prop is IProperty =>
           def meth = prop.GetGetter ();
           def methref =
@@ -730,20 +809,20 @@ namespace Nemerle.Compiler
       def method =
         match (literal)
         {
-          | Literal.String => 
+          | Literal.String =>
             def meth = InternalType.String_opEquality;
             TExpr.StaticRef (meth.GetMemType (), InternalType.String, meth, [])
           | Literal.Decimal =>
             def meth = InternalType.Decimal_opEquality;
             TExpr.StaticRef (meth.GetMemType (), InternalType.Decimal, meth, [])
-          | _ => TExpr.OpCode ("==") 
+          | _ => TExpr.OpCode ("==")
         };
       assert (literal != null);
       def (compare_to, lit) =
         if (compare_to.GetSystemType ().IsValueType)
           (compare_to,
            Cast (TExpr.Literal (literal), compare_to.Type))
-        else 
+        else
           (Cast (compare_to, literal.GetInternalType (compare_to.Type.Manager.InternalType)),
            TExpr.Literal (literal));
       TExpr.Call (compare_to.Location, InternalType.Boolean, method, [Parm (compare_to), Parm (lit)], false)
@@ -752,15 +831,15 @@ namespace Nemerle.Compiler
     /**
      * Returns the constant object for a parameterless variant constructor
      */
-    static get_constant_object (variant_tycon : TypeInfo, 
+    static get_constant_object (variant_tycon : TypeInfo,
                                 matched_value_type : TypeVar) : option [FixedType.Class * IField]
     {
-      def members = 
+      def members =
         variant_tycon.LookupMember ("_N_constant_object");
 
       match (members) {
         | [] => None ()
-        
+
         | [constant_object_field is IField] =>
           def ty = variant_tycon.GetFreshType ();
           ty.ForceRequire (matched_value_type);
@@ -785,7 +864,7 @@ namespace Nemerle.Compiler
       def ty = cases.FoldLeft(ty, fun((_, case), ty) {
         match(ty) {
           | null => case.Type
-          | ty => if(ty.IsFixed) ty else case.Type 
+          | ty => if(ty.IsFixed) ty else case.Type
         }
       });
       TExpr.Switch(ty, indexing_expr, default, cases)
@@ -821,8 +900,8 @@ namespace Nemerle.Compiler
       def ctor = InternalType.NewMatchFailureException_ctor;
       TExpr.Throw (Manager.Solver.FreshTypeVar (),
                    TExpr.Call (InternalType.MatchFailureException,
-                               TExpr.StaticRef (ctor.GetMemType (), 
-                                                InternalType.MatchFailureException, 
+                               TExpr.StaticRef (ctor.GetMemType (),
+                                                InternalType.MatchFailureException,
                                                 ctor, []), [], false))
     }
   }
