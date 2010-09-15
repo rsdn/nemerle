@@ -66,7 +66,8 @@ namespace Nemerle.Tools.MSBuildTask
         public string       ProjectPath             { get; set; }
         public string       RootNamespace           { get; set; }
         public int          CompilerStackSize       { get; set; }
-        public ITaskItem[]  MacroReferences   
+        public string       CustomArguments         { get; set; }
+        public ITaskItem[]  MacroReferences
         {
             get { return (ITaskItem[]) Bag["MacroReferences"]; }
             set { Bag["MacroReferences"] = value; }
@@ -76,8 +77,7 @@ namespace Nemerle.Tools.MSBuildTask
             get { return (bool) Bag["CheckIntegerOverflow"]; }
             set { Bag["CheckIntegerOverflow"] = value; }
         }
-        
-        
+
         #if MONO
         protected override string ToolName
         {
@@ -234,6 +234,9 @@ namespace Nemerle.Tools.MSBuildTask
                 foreach (var it in this.MacroReferences)
                     commandLine.AppendSwitchIfNotNull("\n/macros:", it.ItemSpec);
             }
+
+            if(!string.IsNullOrEmpty(CustomArguments))
+                commandLine.AppendSwitch(CustomArguments);
 
             commandLine.AppendSwitchIfNotNull("\n\n/out:", OutputAssembly);
         }
