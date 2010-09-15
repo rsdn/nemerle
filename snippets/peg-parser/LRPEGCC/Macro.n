@@ -10,8 +10,6 @@ using Nemerle.Compiler.Parsetree.PExpr;
 using Nemerle.Compiler.Token;
 using Nemerle.Imperative;
 
-using LRPEGCC.GrammarCreator;
-
 namespace LRPEGCC
 {
   macro Grammar (_rules : Token)
@@ -43,75 +41,90 @@ namespace LRPEGCC
   {
     public MakeParser(typer : Typer, tb : TypeBuilder, startRule : PExpr, rules : PExpr) : void
     {
-      def (parsedGrammar, grammar) = CreateGrammar(typer, tb, startRule, rules);
-        
-      def compiler = RuleCompiler(typer);
+      def compiler = RuleCompiler(typer, tb);
+      def parsedGrammar = Parsing.ParseRules(typer, RuleRef(startRule.Location, startRule.ToString()), rules);
+      def typedGrammar  = GrammarTyper.AddArgumentCaptures(parsedGrammar);
 
-      def tyParam = 
-        match (grammar.GetRule(grammar.StartRuleName))
+      if (typer.Manager.IsIntelliSenseMode)
+        IntelliSenseSupport.AddIntelliSenseSupport(parsedGrammar, typer, tb);
+      else
+        compiler.CompileGrammar(typedGrammar);
+
+      foreach (name in typedGrammar.Names)
+        CheckRuleMethodHandler(name, typedGrammar, tb, typer);
+
+      CreateStartParseMethods(parsedGrammar, compiler, typer, tb);
+    }
+
+    private CreateStartParseMethods(parsedGrammar : Grammar, compiler : RuleCompiler, typer : Typer, tb : TypeBuilder) : void
+    {
+      def tyParam =
+        match (parsedGrammar.GetRule(parsedGrammar.StartRuleName))
         {
           | Rule.Capture(Handler(retType = RuleType.NType(ty)), _) => ty
           | _ => 
             Message.Error(tb.Location,  "Start rule must be a capture rule");
             <[ object ]>
         };
-        
-      
-      foreach (name in parsedGrammar.Names)
-        MakeGotoInfos(name, parsedGrammar, tb, typer);
 
-      foreach (name in grammar.Names)
-      {
-        def rule = grammar.GetRule(name);
-
-        CheckRuleMethodHandler(name, grammar, tb, typer);
-
-        def body          = if (typer.Manager.IsIntelliSenseMode) <[ _ = pos; _ = text ]>
-                            else compiler.CompileRule(rule, grammar);
-
-        def method =
-          match (rule)
-          {
-            | Rule.Capture(Handler(retType = RuleType.NType(ty)), _) =>
-              <[decl:
-                private $(compiler.DecorateRuleName(name.Id) : dyn)(pos : int, result : ref Nemerle.Peg.VToken[$ty], text : string) : int
-                {
-                  mutable c : char;
-                  _ = c; // eliminate wornint "a local value c was never used"
-                  $body;
-                }
-              ]>
-
-            | Rule.Capture as c => 
-              Message.Error($"PEG implementation error. Wrong Capture '$(c)'");
-              <[decl:private $(compiler.DecorateRuleName(name.Id) : dyn)() : void {}]>
-
-            | _ =>
-              <[decl:
-                private $(compiler.DecorateRuleName(name.Id) : dyn)(pos : int, text : string) : int
-                {
-                  mutable c : char;
-                  _ = c; // eliminate wornint "a local value c was never used"
-                  $body;
-                }
-              ]>
-          };
-
-        _ = tb.DefineWithSource(method);
-
-        //create parse method for single capture rule
-        unless (name.Equals(grammar.StartRuleName))
+      tb.Define(<[decl: mutable _parsingSource : Nemerle.Peg.SourceSnapshot; ]>);
+      tb.Define(<[decl:
+        public ParsingSource : Nemerle.Peg.SourceSnapshot
         {
-          match (rule)
-          {
-            | Rule.Capture(Handler(name, _, NType(retType)), _) => CreateSimpleParseMethod(name, retType, compiler, tb);
-            | Rule.Capture => assert2(false);
-            | _ => ();
-          }
+          get { _parsingSource }
         }
+      ]>);
+
+      _ = tb.DefineWithSource(<[decl:
+        public TryParse(text : string) : int * $tyParam
+        {
+          TryParse(Nemerle.Peg.SourceSnapshot(text))
+        }
+      ]>);
+
+      if (typer.Manager.IsIntelliSenseMode)
+      {
+        _ = tb.DefineWithSource(<[decl:
+          public TryParse([Nemerle.Assertions.NotNull] source : Nemerle.Peg.SourceSnapshot) : int * $tyParam
+          {
+            _parsingSource = source;
+            mutable res;
+            res;
+          }
+        ]>);
+      }
+      else
+      {
+        _ = tb.DefineWithSource(<[decl:
+          public TryParse([Nemerle.Assertions.NotNull] source : Nemerle.Peg.SourceSnapshot) : int * $tyParam
+          {
+            _parsingSource = source;
+
+            mutable result;
+            def pos = $(compiler.DecorateRuleName(parsedGrammar.StartRuleName.Id) : dyn)(0, ref result, _parsingSource.Text);
+
+            (pos, result.Value)
+          }
+        ]>);
       }
 
-      CreateStartParseMethods(grammar.StartRuleName.Id, tyParam, compiler, tb);
+      _ = tb.DefineWithSource(<[decl:
+        public Parse(text : string) : option[$tyParam]
+        {
+          def (pos, res) = TryParse(text);
+
+          if (pos < 0) None() else Some(res)
+        }
+      ]>);
+
+      _ = tb.DefineWithSource(<[decl:
+        public Parse(source : Nemerle.Peg.SourceSnapshot) : option[$tyParam]
+        {
+          def (pos, res) = TryParse(source);
+
+          if (pos < 0) None() else Some(res)
+        }
+      ]>);
 
       tb.Define(<[decl:
         private mutable _maxRollbackPos : int;
@@ -135,104 +148,9 @@ namespace LRPEGCC
       ]>);
     }
 
-    private CreateStartParseMethods(startRuleName : string, tyParam : PExpr, compiler : RuleCompiler, tb : TypeBuilder) : void
-    {
-      tb.Define(<[decl: mutable _parsingSource : Nemerle.Peg.SourceSnapshot; ]>);
-      tb.Define(<[decl:
-        public ParsingSource : Nemerle.Peg.SourceSnapshot
-        {
-          get { _parsingSource }
-        }
-      ]>);
-
-      _ = tb.DefineWithSource(<[decl:
-        public TryParse(text : string) : int * $tyParam
-        {
-          TryParse(Nemerle.Peg.SourceSnapshot(text))
-        }
-      ]>);
-
-      _ = tb.DefineWithSource(<[decl:
-        public TryParse([Nemerle.Assertions.NotNull] source : Nemerle.Peg.SourceSnapshot) : int * $tyParam
-        {
-          _parsingSource = source;
-
-          mutable result : Nemerle.Peg.VToken[$tyParam];
-          def pos = $(compiler.DecorateRuleName(startRuleName) : dyn)(0, ref result, _parsingSource.Text);
-
-          (pos, result.Value)
-        }
-      ]>);
-
-      _ = tb.DefineWithSource(<[decl:
-        public Parse(text : string) : option[$tyParam]
-        {
-          def (pos, res) = TryParse(text);
-          
-          if (pos < 0) None() else Some(res)
-        }
-      ]>);
-      _ = tb.DefineWithSource(<[decl:
-        public Parse(source : Nemerle.Peg.SourceSnapshot) : option[$tyParam]
-        {
-          def (pos, res) = TryParse(source);
-          
-          if (pos < 0) None() else Some(res)
-        }
-      ]>);
-    }
-
-    private static GetGotoMap(tb : TypeBuilder) : Hashtable[Location, Location]
-    {
-      mutable gotoMap = tb.UserData["GoToInfoMap"] :> Hashtable[Location, Location];
-      
-      when (gotoMap == null)
-      {
-        gotoMap = Hashtable();
-        tb.UserData["GoToInfoMap"] = gotoMap;
-      }
-      gotoMap
-    }
-
-    private MakeGotoInfos(ruleName : RuleRef, grammar : Grammar, tb : TypeBuilder, typer : Typer) : void
-    {
-      def rule = grammar.GetRule(ruleName);
-      def gotoMap = GetGotoMap(tb);
-      def getRuleLocation(ruleRef : RuleRef) : Location
-      {
-        match (grammar.GetRule(ruleRef))
-        {
-          | Rule.Capture   (Handler(name = name), _)
-          | ExtensionPoint (name = name) => name.Location
-          | _                            => Location.Default
-        }
-      }
-      def makeGotoRuleDef(r : Rule) : void
-      {
-        | Choice(rules)                       => foreach (r in rules) makeGotoRuleDef(r)
-        | Sequence(rules)                     => foreach (r in rules) makeGotoRuleDef(r)
-        | Call(name)                          => gotoMap[name.Location] = getRuleLocation(name)
-        | RepeatMin(_, rule)                  => makeGotoRuleDef(rule)
-        | RepeatMinMax(_, _, rule)            => makeGotoRuleDef(rule)
-        | Chars                               => ()
-        | Not(rule)                           => makeGotoRuleDef(rule)
-        | And(rule)                           => makeGotoRuleDef(rule)
-        | Capture(Handler(name, _, _), rule)  => gotoMap[name.Location] = getRuleLocation(name); makeGotoRuleDef(rule)
-        | Capture(_, rule)                    => makeGotoRuleDef(rule)
-        | ExtensionPoint                      => ()
-      }
-
-      when (typer.Manager.IsIntelliSenseMode)
-        match (rule)
-        { // skip top capture...
-          | Capture(_, rule) => makeGotoRuleDef(rule);
-          | _                => makeGotoRuleDef(rule);
-        }
-    }
-
     private CheckRuleMethodHandler(ruleName : RuleRef, grammar : Grammar, tb : TypeBuilder, typer : Typer) : void
     {
-      def gotoMap = GetGotoMap(tb);
+      def gotoMap = IntelliSenseSupport.GetGotoMap(tb);
       def rule = grammar.GetRule(ruleName);
       def mems = tb.GetParsedMembers(true).Filter(m => m.Name == ruleName.Id);
 
@@ -297,6 +215,10 @@ namespace LRPEGCC
       }
     }
 
+  }
+}
+
+/*
     private CreateSimpleParseMethod(ruleName : RuleRef, ty : PExpr, compiler : RuleCompiler, tb : TypeBuilder) : void
     {
       def methodName = "ParseRule_" + ruleName.Id;
@@ -308,8 +230,8 @@ namespace LRPEGCC
 
           def pos = $(compiler.DecorateRuleName(ruleName.Id) : dyn)(startPos, ref result, text);
 
-          if (pos < 0) 
-            None() 
+          if (pos < 0)
+            None()
           else 
             Some(result.Value)
         }
@@ -325,5 +247,4 @@ namespace LRPEGCC
       _ = tb.DefineWithSource(parseMethod1);
       _ = tb.DefineWithSource(parseMethod2);
     }
-  }
-}
+*/
