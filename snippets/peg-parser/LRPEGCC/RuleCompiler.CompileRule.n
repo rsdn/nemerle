@@ -25,6 +25,32 @@ namespace LRPEGCC
 
     public CompileRule(ruleToCompile : Rule, useResult : bool, callRule : RuleRef * bool -> void) : PExpr
     {
+      def initMethodsMap(tb : TypeBuilder) : Hashtable[string, ClassMember.Function]
+      {
+        def isScopeHendler(m : ClassMember)
+        {
+          | Function as f => 
+            f.Name.EndsWith(RuleCompiler.ScopeBeginSufix, RuleCompiler.ScopeEndSufix)
+            && f.header.Parameters.Length <= 1;
+            
+          | _ => false
+        }
+        def methods = tb.GetParsedMembers(false).Filter(isScopeHendler).Map(_ :> ClassMember.Function);
+        def groupedMethods = methods.GroupBy(m => m.Name);
+        def methodsMap = Hashtable();
+        
+        foreach (g in groupedMethods)
+        {
+          def method = g.First();
+          when (g.Count() > 1)
+            Message.Error(method.Location, $"The method '$(g.Key)' is scope handler. The overloading not supported to scope handler.");
+          methodsMap.Add(g.Key, method);
+        }
+        
+        methodsMap
+      }
+      def methodsMap = initMethodsMap(_tb);
+        
       def prepandExprs(exprs : list[PExpr], mainExpr : PExpr.Sequence) : PExpr.Sequence
       {
         match (mainExpr)
@@ -489,37 +515,89 @@ namespace LRPEGCC
             }
 
           | Scope(name, subrule) =>
-            def beginName = name.Id + "Begin";
-            def endName = name.Id + "End";
-            def beginRes = true;
-            def endRes = true;
+            def beginName = name.Id + RuleCompiler.ScopeBeginSufix;
+            def endName   = name.Id + RuleCompiler.ScopeEndSufix;
+            def checkHandler(name : string, methodsMap : Hashtable[string, ClassMember.Function]) : option[bool]
+            {
+              mutable method;
+              
+              if (methodsMap.TryGetValue(name, out method))
+                None()
+              else
+              {
+                def paramCount = method.header.Parameters.Length;
+                def boolTy = _tb.InternalType.Boolean;
+                
+                if (name.EndsWith(RuleCompiler.ScopeBeginSufix) && paramCount != 0)
+                  Message.Error(method.NameLocation, "A begin scope handler must have no parameters.")
+                else
+                {
+                  assert(name.EndsWith(RuleCompiler.ScopeEndSufix));
+                  when (paramCount != 1 || !_tb.BindFixedType(method.header.Parameters.Head.Type).Equals(boolTy))
+                    Message.Error(method.NameLocation, "A end scope handler must have only one boolean parameter.")
+                }
+                
+                
+                def ty = _tb.BindFixedType(method.header.ReturnType);
+                
+                match (ty)
+                {
+                  | FixedType.Void => Some(false)
+                  | _ => 
+                    if (ty.Equals(boolTy))
+                      Some(true)
+                    else
+                    {
+                      Message.Error(method.header.ReturnType.Location, 
+                        "The return type of scope handler must be void or bool");
+                      Some(false)
+                    }
+                }
+              }
+            }
+            def beginRes  = checkHandler(beginName, methodsMap);
+            def endRes    = checkHandler(endName,   methodsMap);
             def subRuesCode = compile(subrule, results);
-            def code = if (endRes)
-              <[
-                def newPos = $subRuesCode;
-                if ($(endName : dyn)(newPos >= 0))
-                  newPos;
-                else
-                  -1;
-              ]>;
-            else
-              <[
-                def newPos = $subRuesCode;
-                $(endName : dyn)(newPos >= 0);
-                newPos;
-              ]>;
-            if (beginRes)
-              <[
-                if ($(beginName : dyn)())
-                  $code
-                else
-                  -1
-              ]>
-            else
-              <[
-                $(beginName : dyn)();
-                $code;
-              ]>
+
+            when (endRes.IsNone && beginRes.IsNone)
+              Message.Error(name.Location, $"You must specify at least one scope handler for scope $name. Scope handlers must have signatures: '$beginName() : void', '$endName(isFial : bool) : bool/void'.");
+              
+            def code = 
+              match (beginRes)
+              {
+                | Some(true) =>
+                  <[
+                    def newPos = $subRuesCode;
+                    if ($(endName : dyn)(newPos >= 0))
+                      newPos;
+                    else
+                      -1;
+                  ]>
+                | Some(false) =>
+                  <[
+                    def newPos = $subRuesCode;
+                    $(endName : dyn)(newPos >= 0);
+                    newPos;
+                  ]>
+                | None => subRuesCode
+              };
+              
+            match (endRes)
+            {
+              | Some(true) =>
+                <[
+                  if ($(beginName : dyn)())
+                    $code
+                  else
+                    -1
+                ]>
+              | Some(false) =>
+                <[
+                  $(beginName : dyn)();
+                  $code;
+                ]>
+              | None => code
+            }              
 
           | ExtensionPoint         => throw NotImplementedException();
         }
