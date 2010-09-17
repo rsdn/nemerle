@@ -82,6 +82,18 @@ namespace CSharpToNemerle.Test
       return string.Format(@"a is {0}, b is ""{1}""", a, B);
     }
   }
+
+  struct __<T>
+  {
+      public T _;
+  
+      public __(T _)
+      {
+          this._ = _;
+      }
+  }
+
+  class X { public int A { get; set; } public int B { get; set; } }
   
   static partial class Program 
   {
@@ -144,6 +156,12 @@ namespace CSharpToNemerle.Test
     void TestNullCheckOperator(string str)
     {
       Console.WriteLine("Null-checkin operator: {0}", str ?? "was null :)");
+    }
+    
+    void TestCrazy()
+    {
+      var x = new __<X>(new X { A = 1,  B = 2 }) { _ = { A = 3, B = 4 } }._;
+      Console.WriteLine("A: {0}, B: {1}", x.A, x.B);
     }
   }
 }
