@@ -163,5 +163,11 @@ namespace CSharpToNemerle.Test
       var x = new __<X>(new X { A = 1,  B = 2 }) { _ = { A = 3, B = 4 } }._;
       Console.WriteLine("A: {0}, B: {1}", x.A, x.B);
     }
+
+    void TestNullable()
+    {
+      int? nullableX = 10;
+      Console.WriteLine(nullableX.HasValue ? "nullableX has value" : "no value in nullableX");
+    }
   }
 }
