@@ -124,7 +124,7 @@ namespace CSharpToNemerle.Test
 
     void TestFor(int count) 
     {
-      for(int i = 0, j = 5; i < count; ++i, ++j)
+      for(int i = 0, j = 5; i < count /* ... */; ++i, ++j)
         Console.WriteLine("i = {0}, j = {1}", i, j);
     }
 
