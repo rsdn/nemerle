@@ -172,5 +172,12 @@ namespace CSharpToNemerle.Test
       Console.WriteLine(objX is int ? "objX is int" : "objX is not int");
       Console.WriteLine(objX is int? ? "objX is int?" : "objX is not int?");
     }
+
+    void TestUnicodeSeq()
+    {
+      Console.WriteLine((int)'\uD800' == 0xD800);
+      Console.WriteLine((int)'\uE000' == 0xE000);
+      Console.WriteLine("\U0010FFF1");
+    }
   }
 }
