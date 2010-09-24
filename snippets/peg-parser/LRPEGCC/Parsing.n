@@ -105,6 +105,8 @@ namespace LRPEGCC
 
       #endregion Parse helpers
       #region Rules parsing
+      
+      def parser = MainParser(typer.Env);
 
       // Range           = Token.SquareGroup(LooseGroup(CharLiteral, Operator(".."), CharLiteral))
       def parseRange(tok : Token) : Rule * Token
@@ -156,20 +158,10 @@ namespace LRPEGCC
           
           match (tok.Next)
           {
-            | RoundGroup  as group when name == "FailureRecovery" => 
-              match (group.Child)
-              {
-                | LooseGroup(Identifier(handlerName) as id) as looseGroup => 
-                  if (looseGroup.Next is LooseGroup)
-                    (Rule.Recovery(tok.Location + group.Location, 
-                                   RuleRef(id.Location, handlerName),
-                                   parseOrderedChoice(looseGroup.Next)[0]), group.Next)
-                  else
-                    ReportCriticalUnexpected(group, "(recovery-handler-name, rule-to-skip)")
-
-                | _ => ReportCriticalUnexpected(group, "(recovery-handler-name, rule-to-skip)")
-              }
-
+            | RoundGroup when name == "FailureRecovery" => 
+              def (recoveryRule, next) = parceRecoveryParams(tok);
+              (recoveryRule, next) // unfortunatly tuple not support covariance and we need repack it
+              
             | BracesGroup as group => (Rule.Scope(tok.Location + group.Location, ruleName, parseOrderedChoice(group.Child)[0]), group.Next)
             | _                    => (Rule.Call(tok.Location, ruleName), tok.Next)
           }
@@ -231,38 +223,112 @@ namespace LRPEGCC
         def loc = if (seqs.IsEmpty) tok.Location else tok.Location + seqs.Last.Location;
         (Rule.Choice(loc, seqs), nextTok)
       }
+      and parceRecoveryParams(tok : Token) : Rule.Recovery * Token
+      {
+        match (tok.Next)
+        {
+          | RoundGroup as group => 
+            match (group.Child)
+            {
+              | LooseGroup(Identifier(handlerName) as id) as looseGroup => 
+                if (looseGroup.Next is LooseGroup)
+                  (Rule.Recovery(tok.Location + group.Location, 
+                                 RuleRef(id.Location, handlerName),
+                                 parseOrderedChoice(looseGroup.Next)[0]), group.Next)
+                else
+                  ReportCriticalUnexpected(group, "(recovery-handler-name, rule-to-skip)")
+
+              | _ => ReportCriticalUnexpected(group, "(recovery-handler-name, rule-to-skip)")
+            }
+          | null => ReportCriticalUnexpected(tok, "FailureRecovery(recovery-handler-name, rule-to-skip)")
+          | x => ReportCriticalUnexpected(x, "(recovery-handler-name, rule-to-skip)")
+        }
+      }
+      
       // Rule            = RuleName Eq OrderedChoice
       def parseRule(tok : Token, ruleId : int) : RuleDefinition
       {
+        def getName(tok : Token) : RuleRef
+        {
+          match (tok.Next)
+          {
+            | Identifier(name) as id  =>
+              when (id.Next != null)
+                ReportUnexpected(id.Next, "nothing");
+              
+              RuleRef(id.Location, name)
+                
+            | null                    => ReportCriticalUnexpected(tok, "rule-name");
+            | x                       => ReportCriticalUnexpected(x, "rule-name");
+          }
+        }
         match (tok)
         {
-          | LooseGroup(Identifier 
-                where (name = _, Next = Operator  where (name = "=", Next = ruleBody)) as id) with ty = null
-          | LooseGroup(Identifier 
-                where (name = _, Next = Operator  where (name = ":", Next = Identifier
-                where (name = _, Next = Operator  where (name = "=", Next = ruleBody)) as ty)) as id)
-          | LooseGroup(Identifier 
-                where (name = _, Next = Operator  where (name = ":", Next = Keyword
-                where (name = _, Next = Operator  where (name = "=", Next = ruleBody)) as ty)) as id) =>
+          | LooseGroup(child) =>
+            def parceAttrs(tok)
+            {
+              | SquareGroup(child) =>
+              
+                def parseAttr(g) : RuleAttribute * Token
+                {
+                  | LooseGroup(tok) =>
+                    match (tok)
+                    {
+                      | Identifier("Inline")            => (RuleAttribute.Inline(g.Location), g.Next)
+                      | Identifier("InlineAllSubrules") => (RuleAttribute.InlineAllSubrules(g.Location), g.Next)
+                      | Identifier("Extensible")        => (RuleAttribute.Extensible(g.Location), g.Next)
+                      | Identifier("FailureRecovery")   => 
+                        def (recoveryRule, next) = parceRecoveryParams(tok);
+                        (RuleAttribute.Recovery(recoveryRule), next)
+                        
+                      | Operator("<")   => (RuleAttribute.PrecedenceLesserThan (g.Location, getName(tok)), g.Next)
+                      | Operator(">")   => (RuleAttribute.PrecedenceGreaterThan(g.Location, getName(tok)), g.Next)
+                      | Operator("==")  => (RuleAttribute.PrecedenceEqualsTo   (g.Location, getName(tok)), g.Next)
+                      | _ => ReportCriticalUnexpected(g, RuleAttribute.GetUsages())
+                    }
+                  
+                  | _ => ReportCriticalUnexpected(tok, RuleAttribute.GetUsages())
+                }
+                def parseAttrs(currTok : Token, attrs = [])
+                {
+                  if (currTok == null) attrs.Reverse()
+                  else
+                  {
+                    def (attr, next) = parseAttr(currTok);
+                    parseAttrs(next, attr :: attrs)
+                  }
+                }
+                
+                (tok.Next, parseAttrs(child, []))
+                
+              | _ => (tok, [])
+            }
+            def (tok2, ruleAttrs) = parceAttrs(child);
+              
+            def (expr, nextToken) = parser.ParseExpr(tok2, TokenStoppers.All);
+            
+            when (!(nextToken is Operator("=")) || nextToken.Next == null)
+              _ = ReportUnexpected(nextToken, "'=' rule-body ';'");
 
-            def (rule, nextTok) = parseOrderedChoice(ruleBody);
-
-            def ruleType =
-              match (ty)
+            def (rule, nextTok) = parseOrderedChoice(nextToken.Next);
+          
+            def (id, ruleType) =
+              match (expr)
               {
-                | Identifier as ty => Some(BindFixedType(ty, typer));
-                | Keyword as ty    => Some(BindFixedType(ty, typer));
-                | null             => None();
-                | _                => assert(false);
+                | <[ $name : $ty ]> => (name, Some(BindFixedType(ty, typer)))
+                | Ref as name       => (name, None())
+                | _                 => ReportCriticalUnexpected(tok2, "rule-name (':' return-type)?");
               };
 
             when (nextTok != null)
               _ = ReportUnexpected(nextTok, "EOF");
 
             def name = RuleRef(id.Location, id.ToString());
-            RuleDefinition(id.Location + rule.Location, ruleId, name, ruleType, [], rule);
+            RuleDefinition(id.Location + rule.Location, ruleId, name, ruleType, ruleAttrs, rule);
 
-          | _ => ReportCriticalUnexpected(token, "rule-name = rule-body;")
+          | _ => 
+            assert2(false);
+            ReportCriticalUnexpected(token, " rule-name = rule-body;")
         }
       }
       def parseGramar(grammar : Grammar, token : Token) : Grammar
@@ -282,6 +348,8 @@ namespace LRPEGCC
       parseGramar(grammar, token)
     }
 
+    mutable _debug : bool = true;
+
     #region Error handling
 
     ReportCriticalUnexpected[T](token : Token, expected : string) : T
@@ -293,7 +361,7 @@ namespace LRPEGCC
     ReportUnexpected(token : Token, expected : string) : void
     {
       assert2(false);
-      Message.Error(token.Location, $"expected $expected but found «$token» ($(token.GetType().Name))");
+      Message.Error(token.Location, $"expected «$expected» but found «$token» ($(token.GetType().Name))");
     }
 
     ReportUnexpected(expr : PExpr, expected : string) : void
@@ -312,21 +380,9 @@ namespace LRPEGCC
     
     #region Helpers
     
-    BindFixedType(id : Identifier, typer : Typer) : RuleType.NType
+    BindFixedType(id : PExpr, typer : Typer) : RuleType.NType
     {
-      def name = Name.NameInCurrentColor(id.name, id.Location, typer.Env);
-      RuleType.NType(id.Location, typer.BindFixedType(PExpr.Ref(id.Location, name)))
-    }
-    
-    BindFixedType(id : Keyword, typer : Typer) : RuleType.NType
-    {
-      match (id.name)
-      {
-        | "void" => RuleType.NType(id.Location, typer.InternalType.Void)
-        | _ =>
-          def name = Name.NameInCurrentColor(id.name, id.Location, typer.Env);
-          RuleType.NType(id.Location, typer.BindFixedType(PExpr.Ref(id.Location, name)))
-      }
+      RuleType.NType(id.Location, typer.BindFixedType(id))
     }
     
     #endregion
