@@ -1,0 +1,175 @@
+﻿using System;
+using SCG = System.Collections.Generic;
+
+using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Utility;
+using PT = Nemerle.Compiler.Parsetree;
+using TT = Nemerle.Compiler.Typedtree;
+
+namespace LRPEGCC
+{
+  /// <summary>
+  /// Walks through the type hierarchy of data structure
+  /// and builds code that handles some of entries (in imperative way).
+  /// </summary>
+  public class TypeWalker
+  {
+    public Run(root : TT.TExpr, userHandler : FixedType * PT.PExpr -> option[PT.PExpr]) : PT.PExpr
+    {
+      walkHandlers.Clear();
+      match(GetWalkHandler(root.Type, userHandler))
+      {
+        | Some(handler) =>
+          mutable handlers = [];
+          foreach(item in walkHandlers)
+            when(item.Value is Some( (parmTy, funName, funBody) ))
+            {
+              def funName = PT.Splicable.Name(funName);
+              def funHeader = PT.PFunHeader(funName.Location, funName, PT.PExpr.Void(), [<[parameter: $("x" : dyn) : $(parmTy : typed) ]>]);
+              handlers ::= PT.Function_decl(funHeader, funBody)
+            }
+
+          def decls = PT.PExpr.DefFunctions(handlers);
+          <[
+            $decls;
+            $(handler : name)($(root : typed))
+          ]>
+
+        | _ =>
+          <[ $(root : typed) ]>
+      }
+    }
+
+    walkHandlers : Hashtable[string, option[FixedType * PT.Name * PT.PExpr]] = Hashtable();
+
+    public virtual SelectMembers(t : TypeInfo) : list[IMember]
+    {
+      def flags = System.Reflection.BindingFlags.Instance %| System.Reflection.BindingFlags.Public;
+      def members = t.GetMembers(flags);
+      match(t.GetTydecl())
+      {
+        | VariantOption => members.Filter(m => m is IField)
+        | _             => members.Filter(m => m is IProperty)
+      }
+    }
+
+    private GetWalkHandler(t : TypeVar, userHandler : FixedType * PT.PExpr -> option[PT.PExpr]) : option[PT.Name]
+    {
+      def t = t.Fix();
+      def tName = t.ToString();
+      match(walkHandlers.TryGetValue(tName))
+      {
+        | (Some( (_, name, _) ), true) =>
+          Some(name)
+
+        | (None(), true) =>
+          None()
+
+        | _ =>
+          def handlerName = Macros.NewSymbol("walk_" + tName);
+          walkHandlers[tName] = Some(t, handlerName, null); // for recursive types
+          match(BuildWalkHandler(t, userHandler))
+          {
+            | Some(body) =>
+              walkHandlers[tName] = Some(t, handlerName, body);
+              Some(handlerName)
+            | _ =>
+              walkHandlers[tName] = None();
+              None()
+          }
+      }
+    }
+
+    private BuildWalkHandler(t : FixedType, userHandler : FixedType * PT.PExpr -> option[PT.PExpr]) : option[PT.PExpr]
+    {
+      match(t)
+      {
+        | Class(ti, tyArgs) =>
+          def walkMembers(ti, ft)
+          {
+            SelectMembers(ti).FoldLeft([], fun(mem, exprs)
+            {
+              match(GetWalkHandler(ft.TypeOfMember(mem), userHandler))
+              {
+                | Some(handler) => <[ $(handler : name)(x.$(mem.Name : usesite)) ]> :: exprs
+                | _ => exprs
+              }
+            })
+          }
+
+          match(ti.GetTydecl())
+          {
+            | Variant(opts) =>
+              mutable defaultNeeded = false;
+              def casesRev = opts.FoldLeft([<[case: null => ()]>], fun(optTi, cases)
+              {
+                def optFt = FixedType.Class(optTi, tyArgs);
+                match(walkMembers(optTi, optFt), userHandler(optFt, <[ x ]>))
+                {
+                  | ([], None()) =>
+                    defaultNeeded = true;
+                    cases
+
+                  | ([], Some(code)) =>
+                    <[case: $(optTi.Name : usesite) as x => $code ]> :: cases
+
+                  | (mems, None()) =>
+                    <[case: $(optTi.Name : usesite) as x => { ..$mems }]> :: cases
+
+                  | (mems, Some(code)) =>
+                    <[case: $(optTi.Name : usesite) as x => { ..$(code :: mems) }]> :: cases
+                }
+              });
+              if(casesRev.Length > 1)
+              {
+                def cases = (if(defaultNeeded) <[case: _ => () ]> :: casesRev else casesRev).Rev();
+                Some(<[ match(x) { ..$cases } ]>)
+              }
+              else
+                None()
+
+            | _ =>
+              match(walkMembers(ti, t), userHandler(t, <[ x ]>))
+              {
+                | ([], None()) =>
+                  None()
+
+                | ([], Some(code)) =>
+                  Some(code)
+
+                | (exprs, None())   =>
+                  if(ti.IsValueType)
+                    Some(<[ { ..$exprs } ]>)
+                  else
+                    Some(<[ unless(null == x) { ..$exprs } ]>)
+
+                | (exprs, Some(code))   =>
+                  if(ti.IsValueType)
+                    Some(<[ { ..$(code :: exprs) } ]>)
+                  else
+                    Some(<[ unless(null == x) { ..$(code :: exprs) } ]>)
+              }
+          }
+
+        | Tuple(tys) =>
+          mutable exprs = [];
+
+          foreach(ty in tys with index)
+            when(GetWalkHandler(ty, userHandler) is Some(handler))
+              exprs ::= <[ $(handler : name)(x[$(index : int)]) ]>;
+
+          match(exprs.Rev())
+          {
+            | [] => None()
+            | exprs =>
+              Some(<[ {..$exprs} ]>)
+          }
+
+        | _ => None()
+      }
+    }
+  }
+}
