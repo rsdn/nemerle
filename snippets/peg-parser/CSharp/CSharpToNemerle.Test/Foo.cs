@@ -168,7 +168,7 @@ namespace CSharpToNemerle.Test
     {
       int? nullableX = 10;
       Console.WriteLine(nullableX.HasValue ? "nullableX has value" : "no value in nullableX");
-      object objX = nullableX;
+      global::System.Object objX = nullableX;
       Console.WriteLine(objX is int ? "objX is int" : "objX is not int");
       Console.WriteLine(objX is int? ? "objX is int?" : "objX is not int?");
     }
