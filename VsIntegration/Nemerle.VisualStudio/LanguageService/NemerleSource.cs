@@ -858,7 +858,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override void ReformatSpan(EditArray mgr, TextSpan span)
 		{
-			//Debugger.Break();
 			string filePath = GetFilePath();
 			ProjectInfo projectInfo = ProjectInfo.FindProject(filePath);
 			IEngine engine;
@@ -868,19 +867,9 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 			else engine = NemerleLanguageService.DefaultEngine;
 			ReformatSpanInternal(mgr, span, engine, filePath, this);
-			//ReformatSpan_internal(mgr, span, engine, filePath);
-			//ReformatSpan_internal(mgr, span, engine, filePath);
-			//base.ReformatSpan(mgr, span);
 		}
 		private static void ReformatSpanInternal(EditArray mgr, TextSpan span, IEngine engine, string filePath, ISource src)
 		{
-			//List<FormatterResult> results =
-			//    Formatter.FormatSpan(span.iStartLine + 1,
-			//               span.iStartIndex + 1,
-			//               span.iEndLine + 1,
-			//               span.iEndIndex + 1,
-			//               engine,
-			//               filePath);            
 			var result = Formatter.BeginFormat(span.iStartLine + 1,
 						   span.iStartIndex + 1,
 						   span.iEndLine + 1,
