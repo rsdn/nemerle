@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows.Forms;
 
 using Microsoft.VisualStudio;
@@ -402,7 +403,10 @@ namespace Nemerle.VisualStudio.Project
 				// Make temp cmd-file and run it...
 				cmdFilePath = Path.Combine(Path.GetDirectoryName(path), Path.GetTempFileName());
 				cmdFilePath = Path.ChangeExtension(cmdFilePath, "cmd");
-				File.WriteAllText(cmdFilePath, "@echo off\n\"" + path + "\" " + cmdArgs + "\npause");
+        var oemCodePage = CultureInfo.CurrentCulture.TextInfo.OEMCodePage;
+        var consoleEncoding = Encoding.GetEncoding(oemCodePage);
+        File.WriteAllText(cmdFilePath, "@echo off\n\"" + path + "\" " + cmdArgs + "\npause",
+            consoleEncoding);
 				psi.FileName = cmdFilePath;
 			}
 			else
