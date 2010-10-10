@@ -83,6 +83,10 @@ namespace CSharpToNemerle.Test
     }
   }
 
+  public class Disposable1 : System.IDisposable {
+    void IDisposable.Dispose() {}
+  }
+
   struct __<T>
   {
       public T _;
