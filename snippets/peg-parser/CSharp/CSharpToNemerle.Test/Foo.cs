@@ -38,7 +38,7 @@ namespace CSharpToNemerle.Test
     {
       if(x > 0) {
         System.Console.WriteLine("x is greater than 0.");
-        ++x;
+        checked { ++x; }
       }
       delegate(string p) {
         Console.WriteLine("p Length is {0}", p.Length);
@@ -182,6 +182,11 @@ namespace CSharpToNemerle.Test
       Console.WriteLine((int)'\uD800' == 0xD800);
       Console.WriteLine((int)'\uE000' == 0xE000);
       Console.WriteLine("\U0010FFFF");
+    }
+
+    void TestGenericMethod<D>(D data)
+    {
+      Console.WriteLine(data);
     }
   }
 }
