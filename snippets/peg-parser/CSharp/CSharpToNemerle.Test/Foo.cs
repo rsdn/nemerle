@@ -19,6 +19,14 @@ namespace CSharpToNemerle.Test
     A3
   }
 
+  public static class AExtensions
+  {
+    public static void TestExtension(this A a)
+    {
+      Console.WriteLine(a);
+    }
+  }
+  
   public class Foo<T> where T : new()
   {
     public Foo() : base() {  }
