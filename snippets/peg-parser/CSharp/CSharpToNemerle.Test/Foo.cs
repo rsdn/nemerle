@@ -196,5 +196,17 @@ namespace CSharpToNemerle.Test
     {
       Console.WriteLine(data);
     }
+
+    void TestPrefixInfixChain()
+    {
+      var i = 10;
+      int j = i += 20;
+      Console.WriteLine(j == 30);
+      j = ++i;
+      Console.WriteLine(j == 31);
+      j = i--;
+      Console.WriteLine(j == 31);
+      Console.WriteLine(i == 30);
+    }
   }
 }
