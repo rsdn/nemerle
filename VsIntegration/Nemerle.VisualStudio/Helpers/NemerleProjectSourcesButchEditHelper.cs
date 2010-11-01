@@ -118,7 +118,8 @@ namespace Nemerle.VisualStudio.Helpers
 		public void ReplaseMethodBody(ClassMember.Function function, string text)
 		{
 			var h = GetHelper(function.BodyCloseTokenLocation.FileIndex);
-			var closeBrecket = h.Source.GetText(function.BodyCloseTokenLocation.ToTextSpan());
+      var xx = h.Source.GetText();
+      var closeBrecket = h.Source.GetText(function.BodyCloseTokenLocation.ToTextSpan());
 			if (closeBrecket != "}")
 			{
 				System.Windows.Forms.MessageBox.Show("Internal Nemerle WinForms Designer Error!");
