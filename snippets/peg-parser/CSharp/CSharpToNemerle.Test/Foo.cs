@@ -7,6 +7,8 @@ using LIST = System.Collections.Generic.List<int>;
 
 namespace CSharpToNemerle.Test
 {
+  [Description("this is delegate")]
+  [return:Description("this is delegate result")]
   public delegate T X<T>(int a, T b) where T : class;
 
   public interface IVarianceTest<out T> {
@@ -75,6 +77,7 @@ namespace CSharpToNemerle.Test
     [property:Description("only property")]
     [Description("only property too")]
     [method:Description("both accessors")]
+    [return:Description("shuold be on return value")]
     public string B {
         [Description("getter")]
         get;
