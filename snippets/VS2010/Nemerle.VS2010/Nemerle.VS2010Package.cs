@@ -28,7 +28,8 @@ namespace Nemerle.VS2010
     [PackageRegistration(UseManagedResourcesOnly = true)]
     // This attribute is used to register the informations needed to show the this package
     // in the Help/About dialog of Visual Studio.
-
+    [ComVisible(true)]
+    [Guid(NemerleConstants.PackageGuidString)]
     [WAProvideProjectFactory(typeof(WANemerleProjectFactory), NemerleConstants.LanguageName + " Web Application Project Templates", NemerleConstants.LanguageId, false, "Web", null)]
     [WAProvideProjectFactoryTemplateMapping("{" + NemerleConstants.ProjectFactoryGuidString + "}", typeof(WANemerleProjectFactory))]
     [WAProvideLanguageProperty(typeof(WANemerleProjectFactory), "CodeFileExtension", NemerleConstants.FileExtension)]
@@ -37,15 +38,21 @@ namespace Nemerle.VS2010
     //[WAProvideLanguageProperty(typeof(WANemerleProjectFactory), "CodeBehindEventBinding", typeof(NemerleWACodeBehindEventBinding))]
 
     [InstalledProductRegistration("#110", "#112", "1.0", IconResourceID = 400)]
-    [ProvideProjectFactory(
-    typeof(NemerleProjectFactory),
-    null,
-    "Nemerle Project Files (*.nproj);*.nproj",
-    "nproj", "nproj",
-    @".\\NullPath",
-    LanguageVsTemplate = "Nemerle")]
+    [ProvideProjectFactory(typeof(NemerleProjectFactory),
+        NemerleConstants.LanguageName,
+        NemerleConstants.LanguageName + " Project Files (*." +
+            NemerleConstants.ProjectExtension + ");*." + NemerleConstants.ProjectExtension,
+        NemerleConstants.ProjectExtension,
+        NemerleConstants.ProjectExtension,
+        // Set the projectsTemplatesDirectory to a non-existant path to prevent VS 
+        // from including the working directory as a valid template path
+        @".\NullPath",
+        LanguageVsTemplate = NemerleConstants.LanguageName)]
+   
     [ProvideObject(typeof(GeneralPropertyPage))]
-    [Guid(GuidList.guidNemerle_VS2010PkgString)]
+    [DefaultRegistryRoot(NemerleConstants.VisualStudioRegistryRoot)]
+   // [ProvideService(typeof(NemerleLanguageService), ServiceName = NemerleConstants.LanguageName)]
+   
     public sealed class Nemerle_VS2010Package : ProjectPackage
     {
         /// <summary>

@@ -1,0 +1,1 @@
+"%VS90COMNTOOLS%..\IDE\devenv.exe" Refactoring.Playground.sln /rootsuffix Exp

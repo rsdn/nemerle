@@ -1,0 +1,267 @@
+﻿using System;
+using System.IO;
+using System.Diagnostics;
+
+using SCG = System.Collections.Generic;
+using SR  = System.Reflection;
+
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
+using Nemerle.Utility;
+using Nemerle.Compiler.Utils;
+
+using TT = Nemerle.Compiler.Typedtree;
+using TExpr = Nemerle.Compiler.Typedtree.TExpr;
+
+namespace Nemerle.Completion2
+{
+  internal partial class Engine
+  {
+
+    // Callback method. Process completion in expressin.
+    protected override Complete (
+      expression : PExpr,
+      expected : TypeVar,
+      typer : Typer,
+      env : GlobalEnv) : TExpr
+    {
+      assert(true);
+      match (expression)
+      {
+        | PExpr.Member (obj, Splicable.HalfId (name)) =>
+          def obj = obj; // for debug
+          def name = name; // for debug
+          def elems = SCG.List ();
+          def elems2 = elems;
+          _ = elems2;
+          def tobj = 
+            match (typer.TryTyping(() => typer.TypeExpr(obj)))
+            {
+              | TExpr.Error => typer.TypeName(obj)
+              | e => e
+            };
+          def tobj2 = tobj;
+          _ = tobj2;
+          def typeHint = tobj.Type.Hint;
+
+          def AddOverloads(overloads)
+          {
+            unless (overloads.IsEmpty)
+              elems.Add(Elem.Overloads (overloads));
+          }
+
+          def tryInterpretAsGlobals()
+          {
+            def nss = this.CoreEnv.NameTree.NamespaceTree :: name.GetEnv(env).OpenNamespaces;
+            Completion.AddTypesAndNamespaces (elems, nss, obj, name, false, false);
+          }
+
+          def tryInterpretAsQualifiedName() : void
+          {
+            // Try interpret as qualified name...
+            def overloads = typer.TypeNameFull(expression, typer.Solver.FreshTypeVar(), true);
+            AddOverloads(overloads);
+          }
+
+          def tryInterpretAsExtensionMethods(typeHint) : void
+          { // Try get extention methods...
+            | Some(ty is FixedType) =>
+              def extMethods = this.LibrariesManager.GetExtensionMethods(name.Id, name.GetEnv(env), true);
+              foreach (method when this.IsExtensionMethod(method, ty) in extMethods)
+                foreach (over in typer.ConstructMethodOverload(null, method, null, true))
+                {
+                  over.ExtensionMethodObject = tobj;
+                  elems.Add(Elem.Overload (over));
+                }
+            | _ => ()
+          }
+
+          def tryInterpretAsMemberAccess(typeHint, tobj) : void
+          {
+            tryInterpretAsExtensionMethods(typeHint);
+            // Try interpret as member access at general expression...
+            when (typer.TypeMember (tobj, name, expected, true) is Some(lst))
+              AddOverloads(lst);
+          }
+
+          def makeCompletionResultException()
+          {
+            def compl_exc = CompletionResult (elems, name.Id, name.Location);
+            compl_exc.ObjectType = tobj.Type.Fix();
+            compl_exc
+          }
+
+          match (tobj2)
+          {
+            | TExpr.Delayed(susp) => 
+              match (susp.DtKind)
+              {
+                | Overloaded(overloads) => // collect members for all overloads
+                  foreach (o in overloads)
+                    _ = typer.JustTry(fun() { 
+                      def res = o.Compile();
+                      tryInterpretAsMemberAccess(res.Type.Hint, res);
+                      42 // we need return somethink
+                    });
+                | _ => ()
+              }
+            | _ => ()
+          }
+
+          tryInterpretAsQualifiedName();
+          tryInterpretAsGlobals();
+          tryInterpretAsMemberAccess(typeHint, tobj);
+
+          match (typeHint)
+          {
+            | None when elems.Count == 0 =>
+              def res = typer.DelayAction(typer.Solver.FreshTypeVar(), Typer.DelayedLambdaAction(_failLoudly => {
+                match (tobj.Type.Hint)
+                {
+                  | Some(_) => 
+                    tryInterpretAsMemberAccess(tobj.Type.Hint, tobj);
+                    throw makeCompletionResultException()
+                  | None => None()
+                }
+              }));
+              res
+            | _ => throw makeCompletionResultException()
+
+          }
+
+        | PExpr.Member (obj, _) =>
+          // Try find completion token in nested member access expressions.
+          Complete (obj, expected, typer, env); 
+
+        | PExpr.ToComplete (name) =>
+          def prefix = name.Id;
+          def loc    = name.Location;
+          //def builder = CurrentMethodBuilder;
+          def overloads = typer.TypeNameFull (expression, expected, for_completion = true);
+
+          def elems = SCG.List ();
+          elems.Add(Elem.Overloads (overloads));
+
+          // find locals
+          def CmpOptions = System.StringComparison.InvariantCultureIgnoreCase;
+          foreach ((name, local) when name.Id.StartsWith (prefix, CmpOptions) in typer.LocalContext.GetLocals())
+            elems.Add(Elem.Local (local));
+
+          // add namespaces and types
+
+          def nss = this.CoreEnv.NameTree.NamespaceTree :: name.GetEnv(env).OpenNamespaces;
+          Completion.AddTypesAndNamespaces (elems, nss, null, name, false, false);
+            
+          // Try wait for all types has been resolved.
+          def delayed = typer.DelayAction(typer.Solver.FreshTypeVar(), Typer.DelayedLambdaAction(
+            fun(failLoudly)
+            {
+              when (failLoudly)
+                throw CompletionResult (elems, prefix, loc);
+              None()
+            }));
+
+          if (name.Id.Trim() == "")
+            delayed
+          else
+          {
+            // Continue typing with ref to name...
+            def res = try { typer.TypeExpr(PExpr.Ref(name.Location, name)); }
+                      catch { _ => TExpr.Error() };
+            if (res is TExpr.Error) delayed else res
+          }
+
+        | _ => null;
+      }
+    }
+
+    /// Callback method. Process completion in patterns.
+    protected override CompletePattern (
+      expression         : PExpr,
+      matched_value_type : TypeVar,
+      _patternTyper      : Typer.PatternTyper,
+      env                : GlobalEnv
+    )
+      : void //
+    {
+      assert(true);
+      match (expression)
+      {
+        | PExpr.Is (_nested, PExpr.ToComplete (name)) with obj = null
+        | PExpr.Is (_nested, PExpr.Member (obj, Parsetree.Splicable.HalfId (name))) =>
+          def obj = obj;
+          def name = name;
+          def elems = SCG.List ();
+
+          def nss = this.CoreEnv.NameTree.NamespaceTree 
+            :: name.GetEnv(this.CoreEnv).OpenNamespaces;
+          Completion.AddTypesAndNamespaces (elems, nss, obj, name, true, true);
+
+          throw CompletionResult (elems, name.Id, name.Location);
+
+        | PExpr.Call(PExpr.ToComplete(name), _) with obj = null
+        | PExpr.ToComplete (name)               with obj = null
+        | PExpr.Member (obj, Parsetree.Splicable.HalfId (name)) =>
+          def name = name;
+          def obj = obj;
+          def elems = SCG.List ();
+          
+          elems.Add(Elem.Simple("_", "wildcard", 0));
+
+          match (matched_value_type.Hint)
+          {
+            | Some(ty) =>
+              def prefix = name.Id;
+              def option = System.StringComparison.InvariantCultureIgnoreCase;
+              match (ty)
+              {
+                | FixedType.Class (ti, args) =>
+                  match (ti.GetTydecl())
+                  {
+                    | TT.TypeDeclaration.Variant (members) => // Pattern is VariantOption.
+                      // Add VariantOption's to completion list.
+                      foreach (m when m.Name.StartsWith (prefix, option) in members)
+                        elems.Add(Elem.Node(m.Name, m.NamespaceNode));
+
+                      def tryAddName(name)
+                      {
+                        when (name.StartsWith (prefix, option))
+                          elems.Add(Elem.Node(name, ti.NamespaceNode))
+                      }
+
+                      // If namespace which define matched_value_type open
+                      // add the type name to completion list.
+                      when (obj == null)
+                        match (env.LookupType([ti.Name], null, args.Length))
+                        {
+                          | Some => tryAddName(ti.Name)
+                          | _    =>
+                            // Add full name of matched_value_type to completion list.
+                            tryAddName (ti.NamespaceNode.GetDisplayName());
+                        }
+                      
+                      throw CompletionResult(elems, name.Id, name.Location);
+
+                  //| TypeDeclaration.VariantOption =>
+                    | _ => System.Console.WriteLine(ty);
+                  }
+                | _ => System.Console.WriteLine(ty);
+              }
+
+            | None => System.Console.WriteLine(matched_value_type);
+          }
+
+          def nss = this.CoreEnv.NameTree.NamespaceTree 
+            :: name.GetEnv(this.CoreEnv).OpenNamespaces;
+          Completion.AddTypesAndNamespaces (elems, nss, obj, name, true, true);
+          
+          throw CompletionResult(elems, name.Id, name.Location);
+
+        | _ => assert(true);
+      }
+    }
+  } // end class Engine
+} // end namespace
