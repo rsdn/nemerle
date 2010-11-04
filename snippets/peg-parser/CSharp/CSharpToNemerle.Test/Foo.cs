@@ -114,6 +114,8 @@ namespace CSharpToNemerle.Test
   {
     static Program() { }
 
+    int[] data = { };
+
     void TestAlias()
     {
       Console.WriteLine("Alias LIST is {0}", typeof(LIST));
