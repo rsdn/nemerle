@@ -1,3 +1,4 @@
 ﻿class A{
-    object x = from from in "" select from;
+    object x = from x in X where x is int? select x;
+    object x = (int*) -a;
 }
