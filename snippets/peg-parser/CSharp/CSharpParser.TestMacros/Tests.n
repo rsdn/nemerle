@@ -1,0 +1,149 @@
+﻿using System;
+using System.IO;
+using System.Text.RegularExpressions;
+using SCG = System.Collections.Generic;
+
+using Nemerle.Assertions;
+using Nemerle.Macros;
+using Nemerle.Compiler;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using PT = Nemerle.Compiler.Parsetree;
+
+namespace CSharpParser.Tests
+{
+  [Nemerle.MacroUsage(Nemerle.MacroPhase.BeforeInheritance, Nemerle.MacroTargets.Class)]
+  macro Tests(tb : TypeBuilder, fileMask : string)
+  {
+    unless(Manager().IsIntelliSenseMode)
+    {
+      def fileMask = Path.Combine(Path.GetDirectoryName(Manager().Options.ProjectPath), fileMask);
+      TestsImpl.BuildTests(tb, fileMask)
+    }
+  }
+
+  module TestsImpl
+  {
+    public BuildTests(tb : TypeBuilder, fileMask : string) : void
+    {
+      tb.GetModifiers().custom_attrs ::= <[ NUnit.Framework.TestFixtureAttribute ]>;
+    
+      def maskFileName = Path.GetFileName(fileMask);
+      def maskFileDir = Path.GetDirectoryName(fileMask);
+      def fileNames =
+        if(fileMask.IndexOfAny(array['*', '?']) >= 0)
+          Directory.GetFiles(maskFileDir, maskFileName, SearchOption.TopDirectoryOnly)
+        else
+          Directory.GetFiles(maskFileDir, maskFileName);
+
+      foreach(fileName in fileNames)
+      {
+        def parserInput =
+          using(file = IO.FileStream(fileName, IO.FileMode.Open, IO.FileAccess.Read))
+          using(reader  = IO.StreamReader(file, Text.Encoding.ASCII, true))
+            reader.ReadToEnd();
+
+        tb.Define(BuildTest(fileName, parserInput));
+      }
+      otherwise
+        Message.Warning($"no files matching `$fileMask' found")
+    }
+
+    private nodeTypeNamePattern : Regex = Regex(@"//\s*NODE\s*:\s*(?<nodeTypeNameStr>.*?)\s*$",   RegexOptions.Compiled);
+    private nodePatternPattern  : Regex = Regex(@"//\s*PATTERN\s*:\s*(?<nodePatternStr>.*?)\s*$", RegexOptions.Compiled);
+    private errorLinePattern    : Regex = Regex(@"//\s*E\s*:?\s*",                                RegexOptions.Compiled);
+
+    private BuildTest(fileName : string, parserInput : string) : PT.ClassMember
+    {
+      mutable nodeTypeName = null;
+      mutable nodePattern = null;
+      mutable errorLines = [];
+
+      def csharpParserNamespace = ManagerClass.Instance.CoreEnv.EnterIntoNamespace([ "CSharpParser" ]);
+      def fileIndex = Location.GetFileIndex(fileName);
+
+      foreach(line in parserInput.Split(array[ "\r\n", "\n" ], StringSplitOptions.None) with lineIndex)
+      {
+        def matchobj = nodeTypeNamePattern.Match(line);
+        when(matchobj.Success)
+        {
+          def group = matchobj.Groups["nodeTypeNameStr"];
+          def loc = Location(fileIndex, lineIndex + 1, group.Index + 1);
+
+          if(null == nodeTypeName)
+            nodeTypeName = MainParser.ParseExpr(csharpParserNamespace, group.Value, loc);
+          else
+            Message.Error(loc, "AST node type directive can be specified only once");
+
+          Nemerle.Imperative.Continue();
+        }
+
+        def matchobj = nodePatternPattern.Match(line);
+        when(matchobj.Success)
+        {
+          def group = matchobj.Groups["nodePatternStr"];
+          def loc = Location(fileIndex, lineIndex + 1, group.Index + 1);
+
+          if(null == nodePattern)
+            nodePattern = MainParser.ParseExpr(csharpParserNamespace, group.Value, loc);
+          else
+            Message.Error(loc, "AST node pattern directive can be specified only once");
+
+          Nemerle.Imperative.Continue();
+        }
+
+        def matchobj = errorLinePattern.Match(line);
+        when(matchobj.Success)
+        {
+          errorLines ::= lineIndex;
+
+          Nemerle.Imperative.Continue();
+        }
+      }
+
+      def payload =
+        match( (nodeTypeName, nodePattern, errorLines) )
+        {
+          | (null, null, _) =>
+            <[
+              when(parseErrors.Count > 0)
+              {
+                NUnit.Framework.Assert.Fail("Unexpected error messages.");
+              }
+            ]>
+
+          | (nodeTypeName, nodePattern, _) =>
+            <[
+              when(parseErrors.Count > 0)
+              {
+                NUnit.Framework.Assert.Fail("Unexpected error messages.");
+              }
+              unless(LRPEGCC.AstUtils.ValidateAst(unit, $nodeTypeName, $nodePattern))
+              {
+                NUnit.Framework.Assert.Fail("AST validation failed.");
+              }
+            ]>
+        }
+
+      def methodName = Path.GetFileName(fileName);
+      <[ decl:
+        [NUnit.Framework.TestAttribute(Description = $(parserInput : string))]
+        public $(methodName : usesite)() : void
+        {
+          def parser = CSharpParser.Parser();
+          def source = Nemerle.Peg.SourceSnapshot($(parserInput : string), 1, $(methodName : string));
+          match(parser.Parse(source))
+          {
+            | Some(unit) =>
+              def parseErrors = unit.GetParseErrors();
+              $payload
+            | _ =>
+              NUnit.Framework.Assert.Fail("Failed to parse input.");
+          }
+        }
+      ]>
+    }
+  }
+}
