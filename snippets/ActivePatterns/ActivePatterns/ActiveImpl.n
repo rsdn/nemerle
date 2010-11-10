@@ -1,0 +1,381 @@
+﻿using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nemerle.ActivePatterns
+{
+  /*
+     Example
+     =======
+     
+     Suppose we have this active pattern
+         
+         [Pattern]
+         Sum(a : int, b : int) : option[int]
+         {
+           Some(b - a)
+         }
+     
+     and a code that uses it
+     
+         active match(5)
+         {
+           | 4 => Console.WriteLine(4);
+           | Sum(2,x) => Console.WriteLine(x);
+           | _ => Console.WriteLine("You will never see it");
+         }
+     
+     the code will be converted by a macros into
+        
+        {
+            def rest(x)
+            {
+                match(x)
+                {
+                    | _ => Console.WriteLine("You will never see it");
+                }
+            }
+            match(5)
+            {
+              | 4 => Console.WriteLine(4);
+              | y => match(Sum(2,y)) 
+                {
+                  | Some(x) => Console.WriteLine(x);
+                  | _ => rest(5)
+                }
+              | _ => rest(5)
+            }
+        }
+     
+     This example illustates the basic stages of the macros
+       1. Splitting the body of match expression into three parts 
+          (methods ConvertorActivePatternMatching)
+            * list of casual (not active patterns) patterns, 
+                [ <[ | 4 => Console.WriteLine(4); ]> ]
+            * active pattern
+                <[ | Sum(2,x) => Console.WriteLine(x); ]>
+            * and the rest patterns 
+                [ <[ | _ => Console.WriteLine("You will never see it"); ]> ]
+       
+       2. Processing the rest patterns (ConvertorActivePatternMatching)
+            * the rest patterns are composed into a new match wrapped by a local function
+       
+       3. Decomposition of the active pattern (method Decompose) into
+            * a new variable that replaces the active pattern in the original match exptession
+                <[ y ]>
+            * a name of active pattern
+                <[ Sum ]>
+            * additional parameters to active pattern
+                [ <[ 2 ]> ]
+            * an expected result of success parsing
+                <[ x ]>
+       
+       4. Composing decomposed active pattern to nested match (ExpandActive)
+  */
+  
+  module ActiveImpl
+  {
+    [Record]
+    class DecomposedActivePattern
+    {
+        public NewVariable : PExpr.Ref { get; private set; }
+        public ActivePatternName : PExpr { get; private set; }
+        public ExprectedResult : PExpr { get; private set }
+        public Parameters : list[PExpr] { get; private set; }
+    }
+    
+    class DeactivationWorker
+    {
+        public this(className : string)
+        {
+          deactivated = [];
+          whenGuard = None();
+          this.className = className;
+        }
+        
+        public mutable deactivated : list[DecomposedActivePattern];
+        public mutable whenGuard : option[PExpr];
+        className : string;
+        
+        isActive(method : PExpr) : bool
+        {
+          PatternImpl.PatternTypes.ContainsKey(className) 
+            && PatternImpl.PatternTypes[className].Contains(method.ToString())
+        }
+        
+        public Decompose(rule : PExpr) : PExpr 
+        {
+          match (rule)
+          {
+            | <[ $a when $b ]> => match(whenGuard)
+              {
+                | None() => whenGuard = Some(b); Decompose(a)
+                | Some(_) => Message.FatalError("unexpected 'when' guard");
+              }
+            | <[ $function(..$args) ]> when isActive(function) && args.Length == 0 => Message.FatalError("active pattern call should have at least one argument");
+            | <[ $function(..$args) ]> when isActive(function) => 
+              {
+                def args = args.Reverse();
+                def t = PExpr.Ref(Macros.NewSymbol());
+                deactivated ::= (DecomposedActivePattern(t, function, args.Head, args.Tail.Reverse()));
+                t
+              }
+            | <[ $function(..$args) ]> => <[ $function(..$(args.Map(Decompose))) ]>
+            | PExpr.Tuple(args) => PExpr.Tuple(args.Map(Decompose))
+            | PExpr.Where(name, PExpr.Tuple(fields)) => PExpr.Where(name, PExpr.Tuple(fields.Map(fun(x)
+              {
+                match(x)
+                {
+                  | <[ $x = $p ]> => <[ $x = $(Decompose(p)) ]>
+                }
+              })))
+            | _ => rule
+          }
+        }
+    }
+    
+    class ActivePatternMatchingConvertor
+    {
+        public this(typer : Typer) 
+        {
+          this.typer = typer;
+        }
+        
+        typer : Typer;
+        
+        ExpandActive(deactivated : list[DecomposedActivePattern], whenGuard : option[PExpr], value : PExpr, dismatch : option[PExpr]) : PExpr
+        {
+          match(deactivated)
+          {
+            | [] => <[ $value ]>
+            | [dap] => match(whenGuard)
+              {
+                | Some(guard) => 
+                  {
+                    mutable cases = match(dismatch)
+                    {
+                      | Some(dismatch) => [<[ case: | _ => $dismatch ]>]
+                      | None() => []
+                    }
+                    cases ::= <[ case: | Some($(dap.ExprectedResult)) when $guard => $value ]>;
+                    
+                    def arg = (dap.NewVariable::dap.Parameters.Reverse()).Reverse();
+                    def bar = PExpr.Match(<[ $(dap.ActivePatternName)(..$arg) ]>, cases);
+                    ConvertorActivePatternMatching(bar, dismatch)
+                  }
+                | None() => 
+                  {
+                    mutable cases = match(dismatch)
+                    {
+                      | Some(dismatch) => [<[ case: | _ => $dismatch ]>]
+                      | None() => []
+                    }
+                    cases ::= <[ case: | Some($(dap.ExprectedResult)) => $value ]>;
+                    def arg = (dap.NewVariable::dap.Parameters.Reverse()).Reverse();
+                    def bar = PExpr.Match(<[ $(dap.ActivePatternName)(..$arg) ]>, cases);
+                    ConvertorActivePatternMatching(bar, dismatch)
+                  }
+              }
+            | dap::rest => 
+              {
+                def value = ExpandActive(rest, whenGuard, value, dismatch);
+                mutable cases = match(dismatch)
+                {
+                  | Some(dismatch) => [<[ case: | _ => $dismatch ]>]
+                  | None() => []
+                }
+                cases ::= <[ case: | Some($(dap.ExprectedResult)) => $value ]>;
+            
+                def arg = (dap.NewVariable::dap.Parameters.Reverse()).Reverse();
+                def bar = PExpr.Match(<[ $(dap.ActivePatternName)(..$arg) ]>, cases);
+                
+                ConvertorActivePatternMatching(bar, dismatch)
+              }
+          }
+        }
+        
+        public ConvertorActivePatternMatching(mat : PExpr) : PExpr
+        {
+          // replaces <[ | a | b => e ]> to <[ | a => e | b => e ]>
+          def normalizeCases(cases)
+          {
+            mutable rules = [];
+            foreach(case in cases)
+            {
+              match(case)
+              {
+                | <[ case: | ..$guards => $expr ]> => foreach(guard in guards)
+                  {
+                    rules ::= (guard, expr)
+                  }
+              }
+            }
+            rules
+          }
+          
+          def splitPatterns(rules)
+          {
+            mutable casual = [];
+            // rule, deactivated, when, value
+            mutable activeInfo = None();
+            mutable rest = [];
+            
+            def sorter(rules)
+            {
+              | [] => ()
+              | (rule, value) :: tail =>
+                {
+                  def worker = DeactivationWorker(typer.CurrentTypeBuilder.Name);
+                  def rule = worker.Decompose(rule);
+              
+                  if (worker.deactivated.Length > 0)
+                  {
+                    activeInfo = Some((rule, worker.deactivated, worker.whenGuard, value));
+                    rest = tail;
+                  }
+                  else
+                  {
+                    casual ::= (rule, value);
+                    sorter(tail);
+                  }
+                }
+            }
+            
+            sorter(rules.Reverse());
+            
+            (casual, activeInfo, rest)
+          }
+          
+          def wrapToRestFunction(restFunctionName, obj, restPatterns)
+          {
+            if (restPatterns.Length > 0) 
+            {
+              def matc = PExpr.Match(<[ $obj ]>, restPatterns.Map((r,p) => <[ case: | $r => $p ]> ));
+              def matc = ConvertorActivePatternMatching(matc);
+              <[ def $(restFunctionName : name)() { $matc } ]>
+            } else <[ () ]>;
+          }
+          
+          match (mat)
+          {
+            | <[ match ($val) { ..$cases } ]> => 
+              {
+                def patterns = normalizeCases(cases);
+                
+                def (casual, activeInfo, rest) = splitPatterns(patterns);
+                
+                def restFunctionName = Macros.NewSymbol();
+            
+                def restFunction = wrapToRestFunction(restFunctionName, val, rest);
+            
+                mutable fcases = casual.Map((r,p) => <[ case: | $r => $p ]>).Reverse();
+                match(activeInfo)
+                {
+                  | Some((rule, deactivated, wheng, value)) => 
+                      def expanded = ExpandActive(
+                                        deactivated, 
+                                        wheng, 
+                                        value, 
+                                        if (rest.Length > 0) Some(<[ $(restFunctionName : name)() ]>) else None()
+                                     );
+                      fcases ::= <[ case: | $rule => $expanded  ]>
+                  | None() => ()
+                }
+                when (rest.Length > 0) fcases ::= <[ case: | _ => $(restFunctionName : name)()]>;
+            
+                def mmatch = PExpr.Match(val, fcases.Reverse());
+            
+                def body = PExpr.Sequence([ restFunction, mmatch ]);
+                
+                
+            
+                <[ { $(body) } ]>
+              }
+            | _ => Message.FatalError("the `active match' macro expects a match construct")
+          }
+        }
+        
+        ConvertorActivePatternMatching(mat : PExpr, dismatch : option[PExpr]) : PExpr
+        {
+          match (mat)
+          {
+            | <[ 
+                 match ($val) 
+                 { 
+                   | $rule => $value 
+                   | _ => $rest
+                 } 
+              ]> => 
+              {
+                def worker = DeactivationWorker(typer.CurrentTypeBuilder.Name);
+                def rule = worker.Decompose(rule);
+                  
+                if (worker.deactivated.Length > 0)
+                {
+                  def value = ExpandActive(worker.deactivated, worker.whenGuard, value, dismatch);
+                  <[ match ($val) 
+                  { 
+                    | $rule => $value 
+                    | _ => $rest
+                  } ]>
+                }
+                else
+                {
+                  mutable cases = [ <[ case: | _ => $rest ]> ];
+                  cases ::= match(worker.whenGuard)
+                  {
+                    | Some(guard) => <[ case: | $rule when $guard => $value  ]>
+                    | None() => <[ case: | $rule => $value ]>
+                  }
+                  PExpr.Match(val, cases)
+                }
+              }
+            | <[ 
+                 match ($val) 
+                 { 
+                   | $rule => $value 
+                 } 
+              ]> => 
+              {
+                def worker = DeactivationWorker(typer.CurrentTypeBuilder.Name);
+                def rule = worker.Decompose(rule);
+                  
+                if (worker.deactivated.Length > 0)
+                {
+                  def value = ExpandActive(worker.deactivated, worker.whenGuard, value, dismatch);
+                  <[ match ($val) 
+                  { 
+                    | $rule => $value 
+                  } ]>
+                }
+                else
+                {
+                  match(worker.whenGuard)
+                  {
+                    | Some(guard) => <[ match ($val) { | $rule when $guard => $value } ]>
+                    | None() => <[ match ($val) { | $rule => $value } ]>
+                  }
+                }
+              }
+            | _ => 
+              {
+                Message.FatalError("WTF?")
+              }
+          }
+        }
+    }
+    
+    public Impl(typer : Typer, mat : PExpr) : PExpr
+    {
+      def convertor = ActivePatternMatchingConvertor(typer);
+      
+      convertor.ConvertorActivePatternMatching(mat)
+    }
+  }
+}
