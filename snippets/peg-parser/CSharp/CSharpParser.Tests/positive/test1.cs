@@ -1,7 +1,9 @@
-﻿// NODE:    TypeDeclaration.Class
-// PATTERN: TypeDeclaration.Class where ( Name = Identifier where ( Id = "Foo" ) )
-
-class Foo
+﻿// NODE:    TypeDeclaration
+// PATTERN: TypeDeclaration.Struct where ( Name = Identifier where ( Id = "Bar" ) )
+namespace X
 {
-
+  class Foo
+  {
+    struct Bar {}
+  }
 }

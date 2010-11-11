@@ -14,22 +14,23 @@ using PT = Nemerle.Compiler.Parsetree;
 
 namespace CSharpParser.Tests
 {
-  [Nemerle.MacroUsage(Nemerle.MacroPhase.BeforeInheritance, Nemerle.MacroTargets.Class)]
-  macro Tests(tb : TypeBuilder, fileMask : string)
+  macro GetTestCases(fileMask : string)
   {
-    unless(Manager().IsIntelliSenseMode)
+    if(Manager().IsIntelliSenseMode)
+    {
+      <[ [] ]>
+    }
+    else
     {
       def fileMask = Path.Combine(Path.GetDirectoryName(Manager().Options.ProjectPath), fileMask);
-      TestsImpl.BuildTests(tb, fileMask)
+      TestsImpl.MakeTests(Manager(), fileMask)
     }
   }
 
   module TestsImpl
   {
-    public BuildTests(tb : TypeBuilder, fileMask : string) : void
+    public MakeTests(manager : ManagerClass, fileMask : string) : PT.PExpr
     {
-      tb.GetModifiers().custom_attrs ::= <[ NUnit.Framework.TestFixtureAttribute ]>;
-    
       def maskFileName = Path.GetFileName(fileMask);
       def maskFileDir = Path.GetDirectoryName(fileMask);
       def fileNames =
@@ -38,6 +39,10 @@ namespace CSharpParser.Tests
         else
           Directory.GetFiles(maskFileDir, maskFileName);
 
+      def className =  Macros.NewSymbol("TestCases");
+
+      def tb = manager.CoreEnv.Define(<[ decl: internal module $(className : name) { } ]>);
+      mutable testCases = [];
       foreach(fileName in fileNames)
       {
         def parserInput =
@@ -45,17 +50,54 @@ namespace CSharpParser.Tests
           using(reader  = IO.StreamReader(file, Text.Encoding.ASCII, true))
             reader.ReadToEnd();
 
-        tb.Define(BuildTest(fileName, parserInput));
+        def testCase = MakeTest(fileName, parserInput);
+
+        def validatorName = Macros.NewSymbol("__AST_VALIDATOR__" + fileName);
+
+        tb.Define(<[ decl:
+          private $(validatorName : name)(unit : CSharpParser.CompilationUnit) : bool
+          {
+            $(testCase.ValidateAst)
+          }
+        ]>);
+
+        testCases ::= <[
+          CSharpParser.Tests.TestCase(
+            $(testCase.FileName : string),
+            Nemerle.Peg.SourceSnapshot($(testCase.Source : string)),
+            [..$(testCase.ErrorLines.Map(line => <[ $(line : int) ]>))],
+            $(validatorName : name))
+        ]>
       }
       otherwise
-        Message.Warning($"no files matching `$fileMask' found")
+        Message.Warning($"no files matching `$fileMask' found");
+
+      tb.Define(<[ decl:
+        public GetTestCases() : list[CSharpParser.Tests.TestCase]
+        {
+          [..$(testCases.Rev())]
+        }
+      ]>);
+
+      tb.Compile();
+
+      <[ $(className : name).GetTestCases() ]>
+    }
+
+    [Record]
+    private class TestCaseCreateInfo
+    {
+      [Accessor] fileName : string;
+      [Accessor] source : string;
+      [Accessor] errorLines : list[int];
+      [Accessor] validateAst : PT.PExpr;
     }
 
     private nodeTypeNamePattern : Regex = Regex(@"//\s*NODE\s*:\s*(?<nodeTypeNameStr>.*?)\s*$",   RegexOptions.Compiled);
     private nodePatternPattern  : Regex = Regex(@"//\s*PATTERN\s*:\s*(?<nodePatternStr>.*?)\s*$", RegexOptions.Compiled);
     private errorLinePattern    : Regex = Regex(@"//\s*E\s*:?\s*",                                RegexOptions.Compiled);
 
-    private BuildTest(fileName : string, parserInput : string) : PT.ClassMember
+    private MakeTest(fileName : string, parserInput : string) : TestCaseCreateInfo
     {
       mutable nodeTypeName = null;
       mutable nodePattern = null;
@@ -97,53 +139,20 @@ namespace CSharpParser.Tests
         def matchobj = errorLinePattern.Match(line);
         when(matchobj.Success)
         {
-          errorLines ::= lineIndex;
+          errorLines ::= lineIndex + 1;
 
           Nemerle.Imperative.Continue();
         }
       }
 
-      def payload =
-        match( (nodeTypeName, nodePattern, errorLines) )
-        {
-          | (null, null, _) =>
-            <[
-              when(parseErrors.Count > 0)
-              {
-                NUnit.Framework.Assert.Fail("Unexpected error messages.");
-              }
-            ]>
-
-          | (nodeTypeName, nodePattern, _) =>
-            <[
-              when(parseErrors.Count > 0)
-              {
-                NUnit.Framework.Assert.Fail("Unexpected error messages.");
-              }
-              unless(LRPEGCC.AstUtils.ValidateAst(unit, $nodeTypeName, $nodePattern))
-              {
-                NUnit.Framework.Assert.Fail("AST validation failed.");
-              }
-            ]>
-        }
-
-      def methodName = Path.GetFileName(fileName);
-      <[ decl:
-        [NUnit.Framework.TestAttribute(Description = $(parserInput : string))]
-        public $(methodName : usesite)() : void
-        {
-          def parser = CSharpParser.Parser();
-          def source = Nemerle.Peg.SourceSnapshot($(parserInput : string), 1, $(methodName : string));
-          match(parser.Parse(source))
-          {
-            | Some(unit) =>
-              def parseErrors = unit.GetParseErrors();
-              $payload
-            | _ =>
-              NUnit.Framework.Assert.Fail("Failed to parse input.");
-          }
-        }
-      ]>
+      TestCaseCreateInfo(
+        Path.GetFileName(fileName),
+        parserInput,
+        errorLines.Rev(),
+        if(null == nodeTypeName)
+          <[ _ = unit; true ]>
+        else
+          <[ LRPEGCC.AstUtils.ValidateAst(unit, $nodeTypeName, $nodePattern) ]>)
     }
   }
 }

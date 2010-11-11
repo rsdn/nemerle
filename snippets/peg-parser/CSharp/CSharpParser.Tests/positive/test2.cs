@@ -1,6 +1,8 @@
 ﻿// NODE:    TypeDeclaration.Class
 
-class Foo
-{
-
+namespace X {
+  class Foo
+  {
+  
+  }
 }
