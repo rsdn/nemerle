@@ -65,7 +65,7 @@ namespace CSharpParser.Tests
           CSharpParser.Tests.TestCase(
             $(testCase.FileName : string),
             Nemerle.Peg.SourceSnapshot($(testCase.Source : string)),
-            [..$(testCase.ErrorLines.Map(line => <[ $(line : int) ]>))],
+            [..$(testCase.ErrorInfo.Map(e => <[ CSharpParser.Tests.ErrorInfo($(e.Line : int), $(e.Message : string)) ]>))],
             $(validatorName : name))
         ]>
       }
@@ -89,70 +89,87 @@ namespace CSharpParser.Tests
     {
       [Accessor] fileName : string;
       [Accessor] source : string;
-      [Accessor] errorLines : list[int];
+      [Accessor] errorInfo : list[ErrorInfo];
       [Accessor] validateAst : PT.PExpr;
     }
 
-    private nodeTypeNamePattern : Regex = Regex(@"//\s*NODE\s*:\s*(?<nodeTypeNameStr>.*?)\s*$",   RegexOptions.Compiled);
-    private nodePatternPattern  : Regex = Regex(@"//\s*PATTERN\s*:\s*(?<nodePatternStr>.*?)\s*$", RegexOptions.Compiled);
-    private errorLinePattern    : Regex = Regex(@"//\s*E\s*:?\s*",                                RegexOptions.Compiled);
+    [Record]
+    private class ErrorInfo
+    {
+      [Accessor] line : int;
+      [Accessor] message : string;
+    }
+
+    private nodePatternPattern  : Regex = Regex(@"/\*\s*BEGIN-OUTPUT\s*(?<nodePattern>(\s|.)*?)\s*END-OUTPUT\s*\*/",
+                                                  RegexOptions.Compiled
+                                                  %| RegexOptions.Multiline
+                                                  %| RegexOptions.IgnoreCase);
+
+    private errorLinePattern    : Regex = Regex(@"//\s*E\s*:\s*(?<errorPattern>.*?)$",
+                                                  RegexOptions.Compiled
+                                                  %| RegexOptions.Multiline
+                                                  %| RegexOptions.IgnoreCase);
 
     private MakeTest(fileName : string, parserInput : string) : TestCaseCreateInfo
     {
-      mutable nodeTypeName = null;
       mutable nodePattern = null;
-      mutable errorLines = [];
+      mutable errorInfo = [];
+
+      def fileIndex = Location.GetFileIndex(fileName);
+      def lineMap = Nemerle.Peg.SourceSnapshot(parserInput);
+      def getLocationFromPos(pos)
+      {
+        def lineCol = Nemerle.Peg.Location(lineMap, pos, pos + 1).StartLineColumn;
+        Location(fileIndex, lineCol[0], lineCol[1])
+      }
 
       def csharpParserNamespace = ManagerClass.Instance.CoreEnv.EnterIntoNamespace([ "CSharpParser" ]);
-      def fileIndex = Location.GetFileIndex(fileName);
 
-      foreach(line in parserInput.Split(array[ "\r\n", "\n" ], StringSplitOptions.None) with lineIndex)
+      foreach(m is Match in nodePatternPattern.Matches(parserInput))
       {
-        def matchobj = nodeTypeNamePattern.Match(line);
-        when(matchobj.Success)
-        {
-          def group = matchobj.Groups["nodeTypeNameStr"];
-          def loc = Location(fileIndex, lineIndex + 1, group.Index + 1);
+        def g = m.Groups["nodePattern"];
+        if(null == nodePattern)
+          unless(string.IsNullOrEmpty(g.Value))
+            nodePattern = MainParser.ParseExpr(csharpParserNamespace, g.Value, getLocationFromPos(g.Index));
+        else
+          Message.Error(getLocationFromPos(m.Index), "duplicated BEGIN-OUTPUT directive");
+      }
+      otherwise
+        Message.Warning(Location(fileIndex, 1, 1), "no BEGIN-OUTPUT directive found in file");
 
-          if(null == nodeTypeName)
-            nodeTypeName = MainParser.ParseExpr(csharpParserNamespace, group.Value, loc);
-          else
-            Message.Error(loc, "AST node type directive can be specified only once");
+      foreach(m is Match in errorLinePattern.Matches(parserInput))
+      {
+        def g = m.Groups["errorPattern"];
+        errorInfo ::= ErrorInfo(getLocationFromPos(m.Index).Line, g.Value.Trim());
+      }
 
-          Nemerle.Imperative.Continue();
-        }
+      def prepareNodePattern(e)
+      {
+        Util.locate(e.Location,
+          match(e)
+          {
+            | <[ Id($(id : string)) ]> => <[ CSharpParser.Identifier where ( Id = $(id : string) ) ]>
 
-        def matchobj = nodePatternPattern.Match(line);
-        when(matchobj.Success)
-        {
-          def group = matchobj.Groups["nodePatternStr"];
-          def loc = Location(fileIndex, lineIndex + 1, group.Index + 1);
-
-          if(null == nodePattern)
-            nodePattern = MainParser.ParseExpr(csharpParserNamespace, group.Value, loc);
-          else
-            Message.Error(loc, "AST node pattern directive can be specified only once");
-
-          Nemerle.Imperative.Continue();
-        }
-
-        def matchobj = errorLinePattern.Match(line);
-        when(matchobj.Success)
-        {
-          errorLines ::= lineIndex + 1;
-
-          Nemerle.Imperative.Continue();
-        }
+            | <[ $e as $x ]>    => <[ $(prepareNodePattern(e)) as $x ]>
+            | <[ $e when $x ]>  => <[ $(prepareNodePattern(e)) when $x ]>
+            | <[ $x where $e ]> => <[ $x where $(prepareNodePattern(e)) ]>
+            | <[ $x(..$e) ]>    => <[ $x(..$(e.Map(prepareNodePattern))) ]>
+            | <[ (..$e) ]>      => <[ (..$(e.Map(prepareNodePattern))) ]>
+            | <[ [..$e] ]>      => <[ [..$(e.Map(prepareNodePattern))] ]>
+            | <[ {..$e} ]>      => <[ {..$(e.Map(prepareNodePattern))} ]>
+            | <[ $x = $e ]>     => <[ $x = $(prepareNodePattern(e)) ]>
+            | _ => e
+          })
       }
 
       TestCaseCreateInfo(
         Path.GetFileName(fileName),
         parserInput,
-        errorLines.Rev(),
-        if(null == nodeTypeName)
+        errorInfo.Rev(),
+        if(null == nodePattern)
           <[ _ = unit; true ]>
         else
-          <[ LRPEGCC.AstUtils.ValidateAst(unit, $nodeTypeName, $nodePattern) ]>)
+          <[ LRPEGCC.AstUtils.ValidateAst(unit, $(prepareNodePattern(nodePattern))) ]>)
     }
   }
 }

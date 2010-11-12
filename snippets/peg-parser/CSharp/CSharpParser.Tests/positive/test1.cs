@@ -1,9 +1,15 @@
-﻿// NODE:    TypeDeclaration
-// PATTERN: TypeDeclaration.Struct where ( Name = Identifier where ( Id = "Bar" ) )
-namespace X
+﻿namespace X
 {
   class Foo
   {
     struct Bar {}
   }
 }
+
+/*
+BEGIN-OUTPUT
+  TypeDeclaration.Struct where (
+    Name = Id("Bar")
+  )
+END-OUTPUT
+*/
