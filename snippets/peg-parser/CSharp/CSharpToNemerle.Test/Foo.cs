@@ -87,6 +87,7 @@ namespace CSharpToNemerle.Test
         set;
     }
 
+    [Description("just on method")]
     [return:Description("shuold be on return value")]
     public override string ToString()
     {
@@ -116,6 +117,8 @@ namespace CSharpToNemerle.Test
 
     int[] data = { };
 
+    string[] data2 = { "a", "b" };
+
     void TestAlias()
     {
       Console.WriteLine("Alias LIST is {0}", typeof(LIST));
@@ -131,6 +134,9 @@ namespace CSharpToNemerle.Test
 
       var z = new short[][] { new[]{ (short)1, 2 }, new short[]{ 3, 4 } }; // "(short)" is issue :(
       Console.WriteLine("z is {0}: {1}, {2}, {3}, {4}", z, z[0][0], z[0][1], z[1][0], z[1][1]);
+
+      string[] k = { "a", "b" };
+      Console.WriteLine("z is [ {0}, {1} ]", k[0], k[1]);
     }
 
     void TestMagic() 
