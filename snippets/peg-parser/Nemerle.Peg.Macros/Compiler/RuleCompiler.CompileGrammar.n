@@ -1,0 +1,204 @@
+﻿using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using System;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace Nemerle.Peg
+{
+  partial internal class RuleCompiler
+  {
+    public CompileGrammar(typedGrammar : Grammar) : void
+    {
+      using (file = IO.File.CreateText("time.txt"))
+      {
+        def timer = System.Diagnostics.Stopwatch.StartNew();
+        def _follow       = FirstAndFollow(typedGrammar);
+        file.WriteLine(timer.Elapsed);
+      }
+      def untypedGrammar          = GrammarTyper.RemoveAllCaptures(typedGrammar);
+      def optimizedTypedGrammar   = if(_isDebug) typedGrammar   else Optimizer.OptimizeGrammar(typedGrammar);
+      def optimizedUntypedGrammar = if(_isDebug) untypedGrammar else Optimizer.OptimizeGrammar(untypedGrammar);
+
+      def calledRules = Hashtable();
+      def rulesToCall = Stack();
+      def callRule(name, useResult)
+      {
+        def key = (name, useResult);
+        when (!calledRules.Contains(key))
+        {
+          calledRules.Add(key, 0);
+          rulesToCall.Push(key);
+        }
+      }
+      def definedMemoize = Hashtable();
+      def defineMemoize(name : NameRef, ty : FixedType)
+      {
+        match (definedMemoize.Get(name))
+        {
+          | Some(res) => res;
+          | None =>
+            def memPos         = $"__GENERATED_PEG__Memeoize_Pos__$(name.Id)__";
+            def memNewPos      = $"__GENERATED_PEG__Memeoize_End__$(name.Id)__";
+            def memResult      = $"__GENERATED_PEG__Memeoize_Res__$(name.Id)__";
+            def maxRollbackPos = $"__GENERATED_PEG__MaxRollback___$(name.Id)__";
+            _ = _tb.DefineWithSource(<[ decl:
+              private mutable $(memPos : dyn) : int = -1;
+            ]>);
+            _ = _tb.DefineWithSource(<[ decl:
+              private mutable $(memNewPos : dyn) : int = -1;
+            ]>);
+            _ = _tb.DefineWithSource(<[ decl:
+              private mutable $(memResult : dyn) : $(ty : typed);
+            ]>);
+            _ = _tb.DefineWithSource(<[ decl:
+              private mutable $(maxRollbackPos : dyn) : int = -1;
+            ]>);
+            def res = (memPos, memNewPos, memResult, maxRollbackPos);
+            definedMemoize.Add(name, res);
+            res;
+        }
+      }
+      callRule(optimizedTypedGrammar.StartRuleName, true);
+      while (rulesToCall.Count > 0)
+      {
+        def (name, useResult) = rulesToCall.Pop();
+        def rule = if (useResult) optimizedTypedGrammar.GetRule(name);
+                   else           optimizedUntypedGrammar.GetRule(name);
+
+        def body =
+          try
+          {
+            CompileRule(rule, useResult, callRule, defineMemoize);
+          }
+          catch
+          {
+            | ex =>
+              Message.Error(ex.Message);
+              PExpr.Error();
+          }
+
+        def method = if (useResult)
+        {
+          def ty = match (rule.ResultType)
+          {
+            | Some(NType(ty)) => <[ $(ty : typed) ]>
+
+            | _ =>
+              Message.Error("PEG implementation error.");
+              PExpr.Error();
+          };
+
+          <[decl:
+            private $(DecorateRuleName(name.Id) : dyn)(pos : int, result : ref $ty, text : string) : int
+            {
+              $body;
+            }
+          ]>
+        }
+        else
+        {
+          <[decl:
+            private $(DecorateRuleName(name.Id) : dyn)(pos : int, text : string) : int
+            {
+              $body;
+            }
+          ]>
+        }
+
+        _ = _tb.DefineWithSource(method);
+      }
+      def cmps = definedMemoize.MapToList(keyValue =>
+      {
+        def name = keyValue.Key;
+        def id = typedGrammar.GetRule(name).Id;
+        def (_, _, _, maxRollbackPos) = keyValue.Value;
+        <[
+          when (max < $(maxRollbackPos : dyn))
+          {
+            max = $(maxRollbackPos : dyn);
+            ids.Clear();
+          }
+          when ($(maxRollbackPos : dyn) > 0 && max == $(maxRollbackPos : dyn))
+            ids.Add($(id : int));
+        ]>
+      });
+
+      _ = _tb.DefineWithSource(
+        <[decl:
+          public GetMaxRollbackPosAndIds() : int * System.Collections.Generic.List[int]
+          {
+            def ids = System.Collections.Generic.List(42);
+            mutable max = -1;
+            {..$cmps}
+            (max, ids);
+          }
+        ]>);
+
+      _ = _tb.DefineWithSource(
+        <[decl:
+          public GetMaxRollbackPosAndNames() : int * System.Collections.Generic.List[string]
+          {
+            def (max, ids) = GetMaxRollbackPosAndIds();
+            def names = System.Collections.Generic.List(ids.Count);
+            foreach (id in ids)
+              names.Add(GetRuleName(id));
+            (max, names);
+          }
+        ]>);
+
+      def idToName = typedGrammar.Names.Map(name => MatchCase([<[ $(typedGrammar.GetRule(name).Id : int) ]>], <[ $(name.Id : string) ]>));
+      def idToName = idToName + [MatchCase([<[ _ ]>], <[ "Unkown rule name." ]>)];
+      _ = _tb.DefineWithSource(
+        <[decl:
+          public GetRuleName(id : int) : string
+          {
+            match (id)
+            {
+              ..$idToName
+            }
+          }
+        ]>);
+
+      def clearMaxRollbackPos = definedMemoize.MapToList(keyValue =>
+      {
+        def (_, _, _, maxRollbackPos) = keyValue.Value;
+        <[
+          $(maxRollbackPos : dyn) = -1;
+        ]>
+      });
+
+      _ = _tb.DefineWithSource(
+        <[decl:
+          private ResetMaxRollbackPos() : void
+          {
+            ..$clearMaxRollbackPos
+          }
+        ]>);
+
+      def clearMemoization = definedMemoize.MapToList(keyValue =>
+      {
+        def (memPos, memNewPos, memResult, _) = keyValue.Value;
+        <[
+          {
+            $(memPos    : dyn) = -1;
+            $(memNewPos : dyn) = -1;
+            $(memResult : dyn) = $(Typedtree.TExpr.DefaultValue() : typed);
+          }
+        ]>
+      });
+
+      _ = _tb.DefineWithSource(
+        <[decl:
+          private ResetMemoization() : void
+          {
+            ..$clearMemoization
+          }
+        ]>);
+    }
+  }
+}
