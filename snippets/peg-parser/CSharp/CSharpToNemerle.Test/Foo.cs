@@ -233,8 +233,10 @@ namespace CSharpToNemerle.Test
     
     void TestLambda()
     {
-      var c = new Container<string, Data<int>>(_x => new Data<int>());
-      Console.WriteLine(c.GetType());
+      var c1 = new Container<string, Data<int>>(_x => new Data<int>());
+      var c2 = x => x == 10;
+      Console.WriteLine(c1.GetType());
+      Console.WriteLine(c2.GetType());
     }
   }
 }
