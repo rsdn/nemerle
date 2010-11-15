@@ -110,8 +110,19 @@ namespace CSharpToNemerle.Test
   }
 
   class X { public int A { get; set; } public int B { get; set; } }
+
+  public class Container<T1, T2>
+  {
+    public Container(Func<T1, T2> _f)
+    {
+    }
+  }
   
-  static partial class Program 
+  public class Data<T>
+  {
+  }
+
+  static partial class Program
   {
     static Program() { }
 
@@ -218,6 +229,12 @@ namespace CSharpToNemerle.Test
       j = i--;
       Console.WriteLine(j == 31);
       Console.WriteLine(i == 30);
+    }
+    
+    void TestLambda()
+    {
+      var c = new Container<string, Data<int>>(_x => new Data<int>());
+      Console.WriteLine(c.GetType());
     }
   }
 }
