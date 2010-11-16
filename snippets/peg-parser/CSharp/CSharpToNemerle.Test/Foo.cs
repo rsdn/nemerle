@@ -238,5 +238,15 @@ namespace CSharpToNemerle.Test
       Console.WriteLine(c1.GetType());
       Console.WriteLine(c2.GetType());
     }
+
+    void TestDictionaryInitializer()
+    {
+      var d = new System.Collections.Generic.Dictionary<string, bool>()
+      {
+        { "a", false },
+        { "b", true }
+      };
+      Console.WriteLine(d["b"]);
+    }
   }
 }

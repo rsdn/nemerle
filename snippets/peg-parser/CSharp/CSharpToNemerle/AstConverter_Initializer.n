@@ -1,0 +1,182 @@
+﻿using System;
+using SCG = System.Collections.Generic;
+using SG  = System.Globalization;
+
+using Nemerle.Assertions;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+
+using PT = Nemerle.Compiler.Parsetree;
+using PEG = Nemerle.Peg;
+using CS = CSharpParser;
+
+namespace CSharpToNemerle
+{
+  public partial class AstConverter
+  {
+    ConvertVariableInitializer(varType : CS.Expr, init : CS.VariableInitializer) : PT.PExpr
+    {
+      match(init)
+      {
+        | null => null
+
+        | Expr(expr) when null == varType =>
+          ConvertExpr(expr)
+
+        | Expr(expr) =>
+          PT.PExpr.TypeEnforcement(expr.NLocation(), ConvertExpr(expr), ConvertExpr(varType))
+
+        | Complex =>
+          ConvertArrayInitializer(null, [], 1, init)
+
+        | Property   with msg = "property initializer not allowed here"
+        | StackAlloc with msg = "`stackalloc' expression is not supported" =>
+          def loc = init.NLocation();
+          Message.Error(loc, msg);
+          PT.PExpr.Error(loc)
+      }
+    }
+
+    ConvertObjectInitializer(ctor : PT.PExpr, init : CS.VariableInitializer) : PT.PExpr
+    {
+      match(init)
+      {
+        | null
+        | Complex([]) =>
+          ctor
+
+        | Complex((Property :: _) as seq) with (converter = ConvertObjectPropertyInitializer)
+        | Complex((Expr     :: _) as seq) with (converter = ConvertCollectionItemInitializer)
+        | Complex((Complex  :: _) as seq) with (converter = ConvertCollectionItemInitializer) =>
+          Util.locate(init.NLocation(),
+          {
+            if(ctor is PT.PExpr.Member)
+            {
+              def seq = seq.Map(converter(ctor, _));
+              <[ { ..$seq } ]>
+            }
+            else
+            {
+              def tmp = Macros.NewSymbol("tmp");
+              def seq = seq.Map(converter(<[ $(tmp : name) ]>, _));
+              <[
+                def $(tmp : name) = $ctor;
+                { ..$seq }
+                $(tmp : name)
+              ]>
+            }
+          });
+
+        | _ =>
+          def loc = init.NLocation();
+          Message.Error(loc, "invalid initializer expression");
+          PT.PExpr.Error(loc)
+      }
+    }
+
+    ConvertObjectPropertyInitializer(obj : PT.PExpr, init : CS.VariableInitializer) : PT.PExpr
+    {
+      def loc = init.NLocation();
+      match(init)
+      {
+        | Property(id, Expr(value)) =>
+          Util.locate(loc, <[ $obj.$(MakeSplicableName(id)) = $(ConvertExpr(value)) ]>)
+
+        | Property(id, Complex as init) =>
+          Util.locate(loc,
+          {
+            def init = ConvertObjectInitializer(<[ $obj.$(MakeSplicableName(id)) ]>, init);
+            <[ _ = $init ]>
+          });
+
+        | _ =>
+          Message.Error(loc, "assignment statement `name = expression' expected in object initializer sequence");
+          PT.PExpr.Error(loc)
+      }
+    }
+
+    ConvertCollectionItemInitializer(obj : PT.PExpr, init : CS.VariableInitializer) : PT.PExpr
+    {
+      def loc = init.NLocation();
+      match(init)
+      {
+        | Property
+        | Expr(CS.Expr.Assign) =>
+          Message.Error(loc, "assignment expression is not allowed in collection initializer");
+          PT.PExpr.Error(loc)
+
+        | Expr(value) =>
+          Util.locate(loc, <[ $obj.Add($(ConvertExpr(value))) ]>)
+
+        | Complex(values) =>
+          mutable args = [];
+          foreach(expr in values)
+          {
+            | Expr(value) =>
+              args ::= ConvertExpr(value)
+
+            | _ =>
+              Message.Error(expr.NLocation(), "expression expected in object initializer sequence");
+          }
+          Util.locate(loc, <[ $obj.Add(..$(args.Rev())) ]>)
+
+        | _ =>
+          Message.Error(loc, "bad expression in collection initializer");
+          PT.PExpr.Error(loc)
+      }
+    }
+
+    ConvertArrayInitializer(elementType : CS.Expr, arrayArgs : list[CS.Expr], rank : int, init : CS.VariableInitializer) : PT.PExpr
+    {
+      match(init)
+      {
+        | null
+        | Complex([]) =>
+          if(arrayArgs.IsEmpty)
+            PT.PExpr.EmptyArray([<[ $(0 : int) ]>])
+          else
+            PT.PExpr.EmptyArray(arrayArgs.Map(ConvertExpr))
+
+        | Complex(_) =>
+          def loc = init.NLocation();
+          unless(arrayArgs.IsEmpty)
+            Message.Warning(arrayArgs.Head.NLocation() + arrayArgs.Last.NLocation(), "array size arguments are ignored");
+          PT.PExpr.Array(loc, Util.locate(loc, <[ $(rank : int) ]>), ConvertArrayElement(elementType, init))
+
+        | _ =>
+          def loc = init.NLocation();
+          Message.Error(loc, "array initializer expected");
+          PT.PExpr.Error(loc)
+      }
+    }
+
+    ConvertArrayElement(elementType : CS.Expr, expr : CS.VariableInitializer) : PT.PExpr
+    {
+      def loc = expr.NLocation();
+      match(expr) {
+        | Property
+        | Expr(CS.Expr.Assign) =>
+          Message.Error(loc, "assignment is not supported in array initializer");
+          PT.PExpr.Error(loc)
+
+        | Expr(expr) when null != elementType =>
+          PT.PExpr.TypeEnforcement(loc, ConvertExpr(expr), ConvertExpr(elementType));
+
+        | Expr(expr) =>
+          ConvertExpr(expr)
+
+        | Complex([]) => 
+          PT.PExpr.ListLiteral(loc, [])
+
+        | Complex(first :: others) =>
+          def first = ConvertArrayElement(elementType, first);
+          def others = others.Map(ConvertArrayElement(null, _));
+          PT.PExpr.ListLiteral(loc, first :: others)
+
+        | _ =>
+          Message.Error(loc, "array element expected");
+          PT.PExpr.Error(loc)
+      }
+    }
+  }
+}
