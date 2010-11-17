@@ -248,5 +248,30 @@ namespace CSharpToNemerle.Test
       };
       Console.WriteLine(d["b"]);
     }
+
+    void TestGoto()
+    {
+      for(int i = 0; i < 100; ++i)
+        if(i == 10)
+          goto ENDLOOP;
+    ENDLOOP:
+      Console.WriteLine("GOTO :)");
+    }
+    
+    void TestSwitch()
+    {
+      var i = 10;
+      switch(i)
+      {
+        case 0:
+        case 1:
+          Console.WriteLine("Fail");
+          break;
+
+        case 10:
+        case 11:
+          Console.WriteLine("OK");
+      }
+    }
   }
 }
