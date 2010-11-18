@@ -257,7 +257,7 @@ namespace CSharpToNemerle.Test
     ENDLOOP:
       Console.WriteLine("GOTO :)");
     }
-    
+
     void TestSwitch()
     {
       var i = 10;
