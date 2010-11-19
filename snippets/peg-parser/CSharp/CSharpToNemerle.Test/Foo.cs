@@ -260,7 +260,7 @@ namespace CSharpToNemerle.Test
 
     void TestSwitch()
     {
-      var i = 10;
+      var i = 14;
       switch(i)
       {
         case 0:
@@ -268,9 +268,18 @@ namespace CSharpToNemerle.Test
           Console.WriteLine("Fail");
           break;
 
+        case 5:
+          goto default;
+
         case 10:
         case 11:
           Console.WriteLine("OK");
+
+        case 14:
+          goto case 5;
+
+        default:
+          goto case 11;
       }
     }
   }

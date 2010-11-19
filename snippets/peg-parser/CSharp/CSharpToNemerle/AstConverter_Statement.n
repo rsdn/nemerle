@@ -19,26 +19,13 @@ namespace CSharpToNemerle
     {
       def loc = stmt.NLocation();
 
-      def foldStatements(stmts : list[CS.Statement]) : PT.PExpr {
-        def mapStatements(_) {
-          | []      => []
-          | [x]     => ConvertStatement(x)
-          | x :: xs => WithLastStatement(false).ConvertStatement(x) + mapStatements(xs)
-        }
-        match(mapStatements(stmts)) {
-          | []  => PT.PExpr.Void(loc)
-          | [x] => x
-          | xs  => PT.PExpr.Sequence(loc, xs)
-        }
-      }
-
       match(stmt) {
         | Empty
         | Block([]) =>
           [Util.locate(loc, <[ _ = () ]>)]
 
         | Block(stmts) =>
-          [foldStatements(stmts)]
+          [ConvertStatements(loc, stmts)]
 
         | Expression(expr) =>
           def expr = WithIntoExpression(false).ConvertExpr(expr);
@@ -82,51 +69,8 @@ namespace CSharpToNemerle
         | If(expr, trueStmt, falseStmt) =>
           [Util.locate(loc, <[ Nemerle.Core.@if($(ConvertExpr(expr)), $(ConvertExpr(trueStmt)), $(ConvertExpr(falseStmt))) ]>)]
 
-        | Switch(expr, entries) =>
-          def expr = ConvertExpr(expr);
-
-          mutable matchCases = [];
-          mutable currentEntriesRev = [];
-          mutable wasDefault = false;
-
-          foreach(entry in entries)
-          {
-            currentEntriesRev ::= entry;
-            unless(entry.Body.IsEmpty())
-            {
-              mutable patterns = [];
-              foreach(entry in currentEntriesRev)
-              {
-                | CS.SwitchCaseEntry.Case(id) =>
-                  patterns ::= ConvertExpr(id);
-
-                | CS.SwitchCaseEntry.Default =>
-                  wasDefault = true;
-                  patterns ::= PT.PExpr.Wildcard(entry.NLocation());
-              }
-              matchCases ::= PT.MatchCase(patterns, foldStatements(entry.Body));
-              currentEntriesRev = [];
-            }
-          }
-          unless(wasDefault)
-          {
-            def loc = expr.Location;
-            matchCases ::= PT.MatchCase([PT.PExpr.Wildcard(loc)], PT.PExpr.Sequence(loc, []));
-          }
-
-          unless(currentEntriesRev.IsEmpty())
-          {
-            def x = currentEntriesRev.Last;
-            Message.Error(x.NLocation(), $"control cannot fall from one case label `$x' to another");
-          }
-
-          [Util.locate(loc,
-          <[
-            ($(PT.Name.Global(manager, "_N_break") : name) : // `x : global' needs typer in context
-            {
-              match($expr) { ..$(matchCases.Rev()) }
-            }) : void
-          ]>)]
+        | Switch as switch =>
+          [WithNewSwitchScope().ConvertSwitchStatement(switch)]
 
         | While(cond, stmt) =>
           [Util.locate(loc, <[ Nemerle.Core.@while($(ConvertExpr(cond)), $(WithLastStatement(false).ConvertExpr(stmt))) ]>)]
@@ -192,13 +136,10 @@ namespace CSharpToNemerle
             TT.TExpr.DefaultValue(manager.InternalType.Void)))
             :: ConvertStatement(stmt)
 
-        | Goto(label) =>
-          [PT.PExpr.Typed(loc, TT.TExpr.Goto(manager.InternalType.Void, labelScope.UseLabel(label), 1))]
-
-        | GotoCase    with msg = "`goto case' statement is not supported"
-        | GotoDefault with msg = "`goto default' statement is not supported" =>
-          Message.Error(loc, msg);
-          [PT.PExpr.Error(loc)]
+        | Goto(label)    with labelId = labelScope.UseLabel(label) 
+        | GotoCase(expr) with labelId = switchScope.UseLabel(ConvertExpr(expr))
+        | GotoDefault    with labelId = switchScope.UseLabel(PT.PExpr.Wildcard()) =>
+          [PT.PExpr.Typed(loc, TT.TExpr.Goto(manager.InternalType.Void, labelId, 1))]
 
         | Return(null) =>
           if(isLastStatement)
@@ -286,6 +227,90 @@ namespace CSharpToNemerle
         | Error(msg) =>
           Message.Error(loc, msg);
           [PT.PExpr.Error(loc)]
+      }
+    }
+
+    ConvertSwitchStatement(statement : CS.Statement.Switch) : PT.PExpr
+    {
+      def loc = statement.NLocation();
+      def expr = ConvertExpr(statement.expr);
+
+      mutable matchCases1 = [];
+      mutable currentEntriesRev = [];
+      mutable wasDefault = false;
+
+      foreach(entry in statement.entries)
+      {
+        currentEntriesRev ::= entry;
+        unless(entry.Body.IsEmpty())
+        {
+          mutable patterns = [];
+          foreach(entry in currentEntriesRev)
+          {
+            | CS.SwitchCaseEntry.Case(id) =>
+              patterns ::= ConvertExpr(id);
+
+            | CS.SwitchCaseEntry.Default =>
+              wasDefault = true;
+              patterns ::= PT.PExpr.Wildcard(entry.NLocation());
+          }
+          matchCases1 ::= (patterns, switchScope.DeclareLabel(patterns), entry.Body);
+          currentEntriesRev = [];
+        }
+      }
+      unless(wasDefault)
+      {
+        def loc = expr.Location;
+        def patterns = [PT.PExpr.Wildcard(loc)];
+        matchCases1 ::= (patterns, 0, [CS.Statement.Block(statement.Location, [])]);
+      }
+
+      def matchCases2 = matchCases1.Map(fun(patterns, labelId, stmts)
+      {
+        // convert inner expressions
+        // they possibly can use labels we defined
+        (patterns, labelId, ConvertStatements(statement.NLocation(), stmts))
+      });
+
+      def matchCases3 = matchCases2.Map(fun(patterns, labelId, expr)
+      {
+        if(switchScope.IsLabelUsed(labelId))
+          PT.MatchCase(patterns,
+            PT.PExpr.Sequence([
+              PT.PExpr.Typed(patterns.Head.Location,
+                TT.TExpr.Label(manager.InternalType.Void, labelId,
+                  TT.TExpr.DefaultValue(manager.InternalType.Void))),
+              expr ]))
+        else
+          PT.MatchCase(patterns, expr)
+      });
+
+      unless(currentEntriesRev.IsEmpty())
+      {
+        def x = currentEntriesRev.Last;
+        Message.Error(x.NLocation(), $"control cannot fall from one case label `$x' to another");
+      }
+
+      Util.locate(loc,
+      <[
+        ($(PT.Name.Global(manager, "_N_break") : name) : // `x : global' needs typer in context
+        {
+          match($expr) { ..$(matchCases3.Rev()) }
+        }) : void
+      ]>)
+    }
+
+    ConvertStatements(loc : Location, stmts : list[CS.Statement]) : PT.PExpr
+    {
+      def mapStatements(_) {
+        | []      => []
+        | [x]     => ConvertStatement(x)
+        | x :: xs => WithLastStatement(false).ConvertStatement(x) + mapStatements(xs)
+      }
+      match(mapStatements(stmts)) {
+        | []  => PT.PExpr.Void(loc)
+        | [x] => x
+        | xs  => PT.PExpr.Sequence(loc, xs)
       }
     }
 
