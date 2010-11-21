@@ -3,6 +3,7 @@ using Nemerle.Text;
 using Nemerle.Utility;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
 
 using System;
 using System.Linq;
@@ -74,6 +75,7 @@ namespace Nemerle.Peg
         }
       }
 
+      mutable labelCount = 0;
       mutable varCount = 0;
       def newVar()
       {
@@ -254,62 +256,56 @@ namespace Nemerle.Peg
 
           | Fsm(fsm)               =>
             def fsm = DFSMTransform.Do(fsm);
-            def lengths = Util.GraphWalk([fsm.StartState], (state, getLen) =>
-            {
-              def lengths = fsm
-                .Transitions
-                .MapFiltered(t => t.From == state && t is Transition.Symbol, t => getLen(t.To));
-              match (lengths)
+            def labelOfs = labelCount;
+            labelCount += fsm.StateCount + 2;
+            def okState  = fsm.StateCount;
+            def endState = fsm.StateCount + 1;
+            def goto(n)  { PExpr.Typed(Location.Default, TExpr.Goto(_typer.Manager.InternalType.Void, labelOfs + n, 1)) }
+            def label(n) { PExpr.Typed(Location.Default, TExpr.Label(_typer.Manager.InternalType.Void, labelOfs + n, TExpr.DefaultValue(_typer.Manager.InternalType.Void))) }
+            def states = $[0..fsm.StateCount - 1].Fold(SCG.Dictionary(), (state, states) =>
               {
-                | [] => 0;
-                | _  => lengths.Min() + 1;
-              }
-            }, _ => assert(false));
-
-            def posOfs(ofs : int) : PExpr
+                def transitions = fsm.Transitions.Filter(t => t.From == state);
+                def sumbolTransitions = transitions.MapFiltered(_ is Transition.Symbol, _ :> Transition.Symbol);
+                def isOkState = transitions.Exists(_ is Transition.Epsilon);
+                states.Add(state, (isOkState, sumbolTransitions));
+                states;
+              });
+            def statements = SCG.List();
+            statements.Add(<[ mutable okPos = -1 ]>);
+            statements.Add(<[ mutable curPos = pos ]>);
+            when (fsm.StartState != 0)
+              statements.Add(goto(fsm.StartState));
+            for (mutable state = 0; state < fsm.StateCount; ++state)
             {
-              if (ofs == 0)
-                <[ pos ]>
-              else
-                <[ pos + $(ofs : int) ]>
-            }
-            def generate(state : int, ofs : int, lastCheck : int, failCode : PExpr) : PExpr
-            {
-              def transitions = fsm.Transitions.Filter(t => t.From == state);
-              def sumbolTransitions = transitions.MapFiltered(_ is Transition.Symbol, _ :> Transition.Symbol);
-              def isOkState = transitions.Exists(_ is Transition.Epsilon);
-              def failCode = if (isOkState) posOfs(ofs) else failCode;
-              def gen(sumbolTransitions)
+              def (isOkState, sumbolTransitions) = states[state];
+              when (!sumbolTransitions.IsEmpty())
               {
-                | [] => failCode
-                | trans :: sumbolTransitions =>
-                  def checkLen = lengths.Get(state) + ofs - 1;
-                  def code = generate(trans.To, ofs + 1, checkLen, failCode);
-                  def failCode = gen(sumbolTransitions);
-                  def lenCheckCode = <[ $(posOfs(checkLen)) < text.Length ]>;
-                  def charCheckCode = match (trans.Chars.Ranges)
-                  {
-                    | [range] when range.from == char.MinValue && range.to == char.MaxValue =>
-                      <[ true ]>
-                    | [range] when range.from == range.to =>
-                      <[text[$(posOfs(ofs))] == $(range.from : char)]>
-                    | _ =>
-                      <[{c = text[$(posOfs(ofs))]; $(testChar(trans.Chars))}]>
-                  }
-                  def check = if (checkLen <= lastCheck)
-                      charCheckCode;
+                statements.Add(label(state));
+                when (isOkState)
+                  statements.Add(<[ okPos = curPos ]>);
+                statements.Add(<[ when (curPos >= text.Length) $(goto(endState)) ]>);
+                statements.Add(<[ c = text[curPos] ]>);
+                statements.Add(<[ ++curPos ]>);
+                foreach (trans in sumbolTransitions)
+                {
+                  def (isOkState, sumbolTransitions) = states[trans.To];
+                  def toState = if (sumbolTransitions.IsEmpty())
+                    if (isOkState)
+                      okState;
                     else
-                      <[ $lenCheckCode && $charCheckCode ]>;
-                  <[
-                    if ($(check))
-                      { $code }
-                    else
-                      $failCode
-                  ]>
+                      endState;
+                  else
+                    trans.To;
+                  statements.Add(<[ when ($(testChar(trans.Chars))) $(goto(toState)) ]>);
+                }
+                statements.Add(goto(endState));
               }
-              gen(sumbolTransitions);
             }
-            generate(fsm.StartState, 0, -1, <[ -1 ]>);
+            statements.Add(label(okState));
+            statements.Add(<[ okPos = curPos ]>);
+            statements.Add(label(endState));
+            statements.Add(<[ okPos ]>);
+            PExpr.Sequence(statements.NToList());
 
           | Chars(chars)           =>
             def generate(_)
