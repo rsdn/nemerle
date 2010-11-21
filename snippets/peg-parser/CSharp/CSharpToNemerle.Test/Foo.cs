@@ -258,6 +258,21 @@ namespace CSharpToNemerle.Test
       Console.WriteLine("GOTO :)");
     }
 
+    void TestVoid1()
+    {
+      var x = new System.Text.StringBuilder();
+      if(true) {
+        Console.WriteLine("OK");
+        x.Append("OK");
+      } else {}
+    }
+
+    void TestVoid2()
+    {
+      var f = true;
+      for(;;) { Console.WriteLine("OK"); if(f) break; }
+    }
+
     void TestSwitch()
     {
       var i = 14;
