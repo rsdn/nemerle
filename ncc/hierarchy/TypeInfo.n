@@ -257,16 +257,17 @@ public abstract class TypeInfo : MemberInfo, IMember, System.IComparable [TypeIn
   [Accessor]
   protected mutable system_type : System.Type;
   id : int;
-  protected mutable default_indexer : string;
-  protected internal mutable typarms : list [StaticTypeVar] = [];
-  protected mutable self_type : FixedType.Class;
-  protected fullname : string;
-
-  protected mutable member_map : Hashtable [string, list [IMember]];
-
-  protected extension_patterns : Hashtable [string, ExtensionPattern] = Hashtable ();
-  
-  protected namespace_nd : NamespaceTree.Node;
+  protected mutable default_indexer       : string;
+  protected internal mutable typarms      : list[StaticTypeVar] = [];
+  protected mutable self_type             : FixedType.Class;
+  protected         fullname              : string;
+  protected mutable member_map            : Hashtable[string, list [IMember]];
+  protected         extension_patterns    : Hashtable[string, ExtensionPattern] = Hashtable ();
+  protected         namespace_nd          : NamespaceTree.Node;
+  protected mutable _superTypes           : list[FixedType.Class] = [];
+  protected mutable _superTypesLookup     : Hashtable[FixedType.Class, byte] = Hashtable();
+  protected mutable _superTypeInfosLookup : Hashtable[TypeInfo, list[FixedType.Class]] = Hashtable();
+  protected mutable _superTypesCalculated : bool;
   
   public this (ns_node : NamespaceTree.Node, man : ManagerClass, fullname : string)
   {
@@ -654,16 +655,14 @@ public abstract class TypeInfo : MemberInfo, IMember, System.IComparable [TypeIn
         def acc = if (res is []) acc else res :: acc;
 
         if (ti.IsInterface)
-          match (ti.GetDirectSuperTypes ()) {
-            | [] =>
-              InternalType.Object_tc.LookupMemberImpl (name) :: acc
-            | ifaces =>
-              ifaces.Map (fun (c) {
-                c.tycon.LookupMember (name)
-              }) + acc
+          match (ti.GetDirectSuperTypes())
+          {
+            | []     => InternalType.Object_tc.LookupMemberImpl (name) :: acc
+            | ifaces => ifaces.Map(c => c.tycon.LookupMember(name)) + acc
           }
         else
-          match (ti.SuperClass ()) {
+          match (ti.SuperClass())
+          {
             | Some (ti) => loop (acc, ti)
             | None => acc
           }
@@ -672,8 +671,10 @@ public abstract class TypeInfo : MemberInfo, IMember, System.IComparable [TypeIn
       if (name == ".ctor")
         // don't recurse
         LookupMemberImpl (name)
-      else {
-        match (loop ([], this)) {
+      else
+      {
+        match (loop ([], this))
+        {
           | [] => []
           | [one] => one
           | members =>
@@ -692,8 +693,7 @@ public abstract class TypeInfo : MemberInfo, IMember, System.IComparable [TypeIn
   public abstract GetTydecl () : TypeDeclaration;
 
   // helper used in TypeInfo
-  internal ConstructSubst (tc : TypeInfo, typarms : list [StaticTypeVar],
-                           args : list [TypeVar], check_parms : bool) : Subst
+  internal ConstructSubst(tc : TypeInfo, typarms : list[StaticTypeVar], args : list[TypeVar], check_parms : bool) : Subst
   {
     _recursionLevel++;
 
@@ -742,20 +742,15 @@ public abstract class TypeInfo : MemberInfo, IMember, System.IComparable [TypeIn
       For example assuming our type parameters are are ('a, 'b), then
       [MakeSubst (t1, t2)] produces substitution { 'a := t1; 'b := t2 }.
    */
-  internal MakeSubst (parms : list [TypeVar]) : Subst
+  internal MakeSubst(parms : list[TypeVar]) : Subst
   {
-    ConstructSubst (this, typarms, parms, check_parms = true)
+    ConstructSubst(this, typarms, parms, check_parms = true)
   }
-  
-  internal MakeUncheckedSubst (args : list [TypeVar]) : Subst
+
+  internal MakeUncheckedSubst(args : list[TypeVar]) : Subst
   {
-    ConstructSubst (this, typarms, args, check_parms = false)
-  }
-  
-  
-  internal MakeSubst1 (parms : list [FixedType]) : Subst
-  {
-    MakeSubst (Solver.MonoTypes (parms))
+    def res = ConstructSubst(this, typarms, args, check_parms = false);
+    res
   }
 
   /**
@@ -775,77 +770,141 @@ public abstract class TypeInfo : MemberInfo, IMember, System.IComparable [TypeIn
   /// If $this subtypes of $typeInfo, then return instantiated type arguments of typeInfo.
   public abstract GetTypeArgumentsForSuperType(typeInfo : TypeInfo) : option[list[FixedType]];
 
-  public abstract IsDerivedFrom(typeInfo : TypeInfo) : bool;
+  public IsDerivedFrom(typeInfo : TypeInfo) : bool
+  {
+    assert(typeInfo != null);
+    assert(_superTypesCalculated);
 
-  /** */
-  public abstract SubtypingSubst (tycon : TypeInfo) : Subst;
+    if (typeInfo.Equals(this))
+      true
+    else if (typeInfo.Equals(InternalType.Object_tc))
+      true
+    else
+      _superTypeInfosLookup.Contains(typeInfo)
+  }
+
+  public IsDerivedFrom(fixedType : FixedType.Class) : bool
+  {
+    assert(fixedType != null);
+    assert(_superTypesCalculated);
+
+    if (fixedType.Equals(InternalType.Object))
+      true
+    else if (GetMemType().Equals(fixedType))
+      true
+    else
+      _superTypesLookup.Contains(fixedType)
+  }
+
+  public LookupDerived(typeInfo : TypeInfo) : list[FixedType.Class]
+  {
+    mutable classes;
+    
+    if (_superTypeInfosLookup.TryGetValue(typeInfo, out classes))
+      classes
+    else
+      []
+  }
+  
+  public HasSuperType(typeInfo : TypeInfo) : bool
+  {
+    _superTypeInfosLookup.Contains(typeInfo)
+  }
+
+  /// Return substitution to apply to types of members of our supertype [ti]
+  /// to get types of members in [this].
+  ///
+  /// <remarks>
+  ///    For example consider:
+  ///    <code>
+  ///      class A ['a] { f : 'a; }
+  ///      class B : A [int] { }
+  ///    </code>
+  ///    Now ["B".SubtypingSubst ("A")] would return { 'a := int }, so
+  ///    it can be applied to type of [A.f] which is ['a], to obtain type
+  ///    of [B.f] which is [int].
+  /// </remarks>
+  public SubtypingSubst(tc : TypeInfo) : Subst
+  {
+    // FIXME: VladD2: Этот метод нужно полностью выкинуть, так как это лозейка для багов!
+    if (this.Equals(tc))
+      Subst() // current type, no substitution
+    else
+    {
+      match (GetTypeArgumentsForSuperType(tc))
+      {
+        | Some(args)  => tc.MakeSubst(Solver.MonoTypes(args));
+        | None        => /*assert2(false);*/ Subst()
+      }
+    }
+  }
 
   /** [parent] is one of the enclosing types of [this]. For Parent['a,'b]
       and This['a1,'b1,'c] returns ['a := 'a1, 'b := 'b1]. If there are types
       between [parent] and [this], their type variables are also replaced. */
   public virtual NestingSubst (parent : TypeInfo) : Subst
   {
-    if (parent.Equals (this))
-      Subst ()
-    else {
-      def res = Subst ();
-      def cnt = parent.TyparmsCount;
-      def target = GetMemType ().args.FirstN (cnt);
+    if (parent.Equals(this))
+      Subst()
+    else
+    {
+      def res     = Subst();
+      def cnt     = parent.TyparmsCount;
+      def target  = GetMemType().args.FirstN (cnt);
         
-      def loop (ti) {
-        def source = ti.Typarms.FirstN (cnt);
+      def loop(ti)
+      {
+        def source = ti.Typarms.FirstN(cnt);
         NList.Iter2 (source, target, res.Add);
-        when (! ti.Equals (parent))
+        when (! ti.Equals(parent))
           loop (ti.DeclaringType)
       }
-      loop (DeclaringType);
+
+      loop(DeclaringType);
+
       res
     }
   }
 
-  public abstract SuperClass () : option [TypeInfo];
+  public abstract SuperClass () : option[TypeInfo];
 
   /** Gets the direct base type of this type. Null if there isn't any
       (e.g. for interfaces) */
-  public abstract BaseType : TypeInfo
-  { get;  }
+  public abstract BaseType : TypeInfo { get; }
 
   /** Return list of all members defined in this very type and its
       supertypes. */
-  public abstract GetMembers () : list [IMember];
+  public abstract GetMembers() : list[IMember];
 
   /** Searches for the members defined for the current TypeInfo, using the
       specified binding constraints. */
-  public abstract GetMembers (bindingAttr : BindingFlags) : list [IMember];
+  public abstract GetMembers(bindingAttr : BindingFlags) : list[IMember];
 
   /** Searches for the fields defined for the current TypeInfo, using the
       specified binding constraints. */
-  public abstract GetFields (bindingAttr : BindingFlags) : list [IField];
+  public abstract GetFields(bindingAttr : BindingFlags)       : list [IField];
+  public abstract GetConstructors(bindingAttr : BindingFlags) : list [IMethod];
+  public          GetSuperTypes()                             : list[FixedType.Class] { _superTypes }
+  public abstract GetDirectSuperTypes()                       : list[FixedType.Class];
 
-  public abstract GetConstructors (bindingAttr : BindingFlags) : list [IMethod];
-
-  /** */
-  public abstract GetSuperTypes () : list [FixedType.Class];
-
-  public abstract GetDirectSuperTypes () : list [FixedType.Class];
-
-  /** If this is a constant variant option, this method returns static
-      class member that shall be used instead of calling constructor.
-      Otherwise [null] is returned. */
-  public abstract GetConstantObject () : IField;
+  /// If this is a constant variant option, this method returns static class member that shall be 
+  /// used instead of calling constructor. Otherwise [null] is returned.
+  public abstract GetConstantObject() : IField;
 
   public abstract IsDelegate : bool { get; }
 
   public virtual IsEnum : bool
   {
-    get {
+    get
+    {
       assert (InternalType.Enum_tc != null);
 
-      IsValueType &&
-      match (SuperClass ()) {
-        | Some (tc) => tc.Equals (InternalType.Enum_tc)
-        | None => false
-      }
+      IsValueType 
+        &&  match (SuperClass())
+            {
+              | Some (tc) => tc.Equals(InternalType.Enum_tc)
+              | None => false
+            }
     }
   }
 
@@ -868,7 +927,7 @@ public abstract class TypeInfo : MemberInfo, IMember, System.IComparable [TypeIn
    *
    * Used mainly with [FreshSubst ()] or [MakeSubst ()].
    */
-  public GetMemType () : FixedType.Class
+  public GetMemType() : FixedType.Class
   {
     assert (self_type != null, FullName);
     self_type
@@ -887,7 +946,8 @@ public abstract class TypeInfo : MemberInfo, IMember, System.IComparable [TypeIn
 
   public virtual SourceTyparmsCount : int
   {
-    get {
+    get
+    {
       if (DeclaringType == null) TyparmsCount
       else TyparmsCount - DeclaringType.TyparmsCount
     }
@@ -905,9 +965,12 @@ public abstract class TypeInfo : MemberInfo, IMember, System.IComparable [TypeIn
   /* public properties */
   public abstract DeclaringType : TypeInfo { get; }
   public abstract Name : string { get; }
-  public virtual MemberKind : MemberKinds { 
+
+  public virtual MemberKind : MemberKinds
+  { 
     get { if (DeclaringType != null) MemberKinds.NestedType else MemberKinds.TypeInfo }
   }
+  
   public abstract UnderlyingType : TypeInfo { get; }
 }
 

@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (c) 2003-2008 The University of Wroclaw.
  * All rights reserved.
  *
@@ -35,6 +35,7 @@ using Nemerle.Surround;
 using Nemerle.Utility;
 
 using System;
+using System.Diagnostics;
 using System.Collections.Specialized;
 
 using PT = Nemerle.Compiler.Parsetree;
@@ -43,6 +44,9 @@ using SC = System.Collections;
 
 namespace Nemerle.Compiler
 {
+type NameToMethodsMap = Hashtable[string, list[FixedType.Class * IMethod]];
+type IfaceMethod      = FixedType.Class * IMethod;
+type IfaceMethods     = list[FixedType.Class * IMethod];
 
 [Nemerle.Compiler.SupportRelocation]
 public partial class TypeBuilder : TypeInfo
@@ -54,20 +58,22 @@ public partial class TypeBuilder : TypeInfo
   before_finalization   : Queue [void -> void] = Queue ();
   before_finalization2  : Queue [void -> void] = Queue ();
 
-  enclosing_type : TypeBuilder;
+  _declaringType : TypeBuilder;
   internal mutable parent_type : FixedType.Class;
   internal mutable forced_typarms : list[StaticTypeVar];
   internal mutable reflection_inheritance_emitted : bool;
   internal mutable is_lambda : bool;
   mutable t_implements : list[FixedType.Class];
-  [Accessor (DeclaredNestedTypes)]
-  mutable contained_types : list[TypeBuilder] = [];
-  mutable variant_options : list[TypeBuilder] = [];
-  mutable _supertypes : Map [TypeInfo, TypeInfo * list[FixedType]];
-  mutable member_list : list[IMember] = [];
-  mutable constant_object : IField;
-  mutable underlying_enum_type : FixedType.Class;
-  public UnimplementedMembers : list[IMember] { get; private set; }
+  //mutable _directImplementedInterfaces : list[FixedType.Class];
+  [Accessor(DeclaredNestedTypes)]
+  mutable contained_types       : list[TypeBuilder] = [];
+  mutable variant_options       : list[TypeBuilder] = [];
+  mutable _superTypeInfos       : list[TypeInfo] = [];
+  mutable _superTypeInfosMap    : Map[TypeInfo, TypeInfo * list[FixedType]];
+  mutable member_list           : list[IMember] = [];
+  mutable constant_object       : IField;
+  mutable underlying_enum_type  : FixedType.Class;
+  public UnimplementedMembers   : list[FixedType.Class * IMember] { get; private set; }
 
   //list of instance field initializers
   public mutable init_list : list[PT.PExpr] = [];
@@ -151,7 +157,7 @@ public partial class TypeBuilder : TypeInfo
     when (this.GlobalEnv == null)
       Util.ice ($ "env is null for $(ns_node.GetDisplayName ())");
 
-    this.enclosing_type = par;
+    _declaringType = par;
 
     when (par != null)
       par.contained_types = this :: par.contained_types;
@@ -167,11 +173,11 @@ public partial class TypeBuilder : TypeInfo
     {
       | PT.TopDeclaration.VariantOption =>
         instance_ctor_occured = true;
-        when (enclosing_type != null)
-          enclosing_type.variant_options = this :: enclosing_type.variant_options;
+        when (_declaringType != null)
+          _declaringType.variant_options = this :: _declaringType.variant_options;
         attributes |= NemerleAttributes.Sealed;
         modifiers.custom_attrs = <[ Record ]> :: modifiers.custom_attrs;
-        if (enclosing_type != null && enclosing_type.IsPublic)
+        if (_declaringType != null && _declaringType.IsPublic)
           attributes |= NemerleAttributes.Public
         else
           attributes |= NemerleAttributes.Internal;
@@ -199,7 +205,7 @@ public partial class TypeBuilder : TypeInfo
                             || IsModule || instance_ctor_occured || IsInterface || is_enum;
     
     unless (attributes %&& NemerleAttributes.AccessModifiers)
-      if (enclosing_type != null)
+      if (_declaringType != null)
         attributes |= NemerleAttributes.Private;
       else
         attributes |= NemerleAttributes.Internal;
@@ -216,27 +222,13 @@ public partial class TypeBuilder : TypeInfo
             Accessibility.Public
       }
 
-    when (enclosing_type != null)
-      accessibility = FixedType.AccessibilityIntersect(accessibility, enclosing_type.Accessibility);
+    when (_declaringType != null)
+      accessibility = FixedType.AccessibilityIntersect(accessibility, _declaringType.Accessibility);
 
     CheckTypeAttributes ();
 
     m_has_been_used = IsExternallyAccessible;
   }
-
-    public override IsDerivedFrom(typeInfo : TypeInfo) : bool
-    {
-      assert(typeInfo != null);
-      assert(_supertypes != null);
-
-      if (typeInfo.Equals(this))
-        true
-      else if (typeInfo.Equals(InternalType.Object_tc))
-        true
-      else
-        _supertypes.Contains(typeInfo)
-    }
-
 
   /**
    * Return list of type parameters under which we subtype given type.
@@ -250,9 +242,9 @@ public partial class TypeBuilder : TypeInfo
   public override GetTypeArgumentsForSuperType(ti : TypeInfo) : option[list[FixedType]]
   {
     assert (ti != null);
-    assert (_supertypes != null);
+    assert (_superTypeInfosMap != null);
 
-    match (_supertypes.Find(ti))
+    match (_superTypeInfosMap.Find(ti))
     {
       | Some((_, x)) => Some(x)
       | None =>
@@ -352,10 +344,10 @@ public partial class TypeBuilder : TypeInfo
     }
   }
   
-  /** Return type we were defined in (null for toplevel types). */
-  public override DeclaringType : TypeInfo { get { enclosing_type } }
+  /// Return type we were defined in (null for toplevel types).
+  public override DeclaringType : TypeInfo { get { _declaringType } }
 
-  /** Return name without any dots. */  
+  /// Return name without any dots.
   public override Name : string { get { name } }
 
   public override Accessibility : Accessibility
@@ -404,8 +396,8 @@ public partial class TypeBuilder : TypeInfo
       base.HasBeenUsed = value;
       m_has_been_used = true;
 
-      when (enclosing_type != null)
-        Manager.MarkAsUsed(enclosing_type, value)
+      when (_declaringType != null)
+        Manager.MarkAsUsed(_declaringType, value)
     }
   }
 
@@ -427,29 +419,6 @@ public partial class TypeBuilder : TypeInfo
     }
   }
    
-  public override CanAccess(source : TypeInfo) : bool
-  {
-    IsPublic 
-      || (IsInternal && source is TypeBuilder) 
-      || (IsProtected 
-        && (if (enclosing_type != null)
-             // during bind_types all supertypes are null
-             _supertypes == null || source.IsDerivedFrom(enclosing_type)
-            else
-              false
-           ))
-      || (if (enclosing_type != null)
-          {
-            mutable result = false;
-            for (mutable tc = source; tc != null && !result; tc = tc.DeclaringType)
-              result = tc.Equals(enclosing_type);
-            result
-          }
-          else
-            false
-    )
-  }
-
   [Nemerle.Assertions.Requires (TyManager.run_phase <= 2)] 
   public AddImplementedInterface (t : PT.PExpr) : void
   {
@@ -649,11 +618,12 @@ public partial class TypeBuilder : TypeInfo
    *   type for variant options.
    * </remarks>
    */
-  public override GetDirectSuperTypes () : list[FixedType.Class]
+  public override GetDirectSuperTypes() : list[FixedType.Class]
   {
-    match (parent_type) {
-      | null => t_implements
-      | t => t :: t_implements
+    match (parent_type)
+    {
+      | null  => t_implements
+      | t     => t :: t_implements
     }
   }
 
@@ -878,8 +848,8 @@ public partial class TypeBuilder : TypeInfo
 
   public GetVariantOptionParent () : TypeBuilder
   {
-    assert (enclosing_type != null);
-    enclosing_type
+    assert (_declaringType != null);
+    _declaringType
   }
   
   public GetVariantOptions () : list[TypeBuilder]
@@ -887,61 +857,8 @@ public partial class TypeBuilder : TypeInfo
     variant_options
   }
 
-  /** Return interfaces [this] needs to implement (that is it says it will
-      implement them, but they are not implemented in base class). */
-  public InterfacesToImplement () : list[TypeInfo] 
-  {
-    def base_class =
-      match (parent_type)
-      {
-        | null => InternalType.Object_tc
-        | _ => parent_type.tycon
-      };
-
-    def collect(t : FixedType.Class, acc)
-    {
-      def tc = t.tycon;
-
-      if (tc.IsInterface)
-      {
-        if (base_class.IsDerivedFrom(tc))
-          acc
-        else
-          tc :: acc
-      }
-      else
-        acc
-    }
-
-    GetSuperTypes().FoldLeft([], collect);
-  }
-
   //------------ METHODS FOR TYPING --------------------------------------  
 
-  /**
-   * Return substitution to apply to types of members of our supertype [ti]
-   * to get types of members in [this].
-   *
-   * <remarks>
-   *    For example consider:
-   *    <code>
-   *      class A ['a] { f : 'a; }
-   *      class B : A [int] { }
-   *    </code>
-   *    Now ["B".SubtypingSubst ("A")] would return { 'a := int }, so
-   *    it can be applied to type of [A.f] which is ['a], to obtain type
-   *    of [B.f] which is [int].
-   * </remarks>
-   */
-  public override SubtypingSubst(tc : TypeInfo) : Subst
-  {
-    if (this.Equals(tc))
-      Subst() // current type, no substitution
-    else
-      tc.MakeSubst1(Option.UnSome(GetTypeArgumentsForSuperType(tc)));
-  }
-
-  
   internal ReverseChildren() : void
   {
     contained_types = NList.Rev(contained_types);
@@ -1098,6 +1015,25 @@ public partial class TypeBuilder : TypeInfo
 
   [Record] class RecursiveTypeDefinition : Exception { public Name : string;  }
 
+  private TryAddSuperType(ty : FixedType.Class) : void
+  {
+    unless (_superTypesLookup.Contains(ty))
+    {
+      def tc = ty.tycon;
+      _superTypeInfosLookup[tc] = ty :: _superTypeInfosLookup[tc];
+      _superTypesLookup.Add(ty, 0);
+      _superTypes ::= ty;
+    }
+  }
+
+  private AddSuperType(ty : FixedType.Class) : void
+  {
+    def tc = ty.tycon;
+    _superTypeInfosLookup[tc] = [ty];
+    _superTypesLookup.Add(ty, 0);
+    _superTypes ::= ty;
+  }
+
   /// Bind type expressions occurring in type declarations. This
   /// includes [extends] type, [implements] list, and aliased type
   /// in case of type alias declaration.
@@ -1152,37 +1088,43 @@ public partial class TypeBuilder : TypeInfo
         };
 
       def nested_tyvars_subst =
-        if (enclosing_type == null || enclosing_type.typarms is [] || typarms is []) null
-        else {
-          def sub = Subst ();
-          def par_typarms = enclosing_type.typarms;
-          //Message.Debug ($"my typarms=$typarms vs eclosing=$par_typarms");
-          NList.Iter2 (typarms.FirstN (par_typarms.Length), par_typarms, fun (t, pt) {
-            sub.Add (pt, FixedType.StaticTypeVarRef (t))
-          });
-          sub
-        }
+        if (_declaringType == null || _declaringType.typarms is [] || typarms is [])
+          null
+        else
+        {
+          def sub         = Subst();
+          def par_typarms = _declaringType.typarms;
 
-      def bind_to_class (t : PT.PExpr) {
-        match (this.tenv.BindFixedType (this.GlobalEnv,
-                                   enclosing_type,
-                                   t, check_parms = false)) {
+          //Message.Debug ($"my typarms=$typarms vs eclosing=$par_typarms");
+          NList.Iter2(typarms.FirstN (par_typarms.Length), par_typarms, fun (t, pt) 
+          {
+            sub.Add(pt, FixedType.StaticTypeVarRef(t))
+          });
+
+          sub
+        };
+
+      def bind_to_class(t : PT.PExpr)
+      {
+        match (this.tenv.BindFixedType(this.GlobalEnv, _declaringType, t, check_parms = false))
+        {
           | FixedType.Class as tcl => 
             if (nested_tyvars_subst == null) tcl
-            else nested_tyvars_subst.Apply (tcl) :> FixedType.Class
+            else nested_tyvars_subst.Apply(tcl) :> FixedType.Class
 
           | _ => 
-            Message.FatalError2 (t.Location, "derived or implemented type must be a class");
+            Message.FatalError2(t.Location, "derived or implemented type must be a class");
             null
         };
       }
 
       this.t_implements = [];
-      match (td) {
+      //_directImplementedInterfaces = [];
+
+      match (td)
+      {
         | PT.TopDeclaration.VariantOption =>
-          this.parent_type = 
-            FixedType.Class (enclosing_type, 
-                         typarms.Map (fun (x) { FixedType.StaticTypeVarRef (x) }));
+          this.parent_type =  FixedType.Class(_declaringType, typarms.Map(FixedType.StaticTypeVarRef(_)));
 
         | PT.TopDeclaration.Class (t_extends = hd :: tl)
         | PT.TopDeclaration.Interface (t_extends = hd :: tl)
@@ -1190,6 +1132,7 @@ public partial class TypeBuilder : TypeInfo
         | PT.TopDeclaration.Enum (t_extends = hd :: tl) =>
           def hd1 = bind_to_class (hd);
           def itfs = SCG.List();
+
           if (hd1 == null)
             this.parent_type = null
           else if (hd1.tycon.IsInterface)
@@ -1203,14 +1146,20 @@ public partial class TypeBuilder : TypeInfo
           foreach (itf in tl)
           {
             def bindItf = bind_to_class (itf);
+
             when (bindItf != null)
               itfs.Add(bindItf);
           }
 
           this.t_implements = itfs.ToList();
 
+          //foreach (itf in this.t_implements)
+          //  itfs.tycon.GetDirectSuperTypes();
+
+          //_directImplementedInterfaces = itfs.ToList();
+
         | _ => this.parent_type = null
-      };
+      }
 
       // merge types implemented by partial parts of this class into this TypeBuilder
       foreach (part in partial_parts)
@@ -1218,20 +1167,20 @@ public partial class TypeBuilder : TypeInfo
         match (part)
         {
           | PT.TopDeclaration.Interface (t_extends = hd :: tail)        
-          | PT.TopDeclaration.Class (t_extends = hd :: tail)
-          | PT.TopDeclaration.Variant (t_extends = hd :: tail) =>
-            def hd' = bind_to_class (hd);
+          | PT.TopDeclaration.Class     (t_extends = hd :: tail)
+          | PT.TopDeclaration.Variant   (t_extends = hd :: tail) =>
+            def hd2 = bind_to_class (hd);
             def added_ifaces =
-              if (hd'.tycon.IsInterface)
-                [hd']
+              if (hd2.tycon.IsInterface)
+                [hd2]
               else
               {
                 // if base class exists in both parts, it must be the same
                 match (parent_type)
                 {
-                  | null => parent_type = hd'
+                  | null => parent_type = hd2
                   | t =>
-                    unless (t.tycon.Equals (hd'.tycon))
+                    unless (t.tycon.Equals (hd2.tycon))
                       Message.Error(part.Location, $"Partial declarations of `$(FullName)' must not specify different base classes")
                 }
 
@@ -1327,7 +1276,7 @@ public partial class TypeBuilder : TypeInfo
           | _ => ()
         }
 
-      def first = if (enclosing_type != null) [enclosing_type] else [];
+      def first = if (_declaringType != null) [_declaringType] else [];
       this.iterate_first = iterate_first.Fold (first, fun (_, ti, acc) { ti :: acc });
 
       foreach (x in contained_types)
@@ -1356,57 +1305,57 @@ public partial class TypeBuilder : TypeInfo
       add_subtyping_of(s, t.tycon, t.args)
     }
 
-    _supertypes = GetDirectSuperTypes().FoldLeft(Map(), add_srs);
+    def subst = FreshSubst();
+    def subtypesGroupedByTypeInfo = GetDirectSuperTypes().Grouping(ty => (ty.tycon, (ty, subst.Apply(ty).Fix())));
+    
+    foreach (types when types.Count > 1 in subtypesGroupedByTypeInfo.Values)
+    {
+      def reported = Hashtable();
+      foreach ((ty1Source, ty1) in types with i1)
+        foreach ((ty2Source, ty2) when i1 != i2 && !reported.Contains(ty1, ty2) && ty1.TryUnify(ty2) in types with i2)
+        {
+          reported[ty1, ty2] = 0;
+          reported[ty2, ty1] = 0;
+          Message.Error(NameLocation, $"'$this' cannot implement both '$ty1Source' and '$ty2Source' because they may unify for some type parameter substitutions");
+        }
+    }
+
+    _superTypeInfosMap                            = GetDirectSuperTypes().FoldLeft(Map(), add_srs);
+    _superTypeInfosLookup[InternalType.Object_tc] = [InternalType.Object];
+    _superTypeInfosLookup[this]                   = [GetMemType()];
+    _superTypes                                   = _superTypes.Reverse();
+    _superTypesCalculated                         = true;
 
     // we should do the additional accessibility checks, which could have
     // been loosened during bind_types, when supertypes were null
-    foreach (t in GetDirectSuperTypes ())
-      unless (t.IsAccessibleFrom (this))
-        Message.Error ($"$t is inaccessible from $this");
+    foreach (t in GetDirectSuperTypes())
+      unless (t.IsAccessibleFrom(this))
+        Message.Error($"$t is inaccessible from $this");
 
     foreach (t in typarms)
       foreach (ct in t.Constraints)
-        unless (ct.IsAccessibleFrom (this))
-          Message.Error ($"$ct is inaccessible from $this");
+        unless (ct.IsAccessibleFrom(this))
+          Message.Error($"$ct is inaccessible from $this");
           
-    when (!this.typarms.IsEmpty && _supertypes.Contains (InternalType.Attribute_tc))
-      Message.Error ($"A generic type cannot derive from `$parent_type' because it is an attribute class");
+    when (!this.typarms.IsEmpty && HasSuperType(InternalType.Attribute_tc))
+      Message.Error($"A generic type cannot derive from `$parent_type' because it is an attribute class");
   }
 
   add_subtyping_of(subinfo : Subinfo, tc : TypeInfo, args : list[TypeVar]) : Subinfo
   {
     def add_sr(subinfo : Subinfo, subtyped : TypeInfo, args : list[FixedType])
     {
-      match (subinfo.Find (subtyped))
+      def ty = FixedType.Class(subtyped, args.Map(x => x));
+      
+      match (subinfo.Find(subtyped))
       {
-        | Some((_, args2)) =>
-          mutable problem = "";
-
-          def check_eq(t1 : FixedType, t2 : FixedType) : bool
-          {
-            if (t1.Equals (t2))
-              true
-            else
-            {
-              problem = $"types $t1 and $t2 are not compatible";
-              false
-            }
-          }
-
-          unless (NList.ForAll2(args, args2, check_eq))
-          {
-            Message.Error($"type `$(subtyped)' is implemented by type `$(FullName)' twice under different instantiations");
-
-            if (tc.Equals(subtyped))
-              Message.Error("second one directly");
-            else
-              Message.Error("second one through `" + tc.FullName + "'");
-
-            Message.Error(problem);
-          };
+        | Some =>
+          TryAddSuperType(ty);
           subinfo
 
-        | None => subinfo.Add(subtyped, (subtyped, args))
+        | None =>
+          AddSuperType(ty);
+          subinfo.Add(subtyped, (subtyped, args))
       }
     }
 
@@ -1414,25 +1363,16 @@ public partial class TypeBuilder : TypeInfo
     
     def add_srt(t : FixedType.Class, subinfo : Subinfo)
     {
-      add_sr(subinfo, t.tycon, t.args.Map((t : TypeVar) => sub.Apply(t.Fix()).Fix()))
+      def sub2 = sub;
+      _ = sub2;
+      def tyArgs = t.args.Map((t : TypeVar) => sub.Apply(t.Fix()).Fix());
+      add_sr(subinfo, t.tycon, tyArgs)
     }
 
     def subinfo = tc.GetSuperTypes().FoldLeft(subinfo, add_srt);
     def subinfo = add_sr(subinfo, tc, Solver.FixedValues(args));
 
     subinfo
-  }
-
-  public override GetSuperTypes() : list[FixedType.Class]
-  {
-    if (_supertypes == null)
-      []
-    else
-      _supertypes.Fold([], 
-        fun (_, (tc, args), acc)
-        {
-          FixedType.Class(tc, Solver.MonoTypes(args)) :: acc
-        })
   }
 
   add_derived_members() : void
@@ -1469,7 +1409,7 @@ public partial class TypeBuilder : TypeInfo
     if ((Attributes %& additional.Attributes) %&& NemerleAttributes.Partial)
     {
       unless (additional.Attributes %&& NemerleAttributes.AccessModifiers)
-        match (enclosing_type)
+        match (_declaringType)
         {
           | null => additional.Attributes |= NemerleAttributes.Internal;
           | _    => additional.Attributes |= NemerleAttributes.Private;
@@ -1592,8 +1532,7 @@ public partial class TypeBuilder : TypeInfo
     mutable ignoreMember = false;
 
     // traverse existing members [mems] searching one which match signature
-    // with the newly added method [meth]
-    // returns new list of members having this name
+    // with the newly added method [meth] returns new list of members having this name
     def replace_method(acc, meth : MethodBuilder, mems : list[IMember])
     {
       def par_amount = meth.GetParameters().Length;
@@ -1611,7 +1550,10 @@ public partial class TypeBuilder : TypeInfo
           
         | x :: xs => // process next member 
           def m = x :> IMethod;
-          def sub_current = get_method_type_after_subst(m, meth);
+          // FIXME: VladD2: Вместо GetTypeArgumentsForSuperType нужно иметь полноценный список супертипов в формате 
+          // FixedType.Class и подставлять его в подобных случаях!
+          def declaringFixedType = FixedType.Class(m.DeclaringType, Solver.MonoTypes(GetTypeArgumentsForSuperType(m.DeclaringType).Value));
+          def sub_current = get_method_type_after_subst(declaringFixedType, m, meth);
 
           def sig_matches =
             (if (meth.Attributes %&& NemerleAttributes.Override)
@@ -1704,11 +1646,6 @@ public partial class TypeBuilder : TypeInfo
             replace_method(x :: acc, meth, xs)
       }
     }  // end of replace_method local function
-/*
-    def _meths = GetMethods ();
-    Message.Debug (FullName);
-    foreach (meth in _meths) Message.Debug (meth.ToString ());
-*/   
 
     when (IsValueType && !mem.IsStatic)
       match (mem)
@@ -2104,50 +2041,46 @@ public partial class TypeBuilder : TypeInfo
       Util.locate(loc, 
       {
         def field = <[ decl: public static _N_constant_object : $(ttf : typed); ]>;
-        constant_object = DefineAndReturn (field) :> IField;
+        constant_object = DefineAndReturn(field) :> IField;
 
         // reference to called constructor must be directly in typed version          
         Define(<[ decl: 
-          static this ()
+          static this()
           {
             $(TExpr.Assign(loc, InternalType.Void, TExpr.StaticRef(loc, ttf, ttf, constant_object, []),
-                TExpr.Call (ttf, TExpr.StaticRef (loc, ctor.GetMemType (), ttf, ctor, []), [], false)) : typed);
+                TExpr.Call(ttf, TExpr.StaticRef(loc, ctor.GetMemType(), ttf, ctor, []), [], false)) : typed);
           }
         ]>);
 
-        // if this constant variant option is serializable
-        // we give the explicit deserialization behaviour to keep the singleton
-        // semantics fo _N_constant_object always
-        def ior = InternalType.IObjectReference.tycon;
+        // if this constant variant option is serializable we give the explicit deserialization behaviour 
+        // to keep the singleton semantics fo _N_constant_object always
+        def iObjectReference = InternalType.IObjectReference;
 
-        when (HasAttribute(InternalType.Serializable_tc))
-          unless (_supertypes.Contains(ior))
-          {
-            t_implements ::= InternalType.IObjectReference;
-            _supertypes = _supertypes.Add(ior, (ior, []));
+        when (HasAttribute(InternalType.Serializable_tc) && !HasSuperType(iObjectReference.tycon))
+        {
+          AddSuperType(iObjectReference);
 
-            def decl = <[ decl:
+          def decl = <[ decl:
 #if NET_4_0
-              [System.Security.SecurityCritical]
+            [System.Security.SecurityCritical]
 #endif
-              public GetRealObject(_ : System.Runtime.Serialization.StreamingContext) : object
-              {
-                // When deserialiing this object, return a reference to 
-                // the Singleton object instead.
-                $(TExpr.StaticRef (loc, ttf, ttf, 
-                                   constant_object, []) : typed);
-              }
-            ]>;
-            decl.Attributes |= NemerleAttributes.SpecialName;
-            Define(decl);
-          }
+            public GetRealObject(_ : System.Runtime.Serialization.StreamingContext) : object
+              implements System.Runtime.Serialization.IObjectReference.GetRealObject
+            {
+              // When deserialiing this object, return a reference to 
+              // the Singleton object instead.
+              $(TExpr.StaticRef(loc, ttf, ttf, constant_object, []) : typed);
+            }
+          ]>;
+          decl.Attributes |= NemerleAttributes.SpecialName;
+          Define(decl);
+        }
         
         // add the constant object generator function
         def decl = <[ decl:
           public static _N_constant_object_generator () : $(ttf : typed)
           {
-            $(TExpr.StaticRef (loc, ttf, ttf, 
-                               constant_object, []) : typed)
+            $(TExpr.StaticRef (loc, ttf, ttf, constant_object, []) : typed)
           }
         ]>;
 
@@ -2197,7 +2130,7 @@ public partial class TypeBuilder : TypeInfo
       | TypeDeclaration.VariantOption =>
         mutable my_index = 0;
 
-        _ = NList.Find(enclosing_type.GetVariantOptions (), x => (x : object) == this || { ++my_index; false });
+        _ = NList.Find(_declaringType.GetVariantOptions(), x => (x : object) == this || { ++my_index; false });
 
         VariantOptionCode = my_index;
 
@@ -2270,66 +2203,26 @@ public partial class TypeBuilder : TypeInfo
     }
   }
     
-  /// determine equality of methods signatures taking into account types substitutions.
-  /// For axample you can compare method of implemented interface and it implementation
-  /// on current type.
-  public EqualsMethodsSignatures(baseTypeMethod : IMethod, method : IMethod) : bool
-  {
-    methods_matches_by_signature(baseTypeMethod, method)
-  }
-  
-  methods_matches_by_signature (iface_meth : IMethod, meth : IMethod) : bool 
-  {
-    if (iface_meth.GetHeader ().typarms.Length == meth.GetHeader ().typarms.Length)
-    {
-      def iftype = get_method_type_after_subst(iface_meth, meth);
-      def methd_type = if (meth.DeclaringType.Equals(this)) meth.GetMemType() else GetMemType().TypeOfMember(meth).Fix();
-      methd_type.TrySigRequire(iftype)
-    } 
-    else
-      false
-  }
-  
-  get_method_type_after_subst (iface_meth : IMethod, meth : IMethod) : FixedType
-  {
-    def h1 = iface_meth.GetHeader();
-    def h2 = meth.GetHeader();
-    def sub = SubtypingSubst(iface_meth.DeclaringType);
-    unless (h1.typarms.IsEmpty)
-      NList.Iter2(h1.typarms, h2.typarms, 
-        fun (stv, target)
-        {
-          sub.Add(stv, FixedType.StaticTypeVarRef(target))
-        });
-
-    sub.MonoApply(iface_meth.GetMemType());
-  }
-    
-  /**
-   * Resolves overrides for the required interface methods
-   */
-  internal resolve_method_implements () : void
+  /// Resolves overrides for the required interface methods
+  internal resolve_method_implements() : void
   {
     check_abstract();
-
-    def methods = GetMethods (BindingFlags.DeclaredOnly %| BindingFlags.Public %| BindingFlags.Instance %| BindingFlags.NonPublic);
+    def methods = GetMethods(BindingFlags.DeclaredOnly %| BindingFlags.Public %| BindingFlags.Instance %| BindingFlags.NonPublic);
     def methods = methods.Map(_ :> MethodBuilder);
     
     // FIXME: in fact we should only mark some methods as implemented and scream
     // when signature match is ambiguous
 
     // unresolved interface methods, which we must implement
-    def iface_methods = Hashtable(30);
-    def can_explicitly_impl_methods = Hashtable();
+    def ifaceMethodods : NameToMethodsMap  = Hashtable(30);
+    def can_explicitly_impl_methods : NameToMethodsMap = Hashtable();
 
-    def partition_correct_meth(ifmethods, proposed_meth, scream)
+    def partition_correct_meth(ifmethods : IfaceMethods, proposed_meth, scream)
     {
-      def is_correct(iface_meth : IMethod) 
+      def is_correct(ifaceType, ifaceMethod : IMethod) : bool
       {
-        // Message.Debug ( $ "try req: $proposed_meth req $iface_meth --- "
-        //                   "$(proposed_meth.GetMemType ()) req "
-        //                   "$(GetMemType ().TypeOfMethod (iface_meth))");
-        if (methods_matches_by_signature(iface_meth, proposed_meth))
+        // Message.Debug($"try req: $proposed_meth req $ifaceMethod --- $(proposed_meth.GetMemType ()) req $(GetMemType ().TypeOfMethod (ifaceMethod))");
+        if (methods_matches_by_signature(ifaceType, ifaceMethod, proposed_meth))
           if (proposed_meth.Attributes %&& NemerleAttributes.Public && !(proposed_meth.Attributes %&& NemerleAttributes.Static)) 
             true
           else 
@@ -2345,100 +2238,108 @@ public partial class TypeBuilder : TypeInfo
       ifmethods.Partition(is_correct)
     }
 
-    def collect_methods(tc, iface_methods)
+    def collect_methods(ifaceType : FixedType.Class, ifaceMethodods : NameToMethodsMap) : void
     {
-      foreach (m is IMethod in tc.GetMembers(BindingFlags.DeclaredOnly %| BindingFlags.Public %| BindingFlags.Instance))
-        match (iface_methods.Get(m.Name))
+      def methods = ifaceType.tycon.GetMembers(BindingFlags.DeclaredOnly %| BindingFlags.Public %| BindingFlags.Instance);
+
+      foreach (m is IMethod in methods)
+        match (ifaceMethodods.GetValueOrDefault(m.Name))
         {
-          | Some (lst) => iface_methods.Set(m.Name, m :: lst)
-          | None       => iface_methods.Add (m.Name, [m])
-        };
+          | [] | null => ifaceMethodods.Add(m.Name, [(ifaceType, m)]);
+          // здесь ошибка! Реализации интерфейсов с разными аргументами типов не должны попадать в один списко!
+          // По всей видимости нужно заменить FixedType.Class * list[IMethod] на list[FixedType.Class * IMethod]
+          // Хотя черт его знает. Нужно думать на свежую голову!
+          // !!! По всей видимости вместо того чтобы таскать за собой тип (ifaceType) лучше сразу здесь сделать сабст и
+          // поместить в хэш-таблицы 
+          | lst => ifaceMethodods.Set(m.Name, (ifaceType, m) :: lst);
+        }
     }
     
-    foreach (tc : TypeInfo in InterfacesToImplement())
-    {
-      // Message.Debug ($ "in $this, $tc .GetMembers == $(tc.GetMembers (BindingFlags.DeclaredOnly %| BindingFlags.Public %| BindingFlags.Instance))");
-       collect_methods(tc, iface_methods);
-    }
+    foreach (ty in InterfacesToImplement())
+       collect_methods(ty, ifaceMethodods);
 
     foreach (mtype in t_implements)
-       collect_methods(mtype.tycon, can_explicitly_impl_methods);
+       collect_methods(mtype, can_explicitly_impl_methods);
 
     def bind_explicit_implements(meth : MethodBuilder) : void
     {
-      def bind_one(impl)
+      def bindOneExplicitMethodRef(impl : PT.PExpr) : IfaceMethod
       {
         match (impl)
         {
           | <[ $ns . $(member : dyn) ]> =>
 
-            def ty =
-              match (Util.QidOfExpr(ns))
+            def (explicitIfaceTypeInfo, explicitIfaceType) =
+              match (BindFixedType(ns))
               {
-                | Some((idl, name)) => name.context.GetType(idl, this, 0)
-                | _ =>
-                  match (BindFixedType(ns))
-                  {
-                    | Class(tc, _) => tc
-                    | m_ty => Message.Error (impl.Location, $"cannot implement method from non-class type $m_ty");
-                              null
-                  }
+                | Class(tc, _) as ty => (tc, ty)
+                | m_ty => Message.Error(impl.Location, $"cannot implement method from non-interface type '$m_ty'");
+                          (null, null)
               };
 
-            def is_correct(iface_meth : IMethod)
+            def is_correct(ifaceType : FixedType.Class, ifaceMethod : IMethod) : bool
             {
-              ty != null && iface_meth.DeclaringType.Equals(ty) && methods_matches_by_signature(iface_meth, meth)
+              def explicitIfaceTypeInfo = explicitIfaceTypeInfo;
+              def explicitIfaceType     = explicitIfaceType;
+
+              explicitIfaceTypeInfo != null
+              && ifaceMethod.DeclaringType.Equals(explicitIfaceTypeInfo)
+              && explicitIfaceType.TryUnify(ifaceType)
+              && methods_matches_by_signature(explicitIfaceType, ifaceMethod, meth)
             }
 
-            Manager.MarkAsUsed (meth, !IsObsolete);
+            Manager.MarkAsUsed(meth, !IsObsolete);
             
-            def partition_and_set (meths, methods_map)
+            def partition_and_set(meths : IfaceMethods, methods_map : NameToMethodsMap) : IfaceMethod
             {
               def (correct, notcorrect) = meths.Partition(is_correct);
 
               match (correct)
               {
-                | [] =>
-                  def ty = ty;
-                  def isImplementInterface(itf : TypeInfo) : bool
+                | [] | null =>
+                  def ty = explicitIfaceType;
+
+                  def isImplementInterface(itf) : bool
                   {
-                    t_implements.Exists(x => object.Equals(x.tycon, itf))
+                    t_implements.Exists(x => object.Equals(x, itf))
                   }
                   when (ty != null)
                   {
                     if (isImplementInterface(ty))
-                      Message.Error(impl.Location, $"interface `$(ty.FullName)' does not contain method named `$member' with proper signature");
+                      Message.Error(impl.Location, $"'$impl' in explicit interface declaration is not a member of interface ($ty)");
+                      //Message.Error(impl.Location, $"interface `$ty' does not contain method named `$member' with proper signature");
                     else
-                      Message.Error(impl.Location, $"the $meth try to implement interface `$(ty.FullName)' which don't implement by type `$(this.FullName)'");
+                      Message.Error(impl.Location, $"the $meth try to implement interface `$ty' which don't implement by containing type ($this)");
                   }
-                  null
+                  (null, null)
 
-                | [m] =>                
-                  methods_map.Set (member, notcorrect);
+                | [m] =>
+                  methods_map.Set(member, notcorrect);
                   m
                   
-                | null => null
-                | _ =>
-                  Message.Error (impl.Location, $"interface `$(ty.FullName)' contains more then one method named `$member' with proper signature");
-                  correct.Head 
+                | headMethod :: _ =>
+                  Message.Error (impl.Location, $"interface `$explicitIfaceTypeInfo' contains more then one method named `$member' with proper signature");
+                  //TODO: Добавить список эти методов в виде зависмого хинта
+                  headMethod
               }
             }
             
-            match (iface_methods.Get (member))
+            match (ifaceMethodods.GetValueOrDefault(member))
             {
-              | Some (meths) => partition_and_set(meths, iface_methods)
-              | None =>
-                match (can_explicitly_impl_methods.Get (member))
+              | [] | null =>
+                match (can_explicitly_impl_methods.GetValueOrDefault(member))
                 {
-                  | Some (meths) => partition_and_set(meths, can_explicitly_impl_methods);
-                  | _ =>
+                  | null =>
                     Message.Error(impl.Location, $"no interface implemented by `$FullName' contains method named `$member' (looking for `$impl')");
-                    null
+                    (null, null)
+                    
+                  | meths => partition_and_set(meths, can_explicitly_impl_methods);
                 }
+              | meths => partition_and_set(meths, ifaceMethodods)
             }
                 
-          | _ => Message.Error(impl.Location, "simple identifier expected in explicit implementation specifier");
-                 null
+          | _ => Message.Error(impl.Location, "a qualified name expected in explicit implementation specifier");
+                 (null, null)
         }
       }
 
@@ -2448,9 +2349,9 @@ public partial class TypeBuilder : TypeInfo
           def impl2 =
             try
             {
-              def res = impl.RevMap(bind_one);
-              if (res.Contains(null))
-                res.Remove(null)
+              def res = impl.RevMap(bindOneExplicitMethodRef);
+              if (res.Contains((null, null)))
+                res.Remove((null, null))
               else
                 res
             }
@@ -2462,8 +2363,8 @@ public partial class TypeBuilder : TypeInfo
            unless (meth.Attributes %&& NemerleAttributes.Virtual)
              meth.Attributes |= NemerleAttributes.Sealed %| NemerleAttributes.Virtual %| NemerleAttributes.New;
               
-          foreach (mem in impl2)
-            Manager.MarkAsUsed (mem, !is_obsolete && !meth.IsObsolete);
+          foreach ((_, mem) in impl2)
+            Manager.MarkAsUsed(mem, !is_obsolete && !meth.IsObsolete);
 
           meth.ImplementedMethods = impl2;
          
@@ -2480,41 +2381,42 @@ public partial class TypeBuilder : TypeInfo
     // to some of the yet unimlemented interfaces methods
     def bind_implicit_implements(meth : MethodBuilder) : void
     {
-      def lookup_iface_members()
+      def lookup_iface_members() : IfaceMethods
       {
-        match (iface_methods.Get(meth.Name))
+        match (ifaceMethodods.GetValueOrDefault(meth.Name))
         {
-          | Some (meths) =>
-            match (partition_correct_meth(meths, meth, false))
+          | null => []
+          | [] as ifmethods | ifmethods =>
+            match (partition_correct_meth(ifmethods, meth, false))
             {
-              | (lst, notcorrect) =>
-                iface_methods.Set(meth.Name, notcorrect);
+              | (correct, notcorrect) =>
+                ifaceMethodods.Set(meth.Name, notcorrect);
                 def already =
                   if (already_bound.Contains(meth.Name))
                   {
-                    def lst = already_bound[meth.Name] : list[IMethod];
+                    def lst = already_bound[meth.Name];
                     def (additional, _) = partition_correct_meth(lst, meth, false);
                     unless (additional.IsEmpty)
                       Message.Error(meth.NameLocation, $"ambiguous implements-match for interface method(s): $additional, please use explicit implementation");
                     lst
                   }
                   else [];
-                already_bound [meth.Name] = lst + already;
-                unless (lst.IsEmpty)
-                  Manager.MarkAsUsed (meth, false);
-                lst
+                already_bound[meth.Name] = correct + already;
+                unless (correct.IsEmpty)
+                  Manager.MarkAsUsed(meth, false);
+                
+                correct
             }
-          | None => []
         }
       }
 
-      match (lookup_iface_members ())
+      match (lookup_iface_members())
       {
         | [] => ()
         | impl2 =>
-          def new_impls = impl2 + meth.ImplementedMethods;
+          def new_impls : IfaceMethods = impl2 + meth.ImplementedMethods;
 
-          foreach (impl in new_impls)
+          foreach ((_, impl) in new_impls)
             Manager.MarkAsUsed(impl, !is_obsolete && !meth.IsObsolete);
 
           meth.ImplementedMethods = new_impls;
@@ -2535,12 +2437,11 @@ public partial class TypeBuilder : TypeInfo
     // implementators of some unresolved interface methods
     mutable resolved_additionals = [];
 
-    def create_additional_overrides(name : string, mutable meths : list[IMethod])
+    def create_additional_overrides(name : string, mutable meths : IfaceMethods) : void
     {
       unless (meths is [])
       {
-        // possible implementators from existing methods
-        def possible_impls = LookupMember(name);
+        def possible_impls = LookupMember(name); // possible implementators from existing methods
 
         // choose only methods from within possible implementors
         foreach (meth is IMethod in possible_impls)
@@ -2552,7 +2453,7 @@ public partial class TypeBuilder : TypeInfo
               meths = notcorrect;
 
               // create a wrapper in the current type
-              def meth_header = meth.GetHeader ();
+              def meth_header = meth.GetHeader();
               def obj = if (meth.IsAbstract) <[ null : this ]> else <[ base ]>;
               //Message.Debug ("additional " + meth_header.name);
               
@@ -2561,9 +2462,9 @@ public partial class TypeBuilder : TypeInfo
                   NemerleAttributes.Override 
                 else
                   NemerleAttributes.New;
-              def subst = GetMemType ().ConstructSubstForTypeInfo (meth.DeclaringType);
-              def parse_tr = meth_header.CreateAliasMethod (mods | NemerleAttributes.Public, obj, subst);
-              def wrapper = DefineAndReturn (parse_tr) :> MethodBuilder;
+              def subst = GetMemType().ConstructSubstForTypeInfo(meth.DeclaringType); // VladD2: возможно это ошибка!
+              def parse_tr = meth_header.CreateAliasMethod(mods | NemerleAttributes.Public, obj, subst);
+              def wrapper = DefineAndReturn(parse_tr) :> MethodBuilder;
 
               wrapper.MarkWithSpecialName ();
               wrapper.HasBeenUsed = false; // do not trigger obsoletion warning
@@ -2573,28 +2474,30 @@ public partial class TypeBuilder : TypeInfo
           }
         }
 
-        resolved_additionals = (name, meths) :: resolved_additionals;
+        resolved_additionals ::= (name, meths);
       }
     }
 
-    foreach ((name, meths) in iface_methods.KeyValuePairs)
-      create_additional_overrides(name, meths);
+    foreach ((name, ifaceMeths) in ifaceMethodods.KeyValuePairs)
+      create_additional_overrides(name, ifaceMeths);
 
     foreach ((name, meths) in resolved_additionals)
-      iface_methods.Set(name, meths);
+      ifaceMethodods.Set(name, meths);
 
     // emit error messages for any unbound interface method
-    def scream_about_unimplemented(meths : list[IMethod])
+    def scream_about_unimplemented(meths : IfaceMethods)
     {
       def methods = methods;
-      foreach (meth in meths)
+      foreach ((ifaceType, ifaceMethod) as meth in meths)
       {
         // the word ``method'' comes from meth.ToString
-        Message.Error (this.NameLocation, $"unimplemented interface $(meth) (in $(this.FullName) type)");
-        UnimplementedMembers ::= meth;
+        Message.Error(this.NameLocation, $"'$this' does not implement interface member '$ifaceType.$(ifaceMethod.Name) : $(ifaceType.TypeOfMethod(ifaceMethod))'");
+        //Message.Error (this.NameLocation, $"unimplemented interface '$ifaceMethod' of '$ifaceType' interface (in $(this.FullName) type)");
+        UnimplementedMembers ::= (ifaceType, ifaceMethod);
 
+        def ifaceMethodName = ifaceMethod.Name;
         // following code can let wrong messge, but it can get hint to solv problem
-        def precedents = methods.Filter(m => m.Name == meth.Name);
+        def precedents = methods.Filter(m => m.Name == ifaceMethodName);
         def ifmethods = [meth];
         foreach (precedent in precedents)
           // "scream = true" force error report (about private or static methods).
@@ -2602,14 +2505,107 @@ public partial class TypeBuilder : TypeInfo
       }
     }
     
-    foreach (meths in iface_methods.Values)
-      scream_about_unimplemented(meths);
+    foreach (ifaceMeths in ifaceMethodods.Values)
+      scream_about_unimplemented(ifaceMeths);
 
-    foreach (meth is MethodBuilder when meth.overridden_method != null in GetMembers())
+    //foreach (meth is MethodBuilder when meth.overridden_method != null in GetMembers())
+    //{
+    //  meth.ImplementedMethods = meth.overridden_method :: meth.ImplementedMethods;
+    //  meth.overridden_method = null;
+    //}
+  }
+
+  /// determine equality of methods signatures taking into account types substitutions.
+  /// For axample you can compare method of implemented interface and it implementation
+  /// on current type.
+  methods_matches_by_signature(ifaceType : FixedType.Class, ifaceMethod : IMethod, meth : IMethod) : bool 
+  {
+    if (ifaceMethod.GetHeader().typarms.Length == meth.GetHeader().typarms.Length)
     {
-      meth.ImplementedMethods = meth.overridden_method :: meth.ImplementedMethods;
-      meth.overridden_method = null;
-    }
+      def iftype = get_method_type_after_subst(ifaceType, ifaceMethod, meth);
+      def methd_type =
+        if (meth.DeclaringType.Equals(this))
+          meth.GetMemType()
+      else
+        GetMemType().TypeOfMember(meth).Fix();
+      methd_type.TrySigRequire(iftype)
+    } 
+    else
+      false
+  }
+
+  /*static*/ get_method_type_after_subst(ifaceType : FixedType.Class, ifaceMethod : IMethod, meth : IMethod) : FixedType
+  {
+    def h1 = ifaceMethod.GetHeader();
+    def h2 = meth.GetHeader();
+    def sub = ifaceType.tycon.MakeSubst(ifaceType.args);
+    
+    unless (h1.typarms.IsEmpty)
+      NList.Iter2(h1.typarms, h2.typarms, (sourceStaticTypeVar, staticTypeVarForSubst) =>
+          sub.Add(sourceStaticTypeVar, FixedType.StaticTypeVarRef(staticTypeVarForSubst)));
+
+    def sub = sub;
+    def res = sub.MonoApply(ifaceMethod.GetMemType());
+    _ = this;
+    res
+  }
+
+  /// Return interfaces [this] needs to implement (that is it says it will
+  /// implement them, but they are not implemented in base class).
+  InterfacesToImplement() : Seq[FixedType.Class]
+  {
+    //def print[T](seq : Seq[T], name : string)
+    //{
+    //  def lst = seq.NToList();
+    //  Debug.WriteLine($"$name = ..$lst");
+    //}
+    
+    def interfacesOnly = _.IsInterface;
+    
+    def implementedByThis = GetSuperTypes().FilterLazy(interfacesOnly)
+                                           .MapLazy(ty => ty.DeepFix() :> FixedType.Class).NToArray();
+    //print(implementedByThis, "implementedByThis");
+    
+    def implementedByParent = 
+      match (parent_type)
+      {
+        | null | _ when parent_type.Equals(InternalType.Object) => array(0)
+        | _ => 
+          def subst = parent_type.tycon.MakeSubst(parent_type.args);
+          parent_type.tycon.GetSuperTypes()
+                     .FilterLazy(interfacesOnly)
+                     .MapLazy(ty => subst.MonoApply(ty).DeepFix() :> FixedType.Class).NToArray();
+      };
+    //print(implementedByParent, "implementedByParent");
+    
+    def unimplementedInterfaces = implementedByThis.ExcludeLazy(implementedByParent).NToArray();
+    //print(unimplementedInterfaces, "unimplementedInterfaces");
+    
+    unimplementedInterfaces
+  }
+  
+  //  InterfacesToImplement() : Seq[FixedType.Class]
+  //{
+  //  def print[T](seq : Seq[T], name : string)
+  //  {
+  //    def lst = seq.NToList();
+  //    Debug.WriteLine($"$name = ..$lst");
+  //  }
+  //  def interfacesOnly = _.IsInterface;
+  //  def implementedInterfaces   = GetSuperTypes().FilterLazy(interfacesOnly);
+  //  print(implementedInterfaces, "implementedInterfaces");
+  //  def interfacesToImplement   = GetDirectSuperTypes().FilterLazy(interfacesOnly);
+  //  print(interfacesToImplement, "interfacesToImplement");
+  //  def unimplementedInterfaces = interfacesToImplement.ExcludeLazy(implementedInterfaces);
+  //  print(unimplementedInterfaces, "unimplementedInterfaces");
+  //  unimplementedInterfaces
+  //}
+
+  
+  /** Returns null if there isn't any */
+  public BaseClass : FixedType.Class
+  {
+    get { if (parent_type != null) parent_type else InternalType.Object }
   }
 
   internal process_attributes (self_parm : list[Parsetree.SyntaxElement], target : MacroTargets, 
@@ -2904,7 +2900,7 @@ public partial class TypeBuilder : TypeInfo
       | _ => ()
     }
 
-    def type_is_top_level = enclosing_type == null;
+    def type_is_top_level = _declaringType == null;
     
     // top-level classes can only be public or internal
     when (type_is_top_level && accessibility != Accessibility.Public && accessibility != Accessibility.Internal)
@@ -2979,6 +2975,29 @@ public partial class TypeBuilder : TypeInfo
       additional_decls = SCG.List();
 
     additional_decls.Add(mem);
+  }
+
+  public override CanAccess(source : TypeInfo) : bool
+  {
+    IsPublic 
+      || (IsInternal && source is TypeBuilder) 
+      || (IsProtected 
+        && (if (_declaringType != null)
+             // during bind_types all supertypes are null
+             !_superTypesCalculated || source.IsDerivedFrom(_declaringType)
+            else
+              false
+           ))
+      || (if (_declaringType != null)
+          {
+            mutable result = false;
+            for (mutable tc = source; tc != null && !result; tc = tc.DeclaringType)
+              result = tc.Equals(_declaringType);
+            result
+          }
+          else
+            false
+    )
   }
 }
 } // ns

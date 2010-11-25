@@ -20,7 +20,7 @@ namespace Nemerle.VisualStudio.GUI
 	{
 		readonly NemerleSource _source;
 		readonly TypeBuilder _ty;
-		readonly IEnumerable<IMember> _unimplementedMembers;
+    readonly IEnumerable<IGrouping<FixedType.Class, IMember>> _unimplementedMembers;
 	  readonly int _imageSize;
 
     class MemberImplInfo
@@ -40,7 +40,7 @@ namespace Nemerle.VisualStudio.GUI
       }
     }
 
-		public ImplementMembersForm(NemerleSource source, TypeBuilder ty, IEnumerable<IMember> unimplementedMembers)
+    public ImplementMembersForm(NemerleSource source, TypeBuilder ty, IEnumerable<IGrouping<FixedType.Class, IMember>> unimplementedMembers)
 		{
 			_source               = source;
 			_ty                   = ty;
@@ -77,18 +77,23 @@ namespace Nemerle.VisualStudio.GUI
     /// </summary>
     private Dictionary<FixedType.Class, IMember[]> MakeTypeMembersMap()
     {
-      var implItfs = _ty.GetDirectSuperTypes().Where(t => t.IsInterface);
-      var types = _unimplementedMembers.GroupBy(m => m.DeclaringType);
-      var res = implItfs.Join(types, t => t.tycon, itf => itf.Key, (t, itf) => new { Group = itf, Ty = t });
+      //var implItfs = _ty.GetDirectSuperTypes().Where(t => t.IsInterface);
+      //var types = _unimplementedMembers.GroupBy(m => m.DeclaringType);
+      //var res = implItfs.Join(types, t => t.tycon, itf => itf.Key, (t, itf) => new { Group = itf, Ty = t });
+
+      //var ht = new Dictionary<FixedType.Class, IMember[]>();
+      //foreach (var item in res)
+      //  ht[item.Ty] = ReplaceGettersAndSettersByProperties(item.Group);
+
+      //var baseTypes = types.Where(g => !g.Key.IsInterface);
+
+      //foreach (var baseType in baseTypes)
+      //  ht[baseType.Key.GetMemType()] = ReplaceGettersAndSettersByProperties(baseType);
 
       var ht = new Dictionary<FixedType.Class, IMember[]>();
-      foreach (var item in res)
-        ht[item.Ty] = ReplaceGettersAndSettersByProperties(item.Group);
 
-      var baseTypes = types.Where(g => !g.Key.IsInterface);
-
-      foreach (var baseType in baseTypes)
-        ht[baseType.Key.GetMemType()] = ReplaceGettersAndSettersByProperties(baseType);
+      foreach (var item in _unimplementedMembers)
+        ht[item.Key] = ReplaceGettersAndSettersByProperties(item);
 
       return ht;
     }
@@ -140,9 +145,17 @@ namespace Nemerle.VisualStudio.GUI
       return typeMembersesMap.Any(x => x.Key.IsInterface);
     }
 
-    private static IMember[] ReplaceGettersAndSettersByProperties(IGrouping<TypeInfo, IMember> item)
+    //private static IMember[] ReplaceGettersAndSettersByProperties(IGrouping<TypeInfo, IMember> item)
+    //{
+    //  var props = item.Key.GetMembers().OfType<IProperty>();
+    //  var mems1 = item.Select(m => props.SingleOrDefault(p => p.GetGetter() == m || p.GetSetter() == m) ?? m);
+    //  var mems2 = mems1.Distinct().OrderBy(m => m.Name).ToArray();
+    //  return mems2;
+    //}
+
+    private static IMember[] ReplaceGettersAndSettersByProperties(IGrouping<FixedType.Class, IMember> item)
     {
-      var props = item.Key.GetMembers().OfType<IProperty>();
+      var props = item.Key.tycon.GetMembers().OfType<IProperty>();
       var mems1 = item.Select(m => props.SingleOrDefault(p => p.GetGetter() == m || p.GetSetter() == m) ?? m);
       var mems2 = mems1.Distinct().OrderBy(m => m.Name).ToArray();
       return mems2;

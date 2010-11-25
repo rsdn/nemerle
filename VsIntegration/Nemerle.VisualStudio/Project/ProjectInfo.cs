@@ -764,7 +764,8 @@ namespace Nemerle.VisualStudio.Project
 			Debug.WriteLine(text);
 		}
 
-		public void AddUnimplementedMembers(ISource source, TypeBuilder ty, IEnumerable<IMember> unimplementedMembers)
+    public void AddUnimplementedMembers(ISource source, TypeBuilder ty, 
+      IEnumerable<IGrouping<FixedType.Class, IMember>> unimplementedMembers)
 		{
 			using (var form = new ImplementMembersForm((NemerleSource)source, ty, unimplementedMembers))
 			{
@@ -774,7 +775,9 @@ namespace Nemerle.VisualStudio.Project
 
 		public void AddOverrideMembers(ISource source, TypeBuilder ty, IEnumerable<IMember> notOverriden)
 		{
-			using (var form = new ImplementMembersForm((NemerleSource)source, ty, notOverriden))
+      var ty2 = ty.GetMemType();
+      var notOverriden2 = notOverriden.Select(m => new { ty2,  m }).GroupBy(x => x.ty2, x => x.m);
+      using (var form = new ImplementMembersForm((NemerleSource)source, ty, notOverriden2))
 			{
 				form.ShowDialog();
 			}
