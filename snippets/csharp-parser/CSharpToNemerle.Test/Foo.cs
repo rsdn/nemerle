@@ -14,13 +14,16 @@ namespace CSharpToNemerle.Test
   public interface IVarianceTest<out T> {
     T Bar();
   }
-  
+
   public enum A {
     A1 = 10,
     A2,
     A3
   }
 
+  #define X
+
+  #if X
   public static class AExtensions
   {
     public static void TestExtension(this A a)
@@ -28,7 +31,8 @@ namespace CSharpToNemerle.Test
       Console.WriteLine(a);
     }
   }
-  
+  #endif
+
   public class Foo<T> where T : new()
   {
     public Foo() : base() {  }
@@ -102,7 +106,7 @@ namespace CSharpToNemerle.Test
   struct __<T>
   {
       public T _;
-  
+
       public __(T _)
       {
           this._ = _;
@@ -117,7 +121,7 @@ namespace CSharpToNemerle.Test
     {
     }
   }
-  
+
   public class Data<T>
   {
   }
@@ -150,13 +154,13 @@ namespace CSharpToNemerle.Test
       Console.WriteLine("z is [ {0}, {1} ]", k[0], k[1]);
     }
 
-    void TestMagic() 
+    void TestMagic()
     {
       Magic m = new Magic { A = 10, B = "s" };
       Console.WriteLine("magic: {0}", m);
     }
 
-    void TestFor(int count) 
+    void TestFor(int count)
     {
       for(int i = 0, j = 5; i < count /* ... */; ++i, ++j)
         Console.WriteLine("i = {0}, j = {1}", i, j);
@@ -186,12 +190,12 @@ namespace CSharpToNemerle.Test
         }
         Console.WriteLine();
     }
-    
+
     void TestNullCheckOperator(string str)
     {
       Console.WriteLine("Null-checkin operator: {0}", str ?? "was null :)");
     }
-    
+
     void TestCrazy()
     {
       var x = new __<X>(new X { A = 1,  B = 2 }) { _ = { A = 3, B = 4 } }._;
@@ -230,7 +234,7 @@ namespace CSharpToNemerle.Test
       Console.WriteLine(j == 31);
       Console.WriteLine(i == 30);
     }
-    
+
     void TestLambda()
     {
       var c1 = new Container<string, Data<int>>(_x => new Data<int>());
