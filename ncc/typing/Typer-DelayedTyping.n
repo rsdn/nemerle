@@ -89,13 +89,30 @@ namespace Nemerle.Compiler
       public variant Kind
       {
         | MemberAccess { expr : TExpr; name : PT.Name; }
-        | Overloaded { overloads : list [OverloadPossibility]; }
-        | OverloadedOperator { overloads : list [OverloadPossibility]; 
-                               t1 : TypeVar; t2 : TypeVar; name : string; env : GlobalEnv; 
-                               seen : list [OverloadPossibility];
-                             }
+        | Overloaded   { overloads : list[OverloadPossibility]; }
+        | OverloadedOperator
+          {
+            overloads : list[OverloadPossibility]; 
+            t1        : TypeVar;
+            t2        : TypeVar;
+            name      : string;
+            env       : GlobalEnv;
+            seen      : list[OverloadPossibility];
+          }
+
         | Operator { t1 : TypeVar; t2 : TypeVar; name : string; env : GlobalEnv; }
-        | Resolved { expr : TExpr; }
+        | Resolved
+          {
+            expr : TExpr;
+            [RecordIgnore] parms : list[Parm]; // "parms" may contains new parameters for TExpr.Call if it is a extention method call
+
+            public this(expr : TExpr, parms : list[Parm])
+            {
+              this.expr  = expr;
+              this.parms = parms;
+            }
+          }
+
         | Macro { action : DelayedAction }
         | Error
 
@@ -166,10 +183,11 @@ namespace Nemerle.Compiler
         def k =
           match (k) 
           {
-            | Kind.Resolved ((TExpr.StaticRef (_, meth is IMethod, _)) as expr) =>
+            | Kind.Resolved ((TExpr.StaticRef (_, meth is IMethod, _)) as expr) as resolvedKind =>
               match (meth.BuiltinKind)
               {
                 | BuiltinMethodKind.OpCode (ch, unch) =>
+                  assert2(resolvedKind.parms == null);
                   def opcode = if (local_context.IsChecked) ch else unch;
                   Kind.Resolved (TExpr.OpCode (expr.Location, expr.ty, opcode))
 
@@ -403,11 +421,13 @@ namespace Nemerle.Compiler
 
       public ResolutionResult : TExpr
       {
-        get {
-          match (DtKind) {
-            | Kind.Resolved (e) => e
-            | Kind.Error => TExpr.Error ()
-            | _ => assert (false)
+        get
+        {
+          match (DtKind)
+          {
+            | Kind.Resolved(e)  => e
+            | Kind.Error        => TExpr.Error()
+            | _                 => assert(false)
           }
         }
       }
@@ -511,23 +531,7 @@ namespace Nemerle.Compiler
           Util.cassert (kind.filtering_expression : object == e : object)
       }
 
-      FilteringExpressionHack(parms : list[Parm]) : void
-      {
-        def call = this.DtKind.filtering_expression;
-        // VladD2: This is a hack! 
-        // Copy original TExpr.Call. We should safe it for next speculative typing 
-        // processes (delayed typing).
-        def copy = TExpr.Call(call.func, call.parms, call.is_tail);
-        copy.ty = call.ty;
-        // Set copy to filter
-        this.DtKind.filtering_expression = copy;
-        // This change source TExpr.Call wich been made while parsing.
-        // TODO: This is a dirty hack. We mast remove it.
-        call.parms = parms;
-      }
-
-      ResolveOverload(overloads : list [OverloadPossibility], parms : list [Parm], expected : TypeVar)
-        : list [OverloadPossibility]
+      ResolveOverload(overloads : list[OverloadPossibility], parms : list[Parm], expected : TypeVar) : list[OverloadPossibility]
       {
         def loc = 
           match (PExpr)
@@ -536,7 +540,7 @@ namespace Nemerle.Compiler
             | _                          => LocationStack.Top()
           };
 
-        def res = typer.ResolveOverload(overloads, parms, expected, Speculative, loc, FilteringExpressionHack);
+        def res = typer.ResolveOverload(overloads, parms, expected, Speculative, loc);
         res
       }
 
@@ -703,15 +707,13 @@ namespace Nemerle.Compiler
                   // [End of overload resoluton process]
                   // Add implicit cast if needed.
                   def expr1 = one.Compile();
-                  //def expr2 = typer.TryAddCastTo(expr1, expected);
                   def ext = one.ExtensionMethodObject;
                   def expr2 = 
                     if (ext == null || expr != null)
-                      typer.TryAddCastTo (expr1, expected)
+                      typer.TryAddCastTo(expr1, expected, _speculative)
                     else match (expr1.Type)
                     {
                       | FixedType.Fun(FixedType.Tuple([_]), _) | FixedType.Fun(FixedType.Tuple([]), _) => Util.ice("FixedType.Fun has inconsistent state!")
-
                       | FixedType.Fun(FixedType.Tuple(head :: last :: []), to) with (from = last,              cnt = 1)
                       | FixedType.Fun(FixedType.Tuple(head :: tail),       to) with (from = FixedType.Tuple(tail), cnt = tail.Length)
                       | FixedType.Fun(head,                            to) with (from = FixedType.Void(),      cnt = 0) =>
@@ -728,10 +730,10 @@ namespace Nemerle.Compiler
                             typer.TypeExpr(<[ ($(expr1 : typed)(..$parms) : $funTyExpr) ]>, expected);
                         tExpr
 
-                      | _ => typer.TryAddCastTo(expr1, expected) // was error
+                      | _ => typer.TryAddCastTo(expr1, expected, _speculative) // was error
                     };
 
-                  SetKind(Kind.Resolved(expr2 ?? expr1))
+                  SetKind(Kind.Resolved(expr2 ?? expr1, one.ResolvedCallParameters))
 
                 | lst => SetKind (Kind.Overloaded (lst))
               }
@@ -752,7 +754,7 @@ namespace Nemerle.Compiler
 
             when (hints != args && DtKind.filtering_expression != null)
             { // resolving of nested delayed typing can calc types of t1 & t2... try it...
-              def ok = typer.TryResolveNestedDelayedTyping(DtKind.filtering_expression.parms.Map(_.expr), false);
+              def ok = typer.TryResolveNestedDelayedTyping(DtKind.filtering_expression.parms.Map(_.expr), _speculative);
               when (ok)
                 hints = calcHintCount(t1, t2)
             }
@@ -779,7 +781,7 @@ namespace Nemerle.Compiler
 
                 def (o1, isResolveOverloadCalled) =
                   if (expr == null)
-                    (RemoveExtensionMethods(OverloadPossibility.OnlyPossible (overloads, expected, typer)), false)
+                    (RemoveExtensionMethods(OverloadPossibility.OnlyPossible(overloads, expected, typer)), false)
                   else if (typer.Expect (expected, expr.func.Type, "overloaded function call"))
                       match (overloads) 
                       {
@@ -791,47 +793,46 @@ namespace Nemerle.Compiler
                 when (o1.Length != overloads.Length || o1.Length == 1)
                   match (o1)
                   {
-                    | [one] when hints == args
-                              || hints > 0 && typer.BadnessAllowed > 0
-                              || typer.BadnessAllowed > 1 =>
-                      when (expr != null && !isResolveOverloadCalled) //ResolveOverload maybe wasn't called, but it should be to set stuff in expr
-                        _ = ResolveOverload (overloads, expr.parms, expr.Type);
-                      SetKind (Kind.Resolved (one.Compile ()))
+                    | [one] when hints == args || hints > 0 && typer.BadnessAllowed > 0 || typer.BadnessAllowed > 1 =>
+                      when (expr != null && !isResolveOverloadCalled) //ResolveOverload maybe wasn't called, but it should be to set stuff in parameters
+                        _ = ResolveOverload(overloads, expr.parms, expr.Type);
+                      SetKind(Kind.Resolved(one.Compile(), one.ResolvedCallParameters))
 
-                    | lst =>
-                      SetKind (Kind.OverloadedOperator (lst, t1, t2, name, env, seen));
+                    | lst => SetKind(Kind.OverloadedOperator(lst, t1, t2, name, env, seen));
                   }
               }
 
           | Kind.Operator (t1, t2, name, env) =>
-            def operators = {
-              def globals = env.LookupSymbolExt ([name], typer.current_type);
-              mutable res = [];
-              foreach ((ti, meth) in globals)
-                when (meth.IsStatic)
-                  res = typer.ConstructMethodOverload (ti, meth :> IMethod) + res;
-              when (LookupOperator (t1, name) is Some (lst))
-                res = lst + res;
-              when (LookupOperator (t2, name) is Some (lst))
-                res = lst + res;
-              res = OverloadPossibility.Unique (res);
-              res
-            }
-            SetKind (Kind.OverloadedOperator (operators, t1, t2, name, env, operators));
+            def operators =
+              {
+                def globals = env.LookupSymbolExt ([name], typer.current_type);
+                mutable res = [];
+                foreach ((ti, meth) in globals)
+                  when (meth.IsStatic)
+                    res = typer.ConstructMethodOverload (ti, meth :> IMethod) + res;
+                when (LookupOperator (t1, name) is Some (lst))
+                  res = lst + res;
+                when (LookupOperator (t2, name) is Some (lst))
+                  res = lst + res;
+                res = OverloadPossibility.Unique (res);
+                res
+              };
+            SetKind (Kind.OverloadedOperator(operators, t1, t2, name, env, operators));
             Resolve ()
             
           | Kind.Resolved (expr) =>
             unless (typer.Expect (expected, expr.Type, "already resolved overload"))
-              SetKind (Kind.Error ())
+              SetKind(Kind.Error())
 
           | Kind.Macro (action) =>
             Util.locate (Location,
-              match (action.Resolve (false)) {
+              match (action.Resolve(false))
+              {
                 | Some (expr) =>
-                  if (typer.Expect (expected, expr.Type, $ "result of $action execution"))
-                    SetKind (Kind.Resolved (expr))
+                  if (typer.Expect(expected, expr.Type, $ "result of $action execution"))
+                    SetKind(Kind.Resolved(expr))
                   else
-                    SetKind (Kind.Error ())
+                    SetKind(Kind.Error())
 
                 | None => {}
               })

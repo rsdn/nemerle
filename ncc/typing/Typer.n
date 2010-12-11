@@ -463,7 +463,7 @@ namespace Nemerle.Compiler
       
       foreach ((dt : DelayedTyping, _) in solver.dt_store)
       {
-        unless (dt.IsResolved) 
+        unless (dt.IsResolved)
         {
           dt.Resolve ();
 
@@ -725,23 +725,27 @@ namespace Nemerle.Compiler
     }
 
 
-    /** Run given typing action, without possiblity of any error messages. */
-    public TryTyping (fn : void -> TExpr) : TExpr
+    /// Run given typing action, without possiblity of any error messages.
+    public TryTyping(fn : void -> TExpr) : TExpr
     {
       def is_wrong =
-        try {
+        try
+        {
           solver.PushState ();
           _ = fn ();
           messenger.SeenError
-        } finally {
-          solver.PopState ()
         }
-      if (is_wrong) TExpr.Error ()
+        finally { solver.PopState () };
+
+      if (is_wrong)
+        TExpr.Error()
       else
-        // we cannot reuse the previous result, since it's has been
-        // popped off the stack
-        fn ()
+      {
+        // we cannot reuse the previous result, since it's has been taken in speculative typing mode
+        def res = fn();
+        res
       }
+    }
 
 
     static IsError (expr : TExpr) : bool
@@ -1058,8 +1062,11 @@ namespace Nemerle.Compiler
 
     public SkipExpressionTreeConvertion : bool { get; protected set; }
     
-    NonLiteralCast (expr : TExpr, target : TypeVar) : TExpr
+    /// Returns null if has no cast
+    NonLiteralCast(expr : TExpr, target : TypeVar, speculative : bool) : TExpr
     {
+      mutable isResolveNestedDelayedTypingTried = false;
+      def result = 
         try
         {
           when (DebugOut)
@@ -1070,7 +1077,7 @@ namespace Nemerle.Compiler
 
           mutable meth = null;
 
-          def (del_tc, exprTree_tc, argsTys, ret) =
+          def (delegate_tc, exprTree_tc, argsTys, ret) =
             if (IsFunctional(expr))
             {
               def (del, exprTree, args, ret) = TryExtractFunType(target.Hint);
@@ -1136,17 +1143,19 @@ namespace Nemerle.Compiler
               | _ => null
             }
           }
-          else if (del_tc != null)
+          else if (delegate_tc != null)
           {
-            log (TYPING, $ "delegate conversion, $(expr.Type) ---> $del_tc");
-            // we don't want any delegate named del_tc, we want this specific delegate
-            def (con, _) = MakeOverloadedNode(TypeToConstructor(null, del_tc), FreshTypeVar());
-        def expr2 = TryTyping (fun() { 
-              def resExpr = TypeExpr(<[ $(con : typed)($(expr : typed)) ]>);
-            def ok = !IsError(resExpr) && TryResolveNestedDelayedTyping([resExpr]);
-              if (ok) resExpr else TExpr.Error()
-          });
-        
+            log (TYPING, $ "delegate conversion, $(expr.Type) ---> $delegate_tc");
+            // we don't want any delegate named delegate_tc, we want this specific delegate
+            def expr2 = 
+              { // type delegate ctor
+                def (con, _) = MakeOverloadedNode(TypeToConstructor(null, delegate_tc), FreshTypeVar());
+                def resExpr = TypeExpr(<[ $(con : typed)($(expr : typed)) ]>);
+                def ok = !IsError(resExpr) 
+                      && { isResolveNestedDelayedTypingTried = true; TryResolveNestedDelayedTyping([resExpr], speculative) };
+                if (ok) resExpr else TExpr.Error()
+              };
+
             if (IsError(expr2) || !expr2.Type.TryRequire(target))
               null
             else
@@ -1202,48 +1211,52 @@ namespace Nemerle.Compiler
             System.Diagnostics.Debug.WriteLine("<<<< Typer.NonLiteralCast()");
           }
         };
+
+      if (result != null && (isResolveNestedDelayedTypingTried || TryResolveNestedDelayedTyping([result], speculative)))
+        result
+      else
+        null
     }
 
 
-    public TryAddCastTo (expr : TExpr, target : TypeVar) : TExpr
+    public TryAddCastTo(expr : TExpr, target : TypeVar, speculative : bool = false) : TExpr
     {
-      match (expr) {
-        | TExpr.Literal (lit)
-          when target.Hint.IsSome && 
-               LiteralConversionPossible (lit, Option.UnSome (target.Hint)) =>
+      match (expr)
+      {
+        | TExpr.Literal(lit) when target.Hint.IsSome && LiteralConversionPossible(lit, Option.UnSome(target.Hint)) =>
           target.Fixate ();
-          if (target.Equals (InternalType.Int64) ||
-              target.Equals (InternalType.UInt64))
-            TExpr.TypeConversion (target, expr, target,
-                                  ConversionKind.IL (local_context.IsChecked))
-          else if (lit is Literal.Null) {
+
+          if (target.Equals(InternalType.Int64) || target.Equals(InternalType.UInt64))
+            TExpr.TypeConversion (target, expr, target, ConversionKind.IL (local_context.IsChecked))
+          else if (lit is Literal.Null)
+          {
             // Message.Debug ($"lit=$lit $(expr.GetHashCode()) et=$(expr.Type):$(expr.Type.GetType()) targ=$target");
-            if (expr.Type.TryUnify (target)) {
+            if (expr.Type.TryUnify(target))
+            {
               expr.Type.ForceUnify(target);
               expr
-            } else
-              NonLiteralCast (expr, target)
-          } else
+            }
+            else
+              NonLiteralCast(expr, target, speculative)
+          }
+          else
             expr
 
         // 0 -> any enum
-        | TExpr.Literal (Literal.Integer (0, _, _))
-          when target.IsFixed && target.FixedValue.IsEnum =>
-          TExpr.TypeConversion (target, expr, target,
-                                ConversionKind.IL (local_context.IsChecked))
+        | TExpr.Literal(Literal.Integer(0, _, _)) when target.IsFixed && target.FixedValue.IsEnum =>
+          TExpr.TypeConversion (target, expr, target, ConversionKind.IL (local_context.IsChecked))
 
-        | _ => NonLiteralCast (expr, target)
+        | _ => NonLiteralCast(expr, target, speculative)
       }
     }
     #endregion
 
     #region Solver interaction
 
-    /// Returns true if no error. This method does not 
-    /// guarantee absence the unresolved delayed typind.
-    internal TryResolveNestedDelayedTyping(exprs : SCG.IEnumerable[TExpr], speculative = true) : bool
+    /// Returns true if no error. This method does not guarantee absence the unresolved delayed typind.
+    internal TryResolveNestedDelayedTyping(exprs : SCG.IEnumerable[TExpr], speculative : bool) : bool
     {
-      // RTry resolve list of unresolved delayed typind (TExpr.Delayed)
+      // Try resolve list of unresolved delayed typind (TExpr.Delayed)
       def resolve(unresolvedDelayeds : SCG.IEnumerable[_], initialCount, speculative)
       {
         if (initialCount > 0)
@@ -1266,25 +1279,16 @@ namespace Nemerle.Compiler
         else true
       }
 
-      def walker = ExprWalker();
+      def walker              = ExprWalker();
+      def unresolvedDelayeds  = SCG.List();
 
-      try
-      { 
-        when (speculative) 
-          solver.PushState();
-        
-        def unresolvedDelayeds = SCG.List();
+      // Collect unresilved nested delayed typing (TExpr.Delayed)...
+      foreach (expr in exprs)
+        walker.ForEachUnresolvedDelayed(expr, unresolvedDelayeds.Add);
 
-        // Collect unresilved nested delayed typing (TExpr.Delayed)...
-        foreach (expr in exprs)
-          walker.ForEachUnresolvedDelayed(expr, unresolvedDelayeds.Add);
-
-        // Try to resolve nested delayed typing. It can fail and this call 
-        // typing action will be also failed (in this case we return false).
-        resolve (unresolvedDelayeds, unresolvedDelayeds.NCount (), speculative)
-
-      }
-      finally { when (speculative) solver.PopState(); };
+      // Try to resolve nested delayed typing. It can fail and this call 
+      // typing action will be also failed (in this case we return false).
+      resolve(unresolvedDelayeds, unresolvedDelayeds.NCount(), speculative)
     }
 
     public FreshTyVar() : TypeVar { FreshTypeVar() }
@@ -1339,16 +1343,18 @@ namespace Nemerle.Compiler
       TypeExpr (e, expected, false)
     }
 
-    public TypeExpr (expr : PExpr, expected : TypeVar, is_toplevel_in_seq : bool) : TExpr
+    public TypeExpr(expr : PExpr, expected : TypeVar, is_toplevel_in_seq : bool) : TExpr
     {
+      //Debug.WriteLine($"typing expression: $expr, exp=$expected");
       log (TYPING, expr.loc, $"(typing expression: $expr, exp=$expected");
       expr.TypedObject = null;
 
       when (solver.dt_store == null)
-        solver.dt_store = Map ();
+        solver.dt_store = Map();
 
-      def texpr = Util.locate (expr.Location, {
-        def e1 = InterceptSpecialMacros (expr, expected);
+      def texpr = Util.locate(expr.Location,
+      {
+        def e1 = InterceptSpecialMacros(expr, expected);
         def e2 = 
           try 
           {
@@ -1360,14 +1366,14 @@ namespace Nemerle.Compiler
             else
             {
               log (MACRO_EXPANSIONS, expr.loc, $ "running expand with: $expr");
-              def expendedExpr = match (MacroRegistry.expand_one_macro (this, expr)) 
+              match (MacroRegistry.expand_one_macro (this, expr)) 
               {
                 | (e, None) => 
                   log (MACRO_EXPANSIONS, e.loc, $ "after expansion: $e");
 
                   def res = DoType (e, expected, is_toplevel_in_seq);
                   log (TYPING, e1.loc, 
-                       $ "done typing: $e --> $res [$(res.GetHashCode())] : $(if (res.ty != null) res.Type else null))");
+                        $ "done typing: $e --> $res [$(res.GetHashCode())] : $(if (res.ty != null) res.Type else null))");
 
                   when (res.ty == null)
                     res.Type = expected;
@@ -1394,12 +1400,11 @@ namespace Nemerle.Compiler
                     res
                   else
                     TExpr.DebugInfo (debugLocation, res.ty, res, pexpr);
-              };
-
-              expendedExpr
+              }
             }
-          } catch {
-            | _ is Recovery =>
+          }
+          catch
+          { | _ is Recovery =>
               messenger.SeenError = true;
               TExpr.Error ()
           }; // e2 def
@@ -1407,10 +1412,12 @@ namespace Nemerle.Compiler
         if (e2.ty == null)
           e2.ty = expected;
         else
-          _ = Expect (expected, e2.ty, "previously typed expression");
+          _ = Expect(expected, e2.ty, "previously typed expression");
 
         e2
       });
+
+      //Debug.WriteLine($"end of typing expression: Type:$(texpr.Type), exp=$expected");
 
       when (expr.TypedObject == null)
         expr.TypedObject = texpr;
@@ -3667,9 +3674,9 @@ namespace Nemerle.Compiler
             when (Manager.ExtPointOverloadingRes != null)
               Manager.ExtPointOverloadingRes(expected, delayedExpr, parameters);
 
-            def expr = TExpr.Call (expected, delayedExpr, parameters, false);
+            def expr = TExpr.Call(expected, delayedExpr, parameters, false);
             dt.SetCallExpr (expr);
-            dt.Resolve (); // just try  
+            dt.Resolve (); // just try
             when (dt.IsResolved && pfnc.TypedObject == null)
               pfnc.TypedObject = dt.ResolutionResult;
             expr
