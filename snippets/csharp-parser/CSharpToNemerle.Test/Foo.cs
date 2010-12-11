@@ -301,5 +301,16 @@ namespace CSharpToNemerle.Test
           goto case 11;
       }
     }
+
+    void TestConditionals()
+    {
+#if DEBUG
+      Console.WriteLine("DEBUG");
+#elif RELEASE
+      Console.WriteLine("RELEASE");
+#else
+      throw ApplicationException();
+#endif
+    }
   }
 }
