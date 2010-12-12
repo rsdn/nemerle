@@ -1,4 +1,6 @@
-﻿using System;
+﻿#line 2 //does not alter locations :)
+
+using System;
 using System.ComponentModel;
 using System.Console;
 using System.Linq;
@@ -279,7 +281,9 @@ namespace CSharpToNemerle.Test
 
     void TestSwitch()
     {
+#line hidden
       var i = 14;
+#line default
       switch(i)
       {
         case 0:
