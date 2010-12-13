@@ -310,10 +310,8 @@ namespace CSharpToNemerle.Test
     {
 #if DEBUG
       Console.WriteLine("DEBUG");
-#elif RELEASE
-      Console.WriteLine("RELEASE");
 #else
-      throw ApplicationException();
+      Console.WriteLine("RELEASE");
 #endif
     }
   }
