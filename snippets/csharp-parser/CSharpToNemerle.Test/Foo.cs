@@ -9,14 +9,25 @@ using LIST = System.Collections.Generic.List<int>;
 
 namespace CSharpToNemerle.Test
 {
+  /// docs for delegate
+
   [Description("this is delegate")]
   [return:Description("this is delegate result")]
   public delegate T X<T>(int a, T b) where T : class;
 
+  /// <summary>
+  /// docs
+  /// for
+  /// interface
+  /// </summary>
   public interface IVarianceTest<out T> {
+    /// method Bar
     T Bar();
   }
 
+  /**
+    docs for enum
+   */
   public enum A {
     A1 = 10,
     A2,
@@ -38,6 +49,8 @@ namespace CSharpToNemerle.Test
   public class Foo<T> where T : new()
   {
     public Foo() : base() {  }
+    
+    /// this is destructor
     ~Foo() {}
 
     public event EventHandler Bar;
