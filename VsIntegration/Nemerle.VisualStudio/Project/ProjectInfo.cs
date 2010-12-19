@@ -259,17 +259,29 @@ namespace Nemerle.VisualStudio.Project
 		private void AddAssembleReferenceWatcher(string filePath)
 		{
 			if (!File.Exists(filePath))
-			{
 				Debug.WriteLine("Assemble " + filePath + " does not exists!");
-			}
 
-			string path = Path.GetDirectoryName(filePath);
-			string name = Path.GetFileName(filePath);
-			FileSystemWatcher watcher = new FileSystemWatcher(path, name);
-			watcher.NotifyFilter = NotifyFilters.LastWrite;
-			watcher.Changed += watcher_Changed;
-			_assembleReferenceWatchers.Add(watcher);
-			watcher.EnableRaisingEvents = true;
+      try
+      {
+        string path = Path.GetDirectoryName(filePath);
+        
+        if (!Directory.Exists(path))
+          return;
+
+        string name = Path.GetFileName(filePath);
+        FileSystemWatcher watcher = new FileSystemWatcher(path, name);
+        watcher.NotifyFilter = NotifyFilters.LastWrite;
+        watcher.Changed += watcher_Changed;
+        _assembleReferenceWatchers.Add(watcher);
+        watcher.EnableRaisingEvents = true;
+      }
+      catch (Exception ex)
+      {
+        Debug.WriteLine(ex.ToString());
+        SetCompilerMessages(new[] {new CompilerMessage(Location.Default, ex.Message, 
+					MessageKind.Error, Engine, false)}, null);
+        throw;
+      }
 		}
 
 		void RemoveAssembleReferenceWatcher(string filePath)
