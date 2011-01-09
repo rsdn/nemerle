@@ -149,6 +149,8 @@ namespace CSharpToNemerle.Test
 
     string[] data2 = { "a", "b" };
 
+    string[,] data3 = { { "a" }, { "b" } };
+
     void TestAlias()
     {
       Console.WriteLine("Alias LIST is {0}", typeof(LIST));
