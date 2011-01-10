@@ -144,10 +144,10 @@ namespace Nemerle.VisualStudio.LanguageService
 				TextLineChange changes = lineChange[0];
 
 				RelocationQueue.AddRelocationRequest(RelocationRequestsQueue,
-		  FileIndex, CurrentVersion,
-		  changes.iNewEndLine + 1, changes.iNewEndIndex + 1,
-		  changes.iOldEndLine + 1, changes.iOldEndIndex + 1,
-		  changes.iStartLine + 1, changes.iStartIndex + 1);
+			FileIndex, CurrentVersion,
+			changes.iNewEndLine + 1, changes.iNewEndIndex + 1,
+			changes.iOldEndLine + 1, changes.iOldEndIndex + 1,
+			changes.iStartLine + 1, changes.iStartIndex + 1);
 			}
 
 			projectInfo.Engine.BeginUpdateCompileUnit(this); // Add request for reparse & update info about CompileUnit
@@ -300,8 +300,8 @@ namespace Nemerle.VisualStudio.LanguageService
 			var col = colIndex + 1;
 
 			GotoInfo[] infos = gotoDefinition
-			  ? engine.GetGotoInfo(this, line, col, GotoKind.Definition)
-			  : engine.GetGotoInfo(this, line, col, GotoKind.Usages);
+				? engine.GetGotoInfo(this, line, col, GotoKind.Definition)
+				: engine.GetGotoInfo(this, line, col, GotoKind.Usages);
 
 			if (infos == null || infos.Length == 0)
 				return;
@@ -314,8 +314,8 @@ namespace Nemerle.VisualStudio.LanguageService
 				var inf = infos[0];
 				GotoInfo[] infoFromPdb = TryFindGotoInfoByDebugInfo(engine, inf);
 				infos = infoFromPdb.Length == 0
-				  ? NemerleGoto.GenerateSource(infos, engine, out captiopn)
-				  : infoFromPdb;
+					? NemerleGoto.GenerateSource(infos, engine, out captiopn)
+					: infoFromPdb;
 			}
 
 			var langSrvc = (NemerleLanguageService)LanguageService;
@@ -871,11 +871,11 @@ namespace Nemerle.VisualStudio.LanguageService
 		private static void ReformatSpanInternal(EditArray mgr, TextSpan span, IEngine engine, string filePath, ISource src)
 		{
 			var result = Formatter.BeginFormat(span.iStartLine + 1,
-						   span.iStartIndex + 1,
-						   span.iEndLine + 1,
-						   span.iEndIndex + 1,
-						   engine,
-						   src);
+							 span.iStartIndex + 1,
+							 span.iEndLine + 1,
+							 span.iEndIndex + 1,
+							 engine,
+							 src);
 			result.AsyncWaitHandle.WaitOne();
 			var results = result.Result;
 			using (var editArray = new EditArray(mgr.Source, mgr.TextView, true, "formatting"))
@@ -980,19 +980,19 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			var compileUnit = CompileUnit;
 			/*
-      try
-      {
+			try
+			{
 
-        if (compileUnit == null && ProjectInfo != null)
-        {
-          var project = ProjectInfo.Project;
-          if (project != null)
-            compileUnit = project.CompileUnits[FileIndex];
-        }
+				if (compileUnit == null && ProjectInfo != null)
+				{
+					var project = ProjectInfo.Project;
+					if (project != null)
+						compileUnit = project.CompileUnits[FileIndex];
+				}
 
-      }
+			}
 // ReSharper disable EmptyGeneralCatchClause
-      catch { }  // exceptions can be cause by coloring lexer which work in UI thread
+			catch { }  // exceptions can be cause by coloring lexer which work in UI thread
 // ReSharper restore EmptyGeneralCatchClause
 			*/
 			return compileUnit;
@@ -1236,6 +1236,124 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region Implementation
 
+		#region Table formating
+
+		internal bool TryDoTableFormating(NemerleViewFilter view, int line, int col)
+		{
+			var text = GetLine(line);
+
+			if (!IsInContent(text, col))
+				return false;
+
+			if (line > 1 && TryInsertSpacesToNextToken(GetLine(GetPrevNotEmpryLineIndex(line)), view, col))
+				return true;
+
+			if (line < LineCount - 1 && TryInsertSpacesToNextToken(GetLine(GetNextNotEmpryLineIndex(line)), view, col))
+				return true;
+
+			return EmulateTabBySpaces(view, line, col);
+		}
+
+		private static bool IsInContent(string lileText, int col)
+		{
+			col--;
+
+			if (col > lileText.Length)
+				return false;
+
+			for (int i = 0; i < col; i++)
+				if (!char.IsWhiteSpace(lileText[i]))
+					return true;
+
+			return false;
+		}
+
+		private static int IndexOfNextToken(string lileText, int startIndex)
+		{
+			if (startIndex >= lileText.Length)
+				return -1;
+
+			for (int i = startIndex; i < lileText.Length; i++)
+			{
+				if (!char.IsWhiteSpace(lileText[i]))
+					continue;
+
+				for (; i < lileText.Length; i++)
+					if (!char.IsWhiteSpace(lileText[i]))
+						break;
+
+				return i;
+			}
+
+			return lileText.Length - 1;
+		}
+
+		bool TryInsertSpacesToNextToken(string patternLineText, NemerleViewFilter view, int col)
+		{
+			if (!IsInContent(patternLineText, col))
+				return false;
+
+			var nextTokenStartIndex = IndexOfNextToken(patternLineText, col - 1);
+			var spacesCount = nextTokenStartIndex - (col - 1);
+
+			if (nextTokenStartIndex < 0 || spacesCount <= 0)
+				return false;
+
+			var completor = new Completor(LanguageService, view.TextView, "table formating");
+			completor.TypeChars(new string(' ', nextTokenStartIndex - (col - 1)));
+			completor.Apply();
+			return true;
+		}
+
+		bool EmulateTabBySpaces(NemerleViewFilter view, int line, int col)
+		{
+			var tabSize = LanguageService.Preferences.TabSize;
+			var visiblePosition = ColumnToVisiblePosition(line - 1, col - 1);
+
+			var countSpaces = visiblePosition % tabSize == 0 ? tabSize : tabSize - (visiblePosition % tabSize);
+			var completor = new Completor(LanguageService, view.TextView, "table formating");
+			completor.TypeChars(new string(' ', countSpaces));
+			completor.Apply();
+			return true;
+		}
+
+		bool IsAllWhiteSpace(string text)
+		{
+			for (int i = 0; i < text.Length; i++)
+				if (!char.IsWhiteSpace(text[i]))
+					return false;
+
+			return true;
+		}
+
+		int GetPrevNotEmpryLineIndex(int line)
+		{
+			if (--line <= 1)
+				return 1;
+
+			while (IsAllWhiteSpace(GetLine(line)))
+				if (--line <= 1)
+					return 1;
+
+			return line;
+		}
+
+		int GetNextNotEmpryLineIndex(int line)
+		{
+			var len = LineCount;
+
+			if (++line > len)
+				return len;
+
+			while (IsAllWhiteSpace(GetLine(line)))
+				if (++line > len)
+					return len;
+
+			return line;
+		}
+		
+		#endregion
+
 		public void OnSetFocus(IVsTextView view)
 		{
 			_oldLine = -1; // we should reset it. otherwise the TryHighlightBraces don't highlight braces
@@ -1406,36 +1524,36 @@ namespace Nemerle.VisualStudio.LanguageService
 		public void SetRegions(IList<RegionInfo> regions, int sourceVersion)
 		{
 			var newRegions = regions.Select(ri =>
-			  {
-				  var secondTime = RegionsLoaded;
-				  var location = ri.Location;
-				  var text = ri.Banner;
-				  var isExpanded = ri.Expanded;
+				{
+					var secondTime = RegionsLoaded;
+					var location = ri.Location;
+					var text = ri.Banner;
+					var isExpanded = ri.Expanded;
 
-				  var r = new NewHiddenRegion
-				  {
-					  tsHiddenText = Utils.SpanFromLocation(location),
-					  iType = (int)HIDDEN_REGION_TYPE.hrtCollapsible,
-					  dwBehavior = (int)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled, //.hrbClientControlled
-					  pszBanner = string.IsNullOrEmpty(text) ? null : text,
-					  dwClient = HiddenRegionCookie,
-					  dwState = (uint)(secondTime || isExpanded ? HIDDEN_REGION_STATE.hrsExpanded : HIDDEN_REGION_STATE.hrsDefault)
-				  };
+					var r = new NewHiddenRegion
+					{
+						tsHiddenText = Utils.SpanFromLocation(location),
+						iType = (int)HIDDEN_REGION_TYPE.hrtCollapsible,
+						dwBehavior = (int)HIDDEN_REGION_BEHAVIOR.hrbEditorControlled, //.hrbClientControlled
+						pszBanner = string.IsNullOrEmpty(text) ? null : text,
+						dwClient = HiddenRegionCookie,
+						dwState = (uint)(secondTime || isExpanded ? HIDDEN_REGION_STATE.hrsExpanded : HIDDEN_REGION_STATE.hrsDefault)
+					};
 
-				  //if (text == "Toplevel typing")
-				  //{
-				  //  // VladD2: Debug staff
-				  //  var behavior = (HIDDEN_REGION_BEHAVIOR)r.dwBehavior;
-				  //  var dwClient = r.dwClient;
-				  //  var state = (HIDDEN_REGION_STATE)r.dwState;
-				  //  var type = (HIDDEN_REGION_TYPE)r.iType;
-				  //  var text1 = r.pszBanner;
-				  //  var loc = Utils.LocationFromSpan(location.FileIndex, r.tsHiddenText);
-				  //  Debug.Assert(true);
-				  //}
+					//if (text == "Toplevel typing")
+					//{
+					//  // VladD2: Debug staff
+					//  var behavior = (HIDDEN_REGION_BEHAVIOR)r.dwBehavior;
+					//  var dwClient = r.dwClient;
+					//  var state = (HIDDEN_REGION_STATE)r.dwState;
+					//  var type = (HIDDEN_REGION_TYPE)r.iType;
+					//  var text1 = r.pszBanner;
+					//  var loc = Utils.LocationFromSpan(location.FileIndex, r.tsHiddenText);
+					//  Debug.Assert(true);
+					//}
 
-				  return r;
-			  });
+					return r;
+				});
 
 			ProcessHiddenRegions(newRegions.ToList(), sourceVersion);
 		}

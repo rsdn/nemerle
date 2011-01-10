@@ -33,7 +33,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		public NemerleViewFilter(CodeWindowManager mgr, IVsTextView view)
 			: base(mgr, view)
 		{
-    }
+		}
 
 		public override void HandleGoto(VsCommands cmd)
 		{
@@ -56,101 +56,101 @@ namespace Nemerle.VisualStudio.LanguageService
 			Source.Goto(TextView, gotoDefinition, line, col);
 		}
 		
-    #region GetDataTipText
+		#region GetDataTipText
 
 		public override TextTipData CreateTextTipData()
 		{
 			return base.CreateTextTipData();
 		}
 
-    public override int GetDataTipText(TextSpan[] aspan, out string textValue)
-    {
-      //VladD2: —тратеги€ отображени€ хинта:
-      // ” нас есть два основных режима отображени€ хинтов 1. ¬о врем€ разработки. 2. ¬о врем€ отладки.
-      // ¬ любом случае, данные описывающие текущий элемент формируютс€ в теневом потоке.
-      // ¬ них формируетс€ строка котора€ будет оторбажатьс€ и описание выражений на которых указывает курсор (aspan[0]).
-      //  огда хинт сформирован провер€ем не под отладчиком ли мы и если под отладчиктом, то пытаемс€ пон€ть,
-      // что конкретно нужно отображать - hint с информацией о выражении, или DataHint который отображает значение выражени€
-      // при отладке.
+		public override int GetDataTipText(TextSpan[] aspan, out string textValue)
+		{
+			//VladD2: —тратеги€ отображени€ хинта:
+			// ” нас есть два основных режима отображени€ хинтов 1. ¬о врем€ разработки. 2. ¬о врем€ отладки.
+			// ¬ любом случае, данные описывающие текущий элемент формируютс€ в теневом потоке.
+			// ¬ них формируетс€ строка котора€ будет оторбажатьс€ и описание выражений на которых указывает курсор (aspan[0]).
+			//  огда хинт сформирован провер€ем не под отладчиком ли мы и если под отладчиктом, то пытаемс€ пон€ть,
+			// что конкретно нужно отображать - hint с информацией о выражении, или DataHint который отображает значение выражени€
+			// при отладке.
 
-      textValue = null;
-      if (Source == null || Source.LanguageService == null || !Source.LanguageService.Preferences.EnableQuickInfo)
-        return NativeMethods.E_FAIL;
+			textValue = null;
+			if (Source == null || Source.LanguageService == null || !Source.LanguageService.Preferences.EnableQuickInfo)
+				return NativeMethods.E_FAIL;
 
-	  // Check if we have to convert the text span for the secondary buffer.
-	  TextSpan[] convertedSpan = new TextSpan[1];
-	  if(BufferCoordinator == null)
-		  convertedSpan[0] = aspan[0];
-	  else
-		  ErrorHandler.ThrowOnFailure(BufferCoordinator.MapPrimaryToSecondarySpan(aspan[0], convertedSpan));
+		// Check if we have to convert the text span for the secondary buffer.
+		TextSpan[] convertedSpan = new TextSpan[1];
+		if(BufferCoordinator == null)
+			convertedSpan[0] = aspan[0];
+		else
+			ErrorHandler.ThrowOnFailure(BufferCoordinator.MapPrimaryToSecondarySpan(aspan[0], convertedSpan));
 
-	  return Source.GetDataTipText(TextView, convertedSpan, out textValue);
-    }
+		return Source.GetDataTipText(TextView, convertedSpan, out textValue);
+		}
 
-    /// <summary>This method checks to see if the IVsDebugger is running, and if so, 
-    /// calls it to get additional information about the current token and returns a combined result.
-    /// You can return an HRESULT here like TipSuccesses2.TIP_S_NODEFAULTTIP.</summary>
-    public override int GetFullDataTipText(string textValue, TextSpan ts, out string fullTipText)
-    {
-      IVsTextLines textLines;
-      fullTipText = textValue;
+		/// <summary>This method checks to see if the IVsDebugger is running, and if so, 
+		/// calls it to get additional information about the current token and returns a combined result.
+		/// You can return an HRESULT here like TipSuccesses2.TIP_S_NODEFAULTTIP.</summary>
+		public override int GetFullDataTipText(string textValue, TextSpan ts, out string fullTipText)
+		{
+			IVsTextLines textLines;
+			fullTipText = textValue;
 
-      ErrorHandler.ThrowOnFailure(this.TextView.GetBuffer(out textLines));
+			ErrorHandler.ThrowOnFailure(this.TextView.GetBuffer(out textLines));
 
-      // Now, check if the debugger is running and has anything to offer
-      try
-      {
-        Microsoft.VisualStudio.Shell.Interop.IVsDebugger debugger = Source.LanguageService.GetIVsDebugger();
+			// Now, check if the debugger is running and has anything to offer
+			try
+			{
+				Microsoft.VisualStudio.Shell.Interop.IVsDebugger debugger = Source.LanguageService.GetIVsDebugger();
 
-        if (debugger != null && Source.LanguageService.IsDebugging)
-        {
-          var tsdeb = new TextSpan[1] { new TextSpan() };
-          if (!TextSpanHelper.IsEmpty(ts))
-          {
-            // While debugging we always want to evaluate the expression user is hovering over
-            ErrorHandler.ThrowOnFailure(TextView.GetWordExtent(ts.iStartLine, ts.iStartIndex, (uint)WORDEXTFLAGS.WORDEXT_FINDEXPRESSION, tsdeb));
-            // If it failed to find something, then it means their is no expression so return S_FALSE
-            if (TextSpanHelper.IsEmpty(tsdeb[0]))
-            {
-              return NativeMethods.S_FALSE;
-            }
-          }
-          string debugTextTip = null;
-          int hr = debugger.GetDataTipValue(textLines, tsdeb, null, out debugTextTip);
-          fullTipText = debugTextTip;
-          if (hr == (int)TipSuccesses2.TIP_S_NODEFAULTTIP)
-          {
-            return hr;
-          }
-          if (!string.IsNullOrEmpty(debugTextTip) && debugTextTip != textValue)
-          {
-            // The debugger in this case returns "=value [type]" which we can
-            // append to the variable name so we get "x=value[type]" as the full tip.
-            int i = debugTextTip.IndexOf('=');
-            if (i >= 0)
-            {
-              string spacer = (i < debugTextTip.Length - 1 && debugTextTip[i + 1] == ' ') ? " " : "";
-              fullTipText = textValue + spacer + debugTextTip.Substring(i);
-            }
-          }
-        }
+				if (debugger != null && Source.LanguageService.IsDebugging)
+				{
+					var tsdeb = new TextSpan[1] { new TextSpan() };
+					if (!TextSpanHelper.IsEmpty(ts))
+					{
+						// While debugging we always want to evaluate the expression user is hovering over
+						ErrorHandler.ThrowOnFailure(TextView.GetWordExtent(ts.iStartLine, ts.iStartIndex, (uint)WORDEXTFLAGS.WORDEXT_FINDEXPRESSION, tsdeb));
+						// If it failed to find something, then it means their is no expression so return S_FALSE
+						if (TextSpanHelper.IsEmpty(tsdeb[0]))
+						{
+							return NativeMethods.S_FALSE;
+						}
+					}
+					string debugTextTip = null;
+					int hr = debugger.GetDataTipValue(textLines, tsdeb, null, out debugTextTip);
+					fullTipText = debugTextTip;
+					if (hr == (int)TipSuccesses2.TIP_S_NODEFAULTTIP)
+					{
+						return hr;
+					}
+					if (!string.IsNullOrEmpty(debugTextTip) && debugTextTip != textValue)
+					{
+						// The debugger in this case returns "=value [type]" which we can
+						// append to the variable name so we get "x=value[type]" as the full tip.
+						int i = debugTextTip.IndexOf('=');
+						if (i >= 0)
+						{
+							string spacer = (i < debugTextTip.Length - 1 && debugTextTip[i + 1] == ' ') ? " " : "";
+							fullTipText = textValue + spacer + debugTextTip.Substring(i);
+						}
+					}
+				}
 #if LANGTRACE
-            } catch (COMException e) {
-                Trace.WriteLine("COMException: GetDataTipValue, errorcode=" + e.ErrorCode);
+						} catch (COMException e) {
+								Trace.WriteLine("COMException: GetDataTipValue, errorcode=" + e.ErrorCode);
 #else
-      }
-      catch (System.Runtime.InteropServices.COMException)
-      {
+			}
+			catch (System.Runtime.InteropServices.COMException)
+			{
 #endif
-      }
-      
-      if (string.IsNullOrEmpty(fullTipText))
-        fullTipText = textValue;
+			}
+			
+			if (string.IsNullOrEmpty(fullTipText))
+				fullTipText = textValue;
 
-      return NativeMethods.S_OK;
-    }
+			return NativeMethods.S_OK;
+		}
  
-    #endregion
+		#endregion
 		public override void OnKillFocus(IVsTextView view)
 		{
 			var pkg = Source.Service.Package;
@@ -176,12 +176,12 @@ namespace Nemerle.VisualStudio.LanguageService
 			//Debug.WriteLine("OnSetFocus(IVsTextView view)");
 			//ShowAst(view, true);
 			base.OnSetFocus(view);
-    
-      var source = Source;
+		
+			var source = Source;
 
-      if (source != null)
-        source.OnSetFocus(view); // notify source
-    }
+			if (source != null)
+				source.OnSetFocus(view); // notify source
+		}
 
 		private void ShowAst(IVsTextView view, bool showInfo)
 		{
@@ -310,7 +310,7 @@ namespace Nemerle.VisualStudio.LanguageService
 					ShowOptions();
 					return VSConstants.S_OK;
 				case MenuCmd.CmdId.AstToolWindow: // AstToolWindow
-          Source.ProjectInfo.ProjectNode.Package.OnAstToolWindowShow(null, null);
+					Source.ProjectInfo.ProjectNode.Package.OnAstToolWindowShow(null, null);
 					return VSConstants.S_OK;
 				case MenuCmd.CmdId.AddHighlighting: // cmdIdAddHighlighting
 					HighlightSymbol();
@@ -318,7 +318,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				case MenuCmd.CmdId.ESC: // ESC
 				case MenuCmd.CmdId.RemoveLastHighlighting: // cmdIdRemoveLastHighlighting
 					RemoveLastHighlighting();
-          Source.Service.Hint.Close();
+					Source.Service.Hint.Close();
 					if(nCmdId == (int)MenuCmd.CmdId.ESC) // ESC
 						break; // go trocess ESC
 					return VSConstants.S_OK;
@@ -332,16 +332,29 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			Trace.Assert(txt == null, "Implement the menu!\r\nID: " + txt);
 
-      _executingCommand = (VsCommands2K)nCmdId;
-      try
-      {
-        var result = base.ExecCommand(ref guidCmdGroup, nCmdId, nCmdexecopt, pvaIn, pvaOut);
-        return result;
-      }
-      finally { _executingCommand = 0; }
+			_executingCommand = (VsCommands2K)nCmdId;
+			try
+			{
+				if (guidCmdGroup == Microsoft.VisualStudio.Project.VsMenus.guidStandardCommandSet2K)
+				{
+					if (_executingCommand == VsCommands2K.TAB)
+					{
+						int lineIndex;
+						int colIndex;
+						TextView.GetCaretPos(out lineIndex, out colIndex);
+
+						if (this.Source.TryDoTableFormating(this, lineIndex + 1, colIndex + 1))
+							return VSConstants.S_OK;
+					}
+				}
+
+				var result = base.ExecCommand(ref guidCmdGroup, nCmdId, nCmdexecopt, pvaIn, pvaOut);
+				return result;
+			}
+			finally { _executingCommand = 0; }
 		}
 
-    VsCommands2K _executingCommand;
+		VsCommands2K _executingCommand;
 
 		private List<Location> _selectionsStack;
 
@@ -397,10 +410,10 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (source != null)
 			{
 				TextSpan span = GetSelection();
-        if (source.ProjectInfo == null)
-          return;
+				if (source.ProjectInfo == null)
+					return;
 
-        source.GetEngine().BeginHighlightUsages(source, span.iStartLine + 1, span.iStartIndex + 1);
+				source.GetEngine().BeginHighlightUsages(source, span.iStartLine + 1, span.iStartIndex + 1);
 			}
 		}
 
@@ -507,30 +520,30 @@ namespace Nemerle.VisualStudio.LanguageService
 		private void RunRenameRefactoring()
 		{
 			if (Source == null || Source.ProjectInfo == null)
-        return;
+				return;
 
-      var engine = Source.ProjectInfo.Engine;
+			var engine = Source.ProjectInfo.Engine;
 			if(!WarnAboutErrors())
-        return;
+				return;
 
 			int lineIndex;
 			int colIndex;
 			TextView.GetCaretPos(out lineIndex, out colIndex);
-      
-      var allUsages = engine.GetGotoInfo(Source, lineIndex + 1, colIndex + 1, GotoKind.Usages);
+			
+			var allUsages = engine.GetGotoInfo(Source, lineIndex + 1, colIndex + 1, GotoKind.Usages);
 			var usages = allUsages.Distinct().ToArray();
 
-      if (usages == null || usages.Length == 0)
-      {
-        Source.ProjectInfo.ShowMessage("No symbol to rename", MessageType.Error);
-        return;
-      }
+			if (usages == null || usages.Length == 0)
+			{
+				Source.ProjectInfo.ShowMessage("No symbol to rename", MessageType.Error);
+				return;
+			}
 
 			var definitionCount = usages.Count(usage => usage.UsageType == UsageType.Definition);
 
-      if(definitionCount == 0)
+			if(definitionCount == 0)
 			{
-        Source.ProjectInfo.ShowMessage("Cannot find definition.", MessageType.Error);
+				Source.ProjectInfo.ShowMessage("Cannot find definition.", MessageType.Error);
 				return;
 			}
 
@@ -540,7 +553,7 @@ namespace Nemerle.VisualStudio.LanguageService
 					Source.RenameSymbols(frm.NewName, usages);
 			}
 
-      RemoveLastHighlighting();
+			RemoveLastHighlighting();
 		}
 
 		private void FindInheritors()
@@ -636,7 +649,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		//public override int GetWordExtent(int line, int index, uint flags, TextSpan[] span)
 		//{
-    //	System.Diagnostics.Debug.Assert(false, "line " + line + " index " + index + " flags " + flags + " span length " + span.Length);
+		//	System.Diagnostics.Debug.Assert(false, "line " + line + " index " + index + " flags " + flags + " span length " + span.Length);
 
 		//	base.GetWordExtent(line, index, flags, span);
 		//	return 0;
@@ -739,12 +752,12 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			var cmd = (VsCommands2K)nCmdId;
 
-      //// we're goona to erase some symbol from existence. 
-      //// In some cases we need to know what it was (auto-deletion of paired token)
-      //if (cmd == VsCommands2K.BACKSPACE)
-      //  Source.RememberCharBeforeCaret(TextView);
-      //else
-      //  Source.ClearRememberedChar();
+			//// we're goona to erase some symbol from existence. 
+			//// In some cases we need to know what it was (auto-deletion of paired token)
+			//if (cmd == VsCommands2K.BACKSPACE)
+			//  Source.RememberCharBeforeCaret(TextView);
+			//else
+			//  Source.ClearRememberedChar();
 
 			_startLine = -1;
 
@@ -762,7 +775,7 @@ namespace Nemerle.VisualStudio.LanguageService
 							int lintIndex;
 							int columnInxex;
 							ErrorHandler.ThrowOnFailure(TextView.GetCaretPos(out lintIndex, out columnInxex));
-              Source.Completion(TextView, lintIndex, columnInxex, false);
+							Source.Completion(TextView, lintIndex, columnInxex, false);
 							return true;
 						}
 					case VsCommands2K.FORMATSELECTION:
@@ -834,9 +847,9 @@ namespace Nemerle.VisualStudio.LanguageService
 		// 3. When typing enter in the middle of expression.
 		public override bool HandleSmartIndent()
 		{
-            int line;
-            int idx;
-            TextView.GetCaretPos(out line, out idx);
+						int line;
+						int idx;
+						TextView.GetCaretPos(out line, out idx);
 
 			return Source.SmartIndent.At(line);
 		}
@@ -856,8 +869,9 @@ namespace Nemerle.VisualStudio.LanguageService
 					break;
 			}
 			VsCommands2K cmd = (VsCommands2K)nCmdId;
+
 			// Special handling of "Toggle all outlining" command
-            //CodingUnit: 2010.02.19 normal action back in Toggle All Outlining
+						//CodingUnit: 2010.02.19 normal action back in Toggle All Outlining
 			/*if (guidCmdGroup == typeof(VsCommands2K).GUID)
 			{
 				if ((VsCommands2K)nCmdId == VsCommands2K.OUTLN_TOGGLE_ALL)
@@ -919,36 +933,5 @@ namespace Nemerle.VisualStudio.LanguageService
 								 result.ReplacementString);
 			}
 		}
-
-		/// <summary>
-		/// Here we will do our formatting...
-		/// </summary>
-		//public override void ReformatSelection()
-		//{
-		//	if (this.CanReformat())
-		//	{
-
-		//		Debug.Assert(this.Source != null);
-		//		if (this.Source != null)
-		//		{
-		//			TextSpan ts = GetSelection();
-		//			if (TextSpanHelper.IsEmpty(ts))
-		//			{
-		//				// format just this current line.
-		//				ts.iStartIndex = 0;
-		//				ts.iEndLine = ts.iStartLine;
-		//				ts.iEndIndex = this.Source.GetLineLength(ts.iStartLine);
-		//			}
-		//			Formatter.FormatSpan(ts.iStartLine, ts.iEndLine);
-		//			//using (EditArray mgr = new EditArray(this.Source, this.TextView, true, "Formatting"))
-		//			//{
-		//			//	this.Source.ReformatSpan(mgr, ts);
-		//			//	mgr.ApplyEdits();
-		//			//}
-		//		}
-		//	}
-
-		//	//base.ReformatSelection();
-		//}
 	}
 }
