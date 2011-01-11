@@ -155,8 +155,8 @@ namespace Nemerle.VisualStudio.GUI
 
 		private static IMember[] ReplaceGettersAndSettersByProperties(IGrouping<FixedType.Class, IMember> item)
 		{
-			var props = item.Key.tycon.GetMembers().OfType<IProperty>();
-			var mems1 = item.Select(m => props.SingleOrDefault(p => p.GetGetter() == m || p.GetSetter() == m) ?? m);
+			var props = item.Key.tycon.GetMembers().OfType<IProperty>().ToArray();
+			var mems1 = item.Select(m => props.SingleOrDefault(p => object.Equals(p.GetGetter(), m) || object.Equals(p.GetSetter(), m)) ?? m).ToArray();
 			var mems2 = mems1.Distinct().OrderBy(m => m.Name).ToArray();
 			return mems2;
 		}
