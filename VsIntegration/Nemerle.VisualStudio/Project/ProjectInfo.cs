@@ -47,11 +47,11 @@ namespace Nemerle.VisualStudio.Project
 		private string _projectLocation;
 
 		public ProjectInfo(
-		  NemerleProjectNode projectNode,
-		  IVsHierarchy hierarchy,
-		  NemerleLanguageService languageService,
-		  string fileName,
-		  string location
+			NemerleProjectNode projectNode,
+			IVsHierarchy hierarchy,
+			NemerleLanguageService languageService,
+			string fileName,
+			string location
 		)
 		{
 			ErrorHelper.ThrowIsNull(languageService, "languageService");
@@ -261,27 +261,27 @@ namespace Nemerle.VisualStudio.Project
 			if (!File.Exists(filePath))
 				Debug.WriteLine("Assemble " + filePath + " does not exists!");
 
-      try
-      {
-        string path = Path.GetDirectoryName(filePath);
-        
-        if (!Directory.Exists(path))
-          return;
+			try
+			{
+				string path = Path.GetDirectoryName(filePath);
+				
+				if (!Directory.Exists(path))
+					return;
 
-        string name = Path.GetFileName(filePath);
-        FileSystemWatcher watcher = new FileSystemWatcher(path, name);
-        watcher.NotifyFilter = NotifyFilters.LastWrite;
-        watcher.Changed += watcher_Changed;
-        _assembleReferenceWatchers.Add(watcher);
-        watcher.EnableRaisingEvents = true;
-      }
-      catch (Exception ex)
-      {
-        Debug.WriteLine(ex.ToString());
-        SetCompilerMessages(new[] {new CompilerMessage(Location.Default, ex.Message, 
+				string name = Path.GetFileName(filePath);
+				FileSystemWatcher watcher = new FileSystemWatcher(path, name);
+				watcher.NotifyFilter = NotifyFilters.LastWrite;
+				watcher.Changed += watcher_Changed;
+				_assembleReferenceWatchers.Add(watcher);
+				watcher.EnableRaisingEvents = true;
+			}
+			catch (Exception ex)
+			{
+				Debug.WriteLine(ex.ToString());
+				SetCompilerMessages(new[] {new CompilerMessage(Location.Default, ex.Message, 
 					MessageKind.Error, Engine, false)}, null);
-        throw;
-      }
+				throw;
+			}
 		}
 
 		void RemoveAssembleReferenceWatcher(string filePath)
@@ -452,7 +452,7 @@ namespace Nemerle.VisualStudio.Project
 
 			if (hr != VSConstants.S_OK)
 				throw new ArgumentException("Can't obtain VSHPROPID_BrowseObject for item with ID "
-				  + itemID, "itemID", new Win32Exception(hr));
+					+ itemID, "itemID", new Win32Exception(hr));
 
 			NemerleFileNodeProperties properties = propertyValue as NemerleFileNodeProperties;
 
@@ -575,8 +575,8 @@ namespace Nemerle.VisualStudio.Project
 
 		/*public Nemerle.Completion2.Project Project
 		{
-		  [DebuggerStepThrough]
-		  get { return Engine.Project; }
+			[DebuggerStepThrough]
+			get { return Engine.Project; }
 		}*/
 
 		bool _isDocumentOpening;
@@ -642,7 +642,7 @@ namespace Nemerle.VisualStudio.Project
 			OLEMSGBUTTON buttons = OLEMSGBUTTON.OLEMSGBUTTON_OK;
 			OLEMSGDEFBUTTON defaultButton = OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST;
 			VsShellUtilities.ShowMessageBox(ProjectNode.ProjectMgr.Site,
-			  message, NemerleConstants.ProductName, icon, buttons, defaultButton);
+				message, NemerleConstants.ProductName, icon, buttons, defaultButton);
 		}
 
 		void IIdeProject.ClearAllCompilerMessages()
@@ -776,8 +776,8 @@ namespace Nemerle.VisualStudio.Project
 			Debug.WriteLine(text);
 		}
 
-    public void AddUnimplementedMembers(ISource source, TypeBuilder ty, 
-      IEnumerable<IGrouping<FixedType.Class, IMember>> unimplementedMembers)
+		public void AddUnimplementedMembers(ISource source, TypeBuilder ty, 
+			IEnumerable<IGrouping<FixedType.Class, IMember>> unimplementedMembers)
 		{
 			using (var form = new ImplementMembersForm((NemerleSource)source, ty, unimplementedMembers))
 			{
@@ -787,9 +787,9 @@ namespace Nemerle.VisualStudio.Project
 
 		public void AddOverrideMembers(ISource source, TypeBuilder ty, IEnumerable<IMember> notOverriden)
 		{
-      var ty2 = ty.GetMemType();
-      var notOverriden2 = notOverriden.Select(m => new { ty2,  m }).GroupBy(x => x.ty2, x => x.m);
-      using (var form = new ImplementMembersForm((NemerleSource)source, ty, notOverriden2))
+			var ty2 = ty.GetMemType();
+			var notOverriden2 = notOverriden.Select(m => new { ty2,  m }).GroupBy(x => x.ty2, x => x.m);
+			using (var form = new ImplementMembersForm((NemerleSource)source, ty, notOverriden2))
 			{
 				form.ShowDialog();
 			}
@@ -907,7 +907,7 @@ namespace Nemerle.VisualStudio.Project
 			var serviceProvider = ProjectNode.GetServiceProvider();
 
 			IVsUIShellOpenDocument openDoc = serviceProvider.GetService(
-			  typeof(IVsUIShellOpenDocument)) as IVsUIShellOpenDocument;
+				typeof(IVsUIShellOpenDocument)) as IVsUIShellOpenDocument;
 
 			if (openDoc == null)
 				return;
@@ -919,8 +919,8 @@ namespace Nemerle.VisualStudio.Project
 			Guid logicalView = VSConstants.LOGVIEWID_Code;
 
 			if (ErrorHandler.Failed(openDoc.OpenDocumentViaProject(
-			  task.Document, ref logicalView, out sp, out hier, out itemid, out frame))
-			  || frame == null
+				task.Document, ref logicalView, out sp, out hier, out itemid, out frame))
+				|| frame == null
 			)
 				return;
 
@@ -946,7 +946,7 @@ namespace Nemerle.VisualStudio.Project
 
 			// Finally, perform the navigation.
 			IVsTextManager mgr = serviceProvider.GetService(
-			  typeof(VsTextManagerClass)) as IVsTextManager;
+				typeof(VsTextManagerClass)) as IVsTextManager;
 
 			if (mgr == null)
 				return;
@@ -954,7 +954,7 @@ namespace Nemerle.VisualStudio.Project
 			var span = task.Span;
 
 			mgr.NavigateToLineAndColumn(buffer, ref logicalView,
-			  span.iStartLine, span.iStartIndex, span.iEndLine, span.iEndIndex);
+				span.iStartLine, span.iStartIndex, span.iEndLine, span.iEndIndex);
 		}
 
 		/// <summary>Clear tasks generated by compiler messeges which associated with this project.</summary>
