@@ -372,7 +372,7 @@ namespace Nemerle.VisualStudio.GUI
 				{
 					// Генерируем override-методы. Для них нужно сформировать правильны модификатор доступа.
 					var am = (member.Attributes | NemerleAttributes.Override)
-									 & ~(NemerleAttributes.Abstract | NemerleAttributes.Virtual);
+									 & ~(NemerleAttributes.Abstract | NemerleAttributes.Virtual | NemerleAttributes.SpecialName);
 					var acessMods = am.ToString().ToLower().Replace(",", "");
 
 					NUtils.GenerateMemberImplementation(writer, _source.FileIndex,
