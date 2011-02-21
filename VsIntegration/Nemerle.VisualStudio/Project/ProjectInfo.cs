@@ -557,7 +557,26 @@ namespace Nemerle.VisualStudio.Project
 			return null;
 		}
 
-		public static ProjectInfo FindProject(string fileName)
+    public static ProjectInfo FindProjectByOutput(string fileName)
+    {
+      var fullPath = Path.GetFullPath(fileName).ToLower();
+      ErrorHelper.ThrowIfPathNullOrEmpty(fileName, "fileName");
+
+      foreach (ProjectInfo proj in _projects)
+      {
+        var outFile = (string)proj._projectNode.VSProject.Project.Properties.Item("OutputFileName").Value ?? "";
+        var outPath = (string)proj._projectNode.VSProject.Project.Properties.Item("OutputPath").Value ?? "";
+        var dir = (string)proj._projectNode.VSProject.Project.Properties.Item("FullPath").Value ?? "";
+        var fullOutPath = Path.GetFullPath(Path.Combine(dir, Path.Combine(outPath, outFile))).ToLower();
+
+        if (fullOutPath == fullPath)
+          return proj;
+      }
+
+      return null;
+    }
+
+    public static ProjectInfo FindProject(string fileName)
 		{
 			ErrorHelper.ThrowIfPathNullOrEmpty(fileName, "fileName");
 

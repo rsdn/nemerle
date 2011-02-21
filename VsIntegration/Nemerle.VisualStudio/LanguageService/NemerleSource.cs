@@ -26,7 +26,7 @@ using System.Text;
 using Nemerle.Compiler.Utils.Async;
 using Nemerle.VisualStudio.GUI;
 using Nemerle.Compiler.Parsetree;
-
+using Nemerle.Compiler.Utils;
 // ReSharper disable LocalizableElement
 
 namespace Nemerle.VisualStudio.LanguageService
@@ -313,9 +313,24 @@ namespace Nemerle.VisualStudio.LanguageService
 				Debug.Assert(infos.Length == 1, "Multiple unknown locations are unexpected");
 				var inf = infos[0];
 				GotoInfo[] infoFromPdb = TryFindGotoInfoByDebugInfo(engine, inf);
-				infos = infoFromPdb.Length == 0
-					? NemerleGoto.GenerateSource(infos, engine, out captiopn)
-					: infoFromPdb;
+        
+        if (infoFromPdb.Length == 0)
+        {
+          if (inf.Member != null)
+          {
+            var res = ProjectInfo.FindProjectByOutput(inf.FilePath);
+
+            if (res != null)
+              infos = res.Engine.GetGotoInfoForMember(inf.Member.GetFullName(), false, GotoKind.Definition);
+
+            if (infos.Length <= 0 || res == null)
+              infos = NemerleGoto.GenerateSource(infos, engine, out captiopn);
+          }
+          else
+            infos = NemerleGoto.GenerateSource(infos, engine, out captiopn);
+        }
+        else
+				  infos = infoFromPdb;
 			}
 
 			var langSrvc = (NemerleLanguageService)LanguageService;
