@@ -47,10 +47,8 @@ namespace Nemerle.WUI.Reactive
     public DoTransformExpr(tb : TypeBuilder, typer : Typer, expr : PExpr) : string
     {
       Macros.DefineCTX(typer);
-      //def convertTy = <[ ttype: System.Convert ]>;
-      //def types = typer.InternalType;
+      def doExpr : PExpr -> string = DoTransformExpr(tb, typer, _);
       def convertTi = typer.Manager.LookupTypeInfo("System.Convert", 0);
-      
       def isToStr(m : object) : bool
       {
         | TExpr.StaticRef(mem=m) => m.DeclaringType.Equals(convertTi) && m.Name == "ToString"
@@ -61,8 +59,20 @@ namespace Nemerle.WUI.Reactive
         | TExpr.PropertyMember(obj, _) => obj is TExpr.This
         | _ => false
       }
+      def isBinOperator(op : PExpr) : bool
+      {
+        match (op.ToString())
+        {
+          | ">" | "<" | ">=" | "<=" | "==" | "!=" | "%" | "+" | "-" 
+          | "/" | "*" | "^"
+          => true
+          
+          | _ => false
+        }
+      }
       match (expr)
       {
+        | PExpr.Literal => expr.ToString()
         | PExpr.Sequence([e]) => DoTransformExpr(tb, typer, e)
         | <[ string.Concat(..$args) ]> =>
           //assert2(false);
@@ -73,17 +83,29 @@ namespace Nemerle.WUI.Reactive
             | _ => e
           }
           def args2 = args.Map(removeToString);
-          $<#"".concat(..$(args2; ", "; DoTransformExpr(tb, typer, _)))#>
+          $<#"".concat(..$(args2; ", "; doExpr))#>
           //<#this.FirstName() + " " + this.LastName()#>
-          
-        | <[ $_($_) ]> when expr.TypedObject is TExpr.MacroEnvelope =>
-          def m = expr.TypedObject :> TExpr.MacroEnvelope;
-          DoTransformExpr(tb, typer, m.expandedPExpr)
           
         | null => ""
         | <[ this.$(name : name) ]> when isThisAccess(expr.TypedObject)
         | <[ $(name : name) ]> when isThisAccess(expr.TypedObject) => $"this.$name()"
-        | _ => expr.ToString()
+        | <[ $op($e1, $e2) ]> when isBinOperator(op) => $"($(doExpr(e1)) $op $(doExpr(e2)))"
+        //| <[ $op($e) ]> when isBinOperator(op) => $"($(doExpr(e1)) $op $(doExpr(e2)))"
+        | <[ ++ $e ]> when isThisAccess(e.TypedObject)
+        | <[ $e ++ ]> when isThisAccess(e.TypedObject)
+          =>
+            //assert2(false); 
+            $"this.$e(this.$e() + 1)"
+
+        | <[ $_($_) ]> when expr.TypedObject is TExpr.MacroEnvelope =>
+          def m = expr.TypedObject :> TExpr.MacroEnvelope;
+          DoTransformExpr(tb, typer, m.expandedPExpr)
+          
+        | _ =>
+          //assert2(false);
+          def ty = expr.GetType().Name;
+          Message.Warning(expr.Location, $"JavaScript translator: no convertion for '$expr' PExpr.$ty.");
+          expr.ToString()
       }
     }
     
@@ -117,7 +139,7 @@ namespace Nemerle.WUI.Reactive
     {
       Macros.DefineCTX(typer);
       
-      def convertMethod(name : string, meth : MethodBuilder) : PExpr
+      def convertMethod(name : string, meth : MethodBuilder, isDependent = true) : PExpr
       {
         #region Type method body
         def typer = typer;
@@ -131,12 +153,21 @@ namespace Nemerle.WUI.Reactive
         def bodyScript = DoTransformExpr(tb, typer, body);
         meth.Body = body;
         
-        def code = $<#
+        def code = 
+          if (isDependent)
+          $<#
 viewModel.$name = ko.dependentObservable(
   function()
   {
     return $bodyScript;
-  }, viewModel);#>;
+  }, viewModel);#>
+          else
+$<#
+viewModel.$name =
+  function()
+  {
+    return $bodyScript;
+  };#>;
         <[ $(code : string) ]>
       }
       
@@ -144,9 +175,14 @@ viewModel.$name = ko.dependentObservable(
       {
         | meth is MethodBuilder when meth.Name.StartsWith("get_") || meth.Name.StartsWith("set_") => null //TODO: Add property IMethod.IsAccessor
         | meth is MethodBuilder when meth.IsConstructor => null
+        | meth is MethodBuilder when meth.ReturnType is FixedType.Void =>
+          convertMethod(meth.Name, meth, false)
+        
         | prop is PropertyBuilder when prop.AutoPropertyField.IsSome => 
-          def prefix = $<#viewModel.$(prop.Name) = ko.observable("#>;
-          <[ $(prefix : string) + this.$(prop.Ast.name).ToString() + $(<#");#> : string) ]>
+          def prefix = $<#viewModel.$(prop.Name) = ko.observable(#>;
+          <[ $(prefix : string) 
+            + Nemerle.WUI.Reactive.Utils.Esc(this.$(prop.Ast.name))
+            + $(<#);#> : string) ]>
           
         | prop is PropertyBuilder when prop.CanRead && !prop.CanWrite => 
           convertMethod(prop.Name, prop.GetGetter() :> MethodBuilder)
