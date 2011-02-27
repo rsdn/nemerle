@@ -50,7 +50,8 @@ namespace Nemerle.WUI.Reactive
     {
       Macros.DefineCTX(typer);
       def doExpr : PExpr -> string = DoTransformExpr(tb, typer, ident, _);
-      def convertTi = typer.Manager.LookupTypeInfo("System.Convert", 0);
+      def manager = typer.Manager;
+      def convertTi = manager.LookupTypeInfo("System.Convert", 0);
       def isToStr(m : object) : bool
       {
         | TExpr.StaticRef(mem=m) => m.DeclaringType.Equals(convertTi) && m.Name == "ToString"
@@ -58,7 +59,7 @@ namespace Nemerle.WUI.Reactive
       }
       def isThisAccess(m : object) : bool
       {
-        | TExpr.PropertyMember(obj, _) => obj is TExpr.This
+        | TExpr.PropertyMember(TExpr.This, _) => true
         | _ => false
       }
       def isBinOperator(op : PExpr) : bool
@@ -81,6 +82,47 @@ namespace Nemerle.WUI.Reactive
           def exors2 = exprs.Map(e => DoTransformExpr(tb, typer, ident2, e));
           $<#{..$(exors2; ""; x => $"$ident2$x;")#> + $"$ident}\n"
           
+        | <[ this.$(name : name) ]> when isThisAccess(expr.TypedObject)
+        | <[ $(name : name) ]> when isThisAccess(expr.TypedObject) => 
+          def arrayType = <[ ttype: Nemerle.WUI.Reactive.VMArray[_] ]>;
+          match (expr.TypedObject)
+          {
+            | TExpr.PropertyMember as prop when prop.Type.TryUnify(arrayType) => $"this.$name"
+            | _ => $"this.$name()"
+          }          
+            
+        | <[ $e1.$(name : name) ]> => 
+          //assert2(false);
+          def result = 
+            match (expr.TypedObject)
+            {
+              | TExpr.MethodRef(obj, meth, type_parms, notvirtual) => 
+                def name2 =
+                  if (meth.IsCustomAttributeDefined("Nemerle.WUI.Reactive.JsNameAttribute"))
+                  {
+                    //assert2(false);
+                    def ti = manager.LookupTypeInfo("Nemerle.WUI.Reactive.JsNameAttribute", 0);
+                    match (meth.GetModifiers().FindAttributeWithArgs(ti, typer.Env))
+                    {
+                      | Some((a, [<[ $(str : string) ]>])) => _ = a; str //[PExpr.Literal(Literal.String(str))]
+                      | _ => name.ToString()
+                    }
+                  }
+                  else
+                    name.ToString();
+                    
+                _ = obj; _ = type_parms; _ = notvirtual;
+                    
+                $"$(doExpr(e1)).$name2"
+                
+              | TExpr.StaticRef => "[]"
+              | TExpr.PropertyMember(obj, prop) => "!!!жопа!!!"
+              | _ => ""
+            };
+            
+          result
+          
+        | <[ $e1 = $e2 ]> when isThisAccess(e1.TypedObject) => $"this.$e1($(doExpr(e2)))"
         | <[ when ($cond) $e ]> =>
           def e2 = 
             match (e)
@@ -101,9 +143,6 @@ namespace Nemerle.WUI.Reactive
           def args2 = args.Map(removeToString);
           $<#"".concat(..$(args2; ", "; doExpr))#>
           
-        | null => ""
-        | <[ this.$(name : name) ]> when isThisAccess(expr.TypedObject)
-        | <[ $(name : name) ]> when isThisAccess(expr.TypedObject) => $"this.$name()"
         | <[ $op($e1, $e2) ]> when isBinOperator(op) => $"($(doExpr(e1)) $op $(doExpr(e2)))"
         | <[ ++ $e ]> when isThisAccess(e.TypedObject)
         | <[ $e ++ ]> when isThisAccess(e.TypedObject) => $"this.$e(this.$e() + 1)"
@@ -114,6 +153,7 @@ namespace Nemerle.WUI.Reactive
           DoTransformExpr(tb, typer, ident, m.expandedPExpr)
           
         | <[ $func(..$exprs) ]> => $<#$(doExpr(func))(..$(exprs; ", "; doExpr))#>
+        | null => ""
         | _ =>
           //assert2(false);
           def ty = expr.GetType().Name;
@@ -164,7 +204,25 @@ namespace Nemerle.WUI.Reactive
         methodTyper.RunFullTyping();
         typer.Manager.Options.EmitDebug = oldEmitDebug;
         #endregion
-        def bodyScript = DoTransformExpr(tb, typer, "", body);
+        //assert2(false);
+        def exprs = 
+          match (body)
+          {
+            | PExpr.Sequence(body2) => body2
+            | _                     => [body]
+          };
+        def scriptExprs = exprs.Map(e => DoTransformExpr(tb, typer, Ident, e));
+        
+        def scriptBody =
+        if (isDependent)
+            match (scriptExprs.DivideLast())
+            {
+              | ([], last)     => Ident + "return " + last.Trim()
+              | (exprs2, last) => $<#..$(exprs2; ";\n");\n$Ident#> + "return " + last.Trim()
+            }
+        else
+          $<#$Ident..$(scriptExprs; $";\n$Ident")#>;
+        
         meth.Body = body;
         
         def code = 
@@ -173,14 +231,14 @@ namespace Nemerle.WUI.Reactive
 viewModel.$name = ko.dependentObservable(
   function()
   {
-    return $bodyScript;
+    $scriptBody;
   }, viewModel);#>
           else
 $<#
 viewModel.$name =
   function()
   {
-    return $bodyScript;
+    $scriptBody;
   };#>;
         <[ $(code : string) ]>
       }
@@ -192,10 +250,14 @@ viewModel.$name =
         | meth is MethodBuilder when meth.ReturnType is FixedType.Void =>
           convertMethod(meth.Name, meth, false)
         
-        | prop is PropertyBuilder when prop.AutoPropertyField.IsSome => 
-          def prefix = $<#viewModel.$(prop.Name) = ko.observable(#>;
+        | prop is PropertyBuilder when prop.AutoPropertyField.IsSome =>
+          //assert2(false);
+          def arrayType = <[ ttype: Nemerle.WUI.Reactive.VMArray[_] ]>;
+          def isArray = prop.Getter.ReturnType.TryUnify(arrayType);
+          def ctor = if (isArray) "observableArray" else "observable";
+          def prefix = $<#viewModel.$(prop.Name) = ko.$ctor(#>;
           <[ $(prefix : string) 
-            + Nemerle.WUI.Reactive.Utils.Esc(this.$(prop.Ast.name))
+            + Nemerle.WUI.Reactive.Utils.ToJson(this.$(prop.Ast.name))
             + $(<#);#> : string) ]>
           
         | prop is PropertyBuilder when prop.CanRead && !prop.CanWrite => 
@@ -212,7 +274,7 @@ viewModel.$name =
       def exprs1 = members.RevMap(convertMember).RevFilter(_ != null);
       def exprs2 = exprs1.Map(e => <[ _ = sb.AppendLine($e) ]>);
       
-      def member = tb.DefineWithSource(<[ decl:
+      _ = tb.DefineWithSource(<[ decl:
         public GetViewModelScript() : string
         {
           def sb = System.Text.StringBuilder();
@@ -223,7 +285,13 @@ viewModel.$name =
         }
         ]>);
 
-      _ = member;
+      _ = tb.DefineWithSource(<[ decl:
+        public ToJson() : string
+        {
+          assert2(false);
+          "!!! Not implemented yet !!!"
+        }
+        ]>);
     }
     
     /// Create nested type with given properties and return name of created type.
