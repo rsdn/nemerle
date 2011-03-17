@@ -329,5 +329,11 @@ namespace CSharpToNemerle.Test
       Console.WriteLine("RELEASE");
 #endif
     }
+
+    void TestEscapes()
+    {
+      var a\u0041 = "AA";
+      Console.WriteLine(aA);
+    }
   }
 }
