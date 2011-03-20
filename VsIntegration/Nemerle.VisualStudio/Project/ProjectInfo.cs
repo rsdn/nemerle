@@ -689,7 +689,14 @@ namespace Nemerle.VisualStudio.Project
 			SetCompilerMessages(compileUnit.ParseCompilerMessages, task =>
 			{
 				var msg = task.CompilerMessage as CompilerMessageForCompileUnit;
-				return msg != null && msg.CompileUnit.FileIndex == fileIndex;
+				if (msg != null)
+					return msg.CompileUnit.FileIndex == fileIndex;
+
+				var msg2 = task.CompilerMessage as CompilerMessageForMethod;
+				if (msg2 != null && msg2.Member != null)
+					return msg2.Member.Location.FileIndex == fileIndex;
+
+				return false;
 			});
 		}
 
@@ -763,7 +770,8 @@ namespace Nemerle.VisualStudio.Project
 			SetCompilerMessages(messages, task =>
 			{
 				var memberMsg = task.CompilerMessage as CompilerMessageForMethod;
-				return memberMsg != null && memberMsg.Member == member;
+				var result = memberMsg != null && memberMsg.Member == member;
+				return result;
 			});
 			// Following for debugging purpose:
 			//var res = _errorList.Tasks.OfType<NemerleErrorTask>().GroupBy(x => x.ToString()).Where(g => g.Count() > 1).ToArray();
@@ -985,8 +993,13 @@ namespace Nemerle.VisualStudio.Project
 			{
 				var errorTask = tasks[i] as NemerleErrorTask;
 				if (errorTask != null && errorTask.ProjectInfo == this)
+				{
 					if (predicate(errorTask))
 						tasks.RemoveAt(i--);
+					else
+					{
+					}
+				}
 			}
 		}
 
