@@ -692,12 +692,38 @@ namespace Nemerle.VisualStudio.Project
 				if (msg != null)
 					return msg.CompileUnit.FileIndex == fileIndex;
 
-				var msg2 = task.CompilerMessage as CompilerMessageForMethod;
-				if (msg2 != null && msg2.Member != null)
-					return msg2.Member.Location.FileIndex == fileIndex;
-
 				return false;
 			});
+		}
+
+		void IIdeProject.ClearMethodCompilerMessages(MemberBuilder member)
+		{
+			lock (_errorList.Tasks)
+			{
+				_errorList.SuspendRefresh();
+				try
+				{
+					ClearCompilerMessgesTasks(task =>
+					{
+						var memberMsg = task.CompilerMessage as CompilerMessageForMethod;
+						var result = memberMsg != null && memberMsg.Member == member;
+						return result;
+					});
+				}
+				finally { _errorList.ResumeRefresh(); }
+			}
+		}
+
+		void IIdeProject.SetMethodCompilerMessages(MemberBuilder member, IEnumerable<CompilerMessage> messages)
+		{
+			if (!IsMemberVersionCorrect(member))
+				return;
+
+			SetCompilerMessages(messages, null /* messges related to member was deleted be ClearMethodCompilerMessages() */);
+			// Following for debugging purpose:
+			//var res = _errorList.Tasks.OfType<NemerleErrorTask>().GroupBy(x => x.ToString()).Where(g => g.Count() > 1).ToArray();
+			//if (res.Length > 0)
+			//	Test(res, Engine.TypesTreeVersion);
 		}
 
 		void IIdeProject.TypesTreeCreated()
@@ -757,26 +783,6 @@ namespace Nemerle.VisualStudio.Project
 			}
 			else
 				return message;
-		}
-
-		void IIdeProject.SetMethodCompilerMessages(MemberBuilder member, IEnumerable<CompilerMessage> messages)
-		{
-			if (!IsMemberVersionCorrect(member))
-				return;
-
-			//messages = messages.Distinct(CompilerMessageEqComparer.Instance);
-
-			// Find and clear existent error messages which associated with the 'member'.
-			SetCompilerMessages(messages, task =>
-			{
-				var memberMsg = task.CompilerMessage as CompilerMessageForMethod;
-				var result = memberMsg != null && memberMsg.Member == member;
-				return result;
-			});
-			// Following for debugging purpose:
-			//var res = _errorList.Tasks.OfType<NemerleErrorTask>().GroupBy(x => x.ToString()).Where(g => g.Count() > 1).ToArray();
-			//if (res.Length > 0)
-			//	Test(res, Engine.TypesTreeVersion);
 		}
 
 		public static string GetAssemblyReferencesString(ReferenceNode node)
