@@ -788,6 +788,8 @@ namespace Nemerle.VisualStudio.Project
 			//
 			var langService = Utils.GetService<NemerleLanguageService>(Site);
 
+      Debug.Assert(langService != null);
+
 			_projectInfo = new ProjectInfo(this, InteropSafeHierarchy, langService, filename, location);
 
 			ProjectInfo.Projects.Add(_projectInfo);
