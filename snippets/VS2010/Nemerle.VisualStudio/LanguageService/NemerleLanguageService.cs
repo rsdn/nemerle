@@ -63,8 +63,14 @@ namespace Nemerle.VisualStudio.LanguageService
 			CompiledUnitAstBrowser.ShowLocation += GotoLocation;
 			AstToolControl.ShowLocation += GotoLocation;
 
-			if (DefaultEngine == null)
-				DefaultEngine = EngineFactory.Create(EngineCallbackStub.Default, new TraceWriter(), true);
+      if (DefaultEngine == null)
+      {
+        try { DefaultEngine = EngineFactory.Create(EngineCallbackStub.Default, new TraceWriter(), true); }
+        catch (Exception ex)
+        {
+          Debug.WriteLine(ex.Message);
+        }
+      }
 
       Hint = new Hint();
 			Hint.WrapWidth = 900.1;
