@@ -37,16 +37,19 @@ namespace WpfHint
 				throw new NullReferenceException("Can't find root");
 
 			_ownerWndProc = WndProc;
-								_oldOwner = Win32.SetWindowProc(_owner, _ownerWndProc);
+			_oldOwner = Win32.SetWindowProc(_owner, _ownerWndProc);
 
 			if (_oldOwner == IntPtr.Zero)
 				throw new InvalidOperationException("Failed subclass");
 
-			_rootWndProc = RootWndProc;
-								_oldRoot = Win32.SetWindowProc(_root, _rootWndProc);
+      if (_owner != _root)
+      {
+        _rootWndProc = RootWndProc;
+        _oldRoot = Win32.SetWindowProc(_root, _rootWndProc);
 
-			if (_oldRoot == IntPtr.Zero)
-				throw new InvalidOperationException("Failed subclass");
+        if (_oldRoot == IntPtr.Zero)
+          throw new InvalidOperationException("Failed subclass");
+      }
 		}
 
 		public void UnSubClass()
@@ -67,7 +70,14 @@ namespace WpfHint
 
 		private int WndProc(IntPtr hwnd, int msg, int wParam, int lParam)
 		{
-			// We mast pracess window messages before our logic will be done.
+      Debug.WriteLine("msg=" + msg.ToString("X") + " (" + msg + ")");
+      if ((msg == Win32.WM_KEYDOWN || msg == Win32.WM_MOUSEWHEEL) && Activate != null)
+        Activate();
+
+      if ((msg == Win32.WM_LBUTTONDOWN || msg == Win32.WM_RBUTTONDOWN) && Activate != null)
+        Activate();
+
+      // We mast pracess window messages before our logic will be done.
 			// Otherwise UnSubClass() will be remove (hide) current messege.
 			int result = Win32.CallWindowProc(_oldOwner, hwnd, msg, wParam, lParam);
 
@@ -83,7 +93,13 @@ namespace WpfHint
 			if (msg == Win32.WM_MOUSELEAVE && MouseLeave != null)
 				MouseLeave();
 
-			return result;
+      if ((msg == Win32.WM_ACTIVATE || msg == Win32.WM_MOVE || msg == Win32.WM_ACTIVATEAPP) &&
+        Activate != null)
+      {
+        Activate();
+      }
+      
+      return result;
 		}
 
 		private int RootWndProc(IntPtr hwnd, int msg, int wParam, int lParam)

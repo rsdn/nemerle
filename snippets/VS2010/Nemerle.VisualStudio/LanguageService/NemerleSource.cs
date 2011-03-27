@@ -709,36 +709,27 @@ namespace Nemerle.VisualStudio.LanguageService
 			var oldRegionsMap = new Dictionary<TextSpan, IVsHiddenRegion>(TextSpanEqCmp.Instance);
 			IVsEnumHiddenRegions ppenum = null;
 
-			try
+			ErrorHandler.ThrowOnFailure(session.EnumHiddenRegions((uint)FIND_HIDDEN_REGION_FLAGS.FHR_ALL_REGIONS, HiddenRegionCookie, aspan, out ppenum));
+
+			uint fetched;
+
+			while (ppenum.Next(1, aregion, out fetched) == NativeMethods.S_OK && fetched == 1)
 			{
+				var region = aregion[0];
+				int regTypeInt;
+				ErrorHandler.ThrowOnFailure(region.GetType(out regTypeInt));
+				uint dwData;
+				region.GetClientData(out dwData);
+				var regType = (HIDDEN_REGION_TYPE)regTypeInt;
+				if (regType != HIDDEN_REGION_TYPE.hrtCollapsible)// || dwData != 0 && dwData != HiddenRegionCookie)
+					continue;
 
-				ErrorHandler.ThrowOnFailure(session.EnumHiddenRegions((uint)FIND_HIDDEN_REGION_FLAGS.FHR_ALL_REGIONS, HiddenRegionCookie, aspan, out ppenum));
-
-				uint fetched;
-
-				while (ppenum.Next(1, aregion, out fetched) == NativeMethods.S_OK && fetched == 1)
-				{
-					var region = aregion[0];
-					int regTypeInt;
-					ErrorHandler.ThrowOnFailure(region.GetType(out regTypeInt));
-					uint dwData;
-					region.GetClientData(out dwData);
-					var regType = (HIDDEN_REGION_TYPE)regTypeInt;
-					if (regType != HIDDEN_REGION_TYPE.hrtCollapsible)// || dwData != 0 && dwData != HiddenRegionCookie)
-						continue;
-
-					ErrorHandler.ThrowOnFailure(region.GetSpan(aspan));
-					TextSpan s = aspan[0];
-					//var loc = Utils.LocationFromSpan(FileIndex, s);
-					oldRegionsMap[s] = region;
-				}
-
+				ErrorHandler.ThrowOnFailure(region.GetSpan(aspan));
+				TextSpan s = aspan[0];
+				//var loc = Utils.LocationFromSpan(FileIndex, s);
+				oldRegionsMap[s] = region;
 			}
-			finally
-			{
-				if (ppenum != null)
-					Marshal.ReleaseComObject(ppenum);
-			}
+
 			//Debug.WriteLine("SetRegions: old regions fetched " + timer.Elapsed); timer.Reset(); timer.Start();
 
 			#endregion

@@ -1,6 +1,7 @@
 using System;
 using System.Windows;
 using System.Windows.Input;
+using System.Diagnostics;
 
 namespace WpfHint
 {
@@ -120,7 +121,8 @@ namespace WpfHint
 			private void OnMouse()
 			{
 				if (!IsMouseOver) RaiseEvent();
-			}
+        Debug.WriteLine("OnMouse()");
+      }
 
 			public override bool IsMouseOver
 			{

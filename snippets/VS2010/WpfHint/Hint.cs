@@ -63,6 +63,8 @@ namespace WpfHint
 		{
 			if (_hintWindow != null)
 				_hintWindow.Close();
+
+      Debug.WriteLine("Close()");
 		}
 
 		public void Show(IntPtr owner, Rect placementRect, Func<string, string> getHintContent, string text)
