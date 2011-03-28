@@ -18,11 +18,45 @@ using Microsoft.Win32;
 using System.Diagnostics;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Text.Editor;
+using Microsoft.VisualStudio.Text;
 
 namespace Nemerle.VisualStudio
 {
 	static class Utils
 	{
+		public static ITextBuffer ToITextBuffer(this IVsTextBuffer vsTextBuffer)
+		{
+			object obj2;
+			IVsUserData data = vsTextBuffer as IVsUserData;
+			if (data == null)
+			{
+				throw new InvalidOperationException("The shims should allow us to cast to IVsUserData");
+			}
+			Guid guidIVxTextBuffer = DefGuidList.guidIVxTextBuffer;
+			ErrorHelper.ThrowOnFailure(data.GetData(ref guidIVxTextBuffer, out obj2));
+			ITextBuffer buffer = obj2 as ITextBuffer;
+			if (buffer == null)
+			{
+				throw new InvalidOperationException("user data doesnt implement the interface");
+			}
+			return buffer;
+		}
+
+		public static ITextView ToITextView(this IVsTextView vsTextView)
+		{
+			object obj2;
+			IVsUserData data = vsTextView as IVsUserData;
+			if (data == null)
+			{
+				throw new InvalidOperationException("The IVsTextView shims should allow us to cast to IVsUserData");
+			}
+			Guid guidIWpfTextViewHost = DefGuidList.guidIWpfTextViewHost;
+			ErrorHelper.ThrowOnFailure(data.GetData(ref guidIWpfTextViewHost, out obj2));
+			IWpfTextViewHost host = obj2 as IWpfTextViewHost;
+			return host.TextView;
+		}
+
 		public static string GetLiadingSpaces(this string text)
 		{
 			return text.Substring(0, text.Length - text.TrimStart(' ', '\t').Length);

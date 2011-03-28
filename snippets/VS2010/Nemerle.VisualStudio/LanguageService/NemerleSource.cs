@@ -27,6 +27,7 @@ using Nemerle.Compiler.Utils.Async;
 using Nemerle.VisualStudio.GUI;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Utils;
+using Microsoft.VisualStudio.Text.Editor;
 // ReSharper disable LocalizableElement
 
 namespace Nemerle.VisualStudio.LanguageService
