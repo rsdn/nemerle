@@ -65,26 +65,26 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override int GetDataTipText(TextSpan[] aspan, out string textValue)
 		{
-			//VladD2: —тратеги€ отображени€ хинта:
-			// ” нас есть два основных режима отображени€ хинтов 1. ¬о врем€ разработки. 2. ¬о врем€ отладки.
-			// ¬ любом случае, данные описывающие текущий элемент формируютс€ в теневом потоке.
-			// ¬ них формируетс€ строка котора€ будет оторбажатьс€ и описание выражений на которых указывает курсор (aspan[0]).
-			//  огда хинт сформирован провер€ем не под отладчиком ли мы и если под отладчиктом, то пытаемс€ пон€ть,
-			// что конкретно нужно отображать - hint с информацией о выражении, или DataHint который отображает значение выражени€
-			// при отладке.
+      //VladD2: —тратеги€ отображени€ хинта:
+      // ” нас есть два основных режима отображени€ хинтов 1. ¬о врем€ разработки. 2. ¬о врем€ отладки.
+      // ¬ любом случае, данные описывающие текущий элемент формируютс€ в теневом потоке.
+      // ¬ них формируетс€ строка котора€ будет оторбажатьс€ и описание выражений на которых указывает курсор (aspan[0]).
+      //  огда хинт сформирован провер€ем не под отладчиком ли мы и если под отладчиктом, то пытаемс€ пон€ть,
+      // что конкретно нужно отображать - hint с информацией о выражении, или DataHint который отображает значение выражени€
+      // при отладке.
 
-			textValue = null;
-			if (Source == null || Source.LanguageService == null || !Source.LanguageService.Preferences.EnableQuickInfo)
-				return NativeMethods.E_FAIL;
+      textValue = null;
+      if (Source == null || Source.LanguageService == null || !Source.LanguageService.Preferences.EnableQuickInfo)
+        return NativeMethods.E_FAIL;
 
-		// Check if we have to convert the text span for the secondary buffer.
-		TextSpan[] convertedSpan = new TextSpan[1];
-		if(BufferCoordinator == null)
-			convertedSpan[0] = aspan[0];
-		else
-			ErrorHandler.ThrowOnFailure(BufferCoordinator.MapPrimaryToSecondarySpan(aspan[0], convertedSpan));
+      // Check if we have to convert the text span for the secondary buffer.
+      TextSpan[] convertedSpan = new TextSpan[1];
+      if (BufferCoordinator == null)
+        convertedSpan[0] = aspan[0];
+      else
+        ErrorHandler.ThrowOnFailure(BufferCoordinator.MapPrimaryToSecondarySpan(aspan[0], convertedSpan));
 
-		return Source.GetDataTipText(TextView, convertedSpan, out textValue);
+      return Source.GetDataTipText(TextView, convertedSpan, out textValue);
 		}
 
 		/// <summary>This method checks to see if the IVsDebugger is running, and if so, 

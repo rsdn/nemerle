@@ -8,9 +8,9 @@ namespace WpfHint
 	internal abstract class HintRoot : IDisposable
 	{
 		public event Action MouseLeave;
-		public Rect ActiveRect { get; protected set; }
-
+		public          Rect ActiveRect  { get; protected set; }
 		public abstract bool IsMouseOver { get; }
+
 		protected void RaiseEvent()
 		{
 			if (MouseLeave != null) MouseLeave();
@@ -42,13 +42,6 @@ namespace WpfHint
 				var pt = fe.PointToScreen(new Point());
 				var pt2 = fe.PointToScreen(new Point(fe.ActualWidth, fe.ActualHeight));
 				ActiveRect = new Rect(pt.X, pt.Y, pt2.X - pt.X, pt2.Y - pt.Y);
-
-				fe.MouseLeave += OnMouse;
-			}
-
-			void OnMouse(object sender, MouseEventArgs e)
-			{
-				RaiseEvent();
 			}
 
 			public override bool IsMouseOver
@@ -58,7 +51,6 @@ namespace WpfHint
 
 			public override void Dispose()
 			{
-				_fe.MouseLeave -= OnMouse;
 			}
 
 			#region Equality
@@ -114,8 +106,6 @@ namespace WpfHint
 			{
 				this.source = source;
 				ActiveRect = rect;
-				source.MouseMove += OnMouse;
-				source.MouseLeave += OnMouse;
 			}
 
 			private void OnMouse()
@@ -131,8 +121,6 @@ namespace WpfHint
 
 			public override void Dispose()
 			{
-				source.MouseMove -= OnMouse;
-				source.MouseLeave -= OnMouse;
 			}
 		}
 	}

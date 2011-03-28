@@ -23,14 +23,13 @@ namespace WpfHint
 
 		void InvisibleWindow_Loaded(object sender, RoutedEventArgs e)
 		{
-			var source = HwndSource.FromHwnd(
-					new WindowInteropHelper(this).Handle);
-			if (source != null) source.AddHook(WndProc);
+			var source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+			if (source != null)
+        source.AddHook(WndProc);
 		}
 
 		// Prevent activation of window
-		private static IntPtr WndProc(IntPtr hwnd, int msg,
-																	IntPtr wParam, IntPtr lParam, ref bool handled)
+		private static IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
 		{
 			// ReSharper disable InconsistentNaming
 			const int WM_MOUSEACTIVATE = 0x0021;

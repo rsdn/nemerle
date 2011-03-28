@@ -1,125 +1,122 @@
 using System;
 using System.Diagnostics;
+using System.Windows.Input;
+using System.Windows;
+using System.Windows.Threading;
+using System.Linq;
 
 namespace WpfHint
 {
 	internal class HintSource : IDisposable
 	{
-		private Win32.Callback _ownerWndProc;
-		private Win32.Callback _rootWndProc;
-
-		private IntPtr _oldRoot;
-		private IntPtr _oldOwner;
-
-		private IntPtr _owner;   // text editor window handle
-		private IntPtr _root;    // main window handle (visual studio)
-
 		public event Action Activate;
-		public event Action MouseMove;
-		public event Action MouseLeave;
+    public HintWindow HintWindow { get; set; }
 
-		public IntPtr Owner { get { return _owner; } }
+    /// text editor window handle
+    public IntPtr Owner { get; private set; }
 
-		public void SubClass(IntPtr owner)
+    private InputManager _inputManager;
+    private Dispatcher   _dispatcher;
+
+    public void SubClass(IntPtr owner)
 		{
-			Debug.WriteLine("SubClass(): " + owner);
+      Owner         = owner;
+      _inputManager = InputManager.Current;
+      _dispatcher   = _inputManager.Dispatcher;
 
-			var pt = Win32.GetCursorPos();
-			var pt1 = new Win32.POINT(pt.X, pt.Y);
+      _inputManager.PreProcessInput += OnPreProcessInputEventHandler;
+      _inputManager.EnterMenuMode   += OnEnterMenuMode;
 
-			_owner = owner == IntPtr.Zero ? Win32.WindowFromPoint(pt1) : owner;
-
-			if (_owner == IntPtr.Zero)
-				throw new NullReferenceException("Can't find owner");
-
-			_root = Win32.GetAncestor(_owner, Win32.GA_ROOT);
-			if (_root == IntPtr.Zero)
-				throw new NullReferenceException("Can't find root");
-
-			_ownerWndProc = WndProc;
-			_oldOwner = Win32.SetWindowProc(_owner, _ownerWndProc);
-
-			if (_oldOwner == IntPtr.Zero)
-				throw new InvalidOperationException("Failed subclass");
-
-      if (_owner != _root)
-      {
-        _rootWndProc = RootWndProc;
-        _oldRoot = Win32.SetWindowProc(_root, _rootWndProc);
-
-        if (_oldRoot == IntPtr.Zero)
-          throw new InvalidOperationException("Failed subclass");
-      }
+      //Debug.WriteLine("SubClass(): " + owner);
 		}
+
+    void Unsubscribe()
+    {
+      _inputManager.PreProcessInput -= OnPreProcessInputEventHandler;
+      _inputManager.EnterMenuMode   -= OnEnterMenuMode;
+    }
 
 		public void UnSubClass()
 		{
-			Debug.WriteLine("UnSubClass(): " + _owner);
-			if (_owner != IntPtr.Zero && _oldOwner != IntPtr.Zero)
-			{
-				Win32.SetWindowProc(_owner, _oldOwner);
-				_oldOwner = IntPtr.Zero;
-			}
+      if (_dispatcher != null)
+        _dispatcher.BeginInvoke((Action)Unsubscribe);
 
-			if (_root != IntPtr.Zero && _oldRoot != IntPtr.Zero)
-			{
-				Win32.SetWindowProc(_root, _oldRoot);
-				_oldRoot = IntPtr.Zero;
-			}
+      //Debug.WriteLine("UnSubClass(): " + _owner);
 		}
 
-		private int WndProc(IntPtr hwnd, int msg, int wParam, int lParam)
-		{
-      Debug.WriteLine("msg=" + msg.ToString("X") + " (" + msg + ")");
-      if ((msg == Win32.WM_KEYDOWN || msg == Win32.WM_MOUSEWHEEL) && Activate != null)
-        Activate();
+    #region Dispatcher handlers
 
-      if ((msg == Win32.WM_LBUTTONDOWN || msg == Win32.WM_RBUTTONDOWN) && Activate != null)
-        Activate();
+    bool MouseHoverHintWindow()
+    {
+      var pos = Win32.GetCursorPos();
 
-      // We mast pracess window messages before our logic will be done.
-			// Otherwise UnSubClass() will be remove (hide) current messege.
-			int result = Win32.CallWindowProc(_oldOwner, hwnd, msg, wParam, lParam);
-
-			if ((msg == Win32.WM_KEYDOWN || msg == Win32.WM_MOUSEWHEEL) && Activate != null)
-				Activate();
-
-			if ((msg == Win32.WM_LBUTTONDOWN || msg == Win32.WM_RBUTTONDOWN) && Activate != null)
-				Activate();
-
-			if (msg == Win32.WM_MOUSEMOVE && MouseMove != null)
-				MouseMove();
-
-			if (msg == Win32.WM_MOUSELEAVE && MouseLeave != null)
-				MouseLeave();
-
-      if ((msg == Win32.WM_ACTIVATE || msg == Win32.WM_MOVE || msg == Win32.WM_ACTIVATEAPP) &&
-        Activate != null)
+      Func<Window, bool> process = null; process = wnd => // local funtion :)
       {
-        Activate();
+        if (wnd.RestoreBounds.Contains(pos))
+          return true;
+
+        foreach (Window win in wnd.OwnedWindows)
+          if (process(win))
+            return true;
+
+        return false;
+      };
+
+      Trace.Assert(HintWindow != null);
+      return process(HintWindow);
+    }
+
+    void OnPreProcessInputEventHandler(object sender, PreProcessInputEventArgs e)
+    {
+      var name = e.StagingItem.Input.RoutedEvent.Name;
+
+      switch (name)
+      {
+        case "PreviewMouseDown":
+        case "PreviewMouseUp":
+        case "MouseDown":
+        case "MouseUp":
+          if (!MouseHoverHintWindow())
+            CollActivate();
+          break;
+
+        case "PreviewKeyDown":
+        case "PreviewKeyUp":
+        case "KeyDown":
+        case "KeyUp":
+        case "LostKeyboardFocus":
+          CollActivate();
+          break;
+
+        case "PreviewInputReport":
+        case "InputReport":
+        case "QueryCursor":
+        case "PreviewMouseMove":
+        case "MouseMove":
+          break;
+        default:
+          Debug.WriteLine(name);
+          break;
       }
-      
-      return result;
-		}
+    }
 
-		private int RootWndProc(IntPtr hwnd, int msg, int wParam, int lParam)
-		{
-			// We mast pracess window messages before our logic will be done.
-			// Otherwise UnSubClass() will be remove (hide) current messege.
-			int result = Win32.CallWindowProc(_oldRoot, hwnd, msg, wParam, lParam);
+    void CollActivate()
+    {
+      if (Activate != null)
+        Activate();
+    }
 
-			if ((msg == Win32.WM_ACTIVATE || msg == Win32.WM_MOVE || msg == Win32.WM_ACTIVATEAPP) && 
-				Activate != null)
-			{
-				Activate();
-			}
-			return result;
-		}
+    void OnEnterMenuMode(object sender, EventArgs e)
+    {
+      CollActivate();
+    }
 
-		#region Implementation of IDisposable
+    #endregion Dispatcher handlers
+
+    #region Implementation of IDisposable
 
 
-		~HintSource()
+    ~HintSource()
 		{
 			Dispose();
 		}
@@ -130,5 +127,5 @@ namespace WpfHint
 		}
 
 		#endregion
-	}
+  }
 }

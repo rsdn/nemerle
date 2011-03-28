@@ -45,8 +45,8 @@ namespace WpfHint.UIBuilding
 
 		public static void AddMouseHoverHandler(DependencyObject d, RoutedEventHandler handler)
 		{
-			var element = d as UIElement;
-			if (element != null) element.AddHandler(MouseHoverEvent, handler);
+      var element = d as UIElement;
+      if (element != null) element.AddHandler(MouseHoverEvent, handler);
 		}
 
 		public static void RemoveMouseHoverHandler(DependencyObject d, RoutedEventHandler handler)

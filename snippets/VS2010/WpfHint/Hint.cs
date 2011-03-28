@@ -2,6 +2,7 @@
 using System.Windows;
 using System.Windows.Interop;
 using System.Diagnostics;
+using System.Windows.Input;
 
 namespace WpfHint
 {
@@ -84,6 +85,9 @@ namespace WpfHint
 
 		private void Show(IntPtr owner)
 		{
+      if (InputManager.Current.IsInMenuMode)
+        return;
+
 			if (_hintWindow != null)
 				throw new NotSupportedException("Hint already shown");
 
@@ -95,7 +99,8 @@ namespace WpfHint
 			// create hint window
 			var ht = HintRoot.Create(PlacementRect, _hintSource);
 			_hintWindow = new HintWindow(this, ht) { Text = _text };
-			new WindowInteropHelper(_hintWindow) { Owner = _hintSource.Owner };
+      _hintSource.HintWindow = _hintWindow;
+			//new WindowInteropHelper(_hintWindow) { Owner = _hintSource.Owner };
 			_hintWindow.Closed += HintWindowClosed;
 			_hintWindow.MaxHeight = 1200.0;//System.Windows.Forms.Screen.FromRectangle(PlacementRect).WorkingArea.
       _wrapWidth = 1200.0;
