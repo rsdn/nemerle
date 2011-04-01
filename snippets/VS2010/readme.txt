@@ -13,4 +13,4 @@ Build steps
 	6. Open Nemerle\snippets\VS2010\Nemerle.VS2010.sln and build (Build | Rebuild All).
 	7. Install Nemerle\snippets\VS2010\bin\Debug\Nemerle.VisualStudio.vsix
 
-Note: this an early preview version. Send bug reports to http://code.google.com/p/nemerle/issues/list, please.
+Note: this is an early preview version. Send bug reports to http://code.google.com/p/nemerle/issues/list, please.
