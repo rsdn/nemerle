@@ -28,9 +28,14 @@ namespace WpfHint.Parsing
             return new TextToken(_rangeList) { Range = _rangeList.SplitRange(Range, index) };
         }
 
+				private static string HtmlMangling(string str)
+				{
+					return str.Replace("&", "&amp;").Replace(">", "&gt;").Replace("<", "&lt;");
+				}
+
         public override string ToString()
         {
-            return Text;
+					return HtmlMangling(Text);
         }
     }
 }
