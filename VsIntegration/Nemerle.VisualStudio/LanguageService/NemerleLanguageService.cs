@@ -707,6 +707,9 @@ namespace Nemerle.VisualStudio.LanguageService
 			IVsWindowFrame docFrame;
 			IVsTextView	   textView;
 
+			if (loc.FileIndex == 0)
+				return;
+			
 			VsShell.OpenDocument(Site, loc.File, VSConstants.LOGVIEWID_Code, 
 				out hierarchy, out itemID, out docFrame, out textView);
 

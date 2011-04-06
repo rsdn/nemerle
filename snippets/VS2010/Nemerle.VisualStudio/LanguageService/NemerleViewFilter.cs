@@ -267,7 +267,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			const uint ShowSmartTag = 147;
 			if (guidCmdGroup == VSConstants.VSStd2K && nCmdId == ShowSmartTag)
 			{
-				Source.ShowTypeNameSmartTag(TextView, true);
+				//Source.ShowTypeNameSmartTag(TextView, true);
 				return VSConstants.S_OK;
 			}
 

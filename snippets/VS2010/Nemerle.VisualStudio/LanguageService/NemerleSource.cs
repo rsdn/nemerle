@@ -43,6 +43,10 @@ namespace Nemerle.VisualStudio.LanguageService
 			string path = GetFilePath();
 			// ReSharper restore DoNotCallOverridableMethodsInConstructor
 
+			var vsTextBuffer = textLines as IVsTextBuffer;
+			var textBuffer = vsTextBuffer.ToITextBuffer();
+			textBuffer.Properties.AddProperty(typeof(NemerleSource), this);
+
 			Service = service;
 			ProjectInfo = ProjectInfo.FindProject(path);
 
@@ -501,21 +505,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			return null;
 		}
-
-		//private static string GetFullName(TopDeclaration td)
-		//{
-		//  var splName = td.ParsedSplicableName as Nemerle.Compiler.Parsetree.Splicable.Name;
-
-		//  if (splName == null || splName.body.context == null)
-		//    return null;
-
-		//  var nsName = splName.body.context.CurrentNamespace.GetDisplayName();
-
-		//  if (nsName.IsNullOrEmpty())
-		//    return td.Name;
-		//  else
-		//    return nsName + "." + td.Name;
-		//}
 
 		public override ParseRequest BeginParse(int line, int idx, TokenInfo info, ParseReason reason, IVsTextView view, ParseResultHandler callback)
 		{
@@ -981,22 +970,6 @@ namespace Nemerle.VisualStudio.LanguageService
 		private CompileUnit TryGetCompileUnit()
 		{
 			var compileUnit = CompileUnit;
-			/*
-			try
-			{
-
-				if (compileUnit == null && ProjectInfo != null)
-				{
-					var project = ProjectInfo.Project;
-					if (project != null)
-						compileUnit = project.CompileUnits[FileIndex];
-				}
-
-			}
-// ReSharper disable EmptyGeneralCatchClause
-			catch { }  // exceptions can be cause by coloring lexer which work in UI thread
-// ReSharper restore EmptyGeneralCatchClause
-			*/
 			return compileUnit;
 		}
 
@@ -1068,80 +1041,25 @@ namespace Nemerle.VisualStudio.LanguageService
 			return new TextSpan[0];
 		}
 
-		public void ShowTypeNameSmartTag(IVsTextView textView, bool showMenu)
+		public void ImplementInterfaces(int line, int column)
 		{
-			if (_typeNameMarker == null)
-				return;
+			var engine = GetEngine();
 
-			var loc = _typeNameMarker.Location;
-			Service.ShowSmartTag(textView, showMenu, loc,
-				MenuCmd.CmdId.SmartTagContextMenu, cmdId =>
-				{
-					switch (cmdId)
-					{
-						case MenuCmd.CmdId.ImplementInterface:
-							// Реализация методов интерфейсов и переопределение методов базового типа.
-							// Мы не можем обращаться к типизированному АСТ. Поэтмоу мы должны сформировать
-							// запрос на вычисление списка членов которые нужно реализовать.
-							// Когда список будет сформирован, нужно:
-							// 1. Софрмировать текст методов.
-							// 2. Сгенерировать для них текст.
-							// 3. Найти метсо куда можно вставить текст.
-							// 4. Определить отбику и добавить ее к сгенерированному тексту.
-							// 5. Встав полученый текс в место найденное на шаге 3.
-							{
-								var engine = GetEngine();
-								if (!engine.IsDefaultEngine)
-									engine.BeginFindUnimplementedMembers(this, loc.Line, loc.Column);
-							}
-							break;
-						case MenuCmd.CmdId.OverrideMembers:
-							{
-								var engine = GetEngine();
-								if (!engine.IsDefaultEngine)
-									engine.BeginFindMethodsToOverride(this, loc.Line, loc.Column);
-							}
-							break;
-						default:
-							Debug.Assert(false);
-							break;
-					}
-				});
+			if (!engine.IsDefaultEngine)
+				engine.BeginFindUnimplementedMembers(this, line, column);
 		}
 
-		NemerleTextMarkerClient _typeNameMarker;
-
-		private void TryAddTextMarkers(IVsTextView textView, int line, int col)
+		public void OverrideMembers(int line, int column)
 		{
-			var compileUnit = CompileUnit;
+			var engine = GetEngine();
 
-			if (_typeNameMarker != null)
-			{
-				_typeNameMarker.Dispose();
-				_typeNameMarker = null;
-			}
-
-			if (compileUnit != null)
-			{
-				var member = compileUnit.FindMember(line, col);
-
-				if (member.IsSome && member.Value.NameLocation.Contains(line, col)
-					&& (member.Value is TopDeclaration.Class || member.Value is TopDeclaration.Variant))
-				{
-					_typeNameMarker = new NemerleTextMarkerClient(GetTextLines(), member.Value.NameLocation);
-
-					//Debug.WriteLine(member.Value.NameLocation.ToVsOutputStringFormat()
-					//	+ " Caret over class name (" + member.Value.Name + ")");
-				}
-			}
-
-			Service.HideSmartTag(textView);
+			if (!engine.IsDefaultEngine)
+				engine.BeginFindMethodsToOverride(this, line, column);
 		}
 
 		public void CaretChanged(IVsTextView textView, int lineIdx, int colIdx)
 		{
 			TryHighlightBraces1(textView);
-			TryAddTextMarkers(textView, lineIdx + 1, colIdx + 1);
 		}
 
 		private void TryHighlightBraces(IVsTextView textView, VsCommands2K command, int line, int idx,
@@ -1205,34 +1123,6 @@ namespace Nemerle.VisualStudio.LanguageService
 			else if ((tokenBeforeCaret.Trigger & TokenTriggers.MatchBraces) != 0)
 				HighlightBraces(textView, line, idx);
 		}
-
-		//private void HandlePairedSymbols(IVsTextView textView, VsCommands2K command, int line, int idx, char ch)
-		//{
-		//  // insert paired symbols here
-		//  if(command == VsCommands2K.TYPECHAR)
-		//  {
-		//    if(IsOpeningPairedChar(ch))
-		//    {
-		//      SetText(line, idx, line, idx, GetClosingChar(ch).ToString());
-		//      textView.SetCaretPos(line, idx);
-		//    }
-		//    // if we just typed closing char and the char after caret is the same then we just remove 
-		//    // one of them
-		//    if(IsClosingPairedChar(ch))
-		//    {
-		//      char charAfterCaret = GetText(line, idx, line, idx + 1)[0];
-		//      if (ch == charAfterCaret/*IsClosingPairedChar(charAfterCaret)*/)
-		//        RemoveCharAt(line, idx);
-		//    }
-		//  }
-		//  // delete closing char if opened char was just backspaced and closing one is right next
-		//  if(command == VsCommands2K.BACKSPACE)
-		//  {
-		//    char closingChar = GetText(line, idx, line, idx + 1)[0];
-		//    if(IsOpeningPairedChar(_rememberedChar) && IsClosingPairedChar(closingChar))
-		//      RemoveCharAt(line, idx);
-		//  }
-		//}
 
 		#endregion
 
@@ -1672,8 +1562,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			if (_tipAsyncRequest == null || _tipAsyncRequest.Line != loc.Line || _tipAsyncRequest.Column != loc.Column)
 			{
-				if (_typeNameMarker != null && _typeNameMarker.Location.Contains(loc.Line, loc.Column))
-					ShowTypeNameSmartTag(view, false);
+				//if (_typeNameMarker != null && _typeNameMarker.Location.Contains(loc.Line, loc.Column))
+				//  ShowTypeNameSmartTag(view, false);
 				_tipAsyncRequest = GetEngine().BeginGetQuickTipInfo(this, loc.Line, loc.Column);
 				return VSConstants.E_PENDING;
 			}

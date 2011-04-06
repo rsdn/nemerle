@@ -25,6 +25,16 @@ namespace Nemerle.VisualStudio
 {
 	static class Utils
 	{
+		public static IVsTextBuffer ToIVsTextBuffer(this ITextBuffer textBuffer)
+		{
+			IVsTextBuffer buffer;
+
+			if (!textBuffer.Properties.TryGetProperty<IVsTextBuffer>(typeof(IVsTextBuffer), out buffer))
+				return null;
+
+			return buffer;
+		}
+
 		public static ITextBuffer ToITextBuffer(this IVsTextBuffer vsTextBuffer)
 		{
 			object obj2;
