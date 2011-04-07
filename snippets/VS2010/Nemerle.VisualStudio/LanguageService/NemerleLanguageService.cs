@@ -29,6 +29,7 @@ using Nemerle.VisualStudio.Properties;
 using Microsoft.VisualStudio.Package;
 using System.Windows;
 using Microsoft.VisualStudio.Language.Intellisense;
+using Microsoft.VisualStudio.Text.Editor;
 
 // ReSharper disable LocalizableElement
 namespace Nemerle.VisualStudio.LanguageService
@@ -751,30 +752,23 @@ namespace Nemerle.VisualStudio.LanguageService
 
       Microsoft.VisualStudio.Language.Intellisense.ISmartTagBroker tag = null;
 
+      // The ISmartTagBroker property added in NemerleImplementsSmartTaggerProvider
       if (textView.Properties.TryGetProperty<ISmartTagBroker>(typeof(ISmartTagBroker), out tag))
+      {
         if (tag.IsSmartTagActive(textView))
         {
           foreach (ISmartTagSession s in tag.GetSessions(textView))
           {
-            foreach (var itf in s.GetType().GetInterfaces())
-            {
-              var wpfTextView = textView as Microsoft.VisualStudio.Text.Editor.IWpfTextView;
-              if (wpfTextView != null)
-              {
-                var m = wpfTextView.GetSpaceReservationManager("smarttag");
-                var xx = wpfTextView.GetAdornmentLayer("SmartTag");
-                foreach (var e in xx.Elements)
-                {
-                  var uie = e.Adornment;
-                  var p = uie.PointToScreen(new Point(0, 0));
+            var wpfTextView             = (IWpfTextView)textView;
+            var spaceReservationManager = wpfTextView.GetSpaceReservationManager("smarttag");
+            var adornmentLayer          = wpfTextView.GetAdornmentLayer("SmartTag");
 
-                  if (rect.Contains(p))
-                    return true;
-                }
-              }
-            }
+            foreach (var alement in adornmentLayer.Elements)
+              if (rect.Contains(alement.Adornment.PointToScreen(new Point(0, 0))))
+                return true;
           }
         }
+      }
 
       return false;
     }
