@@ -264,7 +264,7 @@ namespace Nemerle.VisualStudio.Project
 			try
 			{
 				string path = Path.GetDirectoryName(filePath);
-				
+
 				if (!Directory.Exists(path))
 					return;
 
@@ -557,26 +557,26 @@ namespace Nemerle.VisualStudio.Project
 			return null;
 		}
 
-    public static ProjectInfo FindProjectByOutput(string fileName)
-    {
-      var fullPath = Path.GetFullPath(fileName).ToLower();
-      ErrorHelper.ThrowIfPathNullOrEmpty(fileName, "fileName");
+		public static ProjectInfo FindProjectByOutput(string fileName)
+		{
+			var fullPath = Path.GetFullPath(fileName).ToLower();
+			ErrorHelper.ThrowIfPathNullOrEmpty(fileName, "fileName");
 
-      foreach (ProjectInfo proj in _projects)
-      {
-        var outFile = (string)proj._projectNode.VSProject.Project.Properties.Item("OutputFileName").Value ?? "";
-        var outPath = (string)proj._projectNode.VSProject.Project.Properties.Item("OutputPath").Value ?? "";
-        var dir = (string)proj._projectNode.VSProject.Project.Properties.Item("FullPath").Value ?? "";
-        var fullOutPath = Path.GetFullPath(Path.Combine(dir, Path.Combine(outPath, outFile))).ToLower();
+			foreach (ProjectInfo proj in _projects)
+			{
+				var outFile = (string)proj._projectNode.VSProject.Project.Properties.Item("OutputFileName").Value ?? "";
+				var outPath = (string)proj._projectNode.VSProject.Project.Properties.Item("OutputPath").Value ?? "";
+				var dir = (string)proj._projectNode.VSProject.Project.Properties.Item("FullPath").Value ?? "";
+				var fullOutPath = Path.GetFullPath(Path.Combine(dir, Path.Combine(outPath, outFile))).ToLower();
 
-        if (fullOutPath == fullPath)
-          return proj;
-      }
+				if (fullOutPath == fullPath)
+					return proj;
+			}
 
-      return null;
-    }
+			return null;
+		}
 
-    public static ProjectInfo FindProject(string fileName)
+		public static ProjectInfo FindProject(string fileName)
 		{
 			ErrorHelper.ThrowIfPathNullOrEmpty(fileName, "fileName");
 
@@ -592,7 +592,7 @@ namespace Nemerle.VisualStudio.Project
 			get { return Engine.IsProjectAvailable; }
 		}
 
-    public bool IsDocumentOpening { get; internal set; }
+		public bool IsDocumentOpening { get; internal set; }
 
 		#region HighlightUsages
 
@@ -797,7 +797,7 @@ namespace Nemerle.VisualStudio.Project
 			Debug.WriteLine(text);
 		}
 
-		public void AddUnimplementedMembers(ISource source, TypeBuilder ty, 
+		public void AddUnimplementedMembers(ISource source, TypeBuilder ty,
 			IEnumerable<IGrouping<FixedType.Class, IMember>> unimplementedMembers)
 		{
 			using (var form = new ImplementMembersForm((NemerleSource)source, ty, unimplementedMembers))
@@ -809,7 +809,7 @@ namespace Nemerle.VisualStudio.Project
 		public void AddOverrideMembers(ISource source, TypeBuilder ty, IEnumerable<IMember> notOverriden)
 		{
 			var ty2 = ty.GetMemType();
-			var notOverriden2 = notOverriden.Select(m => new { ty2,  m }).GroupBy(x => x.ty2, x => x.m);
+			var notOverriden2 = notOverriden.Select(m => new { ty2, m }).GroupBy(x => x.ty2, x => x.m);
 			using (var form = new ImplementMembersForm((NemerleSource)source, ty, notOverriden2))
 			{
 				form.ShowDialog();

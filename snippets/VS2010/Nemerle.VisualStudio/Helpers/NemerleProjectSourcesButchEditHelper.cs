@@ -118,8 +118,8 @@ namespace Nemerle.VisualStudio.Helpers
 		public void ReplaseMethodBody(ClassMember.Function function, string text)
 		{
 			var h = GetHelper(function.BodyCloseTokenLocation.FileIndex);
-      var xx = h.Source.GetText();
-      var closeBrecket = h.Source.GetText(function.BodyCloseTokenLocation.ToTextSpan());
+			var xx = h.Source.GetText();
+			var closeBrecket = h.Source.GetText(function.BodyCloseTokenLocation.ToTextSpan());
 			if (closeBrecket != "}")
 			{
 				System.Windows.Forms.MessageBox.Show("Internal Nemerle WinForms Designer Error!");
@@ -135,13 +135,13 @@ namespace Nemerle.VisualStudio.Helpers
 		}
 
 		internal void AddMethod(
-			TopDeclaration      topDeclaration,
-			CodeMemberMethod    codeMemberMethod,
+			TopDeclaration topDeclaration,
+			CodeMemberMethod codeMemberMethod,
 			CodeTypeDeclaration declaration)
 		{
 			string text = FormCodeDomGenerator.ToString(codeMemberMethod, declaration);
 			var loc = topDeclaration.BodyCloseTokenLocation.FromStart();
-      codeMemberMethod.UserData[typeof(Point)] = new Point(loc.Column + 3, loc.Line + _ident.Length);
+			codeMemberMethod.UserData[typeof(Point)] = new Point(loc.Column + 3, loc.Line + _ident.Length);
 			Add(topDeclaration.Location, loc, text);
 		}
 

@@ -54,10 +54,10 @@ namespace Nemerle.VisualStudio
 
 		public const string IntellisenseProviderGuidString           = "A8B57672-DC5E-4915-A31A-B1C428B29FE1";
 
-		public const string ProjectImageListName                    = "Nemerle.VisualStudio.Resources.NemerleImageList.bmp";
+		public const string ProjectImageListName                     = "Nemerle.VisualStudio.Resources.NemerleImageList.bmp";
 
-    public const string MacroReference                          = "MacroReference";
-    public const string MacroProjectReference                   = "MacroProjectReference";
+		public const string MacroReference                           = "MacroReference";
+		public const string MacroProjectReference                    = "MacroProjectReference";
 
 		/// <summary>
 		/// Indexes to the embedded NemerleImageList.bmp image list.
@@ -66,8 +66,8 @@ namespace Nemerle.VisualStudio
 		{
 			public const int NemerleSource  = 0;
 			public const int NemerleProject = 1;
-      public const int NemerleForm = 2;
-      public const int NemerleMacroReferences = 3;
+			public const int NemerleForm = 2;
+			public const int NemerleMacroReferences = 3;
 		}
 	}
 }

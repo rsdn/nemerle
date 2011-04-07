@@ -16,10 +16,10 @@ using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System;
-using VsCommands2K      = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
-using TopDeclaration    = Nemerle.Compiler.Parsetree.TopDeclaration;
-using TupleIntInt       = Nemerle.Builtins.Tuple<int, int>;
-using TupleStringInt    = Nemerle.Builtins.Tuple<string, int>;
+using VsCommands2K = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
+using TopDeclaration = Nemerle.Compiler.Parsetree.TopDeclaration;
+using TupleIntInt = Nemerle.Builtins.Tuple<int, int>;
+using TupleStringInt = Nemerle.Builtins.Tuple<string, int>;
 using TupleStringIntInt = Nemerle.Builtins.Tuple<string, int, int>;
 using Nemerle.VisualStudio.Package;
 using System.Text;
@@ -48,15 +48,15 @@ namespace Nemerle.VisualStudio.LanguageService
 			textBuffer.Properties.AddProperty(typeof(NemerleSource), this);
 
 			Service = service;
-      ProjectInfo projectInfo = ProjectInfo.FindProject(path);
-      ProjectInfo = projectInfo;
+			ProjectInfo projectInfo = ProjectInfo.FindProject(path);
+			ProjectInfo = projectInfo;
 
-      if (projectInfo != null)
+			if (projectInfo != null)
 			{
-        projectInfo.AddEditableSource(this);
+				projectInfo.AddEditableSource(this);
 				try
 				{
-          projectInfo.MakeCompilerMessagesTextMarkers(textLines, FileIndex);
+					projectInfo.MakeCompilerMessagesTextMarkers(textLines, FileIndex);
 				}
 				catch { }
 			}
@@ -70,11 +70,11 @@ namespace Nemerle.VisualStudio.LanguageService
 			SmartIndent = new NemerleSmartIndentation(this);
 
 
-      if (projectInfo == null)
-        GetEngine().BeginUpdateCompileUnit(this);
-      else
-        projectInfo.Engine.BeginUpdateCompileUnit(this);
-    }
+			if (projectInfo == null)
+				GetEngine().BeginUpdateCompileUnit(this);
+			else
+				projectInfo.Engine.BeginUpdateCompileUnit(this);
+		}
 
 		#endregion
 
@@ -183,10 +183,13 @@ namespace Nemerle.VisualStudio.LanguageService
 
 				if ((i + clen) <= text.Length && text.Substring(i, clen) == lineComment)
 				{
-					var es = new EditSpan(new TextSpan(){
-											iEndLine    = line, iStartLine = line, 
-											iStartIndex = i,    iEndIndex  = i + clen 
-										}, "");
+					var es = new EditSpan(new TextSpan()
+					{
+						iEndLine = line,
+						iStartLine = line,
+						iStartIndex = i,
+						iEndIndex = i + clen
+					}, "");
 					editMgr.Add(es); // remove line comment.
 
 					if (line == span.iStartLine && span.iStartIndex != 0)
@@ -319,24 +322,24 @@ namespace Nemerle.VisualStudio.LanguageService
 				Debug.Assert(infos.Length == 1, "Multiple unknown locations are unexpected");
 				var inf = infos[0];
 				GotoInfo[] infoFromPdb = TryFindGotoInfoByDebugInfo(engine, inf);
-        
-        if (infoFromPdb.Length == 0)
-        {
-          if (inf.Member != null)
-          {
-            var res = ProjectInfo.FindProjectByOutput(inf.FilePath);
 
-            if (res != null)
-              infos = res.Engine.GetGotoInfoForMember(inf.Member.GetFullName(), false, GotoKind.Definition);
+				if (infoFromPdb.Length == 0)
+				{
+					if (inf.Member != null)
+					{
+						var res = ProjectInfo.FindProjectByOutput(inf.FilePath);
 
-            if (infos.Length <= 0 || res == null)
-              infos = NemerleGoto.GenerateSource(infos, engine, out captiopn);
-          }
-          else
-            infos = NemerleGoto.GenerateSource(infos, engine, out captiopn);
-        }
-        else
-				  infos = infoFromPdb;
+						if (res != null)
+							infos = res.Engine.GetGotoInfoForMember(inf.Member.GetFullName(), false, GotoKind.Definition);
+
+						if (infos.Length <= 0 || res == null)
+							infos = NemerleGoto.GenerateSource(infos, engine, out captiopn);
+					}
+					else
+						infos = NemerleGoto.GenerateSource(infos, engine, out captiopn);
+				}
+				else
+					infos = infoFromPdb;
 			}
 
 			var langSrvc = (NemerleLanguageService)LanguageService;
@@ -544,7 +547,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				{
 					var source = ProjectInfo.GetSource(FileIndex);
 
-					if(source != null)
+					if (source != null)
 						ProjectInfo.RemoveSource(source);
 
 					RemoveStubFileForSecondaryBuffer(GetTextLines());
@@ -1244,7 +1247,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			return line;
 		}
-		
+
 		#endregion
 
 		public void OnSetFocus(IVsTextView view)

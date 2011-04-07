@@ -11,193 +11,193 @@ using System.Security;
 
 namespace Nemerle.VisualStudio.Project
 {
-  class NemerleMacroReferenceContainerNode : NemerleReferenceContainerNode
+	class NemerleMacroReferenceContainerNode : NemerleReferenceContainerNode
 	{
-    internal const string MacroReferencesNodeVirtualName = NemerleConstants.MacroReference;
-    
-    #region ctor
+		internal const string MacroReferencesNodeVirtualName = NemerleConstants.MacroReference;
 
-    public NemerleMacroReferenceContainerNode(ProjectNode root)
-      : base(root)
+		#region ctor
+
+		public NemerleMacroReferenceContainerNode(ProjectNode root)
+			: base(root)
 		{
-      this.VirtualNodeName = MacroReferencesNodeVirtualName;
-    }
+			this.VirtualNodeName = MacroReferencesNodeVirtualName;
+		}
 
 		#endregion
 
-    public override object GetIconHandle(bool open)
-    {
-      var img = NemerleProjectNode.NemerleImageList.Images[NemerleConstants.ImageListIndex.NemerleMacroReferences];
-      return PackageUtilities.GetIntPointerFromImage(img);
-    }
+		public override object GetIconHandle(bool open)
+		{
+			var img = NemerleProjectNode.NemerleImageList.Images[NemerleConstants.ImageListIndex.NemerleMacroReferences];
+			return PackageUtilities.GetIntPointerFromImage(img);
+		}
 
-    public override string Caption
-    {
-      get { return "Macro References"; }
-    }
+		public override string Caption
+		{
+			get { return "Macro References"; }
+		}
 
-    private static string[] _supportedReferenceTypes = new[] { NemerleConstants.MacroReference, NemerleConstants.MacroProjectReference };
+		private static string[] _supportedReferenceTypes = new[] { NemerleConstants.MacroReference, NemerleConstants.MacroProjectReference };
 
-    protected override string[] SupportedReferenceTypes
-    {
-      get { return _supportedReferenceTypes; }
-    }
+		protected override string[] SupportedReferenceTypes
+		{
+			get { return _supportedReferenceTypes; }
+		}
 
-    protected override ReferenceNode CreateReferenceNode(string referenceType, ProjectElement element)
-    {
-      switch (referenceType)
-      {
-        case NemerleConstants.MacroReference:        return this.CreateAssemblyReferenceNode(element);
-        case NemerleConstants.MacroProjectReference: return this.CreateProjectReferenceNode(element);
-        default:                                     return base.CreateReferenceNode(referenceType, element);
-      }
-    }
+		protected override ReferenceNode CreateReferenceNode(string referenceType, ProjectElement element)
+		{
+			switch (referenceType)
+			{
+				case NemerleConstants.MacroReference: return this.CreateAssemblyReferenceNode(element);
+				case NemerleConstants.MacroProjectReference: return this.CreateProjectReferenceNode(element);
+				default: return base.CreateReferenceNode(referenceType, element);
+			}
+		}
 
-    /// <summary>
-    /// Creates a project reference node given an existing project element.
-    /// </summary>
-    protected override ProjectReferenceNode CreateProjectReferenceNode(ProjectElement element)
-    {
-      return new NemerleMacroProjectReferenceNode(this.ProjectMgr, element);
-    }
-    /// <summary>
-    /// Create a Project to Project reference given a VSCOMPONENTSELECTORDATA structure
-    /// </summary>
-    protected override ProjectReferenceNode CreateProjectReferenceNode(VSCOMPONENTSELECTORDATA selectorData)
-    {
-      return new NemerleMacroProjectReferenceNode(this.ProjectMgr, selectorData.bstrTitle, selectorData.bstrFile, selectorData.bstrProjRef);
-    }
+		/// <summary>
+		/// Creates a project reference node given an existing project element.
+		/// </summary>
+		protected override ProjectReferenceNode CreateProjectReferenceNode(ProjectElement element)
+		{
+			return new NemerleMacroProjectReferenceNode(this.ProjectMgr, element);
+		}
+		/// <summary>
+		/// Create a Project to Project reference given a VSCOMPONENTSELECTORDATA structure
+		/// </summary>
+		protected override ProjectReferenceNode CreateProjectReferenceNode(VSCOMPONENTSELECTORDATA selectorData)
+		{
+			return new NemerleMacroProjectReferenceNode(this.ProjectMgr, selectorData.bstrTitle, selectorData.bstrFile, selectorData.bstrProjRef);
+		}
 
-    protected override AssemblyReferenceNode CreateAssemblyReferenceNode(string fileName)
-    {
-      return new NemerleMacroAssemblyReferenceNode(ProjectMgr, fileName);
-    }
+		protected override AssemblyReferenceNode CreateAssemblyReferenceNode(string fileName)
+		{
+			return new NemerleMacroAssemblyReferenceNode(ProjectMgr, fileName);
+		}
 
-    protected override AssemblyReferenceNode CreateAssemblyReferenceNode(ProjectElement element)
-    {
-      // VladD2:
-      // ReferenceContainerNode does not support reference to files (instead of
-      // get assembly name from file it tries to use file name as assembly name
-      // (via System.Reflection.AssemblyName()).
+		protected override AssemblyReferenceNode CreateAssemblyReferenceNode(ProjectElement element)
+		{
+			// VladD2:
+			// ReferenceContainerNode does not support reference to files (instead of
+			// get assembly name from file it tries to use file name as assembly name
+			// (via System.Reflection.AssemblyName()).
 
-      string item = element.Item.EvaluatedInclude;
-      NemerleAssemblyReferenceNode node = null;
+			string item = element.Item.EvaluatedInclude;
+			NemerleAssemblyReferenceNode node = null;
 
-      try
-      {
-        node = File.Exists(item) ? new NemerleMacroAssemblyReferenceNode(ProjectMgr, item)
-                                 : new NemerleMacroAssemblyReferenceNode(ProjectMgr, element);
-      }
-      catch (ArgumentNullException   e) { Trace.WriteLine("Exception : " + e.Message); }
-      catch (FileNotFoundException   e) { Trace.WriteLine("Exception : " + e.Message); }
-      catch (BadImageFormatException e) { Trace.WriteLine("Exception : " + e.Message); }
-      catch (FileLoadException       e) { Trace.WriteLine("Exception : " + e.Message); }
-      catch (SecurityException       e) { Trace.WriteLine("Exception : " + e.Message); }
+			try
+			{
+				node = File.Exists(item) ? new NemerleMacroAssemblyReferenceNode(ProjectMgr, item)
+																 : new NemerleMacroAssemblyReferenceNode(ProjectMgr, element);
+			}
+			catch (ArgumentNullException e) { Trace.WriteLine("Exception : " + e.Message); }
+			catch (FileNotFoundException e) { Trace.WriteLine("Exception : " + e.Message); }
+			catch (BadImageFormatException e) { Trace.WriteLine("Exception : " + e.Message); }
+			catch (FileLoadException e) { Trace.WriteLine("Exception : " + e.Message); }
+			catch (SecurityException e) { Trace.WriteLine("Exception : " + e.Message); }
 
-      return node;
-    }
+			return node;
+		}
 
-    public override void AddChild(HierarchyNode node)
-    {
-      if (node == null)
-        throw new ArgumentNullException("node");
+		public override void AddChild(HierarchyNode node)
+		{
+			if (node == null)
+				throw new ArgumentNullException("node");
 
-      // make sure the node is in the map.
-      Object nodeWithSameID = this.ProjectMgr.ItemIdMap[node.ID];
+			// make sure the node is in the map.
+			Object nodeWithSameID = this.ProjectMgr.ItemIdMap[node.ID];
 
-      if (!Object.ReferenceEquals(node, nodeWithSameID as HierarchyNode))
-      {
-        if (nodeWithSameID == null && node.ID <= this.ProjectMgr.ItemIdMap.Count)
-          // reuse our hierarchy id if possible.
-          this.ProjectMgr.ItemIdMap.SetAt(node.ID, this);
-        else
-          throw new InvalidOperationException();
-      }
+			if (!Object.ReferenceEquals(node, nodeWithSameID as HierarchyNode))
+			{
+				if (nodeWithSameID == null && node.ID <= this.ProjectMgr.ItemIdMap.Count)
+					// reuse our hierarchy id if possible.
+					this.ProjectMgr.ItemIdMap.SetAt(node.ID, this);
+				else
+					throw new InvalidOperationException();
+			}
 
-      HierarchyNode previous = null;
-      
-      for (HierarchyNode n = this.FirstChild; n != null; n = n.NextSibling)
-      {
-        if (this.ProjectMgr.CompareNodes(node, n) > 0)
-          break;
+			HierarchyNode previous = null;
 
-        previous = n;
-      }
-      
-      // insert "node" after "previous".
-      if (previous != null)
-      {
-        node.NextSibling = previous.NextSibling;
-        previous.NextSibling = node;
+			for (HierarchyNode n = this.FirstChild; n != null; n = n.NextSibling)
+			{
+				if (this.ProjectMgr.CompareNodes(node, n) > 0)
+					break;
 
-        if (previous == this.LastChild)
-          this.LastChild = node;
-      }
-      else
-      {
-        if (this.LastChild == null)
-          this.LastChild = node;
+				previous = n;
+			}
 
-        node.NextSibling = this.FirstChild;
-        this.FirstChild = node;
-      }
+			// insert "node" after "previous".
+			if (previous != null)
+			{
+				node.NextSibling = previous.NextSibling;
+				previous.NextSibling = node;
 
-      node.Parent = this;
-      this.OnItemAdded(this, node);
+				if (previous == this.LastChild)
+					this.LastChild = node;
+			}
+			else
+			{
+				if (this.LastChild == null)
+					this.LastChild = node;
 
-      NemerleProjectNode project = ProjectMgr as NemerleProjectNode;
+				node.NextSibling = this.FirstChild;
+				this.FirstChild = node;
+			}
 
-      if (project != null)
-      {
-        ReferenceNode referenceNode = (ReferenceNode)node;
-        //TODO: Добавить в список макро-сборок
-        project.ProjectInfo.AddMacroAssembly(referenceNode);
-      }
-    }
+			node.Parent = this;
+			this.OnItemAdded(this, node);
 
-    public override void RemoveChild(HierarchyNode node)
-    {
-      NemerleProjectNode project = ProjectMgr as NemerleProjectNode;
+			NemerleProjectNode project = ProjectMgr as NemerleProjectNode;
 
-      if (project != null)
-      {
-        ReferenceNode referenceNode = (ReferenceNode)node;
-        //TODO: Удалить из списка макро-сборок
-        project.ProjectInfo.RemoveMacroAssembly(referenceNode);
-      }
+			if (project != null)
+			{
+				ReferenceNode referenceNode = (ReferenceNode)node;
+				//TODO: Добавить в список макро-сборок
+				project.ProjectInfo.AddMacroAssembly(referenceNode);
+			}
+		}
 
-      if (node == null)
-        throw new ArgumentNullException("node");
+		public override void RemoveChild(HierarchyNode node)
+		{
+			NemerleProjectNode project = ProjectMgr as NemerleProjectNode;
 
-      ProjectMgr.ItemIdMap.Remove(node);
+			if (project != null)
+			{
+				ReferenceNode referenceNode = (ReferenceNode)node;
+				//TODO: Удалить из списка макро-сборок
+				project.ProjectInfo.RemoveMacroAssembly(referenceNode);
+			}
 
-      HierarchyNode last = null;
+			if (node == null)
+				throw new ArgumentNullException("node");
 
-      for (HierarchyNode n = this.FirstChild; n != null; n = n.NextSibling)
-      {
-        if (n == node)
-        {
-          if (last != null)
-            last.NextSibling = n.NextSibling;
+			ProjectMgr.ItemIdMap.Remove(node);
 
-          if (n == this.LastChild)
-          {
-            if (last == this.LastChild)
-              this.LastChild = null;
-            else
-              this.LastChild = last;
-          }
+			HierarchyNode last = null;
 
-          if (n == this.FirstChild)
-            this.FirstChild = n.NextSibling;
+			for (HierarchyNode n = this.FirstChild; n != null; n = n.NextSibling)
+			{
+				if (n == node)
+				{
+					if (last != null)
+						last.NextSibling = n.NextSibling;
 
-          return;
-        }
+					if (n == this.LastChild)
+					{
+						if (last == this.LastChild)
+							this.LastChild = null;
+						else
+							this.LastChild = last;
+					}
 
-        last = n;
-      }
+					if (n == this.FirstChild)
+						this.FirstChild = n.NextSibling;
 
-      throw new InvalidOperationException("Node not found");
-    }
-  }
+					return;
+				}
+
+				last = n;
+			}
+
+			throw new InvalidOperationException("Node not found");
+		}
+	}
 }

@@ -49,15 +49,15 @@ namespace Nemerle.VisualStudio
 		NemerleConstants.LanguageName,
 		100,
 		DefaultToInsertSpaces = true,
-		AutoOutlining         = true,
-		CodeSense             = true,
-		EnableCommenting      = true,
-		MatchBraces           = true,
-		ShowCompletion        = true,
-		ShowMatchingBrace     = true,
-		ShowDropDownOptions   = true,
+		AutoOutlining = true,
+		CodeSense = true,
+		EnableCommenting = true,
+		MatchBraces = true,
+		ShowCompletion = true,
+		ShowMatchingBrace = true,
+		ShowDropDownOptions = true,
 		EnableFormatSelection = true,
-		ShowSmartIndent       = true
+		ShowSmartIndent = true
 		)]
 	[ProvideLanguageExtension(typeof(NemerleLanguageService), NemerleConstants.FileExtension)]
 	[ProvideProjectFactory(typeof(NemerleProjectFactory),
@@ -89,12 +89,12 @@ namespace Nemerle.VisualStudio
 	[ProvideObject(typeof(NemerleIntellisenseProvider))]
 
 	[ProvideMenuResource(1000, 1)]
-	[ProvideObject           (typeof(NemerleGeneralPropertyPage))]
-	[ProvideObject           (typeof(NemerleDebugPropertyPage))]
-	[ProvideObject           (typeof(NemerleBuildPropertyPage))]
-	[ProvideObject           (typeof(NemerleWACodeBehindEventBinding))]
+	[ProvideObject(typeof(NemerleGeneralPropertyPage))]
+	[ProvideObject(typeof(NemerleDebugPropertyPage))]
+	[ProvideObject(typeof(NemerleBuildPropertyPage))]
+	[ProvideObject(typeof(NemerleWACodeBehindEventBinding))]
 	[ProvideEditorExtension(typeof(NemerleEditorFactory), NemerleConstants.FileExtension, 32)]
-	
+
 	// Attention! These guids are magic numbers provided by Microsoft. Don't change them.
 	//
 	[ProvideEditorLogicalView(typeof(NemerleEditorFactory), "{7651a702-06e5-11d1-8ebd-00a0c90f26ea}")]  //LOGVIEWID_Designer
@@ -103,11 +103,11 @@ namespace Nemerle.VisualStudio
 	// Showing the splash screen requires "devenv /rootsuffix Exp /setup" during the installation.
 	// For more information please see: http://blogs.msdn.com/jim_glass/archive/2005/05/23/421152.aspx
 	[InstalledProductRegistration(
-		true, 
-		NemerleConstants.LanguageName, 
-		NemerleConstants.ProductDetails, 
-		NemerleConstants.PLKProductVersion, 
-		IconResourceID=300)]
+		true,
+		NemerleConstants.LanguageName,
+		NemerleConstants.ProductDetails,
+		NemerleConstants.PLKProductVersion,
+		IconResourceID = 300)]
 	[RegistrationAttributes.RegisterSnippets(
 		NemerleConstants.LanguageServiceGuidString,
 		false,
@@ -125,13 +125,13 @@ namespace Nemerle.VisualStudio
 
 	//The following attributes are specific to supporting Web Application Projects
 	//
-	[WebSiteProject(NemerleConstants.LanguageId , NemerleConstants.LanguageName)]
-	[WebSiteProjectRelatedFiles("aspx",   NemerleConstants.FileExtensionOnly)]
+	[WebSiteProject(NemerleConstants.LanguageId, NemerleConstants.LanguageName)]
+	[WebSiteProjectRelatedFiles("aspx", NemerleConstants.FileExtensionOnly)]
 	[WebSiteProjectRelatedFiles("master", NemerleConstants.FileExtensionOnly)]
 	[WAProvideProjectFactory(typeof(WANemerleProjectFactory), NemerleConstants.LanguageName + " Web Application Project Templates", NemerleConstants.LanguageId, false, "Web", null)]
 	[WAProvideProjectFactoryTemplateMapping("{" + NemerleConstants.ProjectFactoryGuidString + "}", typeof(WANemerleProjectFactory))]
-	[WAProvideLanguageProperty(typeof(WANemerleProjectFactory), "CodeFileExtension",       NemerleConstants.FileExtension)]
-	[WAProvideLanguageProperty(typeof(WANemerleProjectFactory), "TemplateFolder",          NemerleConstants.LanguageId)]
+	[WAProvideLanguageProperty(typeof(WANemerleProjectFactory), "CodeFileExtension", NemerleConstants.FileExtension)]
+	[WAProvideLanguageProperty(typeof(WANemerleProjectFactory), "TemplateFolder", NemerleConstants.LanguageId)]
 	[WAProvideLanguageProperty(typeof(WANemerleProjectFactory), "CodeBehindCodeGenerator", NemerleConstants.WACodeBehindCodeGeneratorGuidString)]
 	[WAProvideLanguageProperty(typeof(WANemerleProjectFactory), "CodeBehindEventBinding", typeof(NemerleWACodeBehindEventBinding))]
 
@@ -141,7 +141,7 @@ namespace Nemerle.VisualStudio
 	{
 		#region Fields
 
-		private uint                  _componentID;
+		private uint _componentID;
 		private NemerleLibraryManager _libraryManager;
 		private SourceOutlinerToolWindow _sourceOutlinerToolWindow;
 		public OleMenuCommand RefactoringMenu { get; private set; }
@@ -161,76 +161,76 @@ namespace Nemerle.VisualStudio
 			container.AddService(typeof(INemerleLibraryManager), CreateService, true);
 		}
 
-    class MySolutionListener : SolutionListener
-    {
-      public MySolutionListener(System.IServiceProvider serviceProvider) : base(serviceProvider) { }
+		class MySolutionListener : SolutionListener
+		{
+			public MySolutionListener(System.IServiceProvider serviceProvider) : base(serviceProvider) { }
 
-      public override int OnAfterOpenSolution(object pUnkReserved, int fNewSolution)
-      {
-        EnvDTE.DTE dte = (EnvDTE.DTE)ServiceProvider.GetService(typeof(EnvDTE.DTE));
+			public override int OnAfterOpenSolution(object pUnkReserved, int fNewSolution)
+			{
+				EnvDTE.DTE dte = (EnvDTE.DTE)ServiceProvider.GetService(typeof(EnvDTE.DTE));
 
-        // Из-за того, что при создании NemerleMacroProjectReferenceNode и NemerleMacroAssemblyReferenceNode
-        // при открытии проектов dte.Solution.Projects еще не содержал проектов добавление ссылок 
-        // на проекты того же солюшена закончились неудачей. Производим повторную попытку добавить 
-        // ссылки на проекты в ProjectInfo...
+				// Из-за того, что при создании NemerleMacroProjectReferenceNode и NemerleMacroAssemblyReferenceNode
+				// при открытии проектов dte.Solution.Projects еще не содержал проектов добавление ссылок 
+				// на проекты того же солюшена закончились неудачей. Производим повторную попытку добавить 
+				// ссылки на проекты в ProjectInfo...
 
-        foreach (EnvDTE.Project prj in dte.Solution.Projects)
-        {
-          //foreach (EnvDTE.ProjectItem item in prj.ProjectItems)
-          //  System.Diagnostics.Trace.WriteLine(item.Name);
+				foreach (EnvDTE.Project prj in dte.Solution.Projects)
+				{
+					//foreach (EnvDTE.ProjectItem item in prj.ProjectItems)
+					//  System.Diagnostics.Trace.WriteLine(item.Name);
 
-          var oaProj = prj as Microsoft.VisualStudio.Project.Automation.OAProject;
+					var oaProj = prj as Microsoft.VisualStudio.Project.Automation.OAProject;
 
-          if (oaProj == null)
-            continue;
+					if (oaProj == null)
+						continue;
 
-          var nProj = oaProj.Project as NemerleProjectNode;
+					var nProj = oaProj.Project as NemerleProjectNode;
 
-          if (nProj == null)
-            continue;
+					if (nProj == null)
+						continue;
 
-          var mrc = (NemerleMacroReferenceContainerNode)nProj.GetMacroReferenceContainer();
-          var projectInfo = nProj.ProjectInfo;
+					var mrc = (NemerleMacroReferenceContainerNode)nProj.GetMacroReferenceContainer();
+					var projectInfo = nProj.ProjectInfo;
 
-          var macroProjectRefs = new List<NemerleMacroProjectReferenceNode>();
-          mrc.FindNodesOfType(macroProjectRefs);
-          foreach (var item in macroProjectRefs)
-            projectInfo.AddMacroAssembly(item);
+					var macroProjectRefs = new List<NemerleMacroProjectReferenceNode>();
+					mrc.FindNodesOfType(macroProjectRefs);
+					foreach (var item in macroProjectRefs)
+						projectInfo.AddMacroAssembly(item);
 
-          var rc = (NemerleReferenceContainerNode)nProj.GetReferenceContainer();
-          var macroRefs = new List<NemerleProjectReferenceNode>();
-          rc.FindNodesOfType(macroRefs);
-          foreach (var item in macroRefs)
-            projectInfo.AddAssembly(item);
+					var rc = (NemerleReferenceContainerNode)nProj.GetReferenceContainer();
+					var macroRefs = new List<NemerleProjectReferenceNode>();
+					rc.FindNodesOfType(macroRefs);
+					foreach (var item in macroRefs)
+						projectInfo.AddAssembly(item);
 
-          System.Diagnostics.Trace.WriteLine(nProj.Caption);
-        }
+					System.Diagnostics.Trace.WriteLine(nProj.Caption);
+				}
 
-        return base.OnAfterOpenSolution(pUnkReserved, fNewSolution);
-      }
-    }
+				return base.OnAfterOpenSolution(pUnkReserved, fNewSolution);
+			}
+		}
 
-    MySolutionListener _mySolutionListener;
-    
+		MySolutionListener _mySolutionListener;
+
 		protected override void Initialize()
 		{
 			base.Initialize();
 
-      _mySolutionListener = new MySolutionListener(this);
-      _mySolutionListener.Init();
+			_mySolutionListener = new MySolutionListener(this);
+			_mySolutionListener.Init();
 
-      foreach (var listener in Trace.Listeners.OfType<DefaultTraceListener>())
-        listener.AssertUiEnabled = false;
+			foreach (var listener in Trace.Listeners.OfType<DefaultTraceListener>())
+				listener.AssertUiEnabled = false;
 
-      foreach (var listener in Debug.Listeners.OfType<DefaultTraceListener>())
-        listener.AssertUiEnabled = false;
+			foreach (var listener in Debug.Listeners.OfType<DefaultTraceListener>())
+				listener.AssertUiEnabled = false;
 
-		  //Debug.Assert(false);
-		  //Trace.Listeners.Clear();
-		  //Trace.Listeners.Clear();
+			//Debug.Assert(false);
+			//Trace.Listeners.Clear();
+			//Trace.Listeners.Clear();
 
 			RegisterProjectFactory(new NemerleProjectFactory(this));
-			RegisterEditorFactory (new NemerleEditorFactory (this));
+			RegisterEditorFactory(new NemerleEditorFactory(this));
 			RegisterProjectFactory(new NemerleWPFProjectFactory(this));
 			RegisterNemerleCommands();
 		}
@@ -261,9 +261,9 @@ namespace Nemerle.VisualStudio
 		}
 
 		private static OleMenuCommand RegisterOleMenuCommand(
-			OleMenuCommandService service, 
-			MenuCmd.CmdId id, 
-			bool visible, 
+			OleMenuCommandService service,
+			MenuCmd.CmdId id,
+			bool visible,
 			EventHandler handler)
 		{
 			var commandID = new CommandID(MenuCmd.guidNemerleProjectCmdSet, (int)id);
@@ -274,12 +274,12 @@ namespace Nemerle.VisualStudio
 			return command;
 		}
 
-    //private static void RegisterCommand(OleMenuCommandService service, CommandID commandId, EventHandler handler)
-    //{
-    //  var command = new MenuCommand(handler, commandId);
-    //  service.AddCommand(command);
-    //  //Debug.WriteLine(string.Format("Menu command {0} added", command));
-    //}
+		//private static void RegisterCommand(OleMenuCommandService service, CommandID commandId, EventHandler handler)
+		//{
+		//  var command = new MenuCommand(handler, commandId);
+		//  service.AddCommand(command);
+		//  //Debug.WriteLine(string.Format("Menu command {0} added", command));
+		//}
 
 		//public IWin32Window TextEditorWindow
 		//{
@@ -369,8 +369,8 @@ namespace Nemerle.VisualStudio
 			{
 				OLECRINFO[] crinfo = new OLECRINFO[1];
 
-				crinfo[0].cbSize   = (uint)Marshal.SizeOf(typeof(OLECRINFO));
-				crinfo[0].grfcrf   = (uint)_OLECRF.olecrfNeedIdleTime | (uint)_OLECRF.olecrfNeedPeriodicIdleTime;
+				crinfo[0].cbSize = (uint)Marshal.SizeOf(typeof(OLECRINFO));
+				crinfo[0].grfcrf = (uint)_OLECRF.olecrfNeedIdleTime | (uint)_OLECRF.olecrfNeedPeriodicIdleTime;
 				crinfo[0].grfcadvf = (uint)
 					(_OLECADVF.olecadvfModal | _OLECADVF.olecadvfRedrawOff | _OLECADVF.olecadvfWarningsOff);
 				crinfo[0].uIdleTimeInterval = 1000;
@@ -404,11 +404,11 @@ namespace Nemerle.VisualStudio
 		internal void OnSourceOutlinerWindowShow(object sender, EventArgs e)
 		{
 			ToolWindowPane window = FindToolWindow(typeof(SourceOutlinerToolWindow), 0, true);
-			if(window == null || window.Frame == null)
+			if (window == null || window.Frame == null)
 				throw new COMException(Resources.CannotCreateWindow);
 
 			_sourceOutlinerToolWindow = (SourceOutlinerToolWindow)window;
-	
+
 			IVsWindowFrame windowFrame = (IVsWindowFrame)window.Frame;
 			ErrorHandler.ThrowOnFailure(windowFrame.Show());
 		}
@@ -426,7 +426,7 @@ namespace Nemerle.VisualStudio
 			int hr = VSConstants.S_OK;
 
 			IVsUIShell VsUiShell = GetService(typeof(SVsUIShell)) as IVsUIShell;
-			if(VsUiShell != null)
+			if (VsUiShell != null)
 			{
 				// There is no check for return code because 
 				// any failure of this call is ignored.
@@ -501,7 +501,7 @@ namespace Nemerle.VisualStudio
 		{
 			try
 			{
-        _mySolutionListener.Dispose();
+				_mySolutionListener.Dispose();
 
 				if (_componentID != 0)
 				{
@@ -522,15 +522,15 @@ namespace Nemerle.VisualStudio
 				base.Dispose(disposing);
 			}
 		}
-		
+
 		#endregion
 
 		#region Overrides
 
-    public override string ProductUserContext
-    {
-      get { return "Nemerle"; }
-    }
+		public override string ProductUserContext
+		{
+			get { return "Nemerle"; }
+		}
 
 		protected override int QueryClose(out bool canClose)
 		{
@@ -541,7 +541,7 @@ namespace Nemerle.VisualStudio
 				Settings.Default.Save();
 			}
 
-			return  res;
+			return res;
 		}
 
 		#endregion
@@ -565,19 +565,19 @@ namespace Nemerle.VisualStudio
 			if (_libraryManager != null)
 				_libraryManager.OnIdle();
 
-			if(_sourceOutlinerToolWindow != null)
+			if (_sourceOutlinerToolWindow != null)
 				_sourceOutlinerToolWindow.OnIdle();
 
 			return 0;
 		}
 
-		public int  FPreTranslateMessage(MSG[] pMsg)                        { return 0; }
-		public int  FQueryTerminate     (int fPromptUser)                   { return 1; }
+		public int FPreTranslateMessage(MSG[] pMsg) { return 0; }
+		public int FQueryTerminate(int fPromptUser) { return 1; }
 
-		public void OnAppActivate       (int fActive, uint dwOtherThreadID) {}
-		public void OnEnterState        (uint uStateID, int fEnter)         {}
-		public void OnLoseActivation    () {}
-		public void Terminate           () {}
+		public void OnAppActivate(int fActive, uint dwOtherThreadID) { }
+		public void OnEnterState(uint uStateID, int fEnter) { }
+		public void OnLoseActivation() { }
+		public void Terminate() { }
 
 		public int FReserved1(uint dwReserved, uint message, IntPtr wParam, IntPtr lParam)
 		{
@@ -590,12 +590,12 @@ namespace Nemerle.VisualStudio
 		}
 
 		public void OnActivationChange(
-			IOleComponent  pic,
-			int            fSameComponent,
-			OLECRINFO[]    pcrinfo,
-			int            fHostIsActivating, 
+			IOleComponent pic,
+			int fSameComponent,
+			OLECRINFO[] pcrinfo,
+			int fHostIsActivating,
 			OLECHOSTINFO[] pchostinfo,
-			uint           dwReserved)
+			uint dwReserved)
 		{
 		}
 

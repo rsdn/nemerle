@@ -39,8 +39,8 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 		string _defaultNamespace;
 		string _startupObject;
 		string _applicationIcon;
-    //FIXME: Надо разобраться с платформами. Н1 все равно пока что не поддерживает смену платформы.
-    //MSP.PlatformType _targetPlatform = MSP.PlatformType.v2;
+		//FIXME: Надо разобраться с платформами. Н1 все равно пока что не поддерживает смену платформы.
+		//MSP.PlatformType _targetPlatform = MSP.PlatformType.v2;
 		//string _targetPlatformLocation;
 
 		#endregion
@@ -88,22 +88,22 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 			_startupObject = GetPropertyValue(Consts.StartupObject);
 			_applicationIcon = GetPropertyValue(Consts.ApplicationIcon);
 
-      //FIXME: Надо разобраться с платформами. Н1 все равно пока что не поддерживает смену платформы.
-      //string targetPlatform = GetPropertyValue(Consts.TargetPlatform);
+			//FIXME: Надо разобраться с платформами. Н1 все равно пока что не поддерживает смену платформы.
+			//string targetPlatform = GetPropertyValue(Consts.TargetPlatform);
 
-      //if (targetPlatform != null && targetPlatform.Length > 0)
-      //{
-      //  try
-      //  {
-      //    _targetPlatform =
-      //      (MSP.PlatformType)Enum.Parse(typeof(MSP.PlatformType), targetPlatform);
-      //  }
-      //  catch
-      //  {
-      //  }
-      //}
+			//if (targetPlatform != null && targetPlatform.Length > 0)
+			//{
+			//  try
+			//  {
+			//    _targetPlatform =
+			//      (MSP.PlatformType)Enum.Parse(typeof(MSP.PlatformType), targetPlatform);
+			//  }
+			//  catch
+			//  {
+			//  }
+			//}
 
-      //_targetPlatformLocation = GetPropertyValue(Consts.TargetPlatformLocation);
+			//_targetPlatformLocation = GetPropertyValue(Consts.TargetPlatformLocation);
 		}
 
 		protected override int ApplyChanges()
@@ -114,13 +114,13 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 				return VSConstants.E_INVALIDARG;
 			}
 
-			SetPropertyValue(Consts.AssemblyName,           _assemblyName);
-			SetPropertyValue(Consts.OutputType,             _outputType.ToString());
-			SetPropertyValue(Consts.RootNamespace,          _defaultNamespace);
-			SetPropertyValue(Consts.StartupObject,          _startupObject);
-			SetPropertyValue(Consts.ApplicationIcon,        _applicationIcon);
-      //FIXME: Надо разобраться с платформами. Н1 все равно пока что не поддерживает смену платформы.
-      //SetPropertyValue(Consts.TargetPlatform,         _targetPlatform.ToString());
+			SetPropertyValue(Consts.AssemblyName, _assemblyName);
+			SetPropertyValue(Consts.OutputType, _outputType.ToString());
+			SetPropertyValue(Consts.RootNamespace, _defaultNamespace);
+			SetPropertyValue(Consts.StartupObject, _startupObject);
+			SetPropertyValue(Consts.ApplicationIcon, _applicationIcon);
+			//FIXME: Надо разобраться с платформами. Н1 все равно пока что не поддерживает смену платформы.
+			//SetPropertyValue(Consts.TargetPlatform,         _targetPlatform.ToString());
 			//SetPropertyValue(Consts.TargetPlatformLocation, _targetPlatformLocation);
 
 			IsDirty = false;
@@ -206,26 +206,26 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 			get { return Evaluate(_assemblyName) + NemerleProjectNode.GetOutputExtension(_outputType); }
 		}
 
-    //FIXME: Надо разобраться с платформами. Н1 все равно пока что не поддерживает смену платформы.
-    //[SRCategoryAttribute(SR.Project)]
-    //[SRDisplayName(SR.TargetPlatform)]
-    //[SRDescriptionAttribute(SR.TargetPlatformDescription)]
-    //[MSP.AutomationBrowsable(false)]
-    //public MSP.PlatformType TargetPlatform
-    //{
-    //  get { return _targetPlatform; }
-    //  set { _targetPlatform = value; IsDirty = true; }
-    //}
+		//FIXME: Надо разобраться с платформами. Н1 все равно пока что не поддерживает смену платформы.
+		//[SRCategoryAttribute(SR.Project)]
+		//[SRDisplayName(SR.TargetPlatform)]
+		//[SRDescriptionAttribute(SR.TargetPlatformDescription)]
+		//[MSP.AutomationBrowsable(false)]
+		//public MSP.PlatformType TargetPlatform
+		//{
+		//  get { return _targetPlatform; }
+		//  set { _targetPlatform = value; IsDirty = true; }
+		//}
 
-    //[SRCategoryAttribute(SR.Project)]
-    //[SRDisplayName(SR.TargetPlatformLocation)]
-    //[SRDescriptionAttribute(SR.TargetPlatformLocationDescription)]
-    //[MSP.AutomationBrowsable(false)]
-    //public string TargetPlatformLocation
-    //{
-    //  get { return _targetPlatformLocation; }
-    //  set { _targetPlatformLocation = value; IsDirty = true; }
-    //}
+		//[SRCategoryAttribute(SR.Project)]
+		//[SRDisplayName(SR.TargetPlatformLocation)]
+		//[SRDescriptionAttribute(SR.TargetPlatformLocationDescription)]
+		//[MSP.AutomationBrowsable(false)]
+		//public string TargetPlatformLocation
+		//{
+		//  get { return _targetPlatformLocation; }
+		//  set { _targetPlatformLocation = value; IsDirty = true; }
+		//}
 
 		#endregion
 

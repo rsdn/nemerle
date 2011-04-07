@@ -20,7 +20,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			var markerRef = new IVsTextLineMarker[1];
 
-			var hr = buffer.CreateLineMarker((int)MARKERTYPE2.MARKER_SMARTTAG_FACTOID, 
+			var hr = buffer.CreateLineMarker((int)MARKERTYPE2.MARKER_SMARTTAG_FACTOID,
 				loc.Line - 1, loc.Column - 1, loc.EndLine - 1, loc.EndColumn - 1, this, markerRef);
 
 			Debug.Assert(hr == 0);
@@ -32,7 +32,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				uint i;
 				TextLineMarker.GetVisualStyle(out i);
 				//TextLineMarker.SetVisualStyle((uint)MARKERVISUAL.MV_SEL_MARGIN_GLYPH);
-        Debug.Assert(true);
+				Debug.Assert(true);
 			}
 		}
 
@@ -68,7 +68,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		int IVsTextMarkerClient.GetTipText(IVsTextMarker pMarker, string[] tipText)
 		{
 			//if (Text != null && Text.Length > 0)
-				tipText[0] = "test";//Text;
+			tipText[0] = "test";//Text;
 
 			return VSConstants.S_OK;
 		}
@@ -77,16 +77,16 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			if (TextLineMarker != null)
 			{
-        TextLineMarker.Invalidate();
+				TextLineMarker.Invalidate();
 				TextLineMarker.UnadviseClient();
 				TextLineMarker = null;
 			}
 		}
 
 		void IVsTextMarkerClient.MarkerInvalidated()
-    {
-      //DisposeTextLineMarker();
-    }
+		{
+			//DisposeTextLineMarker();
+		}
 
 		int IVsTextMarkerClient.OnAfterMarkerChange(IVsTextMarker pMarker)
 		{

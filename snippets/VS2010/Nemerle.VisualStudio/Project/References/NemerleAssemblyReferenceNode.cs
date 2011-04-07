@@ -47,20 +47,20 @@ namespace Nemerle.VisualStudio.Project
 				guid = this.ItemTypeGuid;
 				return VSConstants.S_OK;
 			}
-      
+
 			return base.GetGuidProperty(propid, out guid);
 		}
 
-    protected override void BindReferenceData()
-    {
-      base.BindReferenceData();
+		protected override void BindReferenceData()
+		{
+			base.BindReferenceData();
 
 			string path = null;
-      var fullFilePath = Path.GetFullPath(Url);
+			var fullFilePath = Path.GetFullPath(Url);
 			// Пробуем определить не является ли путь путем указанным в переменной среды окружения Nemerle...
 			var dir = Path.GetFullPath(Path.GetDirectoryName(fullFilePath));
 			var envVar = Environment.GetEnvironmentVariable("Nemerle");
-			
+
 			if (!string.IsNullOrEmpty(envVar))
 			{
 				envVar = Path.GetFullPath(envVar);
@@ -77,9 +77,9 @@ namespace Nemerle.VisualStudio.Project
 				path = Utils.GetRelativePath(fullProjectPath, fullFilePath);
 			}
 
-      // Set a default HintPath for msbuild to be able to resolve the reference.
+			// Set a default HintPath for msbuild to be able to resolve the reference.
 			ItemNode.SetMetadata(ProjectFileConstants.HintPath, path);
-    }
+		}
 
 		public override string ToString()
 		{

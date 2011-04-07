@@ -24,97 +24,97 @@ namespace Nemerle.VisualStudio.Project
 		{
 		}
 
-    public NemerleMacroProjectReferenceNode(ProjectNode root, string referencedProjectName, string projectPath, string projectReference)
+		public NemerleMacroProjectReferenceNode(ProjectNode root, string referencedProjectName, string projectPath, string projectReference)
 			: base(root, referencedProjectName, projectPath, projectReference)
 		{
 		}
 
 		#endregion
 
-    protected override NodeProperties CreatePropertiesObject()
-    {
-      return new NemerleProjectReferencesProperties(this, "Macro Project Reference Properties");
-    }
+		protected override NodeProperties CreatePropertiesObject()
+		{
+			return new NemerleProjectReferencesProperties(this, "Macro Project Reference Properties");
+		}
 
-    /// <summary>
-    /// Links a reference node to the project file.
-    /// </summary>
-    protected override void BindReferenceData()
-    {
-      base.BindReferenceData();
-      this.ItemNode.ItemName = NemerleConstants.MacroProjectReference;
-      // Предотвращаем копирование макро-сборки в каталог собираемого проекта
-      ItemNode.SetMetadata(ProjectFileConstants.Private, "False");
-    }
+		/// <summary>
+		/// Links a reference node to the project file.
+		/// </summary>
+		protected override void BindReferenceData()
+		{
+			base.BindReferenceData();
+			this.ItemNode.ItemName = NemerleConstants.MacroProjectReference;
+			// Предотвращаем копирование макро-сборки в каталог собираемого проекта
+			ItemNode.SetMetadata(ProjectFileConstants.Private, "False");
+		}
 
-    void VerifyMacroAssembly()
-    {
-      var path = ProjectInfo.GetAssemblyReferencesString(this);
+		void VerifyMacroAssembly()
+		{
+			var path = ProjectInfo.GetAssemblyReferencesString(this);
 
-      if (!File.Exists(path))
-      {
-        //var message = "A macro project reference can't be verified as the project has not been compiled yet.";
-        //OLEMSGICON icon = OLEMSGICON.OLEMSGICON_QUERY;
-        //OLEMSGBUTTON buttons = OLEMSGBUTTON.OLEMSGBUTTON_YESNO;
-        //OLEMSGDEFBUTTON defaultButton = OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_SECOND;
-        //var res = VsShellUtilities.ShowMessageBox(ProjectMgr.Site,
-        //  message, NemerleConstants.ProductName, icon, buttons, defaultButton);
+			if (!File.Exists(path))
+			{
+				//var message = "A macro project reference can't be verified as the project has not been compiled yet.";
+				//OLEMSGICON icon = OLEMSGICON.OLEMSGICON_QUERY;
+				//OLEMSGBUTTON buttons = OLEMSGBUTTON.OLEMSGBUTTON_YESNO;
+				//OLEMSGDEFBUTTON defaultButton = OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_SECOND;
+				//var res = VsShellUtilities.ShowMessageBox(ProjectMgr.Site,
+				//  message, NemerleConstants.ProductName, icon, buttons, defaultButton);
 
-        //if (res == VSConstants.S_OK)
-        //  return;
-        
-        //throw new FileNotFoundException("Macro assembly not found", path);
-        return;
-      }
+				//if (res == VSConstants.S_OK)
+				//  return;
 
-      var assembly  = Assembly.Load(File.ReadAllBytes(path));
-      var macroDefs = assembly.GetCustomAttributes(false).Where(t => t.GetType().FullName == "Nemerle.Internal.ContainsMacroAttribute");
+				//throw new FileNotFoundException("Macro assembly not found", path);
+				return;
+			}
 
-      if (macroDefs.Count() == 0)
-      {
-        var operDefs = assembly.GetCustomAttributes(false).Where(t => t.GetType().FullName == "Nemerle.Internal.OperatorAttribute");
+			var assembly = Assembly.Load(File.ReadAllBytes(path));
+			var macroDefs = assembly.GetCustomAttributes(false).Where(t => t.GetType().FullName == "Nemerle.Internal.ContainsMacroAttribute");
 
-        if (operDefs.Count() == 0)
-          throw new InvalidOperationException("This assembly not contains macros.");
-      }
-    }
+			if (macroDefs.Count() == 0)
+			{
+				var operDefs = assembly.GetCustomAttributes(false).Where(t => t.GetType().FullName == "Nemerle.Internal.OperatorAttribute");
 
-    /// <summary>
-    /// Links a reference node to the project and hierarchy.
-    /// </summary>
-    public override void AddReference()
-    {
-      if (this.ProjectMgr == null)
-        return;
+				if (operDefs.Count() == 0)
+					throw new InvalidOperationException("This assembly not contains macros.");
+			}
+		}
 
-      VerifyMacroAssembly();
+		/// <summary>
+		/// Links a reference node to the project and hierarchy.
+		/// </summary>
+		public override void AddReference()
+		{
+			if (this.ProjectMgr == null)
+				return;
 
-      ReferenceContainerNode referencesFolder = (ReferenceContainerNode)((NemerleProjectNode)this.ProjectMgr).GetMacroReferenceContainer();
-      Debug.Assert(referencesFolder != null, "Could not find the References node");
+			VerifyMacroAssembly();
 
-      CannotAddReferenceErrorMessage referenceErrorMessageHandler = null;
+			ReferenceContainerNode referencesFolder = (ReferenceContainerNode)((NemerleProjectNode)this.ProjectMgr).GetMacroReferenceContainer();
+			Debug.Assert(referencesFolder != null, "Could not find the References node");
 
-      if (!this.CanAddReference(out referenceErrorMessageHandler))
-      {
-        if (referenceErrorMessageHandler != null)
-          referenceErrorMessageHandler.DynamicInvoke(new object[] { });
+			CannotAddReferenceErrorMessage referenceErrorMessageHandler = null;
 
-        return;
-      }
+			if (!this.CanAddReference(out referenceErrorMessageHandler))
+			{
+				if (referenceErrorMessageHandler != null)
+					referenceErrorMessageHandler.DynamicInvoke(new object[] { });
 
-      // Link the node to the project file.
-      this.BindReferenceData();
+				return;
+			}
 
-      // At this point force the item to be refreshed
-      this.ItemNode.RefreshProperties();
+			// Link the node to the project file.
+			this.BindReferenceData();
 
-      referencesFolder.AddChild(this);
+			// At this point force the item to be refreshed
+			this.ItemNode.RefreshProperties();
+
+			referencesFolder.AddChild(this);
 
 			this.ProjectMgr.AddBuildDependency(this.buildDependency);
 
-      return;
-    }
-	
+			return;
+		}
+
 		public override object GetIconHandle(bool open)
 		{
 			//TODO: Shou special icon

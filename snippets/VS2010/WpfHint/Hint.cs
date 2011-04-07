@@ -47,7 +47,7 @@ namespace WpfHint
 			set
 			{
 				_text = value;
-				
+
 				if (_hintWindow == null)
 					return;
 
@@ -65,13 +65,13 @@ namespace WpfHint
 			if (_hintWindow != null)
 				_hintWindow.Close();
 
-      Debug.WriteLine("Close()");
+			Debug.WriteLine("Close()");
 		}
 
 		public void Show(IntPtr owner, Rect placementRect, Func<string, string> getHintContent, string text)
 		{
-			PlacementRect   = placementRect;
-			Text            = text;
+			PlacementRect = placementRect;
+			Text = text;
 			_getHintContent = getHintContent;
 
 			try
@@ -85,8 +85,8 @@ namespace WpfHint
 
 		private void Show(IntPtr owner)
 		{
-      if (InputManager.Current.IsInMenuMode)
-        return;
+			if (InputManager.Current.IsInMenuMode)
+				return;
 
 			if (_hintWindow != null)
 				throw new NotSupportedException("Hint already shown");
@@ -99,11 +99,11 @@ namespace WpfHint
 			// create hint window
 			var ht = HintRoot.Create(PlacementRect, _hintSource);
 			_hintWindow = new HintWindow(this, ht) { Text = _text };
-      _hintSource.HintWindow = _hintWindow;
+			_hintSource.HintWindow = _hintWindow;
 			//new WindowInteropHelper(_hintWindow) { Owner = _hintSource.Owner };
 			_hintWindow.Closed += HintWindowClosed;
 			_hintWindow.MaxHeight = 1200.0;//System.Windows.Forms.Screen.FromRectangle(PlacementRect).WorkingArea.
-      _wrapWidth = 1200.0;
+			_wrapWidth = 1200.0;
 
 			_hintWindow.WrapWidth = _wrapWidth;
 			_hintWindow.Show();
@@ -132,7 +132,7 @@ namespace WpfHint
 
 			return key;
 		}
-		
+
 		internal void RaiseClick(string handler)
 		{
 			if (Click != null)

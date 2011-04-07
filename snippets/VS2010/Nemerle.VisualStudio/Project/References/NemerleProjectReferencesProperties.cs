@@ -8,19 +8,20 @@ using System.ComponentModel;
 
 namespace Nemerle.VisualStudio.Project
 {
-  [CLSCompliant(false), ComVisible(true)]
-  public class NemerleProjectReferencesProperties : ReferenceNodeProperties
-  {
-    string _className;
+	[CLSCompliant(false), ComVisible(true)]
+	public class NemerleProjectReferencesProperties : ReferenceNodeProperties
+	{
+		string _className;
 
 		#region ctors
 
-    public NemerleProjectReferencesProperties(HierarchyNode node, string className) : base(node)
-    {
-      _className = className + "!";
-    }
-		
-    #endregion
+		public NemerleProjectReferencesProperties(HierarchyNode node, string className)
+			: base(node)
+		{
+			_className = className + "!";
+		}
+
+		#endregion
 
 		#region overriden
 
@@ -37,21 +38,21 @@ namespace Nemerle.VisualStudio.Project
 				return value;
 			}
 		}
-		
-    public override string FullPath
+
+		public override string FullPath
 		{
 			get
 			{
-        var path = ((NemerleProjectReferenceNode)Node).ReferencedProjectOutputPath;
-        return path == null ? "<can't resolve path>" : path;
+				var path = ((NemerleProjectReferenceNode)Node).ReferencedProjectOutputPath;
+				return path == null ? "<can't resolve path>" : path;
 			}
 		}
 
-    public override string GetClassName()
-    {
-      return _className;
-    }
+		public override string GetClassName()
+		{
+			return _className;
+		}
 
 		#endregion
-  }
+	}
 }

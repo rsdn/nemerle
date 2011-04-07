@@ -13,7 +13,7 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 		protected string GetPropertyValue(string propertyName)
 		{
 			var prop = ProjectMgr.BuildProject.GetPropertyValue(propertyName);
-			
+
 			if (prop == null)
 				return "";
 
@@ -35,14 +35,14 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 		/// <param name="value">Value whith $(...) splaces.</param>
 		protected string Evaluate(string value)
 		{
-      var res = ProjectMgr.BuildProject.ExpandString(value);
-      return res;
-      //var props = ProjectMgr.BuildProject.EvaluatedProperties;
-      //var res = _replaceVarsRx.Replace(value, match => {
-      //  var prop = props[match.Groups[1].Value];
-      //  return prop == null ? "" : prop.FinalValue;
-      //});
-      //return res;
+			var res = ProjectMgr.BuildProject.ExpandString(value);
+			return res;
+			//var props = ProjectMgr.BuildProject.EvaluatedProperties;
+			//var res = _replaceVarsRx.Replace(value, match => {
+			//  var prop = props[match.Groups[1].Value];
+			//  return prop == null ? "" : prop.FinalValue;
+			//});
+			//return res;
 		}
 
 		#endregion

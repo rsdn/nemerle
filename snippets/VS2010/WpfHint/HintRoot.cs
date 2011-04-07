@@ -8,7 +8,7 @@ namespace WpfHint
 	internal abstract class HintRoot : IDisposable
 	{
 		public event Action MouseLeave;
-		public          Rect ActiveRect  { get; protected set; }
+		public Rect ActiveRect { get; protected set; }
 		public abstract bool IsMouseOver { get; }
 
 		protected void RaiseEvent()
@@ -59,7 +59,7 @@ namespace WpfHint
 			{
 				if (ReferenceEquals(null, other))
 					return false;
-				
+
 				if (ReferenceEquals(this, other))
 					return true;
 
@@ -111,8 +111,8 @@ namespace WpfHint
 			private void OnMouse()
 			{
 				if (!IsMouseOver) RaiseEvent();
-        Debug.WriteLine("OnMouse()");
-      }
+				Debug.WriteLine("OnMouse()");
+			}
 
 			public override bool IsMouseOver
 			{

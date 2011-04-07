@@ -115,83 +115,83 @@ namespace Microsoft.VisualStudio.Project
 			get { return this.referencedProjectName; }
 		}
 
-    private EnvDTE.Property GetProperty(EnvDTE.Project project, string propertyName)
-    {
-      EnvDTE.Property result = null;
-      try
-      {
-        if (project.Properties == null)
-          return null;
+		private EnvDTE.Property GetProperty(EnvDTE.Project project, string propertyName)
+		{
+			EnvDTE.Property result = null;
+			try
+			{
+				if (project.Properties == null)
+					return null;
 
-        result = project.Properties.Item(propertyName);
-      }
-      catch { }
-      return result;
-    }
+				result = project.Properties.Item(propertyName);
+			}
+			catch { }
+			return result;
+		}
 
-    private EnvDTE.Project FindProjectByPath(IEnumerable<EnvDTE.Project> projects)
-    {
-      foreach(EnvDTE.Project prj in projects)
+		private EnvDTE.Project FindProjectByPath(IEnumerable<EnvDTE.Project> projects)
+		{
+			foreach (EnvDTE.Project prj in projects)
 			{
 				//Skip this project if it is an umodeled project (unloaded)
-				if(string.Compare(EnvDTE.Constants.vsProjectKindUnmodeled, prj.Kind, StringComparison.OrdinalIgnoreCase) == 0)
+				if (string.Compare(EnvDTE.Constants.vsProjectKindUnmodeled, prj.Kind, StringComparison.OrdinalIgnoreCase) == 0)
 					continue;
-		
-        //SolutionFolder
 
-        if (string.Compare(EnvDTE.Constants.vsProjectKindSolutionItems, prj.Kind, StringComparison.OrdinalIgnoreCase) == 0)
-        {
-          var subProjects = new List<EnvDTE.Project>();
+				//SolutionFolder
 
-          foreach (EnvDTE.ProjectItem item in prj.ProjectItems)
-          {
-            try
-            {
-              EnvDTE.Project subProject = item.SubProject as EnvDTE.Project;
+				if (string.Compare(EnvDTE.Constants.vsProjectKindSolutionItems, prj.Kind, StringComparison.OrdinalIgnoreCase) == 0)
+				{
+					var subProjects = new List<EnvDTE.Project>();
 
-              if (subProject != null)
-                subProjects.Add(subProject);
-            }
-            catch { }
-          }
+					foreach (EnvDTE.ProjectItem item in prj.ProjectItems)
+					{
+						try
+						{
+							EnvDTE.Project subProject = item.SubProject as EnvDTE.Project;
 
-          if (subProjects.Count > 0)
-          {
-            var result = FindProjectByPath(subProjects);
+							if (subProject != null)
+								subProjects.Add(subProject);
+						}
+						catch { }
+					}
 
-            if (result != null)
-              return result;
-          }
-        }
+					if (subProjects.Count > 0)
+					{
+						var result = FindProjectByPath(subProjects);
 
-        // Get the full path of the current project.
-        EnvDTE.Property pathProperty = GetProperty(prj, "FullPath");
+						if (result != null)
+							return result;
+					}
+				}
 
-        if (pathProperty == null)
-          // The full path should alway be availabe, but if this is not the
-          // case then we have to skip it.
-          continue;
+				// Get the full path of the current project.
+				EnvDTE.Property pathProperty = GetProperty(prj, "FullPath");
 
-        string prjPath = pathProperty.Value.ToString();
-				
-	
-        // Get the name of the project file.
-        EnvDTE.Property fileNameProperty = GetProperty(prj, "FileName");
+				if (pathProperty == null)
+					// The full path should alway be availabe, but if this is not the
+					// case then we have to skip it.
+					continue;
 
-        if (fileNameProperty == null)
+				string prjPath = pathProperty.Value.ToString();
+
+
+				// Get the name of the project file.
+				EnvDTE.Property fileNameProperty = GetProperty(prj, "FileName");
+
+				if (fileNameProperty == null)
 					// Again, this should never be the case, but we handle it anyway.
 					continue;
 
-        prjPath = System.IO.Path.Combine(prjPath, fileNameProperty.Value.ToString());
+				prjPath = System.IO.Path.Combine(prjPath, fileNameProperty.Value.ToString());
 
 				// If the full path of this project is the same as the one of this
 				// reference, then we have found the right project.
-				if(NativeMethods.IsSamePath(prjPath, referencedProjectFullPath))
+				if (NativeMethods.IsSamePath(prjPath, referencedProjectFullPath))
 					return prj;
 			}
 
-      return null;
-    }
+			return null;
+		}
 
 		/// <summary>
 		/// Gets the automation object for the referenced project.
@@ -201,17 +201,17 @@ namespace Microsoft.VisualStudio.Project
 			get
 			{
 				// If the referenced project is null then re-read.
-				if(this.referencedProject == null)
+				if (this.referencedProject == null)
 				{
 					// Search for the project in the collection of the projects in the
 					// current solution.
 					EnvDTE.DTE dte = (EnvDTE.DTE)this.ProjectMgr.GetService(typeof(EnvDTE.DTE));
-					
-          if(null == dte || null == dte.Solution)
+
+					if (null == dte || null == dte.Solution)
 						return null;
 
-          this.referencedProject = FindProjectByPath(dte.Solution.Projects.OfType<EnvDTE.Project>());
-        }
+					this.referencedProject = FindProjectByPath(dte.Solution.Projects.OfType<EnvDTE.Project>());
+				}
 
 				return this.referencedProject;
 			}
@@ -284,7 +284,7 @@ namespace Microsoft.VisualStudio.Project
 		{
 			get
 			{
-				if(null == projectReference)
+				if (null == projectReference)
 				{
 					projectReference = new Automation.OAProjectReference(this);
 				}
@@ -325,7 +325,7 @@ namespace Microsoft.VisualStudio.Project
 
 			Uri uri = new Uri(this.ProjectMgr.BaseURI.Uri, this.referencedProjectRelativePath);
 
-			if(uri != null)
+			if (uri != null)
 			{
 				this.referencedProjectFullPath = Microsoft.VisualStudio.Shell.Url.Unescape(uri.LocalPath, true);
 			}
@@ -347,16 +347,16 @@ namespace Microsoft.VisualStudio.Project
 			string fileName = String.Empty;
 
 			// Unfortunately we cannot use the path part of the projectReference string since it is not resolving correctly relative pathes.
-			if(indexOfSeparator != -1)
+			if (indexOfSeparator != -1)
 			{
 				string projectGuid = projectReference.Substring(0, indexOfSeparator);
 				this.referencedProjectGuid = new Guid(projectGuid);
-				if(indexOfSeparator + 1 < projectReference.Length)
+				if (indexOfSeparator + 1 < projectReference.Length)
 				{
 					string remaining = projectReference.Substring(indexOfSeparator + 1);
 					indexOfSeparator = remaining.IndexOf('|');
 
-					if(indexOfSeparator == -1)
+					if (indexOfSeparator == -1)
 					{
 						fileName = remaining;
 					}
@@ -397,7 +397,7 @@ namespace Microsoft.VisualStudio.Project
 		/// </summary>
 		public override void AddReference()
 		{
-			if(this.ProjectMgr == null)
+			if (this.ProjectMgr == null)
 			{
 				return;
 			}
@@ -411,7 +411,7 @@ namespace Microsoft.VisualStudio.Project
 		/// </summary>
 		public override void Remove(bool removeFromStorage)
 		{
-			if(this.ProjectMgr == null || !this.CanRemoveReference)
+			if (this.ProjectMgr == null || !this.CanRemoveReference)
 			{
 				return;
 			}
@@ -441,7 +441,7 @@ namespace Microsoft.VisualStudio.Project
 		/// <returns></returns>
 		protected override bool CanShowDefaultIcon()
 		{
-			if(this.referencedProjectGuid == Guid.Empty || this.ProjectMgr == null || this.ProjectMgr.IsClosed || this.isNodeValid)
+			if (this.referencedProjectGuid == Guid.Empty || this.ProjectMgr == null || this.ProjectMgr.IsClosed || this.isNodeValid)
 			{
 				return false;
 			}
@@ -450,13 +450,13 @@ namespace Microsoft.VisualStudio.Project
 
 			hierarchy = VsShellUtilities.GetHierarchy(this.ProjectMgr.Site, this.referencedProjectGuid);
 
-			if(hierarchy == null)
+			if (hierarchy == null)
 			{
 				return false;
 			}
 
 			//If the Project is unloaded return false
-			if(this.ReferencedProjectObject == null)
+			if (this.ReferencedProjectObject == null)
 			{
 				return false;
 			}
@@ -472,13 +472,13 @@ namespace Microsoft.VisualStudio.Project
 		protected override bool CanAddReference(out CannotAddReferenceErrorMessage errorHandler)
 		{
 			// When this method is called this refererence has not yet been added to the hierarchy, only instantiated.
-			if(!base.CanAddReference(out errorHandler))
+			if (!base.CanAddReference(out errorHandler))
 			{
 				return false;
 			}
 
 			errorHandler = null;
-			if(this.IsThisProjectReferenceInCycle())
+			if (this.IsThisProjectReferenceInCycle())
 			{
 				errorHandler = new CannotAddReferenceErrorMessage(ShowCircularReferenceErrorMessage);
 				return false;
@@ -510,23 +510,23 @@ namespace Microsoft.VisualStudio.Project
 			IVsHierarchy hierarchy = VsShellUtilities.GetHierarchy(this.ProjectMgr.Site, projectGuid);
 
 			IReferenceContainerProvider provider = hierarchy as IReferenceContainerProvider;
-			if(provider != null)
+			if (provider != null)
 			{
 				IReferenceContainer referenceContainer = provider.GetReferenceContainer();
 
 				Debug.Assert(referenceContainer != null, "Could not found the References virtual node");
 
-				foreach(ReferenceNode refNode in referenceContainer.EnumReferences())
+				foreach (ReferenceNode refNode in referenceContainer.EnumReferences())
 				{
 					ProjectReferenceNode projRefNode = refNode as ProjectReferenceNode;
-					if(projRefNode != null)
+					if (projRefNode != null)
 					{
-						if(projRefNode.ReferencedProjectGuid == this.ProjectMgr.ProjectIDGuid)
+						if (projRefNode.ReferencedProjectGuid == this.ProjectMgr.ProjectIDGuid)
 						{
 							return true;
 						}
 
-						if(this.IsReferenceInCycle(projRefNode.ReferencedProjectGuid))
+						if (this.IsReferenceInCycle(projRefNode.ReferencedProjectGuid))
 						{
 							return true;
 						}

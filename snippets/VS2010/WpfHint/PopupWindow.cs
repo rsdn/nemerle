@@ -25,7 +25,7 @@ namespace WpfHint
 		{
 			var source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
 			if (source != null)
-        source.AddHook(WndProc);
+				source.AddHook(WndProc);
 		}
 
 		// Prevent activation of window

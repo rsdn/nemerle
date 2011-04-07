@@ -45,8 +45,8 @@ namespace WpfHint.UIBuilding
 
 		public static void AddMouseHoverHandler(DependencyObject d, RoutedEventHandler handler)
 		{
-      var element = d as UIElement;
-      if (element != null) element.AddHandler(MouseHoverEvent, handler);
+			var element = d as UIElement;
+			if (element != null) element.AddHandler(MouseHoverEvent, handler);
 		}
 
 		public static void RemoveMouseHoverHandler(DependencyObject d, RoutedEventHandler handler)
@@ -70,15 +70,15 @@ namespace WpfHint.UIBuilding
 		public HintControl(string hintKey, Func<string, string> hintTextLookup, string handler)
 		{
 			HintTextLookup = hintTextLookup;
-			_hintKey       = hintKey;
-			Handler        = handler;
+			_hintKey = hintKey;
+			Handler = handler;
 
 			MouseEnter += delegate { RaiseEvent(new RoutedEventArgs(MouseHoverEvent)); };
 
 			if (handler != null)
 			{
 				var hLink = new Hyperlink { Focusable = false };
-				hLink.Click += 
+				hLink.Click +=
 					delegate
 					{
 						RaiseEvent(new RoutedEventArgs(ClickEvent));
