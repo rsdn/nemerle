@@ -25,6 +25,7 @@ using Microsoft.VisualStudio.Shell;
 using System.ComponentModel.Design;
 using System.Runtime.InteropServices;
 using Nemerle.VisualStudio;
+using Microsoft.VisualStudio.Language.Intellisense;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
@@ -267,8 +268,22 @@ namespace Nemerle.VisualStudio.LanguageService
 			const uint ShowSmartTag = 147;
 			if (guidCmdGroup == VSConstants.VSStd2K && nCmdId == ShowSmartTag)
 			{
-				//Source.ShowTypeNameSmartTag(TextView, true);
-				return VSConstants.S_OK;
+        var textView = TextView.ToITextView();
+        var smartTagBroker = textView.GetSmartTagBroker();
+
+        foreach (var session in smartTagBroker.GetSessions(textView))
+        {
+          var span = session.ApplicableToSpan.GetSpan(textView.TextSnapshot);
+
+          if (span.Contains(textView.Caret.Position.BufferPosition.Position))
+          {
+            session.State = SmartTagState.Expanded;
+            return VSConstants.S_OK;
+          }
+        }
+
+        //if (smartTagBroker != null && smartTagBroker.IsSmartTagActive(textView))
+        return VSConstants.S_OK;
 			}
 
 			// hi_octane : found a lot of mistakes comparing the switch

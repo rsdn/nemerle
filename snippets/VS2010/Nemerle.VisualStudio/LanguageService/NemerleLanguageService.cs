@@ -749,24 +749,19 @@ namespace Nemerle.VisualStudio.LanguageService
     private static bool IsIntersectedWithSmartTag(IVsTextView view, Rect rect)
     {
       var textView = view.ToITextView();
+      var smartTagBroker = textView.GetSmartTagBroker();
 
-      Microsoft.VisualStudio.Language.Intellisense.ISmartTagBroker tag = null;
-
-      // The ISmartTagBroker property added in NemerleImplementsSmartTaggerProvider
-      if (textView.Properties.TryGetProperty<ISmartTagBroker>(typeof(ISmartTagBroker), out tag))
+      if (smartTagBroker != null && smartTagBroker.IsSmartTagActive(textView))
       {
-        if (tag.IsSmartTagActive(textView))
+        foreach (ISmartTagSession s in smartTagBroker.GetSessions(textView))
         {
-          foreach (ISmartTagSession s in tag.GetSessions(textView))
-          {
-            var wpfTextView             = (IWpfTextView)textView;
-            var spaceReservationManager = wpfTextView.GetSpaceReservationManager("smarttag");
-            var adornmentLayer          = wpfTextView.GetAdornmentLayer("SmartTag");
+          var wpfTextView             = (IWpfTextView)textView;
+          var spaceReservationManager = wpfTextView.GetSpaceReservationManager("smarttag");
+          var adornmentLayer          = wpfTextView.GetAdornmentLayer("SmartTag");
 
-            foreach (var alement in adornmentLayer.Elements)
-              if (rect.Contains(alement.Adornment.PointToScreen(new Point(0, 0))))
-                return true;
-          }
+          foreach (var alement in adornmentLayer.Elements)
+            if (rect.Contains(alement.Adornment.PointToScreen(new Point(0, 0))))
+              return true;
         }
       }
 

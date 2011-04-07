@@ -20,11 +20,20 @@ using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Language.Intellisense;
 
 namespace Nemerle.VisualStudio
 {
 	static class Utils
 	{
+    public static ISmartTagBroker GetSmartTagBroker(this ITextView textView)
+    {
+      ISmartTagBroker tag = null;
+      // The ISmartTagBroker property added in NemerleImplementsSmartTaggerProvider
+      textView.Properties.TryGetProperty<ISmartTagBroker>(typeof(ISmartTagBroker), out tag);
+      return tag;
+    }
+
 		public static IVsTextBuffer ToIVsTextBuffer(this ITextBuffer textBuffer)
 		{
 			IVsTextBuffer buffer;
