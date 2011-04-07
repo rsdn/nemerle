@@ -592,19 +592,7 @@ namespace Nemerle.VisualStudio.Project
 			get { return Engine.IsProjectAvailable; }
 		}
 
-		/*public Nemerle.Completion2.Project Project
-		{
-			[DebuggerStepThrough]
-			get { return Engine.Project; }
-		}*/
-
-		bool _isDocumentOpening;
-
-		public bool IsDocumentOpening
-		{
-			get { return _isDocumentOpening; }
-			internal set { _isDocumentOpening = value; }
-		}
+    public bool IsDocumentOpening { get; internal set; }
 
 		#region HighlightUsages
 

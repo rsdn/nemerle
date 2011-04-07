@@ -21,10 +21,18 @@ namespace SmartTagTest
 		[Import(typeof(ITextStructureNavigatorSelectorService))]
 		internal ITextStructureNavigatorSelectorService NavigatorService { get; set; }
 
-		public ITagger<T> CreateTagger<T>(ITextView textView, ITextBuffer buffer) where T : ITag
+    [Import]
+    internal ISmartTagBroker SmartTagBroker { get; set; }
+
+    public ITagger<T> CreateTagger<T>(ITextView textView, ITextBuffer buffer) where T : ITag
 		{
 			if (buffer == null || textView == null)
 				return null;
+
+      var propKey = typeof(ISmartTagBroker);
+
+      if (!textView.Properties.ContainsProperty(propKey) && SmartTagBroker != null)
+        textView.Properties.AddProperty(propKey, SmartTagBroker);
 
 			//make sure we are tagging only the top buffer
 			if (buffer == textView.TextBuffer)

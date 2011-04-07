@@ -48,14 +48,15 @@ namespace Nemerle.VisualStudio.LanguageService
 			textBuffer.Properties.AddProperty(typeof(NemerleSource), this);
 
 			Service = service;
-			ProjectInfo = ProjectInfo.FindProject(path);
+      ProjectInfo projectInfo = ProjectInfo.FindProject(path);
+      ProjectInfo = projectInfo;
 
-			if (ProjectInfo != null)
+      if (projectInfo != null)
 			{
-				ProjectInfo.AddEditableSource(this);
+        projectInfo.AddEditableSource(this);
 				try
 				{
-					ProjectInfo.MakeCompilerMessagesTextMarkers(textLines, FileIndex);
+          projectInfo.MakeCompilerMessagesTextMarkers(textLines, FileIndex);
 				}
 				catch { }
 			}
@@ -67,7 +68,13 @@ namespace Nemerle.VisualStudio.LanguageService
 			LastDirtyTime = DateTime.Now;
 
 			SmartIndent = new NemerleSmartIndentation(this);
-		}
+
+
+      if (projectInfo == null)
+        GetEngine().BeginUpdateCompileUnit(this);
+      else
+        projectInfo.Engine.BeginUpdateCompileUnit(this);
+    }
 
 		#endregion
 
@@ -124,10 +131,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override void OnChangeLineText(TextLineChange[] lineChange, int last)
 		{
-			//var oldLastDirtyTime = LastDirtyTime;
 			base.OnChangeLineText(lineChange, last);
 			TimeStamp++;
-			//var timer = Stopwatch.StartNew();
 
 			ProjectInfo projectInfo = ProjectInfo;
 
@@ -138,11 +143,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 
 			if (projectInfo.IsDocumentOpening)
-			{
-				//TODO: Реализовать считывание информации о регионах и структуре файла на базе CompileUnit-а получаемого при парсинге.
-				projectInfo.Engine.BeginUpdateCompileUnit(this);
 				return;
-			}
 
 			if (projectInfo.IsProjectAvailable)
 			{
