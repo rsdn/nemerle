@@ -7,6 +7,9 @@ using Microsoft.Build.Framework;
 using Microsoft.VisualStudio.Project;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using System.Text;
+using System.Globalization;
+using System.IO;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -26,6 +29,58 @@ namespace Nemerle.VisualStudio.Project
 			: base(output, taskProvider, hierarchy)
 		{
 			_taskProvider = taskProvider;
+		}
+
+		enum MsgKind
+		{
+			Error,
+			Warning,
+			Message
+		}
+
+		/// <summary>Format error messages for the task list</summary>
+		private string GetFormattedErrorMessage(
+				string fileName,
+				int line,
+				int column,
+				MsgKind kind,
+				string errorNumber,
+				string errorText)
+		{
+			string errorCode = "";
+
+			switch (kind)
+			{
+				case MsgKind.Error:   errorCode = this.ErrorString;   break;
+				case MsgKind.Warning: errorCode = this.WarningString; break;
+				default:              errorCode = "";                 break;
+			}
+			
+			var message = new StringBuilder();
+			if (!string.IsNullOrEmpty(fileName))
+				message.AppendFormat(CultureInfo.CurrentCulture, "{0}({1},{2}):", fileName, line, column);
+
+			message.AppendFormat(CultureInfo.CurrentCulture, " {0} {1}: {2}", errorCode, errorNumber, errorText);
+			message.AppendLine();
+
+			return message.ToString();
+		}
+
+		protected override void WarningHandler(object sender, BuildWarningEventArgs warningEvent)
+		{
+			QueueOutputText(MessageImportance.High, GetFormattedErrorMessage(Path.GetFullPath(warningEvent.File), 
+				warningEvent.LineNumber, warningEvent.ColumnNumber, MsgKind.Warning, warningEvent.Code, warningEvent.Message));
+		}
+
+		protected override void ErrorHandler(object sender, BuildErrorEventArgs errorEvent)
+		{
+			QueueOutputText(MessageImportance.High, GetFormattedErrorMessage(Path.GetFullPath(errorEvent.File),
+				errorEvent.LineNumber, errorEvent.ColumnNumber, MsgKind.Error, errorEvent.Code, errorEvent.Message));
+		}
+
+		protected override void MessageHandler(object sender, BuildMessageEventArgs messageEvent)
+		{
+			base.MessageHandler(sender, messageEvent);
 		}
 
 		/// <summary>
