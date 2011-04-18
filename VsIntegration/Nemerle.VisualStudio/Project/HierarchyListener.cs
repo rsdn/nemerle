@@ -207,7 +207,7 @@ namespace Nemerle.VisualStudio.Project
 			if (ErrorHandler.Failed(hr))
 				return false;
 
-			return Utils.IsNemerleFileExtension(canonicalName);
+			return true;
 		}
 
 		/// <summary>
