@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -198,7 +198,7 @@ namespace Nemerle.VisualStudio.Project
 
 			HierarchyListener listener = new HierarchyListener(hierarchy);
 
-			listener.ItemAdded   += OnNewFile;
+			listener.ItemAdded   += OnFileChanged;
 			listener.ItemDeleted += OnDeleteFile;
 
 			listener.StartListening(true);
@@ -381,45 +381,25 @@ namespace Nemerle.VisualStudio.Project
 
 		#endregion
 
-		void CreateParseRequest(string file, string text, ModuleID id)
-		{
-			LibraryTask task = new LibraryTask(file, text);
-
-			task.ModuleID = id;
-
-			lock (_requests)
-				_requests.Enqueue(task);
-
-			_requestPresent.Set();
-		}
-
 		#region Hierarchy Events
 
-		void OnNewFile(object sender, HierarchyEventArgs args)
+		void OnFileChanged(object sender, HierarchyEventArgs args)
 		{
 			IVsHierarchy hierarchy = sender as IVsHierarchy;
 
 			if (null == hierarchy)
 				return;
 
-			string fileText = null;
-
 			if (null != args.TextBuffer)
 			{
-				int lastLine;
-				int lastIndex;
-				int hr = args.TextBuffer.GetLastLineIndex(out lastLine, out lastIndex);
-
-				if (ErrorHandler.Failed(hr))
-					return;
-
-				hr = args.TextBuffer.GetLineText(0, 0, lastLine, lastIndex, out fileText);
-
-				if (ErrorHandler.Failed(hr))
-					return;
+				// Немерловые файлы обрабатываются в NemerleSource.OnChangeLineText() так как для них требуется 
+				// знать какая часть текста изменена.
+				if (!Utils.IsNemerleFileExtension(args.FileName))
+				{
+					var projectInfo = ProjectInfo.FindProject(hierarchy);
+					projectInfo.Engine.RequestOnBuildTypesTree();
+				}
 			}
-
-			CreateParseRequest(args.FileName, fileText, new ModuleID(hierarchy, args.ItemID));
 		}
 
 		void OnDeleteFile(object sender, HierarchyEventArgs args)
@@ -549,12 +529,16 @@ namespace Nemerle.VisualStudio.Project
 						// This hierarchy is not monitored, we can exit now.
 						return VSConstants.S_OK;
 
-					// Check the extension of the file to see if a listener is required.
-					//
-					string extension = Path.GetExtension(documentMoniker);
+					// VladD2: Мы не проверяем расширение файла, так как наш компилятор поддерживает плагины для парсеров!
+					// VladD2: Кроме того мы должны перепарсивать проект в случае изменения других файлов, так как они
+					// VladD2: могут читаться читаться макросами.
 
-					if (string.Compare(extension, NemerleConstants.FileExtension, StringComparison.OrdinalIgnoreCase) != 0)
-						return VSConstants.S_OK;
+					////// Check the extension of the file to see if a listener is required.
+					//////
+					////string extension = Path.GetExtension(documentMoniker);
+
+					////if (string.Compare(extension, NemerleConstants.FileExtension, StringComparison.OrdinalIgnoreCase) != 0)
+					////  return VSConstants.S_OK;
 
 					// Create the module id for this document.
 					//
@@ -572,7 +556,7 @@ namespace Nemerle.VisualStudio.Project
 					// difference between the AddFile and FileChanged operation, so we 
 					// can use the same handler.
 					//
-					listener.OnFileChanged += OnNewFile;
+					listener.OnFileChanged += OnFileChanged;
 
 					// Add the listener to the dictionary, so we will not create it anymore.
 					//
@@ -614,7 +598,7 @@ namespace Nemerle.VisualStudio.Project
 				//
 				HierarchyEventArgs args = new HierarchyEventArgs(listener.FileID.ItemID, listener.FileName);
 
-				OnNewFile(listener.FileID.Hierarchy, args);
+				OnFileChanged(listener.FileID.Hierarchy, args);
 			}
 			return VSConstants.S_OK;
 		}
