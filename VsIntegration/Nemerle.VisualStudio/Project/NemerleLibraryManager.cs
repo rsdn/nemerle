@@ -394,11 +394,15 @@ namespace Nemerle.VisualStudio.Project
 			{
 				// Немерловые файлы обрабатываются в NemerleSource.OnChangeLineText() так как для них требуется 
 				// знать какая часть текста изменена.
-				if (!Utils.IsNemerleFileExtension(args.FileName))
-				{
-					var projectInfo = ProjectInfo.FindProject(hierarchy);
-					projectInfo.Engine.RequestOnBuildTypesTree();
-				}
+				if (Utils.IsNemerleFileExtension(args.FileName))
+					return;
+
+				var projectInfo = ProjectInfo.FindProject(hierarchy);
+
+				if (projectInfo == null)// || projectInfo.IsDocumentOpening)
+					return;
+
+				projectInfo.Engine.RequestOnBuildTypesTree();
 			}
 		}
 
