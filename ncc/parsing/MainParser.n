@@ -409,25 +409,27 @@ namespace Nemerle.Compiler
     
     static IsTopLevel (tok : Token.LooseGroup) : bool
     {
-      def testToken (_tok)
+      def testToken(_tok)
       {
-        | Token.Keyword (k) =>
-          match (k) {
+        | Token.Keyword(k) =>
+          match (k)
+          {
             | "public" | "private" | "static" | "internal"
             | "abstract" | "sealed" | "partial" | "class" | "module" | "variant"
-            | "enum" | "interface" | "struct" | "delegate" | "type" | "macro"
-              => true
-            | _ => false
+            | "enum" | "interface" | "struct" | "delegate" | "macro"  => true
+            | _                                                       => false
           }
 
+        | Token.Identifier("type") when _tok.Next is Token.Identifier => true
+        
         // This is workaround for complete using directive. Without it compiler
         // parse "u" (which user type for complete "using") as expression and
         // wrap it in auto-module.
         | Token.Identifier (_)
-        | Token.IdentifierToComplete (_)       => testToken (_tok.Next)
+        | Token.IdentifierToComplete (_)                              => testToken (_tok.Next)
         | Token.SquareGroup
-        | Token.Namespace | Token.Using | null => true
-        | _                                    => false
+        | Token.Namespace | Token.Using | null                        => true
+        | _                                                           => false
       }
 
       testToken (tok.Child)
@@ -854,162 +856,166 @@ namespace Nemerle.Compiler
     ParseTypeDeclaration (mods : Modifiers, startLocation : Location) : TopDeclaration
     {
       def tok = get_token ();
+      
+      def processType(key)
+      {
+        /// first get name of this declartion
+        def name = get_splicable_id ();
+        mutable end_loc = name.Location;
+        // now generic type parameters
+        def tyvars = parse_tyvars();
+
+        def (_, _, tyvarsLocation) = tyvars;
+        when (tyvarsLocation != Location.Default)
+          end_loc = tyvarsLocation;
+
+        def t_extends =
+          match (peek_token ())
+          {
+            | Token.Operator (":") as colonToc =>
+              def errTypeExpected(loc)
+              {
+                Message.Error (loc, "Type expected");
+                end_loc = loc;
+              }
+
+              shift ();
+              def tok = peek_token ();
+
+              // if type not present.
+              if (tok == null || tok is Token.BracesGroup || tok is Token.Keyword ("where"))
+              {
+                errTypeExpected (colonToc.Location);
+                []
+              }
+              else match (maybe_parse_ellipsis ())
+              {
+                | Some (e) => [e]
+                | _ =>
+                  // parse , separated sequence as one expression
+                  def res = comma_separated_list (() => parse_expr (TokenStoppers.All));
+                  match (res.Find (e => e is PExpr.Error || e is Member (_, null)))
+                  {
+                    | Some (errTok) =>
+                      push_back ();
+                      errTypeExpected (errTok.Location);
+                      res.Filter (e => !(e is PExpr.Error || e is Member (_, null)))
+                    | _ => res
+                  }
+              }
+            | _ => []
+          };
+
+        unless ((t_extends ?? []).IsEmpty)
+          end_loc = t_extends.Last.Location;
+
+        // where constraints for specified generic type parameters
+        def typarms = parse_where_constraints (tyvars);
+        parse_top_extensions (mods, MacroTargets.Class);
+
+        mutable members = SCG.List();
+        mutable bodyBracesGroup;
+
+        unless (key == "type")
+        {
+          def nextTok = get_token ();
+
+          match (nextTok)
+          {
+            | Token.BracesGroup (children, _) as tok =>
+              bodyBracesGroup = tok;
+              end_loc         = tok.Location;
+              push_stream (children);
+              match (maybe_parse_ellipsis ())
+              {
+                | Some(e) =>
+                  pop_stream ();
+                  members.Add(ClassMember.Field (e.Location, null, null, e)); // special encoding for <[ decl: class A { ..$mems } ]>
+
+                | _ =>
+                  pop_stream ();
+                  when (key == "variant")
+                    in_variant = true;
+                  members = ParseClassMembers(children, key);
+                  _ = members.RemoveAll(_ is ClassMember.TypeDeclaration (TopDeclaration.Delegate(null)));
+                  in_variant = false
+              }
+
+            | x => Error (x, "expecting type body"); push_back ();
+          }
+        }
+
+        def members2 = members.NToList();
+        def locAll   = startLocation + end_loc;
+
+        def td =
+          match (key)
+          {
+            | "class" => TopDeclaration.Class (locAll, name, mods, typarms, t_extends, members2)
+            | "struct" =>
+              mods.mods |= NemerleAttributes.Struct;
+              TopDeclaration.Class (locAll, name, mods, typarms, t_extends, members2)
+
+            | "module" =>
+              mods.mods |= NemerleAttributes.Static;
+              foreach (m when !(m is ClassMember.TypeDeclaration) in members)
+                when (m.modifiers != null)
+                  m.modifiers.mods |= NemerleAttributes.Static;
+              TopDeclaration.Class (locAll, name, mods, typarms, t_extends, members2)
+
+            | "type" =>
+              expect_operator ("=");
+              def t = parse_expr ();
+              expect_empty ("type alias declaration");
+              TopDeclaration.Alias (locAll, name, mods, typarms, t)
+
+            | "interface" => TopDeclaration.Interface (locAll, name, mods, typarms, t_extends, members2)
+            | "variant" => TopDeclaration.Variant (locAll, name, mods, typarms, t_extends, members2)
+            | "enum" => TopDeclaration.Enum (locAll, name, mods, typarms, t_extends, members2)
+            | _ => Util.ice ()
+          };
+
+        InitBodyLocations(td, bodyBracesGroup);
+
+        if (tyvarsLocation != Location.Default)
+        {
+          td._headerLocation        = startLocation + tyvarsLocation;
+          td._typeParametersLocation = tyvarsLocation;
+        }
+        else td._headerLocation     = startLocation + name.Location;
+
+        // Add references to TopDeclaration where members is defined.
+        foreach (member in members)
+        {
+          | TypeDeclaration(nestedType) =>
+            member._definedIn     = td;
+            nestedType._definedIn = td;
+
+          | Property(getter = Some(g), setter = Some(s)) =>
+            member._definedIn = td;
+            g._definedIn = td;
+            s._definedIn = td;
+
+          | Property(getter = Some(accessor))
+          | Property(setter = Some(accessor)) =>
+            member._definedIn   = td;
+            accessor._definedIn = td;
+
+          | _                           => member._definedIn     = td;
+        }
+
+        td.name     = name;
+        td.Location = startLocation + end_loc;
+        td
+      }
+      
       def res =
         match (tok)
         {
           | Token.Keyword (key) =>
             match (key)
             {
-              | "type" | "class" | "struct" | "module" | "interface" | "enum" | "variant" =>
-                /// first get name of this declartion
-                def name = get_splicable_id ();
-                mutable end_loc = name.Location;
-                // now generic type parameters
-                def tyvars = parse_tyvars();
-
-                def (_, _, tyvarsLocation) = tyvars;
-                when (tyvarsLocation != Location.Default)
-                  end_loc = tyvarsLocation;
-
-                def t_extends =
-                  match (peek_token ())
-                  {
-                    | Token.Operator (":") as colonToc =>
-                      def errTypeExpected(loc)
-                      {
-                        Message.Error (loc, "Type expected");
-                        end_loc = loc;
-                      }
-
-                      shift ();
-                      def tok = peek_token ();
-
-                      // if type not present.
-                      if (tok == null || tok is Token.BracesGroup || tok is Token.Keyword ("where"))
-                      {
-                        errTypeExpected (colonToc.Location);
-                        []
-                      }
-                      else match (maybe_parse_ellipsis ())
-                      {
-                        | Some (e) => [e]
-                        | _ =>
-                          // parse , separated sequence as one expression
-                          def res = comma_separated_list (() => parse_expr (TokenStoppers.All));
-                          match (res.Find (e => e is PExpr.Error || e is Member (_, null)))
-                          {
-                            | Some (errTok) =>
-                              push_back ();
-                              errTypeExpected (errTok.Location);
-                              res.Filter (e => !(e is PExpr.Error || e is Member (_, null)))
-                            | _ => res
-                          }
-                      }
-                    | _ => []
-                  };
-
-                unless ((t_extends ?? []).IsEmpty)
-                  end_loc = t_extends.Last.Location;
-
-                // where constraints for specified generic type parameters
-                def typarms = parse_where_constraints (tyvars);
-                parse_top_extensions (mods, MacroTargets.Class);
-
-                mutable members = SCG.List();
-                mutable bodyBracesGroup;
-
-                unless (key == "type")
-                {
-                  def nextTok = get_token ();
-
-                  match (nextTok)
-                  {
-                    | Token.BracesGroup (children, _) as tok =>
-                      bodyBracesGroup = tok;
-                      end_loc         = tok.Location;
-                      push_stream (children);
-                      match (maybe_parse_ellipsis ())
-                      {
-                        | Some(e) =>
-                          pop_stream ();
-                          members.Add(ClassMember.Field (e.Location, null, null, e)); // special encoding for <[ decl: class A { ..$mems } ]>
-
-                        | _ =>
-                          pop_stream ();
-                          when (key == "variant")
-                            in_variant = true;
-                          members = ParseClassMembers(children, key);
-                          _ = members.RemoveAll(_ is ClassMember.TypeDeclaration (TopDeclaration.Delegate(null)));
-                          in_variant = false
-                      }
-
-                    | x => Error (x, "expecting type body"); push_back ();
-                  }
-                }
-
-                def members2 = members.NToList();
-                def locAll   = startLocation + end_loc;
-
-                def td =
-                  match (key)
-                  {
-                    | "class" => TopDeclaration.Class (locAll, name, mods, typarms, t_extends, members2)
-                    | "struct" =>
-                      mods.mods |= NemerleAttributes.Struct;
-                      TopDeclaration.Class (locAll, name, mods, typarms, t_extends, members2)
-
-                    | "module" =>
-                      mods.mods |= NemerleAttributes.Static;
-                      foreach (m when !(m is ClassMember.TypeDeclaration) in members)
-                        when (m.modifiers != null)
-                          m.modifiers.mods |= NemerleAttributes.Static;
-                      TopDeclaration.Class (locAll, name, mods, typarms, t_extends, members2)
-
-                    | "type" =>
-                      expect_operator ("=");
-                      def t = parse_expr ();
-                      expect_empty ("type alias declaration");
-                      TopDeclaration.Alias (locAll, name, mods, typarms, t)
-
-                    | "interface" => TopDeclaration.Interface (locAll, name, mods, typarms, t_extends, members2)
-                    | "variant" => TopDeclaration.Variant (locAll, name, mods, typarms, t_extends, members2)
-                    | "enum" => TopDeclaration.Enum (locAll, name, mods, typarms, t_extends, members2)
-                    | _ => Util.ice ()
-                  };
-
-                InitBodyLocations(td, bodyBracesGroup);
-
-                if (tyvarsLocation != Location.Default)
-                {
-                  td._headerLocation        = startLocation + tyvarsLocation;
-                  td._typeParametersLocation = tyvarsLocation;
-                }
-                else td._headerLocation     = startLocation + name.Location;
-
-                // Add references to TopDeclaration where members is defined.
-                foreach (member in members)
-                {
-                  | TypeDeclaration(nestedType) =>
-                    member._definedIn     = td;
-                    nestedType._definedIn = td;
-
-                  | Property(getter = Some(g), setter = Some(s)) =>
-                    member._definedIn = td;
-                    g._definedIn = td;
-                    s._definedIn = td;
-
-                  | Property(getter = Some(accessor))
-                  | Property(setter = Some(accessor)) =>
-                    member._definedIn   = td;
-                    accessor._definedIn = td;
-
-                  | _                           => member._definedIn     = td;
-                }
-
-                td.name     = name;
-                td.Location = startLocation + end_loc;
-                td
-
+              | "class" | "struct" | "module" | "interface" | "enum" | "variant" => processType(key)
               | "delegate" =>
                 def h = parse_fun_header (null);
                 def td = TopDeclaration.Delegate (startLocation + h.Location, h.ParsedSplicableName, mods, h.ParsedTypeParameters, h);
@@ -1038,6 +1044,8 @@ namespace Nemerle.Compiler
 
               | _ => Error (tok, "expecting type declaration"); TopDeclaration.Delegate (null);
             }
+            
+          | Token.Identifier("type") => processType("type")
           | x => Error (x, "expecting type declaration"); TopDeclaration.Delegate (null);
         };
 
@@ -1074,8 +1082,22 @@ namespace Nemerle.Compiler
           mutable prmsCloseLoc;
 
           def tok = peek_token ();
+
+          def parseNestedTypeDeclaration()
+          {
+            take_attributes_out (ref customs, System.AttributeTargets.Class, true, mods);
+            def td = ParseTypeDeclaration (mods, start_tok.Location.FromStart());
+            def mem = ClassMember.TypeDeclaration (loc = td.Location,
+                                                    name = td.name,
+                                                    modifiers = td.modifiers,
+                                                    td = td);
+            when (mem != null)
+              members.Add(mem);
+          }
+
           match (tok)
           {
+            | Token.Identifier("type") when peek_second_token() is Token.Identifier => parseNestedTypeDeclaration()
             | Token.Operator ("$") | Token.Identifier =>
               def id = get_splicable_id ();
               mutable is_property = false;
@@ -1168,15 +1190,7 @@ namespace Nemerle.Compiler
                                     loc = loc, body = FunBody.Parsed(<[]>), implemented = []);
               members.Add(dummy_method);
 
-            | _ =>
-              take_attributes_out (ref customs, System.AttributeTargets.Class, true, mods);
-              def td = ParseTypeDeclaration (mods, start_tok.Location.FromStart());
-              def mem = ClassMember.TypeDeclaration (loc = td.Location,
-                                                     name = td.name,
-                                                     modifiers = td.modifiers,
-                                                     td = td);
-              when (mem != null)
-                members.Add(mem);
+            | _ => parseNestedTypeDeclaration()
           }
 
           pop_stream ("class member");
@@ -1926,7 +1940,7 @@ namespace Nemerle.Compiler
                   | Token.Identifier ("param")    => System.AttributeTargets.Parameter
                   | Token.Identifier ("property") => System.AttributeTargets.Property
                   | Token.Identifier ("return")   => System.AttributeTargets.ReturnValue
-                  | Token.Keyword    ("type")     => System.AttributeTargets.Class
+                  | Token.Identifier ("type")     => System.AttributeTargets.Class
                   | _                             => System.AttributeTargets.All
                 };
 
