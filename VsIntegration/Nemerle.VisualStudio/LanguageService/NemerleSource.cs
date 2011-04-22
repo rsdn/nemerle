@@ -31,7 +31,7 @@ using Nemerle.Compiler.Utils;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
-	public partial class NemerleSource : Source, ISource
+	public partial class NemerleSource : Source, IIdeSource
 	{
 		#region Init
 
@@ -883,7 +883,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			else engine = NemerleLanguageService.DefaultEngine;
 			ReformatSpanInternal(mgr, span, engine, filePath, this);
 		}
-		private static void ReformatSpanInternal(EditArray mgr, TextSpan span, IEngine engine, string filePath, ISource src)
+		private static void ReformatSpanInternal(EditArray mgr, TextSpan span, IEngine engine, string filePath, IIdeSource src)
 		{
 			var result = Formatter.BeginFormat(span.iStartLine + 1,
 							 span.iStartIndex + 1,
@@ -1453,7 +1453,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				//VladD2: Это не верное предположение! 
 				//TODO: Нужно переписать этот код так, чтобы он выполнялся без ошибок при любом исходе.
 				// Тут есть два пути: 1) открывать все файлы в редакторах, 2) создать еще одну реализацию EditArray которая умела 
-				// бы работать с ISource. При этом нужно как-то поддерживать Undo/Redo.
+				// бы работать с IIdeSource. При этом нужно как-то поддерживать Undo/Redo.
 				Trace.Assert(source != null);
 
 				var mgr = new EditArray(source, null, true, "Renaming");
@@ -1520,7 +1520,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#endregion
 
-		#region ISource Members
+		#region IIdeSource Members
 
 		public int CurrentVersion { get { return TimeStamp; } }
 
