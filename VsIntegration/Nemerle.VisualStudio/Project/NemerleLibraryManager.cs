@@ -390,20 +390,24 @@ namespace Nemerle.VisualStudio.Project
 			if (null == hierarchy)
 				return;
 
-			if (null != args.TextBuffer)
-			{
-				// Немерловые файлы обрабатываются в NemerleSource.OnChangeLineText() так как для них требуется 
-				// знать какая часть текста изменена.
-				if (Utils.IsNemerleFileExtension(args.FileName))
-					return;
+			if (null == args.TextBuffer)
+				return;
 
-				var projectInfo = ProjectInfo.FindProject(hierarchy);
+			// hc: обработчики нужно вызывать для всех типов файлов
+			// VladD2: Немерловые файлы обрабатываются в NemerleSource.OnChangeLineText() так как для них требуется 
+			// знать какая часть текста изменена.
+			//if (Utils.IsNemerleFileExtension(args.FileName))
+			//  return;
 
-				if (projectInfo == null)// || projectInfo.IsDocumentOpening)
-					return;
+			var projectInfo = ProjectInfo.FindProject(hierarchy);
+			if (null == projectInfo) // || projectInfo.IsDocumentOpening)
+				return;
 
-				projectInfo.Engine.RequestOnBuildTypesTree();
-			}
+			// hc: как правильно убрать это в обработчики SourceChanged?
+			//projectInfo.Engine.RequestOnBuildTypesTree();
+
+			int fileIndex = Nemerle.Compiler.Location.GetFileIndex(args.FileName);
+			projectInfo.Engine.NotifySourceChanged(new VsTextLinesSource(fileIndex, args.TextBuffer));
 		}
 
 		void OnDeleteFile(object sender, HierarchyEventArgs args)
@@ -422,6 +426,13 @@ namespace Nemerle.VisualStudio.Project
 
 			if (null != node)
 				_library.RemoveNode(node);
+
+			var projectInfo = ProjectInfo.FindProject(hierarchy);
+			if (null != projectInfo)
+			{
+				int fileIndex = Nemerle.Compiler.Location.GetFileIndex(args.FileName);
+				projectInfo.Engine.NotifySourceDeleted(fileIndex);
+			}
 		}
 
 		#endregion
