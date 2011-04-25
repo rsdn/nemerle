@@ -14,14 +14,14 @@ namespace Nemerle.VisualStudio.GUI
 {
 	public partial class RenameRefactoringDlg : Form
 	{
-		public RenameRefactoringDlg(Nemerle.Completion2.IEngine engine, GotoInfo[] usages)
+		public RenameRefactoringDlg(Nemerle.Completion2.IIdeEngine engine, GotoInfo[] usages)
 		{
 			InitializeComponent();
 			_usages = usages;
 			FillUsagesTextBox(engine);
 		}
 
-		private void FillUsagesTextBox(Nemerle.Completion2.IEngine engine)
+		private void FillUsagesTextBox(Nemerle.Completion2.IIdeEngine engine)
 		{
 			string currentFileName = null;
 			var lastTextLength = 0;

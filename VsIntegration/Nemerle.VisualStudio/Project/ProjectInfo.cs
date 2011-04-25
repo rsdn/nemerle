@@ -132,8 +132,8 @@ namespace Nemerle.VisualStudio.Project
 		int _buildTypedtreeCount;
 		readonly List<MethodBuilderEx> _methodsCheckQueue = new List<MethodBuilderEx>(100);
 
-		private IEngine _engine;
-		public IEngine Engine
+		private IIdeEngine _engine;
+		public IIdeEngine Engine
 		{
 			[DebuggerNonUserCode]
 			get { ManagerClass.Instance = (ManagerClass)_engine; return _engine; }

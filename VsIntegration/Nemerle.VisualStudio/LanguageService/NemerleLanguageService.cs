@@ -41,7 +41,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		#region Fields
 
 		public bool IsSmartTagActive { get; private set; }
-		public static IEngine DefaultEngine { get; private set; }
+		public static IIdeEngine DefaultEngine { get; private set; }
 		public bool IsDisposed { get; private set; }
 		IVsStatusbar _statusbar;
 		public NemerlePackage Package { get; private set; }
@@ -165,7 +165,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region Misc
 
-		public bool IsDefaultEngine(IEngine engine)
+		public bool IsDefaultEngine(IIdeEngine engine)
 		{
 			return engine == DefaultEngine;
 		}

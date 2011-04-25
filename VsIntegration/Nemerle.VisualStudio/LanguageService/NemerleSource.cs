@@ -375,7 +375,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		/// более одного члена, то производит отсев наиболее подходящего. Для этого последовательно проверяем список
 		/// аргументов, возвращаемое значение и т.п.
 		/// </remarks>
-		private GotoInfo[] TryFindGotoInfoByDebugInfo(IEngine engine, GotoInfo inf)
+		private GotoInfo[] TryFindGotoInfoByDebugInfo(IIdeEngine engine, GotoInfo inf)
 		{
 			GotoInfo[] infoFromPdb = ProjectInfo.LookupLocationsFromDebugInformation(inf);
 			var result = new List<GotoInfo>();
@@ -875,7 +875,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			string filePath = GetFilePath();
 			ProjectInfo projectInfo = ProjectInfo.FindProject(filePath);
-			IEngine engine;
+			IIdeEngine engine;
 			if (projectInfo != null)
 			{
 				engine = projectInfo.Engine;
@@ -883,7 +883,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			else engine = NemerleLanguageService.DefaultEngine;
 			ReformatSpanInternal(mgr, span, engine, filePath, this);
 		}
-		private static void ReformatSpanInternal(EditArray mgr, TextSpan span, IEngine engine, string filePath, IIdeSource src)
+		private static void ReformatSpanInternal(EditArray mgr, TextSpan span, IIdeEngine engine, string filePath, IIdeSource src)
 		{
 			var result = Formatter.BeginFormat(span.iStartLine + 1,
 							 span.iStartIndex + 1,
@@ -1377,7 +1377,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			TryHighlightBraces1(view);
 		}
 
-		public IEngine GetEngine()
+		public IIdeEngine GetEngine()
 		{
 			var projectInfo = ProjectInfo;
 

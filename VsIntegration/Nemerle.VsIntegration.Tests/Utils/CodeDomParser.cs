@@ -26,7 +26,7 @@ namespace Nemerle.VsIntegration.Tests
         new string[0]
 			);
 
-			IEngine engine = EngineFactory.Create(callback, new TraceWriter(), false);
+			IIdeEngine engine = EngineFactory.Create(callback, new TraceWriter(), false);
 		}
 
 		[Test]
