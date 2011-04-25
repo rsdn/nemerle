@@ -393,18 +393,9 @@ namespace Nemerle.VisualStudio.Project
 			if (null == args.TextBuffer)
 				return;
 
-			// hc: обработчики нужно вызывать для всех типов файлов
-			// VladD2: Немерловые файлы обрабатываются в NemerleSource.OnChangeLineText() так как для них требуется 
-			// знать какая часть текста изменена.
-			//if (Utils.IsNemerleFileExtension(args.FileName))
-			//  return;
-
 			var projectInfo = ProjectInfo.FindProject(hierarchy);
 			if (null == projectInfo) // || projectInfo.IsDocumentOpening)
 				return;
-
-			// hc: как правильно убрать это в обработчики SourceChanged?
-			//projectInfo.Engine.RequestOnBuildTypesTree();
 
 			int fileIndex = Nemerle.Compiler.Location.GetFileIndex(args.FileName);
 			projectInfo.Engine.NotifySourceChanged(new VsTextLinesSource(fileIndex, args.TextBuffer));
