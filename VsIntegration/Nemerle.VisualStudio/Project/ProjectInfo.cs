@@ -504,6 +504,17 @@ namespace Nemerle.VisualStudio.Project
 
 		#endregion
 
+
+		internal void FileBuildActionPropertyChanged(HierarchyNode node, NemerleBuildAction oldAction, NemerleBuildAction newAction)
+		{
+			if (oldAction == NemerleBuildAction.Compile && newAction != NemerleBuildAction.Compile)
+				RemoveSource(node.Url);
+			else if (newAction == NemerleBuildAction.Compile && oldAction != NemerleBuildAction.Compile)
+				AddSource(node.Url);
+
+			Engine.RequestOnBuildTypesTree();
+		}
+
 		private void FileAdded(object sender, HierarchyEventArgs ergs)
 		{
 			Debug.Assert(ergs.TextBuffer == null);
@@ -516,7 +527,12 @@ namespace Nemerle.VisualStudio.Project
 
 			string path = ergs.FileName;
 
-			IIdeSource source = (NemerleSource)LanguageService.GetSource(path);
+			AddSource(path);
+		}
+
+		private void AddSource(string path)
+		{
+			IIdeSource source = (NemerleSource)LanguageService.GetSource(path); // TODO: VladD2: тут надо искать Source по иерархии, а не по пути!
 
 			try
 			{
@@ -538,6 +554,11 @@ namespace Nemerle.VisualStudio.Project
 			Debug.Assert(ergs.TextBuffer == null);
 
 			string path = ergs.FileName;
+			RemoveSource(path);
+		}
+
+		private void RemoveSource(string path)
+		{
 			var fileIndex = Location.GetFileIndex(path);
 
 			if (IsFileInProject(fileIndex))

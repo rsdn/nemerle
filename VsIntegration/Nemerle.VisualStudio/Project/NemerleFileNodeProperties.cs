@@ -58,13 +58,17 @@ namespace Nemerle.VisualStudio.Project
 
 				if (string.IsNullOrEmpty(value))
 					return NemerleBuildAction.None;
-
+					
 				return (NemerleBuildAction)Enum.Parse(typeof(NemerleBuildAction), value);
 			}
 
 			set
 			{
+				var oldValue = NemerleBuildAction;
 				Node.ItemNode.ItemName = value.ToString();
+				var project = ProjectInfo.FindProject(this.Node.ProjectMgr);
+				if (project != null)
+					project.FileBuildActionPropertyChanged(this.Node, oldValue, value);
 			}
 		}
 
