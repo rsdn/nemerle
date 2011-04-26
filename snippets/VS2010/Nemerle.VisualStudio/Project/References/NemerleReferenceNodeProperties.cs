@@ -16,6 +16,24 @@ namespace Nemerle.VisualStudio.Project.References
 		{
 		}
 
+        [SRCategoryAttribute(Microsoft.VisualStudio.Project.SR.Misc)]
+        [LocDisplayName(Microsoft.VisualStudio.Project.SR.CopyToLocal)]
+        [SRDescriptionAttribute(Microsoft.VisualStudio.Project.SR.CopyToLocalDescription)]
+        public bool CopyToLocal
+        {
+            get
+            {
+                string copyLocal = this.GetProperty(ProjectFileConstants.Private, "False");
+                if (copyLocal == null || copyLocal.Length == 0)
+                    return false;
+                return bool.Parse(copyLocal);
+            }
+            set
+            {
+                this.SetProperty(ProjectFileConstants.Private, value.ToString());
+            }
+        }
+
 		[LocDisplayName("HintPath")]
 		[SRCategoryAttribute("Misc")]
 		//[SRDescriptionAttribute("ssssssssssss")]
