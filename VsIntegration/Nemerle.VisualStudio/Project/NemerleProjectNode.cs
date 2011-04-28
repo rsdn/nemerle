@@ -335,19 +335,19 @@ namespace Nemerle.VisualStudio.Project
 		/// <returns>true - if it's OK</returns>
 		static bool StartNoDebug(EnvDTE.DTE dte)
 		{
-			var startupProjects   = (object[])dte.Solution.SolutionBuild.StartupProjects;
+			var startupProjects = (object[])dte.Solution.SolutionBuild.StartupProjects;
 
 			if (startupProjects.Length < 1)
 				throw new ApplicationException("No startup projects.");
 
 			var startupProjectName = (string)startupProjects[0];
-			var nemerleOAProject   = dte.Solution.Item(startupProjectName) as NemerleOAProject;
+			var nemerleOAProject = dte.Solution.Item(startupProjectName) as NemerleOAProject;
 
 			if (nemerleOAProject == null)
 				return false;
 
-			var projectNode        = nemerleOAProject.Project.ProjectMgr;
-			var currentConfigName  = Utilities.GetActiveConfigurationName(nemerleOAProject);
+			var projectNode = nemerleOAProject.Project.ProjectMgr;
+			var currentConfigName = Utilities.GetActiveConfigurationName(nemerleOAProject);
 
 			projectNode.SetConfiguration(currentConfigName);
 
@@ -403,10 +403,10 @@ namespace Nemerle.VisualStudio.Project
 				// Make temp cmd-file and run it...
 				cmdFilePath = Path.Combine(Path.GetDirectoryName(path), Path.GetTempFileName());
 				cmdFilePath = Path.ChangeExtension(cmdFilePath, "cmd");
-        var oemCodePage = CultureInfo.CurrentCulture.TextInfo.OEMCodePage;
-        var consoleEncoding = Encoding.GetEncoding(oemCodePage);
-        File.WriteAllText(cmdFilePath, "@echo off\n\"" + path + "\" " + cmdArgs + "\npause",
-            consoleEncoding);
+				var oemCodePage = CultureInfo.CurrentCulture.TextInfo.OEMCodePage;
+				var consoleEncoding = Encoding.GetEncoding(oemCodePage);
+				File.WriteAllText(cmdFilePath, "@echo off\n\"" + path + "\" " + cmdArgs + "\npause",
+						consoleEncoding);
 				psi.FileName = cmdFilePath;
 			}
 			else
@@ -452,31 +452,31 @@ namespace Nemerle.VisualStudio.Project
 		}
 
 		protected internal override void ProcessReferences()
-    {
-      IReferenceContainer container = GetReferenceContainer();
-      if (null == container)
-      {
-        // Process References
-        ReferenceContainerNode referencesFolder = CreateReferenceContainerNode();
-        if (null == referencesFolder)
-        {
-          // This project type does not support references or there is a problem
-          // creating the reference container node.
-          // In both cases there is no point to try to process references, so exit.
-          return;
-        }
-        this.AddChild(referencesFolder);
-        container = referencesFolder;
+		{
+			IReferenceContainer container = GetReferenceContainer();
+			if (null == container)
+			{
+				// Process References
+				ReferenceContainerNode referencesFolder = CreateReferenceContainerNode();
+				if (null == referencesFolder)
+				{
+					// This project type does not support references or there is a problem
+					// creating the reference container node.
+					// In both cases there is no point to try to process references, so exit.
+					return;
+				}
+				this.AddChild(referencesFolder);
+				container = referencesFolder;
 
-        var macroReferencesFolder = new NemerleMacroReferenceContainerNode(this);
-        this.AddChild(macroReferencesFolder);
+				var macroReferencesFolder = new NemerleMacroReferenceContainerNode(this);
+				this.AddChild(macroReferencesFolder);
 
-        macroReferencesFolder.LoadReferencesFromBuildProject(BuildProject);
-      }
+				macroReferencesFolder.LoadReferencesFromBuildProject(BuildProject);
+			}
 
-      // Load the referernces.
-      container.LoadReferencesFromBuildProject(BuildProject);
-    }
+			// Load the referernces.
+			container.LoadReferencesFromBuildProject(BuildProject);
+		}
 
 		protected internal override void ProcessFolders()
 		{
@@ -774,6 +774,8 @@ namespace Nemerle.VisualStudio.Project
 			// as we will catch assembly reference adding.
 			//
 			var langService = Utils.GetService<NemerleLanguageService>(Site);
+
+			Debug.Assert(langService != null);
 
 			_projectInfo = new ProjectInfo(this, InteropSafeHierarchy, langService, filename, location);
 
@@ -1163,56 +1165,56 @@ namespace Nemerle.VisualStudio.Project
 			return VSConstants.S_OK;
 		}
 
-    #region IVsComponentUser methods
+		#region IVsComponentUser methods
 
-    public IReferenceContainer GetMacroReferenceContainer()
-    {
-      return (IReferenceContainer)this.FindChild(NemerleMacroReferenceContainerNode.MacroReferencesNodeVirtualName);
-    }
+		public IReferenceContainer GetMacroReferenceContainer()
+		{
+			return (IReferenceContainer)this.FindChild(NemerleMacroReferenceContainerNode.MacroReferencesNodeVirtualName);
+		}
 
-    /// <summary>
-    /// Add Components to the Project.
-    /// Used by the environment to add components specified by the user in the Component Selector dialog 
-    /// to the specified project
-    /// </summary>
-    /// <param name="dwAddCompOperation">The component operation to be performed.</param>
-    /// <param name="cComponents">Number of components to be added</param>
-    /// <param name="rgpcsdComponents">array of component selector data</param>
-    /// <param name="hwndDialog">Handle to the component picker dialog</param>
-    /// <param name="pResult">Result to be returned to the caller</param>
-    public override int AddComponent(VSADDCOMPOPERATION dwAddCompOperation, uint cComponents, System.IntPtr[] rgpcsdComponents, System.IntPtr hwndDialog, VSADDCOMPRESULT[] pResult)
-    {
-      //initalize the out parameter
-      pResult[0] = VSADDCOMPRESULT.ADDCOMPRESULT_Success;
+		/// <summary>
+		/// Add Components to the Project.
+		/// Used by the environment to add components specified by the user in the Component Selector dialog 
+		/// to the specified project
+		/// </summary>
+		/// <param name="dwAddCompOperation">The component operation to be performed.</param>
+		/// <param name="cComponents">Number of components to be added</param>
+		/// <param name="rgpcsdComponents">array of component selector data</param>
+		/// <param name="hwndDialog">Handle to the component picker dialog</param>
+		/// <param name="pResult">Result to be returned to the caller</param>
+		public override int AddComponent(VSADDCOMPOPERATION dwAddCompOperation, uint cComponents, System.IntPtr[] rgpcsdComponents, System.IntPtr hwndDialog, VSADDCOMPRESULT[] pResult)
+		{
+			//initalize the out parameter
+			pResult[0] = VSADDCOMPRESULT.ADDCOMPRESULT_Success;
 
-      var selectedNodes = GetSelectedNodes();
+			var selectedNodes = GetSelectedNodes();
 
-      IReferenceContainer references = selectedNodes.Count == 1 && selectedNodes[0] is NemerleMacroReferenceContainerNode
-                                        ? GetMacroReferenceContainer()
-                                        : GetReferenceContainer();
+			IReferenceContainer references = selectedNodes.Count == 1 && selectedNodes[0] is NemerleMacroReferenceContainerNode
+																				? GetMacroReferenceContainer()
+																				: GetReferenceContainer();
 
-      if (null == references)
-      {
-        // This project does not support references or the reference container was not created.
-        // In both cases this operation is not supported.
-        return VSConstants.E_NOTIMPL;
-      }
-      for (int cCount = 0; cCount < cComponents; cCount++)
-      {
-        VSCOMPONENTSELECTORDATA selectorData = new VSCOMPONENTSELECTORDATA();
-        IntPtr ptr = rgpcsdComponents[cCount];
-        selectorData = (VSCOMPONENTSELECTORDATA)Marshal.PtrToStructure(ptr, typeof(VSCOMPONENTSELECTORDATA));
-        if (null == references.AddReferenceFromSelectorData(selectorData))
-        {
-          //Skip further proccessing since a reference has to be added
-          pResult[0] = VSADDCOMPRESULT.ADDCOMPRESULT_Failure;
-          return VSConstants.S_OK;
-        }
-      }
-      return VSConstants.S_OK;
-    }
+			if (null == references)
+			{
+				// This project does not support references or the reference container was not created.
+				// In both cases this operation is not supported.
+				return VSConstants.E_NOTIMPL;
+			}
+			for (int cCount = 0; cCount < cComponents; cCount++)
+			{
+				VSCOMPONENTSELECTORDATA selectorData = new VSCOMPONENTSELECTORDATA();
+				IntPtr ptr = rgpcsdComponents[cCount];
+				selectorData = (VSCOMPONENTSELECTORDATA)Marshal.PtrToStructure(ptr, typeof(VSCOMPONENTSELECTORDATA));
+				if (null == references.AddReferenceFromSelectorData(selectorData))
+				{
+					//Skip further proccessing since a reference has to be added
+					pResult[0] = VSADDCOMPRESULT.ADDCOMPRESULT_Failure;
+					return VSConstants.S_OK;
+				}
+			}
+			return VSConstants.S_OK;
+		}
 
-    #endregion
+		#endregion
 
 
 		protected override ConfigProvider CreateConfigProvider()

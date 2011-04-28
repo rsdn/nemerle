@@ -35,10 +35,10 @@ namespace Nemerle.VisualStudio.Project
 
 		#endregion
 
-    protected override NodeProperties CreatePropertiesObject()
-    {
-      return new NemerleProjectReferencesProperties(this, "Project Reference Properties");
-    }
+		protected override NodeProperties CreatePropertiesObject()
+		{
+			return new NemerleProjectReferencesProperties(this, "Project Reference Properties");
+		}
 
 		public override object GetIconHandle(bool open)
 		{

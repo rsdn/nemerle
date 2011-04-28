@@ -208,10 +208,10 @@ namespace Nemerle.VisualStudio
 		{
 			TextSpan span = new TextSpan();
 
-			span.iStartLine  = point.Line   - 1;
+			span.iStartLine = point.Line - 1;
 			span.iStartIndex = point.Column - 1;
-			span.iEndLine    = point.Line   - 1;
-			span.iEndIndex   = point.Column - 1;
+			span.iEndLine = point.Line - 1;
+			span.iEndIndex = point.Column - 1;
 
 			return span;
 		}
@@ -220,10 +220,10 @@ namespace Nemerle.VisualStudio
 		{
 			TextSpan span = new TextSpan();
 
-			span.iStartLine  = startPoint.Line   - 1;
+			span.iStartLine = startPoint.Line - 1;
 			span.iStartIndex = startPoint.Column - 1;
-			span.iEndLine    = endPoint.Line     - 1;
-			span.iEndIndex  = endPoint.Column    - 1;
+			span.iEndLine = endPoint.Line - 1;
+			span.iEndIndex = endPoint.Column - 1;
 
 			return span;
 		}
@@ -425,14 +425,14 @@ namespace Nemerle.VisualStudio
 			return (int)Math.Min((long)int.MaxValue, t - s);
 		}
 
-    public static string ToVsOutputStringFormat(this Location loc)
-    {
-      var res = loc.File + "(" + loc.Line + "," + loc.Column;
+		public static string ToVsOutputStringFormat(this Location loc)
+		{
+			var res = loc.File + "(" + loc.Line + "," + loc.Column;
 
-      if (loc.EndLine > loc.Line || loc.EndLine == loc.Line && loc.EndColumn > loc.Column)
-        res += "," + loc.EndLine + "," + loc.EndColumn;
+			if (loc.EndLine > loc.Line || loc.EndLine == loc.Line && loc.EndColumn > loc.Column)
+				res += "," + loc.EndLine + "," + loc.EndColumn;
 
-      return res + "): ";
-    }
+			return res + "): ";
+		}
 	}
 }

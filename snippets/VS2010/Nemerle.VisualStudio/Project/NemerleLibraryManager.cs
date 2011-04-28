@@ -9,6 +9,8 @@ using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.TextManager.Interop;
 
+using Nemerle.Compiler;
+
 namespace Nemerle.VisualStudio.Project
 {
 	/// <summary>
@@ -198,7 +200,7 @@ namespace Nemerle.VisualStudio.Project
 
 			HierarchyListener listener = new HierarchyListener(hierarchy);
 
-			listener.ItemAdded   += OnNewFile;
+			listener.ItemAdded   += OnFileChanged;
 			listener.ItemDeleted += OnDeleteFile;
 
 			listener.StartListening(true);
@@ -395,7 +397,7 @@ namespace Nemerle.VisualStudio.Project
 
 		#region Hierarchy Events
 
-		void OnNewFile(object sender, HierarchyEventArgs args)
+		void OnFileChanged(object sender, HierarchyEventArgs args)
 		{
 			IVsHierarchy hierarchy = sender as IVsHierarchy;
 
@@ -417,6 +419,13 @@ namespace Nemerle.VisualStudio.Project
 
 				if (ErrorHandler.Failed(hr))
 					return;
+
+				var projectInfo = ProjectInfo.FindProject(hierarchy);
+				if (null != projectInfo)
+				{
+					int fileIndex = Nemerle.Compiler.Location.GetFileIndex(args.FileName);
+					projectInfo.Engine.NotifySourceChanged(new StringSource(fileIndex, fileText));
+				}
 			}
 
 			CreateParseRequest(args.FileName, fileText, new ModuleID(hierarchy, args.ItemID));
@@ -572,7 +581,7 @@ namespace Nemerle.VisualStudio.Project
 					// difference between the AddFile and FileChanged operation, so we 
 					// can use the same handler.
 					//
-					listener.OnFileChanged += OnNewFile;
+					listener.OnFileChanged += OnFileChanged;
 
 					// Add the listener to the dictionary, so we will not create it anymore.
 					//
@@ -614,7 +623,7 @@ namespace Nemerle.VisualStudio.Project
 				//
 				HierarchyEventArgs args = new HierarchyEventArgs(listener.FileID.ItemID, listener.FileName);
 
-				OnNewFile(listener.FileID.Hierarchy, args);
+				OnFileChanged(listener.FileID.Hierarchy, args);
 			}
 			return VSConstants.S_OK;
 		}

@@ -50,12 +50,12 @@ namespace Nemerle.VisualStudio.LanguageService
 				case VSConstants.VSStd97CmdID.GotoRef:
 					Trace.WriteLine("GoToReference() not implemenred yet");
 					break;
-				default: Trace.Assert(false);	break;
+				default: Trace.Assert(false); break;
 			}
 
 			Source.Goto(TextView, gotoDefinition, line, col);
 		}
-		
+
 		#region GetDataTipText
 
 		public override TextTipData CreateTextTipData()
@@ -77,14 +77,14 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (Source == null || Source.LanguageService == null || !Source.LanguageService.Preferences.EnableQuickInfo)
 				return NativeMethods.E_FAIL;
 
-		// Check if we have to convert the text span for the secondary buffer.
-		TextSpan[] convertedSpan = new TextSpan[1];
-		if(BufferCoordinator == null)
-			convertedSpan[0] = aspan[0];
-		else
-			ErrorHandler.ThrowOnFailure(BufferCoordinator.MapPrimaryToSecondarySpan(aspan[0], convertedSpan));
+			// Check if we have to convert the text span for the secondary buffer.
+			TextSpan[] convertedSpan = new TextSpan[1];
+			if (BufferCoordinator == null)
+				convertedSpan[0] = aspan[0];
+			else
+				ErrorHandler.ThrowOnFailure(BufferCoordinator.MapPrimaryToSecondarySpan(aspan[0], convertedSpan));
 
-		return Source.GetDataTipText(TextView, convertedSpan, out textValue);
+			return Source.GetDataTipText(TextView, convertedSpan, out textValue);
 		}
 
 		/// <summary>This method checks to see if the IVsDebugger is running, and if so, 
@@ -143,13 +143,13 @@ namespace Nemerle.VisualStudio.LanguageService
 			{
 #endif
 			}
-			
+
 			if (string.IsNullOrEmpty(fullTipText))
 				fullTipText = textValue;
 
 			return NativeMethods.S_OK;
 		}
- 
+
 		#endregion
 		public override void OnKillFocus(IVsTextView view)
 		{
@@ -176,7 +176,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			//Debug.WriteLine("OnSetFocus(IVsTextView view)");
 			//ShowAst(view, true);
 			base.OnSetFocus(view);
-		
+
 			var source = Source;
 
 			if (source != null)
@@ -277,13 +277,13 @@ namespace Nemerle.VisualStudio.LanguageService
 			// leaving only two files required to be synchronized
 
 			string txt = null;
-			switch((MenuCmd.CmdId)nCmdId)
+			switch ((MenuCmd.CmdId)nCmdId)
 			{
 				case MenuCmd.CmdId.IplementInterface:
 
 					break;
-				case MenuCmd.CmdId.SetAsMain: 
-					txt = "cmdidSetAsMain"; 
+				case MenuCmd.CmdId.SetAsMain:
+					txt = "cmdidSetAsMain";
 					break;
 				case MenuCmd.CmdId.ExtendSelection:
 					// cmdIdExtendSelection
@@ -298,7 +298,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				case MenuCmd.CmdId.FindInheritorsCtxt: //cmdIdFindInheritorsCtxt
 					FindInheritors();
 					return VSConstants.S_OK;
-				case MenuCmd.CmdId.Rename: 
+				case MenuCmd.CmdId.Rename:
 					txt = "cmdIdRename";
 					RunRenameRefactoring();
 					return VSConstants.S_OK;
@@ -319,12 +319,12 @@ namespace Nemerle.VisualStudio.LanguageService
 				case MenuCmd.CmdId.RemoveLastHighlighting: // cmdIdRemoveLastHighlighting
 					RemoveLastHighlighting();
 					Source.Service.Hint.Close();
-					if(nCmdId == (int)MenuCmd.CmdId.ESC) // ESC
+					if (nCmdId == (int)MenuCmd.CmdId.ESC) // ESC
 						break; // go trocess ESC
 					return VSConstants.S_OK;
 				case MenuCmd.CmdId.SourceOutlinerWindow:
 					{
-						if(Source != null)
+						if (Source != null)
 							Source.ProjectInfo.ProjectNode.Package.OnSourceOutlinerWindowShow(null, null);
 					}
 					return VSConstants.S_OK;
@@ -359,7 +359,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		private List<Location> _selectionsStack;
 
 		private int _currentSelection;
-		public  int  CurrentSelection
+		public int CurrentSelection
 		{
 			get { return _currentSelection; }
 			set
@@ -431,7 +431,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				return false;
 
 			if (projectInfo.ErrorCount > 0)
-				return MessageBox.Show(TextEditorWindow, 
+				return MessageBox.Show(TextEditorWindow,
 					"The project contaions error[s]. Are you sure you want to proceed (it's unsafe!)?",
 					"",
 					MessageBoxButtons.YesNo,
@@ -523,13 +523,13 @@ namespace Nemerle.VisualStudio.LanguageService
 				return;
 
 			var engine = Source.ProjectInfo.Engine;
-			if(!WarnAboutErrors())
+			if (!WarnAboutErrors())
 				return;
 
 			int lineIndex;
 			int colIndex;
 			TextView.GetCaretPos(out lineIndex, out colIndex);
-			
+
 			var allUsages = engine.GetGotoInfo(Source, lineIndex + 1, colIndex + 1, GotoKind.Usages);
 			var usages = allUsages.Distinct().ToArray();
 
@@ -541,7 +541,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			var definitionCount = usages.Count(usage => usage.UsageType == UsageType.Definition);
 
-			if(definitionCount == 0)
+			if (definitionCount == 0)
 			{
 				Source.ProjectInfo.ShowMessage("Cannot find definition.", MessageType.Error);
 				return;
@@ -847,9 +847,9 @@ namespace Nemerle.VisualStudio.LanguageService
 		// 3. When typing enter in the middle of expression.
 		public override bool HandleSmartIndent()
 		{
-						int line;
-						int idx;
-						TextView.GetCaretPos(out line, out idx);
+			int line;
+			int idx;
+			TextView.GetCaretPos(out line, out idx);
 
 			return Source.SmartIndent.At(line);
 		}
@@ -871,7 +871,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			VsCommands2K cmd = (VsCommands2K)nCmdId;
 
 			// Special handling of "Toggle all outlining" command
-						//CodingUnit: 2010.02.19 normal action back in Toggle All Outlining
+			//CodingUnit: 2010.02.19 normal action back in Toggle All Outlining
 			/*if (guidCmdGroup == typeof(VsCommands2K).GUID)
 			{
 				if ((VsCommands2K)nCmdId == VsCommands2K.OUTLN_TOGGLE_ALL)

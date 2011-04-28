@@ -36,7 +36,7 @@ namespace Nemerle.VisualStudio.LanguageService
 	/// This is the base class for a language service that supplies language features including syntax highlighting, brace matching, auto-completion, IntelliSense support, and code snippet expansion.
 	///</summary>
 	[Guid(NemerleConstants.LanguageServiceGuidString)]
-  public class NemerleLanguageService : Microsoft.VisualStudio.Package.LanguageService
+	public class NemerleLanguageService : Microsoft.VisualStudio.Package.LanguageService
 	{
 		#region Fields
 
@@ -47,14 +47,14 @@ namespace Nemerle.VisualStudio.LanguageService
 		public NemerlePackage Package { get; private set; }
     IVsSmartTagTipWindow _smartTagWin;
 		public bool ContextMenuActive { get; set; }
-		
+
 		#endregion
-		
+
 		#region Init
-		
+
 		public NemerleLanguageService(NemerlePackage package)
 		{
-      Debug.Assert(package != null, "package != null");
+			Debug.Assert(package != null, "package != null");
 			Package = package;
 
 			if (System.Threading.Thread.CurrentThread.Name == null)
@@ -64,9 +64,15 @@ namespace Nemerle.VisualStudio.LanguageService
 			AstToolControl.ShowLocation += GotoLocation;
 
 			if (DefaultEngine == null)
-				DefaultEngine = EngineFactory.Create(EngineCallbackStub.Default, new TraceWriter(), true);
+			{
+				try { DefaultEngine = EngineFactory.Create(EngineCallbackStub.Default, new TraceWriter(), true); }
+				catch (Exception ex)
+				{
+					Debug.WriteLine(ex.Message);
+				}
+			}
 
-      Hint = new Hint();
+			Hint = new Hint();
 			Hint.WrapWidth = 900.1;
 		}
 
@@ -178,7 +184,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			return null; // At now we not use Microsoft implementation of parse thread!
 		}
-    	
+
 		#endregion
 
 		#region Colorizing
@@ -257,7 +263,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		};
 
-	  readonly Dictionary<IVsTextLines, NemerleColorizer> _colorizers = new Dictionary<IVsTextLines,NemerleColorizer>();
+		readonly Dictionary<IVsTextLines, NemerleColorizer> _colorizers = new Dictionary<IVsTextLines, NemerleColorizer>();
 
 		public override Colorizer GetColorizer(IVsTextLines buffer)
 		{
@@ -369,7 +375,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			else
 				_expansionsList.Clear();
 
-			IVsTextManager2 textManager = 
+			IVsTextManager2 textManager =
 				Microsoft.VisualStudio.Shell.Package.GetGlobalService(
 				typeof(SVsTextManager)) as IVsTextManager2;
 
@@ -439,18 +445,18 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override void SynchronizeDropdowns()
 		{
-      IVsTextView view = LastActiveTextView;
-      if (view != null)
+			IVsTextView view = LastActiveTextView;
+			if (view != null)
 				SynchronizeDropdowns(view);
 		}
 
 		public void SynchronizeDropdowns(IVsTextView view)
 		{
 			var mgr = GetCodeWindowManagerForView(view);
-      if (mgr == null || mgr.DropDownHelper == null)
-        return;
+			if (mgr == null || mgr.DropDownHelper == null)
+				return;
 
-      var dropDownHelper = (NemerleTypeAndMemberDropdownBars)mgr.DropDownHelper;
+			var dropDownHelper = (NemerleTypeAndMemberDropdownBars)mgr.DropDownHelper;
 			int line = -1, col = -1;
 			if (!ErrorHandler.Failed(view.GetCaretPos(out line, out col)))
 				dropDownHelper.SynchronizeDropdownsRsdn(view, line, col);
@@ -484,7 +490,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				_preferences = new LanguagePreferences(Site, typeof(NemerleLanguageService).GUID, Name);
 
 				// Setup default values.
-				_preferences.ShowNavigationBar	 = true;
+				_preferences.ShowNavigationBar = true;
 				_preferences.EnableFormatSelection = true;
 				_preferences.IndentStyle = IndentingStyle.Smart;
 
@@ -588,18 +594,18 @@ namespace Nemerle.VisualStudio.LanguageService
 		}
 
 		public override int ValidateBreakpointLocation(
-			IVsTextBuffer buffer, 
-			int		   line, 
-			int		   col, 
-			TextSpan[]	pCodeSpan
+			IVsTextBuffer buffer,
+			int line,
+			int col,
+			TextSpan[] pCodeSpan
 		)
 		{
 			if (pCodeSpan != null)
 			{
-				pCodeSpan[0].iStartLine  = line;
+				pCodeSpan[0].iStartLine = line;
 				pCodeSpan[0].iStartIndex = col;
-				pCodeSpan[0].iEndLine	= line;
-				pCodeSpan[0].iEndIndex   = col;
+				pCodeSpan[0].iEndLine = line;
+				pCodeSpan[0].iEndIndex = col;
 
 				if (buffer != null)
 				{
@@ -608,7 +614,7 @@ namespace Nemerle.VisualStudio.LanguageService
 					buffer.GetLengthOfLine(line, out length);
 
 					pCodeSpan[0].iStartIndex = 0;
-					pCodeSpan[0].iEndIndex   = length;
+					pCodeSpan[0].iEndIndex = length;
 				}
 
 				return VSConstants.S_OK;
@@ -638,19 +644,19 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (IsDisposed)
 				return;
 
-      foreach (var prj in ProjectInfo.Projects)
-        prj.Engine.OnIdle();
+			foreach (var prj in ProjectInfo.Projects)
+				prj.Engine.OnIdle();
 
-      if (periodic)
-      {
-        var maxTime = TimeSpan.FromSeconds(0.05);
-        var timer = Stopwatch.StartNew();
+			if (periodic)
+			{
+				var maxTime = TimeSpan.FromSeconds(0.05);
+				var timer = Stopwatch.StartNew();
 
-        AsyncWorker.DispatchResponses();
+				AsyncWorker.DispatchResponses();
 
-        while (timer.Elapsed < maxTime && AsyncWorker.DoSynchronously())
-          ;
-      }
+				while (timer.Elapsed < maxTime && AsyncWorker.DoSynchronously())
+					;
+			}
 			//if (LastActiveTextView == null)
 			//  return;
 
@@ -677,12 +683,12 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region ShowLocation event handler
 
-    public void GotoLocation(Location loc)
-    {
-      GotoLocation(loc, null, false);
-    }
-		
-    public void GotoLocation(Location loc, string caption, bool asReadonly)
+		public void GotoLocation(Location loc)
+		{
+			GotoLocation(loc, null, false);
+		}
+
+		public void GotoLocation(Location loc, string caption, bool asReadonly)
 		{
 			//TODO: VladD2: Разобраться почему этот код вызывает вылет
 			//IVsUIShell uiShell = this.GetService(typeof(SVsUIShell)) as IVsUIShell;
@@ -697,15 +703,15 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			TextSpan span = new TextSpan();
 
-			span.iStartLine  = loc.Line - 1;
+			span.iStartLine = loc.Line - 1;
 			span.iStartIndex = loc.Column - 1;
-			span.iEndLine	   = loc.EndLine - 1;
-			span.iEndIndex   = loc.EndColumn - 1;
+			span.iEndLine = loc.EndLine - 1;
+			span.iEndIndex = loc.EndColumn - 1;
 
-			uint		       itemID;
+			uint itemID;
 			IVsUIHierarchy hierarchy;
 			IVsWindowFrame docFrame;
-			IVsTextView	   textView;
+			IVsTextView textView;
 
 			if (loc.FileIndex == 0)
 				return;
@@ -721,12 +727,12 @@ namespace Nemerle.VisualStudio.LanguageService
 				stream.SetStateFlags((uint)BUFFERSTATEFLAGS.BSF_USER_READONLY);
 			}
 
-      if (caption != null)
-        ErrorHandler.ThrowOnFailure(docFrame.SetProperty((int)__VSFPROPID.VSFPROPID_OwnerCaption, caption));
+			if (caption != null)
+				ErrorHandler.ThrowOnFailure(docFrame.SetProperty((int)__VSFPROPID.VSFPROPID_OwnerCaption, caption));
 
 			ErrorHandler.ThrowOnFailure(docFrame.Show());
 
-      if (textView != null && loc.Line != 0)
+			if (textView != null && loc.Line != 0)
 			{
 				try
 				{
@@ -754,15 +760,15 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (_statusbar != null)
 				_statusbar.SetText(text);
 		}
- 
+
 		#endregion
 
-    #region IVsTipWindow Members
+		#region IVsTipWindow Members
 
-	  public Hint Hint { get; private set; }
+		public Hint Hint { get; private set; }
 
 		public bool ShowHint(IVsTextView view, TextSpan hintSpan, Func<string, string> getHintContent, string hintText)
-	  {
+		{
 			if (ContextMenuActive)
 				return false;
 

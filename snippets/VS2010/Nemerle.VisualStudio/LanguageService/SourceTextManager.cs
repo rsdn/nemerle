@@ -7,11 +7,11 @@
 
 //using Tuple2 = Nemerle.Builtins.Tuple<int, int>;
 
-//using ISource = Nemerle.Completion2.ISource;
+//using IIdeSource = Nemerle.Completion2.IIdeSource;
 
 //namespace Nemerle.VisualStudio.LanguageService
 //{
-//  class SourceTextManager : ISource
+//  class SourceTextManager : IIdeSource
 //  {
 //    public int FileIndex { get { return _source.FileIndex; } }
 

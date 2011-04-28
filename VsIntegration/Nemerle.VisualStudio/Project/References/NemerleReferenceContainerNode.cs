@@ -14,7 +14,8 @@ namespace Nemerle.VisualStudio.Project
 	{
 		#region ctor
 
-		public NemerleReferenceContainerNode(ProjectNode root) : base(root)
+		public NemerleReferenceContainerNode(ProjectNode root)
+			: base(root)
 		{
 		}
 
@@ -42,10 +43,10 @@ namespace Nemerle.VisualStudio.Project
 			catch (NullReferenceException e)
 			{
 				if (e.Message == "The InstalledFilePath is null")
-					throw new ApplicationException("The file '" 
+					throw new ApplicationException("The file '"
 						+ System.IO.Path.GetFileName(selectorData.bstrFile)
 						+ "' not .Net assembly or correctly installed COM library!");
-				
+
 				throw;
 			}
 		}
@@ -58,13 +59,13 @@ namespace Nemerle.VisualStudio.Project
 			return new NemerleProjectReferenceNode(this.ProjectMgr, element);
 		}
 
-    /// <summary>
-    /// Create a Project to Project reference given a VSCOMPONENTSELECTORDATA structure
-    /// </summary>
-    protected override ProjectReferenceNode CreateProjectReferenceNode(VSCOMPONENTSELECTORDATA selectorData)
-    {
-      return new NemerleProjectReferenceNode(this.ProjectMgr, selectorData.bstrTitle, selectorData.bstrFile, selectorData.bstrProjRef);
-    }
+		/// <summary>
+		/// Create a Project to Project reference given a VSCOMPONENTSELECTORDATA structure
+		/// </summary>
+		protected override ProjectReferenceNode CreateProjectReferenceNode(VSCOMPONENTSELECTORDATA selectorData)
+		{
+			return new NemerleProjectReferenceNode(this.ProjectMgr, selectorData.bstrTitle, selectorData.bstrFile, selectorData.bstrProjRef);
+		}
 
 		protected override AssemblyReferenceNode CreateAssemblyReferenceNode(string fileName)
 		{
@@ -98,7 +99,7 @@ namespace Nemerle.VisualStudio.Project
 			return node;
 		}
 
-    protected override AssemblyReferenceNode CreateAssemblyReferenceNode(ProjectElement element)
+		protected override AssemblyReferenceNode CreateAssemblyReferenceNode(ProjectElement element)
 		{
 			// VladD2:
 			// ReferenceContainerNode does not support reference to files (instead of

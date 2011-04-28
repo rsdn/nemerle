@@ -11,17 +11,17 @@ using System.Security;
 
 namespace Nemerle.VisualStudio.Project
 {
-  class NemerleMacroReferenceContainerNode : NemerleReferenceContainerNode
+	class NemerleMacroReferenceContainerNode : NemerleReferenceContainerNode
 	{
-    internal const string MacroReferencesNodeVirtualName = NemerleConstants.MacroReference;
-    
-    #region ctor
+		internal const string MacroReferencesNodeVirtualName = NemerleConstants.MacroReference;
 
-    public NemerleMacroReferenceContainerNode(ProjectNode root)
-      : base(root)
+		#region ctor
+
+		public NemerleMacroReferenceContainerNode(ProjectNode root)
+			: base(root)
 		{
-      this.VirtualNodeName = MacroReferencesNodeVirtualName;
-    }
+			this.VirtualNodeName = MacroReferencesNodeVirtualName;
+		}
 
 		#endregion
 

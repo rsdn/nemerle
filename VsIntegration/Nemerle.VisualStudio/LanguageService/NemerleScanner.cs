@@ -18,14 +18,14 @@ namespace Nemerle.VisualStudio.LanguageService
 			_buffer		  = buffer;
 		}
 
-		private readonly	NemerleLanguageService _languageService;
-		private readonly	IVsTextLines		   _buffer;
-		internal			int					_currentLine = -1;
-		internal			TokenColor			 _lastColor;
-		internal			bool				   _colorizeEnd;
-		internal			NemerleSource		  _source;
+		private readonly	NemerleLanguageService  _languageService;
+		private readonly	IVsTextLines		        _buffer;
+		internal			    int					            _currentLine = -1;
+		internal			    TokenColor			        _lastColor;
+		internal			    bool				            _colorizeEnd;
+		internal			    NemerleSource		        _source;
+		private           ScanLexer               _lexer;
 
-		private  ScanLexer _lexer;
 		internal ScanLexer GetNewLexer()
 		{
 			var source = (NemerleSource)_languageService.GetSource(_buffer);

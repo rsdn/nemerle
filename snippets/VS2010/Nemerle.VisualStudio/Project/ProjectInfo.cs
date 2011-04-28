@@ -18,7 +18,7 @@ using Nemerle.Completion2;
 using Nemerle.VisualStudio.LanguageService;
 
 using MSBuild = Microsoft.Build.BuildEngine;
-using SourceMap = System.Collections.Generic.Dictionary<int, Nemerle.Completion2.ISource>;
+using SourceMap = System.Collections.Generic.Dictionary<int, Nemerle.Completion2.IIdeSource>;
 using Nemerle.VisualStudio.GUI;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Package;
@@ -42,7 +42,7 @@ namespace Nemerle.VisualStudio.Project
 		public int ErrorCount { get { return _errorList.Tasks.Count; } }
 
 		readonly SourceMap _sourceMap = new SourceMap();
-		readonly List<ISource> _sources = new List<ISource>();
+		readonly List<IIdeSource> _sources = new List<IIdeSource>();
 
 		private string _projectLocation;
 
@@ -132,8 +132,8 @@ namespace Nemerle.VisualStudio.Project
 		int _buildTypedtreeCount;
 		readonly List<MethodBuilderEx> _methodsCheckQueue = new List<MethodBuilderEx>(100);
 
-		private IEngine _engine;
-		public IEngine Engine
+		private IIdeEngine _engine;
+		public IIdeEngine Engine
 		{
 			[DebuggerNonUserCode]
 			get { ManagerClass.Instance = (ManagerClass)_engine; return _engine; }
@@ -325,10 +325,10 @@ namespace Nemerle.VisualStudio.Project
 			ReplaseOrAddSource(source);
 		}
 
-		internal void ReplaseOrAddSource(ISource source)
+		internal void ReplaseOrAddSource(IIdeSource source)
 		{
 			var fileIndex = source.FileIndex;
-			ISource old;
+			IIdeSource old;
 			if (_sourceMap.TryGetValue(fileIndex, out old))
 				_sources.Remove(old);
 
@@ -347,7 +347,7 @@ namespace Nemerle.VisualStudio.Project
 			ReplaseOrAddSource(new FileNemerleSource(fileIndex));
 		}
 
-		internal void RemoveSource(ISource source)
+		internal void RemoveSource(IIdeSource source)
 		{
 			_sourceMap.Remove(source.FileIndex);
 			_sources.Remove(source);
@@ -357,7 +357,7 @@ namespace Nemerle.VisualStudio.Project
 
 		public NemerleSource GetEditableSource(int fileIndex, WindowFrameShowAction action)
 		{
-			ISource source;
+			IIdeSource source;
 
 			if (!_sourceMap.TryGetValue(fileIndex, out source))
 				throw new ApplicationException("File not in project");
@@ -422,13 +422,13 @@ namespace Nemerle.VisualStudio.Project
 			return frame;
 		}
 
-		public ISource GetSource(int fileIndex)
+		public IIdeSource GetSource(int fileIndex)
 		{
-			ISource source;
+			IIdeSource source;
 			return _sourceMap.TryGetValue(fileIndex, out source) ? source : null;
 		}
 
-		public ISource GetSource(string filePath)
+		public IIdeSource GetSource(string filePath)
 		{
 			return GetSource(Location.GetFileIndex(filePath));
 		}
@@ -490,7 +490,7 @@ namespace Nemerle.VisualStudio.Project
 			return options;
 		}
 
-		IEnumerable<ISource> IIdeProject.GetSources()
+		IEnumerable<IIdeSource> IIdeProject.GetSources()
 		{
 			return _sources;
 		}
@@ -504,6 +504,17 @@ namespace Nemerle.VisualStudio.Project
 
 		#endregion
 
+
+		internal void FileBuildActionPropertyChanged(HierarchyNode node, NemerleBuildAction oldAction, NemerleBuildAction newAction)
+		{
+			if (oldAction == NemerleBuildAction.Compile && newAction != NemerleBuildAction.Compile)
+				RemoveSource(node.Url);
+			else if (newAction == NemerleBuildAction.Compile && oldAction != NemerleBuildAction.Compile)
+				AddSource(node.Url);
+
+			Engine.RequestOnBuildTypesTree();
+		}
+
 		private void FileAdded(object sender, HierarchyEventArgs ergs)
 		{
 			Debug.Assert(ergs.TextBuffer == null);
@@ -516,7 +527,12 @@ namespace Nemerle.VisualStudio.Project
 
 			string path = ergs.FileName;
 
-			ISource source = (NemerleSource)LanguageService.GetSource(path);
+			AddSource(path);
+		}
+
+		private void AddSource(string path)
+		{
+			IIdeSource source = (NemerleSource)LanguageService.GetSource(path); // TODO: VladD2: тут надо искать Source по иерархии, а не по пути!
 
 			try
 			{
@@ -538,6 +554,11 @@ namespace Nemerle.VisualStudio.Project
 			Debug.Assert(ergs.TextBuffer == null);
 
 			string path = ergs.FileName;
+			RemoveSource(path);
+		}
+
+		private void RemoveSource(string path)
+		{
 			var fileIndex = Location.GetFileIndex(path);
 
 			if (IsFileInProject(fileIndex))
@@ -596,7 +617,7 @@ namespace Nemerle.VisualStudio.Project
 
 		#region HighlightUsages
 
-		internal void RemoveLastHighlighting(ISource source)
+		internal void RemoveLastHighlighting(IIdeSource source)
 		{
 			Debug.WriteLine(">>>> ##### RemoveLastHighlighting!");
 			var nsource = source as NemerleSource;
@@ -716,7 +737,7 @@ namespace Nemerle.VisualStudio.Project
 
 		void IIdeProject.TypesTreeCreated()
 		{
-			foreach (ISource source in _sources)
+			foreach (IIdeSource source in _sources)
 			{
 				var nemerleSource = source as NemerleSource;
 
@@ -797,7 +818,7 @@ namespace Nemerle.VisualStudio.Project
 			Debug.WriteLine(text);
 		}
 
-		public void AddUnimplementedMembers(ISource source, TypeBuilder ty,
+		public void AddUnimplementedMembers(IIdeSource source, TypeBuilder ty,
 			IEnumerable<IGrouping<FixedType.Class, IMember>> unimplementedMembers)
 		{
 			using (var form = new ImplementMembersForm((NemerleSource)source, ty, unimplementedMembers))
@@ -806,7 +827,7 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
-		public void AddOverrideMembers(ISource source, TypeBuilder ty, IEnumerable<IMember> notOverriden)
+		public void AddOverrideMembers(IIdeSource source, TypeBuilder ty, IEnumerable<IMember> notOverriden)
 		{
 			var ty2 = ty.GetMemType();
 			var notOverriden2 = notOverriden.Select(m => new { ty2, m }).GroupBy(x => x.ty2, x => x.m);
@@ -816,7 +837,7 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
-		public void SetHighlights(ISource source, IEnumerable<GotoInfo> highlights)
+		public void SetHighlights(IIdeSource source, IEnumerable<GotoInfo> highlights)
 		{
 			var isPermanent = false;
 

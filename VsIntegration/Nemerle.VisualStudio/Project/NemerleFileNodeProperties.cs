@@ -58,7 +58,7 @@ namespace Nemerle.VisualStudio.Project
 
 				if (string.IsNullOrEmpty(value))
 					return NemerleBuildAction.None;
-					
+
 				return (NemerleBuildAction)Enum.Parse(typeof(NemerleBuildAction), value);
 			}
 

@@ -64,7 +64,11 @@ namespace Nemerle.VisualStudio.Project
 
 			set
 			{
+				var oldValue = NemerleBuildAction;
 				Node.ItemNode.ItemName = value.ToString();
+				var project = ProjectInfo.FindProject(this.Node.ProjectMgr);
+				if (project != null)
+					project.FileBuildActionPropertyChanged(this.Node, oldValue, value);
 			}
 		}
 
