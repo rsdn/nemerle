@@ -19,7 +19,7 @@ namespace Nemerle.VisualStudio.Project.References
         [SRCategoryAttribute(Microsoft.VisualStudio.Project.SR.Misc)]
         [LocDisplayName(Microsoft.VisualStudio.Project.SR.CopyToLocal)]
         [SRDescriptionAttribute(Microsoft.VisualStudio.Project.SR.CopyToLocalDescription)]
-        public bool CopyToLocal
+        public new bool CopyToLocal
         {
             get
             {
