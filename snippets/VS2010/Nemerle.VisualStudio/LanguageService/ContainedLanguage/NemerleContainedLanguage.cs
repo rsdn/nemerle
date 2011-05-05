@@ -133,8 +133,9 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (_projectInfo != null && LanguageService.GetSource(buffer) == null)
 			{
 				// создаем и регистрируем в проекте временный source, чтобы не сломалась логика  
-				// конструктора NemerleSource (см вызов LanguageService.GetOrCreateSource) 
-				_projectInfo.ReplaseOrAddSource(new FileNemerleSource(secondaryFileIndex));
+				// конструктора NemerleSource (см вызов LanguageService.AddEditableSource) 
+				//_projectInfo.ReplaseOrAddSource(new FileNemerleSource(secondaryFileIndex));
+				_projectInfo.AddEditableSource((NemerleSource)LanguageService.CreateSource(buffer));
 			}
 			
 			NemerleSource source = LanguageService.GetOrCreateSource(buffer) as NemerleSource;

@@ -59,16 +59,17 @@ namespace Nemerle.VisualStudio.Project
 			var url = this.Url;
 			var ext = Path.GetExtension(url);
 
-			if (ext.Equals(".resx", StringComparison.InvariantCultureIgnoreCase))
-			{
-				url = Path.GetFullPath(this.Url);
-				var path = Path.GetDirectoryName(url);
-				var name = Path.GetFileName(url);
-				_watcher = new FileSystemWatcher(path, name);
-				_watcher.NotifyFilter = NotifyFilters.LastWrite;
-				_watcher.Changed += watcher_Changed;
-				_watcher.EnableRaisingEvents = true;
-			}
+			//if (ext.Equals(".resx", StringComparison.InvariantCultureIgnoreCase))
+			//{
+			//  // TODO: Удалить это дело, так как теперь оповещения должны быть реализованы в Engine.
+			//  url = Path.GetFullPath(this.Url);
+			//  var path = Path.GetDirectoryName(url);
+			//  var name = Path.GetFileName(url);
+			//  _watcher = new FileSystemWatcher(path, name);
+			//  _watcher.NotifyFilter = NotifyFilters.LastWrite;
+			//  _watcher.Changed += watcher_Changed;
+			//  _watcher.EnableRaisingEvents = true;
+			//}
 		}
 
 		#endregion
@@ -192,6 +193,9 @@ namespace Nemerle.VisualStudio.Project
 				ItemNode.SetMetadata(ProjectFileConstants.Name, url);
 
 				//ProjectMgr.OnItemDeleted();
+				var proj = ProjectInfo.FindProject(ProjectMgr);
+				if (proj != null)
+					proj.RemoveSource(this.Url);
 
 				ReDraw(UIHierarchyElement.Icon); // We have to redraw the icon of the node as it is now not a member of the project and should be drawn using a different icon.
 				ReDraw(UIHierarchyElement.SccState); // update the SCC state icon.
@@ -237,6 +241,10 @@ namespace Nemerle.VisualStudio.Project
 
 			ItemNode = projectNode.CreateMsBuildFileProjectElement(Url);
 			ProjectMgr.Tracker.OnItemAdded(Url, VSADDFILEFLAGS.VSADDFILEFLAGS_NoFlags);
+
+			var proj = ProjectInfo.FindProject(ProjectMgr);
+			if (proj != null)
+				proj.AddSource(this.Url);
 
 			//projectNode.OnItemAdded(Parent, this);
 
@@ -351,6 +359,23 @@ namespace Nemerle.VisualStudio.Project
 		#endregion
 
 		#region overridden methods
+
+		protected override FileNode RenameFileNode(string oldFileName, string newFileName, uint newParentId)
+		{
+			var projectInfo = ProjectInfo.FindProject(oldFileName);
+
+			if (projectInfo == null)
+				return base.RenameFileNode(oldFileName, newFileName, newParentId);
+
+			projectInfo.RenameSource(oldFileName, newFileName);
+
+			FileNode result = null;
+			projectInfo.BeginRenameFile();
+			try { result = base.RenameFileNode(oldFileName, newFileName, newParentId); }
+			finally { projectInfo.EndRenameFile(); }
+
+			return result;
+		}
 
 		protected override void Dispose(bool disposing)
 		{

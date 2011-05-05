@@ -930,7 +930,7 @@ namespace Nemerle.VisualStudio.Project
 			var projectInfo = ProjectInfo;
 
 			if (projectInfo != null)
-				projectInfo.Engine.BeginBuildTypesTree();
+				projectInfo.Engine.RequestOnBuildTypesTree();
 
 			//// TODO : Revisit the VSADDFILEFLAGS here. Can it be a nested project?
 			//this.tracker.OnItemAdded(fileName, VSADDFILEFLAGS.VSADDFILEFLAGS_NoFlags);
@@ -1033,7 +1033,7 @@ namespace Nemerle.VisualStudio.Project
 				newNode.OleServiceProvider.AddService(typeof(DesignerContext), newNode.ServiceCreator, false);
 			}
 
-			if (IsCodeFile(include) && item.ItemName == "Compile")
+			if (item.ItemName == "Compile") // IsCodeFile(include) && 
 				provider.AddService(typeof(SVSMDCodeDomProvider), new NemerleVSMDProvider(newNode), false);
 
 			return newNode;

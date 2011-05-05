@@ -70,10 +70,18 @@ namespace Nemerle.VisualStudio.LanguageService
 			SmartIndent = new NemerleSmartIndentation(this);
 
 
+			UpdateProjectInfo(projectInfo);
+		}
+
+		public void UpdateProjectInfo(ProjectInfo projectInfo)
+		{
 			if (projectInfo == null)
 				GetEngine().BeginUpdateCompileUnit(this);
 			else
+			{
+				ProjectInfo = projectInfo;
 				projectInfo.Engine.BeginUpdateCompileUnit(this);
+			}
 		}
 
 		#endregion
@@ -1131,6 +1139,11 @@ namespace Nemerle.VisualStudio.LanguageService
 		#endregion
 
 		#region Implementation
+
+		internal void Rename(string newFileName)
+		{
+			_fileIndex = Location.GetFileIndex(newFileName);
+		}
 
 		#region Table formating
 
