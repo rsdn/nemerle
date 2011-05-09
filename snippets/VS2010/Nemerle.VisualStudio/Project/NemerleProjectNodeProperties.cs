@@ -68,7 +68,7 @@ namespace Nemerle.VisualStudio.Project
 
 		protected string GetPropertyValue(string propertyName)
 		{
-      var prop = Node.ProjectMgr.BuildProject.GetPropertyValue(propertyName); // EvaluatedProperties
+			var prop = Node.ProjectMgr.BuildProject.GetPropertyValue(propertyName); // EvaluatedProperties
 			return prop ?? "";
 		}
 

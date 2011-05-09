@@ -45,6 +45,7 @@ namespace Nemerle.VisualStudio.Project
 		readonly List<IIdeSource> _sources = new List<IIdeSource>();
 
 		private string _projectLocation;
+		private bool _fileRenamingInProgress;
 
 		public ProjectInfo(
 			NemerleProjectNode projectNode,
@@ -334,6 +335,7 @@ namespace Nemerle.VisualStudio.Project
 
 			_sourceMap[fileIndex] = source;
 			_sources.Add(source);
+			//Engine.RequestOnBuildTypesTree();
 		}
 
 		internal void RemoveEditableSource(NemerleSource source)
@@ -351,9 +353,24 @@ namespace Nemerle.VisualStudio.Project
 		{
 			_sourceMap.Remove(source.FileIndex);
 			_sources.Remove(source);
+
+			Engine.RequestOnBuildTypesTree();
 		}
 
+		public void RemoveSource(string path)
+		{
+			if (_fileRenamingInProgress)
+				return;
 
+			var fileIndex = Location.GetFileIndex(path);
+
+			if (IsFileInProject(fileIndex))
+			{
+				var source = GetSource(fileIndex);
+				Trace.Assert(source != null);
+				RemoveSource(source);
+			}
+		}
 
 		public NemerleSource GetEditableSource(int fileIndex, WindowFrameShowAction action)
 		{
@@ -511,8 +528,6 @@ namespace Nemerle.VisualStudio.Project
 				RemoveSource(node.Url);
 			else if (newAction == NemerleBuildAction.Compile && oldAction != NemerleBuildAction.Compile)
 				AddSource(node.Url);
-
-			Engine.RequestOnBuildTypesTree();
 		}
 
 		private void FileAdded(object sender, HierarchyEventArgs ergs)
@@ -530,17 +545,24 @@ namespace Nemerle.VisualStudio.Project
 			AddSource(path);
 		}
 
-		private void AddSource(string path)
+		public void AddSource(string path)
 		{
+			if (_fileRenamingInProgress)
+				return;
+
 			IIdeSource source = (NemerleSource)LanguageService.GetSource(path); // TODO: VladD2: тут надо искать Source по иерархии, а не по пути!
 
 			try
 			{
 				if (source == null)
 					source = new FileNemerleSource(Location.GetFileIndex(path));
+				else
+					((NemerleSource)source).UpdateProjectInfo(this);
 
 				_sourceMap.Add(source.FileIndex, source);
 				_sources.Add(source);
+
+				Engine.RequestOnBuildTypesTree();
 			}
 			catch (Exception ex)
 			{
@@ -555,18 +577,6 @@ namespace Nemerle.VisualStudio.Project
 
 			string path = ergs.FileName;
 			RemoveSource(path);
-		}
-
-		private void RemoveSource(string path)
-		{
-			var fileIndex = Location.GetFileIndex(path);
-
-			if (IsFileInProject(fileIndex))
-			{
-				var source = GetSource(fileIndex);
-				_sourceMap.Remove(fileIndex);
-				_sources.Remove(source);
-			}
 		}
 
 		public static ProjectInfo FindProject(IVsHierarchy hierarchy)
@@ -1091,5 +1101,28 @@ namespace Nemerle.VisualStudio.Project
 		#endregion
 
 		#endregion
+
+		internal void BeginRenameFile()
+		{
+			_fileRenamingInProgress = true;
+		}
+
+		internal void EndRenameFile()
+		{
+			_fileRenamingInProgress = false;
+		}
+
+		internal void RenameSource(string oldFileName, string newFileName)
+		{
+			var source = GetSource(oldFileName);
+			RemoveSource(source);
+
+			var nemerleSource = source as NemerleSource;
+
+			if (nemerleSource != null)
+				nemerleSource.Rename(newFileName);
+			else
+				AddSource(newFileName);
+		}
 	}
 }

@@ -43,14 +43,14 @@ namespace Nemerle.VisualStudio.LanguageService
 			// ReSharper restore DoNotCallOverridableMethodsInConstructor
 
 			Service = service;
-			ProjectInfo = ProjectInfo.FindProject(path);
+			ProjectInfo projectInfo = ProjectInfo.FindProject(path);
 
-			if (ProjectInfo != null)
+			if (projectInfo != null)
 			{
-				ProjectInfo.AddEditableSource(this);
+				projectInfo.AddEditableSource(this);
 				try
 				{
-					ProjectInfo.MakeCompilerMessagesTextMarkers(textLines, FileIndex);
+					projectInfo.MakeCompilerMessagesTextMarkers(textLines, FileIndex);
 				}
 				catch { }
 			}
@@ -62,6 +62,20 @@ namespace Nemerle.VisualStudio.LanguageService
 			LastDirtyTime = DateTime.Now;
 
 			SmartIndent = new NemerleSmartIndentation(this);
+
+
+			UpdateProjectInfo(projectInfo);
+		}
+
+		public void UpdateProjectInfo(ProjectInfo projectInfo)
+		{
+			if (projectInfo == null)
+				GetEngine().BeginUpdateCompileUnit(this);
+			else
+			{
+				ProjectInfo = projectInfo;
+				projectInfo.Engine.BeginUpdateCompileUnit(this);
+			}
 		}
 
 		#endregion
@@ -119,10 +133,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override void OnChangeLineText(TextLineChange[] lineChange, int last)
 		{
-			//var oldLastDirtyTime = LastDirtyTime;
 			base.OnChangeLineText(lineChange, last);
 			TimeStamp++;
-			//var timer = Stopwatch.StartNew();
 
 			ProjectInfo projectInfo = ProjectInfo;
 
@@ -133,11 +145,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 
 			if (projectInfo.IsDocumentOpening)
-			{
-				//TODO: Реализовать считывание информации о регионах и структуре файла на базе CompileUnit-а получаемого при парсинге.
-				projectInfo.Engine.BeginUpdateCompileUnit(this);
 				return;
-			}
 
 			if (projectInfo.IsProjectAvailable)
 			{
@@ -503,21 +511,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			return null;
 		}
-
-		//private static string GetFullName(TopDeclaration td)
-		//{
-		//  var splName = td.ParsedSplicableName as Nemerle.Compiler.Parsetree.Splicable.Name;
-
-		//  if (splName == null || splName.body.context == null)
-		//    return null;
-
-		//  var nsName = splName.body.context.CurrentNamespace.GetDisplayName();
-
-		//  if (nsName.IsNullOrEmpty())
-		//    return td.Name;
-		//  else
-		//    return nsName + "." + td.Name;
-		//}
 
 		public override ParseRequest BeginParse(int line, int idx, TokenInfo info, ParseReason reason, IVsTextView view, ParseResultHandler callback)
 		{
@@ -997,22 +990,6 @@ namespace Nemerle.VisualStudio.LanguageService
 		private CompileUnit TryGetCompileUnit()
 		{
 			var compileUnit = CompileUnit;
-			/*
-			try
-			{
-
-				if (compileUnit == null && ProjectInfo != null)
-				{
-					var project = ProjectInfo.Project;
-					if (project != null)
-						compileUnit = project.CompileUnits[FileIndex];
-				}
-
-			}
-// ReSharper disable EmptyGeneralCatchClause
-			catch { }  // exceptions can be cause by coloring lexer which work in UI thread
-// ReSharper restore EmptyGeneralCatchClause
-			*/
 			return compileUnit;
 		}
 
@@ -1222,37 +1199,14 @@ namespace Nemerle.VisualStudio.LanguageService
 				HighlightBraces(textView, line, idx);
 		}
 
-		//private void HandlePairedSymbols(IVsTextView textView, VsCommands2K command, int line, int idx, char ch)
-		//{
-		//  // insert paired symbols here
-		//  if(command == VsCommands2K.TYPECHAR)
-		//  {
-		//    if(IsOpeningPairedChar(ch))
-		//    {
-		//      SetText(line, idx, line, idx, GetClosingChar(ch).ToString());
-		//      textView.SetCaretPos(line, idx);
-		//    }
-		//    // if we just typed closing char and the char after caret is the same then we just remove 
-		//    // one of them
-		//    if(IsClosingPairedChar(ch))
-		//    {
-		//      char charAfterCaret = GetText(line, idx, line, idx + 1)[0];
-		//      if (ch == charAfterCaret/*IsClosingPairedChar(charAfterCaret)*/)
-		//        RemoveCharAt(line, idx);
-		//    }
-		//  }
-		//  // delete closing char if opened char was just backspaced and closing one is right next
-		//  if(command == VsCommands2K.BACKSPACE)
-		//  {
-		//    char closingChar = GetText(line, idx, line, idx + 1)[0];
-		//    if(IsOpeningPairedChar(_rememberedChar) && IsClosingPairedChar(closingChar))
-		//      RemoveCharAt(line, idx);
-		//  }
-		//}
-
 		#endregion
 
 		#region Implementation
+
+		internal void Rename(string newFileName)
+		{
+			_fileIndex = Location.GetFileIndex(newFileName);
+		}
 
 		#region Table formating
 
@@ -1688,8 +1642,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			if (_tipAsyncRequest == null || _tipAsyncRequest.Line != loc.Line || _tipAsyncRequest.Column != loc.Column)
 			{
-				if (_typeNameMarker != null && _typeNameMarker.Location.Contains(loc.Line, loc.Column))
-					ShowTypeNameSmartTag(view, false);
+				//if (_typeNameMarker != null && _typeNameMarker.Location.Contains(loc.Line, loc.Column))
+				//  ShowTypeNameSmartTag(view, false);
 				_tipAsyncRequest = GetEngine().BeginGetQuickTipInfo(this, loc.Line, loc.Column);
 				return VSConstants.E_PENDING;
 			}

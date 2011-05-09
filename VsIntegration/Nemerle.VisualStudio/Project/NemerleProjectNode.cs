@@ -327,7 +327,7 @@ namespace Nemerle.VisualStudio.Project
 			// Woraround of bug in ProjectNode.GetProjectOptions()
 			// This reset "options" field.
 			SetProjectFileDirty(IsProjectFileDirty);
-			
+
 			return base.GetProjectOptions(config);
 		}
 

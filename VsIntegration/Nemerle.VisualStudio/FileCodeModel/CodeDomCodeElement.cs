@@ -71,11 +71,11 @@ namespace Nemerle.VisualStudio.FileCodeModel
 			var member = CodeObject.UserData["Member"] as Nemerle.Compiler.Parsetree.MemberBase;
 			if (member != null)
 			{
-				if(part == vsCMPart.vsCMPartBody && member.BodyLocation != null)
+				if (part == vsCMPart.vsCMPartBody && member.BodyLocation != null)
 					point = new CodeDomTextPoint(GetTextDocument(), member.BodyLocation.EndColumn, member.BodyLocation.EndLine);
 				else if (part == vsCMPart.vsCMPartNavigate && member.BodyLocation != null)
 					point = GetNavigationPoint(member.BodyLocation);
-				else if(member.Location != null)
+				else if (member.Location != null)
 					point = new CodeDomTextPoint(GetTextDocument(), member.Location.EndColumn, member.Location.EndLine);
 			}
 
@@ -103,7 +103,7 @@ namespace Nemerle.VisualStudio.FileCodeModel
 		private TextPoint GetNavigationPoint(Nemerle.Compiler.Location bodyLocation)
 		{
 			TextPoint point = null;
- 
+
 			if (bodyLocation.Line < bodyLocation.EndLine) // тело метода состоит более чем из одной строки
 			{
 				var tmpPoint = new CodeDomTextPoint(GetTextDocument(), bodyLocation.Column, bodyLocation.Line);
@@ -114,14 +114,14 @@ namespace Nemerle.VisualStudio.FileCodeModel
 
 				if (lines.Trim(' ', '\t').Length > 0) // если предпоследняя строка состоит не только из пробельных символов
 				{
-					if (bodyLocation.Line == bodyLocation.EndLine - 1) 
+					if (bodyLocation.Line == bodyLocation.EndLine - 1)
 						// тело метода состоит из двух строк
 						// установим курсор на последней позиции предпоследней строки
 						// void foo() 
 						// {_
 						// }
 						point = new CodeDomTextPoint(GetTextDocument(), bodyLocation.Column, bodyLocation.EndLine - 1);
-					else 
+					else
 						// тело метода состоит из более чем двух строк
 						// установим курсор на перед первым непробельныи символом предпоследней строки
 						// void foo() 

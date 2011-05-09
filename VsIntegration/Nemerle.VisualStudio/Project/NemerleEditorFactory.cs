@@ -269,7 +269,7 @@ namespace Nemerle.VisualStudio.Project
 
 			// Create loader for the designer.
 			IVSMDDesignerLoader designerLoader = 
-				(IVSMDDesignerLoader)designerService.CreateDesignerLoader(
+				(IVSMDDesignerLoader)(object)designerService.CreateDesignerLoader(
 					"Microsoft.VisualStudio.Designer.Serialization.VSDesignerLoader");
 
 			bool loaderInitalized = false;

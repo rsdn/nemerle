@@ -9,6 +9,8 @@ using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.TextManager.Interop;
 
+using Nemerle.Compiler;
+
 namespace Nemerle.VisualStudio.Project
 {
 	/// <summary>
@@ -381,6 +383,18 @@ namespace Nemerle.VisualStudio.Project
 
 		#endregion
 
+		void CreateParseRequest(string file, string text, ModuleID id)
+		{
+			LibraryTask task = new LibraryTask(file, text);
+
+			task.ModuleID = id;
+
+			lock (_requests)
+				_requests.Enqueue(task);
+
+			_requestPresent.Set();
+		}
+
 		#region Hierarchy Events
 
 		void OnFileChanged(object sender, HierarchyEventArgs args)
@@ -390,15 +404,31 @@ namespace Nemerle.VisualStudio.Project
 			if (null == hierarchy)
 				return;
 
-			if (null == args.TextBuffer)
-				return;
+			string fileText = null;
 
-			var projectInfo = ProjectInfo.FindProject(hierarchy);
-			if (null == projectInfo) // || projectInfo.IsDocumentOpening)
-				return;
+			if (null != args.TextBuffer)
+			{
+				int lastLine;
+				int lastIndex;
+				int hr = args.TextBuffer.GetLastLineIndex(out lastLine, out lastIndex);
 
-			int fileIndex = Nemerle.Compiler.Location.GetFileIndex(args.FileName);
-			projectInfo.Engine.NotifySourceChanged(new VsTextLinesSource(fileIndex, args.TextBuffer));
+				if (ErrorHandler.Failed(hr))
+					return;
+
+				hr = args.TextBuffer.GetLineText(0, 0, lastLine, lastIndex, out fileText);
+
+				if (ErrorHandler.Failed(hr))
+					return;
+
+				var projectInfo = ProjectInfo.FindProject(hierarchy);
+				if (null != projectInfo)
+				{
+					int fileIndex = Nemerle.Compiler.Location.GetFileIndex(args.FileName);
+					projectInfo.Engine.NotifySourceChanged(new StringSource(fileIndex, fileText));
+				}
+			}
+
+			CreateParseRequest(args.FileName, fileText, new ModuleID(hierarchy, args.ItemID));
 		}
 
 		void OnDeleteFile(object sender, HierarchyEventArgs args)
@@ -417,13 +447,6 @@ namespace Nemerle.VisualStudio.Project
 
 			if (null != node)
 				_library.RemoveNode(node);
-
-			var projectInfo = ProjectInfo.FindProject(hierarchy);
-			if (null != projectInfo)
-			{
-				int fileIndex = Nemerle.Compiler.Location.GetFileIndex(args.FileName);
-				projectInfo.Engine.NotifySourceDeleted(fileIndex);
-			}
 		}
 
 		#endregion
@@ -535,16 +558,12 @@ namespace Nemerle.VisualStudio.Project
 						// This hierarchy is not monitored, we can exit now.
 						return VSConstants.S_OK;
 
-					// VladD2: Мы не проверяем расширение файла, так как наш компилятор поддерживает плагины для парсеров!
-					// VladD2: Кроме того мы должны перепарсивать проект в случае изменения других файлов, так как они
-					// VladD2: могут читаться читаться макросами.
+					// Check the extension of the file to see if a listener is required.
+					//
+					string extension = Path.GetExtension(documentMoniker);
 
-					////// Check the extension of the file to see if a listener is required.
-					//////
-					////string extension = Path.GetExtension(documentMoniker);
-
-					////if (string.Compare(extension, NemerleConstants.FileExtension, StringComparison.OrdinalIgnoreCase) != 0)
-					////  return VSConstants.S_OK;
+					if (string.Compare(extension, NemerleConstants.FileExtension, StringComparison.OrdinalIgnoreCase) != 0)
+						return VSConstants.S_OK;
 
 					// Create the module id for this document.
 					//

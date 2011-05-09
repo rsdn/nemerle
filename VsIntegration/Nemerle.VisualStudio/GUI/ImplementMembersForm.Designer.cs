@@ -206,15 +206,15 @@
 
 		private System.Windows.Forms.Button pbImplement;
 		private System.Windows.Forms.Button pbCancel;
-    private System.Windows.Forms.DataGridView _grid;
-    private System.Windows.Forms.Panel panel1;
-    private System.Windows.Forms.ImageList imageList1;
-    private System.Windows.Forms.DataGridViewTextBoxColumn SoutceName;
-    private System.Windows.Forms.DataGridViewCheckBoxColumn Implement;
-    private System.Windows.Forms.DataGridViewCheckBoxColumn Explicit;
-    private System.Windows.Forms.DataGridViewComboBoxColumn AccessModifier;
-    private System.Windows.Forms.DataGridViewTextBoxColumn ImplementationName;
-    private System.Windows.Forms.DataGridViewTextBoxColumn Signature;
+		private System.Windows.Forms.DataGridView _grid;
+		private System.Windows.Forms.Panel panel1;
+		private System.Windows.Forms.ImageList imageList1;
+		private System.Windows.Forms.DataGridViewTextBoxColumn SoutceName;
+		private System.Windows.Forms.DataGridViewCheckBoxColumn Implement;
+		private System.Windows.Forms.DataGridViewCheckBoxColumn Explicit;
+		private System.Windows.Forms.DataGridViewComboBoxColumn AccessModifier;
+		private System.Windows.Forms.DataGridViewTextBoxColumn ImplementationName;
+		private System.Windows.Forms.DataGridViewTextBoxColumn Signature;
 		private System.Windows.Forms.CheckBox _cbGenerateRegion;
 		private System.Windows.Forms.CheckBox _cbGenerateXmlDoc;
 
