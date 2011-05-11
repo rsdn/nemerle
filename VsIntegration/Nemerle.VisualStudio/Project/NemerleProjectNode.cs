@@ -340,8 +340,8 @@ namespace Nemerle.VisualStudio.Project
 			if (startupProjects.Length < 1)
 				throw new ApplicationException("No startup projects.");
 
-			var startupProjectName = (string)startupProjects[0];
-			var nemerleOAProject = dte.Solution.Item(startupProjectName) as NemerleOAProject;
+			var startupProjectFullName = Path.Combine(Path.GetDirectoryName(dte.Solution.FullName), (string)startupProjects[0]);
+			var nemerleOAProject = dte.Solution.FindProjectItem(startupProjectFullName) as NemerleOAProject;
 
 			if (nemerleOAProject == null)
 				return false;
