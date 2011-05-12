@@ -26,7 +26,7 @@ namespace Nemerle.VisualStudio
 		public const string FileExtensionOnly = "n";
 		public const string ProjectExtension  = "nproj";
 		public const string ProductName       = "Nemerle Visual Studio Integration";
-		public const string ProductDetails    = "Nemerle Visual Studio Integration\r\nVersion 1.0 (Release Candidate)";
+		public const string ProductDetails    = "Nemerle Visual Studio Integration\r\nVersion 1.0";
 
 		// Attention, GUID LanguageServiceGuidString also has to be changed there:
 		// Nemerle.VsIntegration\CodeSnippets\SnippetsIndex.xml
