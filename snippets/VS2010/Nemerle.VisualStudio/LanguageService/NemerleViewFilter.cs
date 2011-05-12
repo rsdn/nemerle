@@ -358,7 +358,7 @@ namespace Nemerle.VisualStudio.LanguageService
 						int colIndex;
 						TextView.GetCaretPos(out lineIndex, out colIndex);
 
-                        if (!Source.CompletionSet.IsDisplayed && this.Source.TryDoTableFormating(this, lineIndex + 1, colIndex + 1))
+						if (!Source.CompletionSet.IsDisplayed && this.Source.TryDoTableFormating(this, lineIndex + 1, colIndex + 1))
 							return VSConstants.S_OK;
 					}
 				}

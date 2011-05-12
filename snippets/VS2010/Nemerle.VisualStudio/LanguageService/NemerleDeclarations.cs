@@ -54,8 +54,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override string GetName(int index)
 		{
-            if (index < 0 )
-                return "";
+			if (index < 0 )
+				return "";
 			return _overloadPossibility[index].DisplayName;
 		}
 
@@ -64,10 +64,6 @@ namespace Nemerle.VisualStudio.LanguageService
 			return _overloadPossibility[index].GlyphType;
 		}
 
-        public override bool IsCommitChar(string textSoFar, int selected, char commitCharacter)
-        {
-            return base.IsCommitChar(textSoFar, selected, commitCharacter);
-        }
 		class ByNameComparer : IComparer<CompletionElem>
 		{
 			public static readonly ByNameComparer Instance = new ByNameComparer();

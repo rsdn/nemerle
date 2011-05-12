@@ -34,10 +34,6 @@ namespace Nemerle.VisualStudio.LanguageService
 			base.Init(textView, declarations, completeWord);
 		}
 
-        public override int OnCommit(string textSoFar, int index, int selected, ushort commitChar, out string completeWord)
-        {
-            return base.OnCommit(textSoFar, index, selected, commitChar, out completeWord);
-        }
 		public override int GetInitialExtent(out int line, out int startIdx, out int endIdx)
 		{
 			int returnCode = base.GetInitialExtent(out line, out startIdx, out endIdx);

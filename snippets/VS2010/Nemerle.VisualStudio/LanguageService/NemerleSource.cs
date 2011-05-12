@@ -925,7 +925,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			//VladD2: We do not trigger MethodTip on type because it's very slow!
 
 			// This code open completion list if user enter '.'.
-		if ((tokenBeforeCaret.Trigger & TokenTriggers.MemberSelect) != 0 && (command == VsCommands2K.TYPECHAR))
+			if ((tokenBeforeCaret.Trigger & TokenTriggers.MemberSelect) != 0 && (command == VsCommands2K.TYPECHAR))
 			{
 				var spaces = new[] { '\t', ' ', '\u000B', '\u000C' };
 				var str = GetText(line, 0, line, idx - 1).Trim(spaces);

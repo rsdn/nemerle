@@ -30,10 +30,10 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			var source = (NemerleSource)_languageService.GetSource(_buffer);
 
-            if (source == null)
-                source = _source;
-            if (source == null)
-                return null;
+			if (source == null)
+				source = _source;
+			if (source == null)
+				return null;
 			var engine = source.GetEngine();
 
 			if (engine.RequestOnInitEngine())
