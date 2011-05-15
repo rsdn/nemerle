@@ -1,0 +1,168 @@
+﻿using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
+using Nemerle.IO;
+using Nemerle.Late;
+using Nemerle.Utility;
+using System.IO;
+using System.Reflection;
+
+using PT = Nemerle.Compiler.Parsetree;
+using SR = System.Reflection;
+using SRE = System.Reflection.Emit;
+using SCG = System.Collections.Generic;
+
+namespace Nemerle.Compiler
+{
+  [ManagerAccess]
+  public sealed class PluginsManager
+  {
+    public NameTree : NamespaceTree;
+
+    public this(manager : ManagerClass)
+    {
+      this.Manager = manager;
+      this.NameTree = manager.NameTree;
+    }
+
+    public LoadBackend(backendName : string) : void
+    {
+      def backendPath = System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, $"ncc.backend.$backendName.dll");
+      def assembly = System.Reflection.Assembly.LoadFrom(backendPath);
+      def assemblyAttributes = assembly.GetCustomAttributes(false);
+      def backendDefs = assemblyAttributes.Filter(t => t.GetType().FullName == "Nemerle.Internal.CompilerBackendAttribute");
+      foreach(definition in backendDefs)
+      {
+        def backendTypeName = late(definition.Name) :> string;
+        match(assembly.GetType(backendTypeName))
+        {
+          | null =>
+            Message.FatalError($"failed to lookup backend `$backendTypeName' in assembly $(assembly.FullName)");
+          | backendType =>
+            Manager.Backend = System.Activator.CreateInstance(backendType, Manager) :> ICompilerBackend;
+        }
+      }
+      otherwise
+      {
+        Message.FatalError($"failed to lookup any backends in assembly $(assembly.FullName)");
+      }
+    }
+
+    public LoadPluginsFrom(assemblyPath : string, loadMacros : bool = true, loadParsers : bool = true) : void
+    {
+      try
+      {
+        def assembly = SR.Assembly.LoadFrom(assemblyPath);
+        when(loadMacros)
+          LoadMacrosFrom(assembly);
+        when(loadParsers)
+          LoadParsersFrom(assembly);
+      }
+      catch
+      {
+        | _ => Message.FatalError($"cannot load plugins assembly `$assemblyPath'")
+      }
+    }
+
+    public LoadMacrosFrom([NotNull] assembly : SR.Assembly) : void
+    {
+      def assemblyAttributes = assembly.GetCustomAttributes(false);
+      def macroDefs = assemblyAttributes.Filter(t => t.GetType().FullName == "Nemerle.Internal.ContainsMacroAttribute");
+      def operDefs  = assemblyAttributes.Filter(t => t.GetType().FullName == "Nemerle.Internal.OperatorAttribute");
+
+      try
+      {
+        foreach (definition in macroDefs)
+          load_macro (assembly, late(definition.Name) :> string);
+
+        foreach (definition in operDefs)
+        {
+          def node = NameTree.ExactPath(NString.Split(late(definition.Env) :> string, '.'));
+          def od = OperatorDefinition(
+            node,
+            late(definition.Name) :> string,
+            late(definition.Left) :> int,
+            late(definition.Right) :> int,
+            late(definition.IsUnary) :> bool);
+          Manager.MacrosRegistry.AddOperatorDefinition(od);
+        }
+      }
+      catch
+      { | e is System.TypeLoadException =>
+        Message.Error($"cannot load types from macroassembly `$(assembly.FullName)' : $(e.Message)")
+      }
+    }
+
+    public LoadParsersFrom([NotNull] assembly : SR.Assembly) : void
+    {
+      def assemblyAttributes = assembly.GetCustomAttributes(false);
+      def parserDefs = assemblyAttributes.Filter(t => t.GetType().FullName == "Nemerle.Internal.RegisterParserAttribute");
+
+      try
+      {
+        foreach(definition in parserDefs)
+        {
+          def parserTypeName = late(definition.Name) :> string;
+          def fileExtension = late(definition.Extension) :> string;
+          match(assembly.GetType(parserTypeName))
+          {
+            | null =>
+              Message.Warning($"failed to lookup parser `$parserTypeName' in assembly $(assembly.FullName)");
+            | parserType =>
+              Manager.Parser.Register(parserType, fileExtension);
+          }
+        }
+      }
+      catch
+      { | e is System.TypeLoadException =>
+        Message.Error($"cannot load parsers from assembly `$(assembly.FullName)' : $(e.Message)")
+      }
+    }
+
+    private load_macro (lib : SR.Assembly, macro_name : string) : void
+    {
+      def macro_type = lib.GetType (macro_name.Replace ("&", "\\&"));
+      if (macro_type == null)
+        Message.Warning ($"failed to lookup macro `$(macro_name)' in assembly $(lib.FullName)");
+      else
+      {
+        def ctor = macro_type.GetConstructor (System.Type.EmptyTypes);
+        if (ctor == null)
+          Message.Warning ($"failed to lookup constructor in macro `$macro_name' from assembly $(lib.FullName)");
+        else match (ctor.Invoke (null))
+        {
+          | null => Message.Warning ($"failed to construct instance of macro `$macro_name' from assembly $(lib.FullName)");
+          | casted_macro is IMacro =>
+            def ns = casted_macro.GetNamespace ();
+            when (namespace_nodes.Get (ns).IsNone)
+              _ = cache_namespace_node (ns);
+
+            Manager.MacrosRegistry.RegisterMacro (casted_macro);
+
+          | _ =>
+            Message.Warning ($"instance of macro `$macro_name' from assembly $(lib.FullName)"
+                              " does not implement IMacro interface");
+        }
+      }
+    }
+
+    private namespace_nodes : Hashtable[string, NamespaceTree.Node] = Hashtable(300);
+
+    internal cache_namespace_node (namespc : string) : NamespaceTree.Node
+    {
+      def nd = NameTree.ExactPath (NString.Split (namespc, array ['.']));
+      mutable assigned = nd;
+      while (assigned != null)
+      {
+        when (assigned.Value is NamespaceTree.TypeInfoCache.No)
+          assigned.Value = NamespaceTree.TypeInfoCache.NamespaceReference ();
+
+        assigned = assigned.Parent;
+      }
+
+      namespace_nodes.Add (namespc, nd);
+      nd
+    }
+  }
+}
