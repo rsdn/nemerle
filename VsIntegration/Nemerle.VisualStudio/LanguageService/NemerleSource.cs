@@ -546,6 +546,12 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override void Dispose()
 		{
+			_oldTextView = null;
+			SmartIndent = null;
+			Scanner = null;
+			MethodData = null;
+			_tipAsyncRequest = null;
+
 			if (ProjectInfo != null)
 			{
 				ProjectInfo.RemoveEditableSource(this);
