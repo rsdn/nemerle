@@ -271,48 +271,12 @@ namespace Nemerle.VisualStudio.LanguageService
 			Debug.WriteLine("MethodTip");
 		}
 
-		public void Goto(IVsTextView view, bool gotoDefinition, int lineIndex, int colIndex)
+		/// <summary>
+		/// Подготавливает результаты Find Usages/Find All References
+		/// </summary>
+		public GotoInfo[] GetGotoInfo(IVsTextView view, bool gotoDefinition, int lineIndex, int colIndex, out string caption)
 		{
-			#region MyRegion // TODO: try use VS window
-			/*
-			IVsUIShell shell = _project.ProjectNode.Package.GetService<IVsUIShell, SVsUIShell>();
-
-			Guid		   guid = new Guid(ToolWindowGuids.ObjectSearchResultsWindow);
-			IVsWindowFrame frame;
-
-			shell.FindToolWindow(
-				(uint)__VSFINDTOOLWIN.FTW_fForceCreate,
-				ref guid,
-				out frame);
-
-			if (frame != null)
-			{
-				object obj;
-				frame.GetProperty((int)__VSFPROPID.VSFPROPID_ExtWindowObject, out obj);
-
-				obj.ToString();
-
-				EnvDTE.Window window = (EnvDTE.Window)obj;
-
-				guid = typeof(IVsObjectListOwner).GUID;
-				IntPtr ptr;
-				frame.QueryViewInterface(ref guid, out ptr);
-
-				IVsObjectListOwner lst = Marshal.GetObjectForIUnknown(ptr) as IVsObjectListOwner;
-
-				int isv = lst.IsVisible();
-
-				lst.ClearCachedData((int)_VSOBJLISTOWNERCACHEDDATAKINDS.LOCDK_SELECTEDNAVINFO);
-
-				guid = typeof(IVsObjectSearchPane).GUID;
-				frame.QueryViewInterface(ref guid, out ptr);
-
-				IVsObjectSearchPane pane = Marshal.GetObjectForIUnknown(ptr) as IVsObjectSearchPane;
-
-				frame.Show();
-			}
-			*/
-			#endregion
+			caption = null;
 
 			var engine = GetEngine();
 			var line = lineIndex + 1;
@@ -322,47 +286,58 @@ namespace Nemerle.VisualStudio.LanguageService
 				? engine.GetGotoInfo(this, line, col, GotoKind.Definition)
 				: engine.GetGotoInfo(this, line, col, GotoKind.Usages);
 
-			if (infos == null || infos.Length == 0)
-				return;
+			if(infos == null || infos.Length == 0)
+				return infos;			
 
-			string captiopn = null;
-
-			if (!infos[0].HasLocation && infos[0].Member != null)
+			if(!infos[0].HasLocation && infos[0].Member != null)
 			{
 				Debug.Assert(infos.Length == 1, "Multiple unknown locations are unexpected");
 				var inf = infos[0];
 				GotoInfo[] infoFromPdb = TryFindGotoInfoByDebugInfo(engine, inf);
 
-				if (infoFromPdb.Length == 0)
+				if(infoFromPdb.Length == 0)
 				{
-					if (inf.Member != null)
+					if(inf.Member != null)
 					{
 						var res = ProjectInfo.FindProjectByOutput(inf.FilePath);
 
-						if (res != null)
+						if(res != null)
 							infos = res.Engine.GetGotoInfoForMember(inf.Member.GetFullName(), false, GotoKind.Definition);
 
-						if (infos.Length <= 0 || res == null)
-							infos = NemerleGoto.GenerateSource(infos, engine, out captiopn);
-					}
-					else
-						infos = NemerleGoto.GenerateSource(infos, engine, out captiopn);
-				}
-				else
+						if(infos.Length <= 0 || res == null)
+							infos = NemerleGoto.GenerateSource(infos, engine, out caption);
+					} else
+						infos = NemerleGoto.GenerateSource(infos, engine, out caption);
+				} else
 					infos = infoFromPdb;
 			}
+
+			return infos;
+		}
+
+		/// <summary>
+		/// Этот метод заполняет и показывает окошко GotoUsageForm
+		/// </summary>
+		public void Goto(IVsTextView view, bool gotoDefinition, int lineIndex, int colIndex)
+		{	
+			string caption;
+
+			var infos = GetGotoInfo(view, gotoDefinition, lineIndex, colIndex, out caption);
+
+			if((infos == null) || (infos.Length == 0))
+				return;
 
 			var langSrvc = (NemerleLanguageService)LanguageService;
 
 			if (infos.Length == 1)
-				langSrvc.GotoLocation(infos[0].Location, captiopn, captiopn != null);
+				langSrvc.GotoLocation(infos[0].Location, caption, caption != null);
 			else if (infos.Length > 0)
 			{
 				var textEditorWnd = NativeWindow.FromHandle(view.GetWindowHandle());
 
 				using (var popup = new GotoUsageForm(infos))
 					if ((textEditorWnd == null ? popup.ShowDialog() : popup.ShowDialog(textEditorWnd)) == DialogResult.OK)
-						langSrvc.GotoLocation(popup.Result.Location, captiopn, captiopn != null);
+						langSrvc.GotoLocation(popup.Result.Location, caption, caption != null);
 			}
 		}
 

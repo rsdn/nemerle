@@ -6,6 +6,7 @@ using System.Linq;
 using System.Windows.Forms;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.OLE.Interop;
+using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.TextManager.Interop;
 
 using Nemerle.Completion2;
@@ -262,8 +263,90 @@ namespace Nemerle.VisualStudio.LanguageService
 			base.OnChangeCaretLine(view, line, col);
 		}
 
+		/// <summary>
+		/// Реализация Find All References поиска всех вхождений (в перспективе включая поиск и по не-Nemerle проектам) 
+		/// с заполнением окошка "Find Symbol Results" студии
+		/// </summary>
+		/// <remarks>
+		/// Вызываем Source.Goto, и подготавливаем результаты поиска
+		/// Потом передаём уже готовые результаты поиска в _library через метод NemerleLibraryManager
+		/// Затем вызываем IVsObjectSearch.Find - интерфейс отвечающий за поиски, который найдёт и вызовет _library.GetList2(),
+		/// IVsObjectSearch в свою очередь должен поискать и в остальных проектах (пока не реализовано, т.к. нет чёткого понятия какими должны быть VSOBSEARCHCRITERIA),
+		/// и вывести все результаты поиска в окошке Find Symbol Results (уже выводит)
+		/// 
+		/// Обсуждения в форумах по теме:		
+		/// http://social.msdn.microsoft.com/Forums/en-US/vsx/thread/951158dd-fc98-4325-b07d-bab65b372603/
+		/// http://social.msdn.microsoft.com/Forums/en-US/vsx/thread/793f916d-80a6-4944-b058-7166d48d3a32
+		/// http://social.msdn.microsoft.com/Forums/en-US/vsx/thread/3d85e968-f735-420c-b9c8-d57ed7839d36
+		/// 
+		/// Возможно для поиска по всему проекту IVsObjectSearch.Find придётся заменить на IVsFindSymbol.DoSearch 
+		/// http://msdn.microsoft.com/en-us/library/microsoft.visualstudio.shell.interop.ivsfindsymbol.dosearch.aspx
+		/// есть какая-то инфа про глюки в методе Find
+		/// http://social.msdn.microsoft.com/Forums/en-US/vsx/thread/08b71611-2c94-40e7-a79e-3be843c974ea/
+		/// </remarks>
+		private void FindReferences()
+		{
+			int line, col;
+
+			// Get the caret position
+			ErrorHandler.ThrowOnFailure(this.TextView.GetCaretPos(out line, out col));
+
+			var findSvc = (IVsObjectSearch)Source.Service.GetService(typeof(SVsObjectSearch));
+
+			IVsNavInfo navInfo;
+
+			if(findSvc != null)
+			{
+				string caption;
+				var infos = Source.GetGotoInfo(TextView, false, line, col, out caption);
+				if((infos != null) && (infos.Length > 0))
+				{
+					var criteria = new[]
+					{
+						new VSOBSEARCHCRITERIA
+						{
+							eSrchType = VSOBSEARCHTYPE.SO_ENTIREWORD,
+							grfOptions = (uint)_VSOBSEARCHOPTIONS.VSOBSO_CASESENSITIVE,
+							szName = "<dummy>",
+							dwCustom = Library.FindAllReferencesMagicNum,
+						}
+					};
+
+					var inlm = Source.Service.GetService(typeof(INemerleLibraryManager));
+					if(inlm != null)
+					{
+						var nlm = (NemerleLibraryManager)inlm;
+
+						var libSearchResults = new LibraryNode("<dummy2>", LibraryNode.LibraryNodeType.References, LibraryNode.LibraryNodeCapabilities.None, null);
+
+						foreach(var i in infos)
+						{
+							var inner = new GotoInfoLibraryNode((NemerleLanguageService)Source.LanguageService, i, caption);
+							libSearchResults.AddNode(inner);
+						}
+
+						nlm.OnFindAllReferencesDone(libSearchResults);
+						IVsObjectList results;
+						var hr = findSvc.Find((uint)__VSOBSEARCHFLAGS.VSOSF_EXPANDREFS, criteria, out results);
+					}
+				}
+			}
+		}
+
 		protected override int ExecCommand(ref Guid guidCmdGroup, uint nCmdId, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
 		{
+			if(guidCmdGroup == VSConstants.GUID_VSStandardCommandSet97)
+			{
+				var cmdId = (VSConstants.VSStd97CmdID)nCmdId;
+
+				switch(cmdId)
+				{
+					case VSConstants.VSStd97CmdID.FindReferences:
+						FindReferences();
+						return VSConstants.S_OK;
+				}
+			}
+
 			//Debug.WriteLine(guidCmdGroup + " " + nCmdId);
 			const uint ShowSmartTag = 147;
 			if (guidCmdGroup == VSConstants.VSStd2K && nCmdId == ShowSmartTag)
@@ -672,6 +755,17 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		protected override int QueryCommandStatus(ref Guid guidCmdGroup, uint nCmdId)
 		{
+			if(guidCmdGroup == VSConstants.GUID_VSStandardCommandSet97)
+			{
+				var cmdId = (VSConstants.VSStd97CmdID)nCmdId;
+
+				switch(cmdId)
+				{
+					case VSConstants.VSStd97CmdID.FindReferences:
+						return (int)(OLECMDF.OLECMDF_SUPPORTED | OLECMDF.OLECMDF_ENABLED);
+				}
+			}
+
 			if (guidCmdGroup == VSConstants.VSStd2K)
 			{
 				var cmdId = (VSConstants.VSStd2KCmdID)nCmdId;

@@ -551,11 +551,24 @@ namespace Nemerle.VisualStudio.Project
 			return VSConstants.E_NOTIMPL;
 		}
 
+		protected virtual void GetSourceContextWithOwnership(out string fileName, out uint pulLineNum)
+		{
+			fileName = null;
+			pulLineNum = 0;
+		}
+
 		int IVsSimpleObjectList2.GetSourceContextWithOwnership(uint index, out string pbstrFilename, out uint pulLineNum)
 		{
-			pbstrFilename = null;
-			pulLineNum = (uint)0;
-			return VSConstants.E_NOTIMPL;
+			if(index >= (uint)_children.Count)
+				throw new ArgumentOutOfRangeException("index");
+
+			_children[(int)index].GetSourceContextWithOwnership(out pbstrFilename, out pulLineNum);
+			return pbstrFilename != null ? VSConstants.S_OK : VSConstants.E_NOTIMPL;
+		}
+
+		protected virtual string GetTextWithOwnership(VSTREETEXTOPTIONS tto)
+		{
+			return Name;
 		}
 
 		int IVsSimpleObjectList2.GetTextWithOwnership(uint index, VSTREETEXTOPTIONS tto, out string pbstrText)
@@ -564,8 +577,8 @@ namespace Nemerle.VisualStudio.Project
 			if (index >= (uint)_children.Count)
 				throw new ArgumentOutOfRangeException("index");
 
-			pbstrText = _children[(int)index]._name;
-			return VSConstants.S_OK;
+			pbstrText = _children[(int)index].GetTextWithOwnership(tto);
+			return pbstrText != null ? VSConstants.S_OK : VSConstants.E_NOTIMPL;
 		}
 
 		int IVsSimpleObjectList2.GetTipTextWithOwnership(uint index, VSTREETOOLTIPTYPE eTipType, out string pbstrText)

@@ -80,7 +80,7 @@ namespace Nemerle.VisualStudio.Project
 			_parseThread	 = new Thread(ParseThread) {Name = "Parse thread"};
 
 			_library		 = new Library(new Guid(NemerleConstants.LibraryGuidString));
-			_library.LibraryCapabilities = (_LIB_FLAGS2)_LIB_FLAGS.LF_PROJECT;
+			_library.LibraryCapabilities = (_LIB_FLAGS2)(_LIB_FLAGS.LF_PROJECT) | _LIB_FLAGS2.LF_SUPPORTSFILTERING | _LIB_FLAGS2.LF_SUPPORTSCALLBROWSER;
 
 			_parseThread.Start();
 		}
@@ -111,6 +111,20 @@ namespace Nemerle.VisualStudio.Project
 				rdt.UnadviseRunningDocTableEvents(_runningDocTableCookie);
 
 			_runningDocTableCookie = 0;
+		}
+
+		/// <summary>
+		/// Hack. Based on the fact that we have only one fixed root _library. FindAllReferences
+		/// search results are stored in the _library just before VS environment ask the _library
+		/// for them.
+		/// 
+		/// Хак. Используем то что у нас одна фиксированная _library, сохраняем в неё 
+		/// уже найденные результаты для FindAllReferences непосредственно перед тем как
+		/// среда VS попросит у _library эти результаты поиска.
+		/// </summary>
+		public void OnFindAllReferencesDone(IVsSimpleObjectList2 findResults)
+		{
+			_library.OnFindAllReferencesDone(findResults);
 		}
 
 		#region IDisposable Members
