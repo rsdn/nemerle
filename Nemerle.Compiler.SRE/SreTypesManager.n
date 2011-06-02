@@ -8,14 +8,16 @@ using System.Diagnostics.SymbolStore;
 using System.Diagnostics;
 using System.Security;
 
+using SY = System;
 using NC = Nemerle.Compiler;
+using SR = System.Reflection;
 using SRE = System.Reflection.Emit;
 
 namespace Nemerle.Compiler.Sre
 {
   internal sealed class SreTypesManager : TypesManager
   {
-    public this(manager : Manager)
+    public this(manager : ManagerClass)
     {
       base(manager);
 
@@ -67,7 +69,7 @@ namespace Nemerle.Compiler.Sre
       mutable optional : PermissionSet;
       mutable refused : PermissionSet;
 
-      foreach ((action, perm_set) in Manager.AttributeCompiler.GetPermissionSets (assembly_attributes)) {
+      foreach ((action, perm_set) in (Manager.AttributeCompiler :> SreAttributeCompilerClass).GetPermissionSets (assembly_attributes)) {
         match (action) {
         | Permissions.SecurityAction.RequestMinimum  => required = perm_set
         | Permissions.SecurityAction.RequestOptional => optional = perm_set
@@ -201,18 +203,18 @@ namespace Nemerle.Compiler.Sre
     {
       Manager.Solver.Enqueue (fun () {
         compile_all_tyinfos (false);
-        foreach ((attr, shouldEmit) when shouldEmit in Manager.AttributeCompiler.GetCompiledAssemblyAttributes (assembly_attributes))
+        foreach ((attr, shouldEmit) when shouldEmit in (Manager.AttributeCompiler :> SreAttributeCompilerClass).GetCompiledAssemblyAttributes (assembly_attributes))
           _assembly_builder.SetCustomAttribute (attr);
 
         // emit debug attributes
         when (Manager.Options.EmitDebug) {
-          def attr = Manager.AttributeCompiler.MakeEmittedAttribute (SystemTypeCache.DebuggableAttribute, array [SystemTypeCache.DebuggableAttribute_DebuggingModes],
+          def attr = (Manager.AttributeCompiler :> SreAttributeCompilerClass).MakeEmittedAttribute (SystemTypeCache.DebuggableAttribute, array [SystemTypeCache.DebuggableAttribute_DebuggingModes],
             DebuggableAttribute.DebuggingModes.DisableOptimizations | DebuggableAttribute.DebuggingModes.Default);
           _assembly_builder.SetCustomAttribute (attr);
         }
 
         // do not require string literals interning
-        def attr = Manager.AttributeCompiler.MakeEmittedAttribute (SystemTypeCache.CompilationRelaxationsAttribute, 8);
+        def attr = (Manager.AttributeCompiler :> SreAttributeCompilerClass).MakeEmittedAttribute (SystemTypeCache.CompilationRelaxationsAttribute, 8);
         _assembly_builder.SetCustomAttribute (attr);
 
         // wrap non exception throws
@@ -232,7 +234,7 @@ namespace Nemerle.Compiler.Sre
 
       // if there are some nemerle specific metadata encoded in attributes
       when (contains_nemerle_specifics) {
-        def attr = Manager.AttributeCompiler.MakeEmittedAttribute (SystemTypeCache.Reflection_AssemblyConfigurationAttribute, "ContainsNemerleTypes");
+        def attr = (Manager.AttributeCompiler :> SreAttributeCompilerClass).MakeEmittedAttribute (SystemTypeCache.Reflection_AssemblyConfigurationAttribute, "ContainsNemerleTypes");
         this._assembly_builder.SetCustomAttribute (attr);
       }
 
@@ -285,7 +287,7 @@ namespace Nemerle.Compiler.Sre
      * - finalize value types
      * - finalize all types
      */
-    protected virtual compile_all_tyinfos (aux_phase : bool) : void
+    private compile_all_tyinfos (aux_phase : bool) : void
     {
       def allow_it(ti : TypeBuilder)
       {
@@ -301,7 +303,7 @@ namespace Nemerle.Compiler.Sre
 
           when (ti.Attributes %&& NemerleAttributes.Macro)
           {
-            def attr = Manager.AttributeCompiler.MakeEmittedAttribute (SystemTypeCache.ContainsMacroAttribute, ti.GetTypeBuilder ().FullName);
+            def attr = (Manager.AttributeCompiler :> SreAttributeCompilerClass).MakeEmittedAttribute (SystemTypeCache.ContainsMacroAttribute, ti.GetTypeBuilder ().FullName);
             _assembly_builder.SetCustomAttribute (attr);
           }
         }
@@ -377,6 +379,90 @@ namespace Nemerle.Compiler.Sre
         ti.DoBeforeFinalization(() => mem.Compile())
     }
 
+    private CreateAssemblyName () : SR.AssemblyName
+    {
+      /* create an assembly name and set its properties according to defined
+         global assembly attributes */
+      def an = SR.AssemblyName ();
+      an.CodeBase = string.Concat("file:///", Directory.GetCurrentDirectory());
+
+      when (Manager.Options.StrongAssemblyKeyName != null) {
+        an.KeyPair = read_keypair (Location.Default, Manager.Options.StrongAssemblyKeyName);
+      }
+
+      foreach ((env, attr) in assembly_attributes)
+      {
+        /* store resolved attribute */
+        def (tc, parms) = (Manager.AttributeCompiler :> SreAttributeCompilerClass).CheckAttribute (env, attr);
+
+        def take_string (pars) {
+          | [ <[ $(x : string) ]> ] => x
+          | _ =>
+            Message.FatalError (attr.Location, "given attribute must have single string as parameter")
+        }
+        if (tc.Equals (InternalType.AssemblyVersionAttribute_tc))
+        {
+          // spec for parsing version is quite interesting
+          // http://msdn.microsoft.com/library/en-us/cpref/html/frlrfsystemreflectionassemblyversionattributeclassctortopic.asp
+          def ver = NString.Split (take_string (parms), array ['.']);
+
+          mutable version_object = null;
+          try
+          {
+            def verint = ver.Map(x => if (x == "*") -1 else (SY.UInt16.Parse(x) :> int));
+
+            version_object =
+              match (verint) {
+                | [x1] => SY.Version (x1.ToString ())
+                | [x1, x2] => SY.Version (x1, x2)
+                | [x1, x2, -1] =>
+                  def spanBuild = SY.DateTime.Now.Subtract (SY.DateTime (2000, 1, 1));
+                  def spanRevision = SY.DateTime.Now.Subtract (SY.DateTime.Today);
+                  SY.Version (x1, x2, spanBuild.Days, (spanRevision.Ticks / 20000000) :> int)
+                | [x1, x2, x3] => SY.Version (x1, x2, x3)
+                | [x1, x2, x3, -1] =>
+                  def spanRevision = SY.DateTime.Now.Subtract (SY.DateTime.Today);
+                  SY.Version (x1, x2, x3, (spanRevision.Ticks / 20000000) :> int)
+                | [x1, x2, x3, x4] => SY.Version (x1, x2, x3, x4)
+                | _ =>
+                  Message.Error (attr.Location, "invalid format of version attribute");
+                  SY.Version ();
+              }
+          }
+          catch {
+            | _ is SY.OverflowException =>
+              Message.Error (attr.Location, "wrong format of version attribute");
+              version_object = SY.Version ();
+          }
+
+          an.Version = version_object;
+        }
+        else if (tc.Equals (InternalType.AssemblyKeyFileAttribute_tc))
+        {
+          def key = take_string (parms);
+          if (an.KeyPair != null)
+            Message.Warning (attr.Location, "AssemblyKeyFile attribute will be ignored, as key file was already specified")
+          else
+            when (key != "") an.KeyPair = read_keypair (attr.Location, key);
+        }
+        else when (tc.Equals (InternalType.AssemblyCultureAttribute_tc))
+          an.CultureInfo = SY.Globalization.CultureInfo (take_string (parms));
+      }
+      an
+    }
+
+    private static read_keypair (loc : Location, name : string) : SR.StrongNameKeyPair
+    {
+      try {
+        SR.StrongNameKeyPair(File.Open(name, FileMode.Open, FileAccess.Read))
+      }
+      catch {
+        | _ is DirectoryNotFoundException =>
+          Message.FatalError (loc, "could not find directory of `" + name + "' with key pair for assembly")
+        | _ is FileNotFoundException =>
+          Message.FatalError (loc, "could not find file `" + name + "' with key pair for assembly")
+      }
+    }
 
     /**
      * Check if declaration is auxiliary, used internally etc.
