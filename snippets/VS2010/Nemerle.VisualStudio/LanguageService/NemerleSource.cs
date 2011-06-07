@@ -1534,7 +1534,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			indent += 2;
 
-			string msg = cm.Msg;
+			string msg = Utils.HtmlMangling(cm.Msg);
 
 			var len = msg.EndsWith("[simple require]") && msg.Contains(':') ? msg.LastIndexOf(':') : msg.Length;
 			var start = msg.StartsWith(PosibleOverloadPref) ? PosibleOverloadPref.Length : 0;

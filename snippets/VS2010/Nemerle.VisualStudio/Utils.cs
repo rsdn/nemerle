@@ -26,6 +26,11 @@ namespace Nemerle.VisualStudio
 {
 	static class Utils
 	{
+		public static string HtmlMangling(string str)
+		{
+			return str.Replace("&", "&amp;").Replace(">", "&gt;").Replace("<", "&lt;");
+		}
+
 		public static ISmartTagBroker GetSmartTagBroker(this ITextView textView)
 		{
 			ISmartTagBroker tag = null;
