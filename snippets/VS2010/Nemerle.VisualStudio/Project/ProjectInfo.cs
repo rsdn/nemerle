@@ -1084,10 +1084,7 @@ namespace Nemerle.VisualStudio.Project
 
 					AddNewCompilerMessages(messages.Select(m => TranslateSecondarySourceMessage(m)).Where(m => m != null));
 				}
-				finally 
-				{ 
-					_errorList.ResumeRefresh();
-				}
+				finally { _errorList.ResumeRefresh(); }
 			}
 		}
 

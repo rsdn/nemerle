@@ -651,7 +651,10 @@ namespace Nemerle.VisualStudio.LanguageService
 				return;
 
 			foreach (var prj in ProjectInfo.Projects)
+			{
 				prj.Engine.OnIdle();
+				prj.ProcessDelayedMethodCompilerMessages();
+			}
 
 			if (periodic)
 			{

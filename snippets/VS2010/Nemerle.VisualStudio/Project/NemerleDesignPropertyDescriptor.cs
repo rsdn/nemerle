@@ -7,6 +7,7 @@ namespace Nemerle.VisualStudio.Project
 {
 	/// <summary>
 	/// Subclasses <see cref="DesignPropertyDescriptor"/> to allow for non-bolded text in the property grid.
+  /// </summary>
 	public class NemerleDesignPropertyDescriptor : DesignPropertyDescriptor
 	{
 		#region Constructors
