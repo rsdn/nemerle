@@ -814,14 +814,18 @@ namespace Nemerle.VisualStudio.LanguageService
 							else
 							{
 								chunk[j] = r;
+								j++;
 								//added++;
 							}
 							i++;
-							j++;
 						}
-						int hr = session.AddHiddenRegions((int)CHANGE_HIDDEN_REGION_FLAGS.chrNonUndoable, j, chunk, null);
-						if (ErrorHandler.Failed(hr))
-							break; // stop adding if we start getting errors.
+
+						if (j > 0)
+						{
+							int hr = session.AddHiddenRegions((int)CHANGE_HIDDEN_REGION_FLAGS.chrNonUndoable, j, chunk, null);
+							if (ErrorHandler.Failed(hr))
+								break; // stop adding if we start getting errors.
+						}
 					}
 				}
 
@@ -831,6 +835,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 				#endregion
 			}
+			catch (Exception ex) { Debug.WriteLine("Exception while region processing: " + ex.Message); }
 			finally
 			{
 				UnlockWrite();
