@@ -30,10 +30,18 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			#region Init fields
 
+			ErrorHelper.ThrowIsNull(source, "source");
+			ErrorHelper.ThrowIsNull(scanner, "scanner");
+			ErrorHelper.ThrowIsNull(colorState, "colorState");
+
 			Scanner = scanner;
 			Source = source;
 			StartLine = startLine;
 			Lex = scanner.GetNewLexer();
+
+			if (Lex == null)
+				throw new InvalidOperationException("The 'scanner' has invalid state.");
+
 			Lex.SetFileName(source.GetFilePath());
 			ColorState = colorState;
 			_lineCount = source.GetLineCount();

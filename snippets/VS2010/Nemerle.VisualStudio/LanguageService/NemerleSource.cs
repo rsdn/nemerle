@@ -1118,10 +1118,14 @@ namespace Nemerle.VisualStudio.LanguageService
 			TokenInfo tokenBeforeCaret = GetTokenInfo(line, idx);
 			TokenInfo tokenAfterCaret = GetTokenInfo(line, idx + 1);
 
-			if ((tokenAfterCaret.Trigger & TokenTriggers.MatchBraces) != 0)
-				HighlightBraces(textView, line, idx + 1);
-			else if ((tokenBeforeCaret.Trigger & TokenTriggers.MatchBraces) != 0)
-				HighlightBraces(textView, line, idx);
+			try
+			{
+				if ((tokenAfterCaret.Trigger & TokenTriggers.MatchBraces) != 0)
+					HighlightBraces(textView, line, idx + 1);
+				else if ((tokenBeforeCaret.Trigger & TokenTriggers.MatchBraces) != 0)
+					HighlightBraces(textView, line, idx);
+			}
+			catch (InvalidOperationException ex) { Debug.WriteLine(ex.Message); }
 		}
 
 		#endregion
