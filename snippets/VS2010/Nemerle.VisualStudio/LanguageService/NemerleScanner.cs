@@ -57,6 +57,9 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			ScanTokenInfo info = _lexer.GetToken((ScanState)state);
 
+			if (info == null)
+				return false;
+
 			state		= (int)info.State;
 
 			_lastColor   = (TokenColor)info.Color;
@@ -65,6 +68,10 @@ namespace Nemerle.VisualStudio.LanguageService
 			tokenInfo.Color	     = _lastColor;
 			tokenInfo.Type	     = (TokenType)	info.Type;
 			tokenInfo.Trigger	   = (TokenTriggers)info.Triggers;
+			
+			if (info.Token == null)
+				return false;
+
 			tokenInfo.StartIndex = info.Token.Location.Column	- 1;
 			tokenInfo.EndIndex   = info.Token.Location.EndColumn - 2;
 

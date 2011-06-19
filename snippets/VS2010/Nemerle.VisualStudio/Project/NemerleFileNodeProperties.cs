@@ -94,5 +94,32 @@ namespace Nemerle.VisualStudio.Project
 				this.NemerleBuildAction = (NemerleBuildAction)Enum.Parse(typeof(NemerleBuildAction), value.ToString());
 			}
 		}
+
+		[SRCategoryAttribute(Microsoft.VisualStudio.Project.SR.Advanced)]
+		[LocDisplayName("Copy to Output Directory")]
+		[SRDescriptionAttribute("CopyToOutputDirectory...")]
+		[DefaultValue(CopyToOutputDirectory.DoNotCopy)]
+		public virtual CopyToOutputDirectory CopyToOutputDirectory
+		{
+			get
+			{
+				string value = this.Node.ItemNode.GetMetadata("CopyToOutputDirectory");
+
+				if (string.IsNullOrWhiteSpace(value))
+					return CopyToOutputDirectory.DoNotCopy;
+
+				return (CopyToOutputDirectory)Enum.Parse(typeof(CopyToOutputDirectory), value);
+			}
+			set
+			{
+				if (value == CopyToOutputDirectory.DoNotCopy)
+				{
+					this.Node.ItemNode.SetMetadata("CopyToOutputDirectory", null);
+					return;
+				}
+
+				this.Node.ItemNode.SetMetadata("CopyToOutputDirectory", value.ToString());
+			}
+		}
 	}
 }

@@ -54,6 +54,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override string GetName(int index)
 		{
+			if (index < 0 )
+				return "";
 			return _overloadPossibility[index].DisplayName;
 		}
 

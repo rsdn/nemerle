@@ -23,6 +23,11 @@ namespace Nemerle.VisualStudio
 {
 	static class Utils
 	{
+		public static string HtmlMangling(string str)
+		{
+			return str.Replace("&", "&amp;").Replace(">", "&gt;").Replace("<", "&lt;");
+		}
+
 		public static string GetLiadingSpaces(this string text)
 		{
 			return text.Substring(0, text.Length - text.TrimStart(' ', '\t').Length);

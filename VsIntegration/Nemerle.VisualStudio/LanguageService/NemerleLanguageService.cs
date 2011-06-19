@@ -265,6 +265,12 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		readonly Dictionary<IVsTextLines, NemerleColorizer> _colorizers = new Dictionary<IVsTextLines, NemerleColorizer>();
 
+		public void DisposeColorizer(IVsTextLines buffer)
+		{
+			if (_colorizers.ContainsKey(buffer))
+				_colorizers.Remove(buffer);
+		}
+
 		public override Colorizer GetColorizer(IVsTextLines buffer)
 		{
 			NemerleColorizer colorizer;
@@ -645,7 +651,10 @@ namespace Nemerle.VisualStudio.LanguageService
 				return;
 
 			foreach (var prj in ProjectInfo.Projects)
+			{
 				prj.Engine.OnIdle();
+				prj.ProcessDelayedMethodCompilerMessages();
+			}
 
 			if (periodic)
 			{

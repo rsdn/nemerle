@@ -44,6 +44,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			Service = service;
 			ProjectInfo projectInfo = ProjectInfo.FindProject(path);
+			ProjectInfo = projectInfo;
 
 			if (projectInfo != null)
 			{
@@ -539,13 +540,14 @@ namespace Nemerle.VisualStudio.LanguageService
 			return null;
 		}
 
-		public override void OnChangesCommitted(uint reason, TextSpan[] changedArea)
-		{
-			Debug.WriteLine("OnChangesCommitted");
-		}
-
 		public override void Dispose()
 		{
+			_oldTextView = null;
+			SmartIndent = null;
+			Scanner = null;
+			MethodData = null;
+			_tipAsyncRequest = null;
+
 			if (ProjectInfo != null)
 			{
 				ProjectInfo.RemoveEditableSource(this);
@@ -1614,7 +1616,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			indent += 2;
 
-			string msg = cm.Msg;
+			string msg = Utils.HtmlMangling(cm.Msg);
 
 			var len = msg.EndsWith("[simple require]") && msg.Contains(':') ? msg.LastIndexOf(':') : msg.Length;
 			var start = msg.StartsWith(PosibleOverloadPref) ? PosibleOverloadPref.Length : 0;
