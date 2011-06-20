@@ -25,24 +25,26 @@ namespace Nemerle.VisualStudio.Project
 
 		public override int GetPlatformNames(uint celt, string[] names, uint[] actual)
 		{
-			if (names != null)
-				names[0] = "Any CPU";
+			return base.GetPlatformNames(celt, names, actual);
+			//if (names != null)
+			//  names[0] = "Any CPU";
 
-			if (actual != null)
-				actual[0] = 1;
+			//if (actual != null)
+			//  actual[0] = 1;
 
-			return VSConstants.S_OK;
+			//return VSConstants.S_OK;
 		}
 
 		public override int GetSupportedPlatformNames(uint celt, string[] names, uint[] actual)
 		{
-			if (names != null)
-				names[0] = "Any CPU";
+			return base.GetSupportedPlatformNames(celt, names, actual);
+			//if (names != null)
+			//  names[0] = "Any CPU";
 
-			if (actual != null)
-				actual[0] = 1;
+			//if (actual != null)
+			//  actual[0] = 1;
 
-			return VSConstants.S_OK;
+			//return VSConstants.S_OK;
 		}
 
 		protected override ProjectConfig CreateProjectConfiguration(string configName)
