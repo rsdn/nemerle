@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 
 using Microsoft.VisualStudio.Project;
+using Nemerle.VisualStudio.Helpers;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -105,7 +106,7 @@ namespace Nemerle.VisualStudio.Project
 			{
 				string value = this.Node.ItemNode.GetMetadata("CopyToOutputDirectory");
 
-				if (string.IsNullOrWhiteSpace(value))
+				if (StringUtils.IsNullOrWhiteSpace(value))
 					return CopyToOutputDirectory.DoNotCopy;
 
 				return (CopyToOutputDirectory)Enum.Parse(typeof(CopyToOutputDirectory), value);
