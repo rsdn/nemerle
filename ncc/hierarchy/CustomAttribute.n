@@ -424,7 +424,7 @@ namespace Nemerle.Compiler
         && typeof(SSP.SecurityAttribute).IsAssignableFrom ((ti :> LibraryReference.ExternalTypeInfo).SystemType)
     }
 
-    private compile_expr(env : GlobalEnv, ti : TypeBuilder, allow_rec : bool, expr : PT.PExpr) : object * FixedType
+    private compile_expr(env : GlobalEnv, ti : TypeBuilder, allow_rec : bool, expr : PT.PExpr, typer : Typer) : object * FixedType
     {
       def compile_type(parsedType, fixedType)
       {
@@ -452,44 +452,39 @@ namespace Nemerle.Compiler
         | <[ $(x : bool) ]> => ((x : object), InternalType.Boolean)
         | <[ $(x : char) ]> => ((x : object), InternalType.Char)
         | PT.PExpr.Literal (Literal.Enum (lval, ty, _)) =>
-          def (val, _) = compile_expr (env, ti, allow_rec, PT.PExpr.Literal (lval));
-          (val, FixedType.Class (ty, []))
+          def (val, _) = compile_expr(env, ti, allow_rec, PT.PExpr.Literal(lval), typer);
+          (val, FixedType.Class(ty, []))
 
         | <[ null ]> => (null, InternalType.Type)
-
-        | PT.PExpr.Literal (Literal.Decimal) =>
-          Message.FatalError(expr.Location, "An attribute argument cannot be number of type decimal");
-
-        | PT.PExpr.Literal (lit) =>
-          (lit.AsObject (InternalType), lit.GetInternalType (InternalType))
-
-        | <[ typeof ($t) ]> when ti != null => compile_type(t, ti .BindType(t).Fix())
-        | <[ typeof ($t) ]>                 => compile_type(t, env.BindType(t).Fix())
-        | <[ array [..$elems] ]> when allow_rec =>
-          def exprs = elems.Map(e => compile_expr (env, ti, false, e));
+        | PT.PExpr.Literal (Literal.Decimal) => Message.FatalError(expr.Location, "An attribute argument cannot be number of type decimal");
+        | PT.PExpr.Literal (lit) => (lit.AsObject (InternalType), lit.GetInternalType (InternalType))
+        | <[ typeof($t) ]> when ti != null => compile_type(t, ti .BindType(t).Fix())
+        | <[ typeof($t) ]>                 => compile_type(t, env.BindType(t).Fix())
+        | <[ array[] ]> when allow_rec => ((array(0) : array[object]) : object, FixedType.Array(typer.FreshTypeVar(), 1))
+        | <[ array[..$elems] ]> when allow_rec =>
+          def exprs = elems.Map(e => compile_expr(env, ti, false, e, typer));
           def array_tc = exprs.FoldLeft(InternalType.Object_tc,
               fun (et, curty)
               {
                 match (et)
                 {
-                  | (_, FixedType.Class (tc, _)) when !tc.Equals (InternalType.Object_tc) => tc
+                  | (_, FixedType.Class(tc, _)) when !tc.Equals(InternalType.Object_tc) => tc
                   | _ => curty
                 }
               });
-          def allow_null = array_tc.Equals (InternalType.String_tc) || array_tc.Equals (InternalType.Type_tc);
+          def allow_null = array_tc.Equals(InternalType.String_tc) || array_tc.Equals(InternalType.Type_tc);
           def objects = exprs.Map(
             fun (_)
             {
               | (e, FixedType.Class (tc, _)) when tc.Equals (array_tc) => e
               | (x, _) when allow_null && x == null => null
-              | (_, t) =>
-                Message.FatalError(expr.Location, $"custom attribute array shall have type $array_tc while the element has type $t")
+              | (_, t) => Message.FatalError(expr.Location, $"custom attribute array shall have type $array_tc while the element has type $t")
             });
 
           // FIXME: this seems wrong, what if there are two mscorlibs?
 
           def arr = objects.ToArray ();
-          (arr : object, FixedType.Array(FixedType.Class (array_tc, []), 1))
+          (arr : object, FixedType.Array(FixedType.Class(array_tc, []), 1))
 
         | <[ $obj . $(n : name) ]> => Message.FatalError(expr.Location, $"unbound / non-enum member $(n.Id) in $obj at custom attribute parameter")
 
@@ -507,11 +502,12 @@ namespace Nemerle.Compiler
       }
     }
 
-    private pre_compile (env : GlobalEnv, ti : TypeBuilder, attr : TypeInfo, parms : list [PT.PExpr])
+    private pre_compile(env : GlobalEnv, ti : TypeBuilder, attr : TypeInfo, parms : list [PT.PExpr])
         : SR.ConstructorInfo * list[object] *
           list[SR.PropertyInfo] * list[object] *
           list[SR.FieldInfo] * list[object]
     {
+      def typer = Typer(env);
       mutable ctor_parm_types = [];
       mutable ctor_parms = [];
       mutable field_infos = [];
@@ -523,50 +519,56 @@ namespace Nemerle.Compiler
       {
         | <[ $(n : name) = $expr ]> =>
           def name = n.Id;
-          def expr = ConstantFolder.FoldConstants (env, expr);
-          def (obj, ty) = compile_expr (env, ti, true, expr);
-          def problem () { Message.FatalError($"the type $(attr.FullName) has no field nor property named `$name'") };
+          def expr = ConstantFolder.FoldConstants(env, expr);
+          def (obj, ty) = compile_expr(env, ti, true, expr, typer);
+          def problem() { Message.FatalError($"the type $(attr.FullName) has no field nor property named `$name'") };
           def (is_prop, mem) =
-            match (attr.LookupMember (name))
+            match (attr.LookupMember(name))
             {
               | [mem] =>
-                match (mem.MemberKind) {
-                  | MemberKinds.Field => (false, mem)
+                match (mem.MemberKind)
+                {
+                  | MemberKinds.Field    => (false, mem)
                   | MemberKinds.Property => (true, mem)
-                  | _ => problem ()
+                  | _ => problem()
                 }
-              | _ => problem ()
+              | _ => problem()
             };
-          def handle = mem.GetHandle ();
-          assert (handle != null);
-          if (mem.GetMemType ().Equals (ty.Fix ()))
-            if (is_prop) {
+          def handle = mem.GetHandle();
+          assert(handle != null);
+          def memberType = mem.GetMemType();
+
+          if (memberType.Unify(ty))
+            if (is_prop)
+            {
               property_infos ::= handle :> SR.PropertyInfo;
               properties ::= obj;
-            } else {
+            }
+            else
+            {
               field_infos ::= handle :> SR.FieldInfo;
               fields ::= obj;
             }
           else
-            Message.FatalError ($ "the member `$name' has type "
-                                   "$(mem.GetMemType ()) while the value "
-                                   "assigned has type $ty")
+            Message.FatalError ($"the member `$name' has type $(mem.GetMemType()) while the value assigned has type $ty")
 
         | _ =>
-          def (obj, ty) = compile_expr (env, ti, true, parm);
+          def (obj, ty) = compile_expr(env, ti, true, parm, typer);
           ctor_parm_types ::= ty;
           ctor_parms ::= obj;
       }
 
-      def proper_ctor = {
-        def typer = Typer(env);
-
+      def proper_ctor = 
+      {
         mutable overloads = [];
+
         foreach (meth is IMethod when meth.IsConstructor && !meth.IsPrivate in attr.LookupMember(".ctor"))
         {
-          def ty = meth.GetMemType ();
-          def from = attr.GetMemType ();
-          overloads ::= OverloadPossibility (typer, ty, null, from, meth);
+          def ty   = meth.GetMemType();
+          def from = attr.GetMemType();
+          
+          overloads ::= OverloadPossibility(typer, ty, null, from, meth);
+
           when (meth.IsVarArgs)
           {
             def op = OverloadPossibility (typer, ty, null, from, meth);
@@ -574,31 +576,34 @@ namespace Nemerle.Compiler
             overloads ::= op;
           }
         }
+
         def parms = ctor_parm_types.RevMap(ty => Parm(TExpr.DefaultValue(ty)));
 
         match(typer.ResolveOverload(overloads, parms, Manager.InternalType.Void, false, LocationStack.Top()))
         {
           | [] => Message.FatalError($"none of the constructors of `$(attr.FullName)'matches positional argument types $(ctor_parm_types.Rev())");
           | [one] => one.Member :> IMethod
-
           | lst =>
             Message.Error( $"ambiguity between custom attribute constructors $lst");
             lst.Head.Member :> IMethod
         }
-      }
+      };
 
       when(proper_ctor.IsVarArgs)
       {
-        def (var_parms, normal_parms) = NList.Partition(ctor_parms, {
-          def required_parms_count = proper_ctor.GetParameters().Length;
-          def actual_parms_count = ctor_parms.Length;
-          mutable count = actual_parms_count - required_parms_count;
-          fun(_) {
-            def is_var_parm = count >= 0;
-            count--;
-            is_var_parm
-          }
-        });
+        def (var_parms, normal_parms) = NList.Partition(ctor_parms,
+          {
+            def required_parms_count = proper_ctor.GetParameters().Length;
+            def actual_parms_count = ctor_parms.Length;
+            mutable count = actual_parms_count - required_parms_count;
+            fun(_)
+            {
+              def is_var_parm = count >= 0;
+              count--;
+              is_var_parm
+            }
+          });
+
         ctor_parms = var_parms.Rev().ToArray() :: normal_parms;
       }
 

@@ -44,6 +44,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			Service = service;
 			ProjectInfo projectInfo = ProjectInfo.FindProject(path);
+			ProjectInfo = projectInfo;
 
 			if (projectInfo != null)
 			{
@@ -537,11 +538,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			Debug.WriteLine("Soutce.BeginParse: " + reason);
 			return null;
-		}
-
-		public override void OnChangesCommitted(uint reason, TextSpan[] changedArea)
-		{
-			Debug.WriteLine("OnChangesCommitted");
 		}
 
 		public override void Dispose()
@@ -1620,7 +1616,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			indent += 2;
 
-			string msg = cm.Msg;
+			string msg = Utils.HtmlMangling(cm.Msg);
 
 			var len = msg.EndsWith("[simple require]") && msg.Contains(':') ? msg.LastIndexOf(':') : msg.Length;
 			var start = msg.StartsWith(PosibleOverloadPref) ? PosibleOverloadPref.Length : 0;

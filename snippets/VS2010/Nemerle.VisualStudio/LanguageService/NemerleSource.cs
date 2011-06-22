@@ -814,14 +814,18 @@ namespace Nemerle.VisualStudio.LanguageService
 							else
 							{
 								chunk[j] = r;
+								j++;
 								//added++;
 							}
 							i++;
-							j++;
 						}
-						int hr = session.AddHiddenRegions((int)CHANGE_HIDDEN_REGION_FLAGS.chrNonUndoable, j, chunk, null);
-						if (ErrorHandler.Failed(hr))
-							break; // stop adding if we start getting errors.
+
+						if (j > 0)
+						{
+							int hr = session.AddHiddenRegions((int)CHANGE_HIDDEN_REGION_FLAGS.chrNonUndoable, j, chunk, null);
+							if (ErrorHandler.Failed(hr))
+								break; // stop adding if we start getting errors.
+						}
 					}
 				}
 
@@ -831,6 +835,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 				#endregion
 			}
+			catch (Exception ex) { Debug.WriteLine("Exception while region processing: " + ex.Message); }
 			finally
 			{
 				UnlockWrite();
@@ -1113,10 +1118,14 @@ namespace Nemerle.VisualStudio.LanguageService
 			TokenInfo tokenBeforeCaret = GetTokenInfo(line, idx);
 			TokenInfo tokenAfterCaret = GetTokenInfo(line, idx + 1);
 
-			if ((tokenAfterCaret.Trigger & TokenTriggers.MatchBraces) != 0)
-				HighlightBraces(textView, line, idx + 1);
-			else if ((tokenBeforeCaret.Trigger & TokenTriggers.MatchBraces) != 0)
-				HighlightBraces(textView, line, idx);
+			try
+			{
+				if ((tokenAfterCaret.Trigger & TokenTriggers.MatchBraces) != 0)
+					HighlightBraces(textView, line, idx + 1);
+				else if ((tokenBeforeCaret.Trigger & TokenTriggers.MatchBraces) != 0)
+					HighlightBraces(textView, line, idx);
+			}
+			catch (InvalidOperationException ex) { Debug.WriteLine(ex.Message); }
 		}
 
 		#endregion

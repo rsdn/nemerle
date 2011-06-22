@@ -733,11 +733,52 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
+		Queue<IEnumerable<CompilerMessage>> _delayedMethodCompilerMessages = new Queue<IEnumerable<CompilerMessage>>();
+		TimeSpan _lastTimeOfProcessDelayedMethodCompilerMessages;
+		Stopwatch _processDelayedMethodCompilerMessagesTimer = Stopwatch.StartNew();
+		
+		/// <summary>
+		/// –азбирвает очередь _delayedMethodCompilerMessages. ¬ эту очередь помещаютс€ сообщени€ компил€тора
+		/// возникающие при типизации тел методов при условии, что уже имеетс€ много сообщений от компил€тора.
+		/// Ётот трюк нужен так как в противном случае GUI VS начинает дико тормозить в случае наличи€ множества
+		/// ошибок.
+		/// </summary>
+		internal void ProcessDelayedMethodCompilerMessages()
+		{
+			var current = _processDelayedMethodCompilerMessagesTimer.Elapsed;
+			var delta   = current - _lastTimeOfProcessDelayedMethodCompilerMessages;
+
+			if (delta < TimeSpan.FromSeconds(1))
+				return;
+
+			var queue = _delayedMethodCompilerMessages;
+
+			if (queue.Count <= 0)
+				return;
+
+			_lastTimeOfProcessDelayedMethodCompilerMessages = current;
+
+			_errorList.SuspendRefresh();
+			try
+			{
+				while (queue.Count > 0)
+				{
+					var messages = queue.Dequeue(); 
+					AddNewCompilerMessages(messages.Select(m => TranslateSecondarySourceMessage(m)).Where(m => m != null));
+				}
+			}
+			finally { _errorList.ResumeRefresh(); }
+		}
 		void IIdeProject.SetMethodCompilerMessages(MemberBuilder member, IEnumerable<CompilerMessage> messages)
 		{
 			if (!IsMemberVersionCorrect(member))
 				return;
 
+			var count = _errorList.Tasks.Count;
+
+			if (count > 100)
+				_delayedMethodCompilerMessages.Enqueue(messages);
+			else
 			SetCompilerMessages(messages, null /* messges related to member was deleted be ClearMethodCompilerMessages() */);
 			// Following for debugging purpose:
 			//var res = _errorList.Tasks.OfType<NemerleErrorTask>().GroupBy(x => x.ToString()).Where(g => g.Count() > 1).ToArray();

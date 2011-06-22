@@ -725,7 +725,7 @@ namespace Nemerle.VisualStudio.Project
 					ClearCompilerMessgesTasks(task =>
 					{
 						var memberMsg = task.CompilerMessage as CompilerMessageForMethod;
-						var result = memberMsg != null && memberMsg.Member == member;
+						var result = memberMsg != null && (memberMsg.Member == member || memberMsg.Member.ToString() == member.ToString());
 						return result;
 					});
 				}
@@ -1084,10 +1084,7 @@ namespace Nemerle.VisualStudio.Project
 
 					AddNewCompilerMessages(messages.Select(m => TranslateSecondarySourceMessage(m)).Where(m => m != null));
 				}
-				finally 
-				{ 
-					_errorList.ResumeRefresh();
-				}
+				finally { _errorList.ResumeRefresh(); }
 			}
 		}
 
