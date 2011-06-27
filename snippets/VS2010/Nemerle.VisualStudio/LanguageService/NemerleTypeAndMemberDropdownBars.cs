@@ -276,8 +276,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			if (UpdateDropDownTypes() | SyncSelectedType(line, col) | SyncSelectedMember(line, col))
 			{
-				ErrorHandler.ThrowOnFailure(_dropDownBar.RefreshCombo(DropClasses, _lastSelectedType));
-				ErrorHandler.ThrowOnFailure(_dropDownBar.RefreshCombo(DropMethods, _lastSelectedMember));
+				ErrorHandler.ThrowOnFailure(_dropDownBar.RefreshCombo(DropClasses, _lastSelectedType   < 0 ? -1 : _lastSelectedType));
+				ErrorHandler.ThrowOnFailure(_dropDownBar.RefreshCombo(DropMethods, _lastSelectedMember < 0 ? -1 : _lastSelectedMember));
 			}
 		}
 
