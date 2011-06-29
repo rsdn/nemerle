@@ -259,6 +259,9 @@ namespace Nemerle.VisualStudio.Project
 					TokenProcessor processor = new TokenProcessor();
 					return processor.GetFileNamespace(this.Url, this);
 
+				case __VSHPROPID.VSHPROPID_DefaultEnableBuildProjectCfg:
+					return base.GetProperty(propId);
+
 				default: return base.GetProperty(propId);
 			}
 		}

@@ -147,10 +147,10 @@ namespace Nemerle.VisualStudio.Project
 
 			NemerleProjectNode project = ProjectMgr as NemerleProjectNode;
 
-			if (project != null)
+			if (project != null && project.ProjectInfo.IsLoaded)
 			{
 				ReferenceNode referenceNode = (ReferenceNode)node;
-				//TODO: Добавить в список макро-сборок
+				//TODO: Добавлять только если project.ProjectInfo.IsLoaded == екгу
 				project.ProjectInfo.AddMacroAssembly(referenceNode);
 			}
 		}

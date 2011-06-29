@@ -146,7 +146,7 @@ namespace Nemerle.VisualStudio.Project
 
 			NemerleProjectNode project = ProjectMgr as NemerleProjectNode;
 
-			if (project != null)
+			if (project != null && project.ProjectInfo.IsLoaded)
 			{
 				ReferenceNode referenceNode = (ReferenceNode)node;
 				project.ProjectInfo.AddAssembly(referenceNode);

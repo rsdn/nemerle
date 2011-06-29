@@ -2,7 +2,7 @@
 using Microsoft.VisualStudio.Project;
 
 using MSBuild = Microsoft.Build.BuildEngine;
-using ComInteropHelpers;
+//using ComInteropHelpers;
 using Microsoft.VisualStudio.Shell.Interop;
 using System.Runtime.InteropServices;
 using System.IO;
@@ -23,8 +23,8 @@ namespace Nemerle.VisualStudio.Project
 	/// </summary>
 	public class NemerleProjectConfig : ProjectConfig
 	{
-		public NemerleProjectConfig(ProjectNode project, string configuration)
-			: base(project, configuration)
+		public NemerleProjectConfig(ProjectNode project, string canonicalName)
+			: base(project, canonicalName)
 		{
 		}
 
@@ -35,8 +35,7 @@ namespace Nemerle.VisualStudio.Project
 			get
 			{
 				if (_configurationProperties == null)
-					_configurationProperties = new ProjectConfigPropertiesComWrapper(
-						new NemerleProjectConfigProperties(this));
+					_configurationProperties = new NemerleProjectConfigProperties(this);
 
 				return _configurationProperties;
 			}
@@ -62,7 +61,7 @@ namespace Nemerle.VisualStudio.Project
 				string property = GetConfigurationProperty("StartProgram", true);
 
 				if (string.IsNullOrEmpty(property))
-					info.bstrExe = ProjectMgr.GetOutputAssembly(this.ConfigName);
+					info.bstrExe = ProjectMgr.GetOutputAssembly(this.ConfigKey);
 				else
 					info.bstrExe = property;
 

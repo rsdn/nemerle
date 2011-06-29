@@ -168,9 +168,16 @@ namespace Microsoft.VisualStudio.Project
 				EnvDTE.Property pathProperty = GetProperty(prj, "FullPath");
 
 				if (pathProperty == null)
+				{
+					var fullName = prj.FullName;
+
+					if (NativeMethods.IsSamePath(fullName, referencedProjectFullPath))
+						return prj;
+
 					// The full path should alway be availabe, but if this is not the
 					// case then we have to skip it.
 					continue;
+				}
 
 				string prjPath = pathProperty.Value.ToString();
 
@@ -238,7 +245,12 @@ namespace Microsoft.VisualStudio.Project
 					return null;
 
 				// Get the active configuration.
-				EnvDTE.Configuration config = confManager.ActiveConfiguration;
+				EnvDTE.Configuration config = null;
+
+				try { config = confManager.ActiveConfiguration; }
+				catch (Exception ex)
+				{ Debug.WriteLine(ex.Message); }
+
 				if (null == config)
 					return null;
 
@@ -261,16 +273,24 @@ namespace Microsoft.VisualStudio.Project
 				// Now get the name of the assembly from the project.
 				// Some project system throw if the property does not exist. We expect an ArgumentException.
 				EnvDTE.Property assemblyNameProperty = null;
-				try
-				{
-					assemblyNameProperty = this.ReferencedProjectObject.Properties.Item("OutputFileName");
-				}
-				catch (ArgumentException)
-				{
-				}
+				try { assemblyNameProperty = this.ReferencedProjectObject.Properties.Item("OutputFileName"); }
+				catch (ArgumentException) { }
 
-				if (null == assemblyNameProperty)
+				if (assemblyNameProperty == null)
+				{
+					try
+					{
+						var fileNames = (object[])config.OutputGroups.Item("Built").FileNames;
+						if (fileNames.Length > 0)
+							return Path.Combine(outputPath, (string)fileNames[0]);
+					}
+					catch (InvalidCastException)   { return null; }
+					catch (ArgumentException)      { return null; }
+					catch (NullReferenceException) { return null; }
+					catch (COMException ex) { return null; }
+
 					return null;
+				}
 
 				// build the full path adding the name of the assembly to the output path.
 				outputPath = Path.Combine(outputPath, assemblyNameProperty.Value.ToString());

@@ -65,6 +65,42 @@ namespace Nemerle.VisualStudio.Project
 						}
 
 						break;
+
+					case OpenFolderInExplorerCmdId:
+						result |= QueryStatusResult.SUPPORTED | QueryStatusResult.ENABLED;
+						returnCode = VSConstants.S_OK;
+						return true;
+				}
+			}
+
+			// just an arbitrary value, it doesn't matter if method hasn't handled the request
+			returnCode = VSConstants.S_FALSE;
+
+			// not handled
+			return false;
+		}
+
+		const VsCommands2K OpenFolderInExplorerCmdId = (VsCommands2K)1635;
+
+		internal static bool ExecCommandOnProjectSourceNode(HierarchyNode node, Guid cmdGroup, uint cmd, uint cmdexecopt, IntPtr pvaIn, IntPtr pvaOut, out int returnCode)
+		{
+
+			if (cmdGroup == VsMenus.guidStandardCommandSet2K)
+			{
+				switch ((VsCommands2K)cmd)
+				{
+					case VsCommands2K.INCLUDEINPROJECT:
+						returnCode = ((IProjectSourceNode)node).IncludeInProject();
+						return true;
+
+					case VsCommands2K.EXCLUDEFROMPROJECT:
+						returnCode = ((IProjectSourceNode)node).ExcludeFromProject();
+						return true;
+
+					case OpenFolderInExplorerCmdId:
+						System.Diagnostics.Process.Start(node.Url);
+						returnCode = VSConstants.S_OK;
+						return true;
 				}
 			}
 

@@ -141,12 +141,15 @@ namespace Nemerle.VisualStudio
 	{
 		#region Fields
 
-		private uint _componentID;
-		private NemerleLibraryManager _libraryManager;
-		private SourceOutlinerToolWindow _sourceOutlinerToolWindow;
 		public OleMenuCommand RefactoringMenu { get; private set; }
 		public OleMenuCommand SelectionExtend { get; private set; }
 		public OleMenuCommand SelectionShrink { get; private set; }
+
+		private uint                     _componentID;
+		private NemerleLibraryManager    _libraryManager;
+		private SourceOutlinerToolWindow _sourceOutlinerToolWindow;
+		private MySolutionListener       _mySolutionListener;
+		private bool                     _solutionIsLoaded;
 
 		#endregion
 
@@ -163,54 +166,44 @@ namespace Nemerle.VisualStudio
 
 		class MySolutionListener : SolutionListener
 		{
-			public MySolutionListener(System.IServiceProvider serviceProvider) : base(serviceProvider) { }
+			public MySolutionListener(NemerlePackage serviceProvider) : base(serviceProvider) { }
 
 			public override int OnAfterOpenSolution(object pUnkReserved, int fNewSolution)
 			{
-				EnvDTE.DTE dte = (EnvDTE.DTE)ServiceProvider.GetService(typeof(EnvDTE.DTE));
-
-				// Из-за того, что при создании NemerleMacroProjectReferenceNode и NemerleMacroAssemblyReferenceNode
-				// при открытии проектов dte.Solution.Projects еще не содержал проектов добавление ссылок 
-				// на проекты того же солюшена закончились неудачей. Производим повторную попытку добавить 
-				// ссылки на проекты в ProjectInfo...
-
-				foreach (EnvDTE.Project prj in dte.Solution.Projects)
-				{
-					//foreach (EnvDTE.ProjectItem item in prj.ProjectItems)
-					//  System.Diagnostics.Trace.WriteLine(item.Name);
-
-					var oaProj = prj as Microsoft.VisualStudio.Project.Automation.OAProject;
-
-					if (oaProj == null)
-						continue;
-
-					var nProj = oaProj.Project as NemerleProjectNode;
-
-					if (nProj == null)
-						continue;
-
-					var mrc = (NemerleMacroReferenceContainerNode)nProj.GetMacroReferenceContainer();
-					var projectInfo = nProj.ProjectInfo;
-
-					var macroProjectRefs = new List<NemerleMacroProjectReferenceNode>();
-					mrc.FindNodesOfType(macroProjectRefs);
-					foreach (var item in macroProjectRefs)
-						projectInfo.AddMacroAssembly(item);
-
-					var rc = (NemerleReferenceContainerNode)nProj.GetReferenceContainer();
-					var macroRefs = new List<NemerleProjectReferenceNode>();
-					rc.FindNodesOfType(macroRefs);
-					foreach (var item in macroRefs)
-						projectInfo.AddAssembly(item);
-
-					System.Diagnostics.Trace.WriteLine(nProj.Caption);
-				}
+				((NemerlePackage)ServiceProvider)._solutionIsLoaded = true;
 
 				return base.OnAfterOpenSolution(pUnkReserved, fNewSolution);
 			}
 		}
 
-		MySolutionListener _mySolutionListener;
+		/// <summary>
+		/// This method called from FDoIdle, after solution loading was complited. This is need 
+		/// because OnAfterOpenSolution fired to early.
+		/// </summary>
+		void AfterSolutionLoaded()
+		{
+			EnvDTE.DTE dte = (EnvDTE.DTE)GetService(typeof(EnvDTE.DTE));
+
+			// Из-за того, что при создании NemerleMacroProjectReferenceNode и NemerleMacroAssemblyReferenceNode
+			// при открытии проектов dte.Solution.Projects еще не содержал проектов добавление ссылок 
+			// на проекты того же солюшена закончились неудачей. Производим повторную попытку добавить 
+			// ссылки на проекты в ProjectInfo...
+
+			foreach (EnvDTE.Project prj in dte.Solution.Projects)
+			{
+				var oaProj = prj as Microsoft.VisualStudio.Project.Automation.OAProject;
+
+				if (oaProj == null)
+					continue;
+
+				var nProj = oaProj.Project as NemerleProjectNode;
+
+				if (nProj == null)
+					continue;
+
+				nProj.ProjectInfo.AfterSolutionLoaded();
+			}
+		}
 
 		protected override void Initialize()
 		{
@@ -273,18 +266,6 @@ namespace Nemerle.VisualStudio
 			//Debug.WriteLine(string.Format("Menu command {0} added", command));
 			return command;
 		}
-
-		//private static void RegisterCommand(OleMenuCommandService service, CommandID commandId, EventHandler handler)
-		//{
-		//  var command = new MenuCommand(handler, commandId);
-		//  service.AddCommand(command);
-		//  //Debug.WriteLine(string.Format("Menu command {0} added", command));
-		//}
-
-		//public IWin32Window TextEditorWindow
-		//{
-		//  get { return null; }
-		//}
 
 		private void GotoFile()
 		{
@@ -555,6 +536,12 @@ namespace Nemerle.VisualStudio
 
 		public int FDoIdle(uint grfidlef)
 		{
+			if (_solutionIsLoaded)
+			{
+				_solutionIsLoaded = false;
+				AfterSolutionLoaded();
+			}
+
 			NemerleLanguageService lang = GetService(typeof(NemerleLanguageService)) as NemerleLanguageService;
 
 			var isPeriodic = (grfidlef & (uint)_OLEIDLEF.oleidlefPeriodic) != 0;

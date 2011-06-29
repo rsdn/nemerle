@@ -35,6 +35,8 @@ namespace Nemerle.VisualStudio.Project
 	{
 		private static Collection<ProjectInfo> _projects = new Collection<ProjectInfo>();
 
+		public bool IsLoaded { get; private set; }
+
 		public string ProjectFullPath { get; private set; }
 		HierarchyListener _listener;
 		public NemerleLanguageService LanguageService { get; private set; }
@@ -184,7 +186,8 @@ namespace Nemerle.VisualStudio.Project
 			else
 				Debug.Assert(false, "Can't add " + type + "assembly reference '" + node.Caption + "' (" + node.Url + ")");
 
-			Engine.RequestOnReloadProject();
+			if (IsLoaded)
+				Engine.RequestOnReloadProject();
 		}
 
 		public void RemoveAssembly(List<string> assemblies, ReferenceNode node, string type)
@@ -1169,6 +1172,23 @@ namespace Nemerle.VisualStudio.Project
 				nemerleSource.Rename(newFileName);
 			else
 				AddSource(newFileName);
+		}
+
+		internal void AfterSolutionLoaded()
+		{
+			IsLoaded = true;
+
+			var mrc = (NemerleMacroReferenceContainerNode)ProjectNode.GetMacroReferenceContainer();
+			var macroReferenceNodes = new List<ReferenceNode>();
+			mrc.FindNodesOfType(macroReferenceNodes);
+			foreach (var node in macroReferenceNodes)
+				AddMacroAssembly(node);
+
+			var rc = (NemerleReferenceContainerNode)ProjectNode.GetReferenceContainer();
+			var referenceNodes = new List<ReferenceNode>();
+			rc.FindNodesOfType(referenceNodes);
+			foreach (var node in referenceNodes)
+				AddAssembly(node);
 		}
 	}
 }
