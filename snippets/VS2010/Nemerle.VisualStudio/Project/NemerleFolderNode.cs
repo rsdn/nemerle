@@ -273,6 +273,8 @@ namespace Nemerle.VisualStudio.Project
 			return new NemerleFolderNodeProperties(this);
 		}
 
+		public const int OpenFolderInExplorerCmdId = 1635;
+
 		/// <summary>
 		/// Handles command status on a node. Should be overridden by descendant nodes. If a command cannot be handled then the base should be called.
 		/// </summary>
@@ -304,17 +306,10 @@ namespace Nemerle.VisualStudio.Project
 		[SuppressMessage("Microsoft.Naming", "CA1725:ParameterNamesShouldMatchBaseDeclaration", MessageId = "2#", Justification = "Suppressing to avoid conflict with style cop.")]
 		protected override int ExecCommandOnNode(Guid cmdGroup, uint cmd, uint cmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
 		{
-			if (cmdGroup == VsMenus.guidStandardCommandSet2K)
-			{
-				switch ((VsCommands2K)cmd)
-				{
-					case VsCommands2K.INCLUDEINPROJECT:
-						return ((IProjectSourceNode)this).IncludeInProject();
+			int returnCode;
 
-					case VsCommands2K.EXCLUDEFROMPROJECT:
-						return ((IProjectSourceNode)this).ExcludeFromProject();
-				}
-			}
+			if (HierarchyHelpers.ExecCommandOnProjectSourceNode(this, cmdGroup, cmd, cmdexecopt, pvaIn, pvaOut, out returnCode))
+				return returnCode;
 
 			return base.ExecCommandOnNode(cmdGroup, cmd, cmdexecopt, pvaIn, pvaOut);
 		}

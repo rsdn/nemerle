@@ -108,7 +108,7 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 					debugSymbols = false;
 					foreach (var c in this.GetProjectConfigurations())
 					{
-						if(c.ConfigName == "Debug")
+						if(c.ConfigurationName == "Debug")
 						{
 							debugSymbols = true;
 							break;

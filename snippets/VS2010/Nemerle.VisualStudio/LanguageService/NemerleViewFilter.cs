@@ -293,7 +293,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			var findSvc = (IVsObjectSearch)Source.Service.GetService(typeof(SVsObjectSearch));
 
-			IVsNavInfo navInfo;
+			//IVsNavInfo navInfo;
 
 			if(findSvc != null)
 			{

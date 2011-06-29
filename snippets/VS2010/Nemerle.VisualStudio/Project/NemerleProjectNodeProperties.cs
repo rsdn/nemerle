@@ -25,6 +25,11 @@ namespace Nemerle.VisualStudio.Project
 		public const string ManifestCertificateThumbprintPropertyName = "ManifestCertificateThumbprint";
 		public const string OutputPathPropertyName = "OutputPath";
 
+		public EnvDTE.Configuration get_ActiveConfiguration()
+		{
+			return null;
+		}
+
 		private NemerleProjectNode ThisProjectMgr
 		{
 			get { return (NemerleProjectNode)(Node.ProjectMgr); }

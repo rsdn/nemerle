@@ -448,25 +448,17 @@ namespace Nemerle.VisualStudio.Project
 			manager.Open(false, false, viewGuid, out frame, WindowFrameShowAction.Show);
 		}
 
-		protected override int ExecCommandOnNode(
-			Guid guidCmdGroup, uint cmd, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
+		protected override int ExecCommandOnNode(Guid guidCmdGroup, uint cmd, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
 		{
 			Debug.Assert(ProjectMgr != null, "The NemerleFileNode has no project manager");
 
 			if (ProjectMgr == null)
 				throw new InvalidOperationException();
 
-			if (guidCmdGroup == VsMenus.guidStandardCommandSet2K)
-			{
-				switch ((VsCommands2K)cmd)
-				{
-					case VsCommands2K.INCLUDEINPROJECT:
-						return ((IProjectSourceNode)this).IncludeInProject();
+			int returnCode;
 
-					case VsCommands2K.EXCLUDEFROMPROJECT:
-						return ((IProjectSourceNode)this).ExcludeFromProject();
-				}
-			}
+			if (HierarchyHelpers.ExecCommandOnProjectSourceNode(this, guidCmdGroup, cmd, nCmdexecopt, pvaIn, pvaOut, out returnCode))
+				return returnCode;
 
 			if (guidCmdGroup == MenuCmd.guidNemerleProjectCmdSet && cmd == (uint)MenuCmd.SetAsMain.ID)
 			{
@@ -482,9 +474,8 @@ namespace Nemerle.VisualStudio.Project
 
 		/// <summary>
 		/// Handles the menuitems
-		/// </summary>		
-		protected override int QueryStatusOnNode(
-			Guid guidCmdGroup, uint cmd, IntPtr pCmdText, ref QueryStatusResult result)
+		/// </summary>
+		protected override int QueryStatusOnNode(Guid guidCmdGroup, uint cmd, IntPtr pCmdText, ref QueryStatusResult result)
 		{
 			int returnCode;
 			if (HierarchyHelpers.QueryStatusOnProjectSourceNode(this, guidCmdGroup, cmd, ref result, out returnCode))

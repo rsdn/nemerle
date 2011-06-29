@@ -91,7 +91,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			{
 				if (_currentLine >= 0 && source.Length > 0)
 				{
-					if (_source != null && _source.ProjectInfo != null)
+					if (_source != null && _source.ProjectInfo != null && _source.ProjectInfo.IsLoaded)
 					{
 						var ret = _source.ProjectInfo.Engine.GetActiveEnv(_source.FileIndex, _currentLine + 1);
 
