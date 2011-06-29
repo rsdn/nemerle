@@ -106,7 +106,7 @@ namespace CommonLib.Utils
             0X8801, 0X48C0, 0X4980, 0X8941, 0X4B00, 0X8BC1, 0X8A81, 0X4A40,
             0X4E00, 0X8EC1, 0X8F81, 0X4F40, 0X8D01, 0X4DC0, 0X4C80, 0X8C41,
             0X4400, 0X84C1, 0X8581, 0X4540, 0X8701, 0X47C0, 0X4680, 0X8641,
-            0X8201, 0X42C0, 0X4380, 0X8341, 0X4100, 0X81C1, 0X8081, 0X4040 
+            0X8201, 0X42C0, 0X4380, 0X8341, 0X4100, 0X81C1, 0X8081, 0X4040
         };
 
 
@@ -133,7 +133,7 @@ namespace CommonLib.Utils
         //{
         //    //char[] res = new char[2];
         //    second = hexsymbs[Common.LowQuat(val)];
-        //    first = hexsymbs[Common.HighQuat(val)];            
+        //    first = hexsymbs[Common.HighQuat(val)];
         //}
 
         public static string ConvertTo(byte[] val)
@@ -346,7 +346,7 @@ namespace CommonLib.Utils
 
         public void Load()
         {
-            main.CopyTo(sub);            
+            main.CopyTo(sub);
         }
 
         void sub_set_SettingsSaving(object sender, System.ComponentModel.CancelEventArgs e)
@@ -355,10 +355,10 @@ namespace CommonLib.Utils
             e.Cancel = true;
             main.Save();
         }
-       
+
 
     }
-    
+
     public static class SettingsUtils
     {
         public static void CopyTo(this ApplicationSettingsBase settings, ApplicationSettingsBase to_set)
@@ -370,13 +370,13 @@ namespace CommonLib.Utils
 
         public static void BindTo(this ApplicationSettingsBase main, ApplicationSettingsBase sub)
         {
-            
+
         }
 
-        
+
         static void main_SettingsLoaded(object sender, SettingsLoadedEventArgs e)
         {
-            
+
         }
     }
 }
