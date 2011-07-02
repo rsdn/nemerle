@@ -3505,12 +3505,12 @@ namespace Microsoft.VisualStudio.Project
 
 			EnvDTE.Project automationObject = this.GetAutomationObject() as EnvDTE.Project;
 
-			var config = ProjectConfig.TryGetActiveConfigurationAndPlatform(ServiceProvider, this);
+			var configKey = ProjectConfig.TryGetActiveConfigurationAndPlatform(ServiceProvider, this);
 
 			//Utilities.GetActiveConfigurationName(automationObject)
 
-			if (config != null)
-				this.SetConfiguration(config);
+			if (configKey != null)
+				this.SetConfiguration(configKey);
 		}
 
 		/// <summary>
@@ -3518,13 +3518,11 @@ namespace Microsoft.VisualStudio.Project
 		/// This does not get persisted and is used to evaluate msbuild conditions
 		/// which are based on the $(Configuration) property.
 		/// </summary>
-		/// <param name="config">Configuration name</param>
-		protected internal virtual void SetConfiguration(string config)
+		/// <param name="configKey">Configuration name</param>
+		protected internal virtual void SetConfiguration(string configKey)
 		{
-			if (config == null)
-			{
-				throw new ArgumentNullException("config");
-			}
+			if (configKey == null)
+				throw new ArgumentNullException("configKey");
 
 			// Can't ask for the active config until the project is opened, so do nothing in that scenario
 			if (!projectOpened)
@@ -3534,41 +3532,33 @@ namespace Microsoft.VisualStudio.Project
 			// we want to se is the current, we do nothing otherwise we fail.
 			if (this.BuildInProgress)
 			{
-				var currentConfig = ProjectConfig.TryGetActiveConfigurationAndPlatform(ServiceProvider, this);
-				bool configsAreEqual = ProjectConfig.Eq(currentConfig, config);
-
-				//EnvDTE.Project automationObject = this.GetAutomationObject() as EnvDTE.Project;
-				//string currentConfigName = Utilities.GetActiveConfigurationName(automationObject);
-				//bool configsAreEqual = String.Compare(currentConfigName, config, StringComparison.OrdinalIgnoreCase) == 0;
-
-				if (configsAreEqual)
-				{
+				var currentConfigKey = ProjectConfig.TryGetActiveConfigurationAndPlatform(ServiceProvider, this);
+		
+				if (ProjectConfig.Eq(currentConfigKey, configKey))
 					return;
-				}
-				throw new InvalidOperationException();
+
+				throw new InvalidOperationException("Can't set other configuration during a build in progress.");
 			}
 
 			string configName;
 			string platformName;
-			if (!ProjectConfig.TrySplitConfigurationCanonicalName(config, out configName, out platformName))
-				configName = config;
+			if (!ProjectConfig.TrySplitConfigurationCanonicalName(configKey, out configName, out platformName))
+				configName = configKey;
 
 			bool propertiesChanged = this.buildProject.SetGlobalProperty(ProjectFileConstants.Configuration, configName);
 
 			if (!string.IsNullOrWhiteSpace(platformName))
-				propertiesChanged |= this.buildProject.SetGlobalProperty(ProjectFileConstants.Platform, platformName);
+				propertiesChanged |= this.buildProject.SetGlobalProperty(ProjectFileConstants.Platform, ProjectConfig.ToMSBuildPlatform(platformName));
+
+			//this.buildProject.ReevaluateIfNecessary(); //???
 
 			if (this.currentConfig == null || propertiesChanged)
 				this.currentConfig = this.buildProject.CreateProjectInstance();
 
-
-
 			if (propertiesChanged || this.designTimeAssemblyResolution == null)
 			{
 				if (this.designTimeAssemblyResolution == null)
-				{
 					this.designTimeAssemblyResolution = new DesignTimeAssemblyResolution();
-				}
 
 				this.designTimeAssemblyResolution.Initialize(this);
 			}
@@ -3750,23 +3740,15 @@ namespace Microsoft.VisualStudio.Project
 			// If it is not null we got the event because a project in teh configuration manager has changed its active configuration.
 			// We care only about our project in the default implementation.
 			if (eventArgs == null || eventArgs.Hierarchy == null || !Utilities.IsSameComObject(eventArgs.Hierarchy, this))
-			{
 				return;
-			}
 
 			string name, platform;
 			if (!Utilities.TryGetActiveConfigurationAndPlatform(this.Site, this, out name, out platform))
-			{
 				throw new InvalidOperationException();
-			}
 
 			this.buildProject.SetGlobalProperty(GlobalProperty.Configuration.ToString(), name);
 
-			// If the platform is "Any CPU" then it should be set to AnyCPU, since that is the property value in MsBuild terms.
-			if (String.Compare(platform, ConfigProvider.AnyCPUPlatform, StringComparison.Ordinal) == 0)
-			{
-				platform = ProjectFileValues.AnyCPU;
-			}
+			platform = ProjectConfig.ToMSBuildPlatform(platform);
 
 			this.buildProject.SetGlobalProperty(GlobalProperty.Platform.ToString(), platform);
 		}
@@ -5710,19 +5692,16 @@ namespace Microsoft.VisualStudio.Project
 		/// <param name="storage">Project or user file (_PersistStorageType)</param>
 		/// <param name="propertyValue">Value of the property (out parameter)</param>
 		/// <returns>HRESULT</returns>
-		int IVsBuildPropertyStorage.GetPropertyValue(string propertyName, string configName, uint storage, out string propertyValue)
+		int IVsBuildPropertyStorage.GetPropertyValue(string propertyName, string configCanonicalName, uint storage, out string propertyValue)
 		{
 			// TODO: when adding support for User files, we need to update this method
 			propertyValue = null;
-			if (string.IsNullOrEmpty(configName))
-			{
+
+			if (string.IsNullOrEmpty(configCanonicalName))
 				propertyValue = this.GetProjectProperty(propertyName);
-			}
 			else
 			{
-				IVsCfg configurationInterface;
-				ErrorHandler.ThrowOnFailure(this.ConfigProvider.GetCfgOfName(configName, string.Empty, out configurationInterface));
-				ProjectConfig config = (ProjectConfig)configurationInterface;
+				ProjectConfig config = GetConfigByCanonicalName(configCanonicalName);
 				propertyValue = config.GetConfigurationProperty(propertyName, true);
 			}
 			return VSConstants.S_OK;
@@ -5767,21 +5746,27 @@ namespace Microsoft.VisualStudio.Project
 		/// <param name="storage">Project file or user file (_PersistStorageType)</param>
 		/// <param name="propertyValue">New value for that property</param>
 		/// <returns>HRESULT</returns>
-		int IVsBuildPropertyStorage.SetPropertyValue(string propertyName, string configName, uint storage, string propertyValue)
+		int IVsBuildPropertyStorage.SetPropertyValue(string propertyName, string configCanonicalName, uint storage, string propertyValue)
 		{
 			// TODO: when adding support for User files, we need to update this method
-			if (string.IsNullOrEmpty(configName))
-			{
+			if (string.IsNullOrEmpty(configCanonicalName))
 				this.SetProjectProperty(propertyName, propertyValue);
-			}
 			else
 			{
-				IVsCfg configurationInterface;
-				ErrorHandler.ThrowOnFailure(this.ConfigProvider.GetCfgOfName(configName, string.Empty, out configurationInterface));
-				ProjectConfig config = (ProjectConfig)configurationInterface;
+				ProjectConfig config = GetConfigByCanonicalName(configCanonicalName);
 				config.SetConfigurationProperty(propertyName, propertyValue);
 			}
+
 			return VSConstants.S_OK;
+		}
+
+		private ProjectConfig GetConfigByCanonicalName(string configCanonicalName)
+		{
+			IVsCfg configurationInterface;
+			string configName, platformName;
+			ProjectConfig.TrySplitConfigurationCanonicalName(configCanonicalName, out configName, out platformName);
+			ErrorHandler.ThrowOnFailure(this.ConfigProvider.GetCfgOfName(configName, ProjectConfig.ToPlatformName(platformName), out configurationInterface));
+			return (ProjectConfig)configurationInterface;
 		}
 
 		#endregion

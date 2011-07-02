@@ -247,6 +247,27 @@ namespace Microsoft.VisualStudio.Project
 				// Get the active configuration.
 				EnvDTE.Configuration config = null;
 
+				var dte = confManager.DTE;
+				var solution = dte.Solution;
+				var solutionBuild = solution.SolutionBuild;
+				var pSolutionConfiguration = solutionBuild.ActiveConfiguration;
+				var pSolutionContexts = pSolutionConfiguration.SolutionContexts;
+				var pSln = (IVsSolution)GetService(typeof(SVsSolution));
+				var nProject = (Nemerle.VisualStudio.Project.NemerleOAProject)this.ReferencedProjectObject;
+				var nProjNode = nProject.Project;
+				//(IVsHierarchy) 
+				string bstrPrjUniqueName;
+				pSln.GetUniqueNameOfProject(nProjNode, out bstrPrjUniqueName);
+				var pSolutionContext = pSolutionContexts.Item(bstrPrjUniqueName);
+				var bstrCfgName = pSolutionContext.ConfigurationName;
+				var bstrPlatformName = pSolutionContext.PlatformName;
+				IVsCfgProvider cfgProvider;
+				nProjNode.GetCfgProvider(out cfgProvider);
+				var pCP2 = (IVsCfgProvider2)cfgProvider;
+				try { var cfg = confManager.Item(bstrCfgName, bstrPlatformName); }
+				catch (Exception ex)
+				{ Debug.WriteLine(ex.Message); }
+
 				try { config = confManager.ActiveConfiguration; }
 				catch (Exception ex)
 				{ Debug.WriteLine(ex.Message); }
