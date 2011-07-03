@@ -149,7 +149,7 @@ namespace Nemerle.VisualStudio
 		private NemerleLibraryManager    _libraryManager;
 		private SourceOutlinerToolWindow _sourceOutlinerToolWindow;
 		private MySolutionListener       _mySolutionListener;
-		private bool                     _solutionIsLoaded;
+		private bool                     _allProjectInSolutionIsLoaded;
 
 		#endregion
 
@@ -170,15 +170,24 @@ namespace Nemerle.VisualStudio
 
 			public override int OnAfterOpenSolution(object pUnkReserved, int fNewSolution)
 			{
-				((NemerlePackage)ServiceProvider)._solutionIsLoaded = true;
+				((NemerlePackage)ServiceProvider)._allProjectInSolutionIsLoaded = true;
 
-				return base.OnAfterOpenSolution(pUnkReserved, fNewSolution);
+				return VSConstants.S_OK;
+			}
+
+			public override int OnAfterOpenProject(IVsHierarchy hierarchy, int added)
+			{
+				// We need apdate all references when a project adding in exist solution
+				if (added != 0)
+					((NemerlePackage)ServiceProvider)._allProjectInSolutionIsLoaded = true;
+
+				return VSConstants.S_OK;
 			}
 		}
 
 		/// <summary>
-		/// This method called from FDoIdle, after solution loading was complited. This is need 
-		/// because OnAfterOpenSolution fired to early.
+		/// This method called from FDoIdle, after solution loading was complited or new project added into solution.
+		/// This is need because OnAfterOpenSolution fired to early.
 		/// </summary>
 		void AfterSolutionLoaded()
 		{
@@ -201,7 +210,7 @@ namespace Nemerle.VisualStudio
 				if (nProj == null)
 					continue;
 
-				nProj.ProjectInfo.AfterSolutionLoaded();
+				nProj.ProjectInfo.UpdateAssembleReferences();
 			}
 		}
 
@@ -536,9 +545,9 @@ namespace Nemerle.VisualStudio
 
 		public int FDoIdle(uint grfidlef)
 		{
-			if (_solutionIsLoaded)
+			if (_allProjectInSolutionIsLoaded)
 			{
-				_solutionIsLoaded = false;
+				_allProjectInSolutionIsLoaded = false;
 				AfterSolutionLoaded();
 			}
 

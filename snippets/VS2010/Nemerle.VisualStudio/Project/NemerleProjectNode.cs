@@ -818,8 +818,6 @@ namespace Nemerle.VisualStudio.Project
 			// If this is a WPFFlavor-ed project, then add a project-level DesignerContext service to provide
 			// event handler generation (EventBindingProvider) for the XAML designer.
 			OleServiceProvider.AddService(typeof(DesignerContext), DesignerContext, false);
-
-			//_projectInfo.BeginReloadProject();
 		}
 
 		public override void PrepareBuild(string config, bool cleanBuild)
