@@ -283,6 +283,9 @@ namespace Microsoft.VisualStudio.Project
 				if (null == outputPathProperty)
 					return null;
 
+				if (outputPathProperty.Value == null)
+					throw new InvalidOperationException("<Can't resolve path. The OutputPath property of active configuration is not set.>");
+
 				string outputPath = outputPathProperty.Value.ToString();
 
 				// Ususally the output path is relative to the project path, but it is possible
