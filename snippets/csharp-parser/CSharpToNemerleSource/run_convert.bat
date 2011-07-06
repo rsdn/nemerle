@@ -1,1 +1,1 @@
-bin\debug\cs2nemerle /nd tests\files\ /out converted
+cs2nemerle\bin\debug\cs2nemerle /nd tests\CSharpToNemerleTest\TestFiles\ /d tests\CSharpToNemerleTest\TestFiles\ /out cs2nemerle\converted
