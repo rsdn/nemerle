@@ -104,11 +104,6 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
-		public void BeginReloadProject()
-		{
-			_engine.BeginReloadProject();
-		}
-
 		public bool IsCosed { get; private set; }
 
 		public void Close()
@@ -116,7 +111,7 @@ namespace Nemerle.VisualStudio.Project
 			if (IsCosed)
 				return;
 
-			ResetAssembleReferenceWatchers();
+			ResetAssembleReferences();
 			Engine.Close();
 			IsCosed = true;
 			_projects.Remove(this);
@@ -216,6 +211,9 @@ namespace Nemerle.VisualStudio.Project
 
 		IEnumerable<string> IIdeProject.GetAssemblyReferences()
 		{
+			if (!IsLoaded)
+				UpdateAssembleReferences();
+
 			return _assemblyReferences.ToArray();
 		}
 
@@ -237,6 +235,9 @@ namespace Nemerle.VisualStudio.Project
 
 		IEnumerable<string> IIdeProject.GetMacroAssemblyReferences()
 		{
+			if (!IsLoaded)
+				UpdateAssembleReferences();
+
 			return _macroAssemblyReferences.ToArray();
 		}
 
@@ -305,6 +306,14 @@ namespace Nemerle.VisualStudio.Project
 				watcher.Dispose();
 				_assembleReferenceWatchers.RemoveAt(index);
 			}
+		}
+
+		void ResetAssembleReferences()
+		{
+			IsLoaded = false;
+			ResetAssembleReferenceWatchers();
+			_macroAssemblyReferences.Clear();
+			_assemblyReferences.Clear();
 		}
 
 		void ResetAssembleReferenceWatchers()
@@ -498,8 +507,16 @@ namespace Nemerle.VisualStudio.Project
 					options.DefineConstant(define);
 			}
 
+			options.OutputFileName = this.ProjectNode.OutputFileName;
 			options.ColorMessages = false;
 			options.IgnoreConfusion = true;
+			var prop = GetStringProp("OutputType");
+			
+			if (string.Equals(prop, "WinExe", StringComparison.InvariantCultureIgnoreCase))
+				options.TargetIsWinexe = true;
+			else if (string.Equals(prop, "Library", StringComparison.InvariantCultureIgnoreCase))
+				options.TargetIsLibrary = true;
+
 			options.GreedyReferences = GetBoolProp("GreedyReferences");
 			options.DoNotLoadStdlib = NoStdLib;
 			options.DoNotLoadMacros = NoStdMacros;
@@ -508,6 +525,11 @@ namespace Nemerle.VisualStudio.Project
 			options.RootNamespace = RootNamespace;
 
 			return options;
+		}
+
+		private string GetStringProp(string propertyName)
+		{
+			return ProjectNode.BuildProject.GetPropertyValue(propertyName);
 		}
 
 		IEnumerable<IIdeSource> IIdeProject.GetSources()
@@ -1174,9 +1196,11 @@ namespace Nemerle.VisualStudio.Project
 				AddSource(newFileName);
 		}
 
-		internal void AfterSolutionLoaded()
+		internal void UpdateAssembleReferences()
 		{
-			IsLoaded = true;
+			ResetAssembleReferences();
+
+			// collect and add references...
 
 			var mrc = (NemerleMacroReferenceContainerNode)ProjectNode.GetMacroReferenceContainer();
 			var macroReferenceNodes = new List<ReferenceNode>();
@@ -1189,6 +1213,9 @@ namespace Nemerle.VisualStudio.Project
 			rc.FindNodesOfType(referenceNodes);
 			foreach (var node in referenceNodes)
 				AddAssembly(node);
+
+			IsLoaded = true;
+			Engine.RequestOnReloadProject();
 		}
 	}
 }

@@ -47,8 +47,7 @@ namespace Microsoft.VisualStudio.Project
 
 		#region fields
 		private ProjectNode project;
-		private string _configName;
-		private string _platform;
+		public string PlatformName { get; private set; }
 
 		private MSBuildExecution.ProjectInstance currentConfig;
 		private List<OutputGroup> outputGroups;
@@ -66,17 +65,7 @@ namespace Microsoft.VisualStudio.Project
 			}
 		}
 
-		public string ConfigurationName
-		{
-			get
-			{
-				return this._configName;
-			}
-			set
-			{
-				this._configName = value;
-			}
-		}
+		public string ConfigurationName { get; set; }
 
 		public virtual object ConfigurationProperties
 		{
@@ -128,8 +117,8 @@ namespace Microsoft.VisualStudio.Project
 			string platformName;
 			TrySplitConfigurationCanonicalName(canonicalName, out configName, out platformName);
 
-			_configName = configName;
-			_platform = platformName;
+			ConfigurationName = configName;
+			PlatformName = platformName;
 
 			// Because the project can be aggregated by a flavor, we need to make sure
 			// we get the outer most implementation of that interface (hence: project --> IUnknown --> Interface)
@@ -183,7 +172,7 @@ namespace Microsoft.VisualStudio.Project
 				throw Marshal.GetExceptionForHR(VSConstants.OLE_E_PROMPTSAVECANCELLED);
 			}
 			// Старое значение строки формата: ConfigProvider.configString
-			string condition = MakeMSBuildCondition(ConfigurationName, _platform);
+			string condition = MakeMSBuildCondition(ConfigurationName, PlatformName);
 
 			SetPropertyUnderCondition(propertyName, propertyValue, condition);
 
@@ -313,46 +302,37 @@ namespace Microsoft.VisualStudio.Project
 
 		public virtual string ConfigKey
 		{
-			get
-			{
-				return MakeConfigKey(_configName, _platform);
-			}
+			get { return MakeConfigKey(ConfigurationName, PlatformName); }
 		}
 
 		private string DisplayName
 		{
 			get
 			{
-				return MakeConfigKey(_configName, _platform);
-				//string name;
-				//string[] platform = new string[1];
-				//uint[] actual = new uint[1];
-				//name = this.configName;
-				//// currently, we only support one platform, so just add it..
-				//IVsCfgProvider provider;
-				//ErrorHandler.ThrowOnFailure(project.GetCfgProvider(out provider));
-				//ErrorHandler.ThrowOnFailure(((IVsCfgProvider2)provider).GetPlatformNames(1, platform, actual));
-				//if(!string.IsNullOrEmpty(platform[0]))
-				//{
-				//    name += "|" + platform[0];
-				//}
-				//return name;
+				var platformName = ToPlatformName(PlatformName);
+
+				if (string.IsNullOrEmpty(platformName))
+					return ConfigurationName;
+
+				return ConfigurationName + "|" + platformName;
 			}
 		}
+
 		public virtual int get_IsDebugOnly(out int fDebug)
 		{
 			fDebug = 0;
-			if (this._configName == "Debug")
-			{
+
+			if (ConfigurationName == "Debug")
 				fDebug = 1;
-			}
+
 			return VSConstants.S_OK;
 		}
+
 		public virtual int get_IsReleaseOnly(out int fRelease)
 		{
 			CCITracing.TraceCall();
 			fRelease = 0;
-			if (this._configName == "Release")
+			if (ConfigurationName == "Release")
 			{
 				fRelease = 1;
 			}
@@ -738,6 +718,11 @@ namespace Microsoft.VisualStudio.Project
 			return null;
 		}
 
+		public static bool EqPlatform(string str1, string str2)
+		{
+			return string.Equals(ToMSBuildPlatform(str1), ToMSBuildPlatform(str2), StringComparison.InvariantCultureIgnoreCase);
+		}
+
 		public static bool Eq(string str1, string str2)
 		{
 			return string.Equals(str1, str2, StringComparison.InvariantCultureIgnoreCase);
@@ -745,7 +730,7 @@ namespace Microsoft.VisualStudio.Project
 
 		public static string MakeMSBuildCondition(string configName, string platform)
 		{
-			platform = NormalizePlatformName(platform);
+			platform = ToMSBuildPlatform(platform);
 
 			if (platform == "")
 				return string.Format(CultureInfo.InvariantCulture, " '$(Configuration)' == '{0}' ", configName);
@@ -753,6 +738,58 @@ namespace Microsoft.VisualStudio.Project
 			return string.Format(CultureInfo.InvariantCulture, " '$(Configuration)|$(Platform)' == '{0}|{1}' ", configName, platform);
 		}
 
+		public static string GetConfigName(Tuple<string, string> canonicalConfigName)
+		{
+			return canonicalConfigName.Item1;
+		}
+
+		public static string GetPlatformName(Tuple<string, string> canonicalConfigName)
+		{
+			return ToPlatformName(canonicalConfigName.Item2);
+		}
+
+		public static string GetMSBuildPlatform(Tuple<string, string> canonicalConfigName)
+		{
+			return ToMSBuildPlatform(canonicalConfigName.Item2);
+		}
+		
+		public static string ToMSBuildPlatform(string platform)
+		{
+			var platformLowered = platform.ToLowerInvariant();
+
+			switch (platformLowered)
+			{
+				case "anycpu":
+				case "any cpu": return "AnyCPU";
+				case "itanium": return "Itanium";
+				case "x86": return "x86";
+				case "x64": return "x64";
+
+				default: return platform;
+			}
+		}
+
+		/// <summary>
+		/// Return the Platform Name as it display in VS GUI and used in .sln files.
+		/// </summary>
+		/// <param name="platform">Platform name in any form</param>
+		/// <returns>The Platform Name as it display in VS GUI and used in .sln files.</returns>
+		public static string ToPlatformName(string platform)
+		{
+			var platformLowered = platform.ToLowerInvariant();
+
+			switch (platformLowered)
+			{
+				case "anycpu":
+				case "any cpu": return "Any CPU";
+				case "itanium": return "Itanium";
+				case "x86": return "x86";
+				case "x64": return "x64";
+
+				default: return platform;
+			}
+		}
+		
 		public static Tuple<string, string> ConfigAndPlatformOfCondition(string condition)
 		{
 			condition = condition.Trim();
@@ -772,28 +809,20 @@ namespace Microsoft.VisualStudio.Project
 			return Tuple.Create("", "");
 		}
 
+		public static string MakeConfigKey(Tuple<string, string> canonicalConfigName)
+		{
+			return MakeConfigKey(canonicalConfigName.Item1, canonicalConfigName.Item2);
+		}
+
 		public static string MakeConfigKey(string configName, string platformName)
 		{
-			var platform = NormalizePlatformName(platformName);
+			var platform = ToMSBuildPlatform(platformName);
 
 			if (platform == "")
 				return configName;
 
 			return configName + "|" + platform;
 		}
-
-		public static string NormalizePlatformName(string platformName)
-		{
-			if (platformName == null)
-				return "";
-
-			switch (platformName.ToLower())
-			{
-				case "anycpu":
-				case "any cpu": return "AnyCPU";
-				default: return platformName;
-			}
-		} 
 
 		/// <summary>
 		/// Splits the canonical configuration name into platform and configuration name.
@@ -808,25 +837,17 @@ namespace Microsoft.VisualStudio.Project
 			platformName = String.Empty;
 
 			if (String.IsNullOrEmpty(canonicalName))
-			{
 				return false;
-			}
 
 			string[] splittedCanonicalName = canonicalName.Split(new char[] { '|' }, StringSplitOptions.RemoveEmptyEntries);
 
 			if (splittedCanonicalName == null || (splittedCanonicalName.Length != 1 && splittedCanonicalName.Length != 2))
-			{
 				return false;
-			}
 
 			configName = splittedCanonicalName[0];
-			if (splittedCanonicalName.Length == 2)
-			{
-				platformName = splittedCanonicalName[1];
 
-				if (string.Equals(platformName, "Any CPU", StringComparison.InvariantCultureIgnoreCase))
-					platformName = NormalizePlatformName(platformName);
-			}
+			if (splittedCanonicalName.Length == 2)
+				platformName = ToMSBuildPlatform(splittedCanonicalName[1]);
 
 			return true;
 		}

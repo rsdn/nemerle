@@ -249,7 +249,31 @@ namespace Microsoft.VisualStudio.Project
 
 				try { config = confManager.ActiveConfiguration; }
 				catch (Exception ex)
-				{ Debug.WriteLine(ex.Message); }
+				{ 
+					Debug.WriteLine(ex.Message);
+#if DEBUG && false
+					// примерная реализация свойства confManager.ActiveConfiguration...
+					var dte = confManager.DTE;
+					var solution = dte.Solution;
+					var solutionBuild = solution.SolutionBuild;
+					var pSolutionConfiguration = solutionBuild.ActiveConfiguration;
+					var pSolutionContexts = pSolutionConfiguration.SolutionContexts;
+					var pSln = (IVsSolution)GetService(typeof(SVsSolution));
+					var nProject = (Nemerle.VisualStudio.Project.NemerleOAProject)this.ReferencedProjectObject;
+					var nProjNode = nProject.Project;
+					//(IVsHierarchy) 
+					string bstrPrjUniqueName;
+					pSln.GetUniqueNameOfProject(nProjNode, out bstrPrjUniqueName);
+					var pSolutionContext = pSolutionContexts.Item(bstrPrjUniqueName);
+					var bstrCfgName = pSolutionContext.ConfigurationName;
+					var bstrPlatformName = pSolutionContext.PlatformName;
+					IVsCfgProvider cfgProvider;
+					nProjNode.GetCfgProvider(out cfgProvider);
+					var pCP2 = (IVsCfgProvider2)cfgProvider;
+					try { var cfg = confManager.Item(bstrCfgName, bstrPlatformName); }
+					catch { Debug.WriteLine(ex.Message); }
+#endif
+				}
 
 				if (null == config)
 					return null;
@@ -258,6 +282,9 @@ namespace Microsoft.VisualStudio.Project
 				EnvDTE.Property outputPathProperty = config.Properties.Item("OutputPath");
 				if (null == outputPathProperty)
 					return null;
+
+				if (outputPathProperty.Value == null)
+					throw new InvalidOperationException("<Can't resolve path. The OutputPath property of active configuration is not set.>");
 
 				string outputPath = outputPathProperty.Value.ToString();
 
@@ -287,7 +314,7 @@ namespace Microsoft.VisualStudio.Project
 					catch (InvalidCastException)   { return null; }
 					catch (ArgumentException)      { return null; }
 					catch (NullReferenceException) { return null; }
-					catch (COMException ex) { return null; }
+					catch (COMException) { return null; }
 
 					return null;
 				}
