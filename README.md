@@ -12,7 +12,6 @@ To find out more, please visit: http://nemerle.org/
 
 Create _hello.n_:
 
-    nemerle
     using System.Console;
 
     WriteLine("Hello world")
