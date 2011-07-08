@@ -10,17 +10,19 @@ To find out more, please visit: http://nemerle.org/
 
 ## Hello world
 
-hello.n:
-```nemerle
-using System.Console;
+Create _hello.n_:
 
-WriteLine("Hello world")
-```
+    nemerle
+    using System.Console;
+
+    WriteLine("Hello world")
+
+Compile and run
 
     "C:\Program Files\Nemerle\ncc.exe" hello.n /out:hello.exe
     hello.exe
 
-Will output:
+Will output
 
     Hello world
 
@@ -28,11 +30,11 @@ Will output:
 
 ## Windows
 
-  Install latest msi package from http://code.google.com/p/nemerle/downloads/list
+  Install latest msi package from http://nemerle.org/
 
 ## Linux, Mono
 
-  Download latest binary package from http://code.google.com/p/nemerle/downloads/list and export Nemerle=/path/to/binaries/extracted
+  Download latest binary package from http://nemerle.org and export Nemerle=/path/to/binaries/extracted
 
 # How to build
 
@@ -40,7 +42,7 @@ Will output:
 
   Run DevBuildQuick.cmd or DevBuildQuick-4.cmd depend on required netfx version. Compiler output will be placed at bin/Debug/net-{fx-version}/Stage1.
 
-  _Note: for building Visual Studion bindings you need VSSDK and administrative rights._
+  _Note: for building Visual Studio bindings you need VSSDK and administrative rights._
 
 ## Linux
 
@@ -52,6 +54,18 @@ Will output:
   * Visual Studio 2010 integration is not released, but works and can be builded manually, see snippets/VS2010/readme.txt
   * Sharp Develop 3.0 addin can be builded manually. See snippets/sharpdevelop/ReadMe.txt 
   * See Vim, Emacs, Kate and other editors syntax support in the 'misc' folder
+
+# Repository structure
+
+  * Nemerle compiler sources (ncc/),
+  * Nemerle Documentation (doc/),
+  * standard Nemerle library (lib/),
+  * standard Nemerle macros (macros/),
+  * some examples of Nemerle programs (snippets/),
+  * a few useful tools (e.g. synatx highlighting modes) (misc/),
+  * binary Nemerle compiler needed to compile itself (boot/, boot-4.0/).
+  * Nemerle realted tools (e.g. relector addin) (tools/)
+  * Visual Studio 2008 integration (VsIntegration/)
 
 # Contacts
 
