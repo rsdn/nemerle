@@ -35,6 +35,10 @@ using System.IO;
 using System.Globalization;
 using Nemerle.Assertions;
 using System.Text.RegularExpressions;
+using Nemerle.Text;
+using Nemerle;
+using Nemerle.Macros;
+using Nemerle.Collections;
 
 namespace Nemerle
 {
@@ -434,6 +438,7 @@ namespace Nemerle.Utility
 
   [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
                        Nemerle.MacroTargets.Assembly)]
+  /// deprecated, GeneratedAssemblyVersion do some better
   macro AssemblyVersionFromGit(version : string, fallbackToDate : bool = true)
   {
     def version =
@@ -482,62 +487,206 @@ namespace Nemerle.Utility
       <[ System.Reflection.AssemblyVersion ($(version : string)) ]>);
   }
 
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
+                       Nemerle.MacroTargets.Assembly)]
+  macro GeneratedAssemblyVersion(str, defaults = null)
+  {
+    def version = ExpandEnvHelper.Expand(str, defaults);
+    
+    Manager().Hierarchy.AddAssemblyAttribute(Manager().CoreEnv,
+      <[ System.Reflection.AssemblyVersion($(version : string)) ]>);
+  }
+  
+  macro ExpandEnv(str, defaults = null)
+  {
+    def version = ExpandEnvHelper.Expand(str, defaults);
+    
+    <[ $(version : string) ]>;
+  }
+  
+  module ExpandEnvHelper
+  {
+    VarRegex : Regex = Regex(@"\$([\w_][\w\d_]*)");
+    
+    public Expand(strExpr : PExpr, defaults: PExpr) : string
+    {
+      def str = match (strExpr)
+      {
+        | Literal(Literal.String(s)) => s
+        | _ => Message.FatalError(strExpr.Location, "Expected string literal.")
+      }
+      
+      
+      mutable vars = Set();
+      foreach (m is Match in VarRegex.Matches(str))
+      {
+        vars = vars.Add(m.Groups[1].Value);
+      }
+      
+      def defaultValues = System.Collections.Generic.Dictionary();
+      match (defaults)
+      {
+        | null => ()
+        | <[ Defaults(..$parms) ]> =>
+          foreach (d in parms)
+          {
+            | <[ $var = $value ]>  =>
+              def varName = var.ToString();
+              
+              def value = match (value) 
+              {
+                | Literal(Literal.String(s)) => s
+                | _ => Message.Error(value.Location, "Default value must be a string."); ""
+              }
+              
+              unless (vars.Contains(varName))
+                Message.Error(var.Location, $"$('$')$varName not found in the template.");
+                
+              when (defaultValues.ContainsKey(varName))
+                Message.Error(var.Location, $"Duplicate $varName.");
+                
+              defaultValues[varName] = value;
+            | _ =>
+              Message.Error(d.Location, "Default value expression must have 'x = \"y\"' format.");
+              ()
+          }
+        | _ =>
+          Message.FatalError(defaults.Location, "Defaults expression must have Defaults(x = \"y\", x1 = \"y1\",...)' format.");
+      }
+
+      def path = lazy({
+         def loc = strExpr.Location;
+        if (loc.IsSourceFileAvailable)
+          Path.GetDirectoryName(Path.GetFullPath(loc.File))
+        else
+            Directory.GetCurrentDirectory();
+      });
+
+      //System.Diagnostics.Debugger.Launch();
+      def evaluateVar(var)
+      {
+        def getSpecial()
+        {
+          match (var)
+          {
+            | "GitTag" => 
+              Console.Error.WriteLine("Tag");
+              match (GitRevisionHelper.GetRevisionGeneric(path))
+              {
+                | Some( (tag, _rev, _commit) ) => tag
+                | None() => null
+              }
+            | "GitRevision" => 
+              match (GitRevisionHelper.GetRevisionGeneric(path))
+              {
+                | Some( (_tag, rev, _commit) ) => rev
+                | None() => null
+              }
+            | _ => null
+          }
+        }
+        def getEnvironment()
+        {
+          Environment.GetEnvironmentVariable(var)
+        }
+        def getDefault()
+        {
+          match (defaultValues.ContainsKey(var))
+          {
+            | true => 
+              defaultValues[var]
+            | false =>
+              Message.Error(strExpr.Location, $"$var is not defined and have not default value.");
+              ""
+          }
+        }
+    
+        getEnvironment() ?? getSpecial() ?? getDefault()
+      }
+
+      VarRegex.Replace(str, MatchEvaluator(m => {
+        def varName = m.Groups[1].Value;
+          evaluateVar(varName)
+      }));
+    }
+  }
+
   module GitRevisionHelper
   {
     [Memoize]
     public GetRevisionGeneric(path : string) : option[string * string * string]
     {
-      // Execute "git describe"
-      def process = System.Diagnostics.Process();
-      process.StartInfo.UseShellExecute = false;
-      process.StartInfo.FileName = "git";
-      process.StartInfo.Arguments = "describe --tags --long";
-      process.StartInfo.RedirectStandardOutput = true;
-      process.StartInfo.RedirectStandardError = true;
-      process.StartInfo.WorkingDirectory = path;
-      process.StartInfo.CreateNoWindow = true;
-
-      // Read git output line by line until regex is matched
-      def loop(reader) 
+      def execGit(startInfoConfigurator)
       {
-        match (reader.ReadLine()) 
+        // Execute "git describe"
+        def process = System.Diagnostics.Process();
+        process.StartInfo.UseShellExecute = false;
+        process.StartInfo.RedirectStandardOutput = true;
+        process.StartInfo.RedirectStandardError = true;
+        process.StartInfo.WorkingDirectory = path;
+        process.StartInfo.CreateNoWindow = true;
+        startInfoConfigurator(process.StartInfo);
+      
+        // Read git output line by line until regex is matched
+        def loop(reader) 
         {
-          | null => 
+          match (reader.ReadLine()) 
+          {
+            | null => 
+              None()
+            | line =>
+              regexp match (line)
+              {
+                | @"(?<tag>.+)\-(?<rev>.+)\-(?<commit>.+)" =>
+                  def tag = Regex.Replace(tag, @"[^\d\.]", "");
+                  Some(tag, rev, commit);
+                | _ =>
+                  loop(reader);
+              }
+          }
+        }
+      
+        try
+        {
+          if (process.Start())
+          {
+            def revision = loop (process.StandardOutput);
+        
+            // Wait for git client process to terminate
+            unless (process.WaitForExit (2000))
+              process.Kill ();
+              
+            revision;
+          }
+          else
+          {
             None()
-          | line =>
-            def regex = Regex(@"(?<tag>.+)\-(?<rev>.+)\-(?<commit>.+)");
-            def mc = regex.Match(line);
-
-            if (mc.Success)
-            {
-              def tag = Regex.Replace(mc.Groups["tag"].Value, @"[^\d\.]", "");
-              def rev = mc.Groups["rev"].Value;
-              def commit = mc.Groups["commit"].Value;
-                    
-              Some(tag, rev, commit);
-            }
-            else
-            {
-              loop(reader);
-            }
+          }
+        }
+        catch
+        {
+          | e => 
+            Console.WriteLine(e.ToString());
+            None();
         }
       }
-
-      try
+    
+      def configCommon(si) // mono git or msysgit with git.exe in PATH
       {
-        _ = process.Start();
-
-        def revision = loop (process.StandardOutput);
-
-        // Wait for git client process to terminate
-        unless (process.WaitForExit (2000))
-          process.Kill ();
-
-        revision;
+        si.FileName = "git";
+        si.Arguments = "describe --tags --long";
       }
-      catch
+  
+      def configCmd(si) // PATH conatains git.cmd only workaround 
       {
-        | _ => None();
+        si.FileName = "cmd";
+        si.Arguments = "/C git describe --tags --long";
+      }
+      
+      match (execGit(configCommon))
+      {
+        | Some(_) as x => x
+        | None()       => execGit(configCmd);
       }
     }
   }
