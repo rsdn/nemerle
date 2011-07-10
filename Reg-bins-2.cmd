@@ -40,8 +40,6 @@ md "%NemerleInstall%"
 %NGen% uninstall "%NemerleInstall%\Nemerle.Macros.dll"
 %NGen% uninstall "%NemerleInstall%\Nemerle.MSBuild.Tasks.dll"
 %NGen% uninstall "%NemerleInstall%\ncc.exe"
-%NGen% uninstall "%NemerleInstall%\ncc32.exe"
-%NGen% uninstall "%NemerleInstall%\ncc64.exe"
 
 @echo errorlevel=%errorlevel%
 
