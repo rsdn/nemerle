@@ -1262,6 +1262,8 @@ namespace Nemerle.VisualStudio.Project
 			if (propertiesNode == null)
 				propertiesNode = CreateFolderNode("Properties");
 
+			HierarchyNode parent = this;
+
 			switch (fileId)
 			{
 				case (int)__PSFFILEID.PSFFILEID_AppConfig:
@@ -1278,21 +1280,22 @@ namespace Nemerle.VisualStudio.Project
 					fileName = "app.manifest";
 					break;
 				case (int)__PSFFILEID2.PSFFILEID_AppSettings:
-					fileName = "Settings.settings";
+					fileName = propertiesFolderPath + "Settings.settings";
 					break;
 				case (int)__PSFFILEID2.PSFFILEID_AssemblyResource:
-					fileName = "Resources.resx";
+					fileName = propertiesFolderPath + "Resources.resx";
 					break;
 				case (int)__PSFFILEID2.PSFFILEID_AssemblyInfo:
-					fileName = "AssemblyInfo.cs";
+					fileName = propertiesFolderPath + "AssemblyInfo.cs";
 					break;
 				default:
 					return base.GetFile(fileId, flags, out itemid, out fileName);
 			}
 
-			fileName = propertiesFolderPath + fileName;
+			if (fileName.StartsWith(propertiesFolderPath, StringComparison.InvariantCulture))
+				parent = propertiesNode;
 
-			HierarchyNode fileNode = FindChildEx(propertiesNode, Path.GetFileName(fileName));
+			HierarchyNode fileNode = FindChildEx(parent, Path.GetFileName(fileName));
 			string fullPath = fileNode == null
 				? Path.Combine(ProjectFolder, fileName)
 				: fileNode.Url;
@@ -1305,7 +1308,7 @@ namespace Nemerle.VisualStudio.Project
 					File.WriteAllText(fullPath, string.Empty);
 
 				fileNode = CreateFileNode(fileName);
-				propertiesNode.AddChild(fileNode);
+				parent.AddChild(fileNode);
 			}
 
 			itemid = fileNode != null ? fileNode.ID : 0;
