@@ -264,7 +264,7 @@ namespace Microsoft.VisualStudio.Project.Automation
 			for(HierarchyNode child = this.NodeWithItems.FirstChild; child != null; child = child.NextSibling)
 			{
 				EnvDTE.ProjectItem item = child.GetAutomationObject() as EnvDTE.ProjectItem;
-				if(null != item)
+				if (null != item && !(item is ReferenceContainerNode))
 				{
 					list.Add(item);
 				}
