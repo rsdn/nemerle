@@ -1319,18 +1319,6 @@ namespace Nemerle.VisualStudio.Project
 			return VSConstants.S_OK;
 		}
 
-		static string GetRelativePath(HierarchyNode fileNode, string path = "")
-		{
-			var nodes = new List<HierarchyNode>();
-
-			for (var node = fileNode; !(node is ProjectNode || node == null); node = fileNode.Parent)
-				nodes.Add(node);
-
-			nodes.Reverse();
-
-			return string.Join(Path.DirectorySeparatorChar.ToString(), nodes.Select(n => n.Caption));
-		}
-
 		internal static HierarchyNode FindChildEx(HierarchyNode it, string name)
 		{
 			if (String.IsNullOrEmpty(name))
