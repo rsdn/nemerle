@@ -1284,8 +1284,10 @@ namespace Nemerle.VisualStudio.Project
 					return base.GetFile(fileId, flags, out itemid, out fileName);
 			}
 
-			HierarchyNode fileNode = FindChild(fileName);
-			string fullPath = Path.Combine(ProjectFolder, fileName);
+			HierarchyNode fileNode = FindChildEx(this, fileName);
+			string fullPath = fileNode == null
+				? Path.Combine(ProjectFolder, "Properties", fileName)
+				: fileNode.Url;//Path.Combine(ProjectFolder, GetRelativePath(fileNode), fileName);
 
 			if (fileNode == null && (flags & (uint)__PSFFLAGS.PSFF_CreateIfNotExist) != 0)
 			{
@@ -1305,6 +1307,49 @@ namespace Nemerle.VisualStudio.Project
 
 			return VSConstants.S_OK;
 		}
+
+		static string GetRelativePath(HierarchyNode fileNode, string path = "")
+		{
+			var nodes = new List<HierarchyNode>();
+
+			for (var node = fileNode; !(node is ProjectNode || node == null); node = fileNode.Parent)
+				nodes.Add(node);
+
+			nodes.Reverse();
+
+			return string.Join(Path.DirectorySeparatorChar.ToString(), nodes.Select(n => n.Caption));
+		}
+
+		internal static HierarchyNode FindChildEx(HierarchyNode it, string name)
+		{
+			if (String.IsNullOrEmpty(name))
+				return null;
+
+			HierarchyNode result;
+			for (HierarchyNode child = it.FirstChild; child != null; child = child.NextSibling)
+			{
+				if (!String.IsNullOrEmpty(child.VirtualNodeName) && String.Compare(child.VirtualNodeName, name, StringComparison.OrdinalIgnoreCase) == 0)
+					return child;
+
+				if (String.Equals(child.Caption, name, StringComparison.OrdinalIgnoreCase))
+					return child;
+				
+				// If it is a foldernode then it has a virtual name but we want to find folder nodes by the document moniker or url
+				else if ((String.IsNullOrEmpty(child.VirtualNodeName) || (child is FolderNode)) &&
+						(NativeMethods.IsSamePath(child.GetMkDocument(), name) || NativeMethods.IsSamePath(child.Url, name)))
+				{
+					return child;
+				}
+
+				result = FindChildEx(child, name);
+				if (result != null)
+				{
+					return result;
+				}
+			}
+			return null;
+		}
+
 
 		protected override void OnHandleConfigurationRelatedGlobalProperties(object sender, ActiveConfigurationChangedEventArgs eventArgs)
 		{
