@@ -1256,6 +1256,12 @@ namespace Nemerle.VisualStudio.Project
 		/// <returns></returns>
 		public override int GetFile(int fileId, uint flags, out uint itemid, out string fileName)
 		{
+			const string propertiesFolderPath = "Properties\\";
+			HierarchyNode propertiesNode = FindChildEx(this, "Properties");
+
+			if (propertiesNode == null)
+				propertiesNode = CreateFolderNode("Properties");
+
 			switch (fileId)
 			{
 				case (int)__PSFFILEID.PSFFILEID_AppConfig:
@@ -1284,10 +1290,12 @@ namespace Nemerle.VisualStudio.Project
 					return base.GetFile(fileId, flags, out itemid, out fileName);
 			}
 
-			HierarchyNode fileNode = FindChildEx(this, fileName);
+			fileName = propertiesFolderPath + fileName;
+
+			HierarchyNode fileNode = FindChildEx(propertiesNode, Path.GetFileName(fileName));
 			string fullPath = fileNode == null
-				? Path.Combine(ProjectFolder, "Properties", fileName)
-				: fileNode.Url;//Path.Combine(ProjectFolder, GetRelativePath(fileNode), fileName);
+				? Path.Combine(ProjectFolder, fileName)
+				: fileNode.Url;
 
 			if (fileNode == null && (flags & (uint)__PSFFLAGS.PSFF_CreateIfNotExist) != 0)
 			{
@@ -1297,7 +1305,7 @@ namespace Nemerle.VisualStudio.Project
 					File.WriteAllText(fullPath, string.Empty);
 
 				fileNode = CreateFileNode(fileName);
-				AddChild(fileNode);
+				propertiesNode.AddChild(fileNode);
 			}
 
 			itemid = fileNode != null ? fileNode.ID : 0;
