@@ -213,6 +213,10 @@ namespace Nemerle.VisualStudio.FileCodeModel
 				Initialize();
 
 				CodeDomCodeElements res = new CodeDomCodeElements(DTE, this);
+
+				if (_ccu == null)
+					return res;
+
 				foreach (CDCodeNamespace member in _ccu.Namespaces)
 				{
 					EnsureNamespaceLinked(member);
