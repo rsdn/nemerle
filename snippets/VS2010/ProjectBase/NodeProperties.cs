@@ -480,7 +480,7 @@ namespace Microsoft.VisualStudio.Project
 			}
 			set
 			{
-				if (CustomTool != value)
+				if (CustomTool != value && value != "SettingsSingleFileGenerator") // Nemerle use macro instade SettingsSingleFileGenerator
 				{
 					this.Node.ItemNode.SetMetadata(ProjectFileConstants.Generator, value != string.Empty ? value : null);
 					HierarchyNodeEventArgs args = new HierarchyNodeEventArgs(this.Node);
