@@ -185,7 +185,7 @@ namespace Nemerle.VisualStudio
 
 		public static bool Eq(string str1, string str2)
 		{
-			return string.Compare(str1, str2, StringComparison.InvariantCultureIgnoreCase) == 0;
+			return string.Equals(str1, str2, StringComparison.InvariantCultureIgnoreCase);
 		}
 
 		public static string GetModuleName(Type type)
