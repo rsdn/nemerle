@@ -23,13 +23,6 @@ namespace Nemerle.VisualStudio.GUI
 
 		private void PromptProjectRenameForm_FormClosing(object _, FormClosingEventArgs e)
 		{
-			e.Cancel = !ValidateData();
-
-			if (e.Cancel)
-				return;
-
-			DialogResult = System.Windows.Forms.DialogResult.Yes;
-			ProjectName = _newProjectName.Text;
 		}
 
 		bool ValidateData()
@@ -65,7 +58,12 @@ namespace Nemerle.VisualStudio.GUI
 
 		private void _yesButton_Click(object sender, EventArgs e)
 		{
-			Close();
+			if (ValidateData())
+			{
+				Close();
+				DialogResult = System.Windows.Forms.DialogResult.Yes;
+				ProjectName = _newProjectName.Text;
+			}
 		}
 
 		private void _newProjectName_TextChanged(object sender, EventArgs e)

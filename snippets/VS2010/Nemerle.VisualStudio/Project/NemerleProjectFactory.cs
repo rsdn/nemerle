@@ -48,51 +48,65 @@ namespace Nemerle.VisualStudio.Project
 
 		public int UpgradeProject(string sourceProjectFilePath, uint fUpgradeFlag, string bstrCopyLocation, out string upgradedFullyQualifiedFileName, IVsUpgradeLogger pLogger, out int pUpgradeRequired, out Guid pguidNewProjectFactory)
 		{
-			upgradedFullyQualifiedFileName = null;
-			pUpgradeRequired = 0;
+			pUpgradeRequired = 1;
 			pguidNewProjectFactory = Guid.Empty;
 
+			var projectName = Path.GetFileNameWithoutExtension(sourceProjectFilePath);
 			var destProjectFilePath = sourceProjectFilePath;
-			var backupedProject = Path.Combine(bstrCopyLocation, Path.GetFileName(sourceProjectFilePath));
-			var projectName = Path.GetFileName(sourceProjectFilePath);
+			var backupedProject = string.IsNullOrEmpty(bstrCopyLocation)
+				? null
+				: Path.Combine(bstrCopyLocation, Path.GetFileName(sourceProjectFilePath));
+			var projectFileName = Path.GetFileName(sourceProjectFilePath);
 
-			if (bstrCopyLocation != null && Directory.Exists(bstrCopyLocation))
-			{
-				var dlg = new PromptProjectRenameForm(Path.GetFileNameWithoutExtension(projectName));
-				var result = dlg.ShowDialog();
+			BackupProjectForUpgrade(sourceProjectFilePath, pLogger, ref destProjectFilePath, backupedProject, projectName);
 
-				if (result == DialogResult.Yes)
-				{
-					destProjectFilePath = Path.Combine(Path.GetDirectoryName(sourceProjectFilePath), dlg.ProjectName + Path.GetExtension(projectName));
-					pUpgradeRequired = 1;
-					if (string.Equals(sourceProjectFilePath, destProjectFilePath, StringComparison.InvariantCultureIgnoreCase))
-						throw new ApplicationException("Can't rename project to itself name.");
+			upgradedFullyQualifiedFileName = destProjectFilePath;
 
-					upgradedFullyQualifiedFileName = destProjectFilePath;
-					File.Copy(sourceProjectFilePath, destProjectFilePath);
-					//File successfully backed up as
-					pLogger.LogMessage(0, projectName, projectName, "The project file has been renamed to '"
-						+ Path.GetFileName(destProjectFilePath) + "' ('" + destProjectFilePath 
-						+ "'). The old project file remain unchanged.");
-				}
-				else
-				{
-					File.Copy(sourceProjectFilePath, backupedProject);
-					pLogger.LogMessage(0, projectName, projectName, backupedProject);
-				}
-			}
+			UpgradeProject(sourceProjectFilePath, destProjectFilePath);
 
+			pLogger.LogMessage((uint)__VSUL_ERRORLEVEL.VSUL_INFORMATIONAL, projectName, sourceProjectFilePath, "Project converted successfully");
+			// Tell to VS which the project converted successfull. It's a magic! :)
+			pLogger.LogMessage((uint)__VSUL_ERRORLEVEL.VSUL_STATUSMSG, projectName, sourceProjectFilePath,
+				// "Converted" should NOT be localized - it is referenced in the XSLT used to display the UpgradeReport
+				"Converted");
+			
+			return VSConstants.S_OK;
+		}
+
+		private static void UpgradeProject(string sourceProjectFilePath, string destProjectFilePath)
+		{
 			var projectData = new ProjectUpgradeHelper(sourceProjectFilePath);
 
-			projectData.ToolsVersion.Value           = ToolsVersion;
-			projectData.NemerleProperty.Value        = NemerlePath;
+			projectData.ToolsVersion.Value = ToolsVersion;
+			projectData.NemerleProperty.Value = NemerlePath;
 			projectData.TargetFrameworkVersion.Value = TargetFrameworkVersion;
 
 			projectData.NemerleProperty.Document.Save(destProjectFilePath);
+		}
 
-			pLogger.LogMessage((uint)__VSUL_ERRORLEVEL.VSUL_STATUSMSG, projectName, projectName, "Project converted successfully");
-			
-			return VSConstants.S_OK;
+		private static void BackupProjectForUpgrade(string sourceProjectFilePath, IVsUpgradeLogger pLogger, ref string destProjectFilePath, string backupedProject, string projectName)
+		{
+			var dlg = new PromptProjectRenameForm(projectName);
+			var result = dlg.ShowDialog();
+
+			if (result == DialogResult.Yes)
+			{
+				destProjectFilePath = Path.Combine(Path.GetDirectoryName(sourceProjectFilePath), dlg.ProjectName + Path.GetExtension(sourceProjectFilePath));
+				if (string.Equals(sourceProjectFilePath, destProjectFilePath, StringComparison.InvariantCultureIgnoreCase))
+					throw new ApplicationException("Can't rename project to itself name.");
+
+				File.Copy(sourceProjectFilePath, destProjectFilePath);
+				//File successfully backed up as
+				pLogger.LogMessage(0, projectName, sourceProjectFilePath, "The project file has been renamed to '"
+					+ Path.GetFileName(destProjectFilePath) + "' ('" + destProjectFilePath
+					+ "'). The old project file remain unchanged.");
+			}
+			else if (!string.IsNullOrEmpty(backupedProject))
+			{
+				File.Copy(sourceProjectFilePath, backupedProject);
+				pLogger.LogMessage(0, projectName, sourceProjectFilePath, "File successfully backed up as "
+					+ backupedProject);
+			}
 		}
 
 		public int UpgradeProject_CheckOnly(string projectFileName, IVsUpgradeLogger pLogger, out int pUpgradeRequired, out Guid pguidNewProjectFactory, out uint pUpgradeProjectCapabilityFlags)
