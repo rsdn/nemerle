@@ -1141,6 +1141,12 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		internal bool TryDoTableFormating(NemerleViewFilter view, int line, int col)
 		{
+			if (!view.GetSelection().IsSpanEmpty())
+				return false;
+
+			if (!Service.Package.UseSmartTab)
+				return false;
+
 			var text = GetLine(line);
 
 			if (!IsInContent(text, col))
