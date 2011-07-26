@@ -136,6 +136,11 @@ namespace Nemerle.VisualStudio
 			return new Location(fileIndex, span.iStartLine + 1, span.iStartIndex + 1, span.iEndLine + 1, span.iEndIndex + 1);
 		}
 
+		public static bool IsSpanEmpty(this TextSpan span)
+		{
+			return span.iStartLine == span.iEndLine && span.iStartIndex == span.iEndIndex;
+		}
+
 		public static TextSpan SpanFromLocation(Location location)
 		{
 			TextSpan span = new TextSpan();
