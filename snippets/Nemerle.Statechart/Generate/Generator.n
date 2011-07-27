@@ -1,0 +1,375 @@
+﻿using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Diagnostics;
+using Nemerle.Statechart;
+
+namespace Nemerle.Statechart
+{
+    // TODO: Action events with flag
+  /// <summary>
+  /// Description of StaticGenerator.
+  /// </summary>
+  partial class StaticGenerator
+  {
+        
+    DefineTransBody(tr : StateTransition,ctx : bool=true) : PExpr
+    {           
+      DefineTransBody([tr],ctx)
+    }
+
+    DefineTransBody(tr : list[StateTransition],ctx : bool=true) : PExpr
+    {       
+      def get_body(tr)
+      {
+        |StateTransition.Transition(Name=n)
+        |StateTransition.Initial(Name=n) 
+        |StateTransition.Default(Name=n) => if (ctx) <[ fsm.$(n : usesite)(); ]>; else <[ $(n : usesite)();]>
+      }
+    
+      def sorted=tr.Sort(StateTransition.Comparer);
+      
+      match (sorted)
+      {
+        |[StateTransition.Transition(IsCrossed=true) as tr] =>         
+            def body= get_body(tr);
+                  <[
+                  {
+                  def res= $body;
+                  if (res!=null) res else $(DefineTransBody(tr.ParentCrossed |> (_ : StateTransition),ctx))
+                  }
+                  ]>
+        |[tr] => get_body(tr)
+        |tr :: tail =>         
+            def body=get_body(tr);
+                  <[
+                  {
+                  def res= $body;
+                  if (res!=null) res else $(DefineTransBody(tail,ctx))
+                  }
+                  ]>                  
+        | _ => <[ null ]>
+      } 
+          
+    }
+    
+    DefineIntTransBody(tr : StateChartNode.InternalTransition) : PExpr
+    {                         
+        <[ fsm.$(tr.Name : usesite)(); ]>
+    }
+    
+    DefineTransitions(ty : TypeBuilder,st : FsmState) : void
+    {               
+      def defs=if (st.IsTopState)
+                {
+                  def check_top_trans(t,top)
+                  {            
+                    def find=top.FindTransition(t);
+                    find.MapDefault(DefineTransBody(_),<[ null ]>);                    
+                  }
+        
+                  def check_top_int_trans(t,top)
+                  {            
+                    def find=top.FindIntTransition(t);
+                    find.MapDefault(DefineIntTransBody,<[ () ]>);                                        
+                  }
+
+                  def tr_defs=analyser.TransitionEvents |> <[decl: 
+                   public virtual $(_.Name : usesite)() : State {$(check_top_trans(_,st))}]>;
+                  def int_defs=analyser.IntTransitionEvents |> <[decl: 
+                   public virtual $(_.Name : usesite)() : void {$(check_top_int_trans(_,st))}]>;          
+                  tr_defs+int_defs
+                }
+                else
+                {
+                  if (st.Lived)
+                  {
+                    def tr_defs=st.work_transition_group.MapToList((x,y) => <[decl: 
+                   public override $(x : usesite)() : State {$(DefineTransBody(y |> (_ : StateTransition)))}]>);
+                    def int_defs=st.internal_tran |> <[decl: 
+                   public override $(_.TriggerName : usesite)() : void {$(DefineIntTransBody(_))}]>;          
+                    tr_defs+int_defs;
+                  } else [];
+                }
+      Define(ty,defs);      
+    }
+
+    GetId(st : FsmState) : PExpr * PExpr
+    {
+      match (mask_type)
+      {
+        |TypeCode.UInt32 => (<[uint]>,<[ $((st.Id :> uint) : uint) ]>)
+        |TypeCode.UInt64 => (<[ulong]>,<[ $(st.Id : ulong) ]>)
+        |TypeCode.Empty 
+        |_ => (<[int]>,<[ $((st.Id :> int) : int) ]>)
+      }            
+    }
+    
+    DefineStates(builder : TypeBuilder,st : FsmState) : void
+    {                       
+      def (id_type,expr)=GetId(st);            
+                          
+      def type=if (st.IsTopState)
+                {                    
+                <[ decl:
+                   public class State
+                   {
+                       fsm : $(ChartName : usesite);
+                       public id : $id_type;
+                       public this(fsm : $(ChartName : usesite),id : $id_type) {this.fsm=fsm;this.id=id;}                                                                            
+
+                        public override ToString() : string
+                        {
+                            $(FsmState.TopStateName : string)
+                        }
+                   } ]>;                 
+                        
+                } else
+                {                    
+                  def parent_name=if (st.parent.IsTopState) "State" else st.parent.Name;                                    
+                 <[ decl:                  
+                    public class $(st.Name : usesite) : $(parent_name : usesite)
+                    {   
+                        public this(fsm : $(ChartName : usesite),id : $id_type) {base(fsm,id)}
+                        public this(fsm : $(ChartName : usesite)) {this(fsm,$expr);}
+                        
+                        public override ToString() : string
+                        {
+                            $(st.Name : string)
+                        }
+                    } ]>;                    
+                }            
+      def type=DefineNested(builder,type);
+      DefineTransitions(type,st); // определяем переходы в состоянии
+      DefineHistoryPaths(type,st); // опреляем исторические пути
+      //def builder=if (st.IsTopState) type else builder;
+      ///def builder=if (builder==ty) type else builder;
+      def builder=if (st.IsTopState) type else builder;
+      st.sub_states.Iter(DefineStates(builder,_));
+      type.Compile();
+    }       
+
+    TopState : FsmState
+    {
+      get
+      {
+        analyser.TopState
+      }
+    }
+    
+    DefineStates() : void
+    {
+      DefineStates(ty,analyser.TopState);                 
+    }
+    
+    DefineHistoryPaths(builder : TypeBuilder,st : FsmState) : void
+    {        
+      def create_body(hist)
+      {        
+        <[ fsm.$(hist.Name : usesite)(); ]>
+      }
+                
+      def name(h,x)
+      {
+        def type=h.type;
+        def type=if (h.state.history.IsOne) "" else type.ToString();
+        $"$(type)HistoryFrom$x"
+      }
+        
+      def get_run_hist_body(hist)
+      {
+        |StateTransition.Default(From=from,Name=n,history=hist) =>
+            def hname=name(hist,from.Name);                
+            def name=hist.Name;
+                <[ 
+                if ($(name : usesite)!=null) // определяем выбор в случае если есть переход по умолчанию в случ.если нет истории
+                    $(name : usesite).$(hname : usesite)(); else $(n : usesite)();
+                ]> 
+      }
+      
+      if (st.IsTopState) // если верхнее состояние
+      {
+        def names=analyser.HistoryStates |> name(_,_.state.Name); // получаем имена историч.состояний
+        def decls=names |> <[decl: public virtual $(_ : usesite)() : State {null} ]>; // создаем функции переходов для историч.состояний
+        Define(builder,decls);
+      } else
+      {
+        when (st.HaveHistoryPaths && st.Lived) // если состояние имеет исторические пути переходов и живущее
+        {
+          def paths = st.history_paths;
+          def name = paths |> (name(_[2].History,_),_[2]); // создаем имена переходов         
+          def decl = name.MapToList((n,y) => <[decl: public override $(n : usesite)() : State {$(create_body(y))}]>);
+          Define(builder,decl);
+        }
+      }
+            
+      def def_history(h)
+      {        
+        def hist_name= h |> Name;                
+        def hist_field= hist_name |> <[decl: mutable $(_ : usesite) : State;]>;
+        def hist_func= h.Head.SimpleName;
+        def body=hist_name |> <[ $(_ : usesite) = cur_state;]>;
+            // функция сохранения состояния            
+        def save= <[decl: $($"$(hist_func)Save" : usesite)() : void 
+            {
+                ..$body
+            }]>;
+        def defs=save :: hist_field;
+        def defs=h |>< (_.default.Map(x => [<[decl: $($"$(x.history)Run" : usesite)() : State {$(get_run_hist_body(x));} ]>]).WithDefault([]))+defs;
+            // если есть переход по умолчанию
+        Define(defs); // добавляем в класс состояния          
+      }
+      
+      when (st.history.HasValue)
+      {
+        def hist=st.history.Value;
+        def hist=hist.Filter(x => x.Used);
+        when (!hist.IsEmpty()) def_history(hist);
+      }
+    }
+    
+    DefineHistoryTransitions() : void
+    {
+      def get_body(tran,acts)
+      {
+        match (tran)
+        {
+          |StateTransition.Transition(HistoryTarget=StateChartNode.History(Name=n,state=parent,default=d,type=t) as hist) =>
+              def t=if (parent.history.IsOne) "" else t.ToString();
+            // определяем функцию запуска истории
+              def hist_run=if (d.HasValue) <[ $($"$(hist)Run" : usesite)();]> else <[ $(n : usesite).$($"$(t)HistoryFrom$parent" : usesite)() ]>;               
+            <[
+              {$(GetActions(acts))} // действия при переходе
+                $hist_run
+            ]>
+        }
+      }
+            
+      def trans=analyser.history_transitions; // создаем исторические переходы (в исторические состояния)
+      def trans_body=trans.MapToList((x,y) => (x,history_transitions.Get(x),y)); // создаем узлы перехода
+      def defs=trans_body.Map((n,acts,tr) => <[decl: $(n : usesite)() : State {$(get_body(tr,acts))}]>); // создаем тела переходов
+      
+      def nodes=analyser.history_default_transitions.Map(x => (x,x.PathNodes)); // создаем переходы по умолчанию из ист.состояний
+      def default=nodes |> <[decl: $(_.Name : usesite)() : State {$(GetTransitionBody(_,_[2]))} ]>;      
+      Define(defs+default); // определяем в классе состояния
+    }
+    
+    DefineEvents() : void
+    {      
+      def decl_events=events &> DeclaredEvent;
+      DefineNested(<[ decl:
+            public enum Event
+            {
+                ..$(decl_events |> <[decl: | $(_ : usesite) ]>)
+            }
+            
+            ]>).Compile();
+                                
+      def tran_events=tran_events |> (_,<[Switch($(events_call.Get(_)));]>);
+      def int_tran_events=int_tran_events &> (_,events_call.Get(_));
+      def events=tran_events+int_tran_events;
+      def (hiden,defs)=events.Partition((x,_) => event_for.Contains(x));
+      def hiden=hiden |> <[decl: private $(_ : usesite)() : void {$(_[2])} ]>;        
+      def defs=(defs |> <[decl: public $(_ : usesite)() : void {$(_[2])} ]>)+hiden;              
+      def decls=decl_events |> <[case: | Event.$(_ : usesite) => $(_ : usesite)(); ]>;
+      def decls= decls+[<[case: | _ => ()]>];
+      def defs= <[ decl:
+            
+            public RunEvent(evt : Event) : void
+            {
+                match (evt)
+                {
+                ..$decls
+                }
+            }
+            
+            ]> :: defs;
+      Define(defs);      
+    }
+    
+     
+    DefineTransitionActions() : void
+    {        
+      
+      def init_trans = analyser.InitialTransitions; //init_trans_body |> (analyser.InitialTransitions.Get(_),_[2]);
+      
+      def defs_init=init_trans |> <[decl: $(_ : usesite)() : State {$(GetTransitionBody(_[2],_[2].PathNodes))} ]>;
+      def int_defs=int_trans_body |> <[decl: $(_ : usesite)() : void {$(GetActions(_[2]))} ]>;
+      def trans_body= analyser.WorkTransitions.MapToList((x,y) => (x,y : StateTransition));
+      def defs=trans_body |> <[decl: $(_ : usesite)() : State {$(GetTransitionBody(_[2],_[2].PathNodes))} ]>;
+      def defs=defs+int_defs+defs_init;
+      
+      // исторические переходы
+      def body_name=analyser.HistoryPaths |> (Name,_,_.Nodes);
+      def body=body_name.Map((x,y,n) => <[decl: $(x : usesite)() : State {$(GetTransitionBody(y.transition,n))}]>);      
+      Define(defs+body);
+    }
+        
+    DefineGuards() : void
+    {
+      def get_body(act)
+      {
+           <[
+        if ($(act : usesite)!=null) $(act : usesite)() else false;
+           ]>;
+      }
+      
+      def guards=analyser.guards;
+      def actions=guards.Filter(x => !IsDeclared(x.condition,guard_for));
+      def need_body=guards.Filter(x => GuardNeedBody(x));
+      def need_body=need_body.Map(x => (x,get_guard_cond_expr(x)));
+      need_body.Iter((x,_) => guard_for=guard_for.Replace(x.condition,x.Name));
+      def cond_body=need_body.Map((x,y) => <[decl: $(x.Name : usesite)() : bool {$y}]>);
+      def gnames=actions |> (CreateExecActionName(_.Name),_.Name);
+      def methods=gnames |> <[decl: $(_ : usesite)() : bool {$(get_body(_[2]))}]>;
+      def props=gnames ^|> <[decl: [Accessor(flags=WantSetter)] 
+                                    mutable $(_ : usesite) : void -> bool;]>;
+      def defs=methods+props+cond_body;
+      Define(defs);
+    }
+    
+    
+    DefineActions() : void
+    {
+      def get_body(act)
+      {
+        def evt= <[ def temp= $(act : usesite);
+                    when (temp!=null) temp(this,null);
+                 ]>;
+        // если действие участвует в сохранении состояния
+        if (history_save_nodes.Contains(act))
+        {
+          def save=history_save_nodes.Get(act); //получаем узел сохранения состояния
+          // определяем тело метода
+              <[ 
+          $(save : usesite)();
+               $evt
+              ]>
+        } else evt; // иначе просто оставляем тело                     
+      }
+       
+      def get_clear_body(hist)
+      {
+          <[ $(hist.Name : usesite) = null; ]> // присваиваем null
+      }
+      
+      def (clear,_)=analyser.ActionNodes.MapFilterType(); // получаем узлы очистки истори
+      def clear= $[(y,$"$(y)Clear"),x : PathNode.ClearHistory in clear,y in x.history]; // создаем узлы
+      def clear_decls=clear |> <[decl: $(_[2] : usesite)() : void {$(get_clear_body(_))}]>; // создаем методы
+      
+      def actions=actions.Filter((_,x) => !IsDeclared(x));
+      def methods=actions |> <[decl: $(_ : usesite)() : void {$(get_body(_[2]))}]>;
+      def events=actions ^|> <[decl: public event $(_ : usesite) : EventHandler;]>;
+      def defs=methods+clear_decls+events;
+      Define(defs);
+    }        
+    
+  }
+}
