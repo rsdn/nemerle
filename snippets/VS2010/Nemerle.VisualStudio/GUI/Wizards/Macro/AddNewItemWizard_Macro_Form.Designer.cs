@@ -129,6 +129,7 @@
             "Method",
             "Property",
             "Field",
+            "Event",
             "Parameter"});
 			this._validOnComboBox.Location = new System.Drawing.Point(88, 41);
 			this._validOnComboBox.Margin = new System.Windows.Forms.Padding(2);
@@ -202,14 +203,24 @@
 			this.TypeColl.HeaderText = "Type";
 			this.TypeColl.Items.AddRange(new object[] {
             "PExpr",
+            "Token",
             "list[PExpr]",
             "array[PExpr]",
             "params list[PExpr]",
             "params array[PExpr]",
-            "string (literal)",
-            "int (literal)",
-            "uint (literal)",
-            "double (literal)"});
+            "bool",
+            "byte",
+            "decimal",
+            "double",
+            "float",
+            "int",
+            "long",
+            "sbyte",
+            "short",
+            "string",
+            "uint",
+            "ulong",
+            "ushort"});
 			this.TypeColl.Name = "TypeColl";
 			// 
 			// DefaultValueColl
@@ -259,9 +270,6 @@
 		private System.Windows.Forms.Button _okButton;
 		private System.Windows.Forms.Button _cancelButton;
 		private System.Windows.Forms.DataGridView _grid;
-		private System.Windows.Forms.DataGridViewTextBoxColumn NameColumn;
-		private System.Windows.Forms.DataGridViewComboBoxColumn TypeColumn;
-		private System.Windows.Forms.DataGridViewTextBoxColumn DefaultValueColumn;
 		private System.Windows.Forms.ErrorProvider _errorProvider;
 		private System.Windows.Forms.DataGridViewTextBoxColumn NameColl;
 		private System.Windows.Forms.DataGridViewComboBoxColumn TypeColl;

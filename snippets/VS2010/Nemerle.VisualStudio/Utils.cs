@@ -498,5 +498,25 @@ namespace Nemerle.VisualStudio
 
 			return res + "): ";
 		}
+
+		public static AttributeTargets ToValidOn(object validOn)
+		{
+			var str = validOn.ToString();
+			switch (str)
+			{
+				case "Type": return AttributeTargets.Class;
+				default: return (AttributeTargets)Enum.Parse(typeof(AttributeTargets), str);
+			}
+		}
+
+		public static string ValidOnToString(AttributeTargets attributeTargets)
+		{
+			var str = attributeTargets.ToString();
+			switch (str)
+			{
+				case "Class": return "Type";
+				default: return str;
+			}
+		}
 	}
 }

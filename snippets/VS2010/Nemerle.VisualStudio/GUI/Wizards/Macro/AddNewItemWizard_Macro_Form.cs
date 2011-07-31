@@ -29,26 +29,6 @@ namespace Nemerle.VisualStudio.GUI.Wizards
 
 		#region Helpers
 
-		AttributeTargets ToValidOn(object validOn)
-		{
-			var str = validOn.ToString();
-			switch (str)
-			{
-				case "Type": return AttributeTargets.Class;
-				default: return (AttributeTargets)Enum.Parse(typeof(AttributeTargets), str);
-			}
-		}
-
-		string ValidOnToString(AttributeTargets attributeTargets)
-		{
-			var str = attributeTargets.ToString();
-			switch (str)
-			{
-				case "Class": return "Type";
-				default: return str;
-			}
-		}
-
 		private MacroPhase ToMacroPhase(object value)
 		{
 			return (MacroPhase)Enum.Parse(typeof(MacroPhase), value.ToString());
@@ -96,7 +76,7 @@ namespace Nemerle.VisualStudio.GUI.Wizards
 		{
 			_macroAttributeSettingsGroupBox.Enabled = true;
 			_macroPhaseBomboBox.SelectedItem = attribute.MacroPhase.ToString();
-			_validOnComboBox.SelectedItem    = ValidOnToString(attribute.ValidOn);
+			_validOnComboBox.SelectedItem = Utils.ValidOnToString(attribute.ValidOn);
 		}
 
 		private void Select(MacroType.Expression expression)
@@ -111,7 +91,7 @@ namespace Nemerle.VisualStudio.GUI.Wizards
 
 		private void _validOnComboBox_SelectedIndexChanged(object sender, EventArgs e)
 		{
-			((MacroType.Attribute)MacroType).ValidOn = ToValidOn(_validOnComboBox.SelectedItem);
+			((MacroType.Attribute)MacroType).ValidOn = Utils.ToValidOn(_validOnComboBox.SelectedItem);
 		}
 
 		private void _macroPhaseBomboBox_SelectedIndexChanged(object sender, EventArgs e)
@@ -121,7 +101,10 @@ namespace Nemerle.VisualStudio.GUI.Wizards
 
 		bool ValidateData()
 		{
-			var parms = new string[_grid.RowCount - 1, 3];
+			var parms = new string[_grid.RowCount - 1][];
+
+			for (int i = 0; i < parms.Length; i++)
+				parms[i] = new string[3];
 
 			if (_grid.RowCount > 1) // The first row is a new row. Ignore it.
 			{
@@ -140,7 +123,7 @@ namespace Nemerle.VisualStudio.GUI.Wizards
 						var result = cellValidators[cellIndex](cell, value);
 
 						if (result)
-							parms[i, cellIndex] = value;
+							parms[i][cellIndex] = value;
 						else
 						{
 							ShowErrorMsgForCell(cell);
@@ -152,7 +135,7 @@ namespace Nemerle.VisualStudio.GUI.Wizards
 				#endregion
 			}
 
-			MacroType.Parameters = parms;
+			MacroType.Parameters = parms.Select(p => new ParameterDef(p[0], p[1], "", p[2])).ToArray();
 			//return false;
 			return true;
 		}
