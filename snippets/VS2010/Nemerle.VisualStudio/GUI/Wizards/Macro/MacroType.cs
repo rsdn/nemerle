@@ -10,9 +10,17 @@ namespace Nemerle.VisualStudio.GUI.Wizards
 		public bool           DefineSyntax { get; set; }
 		public ParameterDef[] Parameters   { get; set; }
 
-		private string GenerateParameterDefinition(ParameterDef parameterDef)
+		private string GenerateMacroParameterDefinition(ParameterDef parameterDef)
 		{
-			return parameterDef.Name + " : " + parameterDef.Type + (string.IsNullOrWhiteSpace(parameterDef.DefaultValue) ? "" : " = " + parameterDef.DefaultValue);
+			return (parameterDef.IsParameterArray ? "params " : "")
+				+ parameterDef.Name + " : " + parameterDef.Type 
+				+ (string.IsNullOrWhiteSpace(parameterDef.DefaultValue) ? "" : " = " + parameterDef.DefaultValue);
+		}
+
+		private string GenerateMethodParameterDefinition(ParameterDef parameterDef)
+		{
+			return parameterDef.Name + " : " + parameterDef.Type
+				+ (string.IsNullOrWhiteSpace(parameterDef.DefaultValue) ? "" : " = " + parameterDef.DefaultValue);
 		}
 
 		private string GenerateParametersReference(ParameterDef parameterDef)
@@ -27,7 +35,8 @@ namespace Nemerle.VisualStudio.GUI.Wizards
 
 			var parameters = GetParameterDefs();
 
-			replacementsDictionary["$ParametersDefinition$"] = string.Join(", ", parameters.Select(GenerateParameterDefinition));
+			replacementsDictionary["$MacroParametersDefinition$"] = string.Join(", ", parameters.Select(GenerateMacroParameterDefinition));
+			replacementsDictionary["$MethodParametersDefinition$"] = string.Join(", ", parameters.Select(GenerateMethodParameterDefinition));
 			replacementsDictionary["$ParametersReference$"]  = string.Join(", ", parameters.Select(GenerateParametersReference));
 		}
 

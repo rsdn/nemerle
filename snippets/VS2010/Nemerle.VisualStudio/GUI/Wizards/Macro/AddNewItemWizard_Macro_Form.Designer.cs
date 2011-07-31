@@ -204,8 +204,6 @@
 			this.TypeColl.Items.AddRange(new object[] {
             "PExpr",
             "Token",
-            "list[PExpr]",
-            "array[PExpr]",
             "params list[PExpr]",
             "params array[PExpr]",
             "bool",
