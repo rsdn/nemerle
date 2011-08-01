@@ -50,27 +50,36 @@ namespace Nemerle.VisualStudio.Project
 		{
 			pUpgradeRequired = 1;
 			pguidNewProjectFactory = Guid.Empty;
-
+			upgradedFullyQualifiedFileName = null;
 			var projectName = Path.GetFileNameWithoutExtension(sourceProjectFilePath);
-			var destProjectFilePath = sourceProjectFilePath;
-			var backupedProject = string.IsNullOrEmpty(bstrCopyLocation)
-				? null
-				: Path.Combine(bstrCopyLocation, Path.GetFileName(sourceProjectFilePath));
-			var projectFileName = Path.GetFileName(sourceProjectFilePath);
 
-			BackupProjectForUpgrade(sourceProjectFilePath, pLogger, ref destProjectFilePath, backupedProject, projectName);
+			try
+			{
+				var destProjectFilePath = sourceProjectFilePath;
+				var backupedProject = string.IsNullOrEmpty(bstrCopyLocation)
+					? null
+					: Path.Combine(bstrCopyLocation, Path.GetFileName(sourceProjectFilePath));
+				var projectFileName = Path.GetFileName(sourceProjectFilePath);
 
-			upgradedFullyQualifiedFileName = destProjectFilePath;
+				BackupProjectForUpgrade(sourceProjectFilePath, pLogger, ref destProjectFilePath, backupedProject, projectName);
 
-			UpgradeProject(sourceProjectFilePath, destProjectFilePath);
+				upgradedFullyQualifiedFileName = destProjectFilePath;
 
-			pLogger.LogMessage((uint)__VSUL_ERRORLEVEL.VSUL_INFORMATIONAL, projectName, sourceProjectFilePath, "Project converted successfully");
-			// Tell to VS which the project converted successfull. It's a magic! :)
-			pLogger.LogMessage((uint)__VSUL_ERRORLEVEL.VSUL_STATUSMSG, projectName, sourceProjectFilePath,
-				// "Converted" should NOT be localized - it is referenced in the XSLT used to display the UpgradeReport
-				"Converted");
-			
-			return VSConstants.S_OK;
+				UpgradeProject(sourceProjectFilePath, destProjectFilePath);
+
+				pLogger.LogMessage((uint)__VSUL_ERRORLEVEL.VSUL_INFORMATIONAL, projectName, sourceProjectFilePath, "Project converted successfully");
+				// Tell to VS which the project converted successfull. It's a magic! :)
+				pLogger.LogMessage((uint)__VSUL_ERRORLEVEL.VSUL_STATUSMSG, projectName, sourceProjectFilePath,
+					// "Converted" should NOT be localized - it is referenced in the XSLT used to display the UpgradeReport
+					"Converted");
+
+				return VSConstants.S_OK;
+			}
+			catch (Exception ex)
+			{
+				pLogger.LogMessage((uint)__VSUL_ERRORLEVEL.VSUL_INFORMATIONAL, projectName, sourceProjectFilePath, "Error during project convertion: " + ex.Message);
+				return VSConstants.E_FAIL;
+			}
 		}
 
 		private static void UpgradeProject(string sourceProjectFilePath, string destProjectFilePath)
