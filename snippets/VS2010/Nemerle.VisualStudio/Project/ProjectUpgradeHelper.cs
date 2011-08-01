@@ -21,7 +21,7 @@ namespace Nemerle.VisualStudio.Project
 			TargetFrameworkVersion = FindPropertyElement(project, "TargetFrameworkVersion");
 
 			if (ToolsVersion == null)
-				project.Add(new XAttribute("ToolsVersion", ""));
+				project.Add(ToolsVersion = new XAttribute("ToolsVersion", "0.0"));
 		}
 
 		private XElement FindPropertyElement(XElement project, string propertyNamre)
