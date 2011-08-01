@@ -45,6 +45,7 @@
 			this.NameColl = new System.Windows.Forms.DataGridViewTextBoxColumn();
 			this.TypeColl = new System.Windows.Forms.DataGridViewComboBoxColumn();
 			this.DefaultValueColl = new System.Windows.Forms.DataGridViewTextBoxColumn();
+			this._toolTip = new System.Windows.Forms.ToolTip(this.components);
 			this._macroAttributeSettingsGroupBox.SuspendLayout();
 			((System.ComponentModel.ISupportInitialize)(this._grid)).BeginInit();
 			((System.ComponentModel.ISupportInitialize)(this._errorProvider)).BeginInit();
@@ -69,6 +70,7 @@
 			this._macroPhaseBomboBox.Name = "_macroPhaseBomboBox";
 			this._macroPhaseBomboBox.Size = new System.Drawing.Size(142, 21);
 			this._macroPhaseBomboBox.TabIndex = 6;
+			this._toolTip.SetToolTip(this._macroPhaseBomboBox, resources.GetString("_macroPhaseBomboBox.ToolTip"));
 			this._macroPhaseBomboBox.SelectedIndexChanged += new System.EventHandler(this._macroPhaseBomboBox_SelectedIndexChanged);
 			// 
 			// _macroTypeComboBox
@@ -80,6 +82,7 @@
 			this._macroTypeComboBox.Name = "_macroTypeComboBox";
 			this._macroTypeComboBox.Size = new System.Drawing.Size(166, 21);
 			this._macroTypeComboBox.TabIndex = 2;
+			this._toolTip.SetToolTip(this._macroTypeComboBox, resources.GetString("_macroTypeComboBox.ToolTip"));
 			this._macroTypeComboBox.SelectedIndexChanged += new System.EventHandler(this._macroTypeComboBox_SelectedIndexChanged);
 			// 
 			// label1
@@ -220,12 +223,22 @@
             "ulong",
             "ushort"});
 			this.TypeColl.Name = "TypeColl";
+			this.TypeColl.Width = 120;
 			// 
 			// DefaultValueColl
 			// 
 			this.DefaultValueColl.HeaderText = "Default Value";
 			this.DefaultValueColl.Name = "DefaultValueColl";
-			this.DefaultValueColl.Width = 120;
+			// 
+			// _toolTip
+			// 
+			this._toolTip.AutomaticDelay = 0;
+			this._toolTip.AutoPopDelay = 0;
+			this._toolTip.InitialDelay = 700;
+			this._toolTip.IsBalloon = true;
+			this._toolTip.ReshowDelay = 200;
+			this._toolTip.ToolTipIcon = System.Windows.Forms.ToolTipIcon.Info;
+			this._toolTip.ToolTipTitle = "Help";
 			// 
 			// AddNewItemWizard_Macro_Form
 			// 
@@ -272,5 +285,6 @@
 		private System.Windows.Forms.DataGridViewTextBoxColumn NameColl;
 		private System.Windows.Forms.DataGridViewComboBoxColumn TypeColl;
 		private System.Windows.Forms.DataGridViewTextBoxColumn DefaultValueColl;
+		private System.Windows.Forms.ToolTip _toolTip;
 	}
 }
