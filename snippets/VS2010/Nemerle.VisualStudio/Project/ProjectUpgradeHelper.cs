@@ -24,14 +24,14 @@ namespace Nemerle.VisualStudio.Project
 				project.Add(ToolsVersion = new XAttribute("ToolsVersion", "0.0"));
 		}
 
-		private XElement FindPropertyElement(XElement project, string propertyNamre)
+		private XElement FindPropertyElement(XElement project, string propertyName)
 		{
 			foreach (var nemerleProperty in project.Descendants())
-				if (Utils.Eq(nemerleProperty.Name.LocalName, propertyNamre))
+				if (Utils.Eq(nemerleProperty.Name.LocalName, propertyName))
 					return nemerleProperty;
 
 			throw new ApplicationException("Incorrect format of project file. The project must contains '" 
-				+ propertyNamre + "' property.");
+				+ propertyName + "' property.");
 		}
 
 		public XAttribute ToolsVersion           { get; private set; }
