@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text;
 using System.Windows.Forms;
 using Microsoft.VisualStudio.TemplateWizard;
+using System.Runtime.InteropServices;
+using Microsoft.VisualStudio;
 
 namespace Nemerle.VisualStudio.GUI.Wizards
 {
@@ -32,7 +34,7 @@ namespace Nemerle.VisualStudio.GUI.Wizards
 			var wizard = new AddNewItemWizard_Macro_Form();
 
 			if (wizard.ShowDialog() != DialogResult.OK)
-				throw new ApplicationException("User canceled.");
+				throw Marshal.GetExceptionForHR(VSConstants.OLE_E_PROMPTSAVECANCELLED);
 
 			wizard.MacroType.FillReplacementsDictionary(replacementsDictionary);
 		}

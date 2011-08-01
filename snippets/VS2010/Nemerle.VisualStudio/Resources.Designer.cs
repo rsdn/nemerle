@@ -133,25 +133,7 @@ namespace Nemerle.VisualStudio {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to Macro.
-        /// </summary>
-        internal static string _2246 {
-            get {
-                return ResourceManager.GetString("2246", resourceCulture);
-            }
-        }
-        
-        /// <summary>
-        ///   Looks up a localized string similar to Macro attribute (assembly level).
-        /// </summary>
-        internal static string _2247 {
-            get {
-                return ResourceManager.GetString("2247", resourceCulture);
-            }
-        }
-        
-        /// <summary>
-        ///   Looks up a localized string similar to Macro attribute (method level).
+        ///   Looks up a localized string similar to Variant.
         /// </summary>
         internal static string _2248 {
             get {
@@ -160,7 +142,7 @@ namespace Nemerle.VisualStudio {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to An empty macro attribute definiton.
+        ///   Looks up a localized string similar to An variant definiton. Variant is a Algebraic Data Type (see http://en.wikipedia.org/wiki/Algebraic_data_type). Use this data type to describe some object model, hierarhy or union..
         /// </summary>
         internal static string _2249 {
             get {
@@ -169,7 +151,7 @@ namespace Nemerle.VisualStudio {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to Macro attribute (class level).
+        ///   Looks up a localized string similar to Module.
         /// </summary>
         internal static string _2250 {
             get {
@@ -178,7 +160,7 @@ namespace Nemerle.VisualStudio {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to An empty macro attribute definiton.
+        ///   Looks up a localized string similar to An empty module definiton. Module like a static class in C#, where all member is static by defaule..
         /// </summary>
         internal static string _2251 {
             get {
@@ -196,7 +178,7 @@ namespace Nemerle.VisualStudio {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to Helps to create new macro definiton.
+        ///   Looks up a localized string similar to Helps to create a macro definiton..
         /// </summary>
         internal static string _2253 {
             get {
@@ -214,29 +196,11 @@ namespace Nemerle.VisualStudio {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to An empty macro definiton.
-        /// </summary>
-        internal static string _2263 {
-            get {
-                return ResourceManager.GetString("2263", resourceCulture);
-            }
-        }
-        
-        /// <summary>
         ///   Looks up a localized string similar to A blank Windows Form.
         /// </summary>
         internal static string _2264 {
             get {
                 return ResourceManager.GetString("2264", resourceCulture);
-            }
-        }
-        
-        /// <summary>
-        ///   Looks up a localized string similar to An empty macro attribute definiton.
-        /// </summary>
-        internal static string _2265 {
-            get {
-                return ResourceManager.GetString("2265", resourceCulture);
             }
         }
         

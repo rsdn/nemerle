@@ -28,6 +28,11 @@ namespace Nemerle.VisualStudio.GUI.Wizards
 			return parameterDef.Name;
 		}
 
+		private string GenerateParametersFukeUse(ParameterDef parameterDef)
+		{
+			return "_ = " + parameterDef.Name;
+		}
+
 		public virtual void FillReplacementsDictionary(Dictionary<string, string> replacementsDictionary)
 		{
 			replacementsDictionary["$IsSyntaxDefined$"] = DefineSyntax ? "True" : "False";
@@ -35,9 +40,10 @@ namespace Nemerle.VisualStudio.GUI.Wizards
 
 			var parameters = GetParameterDefs();
 
-			replacementsDictionary["$MacroParametersDefinition$"] = string.Join(", ", parameters.Select(GenerateMacroParameterDefinition));
+			replacementsDictionary["$MacroParametersDefinition$"]  = string.Join(", ", parameters.Select(GenerateMacroParameterDefinition));
 			replacementsDictionary["$MethodParametersDefinition$"] = string.Join(", ", parameters.Select(GenerateMethodParameterDefinition));
-			replacementsDictionary["$ParametersReference$"]  = string.Join(", ", parameters.Select(GenerateParametersReference));
+			replacementsDictionary["$ParametersReference$"]        = string.Join(", ", parameters.Select(GenerateParametersReference));
+			replacementsDictionary["$ParametersFukeUse$"]          = string.Join("; ", parameters.Select(GenerateParametersFukeUse));
 		}
 
 		protected virtual IEnumerable<ParameterDef> GetParameterDefs()

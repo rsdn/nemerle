@@ -337,7 +337,6 @@ namespace Nemerle.VisualStudio.Project
 
 		#region Overridden Methods
 
-
 		public override ProjectOptions GetProjectOptions(string config)
 		{
 			// Woraround of bug in ProjectNode.GetProjectOptions()
