@@ -11,7 +11,7 @@ namespace Nemerle.VisualStudio.GUI.Wizards
 		{
 			const string ParamsPrefix = "params ";
 
-			if (type.StartsWith(ParamsPrefix))
+			if (type.StartsWith(ParamsPrefix, StringComparison.InvariantCulture))
 			{
 				Type = type.Substring(ParamsPrefix.Length);
 				IsParameterArray = true;

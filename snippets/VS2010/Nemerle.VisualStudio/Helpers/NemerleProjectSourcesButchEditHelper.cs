@@ -163,7 +163,7 @@ namespace Nemerle.VisualStudio.Helpers
 
 			// Коамилятор не всегда учитывает точку с запятой в местоположении выражения.
 			// Компенсируем эту проблему удаляя точку с запятой из начала строки.
-			if (sufix.StartsWith(";"))
+			if (sufix.StartsWith(";", StringComparison.InvariantCulture))
 			{
 				sufix = sufix.Substring(1);
 				endCol++;

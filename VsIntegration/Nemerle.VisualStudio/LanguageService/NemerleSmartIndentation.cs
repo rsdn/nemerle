@@ -48,7 +48,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			var indentString = GetIndentString(prevLine);
 
-			if (!string.IsNullOrEmpty(currentLine) && currentLine.Trim().StartsWith("}", StringComparison.InvariantCultureIgnoreCase))
+			if (!string.IsNullOrEmpty(currentLine) && currentLine.Trim().StartsWith("}", StringComparison.InvariantCulture))
 			{
 				if (!prevLine.EndsWith("{", StringComparison.InvariantCultureIgnoreCase))
 					indentString = Unindent(indentString);

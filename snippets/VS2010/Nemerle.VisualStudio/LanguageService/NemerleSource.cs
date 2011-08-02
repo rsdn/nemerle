@@ -1551,8 +1551,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			string msg = Utils.HtmlMangling(cm.Msg);
 
-			var len = msg.EndsWith("[simple require]") && msg.Contains(':') ? msg.LastIndexOf(':') : msg.Length;
-			var start = msg.StartsWith(PosibleOverloadPref) ? PosibleOverloadPref.Length : 0;
+			var len = msg.EndsWith("[simple require]", StringComparison.InvariantCulture) && msg.Contains(':') ? msg.LastIndexOf(':') : msg.Length;
+			var start = msg.StartsWith(PosibleOverloadPref, StringComparison.InvariantCulture) ? PosibleOverloadPref.Length : 0;
 
 			text.Append(msg.Substring(start, len - start));
 

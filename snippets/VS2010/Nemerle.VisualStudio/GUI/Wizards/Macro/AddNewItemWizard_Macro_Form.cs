@@ -191,7 +191,7 @@ namespace Nemerle.VisualStudio.GUI.Wizards
 
 			if (value.Length < 1)
 				cell.ErrorText = "Yoe must select type of parameter.";
-			if (!IsLastRow(cell.RowIndex) && value.StartsWith("params"))
+			if (!IsLastRow(cell.RowIndex) && value.StartsWith("params", StringComparison.InvariantCulture))
 				cell.ErrorText = "Parametr array (or list) must be last parametr!";
 			else
 			{
