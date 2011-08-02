@@ -41,10 +41,10 @@
 			this._okButton = new System.Windows.Forms.Button();
 			this._cancelButton = new System.Windows.Forms.Button();
 			this._grid = new System.Windows.Forms.DataGridView();
-			this._errorProvider = new System.Windows.Forms.ErrorProvider(this.components);
 			this.NameColl = new System.Windows.Forms.DataGridViewTextBoxColumn();
 			this.TypeColl = new System.Windows.Forms.DataGridViewComboBoxColumn();
 			this.DefaultValueColl = new System.Windows.Forms.DataGridViewTextBoxColumn();
+			this._errorProvider = new System.Windows.Forms.ErrorProvider(this.components);
 			this._toolTip = new System.Windows.Forms.ToolTip(this.components);
 			this._macroAttributeSettingsGroupBox.SuspendLayout();
 			((System.ComponentModel.ISupportInitialize)(this._grid)).BeginInit();
@@ -191,10 +191,6 @@
 			this._grid.TabIndex = 11;
 			this._grid.CellValidating += new System.Windows.Forms.DataGridViewCellValidatingEventHandler(this._grid_CellValidating);
 			// 
-			// _errorProvider
-			// 
-			this._errorProvider.ContainerControl = this;
-			// 
 			// NameColl
 			// 
 			this.NameColl.HeaderText = "Name";
@@ -230,10 +226,14 @@
 			this.DefaultValueColl.HeaderText = "Default Value";
 			this.DefaultValueColl.Name = "DefaultValueColl";
 			// 
+			// _errorProvider
+			// 
+			this._errorProvider.ContainerControl = this;
+			// 
 			// _toolTip
 			// 
 			this._toolTip.AutomaticDelay = 0;
-			this._toolTip.AutoPopDelay = 0;
+			this._toolTip.AutoPopDelay = 32767;
 			this._toolTip.InitialDelay = 700;
 			this._toolTip.IsBalloon = true;
 			this._toolTip.ReshowDelay = 200;
