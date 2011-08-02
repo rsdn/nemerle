@@ -53,7 +53,7 @@ namespace Nemerle.VisualStudio.GUI
 
 		private void _newProjectName_Validating(object _, CancelEventArgs e)
 		{
-			e.Cancel = !(_yesButton.Enabled = ValidateData());
+			_yesButton.Enabled = ValidateData();
 		}
 
 		private void _yesButton_Click(object sender, EventArgs e)
