@@ -268,7 +268,9 @@
 			this.Controls.Add(this._macroTypeComboBox);
 			this.Icon = ((System.Drawing.Icon)(resources.GetObject("$this.Icon")));
 			this.Margin = new System.Windows.Forms.Padding(2);
+			this.MinimizeBox = false;
 			this.Name = "AddNewItemWizard_Macro_Form";
+			this.ShowInTaskbar = false;
 			this.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
 			this.Text = "Macro Wizard";
 			this._macroAttributeSettingsGroupBox.ResumeLayout(false);
