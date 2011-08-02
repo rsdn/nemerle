@@ -46,6 +46,7 @@
 			this.DefaultValueColl = new System.Windows.Forms.DataGridViewTextBoxColumn();
 			this._errorProvider = new System.Windows.Forms.ErrorProvider(this.components);
 			this._toolTip = new System.Windows.Forms.ToolTip(this.components);
+			this.label3 = new System.Windows.Forms.Label();
 			this._macroAttributeSettingsGroupBox.SuspendLayout();
 			((System.ComponentModel.ISupportInitialize)(this._grid)).BeginInit();
 			((System.ComponentModel.ISupportInitialize)(this._errorProvider)).BeginInit();
@@ -154,11 +155,11 @@
 			// _okButton
 			// 
 			this._okButton.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
-			this._okButton.Location = new System.Drawing.Point(329, 287);
+			this._okButton.Location = new System.Drawing.Point(329, 306);
 			this._okButton.Margin = new System.Windows.Forms.Padding(2);
 			this._okButton.Name = "_okButton";
 			this._okButton.Size = new System.Drawing.Size(85, 27);
-			this._okButton.TabIndex = 9;
+			this._okButton.TabIndex = 11;
 			this._okButton.Text = "&Finish";
 			this._okButton.UseVisualStyleBackColor = true;
 			this._okButton.Click += new System.EventHandler(this._okButton_Click);
@@ -167,11 +168,11 @@
 			// 
 			this._cancelButton.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
 			this._cancelButton.DialogResult = System.Windows.Forms.DialogResult.Cancel;
-			this._cancelButton.Location = new System.Drawing.Point(418, 288);
+			this._cancelButton.Location = new System.Drawing.Point(418, 307);
 			this._cancelButton.Margin = new System.Windows.Forms.Padding(2);
 			this._cancelButton.Name = "_cancelButton";
 			this._cancelButton.Size = new System.Drawing.Size(85, 26);
-			this._cancelButton.TabIndex = 10;
+			this._cancelButton.TabIndex = 12;
 			this._cancelButton.Text = "&Cancel";
 			this._cancelButton.UseVisualStyleBackColor = true;
 			// 
@@ -185,10 +186,10 @@
             this.NameColl,
             this.TypeColl,
             this.DefaultValueColl});
-			this._grid.Location = new System.Drawing.Point(12, 124);
+			this._grid.Location = new System.Drawing.Point(12, 139);
 			this._grid.Name = "_grid";
-			this._grid.Size = new System.Drawing.Size(490, 159);
-			this._grid.TabIndex = 11;
+			this._grid.Size = new System.Drawing.Size(490, 163);
+			this._grid.TabIndex = 10;
 			this._grid.CellValidating += new System.Windows.Forms.DataGridViewCellValidatingEventHandler(this._grid_CellValidating);
 			// 
 			// NameColl
@@ -240,13 +241,24 @@
 			this._toolTip.ToolTipIcon = System.Windows.Forms.ToolTipIcon.Info;
 			this._toolTip.ToolTipTitle = "Help";
 			// 
+			// label3
+			// 
+			this.label3.AutoSize = true;
+			this.label3.Location = new System.Drawing.Point(11, 123);
+			this.label3.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
+			this.label3.Name = "label3";
+			this.label3.Size = new System.Drawing.Size(60, 13);
+			this.label3.TabIndex = 9;
+			this.label3.Text = "Pa&rameters";
+			// 
 			// AddNewItemWizard_Macro_Form
 			// 
 			this.AcceptButton = this._okButton;
 			this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
 			this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
 			this.CancelButton = this._cancelButton;
-			this.ClientSize = new System.Drawing.Size(514, 319);
+			this.ClientSize = new System.Drawing.Size(514, 338);
+			this.Controls.Add(this.label3);
 			this.Controls.Add(this._grid);
 			this.Controls.Add(this._cancelButton);
 			this.Controls.Add(this._okButton);
@@ -286,5 +298,6 @@
 		private System.Windows.Forms.DataGridViewComboBoxColumn TypeColl;
 		private System.Windows.Forms.DataGridViewTextBoxColumn DefaultValueColl;
 		private System.Windows.Forms.ToolTip _toolTip;
+		private System.Windows.Forms.Label label3;
 	}
 }
