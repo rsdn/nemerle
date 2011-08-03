@@ -1,0 +1,242 @@
+﻿using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Diagnostics;
+using System.Collections.Generic;
+using System.Linq;
+using Nemerle.Statechart;
+
+namespace Nemerle.Statechart
+{
+    
+  using StateTransition;
+  using PathNode;
+  using TransitionDestination;
+  
+  /// <summary>
+  /// Transition Path
+  /// </summary>  
+  partial class TransitionPath
+  {
+         
+    [Accessor]
+    mutable path : PathNode = Empty();        
+    mutable recursive : bool;
+    
+    AddNode(node : PathNode) : void
+    {
+      path = Sequence([path, node]);
+    }
+   
+    TraversePseudo(st : PseudoStateNode) : TransitionDestination
+    {
+      | Terminate as n => Terminate(n)
+      | Fork((FsmState where (PartOfRegion = Some(r)) :: _) as st) => Fork(st,r.ContainedIn)
+      | Fork([]) as f => analyser.AddError(FsmError.ForkError(f)); Unknown()
+      | Fork as f => analyser.AddError(FsmError.ForkMustGoToRegion(f)); Unknown()
+      | _ => Unknown();
+    }
+	  /// <summary>
+	  /// Processing final state node
+	  /// </summary>       
+    TraverseFinal(st : FsmState.FinalState) : TransitionDestination
+    {
+      def parent = st.SuperState;
+      def hist_clear = match (st.history) 
+                       {
+                         | ThreeOption.None  => Empty()
+                         | h  => ClearHistory(h.Value)// создаем узел очистки                           
+                       }
+        // find completion transition
+      match (parent.FindTransitions(completion))
+      {
+        | []  => State(st);            
+          // if have completion transition without guard
+        | [Transition(guard = None()) as tran]  => 
+              // if not defined transition path create it            
+            tran.TraversePath(recursive);            
+            AddNode(hist_clear + tran.PathNode); // get nodes and add to path                        
+            State(tran.ActualTo)  // create destination to dest state
+          // if we have transition list
+        | lst  =>                            
+            AddNode(hist_clear + ForceStateChange(st)); // add node
+            st.Lived = true; // state is lived
+            def tran = lst |> _ : StateTransition;
+            tran.Iter(x  => x.TraversePath(recursive));
+            Choice(parent, tran)            
+      }      
+    }  
+                       
+    TraverseTransitionPath(tran : StateTransition) : list[FsmState] * list[FsmState]
+    {       
+      | Initial(To = State(st), From = from) // initial и pseudo is local transitions by default
+      | Default(To = State(st), From = from)  => FindPath(from, st, [], [])
+      | Internal => ([], []) // no path for internal transition
+      | Transition(To = Final(st), From = from) 
+      | Transition(To = History(StateChartHistory where (State = st)), From = from)
+      | Transition(To = State(st), From = from)  => FindLCA(from, st)
+      | _  => ([], [])
+    }
+    
+    TraverseHistory(hist : StateChartHistory) : TransitionDestination
+    {
+      match (hist)
+      {
+        | StateChartHistory where (Default = Some(Default(ToState = _) as tran)) as h  => 
+            h.Used = true; 
+            tran.TraversePath();            
+            History(hist)
+        | _  => hist.Used = true; 
+            History(hist)
+      }
+    }
+            
+    TraverseOrthogonalRegions(reg : ConcurrentRegions) : TransitionDestination
+    {
+      def initial = reg.Regions.Map(x => x.Initial);
+      when (!initial.All(x => !x.IsEmpty())) analyser.AddError(FsmError.RegionsMustContainInitial(reg, transition));      
+      initial.Iter(x => x.Iter(x => x.TraversePath(recursive)));
+      Regions(reg)
+    }
+    
+    DefineRegionsExit(region : ConcurrentRegion) : void
+    {      
+      foreach (st in region.States)
+      {
+        def (exit, _) = FindPath(st, region.ContainedIn.State, [], []); // exit state nested in region
+        def exit = ExitNodeCreate(exit); // create exit state node      
+        st.region_exit_path = exit;
+      }
+    }
+    
+    TraverseTransitionFromRegions(regions : ConcurrentRegions, tran : StateTransition) : TransitionDestination
+    {
+      regions.Regions.Iter(DefineRegionsExit);
+      def reg_exit = RegionsExit(regions); // exit whole regions
+      def (exit1, _) = FindPath(regions.State, tran.From, [], []); // unwind path from Source up to transition begining (From)                                         
+      def (exit, entry) = TraverseTransitionPath(tran); // find transition path                  
+      def node = reg_exit +  NodesCreate(exit1 + exit, tran, entry); // creating path nodes
+      when (!tran.IsCompletion) regions.MayTakePlaceForcedTransitions = true;
+      AddNode(node); // add node to path      
+      tran.Used = true;
+      TraverseTarget(tran.To) // traversing transition target
+    }
+    
+    TraverseOrdinaryTransition(tran : StateTransition) : TransitionDestination
+    {      
+          when (tran.Source == null) tran.Source = tran.From;      
+      def (exit1, _) = FindPath(tran.Source, tran.From, [], []);// unwind path from Source up to transition begining (From)                       
+      def (exit, entry) = TraverseTransitionPath(tran); // find transition path
+      def node = NodesCreate(exit1 + exit, tran, entry); // creating path nodes 
+      AddNode(node);
+      tran.Used = true;
+      TraverseTarget(tran.To)
+    }    
+    
+    TraverseTransitionFromRegionState(reg : ConcurrentRegion, tran : StateTransition) : TransitionDestination
+    {
+      def src = tran.Source;
+      def regions = reg.ContainedIn;
+      regions.Regions.Iter(DefineRegionsExit);
+      def (exit_cur, _) = FindPath(src, reg.SuperState, [], []); // exit state nested in region
+      def exit_cur = ExitNodeCreate(exit_cur); // create exit state node
+      def regs = regions.RegionsExcept(src); // regions except this state that must exit
+      def reg_exit = RegionExit(regs, regions); // exit other regions
+      regions.DefineExitPattern(regs); // this must be compile time known patterns of exit
+      def (exit1, _) = FindPath(reg.SuperState, tran.From, [], []); // unwind path from Source up to transition begining (From)                                         
+      def (exit, entry) = TraverseTransitionPath(tran); // find transition path                  
+      def node = exit_cur + reg_exit +  NodesCreate(exit1 + exit, tran, entry); // creating path nodes                   
+      regions.MayTakePlaceForcedTransitions = true;
+      AddNode(node); // add node to path
+      tran.Used = true;
+      TraverseTarget(tran.To) // traversing transition target      
+    }
+    
+    TraverseStateTarget(st : FsmState) : TransitionDestination
+    {
+      | FsmState where (Regions = Some(r)) => TraverseOrthogonalRegions(r)
+          // if simple state and no initial transition
+      | FsmState where (Initial = []) as st  => st.Lived = true;
+                                                when (recursive && st.paths==null) st.TraverseTransitions();
+                                                State(st); // конечное состояние
+          // if state with one initial transition without guard
+      | FsmState where (Initial = [Initial(guard = None()) as init])  => TraverseOrdinaryTransition(init) // recursive traverse transition
+      | FsmState where (Initial = init) as st  => init.Iter(x => x.TraversePath(recursive));
+                                                  Choice(st, init |> (_ : StateTransition)); // creating dynamic choice node      
+    }
+    
+    TraverseTarget(to : TransitionTarget) : TransitionDestination
+    {      
+      match (to) 
+      {
+        | State(st) => TraverseStateTarget(st)
+          // if target is orthogonal state
+        | Final(st)  => TraverseFinal(st) // process final node
+        | History(st)  => TraverseHistory(st) // process history node
+        | PseudoState(st) => TraversePseudo(st) 
+        | _  => Unknown();            
+      }
+    }
+    
+    TraverseTransition(tran : StateTransition) : TransitionDestination
+    {       
+      when (tran.Source == null) 
+      {
+        tran.Source = tran.From;
+      }
+      def src = tran.Source; 
+      match (tran)
+      {
+        | Internal => tran.Used = true;
+                      NoStateChange();
+        | _ => 
+            match (src.PartOfRegion)
+            {                         
+               // if begins at some state in concurrent region                    
+              | Some(r) => TraverseTransitionFromRegionState(r, tran)
+              | _ =>                   
+                  match (src.Regions)
+                  {
+                    // if begins at orthogonal regions boundary
+                    | Some(r) => TraverseTransitionFromRegions(r, tran)
+                    // else ordinary transition
+                    | _ => TraverseOrdinaryTransition(tran)
+                  }
+            }
+      }
+    }
+    
+    /// <summary>
+    /// Traversing path
+    /// </summary>
+    public Traverse(rec : bool = false) : void
+    {                  
+      recursive = rec;
+      def to = TraverseTransition(transition); // traversing transition
+      transition.Destination = to;      
+      transition.ActualTo = match (to)
+                            {
+                              | Choice(st, _)
+                              | State(st) => st
+                              | _ => null
+                            }
+    }
+        
+    public this(tran : StateTransition, analyser : FsmAnalyser)
+    {      
+      transition = tran;
+      this.analyser = analyser;      
+    }
+         
+    public Actions : list[string]
+    {
+      get
+      {
+        path.Actions
+      }
+    }
+  }
+    
+}
