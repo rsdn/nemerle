@@ -5,6 +5,8 @@ using System.Text;
 using Microsoft.VisualStudio.Project;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.IO;
+using System.Reflection;
 
 namespace Nemerle.VisualStudio.Project.References
 {
@@ -62,6 +64,58 @@ namespace Nemerle.VisualStudio.Project.References
 			}
 		}
 
+		[DisplayName("Include")]
+		[Description("Unevaluated MSBuild 'Include' item value.")]
+		[CategoryAttribute("Misc")]
+		[Browsable(true)]
+		[AutomationBrowsable(true)]
+		public string UnevaluatedInclude
+		{
+			get
+			{
+				return Node.ItemNode.Item.UnevaluatedInclude;
+			}
+		}
+
+		[DisplayName("Runtime Version")]
+		[Description("Version of the common language runtime (CLR) or version of Mono runtime this assembly compiled against.")]
+		[CategoryAttribute("Misc")]
+		[Browsable(true)]
+		[AutomationBrowsable(true)]
+		public string RuntimeVersion
+		{
+			get
+			{
+				var path = FullPath;
+
+				if (string.IsNullOrEmpty(path))
+					return "<Assembly unresolved>";
+
+				if (!File.Exists(path))
+					return "<Assembly not exists>";
+
+				var assm = Assembly.ReflectionOnlyLoadFrom(path);
+				return assm.ImageRuntimeVersion;
+			}
+		}
+
+		[DisplayName("Version")]
+		[Description("Version of referenced assembly.")]
+		[CategoryAttribute("Misc")]
+		[Browsable(true)]
+		[AutomationBrowsable(true)]
+		public string Version
+		{
+			get
+			{
+				var assmRef = Node as NemerleAssemblyReferenceNode;
+
+				if (assmRef != null && assmRef.ResolvedAssembly != null)
+					return assmRef.ResolvedAssembly.Version.ToString();
+
+				return "<Assembly unresolved>";
+			}
+		}
 		[DisplayName("Specific Version")]
 		[Description("Indicates whether this reference is to a specific version of an assembly.")]
 		[DefaultValue(false)]
