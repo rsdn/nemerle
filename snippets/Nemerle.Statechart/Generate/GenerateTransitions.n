@@ -1,0 +1,188 @@
+﻿using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nemerle.Statechart
+{
+  using StateTransition;
+  using TransitionDestination;
+  
+  /// <summary>
+  /// Description of GenerateTransitions.
+  /// </summary>
+  partial class StaticGenerator
+  {
+  
+    GetTransitionFunction(tran : list[StateTransition]) : list[ClassMember]
+    {
+      tran |> <[ decl: $(_.Name : usesite)() : State {$(GetTransitionBody(_, _.PathNode))} ]>;       
+    }
+
+    GetTransitionFunction(tran : list[string * StateTransition]) : list[ClassMember]
+    {
+      tran |> <[ decl: $(_ : usesite)() : State {$(GetTransitionBody(_[2], _[2].PathNode))} ]>;
+    }
+    
+    GetTransitionBody(tran : StateTransition,  acts : PathNode) : PExpr
+    {
+      def expr = GetActions(acts);      
+      def target =  match (tran.Destination)
+                   {                                            
+                     | State(st) => GetExecStateName(st.Name)
+                     | NoStateChange => <[ cur_state ]>
+                     | Choice(_, tran) => DefineTransBody(tran, false)
+                     | Terminate => <[ Terminate();null ]>
+                     | History(StateChartHistory where (Default = Some()) as h) =>                            
+                            <[ $($"$(h)Run" : usesite)();]>                            
+                     | History(StateChartHistory where (Name = n, State = p, Type = t)) =>
+                         def t = if (p.BothHistories) $"$t" else "";
+                         // call function of run history
+                         <[ $(n : usesite).$($"$(t)HistoryFrom$p" : usesite)() ]>;
+                     | Regions(reg) => def target = GetExecStateName(reg.Name);                                      
+                                      <[
+                                          $(reg.Name : usesite).Initial(this);
+                                          $target
+                                      ]>
+                     | _ => <[ null ]>
+                   }
+                  
+      def body =  <[ $expr;$target ]>;
+      GetGuardedBody(tran, body)
+    }
+    
+    DefineTransBody(tr : list[StateTransition], ctx : bool = true) : PExpr
+    {       
+      def get_body(tr)      
+      {
+        def name = tr.Name;
+        if (ctx) <[ fsm.$(name : usesite)(); ]>; else <[ $(name : usesite)();]>
+      }
+    
+      def sorted = tr.Sort(Comparer);
+      
+      match (sorted)
+      {
+        | [Internal(IsCrossed = true) as tr]
+        | [Transition(IsCrossed = true) as tr]  =>
+            def body =  get_body(tr);
+                  <[
+                  {
+                  def res =  $body;
+                  if (res != null) res else $(DefineTransBody(tr.ParentCrossed, ctx))
+                  }
+                  ]>
+        | [tr]  => get_body(tr)
+        | tr :: tail  =>         
+            def body = get_body(tr);
+                  <[
+                  {
+                  def res =  $body;
+                  if (res != null) res else $(DefineTransBody(tail, ctx))
+                  }
+                  ]>                  
+        |  _  => <[ null ]>
+      } 
+          
+    }
+    
+    DefineTransitions(ty : TypeBuilder, st : FsmState) : void
+    {               
+      def defs = if (st.IsTopState)
+                 {
+                   analyser.TransitionEvents |> <[decl: public virtual $(_.Name : usesite)(_ : $(ChartName : usesite)) : State {null}]>;                  
+                 }
+                 else
+                 {
+                   if (st.Lived)
+                   {
+                     st.work_transition_group.MapToList((x, y)  => <[decl: 
+                   public override $(x : usesite)(fsm : $(ChartName : usesite)) : State {$(DefineTransBody(y |> (_ : StateTransition)))}]>);                    
+                   } else [];
+                 }
+      Define(ty, defs);      
+    }
+
+    DefineHistoryPaths(builder : TypeBuilder, st : FsmState) : void
+    {        
+      def create_body(hist)
+      {        
+        <[ fsm.$(hist.Name : usesite)(); ]>
+      }
+                
+      def get_name(h, x)
+      {
+        | (StateChartHistory where (State = FsmState where (BothHistories = true), Type = t), x) => $"$(t)HistoryFrom$x"
+        | (_, x) => $"HistoryFrom$x"        
+      }
+        
+      def get_run_hist_body(hist)
+      {
+        | StateTransition.Default(From = from, Name = n, history = StateChartHistory where (SimpleName = name) as hist)  =>
+            def hname = get_name(hist, from.Name);
+                <[ 
+                if ($(name : usesite) != null) // определяем выбор в случае если есть переход по умолчанию в случ.если нет истории
+                    $(name : usesite).$(hname : usesite)(this); else $(n : usesite)();
+                ]> 
+      }
+      
+      if (st.IsTopState) // если верхнее состояние
+      {
+        def names = analyser.HistoryStates |> get_name(_, _.State.Name); // получаем имена историч.состояний
+        def decls = names |> <[decl: public virtual $(_ : usesite)(_ : $(ChartName : usesite)) : State {null} ]>; // создаем функции переходов для историч.состояний
+        Define(builder, decls);
+      } else
+      {
+        when (st.HaveHistoryPaths && st.Lived) // если состояние имеет исторические пути переходов и живущее
+        {
+          def paths  =  st.HistoryPaths;
+          def name  =  paths |> (get_name(_[2].History, _), _[2]); // создаем имена переходов         
+          def decl  =  name.MapToList((n, y) => <[decl: public override $(n : usesite)(fsm : $(ChartName : usesite)) : State {$(create_body(y))}]>);
+          Define(builder, decl);
+        }        
+      }
+            
+      def def_history(h)
+      {                
+        def hist_func =  h.Head.SimpleName;
+        def hist_field =  <[decl: mutable $(hist_func : usesite) : State;]>;
+        def body = <[ $(hist_func : usesite)  =  cur_state;]>;
+            // функция сохранения состояния            
+        def save =  <[decl: $($"$(hist_func)Save" : usesite)() : void 
+            {
+                $body
+            }]>;
+        def defs = [save, hist_field];        
+        def defaults = h |>< (_.Default.Map(x  => [<[decl: $($"$(x.history)Run" : usesite)() : State {$(get_run_hist_body(x));} ]>]).WithDefault([]));
+        def defs = defaults + defs;
+            // если есть переход по умолчанию
+        Define(defs); // добавляем в класс состояния          
+      }
+      
+      when (st.history.HasValue)
+      {
+        def hist = st.UsedHistory;        
+        when (!hist.IsEmpty()) def_history(hist);
+      }
+    }
+    
+    DefineTransitionActions() : void
+    {              
+      def trans  =  analyser.all_transitions; 
+      
+      def body = GetTransitionFunction(trans);
+      
+      // history paths
+      def body_name = analyser.HistoryPaths |> (Name, _.transition);
+      def hist = GetTransitionFunction(body_name);
+      Define(hist + body);
+    }
+    
+  }
+}
