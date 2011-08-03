@@ -47,5 +47,43 @@ namespace Nemerle.VisualStudio.Project.References
 				return value;
 			}
 		}
+
+    [SRDescription("SpecificVersionDescription"), SRCategory("Misc"), LocDisplayName("SpecificVersion")]
+    public bool SpecificVersion
+    {
+      get
+      {
+        string property = base.GetProperty("SpecificVersion", null);
+        if (string.IsNullOrEmpty(property))
+        {
+          string property2 = base.GetProperty("Include", null);
+          return property2.IndexOf("Version=", StringComparison.Ordinal) != -1;
+        }
+        return bool.Parse(property);
+      }
+      set
+      {
+       
+        if (value)
+        {
+          AssemblyReferenceNode assemblyReferenceNode = (AssemblyReferenceNode)base.Node;
+          if (assemblyReferenceNode.ResolvedAssembly != null)
+          {
+            base.Node.ItemNode.Rename(assemblyReferenceNode.ResolvedAssembly.FullName);
+            base.SetProperty("SpecificVersion", "True");
+            return;
+          }
+        }
+        else
+        {
+          AssemblyReferenceNode assemblyReferenceNode = (AssemblyReferenceNode)base.Node;
+          if (assemblyReferenceNode.ResolvedAssembly != null)
+          {
+            base.Node.ItemNode.Rename(assemblyReferenceNode.ResolvedAssembly.Name);
+            base.SetProperty("SpecificVersion", "False");
+          }
+        }
+      }
+    }
 	}
 }
