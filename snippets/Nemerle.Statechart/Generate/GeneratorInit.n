@@ -1,0 +1,233 @@
+﻿using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Statechart;
+
+namespace Nemerle.Statechart
+{
+  /// <summary>
+  /// Description of GeneratorInit.
+  /// </summary>
+  partial class StaticGenerator
+  {      
+    DefineMain() : void
+    {
+      def def_initial(i)
+      {
+        def trans = DefineTransBody(i |> (_ : StateTransition), false);
+       <[ cur_state = $trans ]> 
+      }
+      
+      def initial = def_initial(analyser.TopState.Initial);                  
+      def state_names = $[(st.Name, $"State$(st)"), st in analyser.LivedStates, !st.IsTopState]; // создаем имена состояний             
+      def state_names = state_names + (analyser.Regions |> (_.Name, $"State$_"));
+      def state_init_expr = state_names |> <[ $(_[2] : usesite) = State.$(_ : usesite)();]>;
+      def cons_expr = constructor.MapDefault(x  => <[ $(x : usesite)(); ]>, <[ () ]>);            
+      def trans_complete_expr =  if (analyser.Fsm.flags.TransitionCompleted) <[ OnTransitionCompleted(); ]> else <[ () ]>;
+      def dummy =  <[decl: 
+                   class Test
+                   {
+                     [Accessor] mutable cur_state : State;
+                     
+                     // определяем конструктор
+                     public this()
+                     {
+                     // тело конструктора
+                        {..$state_init_expr}
+                        $cons_expr
+                     }   
+         
+                     // определяем метод для изменения состояния  
+                     Switch(st : State) : void 
+                     {
+                        when (st != null) 
+                         {                             
+                             cur_state = st;
+                             $trans_complete_expr
+                         }
+                     }     
+                
+                     public Initiate() : void 
+                     {
+                         $initial
+                     }
+                     
+                    public override ToString() : string
+                    {
+                        cur_state.ToString()
+                    }
+                     
+                    }
+                    
+                  ]>;
+        
+      def states = state_names |> <[decl: $(_[2] : usesite) : State.$(_ : usesite);]>; // create state variables so garbage collector dont delete state instances
+      Define(states);                  
+      Define(dummy.td.GetMembers());
+    }
+    
+    /// <summary>
+    /// Define initial class structure
+    /// </summary>
+    DefineInit() : void
+    {        
+      DefineMain();
+      DefineStates(); // define states
+      when (analyser.Fsm.flags.TransitionCompleted)
+      {
+        Define(<[ decl:
+               OnTransitionCompleted() : void
+               {
+                   def temp = TransitionCompleted;
+                   when (temp != null) temp(this, null);
+               } 
+               ]>);   
+        Define(<[decl: public event TransitionCompleted : EventHandler;]>);
+      } 
+      DefineIsInState();
+      DefineTerminate();
+    }              
+    
+    DefineTerminate() : void
+    {
+      def stop_activity(act)
+      {
+        | StateAction.Do(Name = name) => 
+            def stop = $"$(name)Stop";
+            <[ when ($(stop : usesite)!= null) $(stop : usesite)(); ]>;
+      }
+      
+      def stop_body = analyser.DoActivities |> stop_activity(_);
+      def terminate = <[ decl: public Terminate() : void
+                         {
+                           {..$stop_body}
+                           cur_state = null;
+                         }
+                      ]>;
+      Define(terminate);                
+    }
+    
+    DefineIsInState() : void
+    {
+      def create_comp_expr()
+      {
+        def merge_expr(item, res)
+        {          
+          | ((first :: tail), <[ () ]>) => merge_expr(tail, first)
+          | ((first :: tail), expr) => merge_expr(tail, <[ $expr && $first ]>)
+          | (_, expr) => expr
+        }
+        def comp = TopState.Id.Result;
+        def comp = comp.MapIndex((_, i) => <[cur_state.id.$($"id$i" : usesite) & st.id.$($"id$i" : usesite) == st.id.$($"id$i" : usesite) ]>);
+        merge_expr(comp, <[ () ]>);
+      }
+      
+      def body = if (TopState.Id.MaskType != TypeCode.Empty) <[ cur_state.id & st.id  ==  st.id ]> else
+                 {        
+                   def ids = TopState.Id.Result;
+                   def names = ids.MapIndex((_, i) => $"id$i");
+                   def ids = names |> <[decl: public $(_ : usesite) : uint; ]>;
+                   def vars = names.Map(x => <[parameter: $(x : usesite) : uint]>);
+                   def assign = names |> <[ this.$(_ : usesite) = $(_ : usesite)]>;
+                   def ctor = <[decl: public this(..$vars)
+                      {
+                        ..$assign
+                      }]>;
+                   def ids = ctor :: ids;              
+                   def mem = <[decl: struct LongId
+                              {
+                               ..$ids
+                              }
+                 ]>;
+                   DefineNested(mem).Compile();    
+                   create_comp_expr();
+                 }
+
+      def is_in_state = <[decl: 
+                public IsInState(st : State) : bool
+                {
+                    $body
+                }
+             ]>;             
+      Define(is_in_state);
+    }
+    
+
+    Init() : void
+    {
+      def get_hist_save_name(n)
+      {
+        | FsmState where (history = h) as st  => def h = h.Value.Head;
+            def h = h.SimpleName; 
+            ($"$(st)Exit", $"$(h)Save")                
+      }
+
+      def CreateStateMasks() 
+      {
+        TopState.Id.CreateMask(analyser);
+      }
+
+      InitActionNames();
+      CreateStateMasks(); // creating state masks (identificators)
+
+      tran_events = analyser.TransitionEvents |> Name;      
+      events = analyser.Events;
+      events_call = Map(events |> (_, <[ cur_state.$(_ : usesite)(this) ]>));
+      int_trans_body = Map(analyser.IntTransNodes |> (_, CreateExecActionName(_[2])));
+      def hist_names = analyser.HistoryStates |> get_hist_save_name(_.State);
+      def hist_names = hist_names.RemoveDuplicatesSort(((n, _), (n2, _)) => FsmAnalyser.StringComparator(n, n2));
+      history_save_nodes = Map(hist_names);
+      history_paths = Map(analyser.HistoryPaths |> (Name, CreateExecActionName(_.Path)));
+      history_transitions = Map(analyser.history_transitions |> (_, CreateExecActionName(_[2].PathNode)));
+      history_def_transitions = Map(analyser.history_default_transitions |> (Name, CreateExecActionName(_.PathNode)));
+    }
+
+    InitActionNames() : void
+    {
+      def action_for_name(macros)
+      {
+        |  <[ $_($name) ]>  => name.ToString()
+        | _  => macros.ToString()
+      }
+
+
+      def class_decls  =  ty.GetParsedMembers(false);
+      def macros = class_decls |> (Name, _.ParsedAttributsAndModifiers.ParsedCustomAttributes);
+      def macros = macros.Filter((_, x)  => !x.IsEmpty());
+      macro_actions  =  Map(macros);
+      decls = Map(class_decls |> (Name, _));
+
+      def declared = decls.Keys();
+      def action_for_decls =  macros.FindSingleList(_ is <[ ActionFor($_) ]>);
+      def event_for_decls =  macros.FindSingleList(_ is <[ EventFor($_) ]>);
+      def guard_for_decls = macros.FindSingleList(_ is <[ GuardFor($_) ]>);
+      constructor =  macros.FindSingle(_ is <[Constructor]>) %|> _;
+
+      def decl = declared |> (_, _);
+      def action = action_for_decls |> (action_for_name(_[2]), _);
+      def evt = event_for_decls |> (action_for_name(_[2]), _);
+      action_for = Map(action);
+      event_for = Map(evt);
+      def guard = guard_for_decls |> (action_for_name(_[2]), _);
+      def guard = guard + decl;
+      def guard = guard.RemoveDuplicatesSort(((k1, _), (k2, _))  => k1.CompareTo(k2));
+      guard_for = Map(guard);      
+      def acts = analyser.ActionNodes.Filter(x => {
+                                                 | PathNode.ClearHistory
+                                                 | PathNode.RunDoActivity
+                                                 | PathNode.StopDoActivity => false
+                                                 | _ => true});
+      def acts = acts |>< CreateActionNames(_);
+      def all_acts = acts + (analyser.DoActivities |>< ActionList);
+      def acts = all_acts.RemoveDuplicatesSort(FsmAnalyser.StringComparator);      
+      actions = Map(acts.Map(x  => (CreateExecActionName(x), x)));
+    }       
+    
+  }  
+  
+}

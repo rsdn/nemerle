@@ -1,0 +1,346 @@
+﻿using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Diagnostics;
+using Nemerle.Statechart;
+
+
+namespace Nemerle.Statechart
+{
+  // TODO: Action events with flag
+  /// <summary>
+  /// Description of StaticGenerator.
+  /// </summary>
+  partial class StaticGenerator
+  {
+
+
+    DefineStates(builder : TypeBuilder, st : FsmState) : void
+    {
+      def (id_type, expr) = st.Id.GetId();
+
+      def type = if (st.IsTopState)
+                 {
+                <[ decl:
+                   public variant State
+                   {
+                       public id : $id_type;
+
+                       public this(id : $id_type) {this.id = id;}
+
+                       public override ToString() : string
+                       {
+                         $(FsmState.TopStateName : string)
+                       }
+                   } ]>;
+
+                 } else
+                 {
+                 <[ variant_option: |  $(st.Name : usesite)
+                    {
+                        public this() {base($expr);Instance = this;}
+
+                        public mutable static Instance : $(st.Name : usesite);
+                        public override ToString() : string
+                        {
+                            $(st.Name : string)
+                        }
+                    } ]>
+                 }
+      if(st.LivedNested || st.IsTopState)
+      {
+        def type = DefineNested(builder, type);
+        DefineActions(type,st);
+        DefineTransitions(type, st); // define transitions in state
+        DefineHistoryPaths(type, st); // define history paths      
+        def builder = if (st.IsTopState) 
+                      {
+                        DefineRegions(type);
+                        type 
+                      } else builder;
+        st.SubStates.Iter(DefineStates(builder, _));
+        type.Compile();
+      } else st.SubStates.Iter(DefineStates(builder, _));            
+    }
+
+    TopState : FsmState
+    {
+      get
+      {
+        analyser.TopState
+      }
+    }
+
+    DefineStates() : void
+    {
+      DefineStates(ty, analyser.TopState);
+    }
+
+    DefineActions(type : TypeBuilder,st : FsmState) : void
+    {
+      if (st.IsTopState)
+      {
+        def get_exit(r)
+        {
+          def name = $"ExitFrom$r";
+          <[decl: public virtual $(name : usesite)() : void {}]>;
+        }
+        
+        def exit = analyser.Regions.Map(get_exit);
+        Define(type, exit);
+      } else
+        match (st.PartOfRegion)
+        {
+          | Some(ConcurrentRegion where (ContainedIn = ConcurrentRegions where (MayTakePlaceForcedTransitions = true) as reg)) => 
+              def name = $"ExitFrom$reg";
+              def body = GetActions(st.region_exit_path);
+              def exit = <[decl: public override $(name : usesite)() : void
+                 {
+                   $body
+                 }]>;
+              Define(type,exit);
+          | _ => ()
+        }
+    }
+    
+    DefineRegions(ty : TypeBuilder) : void
+    {
+      
+      def create_regions(reg)
+      {
+        def get_name(r)
+        {
+          $"cur_state$(r.Index)";          
+        }
+        def create_region_reaction(reg, evt)
+        {
+          def name = get_name(reg);
+          <[  Switch(ref $(name : usesite), $(name : usesite).$(evt.Name : usesite)(fsm)); ]>
+        }
+        
+        def create_reaction_body(evt)
+        {
+          def act = reg.Regions.Filter(r => r.events.Exists(x => x == evt));
+          def react = act |> create_region_reaction(_, evt);
+          <[ 
+          {..$react}
+             null
+          ]>
+        }
+      
+        def get_initial_body()
+        {
+          def def_body(r)
+          {
+            def name = get_name(r);
+            def init = r.Initial |> _ : StateTransition;
+            def tran = DefineTransBody(init);
+            <[ $(name : usesite) = $tran]>
+          }
+          
+          reg.Regions.Map(def_body);
+        }
+
+        def def_exit_body(r)
+        {
+          def name = get_name(r);
+          def exit = $"ExitFrom$reg";
+            <[ $(name : usesite).$(exit : usesite)(); ]>
+        }
+        
+        def get_exit_body()
+        {          
+          reg.Regions.Map(def_exit_body)
+        }
+        
+        def get_exit_pattern(pat)
+        {
+          def exit = pat.Map(def_exit_body);
+          def name = GetRegionExit(pat);
+          <[decl: public $(name : usesite)() : void 
+          {
+            ..$exit
+          }]>
+        }
+        
+        def evt = reg.events.Map(x => (x,create_reaction_body(x)));
+        def trans = evt.Map((x,body)  => <[decl: public override $(x.Name : usesite)(fsm : $(ChartName : usesite)) : State {$body}]>);
+        def states = reg.Regions.Map(x => $"cur_state$(x.Index)");
+        def states = states.Map(x => <[decl: mutable $(x : usesite) : State]>);
+        def defs = states + trans;
+        
+        def type = <[variant_option: | $(reg.Name : usesite)
+                   {
+                     public mutable static Instance : $(reg.Name : usesite);
+                     
+                     public this() {base(0);Instance = this;}
+                     
+                     Switch(st : ref State, evt : State) : void
+                     {
+                       when (evt != null) st = evt;
+                     }
+                     
+                     public Initial(fsm : $(ChartName : usesite)) : void
+                     {
+                       ..$(get_initial_body())
+                     }
+                     
+                   }
+                   ]>;
+        
+        def exit = <[decl: public Exit() : void
+                     {
+                       ..$(get_exit_body())
+                     } ]>;
+           
+        def exit_pat = reg.ExitPattern.Map(get_exit_pattern);
+        def defs = if (reg.MayTakePlaceForcedTransitions) exit :: defs + exit_pat  else defs;
+        def type = DefineNested(ty, type);
+        Define(type, defs);
+        type.Compile();
+      }
+      
+      def regions = analyser.Regions;
+      regions.Iter(create_regions);      
+    }
+    
+    DefineEvents() : void
+    {
+      def decl_events = events &> DeclaredEvent;      
+      def decl_events = decl_events.Map(n => <[decl: | $(n : usesite) ]>);
+      DefineNested(<[ decl:
+            public enum Event
+            {              
+              ..$decl_events
+            }
+
+            ]>).Compile();
+      def events = tran_events |> (_, <[Switch($(events_call.Get(_)));]>);
+      def (hiden, defs) = events.Partition((x, _)  => event_for.Contains(x));
+      def hiden = hiden |> <[decl: private $(_ : usesite)() : void {$(_[2])} ]>;
+      def defs = (defs |> <[decl: public $(_ : usesite)() : void {$(_[2])} ]>) + hiden;
+      def evts = analyser.Events.Map(x => <[case: | Event.$(x : usesite) => this.$(x : usesite)();]>);
+      def defs =  <[ decl:
+
+            public RunEvent(evt : Event) : void
+            {
+                match (evt)
+                {
+                  ..$evts
+                }
+            }
+
+            ]> :: defs;
+      Define(defs);
+    }
+
+    DefineGuards() : void
+    {
+      def get_body(act)
+      {
+           <[
+        def temp =  $(act : usesite);
+            if (temp != null) temp() else false;
+           ]>;
+      }
+
+      def guards = analyser.guards;
+      def actions = guards.Filter(x  => !IsDeclared(x.condition, guard_for));
+      def need_body = guards.Filter(x  => GuardNeedBody(x));
+      def need_body = need_body.Map(x  => (x, get_guard_cond_expr(x)));
+      need_body.Iter((x, _)  => guard_for = guard_for.Replace(x.condition, x.Name));
+      def cond_body = need_body.Map((x, y)  => <[decl: $(x.Name : usesite)() : bool {$y}]>);
+      def gnames = actions |> (CreateExecActionName(_.Name), _.Name);
+      def methods = gnames |> <[decl: $(_ : usesite)() : bool {$(get_body(_[2]))}]>;
+      def props = gnames.Map((_, y) => <[decl:
+                                        [Accessor($(y : usesite))]
+                                        mutable $(y.ToLower() : usesite) : void -> bool;]>);
+      def defs = methods + props + cond_body;
+      Define(defs);
+    }
+
+    DefineDoActivity() : void
+    {
+      def create_activity(act)        
+      {
+        | StateAction.Do(Name = name, actions = act) =>            
+            def actions = $"$(name)Actions";
+            def act_list = act |> $"On$_";
+            def run_acts = act_list.Map(x => <[ $(x : usesite)(); ]>);
+            def act_method = <[decl: $(actions : usesite)() : void
+                               {
+                                   try
+                                   {
+                                     ..$run_acts
+                                   }
+                                   catch
+                                   {
+                                       | _ is System.Threading.ThreadAbortException => ()
+                                   }
+                               }
+                             ]>;
+            def field = <[decl: mutable $(name : usesite) : System.Threading.Thread; ]>;
+            def run = <[decl: $($"$(name)Run" : usesite)() : void
+                              {
+                                  $(name : usesite) = System.Threading.Thread($(actions : usesite));
+                                  $(name : usesite).IsBackground = true;
+                                  $(name : usesite).Start();
+                              } ]>;
+            def stop = <[decl: $($"$(name)Stop" : usesite)() : void
+                              {
+                                  $(name : usesite).Abort();
+                                  $(name : usesite).Join();
+                                  $(name : usesite) = null;
+                              } ]>;
+            [act_method, field, run, stop]
+      }
+        
+      def act = analyser.DoActivities;
+      def defs = act |>< create_activity(_);
+      Define(defs);
+    }
+
+    DefineActions() : void
+    {
+      def get_body(act)
+      {
+        def evt =  <[ def temp =  $(act : usesite);
+                      when (temp != null) temp(this, null);
+                 ]>;
+        // if action participate in state saving
+        if (history_save_nodes.Contains(act))
+        {
+          def save = history_save_nodes.Get(act); // get save node
+             // define method body
+              <[
+          $(save : usesite)();
+               $evt
+              ]>
+        } else evt; // else leave normal body
+      }
+
+      def get_clear_body(hist)
+      {
+          <[ $(hist.Name : usesite)  =  null; ]> // assign null
+      }
+
+      def (clear, _) = analyser.ActionNodes.MapFilterType(); // get clear history nodes
+      def clear =  $[(y, $"$(y)Clear"), x : PathNode.ClearHistory in clear, y in x.history]; // create nodes
+      def clear_decls = clear |> <[decl: $(_[2] : usesite)() : void {$(get_clear_body(_))}]>; // creating methods
+
+      def actions = actions.Filter((_, x) => !IsDestDeclared(x));
+      def methods = actions |> <[decl: $(_ : usesite)() : void {$(get_body(_[2]))}]>;
+      def events = actions ^|> <[decl: public event $(_ : usesite) : EventHandler;]>;
+      def defs = methods + clear_decls + events;
+      Define(defs);
+    }
+
+  }
+}

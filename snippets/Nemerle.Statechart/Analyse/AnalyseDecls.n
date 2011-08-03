@@ -1,0 +1,299 @@
+﻿using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nemerle.Statechart;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nemerle.Statechart
+{
+  [Record]
+  variant FsmError
+  {
+    | DuplicateState {state : FsmState;}
+    | UnknownState {state : FsmState;name : FsmState;tran : StateTransition;}
+    | StateNotFound {state : FsmState;}
+    | DuplicateTransition {tran : list[StateTransition];}
+    | DuplicateHistory {state : FsmState;history : StateChartHistory;}
+    | HistoryMustHaveDefault {state : StateChartHistory;}
+    | RegionsMustContainInitial {reg : ConcurrentRegions;tran : StateTransition;}
+    | UnknownTerminateTransition {node : StateTransition;}    
+    | ForkError {fork : PseudoStateNode.Fork;}
+    | ForkMustGoToRegion {fork : PseudoStateNode.Fork;}    
+  }
+
+  [Record]
+  variant FsmWarning
+  {
+    | HistoryNotUsed {hist : StateChartHistory;}
+    | StateNotUsed {state : FsmState;}    
+    | TransitionNotUsed {tran : StateTransition;}
+    | RegionsNotUsed {regions : ConcurrentRegions;}
+  }
+
+  class StateMap
+  {
+    [Accessor]
+    mutable map : Map[string, FsmState];
+
+    errors : List[FsmState] = List();
+
+    [Accessor]
+    mutable duplicates : list[FsmState] = [];
+
+    public Errors : list[FsmState]
+    {
+      get
+      {
+        errors.NToList()
+      }
+    }
+
+    public HaveErrors : bool
+    {
+      get
+      {
+         !errors.IsEmpty() ||  !duplicates.IsEmpty()
+      }
+    }
+
+    public Count : int
+    {
+      get
+      {
+        map.Count()
+      }
+    }
+
+    public CheckRef(st : FsmState) : FsmState
+    {
+      if (st.Reference) Get(st.Name) else st
+    }
+    
+    public Contains(state : string) : bool
+    {
+      map.Contains(state)
+    }
+
+    public Get(state : string) : FsmState
+    {
+      if (Contains(state)) map.Get(state) else
+      {
+        errors.Add(FsmState(StateNode.State(state), true));
+        null
+      }
+    }
+
+    public Item[index : string] : FsmState
+    {
+      get
+      {
+        Get(index)
+      }
+      set
+      {
+        map = map.Add(index, value);
+      }
+    }
+
+    public Init(topstate : FsmState) : void
+    {
+      def sub_st = topstate :: topstate.AllSubStates;
+      duplicates = sub_st.Duplicates(_.CompareTo(_));
+      def st = sub_st.RemoveDuplicatesSort(_.CompareTo(_));
+      map = Map(st |> (Name, _))
+    }
+
+    public Names : list[string]
+    {
+      get
+      {
+        map.Keys()
+      }
+    }
+
+    public States : list[FsmState]
+    {
+      get
+      {
+        map.Values()
+      }
+    }
+  }
+
+  partial class FsmAnalyser
+  {
+
+    [Accessor] statemap : StateMap = StateMap();
+    [Accessor] mutable lived_states : list[FsmState];
+    [Accessor] mutable states : list[FsmState];
+    [Accessor] mutable events : list[string];
+    [Accessor] mutable transitions : Map[string, StateTransition];
+    [Accessor] mutable internal_transitions : Map[string, StateTransition.Internal];
+    mutable events_map : Map[string, StateChartEvent]; // event * for internal transition
+    mutable trans_paths : Map[string, TransitionPaths];
+    [Accessor] mutable transition_nodes : Map[string, PathNode];
+    [Accessor] mutable int_trans_nodes : Map[string, PathNode];
+    [Accessor] mutable actions : list[string];
+    [Accessor] mutable action_node : PathNode;    
+    [Accessor] mutable hierarchy : list[FsmState];
+    [Accessor] mutable history_states : list[StateChartHistory];
+    [Accessor] mutable history_paths : list[HistoryPath];
+    [Accessor] mutable work_transitions : Map[string, StateTransition];
+    [Accessor] mutable work_transition_nodes : Map[string, PathNode];
+    [Accessor] mutable initial_transition_nodes : Map[string, PathNode];
+    [Accessor] mutable initial_transitions : Map[string, StateTransition.Initial];
+    [Accessor] mutable do_activities : list[StateAction.Do];
+    [Accessor] mutable regions : list[ConcurrentRegions]; 
+    [Accessor] mutable pseudo_states : list[PseudoStateNode];    
+    
+    [Accessor]    
+    fsm : StateNode.StateMachine;
+
+    Init() : void
+    {
+      Errors = [];
+      Warnings = [];
+    }
+
+    InitStatechart() : void
+    {
+      def init_states(st, pos)
+      {
+        st.hierarchy_pos = pos;
+        st.CheckAddFinalState(); // check to add final state
+        st.SubStates.Iter(init_states(_, pos + 1)); // инициализируем подсостояния
+      }
+
+      TopState = FsmState(fsm.state);
+      TopState.Name = FsmState.TopStateName;
+      init_states(TopState, 0); // init state map
+    }
+
+    public AddError(err : FsmError) : void
+    {
+      def str = match (err)
+                {
+                  | DuplicateState(name)  => $<#Duplicated state "$(name)"#>
+                  | StateNotFound(s)  => $<#State "$s" Not Found#>
+                  | UnknownState(s, name, tran)  => $<#Transition "$tran" in "$s" has unknown target state "$name"#>
+                  | DuplicateTransition(tran)  => $<#Duplicate transitions "$tran"#>;
+                  | DuplicateHistory(st, hist)  => $<#Duplicate history of type "$(hist.Type)" in "$st"#>
+                  | HistoryMustHaveDefault(st)  => $<#During history transition there is a situation when history "$st" must have default transition#>
+                  | RegionsMustContainInitial(reg, tran) => $<#Transition "$tran" requires region "$reg" to contain initial transition in every of it sub regions#>
+                  | UnknownTerminateTransition(tran) => $<#Unknown terminate transition target of "$tran", there is several terminate pseudo states, specify full name#>
+                  | ForkError(f) => $<#Fork "$f" is empty target list#>
+                  | ForkMustGoToRegion(f) => $<#Fork "$f" must go to concurrent regions#>                  
+                  | x  => $"Unknown Error$x"
+                }
+      Errors ::= str;
+    }
+
+    public AddWarning(err : FsmWarning) : void
+    {
+      def str = match (err)
+                {
+                  | HistoryNotUsed(hist = StateChartHistory where (State = st, Type = t))  => $<#History "$t" in "$st" is not used in fsm life history#>
+                  | StateNotUsed(state = st) => $<#State "$st" is not used in fsm life history#>
+                  | TransitionNotUsed(tran) => $<#Transition "$tran" is not used in fsm life history#>
+                  | RegionsNotUsed(reg) => $<#Concurrent regions "$reg" is not used in fsm life history#>
+                  | x  => $"Unknown Warning $x"
+                }
+      Warnings ::= str;
+    }
+
+    public this(fsm : StateNode.StateMachine)
+    {
+      this.fsm = fsm;
+      Init();
+    }
+
+    public Errors : list[string] {get;set;}
+    public Warnings : list[string] {get;set;}
+
+    public Analyse() : void
+    {
+      InitStateMap();
+      InitEvents();
+      CreatePseudoStates();
+      CreateTransitions();
+      CheckTransitions();
+      CreateConcurrentRegions();      
+      CheckInitialTransitions();
+      CreateTransitionPaths();  
+      CreateHistory();
+      CreateActions();      
+    }
+
+    public TransitionEvents : list[StateChartEvent]
+    {
+      get
+      {
+        events_map.Values()
+      }
+    }
+
+    public Error : bool
+    {
+      get
+      {
+            !Errors.IsEmpty()
+      }
+    }
+
+    public guards : list[TransitionNode.Guard]
+    {
+      get
+      {
+        def guards = transitions.Values().FilterValues(x  => x.guard);
+        def guards = initial_transitions.Values().FilterValues(x  => x.guard) + guards;
+        guards.RemoveDuplicatesSort((x, y)  => StringComparator(x.Name, y.Name))
+      }
+    }
+
+    public history_transitions : Map[string, StateTransition]
+    {
+      get
+      {
+        transitions.Filter((_, x)  => x.HistoryTarget != null);
+      }
+    }
+
+    public history_default_transitions : list[StateTransition.Default]
+    {
+      get
+      {
+        history_states.FilterValues(_.Default).Filter(x  => x.ActualTo != null)
+      }
+    }
+
+    public all_transitions : list[StateTransition]
+    {
+      get
+      {            
+        def b = work_transitions.Values() |> _ : StateTransition;
+        def c = initial_transitions.Values() |> _ : StateTransition;
+        def d = history_default_transitions |> _ : StateTransition;
+        b + c + history_transitions.Values() + d
+      }
+    }
+    
+    public ActionNodes : list[PathNode]
+    {
+      get
+      {
+        action_node.Unsequenced
+      }
+    }
+    
+    public static StringComparator : string * string -> int  =  string.Compare(_, _, StringComparison.CurrentCulture);
+    // TODO: сделать макрос сравнения строк с помощью одной установки
+    public static StrEq : string * string -> bool  =  (x, y)  => StringComparator(x, y) == 0;
+
+
+    public TopState : FsmState {get;set;}
+
+  }
+}
