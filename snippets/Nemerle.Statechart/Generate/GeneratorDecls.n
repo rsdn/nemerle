@@ -1,0 +1,256 @@
+﻿using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Nemerle.Statechart;
+using System.Collections;
+
+namespace Nemerle.Statechart
+{
+  
+  using PathNode;
+  /// <summary>
+  /// Description of GeneratorDecls.
+  /// </summary>
+  partial class StaticGenerator
+  {
+    analyser : FsmAnalyser;
+    ty : TypeBuilder;
+    mutable tran_events : list[string];    
+    mutable events : list[string];
+    mutable events_call : Map[string, PExpr];    
+    mutable int_trans_body : Map[string, list[string]];
+    mutable actions : Map[string, string];
+    mutable decls : Map[string, ClassMember];
+    mutable action_for : Map[string, string]; // source_name * dest_name
+    mutable event_for : Map[string, string];    
+    mutable macro_actions : Map[string, list[PExpr]];
+    mutable constructor : option[string];
+    mutable history_save_nodes : Map[string, string];
+    mutable guard_for : Map[string, string]; // сторожевые условия объявленные в классе
+    mutable history_paths : Map[string, list[string]];
+    mutable history_transitions : Map[string, list[string]];
+    mutable history_def_transitions : Map[string, list[string]];                
+    
+    ChartName : string;
+
+    Define(f : ClassMember) : void
+    {
+      Define(ty, f);
+    }
+
+    Define(ty : TypeBuilder, f : ClassMember) : void
+    {
+      if (WithSources) _  =  ty.DefineWithSource(f); else ty.Define(f);
+    }
+
+    Define(ty : TypeBuilder, lst : list[ClassMember]) : void
+    {
+      lst.Iter(Define(ty, _));
+    }
+
+    Define(lst : list[ClassMember]) : void
+    {
+      Define(ty, lst);
+    }
+
+    DefineNested(ty : TypeBuilder, f : ClassMember.TypeDeclaration) : TypeBuilder
+    {
+      when (WithSources)
+      {
+        def man = ty.TyManager;
+        man.GenerateFakeSourceCode(f);
+      }
+      ty.DefineNestedType(f);
+    }
+    
+    DefineNested(f : ClassMember.TypeDeclaration) : TypeBuilder
+    {
+      DefineNested(ty, f);
+    }
+
+    GetExecStateName(st : string) : PExpr
+    {
+      <[ $("State" : usesite).$(st : usesite).Instance; ]>
+    }
+    
+    GetEndExecName(act : string, map : Map[string, string]) : string
+    {
+      if (IsDeclared(act, map)) map.Get(act) else $"On$act"
+    }
+
+    CreateExecActionName(act : string) : string
+    {
+      if (IsDestDeclared(act)) act else $"On$act"
+    }
+
+    CreateActionNames(node : PathNode) : list[string]
+    {        
+      | Action(act)  => create_act_name(act)
+      | Entry(action = StateAction.Entry(state = st) as act)  => $"$(st)Entry" :: create_act_name(act)
+      | Exit(action = StateAction.Exit(state = st) as act)  => $"$(st)Exit" :: create_act_name(act)
+      | Sequence(lst) => lst |>< CreateActionNames(_)
+      | RunDoActivity as n
+      | StopDoActivity as n => [n.ToString()]
+      | _  => []
+    }
+
+    CreateExecActionName(node : PathNode) : list[string]
+    {        
+      | Action(act)  => create_act_name(act) |> CreateExecActionName(_)
+      | Entry(action = StateAction.Entry(state = st) as act)  => $"On$(st)Entry" :: (create_act_name(act) |> CreateExecActionName(_))
+      | Exit(action = StateAction.Exit(state = st) as act)  => $"On$(st)Exit" :: (create_act_name(act) |> CreateExecActionName(_))
+      | Sequence(lst) => lst |>< CreateExecActionName(_)
+      | RunDoActivity as n
+      | StopDoActivity as n => [$"$n"]
+      | _  => []
+    }
+    
+    IsDeclared(act : string) : bool
+    {
+      IsDeclared(act, action_for);
+    }
+
+    IsDestDeclared(act : string) : bool
+    {
+      action_for.Exists((_, x)  => FsmAnalyser.StrEq(act, x))      
+    }
+    
+    IsDeclared(act : string, map : Map[string, string]) : bool
+    {
+      map.Exists((x, _)  => FsmAnalyser.StrEq(act, x))
+    }
+
+    Declared(act : string, map : Map[string, string]) : string
+    {
+      if (map.Contains(act)) map.Get(act) else act
+    }
+
+    DeclaredEvent(act : string) : string
+    {
+      Declared(act, event_for);
+    }
+
+    DeclaredAction(act : string) : string
+    {
+      Declared(act, action_for);
+    }
+    
+    create_act_name(act : Actions) : list[string]
+    {
+      def (decl, act) = act.ActionList.Partition(IsDeclared);
+      def names = decl.Map(DeclaredAction);
+
+      names + (act |> $"$(_)Action");
+    }
+    
+    GetRegionExit(reg : list[ConcurrentRegion]) : string
+    {
+      def idx = reg |> Index;
+      def idx = idx.MapToArray(x => x.ToString());
+      def idx = string.Join("", idx);
+      $"Exit$idx"
+    }
+    
+    GetActions(acts : PathNode) : PExpr
+    {
+      | Sequence(seq) => def act = seq |> GetActions(_); 
+                         <[ {..$act} ]>                         
+      | ClearHistory  => <[ () ]>
+      | RunDoActivity as n 
+      | StopDoActivity as n => <[ $($"$n" : usesite)(); ]>;      
+      | ForceStateChange(st) => <[ cur_state = $(GetExecStateName(st.Name)); ]>
+      | RegionExit(st, reg) => def reg_state = GetExecStateName(reg.Name);
+                               def reg_exit = GetRegionExit(st);
+                               <[ $reg_state.$(reg_exit : usesite)() ]>;                               
+      | RegionsExit(reg) => def reg_state = GetExecStateName(reg.Name);
+                            <[ $reg_state.Exit() ]>;                            
+      | _  => def act =  CreateExecActionName(acts);
+          def acts = act |> <[$(_ : usesite)();]>;
+              <[ {..$acts} ]>
+    }
+
+    GuardNeedBody(guard : TransitionNode.Guard) : bool
+    {
+      def expr = get_guard_cond_expr(guard);
+      match (expr)
+      {
+        |  <[ $(_ : name) ]>
+        |  PExpr.Call(<[ $(_ : name) ]>, [])  => false
+        | _  => true
+      }
+    }
+
+    get_guard_cond_expr(g : TransitionNode.Guard) : PExpr
+    {
+      def cond = g.condition;
+      def name = GetEndExecName(cond, guard_for);
+      if (IsDeclared(cond, guard_for))
+      {        
+        if (!decls.Contains(name)) <[ $(name : usesite)() ]> else
+          match (decls.Get(name))
+          {
+            | Field(ParsedType  =  <[ bool ]>)
+            | Property(returnType  =  <[ bool ]>)  => <[ $(name : usesite) ]>
+            | Field(ParsedType  =  <[ void -> bool ]>)
+            | Property(returnType  =  <[ void -> bool ]>)  => <[ if ($(name : usesite) != null) $(name : usesite)() else false]>
+            | Function
+            | _  => <[ $(name : usesite)() ]>
+          }
+      } else
+      {
+        def name = GetEndExecName(g.Name, guard_for);
+        <[$(name : usesite)()]>
+      }
+    }
+
+    GetGuardedBody(tran : StateTransition, body : PExpr) : PExpr
+    {
+      match (tran)
+      {
+        // check guard condition
+        | Internal(guard = Some(g))
+        | Initial(guard = Some(g))          
+        | Transition(guard = Some(g))  => def cond = get_guard_cond_expr(g);
+                    <[
+                    {
+                     res:
+                      {
+                         def cond =  $cond;
+                         unless (cond) res(null);
+                         $body
+                      }
+                     }]>
+        | _  => body
+      }
+    }
+
+    public WithSources : bool {get;set;}
+
+    public this(analyser : FsmAnalyser, ty : TypeBuilder)
+    {
+      this.analyser = analyser;
+      this.ty = ty;
+      ChartName = ty.Name;
+      WithSources = true;
+    }
+
+    public Generate() : void
+    {
+      Init();
+      DefineInit();
+      DefineEvents();
+      DefineActions();
+      DefineGuards();
+      DefineTransitionActions();      
+      DefineDoActivity();
+    }
+
+  }
+}
