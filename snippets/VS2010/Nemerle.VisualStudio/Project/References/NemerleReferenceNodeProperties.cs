@@ -77,6 +77,20 @@ namespace Nemerle.VisualStudio.Project.References
 			}
 		}
 
+		string GetAssemblyPath()
+		{
+			var path = FullPath;
+
+			if (string.IsNullOrEmpty(path))
+				return "<Assembly unresolved>";
+
+			if (!File.Exists(path))
+				return "<Assembly not exists>";
+
+			return path;
+		}
+
+
 		[DisplayName("Runtime Version")]
 		[Description("Version of the common language runtime (CLR) or version of Mono runtime this assembly compiled against.")]
 		[CategoryAttribute("Misc")]
@@ -86,15 +100,12 @@ namespace Nemerle.VisualStudio.Project.References
 		{
 			get
 			{
-				var path = FullPath;
+				var path = GetAssemblyPath();
 
-				if (string.IsNullOrEmpty(path))
-					return "<Assembly unresolved>";
+				if (path[0] == '<')
+					return path;
 
-				if (!File.Exists(path))
-					return "<Assembly not exists>";
-
-				var assm = Assembly.ReflectionOnlyLoadFrom(path);
+				Assembly assm = Assembly.ReflectionOnlyLoadFrom(path);
 				return assm.ImageRuntimeVersion;
 			}
 		}
@@ -111,7 +122,18 @@ namespace Nemerle.VisualStudio.Project.References
 				var assmRef = Node as NemerleAssemblyReferenceNode;
 
 				if (assmRef != null && assmRef.ResolvedAssembly != null)
-					return assmRef.ResolvedAssembly.Version.ToString();
+					if (assmRef.ResolvedAssembly.Version == null)
+					{
+						var path = GetAssemblyPath();
+
+						if (path[0] == '<')
+							return path;
+
+						Assembly assm = Assembly.ReflectionOnlyLoadFrom(path);
+						return new AssemblyName(assm.FullName).Version.ToString();
+					}
+					else
+						return assmRef.ResolvedAssembly.Version.ToString();
 
 				return "<Assembly unresolved>";
 			}
