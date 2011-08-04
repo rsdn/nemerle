@@ -6,30 +6,37 @@ using Microsoft.VisualStudio.TextManager.Interop;
 using Nemerle.Completion2;
 using Nemerle.Compiler;
 using System.Diagnostics;
+using Nemerle.Compiler.Utils.Async;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
 	public class NemerleDeclarations : Declarations
 	{
-		readonly CompletionElem[] _overloadPossibility;
-		readonly Location         _comlitionLocation;
+		CompletionElem[] OverloadPossibility { get; set; }
+		Location ComlitionLocation { get; set; }
 
-		public NemerleDeclarations(CompletionElem[] overloadPossibility, Location comlitionLocation)
+		public CompletionAsyncRequest Result { get; private set; }
+		public NemerleSource Source { get; private set; }
+
+
+		public NemerleDeclarations(CompletionAsyncRequest result, NemerleSource source)
 		{
-			_overloadPossibility = overloadPossibility;
-			_comlitionLocation = comlitionLocation;
+			OverloadPossibility = result.CompletionResult.CompletionList;
+			Result              = result;
+			Source              = source;
+			ComlitionLocation   = result.ComlitionLocation;
 			Sort();
 		}
 
 		public override bool GetInitialExtent(IVsTextView textView, out int line, out int startIdx, out int endIdx)
 		{
-			if (_comlitionLocation != Location.Default)
+			if (ComlitionLocation != Location.Default)
 			{
-				Debug.Assert(_comlitionLocation.Line == _comlitionLocation.EndLine);
+				Debug.Assert(ComlitionLocation.Line == ComlitionLocation.EndLine);
 
-				line     = _comlitionLocation.Line      - 1;
-				startIdx = _comlitionLocation.Column    - 1;
-				endIdx   = _comlitionLocation.EndColumn - 1;
+				line     = ComlitionLocation.Line      - 1;
+				startIdx = ComlitionLocation.Column    - 1;
+				endIdx   = ComlitionLocation.EndColumn - 1;
 
 				return true;
 			}
@@ -39,29 +46,29 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override int GetCount()
 		{
-			return _overloadPossibility.Length;
+			return OverloadPossibility.Length;
 		}
 
 		public override string GetDisplayText(int index)
 		{
-			return _overloadPossibility[index].DisplayName;
+			return OverloadPossibility[index].DisplayName;
 		}
 
 		public override string GetDescription(int index)
 		{
-			return _overloadPossibility[index].Description;
+			return OverloadPossibility[index].Description;
 		}
 
 		public override string GetName(int index)
 		{
 			if (index < 0 )
 				return "";
-			return _overloadPossibility[index].DisplayName;
+			return OverloadPossibility[index].DisplayName;
 		}
 
 		public override int GetGlyph(int index)
 		{
-			return _overloadPossibility[index].GlyphType;
+			return OverloadPossibility[index].GlyphType;
 		}
 
 		class ByNameComparer : IComparer<CompletionElem>
@@ -76,7 +83,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public void Sort()
 		{
-			Array.Sort(_overloadPossibility, ByNameComparer.Instance);
+			Array.Sort(OverloadPossibility, ByNameComparer.Instance);
 		}
 
 		// This method is called to get the string to commit to the source buffer.

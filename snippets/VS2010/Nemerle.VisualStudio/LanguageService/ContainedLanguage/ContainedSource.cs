@@ -94,10 +94,5 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			return buffer;
 		}
-
-		public override CompletionSet CreateCompletionSet()
-		{
-			return new NemerleCompletionSet(LanguageService.GetImageList(), this);
-		}
 	}
 }

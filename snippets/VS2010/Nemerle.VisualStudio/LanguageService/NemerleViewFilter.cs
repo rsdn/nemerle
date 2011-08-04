@@ -904,6 +904,23 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			_startLine = -1;
 
+			if (guidCmdGroup == MenuCmd.guidNemerleProjectCmdSet)
+			{
+				var nemerleCmd = (MenuCmd.CmdId)nCmdId;
+
+				switch (nemerleCmd)
+				{
+					case MenuCmd.CmdId.ImportSymbolCompletion:
+						{
+							int lintIndex;
+							int columnInxex;
+							ErrorHandler.ThrowOnFailure(TextView.GetCaretPos(out lintIndex, out columnInxex));
+							Source.ImportCompletion(TextView, lintIndex, columnInxex);
+							return true;
+						}
+				}
+			}
+
 			if (guidCmdGroup == VSConstants.VSStd2K)
 			{
 				if (Source.MethodData.IsDisplayed)

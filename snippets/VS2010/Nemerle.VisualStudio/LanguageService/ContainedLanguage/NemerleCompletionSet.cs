@@ -55,6 +55,32 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			return returnCode;
 		}
+
+		public override int OnCommit(string textSoFar, int index, int selected, ushort commitChar, out string completeWord)
+		{
+			var decls = (NemerleDeclarations)Declarations;
+
+			var env = decls.Result.CompletionResult.Env;
+			var elem = decls.Result.CompletionResult.CompletionList[index];
+			var node = ((Nemerle.Compiler.Elem.Node)elem.Overloads[0]).node;
+
+			var res = env.LookupType(new Nemerle.Core.list<string>.Cons(node.PartName, Nemerle.Core.list<string>.Nil._N_constant_object));
+			
+			if (res.IsSome)
+			{
+				var ti = ((Nemerle.Compiler.NamespaceTree.TypeInfoCache.Cached)node.Value).tycon;
+
+				if (res.Value.Equals(ti))
+				{
+					// это тот же тип, так что открывать простраство имен не нужно.
+				}
+				else
+				{
+				}
+			}
+
+			return base.OnCommit(textSoFar, index, selected, commitChar, out completeWord);
+		}
 	}
 }
 
