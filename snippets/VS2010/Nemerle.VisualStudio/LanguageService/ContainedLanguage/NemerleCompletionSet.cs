@@ -61,44 +61,49 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override int OnCommit(string textSoFar, int index, int selected, ushort commitChar, out string completeWord)
 		{
-			var decls = (NemerleDeclarations)Declarations;
-
-			if (decls.Result.ImportCompletion)
+			try
 			{
-				var env = decls.Result.CompletionResult.Env;
-				var elem = decls.Result.CompletionResult.CompletionList[index];
+				var decls = (NemerleDeclarations)Declarations;
 
-				var usingInfo = NemerleCompletionResult.CalcUsingDeclarationInfo(env, elem.Overloads[0]);
-
-				if (!usingInfo.NeedUsing && !usingInfo.Hiden && string.IsNullOrEmpty(usingInfo.Alias))
-					return base.OnCommit(textSoFar, index, selected, commitChar, out completeWord);
-
-				if (!string.IsNullOrEmpty(usingInfo.Alias))
+				if (decls.Result.ImportCompletion)
 				{
-					var result = base.OnCommit(textSoFar, index, selected, commitChar, out completeWord);
-					completeWord = usingInfo.Alias + "." + completeWord;
-					return result;
-				}
+					var env = decls.Result.CompletionResult.Env;
+					var elem = decls.Result.CompletionResult.CompletionList[index];
 
-				if (usingInfo.Hiden)
-				{
-					var result = base.OnCommit(textSoFar, index, selected, commitChar, out completeWord);
-					completeWord = usingInfo.Namespase + "." + completeWord;
-					return result;
-				}
+					var usingInfo = NemerleCompletionResult.CalcUsingDeclarationInfo(env, elem.Overloads[0]);
 
-				if (usingInfo.NeedUsing)
-				{
-					var cu = Source.CompileUnit;
+					if (!usingInfo.NeedUsing && !usingInfo.Hiden && string.IsNullOrEmpty(usingInfo.Alias))
+						return base.OnCommit(textSoFar, index, selected, commitChar, out completeWord);
 
-					var line = cu != null
-						? NemerleCompletionResult.CalcUsingDeclarationInsertionLine(usingInfo.Namespase, cu) - 1
-						: 0;
-					//if (Source.CompletedFirstParse && cu == null)
-					Source.SetText(line, 0, line, 0, "using " + usingInfo.Namespase + ";" + Environment.NewLine);
+					if (!string.IsNullOrEmpty(usingInfo.Alias))
+					{
+						var result = base.OnCommit(textSoFar, index, selected, commitChar, out completeWord);
+						completeWord = usingInfo.Alias + "." + completeWord;
+						return result;
+					}
+
+					if (usingInfo.Hiden)
+					{
+						var result = base.OnCommit(textSoFar, index, selected, commitChar, out completeWord);
+						completeWord = usingInfo.Namespase + "." + completeWord;
+						return result;
+					}
+
+					if (usingInfo.NeedUsing)
+					{
+						var cu = Source.CompileUnit;
+
+						var line = cu != null
+							? NemerleCompletionResult.CalcUsingDeclarationInsertionLine(usingInfo.Namespase, cu) - 1
+							: 0;
+						//if (Source.CompletedFirstParse && cu == null)
+						Source.SetText(line, 0, line, 0, "using " + usingInfo.Namespase + ";" + Environment.NewLine);
+					}
 				}
 			}
-
+			catch (Exception)
+			{
+			}
 			return base.OnCommit(textSoFar, index, selected, commitChar, out completeWord);
 		}
 	}
