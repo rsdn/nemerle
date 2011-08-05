@@ -16,16 +16,19 @@ using Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio.TextManager.Interop;
 using ErrorHandler = Microsoft.VisualStudio.ErrorHandler;
 using Microsoft.VisualStudio;
+using Nemerle.Completion2;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
 	internal sealed class NemerleCompletionSet : CompletionSet
 	{
+		public NemerleSource Source { get; private set; }
 		internal TextViewWrapper view;
 
-		internal NemerleCompletionSet(ImageList imageList, Source source)
+		internal NemerleCompletionSet(ImageList imageList, NemerleSource source)
 			: base(imageList, source)
 		{
+			Source = source;
 		}
 
 		public override void Init(IVsTextView textView, Declarations declarations, bool completeWord)
@@ -60,22 +63,39 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			var decls = (NemerleDeclarations)Declarations;
 
-			var env = decls.Result.CompletionResult.Env;
-			var elem = decls.Result.CompletionResult.CompletionList[index];
-			var node = ((Nemerle.Compiler.Elem.Node)elem.Overloads[0]).node;
-
-			var res = env.LookupType(new Nemerle.Core.list<string>.Cons(node.PartName, Nemerle.Core.list<string>.Nil._N_constant_object));
-			
-			if (res.IsSome)
+			if (decls.Result.ImportCompletion)
 			{
-				var ti = ((Nemerle.Compiler.NamespaceTree.TypeInfoCache.Cached)node.Value).tycon;
+				var env = decls.Result.CompletionResult.Env;
+				var elem = decls.Result.CompletionResult.CompletionList[index];
 
-				if (res.Value.Equals(ti))
+				var usingInfo = NemerleCompletionResult.CalcUsingDeclarationInfo(env, elem.Overloads[0]);
+
+				if (!usingInfo.NeedUsing && !usingInfo.Hiden && string.IsNullOrEmpty(usingInfo.Alias))
+					return base.OnCommit(textSoFar, index, selected, commitChar, out completeWord);
+
+				if (!string.IsNullOrEmpty(usingInfo.Alias))
 				{
-					// это тот же тип, так что открывать простраство имен не нужно.
+					var result = base.OnCommit(textSoFar, index, selected, commitChar, out completeWord);
+					completeWord = usingInfo.Alias + "." + completeWord;
+					return result;
 				}
-				else
+
+				if (usingInfo.Hiden)
 				{
+					var result = base.OnCommit(textSoFar, index, selected, commitChar, out completeWord);
+					completeWord = usingInfo.Namespase + "." + completeWord;
+					return result;
+				}
+
+				if (usingInfo.NeedUsing)
+				{
+					var cu = Source.CompileUnit;
+
+					var line = cu != null
+						? NemerleCompletionResult.CalcUsingDeclarationInsertionLine(usingInfo.Namespase, cu) - 1
+						: 0;
+					//if (Source.CompletedFirstParse && cu == null)
+					Source.SetText(line, 0, line, 0, "using " + usingInfo.Namespase + ";" + Environment.NewLine);
 				}
 			}
 
