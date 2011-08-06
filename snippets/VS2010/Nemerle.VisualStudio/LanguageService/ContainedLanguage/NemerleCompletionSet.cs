@@ -91,13 +91,20 @@ namespace Nemerle.VisualStudio.LanguageService
 
 					if (usingInfo.NeedUsing)
 					{
-						var cu = Source.CompileUnit;
+						var result = base.OnCommit(textSoFar, index, selected, commitChar, out completeWord);
+						
+						if (result == VSConstants.S_OK)
+						{
+							var cu = Source.CompileUnit;
 
-						var line = cu != null
-							? NemerleCompletionResult.CalcUsingDeclarationInsertionLine(usingInfo.Namespase, cu) - 1
-							: 0;
-						//if (Source.CompletedFirstParse && cu == null)
-						Source.SetText(line, 0, line, 0, "using " + usingInfo.Namespase + ";" + Environment.NewLine);
+							var line = cu != null
+								? NemerleCompletionResult.CalcUsingDeclarationInsertionLine(usingInfo.Namespase, cu) - 1
+								: 0;
+							//if (Source.CompletedFirstParse && cu == null)
+							Source.SetText(line, 0, line, 0, "using " + usingInfo.Namespase + ";" + Environment.NewLine);
+						}
+
+						return result;
 					}
 				}
 			}

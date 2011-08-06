@@ -12,19 +12,23 @@ namespace Nemerle.VisualStudio.LanguageService
 {
 	public class NemerleDeclarations : Declarations
 	{
+		private NemerleSource nemerleSource;
+
 		CompletionElem[] OverloadPossibility { get; set; }
 		Location ComlitionLocation { get; set; }
 
 		public CompletionAsyncRequest Result { get; private set; }
 		public NemerleSource Source { get; private set; }
+		public bool IsMemeberComplation { get; private set; }
 
 
-		public NemerleDeclarations(CompletionAsyncRequest result, NemerleSource source)
+		public NemerleDeclarations(CompletionAsyncRequest result, NemerleSource source, bool isMemeberComplation)
 		{
 			OverloadPossibility = result.CompletionResult.CompletionList;
 			Result              = result;
 			Source              = source;
 			ComlitionLocation   = result.ComlitionLocation;
+			IsMemeberComplation = isMemeberComplation;
 			Sort();
 		}
 
@@ -51,6 +55,9 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override string GetDisplayText(int index)
 		{
+			if (Result.ImportCompletion && OverloadPossibility[index].Overloads != null && OverloadPossibility[index].Overloads.Count > 0)
+				return NemerleCompletionResult.MekeDisplayText(OverloadPossibility[index].Overloads[0]);
+
 			return OverloadPossibility[index].DisplayName;
 		}
 
@@ -89,9 +96,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		// This method is called to get the string to commit to the source buffer.
 		// Note that the initial extent is only what the user has typed so far.
 		// Disable the "ParameterNamesShouldMatchBaseDeclaration" warning.
-		//
-		public override string OnCommit(
-			IVsTextView textView, string textSoFar, char commitCharacter, int index, ref TextSpan initialExtent)
+		public override string OnCommit(IVsTextView textView, string textSoFar, char commitCharacter, int index, ref TextSpan initialExtent)
 		{
 			// We intercept this call only to get the initial extent
 			// of what was committed to the source buffer.
@@ -101,51 +106,10 @@ namespace Nemerle.VisualStudio.LanguageService
 				ref initialExtent);
 		}
 
-		// This method is called after the string has been committed to the source buffer.
-		//
-		public override char OnAutoComplete(IVsTextView textView, 
-			string committedText, char commitCharacter, int index)
+		/// This method is called after the string has been committed to the source buffer.
+		public override char OnAutoComplete(IVsTextView textView, string committedText, char commitCharacter, int index)
 		{
-			//const char defaultReturnValue = '\0';
-			//Declaration item = declarations[index] as Declaration;
-			//if (item == null)
-			//  return defaultReturnValue;
-
-			//// In this example, NemerleDeclaration identifies types with an enum.
-			//// You can choose a different approach.
-			//if (item.Type != Declaration.DeclarationType.Snippet)
-			//  return defaultReturnValue;
-			
-			//Source src = languageService.GetSource(textView);
-			//if (src == null)
-			//  return defaultReturnValue;
-			
-			//ExpansionProvider ep = src.GetExpansionProvider();
-			//if (ep == null)
-			//  return defaultReturnValue;
-			
-			//string title;
-			//string path;
-			//int commitLength = commitSpan.iEndIndex - commitSpan.iStartIndex;
-			//if (commitLength < committedText.Length)
-			//{
-			//  // Replace everything that was inserted so calculate the span of the
-			//  // full
-			//  // insertion, taking into account what was inserted when the 
-			//  // commitSpan was obtained in the first place.
-			//  commitSpan.iEndIndex += (committedText.Length - commitLength);
-			//}
-
-			//if (ep.FindExpansionByShortcut(textView, committedText, commitSpan,
-			//							   true, out title, out path) >= 0)
-			//{
-			//  ep.InsertNamedExpansion(textView, title, path, commitSpan, false);
-			//}
-			//return defaultReturnValue;
-			//throw new NotImplementedException();
-
-			return base.OnAutoComplete(textView, committedText, 
-				commitCharacter, index);
+			return base.OnAutoComplete(textView, committedText, commitCharacter, index);
 		}
 	}
 }
