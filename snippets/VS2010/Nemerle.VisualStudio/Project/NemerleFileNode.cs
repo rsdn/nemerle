@@ -543,10 +543,17 @@ namespace Nemerle.VisualStudio.Project
 		/// <returns>The property value.</returns>
 		public override object GetProperty(int propId)
 		{
-			if ((__VSHPROPID)propId == __VSHPROPID.VSHPROPID_IsNonMemberItem)
-				return IsNonMemberItem;
+			switch ((__VSHPROPID)propId)
+			{
+				case __VSHPROPID.VSHPROPID_DefaultNamespace:
+					//this.Parent;
 
-			return base.GetProperty(propId);
+					return null;
+				case __VSHPROPID.VSHPROPID_IsNonMemberItem:
+					return IsNonMemberItem;
+				default:
+					return base.GetProperty(propId);
+			}
 		}
 
 		/// <summary>

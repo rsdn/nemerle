@@ -335,6 +335,16 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		protected override int ExecCommand(ref Guid guidCmdGroup, uint nCmdId, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
 		{
+			if (guidCmdGroup != VSConstants.GUID_VSStandardCommandSet97 && guidCmdGroup != Microsoft.VisualStudio.Project.VsMenus.guidStandardCommandSet2K)
+			{
+				if (guidCmdGroup == MenuCmd.guidNemerleProjectCmdSet)
+				{
+				}
+				else
+				{
+				}
+			}
+
 			if(guidCmdGroup == VSConstants.GUID_VSStandardCommandSet97)
 			{
 				var cmdId = (VSConstants.VSStd97CmdID)nCmdId;
@@ -344,6 +354,12 @@ namespace Nemerle.VisualStudio.LanguageService
 					case VSConstants.VSStd97CmdID.FindReferences:
 						FindReferences();
 						return VSConstants.S_OK;
+					case VSConstants.VSStd97CmdID.SolutionCfg:
+						break;
+					case VSConstants.VSStd97CmdID.SearchCombo:
+						break;
+					default:
+						break;
 				}
 			}
 
@@ -374,61 +390,68 @@ namespace Nemerle.VisualStudio.LanguageService
 			// decided modify the code
 			// leaving only two files required to be synchronized
 
-			string txt = null;
-			switch ((MenuCmd.CmdId)nCmdId)
+			if (guidCmdGroup == MenuCmd.guidNemerleProjectCmdSet)
 			{
-				case MenuCmd.CmdId.IplementInterface:
+				var nemerleCmd = (MenuCmd.CmdId)nCmdId;
 
-					break;
-				case MenuCmd.CmdId.SetAsMain:
-					txt = "cmdidSetAsMain";
-					break;
-				case MenuCmd.CmdId.ExtendSelection:
-					// cmdIdExtendSelection
-					ExpandSelection();
-					// it's prevent repeated execution of comand in base.ExecCommand() 
-					return VSConstants.S_OK;
-				case MenuCmd.CmdId.ShrinkSelection:
-					// cmdIdShrinkSelection
-					ShrinkSelection();
-					return VSConstants.S_OK;
-				case MenuCmd.CmdId.FindInheritors: //cmdIdFindInheritors 
-				case MenuCmd.CmdId.FindInheritorsCtxt: //cmdIdFindInheritorsCtxt
-					FindInheritors();
-					return VSConstants.S_OK;
-				case MenuCmd.CmdId.Rename:
-					txt = "cmdIdRename";
-					RunRenameRefactoring();
-					return VSConstants.S_OK;
-				case MenuCmd.CmdId.Inline: // cmdIdInline
-					RunInlineRefactoring();
-					return VSConstants.S_OK;
-				case MenuCmd.CmdId.Options:
-					// cmdIdOptions
-					ShowOptions();
-					return VSConstants.S_OK;
-				case MenuCmd.CmdId.AstToolWindow: // AstToolWindow
-					Source.ProjectInfo.ProjectNode.Package.OnAstToolWindowShow(null, null);
-					return VSConstants.S_OK;
-				case MenuCmd.CmdId.AddHighlighting: // cmdIdAddHighlighting
-					HighlightSymbol();
-					return VSConstants.S_OK;
-				case MenuCmd.CmdId.ESC: // ESC
-				case MenuCmd.CmdId.RemoveLastHighlighting: // cmdIdRemoveLastHighlighting
-					RemoveLastHighlighting();
-					Source.Service.Hint.Close();
-					if (nCmdId == (int)MenuCmd.CmdId.ESC) // ESC
-						break; // go trocess ESC
-					return VSConstants.S_OK;
-				case MenuCmd.CmdId.SourceOutlinerWindow:
-					{
-						if (Source != null)
-							Source.ProjectInfo.ProjectNode.Package.OnSourceOutlinerWindowShow(null, null);
-					}
-					return VSConstants.S_OK;
+				string txt = null;
+
+				switch (nemerleCmd)
+				{
+					case MenuCmd.CmdId.ImportSymbolCompletion:
+						break;
+					case MenuCmd.CmdId.IplementInterface:
+						break;
+					case MenuCmd.CmdId.SetAsMain:
+						txt = "cmdidSetAsMain";
+						break;
+					case MenuCmd.CmdId.ExtendSelection:
+						// cmdIdExtendSelection
+						ExpandSelection();
+						// it's prevent repeated execution of comand in base.ExecCommand() 
+						return VSConstants.S_OK;
+					case MenuCmd.CmdId.ShrinkSelection:
+						// cmdIdShrinkSelection
+						ShrinkSelection();
+						return VSConstants.S_OK;
+					case MenuCmd.CmdId.FindInheritors: //cmdIdFindInheritors 
+					case MenuCmd.CmdId.FindInheritorsCtxt: //cmdIdFindInheritorsCtxt
+						FindInheritors();
+						return VSConstants.S_OK;
+					case MenuCmd.CmdId.Rename:
+						txt = "cmdIdRename";
+						RunRenameRefactoring();
+						return VSConstants.S_OK;
+					case MenuCmd.CmdId.Inline: // cmdIdInline
+						RunInlineRefactoring();
+						return VSConstants.S_OK;
+					case MenuCmd.CmdId.Options:
+						// cmdIdOptions
+						ShowOptions();
+						return VSConstants.S_OK;
+					case MenuCmd.CmdId.AstToolWindow: // AstToolWindow
+						Source.ProjectInfo.ProjectNode.Package.OnAstToolWindowShow(null, null);
+						return VSConstants.S_OK;
+					case MenuCmd.CmdId.AddHighlighting: // cmdIdAddHighlighting
+						HighlightSymbol();
+						return VSConstants.S_OK;
+					case MenuCmd.CmdId.ESC: // ESC
+					case MenuCmd.CmdId.RemoveLastHighlighting: // cmdIdRemoveLastHighlighting
+						RemoveLastHighlighting();
+						Source.Service.Hint.Close();
+						if (nCmdId == (int)MenuCmd.CmdId.ESC) // ESC
+							break; // go trocess ESC
+						return VSConstants.S_OK;
+					case MenuCmd.CmdId.SourceOutlinerWindow:
+						{
+							if (Source != null)
+								Source.ProjectInfo.ProjectNode.Package.OnSourceOutlinerWindowShow(null, null);
+						}
+						return VSConstants.S_OK;
+				}
+
+				Trace.Assert(txt == null, "Implement the menu!\r\nID: " + txt);
 			}
-
-			Trace.Assert(txt == null, "Implement the menu!\r\nID: " + txt);
 
 			_executingCommand = (VsCommands2K)nCmdId;
 			try
@@ -443,6 +466,14 @@ namespace Nemerle.VisualStudio.LanguageService
 
 						if (!Source.CompletionSet.IsDisplayed && this.Source.TryDoTableFormating(this, lineIndex + 1, colIndex + 1))
 							return VSConstants.S_OK;
+					}
+
+					switch (_executingCommand)
+					{
+						case VsCommands2K.SolutionPlatform:
+							break;
+						default:
+							break;
 					}
 				}
 
@@ -803,8 +834,6 @@ namespace Nemerle.VisualStudio.LanguageService
 					case MenuCmd.CmdId.ExtendSelection:
 					case MenuCmd.CmdId.ShrinkSelection:
 					case MenuCmd.CmdId.FindInheritors:
-					case MenuCmd.CmdId.Rename:
-					case MenuCmd.CmdId.Inline:
 					case MenuCmd.CmdId.Options:
 					case MenuCmd.CmdId.AstToolWindow:
 					case MenuCmd.CmdId.AddHighlighting:
@@ -817,6 +846,11 @@ namespace Nemerle.VisualStudio.LanguageService
 					case MenuCmd.CmdId.IplementInterface:
 
 						return (int)OLECMDF.OLECMDF_SUPPORTED | (int)OLECMDF.OLECMDF_ENABLED; //OLECMDF_SUPPORTED OLECMDF_ENABLED
+
+					case MenuCmd.CmdId.Inline:
+					case MenuCmd.CmdId.Rename:
+					case MenuCmd.CmdId.RefactoringTopMenu:
+						return (int)OLECMDF.OLECMDF_SUPPORTED | (int)OLECMDF.OLECMDF_ENABLED;
 
 					default:
 
@@ -869,6 +903,23 @@ namespace Nemerle.VisualStudio.LanguageService
 			//  Source.ClearRememberedChar();
 
 			_startLine = -1;
+
+			if (guidCmdGroup == MenuCmd.guidNemerleProjectCmdSet)
+			{
+				var nemerleCmd = (MenuCmd.CmdId)nCmdId;
+
+				switch (nemerleCmd)
+				{
+					case MenuCmd.CmdId.ImportSymbolCompletion:
+						{
+							int lintIndex;
+							int columnInxex;
+							ErrorHandler.ThrowOnFailure(TextView.GetCaretPos(out lintIndex, out columnInxex));
+							Source.ImportCompletion(TextView, lintIndex, columnInxex);
+							return true;
+						}
+				}
+			}
 
 			if (guidCmdGroup == VSConstants.VSStd2K)
 			{

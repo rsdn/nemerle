@@ -136,6 +136,11 @@ namespace Nemerle.VisualStudio
 			return new Location(fileIndex, span.iStartLine + 1, span.iStartIndex + 1, span.iEndLine + 1, span.iEndIndex + 1);
 		}
 
+		public static bool IsSpanEmpty(this TextSpan span)
+		{
+			return span.iStartLine == span.iEndLine && span.iStartIndex == span.iEndIndex;
+		}
+
 		public static TextSpan SpanFromLocation(Location location)
 		{
 			TextSpan span = new TextSpan();
@@ -185,7 +190,7 @@ namespace Nemerle.VisualStudio
 
 		public static bool Eq(string str1, string str2)
 		{
-			return string.Compare(str1, str2, StringComparison.InvariantCultureIgnoreCase) == 0;
+			return string.Equals(str1, str2, StringComparison.InvariantCultureIgnoreCase);
 		}
 
 		public static string GetModuleName(Type type)
@@ -492,6 +497,26 @@ namespace Nemerle.VisualStudio
 				res += "," + loc.EndLine + "," + loc.EndColumn;
 
 			return res + "): ";
+		}
+
+		public static AttributeTargets ToValidOn(object validOn)
+		{
+			var str = validOn.ToString();
+			switch (str)
+			{
+				case "Type": return AttributeTargets.Class;
+				default: return (AttributeTargets)Enum.Parse(typeof(AttributeTargets), str);
+			}
+		}
+
+		public static string ValidOnToString(AttributeTargets attributeTargets)
+		{
+			var str = attributeTargets.ToString();
+			switch (str)
+			{
+				case "Class": return "Type";
+				default: return str;
+			}
 		}
 	}
 }

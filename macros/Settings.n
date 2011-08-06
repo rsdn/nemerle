@@ -1,0 +1,167 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Imperative;
+
+using System.Console;
+
+using System.IO.Path;
+using System.Xml.Linq;
+using System.IO;
+namespace Nemerle.Macro
+{
+  /// <summary>
+  /// Description of Settings.
+  /// </summary>
+  [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Assembly)]
+  macro Settings(path : string, @public : bool = false)
+  {
+    SettingsHelper.Settings(path, @public, Nemerle.Macros.ImplicitCTX())
+  }
+  
+  internal module SettingsHelper
+  {
+    private _xmlNamespace : string = "http://schemas.microsoft.com/VisualStudio/2004/01/settings";
+  
+    public Settings(path : string, @public : bool, typer : Typer) : void
+    {
+      def types = Hashtable();
+      
+      def getType(name)
+      {
+        when (!types.ContainsKey(name))
+          types.Add(name, typer.Manager.Lookup(name).GetMemType());
+          
+        types[name];
+      }
+      
+      def makeWrapperClass(resource : ISource, processingCount : int) : void
+      {
+        // request rebuilding type tree when xml changed
+        when (processingCount > 1 && typer.Manager.IsIntelliSenseMode)
+        {
+          typer.Manager.RequestOnBuildTypesTree();
+          return;
+        }
+
+        try
+        {
+          def defineProperty(builder, el)
+          {
+            mutable propertyAttributes = [<[ System.Diagnostics.DebuggerNonUserCodeAttribute ]>];
+            def propertyType =  
+              match (el.Attribute(XName.Get("Type")).Value)
+              {
+                | "(Web Service URL)" =>
+                  propertyAttributes ::= <[ System.Configuration.SpecialSettingAttribute(System.Configuration.SpecialSetting.WebServiceUrl) ]>;
+                  "System.String";
+                | "(Connection string)" => 
+                  propertyAttributes ::= <[ System.Configuration.SpecialSettingAttribute(System.Configuration.SpecialSetting.ConnectionString) ]>;
+                  "System.String";
+                | _ => el.Attribute(XName.Get("Type")).Value;
+              }
+          
+            match(el.Attribute(XName.Get("Scope")))
+            {
+              | null => Message.Error("Scope of setting can't be null.");
+              | e => match(e.Value)
+                {
+                  | "User" => propertyAttributes ::= <[ System.Configuration.UserScopedSettingAttribute ]>;
+                  | "Application" => propertyAttributes ::= <[ System.Configuration.ApplicationScopedSettingAttribute ]>;
+                  | _ => Message.Error($"Unrecognized scope $e in setting $el");
+                }
+            };
+        
+            match(el.Element(XName.Get("Value", _xmlNamespace)))
+            {
+              | null => ();
+              | e => 
+                def attribute = e.Attribute(XName.Get("Profile"));
+                when(attribute != null && attribute.Value == "(Default)" && !string.IsNullOrEmpty(e.Value)) 
+                  propertyAttributes ::= <[ System.Configuration.DefaultSettingValueAttribute($(e.Value : string)) ]>;
+            }        
+          
+            def propertyName = el.Attribute(XName.Get("Name")).Value;
+        
+            builder.Define(
+            <[ decl:
+              ..$(Modifiers(NemerleAttributes.Public, propertyAttributes))
+              $(propertyName : usesite) : $(getType(propertyType) : typed)
+              {
+                get { Item[$(propertyName : string)] :> $(getType(propertyType) : typed); }
+                set { Item[$(propertyName : string)] = value; }
+              }
+            ]>);
+          }
+      
+          def defineClass(root)
+          {
+            def getAttributes()
+            {
+              NemerleAttributes.Sealed | 
+              (if (@public) NemerleAttributes.Public else NemerleAttributes.Internal);
+            }
+      
+            def attribute = root.Attribute(XName.Get("GeneratedClassName"));
+            def className = if(attribute != null) attribute.Value; else GetFileNameWithoutExtension(path);
+            def modifiers = Modifiers(getAttributes(), [ <[ System.Runtime.CompilerServices.CompilerGeneratedAttribute ]> ]);
+          
+            def builder = typer.Env.Define(
+            <[ decl:
+              ..$modifiers class $(className : usesite) : System.Configuration.ApplicationSettingsBase
+              {
+                private static _defaultInstance : $(className : usesite) = 
+                  System.Configuration.ApplicationSettingsBase.Synchronized($(className : usesite)()) :> $(className : usesite);
+              
+                public static Default : $(className : usesite)
+                {
+                  get { _defaultInstance; }
+                }
+              }
+            ]>);
+        
+            foreach (el in root.Element(XName.Get("Settings", _xmlNamespace))?.Elements() ?? [])
+            {
+              if(el.Name.LocalName == "Setting")
+                defineProperty(builder, el);              
+              else             
+                Message.Warning($"$el isn't setting");
+            }
+            otherwise
+              Message.Warning($"$path doesn't contain settings");
+        
+            builder.Compile();
+          }
+        
+          try
+          {
+            def root = XDocument.Parse(resource.GetText(), LoadOptions.SetLineInfo).Root;
+        
+            if(root.Name.NamespaceName == _xmlNamespace)
+              defineClass(root);
+            else
+              Message.Error($"$path is not valid settings file");
+          }
+          catch { | e => Message.Error($"$path isn't valid settings file. $e"); }
+        }
+        catch { | e => Message.Error(e.Message); }
+      }
+
+      def fullPath = if (IsPathRooted(path)) path
+                     else Combine(GetDirectoryName(typer.Manager.Options.ProjectPath), path);
+      def name = Path.GetFileNameWithoutExtension(fullPath);
+      
+      // Ignore if default resource file is lacking.
+      when (name == "Settings" && !File.Exists(fullPath))
+        return;
+
+      when (!File.Exists(fullPath))
+      {
+        Message.Error($<#The "$fullPath" not exists.#>);
+        return;
+      }
+      
+      SourceHelper.SubscribeSourceChangedWithCounter(typer.Manager, Location.GetFileIndex(fullPath), makeWrapperClass);
+    }
+  }
+}

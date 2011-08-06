@@ -5481,6 +5481,8 @@ namespace Microsoft.VisualStudio.Project
 			itemid = VSConstants.VSITEMID_NIL;
 			fileName = String.Empty;
 
+			//__PSFFILEID2.PSFFILEID_AssemblyResource
+
 			// We need to return S_OK, otherwise the property page tabs will not be shown.
 			return VSConstants.E_NOTIMPL;
 		}

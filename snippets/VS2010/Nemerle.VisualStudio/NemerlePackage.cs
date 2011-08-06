@@ -135,8 +135,8 @@ namespace Nemerle.VisualStudio
 	[WAProvideLanguageProperty(typeof(WANemerleProjectFactory), "CodeBehindCodeGenerator", NemerleConstants.WACodeBehindCodeGeneratorGuidString)]
 	[WAProvideLanguageProperty(typeof(WANemerleProjectFactory), "CodeBehindEventBinding", typeof(NemerleWACodeBehindEventBinding))]
 
+	[ProvideLanguageEditorOptionPage(typeof(NemerleOptionsPage), @"Nemerle", "Advanced", "", "Tool_Option_Nemerle_Advanced_PageName")]
 	#endregion
-
 	public class NemerlePackage : ProjectPackage, IOleComponent, IVsInstalledProduct
 	{
 		#region Fields
@@ -259,6 +259,7 @@ namespace Nemerle.VisualStudio
 				SelectionExtend.Enabled = false;
 				SelectionShrink.Enabled = false;
 				RegisterOleMenuCommand(menuService, MenuCmd.CmdId.GoToFile, true, (o, e) => GotoFile());
+				RegisterOleMenuCommand(menuService, MenuCmd.CmdId.ImportSymbolCompletion, true, (o, e) => MessageBox.Show("ImportSymbolCompletion"));
 			}
 		}
 
@@ -404,6 +405,20 @@ namespace Nemerle.VisualStudio
 		}
 
 		#endregion
+
+		#region Properties
+
+		public bool UseSmartTab
+		{
+			get
+			{
+				var page = (NemerleOptionsPage)GetDialogPage(typeof(NemerleOptionsPage));
+
+				return page.UseSmartTab;
+			}
+		}
+
+		#endregion Methods
 
 		#region Methods
 
