@@ -259,6 +259,7 @@ namespace Nemerle.VisualStudio
 				SelectionExtend.Enabled = false;
 				SelectionShrink.Enabled = false;
 				RegisterOleMenuCommand(menuService, MenuCmd.CmdId.GoToFile, true, (o, e) => GotoFile());
+				RegisterOleMenuCommand(menuService, MenuCmd.CmdId.ImportSymbolCompletion, true, (o, e) => MessageBox.Show("ImportSymbolCompletion"));
 			}
 		}
 

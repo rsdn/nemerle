@@ -213,12 +213,23 @@ namespace Nemerle.VisualStudio.LanguageService
 			return span;
 		}
 
+		public override CompletionSet CreateCompletionSet()
+		{
+			return new NemerleCompletionSet(LanguageService.GetImageList(), this);
+		}
+
 		public void Completion(IVsTextView textView, int lintIndex, int columnIndex, bool byTokenTrigger)
 		{
-			var result = GetEngine().Completion(this, lintIndex + 1, columnIndex + 1);
-
-			var decls = new NemerleDeclarations(result.CompletionElems, result.ComlitionLocation);
+			var result = GetEngine().Completion(this, lintIndex + 1, columnIndex + 1, false);
+			var decls = new NemerleDeclarations(result, this, result.CompletionResult.IsMemeberComplation);
 			CompletionSet.Init(textView, decls, !byTokenTrigger);
+		}
+
+		public void ImportCompletion(IVsTextView textView, int lintIndex, int columnIndex)
+		{
+			var result = GetEngine().Completion(this, lintIndex + 1, columnIndex + 1, true);
+			var decls = new NemerleDeclarations(result, this, result.CompletionResult.IsMemeberComplation);
+			CompletionSet.Init(textView, decls, true);
 		}
 
 		public override string GetFilePath()

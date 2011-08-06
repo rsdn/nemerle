@@ -28,6 +28,7 @@ namespace Nemerle.VisualStudio.Project
 			GoToFile                 = 0x2007,
 			ImplementInterface       = 0x2008,
 			OverrideMembers          = 0x2009,
+			ImportSymbolCompletion   = 0x2010,
 
 			SetAsMain = 0x3001,
 
@@ -75,6 +76,7 @@ namespace Nemerle.VisualStudio.Project
 		internal static readonly CommandID GoToType = MakeCmd(CmdId.GoToType);
 
 		internal static readonly CommandID SourceOutlinerWindow = MakeCmd(CmdId.SourceOutlinerWindow);
+		internal static readonly CommandID ImportSymbolCompletion = MakeCmd(CmdId.ImportSymbolCompletion);
 	}
 }
 
