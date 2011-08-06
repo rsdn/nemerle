@@ -12,14 +12,12 @@ namespace Nemerle.VisualStudio.LanguageService
 {
 	public class NemerleDeclarations : Declarations
 	{
-		private NemerleSource nemerleSource;
+		CompletionElem[] OverloadPossibility              { get; set; }
+		Location         ComlitionLocation                { get; set; }
 
-		CompletionElem[] OverloadPossibility { get; set; }
-		Location ComlitionLocation { get; set; }
-
-		public CompletionAsyncRequest Result { get; private set; }
-		public NemerleSource Source { get; private set; }
-		public bool IsMemeberComplation { get; private set; }
+		public CompletionAsyncRequest Result              { get; private set; }
+		public NemerleSource          Source              { get; private set; }
+		public bool                   IsMemeberComplation { get; private set; }
 
 
 		public NemerleDeclarations(CompletionAsyncRequest result, NemerleSource source, bool isMemeberComplation)
