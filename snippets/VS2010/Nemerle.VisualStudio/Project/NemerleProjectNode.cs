@@ -337,7 +337,6 @@ namespace Nemerle.VisualStudio.Project
 
 		#region Overridden Methods
 
-
 		public override ProjectOptions GetProjectOptions(string config)
 		{
 			// Woraround of bug in ProjectNode.GetProjectOptions()
@@ -1256,6 +1255,14 @@ namespace Nemerle.VisualStudio.Project
 		/// <returns></returns>
 		public override int GetFile(int fileId, uint flags, out uint itemid, out string fileName)
 		{
+			const string propertiesFolderPath = "Properties\\";
+			HierarchyNode propertiesNode = FindChildEx(this, "Properties");
+
+			if (propertiesNode == null)
+				propertiesNode = CreateFolderNode("Properties");
+
+			HierarchyNode parent = this;
+
 			switch (fileId)
 			{
 				case (int)__PSFFILEID.PSFFILEID_AppConfig:
@@ -1272,20 +1279,25 @@ namespace Nemerle.VisualStudio.Project
 					fileName = "app.manifest";
 					break;
 				case (int)__PSFFILEID2.PSFFILEID_AppSettings:
-					fileName = "Settings.settings";
+					fileName = propertiesFolderPath + "Settings.settings";
 					break;
 				case (int)__PSFFILEID2.PSFFILEID_AssemblyResource:
-					fileName = "Resources.resx";
+					fileName = propertiesFolderPath + "Resources.resx";
 					break;
 				case (int)__PSFFILEID2.PSFFILEID_AssemblyInfo:
-					fileName = "AssemblyInfo.cs";
+					fileName = propertiesFolderPath + "AssemblyInfo.cs";
 					break;
 				default:
 					return base.GetFile(fileId, flags, out itemid, out fileName);
 			}
 
-			HierarchyNode fileNode = FindChild(fileName);
-			string fullPath = Path.Combine(ProjectFolder, fileName);
+			if (fileName.StartsWith(propertiesFolderPath, StringComparison.InvariantCulture))
+				parent = propertiesNode;
+
+			HierarchyNode fileNode = FindChildEx(parent, Path.GetFileName(fileName));
+			string fullPath = fileNode == null
+				? Path.Combine(ProjectFolder, fileName)
+				: fileNode.Url;
 
 			if (fileNode == null && (flags & (uint)__PSFFLAGS.PSFF_CreateIfNotExist) != 0)
 			{
@@ -1295,7 +1307,7 @@ namespace Nemerle.VisualStudio.Project
 					File.WriteAllText(fullPath, string.Empty);
 
 				fileNode = CreateFileNode(fileName);
-				AddChild(fileNode);
+				parent.AddChild(fileNode);
 			}
 
 			itemid = fileNode != null ? fileNode.ID : 0;
@@ -1305,6 +1317,37 @@ namespace Nemerle.VisualStudio.Project
 
 			return VSConstants.S_OK;
 		}
+
+		internal static HierarchyNode FindChildEx(HierarchyNode it, string name)
+		{
+			if (String.IsNullOrEmpty(name))
+				return null;
+
+			HierarchyNode result;
+			for (HierarchyNode child = it.FirstChild; child != null; child = child.NextSibling)
+			{
+				if (!String.IsNullOrEmpty(child.VirtualNodeName) && String.Compare(child.VirtualNodeName, name, StringComparison.OrdinalIgnoreCase) == 0)
+					return child;
+
+				if (String.Equals(child.Caption, name, StringComparison.OrdinalIgnoreCase))
+					return child;
+				
+				// If it is a foldernode then it has a virtual name but we want to find folder nodes by the document moniker or url
+				else if ((String.IsNullOrEmpty(child.VirtualNodeName) || (child is FolderNode)) &&
+						(NativeMethods.IsSamePath(child.GetMkDocument(), name) || NativeMethods.IsSamePath(child.Url, name)))
+				{
+					return child;
+				}
+
+				result = FindChildEx(child, name);
+				if (result != null)
+				{
+					return result;
+				}
+			}
+			return null;
+		}
+
 
 		protected override void OnHandleConfigurationRelatedGlobalProperties(object sender, ActiveConfigurationChangedEventArgs eventArgs)
 		{

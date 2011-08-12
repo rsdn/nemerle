@@ -23,18 +23,6 @@ namespace Nemerle.Macro
     public Build(path : string, typer : Typer) : void
     {
       def types = Hashtable();
-
-      def projDir = GetDirectoryName(typer.Manager.Options.ProjectPath);
-
-      def buildResxNamespace(path)
-      {
-        def parent = System.IO.Directory.GetParent(path);
-        if(parent.FullName == projDir || parent.FullName == GetPathRoot(path))
-          string.Empty
-        else
-          buildResxNamespace(parent.FullName) + parent.Name + ".";
-      }
-
       def getType(name)
       {
         when (!types.ContainsKey(name))
@@ -42,122 +30,119 @@ namespace Nemerle.Macro
 
         types[name];
       }
-
+      def projDir = GetDirectoryName(typer.Manager.Options.ProjectPath);
+      def className = GetFileNameWithoutExtension(path);
       def resPath =
         if (IsPathRooted(path)) path
-        else Combine(GetDirectoryName(typer.Manager.Options.ProjectPath), path);
-
-      def className = GetFileNameWithoutExtension(path);
+        else Combine(projDir, path);
 
       // Ignore if default resource file is lacking.
       when (className == "Resources" && !File.Exists(resPath))
         return;
 
+      when (!File.Exists(resPath))
+      {
+        Message.Error($<#The "$resPath" not exists.#>);
+        return;
+      }
+
       def oldDir = GetCurrentDirectory();
-      def dir = GetDirectoryName(resPath);
+      def dir    = GetDirectoryName(resPath);
 
-      SetCurrentDirectory(dir);
+      SetCurrentDirectory(dir); // The resourse reader use current dir to find referenced files.
 
-      SubscribeSourceChangedWithCounter(typer.Manager, Location.GetFileIndex(resPath), 
-        (resource, processingCount) =>
+      def makeWrapperClass(resource : ISource, processingCount : int) : void
+      {
+        // request rebuilding type tree when xml changed
+        when (processingCount > 1 && typer.Manager.IsIntelliSenseMode)
         {
-          // request rebuilding type tree when xml changed
-          when (processingCount > 1 && typer.Manager.IsIntelliSenseMode)
-          {
-            typer.Manager.RequestOnBuildTypesTree();
-            return;
-          }
+          typer.Manager.RequestOnBuildTypesTree();
+          return;
+        }
 
-          try
+        try
+        {
+          using (def reader = ResXReader(StringReader(resource.GetText())))
           {
-            using (def reader = ResXReader(System.IO.StringReader(resource.GetText())))
-            {
-              def rootNamespace = typer.Manager.Options.RootNamespace;
-              def resourceName =
-                if (string.IsNullOrEmpty(rootNamespace)) className
-                else rootNamespace + "." + buildResxNamespace(resPath) + className;
+            def rootNamespace = typer.Manager.Options.RootNamespace;
+            def resourceName =
+              if (string.IsNullOrEmpty(rootNamespace)) className
+              else SourceHelper.MakeNamespaceForFolder(rootNamespace, dir, projDir) + "." + className;
 
-              def builder = typer.Env.Define(
-              <[ decl:
-                internal module  $(className: usesite)
+            def builder = typer.Env.Define(
+            <[ decl:
+              internal module  $(className: usesite)
+              {
+                private mutable _resourceManager : System.Resources.ResourceManager;
+
+                public ResourceManager : System.Resources.ResourceManager
                 {
-                  private mutable _resourceManager : System.Resources.ResourceManager;
-
-                  public ResourceManager : System.Resources.ResourceManager
+                  get
                   {
-                    get
+                    when (object.ReferenceEquals(_resourceManager, null))
                     {
-                      when (object.ReferenceEquals(_resourceManager, null))
-                      {
-                          def temp : System.Resources.ResourceManager
-                            = System.Resources.ResourceManager($(resourceName : string), typeof($(className: usesite)).Assembly);
+                        def temp : System.Resources.ResourceManager
+                          = System.Resources.ResourceManager($(resourceName : string), typeof($(className: usesite)).Assembly);
 
-                          _resourceManager = temp;
-                      }
-                      _resourceManager;
+                        _resourceManager = temp;
                     }
-                  }
-
-                  private mutable _resourceCulture : System.Globalization.CultureInfo;
-
-                  public ResourceCulture : System.Globalization.CultureInfo
-                  {
-                    get { _resourceCulture; }
-                    set { _resourceCulture = value; }
+                    _resourceManager;
                   }
                 }
-              ]>);
 
-              foreach(d :> DictionaryEntry in reader)
-              {
-                def typeName = d.Value.GetType().FullName;
-                def key = d.Key.ToString();
+                private mutable _resourceCulture : System.Globalization.CultureInfo;
 
-                match(d.Value)
+                public ResourceCulture : System.Globalization.CultureInfo
                 {
-                  | _ is string =>
-                      builder.Define(
-                      <[ decl:
-                        public $(d.Key.ToString() : usesite) : $(getType(typeName) : typed)
-                        {
-                          get
-                          {
-                            ResourceManager.GetString($(key : string), _resourceCulture);
-                          }
-                        }
-                      ]>);
-                  | _ =>
-                      builder.Define(
-                      <[ decl:
-                        public $(d.Key.ToString() : usesite) : $(getType(typeName) : typed)
-                        {
-                          get
-                          {
-                            def temp = ResourceManager.GetObject($(key : string), _resourceCulture);
-                            temp :> $(getType(typeName) : typed);
-                          }
-                        }
-                      ]>);
+                  get { _resourceCulture; }
+                  set { _resourceCulture = value; }
                 }
               }
+            ]>);
 
-              builder.Compile();
+            foreach(d :> DictionaryEntry in reader)
+            {
+              def typeName = d.Value.GetType().FullName;
+              def key = d.Key.ToString();
+              def typedDype = <[ $(getType(typeName) : typed) ]>;
+
+              match(d.Value)
+              {
+                | _ is string =>
+                    builder.Define(
+                    <[ decl:
+                      public $(key : usesite) : string
+                      {
+                        get
+                        {
+                          ResourceManager.GetString($(key : string), _resourceCulture);
+                        }
+                      }
+                    ]>);
+                    
+                | _ =>
+                    builder.Define(
+                    <[ decl:
+                      public $(key : usesite) : $typedDype
+                      {
+                        get
+                        {
+                          def temp = ResourceManager.GetObject($(key : string), _resourceCulture);
+                          temp :> $typedDype;
+                        }
+                      }
+                    ]>);
+              }
             }
+
+            builder.Compile();
           }
-          catch { | e => Message.Error(e.Message); }
-        });
-
+        }
+        catch { | e => Message.Error(e.Message); }
+      }
+      
+      SourceHelper.SubscribeSourceChangedWithCounter(typer.Manager, Location.GetFileIndex(resPath), makeWrapperClass);
       SetCurrentDirectory(oldDir);
-    }
-
-    private SubscribeSourceChangedWithCounter(manager : ManagerClass, fileIndex : int, handler : ISource * int -> void) : void
-    {
-      mutable counter = 0;
-      manager.SubscribeSourceChanged(fileIndex, source =>
-      {
-        counter += 1;
-        handler(source, counter);
-      });
     }
   }
 }

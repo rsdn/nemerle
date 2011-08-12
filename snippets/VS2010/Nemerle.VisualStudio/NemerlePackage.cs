@@ -135,8 +135,8 @@ namespace Nemerle.VisualStudio
 	[WAProvideLanguageProperty(typeof(WANemerleProjectFactory), "CodeBehindCodeGenerator", NemerleConstants.WACodeBehindCodeGeneratorGuidString)]
 	[WAProvideLanguageProperty(typeof(WANemerleProjectFactory), "CodeBehindEventBinding", typeof(NemerleWACodeBehindEventBinding))]
 
+  [ProvideOptionPage(typeof(NemerleOptionsPage), @"Nemerle", "Advanced", 0, 0, true)] //Text Editor\
 	#endregion
-
 	public class NemerlePackage : ProjectPackage, IOleComponent, IVsInstalledProduct
 	{
 		#region Fields
@@ -404,6 +404,20 @@ namespace Nemerle.VisualStudio
 		}
 
 		#endregion
+
+		#region Properties
+
+		public bool UseSmartTab
+		{
+			get
+			{
+				var page = (NemerleOptionsPage)GetDialogPage(typeof(NemerleOptionsPage));
+
+				return page.UseSmartTab;
+			}
+		}
+
+		#endregion Methods
 
 		#region Methods
 

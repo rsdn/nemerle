@@ -2,7 +2,7 @@
 
 set NemerleRoot=%~dp0.
 set GacUtil="%ProgramFiles%\Microsoft SDKs\Windows\v7.0A\bin\NETFX 4.0 Tools\gacutil.exe"
-set NemerleInstall=%ProgramFiles%\Nemerle
+set NemerleInstall=%ProgramFiles%\Nemerle\Net-4.0
 
 IF NOT "%PROCESSOR_ARCHITECTURE%" == "x86" goto b64
 IF NOT "%PROCESSOR_ARCHITEW6432%" == "" goto b64
