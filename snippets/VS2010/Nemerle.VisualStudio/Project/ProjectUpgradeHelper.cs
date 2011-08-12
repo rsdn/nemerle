@@ -8,6 +8,8 @@ namespace Nemerle.VisualStudio.Project
 {
 	class ProjectUpgradeHelper
 	{
+		XNamespace vs = XNamespace.Get("http://schemas.microsoft.com/developer/msbuild/2003");
+
 		public ProjectUpgradeHelper(string projectFilePath)
 		{
 			var doc = XDocument.Load(projectFilePath, LoadOptions.PreserveWhitespace | LoadOptions.SetBaseUri | LoadOptions.SetLineInfo);
@@ -21,17 +23,23 @@ namespace Nemerle.VisualStudio.Project
 			TargetFrameworkVersion = FindPropertyElement(project, "TargetFrameworkVersion");
 
 			if (ToolsVersion == null)
-				project.Add(new XAttribute("ToolsVersion", ""));
+				project.Add(ToolsVersion = new XAttribute("ToolsVersion", "0.0"));
 		}
 
-		private XElement FindPropertyElement(XElement project, string propertyNamre)
+		private XElement FindPropertyElement(XElement project, string propertyName)
 		{
-			foreach (var nemerleProperty in project.Descendants())
-				if (Utils.Eq(nemerleProperty.Name.LocalName, propertyNamre))
-					return nemerleProperty;
+			foreach (var nemerleProperty in project.Descendants(vs + propertyName))
+				return nemerleProperty;
 
-			throw new ApplicationException("Incorrect format of project file. The project must contains '" 
-				+ propertyNamre + "' property.");
+			// Try to add property if it's not exists
+			foreach (var propertyGroup in project.Elements(vs + "PropertyGroup").Where(g => !g.HasAttributes))
+			{
+				var newElem = new XElement(vs + propertyName, "");
+				propertyGroup.Add(newElem);
+				return newElem;
+			}
+
+			throw new ApplicationException("Incorrect format of project file. The project must contains '" + propertyName + "' property.");
 		}
 
 		public XAttribute ToolsVersion           { get; private set; }

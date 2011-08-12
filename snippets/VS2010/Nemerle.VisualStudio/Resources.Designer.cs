@@ -761,6 +761,15 @@ namespace Nemerle.VisualStudio {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to Advanced.
+        /// </summary>
+        internal static string Tool_Option_Nemerle_Advanced_PageName {
+            get {
+                return ResourceManager.GetString("Tool_Option_Nemerle_Advanced_PageName", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to Warning.
         /// </summary>
         internal static string Warning {
