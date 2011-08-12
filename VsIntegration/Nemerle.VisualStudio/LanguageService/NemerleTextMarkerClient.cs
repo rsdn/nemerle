@@ -54,15 +54,15 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		int IVsTextMarkerClient.GetMarkerCommandInfo(IVsTextMarker pMarker, int iItem, string[] text, uint[] commandFlags)
 		{
-			// Returning S_OK results in error message appearing in editor's
-			// context menu when you right click over the error message.
-			if (commandFlags != null && commandFlags.Length > 0)
-				commandFlags[0] = 0;
-			if (text != null && text.Length > 0)
-				text[0] = "aaaaaaaaaa";
+			// You can use this code to implement menu for compiler message.
+			//if (commandFlags != null && commandFlags.Length > 0)
+			//  commandFlags[0] = 0;
+			//if (text != null && text.Length > 0)
+			//  pMarker.GetTipText(text);
+			//
+			//return VSConstants.S_OK;
 
-			//return VSConstants.E_NOTIMPL;
-			return VSConstants.S_OK;
+			return VSConstants.E_NOTIMPL;
 		}
 
 		int IVsTextMarkerClient.GetTipText(IVsTextMarker pMarker, string[] tipText)

@@ -89,7 +89,7 @@ namespace Nemerle.VisualStudio.Package
 			//      "VS7 #23719/#15312 [CFlaat]: exclude adjacent markers when the target span is non-empty"
 			// So I wonder if we should debug assert on that or try and modify the span
 			// in some way to make it non-empty...
-			ErrorHandler.ThrowOnFailure(buffer.CreateLineMarker(markerType, span.iStartLine, span.iStartIndex, 
+			ErrorHandler.ThrowOnFailure(buffer.CreateLineMarker(markerType, span.iStartLine, span.iStartIndex,
 				span.iEndLine, span.iEndIndex, this, marker));
 
 			_textLineMarker = marker[0];
@@ -146,15 +146,15 @@ namespace Nemerle.VisualStudio.Package
 
 		int IVsTextMarkerClient.GetMarkerCommandInfo(IVsTextMarker pMarker, int iItem, string[] text, uint[] commandFlags)
 		{
-			// Returning S_OK results in error message appearing in editor's
-			// context menu when you right click over the error message.
-			if (commandFlags != null && commandFlags.Length > 0)
-				commandFlags[0] = 0;
-			if (text != null && text.Length > 0)
-				text[0] = "aaaa";
+			// You can use this code to implement menu for compiler message.
+			//if (commandFlags != null && commandFlags.Length > 0)
+			//  commandFlags[0] = 0;
+			//if (text != null && text.Length > 0)
+			//  pMarker.GetTipText(text);
+			//
+			//return VSConstants.S_OK;
 
 			return VSConstants.E_NOTIMPL;
-			//return VSConstants.S_OK;
 		}
 
 		int IVsTextMarkerClient.GetTipText(IVsTextMarker pMarker, string[] tipText)
