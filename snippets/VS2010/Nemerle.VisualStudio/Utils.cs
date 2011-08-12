@@ -416,26 +416,9 @@ namespace Nemerle.VisualStudio
 
 		public static string GetLabel(this ClassMember member)
 		{
-			return Nemerle.Compiler.Utils.AstUtils.GetMemberLabel(member);
+			return Nemerle.Compiler.Utils.AstUtils.GetMemberLabel(member).Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ');
 		}
-		/*
-				public static RegistryKey VSRegistry_RegistryRoot
-				{
-					get
-					{
-						Microsoft.VisualStudio.Shell.Interop.ILocalRegistry3 ILocalRegistry3 =
-							Microsoft.VisualStudio.Shell.Package.GetGlobalService(typeof(Microsoft.VisualStudio.Shell.Interop.SLocalRegistry))
-							as Microsoft.VisualStudio.Shell.Interop.ILocalRegistry3;
-						string root = null;
-						ILocalRegistry3.GetLocalRegistryRoot(out root);
 
-						if(root == null)
-							return null;
-
-						return Registry.LocalMachine.OpenSubKey(root);
-					}
-				}
-		*/
 		/// <summary>
 		/// Displays the specified message string.
 		/// </summary>
