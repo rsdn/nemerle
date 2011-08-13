@@ -288,15 +288,10 @@ namespace Nemerle.VisualStudio.GUI
 
 				// На данном этапе в "sb" находится текст заглушек для членов тела которых отбиты одной табуляцией на отступ.
 				// Заменяем этот табы на отступ указанный в настройках студии для Nemerle.
-				// TODO: Надо сразу генерировать правлиьные отступы, а не пользоваться табами, так как отступы
-				// могут быть не кратными размеру табуляции. При этом отступы должны дополняться пробелами.
-				// подроности смотри в MakeIndentString().
-
-				if (!pref.InsertTabs && pref.IndentSize == 1)
-					sb.Replace("\t", pref.MakeIndentString());
 
 				// Кроме того члены не имеют отсупа от левого края. Отступ должен совпадать с отступом
 				// типа в который помещаются плюс один отступ.
+
 				// Кроме того пользователю будет удобно если добавляемые члены будут добавлены после 
 				// последнего члена того же (т.е. типа чьи члены реализуются) типа уже имеющегося в данном типе.
 				// Таким образом мы должны попытаться найти уже реализованные типы. В них найти самый послединй,
@@ -305,7 +300,7 @@ namespace Nemerle.VisualStudio.GUI
 				// в конец текущего типа.
 
 				TextPoint pt;
-				string indent;
+				int indentCount;
 
 				var lastImplementedMembers = NUtils.GetLastImplementedMembersOfInterface(_ty, stub.Key);
 
@@ -316,7 +311,7 @@ namespace Nemerle.VisualStudio.GUI
 					// Используем meber.Value для получения места вставки
 					var endLine = lastImplementedMembers.Value.Location.EndLine;
 					var text = _source.GetLine(endLine);
-					indent = text.GetLiadingSpaces();
+					indentCount = NUtils.CalcIndentVisiblePosition(text, pref.IndentSize) / pref.IndentSize;
 					pt = new TextPoint(endLine + 1, 1);
 					//TODO: Этот код рассчитывает на то, что за членом не идет многострочного коментария
 					// или другого члена. Надо бы сделать реализацию не закладывающуюся на это.
@@ -332,17 +327,18 @@ namespace Nemerle.VisualStudio.GUI
 					// Вставляем описание интерфейса в конец класса
 					var endLine = _ty.Location.EndLine;
 					var text = _source.GetLine(endLine);
-					indent = text.GetLiadingSpaces();
+					indentCount = (NUtils.CalcIndentVisiblePosition(text, pref.TabSize) + pref.IndentSize) / pref.IndentSize;
 					pt = new TextPoint(endLine, 1);
-					indent += pref.MakeIndentString();
 					//TODO: Этот код рассчитывает на то, что конец типа распологается на отдельной строке.
 					// Надо бы сделать реализацию не закладывающуюся на это.
 				}
 				
 				#endregion
 
+				var indent = new string('\t', indentCount);
 				sb.Insert(0, indent);
 				sb.Replace("\n", "\n" + indent);
+				sb = NUtils.NormalizeIndent(sb.ToString(), pref.InsertTabs, pref.IndentSize, pref.TabSize);
 				TrimEnd(sb);
 
 				var inertLoc = new Location(_source.FileIndex, pt, pt);

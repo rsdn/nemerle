@@ -22,6 +22,8 @@ using System.Diagnostics;
 using Nemerle.VisualStudio.Helpers;
 using Microsoft.VisualStudio.Shell.Design.Serialization;
 using Nemerle.Compiler.Parsetree;
+using Nemerle.Completion2;
+using System.Threading;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -199,19 +201,26 @@ namespace Nemerle.VisualStudio.Project
 			// формы. 
 			// Если один из файлов будет изменен пользователем, то CodeDom будет автоматически пересоздан.
 			// Таким образом изменение файла могут быть вызваны только сериализацией CodeDom-а в код.
+
 			foreach (var si in sourcesInf)
 			{
 				var fileIndex = si.Field2;
 				var fileVertion = si.Field1;
 				var code = si.Field0;
 				var source = projectInfo.GetEditableSource(fileIndex, WindowFrameShowAction.DoNotShow);
+				projectInfo.Engine.BeginUpdateCompileUnit(source).AsyncWaitHandle.WaitOne();
+				
 				if (source.CurrentVersion != fileVertion)
-					source.SetText(code); // файл изменился с момента генерации по нему CodeDom-а! Восстанавливаем его.
+				{
+					var oldSource = source.GetText();
+					//source.SetText(code); // файл изменился с момента генерации по нему CodeDom-а! Восстанавливаем его.
+					var x = oldSource;
+				}
 			}
 
-			var indent = projectInfo.LanguageService.Preferences.MakeIndentString();
+			var indentInfo = new IndentInfo(projectInfo.LanguageService.Preferences);
 
-			using (var helper = new NemerleProjectSourcesButchEditHelper(projectInfo, "form designer update", indent))
+			using (var helper = new NemerleProjectSourcesButchEditHelper(projectInfo, "form designer update", indentInfo))
 			{
 				var definedIn = changes.Declaration.UserData["Member"] as TopDeclaration;
 				var initializeComponent = changes.InitializeComponent;
@@ -223,14 +232,19 @@ namespace Nemerle.VisualStudio.Project
 
 				if (initializeComponent != null)
 				{
-					var text = CodeGenerator.ToString(changes.NewInitializeComponentStatements);
-					// обновляем исходники...
-					helper.ReplaseMethodBody(initializeComponent, text);
-					definedIn = initializeComponent.DefinedIn;
-				}
+					var source = projectInfo.GetEditableSource(initializeComponent.Location.FileIndex, WindowFrameShowAction.DoNotShow);
+					var cu = source.CompileUnit;
+					var cls = (TopDeclaration.Class)cu.TopDeclarations.First();
 
-				foreach (CodeMemberField codeMemberField in changes.InsertedFields)
-					helper.AddField(definedIn, codeMemberField);
+					var text = CodeGenerator.ToString(changes.NewInitializeComponentStatements);
+					var newInitializeComponent = cls.GetMembers().First(m => m.Name == "InitializeComponent");
+					// обновляем исходники...
+					helper.ReplaseMethodBody((ClassMember.Function)newInitializeComponent, text);
+					//definedIn = initializeComponent.DefinedIn;
+
+					foreach (CodeMemberField codeMemberField in changes.InsertedFields)
+						helper.AddField(cls, codeMemberField);
+				}
 
 				foreach (CodeMemberMethod codeMemberMethod in changes.InsertedMethods)
 					helper.AddMethod(mainPart, codeMemberMethod, changes.Declaration);
