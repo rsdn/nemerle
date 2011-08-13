@@ -356,6 +356,7 @@ namespace Nemerle.VisualStudio.Project
 				throw new ApplicationException("No startup projects.");
 
 			var startupProjectFullName = Path.Combine(Path.GetDirectoryName(dte.Solution.FullName), (string)startupProjects[0]);
+			var nemerleOAProject2 = dte.Solution.FindProjectItem(startupProjectFullName);
 			var nemerleOAProject = dte.Solution.FindProjectItem(startupProjectFullName) as NemerleOAProject;
 
 			if (nemerleOAProject == null)
@@ -452,6 +453,10 @@ namespace Nemerle.VisualStudio.Project
 			{
 				switch ((VsCommands)cmdId)
 				{
+					case VsCommands.DebugProcesses:
+						break;
+					case VsCommands.Start:
+						break;
 					case VsCommands.StartNoDebug:
 						EnvDTE.DTE dte = (EnvDTE.DTE)ProjectMgr.GetService(typeof(EnvDTE.DTE));
 						if (StartNoDebug(dte))
