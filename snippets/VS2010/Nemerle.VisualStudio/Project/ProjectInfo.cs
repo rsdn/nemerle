@@ -1154,21 +1154,6 @@ namespace Nemerle.VisualStudio.Project
 			TryAddTextMarkers(newTasks);
 		}
 
-		//void Test(IGrouping<string, NemerleErrorTask>[] errGroups, int typeTreeVersion)
-		//{
-		//  Debug.WriteLine("  Engine.TypesTreeVersion: " + typeTreeVersion);
-		//  foreach (var g in errGroups)
-		//  {
-		//    Debug.WriteLine(g.Key);
-		//    foreach (var item in g)
-		//    {
-		//      var cm = (CompilerMessageForMethod)item.CompilerMessage;
-		//      var method = (MethodBuilderEx)cm.Member;
-		//      Debug.WriteLine("  " + method.TypesTreeVersion);
-		//    }
-		//  }
-		//}
-
 		#endregion
 
 		#endregion
