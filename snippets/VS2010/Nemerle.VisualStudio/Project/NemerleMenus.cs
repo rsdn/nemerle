@@ -21,7 +21,6 @@ namespace Nemerle.VisualStudio.Project
 
 			// Comands IDs
 
-			Rename                   = 0x2003,
 			Inline                   = 0x2004,
 			ExtendSelection          = 0x2005,
 			ShrinkSelection          = 0x2006,
@@ -60,7 +59,6 @@ namespace Nemerle.VisualStudio.Project
 
 		internal static readonly CommandID FindInheritors = MakeCmd(CmdId.FindInheritors);
 
-		internal static readonly CommandID Rename = MakeCmd(CmdId.Rename);
 		internal static readonly CommandID Inline = MakeCmd(CmdId.Inline);
 
 		internal static readonly CommandID Options = MakeCmd(CmdId.Options);

@@ -418,10 +418,6 @@ namespace Nemerle.VisualStudio.LanguageService
 					case MenuCmd.CmdId.FindInheritorsCtxt: //cmdIdFindInheritorsCtxt
 						FindInheritors();
 						return VSConstants.S_OK;
-					case MenuCmd.CmdId.Rename:
-						txt = "cmdIdRename";
-						RunRenameRefactoring();
-						return VSConstants.S_OK;
 					case MenuCmd.CmdId.Inline: // cmdIdInline
 						RunInlineRefactoring();
 						return VSConstants.S_OK;
@@ -762,28 +758,6 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 		}
 
-		//private List<Location> GetSelectionsStack(TextSpan span)
-		//{
-		//  NemerleSource source = Source as NemerleSource;
-		//  if (source != null)
-		//  {
-		//    Location current = Utils.LocationFromSpan(source.FileIndex, span);
-		//    List<Location> stack = new List<Location>();
-		//    stack.AddRange(source.ProjectInfo.Project.GetEnclosingLocationsChain(current).ToArray());
-		//    return stack;
-		//  }
-		//  else
-		//    return null;
-		//}
-
-		//public override int GetWordExtent(int line, int index, uint flags, TextSpan[] span)
-		//{
-		//	System.Diagnostics.Debug.Assert(false, "line " + line + " index " + index + " flags " + flags + " span length " + span.Length);
-
-		//	base.GetWordExtent(line, index, flags, span);
-		//	return 0;
-		//}
-
 		protected override int QueryCommandStatus(ref Guid guidCmdGroup, uint nCmdId)
 		{
 			if(guidCmdGroup == VSConstants.GUID_VSStandardCommandSet97)
@@ -794,40 +768,30 @@ namespace Nemerle.VisualStudio.LanguageService
 				{
 					case VSConstants.VSStd97CmdID.FindReferences:
 						return (int)(OLECMDF.OLECMDF_SUPPORTED | OLECMDF.OLECMDF_ENABLED);
+
+					default:
+						break;
 				}
 			}
-
-			if (guidCmdGroup == VSConstants.VSStd2K)
+			else if (guidCmdGroup == VSConstants.VSStd2K)
 			{
 				var cmdId = (VSConstants.VSStd2KCmdID)nCmdId;
 
-				if (cmdId == VSConstants.VSStd2KCmdID.INSERTSNIPPET
-				 || cmdId == VSConstants.VSStd2KCmdID.SURROUNDWITH)
+				switch (cmdId)
 				{
-					return (int)(OLECMDF.OLECMDF_SUPPORTED | OLECMDF.OLECMDF_ENABLED);
+					case VSConstants.VSStd2KCmdID.INSERTSNIPPET:
+					case VSConstants.VSStd2KCmdID.SURROUNDWITH:
+					case VSConstants.VSStd2KCmdID.RENAME:
+						return (int)(OLECMDF.OLECMDF_SUPPORTED | OLECMDF.OLECMDF_ENABLED);
+
+					default:
+						break;
 				}
 			}
-
-			if (guidCmdGroup == Microsoft.VisualStudio.Shell.VsMenus.guidStandardCommandSet97)
+			else if (guidCmdGroup == MenuCmd.guidNemerleProjectCmdSet)
 			{
-				//object objCaption;
-				//GetProperty(itemid, (int)__VSHPROPID.VSHPROPID_Caption, out objCaption);
-
-				//if (objCaption.ToString().Equals("MyItems", StringComparison.CurrentCultureIgnoreCase))
-				//{
-				//  // make Properties command invisible.
-				//  prgCmds[0].cmdf = (uint)OLECMDF.OLECMDF_SUPPORTED | (uint)OLECMDF.OLECMDF_INVISIBLE;
-				//  return VSConstants.S_OK;
-				//}
-				//return (int)OLECMDF.OLECMDF_SUPPORTED | (int)OLECMDF.OLECMDF_INVISIBLE; //OLECMDF_SUPPORTED OLECMDF_ENABLED
-			}
-
-			//return (int)OLECMDF.OLECMDF_SUPPORTED | (int)OLECMDF.OLECMDF_INVISIBLE; //OLECMDF_SUPPORTED OLECMDF_ENABLED
-
-			if (guidCmdGroup == MenuCmd.guidNemerleProjectCmdSet)
-			{
-				MenuCmd.CmdId x = (MenuCmd.CmdId)nCmdId;
-				switch (x)
+				var cmdId = (MenuCmd.CmdId)nCmdId;
+				switch (cmdId)
 				{
 					case MenuCmd.CmdId.ESC:
 					case MenuCmd.CmdId.SetAsMain:
@@ -843,17 +807,14 @@ namespace Nemerle.VisualStudio.LanguageService
 					case MenuCmd.CmdId.GoToType:
 					case MenuCmd.CmdId.SourceOutlinerWindow:
 						break;
+
 					case MenuCmd.CmdId.IplementInterface:
-
-						return (int)OLECMDF.OLECMDF_SUPPORTED | (int)OLECMDF.OLECMDF_ENABLED; //OLECMDF_SUPPORTED OLECMDF_ENABLED
-
+					case MenuCmd.CmdId.ImportSymbolCompletion:
 					case MenuCmd.CmdId.Inline:
-					case MenuCmd.CmdId.Rename:
 					case MenuCmd.CmdId.RefactoringTopMenu:
 						return (int)OLECMDF.OLECMDF_SUPPORTED | (int)OLECMDF.OLECMDF_ENABLED;
 
 					default:
-
 						break;
 				}
 			}
@@ -926,10 +887,11 @@ namespace Nemerle.VisualStudio.LanguageService
 				if (Source.MethodData.IsDisplayed)
 					TextView.GetCaretPos(out _startLine, out _startPos);
 
-
-
 				switch (cmd)
 				{
+					case VSConstants.VSStd2KCmdID.RENAME:
+						RunRenameRefactoring();
+						return true;
 					case VsCommands2K.COMPLETEWORD:
 						{
 							int lintIndex;
@@ -1014,20 +976,8 @@ namespace Nemerle.VisualStudio.LanguageService
 			return Source.SmartIndent.At(line);
 		}
 
-		public override void HandlePostExec(
-			ref Guid guidCmdGroup, uint nCmdId, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut, bool bufferWasChanged)
+		public override void HandlePostExec(ref Guid guidCmdGroup, uint nCmdId, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut, bool bufferWasChanged)
 		{
-			switch (nCmdId)
-			{
-				case 1990:
-				case 140:
-				case 684:
-				case 337:
-				case 1627:
-					break;
-				default:
-					break;
-			}
 			VsCommands2K cmd = (VsCommands2K)nCmdId;
 
 			// Special handling of "Toggle all outlining" command
@@ -1043,35 +993,34 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			base.HandlePostExec(ref guidCmdGroup, nCmdId, nCmdexecopt, pvaIn, pvaOut, bufferWasChanged);
 
-			// workaround: for some reason, UP and DOWN commands are not passed to Source in base.HandlePostExec
-			if (cmd == VsCommands2K.UP || cmd == VsCommands2K.DOWN)
-				Source.OnCommand(TextView, cmd, '\0');
-
-			if (_startLine >= 0 && Source.MethodData.IsDisplayed)
+			if (guidCmdGroup == VSConstants.VSStd2K)
 			{
-				int line;
-				int pos;
+				// workaround: for some reason, UP and DOWN commands are not passed to Source in base.HandlePostExec
+				if (cmd == VsCommands2K.UP || cmd == VsCommands2K.DOWN)
+					Source.OnCommand(TextView, cmd, '\0');
 
-				TextView.GetCaretPos(out line, out pos);
-
-				if (line != _startLine || pos != _startPos)
+				if (_startLine >= 0 && Source.MethodData.IsDisplayed)
 				{
-					bool backward =
-						cmd == VsCommands2K.BACKSPACE ||
-						cmd == VsCommands2K.BACKTAB ||
-						cmd == VsCommands2K.LEFT ||
-						cmd == VsCommands2K.LEFT_EXT;
+					int line;
+					int pos;
 
-					TokenInfo info = Source.GetTokenInfo(line, pos);
-					TokenTriggers triggerClass = info.Trigger;
+					TextView.GetCaretPos(out line, out pos);
 
-					if (!backward && (triggerClass & TokenTriggers.MethodTip) == TokenTriggers.ParameterNext)
+					if (line != _startLine || pos != _startPos)
 					{
-						Source.MethodData.AdjustCurrentParameter(1);
-					}
-					else
-					{
-						Source.MethodTip(TextView, line, pos, info);
+						bool backward =
+							cmd == VsCommands2K.BACKSPACE ||
+							cmd == VsCommands2K.BACKTAB ||
+							cmd == VsCommands2K.LEFT ||
+							cmd == VsCommands2K.LEFT_EXT;
+
+						TokenInfo info = Source.GetTokenInfo(line, pos);
+						TokenTriggers triggerClass = info.Trigger;
+
+						if (!backward && (triggerClass & TokenTriggers.MethodTip) == TokenTriggers.ParameterNext)
+							Source.MethodData.AdjustCurrentParameter(1);
+						else
+							Source.MethodTip(TextView, line, pos, info);
 					}
 				}
 			}
