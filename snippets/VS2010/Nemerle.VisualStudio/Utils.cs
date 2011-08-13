@@ -86,6 +86,34 @@ namespace Nemerle.VisualStudio
 			return text.Substring(0, text.Length - text.TrimStart(' ', '\t').Length);
 		}
 
+		public static string MakeIndentString(int indentCount, bool insertTabs, int indentSize, int tabSize)
+		{
+			string indent = null;
+
+			if (insertTabs)
+			{
+				var allIndentSize = indentCount   * indentSize;
+				var spacesNeeded  = allIndentSize % tabSize;
+				var tabsNeeded    = allIndentSize / tabSize;
+
+				if (tabsNeeded > 0 && spacesNeeded > 0)
+				{
+					var sb = new StringBuilder(tabsNeeded + spacesNeeded);
+					sb.Append('\t', tabsNeeded);
+					sb.Append(' ', spacesNeeded);
+					indent = sb.ToString();
+				}
+				else if (tabsNeeded > 0)
+					indent = new string('\t', tabsNeeded);
+				else if (spacesNeeded > 0)
+					indent = new string(' ', spacesNeeded);
+			}
+			else
+				indent = new string(' ', indentSize * indentCount);
+
+			return indent;
+		}
+
 		public static string MakeIndentString(this LanguagePreferences pref)
 		{
 			string indent = null;
@@ -95,16 +123,22 @@ namespace Nemerle.VisualStudio
 				var spacesNeeded = pref.IndentSize % pref.TabSize;
 				var tabsNeeded = pref.IndentSize / pref.TabSize;
 
-				if (tabsNeeded > 0)
+				if (tabsNeeded > 0 && spacesNeeded > 0)
+				{
+					var sb = new StringBuilder(tabsNeeded + spacesNeeded);
+					sb.Append('\t', tabsNeeded);
+					sb.Append(' ', spacesNeeded);
+					indent = sb.ToString();
+				}
+				else if (tabsNeeded > 0)
 					indent = new string('\t', tabsNeeded);
-
-				if (spacesNeeded > 0)
-					indent = new string('\t', tabsNeeded);
+				else if (spacesNeeded > 0)
+					indent = new string(' ', spacesNeeded);
 			}
 			else
 				indent = new string(' ', pref.IndentSize);
 
-			return indent ?? "";
+			return indent;
 		}
 
 		public static TextPoint GetCaretTextPoint(this IVsTextView textView)
