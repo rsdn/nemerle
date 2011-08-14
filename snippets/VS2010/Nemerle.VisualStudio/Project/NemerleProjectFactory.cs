@@ -126,7 +126,7 @@ namespace Nemerle.VisualStudio.Project
 
 			var projectData = new ProjectUpgradeHelper(projectFileName);
 
-			if (projectData.ToolsVersion == null || ParseVersion(projectData.ToolsVersion.Value) < 4.0)
+			if (projectData.ToolsVersion == null || ParseVersion(projectData.ToolsVersion.Value).Major < 4)
 				return VSConstants.S_OK;
 
 			if (!Utils.Eq(projectData.NemerleProperty.Value, NemerlePath))
@@ -140,10 +140,10 @@ namespace Nemerle.VisualStudio.Project
 			return VSConstants.S_OK;
 		}
 
-		private static float ParseVersion(string value)
+		private static Version ParseVersion(string value)
 		{
-			try { return float.Parse(value); }
-			catch (FormatException) { return 0.0F; }
+			try { return Version.Parse(value); }
+			catch (FormatException) { return new Version("0.0"); }
 		}
 
 		#endregion
