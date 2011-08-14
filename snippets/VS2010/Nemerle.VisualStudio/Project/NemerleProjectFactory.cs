@@ -143,7 +143,7 @@ namespace Nemerle.VisualStudio.Project
 		private static Version ParseVersion(string value)
 		{
 			try { return Version.Parse(value); }
-			catch (FormatException) { return new Version(0.0); }
+			catch (FormatException) { return new Version("0.0"); }
 		}
 
 		#endregion
