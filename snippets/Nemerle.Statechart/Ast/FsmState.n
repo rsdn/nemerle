@@ -37,7 +37,7 @@ namespace Nemerle.Statechart
               def (regs, subst) = st.sub_states.Partition(x => x.regions.HasValue);
               def regs = regs.Map(x => ConcurrentRegion(this, x.regions.Value));              
               super_state = if (st.SuperState != null) State(st.SuperState, true); else null;
-              sub_states = (subst &> State) + regs;              
+              sub_states = (subst |> State(_)) + regs;              
               pseudo_states = st.pseudo_states |> PseudoStateNode.Create(_.node);        
             }
           }
@@ -62,49 +62,80 @@ namespace Nemerle.Statechart
 
     | ConcurrentSubRegion
         {      
-          [Accessor] index : int;
-          [Accessor] contained_in : ConcurrentRegion;      
+          index : int;
+          contained_in : ConcurrentRegion;      
       
-          public this(regions : ConcurrentRegion, node : StateNode.SubRegion, idx : int)
+          public this(regions : ConcurrentRegion, st : StateNode.SubRegion, idx : int)
           {
             contained_in = regions;
-            sub_states = node.nodes |> State(_);
+            do_activity = st.do_activity |> StateAction.Do(_.action.ActionList, this, _.flags);
+            internal_tran = Internal.Create(this, st.internal_tran);
+            entry = st.entry |> StateAction.Entry(_.action.ActionList, this);
+            exit = st.exit |> StateAction.Exit(_.action.ActionList, this);
+            history = st.history |> StateChartHistory(this, _);
+            transitions = Transition.Create(this, st.transitions);
+            initial = st.initial |> Initial(this, _);                            
+            pseudo_states = st.pseudo_states |> PseudoStateNode.Create(_.node);                    
+            sub_states = st.sub_states |> State(_);
             sub_states.Iter(x => x.super_state = this);
             index = idx;
-            super_state = regions;            
+            super_state = regions;
           }
     
           public override UpdateReference(map : StateMap) : void
           { 
-            base.UpdateReference(map);            
-            SubStates.StateIter(x => x.part_of_region = Some(this));
+            base.UpdateReference(map);
+            SubStates.StateIter(x => x.part_of_sub_region = Some(this));
+            SubStates.StateIter(x => x.part_of_region = Some(contained_in));
           }
       
         }
     
     | ConcurrentRegion
         {
-          [Accessor] sub_regions : list[ConcurrentSubRegion] = [];    
+          sub_regions : list[ConcurrentSubRegion] = [];    
     
-          [Accessor] mutable exit_pattern : Map[string, list[ConcurrentSubRegion]] = Map();
+          mutable exit_pattern : Map[string, list[ConcurrentSubRegion]] = Map();
+          mutable enter_pattern : Map[string, list[ConcurrentSubRegion]] = Map();
     
           public this(st : FsmState, node : StateNode.Region)
           {
             name = node.state.name;
             super_state = st;
+            transitions = Transition.Create(this, node.transitions);
             sub_regions = node.regions.MapIndex((x, i) => ConcurrentSubRegion(this, x, i));            
-            sub_states = sub_regions |> _ : FsmState;            
+            sub_states = sub_regions |> _ : FsmState;
           }
-    
+
+          public static get_pattern(reg : list[ConcurrentSubRegion]) : string
+          {
+            def idx = (reg |> index).Sort(_ - _);
+            def idx = idx |> _.ToString();
+            string.Join("", idx)
+          }
+          
           public DefineExitPattern(reg : list[ConcurrentSubRegion]) : void
           {
-            def idx = reg |> Index;
-            def idx = idx.Sort(_ - _);
-            def idx = idx |> _.ToString();
-            def str = string.Join("", idx);
+            def str = get_pattern(reg);
             when (!exit_pattern.Contains(str)) exit_pattern = exit_pattern.Add(str, reg);      
           }
-    
+          
+          public DefineEnterPattern(reg : list[ConcurrentSubRegion]) : void
+          {
+            def str = get_pattern(reg);
+            when (!enter_pattern.Contains(str)) enter_pattern = enter_pattern.Add(str, reg);      
+          }
+
+          public RegionExcept(st : list[ConcurrentSubRegion]) : ConcurrentSubRegion
+          {
+            match (sub_regions.Exclude(st, _ == _))
+            {
+              | [sub] => sub
+              | head :: _ => head
+              | _ => null
+            }
+          }          
+          
           public RegionsExcept(st : FsmState) : list[ConcurrentSubRegion]
           {
             sub_regions.Filter(x => !x.AllSubStates.Contains(st))
@@ -114,13 +145,31 @@ namespace Nemerle.Statechart
           {
             sub_regions.Exclude([st], _ == _)
           }
-              
+                    
+          public mutable join_transitions : list[PseudoStateNode.Join * StateTransition] = [];                                  
+          
+          public JoinCrossed(join : PseudoStateNode.Join) : bool
+          {
+            def have_other = Transitions.Filter(x => !(x.ImplicitFrom is PseudoStateNode.Join)).Exists(x => x.trigger == join.trigger);
+            def have_guard = join.joined_tran.Exists(x => x.guard.HasValue);
+            have_other || have_guard
+          }
+          
+          public HaveJoinTransitions(trigger : StateChartEvent) : bool
+          {
+            join_transitions.Exists((j, _) => j.trigger == trigger)
+          }
           /// <summary>
 	        /// Indicates that maybe external transitions from some points of orthogonal state out of region not only completion
 	        /// </summary>
           public MayTakePlaceForcedTransitions : bool {get;set;}       
-     
-        }    
+          
+          /// <summary>
+		      /// Indicates that maybe transitions from outer states forking control to this orthogonal region
+		      /// </summary>
+          public MayForkingFromOut : bool {get;set;}
+        }
+        
     public mutable super_state_cross_transitions : list[StateTransition] = [];
 
     public this()
@@ -131,7 +180,7 @@ namespace Nemerle.Statechart
     public mutable do_activity : option[StateAction.Do];
       
     [Accessor] mutable sub_states : list[FsmState] = [];
-    public mutable history : ThreeOption[StateChartHistory] = ThreeOption.None();
+    public mutable history : TwoOption[StateChartHistory] = TwoOption.None();
     public mutable pseudo_states : list[PseudoStateNode] = [];
             
     [Accessor] mutable history_paths : list[string * HistoryPath] = []; // paths from outer history     
@@ -144,14 +193,16 @@ namespace Nemerle.Statechart
     [Accessor] mutable internal_tran : list[Internal] = [];
     [Accessor] mutable transitions : list[Transition] = [];
     [Accessor] mutable super_state  : FsmState;
-    public mutable part_of_region : option[ConcurrentSubRegion] = None();
+    [Accessor] mutable part_of_sub_region : option[ConcurrentSubRegion] = None();
+    [Accessor] mutable part_of_region : option[ConcurrentRegion] = None();
+    
     public paths : TransitionPaths {get;set;}
     /// <summary>
-    /// показывает что машина пребывает в этом состоянии и оно не является лишь композитом
+    /// Indicates what fsm lived in this state and it not only composite for others
     /// </summary>
     public Lived : bool {get;set;}
     /// <summary>
-    /// Позиция в иерархии
+    /// Hierarchy position
     /// </summary>
     public hierarchy_pos : int {get;set;}
     
@@ -263,9 +314,9 @@ namespace Nemerle.Statechart
     
     public DefineTransition(tr : StateTransition) : void
     {
-      | Transition as tr => transitions ::= Transition(this, tr);
+      | Transition as tr => transitions ::= Transition(this, tr)
       | Internal as tr => internal_tran ::= Internal(this, tr)
-      | Initial as tr => initial ::= tr;
+      | Initial as tr => initial ::= tr
       | _ => ()
     }
 
@@ -297,7 +348,7 @@ namespace Nemerle.Statechart
       def (init, _) = other.Partition(_ is StateTransition.Initial);
       initial = initial.Exclude(init, (x, y) => StateTransition.FullComparer(x, y) == 0);
       internal_tran = internal_tran.Exclude(int_tran, (x, y) => StateTransition.FullComparer(x, y) == 0);
-      transitions = transitions.Exclude(tran, (x, y) => StateTransition.FullComparer(x, y) == 0);      
+      transitions = transitions.Exclude(tran, (x, y) => StateTransition.FullComparer(x, y) == 0)
     }
 
     public TraverseTransitions() : void
