@@ -22,49 +22,192 @@ namespace Nemerle.Statechart
   
     GetTransitionFunction(tran : list[StateTransition]) : list[ClassMember]
     {
-      tran |> <[ decl: $(_.Name : usesite)() : State {$(GetTransitionBody(_, _.PathNode))} ]>;       
+      tran |> <[ decl: $(_.Name : usesite)() : State {$(GetTransitionBody(_))} ]>;       
     }
 
     GetTransitionFunction(tran : list[string * StateTransition]) : list[ClassMember]
     {
-      tran |> <[ decl: $(_ : usesite)() : State {$(GetTransitionBody(_[2], _[2].PathNode))} ]>;
+      tran |> <[ decl: $(_ : usesite)() : State {$(GetTransitionBody(_[2]))} ]>;
     }
     
-    GetTransitionBody(tran : StateTransition,  acts : PathNode) : PExpr
+    GetDestination(tran : StateTransition, ctx : bool = false) : PExpr
     {
-      def gen_path = GenPath(acts, action_for);      
-      def expr = gen_path.GetActions(true);
-      def target = match (tran.Destination)
-                   {                                            
-                     | State(st) => GenPath.GetExecStateName(st.Name)
-                     | NoStateChange => <[ cur_state ]>
-                     | Choice(_, tran) => DefineTransBody(tran, false)
-                     | Terminate => <[ Terminate();null ]>
-                     | TransitionExecute(tran) => <[ $(tran.Name : usesite)(); ]>
-                     | History(StateChartHistory where (Default = Some()) as h) =>                            
-                            <[ $($"$(h)Run" : usesite)();]>                            
-                     | History(StateChartHistory where (Name = n, State = p, Type = t)) =>
-                         def t = if (p.BothHistories) $"$t" else "";
-                         // call function of run history
-                         <[ $(n : usesite).$($"$(t)HistoryFrom$p" : usesite)() ]>;
-                     | Region(reg) => def target = GenPath.GetExecStateName(reg.Name);
-                                      <[
-                                          $(target).Initial(this);
-                                          $target
-                                      ]>
-                     | _ => <[ null ]>
-                   }
-                  
-      def body =  <[ $expr;$target ]>;
-      GetGuardedBody(tran, body)
+      match (tran.Destination)
+      {                                            
+        | State(st) => if (ctx) <[ $(st.Name : usesite)() ]> else GenPath.GetExecStateName(st)
+        | NoStateChange => if (ctx) <[ fsm.cur_state ]> else <[ cur_state ]>
+        | Choice(_, tran, Some(st)) => def target = if (ctx) <[ $(st.Name : usesite)() ]> else GenPath.GetExecStateName(st);
+            DefineTransBody(tran, ctx, target)
+        | Choice(_, tran, _) => DefineTransBody(tran, ctx)
+        | Terminate => if (ctx) <[ fsm.Terminate();null ]> else <[ Terminate();null ]>        
+        | History(StateChartHistory where (Default = Some()) as h) => def name = $"$(h)Run";
+            if (ctx) <[ fsm.$(name : usesite)();]> else <[ $(name : usesite)();]>
+        | History(StateChartHistory where (Name = n, State = p, Type = t)) =>
+            def t = if (p.BothHistories) $"$t" else "";
+                          // call function of run history
+            def name = $"$(t)HistoryFrom$p";
+            if (ctx) <[ fsm.$(n : usesite).$(name : usesite)() ]> else <[ $(n : usesite).$(name : usesite)() ]>;
+        | SubRegion(reg, st) => def target = GenPath.GetExecStateName(st);
+            def region = reg.contained_in; 
+            // TODO: вынести логику генерации, ctx и переходов в отдельный класс
+            def target_region = GenPath.GetExecStateName(region);
+            def pat = FsmState.ConcurrentRegion.get_pattern(region.sub_regions.Exclude([reg], _ == _));
+            def name = $"Initial$pat";
+            if (ctx) 
+              <[
+              $(region.Name : usesite)().$(name : usesite)(fsm, $(st.Name : usesite)());
+              $(region.Name : usesite)()
+              ]> else                                             
+              <[
+              $(target_region).$(name : usesite)(this, $target);
+              $target_region
+              ]>
+                     // entering in region
+        | Region(reg) => def target = GenPath.GetExecStateName(reg);
+            if (ctx) 
+              <[
+              $(reg.Name : usesite)().Initial(this);
+              $(reg.Name : usesite)()
+              ]> else
+              <[
+              $(target).Initial(this);
+              $target
+              ]>
+        | Fork(reg, tran) => def target = GenPath.GetExecStateName(reg);
+            def trans = tran.Map(x => <[ $(x.Name : usesite)(); ]>);
+            if (ctx)
+              <[
+              $(reg.Name : usesite)().Initial(..$trans);
+              $(reg.Name : usesite)()
+              ]> else                                     
+              <[
+              $(target).Initial(..$trans);
+              $target
+              ]>
+        | Final(Final(PartOfSubRegion = Some(sr)) as st, FsmState.ConcurrentRegion(Name = n, sub_regions = srg) as reg, tran) => 
+            def regname = GenPath.GetExecStateName(reg);
+            def target = GenPath.GetExecStateName(st);              
+            if (ctx)
+            {
+              def trans = DefineTransBody(tran, ctx);                 
+              def parms = srg.Map(x => if (x == sr) <[ $(st.Name : usesite) ]> else <[ null ]>);
+                <[
+                  $(n : usesite)().Initial(..$parms);
+                  if ($(reg.Name : usesite)().IsFinal) $trans else null
+                ]>
+            } else
+            {
+              def trans = DefineTransBody(tran, ctx);
+              def parms = srg.Map(x => if (x == sr) <[ $target ]> else <[ null ]>);
+                <[
+                  $regname.Initial(..$parms);
+                  if ($regname.IsFinal) $trans else null
+                ]>
+            }
+        | _ => <[ null ]>
+      }      
     }
     
-    DefineTransBody(tr : list[StateTransition], ctx : bool = true) : PExpr
+    GuardNeedBody(guard : TransitionNode.Guard) : bool
+    {
+      def expr = get_guard_cond_expr(guard);
+      match (expr)
+      {
+        |  <[ $(_ : name) ]>
+        |  PExpr.Call(<[ $(_ : name) ]>, [])  => false
+        | _  => true
+      }
+    }
+
+    public get_guard_cond_expr(g : TransitionNode.Guard) : PExpr
+    {
+      def cond = g.condition;
+      def guard = GenElement(cond, guard_for);
+      def name = guard.exec_name;
+      if (guard.IsDeclared)
+      {        
+        if (!decls.Contains(name)) <[ $(name : usesite)() ]> else
+          match (decls.Get(name))
+          {
+            | Field(ParsedType  =  <[ bool ]>)
+            | Property(returnType  =  <[ bool ]>)  => <[ $(name : usesite) ]>
+            | Field(ParsedType  =  <[ void -> bool ]>)
+            | Property(returnType  =  <[ void -> bool ]>)  => <[ if ($(name : usesite) != null) $(name : usesite)() else false]>
+            | Function
+            | _  => <[ $(name : usesite)() ]>
+          }
+      } else
+      {
+        def name = GenElement.CreateExecName(g.Name);
+        <[$(name : usesite)()]>
+      }
+    }
+    
+    public GetCheck(node : CheckNode) : PExpr
+    {
+      | CheckRegionStates(reg, st) => def reg_state = GenPath.GetExecStateName(reg);
+          def st = st.Map(x => GenPath.GetExecStateName(x));
+          <[ $reg_state.IsInState(..$st) ]>
+      | GuardCheck(tran) => def guards = tran.FilterValues(x => x.guard);
+          def g = guards |> get_guard_cond_expr(_);
+          MergeExprAnd(g);            
+    }
+    
+    GetGuardedBody(tran : StateTransition, body : PExpr) : PExpr
+    {
+      match (tran)
+      {
+        | StateTransition where (executeCheck = (_ :: _) as check) =>
+            def check = check.Map(GetCheck);
+            def check = MergeExprAnd(check);
+             <[
+                    {
+                     res:
+                      {
+                         unless ($check) res(null);
+                         $body
+                      }
+                     }
+             ]>
+        // check guard condition                
+        | StateTransition where (guard = Some(g))  => def cond = get_guard_cond_expr(g);
+                    <[
+                    {
+                     res:
+                      {
+                         unless ($cond) res(null);
+                         $body
+                      }
+                     }]>
+        | _  => body
+      }
+    }
+    
+    GetTransitionBody(tran : StateTransition, ctx : bool = false) : PExpr
+    {
+      match (tran)
+      {
+        | StateTransition where (PathNode = acts) =>
+      
+            def gen_path = GenPath(acts, action_for);      
+            def expr = gen_path.GetActions(true);
+            def target = GetDestination(tran, ctx);
+                     
+            def body =  <[ $expr;$target ]>;
+            GetGuardedBody(tran, body)
+      }
+    }
+    
+    DefineTransBody(tr : list[StateTransition], ctx : bool = true, alt : PExpr = null) : PExpr
     {       
       def get_body(tr)      
       {
         def name = tr.Name;
-        if (ctx) <[ fsm.$(name : usesite)(); ]>; else <[ $(name : usesite)();]>
+        if (tr.MaybeInlined && GenPath.IsEmpty(tr.PathNode))
+        {
+             <[ $(GetTransitionBody(tr, ctx)) ]>
+        } else 
+          if (ctx) <[ fsm.$(name : usesite)(); ]> else <[ $(name : usesite)();]>
       }          
       
       match (tr)
@@ -74,19 +217,25 @@ namespace Nemerle.Statechart
                   <[
                   {
                   def res =  $body;
-                  if (res != null) res else $(DefineTransBody(tr.ParentCrossed, ctx))
+                  if (res != null) res else $(DefineTransBody(tr.ParentCrossed, ctx, alt))
                   }
                   ]>
-        | [tr]  => get_body(tr)
+        | [tr]  => def body = get_body(tr);
+            if (alt != null) 
+                   <[
+              def res = $body;
+                   if (res != null) res else $alt
+                   ]> else body
+                   
         | tr :: tail  =>         
             def body = get_body(tr);
                   <[
                   {
                   def res =  $body;
-                  if (res != null) res else $(DefineTransBody(tail, ctx))
+                  if (res != null) res else $(DefineTransBody(tail, ctx, alt))
                   }
                   ]>                  
-        |  _  => <[ null ]>
+        |  _  => if (alt != null) alt else <[ null ]>
       } 
           
     }
@@ -102,7 +251,7 @@ namespace Nemerle.Statechart
                    if (st.Lived)
                    {
                      st.work_transition_group.MapToList((x, y)  => <[decl: 
-                       public override $(x : usesite)(fsm : $(ChartName : usesite)) : State {$(DefineTransBody(y |> (_ : StateTransition)))}]>)
+                       public override $(x : usesite)(fsm : $(ChartName : usesite)) : State {$(DefineTransBody(y))}]>)
                    } else [];
                  }
       Define(ty, defs)      
@@ -123,11 +272,11 @@ namespace Nemerle.Statechart
         
       def get_run_hist_body(hist)
       {
-        | StateTransition.Default(From = from, Name = n, history = StateChartHistory where (SimpleName = name) as hist)  =>
+        | StateTransition.Default(From = from, history = StateChartHistory where (SimpleName = name) as hist) as t =>
             def hname = get_name(hist, from.Name);
                 <[ 
                 if ($(name : usesite) != null) // определяем выбор в случае если есть переход по умолчанию в случ.если нет истории
-                    $(name : usesite).$(hname : usesite)(this); else $(n : usesite)();
+                    $(name : usesite).$(hname : usesite)(this); else $(DefineTransBody([t], false));
                 ]> 
       }
       
@@ -173,10 +322,11 @@ namespace Nemerle.Statechart
     
     DefineTransitionActions() : void
     {              
-      def trans  =  analyser.all_transitions; 
+      def trans  =  analyser.all_transitions;
       
+      def trans = trans.Filter(x => !(x.MaybeInlined && GenPath.IsEmpty(x.PathNode)));      
       def body = GetTransitionFunction(trans);
-      
+            
       // history paths
       def body_name = analyser.HistoryPaths |> (Name, _.transition);
       def hist = GetTransitionFunction(body_name);
