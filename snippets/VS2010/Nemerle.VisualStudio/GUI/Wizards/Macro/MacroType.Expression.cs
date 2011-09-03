@@ -16,6 +16,7 @@ namespace Nemerle.VisualStudio.GUI.Wizards
 			public override void FillReplacementsDictionary(Dictionary<string, string> replacementsDictionary)
 			{
 				replacementsDictionary["$IsMacroAttribute$"] = "False";
+				replacementsDictionary["$MacroReturnType$"]  = "PExpr";
 
 				base.FillReplacementsDictionary(replacementsDictionary);
 			}
