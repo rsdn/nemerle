@@ -66,7 +66,7 @@ namespace Nemerle.VisualStudio
 			NemerleConstants.ProjectExtension + ");*." + NemerleConstants.ProjectExtension,
 		NemerleConstants.ProjectExtension,
 		NemerleConstants.ProjectExtension,
-		// Set the projectsTemplatesDirectory to a non-existant path to prevent VS 
+		// Set the projectsTemplatesDirectory to a non-existant path to prevent VS
 		// from including the working directory as a valid template path
 		@".\NullPath",
 		LanguageVsTemplate = NemerleConstants.LanguageName)]
@@ -100,6 +100,7 @@ namespace Nemerle.VisualStudio
 	[ProvideEditorLogicalView(typeof(NemerleEditorFactory), "{7651a702-06e5-11d1-8ebd-00a0c90f26ea}")]  //LOGVIEWID_Designer
 	[ProvideEditorLogicalView(typeof(NemerleEditorFactory), "{7651a701-06e5-11d1-8ebd-00a0c90f26ea}")]  //LOGVIEWID_Code
 
+#pragma warning disable 618
 	// Showing the splash screen requires "devenv /rootsuffix Exp /setup" during the installation.
 	// For more information please see: http://blogs.msdn.com/jim_glass/archive/2005/05/23/421152.aspx
 	[InstalledProductRegistration(
@@ -108,6 +109,7 @@ namespace Nemerle.VisualStudio
 		NemerleConstants.ProductDetails,
 		NemerleConstants.PLKProductVersion,
 		IconResourceID = 300)]
+  #pragma warning restore 618
 	[RegistrationAttributes.RegisterSnippets(
 		NemerleConstants.LanguageServiceGuidString,
 		false,
@@ -194,8 +196,8 @@ namespace Nemerle.VisualStudio
 			EnvDTE.DTE dte = (EnvDTE.DTE)GetService(typeof(EnvDTE.DTE));
 
 			// Из-за того, что при создании NemerleMacroProjectReferenceNode и NemerleMacroAssemblyReferenceNode
-			// при открытии проектов dte.Solution.Projects еще не содержал проектов добавление ссылок 
-			// на проекты того же солюшена закончились неудачей. Производим повторную попытку добавить 
+			// при открытии проектов dte.Solution.Projects еще не содержал проектов добавление ссылок
+			// на проекты того же солюшена закончились неудачей. Производим повторную попытку добавить
 			// ссылки на проекты в ProjectInfo...
 
 			foreach (EnvDTE.Project prj in dte.Solution.Projects)
@@ -374,8 +376,8 @@ namespace Nemerle.VisualStudio
 		#region Commands
 
 		/// <summary>
-		/// This function is called when the user clicks the menu item that shows the 
-		/// tool window. See the Initialize method to see how the menu item is associated to 
+		/// This function is called when the user clicks the menu item that shows the
+		/// tool window. See the Initialize method to see how the menu item is associated to
 		/// this function using the OleMenuCommandService service and the MenuCommand class.
 		/// </summary>
 		internal void OnAstToolWindowShow(object sender, EventArgs e)
@@ -422,7 +424,7 @@ namespace Nemerle.VisualStudio
 		#region Methods
 
 		/// <summary>
-		/// Changes the cursor to the hourglass cursor. 
+		/// Changes the cursor to the hourglass cursor.
 		/// </summary>
 		/// <returns>A return code or S_OK.</returns>
 		public int SetWaitCursor()
@@ -432,7 +434,7 @@ namespace Nemerle.VisualStudio
 			IVsUIShell VsUiShell = GetService(typeof(SVsUIShell)) as IVsUIShell;
 			if (VsUiShell != null)
 			{
-				// There is no check for return code because 
+				// There is no check for return code because
 				// any failure of this call is ignored.
 				hr = VsUiShell.SetWaitCursor();
 			}
