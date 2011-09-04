@@ -364,25 +364,34 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 
 			//Debug.WriteLine(guidCmdGroup + " " + nCmdId);
-			const uint ShowSmartTag = 147;
-			if (guidCmdGroup == VSConstants.VSStd2K && nCmdId == ShowSmartTag)
+			const VSConstants.VSStd2KCmdID ShowSmartTag = (VSConstants.VSStd2KCmdID)147;
+			
+			if (guidCmdGroup == VSConstants.VSStd2K)
 			{
-				var textView = TextView.ToITextView();
-				var smartTagBroker = textView.GetSmartTagBroker();
-
-				foreach (var session in smartTagBroker.GetSessions(textView))
+				switch ((VSConstants.VSStd2KCmdID)nCmdId)
 				{
-					var span = session.ApplicableToSpan.GetSpan(textView.TextSnapshot);
+					case VSConstants.VSStd2KCmdID.CANCEL:
+						RemoveLastHighlighting();
+						Source.Service.Hint.Close();
+						break; // go trocess ESC
 
-					if (span.Contains(textView.Caret.Position.BufferPosition.Position))
-					{
-						session.State = SmartTagState.Expanded;
+					case ShowSmartTag:
+						var textView = TextView.ToITextView();
+						var smartTagBroker = textView.GetSmartTagBroker();
+
+						foreach (var session in smartTagBroker.GetSessions(textView))
+						{
+							var span = session.ApplicableToSpan.GetSpan(textView.TextSnapshot);
+
+							if (span.Contains(textView.Caret.Position.BufferPosition.Position))
+							{
+								session.State = SmartTagState.Expanded;
+								return VSConstants.S_OK;
+							}
+						}
+
 						return VSConstants.S_OK;
-					}
 				}
-
-				//if (smartTagBroker != null && smartTagBroker.IsSmartTagActive(textView))
-				return VSConstants.S_OK;
 			}
 
 			// hi_octane : found a lot of mistakes comparing the switch
@@ -431,12 +440,9 @@ namespace Nemerle.VisualStudio.LanguageService
 					case MenuCmd.CmdId.AddHighlighting: // cmdIdAddHighlighting
 						HighlightSymbol();
 						return VSConstants.S_OK;
-					case MenuCmd.CmdId.ESC: // ESC
 					case MenuCmd.CmdId.RemoveLastHighlighting: // cmdIdRemoveLastHighlighting
 						RemoveLastHighlighting();
 						Source.Service.Hint.Close();
-						if (nCmdId == (int)MenuCmd.CmdId.ESC) // ESC
-							break; // go trocess ESC
 						return VSConstants.S_OK;
 					case MenuCmd.CmdId.SourceOutlinerWindow:
 						{
