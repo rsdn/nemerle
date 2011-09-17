@@ -1,0 +1,224 @@
+﻿using System;
+using System.Reflection;
+
+using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Collections;
+using Nemerle.Utility;
+
+namespace Nemerle.Compiler.Sre.Macros
+{
+  macro AttributeMatch(expr)
+    syntax("attribute", expr)
+  {
+    ForeachAttributeImpl.Build(Macros.ImplicitCTX(), expr)
+  }
+
+  module ForeachAttributeImpl
+  {
+    [Record]
+    internal variant AttributePattern
+    {
+      | Typed   { typeRef  : FixedType; }
+      | Untyped { typeName : string;    }
+      | Wildcard
+      public Location   : Location                { get }
+      public Body       : PExpr                   { get }
+      public CtorParams : option[list[AttributeCtorParameter]] { get }
+      public FrameworkTypeName : string
+      {
+        get
+        {
+          match(this)
+          {
+            | Typed(typeRef)    => typeRef.TypeInfo.FrameworkTypeName
+            | Untyped(typeName) => typeName
+            | Wildcard          => ""
+          }
+        }
+      }
+    }
+
+    [Record]
+    internal variant AttributeCtorParameter
+    {
+      | Positional
+      | Named { propertyName : Name }
+      public Location : Location  { get }
+      public Name     : Name      { get }
+      public Type     : FixedType { get }
+    }
+
+    public Build(typer : Typer, expr : PExpr) : PExpr
+    {
+      match(expr)
+      {
+        | <[ match($expr) { ..$cases } ]> =>
+          def patterns = ParsePatterns(typer, cases);
+          def matchCases = CompilePatterns(patterns);
+          <[
+            def attributeData : System.Reflection.CustomAttributeData = $expr;
+            match(attributeData.Constructor.DeclaringType.FullName)
+            {
+              ..$matchCases
+            }
+          ]>
+
+        | x => Message.FatalError(x.Location, "match expression expected");
+      }
+    }
+
+    private ParsePatterns(typer: Typer, cases : list[MatchCase]) : list[AttributePattern]
+    {
+      def parseCtorParam(_) : AttributeCtorParameter
+      {
+        | <[ $(parmName : name) : $typeRef ]> =>
+          AttributeCtorParameter.Positional(parmName.Location, parmName, typer.BindFixedType(typeRef))
+
+        | <[ $(propertyName : name) : $typeRef = $(parmName : name) ]> =>
+          AttributeCtorParameter.Named(parmName.Location, parmName, typer.BindFixedType(typeRef), propertyName)
+
+        | x => Message.FatalError(x.Location, "constructor parameter expected")
+      }
+
+      def parsePattern(_) : AttributePattern
+      {
+        | <[ case: | $(typeName : string)                  => $body ]> as matchCase with (needCtorParams = false, ctorParams = [])
+        | <[ case: | $(typeName : string)( ..$ctorParams ) => $body ]> as matchCase with (needCtorParams = true) =>
+          AttributePattern.Untyped(
+            matchCase.PatternsLocation,
+            body,
+            if(needCtorParams) Some(ctorParams.Map(parseCtorParam)) else None(),
+            typeName)
+
+        | <[ case: | $(n : name)                => $body ]> as matchCase with (needCtorParams = false, typeName = <[ $(n : name) ]>,     ctorParams = [])
+        | <[ case: | $ns.$(n : name)            => $body ]> as matchCase with (needCtorParams = false, typeName = <[ $ns.$(n : name) ]>, ctorParams = [])
+        | <[ case: | $typeName( ..$ctorParams ) => $body ]> as matchCase with (needCtorParams = true) =>
+          def typeRef = match(typer.BindFixedType(typeName))
+          {
+            | FixedType.Class(_, []) as typeRef => typeRef
+            | _ => Message.FatalError(typeName.Location, "non generic class name expected")
+          };
+          AttributePattern.Typed(
+            matchCase.PatternsLocation,
+            body,
+            if(needCtorParams) Some(ctorParams.Map(parseCtorParam)) else None(),
+            typeRef)
+
+        | <[ case: | _ => $body ]> as matchCase =>
+          AttributePattern.Wildcard(matchCase.Location, body, null)
+
+        | x => Message.FatalError(x.Location, "attribute pattern expected")
+      }
+      cases.Map(parsePattern)
+    }
+
+    private CompilePatterns(patterns : list[AttributePattern]) : list[MatchCase]
+    {
+      def makeParamTypeTest(paramType : FixedType, argumentPath : PExpr) : PExpr
+      {
+        match(paramType)
+        {
+          | Class(ti, []) =>
+            <[ $argumentPath.ArgumentType.FullName == $(ti.FrameworkTypeName : string) ]>
+          | Array(FixedType.Class(ti, []), 1) =>
+            <[ $argumentPath.ArgumentType.FullName == $(ti.FrameworkTypeName + "[]" : string) ]>
+          | _ =>
+            <[ $argumentPath.ArgumentType.Equals(typeof($(paramType : typed))) ]>
+        }
+      }
+      def makeParamValue(paramType : FixedType, argumentPath : PExpr) : PExpr
+      {
+        match(paramType)
+        {
+          | Array(arrayType, 1) =>
+            <[
+              def arguments = $argumentPath.Value :> System.Collections.ObjectModel.ReadOnlyCollection.[System.Reflection.CustomAttributeTypedArgument];
+              def buffer    = array(arguments.Count) : $(paramType : typed);
+              foreach(item in arguments with index)
+                buffer[index] = $(makeParamValue(arrayType.Fix(), <[ item ]>));
+              buffer
+            ]>
+          | _ => <[ $argumentPath.Value :> $(paramType : typed) ]>
+        }
+      }
+      def compileMatchCase(pattern : AttributePattern) : MatchCase
+      {
+        match(pattern.CtorParams)
+        {
+          | None => <[ case: | $(pattern.FrameworkTypeName : string) => $(pattern.Body) ]>
+          | Some(ctorParams) =>
+            def (positionalParams, namedParams) = ctorParams.FoldRight(([], []), fun(item, (positionalParams, namedParams))
+            {
+              match(item : AttributeCtorParameter)
+              {
+                | Positional  as item => (item :: positionalParams, namedParams)
+                | Named       as item => (positionalParams, item :: namedParams)
+              }
+            });
+
+            mutable predicate = <[ attributeData.ConstructorArguments.Count == $(ctorParams.Length : int) ]>;
+            mutable body = [pattern.Body];
+
+            foreach(param in positionalParams with index)
+            {
+              def argumentPath = <[ attributeData.ConstructorArguments[$(index : int)] ]>;
+
+              def paramTypeTest = makeParamTypeTest(param.Type, argumentPath);
+              predicate = <[ $predicate && $paramTypeTest ]>;
+
+              def paramValue = makeParamValue(param.Type, argumentPath);
+              body ::= <[ def $(param.Name : name) : $(param.Type : typed) = $paramValue ]>
+            }
+
+            when(namedParams is _ :: _)
+            {
+              mutable matchCases = [];
+              foreach(param in namedParams)
+              {
+                body ::= <[ mutable $(param.Name : name) = None() ]>;
+
+                def paramValue = makeParamValue(param.Type, <[ namedArgument.TypedValue ]>);
+                matchCases ::= <[ case:
+                  | $(param.propertyName.Id : string) => $(param.Name : name) = Some($paramValue : $(param.Type : typed))
+                ]>
+              }
+              body ::= <[
+                foreach(namedArgument in attributeData.NamedArguments)
+                {
+                  match(namedArgument.MemberInfo.Name) { ..$matchCases }
+                }
+              ]>
+            }
+
+            <[ case: | $(pattern.FrameworkTypeName : string) when $predicate => { ..$body } ]>
+        }
+      }
+
+      patterns.FoldRight([ <[ case: | _ => () ]> ], fun(pattern, cases)
+      {
+        def patternCase = match(pattern : AttributePattern)
+        {
+          | Typed(typeRef) =>
+            when(pattern.CtorParams is Some(ctorParams))
+            {
+              def properCtorSignature = ctorParams.MapFiltered(_ is AttributeCtorParameter.Positional, _.Type);
+              def properCtorType = FixedType.ConstructFunctionType(properCtorSignature, FixedType.Void());
+              def ctors = typeRef.TypeInfo.GetConstructors(BindingFlags.Instance %| BindingFlags.Public %| BindingFlags.NonPublic);
+              unless(ctors.Exists(ctor => properCtorType.Equals(typeRef.TypeOfMethod(ctor).Fix())))
+                Message.Warning(pattern.Location, $"unable to find constructor of type $typeRef with signature $properCtorSignature");
+            }
+            compileMatchCase(pattern)
+
+          | Untyped(_) =>
+            compileMatchCase(pattern)
+          
+          | Wildcard => <[ case: | _ => $(pattern.Body) ]>
+        };
+        patternCase :: cases
+      })
+    }
+  }
+}
