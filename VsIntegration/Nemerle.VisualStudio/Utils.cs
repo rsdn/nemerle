@@ -238,7 +238,7 @@ namespace Nemerle.VisualStudio
 			if (decl == null)
 				return -1;
 
-			NemerleAttributes attrs = decl.Attributes;
+			NemerleModifiers attrs = decl.Attributes;
 
 			GlyphType kind =
 				decl is TopDeclaration.Delegate ? GlyphType.Delegate :
@@ -247,16 +247,16 @@ namespace Nemerle.VisualStudio
 				decl is TopDeclaration.Macro ? GlyphType.Macro :
 				decl is TopDeclaration.Variant ? GlyphType.Variant :
 				decl is TopDeclaration.VariantOption ? GlyphType.VariantOption :
-				Has(attrs, NemerleAttributes.Struct) ? GlyphType.Struct :
+				Has(attrs, NemerleModifiers.Struct) ? GlyphType.Struct :
 																							GlyphType.Class;
 
 			GlyphSubtype modifier =
-				Has(attrs, NemerleAttributes.Internal | NemerleAttributes.Protected) ?
+				Has(attrs, NemerleModifiers.Internal | NemerleModifiers.Protected) ?
 														 GlyphSubtype.ProtectedInternal :
-				Has(attrs, NemerleAttributes.Internal) ? GlyphSubtype.Internal :
-				Has(attrs, NemerleAttributes.Protected) ? GlyphSubtype.Protected :
-				Has(attrs, NemerleAttributes.Public) ? GlyphSubtype.Public :
-				Has(attrs, NemerleAttributes.Private) ? GlyphSubtype.Private :
+				Has(attrs, NemerleModifiers.Internal) ? GlyphSubtype.Internal :
+				Has(attrs, NemerleModifiers.Protected) ? GlyphSubtype.Protected :
+				Has(attrs, NemerleModifiers.Public) ? GlyphSubtype.Public :
+				Has(attrs, NemerleModifiers.Private) ? GlyphSubtype.Private :
 				decl is TopDeclaration.VariantOption ? GlyphSubtype.Public :
 																								 GlyphSubtype.Private;
 
@@ -276,18 +276,18 @@ namespace Nemerle.VisualStudio
 			else if (member is ClassMember.Function) kind = 12;
 			else if (member is ClassMember.Event) kind = 5;
 
-			NemerleAttributes attrs = member.Attributes;
+			NemerleModifiers attrs = member.Attributes;
 
 			modifier =
-				Has(attrs, NemerleAttributes.Internal) ? 1 :
-				Has(attrs, NemerleAttributes.Protected) ? 3 :
-				Has(attrs, NemerleAttributes.Public) ? 0 :
+				Has(attrs, NemerleModifiers.Internal) ? 1 :
+				Has(attrs, NemerleModifiers.Protected) ? 3 :
+				Has(attrs, NemerleModifiers.Public) ? 0 :
 				member.DefinedIn is TopDeclaration.VariantOption ? 0 :
 																											 4;
 			return kind * 6 + modifier;
 		}
 
-		private static bool Has(NemerleAttributes attrs, NemerleAttributes value)
+		private static bool Has(NemerleModifiers attrs, NemerleModifiers value)
 		{
 			return (attrs & value) == value;
 		}
