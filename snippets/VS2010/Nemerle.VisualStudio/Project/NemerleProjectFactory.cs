@@ -9,6 +9,7 @@ using Microsoft.VisualStudio;
 using System.IO;
 using Nemerle.VisualStudio.GUI;
 using System.Windows.Forms;
+using System.Text.RegularExpressions;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -43,6 +44,7 @@ namespace Nemerle.VisualStudio.Project
 		}
 
 		const string ToolsVersion = "4.0";
+		const string OldNemerlePath = @"$(ProgramFiles)\Nemerle";
 		const string NemerlePath = @"$(ProgramFiles)\Nemerle\Net-4.0";
 		const string TargetFrameworkVersion = "v4.0";
 
@@ -65,7 +67,7 @@ namespace Nemerle.VisualStudio.Project
 
 				upgradedFullyQualifiedFileName = destProjectFilePath;
 
-				UpgradeProject(sourceProjectFilePath, destProjectFilePath);
+				UpgradeProject(sourceProjectFilePath, destProjectFilePath, pLogger, projectName);
 
 				pLogger.LogMessage((uint)__VSUL_ERRORLEVEL.VSUL_INFORMATIONAL, projectName, sourceProjectFilePath, "Project converted successfully");
 				// Tell to VS which the project converted successfull. It's a magic! :)
@@ -82,12 +84,22 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
-		private static void UpgradeProject(string sourceProjectFilePath, string destProjectFilePath)
+		static bool IsNeedUpdateNemerleProperty(XElement nemerleProperty)
+		{
+			return Utils.Eq(nemerleProperty.Value, OldNemerlePath) || string.IsNullOrWhiteSpace(nemerleProperty.Value);
+		}
+
+		private static void UpgradeProject(string sourceProjectFilePath, string destProjectFilePath, IVsUpgradeLogger pLogger, string projectName)
 		{
 			var projectData = new ProjectUpgradeHelper(sourceProjectFilePath);
 
 			projectData.ToolsVersion.Value = ToolsVersion;
-			projectData.NemerleProperty.Value = NemerlePath;
+
+			if (IsNeedUpdateNemerleProperty(projectData.NemerleProperty))
+				projectData.NemerleProperty.Value = NemerlePath;
+			else if (!Utils.Eq(projectData.NemerleProperty.Value, NemerlePath))
+				pLogger.LogMessage((uint)__VSUL_ERRORLEVEL.VSUL_WARNING, projectName, sourceProjectFilePath, "The Nemerle property changed by user. You must update it manually.");
+				
 			projectData.TargetFrameworkVersion.Value = TargetFrameworkVersion;
 
 			projectData.NemerleProperty.Document.Save(destProjectFilePath);
@@ -118,6 +130,18 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
+		static bool NemerlePropertyHasCondition(XElement property)
+		{
+			var condition = property.Attribute("Condition");
+			
+			if (condition == null)
+				return false;
+
+			var rxCondition = new Regex(@"\s*'\$\(Nemerle\)'\s*==\s*''\s*");
+
+			return rxCondition.IsMatch(condition.Value);
+		}
+
 		public int UpgradeProject_CheckOnly(string projectFileName, IVsUpgradeLogger pLogger, out int pUpgradeRequired, out Guid pguidNewProjectFactory, out uint pUpgradeProjectCapabilityFlags)
 		{
 			pUpgradeRequired = 1;
@@ -129,7 +153,7 @@ namespace Nemerle.VisualStudio.Project
 			if (projectData.ToolsVersion == null || ParseVersion(projectData.ToolsVersion.Value).Major < 4)
 				return VSConstants.S_OK;
 
-			if (!Utils.Eq(projectData.NemerleProperty.Value, NemerlePath))
+			if (IsNeedUpdateNemerleProperty(projectData.NemerleProperty))
 				return VSConstants.S_OK;
 
 			if (!Utils.Eq(projectData.TargetFrameworkVersion.Value, TargetFrameworkVersion))
