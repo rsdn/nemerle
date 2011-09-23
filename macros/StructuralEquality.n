@@ -1,0 +1,288 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+
+namespace Nemerle.Extensions
+{
+
+  /* Implements Equals and related methods, using the concept of
+    * http://everything2.com/title/structural+equality
+    */
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
+    Nemerle.MacroTargets.Class,
+    Inherited = false, AllowMultiple = false)]
+  public macro StructuralEquality2(tb : TypeBuilder, params _options : list[PExpr])
+  {
+    StructuralEqualityImpl.RunBeforeInheritance(tb);
+  }
+
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
+    Nemerle.MacroTargets.Class,
+    Inherited = false, AllowMultiple = false)]
+  public macro StructuralEquality2(tb : TypeBuilder, params options : list[PExpr])
+  {
+    StructuralEqualityImpl.RunWithTypedMembers(tb, options);
+  }
+    
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
+    Nemerle.MacroTargets.Field,
+    Inherited = false, AllowMultiple = false)]
+  public macro EqualsIgnore(tb : TypeBuilder, field : ParsedField)
+  {
+    StructuralEqualityImpl.Ignore(tb, field);
+  }
+    
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
+    Nemerle.MacroTargets.Property,
+    Inherited = false, AllowMultiple = false)]
+  public macro EqualsIgnore(tb : TypeBuilder, prop : ParsedProperty)
+  {
+    StructuralEqualityImpl.Ignore(tb, prop);
+  }
+    
+  module StructuralEqualityImpl
+  {
+      // used as a key in UserData
+      public IgnoredFieldsLabel : string = "StructuralEquality.IgnoredFields";
+      public IgnoredPropertiesLabel : string = "StructuralEquality.IgnoredProperties";
+
+      // implements interfaces
+      public RunBeforeInheritance(tb : TypeBuilder) : void
+      {
+        def type = tb.ParsedTypeName;
+            
+        tb.AddImplementedInterface(<[ System.IEquatable.[$type] ]>);
+        // todo: add IStructuralEquatable
+      }
+
+      // parses options, defines methods
+      public RunWithTypedMembers(tb : TypeBuilder, options_expr : list[PExpr]) : void
+      {        
+        def options = SEOptions.Parse(options_expr);
+
+        def get_relevant_fields()
+        {            
+          def all_fields = tb.GetFields(BindingFlags.Public %| 
+                                        BindingFlags.NonPublic %| 
+                                        BindingFlags.Instance %| 
+                                        BindingFlags.DeclaredOnly);
+                  
+          // retrieve all ignored fields            
+          def ignore_fields = if (tb.UserData.Contains(IgnoredFieldsLabel)) 
+            tb.UserData[IgnoredFieldsLabel] :> List[string] else List();
+
+          // ignored properties
+          when (tb.UserData.Contains(IgnoredPropertiesLabel))
+          {
+            def prop_list = tb.UserData[IgnoredPropertiesLabel] :> List[string];
+                    
+            foreach (prop in prop_list)
+            {
+              match (tb.LookupMember(prop).Find(x => x is IProperty))
+              {
+              | Some(builder is PropertyBuilder) => 
+                match (builder.AutoPropertyField)
+                {
+                | Some(field) => ignore_fields.Add(field.Name)
+                | _ => Message.Warning(builder.Location, $"$prop is not an autoproperty. No need to use EqualsIgnore")
+                }
+              | _ => Message.Error($"Property $prop not found.")
+              }
+            }
+          }
+                                
+          ignore_fields.AddRange(options.IgnoreFields);
+          ignore_fields.Sort();
+                
+          // remove ignored fields and return result
+          all_fields.Filter(x => ignore_fields.BinarySearch(x.Name) < 0);
+        }
+            
+        // fields that are not ignored when evaluating structural equality
+        def relevant_fields = get_relevant_fields();
+            
+        // true if strict type equality is needed, i. e. no subtypes are allowed;
+        def typecheck_needed = !tb.IsSealed && !tb.IsValueType && options.CheckTypes;
+            
+        DefineEquality(tb, relevant_fields, typecheck_needed);
+        DefineHashCode(tb, relevant_fields);
+        DefineOperators(tb);
+      }
+    
+      // adds a field to ignore list
+      public Ignore(tb : TypeBuilder, field : ClassMember.Field) : void
+      {
+          unless (tb.UserData.Contains(IgnoredFieldsLabel)) tb.UserData.Add(IgnoredFieldsLabel, List.[string]());
+           
+          def lst = tb.UserData[IgnoredFieldsLabel] :> List[string];
+          unless (lst.Contains(field.Name)) lst.Add(field.Name);
+      }
+        
+      // adds a property to ignore list
+      public Ignore(tb : TypeBuilder, prop : ClassMember.Property) : void
+      {           
+          unless (tb.UserData.Contains(IgnoredPropertiesLabel)) tb.UserData.Add(IgnoredPropertiesLabel, List.[string]());
+           
+          def lst = tb.UserData[IgnoredPropertiesLabel] :> List[string];
+          unless (lst.Contains(prop.Name)) lst.Add(prop.Name);
+      }
+
+      // represents macro options
+      [Record]
+      struct SEOptions
+      {
+          [Accessor] _ignoreFields : list[string];
+          [Accessor] _checkTypes   : bool;
+            
+          [Accessor] static _default : SEOptions = SEOptions([], true);
+            
+          public static Parse(options : list[PExpr]) : SEOptions
+          {
+              mutable check_types = true;
+              mutable ignore_fields = [];
+                
+              foreach (opt in options)
+              {
+              | <[ CheckTypes = true ]> => check_types = true;
+              | <[ CheckTypes = false ]> => check_types = false;
+                
+              | <[ Ignore = [..$flds] ]> 
+              | <[ Ignore = $fld  ]> with flds = [fld] =>
+                    
+                  // add field names as strings
+                  ignore_fields += flds.MapFiltered(_ is PExpr.Ref, x => (x :> PExpr.Ref).name.Id)
+                    
+              | _ => 
+                  Message.Error("Unknown options for StructuralEquality.")
+              }
+                
+              SEOptions(ignore_fields, check_types)
+          }            
+      }
+    
+      DefineEquality(tb : TypeBuilder, fields : Seq[IField], check_types : bool) : void
+      {
+        
+          // generates comparison code for a single field
+          def invokeEquals(x : IField)
+          {
+              def nm = Macros.UseSiteSymbol(x.Name);
+              if (x.GetMemType().IsPrimitive)
+                <[ $(nm : name) == other.$(nm : name) ]> // primitive magic
+              else if (x.GetMemType().IsValueType)
+                <[ $(nm : name).Equals(other.$(nm : name)) ]> // no null-checks
+              else
+                <[ System.Object.Equals($(nm : name), other.$(nm : name)) ]>;
+          }
+
+          def type = tb.ParsedTypeName;
+          def type_checker = 
+              if (check_types) 
+                  <[ other.GetType().Equals(this.GetType()) ]> 
+              else 
+                  <[ true ]>;
+                    
+          // core comparison code (type checker + comparison for each field)
+          def body = fields.Fold(type_checker, (f, acc) => <[ $(invokeEquals(f)) && $acc ]> );
+            
+          // implements IEquatable[T]; no null-check for structs
+          def fun_body = if (tb.IsValueType) body else
+              <[ match (other) { | null => false | _ => $body } ]>;
+            
+          tb.Define(<[ decl:
+              public Equals(other : $type) : bool implements System.IEquatable.[$type].Equals
+              {
+                  _ = other; // shut the compiler up if body degrades to "true"
+                  $fun_body
+              }
+          ]> |> MarkCompilerGenerated);
+            
+          // implements object.Equals
+          tb.Define(<[ decl:
+              public override Equals (_other : System.Object) : bool
+              {
+              | x is $type => Equals(x)
+              | _ => false
+              }
+          ]> |> MarkCompilerGenerated);        
+      }
+        
+      // uses http://en.wikipedia.org/wiki/Jenkins_hash_function to implement GetHashCode
+      DefineHashCode(tb : TypeBuilder, fields : Seq[IField]) : void
+      {            
+          def hash_body = fields.Map(f =>
+          {
+              def gethashcode =
+                    
+                  if (f.GetMemType().IsValueType)
+                      <[ $(f.Name : usesite).GetHashCode() ]>
+                  else
+                      <[ $(f.Name : usesite)?.GetHashCode() ]>;
+                
+              <[
+                hash += $gethashcode;
+                hash += (hash << 10);
+                hash ^= (hash >> 6);
+              ]>
+          }); 
+            
+          def body = if (hash_body is []) <[ 0 ]> else
+          <[
+            unchecked
+            {
+              mutable hash : int;
+              { ..$hash_body }
+              hash += (hash << 3);
+              hash ^= (hash >> 11);
+              hash += (hash << 15);
+              hash
+            }
+          ]>;
+            
+          tb.Define (<[ decl: public override GetHashCode () : int { $body } ]> |> MarkCompilerGenerated);
+      }
+        
+      DefineOperators(tb : TypeBuilder) : void
+      {
+          def type = tb.ParsedTypeName;
+        
+          if (tb.IsValueType)
+          {
+              tb.Define(<[ decl:
+                  public static @== (first : $type, second : $type) : bool
+                  {
+                      first.Equals(second)
+                  }
+              ]> |> MarkCompilerGenerated);  
+          }
+          else
+          {
+              tb.Define(<[ decl:
+                  public static @== (first : $type, second : $type) : bool
+                  {
+                      if (first is null) false else first.Equals(second)
+                  }
+              ]> |> MarkCompilerGenerated);  
+          }
+            
+          tb.Define(<[ decl:
+              public static @!= (first : $type, second : $type) : bool
+              {
+                  !(first == second)
+              }
+          ]> |> MarkCompilerGenerated);
+      }
+        
+      MarkCompilerGenerated(cm : ClassMember) : ClassMember
+      {
+          cm.AddCustomAttribute(<[System.Runtime.CompilerServices.CompilerGenerated]>);
+          cm
+      }
+  }
+}
