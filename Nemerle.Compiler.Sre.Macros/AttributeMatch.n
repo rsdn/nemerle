@@ -58,14 +58,53 @@ namespace Nemerle.Compiler.Sre.Macros
       {
         | <[ match($expr) { ..$cases } ]> =>
           def patterns = ParsePatterns(typer, cases);
-          def matchCases = CompilePatterns(patterns);
-          <[
-            def attributeData : System.Reflection.CustomAttributeData = $expr;
-            match(attributeData.Constructor.DeclaringType.FullName)
+          if(patterns.Length < minPatternsToBuildSwitch)
+          {
+            def matchCases = CompilePatterns(patterns, p => <[ $(p.FrameworkTypeName : string) ]>);
+            <[
+              def attributeData : System.Reflection.CustomAttributeData = $expr;
+              match(attributeData.Constructor.DeclaringType.FullName)
+              {
+                ..$matchCases
+              }
+            ]>
+          }
+          else
+          {
+            // compiler does not optimize pattern matching over strings with hashtable search
+            // so we do this manually
+            def typeNameTable = Hashtable();
+            foreach(pattern in patterns)
             {
-              ..$matchCases
+              def typeName = pattern.FrameworkTypeName;
+              mutable index;
+              unless(typeNameTable.TryGetValue(typeName, out index))
+                typeNameTable[typeName] = typeNameTable.Count;
             }
-          ]>
+            def typeNameTableName = Macros.NewSymbol("typeNameTable");
+            typer.CurrentType.Define(<[ decl:
+              private static $(typeNameTableName : name) : System.Collections.Generic.Dictionary[string, int] = 
+              {
+                def table = System.Collections.Generic.Dictionary();
+                { ..$(typeNameTable.Fold([], (typeName, index, r) => <[ table.Add($(typeName : string), $(index : int)) ]> :: r)) } 
+                table
+              }
+            ]>);
+            def matchCases = CompilePatterns(patterns, p => <[ $(typeNameTable[p.FrameworkTypeName] : int) ]>);
+            <[
+              def attributeData : System.Reflection.CustomAttributeData = $expr;
+              match({
+                mutable index;
+                if($(typeNameTableName : name).TryGetValue(attributeData.Constructor.DeclaringType.FullName, out index))
+                  index
+                else
+                  -1
+              })
+              {
+                ..$matchCases
+              }
+            ]>
+          }
 
         | x => Message.FatalError(x.Location, "match expression expected");
       }
@@ -116,7 +155,7 @@ namespace Nemerle.Compiler.Sre.Macros
       cases.Map(parsePattern)
     }
 
-    private CompilePatterns(patterns : list[AttributePattern]) : list[MatchCase]
+    private CompilePatterns(patterns : list[AttributePattern], patternCase : AttributePattern -> PExpr) : list[MatchCase]
     {
       def makeParamTypeTest(paramType : FixedType, argumentPath : PExpr) : PExpr
       {
@@ -149,7 +188,7 @@ namespace Nemerle.Compiler.Sre.Macros
       {
         match(pattern.CtorParams)
         {
-          | None => <[ case: | $(pattern.FrameworkTypeName : string) => $(pattern.Body) ]>
+          | None => <[ case: | $(patternCase(pattern)) => $(pattern.Body) ]>
           | Some(ctorParams) =>
             def (positionalParams, namedParams) = ctorParams.FoldRight(([], []), fun(item, (positionalParams, namedParams))
             {
@@ -197,32 +236,36 @@ namespace Nemerle.Compiler.Sre.Macros
             }
             body.Add(pattern.Body);
 
-            <[ case: | $(pattern.FrameworkTypeName : string) when $predicate => { ..$(NList.ToList(body)) } ]>
+            <[ case: | $(patternCase(pattern)) when $predicate => { ..$(NList.ToList(body)) } ]>
         }
       }
 
-      patterns.FoldRight([ <[ case: | _ => () ]> ], fun(pattern, cases)
+      def compiledCases = List();
+      mutable wildcardFound = false;
+      foreach(pattern in patterns)
       {
-        def patternCase = match(pattern : AttributePattern)
-        {
-          | Typed(typeRef) =>
-            when(pattern.CtorParams is Some(ctorParams))
-            {
-              def properCtorSignature = ctorParams.MapFiltered(_ is AttributeCtorParameter.Positional, _.Type);
-              def properCtorType = FixedType.ConstructFunctionType(properCtorSignature, FixedType.Void());
-              def ctors = typeRef.TypeInfo.GetConstructors(BindingFlags.Instance %| BindingFlags.Public %| BindingFlags.NonPublic);
-              unless(ctors.Exists(ctor => properCtorType.Equals(typeRef.TypeOfMethod(ctor).Fix())))
-                Message.Warning(pattern.Location, $"unable to find constructor of type $typeRef with signature $properCtorSignature");
-            }
-            compileMatchCase(pattern)
+        | Typed(typeRef) =>
+          when(pattern.CtorParams is Some(ctorParams))
+          {
+            def properCtorSignature = ctorParams.MapFiltered(_ is AttributeCtorParameter.Positional, _.Type);
+            def properCtorType = FixedType.ConstructFunctionType(properCtorSignature, FixedType.Void());
+            def ctors = typeRef.TypeInfo.GetConstructors(BindingFlags.Instance %| BindingFlags.Public %| BindingFlags.NonPublic);
+            unless(ctors.Exists(ctor => properCtorType.Equals(typeRef.TypeOfMethod(ctor).Fix())))
+              Message.Warning(pattern.Location, $"unable to find constructor of type $typeRef with signature $properCtorSignature");
+          }
+          pattern |> compileMatchCase |> compiledCases.Add
 
-          | Untyped(_) =>
-            compileMatchCase(pattern)
-          
-          | Wildcard => <[ case: | _ => $(pattern.Body) ]>
-        };
-        patternCase :: cases
-      })
+        | Untyped(_) =>
+          pattern |> compileMatchCase |> compiledCases.Add
+
+        | Wildcard =>
+          wildcardFound = true;
+      }
+      unless(wildcardFound)
+        compiledCases.Add(<[ case: | _ => () ]>);
+      NList.ToList(compiledCases)
     }
+
+    minPatternsToBuildSwitch = 4;
   }
 }
