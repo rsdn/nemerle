@@ -126,7 +126,7 @@ namespace Nemerle.VisualStudio.GUI
 					var name = m.Name;
 					rowIndex = _grid.Rows.Add(name, true, false, null, name, m);
 					row = _grid.Rows[rowIndex];
-					var implementByDefault = isInterface || (m.Attributes & NemerleAttributes.Abstract) != 0;
+					var implementByDefault = isInterface || (m.Attributes & NemerleModifiers.Abstract) != 0;
 					ImplementCell(row).Value = implementByDefault;
 					row.Cells[0].Style.Padding = new Padding(_imageSize * 2, 0, 0, 0);
 
@@ -367,8 +367,8 @@ namespace Nemerle.VisualStudio.GUI
 				else
 				{
 					// Генерируем override-методы. Для них нужно сформировать правильны модификатор доступа.
-					var am = (member.Attributes | NemerleAttributes.Override)
-									 & ~(NemerleAttributes.Abstract | NemerleAttributes.Virtual | NemerleAttributes.SpecialName);
+					var am = (member.Attributes | NemerleModifiers.Override)
+									 & ~(NemerleModifiers.Abstract | NemerleModifiers.Virtual | NemerleModifiers.SpecialName);
 					var acessMods = am.ToString().ToLower().Replace(",", "");
 
 					NUtils.GenerateMemberImplementation(writer, _source.FileIndex,
