@@ -1,0 +1,304 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nemerle.Compiler
+{
+  using Nemerle.Compiler.Parsetree.TopDeclaration;
+  using Nemerle.Compiler.Parsetree.ClassMember;
+
+  public variant TraverseContext
+  {
+    | Top
+    | Uncached {parent : TraverseContext;}
+    | Expr
+        {
+          expr : PExpr;
+          parent : TraverseContext;
+        }
+
+    internal mutable nexpr : PExpr;
+    mutable pushed : bool;
+    mutable full_history : bool;
+
+    public Next() : TraverseContext
+    {
+      match (full_history, pushed, this)
+      {
+        | (true, _, _)
+        | (false, true, _) => Expr(false, nexpr, this)
+        | (false, false, Uncached) => this
+        | (false, false, _) => Uncached(false, this)
+      }
+    }
+
+    public Push() : void
+    {
+      pushed = true;
+    }
+
+    public this(full_hist : bool = false)
+    {
+      full_history = full_hist;
+    }
+  }
+
+  public partial module Macros
+  {
+
+ /**
+   * Allows recursive analysing and rewriting given parse tree expression easily. It calls supplied function on every
+   * node of tree returning its result as new node.
+   *
+   * [ctx] - when specified, then expression is first macro-expanded and expansion result is then further analyzed
+   * [expr] - expression to be processed
+   * [context] - context expr used to provide information of parent expression
+   * [call] - function called for each node of tree, first parameter hold the [context] semantics; second denotes if we are calling the
+   *          function before processing of subnodes (==false) and after (==true) - the function is always called twice for each node;
+   *          third passes the current node to operate on; return value (used only from second/postprocess call) is used as new node value
+   */
+    public TraverseExpr2 (ctx : option[Typer], expr : PExpr, context : PExpr,
+                         call : PExpr * bool * PExpr -> PExpr) : PExpr
+    {
+      def traverse (x) { TraverseExpr2(ctx, x, expr, call) }
+
+      TraverseExprImpl(ctx, expr, call(context, _, _), traverse)
+    }
+
+    TraverseExprImpl(ctx : option[Typer], expr : PExpr, call : bool * PExpr -> PExpr, traverse : PExpr -> PExpr) : PExpr
+    {
+      if (expr == null) null
+      else
+        Util.locate (expr.Location,
+        {
+                       def expr = match (ctx)
+                                  {
+                                    | Some (c) => MacroRegistry.expand_macro(c, expr)[0]
+                                    | _ => expr
+                                  }
+
+                       def trav_funparms(fps)
+                       {
+                         def go_funparm(p)
+                         {
+                           | <[ parameter: $n : $t = $_e ]> => <[ parameter: $n : $t = $(traverse(e)) ]>
+                           | _ => p
+                         }
+
+                         fps.Map(go_funparm)
+                       }
+
+
+                       def trav_splicable(sp)
+                       {
+                         | Splicable.Expression(exp) => Splicable.Expression(traverse(exp))
+                         | _ => sp
+                       }
+
+                       def trav_fun_head(fh)
+                       {
+                         |  PFunHeader where (TypeParameters = Typarms where (tyvars = ty, constraints = c),
+                               SplicableName = n, ReturnType = ret, Parameters = pars) =>
+                             PFunHeader(Typarms(ty.Map(trav_splicable), c), trav_splicable(n), traverse(ret), trav_funparms(pars))
+                       }
+
+                       def trav_func(f)
+                       {
+                         | ClassMember.Function(name = n, header = h, modifiers = m, implemented = i, body = b) =>
+                             def n = trav_splicable(n);
+                             def h = trav_fun_head(h);
+                             def b = match (b)
+                                     {
+                                       | FunBody.Parsed(expr) => FunBody.Parsed(traverse(expr))
+                                       | _ => b
+                                     }
+                             ClassMember.Function(n, m, h, i.Map(traverse), b)
+                       }
+
+                       def trav_field(f)
+                       {
+                         | ClassMember.Field(name = n, modifiers = m, ty = t) => ClassMember.Field(trav_splicable(n), m, traverse(t))
+                       }
+
+                       def trav_top_decl(td)
+                       {
+                         | TopDeclaration.Alias(name = n, modifiers = m, typarms = tp, ty = ty) => Alias(trav_splicable(n), m, tp, traverse(ty))
+                         | Class(name = n, modifiers = m, typarms = tp, t_extends = ext, decls = d) => Class(trav_splicable(n), m, tp, ext.Map(traverse), d.Map(trav_classmember))
+                         | Delegate(name = n, modifiers = m, typarms = tp, header = h) => Delegate(trav_splicable(n), m, tp, trav_fun_head(h))
+                         | Enum(name = n, modifiers = m, typarms = tp, t_extends = ext, decls = d) => Enum(trav_splicable(n), m, tp, ext.Map(traverse), d.Map(trav_classmember))
+                         | Interface(name = n, modifiers = m, typarms = tp, t_extends = ext, methods = d) => Interface(trav_splicable(n), m, tp, ext.Map(traverse), d.Map(trav_classmember))
+                         | Macro(name = n, modifiers = m, typarms = tp, header = h, synt = s, expr = ex) => Macro(trav_splicable(n), m, tp, trav_fun_head(h), s.Map(traverse), traverse(ex))
+                         | Variant(name = n, modifiers = m, typarms = tp, t_extends = ext, decls = d) => Variant(trav_splicable(n), m, tp, ext.Map(traverse), d.Map(trav_classmember))
+                         | VariantOption(name = n, modifiers = m, typarms = tp, decls = d) => VariantOption(trav_splicable(n), m, tp, d.Map(trav_classmember))
+                       }
+
+                       and trav_classmember(cl)
+                       {
+                         | ClassMember.Function as f => trav_func(f)
+                         | Field as f => trav_field(f)
+                         | EnumOption(name = n, modifiers = m, value = v) => EnumOption(trav_splicable(n), m, v.Map(traverse))
+                         | Event(name = n, modifiers = m, ty = t, field = f, add = a, remove = r) =>
+                             Event(trav_splicable(n), m, traverse(t), trav_field(f), trav_func(a), trav_func(r))
+                         | TypeDeclaration(name = n, modifiers = m, td = t) => TypeDeclaration(trav_splicable(n), m, trav_top_decl(t))
+                         | Property(name = n, modifiers = m, returnType = rt, parameters = pars, getter = get, setter = set) =>
+                             Property(trav_splicable(n), m, traverse(rt), trav_funparms(pars), get.Map(trav_func), set.Map(trav_func))
+                       }
+
+                       // first call of whole expr before traversing parts of expression
+                       match (call (false, expr))
+                       {
+                         // if returning null there is no new expr and go to traversing parts normally
+                         | null =>
+
+                             def recursed = match (expr)
+                                            {
+                                              | <[ $(_ : name) ]> => expr
+                                              | <[ $obj . $mem ]> => <[ $(traverse(obj)) . $(trav_splicable(mem)) ]>
+                                              | <[ $func (.. $parms) ]> => <[ $(traverse(func)) (..$(parms.Map(traverse))) ]>
+                                              | <[ $func .[.. $parms] ]> => <[ $(traverse(func)) .[..$(parms.Map(traverse))] ]>
+                                              | <[ $target = $source ]> => <[ $(traverse(target)) = $(traverse(source)) ]>
+                                              | <[ def $n = $val ]> => <[ def $(traverse(n)) = $(traverse(val)) ]>
+                                              | <[ mutable $n = $val ]> => <[ mutable $(traverse(n)) = $(traverse (val)) ]>
+                                              | <[ match ($mexpr) {.. $cases } ]> =>
+                                                  def go_case (c)
+                                                  {
+                                                    def go_guard(g : PExpr)
+                                                    {
+                                                      | <[ $pat when $e ]> => <[ $(traverse(pat)) when $(traverse(e)) ]>
+                                                      | _ => traverse(g)
+                                                    }
+
+                                                    def <[ case: | ..$guards => $exp ]> = c;
+                                                    def guards = guards.Map(go_guard);
+                                              <[ case: | ..$guards => $(traverse(exp)) ]>
+                                                  }
+
+                                                  def cases = cases.Map(go_case);
+                                            <[ match ($(traverse(mexpr))) {.. $cases } ]>
+
+                                              | <[ throw $exc ]> => <[ throw $(traverse(exc)) ]>
+                                              | PExpr.TryFinally(body, handler) => PExpr.TryFinally(traverse(body), traverse(handler))
+                                              | PExpr.Try(body, cases) =>
+
+                                                  def walk_case(case)
+                                                  {
+                                                    | TryCase.Catch (exn, exn_ty, handler) => TryCase.Catch (exn, exn_ty, traverse(handler))
+                                                    | TryCase.Filter (exn, exn_ty, filter, handler) => TryCase.Filter(exn, exn_ty, traverse(filter), traverse(handler))
+                                                    | TryCase.Ellipsis (e) => TryCase.Ellipsis (traverse(e))
+                                                  }
+
+                                                  PExpr.Try(traverse(body), cases.Map(walk_case))
+
+                                              | PExpr.Literal => expr
+                                              | <[ this ]> => expr
+                                              | <[ typeof ($_) ]> => expr
+                                              | <[ $exp :> $ty ]> => <[ $(traverse(exp)) :> $ty ]>
+                                              | <[ $exp : $ty ]> => <[ $(traverse(exp)) : $ty ]>
+                                              | <[ {.. $seq } ]> => <[ { ..$(seq.Map(traverse)) } ]>
+                                              | <[ (.. $args) ]> => <[ ( ..$(args.Map(traverse)) ) ]>
+                                              | <[ ref $e ]> => <[ ref $(traverse(e)) ]>
+                                              | <[ out $e ]> => <[ out $(traverse(e)) ]>
+                                              | <[ array(..$args) ]> => <[ array( ..$(args.Map(traverse)) ) ]>
+                                              | <[ array $args ]> => <[ array $(traverse(args)) ]>
+                                              | <[ array .[ $rank ] $args ]> => <[ array .[ $(traverse(rank))] $(traverse(args)) ]>
+                                              | <[ $obj [.. $args] ]> => <[ $(traverse(obj)) [ ..$(args.Map(traverse)) ] ]>
+                                              | <[ fun [ ..$tparms] (..$args) where ..$tconstrs $body ]> =>
+                                                  def args = trav_funparms(args);
+                                            <[ fun [ ..$tparms] (..$args) where ..$tconstrs $(traverse(body)) ]>
+
+                                              | <[ def ..$funs ]> =>
+
+                                                  def go_fun (f)
+                                                  {
+                                                    | <[ fundecl: $n [ ..$tparms] (..$args) where .. $tconstrs $body ]> =>
+                                                        def args = trav_funparms(args);
+                                                  <[ fundecl:
+                                                     $n [ ..$tparms] (..$args) where .. $tconstrs $(traverse(body)) ]>
+                                                    | _ => f
+                                                  }
+                                            <[ def ..$(funs.Map(go_fun)) ]>
+
+                                              | <[ $pat as $nm ]> => PExpr.As(traverse(pat), nm)
+                                              | <[ $nm where $pat ]> => PExpr.Where(traverse(nm), traverse(pat))
+                                              | <[ $e1 is $e2 ]> => PExpr.Is(traverse(e1), traverse(e2))
+                                              | PExpr.ListLiteral(elems) => PExpr.ListLiteral(elems.Map(traverse))
+                                              | PExpr.ToComplete
+                                              | PExpr.Error | PExpr.Wildcard | PExpr.Void => expr
+                                              | PExpr.MacroCall (x, namespc, parms) =>
+
+                                                  def go_parm(y : SyntaxElement)
+                                                  {
+                                                    | SyntaxElement.Expression(e) => SyntaxElement.Expression(traverse(e))
+                                                    | _ => y
+                                                  }
+                                                  PExpr.MacroCall(x, namespc, parms.Map(go_parm))
+
+                                              | PExpr.Spliced(e) => PExpr.Spliced(traverse(e))
+                                              | PExpr.Ellipsis(e) => PExpr.Ellipsis(traverse(e))
+                                              | PExpr.Quoted(quot) =>
+                                                  def inner = match (quot)
+                                                              {
+                                                                | SyntaxElement.Expression (body) => SyntaxElement.Expression(traverse(body))
+                                                                | SyntaxElement.ClassMember(cl) => SyntaxElement.ClassMember(trav_classmember(cl))
+                                                                | SyntaxElement.MatchCase
+                                                                | SyntaxElement.Function
+                                                                | SyntaxElement.Parameter
+                                                                | SyntaxElement.TType
+                                                                | SyntaxElement.TypeBuilder
+                                                                | SyntaxElement.FieldBuilder
+                                                                | SyntaxElement.MethodBuilder
+                                                                | SyntaxElement.PropertyBuilder
+                                                                | SyntaxElement.EventBuilder
+                                                                | SyntaxElement.RawToken
+                                                                | SyntaxElement.ParameterBuilder => quot
+                                                              }
+                                                  PExpr.Quoted (inner)
+
+                                              | PExpr.Typed | PExpr.TypedPattern | PExpr.TypedType => expr
+                                              | PExpr.Lambda => Util.ice ("Bad construction of PExpr.Lambda")
+                                              | PExpr.Base(ty) => PExpr.Base(ty.Map(traverse))
+                                            }
+                             call(true, recursed)
+
+                         // if return new expression, that signs user traverse it manually and create new, in this case return without traverse
+                         | exp => exp
+                       }
+
+      })
+    }
+
+ /**
+   * Allows recursive analysing and rewriting given parse tree expression easily. It calls supplied function on every
+   * node of tree returning its result as new node. Extended context is used, it may collect full parent expression information,
+   * or can collect only needed nodes
+   *
+   * [ctx] - when specified, then expression is first macro-expanded and expansion result is then further analyzed
+   * [expr] - expression to be processed
+   * [context] - context used to provide information on expression and its parents. null parameter means Top context.
+   * TraverseContext.Top(full_history : bool) - initializes top context, full history means collect all info, false only needed
+   * [call] - function called for each node of tree, first parameter hold the [context] semantics; second denotes if we are calling the
+   *          function before processing of subnodes (after == false) and after (after == true) - the function maybe called twice for each node;
+   *          third parameter passes the current node to operate on;
+   *          if call before returns new expression, it replace old expression and second call and traverse sub nodes is skipped
+   *          if we want to traverse sub nodes, in first call (after == false) we must necesseraly return null.
+   *          return value (used only from second/postprocess call) is used as new node value
+   */
+    public TraverseExprWithContext (ctx : option[Typer], expr : PExpr, context : TraverseContext,
+                                    call : TraverseContext * bool * PExpr -> PExpr) : PExpr
+    {
+      def context = context ?? TraverseContext.Top(false);
+
+      def traverse (x) { TraverseExprWithContext(ctx, x, context.Next(), call) }
+      context.nexpr = expr;
+
+      TraverseExprImpl(ctx, expr, call(context, _, _), traverse)
+    }
+
+  }
+}
