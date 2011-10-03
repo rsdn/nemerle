@@ -6,9 +6,18 @@ using System.Console;
 using System.Linq;
 using SCG = System.Collections.Generic;
 using LIST = System.Collections.Generic.List<int>;
+using SCG;
 
 namespace CSharpToNemerle.Test
 {
+    // test case for issue #93
+    public class TestA
+    {
+        public static IEnumerable<T> B<T>(IEnumerable<T> source)
+        {
+            return source.Select(i => i);
+        }
+    }
   /// docs for delegate
 
   [Description("this is delegate")]
@@ -63,6 +72,7 @@ namespace CSharpToNemerle.Test
 
     const string F = "Generic ";
 
+    
     public void DoSomething(int x, global::System.String p = "class: ")
     {
       if(x > 0) {
@@ -150,6 +160,15 @@ namespace CSharpToNemerle.Test
     string[] data2 = { "a", "b" };
 
     string[,] data3 = { { "a" }, { "b" } };
+
+    void TestGenericLambda()
+    {
+        var res = TestA.B(data);
+        foreach (var i in res)
+        {
+            Console.WriteLine("Element in enumerable is {0}", i);
+        }
+    }
 
     void TestAlias()
     {
@@ -337,3 +356,4 @@ namespace CSharpToNemerle.Test
     }
   }
 }
+
