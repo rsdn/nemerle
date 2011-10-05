@@ -115,7 +115,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (classMember == null)
 				return attr;
 
-			if ((classMember.Attributes & NemerleAttributes.Static) != 0)
+			if ((classMember.Attributes & NemerleModifiers.Static) != 0)
 				attr |= (uint)DROPDOWNFONTATTR.FONTATTR_ITALIC;
 			return attr;
 		}
@@ -127,7 +127,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (topDeclaration == null)
 				return attr;
 
-			if ((topDeclaration.Attributes & NemerleAttributes.Static) != 0)
+			if ((topDeclaration.Attributes & NemerleModifiers.Static) != 0)
 				attr |= (uint)DROPDOWNFONTATTR.FONTATTR_ITALIC;
 
 			if (topDeclaration is TopDeclaration.VariantOption)

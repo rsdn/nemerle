@@ -17,12 +17,13 @@ namespace Nemerle.VisualStudio.Helpers
 		readonly ProjectInfo _projectInfo;
 		readonly Dictionary<int, NemerleSourceButchEditHelper> _fileIndexMap = new Dictionary<int, NemerleSourceButchEditHelper>();
 		readonly string _description;
-		readonly string _ident = "  ";
+		readonly string _ident;
 
-		public NemerleProjectSourcesButchEditHelper(ProjectInfo projectInfo, string description)
+		public NemerleProjectSourcesButchEditHelper(ProjectInfo projectInfo, string description, string ident)
 		{
 			_projectInfo = projectInfo;
 			_description = description;
+			_ident       = ident;
 		}
 
 		#region IDisposable Members

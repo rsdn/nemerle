@@ -118,6 +118,7 @@ namespace Nemerle.VisualStudio.GUI.Wizards
 				replacementsDictionary["$IsMacroAttribute$"] = "True";
 				replacementsDictionary["$MacroPhase$"]       = "MacroPhase." + MacroPhase;
 				replacementsDictionary["$ValidOn$"]          = "MacroTargets." + this.ValidOn;
+				replacementsDictionary["$MacroReturnType$"]  = "void";
 			}
 
 			protected override IEnumerable<ParameterDef> GetParameterDefs()

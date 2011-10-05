@@ -507,7 +507,13 @@ namespace Nemerle.VisualStudio.Project
 					options.DefineConstant(define);
 			}
 
-			options.OutputFileName = this.ProjectNode.OutputFileName;
+			var projectFullName = ProjectFullName;
+			var outputFileName = this.ProjectNode.OutputFileName;
+			var outputPath = GetStringProp("OutputPath");
+			outputFileName = Path.IsPathRooted(outputFileName)
+				? outputFileName
+				: Path.Combine(Path.Combine(Path.GetDirectoryName(projectFullName), outputPath), outputFileName);
+			options.OutputFileName = Path.GetFullPath(outputFileName);
 			options.ColorMessages = false;
 			options.IgnoreConfusion = true;
 			var prop = GetStringProp("OutputType");
@@ -520,9 +526,9 @@ namespace Nemerle.VisualStudio.Project
 			options.GreedyReferences = GetBoolProp("GreedyReferences");
 			options.DoNotLoadStdlib = NoStdLib;
 			options.DoNotLoadMacros = NoStdMacros;
-			options.OutputFileName = ProjectName;
-			options.ProjectPath = ProjectFullName;
-			options.RootNamespace = RootNamespace;
+			options.OutputPath      = GetStringProp("OutputPath");
+			options.ProjectPath     = projectFullName;
+			options.RootNamespace   = RootNamespace;
 
 			return options;
 		}
@@ -1153,21 +1159,6 @@ namespace Nemerle.VisualStudio.Project
 
 			TryAddTextMarkers(newTasks);
 		}
-
-		//void Test(IGrouping<string, NemerleErrorTask>[] errGroups, int typeTreeVersion)
-		//{
-		//  Debug.WriteLine("  Engine.TypesTreeVersion: " + typeTreeVersion);
-		//  foreach (var g in errGroups)
-		//  {
-		//    Debug.WriteLine(g.Key);
-		//    foreach (var item in g)
-		//    {
-		//      var cm = (CompilerMessageForMethod)item.CompilerMessage;
-		//      var method = (MethodBuilderEx)cm.Member;
-		//      Debug.WriteLine("  " + method.TypesTreeVersion);
-		//    }
-		//  }
-		//}
 
 		#endregion
 

@@ -86,6 +86,34 @@ namespace Nemerle.VisualStudio
 			return text.Substring(0, text.Length - text.TrimStart(' ', '\t').Length);
 		}
 
+		public static string MakeIndentString(int indentCount, bool insertTabs, int indentSize, int tabSize)
+		{
+			string indent = null;
+
+			if (insertTabs)
+			{
+				var allIndentSize = indentCount   * indentSize;
+				var spacesNeeded  = allIndentSize % tabSize;
+				var tabsNeeded    = allIndentSize / tabSize;
+
+				if (tabsNeeded > 0 && spacesNeeded > 0)
+				{
+					var sb = new StringBuilder(tabsNeeded + spacesNeeded);
+					sb.Append('\t', tabsNeeded);
+					sb.Append(' ', spacesNeeded);
+					indent = sb.ToString();
+				}
+				else if (tabsNeeded > 0)
+					indent = new string('\t', tabsNeeded);
+				else if (spacesNeeded > 0)
+					indent = new string(' ', spacesNeeded);
+			}
+			else
+				indent = new string(' ', indentSize * indentCount);
+
+			return indent;
+		}
+
 		public static string MakeIndentString(this LanguagePreferences pref)
 		{
 			string indent = null;
@@ -95,16 +123,22 @@ namespace Nemerle.VisualStudio
 				var spacesNeeded = pref.IndentSize % pref.TabSize;
 				var tabsNeeded = pref.IndentSize / pref.TabSize;
 
-				if (tabsNeeded > 0)
+				if (tabsNeeded > 0 && spacesNeeded > 0)
+				{
+					var sb = new StringBuilder(tabsNeeded + spacesNeeded);
+					sb.Append('\t', tabsNeeded);
+					sb.Append(' ', spacesNeeded);
+					indent = sb.ToString();
+				}
+				else if (tabsNeeded > 0)
 					indent = new string('\t', tabsNeeded);
-
-				if (spacesNeeded > 0)
-					indent = new string('\t', tabsNeeded);
+				else if (spacesNeeded > 0)
+					indent = new string(' ', spacesNeeded);
 			}
 			else
 				indent = new string(' ', pref.IndentSize);
 
-			return indent ?? "";
+			return indent;
 		}
 
 		public static TextPoint GetCaretTextPoint(this IVsTextView textView)
@@ -297,7 +331,7 @@ namespace Nemerle.VisualStudio
 			if (decl == null)
 				return -1;
 
-			NemerleAttributes attrs = decl.Attributes;
+			NemerleModifiers attrs = decl.Attributes;
 
 			GlyphType kind =
 				decl is TopDeclaration.Delegate ? GlyphType.Delegate :
@@ -306,16 +340,16 @@ namespace Nemerle.VisualStudio
 				decl is TopDeclaration.Macro ? GlyphType.Macro :
 				decl is TopDeclaration.Variant ? GlyphType.Variant :
 				decl is TopDeclaration.VariantOption ? GlyphType.VariantOption :
-				Has(attrs, NemerleAttributes.Struct) ? GlyphType.Struct :
+				Has(attrs, NemerleModifiers.Struct) ? GlyphType.Struct :
 																							GlyphType.Class;
 
 			GlyphSubtype modifier =
-				Has(attrs, NemerleAttributes.Internal | NemerleAttributes.Protected) ?
+				Has(attrs, NemerleModifiers.Internal | NemerleModifiers.Protected) ?
 														 GlyphSubtype.ProtectedInternal :
-				Has(attrs, NemerleAttributes.Internal) ? GlyphSubtype.Internal :
-				Has(attrs, NemerleAttributes.Protected) ? GlyphSubtype.Protected :
-				Has(attrs, NemerleAttributes.Public) ? GlyphSubtype.Public :
-				Has(attrs, NemerleAttributes.Private) ? GlyphSubtype.Private :
+				Has(attrs, NemerleModifiers.Internal) ? GlyphSubtype.Internal :
+				Has(attrs, NemerleModifiers.Protected) ? GlyphSubtype.Protected :
+				Has(attrs, NemerleModifiers.Public) ? GlyphSubtype.Public :
+				Has(attrs, NemerleModifiers.Private) ? GlyphSubtype.Private :
 				decl is TopDeclaration.VariantOption ? GlyphSubtype.Public :
 																								 GlyphSubtype.Private;
 
@@ -335,18 +369,18 @@ namespace Nemerle.VisualStudio
 			else if (member is ClassMember.Function) kind = 12;
 			else if (member is ClassMember.Event) kind = 5;
 
-			NemerleAttributes attrs = member.Attributes;
+			NemerleModifiers attrs = member.Attributes;
 
 			modifier =
-				Has(attrs, NemerleAttributes.Internal) ? 1 :
-				Has(attrs, NemerleAttributes.Protected) ? 3 :
-				Has(attrs, NemerleAttributes.Public) ? 0 :
+				Has(attrs, NemerleModifiers.Internal) ? 1 :
+				Has(attrs, NemerleModifiers.Protected) ? 3 :
+				Has(attrs, NemerleModifiers.Public) ? 0 :
 				member.DefinedIn is TopDeclaration.VariantOption ? 0 :
 																											 4;
 			return kind * 6 + modifier;
 		}
 
-		private static bool Has(NemerleAttributes attrs, NemerleAttributes value)
+		private static bool Has(NemerleModifiers attrs, NemerleModifiers value)
 		{
 			return (attrs & value) == value;
 		}
@@ -416,26 +450,9 @@ namespace Nemerle.VisualStudio
 
 		public static string GetLabel(this ClassMember member)
 		{
-			return Nemerle.Compiler.Utils.AstUtils.GetMemberLabel(member);
+			return Nemerle.Compiler.Utils.AstUtils.GetMemberLabel(member).Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ');
 		}
-		/*
-				public static RegistryKey VSRegistry_RegistryRoot
-				{
-					get
-					{
-						Microsoft.VisualStudio.Shell.Interop.ILocalRegistry3 ILocalRegistry3 =
-							Microsoft.VisualStudio.Shell.Package.GetGlobalService(typeof(Microsoft.VisualStudio.Shell.Interop.SLocalRegistry))
-							as Microsoft.VisualStudio.Shell.Interop.ILocalRegistry3;
-						string root = null;
-						ILocalRegistry3.GetLocalRegistryRoot(out root);
 
-						if(root == null)
-							return null;
-
-						return Registry.LocalMachine.OpenSubKey(root);
-					}
-				}
-		*/
 		/// <summary>
 		/// Displays the specified message string.
 		/// </summary>

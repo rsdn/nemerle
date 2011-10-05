@@ -209,7 +209,9 @@ namespace Nemerle.VisualStudio.Project
 					source.SetText(code); // файл изменился с момента генерации по нему CodeDom-а! Восстанавливаем его.
 			}
 
-			using (var helper = new NemerleProjectSourcesButchEditHelper(projectInfo, "form designer update"))
+			var indent = projectInfo.LanguageService.Preferences.MakeIndentString();
+
+			using (var helper = new NemerleProjectSourcesButchEditHelper(projectInfo, "form designer update", indent))
 			{
 				var definedIn = changes.Declaration.UserData["Member"] as TopDeclaration;
 				var initializeComponent = changes.InitializeComponent;

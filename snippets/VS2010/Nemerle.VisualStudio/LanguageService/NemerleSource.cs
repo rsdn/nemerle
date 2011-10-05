@@ -862,14 +862,11 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			string filePath = GetFilePath();
 			ProjectInfo projectInfo = ProjectInfo.FindProject(filePath);
-			IIdeEngine engine;
-			if (projectInfo != null)
-			{
-				engine = projectInfo.Engine;
-			}
-			else engine = NemerleLanguageService.DefaultEngine;
+			IIdeEngine engine = projectInfo != null ? projectInfo.Engine : NemerleLanguageService.DefaultEngine;
+
 			ReformatSpanInternal(mgr, span, engine, filePath, this);
 		}
+
 		private static void ReformatSpanInternal(EditArray mgr, TextSpan span, IIdeEngine engine, string filePath, IIdeSource src)
 		{
 			var result = Formatter.BeginFormat(span.iStartLine + 1,
