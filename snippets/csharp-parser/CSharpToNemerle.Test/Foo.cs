@@ -6,9 +6,24 @@ using System.Console;
 using System.Linq;
 using SCG = System.Collections.Generic;
 using LIST = System.Collections.Generic.List<int>;
+using SCG;
 
 namespace CSharpToNemerle.Test
 {
+    // test case for issue #93
+    public class TestA
+    {
+        public static IEnumerable<T> B<T>(IEnumerable<T> source)
+        {
+            return source.Select(i => i);
+        }
+
+        public static IEnumerable<T> C<T>(IEnumerable<T> source)
+        {
+            return source.Select(delegate {return default(T);});
+        }
+
+    }
   /// docs for delegate
 
   [Description("this is delegate")]
@@ -63,6 +78,7 @@ namespace CSharpToNemerle.Test
 
     const string F = "Generic ";
 
+    
     public void DoSomething(int x, global::System.String p = "class: ")
     {
       if(x > 0) {
@@ -150,6 +166,20 @@ namespace CSharpToNemerle.Test
     string[] data2 = { "a", "b" };
 
     string[,] data3 = { { "a" }, { "b" } };
+
+    void TestGenericLambda()
+    {
+        var res = TestA.B(data);
+        foreach (var i in res)
+        {
+            Console.WriteLine("Element in enumerable is {0}", i);
+        }
+        var res = TestA.C(data);
+        foreach (var i in res)
+        {
+            Console.WriteLine("Element in enumerable is {0}", i);
+        }
+    }
 
     void TestAlias()
     {
@@ -258,6 +288,14 @@ namespace CSharpToNemerle.Test
       var c2 = x => x == 10;
       Console.WriteLine(c1.GetType());
       Console.WriteLine(c2.GetType());
+      Func<int, string, string> f0 = delegate { return "OK"; };
+      Console.WriteLine(f0(42, "42"));
+
+      Func<int, string> f = delegate { return "OK"; };
+      Console.WriteLine(f(42));
+   
+      Func<string> f2 = delegate { return "OK"; };
+      Console.WriteLine(f2());    
     }
 
     void TestDictionaryInitializer()
@@ -337,3 +375,4 @@ namespace CSharpToNemerle.Test
     }
   }
 }
+
