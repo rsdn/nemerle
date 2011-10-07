@@ -167,15 +167,17 @@ namespace CSharpToNemerle.Test
 
     string[,] data3 = { { "a" }, { "b" } };
 
+      int[] data4 = { 1, 2, 3};
+
     void TestGenericLambda()
     {
-        var res = TestA.B(data);
+        var res = TestA.B(data2);
         foreach (var i in res)
         {
             Console.WriteLine("Element in enumerable is {0}", i);
         }
-        var res = TestA.C(data);
-        foreach (var i in res)
+        var res2 = TestA.C(data4);
+        foreach (var i in res2)
         {
             Console.WriteLine("Element in enumerable is {0}", i);
         }
@@ -296,6 +298,9 @@ namespace CSharpToNemerle.Test
    
       Func<string> f2 = delegate { return "OK"; };
       Console.WriteLine(f2());    
+
+      Func<int, string> f3 = x => { return x.ToString(); };
+      Console.WriteLine(f3(42));
     }
 
     void TestDictionaryInitializer()
