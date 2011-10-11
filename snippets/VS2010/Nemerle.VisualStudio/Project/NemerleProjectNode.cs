@@ -1,4 +1,4 @@
-using System;
+ï»¿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -355,10 +355,9 @@ namespace Nemerle.VisualStudio.Project
 			if (startupProjects.Length < 1)
 				throw new ApplicationException("No startup projects.");
 
-			var startupProjectFullName = Path.Combine(Path.GetDirectoryName(dte.Solution.FullName), (string)startupProjects[0]);
-			var nemerleOAProject2 = dte.Solution.FindProjectItem(startupProjectFullName);
-			var nemerleOAProject = dte.Solution.FindProjectItem(startupProjectFullName) as NemerleOAProject;
-
+			var startupProjectFullName = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(dte.Solution.FullName), (string)startupProjects[0]));
+			NemerleOAProject nemerleOAProject = GetProject(dte, startupProjectFullName) as NemerleOAProject;
+			
 			if (nemerleOAProject == null)
 				return false;
 
@@ -439,6 +438,17 @@ namespace Nemerle.VisualStudio.Project
 				DeleteTempCmdFile(process, cmdFilePath);
 
 			return true;
+		}
+
+		private static EnvDTE.Project GetProject(EnvDTE.DTE dte, string startupProjectFullName)
+		{
+			// FIXME! Ð¡Ð»ÐµÐ´ÑƒÑŽÑ‰Ð°Ñ ÑÑ‚Ñ€Ð¾ÐºÐ° Ð¿ÐµÑ€ÐµÑÑ‚Ð°Ð»Ð° Ñ€Ð°Ð±Ð»Ð¾Ñ‚Ð°Ñ‚ÑŒ Ð² VS 2010!
+			//nemerleOAProject = dte.Solution.FindProjectItem(startupProjectFullName) as NemerleOAProject; 
+			foreach (EnvDTE.Project project in dte.Solution.Projects)
+				if (Utils.Eq(Path.GetFullPath(project.FullName), startupProjectFullName))
+					return project;
+
+			return null;
 		}
 
 		static void DeleteTempCmdFile(OsProcess process, string cmdFilePath)
@@ -1543,7 +1553,7 @@ namespace Nemerle.VisualStudio.Project
 
 		#region Methods
 
-		//TODO: VladD2: Ðåàëèçîâàòü êîä-äîì-ïðîâàéäåð äëÿ ïðîåêòà.
+		//TODO: VladD2: Ð ÐµÐ°Ð»Ð¸Ð·Ð¾Ð²Ð°Ñ‚ÑŒ ÐºÐ¾Ð´-Ð´Ð¾Ð¼-Ð¿Ñ€Ð¾Ð²Ð°Ð¹Ð´ÐµÑ€ Ð´Ð»Ñ Ð¿Ñ€Ð¾ÐµÐºÑ‚Ð°.
 
 		//private Microsoft.VisualStudio.Designer.Interfaces.IVSMDCodeDomProvider _codeDomProvider;
 		//
