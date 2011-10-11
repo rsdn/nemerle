@@ -5,7 +5,7 @@ IF "%Type%"=="" set Type=Debug
 set NemerleBin=%~dp0bin\%Type%
 set NemerleRoot=%~dp0.
 set GacUtil="%VS90COMNTOOLS%..\..\SDK\v2.0\Bin\gacutil.exe"
-set NemerleInstall=%ProgramFiles%\Nemerle
+set NemerleInstall=%ProgramFiles%\Nemerle\Net-3.5
 
 IF NOT "%PROCESSOR_ARCHITECTURE%" == "x86" goto b64
 IF NOT "%PROCESSOR_ARCHITEW6432%" == "" goto b64
@@ -74,7 +74,7 @@ copy /Y "%NemerleBin%\*.xml" "%NemerleInstall%\*.xml"
 
 set NemerleMSBuildTargets=%NemerleInstall%\Nemerle.MSBuild.targets
 
-@echo Add NemerleTarget=%NemerleMSBuildTargets% 
+@echo Add NemerleTarget=%NemerleMSBuildTargets%
 @echo     into HKLM\SOFTWARE\Microsoft\VisualStudio\9.0\MSBuild\SafeImports
 reg.exe add HKLM\SOFTWARE\Microsoft\VisualStudio\9.0\MSBuild\SafeImports /v NemerleTarget /d "%NemerleInstall%\Nemerle.MSBuild.targets" /f
 
