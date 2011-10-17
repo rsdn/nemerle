@@ -1,0 +1,383 @@
+﻿/*
+ * Copyright (c) 2003-2008 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
+using Nemerle.IO;
+using Nemerle.Utility;
+using System.IO;
+using IKVM.Reflection;
+
+using PT = Nemerle.Compiler.Parsetree;
+using SR = IKVM.Reflection;
+using SRE = IKVM.Reflection.Emit;
+using SCG = System.Collections.Generic;
+
+namespace Nemerle.Compiler.Sre
+{
+  /// LibRefManager for the referenced libraries
+  public class LibraryReferenceManager : IMetadataReader, ICompilerContextBoundObject
+  {
+    public Manager : ManagerClass { get; }
+
+    public NameTree : NamespaceTree { get; }
+
+    // a little hack to prevent AddBuildins() calling in ExternalTypeInfo
+    public add_buildins : bool { get; set; }
+
+    // -- CONSTRUCTORS -----------------------------------------------------
+
+    /// constructor. Always load the Framework core library.
+    public this(
+      [NotNull] manager         : ManagerClass,
+      [NotNull] systemTypeCache : SystemTypeClass,
+      [NotNull] lib_paths       : list [string])
+    {
+      Manager = manager;
+      NameTree = manager.NameTree;
+
+      def assembly_dir(t) { DirectoryOfCodebase(getAssemblyLocation(t.Assembly)); }
+
+      // include current directory and directories where
+      // mscorlib.dll, System.dll and Nemerle.dll reside
+      _lib_path =
+           assembly_dir (typeof (Nemerle.Core.AssertionException))
+        :: System.Environment.CurrentDirectory
+        :: assembly_dir (typeof (System.Text.RegularExpressions.Match))
+        :: assembly_dir (typeof (LibraryReferenceManager))
+        :: assembly_dir (typeof (System.Object))
+        :: lib_paths;
+
+      //FIXME: unsubscribe event
+      System.AppDomain.CurrentDomain.ReflectionOnlyAssemblyResolve += resolveDependentAssembly;
+    }
+
+
+    // -- PUBLIC METHODS ---------------------------------------------------
+
+    /// Stores the referenced library for later lookup by the namespaces. Also
+    /// add transitive closure of libraries needed by given assembly.
+    public AddLibrary (name : string) : void
+    {
+      def assembly = LookupAssembly(name);
+
+      if (assembly == null)
+      {
+        Message.Error ($"cannot find assembly `$name'");
+        throw AssemblyFindException()
+      }
+      else if (_loaded_assemblies_by_name.Contains(assembly.FullName))
+      {
+        when (_assemblies_loaded_by_hand.Contains(assembly.FullName) && !Manager.Options.PersistentLibraries)
+          Message.Warning ($"assembly `$name' already loaded");
+
+        _assemblies_loaded_by_hand[assembly.FullName] = 42;
+      }
+      else
+      {
+        _assemblies_loaded_by_hand[assembly.FullName] = 42;
+        AddAssembly (assembly)
+      }
+    }
+
+    public AddAssembly (assembly : SR.Assembly) : void
+    {
+      unless (_loaded_assemblies_by_name.Contains (assembly.FullName))
+      {
+        _loaded_assemblies_by_name [assembly.FullName] = LibraryReference (this, assembly); // store the pre-loaded reference
+      }
+    }
+
+    /// Remove assembly file name from URL returned by Assembly.CodeBase.
+    public static DirectoryOfCodebase (mutable path : string) : string
+    {
+      path = Path.GetDirectoryName (path);
+
+      // hack for mono returning location in the GAC
+      def mono_gac = path.IndexOf ("mono/gac");
+      path =
+        if (mono_gac != -1)
+        {
+          if (path.LastIndexOf ("Nemerle") > mono_gac)
+            path.Substring (0, mono_gac + 5) + "nemerle/"
+          else if (path.LastIndexOf ("/2.0.") > mono_gac)
+            path.Substring (0, mono_gac + 5) + "2.0/"
+          else
+            path.Substring (0, mono_gac + 5) + "1.0/"
+        }
+        else path;
+
+      path
+    }
+
+    protected virtual assemblyLoad(name : string) : SR.Assembly
+    {
+      SR.Assembly.ReflectionOnlyLoad(name)
+    }
+
+    protected virtual assemblyLoadFrom (path : string) : SR.Assembly
+    {
+      SR.Assembly.ReflectionOnlyLoadFrom(path)
+    }
+
+    public virtual getAssemblyLocation (assembly : SR.Assembly) : string
+    {
+      System.Uri(assembly.CodeBase).LocalPath
+    }
+
+    public virtual getAssemblyLocation (assembly : SR.AssemblyName) : string
+    {
+      System.Uri(assembly.CodeBase).LocalPath
+    }
+
+    /* -- PRIVATE METHODS -------------------------------------------------- */
+
+    private LookupAssembly (name : string) : SR.Assembly
+    {
+      def assembly_by_name (path : string)
+      {
+        try
+        {
+          def ext = Path.GetExtension(path);
+
+          def path =  match (ext.ToLower ())
+                      {
+                        | ".dll" | ".exe" => path
+                        | _ => path + ".dll"
+                      };
+
+          if (File.Exists(path))
+            assemblyLoadFrom (path)
+          else
+            null
+        }
+        catch
+        { | _ is FileNotFoundException => null
+          | _ is System.ArgumentException => null
+        }
+      }
+
+      match (name)
+      {
+        | x when x.IndexOf ('/') != -1 || x.IndexOf ('\\') != -1 =>
+          assembly_by_name (x)
+
+        | x when x.IndexOf (',') != -1 =>
+          try { assemblyLoad (x) }
+          catch { | _ is FileNotFoundException => null }
+
+        | _ =>
+          def lookup(libs)
+          {
+            | lib :: libs =>
+              def ret = assembly_by_name(Path.Combine(lib, name));
+              if (ret == null) lookup(libs)
+              else ret
+
+            | [] => null
+          }
+          lookup(_lib_path);
+      }
+    }
+
+    private resolveDependentAssembly(_ : object, args : System.ResolveEventArgs) : SR.Assembly
+    {
+      LookupAssembly(args.Name)
+    }
+
+    public LoadLibrariesContents () : void
+    {
+      foreach ((key, lib) when lib != null in _loaded_assemblies_by_name.KeyValuePairs)
+      {
+        LoadTypesFrom(lib);
+        _loaded_assemblies_by_name [key] = null;
+      }
+    }
+
+    public IsAssemblyLoaded(assemblyFullName : string) : bool
+    {
+      _loaded_assemblies_by_name.Contains(assemblyFullName)
+    }
+
+    // -- PRIVATE VARIABLES ------------------------------------------------
+
+    /// List of directories we look for assemblies in.
+    private _lib_path : list[string];
+
+    // the non-null values are not-yet processed references, which still need to load contents (types and macros)
+    private _loaded_assemblies_by_name : Hashtable[string, LibraryReference] = Hashtable(20);
+    private _assemblies_loaded_by_hand : Hashtable[string, int] = Hashtable(20);
+    private namespace_nodes : Hashtable[string, NamespaceTree.Node] = Hashtable(300);
+
+    // -- TYPE CACHE -----
+
+    internal LoadTypesFrom (lib : LibraryReference) : void
+    {
+      def assembly = lib.Assembly;
+
+      try
+      {
+        def types = if (lib.IsFriend)
+          assembly.GetTypes().Filter(t => t.IsPublic || t.IsNotPublic
+            || t.IsNestedPublic ||t.IsNestedFamORAssem || t.IsNestedAssembly).ToArray()
+        else
+          assembly.GetExportedTypes();
+
+        foreach (t in types)
+        {
+  //        Message.Debug (name);
+          def e = SreExternalType (lib, t);
+
+          def (ns_node, path_to_type) = framework_nesting (t);
+
+          def mainnode = ns_node.Path (path_to_type);
+
+          when(e.CustomAttributes.ExtensionAttribute is Some(_))
+            NameTree.RegisterForLoadExtensions(mainnode);
+
+          def tinfo_cache =
+            // check if we have met such type before
+            match (mainnode.Value)
+            {
+              | NotLoaded(x)      => NamespaceTree.TypeInfoCache.NotLoadedList([e, x]);
+              | NotLoadedList(xs) => NamespaceTree.TypeInfoCache.NotLoadedList(e :: xs);
+              | _                 => NamespaceTree.TypeInfoCache.NotLoaded(e);
+            };
+
+          // assign wrappers for future loading of typecons
+          mainnode.Value = tinfo_cache;
+        }
+      }
+      catch { | e => Message.Error ($"Can't load types from '$assembly'. Error: $(e.Message)."); }
+    }
+
+    internal static CacheTypeInfo (t : System.Type, tc : TypeInfo, node : NamespaceTree.Node) : void
+    {
+      match (node.Value)
+      {
+        | NamespaceTree.TypeInfoCache.NotLoaded (e) =>
+          e.Type = tc;
+          assert2(e.Sre().SystemType.Equals(t));
+
+        | NamespaceTree.TypeInfoCache.NotLoadedList (es) =>
+          foreach (e when e.Sre().SystemType.Equals(t) in es)
+          {
+            e.Type = tc;
+            break;
+          }
+
+        // this happens when we load external protected type in GetInternalType
+        // we need to cache to prevent looping
+        | NamespaceTree.TypeInfoCache.No =>
+          node.Value = NamespaceTree.TypeInfoCache.Cached (tc)
+
+        | NamespaceReference | MacroCall =>
+          Util.ice ("wanted to cache in wrong place - value " + t.TypeFullName ())
+
+        | Cached | CachedAmbiguous =>
+          Util.ice ("wanted to cache cached value " + t.TypeFullName ())
+      }
+    }
+
+    internal static GetInternalType (lib : LibraryReference, t : System.Type,
+                                     node : NamespaceTree.Node) : TypeInfo
+    {
+      match (node.Value)
+      {
+        | NamespaceTree.TypeInfoCache.Cached(tc) => tc
+        | NamespaceTree.TypeInfoCache.No => lib.ConstructTypeInfo (t, node, TypeCustomAttributes(t));
+        | _ => Util.ice ("not loaded internal type... " + t.Assembly.CodeBase + ":" + t.TypeFullName ())
+      }
+    }
+
+    internal cache_namespace_node (namespc : string) : NamespaceTree.Node
+    {
+      def nd = NameTree.ExactPath (NString.Split (namespc, array ['.']));
+      mutable assigned = nd;
+      while (assigned != null)
+      {
+        when (assigned.Value is NamespaceTree.TypeInfoCache.No)
+          assigned.Value = NamespaceTree.TypeInfoCache.NamespaceReference ();
+
+        assigned = assigned.Parent;
+      }
+
+      namespace_nodes.Add (namespc, nd);
+      nd
+    }
+
+    internal framework_nesting (t : System.Type) : NamespaceTree.Node * list [string]
+    {
+      unless(IsAssemblyLoaded(t.Assembly.FullName))
+      {
+        AddAssembly(t.Assembly);
+        LoadLibrariesContents();
+      }
+
+      def loop (t : System.Type, acc)
+      {
+        def dt = t.DeclaringType;
+
+        if (dt != null)
+          loop (dt, Util.StripGenericMark (dt.Name) :: acc)
+        else
+        {
+          def namespc = if (t.Namespace != null) t.Namespace else "";
+
+          match (namespace_nodes.Get (namespc))
+          {
+            | Some (nd) => (nd, acc)
+            | None      => (cache_namespace_node (namespc), acc)
+          }
+        }
+      }
+      // workaround mono bug #63768
+      if (t.IsPointer)
+      {
+        def find_name (acc, t : System.Type)
+        {
+          if (t.IsPointer)
+            find_name (acc + "*", t.GetElementType ())
+          else
+            loop (t, [t.Name + acc])
+        }
+
+        find_name ("", t)
+      }
+      else loop (t, [Util.StripGenericMark (t.Name)])
+    }
+
+    public AddBuildins(_ : TypeInfo) : void
+    {
+      | tc is LibraryReference.ExternalTypeInfo => tc.AddBuiltins();
+      | _ => ()
+    }
+  }
+} /* namespace */
