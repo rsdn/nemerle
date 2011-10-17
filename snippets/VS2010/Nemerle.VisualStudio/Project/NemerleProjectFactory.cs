@@ -1,15 +1,17 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
+using System.Windows.Forms;
 using System.Xml.Linq;
+
+using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Project;
+using Microsoft.VisualStudio.Shell.Interop;
+
+using Nemerle.VisualStudio.GUI;
 
 using IOleServiceProvider = Microsoft.VisualStudio.OLE.Interop.IServiceProvider;
-using Microsoft.VisualStudio.Shell.Interop;
-using Microsoft.VisualStudio;
-using System.IO;
-using Nemerle.VisualStudio.GUI;
-using System.Windows.Forms;
-using System.Text.RegularExpressions;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -43,10 +45,16 @@ namespace Nemerle.VisualStudio.Project
 			throw new NotImplementedException();
 		}
 
-		const string ToolsVersion = "4.0";
-		const string OldNemerlePath = @"$(ProgramFiles)\Nemerle";
-		const string NemerlePath = @"$(ProgramFiles)\Nemerle\Net-4.0";
-		const string TargetFrameworkVersion = "v4.0";
+		static class Default
+		{
+			private const string FrameworkVersion = "4.0";
+			public const string ToolsVersion = "4.0";
+			public const string NemerleVersion = "Net-" + FrameworkVersion;
+			public const string NemerleBinPathRoot = @"$(ProgramFiles)\Nemerle";
+			public static readonly string[] OldNemerlePropertyValues = new[] { @"$(ProgramFiles)\Nemerle", @"$(ProgramFiles)\Nemerle\Net-3.5", @"$(ProgramFiles)\Nemerle\Net-4.0" };
+			public const string NemerleProperty = @"$(NemerleBinPathRoot)\$(NemerleVersion)";
+			public const string TargetFrameworkVersion = "v" + FrameworkVersion;
+		}
 
 		public int UpgradeProject(string sourceProjectFilePath, uint fUpgradeFlag, string bstrCopyLocation, out string upgradedFullyQualifiedFileName, IVsUpgradeLogger pLogger, out int pUpgradeRequired, out Guid pguidNewProjectFactory)
 		{
@@ -86,34 +94,63 @@ namespace Nemerle.VisualStudio.Project
 
 		static bool IsNeedUpdateNemerleProperty(XElement nemerleProperty)
 		{
-			return Utils.Eq(nemerleProperty.Value, OldNemerlePath) || string.IsNullOrWhiteSpace(nemerleProperty.Value);
+			var value = nemerleProperty.Value;
+
+			if (string.IsNullOrEmpty(value))
+				return true;
+
+			foreach (var oldNemerlePath in Default.OldNemerlePropertyValues)
+				if (Utils.Eq(value, oldNemerlePath))
+					return true;
+
+			return false;
 		}
 
 		private static void UpgradeProject(string sourceProjectFilePath, string destProjectFilePath, IVsUpgradeLogger pLogger, string projectName)
 		{
 			var projectData = new ProjectUpgradeHelper(sourceProjectFilePath);
 
-			projectData.ToolsVersion.Value = ToolsVersion;
+			projectData.ToolsVersion.Value = Default.ToolsVersion;
+
+			if (string.IsNullOrEmpty(projectData.NemerleBinPathRoot.Value))
+				projectData.NemerleBinPathRoot.Value = Default.NemerleBinPathRoot;
+			else if (!Utils.Eq(projectData.NemerleBinPathRoot.Value, Default.NemerleBinPathRoot))
+				pLogger.LogMessage((uint)__VSUL_ERRORLEVEL.VSUL_WARNING, projectName, sourceProjectFilePath, "The NemerleBinPathRoot property changed by user. You must update it manually.");
+
+			projectData.NemerleVersion.Value = Default.NemerleVersion;
 
 			if (IsNeedUpdateNemerleProperty(projectData.NemerleProperty))
-				projectData.NemerleProperty.Value = NemerlePath;
-			else if (!Utils.Eq(projectData.NemerleProperty.Value, NemerlePath))
+				projectData.NemerleProperty.Value = Default.NemerleProperty;
+			else if (!Utils.Eq(projectData.NemerleProperty.Value, Default.NemerleProperty))
 				pLogger.LogMessage((uint)__VSUL_ERRORLEVEL.VSUL_WARNING, projectName, sourceProjectFilePath, "The Nemerle property changed by user. You must update it manually.");
-				
-			projectData.TargetFrameworkVersion.Value = TargetFrameworkVersion;
+
+			projectData.TargetFrameworkVersion.Value = Default.TargetFrameworkVersion;
 
 			projectData.NemerleProperty.Document.Save(destProjectFilePath);
+		}
+
+		private static bool IsNeedUpdateNemerleVersion(ProjectUpgradeHelper projectData)
+		{
+			return projectData.NemerleVersion.Value != Default.NemerleVersion;
 		}
 
 		private static void BackupProjectForUpgrade(string sourceProjectFilePath, IVsUpgradeLogger pLogger, ref string destProjectFilePath, string backupedProject, string projectName)
 		{
 			var dlg = new PromptProjectRenameForm(projectName);
-			var result = dlg.ShowDialog();
+			Form parent = null;
+			foreach (Form item in Application.OpenForms)
+				if (item.GetType().Name == "UpgradeWizard_Dialog")
+				{
+					parent = item;
+					break;
+				}
+
+			var result = dlg.ShowDialog(parent);
 
 			if (result == DialogResult.Yes)
 			{
 				destProjectFilePath = Path.Combine(Path.GetDirectoryName(sourceProjectFilePath), dlg.ProjectName + Path.GetExtension(sourceProjectFilePath));
-				if (string.Equals(sourceProjectFilePath, destProjectFilePath, StringComparison.InvariantCultureIgnoreCase))
+				if (Utils.Eq(sourceProjectFilePath, destProjectFilePath))
 					throw new ApplicationException("Can't rename project to itself name.");
 
 				File.Copy(sourceProjectFilePath, destProjectFilePath);
@@ -133,7 +170,7 @@ namespace Nemerle.VisualStudio.Project
 		static bool NemerlePropertyHasCondition(XElement property)
 		{
 			var condition = property.Attribute("Condition");
-			
+
 			if (condition == null)
 				return false;
 
@@ -150,13 +187,20 @@ namespace Nemerle.VisualStudio.Project
 
 			var projectData = new ProjectUpgradeHelper(projectFileName);
 
-			if (projectData.ToolsVersion == null || ParseVersion(projectData.ToolsVersion.Value).Major < 4)
+      var version = ParseVersion(projectData.ToolsVersion.Value);
+      if (projectData.ToolsVersion == null || version.Major != 4 && version.Minor != 0)
 				return VSConstants.S_OK;
 
 			if (IsNeedUpdateNemerleProperty(projectData.NemerleProperty))
 				return VSConstants.S_OK;
 
-			if (!Utils.Eq(projectData.TargetFrameworkVersion.Value, TargetFrameworkVersion))
+			if (IsNeedUpdateNemerleVersion(projectData))
+				return VSConstants.S_OK;
+
+			if (string.IsNullOrEmpty(projectData.NemerleBinPathRoot.Value))
+				return VSConstants.S_OK;
+
+			if (!Utils.Eq(projectData.TargetFrameworkVersion.Value, Default.TargetFrameworkVersion))
 				return VSConstants.S_OK;
 
 			pUpgradeRequired = 0;

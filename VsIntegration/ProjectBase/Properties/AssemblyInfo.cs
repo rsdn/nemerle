@@ -19,8 +19,8 @@ using System.Resources;
 
 [assembly: Guid("084954ec-af04-4ea3-b166-b1fced604dc8")]
 
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 
 [assembly: SecurityPermissionAttribute(SecurityAction.RequestMinimum, Assertion = true)]
 [assembly: IsolatedStorageFilePermissionAttribute(SecurityAction.RequestMinimum, Unrestricted = true)]
