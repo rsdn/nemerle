@@ -68,18 +68,23 @@ namespace Nemerle.VisualStudio.Project
 
 		protected override void WarningHandler(object sender, BuildWarningEventArgs warningEvent)
 		{
-			QueueOutputText(MessageImportance.High, GetFormattedErrorMessage(Path.GetFullPath(warningEvent.File), 
+			QueueOutputText(GetFormattedErrorMessage(Path.GetFullPath(warningEvent.File), 
 				warningEvent.LineNumber, warningEvent.ColumnNumber, MsgKind.Warning, warningEvent.Code, warningEvent.Message));
 		}
 
 		protected override void ErrorHandler(object sender, BuildErrorEventArgs errorEvent)
 		{
-			QueueOutputText(MessageImportance.High, GetFormattedErrorMessage(Path.GetFullPath(errorEvent.File),
+			QueueOutputText(GetFormattedErrorMessage(Path.GetFullPath(errorEvent.File),
 				errorEvent.LineNumber, errorEvent.ColumnNumber, MsgKind.Error, errorEvent.Code, errorEvent.Message));
 		}
 
 		protected override void MessageHandler(object sender, BuildMessageEventArgs messageEvent)
 		{
+			if (messageEvent.Importance == MessageImportance.High && messageEvent is TaskCommandLineEventArgs)
+			{
+				QueueOutputEvent(MessageImportance.Normal, messageEvent);
+				return;
+			}
 			base.MessageHandler(sender, messageEvent);
 		}
 
