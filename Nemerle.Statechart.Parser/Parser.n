@@ -1,0 +1,338 @@
+﻿using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Peg;
+using Nemerle;
+using System.Diagnostics;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Nemerle.Statechart;
+
+namespace Nemerle.Statechart
+{
+  
+  using StateNode;  
+  using TransitionNode;
+  using PseudoStateAstNode;
+  using GuardNode;
+  
+  public partial class FsmParser
+  {
+    fully_qualified(id : NToken, tail : List[NToken]) : NameIdentifier
+    {
+      def pos = id.StartPos;
+      def tail = tail |> GetText(_);
+      match (GetText(id), tail)
+      {
+        | (s, []) => NameIdentifier.Name(pos, s)
+        | (s, tail) => def lst = s :: tail;
+            def joined = string.Join(".", lst);
+            NameIdentifier.QualifiedName(pos, joined, lst)
+      }
+    }
+
+    simple_guard(tok : NToken) : GuardNode
+    {
+      create_guard(tok)
+    }
+    
+    simple_target(name : NameIdentifier) : TargetType
+    {
+      def get_target(p, n)
+      {
+        match (n)
+        {
+          | "H"
+          | "h" => TargetType.History(name.pos, StateNode.History(0, HistoryType.Shallow, None(), p, true))
+          | "history"  => TargetType.History(name.pos, p : State)
+          | "h*" 
+          | "H*" => TargetType.History(name.pos, StateNode.History(0, HistoryType.Deep, None(), p, true))
+          | "final"
+          | "$0"  => TargetType.Final(name.pos, Final(null))
+          | "terminate"
+          | "x"
+          | "X" => TargetType.PseudoState(name.pos, PseudoStateAstNode.Terminate(p, 0))
+          | x when (x.IndexOf('(') != -1 ) => TargetType.Named(name.pos, p, name.TargetName.Trim('(',')'))
+          | _ => TargetType.State(name.pos, State(n))
+        }
+      }
+      
+      match (name)
+      {
+        | Name(name = n) => get_target(null, n)
+        | QualifiedName(parts = n) => def (tar, lst) = n.SplitLast();
+            def st = string.Join(".", lst);
+            TargetType.Qualified(name.pos, st, get_target(State(st), tar))
+      }
+    }
+    
+    transition_mark(GuardNode : option[GuardNode], act : option[Actions], target : TargetType) : StateNode.Transition
+    {
+      Transition(GuardNode, act, target)
+    }
+    
+    default_transition(act : option[Actions], target : TargetType) : Default
+    {
+      // TODO: проверка с выводом ошибки в случае если не в состояние
+      match (target)
+      {
+        | State(st) => Default(act, st)
+        | _ => Default(act, null)
+      }
+    }
+    
+    events(id : NToken, evt : List[NToken]) : List[Event]
+    {
+      def lst = id :: evt.NToList();
+      def lst = lst |> create_event(_);
+      lst.ToList()
+    }
+    
+    simple_transition(evt : List[Event], tran : StateNode.Transition) : StateNode.Transition
+    {
+      Transition(evt, tran)
+    }
+
+    simp_transition(tran : StateNode.Transition) : StateNode
+    {
+      tran
+    }
+    
+    simple_attrs(attr : List[List[NToken]]) : List[NToken]
+    {
+      attr.Flatten().ToList()
+    }
+    
+    is_in_state(tok : NToken, _ : NToken, st : NToken, _ : NToken) : GuardNode
+    {
+      GuardNode.InState(tok.StartPos, GetText(st))
+    }
+    
+    attributes(attr : List[NToken]) : List[StateAttribute]
+    {
+      def get_attr(at)
+      {
+        match (GetText(at))
+        {
+          | "Initial" => StateAttribute.Initial(at.StartPos)
+          | str => StateAttribute.Unknown(at.StartPos, str)
+        }
+      }
+      
+      attr.Map(get_attr).ToList()
+    }
+
+    trans_act_list(lst : List[NToken]) : Actions
+    {
+      create_action(lst)
+    }
+    
+    block_action_list(lst : List[NToken]) : Actions
+    {
+      create_action(lst)
+    }
+    
+    empty_action_list(tok : NToken) : Actions
+    {
+      Actions(tok.StartPos, [])
+    }
+    
+    delim_action_list(lst : List[NToken]) : Actions
+    {      
+      create_action(lst)
+    }
+          
+    entry(attr : option[List[NToken]], key : NToken, acts : option[Actions]) : Entry
+    {
+      def acts = acts.WithDefault(Actions(key.StartPos, []));
+      def attr = get_action_attr(attr.MapDefault(_.NToList(), []));
+      Entry(key.StartPos, attr, acts)
+    }
+
+    exit(attr : option[List[NToken]], key : NToken,  acts : option[Actions]) : Exit
+    {
+      def acts = acts.WithDefault(Actions(key.StartPos, []));
+      def attr = get_action_attr(attr.MapDefault(_.NToList(), []));
+      Exit(key.StartPos, attr, acts)
+    }
+
+    get_action_attr(attr : list[NToken]) : ActionFlags
+    {
+      def get_attr(at, res)
+      {
+        match (GetText(at))
+        {
+          | _ => (ActionFlags.None | res)
+        }
+      }
+      
+      attr.FoldLeft(ActionFlags.None, get_attr)
+    }
+    
+    do_activity(attr : option[List[NToken]], key : NToken, acts : Actions) : DoActivity
+    {
+      def get_attr(at, res)
+      {
+        def flag = match (GetText(at))
+        {
+          | "Concurrently" => ActivityFlag.Concurrently
+          | "NoWait" => ActivityFlag.NoWaitCancel
+          | "NotLong" => ActivityFlag.NotLong
+          | _ => ActivityFlag.None
+        }
+        res | flag
+      }
+      
+      def flags = attr.MapDefault(_.NToList(), []);
+      def flags = flags.FoldLeft(ActivityFlag.None, get_attr);
+      DoActivity(key.StartPos, acts, flags)
+    }
+    
+    internal_trans(evt : NToken, GuardNode : option[GuardNode], acts : Actions) : InternalTransition
+    {
+      InternalTransition(evt.StartPos, [create_event(evt)], GuardNode, acts)
+    }
+    
+    initial_trans(name : NToken, tran : StateNode.Transition) : Initial
+    {
+      Initial(name.StartPos, tran)
+    }
+
+    state(attr : option[List[StateAttribute]], name : NToken, nodes : List[StateNode]) : State
+    {
+      def name_text = GetText(name);
+      def attr = attr.MapDefault(_.NToList(), []);
+      CreateState(name.StartPos, name_text, attr, nodes.NToList());
+    }
+      
+    flags(tok : List[NToken]) : MachineFlags
+    {
+      def proc_tok(tok, flag)
+      {
+        def nflag = match (GetText(tok))
+                    {
+                      | "debug"  => MachineFlag.Debug
+                      | "auto_initial"  => MachineFlag.AutoInitial
+                      | "local_default"  => MachineFlag.LocalDefault
+                      | "transition_completed_events"  => MachineFlag.TransitionCompleted
+                      | _  => MachineFlag.None
+                    }
+        nflag |  flag
+      }
+      
+      MachineFlags(tok.FoldLeft(MachineFlag.None, proc_tok));
+    }
+    
+    history_deep(tok : NToken, tran : option[StateNode.Default]) : History
+    {
+      def_history(HistoryType.Deep, tok, tran)
+    }
+
+    history_shallow(tok : NToken, tran : option[StateNode.Default]) : History
+    {
+      def_history(HistoryType.Shallow, tok, tran)
+    }
+    
+    history_long(type : NToken, tran : option[StateNode.Default]) : History
+    {
+      match (GetText(type))
+      {
+        | "Deep"
+        | "deep"  => def_history(HistoryType.Deep, type, tran)
+        | "Shallow"
+        | "shallow"  => def_history(HistoryType.Shallow, type, tran)
+        | _  => def_history(HistoryType.None, type, tran)
+      }
+    }
+    
+    terminate_node(tok : NToken) : PseudoState
+    {
+      StateNode.PseudoState(tok.StartPos, PseudoStateAstNode.Terminate(null, tok.StartPos))
+    }
+    
+    join(tok : NToken, name : NToken, target : TargetType) : PseudoState
+    {
+      StateNode.PseudoState(tok.StartPos, PseudoStateAstNode.Join(null, tok.StartPos, GetText(name), target))
+    }
+    
+    junction_target(node : Junction) : TargetType
+    {
+      TargetType.PseudoState(node.pos, node)
+    }
+    
+    junction(tok : NToken, name : NToken, node : Junction) : PseudoState
+    {
+      def pos = tok.StartPos;
+      node.name = GetText(name);
+      node.pos = pos;
+      PseudoState(pos, node)
+    }
+
+    create_junc_node(g : option[GuardNode], a: option[Actions], t : TargetType) : JunctionNode
+    {
+      JunctionNode(0, g, a, t)
+    }
+    
+    junction_body(body : List[option[GuardNode] * option[Actions] * TargetType]) : Junction
+    {
+      def nodes = body |> create_junc_node(_);
+      Junction(null, 0, null, nodes)
+    }
+    
+    choice_target(tok : NToken, body : Junction) : TargetType
+    {
+      def pos = tok.StartPos;
+      TargetType.PseudoState(pos, Choice(null, pos, null, body.nodes))
+    }
+    
+    choice(tok : NToken, name : NToken, _ : NToken, body : Junction) : StateNode.PseudoState
+    {
+      def pos = tok.StartPos;
+      PseudoState(pos, Choice(null, pos, GetText(name), body.nodes))
+    }
+    
+    merge(tok : NToken, name : NToken, GuardNode : option[GuardNode], act : option[Actions], target : TargetType) : StateNode.PseudoState
+    {
+      def pos = tok.StartPos;
+      PseudoState(pos, Merge(null, pos, GetText(name), JunctionNode(pos, GuardNode, act, target)))
+    }
+
+    trans_target(tar : TargetType, targets : List[TargetType]) : TargetType
+    {
+      if (targets.Count() == 0) tar else 
+      {
+        def targets = tar :: targets.NToList();
+        TargetType.PseudoState(0, PseudoStateAstNode.Fork(null, 0, targets))
+      }
+    }
+    
+    inlined_fsm(nkey : NToken, name : NToken, _ : NToken, type : NToken, body : List[StateNode]) : StateNode
+    {
+      def pos = nkey.StartPos;
+      def name = GetText(name);
+      def st = CreateState(pos, name, [], body.NToList());
+      st.type = StateType.InlinedSubMachine(GetText(type));
+      st
+    }
+    
+    statemachine(name : NToken, _ : NToken, type : NToken, tran : List[StateNode.Transition]) : StateNode
+    {
+      State(GetText(name), name.StartPos, StateType.SubMachine(GetText(type)), tran.NToList())
+    }
+    
+    stateMachine(sp : NToken, flags : option[MachineFlags], st : List[StateNode]) : StateMachine
+    {
+      def st = CreateState(sp.StartPos, null, [], st.NToList());
+      def flags = flags.WithDefault(MachineFlags(MachineFlag.None));
+      StateMachine(flags, st);
+    }
+    
+    region(beg : NToken, _ : NToken) : StateNode.State
+    {
+      State(beg.StartPos, StateType.SubRegion())
+    }
+  }
+
+}
