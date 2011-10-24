@@ -1,0 +1,485 @@
+﻿using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nemerle.Statechart
+{
+  using StateTransition;
+  
+  /// <summary>
+  /// Description of GenerateTransitions.
+  /// </summary>
+  public partial class StaticGenerator
+  {
+  
+    GetTransitionFunction(tran : list[StateTransition]) : list[ClassMember]
+    {
+      tran |> <[ decl: $(_.Name : usesite)() : State {$(GetTransitionBody(_))} ]>;
+    }
+
+    GetTransitionFunction(tran : list[string * StateTransition]) : list[ClassMember]
+    {
+      tran |> <[ decl: $(_ : usesite)() : State {$(GetTransitionBody(_[2]))} ]>;
+    }
+    
+    GetActions(act : PathNode, inline_suppress : bool = true) : PExpr
+    {
+      GetActions(act, action_for, inline_suppress)
+    }
+
+    GetActions(act : list[PathNode], inline_suppress : bool = true) : PExpr
+    {
+      GetActions(act, action_for, inline_suppress)
+    }
+    
+    public GetDestination(tran : TransitionDestination, ctx : GenCtx = null) : PExpr
+    {
+      def ctx = ctx ?? GenCtx.Normal();
+      match (tran)
+      {
+        | TransitionDestination.State(st) => 
+            def body = GetExecStateName(st, ctx);
+            if (ctx.IsInEventHandler) 
+            {
+                <[
+                  _ = fsm;
+                  $body;
+                ]>
+            } else body
+        | NoStateChange => if (ctx.IsInEventHandler) <[ fsm.cur_state ]> else <[ cur_state ]>
+        | Choice(_, tran, Some(st)) => def target = GetExecStateName(st, ctx);
+            DefineTransBody(tran, ctx, target)
+        | Choice(_, tran, _) => DefineTransBody(tran, ctx)
+        | Terminate => 
+           def after = if (ctx.HaveActionsAfter) <[ () ]> else <[ null ]>;
+           if (ctx.IsInEventHandler) <[ fsm.Terminate();$after ]> else <[ Terminate();$after ]>
+        | History(StateHistory where (Default = Some()) as h) => def name = $"$(h)Run";
+            if (ctx.IsInEventHandler) <[ fsm.$(name : usesite)();]> else <[ $(name : usesite)();]>
+        | History(StateHistory where (Name = n, state = p, Type = t)) =>
+            def t = if (p.BothHistories) $"$t" else "";
+            def name = $"$(t)HistoryFrom$p"; // call function of run history
+            if (ctx.IsInEventHandler) <[ fsm.$(n : usesite).$(name : usesite)(fsm) ]> else <[ $(n : usesite).$(name : usesite)(this) ]>;
+        | SubRegion(reg, st, from) =>
+            def regs = reg.PartOfRegionsOf(from).Rev();
+            // TODO: вынести логику генерации, ctx и переходов в отдельный класс
+
+            def enter_region(r)
+            {
+              | head :: tail => 
+              
+                  def other = head.RegionsExcept(st.ToState);
+                  def pat = FsmState.ConcurrentRegion.get_pattern(other);
+                  def reg = GetExecStateName(head, ctx);
+                  def name = $"Initial$pat";
+                  def refsm = if (ctx.IsInEventHandler) <[fsm]> else <[ this ]>;
+                  <[
+                    $reg.$(name : usesite)($refsm, $(enter_region(tail)));
+                    $reg
+                  ]>
+
+              | _ => def body = GetDestination(st, ctx);
+                  if (ctx.IsInEventHandler && regs.Length <= 1) 
+                     <[ 
+                        _ = fsm;
+                        $body
+                     ]> else body
+            }
+
+            // entering in region
+            enter_region(regs);
+            
+        | Region(reg) => def target = GetExecStateName(reg, ctx);
+              <[
+                $target.Initial(this);
+                $target
+              ]>
+              
+        | HistoryRestore(h) => <[ $(h.Name : usesite).GetCopy(0) ]>
+        | Fork(reg, tran) => def target = GetExecStateName(reg, ctx);
+            def sub_region(t)
+            {
+              match (t.AtLeastTo)
+              {
+                | FsmState.ConcurrentSubRegion as st => st
+                | x => x.PartOfSubRegion.Value
+              }
+            }
+            
+            def find(trans, x)
+            {
+              match (trans.Find((y, _) => x == y)) 
+              {
+                | Some((_, t)) => t
+                | _ => <[ null ]>
+              }
+            }
+            
+            def trans = tran.Map(x => (sub_region(x), if (ctx.IsInEventHandler) <[ fsm.$(x.Name : usesite)(); ]> else <[ $(x.Name : usesite)(); ]>));
+            def def_this = if (ctx.IsInEventHandler) <[ fsm ]> else <[this]>;
+            def parms = def_this :: reg.sub_regions.Map(find(trans, _));
+            <[
+              $(target).Initial(..$parms);
+              $target
+            ]>
+            
+        | Join(join = Join(name = n)) => 
+            def fname = $"join$n";
+            if (ctx.IsInEventHandler) <[ fsm.$(fname : usesite)++;null ]> else <[ $(fname : usesite)++;null ]>
+            
+        | Final(st, sr, reg, tran) => 
+            def regname = GetExecStateName(reg, ctx);
+            def target = GetExecStateName(st, ctx);
+            def trans = DefineTransBody(tran, ctx);
+            if (reg.HaveFinal)
+            {
+              def hist = reg.ParticipateInHistory;
+              def hist = GetHistoryClear(hist);
+            <[
+              $regname.$(get_sub_region_name(sr) : usesite) = $target;
+              if ($regname.IsFinal) 
+              {
+                $hist;
+                $trans
+              } else null
+            ]>
+            }
+            else <[ $target ]>
+            
+        | ForceStateChange(nest) => GetForceStateChange(nest, ctx);
+          
+        | CheckAfter(check, before, after) =>
+            def check = GetCheck(check, ctx);
+            def before = GetDestination(before, ctx);
+            def nest = GetDestination(after, ctx);
+            <[ def st = $before; if ($check) $nest else st ]>
+        | JoinedTransition(Join(name = n), tran) => def fname = $"join$n";
+            def body = DefineTransBody([tran], ctx);
+            <[ $(fname : usesite) = 0;$body ]>
+        | EventSend(st, evt) => 
+            match (st)
+            {
+              | FsmState where (PartOfRegion = None()) => <[ cur_state.$(evt.Name : usesite)(this) ]>
+              | FsmState where (PartOfRegion = Some(r)) => def name = GetExecStateName(r);
+                <[ $name.$(evt.Name : usesite)(this) ]>
+            }
+        | JunctionNode(t) => get_junction_body(t, ctx)
+        | ChoiceNode(t) => get_choice_body(t, ctx)
+        | SubMachine => <[]>
+        | Unknown => <[ null ]>
+      }
+    }
+    
+    GuardNeedBody(GuardNode : GuardNode) : bool
+    {
+      def expr = get_guard_cond_expr(GuardNode, GenCtx.Normal());
+      match (expr)
+      {
+        |  <[ $(_ : name) ]>
+        |  PExpr.Call(<[ $(_ : name) ]>, []) => false
+        | _  => true
+      }
+    }
+
+    get_guard_cond_expr(g : GuardNode, ctx : GenCtx) : PExpr
+    {
+      def ctx = ctx ?? GenCtx.Normal();
+      match (g)
+      {
+        | Guard(cond) =>
+      
+            def GuardNode = GenElement(cond, guard_for);
+            def name = GuardNode.exec_name;
+            if (GuardNode.IsDeclared)
+            {
+              if (!decls.Contains(name)) <[ $(name : usesite)() ]> else
+                match (decls.Get(name))
+                {
+                  | Field(ParsedType  =  <[ bool ]>)
+                  | Property(returnType  =  <[ bool ]>)  => <[ $(name : usesite) ]>
+                  | Field(ParsedType  =  <[ void -> bool ]>)
+                  | Property(returnType  =  <[ void -> bool ]>)  => <[ if ($(name : usesite) != null) $(name : usesite)() else false]>
+                  | Function
+                  | _  => <[ $(name : usesite)() ]>
+                }
+            } else
+            {
+              def name = GenElement.CreateExecName(g.Name);
+            <[$(name : usesite)()]>
+            }
+      
+        | InState(st) => if (ctx.IsInEventHandler)  <[ fsm.IsInState(State.$(st : usesite)()) ]> else <[ IsInState(State.$(st : usesite)()) ]>
+        | _ => <[ () ]>
+      }
+    }
+    
+    GetCheck(node : CheckNode, ctx : GenCtx) : PExpr
+    {
+      match (node)
+      {
+        | Empty => <[ () ]>
+        | Sequence(lst) => def check = lst |> GetCheck(_, ctx);
+            MergeExprAnd(check)
+        | RegionStates(st) => 
+          
+            def get_check(reg, st)
+            {
+            
+              def check_st = reg.sub_regions.Map(x => 
+                                                   match (st.Find(y => y.PartOfSubRegion.Value == x)) 
+                                                   {
+                                                     | Some(st) => GetExecStateName(st) 
+                                                     | _ => <[ null ]>
+                                                   });
+             
+              def reg_state = GetExecStateName(reg);
+              if (st.All(x => x.Lived && x.LivedSubStatesNested is []))
+                <[ $reg_state.IsInStateConcrete(..$check_st) ]>
+              else 
+                <[ $reg_state.IsInState(..$check_st) ]>
+            }
+          
+            def reg = st |> PartOfRegion.Value;
+            if (reg.ElementsEqual(_ == _))
+            {
+              get_check(reg.Head, st)
+            } else
+            {
+              def group = st.Group((x, y) => FsmAnalyser.StringComparator(x.PartOfRegion.Value.Name, y.PartOfRegion.Value.Name));
+              def check = group.Map(x => get_check(x.First().PartOfRegion.Value, x));
+              MergeExprAnd(check);
+            }
+          
+        | Join(Join(name = n, joined_tran = jtran), tran) => 
+            def reg = jtran |> FromRegion;
+            def idx = reg.FindIndex(tran.FromRegion == _);
+            def fname = $"join$n";
+          <[ $(fname : usesite) == $idx ]>
+          
+        | Guard(g) => GetGuards(g, ctx)
+      }
+    }
+    
+    GetGuards(g : list[GuardNode], ctx : GenCtx) : PExpr
+    {
+      def body = g |> get_guard_cond_expr(_, ctx);
+      MergeExprAnd(body)
+    }
+    
+    GetGuardedBody(tran : StateTransition, body : PExpr, ctx : GenCtx) : PExpr
+    {
+      match (tran)
+      {
+        | StateTransition where (executeCheck = check, Guard = g) =>
+           
+            def check = GetCheck(check, ctx);
+            def check = match (g)
+                        {
+                          | Some(g) => [get_guard_cond_expr(g, ctx), check]
+                          | _ => [check]
+                        }
+            match (check)
+            {
+              | [<[ () ]>] => body
+              | _ => 
+                  def check = MergeExprAnd(check);
+                  <[
+                  {
+                    res:
+                    {
+                      unless ($check) res(null);
+                      $body
+                    }
+                  }
+                  ]>
+            }
+      }
+    }
+
+    GetPostConditions(body : PExpr, post : TransitionPostConditions, ctx : GenCtx = null) : PExpr
+    {
+      def ctx = ctx ?? GenCtx.Normal();
+      def pre = <[ def st = $body; ]>;
+      def post = match (post)
+      {
+        | RegionCompletion(reg, tr) => 
+           def check_reg = CheckNode.RegionStates(tr |> From);
+           def check_guard = if (tr.Exists(x => x.SourceGuard.HasValue)) CheckNode.Guard(tr.FilterValues(_.Guard)) else CheckNode.Empty();
+           def check = check_reg + check_guard;
+           def check = GetCheck(check, ctx);
+           def name = GetExecStateName(reg);
+           def send_evt = <[ $name.Completion(this) ]>;
+           <[
+              if ($check) $send_evt else st;
+           ]>
+       | _ => <[]>
+      }
+      <[
+      $pre;
+      $post;
+      ]>
+    }
+    
+    GetBody(acts : PathNode, dest : TransitionDestination, post : TransitionPostConditions = null, ctx : GenCtx = null) : PExpr
+    {
+      def get_target(t)
+      {
+        | TransitionDestination.JunctionNode
+        | ChoiceNode => GetDestination(dest, ctx)
+        | _ => GetForceStateChange(dest, ctx)
+      }
+      
+      def acts = acts.Unsequenced;
+      def (before, en_after) = acts.PartitionFirst(_ is PathNode.Entry);
+      def bef_expr = GetActions(before, true);
+      def aft_expr = GetActions(en_after, true);
+      if (en_after is []) 
+      {
+        def target = get_target(dest);
+        def body = <[ $bef_expr;$target ]>;
+        if (post != null) GetPostConditions(body, post, ctx) else body;
+      } else 
+      {
+        def ctx = ctx ?? GenCtx.Normal();
+        ctx.HaveActionsAfter = true;
+        def target = GetForceStateChange(dest, ctx);
+        def body = 
+        <[ 
+           $bef_expr;
+           def st = $target;
+           $aft_expr;
+           st
+        ]>;
+        
+        if (post != null) 
+        {
+          GetPostConditions(body, post, ctx)
+        } else body
+      }
+    }
+    
+    GetTransitionBody(tran : StateTransition, ctx : GenCtx = null) : PExpr
+    {
+      | (StateTransition where (PathNode = acts, Destination = dest, PostConditions = post), _) =>
+      
+          def body = GetBody(acts, dest, post, ctx);
+          GetGuardedBody(tran, body, ctx)
+    }
+    
+    DefineTransBody(tr : list[StateTransition], ctx : GenCtx = null, alt : PExpr = null) : PExpr
+    {
+      def ctx = ctx ?? GenCtx.InEventHandler();
+      def get_body(tr)
+      {
+        def name = tr.Name;
+        if (tr.MaybeInlined && IsEmpty(tr.PathNode))
+        {
+             <[ $(GetTransitionBody(tr, ctx)) ]>
+        } else 
+          if (ctx.IsInEventHandler) <[ fsm.$(name : usesite)(); ]> else <[ $(name : usesite)();]>
+      }
+
+      match (tr)
+      {
+        | [StateTransition where (IsCrossed = true) as tr] => 
+            def body =  get_body(tr);
+                  <[
+                    {
+                    def res =  $body;
+                    if (res != null) res else $(DefineTransBody(tr.ParentCrossed, ctx, alt))
+                    }
+                  ]>
+        | [tr]  => def body = get_body(tr);
+            if (alt != null) 
+            <[
+              def res = $body;
+              if (res != null) res else $alt
+            ]> else body
+
+        | tr :: tail  =>
+            def body = get_body(tr);
+                  <[
+                  {
+                    def res =  $body;
+                    if (res != null) res else $(DefineTransBody(tail, ctx, alt))
+                  }
+                  ]>
+        |  _  => if (alt != null) alt else <[ null ]>
+      } 
+    }
+    
+    DefineTransitions(ty : TypeBuilder, st : FsmState) : void
+    {
+      def defs = match (st)
+      
+                 {
+                   | FsmState.State(IsTopState = true) =>
+                       def from_top = <[decl:
+                                        public virtual PathFromTop(_ : $(ChartName : usesite)) : State {null}
+                                      ]>;
+                       def defs = analyser.TransitionEvents |> <[decl: public virtual $(_.Name : usesite)(_ : $(ChartName : usesite)) : State {null}]>;
+                       from_top :: defs
+                       
+                   | FsmState.SubMachine(inlined = false) as st => 
+                       def from_top = <[decl:
+                                        public override PathFromTop(fsm : $(ChartName : usesite)) : State {$(DefineTransBody([st.PathFromOut]))}
+                                      ]>;
+                       def def_tran_body(tr)
+                       {
+                         | StateTransition where (Trigger = StateEvent where (Name = n)) :: _ =>
+                         
+                             def body = DefineTransBody(tr);
+                             if (st.proc_events.Exists(x => FsmAnalyser.StrEq(x, n)))
+                             {
+                           <[ 
+                               machine.$(n : usesite);
+                               when (machine.IsEventDeclined) $body
+                           ]>
+                             } else body;
+                         
+                         | _ => DefineTransBody(tr)
+                       }
+                       
+                       def defs = if (st.Lived)
+                                  {
+                                    st.work_transition_group.MapToList((x, y)  => <[decl: 
+                                      public override $(x : usesite)(fsm : $(ChartName : usesite)) : State {$(def_tran_body(y))}]>)
+                                  } else [];
+                       from_top :: defs
+                       
+                   | _ =>
+                       def from_top = <[decl:
+                                        public override PathFromTop(fsm : $(ChartName : usesite)) : State {$(DefineTransBody([st.PathFromOut]))}
+                                      ]>;
+                       def defs = if (st.Lived)
+                                  {
+                                    st.work_transition_group.MapToList((x, y)  => <[decl: 
+                                      public override $(x : usesite)(fsm : $(ChartName : usesite)) : State {$(DefineTransBody(y))}]>)
+                                  } else [];
+                       from_top :: defs
+                 }
+      Define(ty, defs)
+    }
+
+    
+    
+    DefineTransitionActions() : void
+    {
+      def trans = analyser.all_transitions;
+      def trans = trans.RemoveDuplicatesSort(StateTransition.Comparer);
+      def trans = trans.Filter(x => !(x.MaybeInlined && IsEmpty(x.PathNode)));
+      def body = GetTransitionFunction(trans);
+      // history paths
+      def body_name = analyser.HistoryPaths |> (Name, transition);
+      def hist = GetTransitionFunction(body_name);
+      Define(hist + body);
+    }
+    
+  }
+}
