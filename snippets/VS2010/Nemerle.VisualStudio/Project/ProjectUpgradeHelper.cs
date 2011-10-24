@@ -8,7 +8,7 @@ namespace Nemerle.VisualStudio.Project
 {
 	class ProjectUpgradeHelper
 	{
-		XNamespace vs = XNamespace.Get("http://schemas.microsoft.com/developer/msbuild/2003");
+		public static readonly XNamespace vs = XNamespace.Get("http://schemas.microsoft.com/developer/msbuild/2003");
 
 		public ProjectUpgradeHelper(string projectFilePath)
 		{
