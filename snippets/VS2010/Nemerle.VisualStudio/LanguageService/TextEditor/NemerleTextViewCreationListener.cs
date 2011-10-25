@@ -29,9 +29,16 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 
 		public void VsTextViewCreated(IVsTextView textViewAdapter)
 		{
+			IVsTextLines vsTextLines;
+			textViewAdapter.GetBuffer(out vsTextLines);
+			IPersistFileFormat persistFileFormat = (IPersistFileFormat)vsTextLines;
+			string filePath;
+			uint formatIndex;
+			persistFileFormat.GetCurFile(out filePath, out formatIndex);
+
 			var view = textViewAdapter.ToITextView();
 			var doc = view.TextBuffer.Properties.GetProperty<ITextDocument>(typeof(ITextDocument));
-			var filePath = doc.FilePath;
+			filePath = doc.FilePath;
 
 			Trace.WriteLine("Opened: " + filePath);
 			
