@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.IO;
 using Microsoft.VisualStudio.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
 using System.ComponentModel.Composition;
@@ -12,6 +13,7 @@ using Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Shell.Interop;
 using System.Diagnostics;
+using Nemerle.VisualStudio.Project;
 
 namespace Nemerle.VisualStudio.LanguageService.TextEditor
 {
@@ -29,69 +31,45 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 
 		public void VsTextViewCreated(IVsTextView textViewAdapter)
 		{
-			IVsTextLines vsTextLines;
-			textViewAdapter.GetBuffer(out vsTextLines);
-			IPersistFileFormat persistFileFormat = (IPersistFileFormat)vsTextLines;
-			string filePath;
-			uint formatIndex;
-			persistFileFormat.GetCurFile(out filePath, out formatIndex);
-
-			var view = textViewAdapter.ToITextView();
-			var doc = view.TextBuffer.Properties.GetProperty<ITextDocument>(typeof(ITextDocument));
-			filePath = doc.FilePath;
+			string filePath = textViewAdapter.GetFilePath();
+			var    view = textViewAdapter.ToITextView();
 
 			Trace.WriteLine("Opened: " + filePath);
 			
 			view.TextBuffer.Changed += TextBuffer_Changed;
-			EventHandler closed = null;
-			closed = (sender, args) =>
-				{
-					Trace.WriteLine("Closed: " + filePath);
-					view.TextBuffer.Changed -= TextBuffer_Changed;
-					view.Closed -= closed;
-				};
-			view.Closed += closed; 
+			view.Closed             += view_Closed;
 		}
-
-		
 
 		void TextBuffer_Changed(object sender, TextContentChangedEventArgs args)
 		{
-			var textBuffer = sender as ITextBuffer;
-			var doc = textBuffer.Properties.GetProperty<ITextDocument>(typeof(ITextDocument));
-			//var vsTextBuffer = textBuffer.ToIVsTextBuffer();
-			//var vsTextLines = vsTextBuffer as IVsTextLines;
-			//var filePath = FilePathUtilities.GetFilePath(vsTextLines);
-			var filePath = doc.FilePath;
+			var textBuffer = (ITextBuffer)sender;
+			var vsTextBuffer = textBuffer.ToIVsTextBuffer();
+			IPersistFileFormat persistFileFormat = (IPersistFileFormat)vsTextBuffer;
+			string filePath = textBuffer.GetFilePath();// textBuffer.ToIVsTextBuffer().GetFilePath();
+			var ext = Path.GetExtension(filePath);
+
+			// TODO: FIXME: VladD2: We must check extension by compiler plagin engine!
+			if (!Utils.Eq(ext, ".cs"))
+				return;
+
+			var project = ProjectInfo.FindProject(filePath);
+
+			if (project == null)
+				return;
+
+			project.Engine.RequestOnBuildTypesTree();
+
 			System.Diagnostics.Trace.WriteLine("Changed: (" + args.AfterVersion + ") " + filePath);
-
-
-			//foreach (var p in textBuffer.Properties.PropertyList)
-			//{
-			//  System.Diagnostics.Trace.WriteLine(p.Key + " = " + p.Value);
-			//}
-
-
-			//System.Diagnostics.Trace.WriteLine(args.AfterVersion);
-			//System.Diagnostics.Trace.WriteLine(args.After.GetText());
-		}
-
-		void TextBuffer_Changing(object sender, EventArgs args)
-		{
 		}
 
 		void view_Closed(object sender, EventArgs args)
 		{
-			var textView = sender as ITextView;
-			var wpfTextView = sender as IWpfTextView;
-			
-			
-			//var doc = textView.TextBuffer.Properties.GetProperty<ITextDocument>(typeof(ITextDocument));
-			var docData = textView.TextBuffer.Properties.GetProperty<IVsPersistDocData>(typeof(IVsPersistDocData));
-			
-			//var doc = docData as ITextDocument;
-			//var filePath = docData.;
-			//System.Diagnostics.Trace.WriteLine("Closed: " + filePath);
+			var view = (ITextView)sender;
+			IVsTextView vsTextView = view.ToVsTextView();
+			view.TextBuffer.Changed -= TextBuffer_Changed;
+			view.Closed -= view_Closed;
+
+			Trace.WriteLine("Closed: " + vsTextView.GetFilePath());
 		}
 
 		#endregion
