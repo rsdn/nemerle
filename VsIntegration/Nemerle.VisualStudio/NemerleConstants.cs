@@ -5,7 +5,7 @@ namespace Nemerle.VisualStudio
 		// These constants are parts of PLK.
 		// If you need to change it, you will have to request new PLK as well.
 		//
-		public const string PackageGuidString = "CF7296F1-47E5-4915-83A0-8C44961F0981";
+  	public const string PackageGuidString = "CF7296F1-47E5-4915-83A0-8C44961F0981";
 		public const string TypeLibGuidString = "0D502008-A831-4841-8022-2D7DDFC4E63C";
 		public const string PLKProductName    = "Nemerle VS Integration";
 #if DEBUG
@@ -17,8 +17,8 @@ namespace Nemerle.VisualStudio
 #endif
 
 		public const string PLKMinEdition     = "standard";
-		public const string PLKCompanyName    = "Nemerle Team";
-		public const string PLKProductVersion = "1.1";
+		public const string PLKCompanyName    = "NA";
+		public const string PLKProductVersion = "1.0";
 
 		public const string LanguageId        = "Nemerle";
 		public const string LanguageName      = "Nemerle";
@@ -26,7 +26,7 @@ namespace Nemerle.VisualStudio
 		public const string FileExtensionOnly = "n";
 		public const string ProjectExtension  = "nproj";
 		public const string ProductName       = "Nemerle Visual Studio Integration";
-		public const string ProductDetails    = "Nemerle Visual Studio Integration\r\nVersion 1.1";
+		public const string ProductDetails    = "Nemerle Visual Studio Integration\r\nVersion 1.0";
 
 		// Attention, GUID LanguageServiceGuidString also has to be changed there:
 		// Nemerle.VsIntegration\CodeSnippets\SnippetsIndex.xml

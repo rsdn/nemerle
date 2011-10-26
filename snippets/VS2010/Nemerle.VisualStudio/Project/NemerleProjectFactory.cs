@@ -106,14 +106,30 @@ namespace Nemerle.VisualStudio.Project
 			return false;
 		}
 
+		static bool IsNeedUpdateNemerleBinPathRootProperty(XElement nemerleProperty)
+		{
+			var value = nemerleProperty.Value;
+
+			if (string.IsNullOrEmpty(value))
+				return true;
+
+			if (nemerleProperty.Attribute("Condition") == null)
+				return true;
+
+			return false;
+		}
+
 		private static void UpgradeProject(string sourceProjectFilePath, string destProjectFilePath, IVsUpgradeLogger pLogger, string projectName)
 		{
 			var projectData = new ProjectUpgradeHelper(sourceProjectFilePath);
 
 			projectData.ToolsVersion.Value = Default.ToolsVersion;
 
-			if (string.IsNullOrEmpty(projectData.NemerleBinPathRoot.Value))
+			if (IsNeedUpdateNemerleBinPathRootProperty(projectData.NemerleBinPathRoot))
+			{
 				projectData.NemerleBinPathRoot.Value = Default.NemerleBinPathRoot;
+				projectData.NemerleBinPathRoot.SetAttributeValue("Condition", " '$(NemerleBinPathRoot)' == '' ");
+			}
 			else if (!Utils.Eq(projectData.NemerleBinPathRoot.Value, Default.NemerleBinPathRoot))
 				pLogger.LogMessage((uint)__VSUL_ERRORLEVEL.VSUL_WARNING, projectName, sourceProjectFilePath, "The NemerleBinPathRoot property changed by user. You must update it manually.");
 
@@ -197,7 +213,7 @@ namespace Nemerle.VisualStudio.Project
 			if (IsNeedUpdateNemerleVersion(projectData))
 				return VSConstants.S_OK;
 
-			if (string.IsNullOrEmpty(projectData.NemerleBinPathRoot.Value))
+			if (IsNeedUpdateNemerleBinPathRootProperty(projectData.NemerleBinPathRoot))
 				return VSConstants.S_OK;
 
 			if (!Utils.Eq(projectData.TargetFrameworkVersion.Value, Default.TargetFrameworkVersion))

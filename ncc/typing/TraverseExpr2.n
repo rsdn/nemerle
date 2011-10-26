@@ -18,6 +18,7 @@ namespace Nemerle.Compiler
     | None    
     | FullHistory     = 0b001 // full history of contexts
     | Breaked         = 0b010 // traversing is breaked
+    | NoSkip          = 0b100 // no skip (normal traverse strategy), new return node must be traversed
   }
   
   /// <summary>
@@ -51,12 +52,12 @@ namespace Nemerle.Compiler
     [Record]
     public class CommonFlags
     {
-      [FlagAccessor(Breaked, FullHistory, flags = WantSetter)] mutable state : TraverseStateFlag; // context is pushed
+      [FlagAccessor(Breaked, FullHistory, NoSkip, flags = WantSetter)] mutable state : TraverseStateFlag; // context is pushed
       
       public Data : object {get;set;}
-      public this()
+      public this(st : TraverseStateFlag = TraverseStateFlag.None)
       {
-        state = TraverseStateFlag.None;
+        state = st;
       }
     }
         
@@ -106,6 +107,16 @@ namespace Nemerle.Compiler
       }
     }
     
+    ///<summary>
+    /// No skip mode, every returned node is traversed normally, rather than skipped
+    ///</summary>
+    public NoSkip : bool
+    {
+      get
+      {
+        flags.NoSkip
+      }
+    }
     /// <summary>
 		/// Push context manually
 		/// </summary>
@@ -130,6 +141,12 @@ namespace Nemerle.Compiler
     {
       this.flags = flags ?? CommonFlags();
     }
+    
+    public this(flags : TraverseStateFlag)
+    {
+      this.flags = CommonFlags(flags);
+    }
+
   }
 
   public partial module Macros
@@ -137,25 +154,34 @@ namespace Nemerle.Compiler
 
  /**
    * Allows recursive analysing and rewriting given parse tree expression easily. It calls supplied function on every
-   * node of tree returning its result as new node.
+   * node of tree returning its result as new node. Extended context is used, it may collect full parent expression information,
+   * or can collect only needed nodes
    *
    * [ctx] - when specified, then expression is first macro-expanded and expansion result is then further analyzed
    * [expr] - expression to be processed
-   * [context] - context expr used to provide information of parent expression
+   * [context] - context used to provide information on expression and its parents. null parameter means Top context.
+   * TraverseContext.Top(flags : TraverseContext.CommonFlags) - initializes top context, flags can be initialized with value
+   * full history means collect all info, false only needed
+   * to manual use context (full_history = false), you must call Push() method in context in call before (after = false), and it used in next traversal
+   * You can store Data in context, you can access it later
+   * You can break traversing with Break() method on context, all your data and traversing info on this moment is saved and function exits
    * [call] - function called for each node of tree, first parameter hold the [context] semantics; second denotes if we are calling the
-   *          function before processing of subnodes (==false) and after (==true) - the function is always called twice for each node;
-   *          third passes the current node to operate on; return value (used only from second/postprocess call) is used as new node value
+   *          function before processing of subnodes (after == false) and after (after == true) - the function maybe called twice for each node;
+   *          third parameter passes the current node to operate on;
+   *          if call before returns new expression, it replace old expression (in normal skip mode) second call and traverse sub nodes is skipped
+   *          in NoSkip mode flag with traverse is continued on return expression
+   *          if we want to traverse sub nodes, in first call (after == false) we must necesseraly return null.
+   *          return value (used only from second/postprocess call) is used as new node value
    */
-    public TraverseExpr2 (ctx : option[Typer], expr : PExpr, context : PExpr,
-                         call : PExpr * bool * PExpr -> PExpr) : PExpr
+    
+    public TraverseExprWithContext (ctx : option[Typer], expr : PExpr, context : TraverseContext,
+                                    call : TraverseContext * bool * PExpr -> PExpr) : PExpr
     {
-      def traverse (x) { TraverseExpr2(ctx, x, expr, call) }
+      def context = context ?? TraverseContext.Top();
 
-      TraverseExprImpl(ctx, expr, null, call(context, _, _), traverse)
-    }
-
-    TraverseExprImpl(ctx : option[Typer], expr : PExpr, break : void -> bool, call : bool * PExpr -> PExpr, trav : PExpr -> PExpr) : PExpr
-    {
+      def traverse (x) { if (context.IsBreaked) x else TraverseExprWithContext(ctx, x, context.Next(), call) }
+      context.nexpr = expr;
+      
       if (expr == null) null
       else
         Util.locate (expr.Location,
@@ -166,12 +192,6 @@ namespace Nemerle.Compiler
                                     | _ => expr
                                   }
 
-                       def traverse(exp)
-                       {
-                         if (break != null && break()) exp else trav(exp)
-                       }
-                                  
-                                  
                        def trav_funparms(fps)
                        {
                          def go_funparm(p)
@@ -239,13 +259,15 @@ namespace Nemerle.Compiler
                              Property(trav_splicable(n), m, traverse(rt), trav_funparms(pars), get.Map(trav_func), set.Map(trav_func))
                        }
 
-                       if (break != null && break()) expr else 
+                       if (context.IsBreaked) expr else 
+                       {
                        // first call of whole expr before traversing parts of expression
-                         match (call (false, expr))
+                         def nexpr = call(context, false, expr);
+                         def expr = nexpr ?? expr;
+                         // if expr is null or no skip mode
+                         if (nexpr == null || context.NoSkip)
                          {
                          // if returning null there is no new expr and go to traversing parts normally
-                           | null =>
-                                     
                                def recursed = match (expr)
                                               {
                                                 | <[ $(_ : name) ]> => expr
@@ -354,43 +376,12 @@ namespace Nemerle.Compiler
                                                 | PExpr.Lambda => Util.ice ("Bad construction of PExpr.Lambda")
                                                 | PExpr.Base(ty) => PExpr.Base(ty.Map(traverse))
                                               }
-                               if (break != null && break()) recursed else call(true, recursed);
+                               if (context.IsBreaked) recursed else call(context, true, recursed);
                              
                          // if return new expression, that signs user traverse it manually and create new, in this case return without traverse
-                           | exp => exp
-                         }
-
+                         } else expr
+                        }     
       })
-    }
-
- /**
-   * Allows recursive analysing and rewriting given parse tree expression easily. It calls supplied function on every
-   * node of tree returning its result as new node. Extended context is used, it may collect full parent expression information,
-   * or can collect only needed nodes
-   *
-   * [ctx] - when specified, then expression is first macro-expanded and expansion result is then further analyzed
-   * [expr] - expression to be processed
-   * [context] - context used to provide information on expression and its parents. null parameter means Top context.
-   * TraverseContext.Top(flags : TraverseContext.CommonFlags) - initializes top context, flags can be initialized with value
-   * full history means collect all info, false only needed
-   * to manual use context (full_history = false), you must call Push() method in context in call before (after = false), and it used in next traversal
-   * You can store Data in context, you can access it later
-   * You can break traversing with Break() method on context, all your data and traversing info on this moment is saved and function exits
-   * [call] - function called for each node of tree, first parameter hold the [context] semantics; second denotes if we are calling the
-   *          function before processing of subnodes (after == false) and after (after == true) - the function maybe called twice for each node;
-   *          third parameter passes the current node to operate on;
-   *          if call before returns new expression, it replace old expression and second call and traverse sub nodes is skipped
-   *          if we want to traverse sub nodes, in first call (after == false) we must necesseraly return null.
-   *          return value (used only from second/postprocess call) is used as new node value
-   */
-    public TraverseExprWithContext (ctx : option[Typer], expr : PExpr, context : TraverseContext,
-                                    call : TraverseContext * bool * PExpr -> PExpr) : PExpr
-    {
-      def context = context ?? TraverseContext.Top();
-
-      def traverse (x) { TraverseExprWithContext(ctx, x, context.Next(), call) }
-      context.nexpr = expr;
-      TraverseExprImpl(ctx, expr, () => context.IsBreaked, call(context, _, _), traverse)
     }
 
   }
