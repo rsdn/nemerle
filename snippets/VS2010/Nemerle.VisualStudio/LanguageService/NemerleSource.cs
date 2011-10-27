@@ -63,7 +63,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				catch { }
 			}
 
-			Scanner = colorizer.Scanner as NemerleScanner;
+			Scanner = colorizer == null ? null : colorizer.Scanner as NemerleScanner;
 
 			if (Scanner != null)
 				Scanner._source = this;

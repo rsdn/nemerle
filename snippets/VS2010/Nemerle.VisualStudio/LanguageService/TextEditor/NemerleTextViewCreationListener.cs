@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.IO;
 using Microsoft.VisualStudio.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
 using System.ComponentModel.Composition;
@@ -12,11 +13,12 @@ using Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Shell.Interop;
 using System.Diagnostics;
+using Nemerle.VisualStudio.Project;
 
 namespace Nemerle.VisualStudio.LanguageService.TextEditor
 {
 	[Export(typeof(IVsTextViewCreationListener))]
-	[ContentType("text")]//code
+	[ContentType("code")]
 	[TextViewRole(PredefinedTextViewRoles.Document)]
 	class NemerleTextViewCreationListener : IVsTextViewCreationListener
 	{
@@ -30,61 +32,74 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 		public void VsTextViewCreated(IVsTextView textViewAdapter)
 		{
 			var view = textViewAdapter.ToITextView();
-			var doc = view.TextBuffer.Properties.GetProperty<ITextDocument>(typeof(ITextDocument));
-			var filePath = doc.FilePath;
+			var filePath = textViewAdapter.GetFilePath();
+			var ext = Path.GetExtension(filePath);
+
+			// TODO: FIXME: VladD2: We must check extension by compiler plagin engine!
+			if (!Utils.Eq(ext, ".cs"))
+				return;
+
+			var project = ProjectInfo.FindProject(filePath);
+
+			if (project == null)
+				return;
 
 			Trace.WriteLine("Opened: " + filePath);
-			
-			view.TextBuffer.Changed += TextBuffer_Changed;
-			EventHandler closed = null;
-			closed = (sender, args) =>
-				{
-					Trace.WriteLine("Closed: " + filePath);
-					view.TextBuffer.Changed -= TextBuffer_Changed;
-					view.Closed -= closed;
-				};
-			view.Closed += closed; 
-		}
 
-		
+			IVsTextLines vsTextLines = textViewAdapter.GetBuffer();
+			var source = new NemerleSource(project.LanguageService, vsTextLines, null);
+			project.AddEditableSource(source);
+
+			view.TextBuffer.Changed += TextBuffer_Changed;
+			view.Closed             += view_Closed;
+		}
 
 		void TextBuffer_Changed(object sender, TextContentChangedEventArgs args)
 		{
-			var textBuffer = sender as ITextBuffer;
-			var doc = textBuffer.Properties.GetProperty<ITextDocument>(typeof(ITextDocument));
-			//var vsTextBuffer = textBuffer.ToIVsTextBuffer();
-			//var vsTextLines = vsTextBuffer as IVsTextLines;
-			//var filePath = FilePathUtilities.GetFilePath(vsTextLines);
-			var filePath = doc.FilePath;
+			var textBuffer = (ITextBuffer)sender;
+			string filePath = textBuffer.GetFilePath();// textBuffer.ToIVsTextBuffer().GetFilePath();
+			var ext = Path.GetExtension(filePath);
+
+			// TODO: FIXME: VladD2: We must check extension by compiler plagin engine!
+			if (!Utils.Eq(ext, ".cs"))
+				return;
+
+			var project = ProjectInfo.FindProject(filePath);
+
+			if (project == null)
+				return;
+
+			project.Engine.RequestOnBuildTypesTree();
+
 			System.Diagnostics.Trace.WriteLine("Changed: (" + args.AfterVersion + ") " + filePath);
-
-
-			//foreach (var p in textBuffer.Properties.PropertyList)
-			//{
-			//  System.Diagnostics.Trace.WriteLine(p.Key + " = " + p.Value);
-			//}
-
-
-			//System.Diagnostics.Trace.WriteLine(args.AfterVersion);
-			//System.Diagnostics.Trace.WriteLine(args.After.GetText());
-		}
-
-		void TextBuffer_Changing(object sender, EventArgs args)
-		{
 		}
 
 		void view_Closed(object sender, EventArgs args)
 		{
-			var textView = sender as ITextView;
-			var wpfTextView = sender as IWpfTextView;
-			
-			
-			//var doc = textView.TextBuffer.Properties.GetProperty<ITextDocument>(typeof(ITextDocument));
-			var docData = textView.TextBuffer.Properties.GetProperty<IVsPersistDocData>(typeof(IVsPersistDocData));
-			
-			//var doc = docData as ITextDocument;
-			//var filePath = docData.;
-			//System.Diagnostics.Trace.WriteLine("Closed: " + filePath);
+			var view = (ITextView)sender;
+			IVsTextView vsTextView = view.ToVsTextView();
+		
+			view.TextBuffer.Changed -= TextBuffer_Changed;
+			view.Closed -= view_Closed;
+
+			Trace.WriteLine("Closed: " + vsTextView.GetFilePath());
+
+			var filePath = vsTextView.GetFilePath();// vsTextView.ToIVsTextBuffer().GetFilePath();
+			var ext = Path.GetExtension(filePath);
+
+			// TODO: FIXME: VladD2: We must check extension by compiler plagin engine!
+			if (!Utils.Eq(ext, ".cs"))
+				return;
+
+			var project = ProjectInfo.FindProject(filePath);
+
+			if (project == null)
+				return;
+
+			var source = (NemerleSource)project.GetSource(filePath);
+			source.Dispose();
+
+			//project.RemoveEditableSource((NemerleSource)project.GetSource(filePath));
 		}
 
 		#endregion
