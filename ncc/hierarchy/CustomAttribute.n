@@ -424,7 +424,7 @@ namespace Nemerle.Compiler
         && typeof(SSP.SecurityAttribute).IsAssignableFrom ((ti :> LibraryReference.ExternalTypeInfo).SystemType)
     }
 
-    private compile_expr(env : GlobalEnv, ti : TypeBuilder, allow_rec : bool, expr : PT.PExpr, typer : Typer, mutable expected : TypeVar = null) : object * FixedType
+    private compile_expr(env : GlobalEnv, expr : PT.PExpr, typer : Typer, mutable expected : TypeVar = null) : object * FixedType
     {
       def compile_type(loc, fixedType)
       {
@@ -446,43 +446,37 @@ namespace Nemerle.Compiler
         }
       }
 
-      match (expr)
+      def expr2 = ConstantFolder.FoldConstants(env, expr);
+      when (expr2 == null)
+        throw Recovery();
+      when (expected == null)
+        expected = typer.FreshTypeVar();
+      def tExpr = typer.TypeExpr(expr2, expected);
+      def convert(tExpr : TExpr) : object * FixedType
       {
-        | <[ array[] ]> when allow_rec => ((array(0) : array[object]) : object, FixedType.Array(typer.FreshTypeVar(), 1))
-        | <[ array[..$elems] ]> when allow_rec =>
-          def elemExpected = typer.FreshTypeVar();
-          def objects      = elems.MapToArray(e => compile_expr(env, ti, false, e, typer, elemExpected)[0]);
-          def elemType     = elemExpected.Fix();
-          (objects : object, FixedType.Array(elemType, 1))
-
-        | e =>
-          def typer = Typer(env, ti);
-          def expr2 = ConstantFolder.FoldConstants(env, expr);
-          when (expr2 == null)
-            throw Recovery();
-          when (expected == null)
-            expected = typer.FreshTypeVar();
-          def tExpr = typer.TypeExpr(expr2, expected);
-          def convert(tExpr : TExpr) : object * FixedType
+        | TExpr.Error => throw Recovery() // the typer already report error
+        | TExpr.DebugInfo(subExpr, _) => convert(subExpr)
+        | TExpr.Literal(Literal.Decimal) => Message.FatalError(tExpr.Location, "An attribute argument cannot be number of type decimal");
+        | TExpr.Literal(lit) => (lit.AsObject(InternalType), lit.GetInternalType(InternalType))
+        | TExpr.TypeConversion(subExpr, t, ConversionKind.UpCast, _) when subExpr.Type.TryRequire(t) => convert(subExpr)
+        | TExpr.TypeConversion(TExpr.Literal(lit) as e, t, ConversionKind.UpCast, _) => 
+          match (ConstantFolder.ConvertLiteral(lit, t.Fix()))
           {
-            | TExpr.Error => throw Recovery() // the typer already report error
-            | TExpr.DebugInfo(subExpr, _) => convert(subExpr)
-            | TExpr.Literal(Literal.Decimal) => Message.FatalError(tExpr.Location, "An attribute argument cannot be number of type decimal");
-            | TExpr.Literal(lit) => (lit.AsObject(InternalType), lit.GetInternalType(InternalType))
-            | TExpr.TypeConversion(subExpr, _, ConversionKind.UpCast, _) => convert(subExpr)
-            | TExpr.TypeOf(type) => compile_type(tExpr.Location, type.Fix())
-            /*| TExpr.Array(elems, [_]) => 
-              def objects      = elems.MapToArray(e => convert(e)[0]);
-              def elemType     = tExpr.Type.Fix();
-              (objects : object, elemType)
-
-            | TExpr.Array => Message.FatalError(tExpr.Location, "only single-dimensional arrays allowed in attributes")
-            */
-            | _ => Message.FatalError(tExpr.Location, $"only constant expressions allowed in attributes: $e ($(tExpr.Type))")
+            | Some(convertedLit) => convert(TExpr.Literal(e.Location, t, convertedLit))
+            | _ => Message.FatalError(tExpr.Location, $"Type conversion from $(e.Type) to $t in attribute a argument is unsupported.");
           }
-          
-          convert(tExpr)
+
+        | TExpr.TypeOf(type) => compile_type(tExpr.Location, type.Fix())
+        | TExpr.Array(elems, [_]) => 
+          def objects      = elems.MapToArray(e => convert(e)[0]);
+          def elemType     = tExpr.Type.Fix();
+          (objects : object, elemType)
+
+        | TExpr.Array => Message.FatalError(tExpr.Location, "only single-dimensional arrays allowed in attributes")
+        | _ => Message.FatalError(tExpr.Location, $"only constant expressions allowed in attributes: $expr ($(tExpr.Type))")
       }
+          
+      convert(tExpr)
     }
 
     private pre_compile(env : GlobalEnv, ti : TypeBuilder, attr : TypeInfo, parms : list [PT.PExpr])
@@ -490,7 +484,7 @@ namespace Nemerle.Compiler
           list[SR.PropertyInfo] * list[object] *
           list[SR.FieldInfo] * list[object]
     {
-      def typer = Typer(env);
+      def typer = Typer(env, ti);
       mutable ctor_parm_types = [];
       mutable ctor_parms = [];
       mutable field_infos = [];
@@ -503,7 +497,7 @@ namespace Nemerle.Compiler
         | <[ $(n : name) = $expr ]> =>
           def name = n.Id;
           def expr = ConstantFolder.FoldConstants(env, expr);
-          def (obj, ty) = compile_expr(env, ti, true, expr, typer);
+          def (obj, ty) = compile_expr(env, expr, typer);
           def problem() { Message.FatalError($"the type $(attr.FullName) has no field nor property named `$name'") };
           def (is_prop, mem) =
             match (attr.LookupMember(name))
@@ -536,7 +530,7 @@ namespace Nemerle.Compiler
             Message.FatalError ($"the member `$name' has type $(mem.GetMemType()) while the value assigned has type $ty")
 
         | _ =>
-          def (obj, ty) = compile_expr(env, ti, true, parm, typer);
+          def (obj, ty) = compile_expr(env, parm, typer);
           ctor_parm_types ::= ty;
           ctor_parms ::= obj;
       }
@@ -599,8 +593,7 @@ namespace Nemerle.Compiler
       (proper_ctor.GetConstructorInfo(), ctor_parms, property_infos, properties, field_infos, fields)
     }
 
-    private do_compile (env : GlobalEnv, ti : TypeBuilder, attr : TypeInfo, parms : list [PT.PExpr])
-        : SR.Emit.CustomAttributeBuilder * bool
+    private do_compile(env : GlobalEnv, ti : TypeBuilder, attr : TypeInfo, parms : list [PT.PExpr]) : SR.Emit.CustomAttributeBuilder * bool
     {
       def (ctor_info, ctor_params, prop_infos, prop_values, field_infos, field_values) = pre_compile (env, ti, attr, parms);
 
@@ -784,10 +777,7 @@ namespace Nemerle.Compiler
       result
     }
 
-    internal SaveCustomAttributes (ti : TypeBuilder,
-                                   adder : SY.AttributeTargets *
-                                           SR.Emit.CustomAttributeBuilder *
-                                           bool -> string) : void
+    internal SaveCustomAttributes (ti : TypeBuilder, adder : SY.AttributeTargets * SR.Emit.CustomAttributeBuilder * bool -> string) : void
     {
       foreach (expr in custom_attrs)
       {
