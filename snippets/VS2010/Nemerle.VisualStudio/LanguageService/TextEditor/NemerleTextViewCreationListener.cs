@@ -26,28 +26,36 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
     private IEditorOperationsFactoryService editorOperationsFactoryService { get; set; }
 		[Import]
 		private IVsEditorAdaptersFactoryService editorAdaptersFactoryService { get; set; }
- 	
+
+		ProjectInfo GetProjectInfo(string filePath)
+		{
+			var ext = Path.GetExtension(filePath);
+
+			// TODO: FIXME: VladD2: We must check extension by compiler plagin engine!
+			if (!Utils.Eq(ext, ".cs"))
+				return null;
+
+			return ProjectInfo.FindProject(filePath);
+		}
+
 		#region IVsTextViewCreationListener Members
 
 		public void VsTextViewCreated(IVsTextView textViewAdapter)
 		{
 			var view = textViewAdapter.ToITextView();
 			var filePath = textViewAdapter.GetFilePath();
-			var ext = Path.GetExtension(filePath);
 
-			// TODO: FIXME: VladD2: We must check extension by compiler plagin engine!
-			if (!Utils.Eq(ext, ".cs"))
-				return;
-
-			var project = ProjectInfo.FindProject(filePath);
-
+			var project = GetProjectInfo(filePath);
 			if (project == null)
 				return;
 
-			Trace.WriteLine("Opened: " + filePath);
+			//Trace.WriteLine("Opened: " + filePath);
 
 			IVsTextLines vsTextLines = textViewAdapter.GetBuffer();
-			var source = new NemerleSource(project.LanguageService, vsTextLines, null);
+			var langSrv = NemerlePackage.GetGlobalService(typeof(NemerleLanguageService)) as NemerleLanguageService;
+			if (langSrv == null)
+				return;
+			var source = (NemerleSource)langSrv.GetOrCreateSource(vsTextLines);
 			project.AddEditableSource(source);
 
 			view.TextBuffer.Changed += TextBuffer_Changed;
@@ -58,48 +66,35 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 		{
 			var textBuffer = (ITextBuffer)sender;
 			string filePath = textBuffer.GetFilePath();// textBuffer.ToIVsTextBuffer().GetFilePath();
-			var ext = Path.GetExtension(filePath);
 
-			// TODO: FIXME: VladD2: We must check extension by compiler plagin engine!
-			if (!Utils.Eq(ext, ".cs"))
-				return;
-
-			var project = ProjectInfo.FindProject(filePath);
-
+			var project = GetProjectInfo(filePath);
 			if (project == null)
 				return;
 
 			project.Engine.RequestOnBuildTypesTree();
 
-			System.Diagnostics.Trace.WriteLine("Changed: (" + args.AfterVersion + ") " + filePath);
+			//System.Diagnostics.Trace.WriteLine("Changed: (" + args.AfterVersion + ") " + filePath);
 		}
 
 		void view_Closed(object sender, EventArgs args)
 		{
 			var view = (ITextView)sender;
-			IVsTextView vsTextView = view.ToVsTextView();
 		
 			view.TextBuffer.Changed -= TextBuffer_Changed;
 			view.Closed -= view_Closed;
 
-			Trace.WriteLine("Closed: " + vsTextView.GetFilePath());
+			IVsTextView vsTextView = view.ToVsTextView();
 
 			var filePath = vsTextView.GetFilePath();// vsTextView.ToIVsTextBuffer().GetFilePath();
-			var ext = Path.GetExtension(filePath);
+			//Trace.WriteLine("Closed: " + filePath);
 
-			// TODO: FIXME: VladD2: We must check extension by compiler plagin engine!
-			if (!Utils.Eq(ext, ".cs"))
+			var langSrv = NemerlePackage.GetGlobalService(typeof(NemerleLanguageService)) as NemerleLanguageService;
+			if (langSrv == null)
 				return;
+			var source = (NemerleSource)langSrv.GetSource(filePath);
+			langSrv.OnCloseSource(source);
 
-			var project = ProjectInfo.FindProject(filePath);
-
-			if (project == null)
-				return;
-
-			var source = (NemerleSource)project.GetSource(filePath);
 			source.Dispose();
-
-			//project.RemoveEditableSource((NemerleSource)project.GetSource(filePath));
 		}
 
 		#endregion

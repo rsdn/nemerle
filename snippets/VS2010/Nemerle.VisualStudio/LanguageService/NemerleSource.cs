@@ -28,6 +28,7 @@ using Nemerle.VisualStudio.GUI;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Utils;
 using Microsoft.VisualStudio.Text.Editor;
+using System.IO;
 // ReSharper disable LocalizableElement
 
 namespace Nemerle.VisualStudio.LanguageService
@@ -42,6 +43,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			// ReSharper disable DoNotCallOverridableMethodsInConstructor
 			string path = GetFilePath();
 			// ReSharper restore DoNotCallOverridableMethodsInConstructor
+			IsNemerleSybtax = Utils.Eq(Path.GetExtension(path), ".n");
 
 			var vsTextBuffer = textLines as IVsTextBuffer;
 			var textBuffer = vsTextBuffer.ToITextBuffer();
@@ -100,6 +102,13 @@ namespace Nemerle.VisualStudio.LanguageService
 		internal TopDeclaration[] Declarations { get; set; }
 		public bool RegionsLoaded { get; set; }
 		public CompileUnit CompileUnit { get; set; }
+
+		/// <summary>
+		/// A NemerleSource usen for .n files and for extentions like .cs-files inside Nemerle project.
+		/// IsNemerleSybtax is true if this file is Nemerle language file (niot extension).
+		/// </summary>
+		public bool IsNemerleSybtax { get; private set; }
+
 		internal NemerleSmartIndentation SmartIndent { get; private set; }
 
 		public int FileIndex
@@ -122,6 +131,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				return _fileIndex;
 			}
 		}
+
 		public IVsTextLines TextLines
 		{
 			get { return GetTextLines(); }
@@ -142,6 +152,10 @@ namespace Nemerle.VisualStudio.LanguageService
 		public override void OnChangeLineText(TextLineChange[] lineChange, int last)
 		{
 			base.OnChangeLineText(lineChange, last);
+
+			if (!IsNemerleSybtax)
+				return;
+
 			TimeStamp++;
 
 			ProjectInfo projectInfo = ProjectInfo;
