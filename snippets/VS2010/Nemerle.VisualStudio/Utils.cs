@@ -81,6 +81,41 @@ namespace Nemerle.VisualStudio
 			return host.TextView;
 		}
 
+		public static IVsTextView ToVsTextView(this ITextView view)
+		{
+			return view.Properties.GetProperty<IVsTextView>(typeof(IVsTextView));
+		}
+
+		public static string GetFilePath(this IVsTextView textViewAdapter)
+		{
+			return GetFilePath(GetBuffer(textViewAdapter));
+		}
+
+		public static IVsTextLines GetBuffer(this IVsTextView textViewAdapter)
+		{
+			IVsTextLines vsTextLines;
+			ErrorHelper.ThrowOnFailure(textViewAdapter.GetBuffer(out vsTextLines));
+			return vsTextLines;
+		}
+
+		public static string GetFilePath(this ITextBuffer textBuffer)
+		{
+			return GetFilePath((IPersistFileFormat)textBuffer.ToIVsTextBuffer());
+		}
+
+		private static string GetFilePath(IPersistFileFormat persistFileFormat)
+		{
+			string filePath;
+			uint formatIndex;
+			ErrorHelper.ThrowOnFailure(persistFileFormat.GetCurFile(out filePath, out formatIndex));
+			return filePath;
+		}
+
+		public static string GetFilePath(this IVsTextLines vsTextLines)
+		{
+			return GetFilePath((IPersistFileFormat)vsTextLines);
+		}
+
 		public static string GetLiadingSpaces(this string text)
 		{
 			return text.Substring(0, text.Length - text.TrimStart(' ', '\t').Length);

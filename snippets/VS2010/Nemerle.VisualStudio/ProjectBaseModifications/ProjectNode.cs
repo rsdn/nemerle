@@ -747,11 +747,19 @@ namespace Microsoft.VisualStudio.Project
 		{
 			get
 			{
-				if (this.options == null)
-				{
-					GetProjectOptions();
-				}
-				if (this.options != null)
+        if (this.options == null)
+        {
+          try
+          {
+            GetProjectOptions();
+          }
+          //FIXME: WORKAROUND: if we can't get options return default framework version
+          catch
+          {
+            return DefaultTargetFrameworkMoniker;
+          }
+        }
+        if (this.options != null)
 				{
 					return this.options.TargetFrameworkMoniker ?? DefaultTargetFrameworkMoniker;
 				}

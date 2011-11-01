@@ -424,9 +424,9 @@ namespace Nemerle.Compiler
         && typeof(SSP.SecurityAttribute).IsAssignableFrom ((ti :> LibraryReference.ExternalTypeInfo).SystemType)
     }
 
-    private compile_expr(env : GlobalEnv, ti : TypeBuilder, allow_rec : bool, expr : PT.PExpr, typer : Typer) : object * FixedType
+    private compile_expr(env : GlobalEnv, expr : PT.PExpr, typer : Typer, mutable expected : TypeVar = null) : object * FixedType
     {
-      def compile_type(parsedType, fixedType)
+      def compile_type(loc, fixedType)
       {
         match (fixedType)
         {
@@ -435,71 +435,48 @@ namespace Nemerle.Compiler
             if (args.Exists (is_free))
             {
               when (!args.ForAll (is_free))
-                Message.Error(parsedType.Location, "to create open generic type all arguments must be open `_'");
+                Message.Error(loc, "to create open generic type all arguments must be open `_'");
 
               (tc.SystemType, InternalType.Type)
             }
             else
               (fixedType.GetSystemType(), InternalType.Type)
 
-          | _ => Message.FatalError(parsedType.Location, $"invalid / unbound type `$(parsedType)' in attribute parameter")
+          | _ => Message.FatalError(loc, "invalid type in attribute parameter")
         }
       }
 
-      match (expr)
+      def expr2 = ConstantFolder.FoldConstants(env, expr);
+      when (expr2 == null)
+        throw Recovery();
+      when (expected == null)
+        expected = typer.FreshTypeVar();
+      def tExpr = typer.TypeExpr(expr2, expected);
+      def convert(tExpr : TExpr) : object * FixedType
       {
-        | <[ $(x : string) ]> => ((x : object), InternalType.String)
-        | <[ $(x : bool) ]> => ((x : object), InternalType.Boolean)
-        | <[ $(x : char) ]> => ((x : object), InternalType.Char)
-        | PT.PExpr.Literal (Literal.Enum (lval, ty, _)) =>
-          def (val, _) = compile_expr(env, ti, allow_rec, PT.PExpr.Literal(lval), typer);
-          (val, FixedType.Class(ty, []))
-
-        | <[ null ]> => (null, InternalType.Type)
-        | PT.PExpr.Literal (Literal.Decimal) => Message.FatalError(expr.Location, "An attribute argument cannot be number of type decimal");
-        | PT.PExpr.Literal (lit) => (lit.AsObject (InternalType), lit.GetInternalType (InternalType))
-        | <[ typeof($t) ]> when ti != null => compile_type(t, ti .BindType(t).Fix())
-        | <[ typeof($t) ]>                 => compile_type(t, env.BindType(t).Fix())
-        | <[ array[] ]> when allow_rec => ((array(0) : array[object]) : object, FixedType.Array(typer.FreshTypeVar(), 1))
-        | <[ array[..$elems] ]> when allow_rec =>
-          def exprs = elems.Map(e => compile_expr(env, ti, false, e, typer));
-          def array_tc = exprs.FoldLeft(InternalType.Object_tc,
-              fun (et, curty)
-              {
-                match (et)
-                {
-                  | (_, FixedType.Class(tc, _)) when !tc.Equals(InternalType.Object_tc) => tc
-                  | _ => curty
-                }
-              });
-          def allow_null = array_tc.Equals(InternalType.String_tc) || array_tc.Equals(InternalType.Type_tc);
-          def objects = exprs.Map(
-            fun (_)
-            {
-              | (e, FixedType.Class (tc, _)) when tc.Equals (array_tc) => e
-              | (x, _) when allow_null && x == null => null
-              | (_, t) => Message.FatalError(expr.Location, $"custom attribute array shall have type $array_tc while the element has type $t")
-            });
-
-          // FIXME: this seems wrong, what if there are two mscorlibs?
-
-          def arr = objects.ToArray ();
-          (arr : object, FixedType.Array(FixedType.Class(array_tc, []), 1))
-
-        | <[ $obj . $(n : name) ]> => Message.FatalError(expr.Location, $"unbound / non-enum member $(n.Id) in $obj at custom attribute parameter")
-
-        | e =>
-          def typer = Typer(env, ti);
-          def tExpr = typer.TypeExpr(expr);
-          match (tExpr)
+        | TExpr.Error => throw Recovery() // the typer already report error
+        | TExpr.DebugInfo(subExpr, _) => convert(subExpr)
+        | TExpr.Literal(Literal.Decimal) => Message.FatalError(tExpr.Location, "An attribute argument cannot be number of type decimal");
+        | TExpr.Literal(lit) => (lit.AsObject(InternalType), lit.GetInternalType(InternalType))
+        | TExpr.TypeConversion(subExpr, t, ConversionKind.UpCast, _) when subExpr.Type.TryRequire(t) => convert(subExpr)
+        | TExpr.TypeConversion(TExpr.Literal(lit) as e, t, ConversionKind.UpCast, _) => 
+          match (ConstantFolder.ConvertLiteral(lit, t.Fix()))
           {
-            | TExpr.DebugInfo(TExpr.Error, _) | TExpr.Error => throw Recovery() // the typer already report error
-            | TExpr.DebugInfo(TExpr.Literal(lit), _) | TExpr.Literal(lit) => 
-              (lit.AsObject(InternalType), lit.GetInternalType(InternalType))
-
-            | _ => Message.FatalError(tExpr.Location, $"only constant expressions allowed in attributes: $e ($(tExpr.Type))")
+            | Some(convertedLit) => convert(TExpr.Literal(e.Location, t, convertedLit))
+            | _ => Message.FatalError(tExpr.Location, $"Type conversion from $(e.Type) to $t in attribute a argument is unsupported.");
           }
+
+        | TExpr.TypeOf(type) => compile_type(tExpr.Location, type.Fix())
+        | TExpr.Array(elems, [_]) => 
+          def objects      = elems.MapToArray(e => convert(e)[0]);
+          def elemType     = tExpr.Type.Fix();
+          (objects : object, elemType)
+
+        | TExpr.Array => Message.FatalError(tExpr.Location, "only single-dimensional arrays allowed in attributes")
+        | _ => Message.FatalError(tExpr.Location, $"only constant expressions allowed in attributes: $expr ($(tExpr.Type))")
       }
+          
+      convert(tExpr)
     }
 
     private pre_compile(env : GlobalEnv, ti : TypeBuilder, attr : TypeInfo, parms : list [PT.PExpr])
@@ -507,7 +484,7 @@ namespace Nemerle.Compiler
           list[SR.PropertyInfo] * list[object] *
           list[SR.FieldInfo] * list[object]
     {
-      def typer = Typer(env);
+      def typer = Typer(env, ti);
       mutable ctor_parm_types = [];
       mutable ctor_parms = [];
       mutable field_infos = [];
@@ -520,7 +497,7 @@ namespace Nemerle.Compiler
         | <[ $(n : name) = $expr ]> =>
           def name = n.Id;
           def expr = ConstantFolder.FoldConstants(env, expr);
-          def (obj, ty) = compile_expr(env, ti, true, expr, typer);
+          def (obj, ty) = compile_expr(env, expr, typer);
           def problem() { Message.FatalError($"the type $(attr.FullName) has no field nor property named `$name'") };
           def (is_prop, mem) =
             match (attr.LookupMember(name))
@@ -553,7 +530,7 @@ namespace Nemerle.Compiler
             Message.FatalError ($"the member `$name' has type $(mem.GetMemType()) while the value assigned has type $ty")
 
         | _ =>
-          def (obj, ty) = compile_expr(env, ti, true, parm, typer);
+          def (obj, ty) = compile_expr(env, parm, typer);
           ctor_parm_types ::= ty;
           ctor_parms ::= obj;
       }
@@ -616,8 +593,7 @@ namespace Nemerle.Compiler
       (proper_ctor.GetConstructorInfo(), ctor_parms, property_infos, properties, field_infos, fields)
     }
 
-    private do_compile (env : GlobalEnv, ti : TypeBuilder, attr : TypeInfo, parms : list [PT.PExpr])
-        : SR.Emit.CustomAttributeBuilder * bool
+    private do_compile(env : GlobalEnv, ti : TypeBuilder, attr : TypeInfo, parms : list [PT.PExpr]) : SR.Emit.CustomAttributeBuilder * bool
     {
       def (ctor_info, ctor_params, prop_infos, prop_values, field_infos, field_values) = pre_compile (env, ti, attr, parms);
 
@@ -801,10 +777,7 @@ namespace Nemerle.Compiler
       result
     }
 
-    internal SaveCustomAttributes (ti : TypeBuilder,
-                                   adder : SY.AttributeTargets *
-                                           SR.Emit.CustomAttributeBuilder *
-                                           bool -> string) : void
+    internal SaveCustomAttributes (ti : TypeBuilder, adder : SY.AttributeTargets * SR.Emit.CustomAttributeBuilder * bool -> string) : void
     {
       foreach (expr in custom_attrs)
       {
