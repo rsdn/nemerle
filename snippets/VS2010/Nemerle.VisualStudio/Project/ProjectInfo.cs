@@ -501,10 +501,11 @@ namespace Nemerle.VisualStudio.Project
 
 			if (!string.IsNullOrEmpty(defineConstants))
 			{
-				var defines = defineConstants.Replace(" \t\r\n", String.Empty).Split(';');
+				var defines = defineConstants.Replace(" \t\r\n", String.Empty)
+					.Split(new char[]{';'}, StringSplitOptions.RemoveEmptyEntries);
 
 				foreach (var define in defines)
-					options.DefineConstant(define);
+					options.DefineConstant(define.Trim());
 			}
 
 			var projectFullName = ProjectFullName;
@@ -583,6 +584,7 @@ namespace Nemerle.VisualStudio.Project
 
 			IIdeSource source = (NemerleSource)LanguageService.GetSource(path); // TODO: VladD2: тут надо искать Source по иерархии, а не по пути!
 
+			//source = new NemerleSource(LanguageService, );
 			try
 			{
 				if (source == null)
