@@ -873,22 +873,18 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			string filePath = GetFilePath();
 			ProjectInfo projectInfo = ProjectInfo.FindProject(filePath);
-			IIdeEngine engine;
-			if (projectInfo != null)
-			{
-				engine = projectInfo.Engine;
-			}
-			else engine = NemerleLanguageService.DefaultEngine;
-			ReformatSpanInternal(mgr, span, engine, filePath, this);
+			IIdeEngine engine = projectInfo != null ? projectInfo.Engine : NemerleLanguageService.DefaultEngine;
+            ReformatSpanInternal(mgr, span, engine, filePath, this, LanguageService.GetLanguagePreferences());
 		}
-		private static void ReformatSpanInternal(EditArray mgr, TextSpan span, IIdeEngine engine, string filePath, IIdeSource src)
+
+		private static void ReformatSpanInternal(EditArray mgr, TextSpan span, IIdeEngine engine, string filePath, IIdeSource src, LanguagePreferences pref)
 		{
 			var result = Formatter.BeginFormat(span.iStartLine + 1,
 							 span.iStartIndex + 1,
 							 span.iEndLine + 1,
 							 span.iEndIndex + 1,
 							 engine,
-							 src);
+							 src, new IndentInfo(pref.InsertTabs, pref.IndentSize, pref.TabSize));
 			result.AsyncWaitHandle.WaitOne();
 			var results = result.Result;
 			using (var editArray = new EditArray(mgr.Source, mgr.TextView, true, "formatting"))
