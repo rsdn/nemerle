@@ -24,6 +24,7 @@ using Microsoft.VisualStudio.Shell.Design.Serialization;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Completion2;
 using System.Threading;
+using Nemerle.Completion2.CodeFormatting;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -218,7 +219,7 @@ namespace Nemerle.VisualStudio.Project
 				}
 			}
 
-			var indentInfo = new IndentInfo(projectInfo.LanguageService.Preferences);
+			var indentInfo = ToIndentInfo(projectInfo.LanguageService.Preferences);
 
 			using (var helper = new NemerleProjectSourcesButchEditHelper(projectInfo, "form designer update", indentInfo))
 			{
@@ -264,6 +265,11 @@ namespace Nemerle.VisualStudio.Project
 					}
 				}
 			}
+		}
+
+		public static IndentInfo ToIndentInfo(LanguagePreferences languagePreferences)
+		{
+			return new IndentInfo(languagePreferences.InsertTabs, languagePreferences.IndentSize, languagePreferences.TabSize);
 		}
 
 		private CodeGeneratorOptions GetCodeGeneratorOptions()
