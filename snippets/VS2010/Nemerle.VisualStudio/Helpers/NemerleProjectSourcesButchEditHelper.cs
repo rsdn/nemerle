@@ -9,6 +9,7 @@ using Microsoft.VisualStudio.Project;
 using Nemerle.Compiler.Parsetree;
 using System.CodeDom;
 using System.Drawing;
+using Nemerle.Completion2.CodeFormatting;
 
 using NUtils = Nemerle.Compiler.Utils.Utils;
 
