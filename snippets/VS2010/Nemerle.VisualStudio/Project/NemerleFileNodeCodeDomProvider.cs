@@ -190,62 +190,28 @@ namespace Nemerle.VisualStudio.Project
 			var changes = projectInfo.Engine.MergeCodeCompileUnit(codeCompileUnit);
 			var sourcesInf = (List<TupleStringIntInt>)codeCompileUnit.UserData["NemerleSources"];
 
-			// Для упрощения реализации генерации кода при генерации кода не происходит 
-			// обновление сгенерированных ранее веток CodeDom-а. Однако дизайнер форм может 
-			// вызывать генерацию кода по CodeDom-у множество раз. При этом он не пытается перечитать
-			// содержимое формы, если только пользователь вручную не изменим файлы в которые 
-			// сериализуется форма. При первой сериалзиции фалы хранящие код формы изменяются,
-			// и при повтоной попытке серилизовать CodeDom формы элементы CodeDom-а будут 
-			// указывать на неверные позиции, так как предыдущая сериализация изменила код.
-			// Чтобы не мучиться с синхронизацией перед сериализацией просто востанавливается 
-			// состояние (которое было на момент генерации CodeDom-элементов) файлов содержащих код 
-			// формы. 
-			// Если один из файлов будет изменен пользователем, то CodeDom будет автоматически пересоздан.
-			// Таким образом изменение файла могут быть вызваны только сериализацией CodeDom-а в код.
-
-			foreach (var si in sourcesInf)
-			{
-				var fileIndex = si.Field2;
-				var fileVertion = si.Field1;
-				var code = si.Field0;
-				var source = projectInfo.GetEditableSource(fileIndex, WindowFrameShowAction.DoNotShow);
-				projectInfo.Engine.BeginUpdateCompileUnit(source).AsyncWaitHandle.WaitOne();
-				
-				if (source.CurrentVersion != fileVertion)
-				{
-					var oldSource = source.GetText();
-					//source.SetText(code); // файл изменился с момента генерации по нему CodeDom-а! Восстанавливаем его.
-					var x = oldSource;
-				}
-			}
-
 			var indentInfo = ToIndentInfo(projectInfo.LanguageService.Preferences);
 
 			using (var helper = new NemerleProjectSourcesButchEditHelper(projectInfo, "form designer update", indentInfo))
 			{
 				var definedIn = changes.Declaration.UserData["Member"] as TopDeclaration;
-				var initializeComponent = changes.InitializeComponent;
 				var typeBuilder = definedIn.TypeBuilder;
 
 				var mainFilePath = PathOfMainFile();
 				var mainFileIndex = Location.GetFileIndex(mainFilePath);
 				var mainPart = typeBuilder.AstParts.First(td => td.Location.FileIndex == mainFileIndex);
 
-				if (initializeComponent != null)
+				var cls = changes.Class;
+
+				if (changes.InitializeComponent != null)
 				{
-					var source = projectInfo.GetEditableSource(initializeComponent.Location.FileIndex, WindowFrameShowAction.DoNotShow);
-					var cu = source.CompileUnit;
-					var cls = (TopDeclaration.Class)cu.TopDeclarations.First();
-
 					var text = CodeGenerator.ToString(changes.NewInitializeComponentStatements);
-					var newInitializeComponent = cls.GetMembers().First(m => m.Name == "InitializeComponent");
-					// обновляем исходники...
-					helper.ReplaseMethodBody((ClassMember.Function)newInitializeComponent, text);
-					//definedIn = initializeComponent.DefinedIn;
-
-					foreach (CodeMemberField codeMemberField in changes.InsertedFields)
-						helper.AddField(cls, codeMemberField);
+					// update InitializeComponent() body...
+					helper.ReplaseMethodBody(changes.InitializeComponent, text);
 				}
+
+				foreach (CodeMemberField codeMemberField in changes.InsertedFields)
+					helper.AddField(cls, codeMemberField);
 
 				foreach (CodeMemberMethod codeMemberMethod in changes.InsertedMethods)
 					helper.AddMethod(mainPart, codeMemberMethod, changes.Declaration);
