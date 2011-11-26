@@ -43,14 +43,7 @@ namespace Nemerle.VisualStudio.Project
 				if (this.Project == null || this.Project.IsClosed)
 					return null;
 				else
-				{
-					if (UIThread.Instance.IsUIThread)
-						return base.UniqueName;
-
-					string uniqueName = string.Empty;
-					UIThread.Instance.RunSync(() => uniqueName = base.UniqueName);
-					return uniqueName;
-				}
+					return Utils.CalcSyncInUIThread(() => base.UniqueName);
 			}
 		}
 	}
