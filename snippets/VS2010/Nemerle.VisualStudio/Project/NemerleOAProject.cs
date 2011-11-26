@@ -31,5 +31,27 @@ namespace Nemerle.VisualStudio.Project
 				return new NemerleOAProperties(this.Project.NodeProperties);
 			}
 		}
+
+		/// <summary>
+		/// Returns the name of project as a relative path from the directory containing the solution file to the project file
+		/// </summary>
+		/// <value>Unique name if project is in a valid state. Otherwise null</value>
+		public override string UniqueName
+		{
+			get
+			{
+				if (this.Project == null || this.Project.IsClosed)
+					return null;
+				else
+				{
+					if (UIThread.Instance.IsUIThread)
+						return base.UniqueName;
+
+					string uniqueName = string.Empty;
+					UIThread.Instance.RunSync(() => uniqueName = base.UniqueName);
+					return uniqueName;
+				}
+			}
+		}
 	}
 }
