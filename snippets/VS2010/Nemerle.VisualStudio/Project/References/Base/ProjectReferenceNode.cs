@@ -12,6 +12,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Microsoft.VisualStudio.Project.Automation;
 using EnvDTE80;
+using Nemerle.VisualStudio;
 
 namespace Microsoft.VisualStudio.Project
 {
@@ -235,45 +236,49 @@ namespace Microsoft.VisualStudio.Project
 		{
 			get
 			{
-				// Make sure that the referenced project implements the automation object.
-				if (null == this.ReferencedProjectObject)
-					return null;
+				EnvDTE.Configuration config = 
+					Utils.CalcSyncInUIThread(() =>
+						{
+							EnvDTE.Project referencedProjectObject = ReferencedProjectObject;
+							// Make sure that the referenced project implements the automation object.
+							if (null == referencedProjectObject)
+								return null;
 
-				// Get the configuration manager from the project.
-				EnvDTE.ConfigurationManager confManager = this.ReferencedProjectObject.ConfigurationManager;
-				if (null == confManager)
-					return null;
+							// Get the configuration manager from the project.
+							EnvDTE.ConfigurationManager confManager = referencedProjectObject.ConfigurationManager;
+							if (null == confManager)
+								return null;
 
-				// Get the active configuration.
-				EnvDTE.Configuration config = null;
-
-				try { config = confManager.ActiveConfiguration; }
-				catch (Exception ex)
-				{ 
-					Debug.WriteLine(ex.Message);
+							// Get the active configuration.
+							try { return confManager.ActiveConfiguration; }
+							catch (Exception ex)
+							{
+								Debug.WriteLine(ex.Message);
 #if DEBUG && false
-					// примерная реализация свойства confManager.ActiveConfiguration...
-					var dte = confManager.DTE;
-					var solution = dte.Solution;
-					var solutionBuild = solution.SolutionBuild;
-					var pSolutionConfiguration = solutionBuild.ActiveConfiguration;
-					var pSolutionContexts = pSolutionConfiguration.SolutionContexts;
-					var pSln = (IVsSolution)GetService(typeof(SVsSolution));
-					var nProject = (Nemerle.VisualStudio.Project.NemerleOAProject)this.ReferencedProjectObject;
-					var nProjNode = nProject.Project;
-					//(IVsHierarchy) 
-					string bstrPrjUniqueName;
-					pSln.GetUniqueNameOfProject(nProjNode, out bstrPrjUniqueName);
-					var pSolutionContext = pSolutionContexts.Item(bstrPrjUniqueName);
-					var bstrCfgName = pSolutionContext.ConfigurationName;
-					var bstrPlatformName = pSolutionContext.PlatformName;
-					IVsCfgProvider cfgProvider;
-					nProjNode.GetCfgProvider(out cfgProvider);
-					var pCP2 = (IVsCfgProvider2)cfgProvider;
-					try { var cfg = confManager.Item(bstrCfgName, bstrPlatformName); }
-					catch { Debug.WriteLine(ex.Message); }
+							// примерная реализация свойства confManager.ActiveConfiguration...
+							var dte = confManager.DTE;
+							var solution = dte.Solution;
+							var solutionBuild = solution.SolutionBuild;
+							var pSolutionConfiguration = solutionBuild.ActiveConfiguration;
+							var pSolutionContexts = pSolutionConfiguration.SolutionContexts;
+							var pSln = (IVsSolution)GetService(typeof(SVsSolution));
+							var nProject = (Nemerle.VisualStudio.Project.NemerleOAProject)this.ReferencedProjectObject;
+							var nProjNode = nProject.Project;
+							//(IVsHierarchy) 
+							string bstrPrjUniqueName;
+							pSln.GetUniqueNameOfProject(nProjNode, out bstrPrjUniqueName);
+							var pSolutionContext = pSolutionContexts.Item(bstrPrjUniqueName);
+							var bstrCfgName = pSolutionContext.ConfigurationName;
+							var bstrPlatformName = pSolutionContext.PlatformName;
+							IVsCfgProvider cfgProvider;
+							nProjNode.GetCfgProvider(out cfgProvider);
+							var pCP2 = (IVsCfgProvider2)cfgProvider;
+							try { var cfg = confManager.Item(bstrCfgName, bstrPlatformName); }
+							catch { Debug.WriteLine(ex.Message); }
 #endif
-				}
+								return null;
+							}
+						});
 
 				if (null == config)
 					return null;
