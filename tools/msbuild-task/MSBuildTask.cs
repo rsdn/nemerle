@@ -196,7 +196,9 @@ namespace Nemerle.Tools.MSBuildTask
 			if (IndentationSyntax)
 				commandLine.AppendSwitch("\n/indentation-syntax");
 			commandLine.AppendSwitchIfNotNull("\n/doc:", this.DocumentationFile);
-			commandLine.AppendSwitchUnquotedIfNotNull("\n/define:", base.DefineConstants);
+			def defines = base.DefineConstants
+				.Split(new char[]{';', ' ', '\r', '\n', '\t'}, StringSplitOptions.RemoveEmptyEntries);
+			commandLine.AppendSwitchUnquotedIfNotNull("\n/define:", String.Join(defines, ';'));
 			commandLine.AppendSwitchIfNotNull("\n/win32res:", base.Win32Resource);
 			commandLine.AppendSwitchIfNotNull("\n/platform:", this.Platform);
 
