@@ -33,7 +33,7 @@ namespace Nemerle.VisualStudio.Project
 
 		internal NemerleFileNode(ProjectNode root, ProjectElement e)
 			: this(root, e, false) {
-        _OAProject = root.GetAutomationObject() as NemerleOAProject;
+        _OAProject = (NemerleOAProject)root.GetAutomationObject();
     }
 
 		/// <summary>

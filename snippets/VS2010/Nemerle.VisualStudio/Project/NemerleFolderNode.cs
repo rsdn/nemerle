@@ -28,7 +28,7 @@ namespace Nemerle.VisualStudio.Project
 		public NemerleFolderNode(ProjectNode root, string directoryPath, ProjectElement element)
 			: this(root, directoryPath, element, false)
 		{
-      _OAProject = root.GetAutomationObject() as NemerleOAProject;
+      _OAProject = (NemerleOAProject)root.GetAutomationObject();
 		}
 
 		/// <summary>
@@ -43,7 +43,7 @@ namespace Nemerle.VisualStudio.Project
 			: base(root, directoryPath, element)
 		{
 			IsNonMemberItem = isNonMemberItem;
-      _OAProject = root.GetAutomationObject() as NemerleOAProject;
+      _OAProject = (NemerleOAProject)root.GetAutomationObject();
 			// Folders do not participate in SCC.
 			ExcludeNodeFromScc = true;
 		}

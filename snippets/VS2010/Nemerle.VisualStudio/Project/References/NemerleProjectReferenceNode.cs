@@ -40,7 +40,7 @@ namespace Nemerle.VisualStudio.Project
     public override void Remove(bool removeFromStorage)
     {
       base.Remove(removeFromStorage);
-      (_projectNode.GetAutomationObject() as NemerleOAProject).PersistProjectFile();
+      ((NemerleOAProject)_projectNode.GetAutomationObject()).PersistProjectFile();
       
     }
 		protected override NodeProperties CreatePropertiesObject()

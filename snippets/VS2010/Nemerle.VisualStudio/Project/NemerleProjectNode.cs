@@ -358,7 +358,7 @@ namespace Nemerle.VisualStudio.Project
 				throw new ApplicationException("No startup projects.");
 
 			var startupProjectFullName = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(dte.Solution.FullName), (string)startupProjects[0]));
-			NemerleOAProject nemerleOAProject = GetProject(dte, startupProjectFullName) as NemerleOAProject;
+      NemerleOAProject nemerleOAProject = (NemerleOAProject)GetProject(dte, startupProjectFullName);
 			
 			if (nemerleOAProject == null)
 				return false;
@@ -560,7 +560,7 @@ namespace Nemerle.VisualStudio.Project
 					curParent = VerifySubFolderExists(path, curParent);
 				}
 			}
-      (this.GetAutomationObject() as NemerleOAProject).PersistProjectFile();
+      ((NemerleOAProject)this.GetAutomationObject()).PersistProjectFile();
 			return curParent;
 		}
 
@@ -1055,7 +1055,7 @@ namespace Nemerle.VisualStudio.Project
 			if (item.ItemName == "Compile") // IsCodeFile(include) && 
 				provider.AddService(typeof(SVSMDCodeDomProvider), new NemerleVSMDProvider(newNode), false);
 
-      (this.GetAutomationObject() as NemerleOAProject).PersistProjectFile();
+      ((NemerleOAProject)this.GetAutomationObject()).PersistProjectFile();
 			return newNode;
 		}
 
@@ -1081,7 +1081,7 @@ namespace Nemerle.VisualStudio.Project
 				newNode.OleServiceProvider.AddService(typeof(SVSMDCodeDomProvider),
 					new NemerleVSMDProvider(newNode), false);
 
-      (this.GetAutomationObject() as NemerleOAProject).PersistProjectFile();
+      ((NemerleOAProject)this.GetAutomationObject() ).PersistProjectFile();
 
 			return newNode;
 		}
@@ -1196,7 +1196,7 @@ namespace Nemerle.VisualStudio.Project
 				//
 				ShowProjectInSolutionPage = true;
 			}
-      (this.GetAutomationObject() as NemerleOAProject).PersistProjectFile();
+      ((NemerleOAProject) this.GetAutomationObject()).PersistProjectFile();
 			return VSConstants.S_OK;
 		}
 
@@ -1265,7 +1265,7 @@ namespace Nemerle.VisualStudio.Project
 		public override int AddItem(uint itemIdLoc, VSADDITEMOPERATION op, string itemName, uint filesToOpen, string[] files, IntPtr dlgOwner, VSADDRESULT[] result)
 		{
 			var finalResult =  AddManyItemsHelper(itemIdLoc, op, itemName, filesToOpen, files, dlgOwner, result);
-      (this.GetAutomationObject() as NemerleOAProject).PersistProjectFile();
+      ((NemerleOAProject)this.GetAutomationObject()).PersistProjectFile();
       return finalResult;
 		}
 

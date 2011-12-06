@@ -20,7 +20,7 @@ namespace Nemerle.VisualStudio.Project
 		protected override NodeProperties CreatePropertiesObject()
 		{
       
-			return new NemerleReferenceNodeProperties(this, _projectNode.GetAutomationObject() as NemerleOAProject);
+			return new NemerleReferenceNodeProperties(this, (NemerleOAProject)_projectNode.GetAutomationObject());
       
 		}
 
@@ -61,7 +61,7 @@ namespace Nemerle.VisualStudio.Project
     public override void Remove(bool removeFromStorage)
     {
       base.Remove(removeFromStorage);
-      (_projectNode.GetAutomationObject() as NemerleOAProject).PersistProjectFile();
+      ((NemerleOAProject)_projectNode.GetAutomationObject()).PersistProjectFile();
     }
 		protected override void BindReferenceData()
 		{
