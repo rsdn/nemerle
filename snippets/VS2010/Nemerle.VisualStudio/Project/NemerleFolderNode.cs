@@ -18,7 +18,7 @@ namespace Nemerle.VisualStudio.Project
 	public class NemerleFolderNode : FolderNode, IProjectSourceNode
 	{
 		#region ctors
-
+    readonly NemerleOAProject _OAProject;
 		/// <summary>
 		/// Initializes a new instance of the <see cref="NemerleFolderNode"/> class.
 		/// </summary>
@@ -28,6 +28,7 @@ namespace Nemerle.VisualStudio.Project
 		public NemerleFolderNode(ProjectNode root, string directoryPath, ProjectElement element)
 			: this(root, directoryPath, element, false)
 		{
+      _OAProject = (NemerleOAProject)root.GetAutomationObject();
 		}
 
 		/// <summary>
@@ -42,7 +43,7 @@ namespace Nemerle.VisualStudio.Project
 			: base(root, directoryPath, element)
 		{
 			IsNonMemberItem = isNonMemberItem;
-
+      _OAProject = (NemerleOAProject)root.GetAutomationObject();
 			// Folders do not participate in SCC.
 			ExcludeNodeFromScc = true;
 		}
@@ -116,7 +117,7 @@ namespace Nemerle.VisualStudio.Project
 			}
 
 			HierarchyHelpers.RefreshPropertyBrowser(this);
-
+      _OAProject.PersistProjectFile();
 			return VSConstants.S_OK;
 		}
 
@@ -127,7 +128,10 @@ namespace Nemerle.VisualStudio.Project
 		[SuppressMessage("Microsoft.Design", "CA1033:InterfaceMethodsShouldBeCallableByChildTypes")]
 		int IProjectSourceNode.IncludeInProject()
 		{
-			return ((IProjectSourceNode)this).IncludeInProject(true);
+      
+			var result = ((IProjectSourceNode)this).IncludeInProject(true);
+      _OAProject.PersistProjectFile();
+      return result;
 		}
 
 		/// <summary>
@@ -158,6 +162,7 @@ namespace Nemerle.VisualStudio.Project
 			ReDraw(UIHierarchyElement.Icon);
 
 			HierarchyHelpers.RefreshPropertyBrowser(this);
+      _OAProject.PersistProjectFile();
 
 			return VSConstants.S_OK;
 		}
@@ -211,7 +216,7 @@ namespace Nemerle.VisualStudio.Project
 				ErrorHelper.ThrowIsNull(value, "value");
 
 				IsNonMemberItem = bool.Parse(value.ToString());
-
+        
 				return VSConstants.S_OK;
 			}
 
@@ -260,6 +265,11 @@ namespace Nemerle.VisualStudio.Project
 			return base.GetIconHandle(open);
 		}
 
+    protected internal override void DeleteFromStorage(string path)
+    {
+      base.DeleteFromStorage(path);
+      _OAProject.PersistProjectFile();
+    }
 		/// <summary>
 		/// Creates an object derived from <see cref="NodeProperties"/> that will be used to expose
 		/// properties specific for this object to the property browser.
@@ -273,6 +283,16 @@ namespace Nemerle.VisualStudio.Project
 			return new NemerleFolderNodeProperties(this);
 		}
 
+    public override void RenameDirectory(string newPath)
+    {
+      base.RenameDirectory(newPath);
+      _OAProject.PersistProjectFile();
+    }
+    public override void Remove(bool removeFromStorage)
+    {
+      base.Remove(removeFromStorage);
+      _OAProject.PersistProjectFile();
+    }
 		public const int OpenFolderInExplorerCmdId = 1635;
 
 		/// <summary>

@@ -13,9 +13,11 @@ namespace Nemerle.VisualStudio.Project.References
 	[CLSCompliant(false), ComVisible(true)]
 	public class NemerleReferenceNodeProperties : ReferenceNodeProperties
 	{
-		public NemerleReferenceNodeProperties(HierarchyNode node)
+    readonly NemerleOAProject _OAProject;
+		public NemerleReferenceNodeProperties(HierarchyNode node, NemerleOAProject OAProject)
 			: base(node)
 		{
+      _OAProject = OAProject;
 		}
 
 		[SRCategoryAttribute(Microsoft.VisualStudio.Project.SR.Misc)]
@@ -33,6 +35,7 @@ namespace Nemerle.VisualStudio.Project.References
 			set
 			{
 				this.SetProperty(ProjectFileConstants.Private, value.ToString());
+        _OAProject.PersistProjectFile();
 			}
 		}
 
@@ -178,6 +181,7 @@ namespace Nemerle.VisualStudio.Project.References
 						SetProperty("SpecificVersion", "False");
 					}
 				}
+        _OAProject.PersistProjectFile();
 			}
 		}
 	}

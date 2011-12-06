@@ -27,10 +27,14 @@ namespace Nemerle.VisualStudio.Project
 	class NemerleFileNode : FileNode, IProjectSourceNode
 	{
 
+    readonly NemerleOAProject _OAProject;
+
 		#region ctors
 
 		internal NemerleFileNode(ProjectNode root, ProjectElement e)
-			: this(root, e, false) { }
+			: this(root, e, false) {
+        _OAProject = (NemerleOAProject)root.GetAutomationObject();
+    }
 
 		/// <summary>
 		/// Initializes a new instance of the <see cref="NemerleFileNode"/> class.
@@ -42,6 +46,7 @@ namespace Nemerle.VisualStudio.Project
 		public NemerleFileNode(ProjectNode root, ProjectElement element, bool isNonMemberItem)
 			: base(root, element)
 		{
+      _OAProject = root.GetAutomationObject() as NemerleOAProject;
 			IsNonMemberItem = isNonMemberItem;
 
 			_selectionChangedListener =
@@ -212,6 +217,7 @@ namespace Nemerle.VisualStudio.Project
 
 			HierarchyHelpers.RefreshPropertyBrowser(this);
 
+      _OAProject.PersistProjectFile();
 			return VSConstants.S_OK;
 		}
 
@@ -254,9 +260,10 @@ namespace Nemerle.VisualStudio.Project
 			ResetProperties();
 
 			HierarchyHelpers.RefreshPropertyBrowser(this);
-
+      _OAProject.PersistProjectFile();
 			return VSConstants.S_OK;
 		}
+    
 
 		/// <summary>
 		/// Resets the Node properties for file node item.
@@ -360,6 +367,21 @@ namespace Nemerle.VisualStudio.Project
 
 		#region overridden methods
 
+    protected internal override void DeleteFromStorage(string path)
+    {
+      base.DeleteFromStorage(path);
+      _OAProject.PersistProjectFile();
+    }
+
+    public override int DeleteItem(uint delItemOp, uint itemId)
+    {
+      return base.DeleteItem(delItemOp, itemId);
+    }
+    public override void Remove(bool removeFromStorage)
+    {
+      base.Remove(removeFromStorage);
+      _OAProject.PersistProjectFile();
+    }
 		protected override FileNode RenameFileNode(string oldFileName, string newFileName, uint newParentId)
 		{
 			var projectInfo = ProjectInfo.FindProject(oldFileName);
@@ -373,7 +395,7 @@ namespace Nemerle.VisualStudio.Project
 			projectInfo.BeginRenameFile();
 			try { result = base.RenameFileNode(oldFileName, newFileName, newParentId); }
 			finally { projectInfo.EndRenameFile(); }
-
+      _OAProject.PersistProjectFile();
 			return result;
 		}
 
@@ -564,8 +586,7 @@ namespace Nemerle.VisualStudio.Project
 		public override string GetEditLabel()
 		{
 			if (IsNonMemberItem)
-				return null;
-
+				return null;      
 			return base.GetEditLabel();
 		}
 
