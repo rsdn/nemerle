@@ -139,6 +139,8 @@ namespace Nemerle.VisualStudio.Project
 			get { return (NemerlePackage)base.Package; }
 		}
 
+    public bool Loading { get; private set;}
+    
 		private bool _showAllFilesEnabled;
 		/// <summary>
 		/// Gets if the ShowAllFiles is enabled or not.
@@ -558,7 +560,7 @@ namespace Nemerle.VisualStudio.Project
 					curParent = VerifySubFolderExists(path, curParent);
 				}
 			}
-
+      (this.GetAutomationObject() as NemerleOAProject).PersistProjectFile();
 			return curParent;
 		}
 
@@ -800,6 +802,7 @@ namespace Nemerle.VisualStudio.Project
 			Debug.Assert(BuildProject != null);
 			Debug.Assert(BuildProject.FullPath == Path.GetFullPath(filename));
 
+      this.Loading = true;
 			// IT: ProjectInfo needs to be created before loading
 			// as we will catch assembly reference adding.
 			//
@@ -832,6 +835,7 @@ namespace Nemerle.VisualStudio.Project
 			// If this is a WPFFlavor-ed project, then add a project-level DesignerContext service to provide
 			// event handler generation (EventBindingProvider) for the XAML designer.
 			OleServiceProvider.AddService(typeof(DesignerContext), DesignerContext, false);
+      this.Loading = false;
 		}
 
 		public override void PrepareBuild(string config, bool cleanBuild)
@@ -1051,6 +1055,7 @@ namespace Nemerle.VisualStudio.Project
 			if (item.ItemName == "Compile") // IsCodeFile(include) && 
 				provider.AddService(typeof(SVSMDCodeDomProvider), new NemerleVSMDProvider(newNode), false);
 
+      (this.GetAutomationObject() as NemerleOAProject).PersistProjectFile();
 			return newNode;
 		}
 
@@ -1075,6 +1080,8 @@ namespace Nemerle.VisualStudio.Project
 			if (IsCodeFile(include) && item.ItemName == "Compile")
 				newNode.OleServiceProvider.AddService(typeof(SVSMDCodeDomProvider),
 					new NemerleVSMDProvider(newNode), false);
+
+      (this.GetAutomationObject() as NemerleOAProject).PersistProjectFile();
 
 			return newNode;
 		}
@@ -1189,7 +1196,7 @@ namespace Nemerle.VisualStudio.Project
 				//
 				ShowProjectInSolutionPage = true;
 			}
-
+      (this.GetAutomationObject() as NemerleOAProject).PersistProjectFile();
 			return VSConstants.S_OK;
 		}
 
@@ -1257,7 +1264,9 @@ namespace Nemerle.VisualStudio.Project
 
 		public override int AddItem(uint itemIdLoc, VSADDITEMOPERATION op, string itemName, uint filesToOpen, string[] files, IntPtr dlgOwner, VSADDRESULT[] result)
 		{
-			return AddManyItemsHelper(itemIdLoc, op, itemName, filesToOpen, files, dlgOwner, result);
+			var finalResult =  AddManyItemsHelper(itemIdLoc, op, itemName, filesToOpen, files, dlgOwner, result);
+      (this.GetAutomationObject() as NemerleOAProject).PersistProjectFile();
+      return finalResult;
 		}
 
 		/// <summary>

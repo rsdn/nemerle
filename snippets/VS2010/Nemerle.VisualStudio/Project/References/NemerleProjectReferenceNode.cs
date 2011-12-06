@@ -11,13 +11,14 @@ namespace Nemerle.VisualStudio.Project
 	public class NemerleProjectReferenceNode : ProjectReferenceNode
 	{
 		#region ctors
-
+    readonly NemerleProjectNode _projectNode;
 		/// <summary>
 		/// Constructor for the ReferenceNode. It is called when the project is reloaded, when the project element representing the refernce exists. 
 		/// </summary>
 		public NemerleProjectReferenceNode(ProjectNode root, ProjectElement element)
 			: base(root, element)
 		{
+      root = _projectNode;
 		}
 
 		protected override void BindReferenceData()
@@ -31,10 +32,17 @@ namespace Nemerle.VisualStudio.Project
 		public NemerleProjectReferenceNode(ProjectNode root, string referencedProjectName, string projectPath, string projectReference)
 			: base(root, referencedProjectName, projectPath, projectReference)
 		{
+      root = _projectNode;
 		}
 
 		#endregion
 
+    public override void Remove(bool removeFromStorage)
+    {
+      base.Remove(removeFromStorage);
+      (_projectNode.GetAutomationObject() as NemerleOAProject).PersistProjectFile();
+      
+    }
 		protected override NodeProperties CreatePropertiesObject()
 		{
 			return new NemerleProjectReferencesProperties(this, "Project Reference Properties");

@@ -29,8 +29,17 @@ namespace Nemerle.VisualStudio.Project
 			get
 			{
 				return new NemerleOAProperties(this.Project.NodeProperties);
-			}
-		}
+			}		    
+    }
+    /// <summary>
+    /// Persists the project file changes in a safe manner
+    /// </summary>    
+    public void PersistProjectFile()
+    {
+      if(!(this.Project as NemerleProjectNode).Loading)
+      base.Save("");
+    }
+
 
 		/// <summary>
 		/// Returns the name of project as a relative path from the directory containing the solution file to the project file

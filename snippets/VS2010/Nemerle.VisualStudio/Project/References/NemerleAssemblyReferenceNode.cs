@@ -9,14 +9,19 @@ namespace Nemerle.VisualStudio.Project
 {
 	class NemerleAssemblyReferenceNode : AssemblyReferenceNode
 	{
+    readonly NemerleProjectNode _projectNode;
 		public NemerleAssemblyReferenceNode(ProjectNode root, ProjectElement e)
 			: base(root, e)
 		{
+      _projectNode = root as NemerleProjectNode;
+      
 		}
 
 		protected override NodeProperties CreatePropertiesObject()
 		{
-			return new NemerleReferenceNodeProperties(this);
+      
+			return new NemerleReferenceNodeProperties(this, _projectNode.GetAutomationObject() as NemerleOAProject);
+      
 		}
 
 		/// <summary>
@@ -25,7 +30,9 @@ namespace Nemerle.VisualStudio.Project
 		public NemerleAssemblyReferenceNode(ProjectNode root, string assemblyPath)
 			: base(root, assemblyPath)
 		{
-			// AssemblyReferenceNode is useless without 'resolvedAssemblyName' field set.
+      
+			_projectNode = root as NemerleProjectNode;
+      // AssemblyReferenceNode is useless without 'resolvedAssemblyName' field set.
 			// The only way to set the 'AssemblyReferenceNode.resolvedAssemblyName' field
 			// is a call to ResolveReference(), wich is redundant, since the assemly
 			// was loaded by its path. ;)
@@ -51,6 +58,11 @@ namespace Nemerle.VisualStudio.Project
 			return base.GetGuidProperty(propid, out guid);
 		}
 
+    public override void Remove(bool removeFromStorage)
+    {
+      base.Remove(removeFromStorage);
+      (_projectNode.GetAutomationObject() as NemerleOAProject).PersistProjectFile();
+    }
 		protected override void BindReferenceData()
 		{
 			base.BindReferenceData();
