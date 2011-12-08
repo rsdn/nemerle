@@ -26,6 +26,24 @@ namespace Nemerle.VisualStudio
 {
 	static class Utils
 	{
+		public static void RunSyncInUIThread(Action action)
+		{
+			if (UIThread.Instance.IsUIThread)
+				return;
+
+			UIThread.Instance.RunSync(action);
+		}
+
+		public static T CalcSyncInUIThread<T>(Func<T> func)
+		{
+			if (UIThread.Instance.IsUIThread)
+				return func();
+
+			T value = default(T);
+			UIThread.Instance.RunSync(() => value = func());
+			return value;
+		}
+
 		public static string HtmlMangling(string str)
 		{
 			return str.Replace("&", "&amp;").Replace(">", "&gt;").Replace("<", "&lt;");

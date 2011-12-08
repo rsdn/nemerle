@@ -489,7 +489,8 @@ namespace Nemerle.VisualStudio.Project
 
 			if (!string.IsNullOrEmpty(defineConstants))
 			{
-				var defines = defineConstants.Replace(" \t\r\n", String.Empty).Split(';');
+				var defines = defineConstants
+					.Split(new char[]{';', ' ', '\r', '\n', '\t'}, StringSplitOptions.RemoveEmptyEntries);
 
 				foreach (var define in defines)
 					options.DefineConstant(define);
