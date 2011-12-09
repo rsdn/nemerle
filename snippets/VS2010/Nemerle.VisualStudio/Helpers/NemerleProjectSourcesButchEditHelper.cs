@@ -9,6 +9,9 @@ using Microsoft.VisualStudio.Project;
 using Nemerle.Compiler.Parsetree;
 using System.CodeDom;
 using System.Drawing;
+using Nemerle.Completion2.CodeFormatting;
+
+using NUtils = Nemerle.Compiler.Utils.Utils;
 
 namespace Nemerle.VisualStudio.Helpers
 {
@@ -17,13 +20,13 @@ namespace Nemerle.VisualStudio.Helpers
 		readonly ProjectInfo _projectInfo;
 		readonly Dictionary<int, NemerleSourceButchEditHelper> _fileIndexMap = new Dictionary<int, NemerleSourceButchEditHelper>();
 		readonly string _description;
-		readonly string _ident;
+		readonly IndentInfo _identInfo;
 
-		public NemerleProjectSourcesButchEditHelper(ProjectInfo projectInfo, string description, string ident)
+		public NemerleProjectSourcesButchEditHelper(ProjectInfo projectInfo, string description, IndentInfo identInfo)
 		{
 			_projectInfo = projectInfo;
 			_description = description;
-			_ident       = ident;
+			_identInfo   = identInfo;
 		}
 
 		#region IDisposable Members
@@ -104,7 +107,9 @@ namespace Nemerle.VisualStudio.Helpers
 		public void Add(Location parent, Location inner, string text)
 		{
 			var prefixSpaces = CalcIndent(parent);
-			var bodyPrefix = prefixSpaces + _ident;
+			var indentCount = (NUtils.CalcIndentVisiblePosition(prefixSpaces, _identInfo.TabSize) + _identInfo.IndentSize) / _identInfo.IndentSize;
+			var bodyPrefix = NUtils.MakeIndentString(indentCount, _identInfo.InsertTabs, _identInfo.IndentSize, _identInfo.TabSize);
+			//var bodyPrefix = prefixSpaces + _identInfo;
 			const StringComparison op = StringComparison.Ordinal;
 			var nl = Environment.NewLine;
 			var text2 = text.StartsWith("\r", op) || text.StartsWith("\n", op)
@@ -123,8 +128,7 @@ namespace Nemerle.VisualStudio.Helpers
 			var closeBrecket = h.Source.GetText(function.BodyCloseTokenLocation.ToTextSpan());
 			if (closeBrecket != "}")
 			{
-				System.Windows.Forms.MessageBox.Show("Internal Nemerle WinForms Designer Error!");
-				throw new ArgumentException("closeBrecket != \"}\"");
+				throw new ArgumentException("Internal Nemerle WinForms Designer Error!\r\ncloseBrecket != \"}\"");
 			}
 			Add(function.Location, function.BodyInnerLocation, text);
 		}
@@ -142,7 +146,7 @@ namespace Nemerle.VisualStudio.Helpers
 		{
 			string text = FormCodeDomGenerator.ToString(codeMemberMethod, declaration);
 			var loc = topDeclaration.BodyCloseTokenLocation.FromStart();
-			codeMemberMethod.UserData[typeof(Point)] = new Point(loc.Column + 3, loc.Line + _ident.Length);
+			codeMemberMethod.UserData[typeof(Point)] = new Point(loc.Column, loc.Line + 3/*+ _identInfo.Length*/);
 			Add(topDeclaration.Location, loc, text);
 		}
 
