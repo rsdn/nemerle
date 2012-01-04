@@ -20,7 +20,7 @@ exit /b %1
 
 IF "%Type%"=="" set Type=Debug
 
-%MSBuild% Tests.nproj /p:Configuration=%Type%
+%MSBuild% Tests.nproj /p:Configuration=%Type% /tv:4.0 /p:TargetFrameworkVersion=v4.0
 call :err_check %errorlevel%
 IF %errors% == yes goto Error
 
