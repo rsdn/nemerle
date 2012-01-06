@@ -41,7 +41,7 @@ namespace Nemerle.VisualStudio.GUI.Wizards
 					{ "FieldBuilder",     "FieldBuilder" },
 					{ "PropertyBuilder",  "PropertyBuilder" },
 					{ "EventBuilder",     "EventBuilder" },
-					{ "ParsedField",      "ClassMembe.Field" },
+					{ "ParsedField",      "ClassMember.Field" },
 					{ "ParsedMethod",     "ClassMember.Function" },
 					{ "ParsedProperty",   "ClassMember.Property" },
 					{ "ParsedEvent",      "ClassMember.Event" },
