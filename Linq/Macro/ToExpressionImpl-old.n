@@ -1,0 +1,603 @@
+﻿using System;
+using System.Linq;
+using System.Linq.Expressions;
+using System.Text;
+using System.Reflection;
+
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.IO;
+using Nemerle.Builtins.Function;
+using Nemerle.Utility;
+
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+
+using Nemerle.Assertions;
+
+using TT = Nemerle.Compiler.Typedtree;
+using SCG = System.Collections.Generic;
+using Debug = System.Diagnostics.Debug;
+
+namespace Nemerle.Linq
+{
+  /// <summary>
+  /// Description of ToExpressionImpl_old.
+  /// </summary>
+  module ToExpressionImpl_old
+  {
+    
+    
+    internal ToExpr(expr   : PExpr, 
+                  lparms : list[Hashtable[string, PExpr]],
+                  typer : Typer,
+                  texpr  : TExpr = null,
+                  ) : PExpr
+    {
+//       System.Diagnostics.Debugger.Launch();
+      def getTExprForPExpr(expr : PExpr) : TExpr
+      {
+        def get(_)
+        {
+          | x is TExpr.DebugInfo => get(x.expr)
+          | x is TExpr.MacroEnvelope => get(x.expanded)
+          | x is TExpr.Delayed when x.susp.IsResolved => get(x.susp.ResolutionResult)
+          | x is TExpr => x
+          | null => 
+            match (expr)
+            {
+              | PExpr.Sequence => null
+              | PExpr.TypeEnforcement
+              | PExpr.TypeConversion => typer.TypeExpr(expr)
+              | _ => 
+                assert2(false);
+                typer.TypeExpr(expr)
+            }
+
+          | _ is TT.Pattern => assert2(expr is PExpr.Ref); null
+          | _ =>
+            assert2(false);
+            typer.TypeExpr(expr)
+        }
+
+        get(expr.TypedObject)
+      }
+      def texpr = texpr ?? getTExprForPExpr(expr);
+
+      def error(expr : PExpr, msg = null) : PExpr
+      {
+        assert2(false, "fail convertion to 'expression tree'");
+        def text =
+          if (msg == null)
+            $"conversion from $(expr.GetType().Name) (expr: $expr) into 'expression tree' not supported"
+          else
+            msg;
+        Message.Error(expr.Location, text);
+        PExpr.Error(expr.Location)
+      }
+      def tyToExpr(ty : TypeVar) : PExpr { PExpr.TypedType(ty) }
+      def tyToTypeOfExpr(ty : TypeVar) : PExpr
+      {
+        match (ty.Hint)
+        {
+          | Some(FixedType.Class as ft) => <[ typeof($(PExpr.TypedType(ft))) ]>
+          | _ => 
+            def resTExpr = typer.DelayAction(null, typer.InternalType.Type,
+              Typer.DelayedLambdaAction(failLoudly => 
+                match (ty.Hint)
+                {
+                  | Some(t) => Some(TExpr.TypeOf(t))
+                  | None =>
+                    when (failLoudly)
+                      Message.Error (expr.Location, $"cannot deduce type of '$expr'");
+                    None()
+                }));
+              
+            PExpr.Typed(resTExpr)
+        }
+      }
+      def getAryElemTy(ty : TypeVar) : TypeVar
+      { 
+        | tArray is FixedType.Array => tArray.t
+        | _ => assert2(!(ty is FixedType)); getAryElemTy(ty.Fix())
+      }
+      def getBinExpr(lExpr, rExpr, exprType, liftToNull = <[ false ]>, mi = <[ null ]>)
+      {
+        def lparms = lparms;
+        def lExprTree1 = ToExpr(lExpr, lparms, typer);
+        def rExprTree1 = ToExpr(rExpr, lparms, typer);
+        // Add type conversion if compiler generated TExpr.TypeConversion exits...
+        def (lExprTree, rExprTree) = 
+          match (texpr)
+          {   // ... a conversion exists in right parameterr
+            | TExpr.Call(parms = [_tl, TT.Parm where(expr = TExpr.TypeConversion(_tr, targetTy, _kind, _))]) => 
+              (lExprTree1, <[ Expression.Convert($rExprTree1, typeof($(PExpr.TypedType(targetTy)))) ]>)
+              // ... a conversion exists in left parameterr
+            | TExpr.Call(parms = [TT.Parm where(expr = TExpr.TypeConversion(_tl, targetTy, _kind, _)), _tr]) =>
+              (<[ Expression.Convert($lExprTree1, typeof($(PExpr.TypedType(targetTy)))) ]>, rExprTree1)
+              // ... conversions not exists (arguments has same types)
+            | _ => (lExprTree1, rExprTree1)
+          };
+          
+        <[ Expression.MakeBinary($exprType, $lExprTree, $rExprTree, $liftToNull, $mi) ]>
+      }
+      def getUnExpr(expr, exprType, ty = <[ null ]>, mi = <[ null ]>)
+      {
+        def expr = ToExpr(expr, lparms, typer);
+        <[ Expression.MakeUnary($exprType, $expr, $ty, $mi) ]>
+      }
+      def makeLambdaExpression(body, texpr)
+      {
+        def header = match (texpr)
+        {
+          | TExpr.DefFunctionsIn([header], _) => header
+          | null => assert2(false);  Message.Error("This error should never occurs."); null
+          | _ => assert2(false);  Message.Error("This error should never occurs."); null
+        }
+        
+        if (header != null)
+        {
+          def toParmExpr(name : string, ty : TypeVar)
+          {
+            def parmVar = Macros.NewSymbol($"param_$(name)_");
+            def e = <[ Expression.Parameter($(tyToTypeOfExpr(ty)), $(name : string)) ]>;
+            (name, parmVar, e)
+          }
+
+          def rType       = header.ReturnType;
+          def rTypeRef    = tyToExpr(rType);
+          def parms       = header.Parameters.Map(p => (p.name, p.ty));
+          def typeArgs    = match(rType.Hint)
+          {
+            | Some(FixedType.Void) =>
+              parms.Map((_, ty) => tyToExpr(ty));
+            | _ =>
+              parms.Map((_, ty) => tyToExpr(ty)) + [rTypeRef];
+          }
+          def parmExprs   = parms.Map(toParmExpr);
+          def defines     = parmExprs.Map((_, parmVar, e) => <[ def $(parmVar : name) = $e ]>);
+          def parmAssocs  = parmExprs.Map((name, var, _) => (name, <[ $(var : name) ]>));
+          def paramsMap   = Hashtable(parmAssocs);
+          def body2       = ToExpr(body, paramsMap :: lparms, typer, getTExprForPExpr(body));
+          def parms       = parmAssocs.Map((_, parmVarRef) => parmVarRef);
+          def parms2      = <[ array[..$parms] ]>;
+          
+          def body3 = match(rType.Hint)
+          {
+            | Some(FixedType.Void) =>
+                <[ Expression.Lambda.[Action.[..$typeArgs]]($body2, $parms2) : Expression.[Action.[..$typeArgs]] ]>;
+            | _ =>
+              <[ Expression.Lambda.[Func.[..$typeArgs]]($body2, $parms2) : Expression.[Func.[..$typeArgs]] ]>;
+          }
+          def lambda = <[ { ..$(defines + [body3]) } ]>;
+          lambda
+        }
+        else error(expr)
+      }
+      def processSequence(seq, lparms,) : list[PExpr]
+      {
+        def f(expr, toSeq)
+        {
+          def expr = ToExpr(expr, lparms, typer, getTExprForPExpr(expr));
+          expr :: toSeq
+        }
+        def seq = seq.FoldRight([], f);
+        seq
+      }
+      def tryMakeConvertion(argExpr : PExpr, ty : TypeVar)
+      {
+        match (getTExprForPExpr(argExpr))
+        {//TODO: Литералы нужно пробовать преобразовать сразу (не добавляя рантайм-преобразования типов).
+          | TExpr.Literal as tExpr
+          | tExpr when tExpr.Type.Hint.IsSome => 
+            def argTy   : TypeVar = tExpr.Type;
+            def paramTy : TypeVar = ty;
+            def objectTy = paramTy.InternalType.Object;
+            
+            if (paramTy.Equals(objectTy) && !argTy.Equals(objectTy))
+              ToExpr(<[ $argExpr : object ]>, lparms, typer)
+            else if (argTy.TryRequire(paramTy))
+              ToExpr(argExpr, lparms, typer)
+            else if (Typer.IsFunctional(tExpr))
+              ToExpr(argExpr, lparms, typer)
+            else 
+              ToExpr(<[ $argExpr :> $(tyToExpr(paramTy)) ]>, lparms, typer)
+              
+          | _ => ToExpr(argExpr, lparms, typer)//TODO: We shoud report error here.
+        }
+      }
+      def convertSequence(seq : list[PExpr], ty) : list[PExpr]
+      {
+        def f(expr, toSeq)
+        {
+          def expr = tryMakeConvertion(expr, ty);
+          expr :: toSeq
+        }
+        def seq = seq.FoldRight([], f);
+        seq
+      }
+      /// Convert arguments sorce code into equalent Expression tree
+      def convertArgs(loc : Location, argExprs : list[PExpr], parmsTypes : list[TypeVar]) : list[PExpr]
+      {
+        // Может использовать SubtypingOrImplicitConv?
+        def f(argExpr, ty, exprTrees)
+        {
+          def exprTree= tryMakeConvertion(argExpr, ty);
+          exprTree :: exprTrees
+        }
+        if (argExprs.Length == parmsTypes.Length)
+        {
+          def exprTrees = argExprs.FoldLeft2(parmsTypes, [], f);
+          exprTrees.Rev()
+        }
+        else
+        {
+          Message.Error(loc, $"expect $(parmsTypes.Length) arguments got $(argExprs.Length)");
+          argExprs
+        }
+      }
+      def localRefToClosuredField(local : TExpr.LocalRef) : PExpr
+      {
+        def closure   = TExpr.ClosureObjectOf(typer.InternalType.Object, local);
+        def fieldInfo = TExpr.ClosureFieldOf(typer.InternalType, local);
+        <[ Expression.Field(
+            Expression.Constant($(closure : typed)),
+            $(fieldInfo : typed)) ]>
+      }
+      def convertLiteral(_ : Literal) : PExpr
+      {
+        | Literal.Null         => <[ Expression.Constant(null,             typeof(object)) ]>
+        | Literal.String(val)  => <[ Expression.Constant($(val : string),  typeof(string)) ]>
+        | Literal.Float(val)   => <[ Expression.Constant($(val : float),   typeof(float)) ]>
+        | Literal.Double(val)  => <[ Expression.Constant($(val : double),  typeof(double)) ]>
+        | Literal.Decimal(val) => <[ Expression.Constant($(val : decimal), typeof(decimal)) ]>
+        | Literal.Char(val)    => <[ Expression.Constant($(val : char),    typeof(char)) ]>
+        | Literal.Bool(val)    => <[ Expression.Constant($(val : bool),    typeof(bool)) ]>
+        | Literal.Integer as i => 
+          match (i.AsObject(typer.InternalType))
+          {
+            | o is int    => <[ Expression.Constant($(o : int),    typeof(int)) ]>
+            | o is sbyte  => <[ Expression.Constant($(o : sbyte),  typeof(sbyte)) ]>
+            | o is byte   => <[ Expression.Constant($(o : byte),   typeof(byte)) ]>
+            | o is short  => <[ Expression.Constant($(o : short),  typeof(short)) ]>
+            | o is ushort => <[ Expression.Constant($(o : ushort), typeof(ushort)) ]>
+            | o is uint   => <[ Expression.Constant($(o : uint),   typeof(uint)) ]>
+            | o is long   => <[ Expression.Constant($(o : long),   typeof(long)) ]>
+            | o is ulong  => <[ Expression.Constant($(o : ulong),  typeof(ulong)) ]>
+            | _ => assert(false)
+          }
+        |Literal.Enum(_, _, iField) =>
+           def fixedType = iField.GetMemType();
+           <[Expression.Constant($expr, typeof($(PExpr.TypedType(fixedType))))]>;          
+        | Literal.Void  => error(expr, "void is not supported");
+        
+      }
+      def makeMetodInfo(from, prop)
+      {
+        def metInfo = PExpr.Typed(TExpr.MethodOf(from, prop.GetGetter(), []));
+        metInfo
+      }
+      
+      match (expr)
+      {
+        | PExpr.Literal(lit) => convertLiteral(lit)
+
+        #region PExpr.Call
+        
+        | <[ - $e ]> => getUnExpr(e, <[ ExpressionType.Negate ]>)
+        | <[ ! $e ]> => getUnExpr(e, <[ ExpressionType.Not ]>)
+        // TODO: Add all other unary expressions...
+        | <[ $l + $r ]> | <[ @+ (..$(l::t)) ]> with r = <[ @+ (..$t) ]>
+          =>                getBinExpr(l, r, <[ ExpressionType.Add ]>)
+        | <[ $l * $r ]> | <[ @* (..$(l::t)) ]> with r = <[ @* (..$t) ]> 
+          =>                getBinExpr(l, r, <[ ExpressionType.Multiply ]>)
+        | <[ $l - $r ]> | <[ @- (..$(l::t)) ]> with r = <[ @- (..$t) ]> 
+          =>                 getBinExpr(l, r, <[ ExpressionType.Subtract ]>)
+        | <[ $l / $r ]>| <[ @/ (..$(l::t)) ]> with r = <[ @/ (..$t) ]> 
+          =>                 getBinExpr(l, r, <[ ExpressionType.Divide ]>)
+        | <[ $l == $r ]> =>  getBinExpr(l, r, <[ ExpressionType.Equal ]>)
+        | <[ $l != $r ]> =>  getBinExpr(l, r, <[ ExpressionType.NotEqual ]>)
+        | <[ $l && $r ]>
+        | <[ $l %&& $r ]> => getBinExpr(l, r, <[ ExpressionType.AndAlso ]>)
+        | <[ $l || $r ]>
+        | <[ $l %|| $r ]> => getBinExpr(l, r, <[ ExpressionType.OrElse ]>)
+        | <[ $l & $r ]>
+        | <[ $l %& $r ]> =>  getBinExpr(l, r, <[ ExpressionType.And ]>)
+        | <[ $l % $r ]> =>   getBinExpr(l, r, <[ ExpressionType.Modulo ]>)
+        | <[ $l | $r ]>
+        | <[ $l %| $r ]> =>  getBinExpr(l, r, <[ ExpressionType.Or ]>)
+        | <[ $l ^ $r ]>
+        | <[ $l %^ $r ]> =>  getBinExpr(l, r, <[ ExpressionType.ExclusiveOr ]>)
+        | <[ $l > $r ]> =>   getBinExpr(l, r, <[ ExpressionType.GreaterThan ]>)
+        | <[ $l >= $r ]> =>  getBinExpr(l, r, <[ ExpressionType.GreaterThanOrEqual ]>)
+        | <[ $l < $r ]> =>   getBinExpr(l, r, <[ ExpressionType.LessThan ]>)
+        | <[ $l <= $r ]> =>  getBinExpr(l, r, <[ ExpressionType.LessThanOrEqual ]>)
+        // TODO: Add all other binary expressions...
+        | <[ (..$_) => $body ]>
+        | <[ $_ => $body ]> => makeLambdaExpression(body, texpr)
+        | PExpr.Call(func, _parms) => 
+          def tCall = getTExprForPExpr(expr);
+
+          match (tCall)
+          {
+            | TExpr.TypeConversion(TExpr.DefaultValue as d, target_type, _kind, _) => 
+              if (d.Type.Equals(target_type))
+                <[ Expression.Constant($(d : typed), typeof($(target_type : typed))) ]>
+              else
+                <[ Expression.Convert(Expression.Constant($(d : typed), typeof($(d.Type : typed))), typeof($(target_type : typed))) ]>
+
+            | _ =>
+              match (expr)
+              {
+                | <[ $inst . $_meth (..$args) ]>
+                | <[ $_meth (..$args) ]> with inst = <[ null ]> =>
+              
+                  match (getTExprForPExpr(func))
+                  {
+                    | TExpr.StaticRef(from, meth is IMethod, _) as tExpr when meth.MemberKind == MemberKinds.Constructor =>
+                      def argsTyps    = tExpr.Type.FunParamsTypes(meth);
+                      def args1       = convertArgs(expr.Location, args, argsTyps);
+                      def getCtorInfo = PExpr.Typed(TExpr.CtorOf(from, meth));
+                  
+                      def expr        = <[ Expression.New($getCtorInfo, array[..$args1]) ]>;
+                      expr
+
+                    | TExpr.StaticRef(from, meth is IMethod, typarams) as tExpr when meth.MemberKind == MemberKinds.Method =>
+                      def argsTyps      = tExpr.Type.FunParamsTypes(meth);
+                      def args1         = if (meth.IsExtension && args.Length == argsTyps.Length - 1) inst :: args
+                                          else args;
+                      def args2         = convertArgs(expr.Location, args1, argsTyps);
+                      def getMethodInfo = PExpr.Typed(TExpr.MethodOf(from, meth, typarams));
+                      <[ Expression.Call($getMethodInfo, array[..$args2]) ]>;
+                                      
+                    | TExpr.LocalRef => <[ Expression.Constant($expr) ]> // VladD2: Тут надо генерировать Invoc или Call.
+                    | TExpr.MethodRef(obj, meth, type_parms, _notvirtual) as tExpr => 
+                      def inst          = ToExpr(if (obj is TExpr.This) <[this]> else inst, lparms, typer);
+                      def argsTyps      = tExpr.Type.FunParamsTypes(meth);
+                      def args1         = convertArgs(expr.Location, args, argsTyps);
+                      def getMethodInfo = PExpr.Typed(TExpr.MethodOf(obj.Type, meth, type_parms));
+                      <[ Expression.Call($inst, $getMethodInfo, array[..$args1]) ]>;
+                  
+                    | TExpr.Delayed(susp) =>
+                      assert2(susp.IsResolved);
+                      ToExpr(susp.PExpr, lparms, typer, susp.ResolutionResult)
+                  
+                    | _ => error(expr)
+                  }
+                | _ => error(expr)
+              }
+          }
+
+        #endregion
+
+        //TODO: Нужно сделать обработку констант более умной.
+        // Так, надо преобразовывать тип константы в зависимости от TypeEnforcement
+        | <[ $e1 :  $t1 ]>
+        | <[ $e1 :> $t1 ]> => 
+          def e2 = ToExpr(e1, lparms, typer);
+          <[ Expression.Convert($e2, typeof($t1)) ]>
+          
+        | <[$e1 is $t1 ]> => 
+          def e2 = ToExpr(e1, lparms, typer);
+          <[Expression.TypeIs($e2, typeof($t1))]>
+  
+        | PExpr.Ref(nm) => 
+          match (lparms.Filter(_.ContainsKey(nm.Id)))
+          {
+            | hd :: _ => hd[nm.Id]
+            | _       =>
+              match (getTExprForPExpr(expr))
+              {
+                | TExpr.LocalRef as r => localRefToClosuredField(r)
+                | _ => <[ Expression.Constant($(nm : name)) ]>
+              }
+          }
+
+        | PExpr.Define | PExpr.DefMutable => error(expr)
+        | PExpr.Assign => error(expr)
+        | PExpr.Typeof(ty) => <[ Expression.Constant(typeof($ty), typeof(System.Type)) ]>
+        | PExpr.Member(obj, _member) =>
+          def memberToExpr(texpr) : PExpr
+          {
+            | TExpr.FieldMember(tObj, field) =>
+             
+              def inst = ToExpr(obj, lparms, typer);
+              def tField = PExpr.Typed(TExpr.FieldOf(tObj.Type, field));            
+              
+              <[ Expression.Field($inst, $tField : FieldInfo) ]>;
+
+            | TExpr.PropertyMember(tObj, prop) =>
+              def inst = ToExpr(obj, lparms, typer);
+              <[ Expression.Property($inst, $(makeMetodInfo(tObj.Type, prop))) ]>;
+
+            | TExpr.StaticPropertyRef(from, prop) =>
+              <[ Expression.Property(null, $(makeMetodInfo(from, prop))) ]>;
+
+            | TExpr.Delayed(susp) =>
+              assert2(susp.IsResolved);
+              memberToExpr(susp.ResolutionResult)
+             
+            | t is TExpr.Literal when t.val is Literal.Enum => 
+             def pType = PExpr.TypedType(t.ty);
+             def definition = PExpr.Typed(t);
+             <[Expression.Constant($definition, typeof($(pType)))]>;
+            | TExpr.StaticRef(from, _ ,_) as tref when from.TypeInfo.IsEnum =>
+              def staticRef  = PExpr.Typed(tref);
+              def pType = PExpr.TypedType(from);
+              <[ Expression.Constant($staticRef, typeof($pType))]>;
+              
+            | TExpr.StaticRef(from, field is IField, []) =>
+              def tField = PExpr.Typed(TExpr.FieldOf(from, field));            
+              <[ Expression.Field(null, $tField : FieldInfo) ]>;
+              
+            | _ => error(expr);
+          }
+          
+          memberToExpr(texpr)
+
+        | PExpr.Lambda(decl) => makeLambdaExpression(decl.body, texpr)
+        | PExpr.Array(<[1]>, PExpr.ListLiteral(elements)) =>
+          def elements = convertSequence(elements, getAryElemTy(texpr.Type));
+          <[ Expression.NewArrayInit($(tyToTypeOfExpr(getAryElemTy(texpr.Type))), array[..$elements]) ]>
+
+        | PExpr.Array => error(expr, "The only one-dimensional array is allowed in Expressions.")
+        | PExpr.EmptyArray(sizes) =>
+          def sizes = processSequence(sizes, lparms);
+          <[ Expression.NewArrayBounds($(tyToTypeOfExpr(getAryElemTy(texpr.Type))), array[..$sizes]) ]>
+          
+        | PExpr.Indexer(obj, ind) =>
+          def processIndexer(tExpr : TExpr) : PExpr
+          {
+            | TExpr.Delayed(delayed) when delayed.IsResolved => processIndexer(delayed.ResolutionResult)
+            | TExpr.TupleIndexer(_obj, i, _len) => 
+              def tuple = ToExpr(obj, lparms, typer);
+              <[ Expression.Field($tuple, $($"Field$i" : string)) ]>
+              
+            | _ => 
+              match (tExpr.Type)
+              {
+                | _ is FixedType.Array =>
+                  def arr = ToExpr(obj, lparms, typer);
+                  def ind = processSequence(ind, lparms);
+                  
+                  <[ Expression.ArrayIndex($arr, array[..$ind]) ]>
+                    
+                | _ =>  ToExpr(<[$obj.get_Item( ..$ind)]>, lparms, typer);
+              }
+          }
+          
+          processIndexer(texpr)
+          
+        | PExpr.Sequence([expr]) => ToExpr(expr, lparms, typer, getTExprForPExpr(expr))
+        | PExpr.Sequence(body) =>
+          def body = match (body)
+          { // Pattern-matching в параметрах раскрвается в тело функций. Разруливаем этот случай...
+            | <[ def (..$vars) = $initExpr ]> :: tail =>
+              match (getTExprForPExpr(initExpr))
+              { // инициализатор является кортежем...
+                | TExpr.LocalRef(decl) as locRef when (decl.Type.AnyHint is Some(FixedType.Tuple)) => 
+                  def types = (decl.Type.AnyHint.Value :> FixedType.Tuple).args;
+                  assert2(types.Length == vars.Length);
+                  def tuple = ToExpr(initExpr, lparms, typer, locRef);
+                  
+                  /// Подменяет переменные заданные в патеррнах объявленных внутри параметров
+                  /// на поля кортежа (FieldX, где X - индекс поля).
+                  /// Вложенные паттерны разворачиваются во вложенный доступ к полям (x.Field1.Field2...).
+                  def makeSubst(vars, tuple, ht)
+                  {
+                    def (_, namesMap) = vars.Fold((0, ht), 
+                      fun(var, (i, namesMap)) 
+                      { 
+                        match (var) 
+                        {
+                          | <[ $(varName : name) : $_ ]> | PExpr.Ref(varName) => 
+                            def fieldName = $"Field$i";
+                            namesMap.Add(varName.Id, <[ Expression.Field($tuple, $(fieldName : string)) ]>); 
+                            (i + 1, namesMap)
+
+                          | PExpr.Tuple(args) =>
+                            def fieldName = $"Field$i";
+                            def tuple2    = <[ Expression.Field($tuple, $(fieldName : string)) ]>;
+                            def ht2       = makeSubst(args, tuple2, namesMap);
+                            (i + 1, ht2)
+                            
+                          | _ => (i + 1, namesMap) }
+                      });
+
+                    namesMap
+                  }
+
+                  def namesMap = makeSubst(vars, tuple, Hashtable());
+
+                  processSequence(tail, namesMap :: lparms)
+                  
+                | _ => processSequence(body, lparms)
+              }
+              
+            | [<[ def $(n1 : name) = $ctor ]>, PExpr.Sequence((<[ $_.$_ = $_; ]> :: _) as inits), <[ $(n2 : name) ]>] when n1.Equals(n2) =>
+              //assert2(false);
+              def ctorExpr = ToExpr(ctor, lparms, typer, null);
+              def argExprs = SCG.List();
+              
+              foreach (init in inits)
+              {
+                | <[ $(<[ $(n3 : name).$(_ : name) ]> as member) = $memberInit ]> => 
+                  def memberInitExpr = ToExpr(memberInit, lparms, typer, null);
+                  
+                  match (getTExprForPExpr(member))
+                  {
+                    | TExpr.FieldMember(obj, field) =>
+                      def fieldRef = PExpr.Typed(TExpr.FieldOf(obj.Type, field));                    
+                      argExprs.Add(<[ Expression.Bind($fieldRef, $memberInitExpr) ]>);
+                      
+                    | TExpr.PropertyMember(obj, prop) =>
+                      argExprs.Add(<[ Expression.Bind($(makeMetodInfo(obj.Type, prop)), $memberInitExpr) ]>);
+                      
+                    | _ => argExprs.Add(error(member));
+                  }
+                  
+                  _ = n3;
+                  
+                | _ => argExprs.Add(error(init));
+              }
+              
+              [<[ Expression.MemberInit($ctorExpr, array[..$(argExprs.NToList())]) ]>]
+            
+            | _ => processSequence(body, lparms)
+          }
+          
+          <[ { ..$body } ]>
+        
+        | <[ if ($condExpr) $trueExpr else $falseExpr ]> =>
+          def condExpr  = ToExpr(condExpr,  lparms, typer);
+          def trueExpr  = ToExpr(trueExpr,  lparms, typer);
+          def falseExpr = ToExpr(falseExpr, lparms, typer);
+          <[ Expression.Condition($condExpr, $trueExpr, $falseExpr) ]>
+        
+        | <[ this ]> => <[ Expression.Constant(this, $(tyToTypeOfExpr(texpr.Type))) ]>
+        | PExpr.Tuple(args) =>
+          def makeFieldInfoList(tupleType, i, ty : TypeVar, acc = [])
+          {
+            if (i <= 0) acc
+            else makeFieldInfoList(tupleType, i - 1, ty,
+              PExpr.Typed(TExpr.FieldOf(ty, tupleType.GetField(i))) :: acc)
+          }
+          def tupleType = typer.InternalType.GetTupleType(args.Length);
+          def getCtorInfo = PExpr.Typed(TExpr.CtorOf(texpr.Type, tupleType.Ctor));
+          def argsExprs = args.Map(a => ToExpr(a, lparms, typer));
+          def fieldsInfos = makeFieldInfoList(tupleType, args.Length, TupleType.Make(texpr.Type));
+          def expr = <[ Expression.New($getCtorInfo, array[..$argsExprs], array[..$fieldsInfos]) ]>;
+          expr
+     
+        | PExpr.MacroCall as m => 
+          match (getTExprForPExpr(m))
+          {
+            | TExpr.DebugInfo(TExpr.MacroEnvelope(expanded = tExpr, expandedPExpr = pExpr), _) 
+            |                 TExpr.MacroEnvelope(expanded = tExpr, expandedPExpr = pExpr) => 
+              ToExpr(pExpr, lparms, typer, tExpr)
+              
+            | _ => error(expr)
+          }
+          
+        | _ => error(expr)
+      }
+    }
+    /*
+    UpdateTypedObject(tExpr : TExpr) : void
+    {
+      def exprWalkHandler(info : ExprWalkInfo) : void
+      {
+        match (info.Node)
+        {
+          | e is TypedBase => e.UpdateRelatedParsedObject();
+          | _ => ()
+        }
+      }
+      def walker = ExprWalker();
+      
+      
+      walker.Walk(tExpr, exprWalkHandler);
+    }*/
+  }
+}
