@@ -251,162 +251,6 @@ namespace Nemerle.Linq
         def ident = parseIdentifier();
         QueryClause.Into(first + ident.Location, ident)
       }
-      def convertQuery(collection : PExpr, queryClauses : list[QueryClause], parms : SCG.List[PExpr]) : PExpr
-      {
-        def make_x_param(parms : SCG.List[PExpr]) : PExpr
-        {
-          assert2(!parms.IsEmpty());
-          if (parms.Count == 1) parms[0] else PExpr.Tuple(NList.ToList(parms), 1)
-        }
-        def appendArgToTuple(paramExpr, exprForAppend) : PExpr.Tuple
-        {
-          match (paramExpr)
-          {
-            | PExpr.Tuple(args) => PExpr.Tuple.Create(args + [exprForAppend])
-            | _                 => PExpr.Tuple.Create([paramExpr, exprForAppend])
-          }
-        }
-        match (queryClauses)
-        {
-          | QueryClause.From(ident1, inExpr1) :: QueryClause.From(ident2, inExpr2) :: QueryClause.Select(selExpr) :: tail 
-          | QueryClause.From(ident1, inExpr1) :: QueryClause.From(ident2, inExpr2) :: tail with selExpr = null =>
-            // from x1 in e1 from x2 in e2 ==> e1.SelectMany( x1 => e2 , ( x1 , x2 ) => new { x1 , x2 } )
-            def p1 = <[ $(ident1 : name) ]>;
-            def p2 = <[ $(ident2 : name) ]>;
-            parms.Add(p1);
-            parms.Add(p2);
-            
-            def selExpr2 = if (selExpr == null) <[ ($p1, $p2) ]> else selExpr;
-            
-            def newCollection = <[ $inExpr1.SelectMany($p1 => $inExpr2,  (($p1, $p2)) => $selExpr2) ]>;
-            convertQuery(newCollection, tail, parms)
-          
-          | QueryClause.From(ident, inExpr) :: tail => 
-            parms.Add(<[ $(ident : name) ]>);
-            convertQuery(inExpr, tail, parms)
-            
-          | QueryClause.Where(expr) as clause :: tail =>
-            // from x in e
-            // where f
-            // from x in ( e ) . Where ( x => f )
-            def e = collection;
-            def x = make_x_param(parms);
-            def newCollection = Util.locate(clause.Location, <[ $e.Where($x => $expr) ]>);
-            convertQuery(newCollection, tail, parms)
-
-          | QueryClause.Select(expr) :: tail =>
-            //TODO: Тут надо как-то извлекать список имен колонок и копировать его в parms
-            def x = make_x_param(parms);
-            def newCollection = <[ $collection.Select($x => $expr) ]>;
-            convertQuery(newCollection, tail, parms)
-            
-          | QueryClause.Join(ident, inExpr, k1, k2, into) :: tail =>
-            // from x1 in e1    join x2 in e2 on k1 equals k2 
-            def e1 = collection;
-            def e2 = inExpr;
-            def x1 = make_x_param(parms);
-            def x2 = <[ $(ident : name) ]>;
-            def newCollection = match (into)
-            {
-              | Some(intoName) => 
-                def g = <[ $(intoName : name)]>;
-                parms.Add(g);
-                // e1.GroupJoin(e2 , x1 => k1, x2 => k2, (x1, g) => new { x1 , g })
-                def x1_g = appendArgToTuple(x1, g);
-                <[ $e1.GroupJoin($e2, $x1 => $k1, $x2 => $k2, ($x1, $g) => $x1_g) ]>;
-                
-              | None => 
-                parms.Add(x2);
-                // from * in (e1).Join(e2, x1 => k1, x2 => k2, (x1, x2) => new { x1 , x2 })
-                def x1_x2 = appendArgToTuple(x1, x2);
-                <[ $e1.Join($e2, $x1 => $k1, $x2 => $k2, ($x1, $x2) => $x1_x2) ]>;
-            };
-            convertQuery(newCollection, tail, parms)
-            
-          | QueryClause.Let(ident, expr) :: tail =>
-            // from x in e  
-            // let y = f
-            // from * in ( e ) . Select ( x => new { x , y = f } )
-            def e = collection;
-            def x = make_x_param(parms);
-            def x_f = appendArgToTuple(x, expr);
-            def newCollection = <[ $e.Select($x => $x_f) ]>;
-            parms.Add(<[ $(ident : name) ]>);
-            convertQuery(newCollection, tail, parms)
-            
-          | QueryClause.Orderby([]) as o :: tail =>
-            Message.Error(o.Location, "a orderby clause should contains one or more orderings");
-            convertQuery(collection, tail, parms)
-
-          | QueryClause.Orderby((ordExpr, direction) :: tailOrderings) :: tail =>
-            // from x in e   orderby k1 , k2 , … , kn  ==>
-            // e.OrderBy(x => k1).ThenBy(x => k2). … .ThenBy(x => kn)
-            
-            def e = collection;
-            def x = make_x_param(parms);
-            // e.OrderBy(x => k1)
-            def newCollection1 = if (direction) <[ $e.OrderBy          ($x => $ordExpr) ]>
-                                 else           <[ $e.OrderByDescending($x => $ordExpr) ]>;
-            // .ThenBy(x => k2). … .ThenBy(x => kn)
-            def convertTailOrderings(x : PExpr, orderings, e : PExpr) : PExpr
-            {
-              match (orderings)
-              {
-                | (ordExpr, direction) :: tail =>
-                  def new_e = if (direction) <[ $e.ThenBy          ($x => $ordExpr) ]>
-                              else           <[ $e.ThenByDescending($x => $ordExpr) ]>;
-                  convertTailOrderings(x, tail, new_e)
-                  
-                | [] => e
-              }
-            }            
-            def newCollection2 = convertTailOrderings(x, tailOrderings, newCollection1);
-                                
-            convertQuery(newCollection2, tail, parms)
-            
-          | QueryClause.Group(expr, byExpr) :: tail =>
-            // from x in e group v by k
-            // e.GroupBy(x => k, x => v)   ||   e.GroupBy(x => k) WHERE v is x
-            def e = collection;
-            def x = make_x_param(parms);
-            def v = expr;
-            def k = byExpr;
-
-            def newCollection = {
-              def equalExprs(a : PExpr, b : PExpr) {
-                | (Ref(a), Ref(b)) when a.Id == b.Id =>
-                  true
-                | (Tuple(a), Tuple(b)) when a.Equals(b, equalExprs) =>
-                  true
-                | (TypeEnforcement(a, a_ty), TypeEnforcement(b, b_ty)) when equalExprs(a, b) && equalExprs(a_ty, b_ty) =>
-                  true
-                | _ =>
-                  false
-              }
-              if(equalExprs(x, v))
-                <[ $e.GroupBy($x => $k) ]>
-              else
-                <[ $e.GroupBy($x => $k, $x => $v) ]>
-            }
-            convertQuery(newCollection, tail, parms)
-            
-          | QueryClause.Into(ident) :: tail =>
-            // from … into x … 
-            // from x in ( from … ) …
-
-            // reset all params and add new one (x)
-            def newParms = SCG.List();
-            newParms.Add(<[ $(ident : name) ]>);
-            // try continue convertions
-            convertQuery(collection, tail, newParms);
-          
-          | [] => collection
-          | queryClaus :: _ => 
-            def clausName = queryClaus.GetType().Name.ToLower();
-            Message.Error(queryClaus.Location, $"clause '$clausName' not supported yet");
-            collection
-        }
-      }
       def parseQuery() : list[QueryClause]
       {
         def from = parseFromClause(lexer.Location);
@@ -416,9 +260,10 @@ namespace Nemerle.Linq
       }
       
       typer.Env.Manager.MacroColors.PushUseSiteColor();
-      try { convertQuery(null, parseQuery(), SCG.List()) }
+      try { QueryClause.ConvertQuery(parseQuery()) }
       catch { | _ => <[ () ]> }
       finally { typer.Env.Manager.MacroColors.PopColor(); }
     }
+  
   }
 }

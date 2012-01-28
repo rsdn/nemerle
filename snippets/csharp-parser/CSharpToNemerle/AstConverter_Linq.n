@@ -1,222 +1,60 @@
 ﻿using System;
-using SCG = System.Collections.Generic;
 
 using Nemerle.Assertions;
 using Nemerle.Utility;
 using Nemerle.Collections;
 using Nemerle.Compiler;
+using Nemerle.Linq;
 
-using PT = Nemerle.Compiler.Parsetree;
+using PT  = Nemerle.Compiler.Parsetree;
 using PEG = Nemerle.Peg;
-using CS = CSharpParser;
+using CS  = CSharpParser;
+using SCG = System.Collections.Generic;
 
 namespace CSharpToNemerle
 {
   public partial class AstConverter
   {
-    /*
-      code is ported from LinqImpl.n (Linq.nproj)
-    */
     ConvertQuery(query : CS.Expr.Query) : PT.PExpr
     {
-      def convertParm(var, ty) {
-        def varId = ConvertExpr(var);
-        match(ty) {
-          | null => varId
-          | _ =>
-            def tyId = ConvertExpr(ty);
-            PT.PExpr.TypeEnforcement(tyId.Location + varId.Location, tyId, varId)
+      def toNemerleLinqQuery(query : list[CS.QueryExpr]) : list[QueryClause]
+      {
+        def result = SCG.List();
+        def convertDirection(direction : CS.OrderDirection)
+        {
+          | Desc => false
+          | _    => true
         }
+        def convert(queryExpr : CS.QueryExpr)
+        {
+          | From(variable, null, expr)         => result.Add(QueryClause.From(MakeName(variable), ConvertExpr(expr)));
+          | From(variable, variableType, expr) => result.Add(QueryClause.From(MakeName(variable), <[ $(ConvertExpr(expr)).Cast.[$(ConvertExpr(variableType))]() ]>));
+          | Let(variable, expr)                => result.Add(QueryClause.Let(MakeName(variable), ConvertExpr(expr)));
+          | Where(expr)                        => result.Add(QueryClause.Where(ConvertExpr(expr)));
+          | OrderBy(orderings)                 => result.Add(QueryClause.Orderby(orderings.Map((expr, dir) => (ConvertExpr(expr), convertDirection(dir)))));
+          | Select(expr)                       => result.Add(QueryClause.Select(ConvertExpr(expr)));
+          | Group(expr, partition)             => result.Add(QueryClause.Group(ConvertExpr(expr), ConvertExpr(partition)));
+          | Join(variable, null, expr,  leftExpr, rightExpr, into) =>
+            result.Add(QueryClause.Join(MakeName(variable), ConvertExpr(expr), 
+                                        ConvertExpr(leftExpr), ConvertExpr(rightExpr), 
+                                        if (into == null) None() else Some(MakeName(into))));
+          | Join(variable, variableType, expr,  leftExpr, rightExpr, into) =>
+            result.Add(QueryClause.Join(MakeName(variable), <[ $(ConvertExpr(expr)).Cast.[$(ConvertExpr(variableType))]() ]>, 
+                                        ConvertExpr(leftExpr), ConvertExpr(rightExpr), 
+                                        if (into == null) None() else Some(MakeName(into))));
+          | Into(variable, query) => 
+            result.Add(QueryClause.Into(MakeName(variable)));
+            foreach (e in query)
+              convert(e);
+        }
+
+        foreach (e in query)
+          convert(e);
+          
+        result.NToList()
       }
-      def convertQuery(acc : PT.PExpr, query : list[CS.QueryExpr], parms : SCG.List[PT.PExpr]) : PT.PExpr {
-        def make_x_param(parms : SCG.List[PT.PExpr]) {
-          assert2(!parms.IsEmpty());
-          if (parms.Count == 1) parms[0] else PT.PExpr.Tuple(NList.ToList(parms), 1)
-        }
-        def appendArgToTuple(paramExpr, exprForAppend) {
-          match (paramExpr) {
-            | PT.PExpr.Tuple(args) => PT.PExpr.Tuple.Create(args + [exprForAppend])
-            | _                 => PT.PExpr.Tuple.Create([paramExpr, exprForAppend])
-          }
-        }
-        match(query) {
-          | (From(var1, varTy1, inExpr1) as startClause) :: From(var2, varTy2, inExpr2) :: (Select(selectExpr) as endClause) :: tail
-          | (From(var1, varTy1, inExpr1) as startClause) :: (From(var2, varTy2, inExpr2) as endClause) :: tail with selectExpr = null =>
-            // from x1 in e1 from x2 in e2 ==> e1.SelectMany( x1 => e2 , ( x1 , x2 ) => new { x1 , x2 } )
-            def p1 = convertParm(var1, varTy1);
-            def inExpr1 = ConvertExpr(inExpr1);
-  
-            def p2 = convertParm(var2, varTy2);
-            def inExpr2 = ConvertExpr(inExpr2);
-  
-            parms.Add(p1);
-            parms.Add(p2);
-
-            def selectExpr = match(selectExpr) {
-              | null  => <[ ($p1, $p2) ]>
-              | _     => ConvertExpr(selectExpr)
-            }
-  
-            def acc = { 
-              def loc = (startClause |> NLocation) + (endClause |> NLocation);
-              def SelectMany = MakeSplicableName("SelectMany", loc);
-              Util.locate(loc, <[ $inExpr1.$SelectMany($p1 => $inExpr2, (($p1, $p2)) => $selectExpr) ]>);
-            }
-            convertQuery(acc, tail, parms)
-
-          | From(var, varTy, inExpr) :: tail =>
-            def p = convertParm(var, varTy);
-            parms.Add(p);
-
-            def acc = ConvertExpr(inExpr);
-            convertQuery(acc, tail, parms)
-
-          | Where(predicate) as clause :: tail =>
-            // from x in e
-            // where f
-            // from x in ( e ) . Where ( x => f )
-            def x = make_x_param(parms);
-            def predicate = ConvertExpr(predicate);
-            def acc = {
-              def loc = clause |> NLocation;
-              def Where = MakeSplicableName("Where", loc);
-              Util.locate(loc, <[ $acc.$Where($x => $predicate) ]>);
-            }
-            convertQuery(acc, tail, parms)
-
-          | Select(expr) as clause :: tail =>
-            def x = make_x_param(parms);
-            def expr = ConvertExpr(expr);
-
-            def acc = {
-              def loc = clause |> NLocation;
-              def Select = MakeSplicableName("Select", loc);
-              Util.locate(loc, <[ $acc.$Select($x => $expr) ]>);
-            }
-            convertQuery(acc, tail, parms)
-
-          | Join(var, varTy, expr, leftExpr, rightExpr, into) as clause :: tail =>
-            // from x1 in e1    join x2 in e2 on k1 equals k2
-            def e = ConvertExpr(expr);
-            def k1 = ConvertExpr(leftExpr);
-            def k2 = ConvertExpr(rightExpr);
-            def x1 = make_x_param(parms);
-            def x2 = convertParm(var, varTy);
-            def acc = {
-              def loc = clause |> NLocation;
-              Util.locate(loc,
-                match(into) {
-                  | null =>
-                    // from * in (e1).Join(e2, x1 => k1, x2 => k2, (x1, x2) => new { x1 , x2 })
-                    parms.Add(x2);
-                    def x1_x2 = appendArgToTuple(x1, x2);
-                    def Join = MakeSplicableName("Join", loc);
-                    <[ $acc.$Join($e, $x1 => $k1, $x2 => $k2, ($x1, $x2) => $x1_x2) ]>
-  
-                  | _ =>
-                    // e1.GroupJoin(e2 , x1 => k1, x2 => k2, (x1, g) => new { x1 , g })
-                    def g = ConvertExpr(into);
-                    parms.Add(g);
-                    def x1_g = appendArgToTuple(x1, g);
-                    def GroupJoin = MakeSplicableName("GroupJoin", loc);
-                    <[ $acc.$GroupJoin($e, $x1 => $k1, $x2 => $k2, ($x1, $g) => $x1_g) ]>;
-                });
-            }
-            convertQuery(acc, tail, parms)
-
-          | Let(var, expr) as clause :: tail =>
-            // from x in e  
-            // let y = f
-            // from * in ( e ) . Select ( x => new { x , y = f } )
-            def x = make_x_param(parms);
-            def f = ConvertExpr(expr);
-            def x_f = appendArgToTuple(x, f);
-            def acc = {
-              def loc = clause |> NLocation;
-              def Select = MakeSplicableName("Select", loc);
-              Util.locate(loc, <[ $acc.$Select($x => $x_f) ]>);
-            }
-            parms.Add(ConvertExpr(var));
-            convertQuery(acc, tail, parms)
-
-          | OrderBy([]) as clause :: tail =>
-            Message.Error(clause |> NLocation, "an orderby clause should contain one or more orderings");
-            convertQuery(acc, tail, parms)
-
-          | OrderBy((expr, direction) :: tailOrderings) as clause :: tail =>
-            // from x in e   orderby k1 , k2 , … , kn  ==>
-            // e.OrderBy(x => k1).ThenBy(x => k2). … .ThenBy(x => kn)
-            def x = make_x_param(parms);
-            def ordExpr = ConvertExpr(expr);
-            def acc = {
-              def loc = clause |> NLocation;
-              Util.locate(loc, {
-                def convertTailOrderings(acc, orderings) {
-                  match(orderings) {
-                    | [] => acc
-
-                    | (expr, CS.OrderDirection.Desc) :: tail with ThenBy = MakeSplicableName("ThenByDescending", loc)
-                    | (expr,                      _) :: tail with ThenBy = MakeSplicableName("ThenBy", loc) =>
-                      def ordExpr = ConvertExpr(expr);
-                      def acc = <[ $acc.$ThenBy($x => $ordExpr) ]>;
-                      convertTailOrderings(acc, tail)
-                  }
-                }
-                def acc = match(direction) {
-                  | CS.OrderDirection.Desc with OrderBy = MakeSplicableName("OrderByDescending", loc)
-                  | _                      with OrderBy = MakeSplicableName("OrderBy", loc) =>
-                    <[ $acc.$OrderBy($x => $ordExpr) ]>
-                }
-                convertTailOrderings(acc, tailOrderings)
-              });
-            }
-            convertQuery(acc, tail, parms)
-
-          | Group(expr, key) as clause :: tail =>
-            // from x in e group v by k
-            // e.GroupBy(x => k, x => v)   ||   e.GroupBy(x => k) WHERE v is x
-            def x = make_x_param(parms);
-            def v = ConvertExpr(expr);
-            def k = ConvertExpr(key);
-            def acc = {
-              def equalExprs(a : PT.PExpr, b : PT.PExpr) {
-                | (Ref(a), Ref(b)) when a.Id == b.Id =>
-                  true
-                | (Tuple(a), Tuple(b)) when a.Equals(b, equalExprs) =>
-                  true
-                | (TypeEnforcement(a, a_ty), TypeEnforcement(b, b_ty)) when equalExprs(a, b) && equalExprs(a_ty, b_ty) =>
-                  true
-                | _ =>
-                  false
-              }
-              def loc = clause |> NLocation;
-              def GroupBy = MakeSplicableName("GroupBy", loc);
-              Util.locate(loc,
-                if(equalExprs(x, v))
-                  <[ $acc.$GroupBy($x => $k) ]>
-                else
-                  <[ $acc.$GroupBy($x => $k, $x => $v) ]>)
-            }
-            convertQuery(acc, tail, parms)
-
-          | Into(var, query) :: tail =>
-            assert2(tail.IsEmpty);
-            // from … into x … 
-            // from x in ( from … ) …
-
-            // reset all params and add new one (x)
-            def parms = SCG.List();
-            parms.Add(ConvertExpr(var));
-            convertQuery(acc, query, parms)
-
-          | [] => acc
-          | clause :: _ =>
-            def clauseName = clause.GetType().Name.ToLower();
-            Message.Error(clause |> NLocation, $"query clause $clauseName is not supported yet");
-            acc
-        }
-      }
-      Util.locate(query |> NLocation, convertQuery(PT.PExpr.Error(), query.query, SCG.List()))
+      def nemerleLinqQuery = toNemerleLinqQuery(query.query);
+      QueryClause.ConvertQuery(nemerleLinqQuery);
     }
   }
 }
