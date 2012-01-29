@@ -1,0 +1,226 @@
+﻿using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Globalization;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+using Nemerle.Peg;
+
+namespace Nemerle.Json
+{
+  [PegGrammar(Options = EmitDebugSources, start,
+    grammar
+    {
+      newLine                     = "\r\n" / '\n' / '\r' / '\u2028' / '\u2029' / '\u0085';
+      singleLineComment           = "//" (!('\n' / '\r') [Any])* newLine?;
+      delimitedComment            = "/*" (!"*/" [Any])* "*/";
+      comment                     = singleLineComment / delimitedComment;
+      space                       = ' ' / '\t' / '\u000B' / '\u000C' / newLine / comment;
+      letter                      = ([Lu, Ll, Lt, Lm, Lo, Nl] / '_' / '$');
+      decimalDigit                = ['0'..'9'];
+      hexDigit                    = ['0'..'9', 'A'..'F', 'a'..'f'];
+      octalDigit                  = ['0'..'7'];
+
+      [InlineAllSubrules]
+      s : void = space*;
+      S : void = !identifierPart s;
+
+      identifierPart              = letter / decimalDigit;
+      identifierBody              = letter identifierPart*;
+      identifier      : string    = identifierBody s;
+
+      unicodeEscapeSequence     : char = "\\u" hexDigit hexDigit hexDigit hexDigit;
+      simpleEscapeSequence      : char = "\\'" / "\\\"" / "\\\\" / "\\0" / "\\a" / "\\b" / "\\f" / "\\n" / "\\r" / "\\t" / "\\v";
+
+      singleRegularStringLiteralCharacter  : char   = !( "\"" / "\\") [Any];
+      regularStringLiteralPart             : char   = simpleEscapeSequence
+                                                      / unicodeEscapeSequence
+                                                      / singleRegularStringLiteralCharacter;
+
+      doubleQuotedLiteral : string = "\"" regularStringLiteralPart* "\"" s;
+
+      exponentPart    : string  = ("E" / "e") ("-" / "+")? decimalDigit+;
+      decimalNumber   : string  = ('-' s)? decimalDigit+ ("." decimalDigit+)? exponentPart? s;
+
+      trueValue  : JObject = "true"S;
+      falseValue : JObject = "false"S;
+      nullValue  : JObject = "null"S;
+
+      jstring : JObject = doubleQuotedLiteral;
+
+      jnumber : JObject = decimalNumber;
+
+      jvalue : JObject = jstring
+                            / jnumber
+                            / trueValue
+                            / falseValue
+                            / nullValue;
+
+      jarray  : JObject           = "["s (json ","s)* json? "]"s;
+      jfield  : string * JObject  = (identifier / doubleQuotedLiteral) ":"s json;
+      jobject : JObject           = "{"s (jfield ","s)* jfield? "}"s;
+      json    : JObject           = (jarray / jobject / jvalue) s;
+
+      start   : JObject = s json;
+    }
+  )]
+  public class JsonParser
+  {
+    #region helpers
+    identifier(idValue : NToken) : string
+    {
+      GetText(idValue)
+    }
+
+    //exponentPart    : string  = ("E" / "e") ("-" / "+")? decimalDigit+;
+    exponentPart(_e             : NToken,
+                 sign           : NToken,
+                 decimalDigits  : NToken) : string
+    {
+      GetText(_e) + GetText(sign) + GetText(decimalDigits)
+    }
+
+    //unicodeEscapeSequence   : string = "\\u" hexDigit hexDigit hexDigit hexDigit;
+    unicodeEscapeSequence(_u : NToken, d1 : NToken, d2 : NToken, d3 : NToken, d4 : NToken) : char
+    {
+      unchecked {
+        def x =
+              HexDigit(d1) << 12
+          %|  HexDigit(d2) << 8
+          %|  HexDigit(d3) << 4
+          %|  HexDigit(d4);
+        ConvertUtf32(x)
+      }
+    }
+
+    singleRegularStringLiteralCharacter(c : NToken) : char
+    {
+      ParsingSource.Text[c.StartPos]
+    }
+
+    regularStringLiteralPart(part: char) : char
+    {
+      part
+    }
+
+    doubleQuotedLiteral(_ : NToken, chars : SCG.List[char], _ : NToken) : string
+    {
+      string(chars.ToArray())
+    }
+
+    //simpleEscapeSequence      : string = "\\'" / "\\\"" / "\\\\" / "\\0" / "\\a" / "\\b" / "\\f" / "\\n" / "\\r" / "\\t" / "\\v";
+    simpleEscapeSequence(seq : NToken) : char
+    {
+      match(GetText(seq)) {
+        | "\\'"   => '\''
+        | "\\\""  => '\"'
+        | "\\\\"  => '\\'
+        | "\\0"   => '\0'
+        | "\\a"   => '\a'
+        | "\\b"   => '\b'
+        | "\\f"   => '\f'
+        | "\\n"   => '\n'
+        | "\\r"   => '\r'
+        | "\\t"   => '\t'
+        | "\\v"   => '\v'
+        | s => s[0]
+      }
+    }
+
+    //decimalNumber   : string = MINUS? decimalDigit+ (DOT decimalDigit+)? exponentPart?;
+    decimalNumber(minus           : NToken,
+                  mantissa        : NToken,
+                  frac            : option[NToken*NToken],
+                  exponent        : option[string]) : string
+    {
+      def fracPart = match (frac) {
+        | Some( (_, frac) ) => "." + GetText(frac)
+        | None => ""
+      };
+      def exponent = exponent.WithDefault("");
+
+      GetText(minus) + GetText(mantissa) + fracPart + exponent
+    }
+
+    private HexDigit(t : NToken) : int
+    {
+      unchecked {
+        def c = ParsingSource.Text[t.StartPos];
+        if('0' <= c && c <= '9')
+          c :> int - '0' :> int
+        else if('a' <= c && c <= 'f')
+          c :> int - 'a' :> int + 10
+        else if('A' <= c && c <= 'F')
+          c :> int - 'A' :> int + 10
+        else
+          0
+      }
+    }
+
+    static ConvertUtf32(x : int) : char
+    {
+      unchecked {
+        def x = x :> uint;
+        x :> char
+      }
+    }
+    #endregion
+
+    trueValue(_ : NToken)   : JObject { JObject.Convert(true) }
+    falseValue(_ : NToken)  : JObject { JObject.Convert(false) }
+    nullValue(_ : NToken)   : JObject { JObject.Null }
+
+    jstring(str : string) : JObject { JObject.Convert(str) }
+    jnumber(str : string) : JObject { JObject.Convert(Double.Parse(str, CultureInfo.CreateSpecificCulture("en-US").NumberFormat)) }
+
+    jvalue(o : JObject) : JObject {o}
+
+    //jarray  : JObject = "["s (json ","s)* json? "]"s;
+    jarray( _br1      : NToken,
+            items     : SCG.List[JObject * NToken],
+            lastItem  : option[JObject],
+            _br2      : NToken) : JObject
+    {
+      mutable acc = match(lastItem)
+      {
+        | Some(item) => [item]
+        | _ => []
+      }
+      for(mutable index = items.Count - 1; index >= 0; --index)
+        acc ::= items[index][0];
+
+      JObject.Array(acc)
+    }
+
+    //jfield  : string * JObject  = (identifier / doubleQuotedLiteral) ":"s json;
+    jfield(name : string, _ : NToken, obj : JObject) : string * JObject
+    {
+      (name, obj)
+    }
+
+    //jobject : JObject           = "{"s (jfield ","s)* jfield? "}"s;
+    jobject(_br1      : NToken,
+            items     : SCG.List[(string * JObject) * NToken],
+            lastItem  : option[string * JObject],
+            _br2      : NToken) : JObject
+    {
+      mutable acc = match(lastItem)
+      {
+        | Some(item) => [item]
+        | _ => []
+      }
+      for(mutable index = items.Count - 1; index >= 0; --index)
+        acc ::= items[index][0];
+
+      JObject.Object(acc)
+    }
+
+    //json    : JObject           = (jarray / jobject / jvalue) s;
+    json(obj : JObject) : JObject { obj }
+
+    start(obj : JObject) : JObject { obj }
+  }
+}
