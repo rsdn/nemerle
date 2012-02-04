@@ -741,11 +741,6 @@ namespace Nemerle.Compiler
             Message.HintOnce(10001, "consider using : instead of :>");
             BuildEnforcement(expr, target)
           }
-          else if (exprType.IsNullable)
-          {
-            def res = typer.TypeExpr(<[ $(expr : typed).Value :> $(target : typed) ]>, target);
-            Walk(res)
-          }
           else
             TExpr.TypeConversion(expr.Location, target, expr, target, kind)
 
@@ -756,7 +751,7 @@ namespace Nemerle.Compiler
             BuildEnforcement(expr, target)
           }
           else
-            TExpr.TypeConversion(expr.Location, target, expr, target, ConversionKind.DownCast())
+            TExpr.TypeConversion(expr.Location, target, expr, target, ConversionKind.DownCast(false))
 
         | _ => TExpr.TypeConversion(expr.Location, target, expr, target, kind)
       }
@@ -1558,13 +1553,11 @@ namespace Nemerle.Compiler
           expr.Type.ForceUnify(InternalType.Void);
           Walk(ctx, expr)
 
-        | TExpr.TypeConversion(expr, t, kind, _) =>
-          BuildConversion(Walk(expr), t, kind)
-
-
-        | TExpr.Sequence(e1, DebugInfo(null, _) as e2) =>
-          TExpr.Sequence(Walk(ctx, e1), e2);
-
+        | TExpr.TypeConversion(expr, t, DownCast(inCheckedContext), _) when t.IsNullable => WrapToNullable(ctx, expr, t, inCheckedContext)
+        | TExpr.TypeConversion(expr, t, DownCast(inCheckedContext), _) when expr.Type.IsNullable => UnwrapNullable(ctx, expr, t, inCheckedContext)
+        | TExpr.TypeConversion(expr, t, Implicit, _) when t.IsNullable => NullableImplicitConversion(ctx, expr, t)
+        | TExpr.TypeConversion(expr, t, kind, _) => BuildConversion(Walk(expr), t, kind)
+        | TExpr.Sequence(e1, DebugInfo(null, _) as e2) => TExpr.Sequence(Walk(ctx, e1), e2);
         | TExpr.Sequence(e1, e2) =>
           def e1 = IgnoreExpr(Walk(ctx & Context.AllowGotoAndAllThrows, e1));
           TExpr.Sequence(e1, Walk(ctx & ~Context.IsCalledValue, e2))
@@ -1649,6 +1642,76 @@ namespace Nemerle.Compiler
         | TExpr.Call(TExpr.StaticRef(_, IMethod where (Name="op_Implicit"), []), [parm], _) => parm.expr
         | e => e
       }
+    }
+
+    UnwrapNullable(ctx : Context, expr : TExpr, target : TypeVar, inCheckedContext : bool) : TExpr
+    {
+      assert(!target.IsNullable);
+      assert(target.IsValueType);
+      assert(expr.Type.IsNullable);
+
+      def resExpr1 = <[ $(expr : typed).Value :> $(target : typed) ]>;
+      def resExpr2 = if (inCheckedContext) <[ checked($resExpr1) ]> else <[ unchecked($resExpr1) ]>;
+      def resExpr3 = typer.TypeExpr(resExpr2, target);
+      def resExpr4 = Walk(ctx, resExpr3);
+      resExpr4
+    }
+
+    WrapToNullable(ctx : Context, expr : TExpr, target : TypeVar, inCheckedContext : bool) : TExpr
+    {
+      assert(target.IsNullable);
+      assert(expr.Type.IsValueType);
+
+      def unwrappedTargetType = (target.Fix() :> FixedType.Class).args.Head;
+      def exprIsNullable = expr.Type.IsNullable;
+
+      def v = if (exprIsNullable) <[ x ]> else <[ $(expr : typed) ]>;
+
+      def resExpr1 = if (exprIsNullable) <[ $v.Value ]> else v;
+      def resExpr2 = <[ System.Nullable.[$(unwrappedTargetType : typed)]($resExpr1 :> $(unwrappedTargetType : typed)) ]>;
+      def resExpr3 = if (inCheckedContext) <[ checked($resExpr2) ]> else <[ unchecked($resExpr2) ]>;
+
+      def resExpr4 = 
+        if (exprIsNullable)
+          <[ 
+            def x = $(expr : typed);
+          
+            if (x.HasValue)
+              $resExpr3
+            else
+              System.Nullable.[$(unwrappedTargetType : typed)]() // null
+          ]>
+        else
+          resExpr3;
+
+      def resExpr5 = typer.TypeExpr(resExpr4, target);
+      def resExpr6 = Walk(ctx, resExpr5);
+      resExpr6
+    }
+
+    NullableImplicitConversion(ctx : Context, expr : TExpr, target : TypeVar) : TExpr
+    {
+      def exprType      = expr.Type;
+      def wrappedType   = target.Fix() :> FixedType.Class;
+      def unwrappedType = wrappedType.args.Head;
+
+      assert(exprType.IsValueType);
+
+      def resExpr1 = 
+        if (exprType.IsNullable)
+          <[ 
+            def x = $(expr : typed);
+            if (x.HasValue) 
+              System.Nullable.[$(unwrappedType : typed)](x.GetValueOrDefault() : $(unwrappedType : typed))
+            else
+              System.Nullable.[$(unwrappedType : typed)]()
+          ]>
+        else
+          <[ System.Nullable.[$(unwrappedType : typed)]($(expr : typed) : $(unwrappedType : typed)) ]>;
+
+      def resExpr2 = typer.TypeExpr(resExpr1, wrappedType);
+      def resExpr3 = Walk(ctx, resExpr2);
+      resExpr3
     }
 
     TransformNullableOperators(ctx : Context, loc : Location, _type : TypeVar, opCode : string, parms : list[Parm]) : TExpr
@@ -1737,6 +1800,11 @@ namespace Nemerle.Compiler
                   <[
                     def nullableVal = $(nullableExpr : typed);
                     !nullableVal.HasValue || $(opCode : dyn)($(valueExpr : typed), nullableVal.GetValueOrDefault())
+                  ]>
+                else if (is1Nullable)
+                  <[
+                    def nullableVal = $(nullableExpr : typed);
+                    nullableVal.HasValue && $(opCode : dyn)(nullableVal.GetValueOrDefault(), $(valueExpr : typed))
                   ]>
                 else
                   <[
