@@ -1304,7 +1304,7 @@ namespace Nemerle.Compiler
                 | _ => assert(false)
               }
 
-            | TExpr.OpCode(opCode) as f when Typer.IsNullableBinaryOperator(f.Type) => TransformNullableOperators(ctx, f.Location, f.Type, opCode, parms)
+            | TExpr.OpCode(opCode) as f when Typer.IsNullableBinaryOperator(f.Type) => TransformNullableOperators(ctx, f.Location, expr.Type, opCode, parms)
             | _ =>
               if ((ctx %&& Context.IsTail) && IsSelfCall(func) && parms.ForAll(p => p.kind == ParmKind.Normal))
                 TExpr.SelfTailCall(func, parms)
@@ -1553,8 +1553,12 @@ namespace Nemerle.Compiler
           expr.Type.ForceUnify(InternalType.Void);
           Walk(ctx, expr)
 
-        | TExpr.TypeConversion(expr, t, DownCast(inCheckedContext), _) when t.IsNullable => WrapToNullable(ctx, expr, t, inCheckedContext)
-        | TExpr.TypeConversion(expr, t, DownCast(inCheckedContext), _) when expr.Type.IsNullable => UnwrapNullable(ctx, expr, t, inCheckedContext)
+        | TExpr.TypeConversion(expr, t, DownCast(inCheckedContext), _) when t.IsNullable && !expr.Type.Equals(InternalType.Object) => 
+          WrapToNullable(ctx, expr, t, inCheckedContext)
+
+        | TExpr.TypeConversion(expr, t, DownCast(inCheckedContext), _) when expr.Type.IsNullable => 
+          UnwrapNullable(ctx, expr, t, inCheckedContext)
+
         | TExpr.TypeConversion(expr, t, Implicit, _) when t.IsNullable => NullableImplicitConversion(ctx, expr, t)
         | TExpr.TypeConversion(expr, t, kind, _) => BuildConversion(Walk(expr), t, kind)
         | TExpr.Sequence(e1, DebugInfo(null, _) as e2) => TExpr.Sequence(Walk(ctx, e1), e2);
@@ -1646,9 +1650,9 @@ namespace Nemerle.Compiler
 
     UnwrapNullable(ctx : Context, expr : TExpr, target : TypeVar, inCheckedContext : bool) : TExpr
     {
-      assert(!target.IsNullable);
-      assert(target.IsValueType);
-      assert(expr.Type.IsNullable);
+      assert2(!target.IsNullable);
+      assert2(target.IsValueType);
+      assert2(expr.Type.IsNullable);
 
       def resExpr1 = <[ $(expr : typed).Value :> $(target : typed) ]>;
       def resExpr2 = if (inCheckedContext) <[ checked($resExpr1) ]> else <[ unchecked($resExpr1) ]>;
@@ -1659,8 +1663,8 @@ namespace Nemerle.Compiler
 
     WrapToNullable(ctx : Context, expr : TExpr, target : TypeVar, inCheckedContext : bool) : TExpr
     {
-      assert(target.IsNullable);
-      assert(expr.Type.IsValueType);
+      assert2(target.IsNullable);
+      assert2(expr.Type.IsValueType);
 
       def unwrappedTargetType = (target.Fix() :> FixedType.Class).args.Head;
       def exprIsNullable = expr.Type.IsNullable;
@@ -1691,6 +1695,8 @@ namespace Nemerle.Compiler
 
     NullableImplicitConversion(ctx : Context, expr : TExpr, target : TypeVar) : TExpr
     {
+      assert2(target.IsNullable);
+
       def exprType      = expr.Type;
       def wrappedType   = target.Fix() :> FixedType.Class;
       def unwrappedType = wrappedType.args.Head;
@@ -1714,7 +1720,7 @@ namespace Nemerle.Compiler
       resExpr3
     }
 
-    TransformNullableOperators(ctx : Context, loc : Location, _type : TypeVar, opCode : string, parms : list[Parm]) : TExpr
+    TransformNullableOperators(ctx : Context, loc : Location, retType : TypeVar, opCode : string, parms : list[Parm]) : TExpr
     {
       match (parms)
       {
@@ -1728,9 +1734,13 @@ namespace Nemerle.Compiler
           def is1Nullable = t1.IsNullable;
           def is2Nullable = t2.IsNullable;
 
+          def retTypeIsBool = retType.Fix().Equals(InternalType.Boolean);
+
           def warnDangerousOperator(opCode)
           {
-            when (opCode != "!=" && opCode != "==")
+            def ch = if (opCode.Length > 0) opCode[0] else '\0';
+
+            when ((ch == '<' || ch == '>') && retTypeIsBool)
               Message.Warning(10012, loc, $"Using the '$opCode' operator with nullable types is dangerous. They are implemented only for compatibility with C#.");
           }
 
@@ -1738,19 +1748,8 @@ namespace Nemerle.Compiler
 
           match (e1, e2)  // is1Nullable || is2Nullable
           {
-            | (TExpr.Literal(Literal.Null), e) when is2Nullable && (opCode == "!=" || opCode == "==")
-            | (e, TExpr.Literal(Literal.Null)) when is1Nullable && (opCode == "!=" || opCode == "==") =>
-              // null == nullable // nullable == null // null != nullable // nullable != null
-              //def hasval(e)
-              //{
-              //  TExpr.Call(type, TExpr.MethodRef(e, nullableTi.LookupMember("get_HasValue").Head :> IMethod, [], false), [], false);
-              //}
-              //
-              //match (opCode)
-              //{
-              //  | "==" => TExpr.Call(type, TExpr.OpCode("bool.!"), [Parm(hasval(e))], false)
-              //  | "!=" => hasval(e)
-
+            | (TExpr.Literal(Literal.Null), e) when is2Nullable && retTypeIsBool
+            | (e, TExpr.Literal(Literal.Null)) when is1Nullable && retTypeIsBool =>
               def resExpr1 =
                 match (opCode)
                 {
@@ -1776,7 +1775,12 @@ namespace Nemerle.Compiler
                   | ">=" => <[ (v1.HasValue && v2.HasValue) && $op(v1.GetValueOrDefault(), v2.GetValueOrDefault()) ]>
                   | "==" => <[ v1.GetValueOrDefault() == v2.GetValueOrDefault() && v1.HasValue == v2.HasValue ]>
                   | "!=" => <[ v1.GetValueOrDefault() != v2.GetValueOrDefault() || v1.HasValue != v2.HasValue ]>
-                  | _ => assert(false, "Unsupported nullable operator.");
+                  | _    => 
+                    <[  if (v1.HasValue && v2.HasValue)
+                          System.Nullable.[_]($op(v1.GetValueOrDefault(), v2.GetValueOrDefault()))
+                        else
+                          System.Nullable.[_]()
+                    ]>
                 };
 
               def finalExpr = 
@@ -1791,7 +1795,7 @@ namespace Nemerle.Compiler
               def resExpr2 = Walk(ctx, resExpr1);
               resExpr2
 
-            | _ =>
+            | _ when retTypeIsBool =>
               warnDangerousOperator(opCode);
 
               def (nullableExpr, valueExpr) = if (is1Nullable) (e1, e2) else (e2, e1);
@@ -1813,6 +1817,27 @@ namespace Nemerle.Compiler
                   ]>;
 
               def resExpr1 = typer.TypeExpr(rewritenExpr);
+              def resExpr2 = Walk(ctx, resExpr1);
+              resExpr2
+
+            | _ =>
+              def (nullableExpr, valueExpr) = if (is1Nullable) (e1, e2) else (e2, e1);
+              def calcExpr =
+                if (is1Nullable)
+                  <[ $(opCode : dyn)(nullableVal.GetValueOrDefault(), $(valueExpr : typed)) ]>
+                else
+                  <[ $(opCode : dyn)($(valueExpr : typed), nullableVal.GetValueOrDefault()) ]>;
+              def rewritenExpr =
+                  <[
+                    def nullableVal = $(nullableExpr : typed);
+
+                    if (nullableVal.HasValue)
+                      System.Nullable.[_]($calcExpr)
+                    else
+                      System.Nullable.[_]()
+                  ]>;
+
+              def resExpr1 = typer.TypeExpr(rewritenExpr, retType);
               def resExpr2 = Walk(ctx, resExpr1);
               resExpr2
           }
