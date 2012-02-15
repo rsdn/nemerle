@@ -34,6 +34,7 @@ using System.IO;
 using System.Collections;
 using System.Reflection;
 using System.Text;
+using System.Diagnostics;
 
 using Microsoft.Build.Framework;
 using Microsoft.Build.Tasks;
@@ -143,6 +144,19 @@ namespace Nemerle.Tools.MSBuildTask
 
 		protected override void AddResponseFileCommands(CommandLineBuilderExtension commandLine)
 		{
+			try
+			{
+				AddResponseFileCommandsImpl(commandLine);
+			}
+			catch (Exception ex)
+			{
+				Trace.Assert(false, ex.ToString());
+				throw;
+			}
+		}
+
+		protected void AddResponseFileCommandsImpl(CommandLineBuilderExtension commandLine)
+		{
 			if (OutputAssembly == null && Sources != null && Sources.Length > 0 && ResponseFiles == null)
 			{
 				try
@@ -196,9 +210,12 @@ namespace Nemerle.Tools.MSBuildTask
 			if (IndentationSyntax)
 				commandLine.AppendSwitch("\n/indentation-syntax");
 			commandLine.AppendSwitchIfNotNull("\n/doc:", this.DocumentationFile);
-			var defines = base.DefineConstants
-				.Split(new char[]{';', ' ', '\r', '\n', '\t'}, StringSplitOptions.RemoveEmptyEntries);
-			commandLine.AppendSwitchUnquotedIfNotNull("\n/define:", String.Join(";", defines));
+			if (!string.IsNullOrEmpty(base.DefineConstants))
+			{
+				var defines = base.DefineConstants
+					.Split(new char[] { ';', ' ', '\r', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+				commandLine.AppendSwitchUnquotedIfNotNull("\n/define:", String.Join(";", defines));
+			}
 			commandLine.AppendSwitchIfNotNull("\n/win32res:", base.Win32Resource);
 			commandLine.AppendSwitchIfNotNull("\n/platform:", this.Platform);
 
