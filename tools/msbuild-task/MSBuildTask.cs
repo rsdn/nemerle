@@ -357,7 +357,7 @@ namespace Nemerle.Tools.MSBuildTask
 			var _ = try_report("error:", log_error) || try_report("warning:", log_warning)
 					|| try_report("debug:", log_error) || try_report("hint:", log_warning)
 					|| Log.LogMessageFromText(singleLine, MessageImportance.High);
-                        _ = _; // -- warning CS0219... -- Shut up, bitch!!
+			if (_) return; // -- warning CS0219... 
 		}
 
 		protected override string GetResponseFileSwitch(string responseFilePath)
