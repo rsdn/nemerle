@@ -76,7 +76,7 @@ namespace Nemerle.Compiler
     
     // TODO: object model seems to fit better here, upgrade most kinds to use DelayedAction
     [ManagerAccess (typer.Manager)]
-    public class DelayedTyping : Located, System.IComparable [DelayedTyping]
+    public class DelayedTyping : TypedBase, System.IComparable [DelayedTyping]
     {
       id : int;
       typer : Typer;
@@ -165,7 +165,7 @@ namespace Nemerle.Compiler
 
       public ApplyGenericSpecifier (tyvars : list [TypeVar]) : void
       {
-        assert (generic_specifier == null);
+        assert(generic_specifier == null);
         generic_specifier = tyvars;
         // apply it (possibly)
         SetKind (DtKind);
@@ -241,16 +241,16 @@ namespace Nemerle.Compiler
         match (k) 
         {
           | Kind.Resolved (expr) =>
-            when (PExpr != null)
-            match (PExpr)
+            when (this.PExpr != null)
+            match (this.PExpr)
             {
               | null => ()
               | PT.PExpr.Sequence(body) => 
                 foreach (elem in body)
                   match (elem.TypedObject)
                   {
-                    | TExpr.Delayed when elem.TypedObject == PExpr.TypedObject => 
-                      elem.TypedObject = expr;
+                    | TExpr.Delayed when elem.TypedObject : object == PExpr.TypedObject => 
+                      expr.SetParsedObject(elem); // elem.TypedObject = expr;
 
                     | TExpr.Delayed(susp) as dt =>
                       _ = dt; _ = susp;
@@ -258,9 +258,9 @@ namespace Nemerle.Compiler
                     | _ => ()
                   }
 
-                PExpr.TypedObject = expr;
+                //PExpr.TypedObject = expr;
 
-              | _ => PExpr.TypedObject = expr;
+              | _ => expr.SetParsedObject(this.PExpr); //PExpr.TypedObject = expr;
             }
 
             when (k.need_write)
@@ -273,8 +273,9 @@ namespace Nemerle.Compiler
       }
 
 
-      public this (t : Typer, k : Kind, e : TypeVar)
+      public this (expr : PT.PExpr, t : Typer, k : Kind, e : TypeVar)
       {
+        this.PExpr = expr;
         typer = t;
         local_context = t.local_context;
         Manager.Typer_DT_Id++;
@@ -564,14 +565,43 @@ namespace Nemerle.Compiler
           | FixedType.Class (ti, _) =>
             loop (ti);
             res
-          | _ => assert (false)
+          | _ => assert(false)
         }
       }
 
+      static WrapTo(type : TypeInfo, unwrappedMethod : IMethod) : IMethod
+      {
+        def name = unwrappedMethod.Name;
+        BuiltinWrapMethod(type, unwrappedMethod, BuiltinMethodKind.OpCode(name, name))
+      }
+
+      WrapeToNullable(bound : FixedType.Class, overloads : list[OverloadPossibility]) : list[OverloadPossibility]
+      {
+        def wrapeOverloadPossibilityToNullable(overload : OverloadPossibility) : OverloadPossibility
+        {
+          def nullable = InternalType.Generic_Nullable_tc;
+          def wrapParamTypes(types : array[TypeVar]) : TypeVar
+          {
+            if (types.Length == 1)
+              FixedType.Class(nullable, [types[0]])
+            else if (types.Length == 0)
+              FixedType.Void()
+            else
+              FixedType.Tuple(types.MapToList(t => FixedType.Class(nullable, [t])))
+          }
+          def unwrappedType   = overload.Type :> FixedType.Fun;
+          def retType         = FixedType.Class(nullable, [unwrappedType.to]);
+          def methodType      = FixedType.Fun(wrapParamTypes(overload.FormalTypes), unwrappedType.argsCount, retType);
+          def unwrappedMethod = overload.Member :> IMethod;
+          def wrappedMethod   = WrapTo(nullable, unwrappedMethod);
+          OverloadPossibility(typer, methodType, null, bound, wrappedMethod, [])
+        }
+        overloads.Map(wrapeOverloadPossibilityToNullable)
+      }
 
       LookupOperator (t : TypeVar, name : string) : option [list [OverloadPossibility]]
       {
-        assert (name != null);
+        assert(name != null);
         if (t == null)
           None ()
         else {
@@ -585,6 +615,22 @@ namespace Nemerle.Compiler
               when tc.Equals (InternalType.Object_tc) && 
                    name != "op_Equality" && name != "op_Inequality" => 
               None ()
+
+            | Some (FixedType.Class(_, [FixedType.Class as bound]) as nTy) when nTy.IsNullable =>
+              // Nullable support
+              def res1 = LookupOperatorIn(nTy, name);
+
+              if (res1.IsEmpty)
+              {
+                def res2 = LookupOperatorIn(bound, name);
+
+                if (res2.IsEmpty)
+                  Some([])
+                else
+                  Some(WrapeToNullable(bound, res2))
+              }
+              else
+                Some(res1)
 
             | Some (FixedType.Class as bound) =>
               Some (LookupOperatorIn (bound, name))
@@ -671,7 +717,7 @@ namespace Nemerle.Compiler
                 def res1 = OverloadPossibility.OnlyPossible (overloads, expected, typer);
                 def isAllOverloadsHaveSameArgCnt (overloads)
                 {
-                  assert (overloads.Length > 1);
+                  assert(overloads.Length > 1);
 
                   def cntArgsForEachOverload = overloads.Map(arg =>
                     match (arg.Type.Hint)
@@ -688,12 +734,48 @@ namespace Nemerle.Compiler
                   argsCnt >= 0
                 }
 
-                def res2 = if (res1.Length > 1 && isAllOverloadsHaveSameArgCnt(res1))
-                    typer.GetBestOverloads (res1);
-                  else if (res1.Length > 1) RemoveExtensionMethods (res1)
-                  else res1;
+                def tryFilterByType(o : OverloadPossibility, type : TypeVar) : bool
+                {
+                  typer.JustTry(
+                    fun()
+                    {
+                      def overloadExpr = o.Compile();
+                      def expr = typer.TryAddCastTo(overloadExpr, type, _speculative);
+                      expr != null
+                    });
+                }
 
-                res2
+                def res2 = 
+                  if (res1 is [_])
+                    res1
+                  else if (expected.IsConstrained)
+                  {
+                    def res = res1.Filter(tryFilterByType(_, expected));
+                    if (res.IsEmpty) res1 else res
+                  }
+                  else if (expected.ImplicitCastHint != null)
+                  {
+                    def res = res1.Filter(tryFilterByType(_, expected.ImplicitCastHint));
+                    if (res.IsEmpty) res1 else res
+                  }
+                  else
+                    res1;
+                
+                def res3 = 
+                  if (res2.Length > 1 && isAllOverloadsHaveSameArgCnt(res2))
+                    typer.GetBestOverloads(res2);
+                  else if (res2.Length > 1)
+                    RemoveExtensionMethods(res2)
+                  else
+                    res2;
+
+                def res4 =
+                  if (Manager.DelayedTypingsSecondPass && res3.Length > 1)
+                    PreferredProperties(res3)
+                  else
+                    res3;
+
+                res4
               }
               else if (typer.Expect (expected, expr.func.Type, "overloaded function call"))
                 ResolveOverload(overloads, expr.parms, expr.Type)
@@ -754,7 +836,8 @@ namespace Nemerle.Compiler
 
             when (hints != args && DtKind.filtering_expression != null)
             { // resolving of nested delayed typing can calc types of t1 & t2... try it...
-              def ok = typer.TryResolveNestedDelayedTyping(DtKind.filtering_expression.parms.Map(_.expr), _speculative);
+              mutable isAllNestedDelayedTypingResolved;
+              def ok = typer.TryResolveNestedDelayedTyping(DtKind.filtering_expression.parms.Map(_.expr), out isAllNestedDelayedTypingResolved, _speculative);
               when (ok)
                 hints = calcHintCount(t1, t2)
             }
@@ -845,6 +928,16 @@ namespace Nemerle.Compiler
           Debug.Unindent();
           Debug.WriteLine($"%End DelayedTyping.DoResolve() DtKind=$(RemoveNL(DtKind))");
         }
+      }
+
+      static PreferredProperties(overloads : list[OverloadPossibility]) : list[OverloadPossibility]
+      {
+        def isNotCtor(o : OverloadPossibility) : bool { !o.Member.IsConstructor }
+
+        if (overloads.Exists(isNotCtor))
+          overloads.RevFilter(isNotCtor)
+        else
+          overloads;
       }
 
 #if DEBUG1

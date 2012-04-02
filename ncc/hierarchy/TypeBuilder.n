@@ -86,7 +86,7 @@ public partial class TypeBuilder : TypeInfo
   mutable loc : Location;
   [Accessor] mutable parts_location : list[Location];
   modifiers : AttributesAndModifiers;
-  accessibility : Accessibility;
+  mutable accessibility : Accessibility;
 
   typarms_count : int;
 
@@ -138,6 +138,8 @@ public partial class TypeBuilder : TypeInfo
     }
   }
 
+  mutable is_special_variant_methods_added : bool;
+
   public this (manager : TypesManager, par : TypeBuilder, td : PT.TopDeclaration,
                  ns_node : NamespaceTree.Node)
   {
@@ -166,17 +168,17 @@ public partial class TypeBuilder : TypeInfo
     modifiers = td.modifiers;
     attributes = modifiers.mods;
 
-    instance_ctor_occured = td is PT.TopDeclaration.Alias;
     match (td)
     {
+      | PT.TopDeclaration.Alias => instance_ctor_occured = true;
       | PT.TopDeclaration.VariantOption =>
         instance_ctor_occured = true;
         when (_declaringType != null)
-          {
-            def var_opts = _declaringType.variant_options;
-            VariantOptionCode = var_opts.Length;
-            _declaringType.variant_options = this :: var_opts;
-          }
+        {
+          def var_opts = _declaringType.variant_options;
+          VariantOptionCode = var_opts.Length;
+          _declaringType.variant_options = this :: var_opts;
+        }
         attributes |= NemerleModifiers.Sealed;
         modifiers.custom_attrs = <[ Record ]> :: modifiers.custom_attrs;
         if (_declaringType != null && _declaringType.IsPublic)
@@ -205,18 +207,52 @@ public partial class TypeBuilder : TypeInfo
         | Variant       => CreateVariant()
         | _             => TypeDeclaration.Class() // may change later (in bind_types)
       };
+  }
 
-    instance_ctor_occured = (attributes %&& (NemerleModifiers.Struct %| NemerleModifiers.Static))
-                            || IsModule || instance_ctor_occured || IsInterface || is_enum;
+  internal CalcAccessibility() : void
+  {
+    mutable resuleAccessModifiers = NemerleModifiers.None;
+    mutable resuleAccessModifiersLoc;
+    mutable resuleOtherModifiers = NemerleModifiers.None;
+     
+    foreach (ast in AstParts)
+    {
+      def accessModifiers  = ast.modifiers.Modifiers & NemerleModifiers.AccessModifiers;
+      resuleOtherModifiers = ast.modifiers.Modifiers & ~NemerleModifiers.AccessModifiers;
+      
+      // When a partial type declaration includes an accessibility specification (the public, protected, internal, 
+      // and private modifiers)...
+      when (accessModifiers == NemerleModifiers.None)
+        continue;
 
-    unless (attributes %&& NemerleModifiers.AccessModifiers)
+      // ...it must agree with all other parts that include an accessibility specification. 
+        
+      if (resuleAccessModifiers == NemerleModifiers.None)
+      {
+        resuleAccessModifiers    = accessModifiers;
+        resuleAccessModifiersLoc = ast.Location;
+      }
+      else unless (accessModifiers == resuleAccessModifiers)
+      {
+        Message.Error(ast.Location, $"joined partial classes `$(FullName)' must have compatible modifiers");
+        Message.Hint(resuleAccessModifiersLoc, "part with incompatible modifiers");
+        break;
+      }
+    }
+    
+    // If no part of a partial type includes an accessibility specification, the type is given the appropriate 
+    // default accessibility (§3.5.1).
+    when (resuleAccessModifiers == NemerleModifiers.None)
       if (_declaringType != null)
-        attributes |= NemerleModifiers.Private;
+        resuleAccessModifiers = if (IsVariantOption) NemerleModifiers.Public else NemerleModifiers.Private;
       else
-        attributes |= NemerleModifiers.Internal;
+        resuleAccessModifiers = NemerleModifiers.Internal;
 
+    attributes = resuleAccessModifiers | resuleOtherModifiers;
+    
     accessibility =
-      match (attributes %& NemerleModifiers.AccessModifiers) {
+      match (attributes %& NemerleModifiers.AccessModifiers)
+      {
         | NemerleModifiers.Private => Accessibility.Private
         | NemerleModifiers.Protected => Accessibility.Protected
         | NemerleModifiers.Internal => Accessibility.Internal
@@ -225,14 +261,17 @@ public partial class TypeBuilder : TypeInfo
             Accessibility.ProtectedOrInternal
           else
             Accessibility.Public
-      }
-
+      };
+    
     when (_declaringType != null)
       accessibility = FixedType.AccessibilityIntersect(accessibility, _declaringType.Accessibility);
-
-    CheckTypeAttributes ();
-
+    
+    CheckTypeAttributes();
+    
     m_has_been_used = IsExternallyAccessible;
+
+    instance_ctor_occured = (attributes %&& (NemerleModifiers.Struct %| NemerleModifiers.Static))
+                            || IsModule || instance_ctor_occured || IsInterface || is_enum;
   }
 
   CreateVariant() : TypeDeclaration.Variant
@@ -330,6 +369,20 @@ public partial class TypeBuilder : TypeInfo
   /// Return type we were defined in (null for toplevel types).
   public override DeclaringType : TypeInfo { get { _declaringType } }
 
+  public OuterTypes : Seq[TypeBuilder]
+  {
+    get
+    {
+      mutable current = _declaringType;
+
+      when (current != null)
+      {
+        yield current;
+        current = current._declaringType;
+      }
+    }
+  }
+
   /// Return name without any dots.
   public override Name : string { get { name } }
 
@@ -356,7 +409,7 @@ public partial class TypeBuilder : TypeInfo
   {
     get
     {
-      assert (underlying_enum_type != null);
+      assert(underlying_enum_type != null);
       underlying_enum_type.tycon
     }
   }
@@ -409,25 +462,26 @@ public partial class TypeBuilder : TypeInfo
 
     match (_ast)
     {
-      | PT.TopDeclaration.Class     as td => td.t_extends += [t]
-      | PT.TopDeclaration.Interface as td => td.t_extends += [t]
-      | PT.TopDeclaration.Variant   as td => td.t_extends += [t]
-      | _ =>
-        Message.Error(t.Location, $"cannot add interface to $(_ast.GetType().Name.ToLower()) ($(_ast.Name)).");
+      | PT.TopDeclaration.Class         as td => td.t_extends += [t]
+      | PT.TopDeclaration.Interface     as td => td.t_extends += [t]
+      | PT.TopDeclaration.Variant       as td => td.t_extends += [t]
+      | _ => Message.Error(t.Location, $"cannot add interface to $(_ast.GetType().Name.ToLower()) ($(_ast.Name)).");
     }
   }
 
   public DefineNestedType(td : PT.ClassMember.TypeDeclaration, do_fixup : bool) : TypeBuilder
   {
-    def tyinfo = Manager.NameTree.AddType(this, namespace_nd, td.td);
+    def typeBuilder = Manager.NameTree.AddType(this, namespace_nd, td.td);
+    
+    typeBuilder.CalcAccessibility();
 
     when (TyManager.run_phase > 2)
-      tyinfo.add_special_variant_methods();
+      typeBuilder.add_special_variant_methods();
 
-    when (do_fixup)
-      tyinfo.FixupDefinedClass();
+    when (do_fixup && typeBuilder.self_type == null)
+      typeBuilder.FixupDefinedClass();
 
-    tyinfo
+    typeBuilder
   }
 
   public DefineNestedType (td : PT.ClassMember.TypeDeclaration) : TypeBuilder
@@ -843,13 +897,13 @@ public partial class TypeBuilder : TypeInfo
 
   public GetTypeBuilder () : System.Reflection.Emit.TypeBuilder
   {
-    assert (type_builder != null);
+    assert(type_builder != null);
     type_builder
   }
 
   public GetVariantOptionParent () : TypeBuilder
   {
-    assert (_declaringType != null);
+    assert(_declaringType != null);
     _declaringType
   }
 
@@ -881,7 +935,7 @@ public partial class TypeBuilder : TypeInfo
    */
   protected internal make_tyenvs () : void
   {
-    assert (this.tenv == null);
+    assert(this.tenv == null);
     def tenv = TypeVarEnv (Manager);
     mutable incorrectTyParamsParts = [];
 
@@ -903,6 +957,7 @@ public partial class TypeBuilder : TypeInfo
               | PT.TopDeclaration.Class    (typarms = t) => t
               | PT.TopDeclaration.Variant  (typarms = t) => t
               | PT.TopDeclaration.Interface(typarms = t) => t
+              | PT.TopDeclaration.VariantOption          => _ast.typarms
               | _ => Util.ice ("non class / variant")
             };
 
@@ -992,13 +1047,9 @@ public partial class TypeBuilder : TypeInfo
 
     match (_ast)
     {
-      | PT.TopDeclaration.VariantOption (members) =>
+      | PT.TopDeclaration.VariantOption =>
         unless (Util.is_capitalized (name))
           Message.Error(NameLocation, "variant options' names must start with capital letter");
-
-        foreach (mem in members)
-          unless (mem.Attributes %&& NemerleModifiers.AccessModifiers)
-            mem.Attributes |= NemerleModifiers.Public;
 
       | PT.TopDeclaration.Variant =>  attributes |= NemerleModifiers.Abstract
       | PT.TopDeclaration.Enum when !this.typarms.IsEmpty =>
@@ -1121,7 +1172,7 @@ public partial class TypeBuilder : TypeInfo
 
       def bind_to_class(t : PT.PExpr)
       {
-        match (this.tenv.BindFixedType(this.GlobalEnv, _declaringType, t, check_parms = false))
+        match (this.tenv.BindFixedType(this.GlobalEnv, this, t, check_parms = false))
         {
           | FixedType.Class as tcl =>
             if (nested_tyvars_subst == null) tcl
@@ -1294,9 +1345,6 @@ public partial class TypeBuilder : TypeInfo
       def first = if (_declaringType != null) [_declaringType] else [];
       this.iterate_first = iterate_first.Fold (first, fun (_, ti, acc) { ti :: acc });
 
-      foreach (x in contained_types)
-        Util.locate (x.loc, x.bind_types ());
-
       // check variance limitation to interface/delegate type
       if (IsInterface || IsDelegate)
         unless (typarms.IsEmpty)
@@ -1417,22 +1465,7 @@ public partial class TypeBuilder : TypeInfo
 
   internal ExtendPartialClass(additional : PT.TopDeclaration) : void
   {
-    if ((Attributes %& additional.Attributes) %&& NemerleModifiers.Partial)
-    {
-      unless (additional.Attributes %&& NemerleModifiers.AccessModifiers)
-        match (_declaringType)
-        {
-          | null => additional.Attributes |= NemerleModifiers.Internal;
-          | _    => additional.Attributes |= NemerleModifiers.Private;
-        }
-      // we allow abstract and sealed to be specified just on one arbitratry part
-      attributes            |= additional.Attributes & (NemerleModifiers.Abstract | NemerleModifiers.Sealed);
-      additional.Attributes |= attributes            & (NemerleModifiers.Abstract | NemerleModifiers.Sealed);
-
-      when (additional.Attributes != attributes)
-        Message.Error (additional.Location, $"joined partial classes `$(FullName)' must have compatible modifiers");
-    }
-    else
+    unless ((Attributes %& additional.Attributes) %&& NemerleModifiers.Partial)
     {
       Message.Error (additional.Location, $"you must specify `partial' modifier on all declarations of type `$(FullName)'");
       Message.Error (this.Location, "first defined here");
@@ -1442,7 +1475,8 @@ public partial class TypeBuilder : TypeInfo
     {
       | PT.TopDeclaration.Interface
       | PT.TopDeclaration.Class
-      | PT.TopDeclaration.Variant    =>
+      | PT.TopDeclaration.Variant
+      | PT.TopDeclaration.VariantOption =>
         partial_parts ::= additional;
         additional._typeBuilder = this;
 
@@ -1683,6 +1717,7 @@ public partial class TypeBuilder : TypeInfo
                 // overloading is (hopefully) checked at the get/set method level
                 (mem : IMember) :: old
 
+              | (ty1 is TypeInfo, ty2 is TypeInfo) when ty1.TyparmsCount != ty2.TyparmsCount => [mem : IMember]
               | _ =>
                 surroundwith(related_messages)
                 {
@@ -1699,8 +1734,10 @@ public partial class TypeBuilder : TypeInfo
               | (new_prop is PropertyBuilder, old is IProperty) when new_prop.Attributes %&& NemerleModifiers.Override =>
                 new_prop.UpdateParentProperty(old);
                 [mem : IMember]
+              | (ty1 is TypeInfo, ty2 is TypeInfo) when ty1.TyparmsCount != ty2.TyparmsCount
 
               | _ when mem.Attributes %&& NemerleModifiers.New => [mem : IMember]
+              | (ty1 is TypeInfo, ty2 is TypeInfo) when ty1.TyparmsCount != ty2.TyparmsCount => [mem : IMember]
               | _ =>
                 surroundwith(related_messages)
                 {
@@ -1797,13 +1834,23 @@ public partial class TypeBuilder : TypeInfo
           %| NemerleModifiers.Abstract %| NemerleModifiers.Public;
       }
 
+      def ignoreMember(member : PT.ClassMember) : bool
+      {
+        def name = member.Name ?? "";
+        member.Attributes %&& (NemerleModifiers.AccessModifiers | NemerleModifiers.Static) || name.StartsWith("_N_")
+      }
+
+      when (_ast is PT.TopDeclaration.VariantOption)
+        unless (ignoreMember(class_member))
+          class_member.Attributes |= NemerleModifiers.Public;
+
       match (class_member)
       {
         | PT.ClassMember.EnumOption
         | PT.ClassMember.TypeDeclaration => null
-        | (PT.ClassMember.Field) as f =>
-          def r = FieldBuilder (this, f);
-          AddMember (r);
+        | (PT.ClassMember.Field) as field =>
+          def r = FieldBuilder(this, field);
+          AddMember(r);
           r : MemberBuilder
 
         | (PT.ClassMember.Function) as f =>
@@ -1948,7 +1995,7 @@ public partial class TypeBuilder : TypeInfo
       }
     };
 
-    assert (underlying_enum_type != null);
+    assert(underlying_enum_type != null);
     def atrs = AttributesAndModifiers(NemerleModifiers.Public | NemerleModifiers.SpecialName, []);
     def f = bind_and_add_member (<[ decl: ..$atrs value__ : $(underlying_enum_type : typed); ]>) :> IField;
     Manager.MarkAsAssigned (f);
@@ -2113,6 +2160,16 @@ public partial class TypeBuilder : TypeInfo
    */
   internal add_special_variant_methods() : void
   {
+    if (is_special_variant_methods_added)
+    {
+      when (tydecl is TypeDeclaration.Variant)
+        attributes |= NemerleModifiers.Abstract;
+
+      return;
+    }
+    else
+      is_special_variant_methods_added = true;
+
     match (tydecl)
     {
       | TypeDeclaration.Variant =>
@@ -2158,9 +2215,29 @@ public partial class TypeBuilder : TypeInfo
   {
     match (tydecl)
     {
-      | TypeDeclaration.VariantOption => add_constant_object_ctor()
+      | TypeDeclaration.VariantOption =>
+        CheckFieldsInPartialVariantOption();
+        add_constant_object_ctor();
+
       | _ => ()
     }
+  }
+
+  CheckFieldsInPartialVariantOption() : void
+  {
+    mutable relatedField = null;
+    def env = Manager.CoreEnv;
+
+    when (AstParts.Length > 1)
+      foreach (field is PT.ClassMember.Field in GetParsedMembers(true))
+        when (field.Attributes %&& NemerleModifiers.Public && !field.Name?.StartsWith("_N_") && !field.modifiers.IsCustomAttributeDefined("Nemerle.Internal.IgnoreFieldAttribute", env))
+          if (relatedField == null)
+            relatedField = field;
+          else when (relatedField.DefinedIn : object != field.DefinedIn)
+          {
+            Message.Error(field.Location, "Only fields of one a part of a partial variant option may be used in a constructor. Mark fields of second parts by RecordIgnore attribute.");
+            Message.Hint(relatedField.Location, "The related field definition in other part of variant option.");
+          }
   }
 
   internal GetTyparms () : list[StaticTypeVar]
@@ -2993,6 +3070,7 @@ public partial class TypeBuilder : TypeInfo
         && (if (_declaringType != null)
              // during bind_types all supertypes are null
              !_superTypesCalculated || source.IsDerivedFrom(_declaringType)
+             || (source.IsDerivedFrom(this) && source.DeclaringType?.IsDerivedFrom(_declaringType))
             else
               false
            ))

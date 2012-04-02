@@ -144,7 +144,33 @@ namespace Nemerle.Compiler
           Debug.WriteLine("]");
 #endif
 
-          match (bastOk2)
+          def strType = InternalType.String;
+
+          if (bastOk2.IsEmpty && !overloads.IsEmpty && overloads.Head.Member.Name == "op_Addition" && parms.Exists(p => p.expr.Type.Equals(strType)) && expected.TryUnify(strType))
+          {
+            unless (speculative)
+            {
+              // C# string concatination
+              foreach (p in parms)
+                p.expr =
+                  if (p.expr.Type.Equals(strType))
+                    p.expr
+                  else
+                    TypeExpr(
+                      if (p.expr.Type.Hint.IsNone)
+                        <[ System.Convert.ToString($(p.expr : typed) : object) ]>
+                      else if (p.expr.Type.CanBeNull)
+                        <[ def x = $(p.expr : typed);
+                           if (x != null) x.ToString() else "" ]>
+                      else
+                        <[ $(p.expr : typed).ToString() ]>, strType);
+
+              _ = Expect(expected, strType, "string concatenation");
+            }
+
+            overloads
+          }
+          else match (bastOk2)
           {
             | [] =>
               if (messenger.NeedMessage) 
@@ -200,12 +226,22 @@ namespace Nemerle.Compiler
               // if this typing is speculative, then we should not do final typeng. It prevent change parameters of call.
               if (speculative)
                 result
+              else if (!one.IsAllNestedDelayedTypingResolved && has_untyped_parm && one.Member is BuiltinMethod)
+              {
+                //assert2(false);
+                result
+              }
               else match (try_type(one, parms, expected, final = true)) 
               {
-                | TExpr.Call(_func, tParms, _) as _tCall =>
+                | TExpr.Call(func, tParms, _) as _tCall =>
+                  when (func is TExpr.OpCode(op) when binary_operators.Contains(op) && Typer.IsNullableBinaryOperator(func.Type))
+                    when (tParms is [p1, p2])
+                      // This is a fake typing. It only report error if we have no operator.
+                      _ = TypeExpr(<[ $(op : dyn)($(p1.expr : typed).Value, $(p2.expr : typed).Value) ]>);
+
                   one.ResolvedCallParameters = tParms; // [TAG:SetResolvedCallParameters]
                   one.UsedLastTime = true;
-                  _ = _func; _ = _tCall;
+                  _ = _tCall;
                   result
 
                 | e => 
@@ -288,6 +324,7 @@ namespace Nemerle.Compiler
       ct.is_var_args = overload.VarArgs;
       overload.ResetOverloadSelectionStuff();
       ct.Run();
+      overload.IsNeedTupleConvertion = ct.IsTupleConvertionMade;
 
       def result = 
         if (ct.result == null || (overload.VarArgs && !ct.used_var_args))
@@ -493,12 +530,49 @@ namespace Nemerle.Compiler
         if (o.ExtensionMethodObject == null) argsTypes 
         else o.ExtensionMethodObject.Type :: argsTypes
       }
-      def matchs1 = o1.FormalTypes.Map2ToArray(makeArgsTypes(o1), matchType);
-      def matchs2 = o2.FormalTypes.Map2ToArray(makeArgsTypes(o2), matchType);
+      def formalTypes1 = o1.FormalTypes;
+      def formalTypes2 = o2.FormalTypes;
+      def matchs1 = formalTypes1.Map2ToArray(makeArgsTypes(o1), matchType);
+      def matchs2 = formalTypes2.Map2ToArray(makeArgsTypes(o2), matchType);
       assert2(matchs1.Length == matchs2.Length);
       def differPairs = matchs1.ZipToArray(matchs2).Filter(_ != _);
-      def isBetterOverload = differPairs.Exists((p1, _) => p1) && !differPairs.Exists((_, p2) => p2);
-      isBetterOverload
+
+      if (differPairs.IsEmpty)
+      {
+        // If not the best argument, the reason for it may be implicit type conversion. Let's try to
+        // drop overload with has arguments that are better in terms of a subtype / supertype.
+
+        def extArg1 = o1.ExtensionMethodObject;
+        assert2(extArg1 == null && o2.ExtensionMethodObject == null
+             || extArg1 != null && o2.ExtensionMethodObject != null);
+
+        def argTypes = (if (extArg1 == null) argsTypes else extArg1.Type :: argsTypes).NToArray();
+        mutable overload1Wins = false;
+        mutable overload2Wins = false;
+
+        foreach (t1 in formalTypes1 with i)
+        {
+          assert2(i < argTypes.Length);
+          def t2      = formalTypes2[i];
+          def argType = argTypes[i];
+
+          if        (t1.TryRequire(t2) && argType.TryRequire(t1) && !t2.TryRequire(t1))
+            overload1Wins |= true;
+          else if   (t2.TryRequire(t1) && argType.TryRequire(t2) && !t1.TryRequire(t2))
+            overload2Wins |= true;
+          else if   (t1.IsFixed && argType.TryUnify(t1) && !argType.TryUnify(t2))
+            overload1Wins |= true;
+          else when (t2.IsFixed && argType.TryUnify(t2) && !argType.TryUnify(t2))
+            overload2Wins |= true;
+        }
+
+        overload1Wins && !overload2Wins
+      }
+      else
+      {
+        def isBetterOverload = differPairs.Exists((p1, _) => p1) && !differPairs.Exists((_, p2) => p2);
+        isBetterOverload
+      }
     }
 
     static AintExtension (o : OverloadPossibility) : bool
@@ -531,6 +605,16 @@ namespace Nemerle.Compiler
       else parms
     }
 
+    static RemoveOverloadsWithTupleConvertion(parms : list [OverloadPossibility]) : list [OverloadPossibility]
+    {
+      def f = x => !x.IsNeedTupleConvertion;
+
+      if (NList.Exists(parms, f))
+        NList.RevFilter(parms, f)
+      else
+        parms
+    }
+
     public static FilterIfExists[T](this source : list[T], predicate : T -> bool) : list[T]
     {
       if (source.Exists (predicate)) source.RevFilter (predicate) else source
@@ -543,7 +627,8 @@ namespace Nemerle.Compiler
       {
         | [] | [_] => parms
         | _ =>
-          def res1 = RemoveExtensionMethods(parms);
+          def res0 = RemoveOverloadsWithTupleConvertion(parms);
+          def res1 = RemoveExtensionMethods(res0);
           def res2 = GetMinimal(res1, IsBetterOverload);
           def res3 = res2.FilterIfExists(AintVarArgs);
           def res4 = res3.FilterIfExists(DidntMamboJumbo);
