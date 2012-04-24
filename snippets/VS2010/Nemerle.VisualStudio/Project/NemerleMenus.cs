@@ -28,6 +28,7 @@ namespace Nemerle.VisualStudio.Project
 			ImplementInterface       = 0x2008,
 			OverrideMembers          = 0x2009,
 			ImportSymbolCompletion   = 0x2010,
+			ReloadProject            = 0x2011,
 
 			SetAsMain = 0x3001,
 
