@@ -1976,9 +1976,7 @@ namespace Microsoft.VisualStudio.Project
 			HierarchyNode newNode;
 			HierarchyNode parent = null;
 
-			var dir = Path.GetDirectoryName(item.EvaluatedInclude);
 			string dependentOf = item.GetMetadataValue(ProjectFileConstants.DependentUpon);
-			dependentOf = string.IsNullOrEmpty(dir) ? dependentOf : Path.Combine(dir, dependentOf);
 			Debug.Assert(String.Compare(dependentOf, key, StringComparison.OrdinalIgnoreCase) != 0, "File dependent upon itself is not valid. Ignoring the DependentUpon metadata");
 			if (subitems.ContainsKey(dependentOf))
 			{
