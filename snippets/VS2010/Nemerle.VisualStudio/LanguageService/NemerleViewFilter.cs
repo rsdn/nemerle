@@ -815,6 +815,7 @@ namespace Nemerle.VisualStudio.LanguageService
 						break;
 
 					case MenuCmd.CmdId.IplementInterface:
+					case MenuCmd.CmdId.ReloadProject:
 					case MenuCmd.CmdId.ImportSymbolCompletion:
 					case MenuCmd.CmdId.Inline:
 					case MenuCmd.CmdId.RefactoringTopMenu:
@@ -877,6 +878,13 @@ namespace Nemerle.VisualStudio.LanguageService
 
 				switch (nemerleCmd)
 				{
+					case MenuCmd.CmdId.ReloadProject:
+						var projectInfo = ((NemerleSource)Source).ProjectInfo;
+
+						if (projectInfo != null)
+							projectInfo.Engine.BeginBuildTypesTree();
+
+						return true;
 					case MenuCmd.CmdId.ImportSymbolCompletion:
 						{
 							int lintIndex;
