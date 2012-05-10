@@ -1,1 +1,2 @@
-C:\Windows\Microsoft.NET\Framework\v3.5\MSBuild.exe ComputationExpressions.nproj
+set MSBuild="%SystemRoot%\Microsoft.NET\Framework\v4.0.30319\msbuild.exe"
+%MSBuild% ComputationExpressions.nproj
