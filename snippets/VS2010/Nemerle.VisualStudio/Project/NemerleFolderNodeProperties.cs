@@ -45,5 +45,18 @@ namespace Nemerle.VisualStudio.Project
         {
             return new NemerleDesignPropertyDescriptor(propertyDescriptor);
         }
+
+        [Browsable(false)]
+		public string DefaultNamespace
+		{
+			get
+			{
+			    var ns = Node.Caption;
+			    for (var parent = Node.Parent; parent != null; parent = parent.Parent)
+			        ns = parent.Caption + "." + ns;
+			    return ns;
+			}
+			set { throw new NotImplementedException();  }
+		}
     }
 }
