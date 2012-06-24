@@ -24,6 +24,7 @@ namespace Nemerle.VisualStudio.Project
 		public const string ManifestKeyFilePropertyName = "ManifestKeyFile";
 		public const string ManifestCertificateThumbprintPropertyName = "ManifestCertificateThumbprint";
 		public const string OutputPathPropertyName = "OutputPath";
+        public const string TargetFrameworkMonikerName = "TargetFrameworkMoniker";
 
 		public EnvDTE.Configuration get_ActiveConfiguration()
 		{
@@ -126,6 +127,13 @@ namespace Nemerle.VisualStudio.Project
 		{
 			get { return GetPropertyValue(ManifestCertificateThumbprintPropertyName); }
 			set { Node.ProjectMgr.SetProjectProperty(ManifestCertificateThumbprintPropertyName, value); }
+		}
+
+		[Browsable(false)]
+		public string TargetFrameworkMoniker
+		{
+			get { return GetPropertyValue(TargetFrameworkMonikerName); }
+			set { Node.ProjectMgr.SetProjectProperty(TargetFrameworkMonikerName, value); }
 		}
 
 		[Browsable(false)]
