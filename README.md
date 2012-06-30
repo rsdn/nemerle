@@ -49,8 +49,8 @@ Will output
 
 # What about IDE?
 
-  * Visual Studio 2008 integration installed by Nemerle installer
-  * Visual Studio 2010 integration is not released, but works and can be builded manually, see snippets/VS2010/readme.txt
+  * Visual Studio 2008/2010 integration installed by Nemerle installer
+  * Nemerle Studio is a free IDE based on Visual Studio Shell (Isolated mode) installed by Nemerle installer if VS Shell was installed
   * Sharp Develop 3.0 addin can be builded manually. See snippets/sharpdevelop/ReadMe.txt 
   * See Vim, Emacs, Kate and other editors syntax support in the 'misc' folder
 
