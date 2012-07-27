@@ -234,6 +234,7 @@ namespace Nemerle.Tools.MSBuildTask
 			commandLine.AppendPlusOrMinusSwitch("\n/debug", base.Bag, "EmitDebugInformation");
 			commandLine.AppendSwitchIfNotNull("\n/project-path:", this.ProjectPath);
 			commandLine.AppendSwitchIfNotNull("\n/root-namespace:", this.RootNamespace);
+			commandLine.AppendSwitchIfNotNull("\n/main:", this.MainEntryPoint);
 			if (CompilerStackSize > 0)
 				commandLine.AppendSwitchIfNotNull("\n/stack-size:", this.CompilerStackSize.ToString());
 
