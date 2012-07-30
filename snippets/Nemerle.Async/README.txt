@@ -16,6 +16,10 @@ Before use, please ensure that you know exactly what
 "Task-based Asynchronous Pattern" is about:
 http://www.microsoft.com/en-us/download/details.aspx?id=19957
 
+AsyncTargetingPack.NET4 is required when using with .NET 4.0:
+http://www.microsoft.com/en-us/download/details.aspx?id=29576
+Reference to AsyncTargetingPack can be removed in .NET 4.5 or later.
+
 For more info please see here:
 http://sites.google.com/site/gibekm/programming/nemerle/asyncawait
   
