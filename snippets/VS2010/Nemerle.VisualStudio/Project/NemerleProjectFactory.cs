@@ -201,7 +201,19 @@ namespace Nemerle.VisualStudio.Project
 			pUpgradeProjectCapabilityFlags = (uint)(__VSPPROJECTUPGRADEVIAFACTORYFLAGS.PUVFF_BACKUPSUPPORTED | __VSPPROJECTUPGRADEVIAFACTORYFLAGS.PUVFF_COPYBACKUP);
 			pguidNewProjectFactory = Guid.Empty;
 
-			var projectData = new ProjectUpgradeHelper(projectFileName);
+			ProjectUpgradeHelper projectData;
+
+			try
+			{
+				projectData = new ProjectUpgradeHelper(projectFileName);
+			}
+			catch (Exception ex)
+			{
+				MessageBox.Show(ex.Message, "Nemerle laguage");
+				pUpgradeRequired = 0;
+				return VSConstants.E_FAIL;
+			} 
+				
 
       var version = ParseVersion(projectData.ToolsVersion.Value);
       if (projectData.ToolsVersion == null || version.Major != 4 && version.Minor != 0)
