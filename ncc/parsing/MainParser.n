@@ -73,7 +73,6 @@ namespace Nemerle.Compiler
 
       public static RoundInfo   : OperatorInfo = OperatorInfo      ("(", 290, 291);
       public static SquareInfo  : OperatorInfo = OperatorInfo      ("[", 290, 291);
-      public static ProductInfo : OperatorInfo = OperatorInfo      ("*", 261, 260);
       public static UnMinus     : OperatorInfo = UnaryOperatorInfo ("-", 281, 280);
       public static UnPlus      : OperatorInfo = UnaryOperatorInfo ("+", 281, 280);
 
@@ -600,28 +599,31 @@ namespace Nemerle.Compiler
       }
     }
 
-    should_stop (stop : TokenStoppers) : bool
+    should_stop(stop : TokenStoppers) : bool
     {
-      if (stream == null) true
-      else
+      should_stop(stream, stop)
+    }
+
+    static should_stop(tok : Token, stop : TokenStoppers) : bool
+    {
+      if (tok == null)
+        true
+      else match (tok)
       {
-        match (stream)
-        {
-          | Token.Semicolon => true
-          | Token.LooseGroup (Token.Operator (str))
-          | Token.Operator (str) =>
-            match (str)
-            {
-              | "|"  when stop %&& TokenStoppers.Pipe
-              | "="  when stop %&& TokenStoppers.Equal
-              | "=>" when stop %&& TokenStoppers.Arrow
-              | "$"  when stop %&& TokenStoppers.Dollar
-              | ":"  when stop %&& TokenStoppers.Colon => true
-              | _                                      => false
-            }
-          | Token.Keyword ("where") => stop %&& TokenStoppers.Where
-          | _ => false
-        }
+        | Token.Semicolon => true
+        | Token.LooseGroup (Token.Operator (str))
+        | Token.Operator (str) =>
+          match (str)
+          {
+            | "|"  when stop %&& TokenStoppers.Pipe
+            | "="  when stop %&& TokenStoppers.Equal
+            | "=>" when stop %&& TokenStoppers.Arrow
+            | "$"  when stop %&& TokenStoppers.Dollar
+            | ":"  when stop %&& TokenStoppers.Colon => true
+            | _                                      => false
+          }
+        | Token.Keyword ("where") => stop %&& TokenStoppers.Where
+        | _ => false
       }
     }
 
@@ -2621,12 +2623,22 @@ namespace Nemerle.Compiler
 
             match (tok)
             {
-              | Token.Operator("*") =>
-                (NaryOperatorInfo(OperatorInfo.ProductInfo, loc), loc)
-
               | Token.Operator(str) =>
-                if (should_stop (stop)) (null, loc)
-                else                    (env.FetchOperator(str),  loc)
+                if (should_stop(stop))
+                  (null, loc)
+                else if (env.HasOperator(str))
+                {
+                  def next = peek_second_token();
+                  
+                  if (env.HasUnaryOperator(str) && is_operator_or_stoper(next, stop))
+                    (env.LookupUnaryOperator(str), loc)
+                  else
+                    (env.FetchOperator(str), loc)
+                }
+                else if (str == "*")
+                  (BinaryOperatorInfo("*", 261, 260), loc) // default operator
+                else
+                  (env.FetchOperator(str), loc)
 
               | Token.Keyword(str) =>
                 if (should_stop(stop)) (null, loc)
@@ -2683,7 +2695,7 @@ namespace Nemerle.Compiler
             match (_expr_stack)
             {
               | [x] => x
-              | _ => Util.ice ("something different than one expression after rolling")
+              | _ => assert2(false); Util.ice("something different than one expression after rolling")
             }
           }
           else
@@ -2697,18 +2709,7 @@ namespace Nemerle.Compiler
               | _ => ()
             }
 
-            // special case for x * y * z
-            if (info.Name == "*")
-            {
-              _op_context = OpContext.Prefix;
-              match (rpn_op_stack)
-              {
-                | (x, _) :: _ when x.Name == "*" => ()
-                | _ => rpn_op_stack = infoAndLocOfLastToken :: rpn_op_stack;
-              }
-            }
-            else
-              rpn_op_stack = (info, loc) :: rpn_op_stack;
+            rpn_op_stack = (info, loc) :: rpn_op_stack;
 
             // parse inner elements of bracket-like operators: `( ... )'
             _expr_stack = parse_expr_sequence (group, _expr_stack);
@@ -2720,7 +2721,48 @@ namespace Nemerle.Compiler
           }
         }
       }
-      loop ();
+      def resulrExpr = loop();
+      
+      match (resulrExpr)
+      {
+        | <[ $_ * $_ ]> => flatten_mul_expr(resulrExpr)
+        | _ => resulrExpr
+      }
+    }
+    
+    is_operator_or_stoper(tok : Token, stop : TokenStoppers) : bool
+    {
+      if (should_stop(tok, stop))
+        true
+      else match (tok)
+      {
+        | Token.Keyword(str) => env.HasOperator(str)
+        | Token.Operator     => true
+        | _ => false
+      }
+    }
+    
+    static flatten_mul_expr(expr : PExpr) : PExpr
+    {
+      def lst = SCG.List();
+      def loop(expr) : void
+      {
+        | <[ $e1 * $e2 ]> when !(expr.Token is Token.RoundGroup) => loop(e1); loop(e2);
+        | _                                                      => lst.Add(expr);
+      }
+      
+      loop(expr);
+      
+      if (lst.Count > 2)
+      {
+        def lst2 = lst.NToList();
+        def loc  = lst2.EnclosingLocation();
+        def mul  = Util.locate(loc, <[ @* (..$lst2) ]>);
+        mul.Location = loc;
+        mul
+      }
+      else
+        expr
     }
 
     parse_literal () : PExpr
@@ -2847,9 +2889,9 @@ namespace Nemerle.Compiler
     // parsing of expressions beginning (mostly) with unique keyword
     // we use this method to parse expressions occuring between operators, which
     // are parsed in [parse_expr] using infix to RPN method
-    parse_embedded_expr (stop : TokenStoppers) : PExpr
+    parse_embedded_expr(stop : TokenStoppers) : PExpr
     {
-      def lit = parse_literal ();
+      def lit = parse_literal();
 
       if (lit != null)
         lit
@@ -2858,370 +2900,378 @@ namespace Nemerle.Compiler
         def     tok = get_token ();
         mutable loc = tok.Location;
 
-        match (tok)
-        {
-          | Token.Keyword ("void") => PExpr.Void (loc)
-          | Token.Keyword ("this") => PExpr.This (loc)
-          | Token.Keyword ("base") => 
-            match (peek_token ()) //testing if next token is type enforcement
-            {
-              | Token.Operator(":") as op when op.Next is Token.Identifier=>
-                _ = get_token ();//poping from stack
-                loc = tok.Location + op.Next.Location;
-                
-                PExpr.Base (loc, parse_expr (stop))
-              | _ => PExpr.Base (loc)
-            }            
-          | Token.Keyword ("_") => PExpr.Wildcard (loc)
-          | Token.Keyword ("typeof") =>
-            match (get_token ()) {
-              | Token.RoundGroup (child) as g =>
-                match (parse_expr_sequence (child, [])) {
-                  | [x] => PExpr.Typeof (loc + g.Location, x)
-                  | _ => fatal_error (g.Location, "expecting single type in `typeof (...)'");
-                }
-              | x => fatal_error (x, "expecting `(..)' after `typeof'");
-            }
-
-          | Token.Keyword ("array") =>
-            def rank =
-              match (peek_token ())
+        def resultExpr = 
+          match (tok)
+          {
+            | Token.Keyword("void") => PExpr.Void(loc)
+            | Token.Keyword("this") => PExpr.This(loc)
+            | Token.Keyword("base") => 
+              match (peek_token ()) //testing if next token is type enforcement
               {
-                | Token.Operator (".") =>
-                  shift ();
-                  match (get_token ()) {
-                    | Token.SquareGroup (null) => <[ 1 ]>
-                    | Token.SquareGroup (child) =>
-                      match (parse_expr_sequence (child, [])) {
-                        | [x] => x
-                        | _ => Error (child, "expecting `[rank]' after `array.'"); <[ 1 ]>
-                      }
-                    | x => Error (x, "expecting `[rank]' after `array.'"); <[ 1 ]>
+                | Token.Operator(":") as op when op.Next is Token.Identifier =>
+                  _ = get_token();//poping from stack
+                  loc = tok.Location + op.Next.Location;
+                  PExpr.Base(loc, parse_expr(stop))
+
+                | _ => PExpr.Base (loc)
+              }
+
+            | Token.Keyword("_") => PExpr.Wildcard(loc)
+            | Token.Keyword("typeof") =>
+              match (get_token())
+              {
+                | Token.RoundGroup(child) as g =>
+                  match (parse_expr_sequence(child, []))
+                  {
+                    | [x] => PExpr.Typeof(loc + g.Location, x)
+                    | _ => fatal_error(g.Location, "expecting single type in `typeof (...)'");
                   }
-                | _ => <[ 1 ]>
-              }
-
-            def body = peek_token ();
-            match (body)
-            {
-              | Token.SquareGroup | Token.Operator ("$") =>
-                PExpr.Array (loc + body.Location, rank, parse_embedded_expr (TokenStoppers.All))
-
-              | Token.RoundGroup (groups) =>
-                unless (rank is <[ 1 ]>)
-                  Message.Error(rank.Location, $"Invalid array rank: $rank. You can use only '1' in rank of empty array.");
-              
-                shift ();
-                def exprs = parse_expr_sequence(groups);
-                PExpr.EmptyArray(loc + body.Location, exprs)
-
-              | x =>
-                fatal_error (x, "expected [ ..elements of array.. ], ( .."
-                             "sizes of empty array.. )  or `array .[rank] [..]' in array creation");
-            }
-
-          // tuples
-          | Token.RoundGroup (groups) =>
-            match (parse_expr_sequence (groups))
-            {
-              | [PExpr.Ellipsis] as exprs => PExpr.Tuple.Create (loc, exprs)
-              | [PExpr.Tuple as tuple] => tuple.argsCount = 1; tuple
-              | [e] => e  //VladD2: We lose location of brackets!
-              | exprs => PExpr.Tuple.Create (loc, exprs)
-            }
-
-          | Token.SquareGroup (groups) =>
-            PExpr.ListLiteral (loc, parse_expr_sequence (groups));
-
-          | Token.BracesGroup as brac when !(stop %&& TokenStoppers.Braces) =>
-            ParseBlock (brac, [])
-
-          | Token.QuoteGroup (group) =>
-            push_stream (group);
-            def expr = parse_quotation ();
-            pop_stream ("code quotation");
-            expr
-
-          | Token.Keyword ("ref") =>
-            def refexpr = parse_expr (TokenStoppers.All);
-            PExpr.ParmByRef (loc + refexpr.Location, refexpr)
-
-          | Token.Keyword ("out") =>
-            def outexpr = parse_expr (TokenStoppers.All);
-            PExpr.ParmOut (loc + outexpr.Location, outexpr)
-
-          | Token.Keyword ("throw") =>
-            if (stream != null) {
-              def exn = parse_expr (stop);
-              PExpr.Throw (loc + exn.Location, exn)
-            }
-            else
-              PExpr.Throw (loc, null)
-
-          | Token.Keyword ("mutable") =>
-            mutable ids = [];
-            mutable vals = [];
-
-            def loop ()
-            {
-              def id = parse_expr (TokenStoppers.All);
-
-              match (id)
-              {
-                | PExpr.Call(PExpr.Ref as op, [id2, _]) with opText = op?.ToString() ?? "" =>
-                  def msg = if (op != null && opText.Length > 1 && opText[0] == '=')
-                              " Maybe you forgot to separate the operator by space?"
-                            else "";
-
-                  Message.Error(op.Location, $"Unexpected operator or function call. '$opText'.$msg");
-
-                  unless (id2 is PExpr.Ref)
-                    Message.Error(op.Location, $"Expected variable name. See http://nemerle.org/Core_expressions_%28ref%29#Mutable_value_definition. '$opText'.$msg");
                   
-                  ids ::= id2;
-
-                | _ => ids ::= id;
+                | x => fatal_error(x, "expecting `(..)' after `typeof'");
               }
 
+            | Token.Keyword("array") =>
+              def rank =
+                match (peek_token ())
+                {
+                  | Token.Operator (".") =>
+                    shift ();
+                    match (get_token ())
+                    {
+                      | Token.SquareGroup(null) => <[ 1 ]>
+                      | Token.SquareGroup(child) =>
+                        match (parse_expr_sequence(child, []))
+                        {
+                          | [x] => x
+                          | _ => Error(child, "expecting `[rank]' after `array.'"); <[ 1 ]>
+                        }
+                        
+                      | x => Error(x, "expecting `[rank]' after `array.'"); <[ 1 ]>
+                    }
+                  | _ => <[ 1 ]>
+                }
+
+              def body = peek_token ();
+              match (body)
+              {
+                | Token.SquareGroup | Token.Operator("$") =>
+                  PExpr.Array(loc + body.Location, rank, parse_embedded_expr(TokenStoppers.All))
+
+                | Token.RoundGroup(groups) =>
+                  unless (rank is <[ 1 ]>)
+                    Message.Error(rank.Location, $"Invalid array rank: $rank. You can use only '1' in rank of empty array.");
+
+                  shift();
+                  def exprs = parse_expr_sequence(groups);
+                  PExpr.EmptyArray(loc + body.Location, exprs)
+
+                | x => fatal_error (x, "expected [ ..elements of array.. ], ( ..sizes of empty array.. )  or `array .[rank] [..]' in array creation");
+              }
+
+            // tuples
+            | Token.RoundGroup(groups) =>
+              match (parse_expr_sequence (groups))
+              {
+                | [PExpr.Ellipsis] as exprs => PExpr.Tuple.Create (loc, exprs)
+                | [PExpr.Tuple as tuple] => tuple.argsCount = 1; tuple
+                | [e] => e // VladD2: We lose location of brackets!
+                | exprs => PExpr.Tuple.Create (loc, exprs)
+              }
+
+            | Token.SquareGroup(groups) => PExpr.ListLiteral(loc, parse_expr_sequence(groups));
+            | Token.BracesGroup as brac when !(stop %&& TokenStoppers.Braces) => ParseBlock(brac, [])
+
+            | Token.QuoteGroup(group) =>
+              push_stream (group);
+              def expr = parse_quotation ();
+              pop_stream ("code quotation");
+              expr
+
+            | Token.Keyword ("ref") =>
+              def refexpr = parse_expr (TokenStoppers.All);
+              PExpr.ParmByRef (loc + refexpr.Location, refexpr)
+
+            | Token.Keyword ("out") =>
+              def outexpr = parse_expr (TokenStoppers.All);
+              PExpr.ParmOut (loc + outexpr.Location, outexpr)
+
+            | Token.Keyword ("throw") =>
+              if (stream != null)
+              {
+                def exn = parse_expr (stop);
+                PExpr.Throw (loc + exn.Location, exn)
+              }
+              else
+                PExpr.Throw (loc, null)
+
+            | Token.Keyword ("mutable") =>
+              mutable ids  = [];
+              mutable vals = [];
+
+              def loop()
+              {
+                def id = parse_expr(TokenStoppers.All);
+
+                match (id)
+                {
+                  | PExpr.Call(PExpr.Ref as op, [id2, _]) with opText = op?.ToString() ?? "" =>
+                    def msg = if (op != null && opText.Length > 1 && opText[0] == '=')
+                                " Maybe you forgot to separate the operator by space?"
+                              else
+                                "";
+
+                    Message.Error(op.Location, $"Unexpected operator or function call. '$opText'.$msg");
+
+                    unless (id2 is PExpr.Ref)
+                      Message.Error(op.Location, $"Expected variable name. See http://nemerle.org/Core_expressions_%28ref%29#Mutable_value_definition. '$opText'.$msg");
+
+                    ids ::= id2;
+
+                  | _ => ids ::= id;
+                }
+
+                match (peek_token ())
+                {
+                  | Token.Operator ("=") =>
+                    shift();
+                    def val = parse_expr (stop);
+                    vals ::= val;
+
+                  | _ => vals ::= null;
+                }
+                
+                when (peek_token () is Token.Comma)
+                {
+                  shift ();
+                  loop ();
+                }
+              }
+
+              loop ();
+
+              match ((ids, vals))
+              {
+                | ([id], [val]) => PExpr.DefMutable (if (val != null) loc + val.Location else loc + id.Location, id, val)
+                | _ => PExpr.DefMutable (loc, PExpr.Tuple.Create (loc, ids.Reverse ()), PExpr.Tuple.Create (loc, vals.Reverse ()))
+              }
+
+            | Token.Keyword ("fun") =>
+              def tyvars   = parse_tyvars ();
+              def (parms, parmsloc) = parse_parameters (allow_patterns = true, allow_omit = true);
+              def g = parmsloc;
+              def prmsOpenLoc  = Location(g, g.Line,    g.Column,        g.Line,    g.Column + 1);
+              def prmsCloseLoc = Location(g, g.EndLine, g.EndColumn - 1, g.EndLine, g.EndColumn);
+              def ret_type = parse_return_type(true, Location.Default);
+              def typarms  = parse_where_constraints (tyvars);
+              def h        = PFunHeader(loc.Combine(parmsloc).Combine(ret_type.Location), typarms,
+                                        MkSplicableName("", tok.Location), ret_type, parms,
+                                        prmsOpenLoc, prmsCloseLoc);
+              def expr     = parse_block(parms);
+
+              PExpr.Lambda(h.Location.Combine(expr.Location), Function_decl(h, expr))
+
+            | Token.Operator ("$") =>
               match (peek_token ())
               {
-                | Token.Operator ("=") =>
+                | Token.StringLiteral(str, rawStr) as stok => // change $"..." to sprint("...")
                   shift ();
-                  def val = parse_expr (stop);
-                  vals ::= val;
+                  // the sprint macro must get current location and global context...
+                  def lit = Literal.String(str);
+                  lit.RawString = rawStr;
+                  def expr = PExpr.Literal (stok.Location, lit);
+                  def sprintMacro = <[ $(MkNameGenerated("Nemerle") : name).IO.sprint ($expr) ]>;
+                  sprintMacro.Location = loc + stok.Location; // Make lacation as parsed (not generated)!
+                  sprintMacro
 
-                | _ => vals ::= null;
+                | Token.SquareGroup (group) as grp =>
+                  shift ();
+                  push_stream (group);
+                  def expr = parse_expr_sequence (TokenStoppers.Pipe);
+                  match (stream)
+                  {
+                    | Token.LooseGroup (Child = Token.Operator ("|")) as t => t.Child = t.Child.Next;
+                    | _ => {}
+                  }
+                  def conds = parse_expr_sequence (TokenStoppers.None);
+                  def all = expr + conds;
+                  pop_stream ("list comprehension");
+                  Util.locate (grp.Location, <[ $(MkNameGenerated("Nemerle") : name).Utility.ExpandListComprehension (..$all) ]>)
+
+                | _ =>
+                  push_back ();
+                  parse_spliced_expr ();
               }
-              when (peek_token () is Token.Comma)
-              {
-                shift ();
-                loop ();
-              }
-            }
-            loop ();
 
-            match ((ids, vals))
-            {
-              | ([id], [val]) => PExpr.DefMutable (if (val != null) loc + val.Location else loc + id.Location, id, val)
-              | _ => PExpr.DefMutable (loc, PExpr.Tuple.Create (loc, ids.Reverse ()),
-                                       PExpr.Tuple.Create (loc, vals.Reverse ()))
-            }
-
-          | Token.Keyword ("fun") =>
-            def tyvars   = parse_tyvars ();
-            def (parms, parmsloc) = parse_parameters (allow_patterns = true, allow_omit = true);
-            def g = parmsloc;
-            def prmsOpenLoc  = Location(g, g.Line,    g.Column,        g.Line,    g.Column + 1);
-            def prmsCloseLoc = Location(g, g.EndLine, g.EndColumn - 1, g.EndLine, g.EndColumn);
-            def ret_type = parse_return_type(true, Location.Default);
-            def typarms  = parse_where_constraints (tyvars);
-            def h        = PFunHeader (loc.Combine(parmsloc).Combine(ret_type.Location), typarms,
-                                       MkSplicableName("", tok.Location), ret_type, parms,
-                                       prmsOpenLoc, prmsCloseLoc);
-            def expr     = parse_block (parms);
-            PExpr.Lambda (h.Location.Combine(expr.Location), Function_decl (h, expr))
-
-          | Token.Operator ("$") =>
-            match (peek_token ())
-            {
-              | Token.StringLiteral(str, rawStr) as stok => // change $"..." to sprint("...")
-                shift ();
-                // the sprint macro must get current location and global context...
-                def lit = Literal.String(str);
-                lit.RawString = rawStr;
-                def expr = PExpr.Literal (stok.Location, lit);
-                def sprintMacro = <[ $(MkNameGenerated("Nemerle") : name).IO.sprint ($expr) ]>;
-                sprintMacro.Location = loc + stok.Location; // Make lacation as parsed (not generated)!
-                sprintMacro
-
-              | Token.SquareGroup (group) as grp =>
-                shift ();
-                push_stream (group);
-                def expr = parse_expr_sequence (TokenStoppers.Pipe);
-                match (stream)
+            | Token.Keyword ("match") =>
+              def (expr, expr_loc) =
+                match (get_token ())
                 {
-                  | Token.LooseGroup (Child = Token.Operator ("|")) as t =>
-                    t.Child = t.Child.Next;
-                  | _ => {}
-                }
-                def conds = parse_expr_sequence (TokenStoppers.None);
-                def all = expr + conds;
-                pop_stream ("list comprehension");
-                Util.locate (grp.Location, <[ $(MkNameGenerated("Nemerle") : name).Utility.ExpandListComprehension (..$all) ]>)
-
-              | _ =>
-                push_back ();
-                parse_spliced_expr ();
-            }
-
-          | Token.Keyword ("match") =>
-            def (expr, expr_loc) =
-              match (get_token ())
-              {
-                | Token.RoundGroup (group) as whole when group != null =>
+                  | Token.RoundGroup(group) as whole when group != null =>
                   loc = loc + whole.Location;
                   (
-                    match (parse_expr_sequence (group, []))
+                    match (parse_expr_sequence(group, []))
                     {
                       | [x] => x
-                      | [] => fatal_error (group.Location, "expecting expression inside `match (..)'");
-                      | xs => PExpr.Tuple.Create (loc, xs.Reverse ())
+                      | [] => fatal_error(group.Location, "expecting expression inside `match (..)'");
+                      | xs => PExpr.Tuple.Create(loc, xs.Reverse ())
                     },
                     whole.Location
                   )
-                | x => (fatal_error (x, "expecting non-empty `(..)' after `match'"), Location.Default);
-              };
+                  
+                  | x => (fatal_error(x, "expecting non-empty `(..)' after `match'"), Location.Default);
+                };
 
-            match (get_token ())
-            {
-              | Token.BracesGroup (Token.LooseGroup (Token.Operator ("..")) as group, _) =>
-                push_stream (group);
-                match (maybe_parse_ellipsis ())
-                {
-                  | Some (e) =>
-                    pop_stream ("match body");
-                    PExpr.Match (loc, expr, [MatchCase ([], e)], expr_loc);
-                  | _        => Util.ice ()
-                }
-
-              | Token.BracesGroup (group, _) as tok =>
-                PExpr.Match (loc.Combine(tok.Location), expr, process_groups (group, "match body", parse_match_case), expr_loc)
-
-              | x =>
-                Message.Error (x.Location, "expecting '{' after 'match (e)'");
-                expr // return test expression for the Completion work well
-            }
-
-          | Token.Keyword ("try") =>
-            def try_body = parse_expr();
-            mutable body = try_body; // resulting expression
-
-            // exception handlers
-            when (flag_sibling_keyword ("catch"))
-            {
-              def mktry (h : MatchCase, cases)
-              {
-                match (h.patterns)
-                {
-                  | [PExpr.TypeEnforcement(PExpr.Wildcard as wc, t) as p] =>
-                    Message.Warning (602, wc.Location, "using ``:'' as a type tests is "
-                                     "deprecated, please use ``is'' instead");
-                    TryCase.Catch(p.Location, MkWildcardSplicableName(wc.Location), t, h.body) :: cases
-
-                  | [PExpr.Is(PExpr.Wildcard as wc, t) as p] =>
-                    TryCase.Catch(p.Location, MkWildcardSplicableName(wc.Location), t, h.body) :: cases
-
-                  | [<[ $var is $t when $cond ]> as p] when var is PExpr.Wildcard =>
-                    TryCase.Filter(p.Location, MkWildcardSplicableName(var.Location), t, cond, h.body) :: cases
-
-                  | [PExpr.TypeEnforcement(PExpr.Ref (Location = loc,  name = id), t) as p] =>
-                    Message.Warning (602, loc, "using ``:'' as a type tests is "
-                                     "deprecated, please use ``is'' instead");
-                    TryCase.Catch(p.Location, Splicable.Name(loc, id), t, h.body) :: cases
-
-                  | [PExpr.Is(PExpr.Ref (Location = loc, name = id), t) as p] =>
-                    TryCase.Catch(p.Location, Splicable.Name (loc, id), t, h.body) :: cases
-
-                  | [<[ $(PExpr.Ref(Location = loc, name = id)) is $t when $cond ]> as p] =>
-                    TryCase.Filter(p.Location, Splicable.Name (loc, id), t, cond, h.body) :: cases
-
-                  | [PExpr.Ref(Location = loc, name = id) as p] =>
-                    TryCase.Catch(p.Location, Splicable.Name (loc, id), <[ System.Exception ]>, h.body) :: cases
-
-                  | [<[ $(PExpr.Ref(Location = loc, name = id)) when $cond ]> as p] =>
-                    TryCase.Filter(p.Location, Splicable.Name (loc, id), <[ System.Exception ]>, cond, h.body) :: cases
-
-                  | [PExpr.Wildcard as wc]=>
-                    TryCase.Catch(wc.Location, MkWildcardSplicableName(wc.Location), <[ System.Exception ]>, h.body) :: cases
-
-                  | [<[ $var when $cond ]> as p] when var is PExpr.Wildcard =>
-                    TryCase.Filter(p.Location, MkWildcardSplicableName(var.Location), <[ System.Exception ]>, cond, h.body) :: cases
-
-                  | [PExpr.TypeEnforcement(PExpr.Spliced (Location = loc, body = id), t) as p] =>
-                    Message.Warning (602, loc, "using ``:'' as a type tests is "
-                                     "deprecated, please use ``is'' instead");
-                    TryCase.Catch(p.Location, Splicable.Expression (id, env), t, h.body) :: cases
-
-                  | [PExpr.Is(PExpr.Spliced (Location = loc, body = id), t) as p] =>
-                    TryCase.Catch(p.Location, Splicable.Expression (loc, id, env), t, h.body) :: cases
-
-                  | [<[ $(PExpr.Spliced(Location = loc, body = id)) is $t when $cond ]> as p] =>
-                    TryCase.Filter(p.Location, Splicable.Expression (loc, id, env), t, cond, h.body) :: cases
-
-                  | _ =>
-                    Message.Error (h.body.Location, "exception catch pattern must be in form of `| e is ExceptionType => handler' or`| e => handler' for System.Exception");
-                    cases
-                }
-              }
               match (get_token())
               {
                 | Token.BracesGroup (Token.LooseGroup (Token.Operator ("..")) as group, _) =>
                   push_stream (group);
-                  match (maybe_parse_ellipsis ()) {
+                  match (maybe_parse_ellipsis ())
+                  {
                     | Some (e) =>
-                      pop_stream ("catch body");
-                      body = PExpr.Try (loc, body, [TryCase.Ellipsis (e)]);
-                    | _ => Util.ice ()
+                      pop_stream ("match body");
+                      PExpr.Match (loc, expr, [MatchCase ([], e)], expr_loc);
+                    | _        => Util.ice ()
                   }
-                | Token.BracesGroup (group, _) as x =>
-                  def cases = NList.FoldLeft (process_groups (group, "exception handlers", parse_match_case),
-                                             [], mktry);
-                  when (cases is [])
-                    Error (x, "catch body must have at least one handler");
-                  body = PExpr.Try (loc + x.Location, body, cases.Rev ());
+
+                | Token.BracesGroup (group, _) as tok =>
+                  PExpr.Match (loc.Combine(tok.Location), expr, process_groups (group, "match body", parse_match_case), expr_loc)
 
                 | x =>
-                  // If 'x' id no block trate it as { | _ => x }
-                  push_back();
-                  def catch_all_expr = parse_expr();
-                  def cases = [TryCase.Catch(Location.Default, MkWildcardSplicableName(Location.Default), <[ System.Exception ]>, catch_all_expr)];
-                  body = PExpr.Try (loc + x.Location, body, cases);
+                    Message.Error (x.Location, "expecting '{' after 'match (e)'");
+                    expr // return test expression for the Completion work well
               }
-            }
 
-            when (flag_sibling_keyword ("finally"))
-            {
-              def handler = parse_expr();
-              body = PExpr.TryFinally(loc.Combine(handler.Location), body, handler);
-            }
-            when (body == (try_body : object))
-              Message.Error(loc, "expecting `catch' or `finally'");
-            body
+            | Token.Keyword ("try") =>
+              def try_body = parse_expr();
+              mutable body = try_body; // resulting expression
 
-          | Token.Keyword ("def") =>
-            def parse_define ()
-            {
-              def pat = parse_expr (stop | TokenStoppers.Equal);
-              expect_operator ("=");
-              def expr = parse_expr (stop);
-              PExpr.Define (loc + expr.Location, pat, expr)
-            }
-            def parse_funs (acc, idopt)
-            {
-              def h    = parse_fun_header (idopt, allow_patterns = true);
-              def body = parse_block (h.Parameters);
-              def fd   = Function_decl (loc + h.Location + body.Location, h, body);
-
-              if (flag_sibling_keyword ("and"))
-                parse_funs(fd :: acc, get_splicable_id())
-              else
+              // exception handlers
+              when (flag_sibling_keyword ("catch"))
               {
-                def lst  = (fd :: acc).Rev();
-                def floc = Location.EnclosingLocation(lst);
-                PExpr.DefFunctions(floc, lst)
-              }
-            }
-
-            match (maybe_parse_ellipsis ())
-            {
-              | Some (e) => PExpr.DefFunctions (loc + e.Location, [Function_decl (null, e)])
-              | _ =>
-                def token = peek_token ();
-                match (token)
+                def mktry (h : MatchCase, cases)
                 {
-                  | Token.Keyword ("_")
-                  | Token.Operator ("$")
-                  | Token.Identifier =>
+                  match (h.patterns)
+                  {
+                    | [PExpr.TypeEnforcement(PExpr.Wildcard as wc, t) as p] =>
+                      Message.Warning (602, wc.Location, "using ``:'' as a type tests is deprecated, please use ``is'' instead");
+                      TryCase.Catch(p.Location, MkWildcardSplicableName(wc.Location), t, h.body) :: cases
+
+                    | [PExpr.Is(PExpr.Wildcard as wc, t) as p] =>
+                      TryCase.Catch(p.Location, MkWildcardSplicableName(wc.Location), t, h.body) :: cases
+
+                    | [<[ $var is $t when $cond ]> as p] when var is PExpr.Wildcard =>
+                      TryCase.Filter(p.Location, MkWildcardSplicableName(var.Location), t, cond, h.body) :: cases
+
+                    | [PExpr.TypeEnforcement(PExpr.Ref (Location = loc,  name = id), t) as p] =>
+                      Message.Warning (602, loc, "using ``:'' as a type tests is deprecated, please use ``is'' instead");
+                      TryCase.Catch(p.Location, Splicable.Name(loc, id), t, h.body) :: cases
+
+                    | [PExpr.Is(PExpr.Ref (Location = loc, name = id), t) as p] =>
+                      TryCase.Catch(p.Location, Splicable.Name (loc, id), t, h.body) :: cases
+
+                    | [<[ $(PExpr.Ref(Location = loc, name = id)) is $t when $cond ]> as p] =>
+                      TryCase.Filter(p.Location, Splicable.Name (loc, id), t, cond, h.body) :: cases
+
+                    | [PExpr.Ref(Location = loc, name = id) as p] =>
+                      TryCase.Catch(p.Location, Splicable.Name (loc, id), <[ System.Exception ]>, h.body) :: cases
+
+                    | [<[ $(PExpr.Ref(Location = loc, name = id)) when $cond ]> as p] =>
+                      TryCase.Filter(p.Location, Splicable.Name (loc, id), <[ System.Exception ]>, cond, h.body) :: cases
+
+                    | [PExpr.Wildcard as wc]=>
+                      TryCase.Catch(wc.Location, MkWildcardSplicableName(wc.Location), <[ System.Exception ]>, h.body) :: cases
+
+                    | [<[ $var when $cond ]> as p] when var is PExpr.Wildcard =>
+                      TryCase.Filter(p.Location, MkWildcardSplicableName(var.Location), <[ System.Exception ]>, cond, h.body) :: cases
+
+                    | [PExpr.TypeEnforcement(PExpr.Spliced (Location = loc, body = id), t) as p] =>
+                      Message.Warning (602, loc, "using ``:'' as a type tests is deprecated, please use ``is'' instead");
+                      TryCase.Catch(p.Location, Splicable.Expression (id, env), t, h.body) :: cases
+
+                    | [PExpr.Is(PExpr.Spliced (Location = loc, body = id), t) as p] =>
+                      TryCase.Catch(p.Location, Splicable.Expression (loc, id, env), t, h.body) :: cases
+
+                    | [<[ $(PExpr.Spliced(Location = loc, body = id)) is $t when $cond ]> as p] =>
+                    TryCase.Filter(p.Location, Splicable.Expression (loc, id, env), t, cond, h.body) :: cases
+
+                    | _ =>
+                      Message.Error(h.body.Location, "exception catch pattern must be in form of `| e is ExceptionType => handler' or`| e => handler' for System.Exception");
+                      cases
+                  }
+                }
+                
+                match (get_token())
+                {
+                  | Token.BracesGroup (Token.LooseGroup (Token.Operator ("..")) as group, _) =>
+                    push_stream (group);
+                    match (maybe_parse_ellipsis ())
+                    {
+                      | Some (e) =>
+                        pop_stream ("catch body");
+                        body = PExpr.Try (loc, body, [TryCase.Ellipsis (e)]);
+                      | _ => Util.ice ()
+                    }
+                    
+                  | Token.BracesGroup (group, _) as x =>
+                    def cases = NList.FoldLeft (process_groups (group, "exception handlers", parse_match_case),
+                                               [], mktry);
+                    when (cases is [])
+                      Error (x, "catch body must have at least one handler");
+                    body = PExpr.Try (loc + x.Location, body, cases.Rev ());
+
+                  | x =>
+                    // If 'x' id no block trate it as { | _ => x }
+                    push_back();
+                    def catch_all_expr = parse_expr();
+                    def cases = [TryCase.Catch(Location.Default, MkWildcardSplicableName(Location.Default), <[ System.Exception ]>, catch_all_expr)];
+                    body = PExpr.Try (loc + x.Location, body, cases);
+                }
+              }
+
+              when (flag_sibling_keyword ("finally"))
+              {
+                def handler = parse_expr();
+                body = PExpr.TryFinally(loc.Combine(handler.Location), body, handler);
+              }
+
+              when (body == (try_body : object))
+                Message.Error(loc, "expecting `catch' or `finally'");
+              body
+
+            | Token.Keyword ("def") =>
+              def parse_define ()
+              {
+                def pat = parse_expr (stop | TokenStoppers.Equal);
+                expect_operator ("=");
+                def expr = parse_expr (stop);
+                PExpr.Define (loc + expr.Location, pat, expr)
+              }
+              def parse_funs (acc, idopt)
+              {
+                def h    = parse_fun_header (idopt, allow_patterns = true);
+                def body = parse_block (h.Parameters);
+                def fd   = Function_decl (loc + h.Location + body.Location, h, body);
+
+                if (flag_sibling_keyword ("and"))
+                  parse_funs(fd :: acc, get_splicable_id())
+                else
+                {
+                  def lst  = (fd :: acc).Rev();
+                  def floc = Location.EnclosingLocation(lst);
+                  PExpr.DefFunctions(floc, lst)
+                }
+              }
+
+              match (maybe_parse_ellipsis ())
+              {
+                | Some (e) => PExpr.DefFunctions (loc + e.Location, [Function_decl (null, e)])
+                | _ =>
+                  def token = peek_token ();
+                  match (token)
+                  {
+                    | Token.Keyword ("_")
+                    | Token.Operator ("$")
+                                                                                          | Token.Identifier =>
                     def id = get_splicable_id ();
 
                     match (peek_token ())
@@ -3253,33 +3303,35 @@ namespace Nemerle.Compiler
                         def define =
                           match (id)
                           {
-                            | Splicable.Name (name) => PExpr.Ref (token.Location, name)
-                            | Splicable.Expression (e) => PExpr.Spliced (loc, e)
-                            | Splicable.HalfId (e) => PExpr.ToComplete (loc, e)
+                            | Splicable.Name(name) => PExpr.Ref(token.Location, name)
+                            | Splicable.Expression(e) => PExpr.Spliced(loc, e)
+                            | Splicable.HalfId(e) => PExpr.ToComplete(loc, e)
                           };
                         PExpr.Define (loc + expr.Location, define, expr)
 
-                      | x => fatal_error (x, "expecting `def x = expr' or `def f () { .. }'");
+                      | x => fatal_error(x, "expecting `def x = expr' or `def f () { .. }'");
                     }
-                  | _ => parse_define ()
-                }
-            }
+                    | _ => parse_define()
+                  }
+              }
 
-          | Token.Identifier (i) => PExpr.Ref(loc, MkName(i, loc))
+            | Token.Identifier(i) => PExpr.Ref(loc, MkName(i, loc))
+            | Token.IdentifierToComplete(i) => PExpr.ToComplete(loc, MkName(i, loc))
+            | Token.Keyword(k) =>
+              // here the expression syntax extensions are triggered, by first keyword
+              // when it has some syntax definition attached
+              match (env.SyntaxKeywords.Find (k))
+              {
+                | Some (syntax_definition) when syntax_definition.Target %&& ((1 << 15) :> MacroTargets) => parse_syntax_definition(syntax_definition, stop)
+                | _ => fatal_error(tok, "unexpected keyword in expression context");
+              }
 
-          | Token.IdentifierToComplete (i) => PExpr.ToComplete (loc, MkName (i, loc))
+            | _ => fatal_error(tok, "expecting expression");
+          };
 
-          | Token.Keyword (k) =>
-            // here the expression syntax extensions are triggered, by first keyword
-            // when it has some syntax definition attached
-            match (env.SyntaxKeywords.Find (k)) {
-              | Some (syntax_definition) when syntax_definition.Target %&& ((1 << 15) :> MacroTargets) =>
-                parse_syntax_definition (syntax_definition, stop)
-              | _ => fatal_error (tok, "unexpected keyword in expression context");
-            }
-
-          | _ => fatal_error (tok, "expecting expression");
-        }
+        resultExpr.Token = tok;
+        
+        resultExpr
       }
     }
 
