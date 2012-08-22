@@ -5690,6 +5690,9 @@ namespace Microsoft.VisualStudio.Project
 			if (node == null)
 				throw new ArgumentException("Invalid item id", "item");
 
+            if (node.ItemNode == null)
+                throw new ArgumentException("Invalid item id", "item.ItemNode");
+
 			attributeValue = node.ItemNode.GetMetadata(attributeName);
 			return VSConstants.S_OK;
 		}
@@ -5743,6 +5746,9 @@ namespace Microsoft.VisualStudio.Project
 
 			if (node == null)
 				throw new ArgumentException("Invalid item id", "item");
+
+            if (node.ItemNode == null)
+                throw new ArgumentException("Invalid item id", "item.ItemNode");
 
 			node.ItemNode.SetMetadata(attributeName, attributeValue);
 			return VSConstants.S_OK;

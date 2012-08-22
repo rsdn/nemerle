@@ -1,0 +1,193 @@
+using System;
+using System.IO;
+using System.Diagnostics;
+using SCG = System.Collections.Generic;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
+using Nemerle.Late;
+using Nemerle.Utility;
+
+using Nemerle.Compiler.Utils;
+using TT    = Nemerle.Compiler.Typedtree;
+using SR    = System.Reflection;
+
+
+namespace Nemerle.Completion2
+{
+  internal partial class Engine
+  {
+    static this()
+    {
+      TopKeywordsStrs = array["using", "class", "struct", "variant", "namespace", "enum", "public", "protected",
+         "internal", "private", "abstract", "sealed", "delegate", "#if", "#region", "extern",
+         "interface", "partial", "static", "[Accessor]", "[Record]", "this", "override",
+         "module", "mutable"];
+
+      _topKeywords = StrsToCompletionElems(TopKeywordsStrs, GlyphType.Snippet :> int, "snippet or top level keyword");
+
+      _expressionDefaultKeywords = StrsToCompletionElems(
+        [ "where", "when", "with" ],
+        GlyphType.Snippet :> int,
+        "snippet or top level keyword");
+    }
+
+    InitEngine(output : TextWriter) : void
+    {
+      Output = output;
+      _isIntelliSenseMode = true;
+      MessageOccured += ProcessTopLevelCompilerMessage;
+      // It doesn't help much since comments are processed
+      // in a very special way...
+      //
+      // Options.LexerStoreComments = true;
+      _afterUsingDirectiveParse = UsingDirectiveParsed;
+      _beforeNamespaceParse = BeforeNamespaceParse;
+      _afterNamespaceParse = AfterNamespaceParse;
+
+      Instance = this;
+
+      _isCanBeReset = true;
+      Reset();
+    }
+
+    public this (callback : IIdeProject, output : TextWriter, isDefaultEngine : bool)
+    {
+      _callback = callback;
+      base (CompilationOptions());
+      IsDefaultEngine = isDefaultEngine;
+      //ExtPointOverloadingRes = ExtPointOverloadingResImpl;
+      InitEngine(output);
+      
+      //when (isDefaultEngine)
+        InitDefaulteEngine();
+    }
+
+    private InitDefaulteEngine() : void
+    {
+      Options.ColorMessages = false;
+      Options.IgnoreConfusion = true;
+      Options.GreedyReferences = false;
+
+      InitCompiler ();
+      LoadExternalLibraries ();
+      Hierarchy = TypesManager (this);
+    }
+
+    //ExtPointOverloadingResImpl(expected : TypeVar, tFunc : TT.TExpr, pTarams : list[TT.Parm]) : void
+    //{
+    //  match (tFunc)
+    //  {
+    //    | TT.TExpr.Delayed(susp) =>
+    //      match (susp.DtKind)
+    //      {
+    //        | Typer.DelayedTyping.Kind.Overloaded(overloads) => 
+
+    //          unless (overloads.IsEmpty)
+    //            when (overloads.Head.Member.Name == "Where")
+    //            {
+    //              when (overloads.ForAll(o => o.ExtensionMethodObject != null))
+    //              {
+    //                foreach (o in overloads)
+    //                {
+    //                  //def ok = o.ExtensionMethodObject.Type.Require(o.FormalTypes[0]);
+    //                  //_ = ok;
+    //                  assert2(true);
+    //                  _ = o;
+    //                }
+    //                _ = overloads;
+    //              }
+    //            }
+
+    //        | _ => ()
+    //      }
+
+    //    | _ => ()
+    //  }
+
+    //  _ = expected;
+    //  _ = tFunc;
+    //  _ = pTarams;
+    //}
+    
+    mutable _isCanBeReset : bool;
+
+    /// Reset Engine state (include: TypesTree, LibRefs and so on).
+    /// Call this method if you need reload libs and completely rebuild TypesTree.
+    public Reset() : void
+    {
+      when (_isCanBeReset)
+      {
+        Options.PersistentLibraries = false; // reload libraries on next parse
+        Options.DisableExternalParsers = true;
+        Parser = CreateParser();
+        FullResetNamespaceTree();
+
+        _isCanBeReset = false; // it set to true in BuildTypesTree()
+      }
+    }
+    
+    static _nemerleFolder = @"Nemerle\Net-4.5";
+
+    private CreateParser() : DispatchingFileParser
+    {
+      def parser = DispatchingFileParser(this, IntegrationDefaultParser(this));
+      def parsersDirectory =
+      {
+        def nemerleVar = Environment.GetEnvironmentVariable("Nemerle");
+        def progFiles86Var = Environment.GetEnvironmentVariable("ProgramFiles(x86)");
+        def progFilesVar = Environment.GetEnvironmentVariable("ProgramFiles");
+
+        if(!string.IsNullOrEmpty(nemerleVar))
+          nemerleVar
+        else if(!string.IsNullOrEmpty(progFiles86Var))
+          Path.Combine(progFiles86Var, _nemerleFolder)
+        else if(!string.IsNullOrEmpty(progFilesVar))
+          Path.Combine(progFilesVar, _nemerleFolder)
+        else
+          ""
+      };
+      unless(string.IsNullOrEmpty(parsersDirectory))
+      when(try Directory.Exists(parsersDirectory) catch false)
+        foreach(file in Directory.GetFiles(parsersDirectory, "ncc.parser.*.dll"))
+        {
+          try
+          {
+            def assembly = Reflection.Assembly.LoadFrom(file);
+            def assemblyAttributes = assembly.GetCustomAttributes(false);
+            def parserDefs = assemblyAttributes.Filter(t => t.GetType().FullName == "Nemerle.Internal.RegisterParserAttribute");
+
+            foreach(definition in parserDefs)
+            {
+              try
+              {
+                def parserTypeName = late(definition.Name) :> string;
+                def fileExtension = late(definition.Extension) :> string;
+                def parserType = assembly.GetType(parserTypeName, true);
+                parser.Register(this, parserType, fileExtension);
+              }
+              catch
+              {
+                | _ => () // unable to load parser type
+              }
+            }
+          }
+          catch
+          {
+            | _ => () // unable to load parser assembly
+          }
+        }
+      parser
+    }
+
+    // Nemerle.Compiler.ManagerClass.Instance is a singletone. Actually, it's a bug.
+    // Quick'n'durty solution is 'save and revert when done'
+    public RestoreManagerClassInstance() : void
+    {
+      Instance = this;
+    }
+  } // end class Engine
+} // end namespace
+
