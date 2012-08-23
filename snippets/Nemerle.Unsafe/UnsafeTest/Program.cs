@@ -14,8 +14,24 @@ namespace UnsafeTest
     static int[] ary = new int[] { 1, 2, 3 };
     //static int[] ary = new int[0];
 
+    byte Test3(byte* ptr)
+    {
+      return ptr[-3];
+    }
+
+    static void Test4(char* ptr)
+    {
+      var c = ptr[3];
+      Console.WriteLine(c.ToString());
+    }
+
     static void Main(string[] args)
     {
+      fixed (char* p = "abc")
+        Test4(p);
+
+      return;
+
       var x = 1;
       //typeof(int).MakePointerType()
       //Console.WriteLine(ary[x]);
