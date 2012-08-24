@@ -18,24 +18,26 @@ using Nemerle.VisualStudio.Project;
 namespace Nemerle.VisualStudio.LanguageService.TextEditor
 {
 	[Export(typeof(IVsTextViewCreationListener))]
-	[ContentType("code")]
+	[ContentType("text")]
 	[TextViewRole(PredefinedTextViewRoles.Document)]
 	class NemerleTextViewCreationListener : IVsTextViewCreationListener
 	{
-    [Import]
-    private IEditorOperationsFactoryService editorOperationsFactoryService { get; set; }
+		[Import]
+		private IEditorOperationsFactoryService editorOperationsFactoryService { get; set; }
 		[Import]
 		private IVsEditorAdaptersFactoryService editorAdaptersFactoryService { get; set; }
 
 		ProjectInfo GetProjectInfo(string filePath)
 		{
-			var ext = Path.GetExtension(filePath);
-
-			// TODO: FIXME: VladD2: We must check extension by compiler plagin engine!
-			if (!Utils.Eq(ext, ".cs"))
-				return null;
-
-			return ProjectInfo.FindProject(filePath);
+			var projectInfo = ProjectInfo.FindProject(filePath);
+			if (null != projectInfo)
+			{
+				var ext = Path.GetExtension(filePath);
+				var engine = projectInfo.Engine;
+				if (!engine.IsExtensionRegistered(ext))
+					return null;
+			}
+			return projectInfo;
 		}
 
 		#region IVsTextViewCreationListener Members
