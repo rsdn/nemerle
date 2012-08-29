@@ -7,8 +7,10 @@ using Nemerle.Utility;
 using Nemerle.Test.Framework;
 
 using System;
+using System.ComponentModel;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Linq;
 
 namespace Nemerle.Compiler.Test
@@ -18,9 +20,16 @@ namespace Nemerle.Compiler.Test
   /// </summary>
   public sealed class NccTest : Test
   {
-    public this([NotNull] compiler : Ncc, filePath : string, [NotNull] globalReferencies : IEnumerable[string], [NotNull] globalOptions : IEnumerable[string])
+    public this(
+      [NotNull] log               : ILog,
+      [NotNull] compiler          : Ncc,
+                filePath          : string,
+      [NotNull] globalReferencies : IEnumerable[string],
+      [NotNull] globalOptions     : IEnumerable[string],
+      [NotNull] verifier          : option[Verifier])
       requires !string.IsNullOrEmpty(filePath)
     {
+      _log = log;
       _compiler = compiler;
       _filePath = Path.GetFullPath(filePath);
       def fileDirectory = Path.GetDirectoryName(_filePath);
@@ -28,7 +37,10 @@ namespace Nemerle.Compiler.Test
       _name = if(string.IsNullOrEmpty(fileDirectory)) fileName else Path.Combine(fileDirectory, fileName);
       _globalReferencies = globalReferencies.ToArray();
       _globalOptions = globalOptions.ToArray();
+      _verifier = verifier;
     }
+
+    public override Name : string { get { _name } }
 
     public override Run() : Result
     {
@@ -47,12 +59,51 @@ namespace Nemerle.Compiler.Test
           return Result.Fail($"This path '$_filePath' is too long")
       }
       def description = try NccTestParser.Parse(reader) finally reader.Dispose();
-      when(description.NoTest)
+      when (description.NoTest)
         return Result.UnableToRun("not a test");
-      Result.Success()
+
+      mutable objectFilePath;
+      mutable compilationResult;
+      try
+      {
+        compilationResult = compile(description, out objectFilePath);
+      }
+      catch
+      {
+        | _ is Win32Exception  =>
+          return Result.Fail("Error occured while running Nemerle compiler (could not run the compiler file)");
+        | e =>
+          return Result.Fail($"Error occured while running Nemerle compiler, $e");
+      }
+      def failLog = List();
+
+      when (compilationResult.ExitCode != 3)
+        validateMessages(description, compilationResult, failLog);
+
+      when (compilationResult.ExitCode == 2)
+        failLog.Add("Nemerle compiler reported internal error");
+
+      when (failLog.Count > 0 || (compilationResult.ExitCode == 0) != (description.ErrorLines.Count == 0))
+        failLog.Add("Nemerle compile test failed");
+
+      when (failLog.Count == 0 && description.ErrorLines.Count == 0)
+        when (_verifier is Some(verifier))
+          verifyOutputAssembly(verifier, compilationResult, objectFilePath, failLog);
+
+      when (failLog.Count == 0 && description.ErrorLines.Count == 0 && description.HasExpectedOutput)
+        testOutputAssembly(objectFilePath, failLog);
+
+      if (failLog.Count > 0)
+      {
+        def message = failLog[failLog.Count - 1];
+        failLog.RemoveAt(failLog.Count - 1);
+        Result.Fail(message, failLog.ToNList())
+      }
+      else
+        Result.Success("passed")
     }
 
-    private compilationStep(description : NccTestDescription) : string * bool
+    private compile(description : NccTestDescription, objectFilePath : out string) : NccResult
     {
       def compilationOptions = List();
 
@@ -69,26 +120,135 @@ namespace Nemerle.Compiler.Test
 
       compilationOptions.AddRange(_globalOptions);
 
-      def objectFileName = 
+      objectFilePath = 
         if(description.HasExpectedOutput)
         {
           compilationOptions.Add("-t:exe");
-          Path.GetFileNameWithoutExtension(_filePath) + ".exe"
+          Path.ChangeExtension(_filePath, ".exe");
         }
         else
         {
           compilationOptions.Add("-t:library");
-          Path.GetFileNameWithoutExtension(_filePath) + ".dll"
+          Path.ChangeExtension(_filePath, ".dll")
         };
-      compilationOptions.Add("-out:" + objectFileName);
+      compilationOptions.Add("-out:" + objectFilePath);
+
+      _log.Write(LogLevel.Info, $"RUN: ..$compilationOptions on $_filePath");
+
+      _compiler.Compile(compilationOptions.ToNList(), [_filePath])
     }
 
-    public override Name : string { get { _name } }
+    private validateMessages(description : NccTestDescription, compilationResult : NccResult, failLog : List[string]) : void
+    {
+      def messageLines = HashSet();
+      foreach(message in compilationResult.Output)
+      {
+        _log.Write(LogLevel.Debug, $"VERB-NEM: $message");
 
+        unless(isExpectedMessage(description, message, messageLines))
+          failLog.Add("Unexpected Nemerle compiler's message :\n" + message);
+      }
+
+      def checkMessage(line : int, msg : Regex, msgTypeStr, isGlobal)
+      {
+        unless (messageLines.Contains(line))
+        {
+          def tail = if (isGlobal) "" else $" in line:$line";
+          failLog.Add($"Expected $msgTypeStr:\n`$msg'\n hasn't occured$tail");
+        }
+      }
+      foreach(message in description.ErrorLines)
+        checkMessage(message.Key, message.Value, "error",   false);
+      foreach(message in description.WarningLines)
+        checkMessage(message.Key, message.Value, "warning", false);
+      foreach(message in description.HintLines)
+        checkMessage(message.Key, message.Value, "hint",    false);
+      foreach(message in description.GlobalErrorLines)
+        checkMessage(message.Key, message.Value, "error",   true);
+      foreach(message in description.GlobalWarningLines)
+        checkMessage(message.Key, message.Value, "warning", true);
+    }
+
+    private isExpectedMessage(description : NccTestDescription, message : string, messageLines : ISet[int]) : bool
+    {
+      def lookupPattern(table, line)
+      {
+        mutable pattern;
+        if(table.TryGetValue(line, out pattern))
+        {
+          when(pattern.IsMatch(message))
+            _ = messageLines.Add(line);
+          true
+        }
+        else
+          false
+      }
+      match(MessageType.Parse(message))
+      {
+        | Error(line)   => lookupPattern(description.ErrorLines,   line) || !description.OkLines.Contains(line)
+        | Warning(line) => lookupPattern(description.WarningLines, line) || description.HintLines.ContainsKey(line)    || description.ErrorLines.ContainsKey(line)
+        | Hint(line)    => lookupPattern(description.HintLines,    line) || description.WarningLines.ContainsKey(line) || description.ErrorLines.ContainsKey(line)
+        | GlobalError   with table = description.GlobalErrorLines
+        | GlobalWarning with table = description.GlobalWarningLines =>
+          mutable result = false;
+          foreach(p when p.Value.IsMatch(message) in table)
+          {
+            result = true;
+            _ = messageLines.Add(p.Key);
+          }
+          result
+        | Unknown => true
+      }
+    }
+
+    private verifyOutputAssembly(verifier : Verifier, compilationResult : NccResult, objectFilePath : string, failLog : List[string]) : void
+    {
+      if (compilationResult.ExitCode == 3)
+        _log.Write(LogLevel.Info, "skipped verification...");
+      else
+        unless(verifier.Verify(objectFilePath))
+          failLog.Add("Verification failed");
+    }
+
+    private testOutputAssembly(objectFilePath : string, failLog : List[string]) : void
+    {
+      
+    }
+
+    private _log : ILog;
     private _compiler : Ncc;
     private _filePath : string;
     private _name : string;
     private _globalReferencies : array[string];
     private _globalOptions : array[string];
+    private _verifier : option[Verifier];
+
+    private variant MessageType
+    {
+      | Unknown
+      | Error   { line : int }
+      | Warning { line : int }
+      | Hint    { line : int }
+      | GlobalError
+      | GlobalWarning
+
+      public static Parse(text : string) : MessageType
+      {
+        regexp match(text)
+        {
+          | @":(?<lineNumber : int>\d*):\d*:(\d*:\d*:)?\s+(?<messageTypeString>.*)$" =>
+            regexp match(messageTypeString)
+            {
+              | "error:"   => Error(lineNumber)
+              | "warning:" => Warning(lineNumber)
+              | "hint:"    => Hint(lineNumber)
+              | _          => Unknown()
+            }
+          | "error:"   => GlobalError()
+          | "warning:" => GlobalWarning()
+          | _          => Unknown()
+        }
+      }
+    }
   }
 }
