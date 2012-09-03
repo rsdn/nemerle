@@ -440,13 +440,46 @@ namespace Nemerle.VisualStudio.Project
 			return true;
 		}
 
+    private static EnvDTE.Project FindProject(EnvDTE.ProjectItem project, string projectFullName)
+    {
+      EnvDTE.Project subProject = project.Object as EnvDTE.Project;
+
+      if (subProject == null)
+        return null;
+
+      if (!string.IsNullOrWhiteSpace(subProject.FullName) && Utils.Eq(Path.GetFullPath(subProject.FullName), projectFullName))
+        return subProject;
+
+
+      if (subProject.ProjectItems == null)
+        return null;
+
+      foreach (EnvDTE.ProjectItem project2 in subProject.ProjectItems)
+      {
+        Debug.WriteLine(project2.Name);
+        var res = FindProject(project2, projectFullName);
+        if (res != null)
+          return res;
+      }
+
+      return null;
+    }
+
 		private static EnvDTE.Project GetProject(EnvDTE.DTE dte, string startupProjectFullName)
 		{
 			// FIXME! Следующая строка перестала раблотать в VS 2010!
+      //var nemerleOAProject = dte.Solution.FindProjectItem(startupProjectFullName);
 			//nemerleOAProject = dte.Solution.FindProjectItem(startupProjectFullName) as NemerleOAProject; 
-			foreach (EnvDTE.Project project in dte.Solution.Projects)
-				if (Utils.Eq(Path.GetFullPath(project.FullName), startupProjectFullName))
-					return project;
+      foreach (EnvDTE.Project project in dte.Solution.Projects)
+      {
+          foreach (var project2 in project.ProjectItems)
+          {
+            EnvDTE.ProjectItem project3 = project2 as EnvDTE.ProjectItem;
+            var res = FindProject(project3, startupProjectFullName);
+            if (res != null)
+              return res;
+          }
+      }
 
 			return null;
 		}

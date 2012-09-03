@@ -4990,8 +4990,9 @@ namespace Microsoft.VisualStudio.Project
 			found = 0;
 			itemId = 0;
 
+      var mkDocument = this.GetMkDocument();
 			// If it is the project file just return.
-			if (NativeMethods.IsSamePath(mkDoc, this.GetMkDocument()))
+      if (NativeMethods.IsSamePath(mkDoc, mkDocument))
 			{
 				found = 1;
 				itemId = VSConstants.VSITEMID_ROOT;
