@@ -45,7 +45,7 @@ Will output
 
 ## Linux
 
-  Nemerle can't bootstrap itself on Mono, but can be used as binaries.
+  Using latest Mono-2.10.8 from github Nemerle can bootstrap itself on Mono.
 
 # What about IDE?
 
