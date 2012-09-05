@@ -1,0 +1,331 @@
+﻿using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Test.Framework;
+
+using System;
+using System.ComponentModel;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Text.RegularExpressions;
+using System.Linq;
+
+namespace Nemerle.Compiler.Test
+{
+  internal sealed class NccTest : Test
+  {
+    public this(
+                filePath                : string,
+                outputDirectory         : string,
+      [NotNull] outputWriter            : ColorizedOutputWriter,
+      [NotNull] compiler                : Ncc,
+      [NotNull] globalReferencies       : IEnumerable[string],
+      [NotNull] verifier                : option[Verifier],
+      [NotNull] processStartInfoFactory : ProcessStartInfoFactory,
+                verbosity               : int)
+      requires !string.IsNullOrEmpty(filePath)
+    {
+      _filePath = Path.GetFullPath(filePath);
+      _outputDirectory =
+        if(string.IsNullOrEmpty(outputDirectory))
+          Path.GetDirectoryName(_filePath)
+        else
+          Path.GetFullPath(outputDirectory);
+      _log = NccTestOutputWriter(outputWriter);
+      _compiler = compiler;
+      def fileDirectory = Path.GetDirectoryName(_filePath);
+      def fileName = Path.GetFileName(_filePath);
+      _name = if(string.IsNullOrEmpty(fileDirectory)) fileName else Path.Combine(Path.GetFileName(fileDirectory), fileName);
+      _globalReferencies = globalReferencies.ToArray();
+      _verifier = verifier;
+      _processStartInfoFactory = processStartInfoFactory;
+      _verbosity = verbosity;
+    }
+
+    public override Name : string { get { _name } }
+
+    public FullName : string { get { _filePath } }
+
+    public override Run() : Result
+    {
+      def readStep() : Result
+      {
+        mutable reader;
+        try reader = File.OpenText(_filePath)
+        catch
+        {
+          | _ is FileNotFoundException =>
+            _log.WriteLine(NccTestMessageType.Error, $"File '$_filePath' does not exist")
+          | _ is DirectoryNotFoundException =>
+            _log.WriteLine(NccTestMessageType.Error, $"This path '$_filePath' is invalid")
+          | _ is PathTooLongException =>
+            _log.WriteLine(NccTestMessageType.Error, $"This path '$_filePath' is too long")
+        }
+        if (_log.HasErrors)
+          _log.GetSuccesOrFailResult()
+        else
+          parseStep(reader)
+      }
+      and parseStep(reader : TextReader) : Result
+      {
+        def description = try NccTestDescription.Parse(reader) finally reader.Dispose();
+        if (description.NoTest)
+          _log.GetNotRunResult("not a test")
+        else
+          compileStep(description)
+      }
+      and compileStep(description : NccTestDescription) : Result
+      {
+        when(_verbosity > 0)
+          _log.WriteLine(NccTestMessageType.Debug, "");
+        mutable objectFilePath;
+        mutable compilationResult;
+        try compilationResult = compile(description, out objectFilePath);
+        catch
+        {
+          | _ is Win32Exception  =>
+            _log.WriteLine(NccTestMessageType.Error, "Error occured while running Nemerle compiler (could not run the compiler file)");
+          | e =>
+            _log.WriteLine(NccTestMessageType.Error, $"Error occured while running Nemerle compiler, $e");
+        }
+        if (_log.HasErrors)
+          _log.GetSuccesOrFailResult()
+        else
+          validateMessagesStep(description, objectFilePath, compilationResult)
+      }
+      and validateMessagesStep(description : NccTestDescription, objectFilePath : string, compilationResult : NccResult) : Result
+      {
+        when (compilationResult.ExitCode != 3)
+          validateMessages(description, compilationResult);
+
+        when (compilationResult.ExitCode == 2)
+          _log.WriteLine(NccTestMessageType.Error, "Nemerle compiler reported internal error");
+
+        if (compilationResult.ExitCode == 3)
+        {
+          if (_log.HasErrors)
+            _log.GetSuccesOrFailResult()
+          else
+            _log.GetNotRunResult("unable to load library")
+        }
+        else
+          validateBinaryStep(description, objectFilePath, compilationResult)
+      }
+      and validateBinaryStep(description : NccTestDescription, objectFilePath : string, compilationResult : NccResult) : Result
+      {
+        when (_log.HasErrors || (compilationResult.ExitCode == 0) != (description.ErrorLines.Count == 0))
+          _log.WriteLine(NccTestMessageType.Error, "Nemerle compile test failed");
+
+        when (!_log.HasErrors && description.ErrorLines.Count == 0)
+          when (_verifier is Some(verifier))
+            verifyOutputAssembly(description, verifier, compilationResult, objectFilePath);
+
+        when (!_log.HasErrors && description.ErrorLines.Count == 0 && description.HasExpectedOutput)
+          testOutputAssembly(description, objectFilePath);
+
+        _log.GetSuccesOrFailResult()
+      }
+
+      _log.Reset();
+      readStep()
+    }
+
+    private compile(description : NccTestDescription, objectFilePath : out string) : NccResult
+    {
+      def compilationOptions = List();
+      compilationOptions.Add("-no-color");
+
+      foreach(reference in _globalReferencies)
+        compilationOptions.Add("-r:" + reference);
+
+      foreach(reference in description.Referencies)
+        compilationOptions.Add("-r:" + reference);
+
+      compilationOptions.AddRange(description.Options);
+
+      foreach(package in description.Packages)
+        compilationOptions.Add("-pkg-config:" + package);
+
+      objectFilePath = 
+        if(description.HasExpectedOutput)
+        {
+          compilationOptions.Add("-t:exe");
+          Path.Combine(_outputDirectory, Path.GetFileNameWithoutExtension(_filePath) + ".exe");
+        }
+        else
+        {
+          compilationOptions.Add("-t:library");
+          Path.Combine(_outputDirectory, Path.GetFileNameWithoutExtension(_filePath) + ".dll");
+        };
+      compilationOptions.Add("-out:" + objectFilePath);
+
+      when(_verbosity > 0)
+        _log.WriteLine(NccTestMessageType.Debug, $"RUN: ..$compilationOptions on $_filePath");
+
+      def normalizedFilePath = _filePath.Replace('\\', '/');
+      _compiler.Compile(compilationOptions.ToNList(), [normalizedFilePath], _log)
+    }
+
+    private validateMessages(description : NccTestDescription, compilationResult : NccResult) : void
+    {
+      def messageLines = HashSet();
+      foreach(message in compilationResult.Output)
+      {
+        when(_verbosity > 0)
+          _log.WriteLine(NccTestMessageType.Debug, $"VERB-NEM: $message");
+
+        unless(isExpectedMessage(description, message, messageLines))
+          _log.WriteLine(NccTestMessageType.Error, "Unexpected Nemerle compiler's message :\n" + message);
+      }
+
+      def checkMessage(line : int, msg : Regex, msgTypeStr, isGlobal)
+      {
+        unless (messageLines.Contains(line))
+        {
+          def tail = if (isGlobal) "" else $" in line:$line";
+          _log.WriteLine(NccTestMessageType.Error, $"Expected $msgTypeStr:\n`$msg'\n hasn't occured$tail");
+        }
+      }
+      foreach(message in description.ErrorLines)
+        checkMessage(message.Key, message.Value, "error",   false);
+      foreach(message in description.WarningLines)
+        checkMessage(message.Key, message.Value, "warning", false);
+      foreach(message in description.HintLines)
+        checkMessage(message.Key, message.Value, "hint",    false);
+      foreach(message in description.GlobalErrorLines)
+        checkMessage(message.Key, message.Value, "error",   true);
+      foreach(message in description.GlobalWarningLines)
+        checkMessage(message.Key, message.Value, "warning", true);
+    }
+
+    private isExpectedMessage(description : NccTestDescription, message : string, messageLines : ISet[int]) : bool
+    {
+      def lookupPattern(table, line)
+      {
+        mutable pattern;
+        if(table.TryGetValue(line, out pattern))
+        {
+          when(pattern.IsMatch(message))
+            _ = messageLines.Add(line);
+          true
+        }
+        else
+          false
+      }
+      match(NccMessageType.Parse(message))
+      {
+        | Error(line)   => lookupPattern(description.ErrorLines,   line) || !description.OkLines.Contains(line)
+        | Warning(line) => lookupPattern(description.WarningLines, line) || description.HintLines.ContainsKey(line)    || description.ErrorLines.ContainsKey(line)
+        | Hint(line)    => lookupPattern(description.HintLines,    line) || description.WarningLines.ContainsKey(line) || description.ErrorLines.ContainsKey(line)
+        | GlobalError   with table = description.GlobalErrorLines
+        | GlobalWarning with table = description.GlobalWarningLines =>
+          mutable result = false;
+          foreach(p when p.Value.IsMatch(message) in table)
+          {
+            result = true;
+            _ = messageLines.Add(p.Key);
+          }
+          result
+        | Unknown => true
+      }
+    }
+
+    private verifyOutputAssembly(description : NccTestDescription, verifier : Verifier, compilationResult : NccResult, objectFilePath : string) : void
+    {
+      if (compilationResult.ExitCode == 3 || description.NoVerify)
+        _log.Write(NccTestMessageType.Info, "verification skipped...");
+      else
+      {
+        _log.Write(NccTestMessageType.Info, "verify...");
+        try
+        {
+          when(verifier.Verify(objectFilePath) is Fail(message))
+          {
+            _log.WriteLine(NccTestMessageType.Error, message);
+            _log.WriteLine(NccTestMessageType.Error, "Verification failed");
+          }
+        }
+        catch
+        {
+          | e is Exception =>
+            _log.WriteLine(NccTestMessageType.Error, $"Error occured while running assembly verifier, $e");
+        }
+      }
+    }
+
+    private testOutputAssembly(description : NccTestDescription, objectFilePath : string) : void
+    {
+      def startInfo = _processStartInfoFactory.CreateProcessStartInfo(objectFilePath, []);
+      startInfo.UseShellExecute = false;
+      startInfo.RedirectStandardOutput = true;
+      startInfo.RedirectStandardInput = true;
+      startInfo.RedirectStandardError = true;
+
+      _log.Write(NccTestMessageType.Info, "run...");
+
+      using(process = Process.Start(startInfo))
+      {
+        foreach(inputLine in description.Input)
+          process.StandardInput.WriteLine(inputLine);
+
+        def actualOutput = List();
+        def readOutput()
+        {
+          def outputLine = process.StandardOutput.ReadLine();
+          unless (ReferenceEquals(null, outputLine))
+          {
+            actualOutput.Add(outputLine);
+            readOutput();
+          }
+        }
+        readOutput();
+
+        process.WaitForExitOrKill();
+
+        def stderr = process.StandardError.ReadToEnd();
+        if (process.ExitCode != 0)
+          _log.WriteLine(NccTestMessageType.Error, $"Test finished with exit code $(process.ExitCode)");
+        else if (!string.IsNullOrEmpty(stderr))
+          _log.WriteLine(NccTestMessageType.Error, "Following error message has been written: " + stderr);
+        else
+        {
+          def checkOutput (expectedOutput : list[string], actualOutput : list[string])
+          {
+            | ([], []) => ()
+            | ([], _)  => _log.WriteLine(NccTestMessageType.Error, "Runtime output is longer than it should be")
+            | (_, [])  => _log.WriteLine(NccTestMessageType.Error, "Unexpected end of runtime output")
+            | (expected :: expectedTail, actual :: actualTail) =>
+              when(_verbosity > 1)
+                _log.WriteLine(NccTestMessageType.Debug, "VERB-RUN: " + actual);
+              /// get rid of whitespaces in program's output and test, then compare
+              unless (string.Equals(expected.Trim(), actual.Trim(), StringComparison.Ordinal))
+                _log.WriteLine(NccTestMessageType.Error, $"Runtime output: \n\"$actual\"\ndoes not match expected: \n\"$expected\"");
+              checkOutput(expectedTail, actualTail)
+          }
+          checkOutput(NList.ToList(description.ExpectedOutput), actualOutput.ToNList());
+        }
+      }
+      catch
+      {
+        | e is Win32Exception =>
+          _log.WriteLine(NccTestMessageType.Error, "Error occured while running the program ");
+          when(_verbosity > 1)
+            _log.WriteLine(NccTestMessageType.Debug, e.ToString());
+      }
+    }
+
+    private _log : NccTestOutputWriter;
+    private _compiler : Ncc;
+    private _filePath : string;
+    private _outputDirectory : string;
+    private _name : string;
+    private _globalReferencies : array[string];
+    private _verifier : option[Verifier];
+    private _processStartInfoFactory : ProcessStartInfoFactory;
+    private _verbosity : int;
+  }
+}
