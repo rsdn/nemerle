@@ -14,6 +14,7 @@ using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Shell.Interop;
 using System.Diagnostics;
 using Nemerle.VisualStudio.Project;
+using Nemerle.Compiler;
 
 namespace Nemerle.VisualStudio.LanguageService.TextEditor
 {
@@ -27,19 +28,6 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 		[Import]
 		private IVsEditorAdaptersFactoryService editorAdaptersFactoryService { get; set; }
 
-		ProjectInfo GetProjectInfo(string filePath)
-		{
-			var projectInfo = ProjectInfo.FindProject(filePath);
-			if (null != projectInfo)
-			{
-				var ext = Path.GetExtension(filePath);
-				var engine = projectInfo.Engine;
-				if (!engine.IsExtensionRegistered(ext))
-					return null;
-			}
-			return projectInfo;
-		}
-
 		#region IVsTextViewCreationListener Members
 
 		public void VsTextViewCreated(IVsTextView textViewAdapter)
@@ -47,21 +35,26 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 			var view = textViewAdapter.ToITextView();
 			var filePath = textViewAdapter.GetFilePath();
 
-			var project = GetProjectInfo(filePath);
+			var project = ProjectInfo.FindProject(filePath);
 			if (project == null)
 				return;
 
-			//Trace.WriteLine("Opened: " + filePath);
+			var engine = project.Engine;
+			if (engine.IsExtensionRegistered(Path.GetExtension(filePath))
+				|| engine.HasSourceChangedSubscribers(Location.GetFileIndex(filePath)))
+			{
+				//Trace.WriteLine("Opened: " + filePath);
 
-			IVsTextLines vsTextLines = textViewAdapter.GetBuffer();
-			var langSrv = NemerlePackage.GetGlobalService(typeof(NemerleLanguageService)) as NemerleLanguageService;
-			if (langSrv == null)
-				return;
-			var source = (NemerleSource)langSrv.GetOrCreateSource(vsTextLines);
-			project.AddEditableSource(source);
+				IVsTextLines vsTextLines = textViewAdapter.GetBuffer();
+				var langSrv = NemerlePackage.GetGlobalService(typeof(NemerleLanguageService)) as NemerleLanguageService;
+				if (langSrv == null)
+					return;
+				var source = (NemerleSource)langSrv.GetOrCreateSource(vsTextLines);
+				project.AddEditableSource(source);
 
-			view.TextBuffer.Changed += TextBuffer_Changed;
-			view.Closed             += view_Closed;
+				view.TextBuffer.Changed += TextBuffer_Changed;
+				view.Closed += view_Closed;
+			}
 		}
 
 		void TextBuffer_Changed(object sender, TextContentChangedEventArgs args)
@@ -69,11 +62,19 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 			var textBuffer = (ITextBuffer)sender;
 			string filePath = textBuffer.GetFilePath();// textBuffer.ToIVsTextBuffer().GetFilePath();
 
-			var project = GetProjectInfo(filePath);
+			var project = ProjectInfo.FindProject(filePath);
 			if (project == null)
 				return;
 
-			project.Engine.RequestOnBuildTypesTree();
+			var engine = project.Engine;
+			if (engine.IsExtensionRegistered(Path.GetExtension(filePath)))
+				engine.RequestOnBuildTypesTree();
+			else
+			{
+				var fileIndex = Location.GetFileIndex(filePath);
+				var text = args.After.GetText();
+				engine.NotifySourceChanged(new StringSource(fileIndex, text));
+			}
 
 			//System.Diagnostics.Trace.WriteLine("Changed: (" + args.AfterVersion + ") " + filePath);
 		}
