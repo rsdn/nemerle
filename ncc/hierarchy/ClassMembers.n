@@ -837,9 +837,11 @@ public partial class MethodBuilder : MemberBuilder, IMethod
   protected mutable fun_header : TFunHeader;
 
   /// system reflection emit method/constructor builder is stored here
-  mutable method_base : SR.MethodBase;
-
-  mutable overridden_method : IMethod;
+  mutable method_base               : SR.MethodBase;
+          isForcedTyparms           : bool;
+  mutable typesToCheckAccessability : list[FixedType];
+  mutable typarmsContainer          : StaticTypeVarContainer;
+  mutable overridden_method         : IMethod;
 
   public ImplementedMethods : list[FixedType.Class * IMethod] { get; internal set; }
 
@@ -1039,22 +1041,23 @@ public partial class MethodBuilder : MemberBuilder, IMethod
                           %| NemerleModifiers.Abstract))
       attributes |= NemerleModifiers.Virtual;
 
-    def (tenv1, typarms) =
-        declaring_type.BindTyparms (functionAst.header.TypeParameters);
+    typarmsContainer = declaring_type.Tenv.AddTyparms(declaring_type.GlobalEnv, functionAst.header.TypeParameters, declaring_type, check_parms = false);
+
+    def tenv1 = typarmsContainer.TypeVarEnv;
 
     // HACK HACK HACK!!!
     def typarms =
-      if (declaring_type.forced_typarms != null) {
+      if (declaring_type.forced_typarms != null)
+      {
         def tmp = declaring_type.forced_typarms;
         declaring_type.forced_typarms = null;
+        isForcedTyparms = true;
         tmp
-      } else typarms;
+      }
+      else
+        typarmsContainer.TypeParams;
 
-    mutable types_to_check = [];
-
-    foreach (tv in typarms)
-      foreach (t in tv.Constraints)
-        types_to_check = t :: types_to_check;
+    typesToCheckAccessability = [];
 
     def bind (loc : Location, t : PT.PExpr)
     {
@@ -1067,7 +1070,7 @@ public partial class MethodBuilder : MemberBuilder, IMethod
         | _ =>
           def ft = tenv1.BindFixedType(par.GlobalEnv, par, t, false);
           def ty = functionAst.header.TypeParameters.Substitute(ft).Fix();
-          types_to_check ::= ty;
+          typesToCheckAccessability ::= ty;
           ty
       }
     }
@@ -1190,38 +1193,7 @@ public partial class MethodBuilder : MemberBuilder, IMethod
 
     fun_header.body = fun_body;
 
-    unless (IsVarianceValid(fun_header.ReturnType.Fix(), 1))
-      Message.Error ($"return type of method `$name' must behave covariantly");
-
-    foreach (parm in parms)
-    {
-      match (parm.ty.Fix())
-      {
-        | FixedType.Void => () //VladD2: a message about this bug reporting at FixupCurrentFunction()
-        | x =>
-          unless (IsVarianceValid(x, -1))
-            Message.Error (parm.TypeLocation, $"type of `$name' method's parameter `$(parm.name)' must behave contravariantly");
-      }
-    }
-
-    foreach (tp in typarms)
-    {
-      when (tp.IsCovariant || tp.IsContravariant)
-        Message.Error ("method's generic paramameter cannot declare variance");
-
-      foreach (ctr in tp.Constraints)
-        unless (IsVarianceValid(ctr, -1))
-          // I'm not sure why this is forbidden, but PEVerify indeed complains :)
-          Message.Error ($"constraints of generic parameters of method `$name' must behave contravariantly");
-    }
-    /// end of variance checks
-
     ty = FixedType.ConstructFunctionType (fun_header);
-
-    // check it at the end, since error reporting routine there
-    // needs us to be initialized to name us
-    foreach (t in types_to_check)
-      t.CheckAccessibility (this, accessibility);
 
     // don't warn about the unused `Main' methods...
     when (IsStatic && name == "Main")
@@ -1232,7 +1204,41 @@ public partial class MethodBuilder : MemberBuilder, IMethod
 
   internal override OnAddMemberComplete(_isIgnored : bool) : void
   {
-    
+    typarmsContainer.SetConstraints();
+
+    unless (IsVarianceValid(fun_header.ReturnType.Fix(), 1))
+      Message.Error ($"return type of method `$name' must behave covariantly");
+
+    foreach (parm in fun_header.Parameters)
+      match (parm.ty.Fix())
+      {
+        | FixedType.Void => () //VladD2: a message about this bug reporting at FixupCurrentFunction()
+        | x =>
+          unless (IsVarianceValid(x, -1))
+            Message.Error (parm.TypeLocation, $"type of `$name' method's parameter `$(parm.name)' must behave contravariantly");
+      }
+
+    unless (fun_header.TypeParameters.IsEmpty)
+    {
+      foreach (tp in fun_header.TypeParameters)
+      {
+        when (tp.IsCovariant || tp.IsContravariant)
+          Message.Error ("method's generic paramameter cannot declare variance");
+        foreach (t in tp.Constraints)
+        {
+          // I'm not sure why this is forbidden, but PEVerify indeed complains :)
+          unless (IsVarianceValid(t, -1))
+            Message.Error ($"constraints of generic parameters of method `$name' must behave contravariantly");
+          t.CheckAccessibility(this, accessibility);
+        }
+      }
+      TypeBuilder.check_bound_type(ty);
+    }
+
+    // check it at the end, since error reporting routine there
+    // needs us to be initialized to name us
+    foreach (t in typesToCheckAccessability)
+      t.CheckAccessibility(this, accessibility);
   }
 
   // this method check the specification from CLI ECMA-335 II 9.7
@@ -1405,6 +1411,15 @@ public partial class MethodBuilder : MemberBuilder, IMethod
   {
     assert(overridden_method == null);
     overridden_method = baseMethod;
+    unless (isForcedTyparms)
+    {
+      when (typarmsContainer.HasConstraints)
+        Message.Error("Constraints for override and explicit interface implementation methods are inherited from the base method, so they cannot be specified directly.");
+
+      def baseMethodHeader = baseMethod.GetHeader();
+      unless (baseMethodHeader.TypeParameters.IsEmpty)
+        typarmsContainer = StaticTypeVarContainer.Clone(typarmsContainer.TypeVarEnv, typarmsContainer.TypeParams, baseMethodHeader.TypeParameters);
+    }
   }
 
   private _isConditional : bool;
