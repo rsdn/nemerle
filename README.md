@@ -11,20 +11,20 @@ To find out more, please visit: http://nemerle.org/
 ## Hello world
 
 Create _hello.n_:
+```nemerle
+using System.Console;
 
-    using System.Console;
-
-    WriteLine("Hello world")
-
+WriteLine("Hello world")
+```
 Compile and run
-
-    "C:\Program Files\Nemerle\ncc.exe" hello.n /out:hello.exe
-    hello.exe
-
+```bat
+"C:\Program Files\Nemerle\ncc.exe" hello.n /out:hello.exe
+hello.exe
+```
 Will output
-
-    Hello world
-
+```bat
+Hello world
+```
 # Install
 
 ## Windows
