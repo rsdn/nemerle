@@ -170,7 +170,7 @@
 			// 
 			this._cbGenerateRegion.AutoSize = true;
 			this._cbGenerateRegion.Checked = true;
-			this._cbGenerateRegion.CheckState = System.Windows.Forms.CheckState.Checked;
+			this._cbGenerateRegion.CheckState = System.Windows.Forms.CheckState.Unchecked;
 			this._cbGenerateRegion.Location = new System.Drawing.Point(178, 9);
 			this._cbGenerateRegion.Name = "_cbGenerateRegion";
 			this._cbGenerateRegion.Size = new System.Drawing.Size(102, 17);
