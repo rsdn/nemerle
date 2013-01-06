@@ -190,7 +190,7 @@ namespace Nemerle.Tools.MSBuildTask
 
 			//System.Diagnostics.Debug.Assert(false);
 			if (RunDebugger)
-				commandLine.AppendSwitch("\n-debugger");
+				commandLine.AppendSwitch("\n/debugger");
 			if (Optimize)
 				commandLine.AppendSwitch("\n/optimize");
 			commandLine.AppendPlusOrMinusSwitch("\n/checked", base.Bag, "CheckIntegerOverflow");
