@@ -26,6 +26,7 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+using Nemerle.Assertions;
 using Nemerle.Collections;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Extensions;
@@ -92,6 +93,7 @@ namespace Nemerle.Compiler
     public DelayedTypingsInProgress : bool { get; internal set; }
     public DelayedTypingsSecondPass : bool { get; internal set; }
     public IsSpeculativeTyping      : bool { get; internal set; }
+    internal mutable NotResolvedNestedDelayedTypings : Hashtable[object, bool];
 
     public delegate MessageEventHandler(loc : Location, msg : string) : void;
 
@@ -108,6 +110,10 @@ namespace Nemerle.Compiler
 
     public event CompilationStart    : CompilerEventHandler;
     public event TypeTreeBuildFinish : CompilerEventHandler;
+    
+    private mutable IdToNameMap : Hashtable[int, string];
+    
+    public ReferencedAssemblies : list[LibraryReference] { get; internal set; }
     
     protected OnTypeTreeBuildFinish() : void
     {
@@ -196,9 +202,7 @@ namespace Nemerle.Compiler
       sourceChangedHandlers[fileIndex] = newHandler;
       when(invokeAfterSubscription)
       {
-        def source = DefaultParser.ReadFile(Location.GetFileName(fileIndex),
-          checkDuplicatedFiles  = false,
-          checkLastLineForLF    = false);
+        def source = GetSource(fileIndex);
         handler(source);
       }
     }
@@ -210,11 +214,16 @@ namespace Nemerle.Compiler
         | (currentHandler, true) =>
           match(System.Delegate.Remove(currentHandler, handler) :> SourceChangedHandler)
           {
-            | null => ()
+            | null       => sourceChangedHandlers.Remove(fileIndex)
             | newHandler => sourceChangedHandlers[fileIndex] = newHandler
           }
         | _ => ()
       }
+    }
+
+    public HasSourceChangedSubscribers(fileIndex : int) : bool
+    {
+      sourceChangedHandlers.ContainsKey(fileIndex)
     }
 
     protected UnsubscribeSourceChangedHandler(fileIndex : int) : void
@@ -225,6 +234,13 @@ namespace Nemerle.Compiler
     protected UnsubscribeSourceChangedHandlers() : void
     {
       sourceChangedHandlers.Clear();
+    }
+
+    public virtual GetSource(fileIndex : int) : ISource
+    {
+      FileSource.ReadFile(Location.GetFileName(fileIndex),
+        checkDuplicatedFiles  = false,
+        checkLastLineForLF    = false)
     }
 
     #endregion
@@ -257,7 +273,7 @@ namespace Nemerle.Compiler
     internal mutable Typer_yield_macro : NamespaceTree.Node;
     internal mutable TyVar_reuse_queue : TypeVar;
     internal mutable TyVar_Id : int;
-    internal mutable Util_Id : int;
+    private  mutable Util_Id : int;
     internal mutable AttributeMacroExpansion_global_nr : int;
     internal mutable Macros_in_pattern : bool;
 
@@ -338,7 +354,35 @@ namespace Nemerle.Compiler
       TyVar_Id = 0;
       TyVar_reuse_queue = null;
       Util_Id = 0;
+      IdToNameMap = null;
       AttributeMacroExpansion_global_nr = 0;
+    }
+
+    public GetNewId() : int
+    {
+      Util_Id++;
+      Util_Id
+    }
+
+    public GetNewId([NotNull] name : string) : int
+    {
+      Util_Id++;
+      
+      when (IdToNameMap == null)
+        IdToNameMap = Hashtable();
+      
+      IdToNameMap[Util_Id] = name;
+      Util_Id
+    }
+    
+    public GetIdName(id : int) : string
+    {
+      mutable name;
+      
+      when (IdToNameMap != null)
+        _ = IdToNameMap.TryGetValue(id, out name);
+        
+      name
     }
 
     #endregion
@@ -474,6 +518,13 @@ namespace Nemerle.Compiler
 
     protected InitCompiler () : void
     {
+      when (Options.TryStartDebugger)
+      {
+        def project = IO.Path.GetFileName(Options?.OutputFileName ?? Options?.ProjectPath ?? "?");
+        Diagnostics.Debug.Assert(false, 
+          $"Press Retry to start debug session for '$project'. If you wants to see this dialog at next time you should remove '-debugger' option from command line");
+      }
+
       _userData = null;
       Typer_BetterTypeCache.Clear();
 
@@ -492,8 +543,11 @@ namespace Nemerle.Compiler
         NameTree.Init ();
       when (shouldCreate (MacrosRegistry))
         MacrosRegistry = MacroRegistry (this);
-      when (shouldCreate (LibrariesManager))
+      when (shouldCreate(LibrariesManager))
+      {
+        ReferencedAssemblies = null;
         LibrariesManager = ComponentsFactory.CreateLibraryReferenceManager (this, Options.LibraryPaths);
+      }
 
       Options.Validate ();
 
@@ -573,13 +627,14 @@ namespace Nemerle.Compiler
           InternalType.InitSystemTypes();
           when (!Options.DoNotLoadStdlib || referencedLibraries.Exists(isNemerleDll))
             InternalType.InitNemerleTypes ();
-          LibrariesManager.LoadExtensions();
 
           unless (Options.DoNotLoadMacros)
             LoadNemerleMacros();
         });
 
         CoreEnv = GlobalEnv.CreateCore (NameTree);
+
+        tryEx(() => LibrariesManager.LoadExtensions());
 
         when (exception != null) throw exception;
       }
@@ -618,13 +673,7 @@ namespace Nemerle.Compiler
 
           Hierarchy = TypesManager (this);
 
-          def parseResults = Options.Sources.RevMap(fun(filePath)
-          {
-            def source = DefaultParser.ReadFile(filePath,
-              checkDuplicatedFiles  = true,
-              checkLastLineForLF    = Options.Warnings.IsEnabled(10002));
-            Parser.Parse(source)
-          });
+          def parseResults = Options.Sources.Map(Parser.Parse);
 
           Message.MaybeBailout();    // we have detected multiple files already
 

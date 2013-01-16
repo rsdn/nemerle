@@ -100,7 +100,7 @@ public abstract class MemberBuilder : MemberInfo, IMember, System.IEquatable[IMe
     loc = ast.Location;
     modifiers = ast.modifiers;
     name = ast.Name;
-    id = Util.next_id (Manager);
+    id = Manager.GetNewId();
 
     attributes = modifiers.mods;
 
@@ -143,7 +143,10 @@ public abstract class MemberBuilder : MemberInfo, IMember, System.IEquatable[IMe
     is_obsolete = modifiers.FindAttribute (InternalType.Obsolete_tc, par.GlobalEnv).IsSome;
   }
 
-
+  internal virtual OnAddMemberComplete(isIgnored : bool) : void
+  {
+    ignore(isIgnored);
+  }
 
   public virtual ResetCodeCache () : void { }
 
@@ -695,7 +698,12 @@ public partial class PropertyBuilder : MemberBuilder, IProperty
 
     parms = propertyAst.parameters.Map(parm => par.BindFixedType(parm.Type));
 
-    unless (par.IsInterface)
+    if (par.IsInterface)
+    {
+      when (propertyAst.initializer.IsSome)
+        Message.Error("initializer cannot be used in interfaces");
+    }
+    else
     {
       def field = Nemerle.Compiler.MainParser.TryExpandAutoproperty(propertyAst);
 
@@ -829,9 +837,11 @@ public partial class MethodBuilder : MemberBuilder, IMethod
   protected mutable fun_header : TFunHeader;
 
   /// system reflection emit method/constructor builder is stored here
-  mutable method_base : SR.MethodBase;
-
-  internal mutable overridden_method : IMethod;
+  mutable method_base               : SR.MethodBase;
+          isForcedTyparms           : bool;
+  mutable typesToCheckAccessability : list[FixedType];
+  mutable typarmsContainer          : StaticTypeVarContainer;
+  mutable overridden_method         : IMethod;
 
   public ImplementedMethods : list[FixedType.Class * IMethod] { get; internal set; }
 
@@ -1010,15 +1020,13 @@ public partial class MethodBuilder : MemberBuilder, IMethod
 
     ImplementedMethods = [];
 
-    def f = functionAst;
-
     when (LexerBase.IsOperator (name))
       unless (IsStatic && IsPublic)
         Message.Error ($"User defined operator '$(DeclaringType).$(name)'"
                        " must be declared static and public");
 
     // convert +, -, /= name to op_Addition equivalents
-    match (OperatorLongName (this.name, f.header.Parameters.Length))
+    match (OperatorLongName (this.name, functionAst.header.Parameters.Length))
     {
       | Some (long) =>
         this.name = long;
@@ -1026,29 +1034,30 @@ public partial class MethodBuilder : MemberBuilder, IMethod
       | None => ()
     }
 
-    this.return_value_modifiers = f.ReturnValueModifiers ?? AttributesAndModifiers();
+    this.return_value_modifiers = functionAst.ReturnValueModifiers ?? AttributesAndModifiers();
 
     // both override and abstract imply virtual
     when (attributes %&& (NemerleModifiers.Override
                           %| NemerleModifiers.Abstract))
       attributes |= NemerleModifiers.Virtual;
 
-    def (tenv1, typarms) =
-        declaring_type.BindTyparms (f.header.TypeParameters);
+    typarmsContainer = declaring_type.Tenv.AddTyparms(declaring_type.GlobalEnv, functionAst.header.TypeParameters, declaring_type, check_parms = false);
+
+    def tenv1 = typarmsContainer.TypeVarEnv;
 
     // HACK HACK HACK!!!
     def typarms =
-      if (declaring_type.forced_typarms != null) {
+      if (declaring_type.forced_typarms != null)
+      {
         def tmp = declaring_type.forced_typarms;
         declaring_type.forced_typarms = null;
+        isForcedTyparms = true;
         tmp
-      } else typarms;
+      }
+      else
+        typarmsContainer.TypeParams;
 
-    mutable types_to_check = [];
-
-    foreach (tv in typarms)
-      foreach (t in tv.Constraints)
-        types_to_check = t :: types_to_check;
+    typesToCheckAccessability = [];
 
     def bind (loc : Location, t : PT.PExpr)
     {
@@ -1059,8 +1068,9 @@ public partial class MethodBuilder : MemberBuilder, IMethod
           InternalType.Object
 
         | _ =>
-          def ty = f.header.TypeParameters.Substitute(par.BindFixedType (tenv1, t)).Fix();
-          types_to_check ::= ty;
+          def ft = tenv1.BindFixedType(declaring_type.GlobalEnv, declaring_type, t, false);
+          def ty = functionAst.header.TypeParameters.Substitute(ft).Fix();
+          typesToCheckAccessability ::= ty;
           ty
       }
     }
@@ -1095,7 +1105,7 @@ public partial class MethodBuilder : MemberBuilder, IMethod
       fp
     }
 
-    mutable fun_body = f.body;
+    mutable fun_body = functionAst.body;
 
    /* We need to convert things like:
         foo (x : int * int) : int { bar }
@@ -1103,7 +1113,7 @@ public partial class MethodBuilder : MemberBuilder, IMethod
         foo (_1 : int, _2 : int) : int { def x = (_1, _2); bar }
       To be consistent. */
 
-    def parms = f.header.Parameters.Map(mkparm);
+    def parms = functionAst.header.Parameters.Map(mkparm);
 
     when (!parms.IsEmpty)
     {
@@ -1133,7 +1143,7 @@ public partial class MethodBuilder : MemberBuilder, IMethod
         Message.Error ("`params' is allowed only on last parameter");
     }
 
-    match ((f.implemented, this.name))
+    match ((functionAst.implemented, this.name))
     {
       | ([], ".ctor") when IsStatic =>
         this.m_has_been_used = true;
@@ -1167,60 +1177,69 @@ public partial class MethodBuilder : MemberBuilder, IMethod
 
             | x => Message.Error ("implemented property must be of Interface.ProprtyName form"); x
           });
-        f.implemented = newimpl
+        functionAst.implemented = newimpl
 
       | _ => ()
     }
 
     fun_header = TFunHeader(
-      ret_type     = bind (f.header.ReturnType.Location, f.header.ReturnType),
-      ret_type_loc = f.header.ReturnType.Location,
+      ret_type     = bind (functionAst.header.ReturnType.Location, functionAst.header.ReturnType),
+      ret_type_loc = functionAst.header.ReturnType.Location,
       typarms      = typarms,
       name         = this.name,
       parms        = parms,
       tenv         = tenv1,
-      loc          = f.header.Location);
+      loc          = functionAst.header.Location);
 
     fun_header.body = fun_body;
 
-    unless (IsVarianceValid(fun_header.ReturnType.Fix(), 1))
-      Message.Error ($"return type of method `$name' must behave covariantly");
-
-    foreach (parm in parms)
-    {
-      match (parm.ty.Fix())
-      {
-        | FixedType.Void => () //VladD2: a message about this bug reporting at FixupCurrentFunction()
-        | x =>
-          unless (IsVarianceValid(x, -1))
-            Message.Error (parm.TypeLocation, $"type of `$name' method's parameter `$(parm.name)' must behave contravariantly");
-      }
-    }
-
-    foreach (tp in typarms)
-    {
-      when (tp.IsCovariant || tp.IsContravariant)
-        Message.Error ("method's generic paramameter cannot declare variance");
-
-      foreach (ctr in tp.Constraints)
-        unless (IsVarianceValid(ctr, -1))
-          // I'm not sure why this is forbidden, but PEVerify indeed complains :)
-          Message.Error ($"constraints of generic parameters of method `$name' must behave contravariantly");
-    }
-    /// end of variance checks
-
     ty = FixedType.ConstructFunctionType (fun_header);
-
-    // check it at the end, since error reporting routine there
-    // needs us to be initialized to name us
-    foreach (t in types_to_check)
-      t.CheckAccessibility (this, accessibility);
 
     // don't warn about the unused `Main' methods...
     when (IsStatic && name == "Main")
       Manager.MarkAsUsed (this);
 
     _isConditional = modifiers.FindAttribute(InternalType.Conditional_tc, par.GlobalEnv).IsSome;
+  }
+
+  internal override OnAddMemberComplete(_isIgnored : bool) : void
+  {
+    unless (typarmsContainer.IsConstraintsSet)
+      typarmsContainer.SetConstraints();
+
+    unless (IsVarianceValid(fun_header.ReturnType.Fix(), 1))
+      Message.Error($"return type of method `$name' must behave covariantly");
+
+    foreach (parm in fun_header.Parameters)
+      match (parm.ty.Fix())
+      {
+        | FixedType.Void => () //VladD2: a message about this bug reporting at FixupCurrentFunction()
+        | x =>
+          unless (IsVarianceValid(x, -1))
+            Message.Error(parm.TypeLocation, $"type of `$name' method's parameter `$(parm.name)' must behave contravariantly");
+      }
+
+    unless (fun_header.TypeParameters.IsEmpty)
+    {
+      foreach (tp in fun_header.TypeParameters)
+      {
+        when (tp.IsCovariant || tp.IsContravariant)
+          Message.Error("method's generic paramameter cannot declare variance");
+        foreach (t in tp.Constraints)
+        {
+          // I'm not sure why this is forbidden, but PEVerify indeed complains :)
+          unless (IsVarianceValid(t, -1))
+            Message.Error($"constraints of generic parameters of method `$name' must behave contravariantly");
+          t.CheckAccessibility(this, accessibility);
+        }
+      }
+      TypeBuilder.check_bound_type(ty);
+    }
+
+    // check it at the end, since error reporting routine there
+    // needs us to be initialized to name us
+    foreach (t in typesToCheckAccessability)
+      t.CheckAccessibility(this, accessibility);
   }
 
   // this method check the specification from CLI ECMA-335 II 9.7
@@ -1387,6 +1406,21 @@ public partial class MethodBuilder : MemberBuilder, IMethod
       declaring_type.process_attributes ([PT.SyntaxElement.TypeBuilder (declaring_type), PT.SyntaxElement.MethodBuilder (this),
                                           PT.SyntaxElement.ParameterBuilder (p)],
                                          MacroTargets.Parameter, MacroPhase.WithTypedMembers, p.modifiers, this);
+  }
+
+  internal SetOverriddenMethod(baseMethod : IMethod) : void
+  {
+    assert(overridden_method == null);
+    overridden_method = baseMethod;
+    unless (isForcedTyparms)
+    {
+      when (typarmsContainer.HasConstraints)
+        Message.Error("Constraints for override and explicit interface implementation methods are inherited from the base method, so they cannot be specified directly.");
+
+      def baseMethodHeader = baseMethod.GetHeader();
+      unless (baseMethodHeader.TypeParameters.IsEmpty)
+        typarmsContainer = StaticTypeVarContainer.Clone(typarmsContainer.TypeVarEnv, typarmsContainer.TypeParams, baseMethodHeader.TypeParameters);
+    }
   }
 
   private _isConditional : bool;

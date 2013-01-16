@@ -4990,8 +4990,9 @@ namespace Microsoft.VisualStudio.Project
 			found = 0;
 			itemId = 0;
 
+      var mkDocument = this.GetMkDocument();
 			// If it is the project file just return.
-			if (NativeMethods.IsSamePath(mkDoc, this.GetMkDocument()))
+      if (NativeMethods.IsSamePath(mkDoc, mkDocument))
 			{
 				found = 1;
 				itemId = VSConstants.VSITEMID_ROOT;
@@ -5690,6 +5691,9 @@ namespace Microsoft.VisualStudio.Project
 			if (node == null)
 				throw new ArgumentException("Invalid item id", "item");
 
+            if (node.ItemNode == null)
+                throw new ArgumentException("Invalid item id", "item.ItemNode");
+
 			attributeValue = node.ItemNode.GetMetadata(attributeName);
 			return VSConstants.S_OK;
 		}
@@ -5743,6 +5747,9 @@ namespace Microsoft.VisualStudio.Project
 
 			if (node == null)
 				throw new ArgumentException("Invalid item id", "item");
+
+            if (node.ItemNode == null)
+                throw new ArgumentException("Invalid item id", "item.ItemNode");
 
 			node.ItemNode.SetMetadata(attributeName, attributeValue);
 			return VSConstants.S_OK;

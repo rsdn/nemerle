@@ -1,0 +1,531 @@
+﻿/*
+ * Copyright (c) 2010  David Sorokin <david.sorokin@gmail.com>
+ * Copyright (c) 2010  rampelstinskin@gmail.com
+ * Copyright (c) 2012  Marek Gibek
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using System;
+using System.Collections.Generic;
+
+namespace Nemerle.Async.Internal
+{
+  /// <summary>
+  /// This module allows us to expand any async expression using
+  /// the specified internal builder.
+  /// </summary>
+  public module AsyncExpander
+  {
+    /// <summary>
+    /// Expands the expression using the specified computation builder.
+    /// </summary>
+    public Expand(builder : AsyncBuilderMacro, expr : PExpr) : PExpr
+    {
+      def transform(expr : PExpr)
+      {
+        // Returns a tuple of two values: the transformed expression and
+        // a flag indicating whether the former contains await expressions.
+
+        match (expr)
+        {
+          | Sequence(exprs) => transformList(exprs);
+          | expr => transformList([expr]);
+        }
+      }
+      and transformList(exprs : list[PExpr])
+      {
+        // Returns a tuple of two values: the result of transformation and
+        // a flag indicating whether the former contains await expressions.
+        //
+        // Also this is the only place where we can process the monadic binding.
+
+        match (exprs)
+        {
+          | [] => (<[ () ]>, false)
+
+          | expr :: exprs =>
+          match (expr)
+          {
+            | Assign(name, MacroCall(macro_name, _, parms))
+              when macro_name.Id == "await"
+              =>
+              match (parms)
+              {
+                | [Expression(Assign(_, _) as ass)] =>
+                  // name = await _ = _
+                  Message.FatalError(ass.Location, "Assignment not allowed here");
+                
+                | [Expression(comp)] =>
+                  // name = await comp
+                  def (p, hasAwait) = transformList(exprs);
+                  match (hasAwait)
+                  {
+                    | true => (builder.BindAsync(comp, name, p, false, false), true)
+                    | false => (builder.Bind(comp, name, p, false, false), true)
+                  }
+
+                | _ =>
+                  Message.FatalError(expr.Location, "Invalid await expression.");
+              };
+            
+            | Define(name, MacroCall(macro_name, _, parms))
+              when macro_name.Id == "await"
+              =>
+              match (parms)
+              {
+                | [Expression(Assign(_, _) as ass)] =>
+                  // def name = await _ = _
+                  Message.FatalError(ass.Location, "Assignment not allowed here");
+                
+                | [Expression(comp)] =>
+                  // def name = await comp
+                  def (p, hasAwait) = transformList(exprs);
+                  match (hasAwait)
+                  {
+                    | true => (builder.BindAsync(comp, name, p, true, false), true)
+                    | false => (builder.Bind(comp, name, p, true, false), true)
+                  }
+
+                | _ =>
+                  Message.FatalError(expr.Location, "Invalid await expression.");
+              };
+
+            | DefMutable(name, MacroCall(macro_name, _, parms))
+              when macro_name.Id == "await"
+              =>
+              match (parms)
+              {
+                | [Expression(Assign(_, _) as ass)] =>
+                  // mutable name = await _ = _
+                  Message.FatalError(ass.Location, "Assignment not allowed here");
+
+                | [Expression(comp)] =>
+                  // mutable name = await comp
+                  def (p, hasAwait) = transformList(exprs);
+                  match (hasAwait)
+                  {
+                    | true => (builder.BindAsync(comp, name, p, true, true), true)
+                    | false => (builder.Bind(comp, name, p, true, true), true)
+                  }
+
+                | _ =>
+                  Message.FatalError(expr.Location, "Invalid await expression.");
+              };
+            
+            | MacroCall(name, _, parms) =>
+            match (name.Id)
+            {
+              | "await" =>
+              match (parms)
+              {
+                | [Expression(Assign(_, _) as ass)] =>
+                  // await _ = _
+                  Message.FatalError(ass.Location, "Assignment not allowed here");
+
+                | [Expression(comp)] =>
+                  def (p, hasAwait) = transformList(exprs);
+                  match (hasAwait)
+                  {
+                    | true => (builder.BindAsync(comp, <[ () ]>, p, false, false), true)
+                    | false => (builder.Bind(comp, <[ () ]>, p, false, false), true)
+                  }
+
+                | _ =>
+                  Message.FatalError(expr.Location, "Invalid await expression.");
+              };
+
+              | _ => 
+              transformList2(expr, exprs)
+            }
+
+            | expr =>
+            transformList2(expr, exprs)
+          }
+        }
+      }
+      and transformList2(expr : PExpr, exprs : list[PExpr])
+      {
+        // Makes the transformation a computation if required.
+        // Apply the monadic then function in case of need.
+
+        match (exprs)
+        {
+          | [] => transform2(expr)
+          
+          | _ =>
+          match (transform2(expr))
+          {
+            | (p, true) =>
+              def (p2, hasAwait) = transformList(exprs);
+              match (hasAwait)
+              {
+                | true => (builder.CombineAsync(p, p2), true)
+                | false => (builder.Combine(p, p2), true)
+              }
+          
+            | (p, false) =>
+              def (p2, f2) = transformList(exprs);
+              (<[ $p; $p2 ]>, f2)
+          }
+        }
+      }
+      and transform2(expr : PExpr)
+      {
+        // This is a workhorse of the macro expander. Returns a tuple of two values:
+        // the result of transformation which can be either a computation (monad) or
+        // a simple expression and also returns a flag indicating whether this 
+        // transformation is a computation (monad).
+
+        match (expr)
+        {				
+          | <[ def _ = _ ]> => (expr, false)
+
+          | <[ mutable _ = _ ]> => (expr, false)
+
+          | Match(x, cases, _) =>  // pattern matching
+
+          def cs = cases.Map(fun (c) 
+          {
+            def (p, f) = transform(c.body);
+            (MatchCase(c.patterns, p), f)
+          });
+
+          def hasAwait = cs.Exists((_, f) => f);
+          (PExpr.Match(x, cs.Map((c, _) => c)), hasAwait);
+
+          | MacroCall(name, _, parms) =>
+          match (name.Id)
+          {
+            | "if" =>
+            match (parms)
+            {
+              | [Expression(cond), Expression(expr1), Expression(expr2)] =>
+              def (p1, hasAwait1) = transform(expr1);
+              def (p2, hasAwait2) = transform(expr2);
+              (<[ if ($cond) $p1 else $p2 ]>, hasAwait1 | hasAwait2)
+
+              | _ =>
+              Message.FatalError(expr.Location, "Invalid if expression.");
+            };
+
+            | "when" =>
+            match (parms)
+            {
+              | [Expression(cond), Expression(expr)] =>
+              def (p, hasAwait) = transform(expr);
+              (<[ when ($cond) $p ]>, hasAwait)
+
+              | _ =>
+              Message.FatalError (expr.Location, "Invalid when expression.");
+            };
+
+            | "unless" =>
+            match (parms)
+            {
+              | [Expression(cond), Expression(expr)] =>
+              def (p, hasAwait) = transform(expr);
+              (<[ unless ($cond) $p ]>, hasAwait)
+
+              | _ =>
+              Message.FatalError(expr.Location, "Invalid unless expression.");
+            };
+
+            | "while" =>
+            match (parms)
+            {
+              | [Expression(pred), Expression(body)] =>
+              match (transform(body))
+              {
+                | (p, false) => 
+                (<[ while ($pred) $p ]>, false)
+
+                | (p, true) =>
+                (builder.While(pred, p), true)
+              }
+
+              | _ =>
+              Message.FatalError(expr.Location, "Invalid while expression.");
+            };
+
+            | "do" =>
+            match (parms)
+            {
+              | [Expression(pred), Expression(body)] =>
+              match (transform(body))
+              {
+                | (p, false) => 
+                (<[ do $p while ($pred) ]>, false)
+                      
+                | (p, true) =>
+                (builder.DoWhile(pred, p), true)
+              }
+
+              | _ =>
+              Message.FatalError(expr.Location, "Invalid do-while expression.");
+            };
+
+            | "foreach" =>
+            match (parms)
+            {
+              | [Expression(<[ $name in $coll ]>), Expression(body)] =>
+              match (transform(body))
+              {
+                | (p, false) =>
+                (<[ foreach ($name in $coll) $p ]>, false)
+                      
+                | (p, true) =>
+                (builder.ForEach(name, coll, p), true)
+              }
+
+              | _ =>
+              Message.FatalError(expr.Location, "Invalid foreach expression.");
+            };
+
+            | "for" =>
+            match (parms)
+            {
+              | [Expression(init), Expression(cond), Expression(change), Expression(body)] =>
+
+              def init = if (init != null) init else <[ () ]>;
+              def cond = if (cond != null) cond else <[ true ]>;
+              def change = if (change != null) change else <[ () ]>;
+
+              match (transform(body))
+              {
+                | (p, false) =>
+                (<[ for ($init; $cond; $change) $p ]>, false)
+
+                | (p, true) =>
+                (builder.For(init, cond, change, p), true)
+              }
+
+              | _ =>
+              Message.FatalError(expr.Location, "Invalid for expression.");
+            };
+
+            | "repeat" =>
+            match (parms)
+            {
+              | [Expression(times), Expression(body)] =>
+
+              match (transform(body))
+              {
+                | (p, false) =>
+                (<[ repeat ($times) $p ]>, false)
+
+                | (p, true) =>
+
+                def var = Macros.NewSymbol ("counter");
+                def init = <[ mutable $(var : name) = $times ]>;
+                def cond = <[ $(var : name) > 0 ]>;
+                def change = <[ $(var : name) -- ]>;
+
+                (builder.For(init, cond, change, p), true)
+              }
+
+              | _ =>
+              Message.FatalError(expr.Location, "Invalid repeat expression.");
+            };
+
+            | "using" =>
+            match (parms)
+            {
+              | Expression(body) :: Expression(sec) :: tail =>
+
+              def extract (expr : SyntaxElement)
+              {
+                | Expression(body) => body
+                | _ => Message.FatalError (expr.Location, "Expected an expression.")
+              }
+
+              match (sec)
+              {
+                | <[ match ($(null)) { ..$cases } ]> => 
+                  transformUsing(expr, body, cases, tail.Map(extract))
+                | _ =>
+                  transformUsing(expr, body, [], sec :: tail.Map(extract))
+              }
+
+              | _ =>
+              Message.FatalError(expr.Location, "Invalid using expression.");
+            }
+
+            | _ =>
+            (expr, false)
+          }
+
+          | TryFinally(body, handler) =>
+
+          match (transform(body))
+          {
+            | (p, false) => (PExpr.TryFinally(p, handler), false)
+            | (p, true) => (builder.TryFinally(p, handler), true)
+          }
+
+          | Try (body, cases) =>
+          transformTry(body, cases)
+
+          | _ => 
+          (expr, false)
+        }
+      }
+      and transformTry (body : PExpr, cases : list[TryCase])
+      {
+        // Transforms the try-catch block and returns a tuple of two values: 
+        // the result of transformation and a flag indicating whether the 
+        // result is a computation (monad).
+
+        def cs = cases.Map (fun (c : TryCase)
+          {
+          | Catch(exn, exn_ty, handler) => 
+            def (p, f) = transform(handler);
+            (TryCase.Catch (exn, exn_ty, p), f)
+
+          | Filter(exn, exn_ty, filter, handler) =>
+            def (p, f) = transform(handler);
+            (TryCase.Filter (exn, exn_ty, filter, p), f)
+
+          | Ellipsis(expr) =>
+            Message.FatalError(expr.Location, "The Ellipsis construct of type TryCase is not currently supported in the computation expressions.")
+          });
+
+        def (body, hasAwait) = transform(body);
+
+        match (hasAwait || cs.Exists((_, f) => f))
+        {
+          | false => 
+          (PExpr.Try(body, cs.Map ((c, _) => c)), false)
+
+          | true =>
+
+          def ps = cs.Map(fun (c, f)
+            {
+            match (f)
+            {
+              | false =>
+
+              match (c : TryCase)
+              {
+                | Catch (exn, exn_ty, handler) => 
+                TryCase.Catch(exn, exn_ty, handler)
+
+                | Filter (exn, exn_ty, filter, handler) =>
+                TryCase.Filter(exn, exn_ty, filter, handler)
+
+                | Ellipsis (expr) =>
+                Message.FatalError(expr.Location, "Internal error.")
+              }
+
+              | true => c
+            }
+            });
+
+          (builder.TryCatch(body, ps), true)
+        }
+      }
+      and transformUsing (expr : PExpr, body : PExpr, cases : list[MatchCase], binding : list[PExpr])
+      {
+        // Transforms the using block and returns a tuple of two values: the result of
+        // transformation and a flag indicating whether this result is a computation (monad).
+
+        def (body, hasAwait) = transform(body);
+
+        def cs = cases.Map(fun (c)
+          {
+          | <[ case: $(x : name) is $exc => $exp ]> =>
+            def (p, f) = transform(exp);
+            (TryCase.Catch(Splicable.Name (x), exc, p), f)
+
+          | <[ case: $(x : name) => $exp ]> =>
+            def (p, f) = transform (exp);
+            (TryCase.Catch(Splicable.Name (x), <[ System.Exception ]>, p), f)
+
+          | _ => 
+            Message.FatalError("expected simple catch pattern: '| x is Exception => body'");
+          });
+
+        def bs = binding.Map(fun (expr)
+          {
+          | <[ mutable _ = _ ]>
+          | DefMutable(_, _) =>
+            
+            Message.FatalError(expr.Location, "A mutable reference makes no sense for "
+            "the using block that is converted to a computation. Use def instead or "
+            "declare a mutable reference outside or inside the using block.")
+
+          | <[ def $(str : name) = $e ]> 
+          | <[ $(str : name) = $e ]> =>
+            (e, <[ $(str : name) ]>, false)
+
+          | MacroCall(name, _, parms) when name.Id == "await" =>
+            match (parms)
+            {
+            | [Expression(Assign(<[ $(str : name) ]>, e))] => (e, <[ $(str : name) ]>, true)
+            | _ => Message.FatalError(expr.Location, "Invalid await expression.")
+            }
+
+          | e =>
+            def x = Macros.NewSymbol();
+            (e, <[ $(x : name) ]>, false)
+          });
+
+        match (hasAwait || cs.Exists((_, f) => f) || bs.Exists((_, _, f) => f))
+        {
+          | false => (expr, false)
+          | true =>
+            def body = bs.FoldRight(body, ((e, name, hasAwait), acc) =>
+              match (hasAwait)
+              {
+                | false => builder.Using(e, name, acc)
+                | true => builder.Bind(e, name, builder.Using (name, name, acc), false, false)
+              });
+            (body, true)
+        }
+      }
+
+      def (p, hasAwait) = transform(expr);
+
+      // ---
+      //Console.WriteLine ("Expansion=\r\n{0}", p);
+      //Console.WriteLine ("HasAwait={0}", hasAwait);
+      // ---
+
+      if (!hasAwait)
+      {
+        Message.Warning("This async block lacks 'await' operators and will run synchronously. ");
+        Message.Hint("Consider using the 'await' operator to await non-blocking API calls, "
+          "or 'await Task.Run(...)' to do CPU-bound work on a background thread.");
+        builder.Run(p)
+      }
+      else
+      {
+        builder.RunAsync(p)
+      }
+    }
+  }
+}

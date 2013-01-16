@@ -314,6 +314,20 @@ namespace Nemerle.VisualStudio.Project
 			return base.ExecCommandOnNode(cmdGroup, cmd, cmdexecopt, pvaIn, pvaOut);
 		}
 
+        /// <summary>
+		/// Get the automation object for the FolderNode
+		/// </summary>
+		/// <returns>An instance of the NemerleOAFolderItem type if succeeded</returns>
+		public override object GetAutomationObject()
+		{
+			if(this.ProjectMgr == null || this.ProjectMgr.IsClosed)
+			{
+				return null;
+			}
+
+			return new NemerleOAFolderItem(this.ProjectMgr.GetAutomationObject() as Microsoft.VisualStudio.Project.Automation.OAProject, this);
+		}
+
 		#endregion
 
 		#region Methods

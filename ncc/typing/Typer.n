@@ -149,7 +149,8 @@ namespace Nemerle.Compiler
     public this (tb : TypeBuilder, tenv : TypeVarEnv, mb : MethodBuilder, env : GlobalEnv)
     {
       this (env.Manager, tb, mb);
-      this.local_context = LocalContext.Empty; // sometimes it is needed
+      when (local_context == null)
+        this.local_context = LocalContext.Empty; // sometimes it is needed
       this.env = env;
       when (tenv != null)
         this.tenv = tenv;
@@ -538,7 +539,7 @@ namespace Nemerle.Compiler
     #endregion
 
     #region Utilities
-    internal CurrentFunction : TFunHeader
+    public CurrentFunction : TFunHeader
     {
       get { current_fun }
     }
@@ -800,7 +801,7 @@ namespace Nemerle.Compiler
         | TExpr.Call (TExpr.PropertyMember (_, p), _, _) when !need_ref => p.IsMutable
         | TExpr.Call (TExpr.Delayed (dt), _, _) when !need_ref => dt.IsMutableIndexer
         | TExpr.This when current_type.IsValueType && current_type.Equals (e.FixedType().TypeInfo)
-        | TExpr.ArrayIndexer => true
+        | TExpr.ArrayIndexer | PointerIndexer => true
         | TExpr.Delayed (dt) => dt.ExpectLValue (need_ref)
         | TExpr.EventMember
         | TExpr.StaticEventRef =>
@@ -1092,6 +1093,8 @@ namespace Nemerle.Compiler
     {
       isAllNestedDelayedTypingResolved          = false;
       mutable isResolveNestedDelayedTypingTried = false;
+      def oldIsSpeculativeTyping = Manager.IsSpeculativeTyping;
+      Manager.IsSpeculativeTyping = speculative;
 
       def result =
         try
@@ -1175,7 +1178,9 @@ namespace Nemerle.Compiler
                     else
                       TExpr.DebugInfo(tExpr.Location, result.Type, result, pexpr)
                     
-                  | _ => TypeExpr(<[ $(con : typed)($(tExpr : typed)) ]>)
+                  | _ => 
+                    def res  = TypeExpr(<[ $(con : typed)($(tExpr : typed)) ]>);
+                    res
                 }
 
                 def resExpr = addDelegateCtor(expr);
@@ -1255,6 +1260,7 @@ namespace Nemerle.Compiler
         }
         finally
         {
+          Manager.IsSpeculativeTyping = oldIsSpeculativeTyping;
           when (DebugOut)
           {
             System.Diagnostics.Debug.Unindent();
@@ -1313,48 +1319,65 @@ namespace Nemerle.Compiler
     #region Solver interaction
 
     /// Returns true if no error. This method does not guarantee absence the unresolved delayed typind.
-    internal TryResolveNestedDelayedTyping(exprs : SCG.IEnumerable[TExpr], isAllNestedDelayedTypingResolved : out bool, speculative : bool) : bool
+    internal TryResolveNestedDelayedTyping(exprs : list[TExpr], isAllNestedDelayedTypingResolved : out bool, speculative : bool) : bool
     {
-      mutable isAllNestedResolved = true;
-
-      // Try resolve list of unresolved delayed typind (TExpr.Delayed)
-      def resolve(unresolvedDelayeds : SCG.IEnumerable[_], initialCount, speculative)
-      {
-        if (initialCount > 0)
+      def needReset = 
+        if (Manager.NotResolvedNestedDelayedTypings == null)
         {
-          foreach (unresolvedDelayed in unresolvedDelayeds)
+          Manager.NotResolvedNestedDelayedTypings = Hashtable();
+          true
+        }
+        else
+          false;
+      isAllNestedDelayedTypingResolved = false;
+      
+      try
+      {
+        mutable isAllNestedResolved = true;
+
+        // Try resolve list of unresolved delayed typind (TExpr.Delayed)
+        def resolve(unresolvedDelayeds : SCG.IEnumerable[_], initialCount, speculative)
+        {
+          if (initialCount > 0)
           {
-            unresolvedDelayed.Resolve(speculative);
-            when (messenger.LocalError)
-              return false;
+            foreach (unresolvedDelayed when Manager.NotResolvedNestedDelayedTypings[unresolvedDelayed] in unresolvedDelayeds)
+            {
+              Manager.NotResolvedNestedDelayedTypings[unresolvedDelayed] = false;
+              unresolvedDelayed.Resolve(speculative);
+              when (messenger.LocalError)
+                return false;
+            }
+
+            def newUnresolvedDelayeds = unresolvedDelayeds.FilterToArray(ud => !ud.IsResolved);
+            def newCount              = newUnresolvedDelayeds.NCount();
+
+            isAllNestedResolved = newCount == 0;
+
+            if (newCount != 0 && initialCount != newCount) // we can try agen
+              resolve(newUnresolvedDelayeds, newCount, speculative)
+            else
+              true
           }
-
-          def newUnresolvedDelayeds = unresolvedDelayeds.FilterToArray(ud => !ud.IsResolved);
-          def newCount              = newUnresolvedDelayeds.NCount();
-
-          isAllNestedResolved = newCount == 0;
-
-          if (newCount != 0 && initialCount != newCount) // we can try agen
-            resolve(newUnresolvedDelayeds, newCount, speculative)
           else
             true
         }
-        else
-          true
-      }
 
-      def walker              = ExprWalker();
-      def unresolvedDelayeds  = SCG.List();
+        def walker              = ExprWalker();
+        def unresolvedDelayeds  = SCG.List();
 
-      // Collect unresilved nested delayed typing (TExpr.Delayed)...
-      foreach (expr in exprs)
-        walker.ForEachUnresolvedDelayed(expr, unresolvedDelayeds.Add);
+        // Collect unresilved nested delayed typing (TExpr.Delayed)...
+        foreach (expr in exprs)
+          walker.ForEachUnresolvedDelayed(Manager, expr, unresolvedDelayeds.Add);
 
-      // Try to resolve nested delayed typing. It can fail and this call
+          // Try to resolve nested delayed typing. It can fail and this call
       // typing action will be also failed (in this case we return false).
-      def result = resolve(unresolvedDelayeds, unresolvedDelayeds.NCount(), speculative);
-      isAllNestedDelayedTypingResolved = isAllNestedResolved;
-      result  
+        def result = resolve(unresolvedDelayeds, unresolvedDelayeds.NCount(), speculative);
+        isAllNestedDelayedTypingResolved = isAllNestedResolved;
+        result  
+      }
+      finally
+        when (needReset)
+          Manager.NotResolvedNestedDelayedTypings = null;
     }
 
     public FreshTyVar() : TypeVar { FreshTypeVar() }
@@ -1560,7 +1583,7 @@ namespace Nemerle.Compiler
           throw CompilationAbortedException($"typing method body of $(GetTopTyper ().current_fun)");
 
       def (pexpr, debugLocation) = GetDebugLocation(expression);
-
+//when(expression.ToString() == "b" /*|| expression.ToString() == "a"*/) assert2(false);
       ////when (Debugger.IsAttached && this.current_method_builder != null && this.current_method_builder.Header.Name == "Main")
       ////  assert2(true);
 
@@ -1952,6 +1975,7 @@ namespace Nemerle.Compiler
 
         | PExpr.Ref (name) =>
           //assert2(name?.ToString() != "EnumerableMethods");
+          // Check whether name is local or global name.
           def res =
             match (TypeLocal (name, expected))
             {
@@ -2544,7 +2568,10 @@ namespace Nemerle.Compiler
 
       foreach (fn in functions)
       {
-        def (tenv, typarms) = current_type.BindTyparms (tenv, fn.header.TypeParameters);
+        def container = tenv.AddTyparms(current_type.GlobalEnv, fn.header.TypeParameters, current_type, check_parms = true);
+        container.SetConstraints();
+        def tenv = container.TypeVarEnv;
+        def typarms = container.TypeParams;
 
         def parms = NList.Map (fn.header.Parameters,
           fun (p : PT.PParameter)
@@ -2840,16 +2867,26 @@ namespace Nemerle.Compiler
               }
               else
                 Some(TExpr.ArrayIndexer (indexer_over_type, tExpr, typed_args))
+                
+            | Some(FixedType.Class(ti, [])) when ti.IsPointer => 
+              match (args)
+              {
+                | [index] => 
+                  def typedIndex = TypeExpr(index, InternalType.Int32);
+                  Some(TExpr.PointerIndexer(pExpr.Location, ti.GetElementTypeInfo().UnSome().GetMemType(), tExpr, typedIndex))
+                  
+                | _ => ReportError(messenger, "A pointer must be indexed by only one value"); None()
+              }
+              
 
             | hint =>
               when (hint.IsSome || lastAttempt)
               {
                 def ty = TypeOf(tExpr).ToString();
                 if (ty == "?")
-                  ReportError (messenger, $ "can't deduce type of $tExpr");
+                  ReportError(messenger, $ "can't deduce type of $tExpr");
                 else
-                  ReportError (messenger,
-                    $"cannot find any suitable indexer in '$pExpr' (type is $ty)");
+                  ReportError(messenger, $"cannot find any suitable indexer in '$pExpr' (type is $ty)");
               }
 
               None ()
@@ -3207,7 +3244,7 @@ namespace Nemerle.Compiler
 
       match (obj)
       {
-        | Delayed(dt) => dt.ExpectMember(mem_name)
+        | Delayed(dt) => dt.ExpectMember(name)
         | _ => {}
       }
 
@@ -3494,12 +3531,18 @@ namespace Nemerle.Compiler
           {
             | Some((idl, name)) => name.GetEnv(env).LookupSymbolExt(idl, current_type, for_completion);
             | None =>
-              // oops
               match (expr)
               {
-                | <[ $broken_type . $_ ]>
-                | broken_type // XXX this shouldn't happen
-                  =>
+                | <[ $obj.$(mem : dyn) ]> =>
+                  def type = current_type.BindType(tyVarEnv, obj).Fix();
+                  def typeInfo = type.TypeInfo;
+                  def members = (typeInfo?.LookupMember(mem, for_completion) ?? []).Filter(m => m.IsStatic);
+                  when (members.IsEmpty)
+                    ReportError (messenger, $ "unbound type `$obj'");
+                    
+                  members.Map(m => (typeInfo, m));
+                  
+                | broken_type => // XXX this shouldn't happen
                   ReportError (messenger, $ "unbound type `$broken_type'");
                   []
               }
@@ -3820,7 +3863,7 @@ namespace Nemerle.Compiler
       }
 
       mutable parameters = parms.Map(compile_parm);
-
+      //when(pfnc.ToString() == "b" || pfnc.ToString() == "a") System.Diagnostics.Debugger.Break();
       def fnc =
         match (pfnc, parameters)
         {
@@ -3917,8 +3960,9 @@ namespace Nemerle.Compiler
 
           | (<[ this ]> as e, _) => GetBaseOverloads(e, is_base = false)
           | (<[ base ]> as e, _) => GetBaseOverloads(e, is_base = true)
+          | (PExpr.TypedType(FixedType.Class(ti, _)), _) => MakeOverloadedNode(null, TypeToConstructor(null, ti), FreshTypeVar())
           | _ =>
-            def ex = TypeExpr (pfnc, FreshTypeVar ());
+            def ex = TypeExpr (pfnc, FreshTypeVar());
             match (ex.Type.Hint)
             {
               | Some (FixedType.Class (tc, _)) when tc.IsDelegate => TypeExpr (<[ $(ex : typed).Invoke ]>)
@@ -3952,7 +3996,7 @@ namespace Nemerle.Compiler
           | fnc =>
             def res = TryTypeCall (fnc, parameters, expected,
                                    var_args = false,
-                                   final = true);
+                                   final = !Manager.IsSpeculativeTyping);
             res
         };
 
@@ -4063,15 +4107,16 @@ namespace Nemerle.Compiler
           }
 
         | [] =>
-          if (to.TryRequire (from))
+          if (to.TryRequire(expr.Type))
           {
             //to.ForceRequire (from);
             TExpr.TypeConversion (expr, to, ConversionKind.DownCast(local_context.IsChecked))
           }
-          else if (from.TryRequire (to))
+          else if (expr.Type.TryRequire(to))
           {
-            from.ForceRequire (to);
-            Message.Warning (10001, $"there is no check needed to cast $from to $to");
+            def fromStr = expr.Type.ToString();
+            expr.Type.ForceRequire(to);
+            Message.Warning (10001, $"there is no check needed to cast $fromStr to $to");
             Message.HintOnce (10001, "consider using : instead of :>");
 
             TExpr.TypeConversion (expr, to, ConversionKind.UpCast ())
@@ -4445,10 +4490,9 @@ namespace Nemerle.Compiler
     HandleYield (expr : PExpr) : TExpr
     {
       Util.cassert (solver.IsTopLevel);
-      def label_no = Util.next_id (Manager);
-      def state_no = AddYieldLabel (label_no);
-      def label =
-        TExpr.Label (InternalType.Void, label_no, VoidLiteral ());
+      def label_no = Manager.GetNewId("YieldLabel");
+      def state_no = AddYieldLabel(label_no);
+      def label = TExpr.Label(InternalType.Void, label_no, VoidLiteral());
 
       def expr =
         Manager.MacroColors.InGlobalColor (fun () {
@@ -4584,7 +4628,8 @@ namespace Nemerle.Compiler
         | TExpr.Sequence => "a sequence"
         | TExpr.Tuple => "a tuple constructor"
         | TExpr.Array => "an array constructor"
-        | TExpr.ArrayIndexer => "an array indexer reference"
+        | TExpr.ArrayIndexer   => "an array indexer reference"
+        | TExpr.PointerIndexer => "an pointer indexer reference"
         | TExpr.TupleIndexer => "an tuple indexer reference"
         | TExpr.TypeOf   => "a typeof expression"
         | TExpr.MethodOf => "a methodof expression"

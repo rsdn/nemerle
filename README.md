@@ -11,20 +11,20 @@ To find out more, please visit: http://nemerle.org/
 ## Hello world
 
 Create _hello.n_:
+```nemerle
+using System.Console;
 
-    using System.Console;
-
-    WriteLine("Hello world")
-
+WriteLine("Hello world")
+```
 Compile and run
-
-    "C:\Program Files\Nemerle\ncc.exe" hello.n /out:hello.exe
-    hello.exe
-
+```bat
+"C:\Program Files\Nemerle\ncc.exe" hello.n /out:hello.exe
+hello.exe
+```
 Will output
-
-    Hello world
-
+```bat
+Hello world
+```
 # Install
 
 ## Windows
@@ -45,12 +45,12 @@ Will output
 
 ## Linux
 
-  Nemerle can't bootstrap itself on Mono, but can be used as binaries.
+  Using latest Mono-2.10.8 from github Nemerle can bootstrap itself on Mono.
 
 # What about IDE?
 
-  * Visual Studio 2008 integration installed by Nemerle installer
-  * Visual Studio 2010 integration is not released, but works and can be builded manually, see snippets/VS2010/readme.txt
+  * Visual Studio 2008/2010 integration installed by Nemerle installer
+  * Nemerle Studio is a free IDE based on Visual Studio Shell (Isolated mode) installed by Nemerle installer if VS Shell was installed
   * Sharp Develop 3.0 addin can be builded manually. See snippets/sharpdevelop/ReadMe.txt 
   * See Vim, Emacs, Kate and other editors syntax support in the 'misc' folder
 

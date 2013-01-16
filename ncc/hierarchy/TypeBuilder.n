@@ -279,6 +279,14 @@ public partial class TypeBuilder : TypeInfo
     TypeDeclaration.Variant(variant_options.Map(_  : TypeInfo))
   }
   
+  public AddMacroAttribute(expr : PT.PExpr) : void
+  {
+    modifiers.macro_attrs ::= (TypesManager.AttributeMacroExpansion.Suffix(MacroTargets.Class, process_macro_attributes_stage), expr);
+    def expansion = TypesManager.AttributeMacroExpansion(MacroTargets.Class, process_macro_attributes_stage, expr,
+      [PT.SyntaxElement.TypeBuilder(this)], this, null);
+    TyManager.AddMacroExpansion(expansion);
+  }
+
   public override IsInterface : bool
   {
     get { if (TyManager.run_phase <= 2)
@@ -481,14 +489,27 @@ public partial class TypeBuilder : TypeInfo
     when (do_fixup && typeBuilder.self_type == null)
       typeBuilder.FixupDefinedClass();
 
+    when (cannot_finalize && member_map != null)
+      AddMember(typeBuilder);
+    
     typeBuilder
   }
 
-  public DefineNestedType (td : PT.ClassMember.TypeDeclaration) : TypeBuilder
+  public DefineNestedType(td : PT.ClassMember.TypeDeclaration) : TypeBuilder
   {
     DefineNestedType (td, true)
   }
 
+  public DefineNestedTypeWithSource(td : PT.ClassMember.TypeDeclaration, do_fixup : bool) : TypeBuilder
+  {
+    TyManager.GenerateFakeSourceCode(this, td);
+    DefineNestedType(td, do_fixup)
+  }
+
+  public DefineNestedTypeWithSource(td : PT.ClassMember.TypeDeclaration) : TypeBuilder
+  {
+    DefineNestedTypeWithSource(td, true)
+  }
 
   /**
    * Adds a definition and returns the new MemberBuilder, if available
@@ -549,7 +570,7 @@ public partial class TypeBuilder : TypeInfo
 
   public DefineWithSource (f : PT.ClassMember, do_fixup = true) : MemberBuilder
   {
-    TyManager.GenerateFakeSourceCode (f);
+    TyManager.GenerateFakeSourceCode (this, f);
     DefineAndReturn (f, do_fixup)
   }
 
@@ -839,24 +860,6 @@ public partial class TypeBuilder : TypeInfo
                      BindingFlags.Public %| BindingFlags.NonPublic)
   }
 
-  /** Searches for the types defined for the current TypeInfo, using the
-      specified BindingFlags.
-  */
-  public GetNestedTypes (bindingAttr : BindingFlags) : list[TypeInfo]
-  {
-    def mems = get_members (bindingAttr, fun (x : IMember) {
-      x.MemberKind == MemberKinds.NestedType &&
-      constrain_member (x, bindingAttr | BindingFlags.Static | BindingFlags.Instance)
-    });
-    NList.Map (mems, fun (x) { x :> TypeInfo })
-  }
-
-  public GetNestedTypes () : list[TypeInfo]
-  {
-    GetNestedTypes (BindingFlags.Static %| BindingFlags.Instance %|
-                    BindingFlags.Public %| BindingFlags.NonPublic)
-  }
-
   public GetProperties (bindingAttr : BindingFlags) : list[IProperty]
   {
     def mems = get_members (bindingAttr, fun (x : IMember) {
@@ -997,8 +1000,10 @@ public partial class TypeBuilder : TypeInfo
           }
         }
 
-
-        (this.tenv, this.typarms) = tenv.AddTyparms (this.GlobalEnv, ps, this, check_parms = false);
+        def container = tenv.AddTyparms (this.GlobalEnv, ps, this, check_parms = false);
+        container.SetConstraints();
+        this.tenv    = container.TypeVarEnv;
+        this.typarms = container.TypeParams;
     }
 
     when (forced_typarms != null) {
@@ -1494,21 +1499,6 @@ public partial class TypeBuilder : TypeInfo
     modifiers.custom_attrs += additional.GetCustomAttributes ();
   }
 
-
-  internal static constrain_member(m : IMember, flags : BindingFlags) : bool
-  {
-    def is_public = m.Attributes %&& NemerleModifiers.Public;
-    // if flag is Public then always return all public members
-    flags == BindingFlags.Public && is_public
-    // if flag is NonPublic then always return all nonpublic members
-      || flags == BindingFlags.NonPublic && !is_public
-    // masks
-      || (!m.IsStatic || flags %&& BindingFlags.Static)
-        && (m.IsStatic || flags %&& BindingFlags.Instance)
-        && (!is_public || flags %&& BindingFlags.Public)
-        && (is_public || flags %&& BindingFlags.NonPublic)
-  }
-
   /** Note that [bindingAttr] is used only to check the case for DeclaredOnly
       members, so you have to provide filter function to check other flags */
   private get_members (bindingAttr : BindingFlags, filter : IMember -> bool) : list[IMember]
@@ -1553,16 +1543,6 @@ public partial class TypeBuilder : TypeInfo
     other_tenv.BindFixedType(this.GlobalEnv, this, t, check_parms = true)
   }
 
-  internal BindTyparms(tp : PT.Typarms) : TypeVarEnv * list[StaticTypeVar]
-  {
-    BindTyparms(tenv, tp)
-  }
-
-  internal BindTyparms(other_tenv : TypeVarEnv, tp : PT.Typarms) : TypeVarEnv * list[StaticTypeVar]
-  {
-    other_tenv.AddTyparms(this.GlobalEnv, tp, this, check_parms = true)
-  }
-
   BindAndAddMember(class_member : PT.ClassMember) : void
   {
     try { ignore (bind_and_add_member (class_member)) }
@@ -1571,13 +1551,10 @@ public partial class TypeBuilder : TypeInfo
 
   internal AddMember(mem : IMember) : void
   {
-    match (mem)
+    when (mem is MemberBuilder as mem)
     {
-      | mem is MemberBuilder =>
-        mem.ProcessMacroAttributes();
-        mem.CheckAttributes ();
-
-      | _ => ()
+      mem.ProcessMacroAttributes();
+      mem.CheckAttributes ();
     }
 
     mutable ignoreMember = false;
@@ -1660,7 +1637,7 @@ public partial class TypeBuilder : TypeInfo
               // we just override virtual method
               if (meth.Attributes %&& NemerleModifiers.Override)
               {
-                meth.overridden_method = m;
+                meth.SetOverriddenMethod(m);
                 meth.HasBeenUsed = false;
 
                 if (m.Attributes %&& NemerleModifiers.Virtual)
@@ -1673,9 +1650,6 @@ public partial class TypeBuilder : TypeInfo
 
                 when ((x.Attributes %& NemerleModifiers.AccessModifiers) != (meth.Attributes %& NemerleModifiers.AccessModifiers))
                   Message.Error($"attempt to change the access modifiers of $meth during override of $x");
-
-                when (meth.Header.TypeParameters.Exists(_.HasConstraints))
-                  Message.Error("Constraints for override and explicit interface implementation methods are inherited from the base method, so they cannot be specified directly.");
               }
               // don't allow to hide abstract methods in classes
               else if (m.Attributes %&& NemerleModifiers.Abstract && !IsInterface)
@@ -1754,7 +1728,7 @@ public partial class TypeBuilder : TypeInfo
             }
 
         | None =>
-          when (mem.Attributes %&& NemerleModifiers.Override)
+          when (mem.Attributes %&& NemerleModifiers.Override) // TODO: Add search the virtual method in the base class. This is necessary because the method could be added by a macro.
             Message.Error($"`override' specified on $mem, but there is no such member in parent to override");
           [mem : IMember]
       };
@@ -1763,6 +1737,9 @@ public partial class TypeBuilder : TypeInfo
 
     unless (ignoreMember)
       member_list = mem :: member_list;
+
+    when (mem is MemberBuilder as mem)
+      mem.OnAddMemberComplete(ignoreMember);
   }
 
   public CannotFinalize : bool
@@ -2793,26 +2770,30 @@ public partial class TypeBuilder : TypeInfo
   /* -- VALIDITY CHECKS --------------------------------------------------- */
   /* ---------------------------------------------------------------------- */
 
-  internal static check_bound_type (t : TypeVar) : void
+  internal static check_bound_type(t : TypeVar) : void
   {
-    def check_type (t)
+    def checkFixedType(t)
     {
-      | FixedType.Out (t)
-      | FixedType.Ref (t)
-      | FixedType.Array (t, _)      => check_tv (t)
-      | FixedType.Fun (ts, t)       => check_tv (ts); check_tv (t)
-      | FixedType.Void              => ()
-      | FixedType.Tuple (ts)        => NList.Iter (ts, check_tv)
-      | FixedType.StaticTypeVarRef  => {}
-      | FixedType.Class (ti, args)  =>
-        NList.Iter (args, check_tv);
-        _ = ti.MakeSubst (args);
+      | FixedType.Out(t)
+      | FixedType.Ref(t)
+      | FixedType.Array(t, _)      => check_bound_type(t);
+      | FixedType.Fun(ts, t)       => check_bound_type(ts); check_bound_type(t);
+      | FixedType.Void             => ()
+      | FixedType.Tuple(ts)        =>
+        foreach(t in ts)
+          check_bound_type(t);
 
-      | FixedType.Intersection (lst) => NList.Iter (lst, check_type)
+      | FixedType.StaticTypeVarRef => ()
+      | FixedType.Class(ti, args)  =>
+        foreach (t in args)
+          check_bound_type(t);
+        _ = ti.MakeSubst(args);
+
+      | FixedType.Intersection(ts) =>
+        foreach (t in ts)
+          checkFixedType(t);
     }
-    and check_tv (t : TypeVar) { check_type (t.Fix ()) }
-
-    check_tv (t)
+    checkFixedType(t.Fix())
   }
 
   /**
@@ -2874,7 +2855,7 @@ public partial class TypeBuilder : TypeInfo
       def (_, has_ctor) = check_ctors (this);
       def (par_has_default, par_has_ctor) = check_ctors (parent_type.tycon);
       when (!has_ctor && !par_has_default && par_has_ctor)
-        Message.Error ("the type `" + FullName + "' has no constructors and the parent type `" + parent_type.tycon.FullName + "' has no default constructor")
+        Message.Error ($"the type `$FullName' has no constructors and the parent type `$(parent_type.tycon.FullName)' has no default constructor")
     }
   }
 
@@ -2890,8 +2871,7 @@ public partial class TypeBuilder : TypeInfo
 
       // first, check if this type has ever been referenced
       when (!(HasBeenUsed || is_variant || IsAlias))
-        Message.Warning (10003, loc,
-                         $"`$this' is not externally visible and has never been referenced");
+        Message.Warning (10003, loc, $"`$this' is not externally visible and has never been referenced");
 
       // then, proceed with the members of this type
       foreach (member in member_list)

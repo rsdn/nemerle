@@ -374,6 +374,22 @@ namespace Nemerle.Compiler
             
             FixedType.Fun(from, argsCount, f(y))
 
+          | <[ @* (.. $([arg])) ]> =>
+            def elemType = f2(arg, allow_ref);
+            def typeInfo = elemType.TypeInfo;
+            
+            if (typeInfo?.IsPrimitive)
+            {
+              def ptrTypeInfo = typeInfo.MakePointerTypeInfo();
+              assert(ptrTypeInfo != null);
+              FixedType.Class(ptrTypeInfo, []);
+            }
+            else
+            {
+              ReportError(Manager.Solver.CurrentMessenger, "Expected a primitive type.");
+              elemType
+            }
+
           | <[ @* (.. $args) ]> => FixedType.Tuple (NList.Map (args, fun (t) { f2 (t, allow_ref) }))
           | <[ this ]> =>
             if (currentType == null)
@@ -383,7 +399,7 @@ namespace Nemerle.Compiler
             }
             else currentType.GetMemType ()
             
-          | <[ @? ($t) ]> => f2 (<[ System.Nullable [$t] ]>, allow_ref)            
+          | <[ @? ($t) ]> => f2 (<[ System.Nullable [$t] ]>, allow_ref)
           | PExpr.Void => InternalType.Void
           | PExpr.Indexer
           | PExpr.GenericSpecifier
@@ -512,13 +528,14 @@ namespace Nemerle.Compiler
 
       Util.locate(t.Location, f(t))
     }
-        
-    public AddTyparms (env : GlobalEnv, tp : Typarms,
+
+    public AddTyparms (env : GlobalEnv,
+                       tp : Typarms,
                        currentType : TypeBuilder,
-                       check_parms : bool) : TypeVarEnv * list [StaticTypeVar]
+                       check_parms : bool) : StaticTypeVarContainer
     {
       when (tp.IsCopyOfExisting)
-        Nemerle.Imperative.Return ((this, tp.ExistingTyvars));
+        Nemerle.Imperative.Return (StaticTypeVarContainer.Copy(this, tp.ExistingTyvars));
         
       def loop (tv : Splicable, acc) {
         def (map, the_list) = acc;
@@ -536,12 +553,6 @@ namespace Nemerle.Compiler
       tenv.triggerObsolete = this.triggerObsolete;
 
       def constraints = Hashtable ();
-      
-      def get (id) {
-        if (constraints.Contains (id))
-          constraints [id]
-        else (GenericParameterAttributes.None, [])
-      }
 
       mutable to_check = [];
 
@@ -551,7 +562,7 @@ namespace Nemerle.Compiler
         match (m.Find (c.tyvar.GetName()))
         {
           | Some (tv) =>
-            def     cons    = get(tv.id);
+            def     cons    = constraints.GetValueOrDefault(tv.id, (GenericParameterAttributes.None, []));
             mutable special = Pair.First(cons);
             mutable subtype = Pair.Second(cons);
 
@@ -561,24 +572,36 @@ namespace Nemerle.Compiler
               | <[ @struct ]> when c.IsSpecial =>
                 special |= GenericParameterAttributes.NotNullableValueTypeConstraint;
                 special |= GenericParameterAttributes.DefaultConstructorConstraint;
-                def ty = tenv.BindFixedType (env, currentType, <[ System.ValueType ]>, check_parms = false);
+                def ty = tenv.BindFixedType(env, currentType, <[ System.ValueType ]>, check_parms = false);
                 subtype ::= ty; 
               | <[ @new ]>    when c.IsSpecial => special |= GenericParameterAttributes.DefaultConstructorConstraint;
               | <[ @+ ]>      when c.IsSpecial => special |= GenericParameterAttributes.Covariant;
               | <[ @- ]>      when c.IsSpecial => special |= GenericParameterAttributes.Contravariant;
-              | <[ @enum ]>   when c.IsSpecial with cty = <[ System.Enum ]>
-              | cty =>
-                def ty = tenv.BindFixedType (env, currentType, cty, check_parms = false);
-                when (check_parms) to_check ::= ty;
-                if (subtype.Contains (ty))
-                  Message.Error ($"constraint `$ty' is already declared for $tv");
+              | <[ @enum ]>   when c.IsSpecial with (cty = <[ System.Enum ]>, isEnum = false)
+              | cty with isEnum = false =>
+                def ty = tenv.BindFixedType(env, currentType, cty, check_parms = false);
+                def isBadConstraint = 
+                  match (ty)
+                  {
+                    | _ when isEnum
+                    // allow interfaces, non-sealed classes and type parameters
+                    | FixedType.Class(ti, _) when ti.IsInterface || (!ti.IsValueType && !ti.IsSealed)
+                    | FixedType.StaticTypeVarRef => false
+                    | _ => true
+                  }
+                when (check_parms && !isBadConstraint)
+                  to_check ::= ty;
+                if (subtype.Contains(ty))
+                  Message.Error($"constraint `$ty' is already declared for $tv");
+                else if (isBadConstraint)
+                  Message.Error($"`$(c.ty)' is not a valid constraint. A type used as a constraint must be an interface, a non-sealed class or a type parameter");
                 else
                   subtype = ty :: subtype;
             }
             constraints [tv.id] = (special, subtype);
-            
+
           | None =>
-            Message.Error ($"unbound type variable `$(c.tyvar)' in constraint")
+            Message.Error($"unbound type variable `$(c.tyvar)' in constraint")
         }
       }
 
@@ -632,12 +655,13 @@ namespace Nemerle.Compiler
             def info = path.ToString(" => ");
             def tyParam = path.Head;
             cyclicConstraints ::= tyRef;
-            Message.Error ( // try find location of type parameter
-              match (tp.tyvars.Find (x => x.ToString () == tyParam)) {
-                | Some(name) => name.Location
-                | _          => Location.Default
-              },
-              $"A constraint of '$tyParam' type parameter is cyclic ($info)");
+            // try find location of type parameter
+            def loc = match (tp.tyvars.Find(x => x.ToString() == tyParam))
+            {
+              | Some(name) => name.Location
+              | None       => Location.Default
+            };
+            Message.Error(loc, $"A constraint of '$tyParam' type parameter is cyclic ($info)");
           }
         }
 
@@ -647,23 +671,13 @@ namespace Nemerle.Compiler
       }
 
       unless (tyParams.IsEmpty)
+      {
         tryDetectCyclicConstraints ();
+        foreach(tv in cyclicConstraints)
+          _ = constraints.Remove(tv.id);
+      }
 
-      if (cyclicConstraints.IsEmpty)
-        foreach (tv : StaticTypeVar in tyParams)
-          tv.SetConstraints (get (tv.id)); 
-      else
-        foreach (tv : StaticTypeVar in tyParams)
-        {
-          if (cyclicConstraints.Contains (tv)) // skip cyclic constraints.
-            tv.SetConstraints (GenericParameterAttributes.None, []); 
-          else
-            tv.SetConstraints (get (tv.id)); 
-        }
-      
-      to_check.Iter (TypeBuilder.check_bound_type);
-
-      (tenv, tyParams)
+      StaticTypeVarContainer.Parsed(tenv, tyParams, to_check, constraints)
     }
   }
 }

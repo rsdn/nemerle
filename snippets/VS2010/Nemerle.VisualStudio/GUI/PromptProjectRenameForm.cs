@@ -16,7 +16,11 @@ namespace Nemerle.VisualStudio.GUI
 		{
 			InitializeComponent();
 			ProjectName = projectName;
+#if VS2012
+			_newProjectName.Text = projectName + "-VS_2012";
+#else
 			_newProjectName.Text = projectName + "-VS_2010";
+#endif
 		}
 
 		public string ProjectName { get; private set; }

@@ -78,6 +78,7 @@ namespace Nemerle.Extensions
     public IgnoredPropertiesLabel                : string = "StructuralEquality.IgnoredProperties";
     public IsEquatableImplementedLabel           : string = "StructuralEquality.IsEquatableImplemented";
     public IsStructuralEquatableImplementedLabel : string = "StructuralEquality.IsStructuralEquatableImplemented";
+    public StructuralEquatableTypeInfoLabel      : string = "StructuralEquality.StructuralEquatableTypeInfoLabel";
 
     // implements interfaces
     public RunBeforeInheritance(tb : TypeBuilder) : void
@@ -106,10 +107,11 @@ namespace Nemerle.Extensions
         tb.UserData.Add(IsEquatableImplementedLabel, true);
 
         // only .NET 4.0+ supports this
-        when (tb.Manager.NameTree.LookupExactType("System.Collections.IStructuralEquatable").IsSome)
+        when (tb.Manager.NameTree.LookupExactType("System.Collections.IStructuralEquatable") is Some(iface))
         {
           tb.AddImplementedInterface(<[ System.Collections.IStructuralEquatable ]>);
           tb.UserData.Add(IsStructuralEquatableImplementedLabel, true);
+          tb.UserData.Add(StructuralEquatableTypeInfoLabel, iface);
         }
       }
     }
@@ -168,8 +170,8 @@ namespace Nemerle.Extensions
       // true if strict type equality is needed, i. e. no subtypes are allowed;
       def typecheck_needed = !tb.IsSealed && !tb.IsVariantOption && !tb.IsValueType && options.CheckTypes;
       //assert2(false);
-      DefineEquality(tb, relevant_fields, typecheck_needed);
-      DefineHashCode(tb, relevant_fields);
+      DefineEquality(tb, relevant_fields, typecheck_needed, options.EmitDebugSources);
+      DefineHashCode(tb, relevant_fields, options.EmitDebugSources);
       DefineOperators(tb);
       DefineStructural(tb);
     }
@@ -198,31 +200,36 @@ namespace Nemerle.Extensions
     [Record]
     struct SEOptions
     {
-        [Accessor] _ignoreFields : list[string];
-        [Accessor] _checkTypes   : bool;
+      public IgnoreFields : list[string] { get }
+      public CheckTypes   : bool         { get }
+      public EmitDebugSources : bool     { get }
 
-        [Accessor] static _default : SEOptions = SEOptions([], true);
+      public static Default : SEOptions { get; default SEOptions([], true, true) }
 
-        public static Parse(options : list[PExpr]) : SEOptions
+      public static Parse(options : list[PExpr]) : SEOptions
+      {
+        mutable check_types = true;
+        mutable ignore_fields = [];
+        mutable emitDebugSources = true;
+
+        foreach (opt in options)
         {
-          mutable check_types = true;
-          mutable ignore_fields = [];
+          | <[ CheckTypes = true ]>  => check_types = true;
+          | <[ CheckTypes = false ]> => check_types = false;
+          | <[ Ignore = [..$flds] ]>
+          | <[ Ignore = $fld  ]> with flds = [fld] =>
 
-          foreach (opt in options)
-          {
-            | <[ CheckTypes = true ]>  => check_types = true;
-            | <[ CheckTypes = false ]> => check_types = false;
-            | <[ Ignore = [..$flds] ]>
-            | <[ Ignore = $fld  ]> with flds = [fld] =>
+          // add field names as strings
+          ignore_fields += flds.MapFiltered(_ is PExpr.Ref, x => (x :> PExpr.Ref).name.Id)
+          
+          | <[ EmitDebugSources = true ]> => emitDebugSources = true;
+          | <[ EmitDebugSources = false ]> => emitDebugSources = false;
 
-            // add field names as strings
-            ignore_fields += flds.MapFiltered(_ is PExpr.Ref, x => (x :> PExpr.Ref).name.Id)
-
-            | _ => Message.Error("Unknown options for StructuralEquality.")
-          }
-
-          SEOptions(ignore_fields, check_types)
+          | _ => Message.Error("Unknown options for StructuralEquality.")
         }
+        
+        SEOptions(ignore_fields, check_types, emitDebugSources)
+      }
     }
     
     GetEqualsImpl(typeInfoToLookup : TypeInfo, paramType : FixedType.Class) : option[IMethod]
@@ -253,11 +260,14 @@ namespace Nemerle.Extensions
       | _ => false
     }
     
-    DefineEquality(tb : TypeBuilder, fields : Seq[IField], _check_types : bool) : void
+    DefineEquality(tb : TypeBuilder, fields : Seq[IField], _check_types : bool, emitDebugSources : bool) : void
     {
       assert2(tb.BaseType.LookupMemberAvailable);
-      def defineMember(member : ClassMember) : void { _ = tb.DefineWithSource(member); }
-
+      def defineMember(member : ClassMember) : void
+      {
+        if (emitDebugSources) _ = tb.DefineWithSource(member)
+        else                  tb.Define(member);
+      }
 
       // generates comparison code for a single field
       def invokeEquals(x : IField)
@@ -309,7 +319,8 @@ namespace Nemerle.Extensions
           method.Body = fun_body;
           //assert2(false);
           method.Ast.Body = fun_body;
-          tb.TyManager.GenerateFakeSourceCode(method.Ast);
+          when (emitDebugSources)
+            tb.TyManager.GenerateFakeSourceCode(tb, method.Ast);
           
         | _ => Message.FatalError($"Can't find EqualsImpl(other : $(tb.GetMemType())) in $tb");
       }
@@ -348,7 +359,7 @@ namespace Nemerle.Extensions
     }
 
     // uses http://en.wikipedia.org/wiki/Jenkins_hash_function to implement GetHashCode
-    DefineHashCode(tb : TypeBuilder, fields : Seq[IField]) : void
+    DefineHashCode(tb : TypeBuilder, fields : Seq[IField], emitDebugSources : bool) : void
     {
       def callBase = IsParentImplement_EqualsImpl(tb);
       
@@ -415,7 +426,12 @@ namespace Nemerle.Extensions
             }
           ]>;
 
-      _ = tb.DefineWithSource(<[ decl: public override GetHashCode() : int { $body } ]>);
+      def define(expr)
+      {
+        if (emitDebugSources) _ = tb.DefineWithSource(expr)
+        else                  tb.Define(expr)
+      }
+      define(<[ decl: public override GetHashCode() : int { $body } ]>);
     }
 
     DefineOperators(tb : TypeBuilder) : void
@@ -451,7 +467,8 @@ namespace Nemerle.Extensions
 
     DefineStructural(tb : TypeBuilder) : void
     {
-      when (AskUserData(tb, IsStructuralEquatableImplementedLabel) == true)
+      when (AskUserData(tb, IsStructuralEquatableImplementedLabel))
+      unless (tb.BaseType?.IsDerivedFrom(tb.UserData[StructuralEquatableTypeInfoLabel] :> TypeInfo))
       {
         tb.Define(<[ decl:
           public Equals(other : object, _comparer : System.Collections.IEqualityComparer) : bool
