@@ -984,7 +984,7 @@ namespace Nemerle.VisualStudio.Project
 			//this.tracker.OnItemAdded(fileName, VSADDFILEFLAGS.VSADDFILEFLAGS_NoFlags);
 		}
 
-		private bool TryFindParentFileNode(HierarchyNode root, string child, out HierarchyNode parent)
+        private bool TryFindParentFileNode(HierarchyNode root, string child, out HierarchyNode parent)
 		{
 			parent = null;
 
@@ -1437,7 +1437,12 @@ namespace Nemerle.VisualStudio.Project
 			return ToggleShowAllFiles();
 		}
 
-		#endregion
+	    protected override void AddWizardCustomParams(HierarchyNode parent, string file, Dictionary<string, string> customParams)
+	    {
+	        customParams["itemnamespace"] = GetNamespace(parent);
+	    }
+
+	    #endregion
 
 		#region IVsProjectSpecificEditorMap2 Members
 
@@ -1582,7 +1587,21 @@ namespace Nemerle.VisualStudio.Project
 			return base.CreateFolderNodes(newFolderUrl);
 		}
 
-		#endregion
+	    private string GetNamespace(HierarchyNode node)
+	    {
+	        var namespaces = new List<string>();
+	        var currentNode = node;
+            while (currentNode != this)
+	        {
+                namespaces.Add(currentNode.NodeProperties.Name);
+	            currentNode = currentNode.Parent;
+	        }
+
+	        return namespaces.AsEnumerable().Reverse().Aggregate(GetProjectProperty(ProjectFileConstants.RootNamespace, false),
+	                                                      (ns, nextNs) => ns + '.' + nextNs);
+	    }
+
+	    #endregion
 
 		#region Methods
 
