@@ -1639,8 +1639,9 @@ namespace Microsoft.VisualStudio.Project
 			try
 			{
 				Array contextParamsAsArray = contextParams;
+			    Array customParamsAsArray = GetWizardCustomParams(parentNode, itemName);
 
-				int result = ivsExtensibility.RunWizardFile(wizardToRun, (int)dlgOwner, ref contextParamsAsArray, out wizResultAsInt);
+				int result = ivsExtensibility.RunWizardFileEx(wizardToRun, (int)dlgOwner, ref contextParamsAsArray, ref customParamsAsArray, out wizResultAsInt);
 
 				if (!ErrorHandler.Succeeded(result) && result != VSConstants.OLE_E_PROMPTSAVECANCELLED)
 				{
@@ -1668,7 +1669,12 @@ namespace Microsoft.VisualStudio.Project
 			}
 		}
 
-		/// <summary>
+        protected virtual void AddWizardCustomParams(HierarchyNode parent, string itemName, Dictionary<string, string> customParams)
+        {
+            
+        }
+
+	    /// <summary>
 		/// Override this method if you want to modify the behavior of the Add Reference dialog
 		/// By example you could change which pages are visible and which is visible by default.
 		/// </summary>
@@ -5959,7 +5965,16 @@ namespace Microsoft.VisualStudio.Project
 			return name;
 		}
 
-		/// <summary>
+        private Array GetWizardCustomParams(HierarchyNode parent, string itemName)
+        {
+            var customParams = new Dictionary<string, string>();
+
+            AddWizardCustomParams(parent, itemName, customParams);
+
+            return customParams.Select(pair => string.Format("${0}$={1}", pair.Key, pair.Value)).Cast<object>().ToArray();
+        }
+
+	    /// <summary>
 		/// Updates our scc project settings. 
 		/// </summary>
 		/// <param name="sccProjectName">String, opaque to the project, that identifies the project location on the server. Persist this string in the project file. </param>
