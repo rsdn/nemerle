@@ -440,46 +440,46 @@ namespace Nemerle.VisualStudio.Project
 			return true;
 		}
 
-    private static EnvDTE.Project FindProject(EnvDTE.ProjectItem project, string projectFullName)
-    {
-      EnvDTE.Project subProject = project.Object as EnvDTE.Project;
+		private static EnvDTE.Project FindProject(EnvDTE.ProjectItem project, string projectFullName)
+		{
+			EnvDTE.Project subProject = project.Object as EnvDTE.Project;
 
-      if (subProject == null)
-        return null;
+			if (subProject == null)
+				return null;
 
-      if (!string.IsNullOrWhiteSpace(subProject.FullName) && Utils.Eq(Path.GetFullPath(subProject.FullName), projectFullName))
-        return subProject;
+			if (!string.IsNullOrWhiteSpace(subProject.FullName) && Utils.Eq(Path.GetFullPath(subProject.FullName), projectFullName))
+				return subProject;
 
 
-      if (subProject.ProjectItems == null)
-        return null;
+			if (subProject.ProjectItems == null)
+				return null;
 
-      foreach (EnvDTE.ProjectItem project2 in subProject.ProjectItems)
-      {
-        Debug.WriteLine(project2.Name);
-        var res = FindProject(project2, projectFullName);
-        if (res != null)
-          return res;
-      }
+			foreach (EnvDTE.ProjectItem project2 in subProject.ProjectItems)
+			{
+				Debug.WriteLine(project2.Name);
+				var res = FindProject(project2, projectFullName);
+				if (res != null)
+					return res;
+			}
 
-      return null;
-    }
+			return null;
+		}
 
 		private static EnvDTE.Project GetProject(EnvDTE.DTE dte, string startupProjectFullName)
 		{
 			// FIXME! Следующая строка перестала раблотать в VS 2010!
-      //var nemerleOAProject = dte.Solution.FindProjectItem(startupProjectFullName);
+			//var nemerleOAProject = dte.Solution.FindProjectItem(startupProjectFullName);
 			//nemerleOAProject = dte.Solution.FindProjectItem(startupProjectFullName) as NemerleOAProject; 
-      foreach (EnvDTE.Project project in dte.Solution.Projects)
-      {
-          foreach (var project2 in project.ProjectItems)
-          {
-            EnvDTE.ProjectItem project3 = project2 as EnvDTE.ProjectItem;
-            var res = FindProject(project3, startupProjectFullName);
-            if (res != null)
-              return res;
-          }
-      }
+			foreach (EnvDTE.Project project in dte.Solution.Projects)
+			{
+					foreach (var project2 in project.ProjectItems)
+					{
+						EnvDTE.ProjectItem project3 = project2 as EnvDTE.ProjectItem;
+						var res = FindProject(project3, startupProjectFullName);
+						if (res != null)
+							return res;
+					}
+			}
 
 			return null;
 		}
@@ -984,7 +984,7 @@ namespace Nemerle.VisualStudio.Project
 			//this.tracker.OnItemAdded(fileName, VSADDFILEFLAGS.VSADDFILEFLAGS_NoFlags);
 		}
 
-        private bool TryFindParentFileNode(HierarchyNode root, string child, out HierarchyNode parent)
+				private bool TryFindParentFileNode(HierarchyNode root, string child, out HierarchyNode parent)
 		{
 			parent = null;
 
@@ -1437,12 +1437,12 @@ namespace Nemerle.VisualStudio.Project
 			return ToggleShowAllFiles();
 		}
 
-	    protected override void AddWizardCustomParams(HierarchyNode parent, string file, Dictionary<string, string> customParams)
-	    {
-	        customParams["itemnamespace"] = GetNamespace(parent);
-	    }
+		protected override void AddWizardCustomParams(HierarchyNode parent, string file, Dictionary<string, string> customParams)
+		{
+			customParams["itemnamespace"] = GetNamespace(parent);
+		}
 
-	    #endregion
+			#endregion
 
 		#region IVsProjectSpecificEditorMap2 Members
 
@@ -1587,21 +1587,19 @@ namespace Nemerle.VisualStudio.Project
 			return base.CreateFolderNodes(newFolderUrl);
 		}
 
-	    private string GetNamespace(HierarchyNode node)
-	    {
-	        var namespaces = new List<string>();
-	        var currentNode = node;
-            while (currentNode != this)
-	        {
-                namespaces.Add(currentNode.NodeProperties.Name);
-	            currentNode = currentNode.Parent;
-	        }
+		private string GetNamespace(HierarchyNode node)
+		{
+			var namespaces = new List<string>();
+			for (var currentNode = node; currentNode != this; currentNode = currentNode.Parent)
+				namespaces.Add(currentNode.NodeProperties.Name);
+			var rootNamespace = GetProjectProperty(ProjectFileConstants.RootNamespace, false);
+			if (!string.IsNullOrEmpty(rootNamespace))
+				namespaces.Add(rootNamespace);
+			namespaces.Reverse();
+			return string.Join(".", namespaces);
+		}
 
-	        return namespaces.AsEnumerable().Reverse().Aggregate(GetProjectProperty(ProjectFileConstants.RootNamespace, false),
-	                                                      (ns, nextNs) => ns + '.' + nextNs);
-	    }
-
-	    #endregion
+			#endregion
 
 		#region Methods
 
