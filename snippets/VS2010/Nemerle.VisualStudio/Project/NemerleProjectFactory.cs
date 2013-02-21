@@ -12,6 +12,7 @@ using Microsoft.VisualStudio.Shell.Interop;
 using Nemerle.VisualStudio.GUI;
 
 using IOleServiceProvider = Microsoft.VisualStudio.OLE.Interop.IServiceProvider;
+using System.Collections.Generic;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -47,18 +48,37 @@ namespace Nemerle.VisualStudio.Project
 
         static class Default
         {
-            #if VS2012
-                private const string FrameworkVersion = "4.5";
-            #else
-                private const string FrameworkVersion = "4.0";
-            #endif
-            
+            private const string FrameworkVersion45 = "4.5";
+            private const string FrameworkVersion40 = "4.0";
+
             public const string ToolsVersion = "4.0";
-            public const string NemerleVersion = "Net-" + FrameworkVersion;
+#if VS2012
+            public const string NemerleVersion = "Net-" + FrameworkVersion45;
+#else
+            public const string NemerleVersion = "Net-" + FrameworkVersion40;
+#endif
+            public static readonly HashSet<string> ValidNemerleVersions = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase)
+            {
+#if VS2012
+                "Net-" + FrameworkVersion45,
+#endif
+                "Net-" + FrameworkVersion40
+            };
             public const string NemerleBinPathRoot = @"$(ProgramFiles)\Nemerle";
             public static readonly string[] OldNemerlePropertyValues = new[] { @"$(ProgramFiles)\Nemerle", @"$(ProgramFiles)\Nemerle\Net-3.5", @"$(ProgramFiles)\Nemerle\Net-4.0", @"$(ProgramFiles)\Nemerle\Net-4.5" };
             public const string NemerleProperty = @"$(NemerleBinPathRoot)\$(NemerleVersion)";
-            public const string TargetFrameworkVersion = "v" + FrameworkVersion;
+#if VS2012
+            public const string TargetFrameworkVersion = "v" + FrameworkVersion45;
+#else
+            public const string TargetFrameworkVersion = "v" + FrameworkVersion40;
+#endif
+            public static readonly HashSet<string> ValidTargetFrameworkVersions = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase)
+            {
+#if VS2012
+                "v" + FrameworkVersion45,
+#endif
+                "v" + FrameworkVersion40
+            };
         }
 
         public int UpgradeProject(string sourceProjectFilePath, uint fUpgradeFlag, string bstrCopyLocation, out string upgradedFullyQualifiedFileName, IVsUpgradeLogger pLogger, out int pUpgradeRequired, out Guid pguidNewProjectFactory)
@@ -152,7 +172,12 @@ namespace Nemerle.VisualStudio.Project
 
         private static bool IsNeedUpdateNemerleVersion(ProjectUpgradeHelper projectData)
         {
-            return projectData.NemerleVersion.Value != Default.NemerleVersion;
+            return !Default.ValidNemerleVersions.Contains(projectData.NemerleVersion.Value);
+        }
+
+        private static bool IsNeedUpdateTargetFrameworkVersion(ProjectUpgradeHelper projectData)
+        {
+            return !Default.ValidTargetFrameworkVersions.Contains(projectData.TargetFrameworkVersion.Value);
         }
 
         private static void BackupProjectForUpgrade(string sourceProjectFilePath, IVsUpgradeLogger pLogger, ref string destProjectFilePath, string backupedProject, string projectName)
@@ -217,11 +242,10 @@ namespace Nemerle.VisualStudio.Project
                 MessageBox.Show(ex.Message, "Nemerle laguage");
                 pUpgradeRequired = 0;
                 return VSConstants.E_FAIL;
-            } 
-                
+            }
 
-      var version = ParseVersion(projectData.ToolsVersion.Value);
-      if (projectData.ToolsVersion == null || version.Major != 4 && version.Minor != 0)
+            var version = ParseVersion(projectData.ToolsVersion.Value);
+            if (projectData.ToolsVersion == null || version.Major != 4 && version.Minor != 0)
                 return VSConstants.S_OK;
 
             if (IsNeedUpdateNemerleProperty(projectData.NemerleProperty))
@@ -233,7 +257,7 @@ namespace Nemerle.VisualStudio.Project
             if (IsNeedUpdateNemerleBinPathRootProperty(projectData.NemerleBinPathRoot))
                 return VSConstants.S_OK;
 
-            if (!Utils.Eq(projectData.TargetFrameworkVersion.Value, Default.TargetFrameworkVersion))
+            if (IsNeedUpdateTargetFrameworkVersion(projectData))
                 return VSConstants.S_OK;
 
             pUpgradeRequired = 0;
