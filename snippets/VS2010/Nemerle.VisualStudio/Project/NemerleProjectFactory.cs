@@ -52,20 +52,14 @@ namespace Nemerle.VisualStudio.Project
             private const string FrameworkVersion40 = "4.0";
 
             public const string ToolsVersion = "4.0";
-#if VS2012
-            public const string NemerleVersion = "Net-" + FrameworkVersion45;
-#else
-            public const string NemerleVersion = "Net-" + FrameworkVersion40;
-#endif
+            public const string NemerleVersion = "Net-" + ToolsVersion;
+
             public static readonly HashSet<string> ValidNemerleVersions = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase)
             {
-#if VS2012
-                "Net-" + FrameworkVersion45,
-#endif
                 "Net-" + FrameworkVersion40
             };
             public const string NemerleBinPathRoot = @"$(ProgramFiles)\Nemerle";
-            public static readonly string[] OldNemerlePropertyValues = new[] { @"$(ProgramFiles)\Nemerle", @"$(ProgramFiles)\Nemerle\Net-3.5", @"$(ProgramFiles)\Nemerle\Net-4.0", @"$(ProgramFiles)\Nemerle\Net-4.5" };
+            public static readonly string[] OldNemerlePropertyValues = new[] { @"$(ProgramFiles)\Nemerle", @"$(ProgramFiles)\Nemerle\Net-3.5", @"$(ProgramFiles)\Nemerle\Net-4.0" };
             public const string NemerleProperty = @"$(NemerleBinPathRoot)\$(NemerleVersion)";
 #if VS2012
             public const string TargetFrameworkVersion = "v" + FrameworkVersion45;
