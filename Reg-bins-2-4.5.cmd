@@ -1,7 +1,7 @@
 @echo off
 
 set NemerleRoot=%~dp0.
-set NemerleInstall=%ProgramFiles%\Nemerle\Net-4.5
+set NemerleInstall=%ProgramFiles%\Nemerle\Net-4.0
 
 IF NOT "%PROCESSOR_ARCHITECTURE%" == "x86" goto b64
 IF NOT "%PROCESSOR_ARCHITEW6432%" == "" goto b64
