@@ -1,4 +1,4 @@
-;;; nemerle.el -- major mode for editing nemerle programs
+;;; nemerle.el --- major mode for editing nemerle programs
 
 ;; Copyright (C) 2003-2005 The University of Wroclaw
 ;; All rights reserved.
