@@ -1,0 +1,203 @@
+/*
+ * Copyright (c) 2003-2008 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler;
+using Nemerle.Imperative;
+using Nemerle.Macros;
+using Nemerle.Text;
+
+using System;
+using System.Globalization;
+using System.IO;
+using System.Text.RegularExpressions;
+using System.Text;
+
+namespace Nemerle.Utility
+{
+  /// Adds property accessor for field.
+  /// By default adds only getter.
+  /// You can specify the following flags:
+  /// WantSetter, Setter, Internal, Protected, Override, Virtual.
+  /// Also you can specify the property name manualy (by default the name
+  /// is generated from the field name).
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
+                       Nemerle.MacroTargets.Field,
+                       Inherited = false, AllowMultiple = true)]
+  macro Accessor (current_type : TypeBuilder, storage_field : ParsedField, params args : list [PExpr])
+  {
+    def usage =
+        "usage: Accessor (name, flags = MODIFIERS, get (MODIFIERS), set (MODIFIERS), "
+        "attributes (LIST OF ATTRIBUTES)), where all sections are optional";
+
+    mutable setterMods = NemerleModifiers.None;
+    mutable getterMods = NemerleModifiers.Public;
+    mutable want_setter = false;
+    mutable attributes = [];
+    mutable oname = None ();
+
+    def parse_opts (expr, allow_deprec)
+    {
+      match (expr)
+      {
+        | <[ $("WantSetter" : dyn) ]>
+        | <[ $("Setter"     : dyn) ]> =>
+          unless (allow_deprec)
+            Message.Error("WantSetter / Setter is not allowed outside 'flags' section");
+
+          want_setter = true;
+          NemerleModifiers.None
+
+        | <[ $("Internal"  : dyn) ]>  => NemerleModifiers.Internal
+        | <[ $("Protected" : dyn) ]>  => NemerleModifiers.Protected
+        | <[ $("Override"  : dyn) ]>  => NemerleModifiers.Override
+        | <[ $("Virtual"   : dyn) ]>  => NemerleModifiers.Virtual
+        | <[ None ]>                  => NemerleModifiers.Extern // will be removed
+        | <[ $e1 | $e2 ]> => (parse_opts(e1, allow_deprec) | parse_opts(e2, allow_deprec))
+        | e => Message.FatalError($"bad accessor option, $e")
+      }
+    }
+
+    foreach (a in args)
+    {
+      | <[ flags = $opts ]> =>
+        def opts = parse_opts (opts, true);
+        getterMods |= opts;
+
+        when (want_setter)
+          setterMods |= getterMods;
+
+      | <[ $(n : dyn) ]>            => oname = Some(n)
+      | <[ set ($opts) ]>           => setterMods |= parse_opts (opts, false)
+      | <[ get ($opts) ]>           => getterMods |= parse_opts (opts, false)
+      | <[ attributes (..$attrs) ]> => attributes += attrs
+      | _ => Message.FatalError (usage);
+    }
+
+    // __some_foo__bar ==> SomeFooBar
+    def transformed_name =
+      {
+        def sb = StringBuilder ();
+        mutable next_upper = true;
+
+        foreach (ch in storage_field.Name)
+        {
+          if (ch == '_')
+            next_upper = true;
+          else if (next_upper)
+          {
+            _ = sb.Append (char.ToUpperInvariant (ch));
+            next_upper = false;
+          }
+          else
+            _ = sb.Append (ch);
+        }
+
+        sb.ToString()
+      };
+    def name = oname.WithDefault(transformed_name);
+
+    when (getterMods %&& NemerleModifiers.Extern)
+      getterMods = NemerleModifiers.None;
+
+    def take_minimum_access(mods)
+    {
+      if (mods %&& NemerleModifiers.Protected && !(mods %&& NemerleModifiers.Internal))
+        NemerleModifiers.Protected
+      else if (mods %&& NemerleModifiers.Internal && !(mods %&& NemerleModifiers.Protected))
+        NemerleModifiers.Internal
+      else if (mods %&& NemerleModifiers.Protected && mods %&& NemerleModifiers.Internal)
+        NemerleModifiers.Internal | NemerleModifiers.Protected
+      else if (mods %&& NemerleModifiers.Public)
+        NemerleModifiers.Public
+      else
+        NemerleModifiers.None
+    }
+
+    getterMods = (getterMods & ~NemerleModifiers.AccessModifiers) | take_minimum_access(getterMods);
+    setterMods = (setterMods & ~NemerleModifiers.AccessModifiers) | take_minimum_access(setterMods);
+
+    def fieldref    = <[ $(storage_field.PName : name) ]>;
+    def setterAttrs = AttributesAndModifiers(setterMods, [<[ System.Diagnostics.DebuggerStepThroughAttribute ]>,<[System.Runtime.CompilerServices.CompilerGenerated]>]);
+    def getterAttrs = AttributesAndModifiers(getterMods, [<[ System.Diagnostics.DebuggerStepThroughAttribute ]>,<[System.Runtime.CompilerServices.CompilerGenerated]>]);
+    def propAttrs   = AttributesAndModifiers(NemerleModifiers.None, attributes);
+
+    def prop =
+      if (setterMods != NemerleModifiers.None && getterMods != NemerleModifiers.None)
+        <[ decl:
+          ..$propAttrs
+          $(name : dyn) : $(storage_field.ty)
+          {
+            ..$setterAttrs set { $fieldref = value; }
+            ..$getterAttrs get { $fieldref }
+          }
+        ]>
+      else if (getterMods != NemerleModifiers.None)
+        <[ decl:
+          ..$propAttrs
+
+          $(name : dyn) : $(storage_field.ty)
+          {
+            ..$getterAttrs get { $fieldref }
+          }
+        ]>;
+      else if (setterMods != NemerleModifiers.None)
+        <[ decl:
+          ..$propAttrs
+
+          $(name : dyn) : $(storage_field.ty)
+          {
+            ..$setterAttrs set { $fieldref = value }
+          }
+        ]>;
+      else Message.FatalError ("no accessor will be visible with specified modifiers");
+
+    prop.SetEnv(storage_field.Env);
+
+    def totalMods = getterMods | setterMods;
+
+    if (totalMods %&& NemerleModifiers.Public)
+      prop.Attributes = (totalMods & ~NemerleModifiers.AccessModifiers) | NemerleModifiers.Public;
+    else if (totalMods %&& NemerleModifiers.Internal && totalMods %&& NemerleModifiers.Protected)
+      prop.Attributes = (totalMods & ~NemerleModifiers.AccessModifiers) | NemerleModifiers.Internal | NemerleModifiers.Protected;
+    else if (totalMods %&& NemerleModifiers.Internal)
+      prop.Attributes = (totalMods & ~NemerleModifiers.AccessModifiers) | NemerleModifiers.Internal;
+    else if (totalMods %&& NemerleModifiers.Protected)
+      prop.Attributes = (totalMods & ~NemerleModifiers.AccessModifiers) | NemerleModifiers.Protected;
+    else
+      prop.Attributes = (totalMods & ~NemerleModifiers.AccessModifiers) | NemerleModifiers.Private;
+
+    when (storage_field.Attributes %&& NemerleModifiers.Static)
+      prop.Attributes |= NemerleModifiers.Static;
+
+    current_type.Define(prop);
+  }
+}
