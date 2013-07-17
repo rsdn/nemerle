@@ -1037,11 +1037,10 @@ namespace Nemerle.VisualStudio.Project
 			if (string.IsNullOrEmpty(strFileName))
 				return false;
 
-			return
-				string.Compare(
-					Path.GetExtension(strFileName),
-					NemerleConstants.FileExtension,
-					StringComparison.OrdinalIgnoreCase) == 0;
+			var extension = Path.GetExtension(strFileName);
+			return ProjectInfo != null
+				? ProjectInfo.Engine.IsExtensionRegistered(extension)
+				: string.Compare(extension, NemerleConstants.FileExtension, StringComparison.OrdinalIgnoreCase) == 0;
 		}
 
 
