@@ -1038,9 +1038,8 @@ namespace Nemerle.VisualStudio.Project
 				return false;
 
 			var extension = Path.GetExtension(strFileName);
-			return ProjectInfo != null
-				? ProjectInfo.Engine.IsExtensionRegistered(extension)
-				: string.Compare(extension, NemerleConstants.FileExtension, StringComparison.OrdinalIgnoreCase) == 0;
+			var isNemerleFile = string.Compare(extension, NemerleConstants.FileExtension, StringComparison.OrdinalIgnoreCase) == 0;
+			return isNemerleFile || (ProjectInfo != null && ProjectInfo.Engine.IsExtensionRegistered(extension));
 		}
 
 
