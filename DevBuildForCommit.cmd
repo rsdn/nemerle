@@ -1,3 +1,2 @@
-set MSBuild="%SystemRoot%\Microsoft.NET\Framework\v3.5\msbuild.exe"
-%MSBuild% NemerleAll.nproj /target:DevBuildFull /p:Configuration=Debug /verbosity:n
+call MSBuild-3.5.cmd NemerleAll.nproj /target:DevBuildFull /p:Configuration=Debug /verbosity:n
 pause
