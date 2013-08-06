@@ -1,1 +1,3 @@
-call MSBuild-3.5.cmd NemerleAll.nproj /t:InstallerFast /p:Configuration=Release
+set MSBuild="%SystemRoot%\Microsoft.NET\Framework\v3.5\msbuild.exe"
+
+%MSBuild% NemerleAll.nproj /t:InstallerFast /p:Configuration=Release
