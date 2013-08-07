@@ -1,0 +1,1 @@
+<%@ WebService Language="C#" CodeBehind="Service1.asmx.n" Class="$safeprojectname$.Service1" %>
