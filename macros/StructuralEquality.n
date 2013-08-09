@@ -15,7 +15,7 @@ namespace Nemerle.Extensions
   [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Class, Inherited = false, AllowMultiple = false)]
   public macro StructuralEquality(tb : TypeBuilder, params _options : list[PExpr])
   {
-    StructuralEqualityImpl.RunBeforeInheritance(tb);
+    StructuralEqualityImpl.RunBeforeInheritance(tb, _options);
   }
 
   [MacroUsage(MacroPhase.WithTypedMembers, MacroTargets.Class, Inherited = false, AllowMultiple = false)]
@@ -81,7 +81,7 @@ namespace Nemerle.Extensions
     public StructuralEquatableTypeInfoLabel      : string = "StructuralEquality.StructuralEquatableTypeInfoLabel";
 
     // implements interfaces
-    public RunBeforeInheritance(tb : TypeBuilder) : void
+    public RunBeforeInheritance(tb : TypeBuilder, options_expr : list[PExpr]) : void
     {
       def type = GetTypeName(tb);
       
@@ -98,7 +98,7 @@ namespace Nemerle.Extensions
           
       when (tb.Ast is TopDeclaration.Variant)
         foreach (vo in tb.GetVariantOptions())
-          vo.Ast.AddCustomAttribute(<[ StructuralEquality ]>);
+          vo.Ast.AddCustomAttribute(<[ StructuralEquality(..$options_expr) ]>);
 
       // Nemerle doesn't build if Tuples from stdlib are changed
       unless (tb.IsVariantOption)
@@ -122,19 +122,12 @@ namespace Nemerle.Extensions
       //assert2(false);
       def options = SEOptions.Parse(options_expr);
 
-      def get_relevant_fields(tb)
+      def get_relevant_fields(tb, ignore_fields)
       {
         def all_fields = tb.GetFields(BindingFlags.Public %|
                                       BindingFlags.NonPublic %|
                                       BindingFlags.Instance %|
                                       BindingFlags.DeclaredOnly);
-
-        // retrieve all ignored fields
-        def ignore_fields =
-          if (tb.UserData.Contains(IgnoredFieldsLabel))
-            tb.UserData[IgnoredFieldsLabel] :> List[string]
-          else
-            List();
 
         // ignored properties
         when (tb.UserData.Contains(IgnoredPropertiesLabel))
@@ -164,14 +157,22 @@ namespace Nemerle.Extensions
         all_fields.Filter(x => ignore_fields.BinarySearch(x.Name) < 0);
       }
 
+      // retrieve all ignored fields
+      def ignore_fields =
+        if (tb.UserData.Contains(IgnoredFieldsLabel))
+          tb.UserData[IgnoredFieldsLabel] :> List.[string]
+        else
+          List();
+
       // fields that are not ignored when evaluating structural equality
-      def relevant_fields = get_relevant_fields(tb);
+      def relevant_fields = get_relevant_fields(tb, ignore_fields);
 
       // true if strict type equality is needed, i. e. no subtypes are allowed;
       def typecheck_needed = !tb.IsSealed && !tb.IsVariantOption && !tb.IsValueType && options.CheckTypes;
       //assert2(false);
-      DefineEquality(tb, relevant_fields, typecheck_needed, options.EmitDebugSources);
-      DefineHashCode(tb, relevant_fields, options.EmitDebugSources);
+      def isHashCode=DefineHashCode(tb, relevant_fields, options.EmitDebugSources);
+      DefineEquality(tb, relevant_fields, typecheck_needed, options.EmitDebugSources, isHashCode);
+
       DefineOperators(tb);
       DefineStructural(tb);
     }
@@ -221,13 +222,10 @@ namespace Nemerle.Extensions
 
           // add field names as strings
           ignore_fields += flds.MapFiltered(_ is PExpr.Ref, x => (x :> PExpr.Ref).name.Id)
-          
-          | <[ EmitDebugSources = true ]> => emitDebugSources = true;
-          | <[ EmitDebugSources = false ]> => emitDebugSources = false;
 
           | _ => Message.Error("Unknown options for StructuralEquality.")
         }
-        
+
         SEOptions(ignore_fields, check_types, emitDebugSources)
       }
     }
@@ -260,13 +258,13 @@ namespace Nemerle.Extensions
       | _ => false
     }
     
-    DefineEquality(tb : TypeBuilder, fields : Seq[IField], _check_types : bool, emitDebugSources : bool) : void
+    DefineEquality(tb : TypeBuilder, fields : Seq[IField], _check_types : bool, emitDebugSources : bool, isHashCode: bool) : void
     {
       assert2(tb.BaseType.LookupMemberAvailable);
       def defineMember(member : ClassMember) : void
       {
         if (emitDebugSources) _ = tb.DefineWithSource(member)
-        else                  tb.Define(member);
+        else tb.Define(member);
       }
 
       // generates comparison code for a single field
@@ -305,6 +303,9 @@ namespace Nemerle.Extensions
           
       // core comparison code (type checker + comparison for each field)
       def body = fields.Fold(baseCall, (f, acc) => <[ $(invokeEquals(f)) && $acc ]> );
+      def body =
+        if(isHashCode) <[ if(this._hashCode!=other._hashCode) false else {$body} ]>
+        else <[ $body ]>;
 
       // no null-check for structs
       def fun_body =  if (tb.GetMemType().CanBeNull) <[ match (other) { | null => false | _ => $body } ]> else body;
@@ -358,80 +359,101 @@ namespace Nemerle.Extensions
       ]>);
     }
 
-    // uses http://en.wikipedia.org/wiki/Jenkins_hash_function to implement GetHashCode
-    DefineHashCode(tb : TypeBuilder, fields : Seq[IField], emitDebugSources : bool) : void
+    DefineHashCode(tb : TypeBuilder, fields : Seq[IField], emitDebugSources : bool) : bool
     {
       def callBase = IsParentImplement_EqualsImpl(tb);
       
-      def hash_body = fields.Map(
-        fun (f)
+      def (countConst, hash_bodyConst, hash_bodyMutable) = fields.Fold((0,<[-2128831035]>,<[_hashCode]>),
+        fun ( f, (countConst, initExprConst, initExprMutable))
         {
           def type = f.GetMemType();
           def value = <[ $(f.Name : usesite) ]>;
           def gethashcode =
-            if (type.Equals(tb.InternalType.Int32))
-              value
-            else if (type.Equals(tb.InternalType.UInt32))
-              <[ unchecked ($value :> int) ]>
-            else if (type.IsValueType)
-              if (type.CanBeNull)
-                <[ EqualityComparer.Default.GetHashCode($value) ]> // можно оптимизировать
-              else
-                <[ this.$value.GetHashCode() ]>
-            else if (type.Equals(tb.InternalType.Int32))
-              <[ this.$value ]>
-            else if (type is FixedType.StaticTypeVarRef)
-              <[ EqualityComparer.Default.GetHashCode($value) ]>
-            else
-              <[ this.$value?.GetHashCode() ]>;
+              if (type.Equals(tb.InternalType.Int32))
+                <[ $value ]>
+              else if (type.Equals(tb.InternalType.UInt32))
+                <[ $value :> int ]>
+              else if (type.Equals(tb.InternalType.Boolean))
+                <[ if($value) 0x959595C3C3 else 0xC953C953 ]>
+              else 
+              if (type.IsValueType)
+                if (type.CanBeNull)
+                  <[if($value is null) 0x359CC953 else $value.GetHashCode()]>
+                else
+                  <[$value.GetHashCode()]>
+              else 
+                if (type is FixedType.StaticTypeVarRef)
+                  <[ EqualityComparer.Default.GetHashCode($value) ]>
+                else
+                  <[if($value is null) 0x359CC953 else $value.GetHashCode()]>;
 
-          <[
-            hash += $gethashcode;
-            hash += (hash << 10);
-            hash ^= (hash >> 6);
-          ]>
+        if(!f.IsMutable && (type.IsPrimitive || type.Equals(tb.InternalType.String))) 
+          (
+            countConst+1,
+            <[ 0x01000193 * (($initExprConst) ^ ($gethashcode)) ]>,
+            <[$initExprMutable]>
+          )
+        else
+          (
+            countConst,
+            <[ $initExprConst]>,
+            <[ 0x01000193 * (($initExprMutable) ^ ($gethashcode)) ]>
+          );
         });
         
-      def variantOptionHash =
+      def hash_bodyConst =
         if (tb.IsVariantOption)
         {
           def optionNumber = tb.GetVariantOptionParent().GetVariantOptions().IndexOf(tb) + 1;
           assert(optionNumber > 0);
-          <[ hash ^= $(optionNumber : int); ]>
+          <[ $hash_bodyConst + $(optionNumber : int) ]>
         }
         else
-          <[ () ]>;
-          
-      def baseHash =
-        if (callBase)
-          <[ hash ^= base.GetHashCode(); ]>
-        else
-          <[ () ]>;
+          <[ $hash_bodyConst ]>;
 
-      def body = 
-        if (hash_body.IsEmpty)
-          if (callBase) <[ base.GetHashCode() ]> else <[ 0 ]>
+      def hash_bodyMutable =
+        if (callBase)
+          <[ $hash_bodyMutable ^ base.GetHashCode() ]>
         else
-          <[
-            unchecked
-            {
-              mutable hash : int;
-              { ..$hash_body }
-              //hash += (hash << 3);
-              //hash ^= (hash >> 11);
-              //hash += (hash << 15);
-              $baseHash;
-              $variantOptionHash;
-              hash
-            }
-          ]>;
+          <[ $hash_bodyMutable ]>;
+
+      def body_hashcode =
+        <[
+          unchecked
+          {
+            when(_hashCode==0) _hashCode= $hash_bodyConst;
+            $hash_bodyMutable;
+          }
+        ]>;
+
+      def body =
+        <[
+          unchecked
+          {
+            def _hashCode= $hash_bodyConst;
+            $hash_bodyMutable;
+          }
+        ]>;
 
       def define(expr)
       {
         if (emitDebugSources) _ = tb.DefineWithSource(expr)
-        else                  tb.Define(expr)
+        else tb.Define(expr)
       }
-      define(<[ decl: public override GetHashCode() : int { $body } ]>);
+
+      def isHashCode=countConst>=7;
+
+      if(isHashCode)
+      {
+        define(<[ decl: private mutable _hashCode : int; ]> );
+        define(<[ decl: public override GetHashCode() : int { $body_hashcode } ]>);
+      }
+      else
+      {
+        define(<[ decl: public override GetHashCode() : int { $body } ]>);
+      }
+
+      isHashCode
     }
 
     DefineOperators(tb : TypeBuilder) : void
