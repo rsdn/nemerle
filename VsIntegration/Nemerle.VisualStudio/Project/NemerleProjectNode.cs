@@ -976,9 +976,11 @@ namespace Nemerle.VisualStudio.Project
 			if (string.IsNullOrEmpty(strFileName))
 				return false;
 
-			var extension = Path.GetExtension(strFileName);
-			var isNemerleFile = string.Compare(extension, NemerleConstants.FileExtension, StringComparison.OrdinalIgnoreCase) == 0;
-			return isNemerleFile || (ProjectInfo != null && ProjectInfo.Engine.IsExtensionRegistered(extension));
+			return
+				string.Compare(
+					Path.GetExtension(strFileName),
+					NemerleConstants.FileExtension,
+					StringComparison.OrdinalIgnoreCase) == 0;
 		}
 
 
