@@ -61,7 +61,11 @@ namespace Nemerle.Tools.MSBuildTask
 		public bool NoStdMacros { get; set; }
 		public bool IndentationSyntax { get; set; }
 		public bool GreedyReferences { get; set; }
+		
+		#if !NET_4_5
 		public string Platform { get; set; }
+		#endif
+		
 		public bool RunDebugger { get; set; }
 		public string ProjectPath { get; set; }
 		public string RootNamespace { get; set; }
