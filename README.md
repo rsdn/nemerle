@@ -45,11 +45,11 @@ Hello world
 
 ## Linux
 
-  Using latest Mono-2.10.8 from github Nemerle can bootstrap itself on Mono.
+  Nemerle can bootstrap itself on Mono.
 
 # What about IDE?
 
-  * Visual Studio 2008/2010 integration installed by Nemerle installer
+  * Visual Studio 2008/2010/2012/2013-preview integration installed by Nemerle installer
   * Nemerle Studio is a free IDE based on Visual Studio Shell (Isolated mode) installed by Nemerle installer if VS Shell was installed
   * Sharp Develop 3.0 addin can be builded manually. See snippets/sharpdevelop/ReadMe.txt 
   * See Vim, Emacs, Kate and other editors syntax support in the 'misc' folder
