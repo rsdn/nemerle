@@ -1,4 +1,4 @@
-
+@echo off
 
 set NemerleRoot=%~dp0.
 set NemerleInstall=%ProgramFiles%\Nemerle\Net-4.0
