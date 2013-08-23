@@ -64,7 +64,7 @@ reg.exe add HKCU\Software\Microsoft\VisualStudio\10.0Exp\Configuration\MSBuild\S
 %NGen% install "%NemerleInstall%\Nemerle.MSBuild.Tasks.dll"
 %NGen% install "%NemerleInstall%\ncc.exe"
 
-%VS100COMNTOOLS%\..\IDE\VSIXInstaller.exe /q "%NemerleInstall%\Nemerle.VisualStudio.vsix
+"%VS100COMNTOOLS%\..\IDE\VSIXInstaller.exe" /q "%NemerleInstall%\Nemerle.VisualStudio.vsix"
 
 
 IF NOT "%NoPause%"=="true" pause
