@@ -16,10 +16,14 @@ namespace Nemerle.VisualStudio.GUI
 		{
 			InitializeComponent();
 			ProjectName = projectName;
-#if VS2012
+#if VS2013
+			_newProjectName.Text = projectName + "-VS_2013";
+#elif VS2012
 			_newProjectName.Text = projectName + "-VS_2012";
-#else
+#elif VS2010
 			_newProjectName.Text = projectName + "-VS_2010";
+#else
+	#error You must define constant VS<VS Version> in the project file. E.g.: VS2010
 #endif
 		}
 
