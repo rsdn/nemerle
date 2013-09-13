@@ -6,27 +6,17 @@ EAPI="5"
 
 USE_DOTNET="net35 net40 net45"
 
-inherit dotnet git-2 multilib eutils
+inherit dotnet multilib eutils
 
 DESCRIPTION="A hybrid programming language for .NET / Mono platforms"
 HOMEPAGE="http://www.nemerle.org/"
 
-SRC_URI=""
+SRC_URI="https://github.com/rsdn/nemerle/archive/v${PV}.tar.gz"
 
 LICENSE="BSD"
 SLOT="0"
-KEYWORDS=""
-IUSE="+binary -indent"
-
-if use indent; then
-	ewarn "indent is very experimental branch"
-	ewarn "usual Nemerle code will definetly fail."
-	EGIT_REPO_URI="git://github.com/Heather/Nemerle.git"
-	EGIT_MASTER="indent"
-else
-	EGIT_REPO_URI="git://github.com/rsdn/nemerle.git"
-	EGIT_MASTER="master"
-fi
+KEYWORDS="~amd64 ~x86"
+IUSE="+binary"
 
 MAKEOPTS="${MAKEOPTS} -j1" #nowarn
 DEPEND=">dev-lang/mono-2.11.3"
