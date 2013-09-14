@@ -108,29 +108,37 @@ namespace Nemerle.Compiler
           mutable add_info = "unbound type name";
           mutable exact_hit = null;
 
-          def symbols = env.LookupSymbolPriority(idl, currentType);
+          def (nodeMembers, aliasesMembers) = env.LookupSymbolPriority(idl, currentType);
 
-          def typeinfos = SCG.List();
-          foreach (ti is NC.TypeInfo in symbols)
+          def makeTypeInfos(symbols : SCG.List[IMember]) : SCG.List[NC.TypeInfo]
           {
-            if (currentType == null || ti.CanAccess(currentType))
-              if (args.Length == ti.SourceTyparmsCount)
-              {
-                when (ti.FullName == name.Id)
-                  exact_hit = ti;
-                typeinfos.Add(ti);
-              }
-              else
-              { 
-                wrong_parms = true;
-                add_info = "wrong number of type parameters to";
-              }
-            else
+            def typeinfos = SCG.List();
+            foreach (ti is NC.TypeInfo in symbols)
             {
-              when (! wrong_parms)
-                add_info = "inaccessible type";
+              if (currentType == null || ti.CanAccess(currentType))
+                if (args.Length == ti.SourceTyparmsCount)
+                {
+                  when (ti.FullName == name.Id)
+                    exact_hit = ti;
+                  typeinfos.Add(ti);
+                }
+                else
+                { 
+                  wrong_parms = true;
+                  add_info = "wrong number of type parameters to";
+                }
+              else
+              {
+                when (! wrong_parms)
+                  add_info = "inaccessible type";
+              }
             }
+            
+            typeinfos
           }
+          
+          def nodeTypeinfos = makeTypeInfos(nodeMembers);
+          def aliasesTypeinfos  = makeTypeInfos(aliasesMembers);
 
           def filterTypes(types : SCG.List[NC.TypeInfo]) : SCG.List[NC.TypeInfo]
           {
@@ -195,65 +203,85 @@ namespace Nemerle.Compiler
             types
           }
 
-          def typeInfos = filterTypes(typeinfos);
+          def nodeTypeInfos    = filterTypes(nodeTypeinfos);
+          def aliasesTypeInfos = filterTypes(aliasesTypeinfos);
           
-          if (typeInfos.Count == 0)
+          // The symbols is resolved in the following cases:
+          // Only one symbols found through current scope or through aliases
+          // Exact hit
+          // Some symbols are found through current scope, take first.
+          // Otherwise, ambiguity.
+          match ((nodeTypeInfos.Count, aliasesTypeInfos.Count))
           {
-            ReportLocatedError(loc, Manager.Solver.CurrentMessenger,
-              $<#$add_info `..$(idl; ".")'#>);
-            InternalType.Object
-          }
-          else
-          {
-            def ti =
-              match (typeInfos.Count)
+            | (0, 0) =>
+              ReportLocatedError(loc, Manager.Solver.CurrentMessenger,
+                $<#$add_info `..$(idl; ".")'#>);
+              InternalType.Object
+            | (1, 0) with ti = nodeTypeInfos[0]
+            | (0, 1) with ti = aliasesTypeInfos[0]
+            | _ when exact_hit != null with ti = exact_hit
+            | (n, _) when n > 0 with ti = nodeTypeInfos[0] =>
+              if (ti.Equals (InternalType.Void_tc))
+                InternalType.Void
+              else if (ti.TyparmsCount == args.Length)
+                FixedType.Class (ti, args)
+              else
               {
-                | 1 => typeInfos[0]
-                | _ when exact_hit != null => exact_hit
-                | _ => typeInfos[0]
-              };
-                
-            if (ti.Equals (InternalType.Void_tc))
-              InternalType.Void
-            else if (ti.TyparmsCount == args.Length)
-              FixedType.Class (ti, args)
-            else
-            {
-              def find_nesting (nesting : NC.TypeInfo)
-              {
-                if (nesting == null) null
-                else if (ti.DeclaringType.Equals (nesting))
-                  currentType.NestingSubst (nesting).Apply (nesting.GetMemType ())
-                else if (nesting.LookupMemberAvailable 
-                      && nesting.LookupMember (ti.Name).Contains (ti))
+                def find_nesting (nesting : NC.TypeInfo)
                 {
-                  currentType.NestingSubst(nesting)
-                    .Apply(nesting.SubtypingSubst(ti.DeclaringType)
-                    .Apply(ti.DeclaringType.GetMemType()).Fix())
+                  if (nesting == null) null
+                  else if (ti.DeclaringType.Equals (nesting))
+                    currentType.NestingSubst (nesting).Apply (nesting.GetMemType ())
+                  else if (nesting.LookupMemberAvailable 
+                        && nesting.LookupMember (ti.Name).Contains (ti))
+                  {
+                    currentType.NestingSubst(nesting)
+                      .Apply(nesting.SubtypingSubst(ti.DeclaringType)
+                      .Apply(ti.DeclaringType.GetMemType()).Fix())
+                  }
+                  else find_nesting (nesting.DeclaringType)
                 }
-                else find_nesting (nesting.DeclaringType)
-              }
-              def nesting_fix = match (find_nesting(currentType))
+                def nesting_fix = match (find_nesting(currentType))
+                  {
+                    | null => null
+                    | x => x.Fix ()
+                  };
+                match (nesting_fix)
                 {
-                  | null => null
-                  | x => x.Fix ()
-                };
-              match (nesting_fix)
-              {
-                | null =>
+                  | null =>
                   ReportLocatedError(loc, Manager.Solver.CurrentMessenger,
                                "cannot determine nested type parameters for `"
                                + $<#..$(idl; ".")', please use the fully qualified name#>);
                   InternalType.Object
                 
-                | FixedType.Class (_, args') =>
+                  | FixedType.Class (_, args') =>
                   def args = args' + args;
                   Util.cassert (args.Length == ti.TyparmsCount);
                   FixedType.Class (ti, args)
                 
-                | _ => Util.ice ()
+                  | _ => Util.ice ()
+                }
               }
-            }        
+            | _ =>
+              def messenger = Manager.Solver.CurrentMessenger;
+              if (messenger.NeedMessage)
+                surroundwith (related_messages)
+                {
+                  //assert2(false);
+                  ReportLocatedError(loc, messenger, $<#type name `..$(idl; ".")' is ambiguous, it could be:#>);
+
+                  when (messenger.NeedMessage)
+                  {
+                    foreach (ti in nodeTypeInfos)
+                      Message.Hint(ti.Location.FromStart(), $"possible type: `$ti'");
+                    foreach (ti in aliasesTypeInfos)
+                      Message.Hint(ti.Location.FromStart(), $"possible type: `$ti'");
+                  }
+                }
+              else
+                messenger.MarkError();
+
+              InternalType.Object
           }
       }
     }
