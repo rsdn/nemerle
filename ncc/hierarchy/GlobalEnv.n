@@ -31,11 +31,13 @@ using Nemerle.Assertions;
 using Nemerle.Collections;
 using Nemerle.Compiler.SolverMacros;
 using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
 using Nemerle.Surround;
 using Nemerle.Utility;
 
 using NSTree = Nemerle.Compiler.NamespaceTree;
 using PT     = Nemerle.Compiler.Parsetree;
+using SCG    = System.Collections.Generic;
 
 namespace Nemerle.Compiler
 {
@@ -462,6 +464,120 @@ namespace Nemerle.Compiler
       }
 
       result
+    }
+    
+    public LookupSymbolPriority(name : list[string], parent : TypeBuilder, for_completion = false) :
+      (SCG.List[IMember] * SCG.List[IMember])
+    {
+      def (nodeMembers, aliasesMembers) = LookupSymbolExtPriority(name, parent, for_completion);
+      
+      // Filter duplicates
+      def nodeResult = SCG.List();
+      foreach ((_, m) in nodeMembers)
+        when(!nodeResult.Contains(m))
+          nodeResult.Add(m);
+         
+      def aliasesResult = SCG.List();
+      foreach ((_, m) in aliasesMembers)
+        when(!nodeResult.Contains(m) && !aliasesResult.Contains(m))
+          aliasesResult.Add(m);
+      
+      (nodeResult, aliasesResult)
+    }
+    
+    /// <returns>Tuple of Lists.
+    /// First: Found from current scope.
+    /// Second: External types, found via aliases.
+    /// Lower index means higher priority
+    /// </returns>
+    public LookupSymbolExtPriority(
+      name : list[string],
+      parent : TypeBuilder,
+      for_completion = false) : (SCG.List[TypeInfo * IMember] * SCG.List[TypeInfo * IMember])
+    {
+      // these are really small, so we do linear lookup in list
+      def visited = SCG.List();
+      def (type_part, the_name) = NList.DivideLast(name);
+      // now we have type_part . the_name
+      
+      def add_members_from((pt : TypeInfo, ti : TypeInfo), result : SCG.List[TypeInfo * IMember]) : void
+      {
+        when (visited.Contains((pt, ti))) return;
+        
+        def members = if (ti.LookupMemberAvailable)
+                          ti.LookupMember(the_name, for_completion)
+                        else
+                          [];
+        visited.Add((pt, ti));
+
+        foreach (member in members)
+        {          
+          when (!result.Contains((pt, member)))
+          {
+            def ti2 = if (pt == null) ti else pt;
+            result.Add((ti2, member));
+          }
+        }
+
+        match (ti.GetTydecl())
+        {
+          | TypeDeclaration.Alias(FixedType.Class(ati, args)) when args.Length == 0 =>
+            add_members_from((pt, ati), result)
+          | TypeDeclaration.Alias(FixedType.Class(ati, args)) when args.Length >  0 =>
+            add_members_from((ti, ati), result)
+          | _ => ()
+        }
+      }
+      
+      mutable type_node = null;
+      
+      def lookup_members(pref : NamespaceTree.Node, result : SCG.List[TypeInfo * IMember]) : void
+      {
+        // do not lookup members in base classes (type_node is non-null when searching them in code below)
+        // they are already correctly added in add_members_from
+        when (type_node == null || !type_part.IsEmpty)
+          foreach (ti in pref.LookupTypes(type_part))
+            add_members_from((null, ti), result);
+
+        foreach (t : IMember in pref.LookupTypes(name, for_completion))
+          when (!result.Contains((null, t)))
+            result.Add((null, t));
+      }
+      
+      // We must prefer aliases because a alias used to resolve type conflicts.
+      def aliasesMembers = SCG.List();
+      foreach (ns when ns.IsFromAlias in open_namespaces) // check aliases
+        lookup_members(ns, aliasesMembers);
+        
+      when (aliasesMembers.IsEmpty()) // if we have no match symbols in aliases...
+      {
+        lookup_members(nameTree.namespace_tree, aliasesMembers); // check root namespace...
+
+        foreach (ns when !ns.IsFromAlias in open_namespaces) // ... and other open namespaces
+          lookup_members(ns, aliasesMembers);
+      }
+      
+      // Try to resolve symbols in current type.
+      def nodeMembers = SCG.List();
+      
+      for (mutable ns_node = parent?.NamespaceNode; ns_node != null; ns_node = ns_node.Parent)
+      {
+        lookup_members(ns_node, nodeMembers);
+        
+        match (ns_node.Value)
+        {
+          | NSTree.TypeInfoCache.Cached(tb is TypeBuilder) => 
+            // collect in types from inside of base classes
+            for (type_node = tb.BaseType; type_node != null; type_node = type_node.BaseType)
+            {
+              lookup_members(type_node.NamespaceNode, nodeMembers);
+            }
+
+          | _ => ()
+        }
+      }
+      
+      (nodeMembers, aliasesMembers)
     }
 
     public CurrentNamespace : NamespaceTree.Node {
