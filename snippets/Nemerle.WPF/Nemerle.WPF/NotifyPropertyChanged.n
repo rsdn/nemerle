@@ -1,0 +1,288 @@
+﻿using Nemerle;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+namespace Nemerle.WPF
+{
+    using NotifyPropertyChangedHelper;
+
+    [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Class, Inherited = false, AllowMultiple = false)]  
+    public macro NotifyPropertyChanged(tb : TypeBuilder, raiseChangedMethod = null)
+    {
+        ignore(raiseChangedMethod);
+
+        if(tb.TrySetMacroAttributeSpecified(this))
+        {
+            AddInterface(tb);
+        }
+        else
+        {
+            Message.Error(tb.Location, 
+                          $"Duplicates of '$(GetMacroName())' macroattribute are not allowed.");    
+        }
+    }
+
+    [MacroUsage(MacroPhase.BeforeTypedMembers, MacroTargets.Class, Inherited = false, AllowMultiple = false)]  
+    public macro NotifyPropertyChanged(tb : TypeBuilder, raiseChangedMethod = <[ () ]>)
+    {
+        when(tb.TrySetMacroAttributeSpecified(this))
+            ImplementInterface(Macros.ImplicitCTX(), tb, raiseChangedMethod, GetMacroName());
+    }
+
+    [MacroUsage(MacroPhase.WithTypedMembers, MacroTargets.Class, Inherited = false, AllowMultiple = false)]  
+    public macro NotifyPropertyChanged(tb : TypeBuilder, raiseChangedMethod =  null)
+    {
+        ignore(raiseChangedMethod);
+
+        when(tb.TrySetMacroAttributeSpecified(this))
+            RewriteSetters(tb, GetMacroName());
+    }
+
+    public macro RaisePropertyChanged(property : PExpr, raiseChangedMethod = <[ () ]>)
+    {
+        CreateRaiseChangedMethodCall(Macros.ImplicitCTX().CurrentTypeBuilder,
+                                     property,
+                                     raiseChangedMethod,
+                                     GetMacroName());
+    }
+
+    [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Property, Inherited = false, AllowMultiple = false)]  
+    public macro NotifyChangedOptions(tb : TypeBuilder, property : ParsedProperty, params options : list[PExpr])
+    {
+        if(tb.TrySetMacroAttributeSpecified(this, property.Name))
+        {
+            SetOptions(tb, property, GetMacroName(), options);
+        }
+        else
+        {
+            Message.Error(property.Location, 
+                          $"Duplicates of '$(GetMacroName())' macroattribute are not allowed."); 
+        }
+    }
+
+    module NotifyPropertyChangedHelper
+    {       
+        public AddInterface(tb : TypeBuilder) : void
+        {
+            tb.AddImplementedInterface(<[ System.ComponentModel.INotifyPropertyChanged ]>);
+        }
+
+        public ImplementInterface(typer              : Typer, 
+                                  tb                 : TypeBuilder, 
+                                  raiseChangedMethod : PExpr, 
+                                  macroName          : string) : void
+        {
+            def ImplementInterface()
+            {
+                Macros.DefineCTX(typer);
+
+                def interfaceAlreadyImplemented = tb.BaseClass.TryRequire(<[ ttype: System.ComponentModel.INotifyPropertyChanged ]>);
+
+                def raiseChangedMethodName = match(raiseChangedMethod)
+                                                {
+                                                    | <[ $(methodName : name) ]> => methodName
+                                                    | <[()]> => _defaultRaiseChangedMethodName
+                                                    | e => Message.Error(e.Location, 
+                                                                    $"Specify a valid method for property changed event raising (e.g. $macroName(OnPropertyChanged)).");
+                                                        _defaultRaiseChangedMethodName
+                                                };
+
+                unless (interfaceAlreadyImplemented)
+                {
+                    tb.Define(<[ decl: public event PropertyChanged : System.ComponentModel.PropertyChangedEventHandler; ]>);
+
+                    def raiseChangedMethodDecl = <[ decl:
+                                                    protected virtual $(raiseChangedMethodName : name)(propertyName: string) : void
+                                                    {
+                                                        def handler = PropertyChanged;
+                                                        when (handler != null)
+                                                            handler(this, System.ComponentModel.PropertyChangedEventArgs(propertyName));
+                                                    }]>;
+
+                    tb.Define(raiseChangedMethodDecl);
+                }
+
+                SetRaiseChangedMethodName(tb, raiseChangedMethodName);
+            }
+
+            if (tb.IsDelegate  || 
+                tb.IsEnum      || 
+                tb.IsInterface || 
+                tb.IsModule)
+                Message.Error(tb.Location, $"Macro $macroName is not valid on this declaration type. It is only valid on 'class' declarations.");
+            else
+                ImplementInterface()
+        }
+
+        public CreateRaiseChangedMethodCall(tb : TypeBuilder, property : PExpr, raiseChangedMethod : PExpr, macroName : string) : PExpr
+        {
+            def OnError(loc, message)
+            {
+                Message.Error(loc, message);
+                <[]>
+            }
+
+            def OnRaiseChangedMethodNotFound()
+            {
+                OnError(raiseChangedMethod.Location, $"Specify a valid method for property changed event raising (e.g. $macroName(PropName, OnPropertyChanged)).")
+            }
+
+            def GetRaiseChangedMethodCall(propExpr, raiseChangedMethodName : option[Name])
+            {
+                def propName = propExpr.name.Id;
+                match(tb.GetProperties().Filter(prop => prop.Name == propName))
+                {
+                   | [_] => raiseChangedMethodName.Map(methodName => <[ $(methodName : name)($(propName : string)); ]>) ?? 
+                            OnRaiseChangedMethodNotFound()
+                   | []  => OnError(propExpr.Location, $"Class '$(tb.FullName)' does not contain a property with the name '$propName'.")
+                   | _::_ => assert(false, $"Two or more properties with the same name found ($propName).")
+                }
+            }
+
+            def raiseChangedMethodName = 
+                             match(raiseChangedMethod)
+                             {
+                                 | <[ $(methodName : name) ]> 
+                                 | <[()]> when tb.UserData.Contains(_raiseChangedMethodKey) 
+                                          with methodName = GetRaiseChangedMethodName(tb)
+                                 | <[()]> with methodName = _defaultRaiseChangedMethodName
+                                      => if (tb.MethodExists(methodName)) Some(methodName) else None()
+                                 | _  => None()
+                             };
+
+            match(property)
+            {
+                | propExpr is PExpr.Ref => GetRaiseChangedMethodCall(propExpr, raiseChangedMethodName)
+                | <[ null ]> => raiseChangedMethodName.Map(methodName => <[ $(methodName : name)(null); ]>) ?? 
+                                OnRaiseChangedMethodNotFound()
+                | e => OnError(e.Location, $"Specify a property for changed event raising (e.g. $macroName(PropName)).")
+            }
+        }
+
+        public RewriteSetters(tb : TypeBuilder, macroName : string) : void
+        {
+            def GetDependentProps(tb, propertyName)
+            {
+                if(!tb.UserData.Contains((_dependentPropsKey, propertyName)))
+                    []
+                else
+                    tb.UserData[(_dependentPropsKey, propertyName)] :> list[PExpr]
+            }
+
+            def ValidateDependentProps(dependentProps)
+            {
+                foreach(dependentProp in dependentProps)
+                {
+                    | dependentProp is PExpr.Ref 
+                        when !tb.GetProperties().Exists(prop => prop.Name == dependentProp.name.Id) =>
+                        Message.Error(dependentProp.Location, $"Class '$(tb.FullName)' does not contain a property with the name '$dependentProp'.")
+                    | _ is PExpr.Ref => ()
+                    | _ => Message.Error(dependentProp.Location, "Expected simple name.")
+                }
+            }
+
+            def GetRaiseChangedMethodCalls(methodName, propertyName)
+            {
+                def dependentProps = GetDependentProps(tb, propertyName);
+
+                ValidateDependentProps(dependentProps);
+
+                def selfSetterRaising = 
+                    if(_ignoredProperties.Contains(tb, propertyName))
+                        <[]>
+                    else 
+                        <[ $(methodName : name)($(propertyName : string)); ]>;
+
+                selfSetterRaising::dependentProps.
+                                   OfType.[PExpr.Ref]().
+                                   Map(prop => <[ $(methodName : name)($(prop.name.Id : string)) ]>)
+            }
+
+            def raiseChangedMethodName = GetRaiseChangedMethodName(tb);
+
+            if(!tb.MethodExists(raiseChangedMethodName))
+            {
+                Message.Error(tb.Location, 
+                              $"Specify a valid method for property changed event raising (e.g. [$macroName(OnPropertyChanged)]).");
+            }
+            else
+            {
+                def properties = tb.GetProperties(BindingFlags.DeclaredOnly | 
+                                                  BindingFlags.Instance     | 
+                                                  BindingFlags.Public       | 
+                                                  BindingFlags.NonPublic);
+
+                foreach(propertyBuilder is PropertyBuilder in properties)
+                {
+                    match(propertyBuilder.Setter)
+                    {
+                        | setter is MethodBuilder => 
+                            setter.Body = <[ $(setter.Body);
+                                            ..$(GetRaiseChangedMethodCalls(raiseChangedMethodName, propertyBuilder.Name)); ]>;
+                        | _ => ()
+                    }
+                }
+            }
+        }
+
+        public SetOptions(tb : TypeBuilder, property : ClassMember.Property, macroName : string, options : list[PExpr]) : void
+        {
+            def SetDependentProps(tb, propName, dependentProps)
+            {
+                tb.UserData[(_dependentPropsKey, propName)] = dependentProps
+            }
+
+            unless(property.setter.HasValue)
+                Message.Warning($"$macroName macro ignored on property without a setter.");
+
+            foreach(option in options) 
+            {
+                | <[ HideSelfChanges ]>           => _ = _ignoredProperties.Add(tb, property.Name);
+                | <[ Dependent = $prop ]> when options is [_] 
+                                          with props = [prop]
+                | <[ Dependent = [..$props] ]>    => SetDependentProps(tb, property.Name, props)
+                | e => Message.Error(e.Location, 
+                                     $"Invalid options syntax in $macroName macro, valid options are: 'Dependent = [Prop1, Prop2]' and 'HideSelfChanges'.")
+            }
+        }
+
+        public GetMacroName(this macroInstance : IMacro) : string
+        {
+            macroInstance.GetName().Split(':').First()
+        }
+
+        public TrySetMacroAttributeSpecified(this tb : TypeBuilder, macroInstance : IMacro, data : object = null) : bool
+        {
+            def key = (macroInstance.GetType().GUID, data);
+            tb.UserData[key] = !tb.UserData.Contains(key);
+            tb.UserData[key] :> bool
+        }
+
+        private MethodExists(this tb : TypeBuilder, methodName : Name) : bool
+        {
+            tb.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).
+               Exists(method => method.Name == methodName.Id)
+        }
+
+        private GetRaiseChangedMethodName(tb : TypeBuilder) : Name
+        {
+            assert(tb.UserData.Contains(_raiseChangedMethodKey));
+
+            tb.UserData[_raiseChangedMethodKey] :> Name
+        }
+
+        private SetRaiseChangedMethodName(tb : TypeBuilder, raiseChangedMethodName : Name) : void
+        {
+            tb.UserData[_raiseChangedMethodKey] = raiseChangedMethodName
+        }
+
+        private _ignoredProperties     = SCG.HashSet.[TypeBuilder * string]();
+        private _dependentPropsKey     = Guid.NewGuid();
+        private _raiseChangedMethodKey = Guid.NewGuid();
+        private _defaultRaiseChangedMethodName = Name("OnPropertyChanged");
+    }
+}
