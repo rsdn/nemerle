@@ -42,7 +42,7 @@ namespace Nemerle.Tools.MSBuildTask
     private static void commonStartInfoConfigurator(ProcessStartInfo startInfo)
     {
       // mono git or msysgit with git.exe in PATH
-      startInfo.FileName = "git";
+      startInfo.FileName = Environment.GetEnvironmentVariable("GIT_PATH") ?? "git";
       startInfo.Arguments = "describe --tags --long";
     }
 
