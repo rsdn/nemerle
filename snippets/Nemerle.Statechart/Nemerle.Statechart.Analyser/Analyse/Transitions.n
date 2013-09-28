@@ -1,0 +1,187 @@
+﻿using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nemerle.Statechart
+{
+  using StateTransition;
+  using ListUtils;
+  //using DecisionNode;  
+  using GuardNode;
+  using Opt;
+/// <summary>
+/// Description of AnalyseTransitions.
+/// </summary>
+  partial class FsmAnalyser
+  {
+
+    CheckInitialTransitions() : void
+    {
+      def check_auto_initial(st, rec)
+      {
+        match (st)
+        {
+          | FsmState(type = StateType.Final)  => ()
+          | FsmState(type = StateType.Region, sub_states = lst) => when (rec) foreach (st in lst) check_auto_initial(st, rec);
+          | FsmState(initial = None, sub_states = head :: _) when (!head.IsFinal) => st.DefineInitial(head);
+                                                                                    when (rec) check_auto_initial(head, rec);
+          | _ => ()
+        }
+      }
+
+      def check_init_tran_correct(t)
+      {
+        match (t.pseudo_states.FilterType())
+        {
+          | []           => ()
+          | t1 :: _ :: _ => messager.AddError(FsmError.InitialPseudoStateAtMostOne(t1))
+          | PseudoStateNode.Initial(tran = tran) as i :: [] => 
+              match (tran.To)
+              {
+                | PseudoState(PseudoStateNode.History(state = st)) 
+                | PseudoState(PseudoStateNode.EntryPoint(state = st))
+                | TransitionTarget.State(st) when (t.AllSubStates.ContainsRef(st)) => ()
+                | _                                                                => messager.AddError(FsmError.InitialTransitionMustGoToState(i))
+              }
+              match (tran.To)
+              {
+                | PseudoState(PseudoStateNode.History(default = None) as h) => messager.AddError(FsmError.InitialTransitionToHistoryMustHaveDefaultTran(i, h))
+                | _                                                         => ()
+              }
+              when (tran.guard.NotEmpty) messager.AddError(FsmError.InitialTransitionCannotHaveGuards(i));
+        }
+
+      }
+
+
+      // check state attributes
+      foreach (st in States)
+      {
+        check_init_tran_correct(st); // check for correct initial transitions
+        when (st.Attributes.Exists(_ is StateAttribute.Initial))
+        {
+          st.Super.DefineInitial(st)
+        }
+        when (FsmFlags.AutoInitial) check_auto_initial(st, false)
+      }
+
+      check_auto_initial(TopState, true);
+      foreach (st when st.IsComposite in States)
+      {
+        when (!st.IncomingTransitions.IsEmpty())
+          if (st.IsConcurrent)
+          {
+            def sreg = st.sub_states.Where(x => x.initial.IsNone);
+            when (!sreg.IsEmpty())
+            {
+              messager.AddError(FsmError.SubRegionsMustContainInitial(sreg.NToList()))
+            }
+          } else
+          {
+            when (st.initial.IsNone) messager.AddError(FsmError.CompositeStateWithIncomingTransitionsMustHaveInitial(st))
+          }
+      }
+
+    }
+
+
+    CheckLocalTrans() : void
+    {
+      foreach (tr when tr.kind == TransitionKind.Local in StateTransitions)
+      {
+        def src = match (tr.FromPseudo)
+                   {
+                     | Some(PseudoStateNode.EntryPoint as p) => p.state
+                     | _                                     => tr.From
+                   }
+        def dest = tr.AtLeastStaticTo;
+        if (dest.IsSubstateOf(src) || src.IsSubstateOf(dest)) () else
+          if (src == dest : object) 
+          {
+            messager.AddError(FsmError.LocalTransitionCannotTargetSelf(tr))
+          } else
+          {
+            messager.AddError(FsmError.LocalTransitionTargetMustBeWithinOrSuper(tr))
+          }
+      }
+    }
+
+    CheckForkTargets() : void
+    {
+      def message(tr)
+      {
+        messager.AddError(FsmError.ForkMustGoToSeparateRegion(tr))
+      }
+
+      foreach (StateTransition(To = TransitionTarget.PseudoState(PseudoStateNode.Fork as p)) as tr in StateTransitions)
+      {
+        def target = p.target;
+        if (target.Length < 2) 
+        {
+          messager.AddError(FsmError.ForkMustHaveAtLeastTwoTargets(tr));
+        } else
+          if (target.All(x => x is TransitionTarget.State))
+          {
+            def states = target.Map(x => x.ToState);
+            def all_regs = states.All(x => !x.Regions.IsEmpty());
+            if (all_regs)
+            {
+              def intersect_regs = states.FoldLeft([], (x, a) => if (a.IsEmpty()) x.Regions else x.Regions.Intersect(a).NToList());
+              match (intersect_regs.Find(x => states.DistinctRegions(x)))
+              {
+                | None => message(tr)
+                | _    => ()
+              }
+            } else
+            {
+              message(tr)
+            }
+          } else
+          {
+            message(tr)
+          }
+      }
+    }
+
+    CheckJoinTransitions() : void
+    {
+      ConvertJoinTransitions();
+
+      def message(j)
+      {
+        messager.AddError(FsmError.JoinTransitionMustLeaveRegion(j))
+      }
+
+      foreach (StateTransition(FromPseudo = Some(PseudoStateNode.Join as join)) as tr in StateTransitions)
+      {
+        def source = join.joined_states;
+        if (source.Length < 2) 
+        {
+          messager.AddError(FsmError.JoinMustHaveAtLeastTwoSources(tr))
+        } else
+        {
+          def all_regs = source.All(x => !x.Regions.IsEmpty());
+          def find_distinct = {
+                                def intersect_regs = source.FoldLeft([], (x, a) => if (a.IsEmpty()) x.Regions else x.Regions.Intersect(a).NToList());
+                                intersect_regs.Exists(x => source.DistinctRegions(x))
+                              }
+          unless (all_regs && find_distinct) message(join)
+        }
+      }
+    }
+
+    CheckTransitions() : void
+    {
+      CheckForkTargets();
+      CheckJoinTransitions();
+      CheckLocalTrans();
+    }
+
+
+
+  }
+}

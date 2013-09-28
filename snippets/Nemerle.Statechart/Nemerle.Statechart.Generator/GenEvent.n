@@ -1,0 +1,274 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Nemerle.Compiler.Parsetree;
+using System.Collections.Concurrent;
+using System.Threading;
+
+namespace Nemerle.Statechart
+{
+  /// <summary>
+  /// Description of GenEvent.
+  /// </summary>
+  
+  [Record]
+  class GenEvent
+  {
+    gen : StaticGenerator;
+    events : list[StateEvent];
+   
+    [Memoized]
+    have_completion : bool
+    {
+      get
+      {
+        events.Exists(x => x.IsCompletion)
+      }
+    }
+    
+    [Memoized]
+    events_wo_completion : list[StateEvent]
+    {
+      get
+      {
+        events.Exclude(_.IsCompletion)
+      }
+    }
+    
+    NeedEvtContextName : bool
+    {
+      get
+      {
+        gen.EventCtx.NeedName
+      }
+    }
+    
+    NeedEvtContext : bool
+    {
+      get
+      {
+        gen.EventCtx.NeedContext
+      }
+    }
+    
+    [Memoized]
+    RunEventInState : list[MatchCase]
+    {
+      get
+      {
+        events_wo_completion.Map(x => <[case: | Event.$(x.TargetName : usesite) => $(RunEvent(x)) ]>);
+      }
+    }
+    
+    RunEvent(evt : StateEvent) : PExpr
+    {
+      <[ cur_state.$(evt.Name : usesite)(this) ]>
+    }
+    
+    [Memoized]
+    EventCtxBody : PExpr
+    {
+      get
+      {
+        if (NeedEvtContext) <[ Evt.evt = evt ]> else <[]>
+      }
+    }
+    
+    EventDecl(n : StateEvent) : ClassMember.TypeDeclaration
+    {
+      def name = n.TargetName;
+      def full = $"$(gen.ty.FullName).$name";
+      def hash = full.GetHashCode();
+      <[ variant_option: | $(name : usesite)
+      {
+        
+        public override ToString() : string
+        {
+          Name
+        }
+        
+        public override FullName : string
+        {
+          get
+          {
+            $full
+          }
+        }
+        
+        public override Name : string 
+        {
+          get
+          {
+            $(n.Name)
+          }
+        }
+        
+        public override GetHashCode() : int
+        {
+          $hash
+        }
+        
+        mutable static instance : HsmEvent;
+        
+        public static New : HsmEvent
+        {
+          get
+          {
+            when (instance == null) 
+            {
+              instance = $(name : usesite)()
+            }
+            instance
+          }
+        }
+        
+      } 
+      ]>
+    }
+    
+    public static SendEventCode(evt : string) : PExpr
+    {
+      <[ PostEvent(Event.$(evt.ToUpperFirst() : usesite).New) ]>
+    }
+    
+    GenEventCtx() : void
+    {
+      def cls = <[decl: public class EventCtx
+                        {
+                          public evt : HsmEvent {get;set;}
+                          
+                          public name : string
+                          {
+                            get
+                            {
+                              evt.ToString()
+                            }
+                          }
+                        } ]>;
+      def field = <[decl: public Evt : EventCtx = EventCtx() ]>;
+      gen.DefineNested(cls).Compile();
+      gen.Define(field);
+    }
+    
+    public static CreateExpr(this evt : StateEvent) : PExpr
+    {
+      if (evt.IsCompletion) <[ CompletionEvent.New ]> else
+        <[ Event.$(evt.TargetName : usesite).New ]>
+        
+    }
+    
+    dispatch_body : list[MatchCase]
+    {
+      get
+      {
+        def evt = <[case:
+                    
+                    | e is Event =>
+                  
+                    $EventCtxBody;
+                    match (e)
+                    {
+                      ..$RunEventInState
+                    } ]>;
+        def completion = <[ case:
+                              _ is CompletionEvent => 
+                                             $EventCtxBody;
+                                             $(RunEvent(StateEvent.Completion))
+                          ]>;
+        def last = <[case: | _ => null ]>;
+        def cases = evt :: last :: [];
+        if (have_completion) completion :: cases else cases;
+      }
+    }
+    
+    GenBaseStruct() : void
+    {
+      when (NeedEvtContext) GenEventCtx();
+      gen.Define(<[ decl:
+            protected override DispatchEvent(evt : HsmEvent) : State
+            {
+                match (evt)
+                {
+                  ..$dispatch_body
+                }
+            }
+            ]>);
+       when (gen.FsmFlags.TransitionCompleted)
+      {
+        def expr = <[decl:
+                   protected override OnEventComplete() : void
+                    {
+                      OnTransitionCompleted()
+                    }
+                   ]>;
+        gen.Define(expr);
+        gen.DefineEvent("TransitionCompleted")
+      }      
+    }
+    
+    GenEvents() : void
+    {
+      def get_events(evt)
+      {
+        evt.Map(x => <[decl: public $(x.Name : usesite)() : void { PostEvent($(x.CreateExpr())) } ]>);
+      }
+      
+      def evt = events.Exclude(_.IsCompletion);
+      def lst = get_events(evt);
+      gen.Define(lst);
+      
+      def decl_events = evt.Map(EventDecl);
+      def ty = gen.DefineNested(<[ decl:
+            public variant Event : HsmEvent
+            {
+            }]>);
+      //..$decl_events
+      decl_events.Iter(x => gen.DefineNested(ty, x).Compile());
+      ty.Compile();
+    }
+    
+    [Memoized]
+    StringToEvent : list[MatchCase]
+    {
+      get
+      {
+        events.FoldRight([<[case: | _ => throw InvalidOperationException("Unknown event") ]>], 
+                         (x, a) => <[case: | $(x.Name : string) => $(x.CreateExpr()); ]> :: a);
+      }
+    }
+    
+    GenPost() : void
+    {
+      
+      gen.Define(<[ decl:
+            GetEventFromStr(evt : string) : HsmEvent
+            {
+              match (evt)
+              {
+                ..$StringToEvent
+              }
+            }
+            ]>);
+            
+      gen.Define(<[ decl:
+            public override PostEvent(evt : string) : void
+            {
+                def res = GetEventFromStr(evt);
+                PostEvent(res)
+            }
+            ]>);
+    }
+    
+    public Generate() : void
+    {
+      GenBaseStruct();
+      GenEvents();
+      GenPost();
+    }
+  }
+}

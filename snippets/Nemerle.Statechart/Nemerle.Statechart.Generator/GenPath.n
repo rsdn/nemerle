@@ -1,0 +1,349 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+namespace Nemerle.Statechart
+{
+  [Record]
+  class GenPath
+  {
+    public map  : Map[string, string];
+    public node : PathNode;
+    public util : GenUtil;
+
+    action(name : string, pars : list[string] = null) : FsmAction
+    {
+      def pars = pars ?? [];
+      FsmAction.Normal(-1, name, pars)
+    }
+
+    [Memoized]
+    public action_name : FsmAction
+    {
+      get
+      {
+        match (node)
+        {
+          | ClearHistory(hist)                          => def name = hist.Head.state;
+                                                           action(HistoryEmitter.ClearActionName(name))
+          | SaveHistory(hist)                           => def name = hist.Head.state;
+                                                           action(HistoryEmitter.SaveActionName(name))
+          | Action(act)                                 => act
+          | Entry(action = act)                         => act
+          | Exit(action = act)                          => act
+          | RunDoActivity(act)                          => FsmAction.Expr(GenActivity.StartCode(act))
+          | StopDoActivity(act)                         => FsmAction.Expr(GenActivity.StopCode(act))
+        }
+      }
+    }
+
+    [Memoized]
+    public node_name : FsmAction
+    {
+      get
+      {
+        match (node)
+        {
+          | Entry(state = st)                         => action($"Entry$st")
+          | Exit(state = st)                          => action($"Exit$st")
+          | _                                         => action_name//action($"$(act.name)", act.parameters)
+        //| Sequence(lst)                               => lst.SelectMany(CreateActions(_, map))
+        //| n                                             => TraverseUtils.SingleElement(FsmAction(-1, n.ToString(), []))
+        }
+      }
+    }
+
+    [Memoized]
+    public gen_action : GenAction
+    {
+      get
+      {
+        GenAction(action_name, map, util)
+      }
+    }
+
+    [Memoized]
+    public node_action : GenAction
+    {
+      get
+      {
+        GenAction(node_name, map, util)
+      }
+    }
+  
+
+    public ExecExpr : PExpr
+    {
+      get
+      {
+        match (node)
+        {
+          | Action
+          | Entry                         
+          | Exit       => gen_action.ExecExpr
+          | _          => gen_action.DeclExecExpr
+        }
+      }
+    }
+
+    public TranExecExpr : PExpr
+    {
+      get
+      {
+        match (node)
+        {
+          | Action
+          | Entry                         
+          | Exit       => node_action.ExecExpr
+          | _          => gen_action.DeclExecExpr
+        }
+
+      }
+    }
+
+    public BodyFunc : PExpr -> PExpr {get;set;}
+
+    public Define() : void
+    {
+      def act = node_action;
+      act.BodyFunc = BodyFunc;
+      act.Define()
+    }
+  }
+
+  [Record]
+  class GenPathNode
+  {
+    map  : Map[string, string];
+    util : GenUtil;
+    flags : MachineFlags;
+    
+    path : TranPath;
+
+    kind : PathKind
+    {
+      get
+      {
+        path.kind
+      }
+    }
+
+    [Memoized]
+    node : list[GenPath]
+    {
+      get
+      {
+        match (kind)
+        {
+          | Entry  => GenPath(map, PathNode.Entry(state, FsmAction.Empty), util, x => x) :: []
+          | Exit   => GenPath(map, PathNode.Exit(state, FsmAction.Empty), util, x => x) :: []
+          | Action => path.nodes.Map(GenPath(map, _, util, x => x))
+          | _      => null
+        }
+      }
+    }
+
+    state : HState
+    {
+      get
+      {
+        path.state
+      }
+    }
+
+    [Memoized]
+    path_nodes  : list[GenPath]
+    {
+      get
+      {
+        path.nodes.Map(x => GenPath(map, x, util, x => x))
+      }
+    }
+
+    [Memoized]
+    TranPathNodes : list[GenPath]
+    {
+      get
+      {
+        def matched(n)
+        {
+          match (n.node)
+          {
+            | PathNode.Entry 
+            | Exit
+            | Action => true
+            | _      => false
+          }
+        }
+
+        path_nodes.Filter(matched)
+      }
+    }
+
+    [Memoized]
+    public ExecExpr : PExpr
+    {
+      get
+      {
+        def expr = TranPathNodes.Map(x => x.TranExecExpr);
+        <[ {..$expr} ]>
+      }
+    }
+
+    [Memoized]
+    public HandlerExecExpr : PExpr
+    {
+      get
+      {
+        def expr = path_nodes.Map(x => x.ExecExpr);
+        <[ {..$expr} ]>
+      }
+    }
+
+    [Memoized]
+    public NodeExecExpr : PExpr
+    {
+      get
+      {
+        def expr = node.Map(x => x.TranExecExpr);
+        <[ {..$expr} ]>
+      }
+    }
+
+    intBodyFunc(n : GenPath, x : PExpr) : PExpr
+    {
+      def add = if (flags.TestingFeatures) <[ OnActionExecuted($(n.node_action.DeclName)) ]> else <[]>;
+      match (kind)
+      {
+        | Entry => <[ $x; $HandlerExecExpr; $add ]>
+        | Exit  => <[ $HandlerExecExpr; $x; $add; ]>
+        | _     => x
+      }
+    }
+
+    public IsEmpty : bool
+    {
+      get
+      {
+        path.IsEmpty
+      }
+    }
+
+    public Define() : void
+    {
+      foreach (n in node)
+      {
+        n.BodyFunc = intBodyFunc(n, _);
+        n.Define()
+      }
+    }
+  }
+
+  [Record]
+  class GenTranPath
+  {
+    map  : Map[string, string];
+    util : GenUtil;
+    flags : MachineFlags;
+    
+    public entry_tran_path : list[TranPath];
+    public exit_tran_path  : list[TranPath];
+    public actions_path    : list[TranPath];
+
+    public this(seq : PathSequence, map : Map[string, string], util : GenUtil, flags : MachineFlags)
+    {
+      entry_tran_path = seq.entry_tran_path;
+      exit_tran_path  = seq.exit_tran_path;
+      actions_path    = seq.actions_path;
+      this.map = map;
+      this.util = util;
+      this.flags = flags;
+    }
+
+    public this(seq : list[TranPath], map : Map[string, string], util : GenUtil, flags : MachineFlags)
+    {
+      def (entry, other) = seq.Partition(x => x.kind == PathKind.Entry);
+      entry_tran_path = entry;
+      def (exit, other) = other.Partition(x => x.kind == PathKind.Exit);
+      exit_tran_path = exit;
+      def (act, _) = other.Partition(x => x.kind == PathKind.Action);
+      actions_path = act;
+      this.map = map;
+      this.util = util;
+      this.flags = flags;
+    }
+
+    [Memoized]
+    public tran_path : list[GenPathNode]
+    {
+      get
+      {
+        exit_path + action_path + entry_path
+      }
+    }
+
+    [Memoized]
+    public tran_act_nodes : list[GenPathNode]
+    {
+      get
+      {
+        exit_path + entry_path
+      }
+    }
+
+    [Memoized]
+    public exit_path   : list[GenPathNode]
+    {
+      get
+      {
+        exit_tran_path.Map(GenPathNode(map, util, flags, _))
+      }
+    }
+
+    [Memoized]
+    public entry_path  : list[GenPathNode]
+    {
+      get
+      {
+        entry_tran_path.Map(GenPathNode(map, util, flags, _))
+      }
+    }
+
+    [Memoized]
+    public action_path : list[GenPathNode]
+    {
+      get
+      {
+        actions_path.Map(GenPathNode(map, util, flags, _))
+      }
+    }
+
+
+    
+    [Memoized]
+    public TranBody : PExpr
+    {
+      get
+      {
+        def path = if (flags.AutoEntryExitActions) tran_path else tran_path.Filter(x => !x.IsEmpty);
+        def body = path.Map(x => x.NodeExecExpr);
+        <[ {..$body } ]>;
+      }
+    }
+
+    public DefineHandlers() : void
+    {
+      foreach (act in tran_act_nodes)
+      {
+        if (!flags.AutoEntryExitActions && act.IsEmpty) () else act.Define()
+      }
+    }
+  }
+}

@@ -6,58 +6,197 @@ using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 
 using System;
+using System.Text;
 using System.Collections.Generic;
 using System.Linq;
 using Nemerle.Statechart;
+using System.IO;
 
 namespace Nemerle.Statechart
 {
-  
+
   using PathNode;
-  
+
   /// <summary>
   /// Description of GeneratorDecls.
   /// </summary>
   public partial class StaticGenerator
   {
-    analyser : FsmAnalyser;
-    ty : TypeBuilder;
-    mutable tran_events : list[string];
-    mutable events : list[string];
-    mutable events_call : Map[string, PExpr];
-    mutable actions : list[GenAction];    
+    internal ty : TypeBuilder;
+
+    [Memoized]
+    Events : list[StateEvent]
+    {
+      get
+      {
+        def evts = transitions.Select(x => x.Trigger);
+        def evts = evts.Where(x => x != null && x.Name != null);
+        evts.RemoveDuplicatesSort(x => x.Name)
+      }
+    }
+
+
+    [Memoized]
+    HistoryStates : list[PseudoState.History]
+    {
+      get
+      {
+        ActiveStates.SelectMany(_.History).Distinct().NToList()
+      }
+    }
+
+    [Memoized]
+    States : list[HState]
+    {
+      get
+      {
+        ActiveStates.SelectMany(x => x.states).NToList()
+      }
+    }
+    
+    [Memoized]
+    internal HasDeferedEvents : bool
+    {
+      get
+      {
+        transitions.Exists(x => x.IsDefer || x.DecisionTree.Targets.Exists(x => x is TargetDeterminator.Defer))
+      }
+    }
+    
+    [Memoized]
+    actions      : list[GenAction]
+    {
+      get
+      {
+        def act = transitions.SelectMany(x => x.DecisionTree.PathActions);
+        def act = act.Exclude(_ is FsmAction.Normal(name = null));
+        def act = act.RemoveDuplicatesSort(_.ToString());
+        act.Map(x => GenAction(x, action_for, util))
+      }
+    }
+
+    [Memoized]
+    tran_paths : list[PathSequence]
+    {
+      get
+      {
+        transitions.SelectMany(x => x.DecisionTree.Path).NToList()
+      }
+    }
+
+    [Memoized]
+    tran_path_nodes : list[TranPath]
+    {
+      get
+      {
+        def ex = tran_paths.SelectMany(x => x.exit_tran_path);
+        def en = tran_paths.SelectMany(x => x.entry_tran_path);
+        def ex = ex.RemoveDuplicatesSort(x => x.state.name);
+        def en = en.RemoveDuplicatesSort(x => x.state.name);
+        ex + en
+      }
+    }
+
+    [Memoized]
+    path_state_actions : list[TranPath]
+    {
+      get
+      {
+        tran_path_nodes.Filter(x => x.kind == PathKind.Entry || x.kind == PathKind.Exit);
+      }
+    }
+
+    [Memoized]
+    transitions : list[Transition]
+    {
+      get
+      {
+        def default = HistoryStates.FilterValues(_.default);
+        Initial :: ActiveStates.SelectMany(x => x.transitions).Concat(default).NToList()
+      }
+    }
+
+    Initial : Transition;
+
+    ActiveStates : IEnumerable[ActiveStateConfig];
+
     mutable decls : Map[string, ClassMember];
     mutable action_for : Map[string, string]; // source_name * dest_name
     mutable event_for : Map[string, string];
     mutable macro_actions : Map[string, list[PExpr]];
     mutable constructor : option[string];
     mutable guard_for : Map[string, string]; // сторожевые условия объявленные в классе
-    mutable history_paths : Map[string, list[GenAction]];
-    mutable history_transitions : Map[string, list[GenAction]];
-    mutable history_def_transitions : Map[string, list[GenAction]];
 
-    ChartName : string;
-    
-    mutable init_exprs : list[PExpr] = [];
+    internal ChartName : string;
+
+    public init_exprs : list[PExpr] {get;set;default []}
     mutable gen_members : list[ClassMember] = [];
-    mutable compile_list : list[TypeBuilder] = [];
-    mutable state_builders : Map[string, TypeBuilder] = Map();
-    mutable method_decls : list[string];
+    internal mutable compile_list : list[TypeBuilder] = [];
     
+    internal mutable StateBuilders : list[ActiveStateConfig * TypeBuilder] = [];
+    
+    mutable method_decls : list[string];
+
+    
+    [Memoized]
+    HistoryPaths : list[HistoryPath]
+    {
+      get
+      {
+        ActiveStates.SelectMany(_.HistoryPath).Distinct().NToList()
+      }
+    }
+
+    internal mutable state_builder : TypeBuilder;
+
+    DoActivities : IEnumerable[StateAction.Do]
+    {
+      get
+      {
+        States.SelectMany(x => x.do_activity).RemoveDuplicatesSort(_.Name)
+      }
+    }
+
+    [Memoized]
+    have_completion : bool
+    {
+      get
+      {
+        DoActivities.Exists(_.need_completion)
+      }
+    }
+
     FinalizeGen() : void
     {
       Define(gen_members);
       compile_list.Iter(_.Compile());
+      when (WithSources) 
+      {
+      }
     }
+
+    LoadedMachines : Hashtable[string, StateNode.StateMachine];
+    
+    internal FsmFlags : MachineFlags;
+    
+    StatesId : StateId;
+    
+    internal EventCtx : EventContext = EventContext();
     
     public WithSources : bool {get;set;}
 
-    public this(analyser : FsmAnalyser, ty : TypeBuilder)
+    public this(active_states : list[ActiveStateConfig], fsm_flags : MachineFlags, initial : Transition, id : StateId, loaded : Hashtable[string, StateNode.StateMachine], ty : TypeBuilder)
     {
-      this.analyser = analyser;
+      ActiveStates = active_states;
+      FsmFlags = fsm_flags;
+      Initial = initial;
+      StatesId = id;
+      LoadedMachines = loaded;
+      //this.analyser = analyser;
       this.ty = ty;
       ChartName = ty.Name;
       WithSources = true;
+      util = GenUtil(ty, WithSources);
     }
 
     public Generate() : void
@@ -67,10 +206,12 @@ namespace Nemerle.Statechart
       DefineActions();
       DefineGuards();
       DefineTransitionActions();
+      DefineDeferedEvents();
       DefineDoActivity();
       DefineInit();
       DefineHistory();
       DefinePseudo();
+      DefineSubMachines();
       FinalizeGen();
     }
 

@@ -1,0 +1,205 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nemerle.Statechart
+{
+
+
+  /// <summary>
+  /// Description of ActiveConfig.
+  /// </summary>
+  partial class FsmAnalyser
+  {
+
+    public ActiveStates : list[ActiveStateConfig] 
+    {
+      get
+      {
+        ActiveConfigProc.ActiveConfigs.NToList()
+      }
+    }
+
+    Transitions  : list[Transition] {get;set;}
+
+    public InitialTransition : Transition {get;set;}
+
+    ActiveConfigProc : ActiveConfigProcessor = ActiveConfigProcessor();
+
+    PseudoCreate(p : HPseudoState, trav : ConfigTraverser) : void
+    {
+      match (p)
+      {
+        | HPseudoState.History(d, t) as h => 
+            def tran = d.Map(x => trav.InitialTransition(x));
+            def res = PseudoState.History(tran, t, h.state);
+            p.PseudoState = res; 
+        | _ => ()
+      }
+    }
+    
+    CreateActiveConfigurations() : void
+    {
+      def init = TopState.initial_tran.Value.ToHTransition;
+      def trav = ConfigTraverser(transitions, ActiveConfigProc);
+      foreach (st in finite_automatas)
+      {
+        foreach (st in st.history.Value) PseudoCreate(st, trav);
+      }
+      trav.Start();
+      InitialTransition = trav.InitialTransition(init);
+      def trans = trav.Result.NToList();
+      def trans = MergeConcurrentTransitions(trans);
+      def groups = trans.GroupBy(_.Source);
+      foreach (gr in groups)
+      {
+        gr.Key.transitions = gr.NToList()
+      }
+      Transitions = ActiveStates.SelectMany(_.transitions).NToList()
+    }
+
+    find_concurrent(tran : list[Transition]) : list[list[Transition]]
+    {
+      def arr = array(tran.Length);
+      tran.IterI((i, x) => arr[i] = x :: []);
+      foreach (t in tran)
+        foreach (gr in arr with i)
+        {
+          when (gr.All(x => distinct_regions(x, t)))
+          {
+            arr[i] = t :: gr;
+          }
+        }
+       def arr = arr.Exclude(x => x.Length == 1).ToArray();
+       foreach (elem when elem : object != null in arr with i)
+       {
+         foreach (el2 when el2 : object != elem in arr)
+         {
+           when (el2 != null && elem.All(x => el2.ContainsRef(x)))
+           {
+             arr[i] = null;
+           }
+         }
+       }
+       def arr = arr.Map(x => x : list[Transition]).Filter(x => x : object != null);
+       arr
+    }    
+
+    distinct_regions(x : Transition, y : Transition) : bool
+    {
+      def st1 = x.OriginateFrom;
+      def st2 = y.OriginateFrom;
+      def regs1 = st1.regions;
+      def regs2 = st2.regions;
+      def tst1 = x.TargetStates.Head;
+      def tst2 = y.TargetStates.Head;
+      def intersect = regs1.Intersect(regs2);
+      def intersect2 = tst1.regions.Intersect(tst2.regions);
+      def intersect = intersect.Intersect(intersect2);
+      if (intersect.IsEmpty()) false else
+      {
+        def distinct_regs = intersect.Exists(x => st1.region_pos(x) != st2.region_pos(x) && 
+                                                  tst1.region_pos(x) != tst2.region_pos(x) && 
+                                                  st1.region_pos(x) == tst1.region_pos(x) &&
+                                                  st2.region_pos(x) == tst2.region_pos(x));
+        distinct_regs
+      }
+    }
+    
+    SelectConcurrentTransitions(tr : list[list[Transition]]) : list[Transition]
+    {
+      def priority(x, y)
+      {
+        if (x.Exists(x => y.Exists(y => x.OriginateFrom.IsSubStateOf(y.OriginateFrom)))) -1 else
+          if (x.Exists(x => y.Exists(y => y.OriginateFrom.IsSubStateOf(x.OriginateFrom)))) 1 else 0
+      }
+      
+      def tr = tr.Exclude(x => x.Count() <= 1); // removing empty groups and not start concurrent
+      def sorted = tr.Sort(priority); // sorting by priority
+      if (!sorted.IsEmpty()) sorted.First() else []
+    }
+    
+    MergeConcurrentTransitions(tr : list[Transition]) : list[Transition]
+    {
+      mutable transitions = tr;
+
+      def merge_decision_tree(x, y, tar)
+      {
+        def combine_target(a, b)
+        {
+          DecisionNode.Target(a.actions + b.actions, PathSequence.CombineParallel(a.path, b.path), null, null, null, tar)
+        }
+
+        match (x, y)
+        {
+          | (DecisionNode.Target as a, DecisionNode.Target as b)                                 => combine_target(a, b)
+          | (DecisionNode.Condition(_, DecisionNode.Target as c) as b, DecisionNode.Target as a) 
+          | (DecisionNode.Target as a, DecisionNode.Condition(_, DecisionNode.Target as c) as b) =>
+                def target = combine_target(a, c);
+                DecisionNode.Condition(b.actions, b.path, b.state, b.Parent, b.condition, target, b.else_node)
+          | _ => throw InvalidOperationException("junction not supported in group transitions yet")
+        }
+      }
+
+      def merge(x, y)
+      {
+        def st1 = match (x.Target)
+                   {
+                     | TargetDeterminator.Completion(st)
+                     | State(st)                         => st
+                     | _                                 => null
+                   }
+        def st2 = match (y.Target)
+                   {
+                     | TargetDeterminator.Completion(st)
+                     | State(st)                         => st
+                     | _                                 => null
+                   }
+        // states from target of first transition
+        def t1st = st1.states.Exclude(x.Source.states);
+        def t2st = st2.states.Exclude(y.Source.states);
+        def fixed = st1.states.Intersect(st2.states).NToList();
+        def tar = fixed + t1st + t2st;
+        def tar = ActiveConfigProc.CreateConfig(tar);
+        def tar = if (tar.simple_states.All(_.IsFinal) || !tar.completion_originated.IsEmpty()) TargetDeterminator.Completion(tar) else TargetDeterminator.State(tar);
+        def grouped = 0;
+        def kind = match (x.Kind, y.Kind)
+                    {
+                      | (TransitionKind.External, _)
+                      | (_, TransitionKind.External) => TransitionKind.External
+                      | _                            => TransitionKind.Internal
+                    }
+        def tree = merge_decision_tree(x.DecisionTree, y.DecisionTree, tar);
+        def group = x :: y :: x.ConcurrentGroup + y.ConcurrentGroup;
+        def tar_states = group.SelectMany(x => x.TargetStates).NToList();
+        def tran = Transition(x.Location, x.Source, x.OriginateFrom, x.Trigger, GuardNode.Combine(x.Guard, y.Guard), PathSequence.CombineParallel(x.Path, y.Path), tar, tree, 0, grouped, kind, false, false, [], group, tar_states);
+        tran
+      }
+
+      def group_by_conf = tr.GroupBy(x => x.Source);
+      foreach (conf in group_by_conf)
+      {
+        def transition_in_states = conf.Filter(x => x.Kind != TransitionKind.Local && x.TargetStates.Length == 1 && x.OriginateFrom != null);
+        def within_region = transition_in_states.Exclude(x => x.OriginateFrom.regions.Intersect(x.TargetStates.SelectMany(x => x.regions)).IsEmpty());
+        def by_trigger = within_region.GroupBy(_.Trigger);
+        foreach (ctrig when ctrig.IsMoreThanOne() in by_trigger)
+        {
+          def groups = find_concurrent(ctrig.NToList());
+          def trans = SelectConcurrentTransitions(groups);
+          when (!trans.IsEmpty())
+          {
+            transitions = transitions.Exclude(trans);
+            def trans = trans.Reduce(merge);
+            transitions ::= trans;
+          }
+        }
+      }
+      transitions
+    }
+  }
+}

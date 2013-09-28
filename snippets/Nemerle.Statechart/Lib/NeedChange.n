@@ -1,0 +1,168 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+
+namespace Nemerle.Statechart
+{
+  [MacroUsage(MacroPhase.WithTypedMembers, MacroTargets.Field)]
+  macro NeedChange(typeBuilder : TypeBuilder, field : FieldBuilder, params pars : list[PExpr])
+  {
+    NeedChangeImpl.DoTransform(Macros.ImplicitCTX(), typeBuilder, field, pars)
+  }
+
+  //[MacroUsage(MacroPhase.BeforeTypedMembers, MacroTargets.Field)]
+  //macro NeedChange(typeBuilder : TypeBuilder, field : ClassMember.Field, params pars : list[PExpr])
+  //{
+  //  NeedChangeImpl.DoTransform2(Macros.ImplicitCTX(), typeBuilder, field, pars)
+  //}
+
+  partial module NeedChangeImpl
+  {
+
+    //public ToLowerCase(this s : string) : string
+    //{
+    //  def to_lower(s, a)
+    //  {
+    //    if (char.IsUpper(s))
+    //    {
+    //      match (a)
+    //      {
+    //        | _ :: _ => Char.ToLower(s) :: '_' ::  a
+    //        | _      => Char.ToLower(s) :: []
+    //      }
+    //    } else s :: a
+    //  }
+
+    //  def chars = s.FoldLeft([], to_lower);
+    //  string(chars.Reverse().ToArray())
+    //}
+    
+    public ToCamel(this s : string) : string
+    {
+      def upper(a)
+      {
+         | head :: tail => Char.ToUpper(head) :: tail
+         | lst          => lst
+      }
+      
+      def to_camel(s, a)
+      {
+        if (s == '_')
+        {
+          upper(a)
+        } else s :: a
+      }
+
+      def chars = s.FoldBack([], to_camel);
+      def chars = upper(chars);
+      string(chars.ToArray())
+    }
+
+    public GetChangeFields(type : TypeBuilder) : IEnumerable[IField]
+    {
+      def get_base_change_fields(t)
+      {
+        def fields = t.tycon.GetFields(BindingFlags.NonPublic | BindingFlags.Instance);
+        fields.Where(x => x.attr_func(x => x.Exists(_ is <[ NeedChange ]>)));
+      }
+      def fields = type.GetFields(BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.FlattenHierarchy);
+      def base_fields = type.GetDirectSuperTypes().SelectMany(get_base_change_fields);
+      fields.Concat(base_fields)
+    }
+
+    public DoTransform2(_ : Typer, typeBuilder : TypeBuilder, field : FieldBuilder) : void
+    {
+      def defined(type, fields)
+      {
+        def constr = type.GetConstructors();
+        constr.Exists(c => c.Header.Parameters.Equals(fields.NToList(), (x, y) => x.Name == StrToLower(y.Name)))
+      }
+
+      def def_constr(type)
+      {
+
+        def fields = GetChangeFields(type);
+        when (!defined(type, fields))
+        {
+          def (this_type, base_type) = fields.PartitionLazy(x => x.DeclaringType.Name == type.Name);
+          def body = this_type.Map(x => <[ this.$(x.Name : usesite) = $(StrToLower(x.Name) : usesite) ]>);
+          def pars = fields.Map(f => <[ parameter: $(StrToLower(f.Name) : usesite) : $(f.GetMemType() : typed) ]>);
+          def base_cons = base_type.Map(x => <[ $(StrToLower(x.Name) : usesite) = $(StrToLower(x.Name) : usesite) ]>);
+          def base_type = if (base_cons is []) <[]> else <[ base(..$base_cons) ]>;
+          _ = type.DefineWithSource(<[decl: public this(..$pars)
+                              {
+                                $base_type;
+                                {..$body}
+                              } ]>);
+        }
+      }
+
+      //assert2(false);
+      when (field.attr_func(x => x.Exists(_ is <[ RecordIgnore ]>) && x.Exists(_ is <[ NeedChange ]>)))
+        match (typeBuilder.GetVariantOptions())
+        {
+          | []  => def_constr(typeBuilder)
+          | lst => def_constr(typeBuilder);
+                  lst.Iter(def_constr);
+        }
+    }
+
+    public DoTransform(typer : Typer, typeBuilder : TypeBuilder, field : FieldBuilder, aliases : list[PExpr]) : void
+    {
+      Macros.DefineCTX(typer);
+      //assert2(false);
+      DoTransform2(typer, typeBuilder, field);
+      //DoTransform2(typer, typeBuilder, field, aliases);
+      def get_short_name(name)
+      {
+        StrToLower($"_par$name")
+      }
+
+      def create_cons(t, f : IField)
+      {
+        def fields = t.GetFields(BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic).Rev();
+        //def fields = fields.Exclude(have_record_ignore);
+        def fields = f :: fields.Filter(x => aliases.Exists(y => y.ToString() == x.Name));
+        def names = fields.Map(x => (x.Name, x.GetMemType()));
+        def cnames = names.Map((x, _) => ToCamel(x));
+        def fname = $<#..$(cnames;"")#>;
+        def name = $"Change$fname";
+        def sname = names.Map((x, y) => (get_short_name(x), y));
+        def sname = sname.Map((x, t) => <[ parameter: $(x : usesite) : $(t : typed) ]>);
+        def chlist = names.Map((x, y) => (x, get_short_name(x), y));
+        def type = t.GetMemType();
+
+        def clist = chlist.Map((x, y, _) => (x, y));
+        def body = CreateNewInst(t, null, clist);
+        def check_list = chlist.Map((x, y, t) => if (t.IsValueType) <[ ! $(x : usesite).Equals($(y : usesite)) ]> else <[ $(x : usesite) : object != $(y : usesite) ]>);
+        def check = check_list.Reduce((x, a) => <[ $x || $a ]>);
+        _ = t.DefineWithSource(<[ decl: public $(name : usesite)(..$sname) : $(type : typed)
+            {
+              if ($check) 
+              {
+                $body
+              } else this
+            }]>);
+      }
+
+      match (typeBuilder.GetVariantOptions())
+      {
+        | [] => create_cons(typeBuilder, field)
+        | lst => create_cons(typeBuilder, field);
+                 lst.Iter(create_cons(_, field))
+      }
+
+      // TODO: Add implementation here.
+      _ = typeBuilder; _ = field;
+    }
+  }
+}

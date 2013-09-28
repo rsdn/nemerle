@@ -1,0 +1,369 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nemerle.Statechart
+{
+  /// <summary>
+  /// Description of Transitions.
+  /// </summary>
+  partial class FsmAnalyser
+  {
+    ConvertEntryExitPoints() : void
+    {
+      def check_target(p, t)
+      {
+        match (p)
+        {
+          | TransitionTarget.PseudoState(PseudoStateNode.EntryPoint(_, p))          => t.AddAction(p.action);
+                                                                                      check_target(p.To, t);
+          | TransitionTarget.PseudoState(PseudoStateNode.ExitPoint(tran = Some(p))) => t.AddAction(p.action);
+                                                                                      check_target(p.To, t)
+          | _                                                                       => p
+        }
+      }
+
+      def tran = StateTransitions.Concat(InitialTran);
+      foreach (StateTransition(To = p) as t in tran)
+      {
+        def tar = check_target(p, t);
+        t.To = tar
+      }
+    }
+
+    ConvertInitialTransitions() : void
+    {
+      // transform action on transition to state
+      foreach (FsmState(initial = Some(i)) as state in States)
+      {
+        def tran = i.tran;
+        when (!tran.action.IsEmpty() || tran.To is TransitionTarget.PseudoState(PseudoStateNode.History))
+        {
+          def st = FsmState(this, StateType.State()); // create simple state
+          st.name = $"$(state)Initial";
+          st.generated = true;
+          def ntran = StateTransition(st, tran.To, TransitionKind.External);// :: [];
+          ntran.trigger = StateEvent.Completion;
+          st.transitions = ntran :: []; // create completion transition to target of initial
+          def act = tran.action;
+          st.entry = act.Map(StateAction.Entry(st.ToString(), _, ActionFlags.None)); // entry action to initial actions
+          def sub = state.sub_states;
+          st.Super = state;
+          state.sub_states = sub.AddBefore(st).NToList(); // add substate before other sub states
+          tran.To = TransitionTarget.State(st);
+          tran.action = []; // clear action
+        }
+      }
+    }
+
+    /// <summary>
+    /// Creating Transitions
+    /// </summary>
+    CreateTransitions() : void
+    {
+      CheckAndCreateCompletionTransitions();
+      ConvertEntryExitPoints();
+      ConvertInitialTransitions();
+      CreateTransitionsFromDeferred();
+    }
+
+    CheckAndCreateCompletionTransitions() : void
+    {
+
+      def create_final_state(start, end)
+      {
+        if (start == end) () else
+        {
+          when (!start.Super.HaveFinal)
+          {
+            def final = FsmState(this, StateType.Final());
+            start.Super.Add(final);
+            def tran = StateTransition(start, TransitionTarget.Final(final), TransitionKind.External);
+            start.transitions += [tran];
+            create_final_state(start.Super, end)
+          }
+          create_final_state(start.Super, end)
+        }
+      }
+
+      foreach (st in States)
+      {
+        when (st.IsSimple || st.HaveFinal)
+        {
+          def tran = st.SuperStatesInclude.SelectMany(_.CompletionTransitions);
+          foreach (tr when tr.FromPseudo.IsNone in tran)
+          {
+            def from = tr.From;
+            create_final_state(st, from)
+          }
+        }
+      }
+    }
+
+    CreateTransitionsFromDeferred() : void
+    {
+      def create_tran(st, e)
+      {
+        def tran = StateTransition(st, TransitionTarget.Defer(), TransitionKind.Internal);
+        tran.Location = e.Location;
+        tran.trigger = e;
+        tran
+      }
+
+      foreach (st in States)
+      {
+        def tran = st.deferred_events.Map(create_tran(st, _));
+        st.DefineTransitions(tran);
+        //HTransition(evt.Location, HTarget.State(st), evt, GuardNode.Empty(), FsmAction.Expr(<[ Defer ]>) :: [], HTarget.Nowhere(), TransitionKind.Internal)
+      }
+    }
+
+    SubConfigs(st : HState) : list[HState * ActiveStateConfig]
+    {
+      def confs = st.all_simple_states.Select(x => (x, x.active_config));
+      def confs = confs.Map((z, x) => (z, ActiveStates.First(y => y.IsThis(x))));
+      confs
+    }
+
+    SubStatesParticipateIn(hist : HPseudoState.History) : list[HState * ActiveStateConfig]
+    {
+      def state = hist.state;
+      match (hist.type)
+      {
+        | HistoryType.Deep     => SubConfigs(state)
+        | HistoryType.Shallow  => match (state.hierarchy)
+            {
+              | [reg] => def states = reg.states;
+                                              def conf = states.Select(x => (x, ActiveConfigProc.GetInitialConfiguration(x)));
+                                              //def sort = conf.Map(ConfigSolver.CreateConfig);
+                                              def participate = conf.Map((z, x) => (z, ActiveStates.First(y => y.IsThis(x))));
+                                              participate
+              | _     => []
+            }
+        | _                    => []
+      }
+    }
+
+    CreateHistoryPaths() : void
+    {
+      def trav = ConfigTraverser([], ActiveConfigProc);
+
+      def history = ActiveStates.SelectMany(x => x.states.SelectMany(x => x.history.Value)).Distinct();//HistoryStates.Select(x => x.ToHPseudo :> HPseudoState.History);
+      foreach (hist in history)
+      {
+        def sub = SubStatesParticipateIn(hist);
+        def parent = hist.state;
+        def res = hist.PseudoState :> PseudoState.History;
+        foreach ((st, conf) in sub)
+        {
+          def builder = HistoryPathBuilder(trav, parent, conf, res);
+          def path = builder.CreatePath();
+          if (hist.type == HistoryType.Shallow) 
+          {
+            def sub = SubConfigs(st);
+            foreach ((_, st) in sub)
+            {
+              st.HistoryPath ::= path;
+              st.History ::= res;
+            }
+          } else
+          {
+            def active = path.To;
+            active.HistoryPath ::= path;
+            active.History ::= res;
+          }
+        }
+      }
+
+    }
+
+    CheckDuplicatesConflicts(config : ActiveStateConfig, conflict : list[list[Transition]]) : list[list[Transition]]
+    {
+      def check_duplicates(tr)
+      {
+        def dups = tr.Duplicates((x, y) => x.Guard.CompareTo(y.Guard)); // duplicates is several conflicting transitions with equal guard
+        def other = tr.Exclude(dups); // other not duplicate transitions
+        def (defer, dups) = dups.Partition(x => x.IsDefer); // get deferrable and other transitions
+        def dups = match (defer, dups)
+                    {
+                      | (d, [])   => d // only duplicates in defered list
+                      | (d, dups) => 
+                          foreach (tran in d) // deferable events is overriden by consumed events
+                          {
+                            messager.AddWarning(FsmWarning.DeferIsAlwaysOverriden(tran, dups));// print warning about it is overriden
+                          }
+                          dups
+                    }
+        Transitions = Transitions.Exclude(defer); // remove overriden defered events
+        config.transitions = config.transitions.Exclude(defer);
+        match (dups)
+        {
+          | [] => other
+          | first :: _ :: _ => 
+            Transitions = Transitions.Exclude(dups);
+            config.transitions = config.transitions.Exclude(dups);
+            dups.Iter(x => messager.AddError(FsmError.DuplicateTransition(x))); // add to error list
+            first :: other
+          | first :: _ => first :: other
+        }
+      }
+
+      conflict.Map(check_duplicates);
+    }
+
+    ResolveConflicts() : void
+    {
+      def is_sub_state_of(x, y)
+      {
+        x.IsSubStateOf(y)
+      }
+
+      def compare(x, y)
+      {
+        def x = x.OriginateFrom;
+        def y = y.OriginateFrom;
+        if (is_sub_state_of(x, y)) -1 else
+          if (is_sub_state_of(y, x)) 1 else 0
+      }
+
+      def tran_compare(x, y)
+      {
+        match (x.IsDefer, y.IsDefer)
+        {
+          | (true, false) => 1
+          | (false, true) => -1
+          | (true, true)  => 0
+          | _             => match (x.Guard, y.Guard)
+                              {
+                                | (GuardNode.Empty, GuardNode.Empty) 
+                                | (GuardNode.Expr, GuardNode.Expr)
+                                | (GuardNode.Else, GuardNode.Else)   => 0
+                                | (GuardNode.Empty, _)               => -1
+                                | (_, GuardNode.Empty)               => 1
+                                | (GuardNode.Else, _)                => 1
+                                | (_, GuardNode.Else)                => -1
+                              }
+        }
+      }
+
+      foreach (conf in ActiveStates)
+      {
+        def by_trigger = conf.transitions.GroupBy(_.Trigger); // with equal trigger
+        def (conflict, other) = by_trigger.NToList().Partition(x => x.IsMoreThanOne());
+        foreach (tr in other)
+        {
+          foreach (tr in tr) tr.MayRun = true;
+        }
+        foreach (ctrig in conflict) // if transitions in group is more than one
+        {
+          def grouped_equal_prio = ctrig.NToList().Group(compare); // group by priority of states relations
+          grouped_equal_prio.IterI((i, x) => x.Iter(x => x.Priority = i)); // set prio for each group of transition with equal prio
+          def (conflict, other) = grouped_equal_prio.Partition(x => x.IsMoreThanOne()); // get conflicting transitions with equal prio
+
+          def conflict = CheckDuplicatesConflicts(conf, conflict);
+          def trans = conflict + other; // merge again transitions in set
+          def trans = trans.OrderBy(x => x.Head.Priority); // sorting by priority
+          def trans = trans.Map(x => x.Sort(tran_compare)); // sort each group by guard
+          def trans = trans.Flatten(); // remove grouping
+          CheckGuards(trans);
+          def (run, other) = trans.SplitFind(x => x.Guard.IsEmpty || x.Guard is GuardNode.Else); // find last with no guard or else guard
+          def (not_guarded, guarded) = run.Partition(x => x.Guard.IsEmpty);
+          def (run, overriden) = match (not_guarded)
+                                  {
+                                    | []           
+                                    | [_]          => (run, [])
+                                      // if several run get head, tail is overriden
+                                    | head :: tail => (head :: guarded, tail)
+                                  }
+          def overriden = other + overriden;
+          foreach (tr in run) tr.MayRun = true;
+          overriden.Iter(x => x.OverridenBy += run);
+          when (!overriden.IsEmpty()) conf.transitions = conf.transitions.Exclude(overriden); // exclude it from the set
+        }
+      }
+    }
+
+    CheckGuards(tran : list[Transition]) : void
+    {
+      match (tran.Partition(x => x.Guard is GuardNode.Else))
+      {
+        | ([], _)  => ()
+        | ([e], g) => def guards_tr = g.Filter(x => x.Guard.NotEmpty);
+                      when (guards_tr.IsEmpty()) messager.AddError(FsmError.ElseMustHaveOtherTransition(e));
+        | (e, _)   => messager.AddError(FsmError.SeveralElseGuards(e))
+      }
+    }
+
+    MergeTransitions() : void
+    {
+
+      def set_to_else(t, n)
+      {
+        foreach (node in t.GetBreadthFirstEnumerable())
+          {
+            | DecisionNode.Condition(else_node = None) as node => node.else_node = Some(n)
+            | _                                                => ()
+          }  
+      }
+
+      def merge_trans(tr, a)
+      {
+        set_to_else(a, tr);
+        a
+      }
+
+      foreach (conf in ActiveStates)
+      {
+        def by_trigger = conf.transitions.GroupBy(_.Trigger);
+        foreach (ctrig when ctrig.IsMoreThanOne() in by_trigger)
+        {
+          def by_priority = ctrig.OrderBy(x => x.Priority);
+          def trees = by_priority.Map(x => x.DecisionTree);
+          def tree = trees.Reduce(merge_trans);
+          def tran = by_priority.First();
+          tran.Grouped = by_priority.Count();
+          def delete = by_priority.Except(tran);
+          conf.transitions = conf.transitions.Exclude(delete.NToList());
+          tran.DecisionTree = tree
+        }
+      }
+    }
+
+    ConvertJoinTransitions() : void
+    {
+      def joins = StateTransitions.Filter(x => x.To is TransitionTarget.PseudoState(PseudoStateNode.Join));
+      def group = joins.GroupBy(x => (x.To :> TransitionTarget.PseudoState).node :> PseudoStateNode.Join);
+      foreach (gr in group)
+      {
+        def tr = gr.First();
+        def trigger = tr.trigger;
+        def join = gr.Key;
+        
+        when (!gr.ElementsEqual((x, y) => x.trigger == y.trigger))
+        {
+          messager.AddError(FsmError.JoinTransitionMustHaveSameTrigger(gr.NToList(), join))
+        }
+        
+        match (gr.Filter(x => x.guard.NotEmpty || !x.action.IsEmpty()))
+        {
+          | []  => ()
+          | lst => foreach (tr in lst) messager.AddError(FsmError.JoinTransitionCannotHaveGuardsOrActions(tr))
+        }
+        
+        def tran = join.transition;
+        join.joined_states = gr.Map(_.From);
+        tran.trigger = trigger;
+        tran.Location = join.Location;
+        tran.To = join.transition.To;
+        gr.Iter(x => x.From.DeleteTransition(x));
+        tr.From.DefineTransitions(tran :: []);
+      }
+    }
+    
+  }
+}

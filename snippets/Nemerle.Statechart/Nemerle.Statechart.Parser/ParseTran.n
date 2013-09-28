@@ -1,0 +1,180 @@
+﻿using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Peg;
+using Nemerle;
+using System.Diagnostics;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nemerle.Statechart
+{
+
+  using StateNode;  
+  //using TransitionNode;
+  using PseudoStateModelNode;
+  using GuardNode;
+  using ListUtils;
+
+  public partial class FsmParser
+  {
+
+    get_state_qualified_target(name : NameIdentifier) : TargetType
+    {
+      | Name(name = n)           => TargetType.Named(name.pos, n)
+      | QualifiedName(parts = n) => def (tar, lst) = n.SplitLast();
+                                    def st = $<#..$(lst;".")#>;
+                                    TargetType.Qualified(name.pos, st, TargetType.Named(name.pos, tar))
+
+    }
+
+    qualified_target(name : NameIdentifier, _ : NToken) : TargetType
+    {
+      def pos = name.pos;
+
+      def get_target(n)
+      {
+        | "history"  with hist = HistoryType.None
+        | "H"  with hist = HistoryType.Shallow
+        | "h"  with hist = HistoryType.Shallow
+        | "h*" with hist = HistoryType.Deep
+        | "H*" with hist = HistoryType.Deep => TargetType.PseudoState(pos, PseudoStateModelNode.History(pos, hist, None()))
+        | "final"
+        | "$0"       => TargetType.Final(pos)
+        | "self"
+        | "@"        => TargetType.Self(pos)
+        | "terminate"
+        | "x"
+        | "X"        => TargetType.PseudoState(name.pos, PseudoStateModelNode.Terminate(0))
+        | x when (x.IndexOf('(') != -1 ) => 
+              def n = string(n.Explode().Except(['(', ')']).ToArray());
+              TargetType.Named(name.pos, n)
+          //| _ => TargetType.Named(name.pos, name.TargetName.Trim('(',')'))
+        | _                      => TargetType.Named(name.pos, n)
+      }
+
+      match (name)
+      {
+        | Name(name = n) => get_target(n)
+        | QualifiedName(parts = n) => 
+            def (tar, lst) = n.SplitLast();
+            def st = $<#..$(lst;".")#>;
+            TargetType.Qualified(name.pos, st, get_target(tar))//State(st, StateType.State()), 
+      }
+    }
+
+    exit_point_target(id : NameIdentifier, _ : NToken) : TargetType
+    {
+      def pos = id.pos;
+      TargetType.PseudoState(pos, PseudoStateModelNode.ExitPoint(pos, id.name, None()))
+    }
+
+    fork_trans_target(first : NameIdentifier, second : NameIdentifier, lst : List[NameIdentifier], _ : NToken) : TargetType
+    {
+      def targets = first :: second :: lst.NToList();
+      def targets = targets.Map(get_state_qualified_target);
+      TargetType.PseudoState(first.pos, PseudoStateModelNode.Fork(first.pos, targets))
+    }
+
+    fork_alt_target(reg : NameIdentifier, _ : NToken, first : NToken, lst : List[NToken], _ : NToken, _ : NToken) : TargetType
+    {
+      def pos = reg.pos;
+      def targets = first :: lst.NToList();
+      def targets = targets.Map(x => TargetType.Named(x.StartPos, GetText(x)));
+      def target = TargetType.PseudoState(pos, PseudoStateModelNode.Fork(pos, targets));
+      match (reg)
+      {
+        | Name(name = n)           => TargetType.Qualified(pos, n, target)
+        | QualifiedName(parts = n) => def st = $<#..$(n;".")#>;
+                                      TargetType.Qualified(pos, st, target)
+      }
+    }
+    
+    join_alt_tran(parent : NameIdentifier, tok : NToken, id : NToken, lst : List[NToken], _ : NToken, _ : NToken, tran : StateNode.Transition) : StateNode.Transition
+    {
+      def lst = id :: lst.NToList();
+      def lst = lst.Map(x => parent.Add(GetText(x)));
+      StateNode.Transition(tok.StartPos, lst, tran.evt, tran.guard, tran.action, tran.to, TransitionKind.External)
+    }
+    
+    join_relocate_tran(tok : NToken, id : NameIdentifier, lst : List[NameIdentifier], _ : NToken, _ : NToken, tran : StateNode.Transition) : StateNode.Transition
+    {
+      def lst = id :: lst.NToList();
+      StateNode.Transition(tok.StartPos, lst, tran.evt, tran.guard, tran.action, tran.to, TransitionKind.External)
+    }
+    
+    default_transition(act : Actions, target : TargetType) : StateNode.Transition
+    {
+      def act = if (act.Empty) None() else Some(act);
+      StateNode.Transition(target.pos, [], [], GuardNode.Empty(-1), act, target, TransitionKind.Local)
+    }
+
+    events(id : NToken, evt : List[NToken * NToken]) : List[TransitionEvent]
+    {
+      def evt = evt.Select((_, x : NToken) => x);
+      def lst = evt.AddBefore(id);
+      lst.Select(create_event).ToList()
+    }
+
+    ext_trans_body(act : Actions, to : TargetType) : StateNode.Transition
+    {
+      def pos = act.pos;
+      def act = if (act.Empty) None() else Some(act);
+      StateNode.Transition(pos, [], [], GuardNode.Empty(), act, to, TransitionKind.External)
+    }
+
+    ext_transition(evt : List[TransitionEvent], guard : option[GuardNode], body : StateNode.Transition) : StateNode.Transition
+    {
+      def pos = evt.First().pos;
+      def guard = guard.WithDefault(GuardNode.Empty(-1));
+      Transition(pos, [], evt.NToList(), guard, body.action, body.to, TransitionKind.External)
+    }
+
+    local_trans(evt : List[TransitionEvent], guard : option[GuardNode], act : Actions, to : TargetType) : StateNode.Transition
+    {
+      def pos = evt.First().pos;
+      def act = if (act.Empty) None() else Some(act);
+      def guard = guard.WithDefault(GuardNode.Empty(-1));
+      Transition(pos, [], evt.NToList(), guard, act, to, TransitionKind.Local)
+    }
+
+    internal_trans(evt : List[TransitionEvent], guard : option[GuardNode], acts : Actions) : StateNode.Transition
+    {
+      def pos = if (evt.Count() != 0) evt.First().pos else -1;
+      def guard = guard.WithDefault(GuardNode.Empty(-1));
+      Transition(pos, [], evt.NToList(), guard, Some(acts), TargetType.NoTarget(pos), TransitionKind.Internal)
+    }
+
+    deferrable_evts(lst : List[TransitionEvent], tok : NToken, _ : NToken, _ : NToken) : StateNode.Defer
+    {
+      Defer(tok.StartPos, lst.NToList())
+    }
+
+    deferred_evts(tok : NToken, _ : NToken, lst : List[TransitionEvent], _ : NToken) : StateNode.Defer
+    {
+      Defer(tok.StartPos, lst.NToList())
+    }
+
+    relocate_pseudo_tran(n : NameIdentifier, _ : NToken, tran : StateNode.Transition) : StateNode.Transition
+    {
+      StateNode.Transition(n.pos, [n], [], GuardNode.Empty(), tran.action, tran.to, TransitionKind.External)
+    }
+    
+    relocate_st_tran(n : NameIdentifier, _ : NToken, tran : StateNode.Transition) : StateNode.Transition
+    {
+      StateNode.Transition(n.pos, [n], tran.evt, tran.guard, tran.action, tran.to, tran.kind)
+    }
+    
+    transition(tr : StateNode.Transition) : StateNode
+    {
+      tr
+    }
+    
+    ext_transition_cnv(tr : StateNode.Transition) : StateNode
+    {
+      tr
+    }
+  }
+}

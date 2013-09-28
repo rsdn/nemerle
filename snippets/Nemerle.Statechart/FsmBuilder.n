@@ -1,0 +1,258 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using System.IO;
+
+namespace Nemerle.Statechart
+{
+  class FsmBuilder
+  {
+    parser : FsmParser;
+    ty : TypeBuilder;
+    top : TopDeclaration;
+    locator : Locator;
+    
+    public this(ty : TypeBuilder, top : TopDeclaration, fsm : StateNode.StateMachine)
+    {
+      this(ty, top);
+      this.fsm = fsm;
+      parser = FsmParser();
+      locator = Locator(parser, loc);
+    }
+
+    public this(ty : TypeBuilder, top : TopDeclaration)
+    {
+      this.ty = ty;
+      this.top = top;
+      parser = FsmParser();
+      locator = Locator(parser, loc);
+    }
+
+    [Accessor]
+    mutable fsm : StateNode.StateMachine;
+
+    AttributesAndMods : AttributesAndModifiers
+    {
+      get
+      {
+        top.ParsedAttributsAndModifiers
+      }
+    }
+
+    [Memoized]
+    attribute : PExpr
+    {
+      get
+      {
+        match (AttributesAndMods.ParsedCustomAttributes.Find(x => x is <[ statechart($_) ]>))
+        {
+          | Some(<[ statechart($x) ]>) => x
+          | _                          => null
+        }
+      }
+    }
+
+    loc : Location
+    {
+      get
+      {
+        if (attribute != null) attribute.Location else top.Location;
+      }
+    }
+
+    [Memoized]
+    public body : string
+    {
+      get
+      {
+        match (attribute)
+        {
+          | <[ $(str : string) ]> => str
+          | _                     => null
+        }
+      }
+    }
+
+    env : GlobalEnv
+    {
+      get
+      {
+        ty.GlobalEnv
+      }
+    }
+
+
+
+    attr_loc : Location
+    {
+      get
+      {
+        top.ParsedAttributsAndModifiers.Location
+      }
+    }
+
+    
+    Parse() : void
+    {
+      parser.flags_map = Hashtable(FsmAnalyser.Flags);
+      parser.env = env;
+      def body = body ?? "";
+      def text = body.Trim();
+      fsm = if (!text.IsEmpty()) 
+             {
+               def (pos, ast) = parser.TryParse(body);
+               if (pos > 0) 
+               {
+                 def len = body.Length;
+                 when (pos < len)
+                 {
+                   def loc = locator.GetLoc(pos);
+                   Message.Error(loc, $"Not full text is parsed, parsing stopped at $(loc.Line):$(loc.Column).");
+                 }
+                 ast
+               }
+               else
+               {
+                 def (pos,  ids)  =  parser.GetMaxRollbackPosAndNames();
+                 def loc = locator.GetLoc(pos);
+                 Message.Error(loc, $"Error in input at $(loc.Line):$(loc.Column). Expected: ..$(ids;\r\n    )");
+                 null
+               }
+             } else null;
+       when (fsm != null) locator.Locate(fsm);
+    }
+
+    public static GetParsedResult(ty : TypeBuilder) : FsmBuilder
+    {
+      def data = ty.Manager.UserData;
+      if (data.Contains(key)) 
+      {
+        def data = data[key] :> data_type;
+        if (data.Find((x, _) => x == ty.Name) is Some((_, d))) d else null
+      } else null
+    }
+
+    public static key = "statechart";
+    type data_type = list[string * FsmBuilder];
+
+    static Memoize(ty : TypeBuilder, tree : FsmBuilder) : void
+    {
+      def storage = ty.Manager.UserData;
+      def name = ty.Name;
+      def data = if (storage.Contains(key))
+                  {
+                    storage[key] :> data_type;
+                  } else [];
+      def data = (name, tree) :: data;
+      storage[key] = data
+    }
+
+    public CheckBody() : void
+    {
+      when (body == null) Message.Error(attr_loc, "Body expression must be a string");
+    }
+    
+    public Build() : void
+    {
+      when (fsm.flags.Logging) Console.WriteLine($"Starting analyse fsm $(ty.Name)...");
+      when (fsm.flags.Debug) assert2(false);
+      def mach = ty.Manager.UserData[key] :> data_type;
+      def analyser = FsmAnalyser(fsm, ty.Name, mach.Map((x, y) => (x, y.fsm)));
+      analyser.Analyse();
+      def warn = analyser.WarningMessages;
+      when (fsm.flags.Logging) Console.WriteLine($"Finish analyse with $(analyser.ErrorMessages.Count()) errors and $(warn.Count()) warnings");
+      def warn_file = $"$(ty.Name)Warnings.log";
+      if (!warn.IsEmpty()) 
+      {
+        def text = warn.Map((_, x) => x);
+        warn.Iter(Message.Warning);
+        when (fsm.flags.Debug) File.WriteAllLines(warn_file, text);
+      } else when (fsm.flags.Debug) File.Delete(warn_file);
+      def err_file = $"$(ty.Name)errors.log";
+      if (analyser.Error)
+      {
+        def err = analyser.ErrorMessages;
+        def text = err.Map((_, x) => x);
+        when (fsm.flags.Debug) System.IO.File.WriteAllLines(err_file, text);
+        err.Iter(Message.Error)
+      } else
+      {
+        when (fsm.flags.Debug) File.Delete(err_file);
+
+        when (!fsm.flags.OnlyAnalyse) 
+        {
+          if (analyser.Complete)
+          {
+            when (fsm.flags.Logging) Console.WriteLine($"Starting generate fsm $(ty.Name)...");
+            def active = analyser.ActiveStates.Where(_.Used).NToList();
+            def gen = StaticGenerator(active, analyser.FsmFlags, analyser.InitialTransition, analyser.StatesId, analyser.LoadedMachines, ty);
+            // active ActiveStates.Where(Used)
+            gen.Generate();
+            when (fsm.flags.Logging) Console.WriteLine($"Finish generating $(ty.Name)");
+            ty.UserData[FsmBuilder.key] = true;
+          } else Message.Warning("No Statechart to generate")
+        }
+      }
+
+    }
+
+    public static ParseAll(ty : TypeBuilder) : void
+    {
+      def types = ty.Manager.Hierarchy.TopTypeBuilders();
+      foreach (ty in types)
+      {
+        def types = ty.AstParts;
+        def builders = types.Map(x => FsmBuilder(ty, x));
+        builders.Iter(x => x.Parse());
+        def parsed = builders.Filter(x => x.fsm != null);
+        match (parsed)
+        {
+          | []  => ()
+          | [p] => Memoize(ty, p)
+          | lst => def fsm = MergePartial(lst.Map(_.Fsm));
+                   Memoize(ty, FsmBuilder(ty, lst.Head.top, fsm))
+        }
+      }
+    }
+
+    static MergePartial(fsm : list[StateNode.StateMachine]) : StateNode.StateMachine
+    {
+      def merge_states(a, b)
+      {
+        def entry = a.entry + b.entry;
+        def exit = a.exit + b.exit;
+        def tran = a.transitions + b.transitions;
+        def doact = a.do_activity + b.do_activity;
+        def err = a.errors + b.errors;
+        def defer = a.defer + b.defer;
+        def pseudo = a.pseudo_states + b.pseudo_states;
+        def sub = a.sub_states + b.sub_states;
+        def pos = Math.Min(a.pos, b.pos);
+        StateNode.State(pos, null, None(), [], entry, exit, tran, doact, defer, sub, pseudo, StateType.State(), err)
+      }
+
+      def merge(a, b)
+      {
+        def pos = Math.Min(a.pos, b.pos);
+        def flags = MachineFlags(a.flags.flags | b.flags.flags, a.flags.errors + b.flags.errors);
+        def aname = a.name ?? "";
+        def bname = b.name ?? "";
+        def name = if (aname.Length > bname.Length) aname else bname;
+        def state = merge_states(a.state, b.state);
+        StateNode.StateMachine(pos, flags, name, state, a.usings + b.usings);
+      }
+
+
+      fsm.Reduce(merge)
+    }
+
+  }
+
+}
