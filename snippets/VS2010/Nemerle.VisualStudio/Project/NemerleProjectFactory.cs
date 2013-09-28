@@ -48,10 +48,16 @@ namespace Nemerle.VisualStudio.Project
 
         static class Default
         {
+            private const string FrameworkVersion451 = "4.5.1";
             private const string FrameworkVersion45 = "4.5";
             private const string FrameworkVersion40 = "4.0";
 
+#if VS2013 || VS2012 || VS2010
             public const string ToolsVersion = "4.0";
+#else
+    #error You must define constant VS<VS Version> in the project file. E.g.: VS2010
+#endif
+
             public const string NemerleVersion = "Net-" + ToolsVersion;
 
             public static readonly HashSet<string> ValidNemerleVersions = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase)
@@ -61,17 +67,32 @@ namespace Nemerle.VisualStudio.Project
             public const string NemerleBinPathRoot = @"$(ProgramFiles)\Nemerle";
             public static readonly string[] OldNemerlePropertyValues = new[] { @"$(ProgramFiles)\Nemerle", @"$(ProgramFiles)\Nemerle\Net-3.5", @"$(ProgramFiles)\Nemerle\Net-4.0" };
             public const string NemerleProperty = @"$(NemerleBinPathRoot)\$(NemerleVersion)";
-#if VS2012
+#if VS2013
+            public const string TargetFrameworkVersion = "v" + FrameworkVersion451;
+#elif VS2012
             public const string TargetFrameworkVersion = "v" + FrameworkVersion45;
-#else
+#elif VS2010
             public const string TargetFrameworkVersion = "v" + FrameworkVersion40;
+#else
+    #error You must define constant VS<VS Version> in the project file. E.g.: VS2010
 #endif
             public static readonly HashSet<string> ValidTargetFrameworkVersions = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase)
             {
-#if VS2012
+#if VS2010 || VS2012 || VS2013
+                "v" + FrameworkVersion40,
+#endif
+                
+#if VS2012 || VS2013
                 "v" + FrameworkVersion45,
 #endif
-                "v" + FrameworkVersion40
+                
+#if VS2013
+                "v" + FrameworkVersion451,
+#endif
+
+#if !(VS2010 || VS2012 || VS2013)
+    #error You must define constant VS<VS Version> in the project file. E.g.: VS2010
+#endif
             };
         }
 
@@ -233,13 +254,18 @@ namespace Nemerle.VisualStudio.Project
             }
             catch (Exception ex)
             {
-                MessageBox.Show(ex.Message, "Nemerle laguage");
+                MessageBox.Show(ex.Message, "Nemerle language");
                 pUpgradeRequired = 0;
                 return VSConstants.E_FAIL;
             }
 
+            if (projectData.ToolsVersion == null)
+                return VSConstants.S_OK;
+
+            // Check ToolsVersion
+            // Can be one of the following: 4.0
             var version = ParseVersion(projectData.ToolsVersion.Value);
-            if (projectData.ToolsVersion == null || version.Major != 4 && version.Minor != 0)
+            if (!(version.Major == 4 && version.Minor == 0))
                 return VSConstants.S_OK;
 
             if (IsNeedUpdateNemerleProperty(projectData.NemerleProperty))
