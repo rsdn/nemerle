@@ -1,4 +1,4 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
 using System.Diagnostics;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Project;
@@ -13,6 +13,7 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 		public const string OutputPath = "OutputPath";
 		public const string DocumentationFile = "DocumentationFile";
 		public const string DebugSymbols = "DebugSymbols";
+		public const string RunDebugger = "RunDebugger";
 	}
 
 	[ComVisible(true)]
@@ -34,6 +35,7 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 		private string outputPath;
 		private string docFile;
 		private bool debugSymbols;
+		private bool runDebugger;
 
 		#endregion
 
@@ -78,6 +80,7 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 		{
 			get { return Evaluate(outputPath); }
 		}
+		
 		[SRCategoryAttribute(SR.BuildCaption)]
 		[SRDisplayName(SR.DebugSymbols)]
 		[SRDescriptionAttribute(SR.DebugSymbolsDescription)]
@@ -85,6 +88,15 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 		{
 			get { return debugSymbols; }
 			set { debugSymbols = value; IsDirty = true; }
+		}
+
+		[SRCategoryAttribute(SR.BuildCaption)]
+		[SRDisplayName(SR.RunDebugger)]
+		[SRDescriptionAttribute(SR.RunDebuggerDescription)]
+		public bool RunDebugger
+		{
+			get { return runDebugger; }
+			set { runDebugger = value; IsDirty = true; }
 		}
 
 		#endregion
@@ -115,6 +127,8 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 						}
 					}
 				}
+
+				bool.TryParse(GetPropertyValue(Consts.RunDebugger), out runDebugger);
 			}
 		}
 
@@ -131,7 +145,8 @@ namespace Nemerle.VisualStudio.Project.PropertyPages
 			SetConfigProperty(Consts.DefineConstants, defineConstants);
 			SetConfigProperty(Consts.OutputPath, outputPath);
 			SetPropertyValue (Consts.DocumentationFile, docFile);
-            SetConfigProperty(Consts.DebugSymbols, debugSymbols.ToString().ToLower());
+			SetConfigProperty(Consts.DebugSymbols, debugSymbols.ToString().ToLower());
+			SetConfigProperty(Consts.RunDebugger, runDebugger.ToString().ToLower());
 
 			IsDirty = false;
 
