@@ -108,6 +108,8 @@ namespace Nemerle.VisualStudio
 		internal const string WorkingDirectoryDescription       = "WorkingDirectoryDescription";
 		internal const string DebugSymbols                      = "DebugSymbols";
 		internal const string DebugSymbolsDescription           = "DebugSymbolsDescription";
+		internal const string RunDebugger                       = "RunDebugger";
+		internal const string RunDebuggerDescription            = "RunDebuggerDescription";
 
 		static SR     loader = null;
 		static object s_InternalSyncObject;
