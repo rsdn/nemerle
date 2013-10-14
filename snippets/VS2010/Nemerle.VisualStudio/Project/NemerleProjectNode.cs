@@ -228,23 +228,9 @@ namespace Nemerle.VisualStudio.Project
 		{
 			get
 			{
-				//Set the RuntimeNameProvider so the XAML designer will call it when items are added to
-				//a design surface. Since the provider does not depend on an item context, we provide it at 
-				//the project level.
-
-				if (_designerContext != null)
-					return _designerContext;
-
-
-				_designerContext =
-					new DesignerContext()
-					{
-						RuntimeNameProvider = new NemerleRuntimeNameProvider(),
-						//EventBindingProvider = new NemerleEventBindingProvider()
-
-					};
-
-				return _designerContext;
+        if (_designerContext == null)
+            _designerContext = XamlDesignerSupport.CreateDesignerContext();
+        return _designerContext;
 			}
 		}
 
@@ -314,6 +300,11 @@ namespace Nemerle.VisualStudio.Project
 		public override string ProjectType { get { return NemerleConstants.LanguageName; } }
 		internal override object Object { get { return VSProject; } }
 
+    public override CommonFileNode CreateNonCodeFileNode(ProjectElement item)
+    {
+      return new NemerleNonCodeFileNode(this, item);
+    }
+    
 		protected override ReferenceContainerNode CreateReferenceContainerNode()
 		{
 			return new NemerleReferenceContainerNode(this);

@@ -5251,6 +5251,17 @@ namespace Microsoft.VisualStudio.Project
 		}
 
 		#endregion
+    
+    /// <summary>
+    /// Finds a node by it's full path on disk.
+    /// </summary>
+    public HierarchyNode FindNodeByFullPath(string name)
+    {
+        Debug.Assert(Path.IsPathRooted(name));
+        HierarchyNode res;
+        _diskNodes.TryGetValue(name, out res);
+        return res;
+    }
 
 		#region IVsComponentUser methods
 

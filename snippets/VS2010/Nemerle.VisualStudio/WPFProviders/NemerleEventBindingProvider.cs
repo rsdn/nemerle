@@ -299,7 +299,7 @@ namespace Nemerle.VisualStudio.WPFProviders
 
     public override string CodeProviderLanguage
     {
-      get { throw new NotImplementedException(); }
+      get { return "Nemerle"; }
     }
 
     public override bool RemoveHandlesForName(string elementName)
