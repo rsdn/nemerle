@@ -1,0 +1,264 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Text;
+using System.Collections.Generic;
+using System.Linq;
+using System.IO;
+
+namespace Nemerle.Statechart
+{
+
+  using System.Console;
+  
+  public variant ActionType
+  {
+    | Initiate
+    | SendEvent { evt : EventInfo; parms : list[string]; }
+    | SetProperty { prop : string; value : string; }
+    | Terminate
+    | Error { err : ErrorType }
+  }
+
+  public variant ErrorType
+  {
+    | NoError
+    | UnknownCommand { text : string }
+    | UnknownEvent { evt : string }
+    | EventNeedParams { evt : EventInfo; }
+    | InvalidParameter { info : string }
+    | UnknownProperty { name : string; }
+    
+    public Message : string
+    {
+      get
+      {
+        match (this)
+        {
+          | NoError             => ""
+          | UnknownCommand(t)   => $<#Unknown command: "$t"#>
+          | UnknownEvent(e)     => $<#Unknown event "$e" for this statemachine#>
+          | EventNeedParams(e)  => $<#Event need parameters, signature is $(e.name)(..$(e.parms; ",")) #>
+          | InvalidParameter(p) => $<#Error in parameter: $p#>
+          | UnknownProperty(p)  => $<#Unknown or inaccessible property $p#>
+        }
+      }
+    }
+  }
+  
+  [Record]
+  public class Result
+  {
+    public state : string;
+    public act   : list[string];
+  }
+  
+  /// <summary>
+  /// Description of FsmTestGen.
+  /// </summary>
+  public partial class FsmInterpreter
+  {
+    public GenConsoleTest(data : string) : void
+    {
+      def lines = data.SplitToList('\n');
+      def _lines = lines.Filter(x => x != "Ok");
+
+    }
+
+    tester : FsmTester;
+    
+    public this(test : FsmTester)
+    {
+      tester = test;
+    }
+    
+    public exit_string : string {get;set;default "exit"}
+
+    mutable canceled : bool;
+
+    [Accessor]
+    mutable history : list[ActionType * Result];
+
+    fsm : ITestStateMachine
+    {
+      get
+      {
+        tester.Fsm
+      }
+    }
+    
+    type_name : string
+    {
+      get
+      {
+        fsm.GetType().ToString()
+      }
+    }
+    
+    SetProperty(name : string, val : object, tostr : string) : ActionType
+    {
+      def type = fsm.GetType();
+      def prop = type.GetProperty(name);
+      if (prop != null)
+      {
+        prop.SetValue(fsm, val, null);
+        ActionType.SetProperty(name, tostr)
+      } else ActionType.Error(ErrorType.UnknownProperty(name))
+    }
+
+    GetPropertyValue(name : string) : object
+    {
+      def type = fsm.GetType();
+      def prop = type.GetProperty(name);
+      prop.GetValue(fsm, null)
+    }
+    
+    AddHistory(act : ActionType) : void
+    {
+      def state = fsm.ToString();
+      def result = Result(state, tester.queue_result.NToList());
+      history = (act, result) :: history;
+    }
+
+    PrintStatus() : void
+    {
+      WriteLine();
+      WriteLine($"[$fsm]");
+    }
+    
+    SendEventParams(info : EventInfo, p : array[string]) : ActionType
+    {
+      def convert_param((n, t))
+      {
+        try
+        {
+          def res = match (t)
+          {
+            | "int"    => int.Parse(n) : object
+            | "uint"   => uint.Parse(n)
+            | "bool"   => match (n)
+                          {
+                            | "true"  => true
+                            | "false" => false
+                            | _       => throw FormatException("invalid bool value")
+                          }
+            | "long"   => long.Parse(n)
+            | "ulong"  => ulong.Parse(n)
+            | "double" => double.Parse(n)
+            | "float"  => float.Parse(n)
+            | "short"  => short.Parse(n)
+            | "ushort" => ushort.Parse(n)
+            | "byte"   => byte.Parse(n)
+            | "char"   => char.Parse(n)
+            | "string" => n
+            | _        => throw InvalidOperationException("unknown type used in event")
+          }
+          (res, ErrorType.NoError())
+        }
+        catch
+        {
+          | m => (null, ErrorType.InvalidParameter(m.Message))
+        }
+      }
+      
+      def parms = p.MapToList(x => x.Trim());
+      def parms_and_types = parms.Zip(info.parms);
+      def res = parms_and_types.Map(convert_param);
+      match (res.Find((x, _) => x == null))
+      {
+        | Some((_, e)) => ActionType.Error(e)
+        | _            => def res = res.MapToArray((x, _) => x);
+                          tester.SendEvent(info.name, res);
+                          ActionType.SendEvent(info, parms)
+      }
+    }
+    
+    Interact(text : string) : ActionType
+    {
+      regexp match (text)
+      {
+        | "exit"
+        | "terminate"                                   => canceled = true;
+                                                          fsm.Terminate();
+                                                          ActionType.Terminate()
+                                                                           
+        | @"(?<param>\w+)\s*=\s*(?<value : int>-?\d+)" => def name = param;
+                                                          def val = value;
+                                                          SetProperty(name, val, val.ToString())
+                                                                           
+        | @"(?<param>\w+)\s*=\s*(?<value>\w+)"         => def name = param;
+                                                          def (val, tostr) = match (value)
+                                                                    {
+                                                                      | "true"  => (true : object, "true")
+                                                                      | "false" => (false, "false")
+                                                                      | _       => (value, value.ToString())
+                                                                    }
+                                                          SetProperty(name, val, tostr)
+                                                                           
+        | _ => def name = text.SpacesToUnderline();
+               regexp match (name)
+               {
+                 | @"\s*(?<name>\w+)\s*" => match (fsm.Events.Find(x => x.name == name))//.Exists(x => x.name == name))
+                                            {
+                                              | Some(e) => if (e.parms.Length == 0)
+                                                           {
+                                                            tester.SendEvent(name);
+                                                            ActionType.SendEvent(e, [])
+                                                           } else ActionType.Error(ErrorType.EventNeedParams(e));
+                                              | _       => ActionType.Error(ErrorType.UnknownEvent(name))
+                                            }
+                 | @"\s*(?<name>\w+)\s*\(\s*(?<parm>\w+)(?<parms>\s*,\s*\w+)*\)" => def name = name;
+                                                                                    def parm = parm;
+                                                                                    def parms = parms.MapDefault(x => parm + x, parm);
+                                                                                    def parms = parms.Split(array[',', ' '], StringSplitOptions.RemoveEmptyEntries);
+                                                                                    match (fsm.Events.Find(x => x.name == name))//.Exists(x => x.name == name))
+                                                                                    {
+                                                                                      | Some(e) => if (e.parms.Length == parms.Length)
+                                                                                                   {
+                                                                                                    SendEventParams(e, parms);
+                                                                                                   } else ActionType.Error(ErrorType.EventNeedParams(e));
+                                                                                      | _       => ActionType.Error(ErrorType.UnknownEvent(name))
+                                                                                    }
+                 | _                         => ActionType.Error(ErrorType.UnknownCommand(text))
+               }
+        
+      }
+    }
+    
+    public StartConsole() : void
+    {
+      canceled = false;
+      Console.WriteLine($"Initiate state machine $type_name");
+      history = [];
+      tester.ConsoleTestInit();
+      fsm.Initiate();
+      PrintStatus();
+      AddHistory(ActionType.Initiate());
+
+      def loop()
+      {
+        def text = Console.ReadLine();
+        tester.prepare();
+        def action = Interact(text);
+        match (action)
+        {
+          | SendEvent             => PrintStatus();
+                                     AddHistory(action);
+          | SetProperty(n, v)     => WriteLine($"Property '$n' setted to '$v'");
+                                     WriteLine($"[$n = $(GetPropertyValue(n))]");
+                                     AddHistory(action);
+          | Error(err)            => WriteLine($"Error: $(err.Message)")
+          | _                     => AddHistory(action);
+        }
+        if (canceled) () else loop()
+      }
+
+      loop();
+      history = history.Reverse()
+    }
+    
+  }
+}

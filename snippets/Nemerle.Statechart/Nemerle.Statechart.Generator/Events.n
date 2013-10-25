@@ -1,0 +1,528 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+namespace Nemerle.Statechart
+{
+  [Record]
+  class GenEvents
+  {
+    gen : StaticGenerator;
+    events : list[StateEvent];
+
+
+    [Memoized]
+    events_with_most_parameters : list[StateEvent]
+    {
+      get
+      {
+        def dups = events.Exclude(_.IsTimed).GroupBy(_.Name);
+        dups.Map(x => x.OrderByDescending(x => x.Parms.Length).First())
+      }
+    }
+
+    [Memoized]
+    have_completion : bool
+    {
+      get
+      {
+        events.Exists(_.IsCompletion)
+      }
+    }
+
+    internal_events : list[StateEvent]
+    {
+      [Memoize]
+      get
+      {
+        events_wo_completion.Exclude(_.IsExternal)
+      }
+    }
+
+    [Memoized]
+    events_wo_completion : list[StateEvent]
+    {
+      get
+      {
+        events_with_most_parameters.Exclude(_.IsCompletion)
+      }
+    }
+
+    [Memoized]
+    events_generators : list[GenEvent]
+    {
+      get
+      {
+        events_with_most_parameters.Map(GenEvent(_, gen))
+      }
+    }
+
+    events_generators_wo_completion : list[GenEvent]
+    {
+      [Memoize]
+      get
+      {
+        events_generators.Exclude(x => x.evt.IsCompletion)
+      }
+    }
+
+    external_events : list[GenEvent]
+    {
+      [Memoize]
+      get
+      {
+        events_generators.Filter(x => x.evt.IsExternal)
+      }
+    }
+
+    NeedEvtContextName : bool
+    {
+      get
+      {
+        gen.EventCtx.NeedName
+      }
+    }
+
+    NeedEvtContext : bool
+    {
+      get
+      {
+        gen.EventCtx.NeedContext
+      }
+    }
+
+
+    [Memoized]
+    RunEventInState : list[MatchCase]
+    {
+      get
+      {
+        events_generators_wo_completion.Exclude(x => x.evt.IsExternal).Map(_.RunEventBody);
+      }
+    }
+
+    [Memoized]
+    EventCtxBody : PExpr
+    {
+      get
+      {
+        if (NeedEvtContext) <[ Evt.evt = evt ]> else <[]>
+      }
+    }
+
+    GenEventCtx() : void
+    {
+      def cls = <[decl: public class EventCtx
+                        {
+                          public evt : HsmEvent {get;set;}
+
+                          public name : string
+                          {
+                            get
+                            {
+                              evt.ToString()
+                            }
+                          }
+                        } ]>;
+      def field = <[decl: public Evt : EventCtx = EventCtx() ]>;
+      gen.DefineNested(cls).Compile();
+      gen.Define(field);
+    }
+
+    public SendOtherCode(evt : string) : PExpr
+    {
+      match (events_generators.Find(x => x.evt.Name == evt))
+      {
+        | Some(e) => <[ Messenger.PostOthers($(e.CreateExpr), this) ]>
+        | _       => <[ ]>
+      }
+    }
+
+    public SendAllCode(evt : string) : PExpr
+    {
+      match (events_generators.Find(x => x.evt.Name == evt))
+      {
+        | Some(e) => <[ Messenger.Post($(e.CreateExpr)) ]>
+        | _       => <[ ]>
+      }
+    }
+
+    public SendEventCode(evt : string) : PExpr
+    {
+      match (events_generators.Find(x => x.evt.Name == evt))
+      {
+        | Some(e) => <[ PostEvent($(e.CreateExpr)) ]>
+        | _       => <[ ]>
+      }
+    }
+
+    timed_events : list[MatchCase]
+    {
+      [Memoize]
+      get
+      {
+        gen.timed_events.DispatchCases
+      }
+    }
+
+    external_events_disp_case : list[MatchCase]
+    {
+      [Memoize]
+      get
+      {
+        def group = external_events.GroupBy(x => x.evt.ExtClass.Base);
+
+        def get_events(e)
+        {
+          def ext = e.evt.ExtClass;
+          def evt = ext.evt_name;
+          def base_class = e.GetBase;
+          <[ case: | $base_class.$(evt : usesite) => current_event = e;
+                                $(e.RunEvent)
+          ]>
+        }
+
+        def get_case(e)
+        {
+
+          def ignore = <[case: _ => null]>;
+          def cases = e.FoldLeft([ignore], (x, a) => get_events(x) :: a);
+          def base_class = e.First().GetBase;
+          <[ case: | e is $base_class => match (e) 
+                                                {
+                                                  ..$cases
+                                                }
+          ]>
+        }
+
+        group.Map(get_case)
+      }
+    }
+
+    internal_event_disp_case : MatchCase
+    {
+      [Memoize]
+      get
+      {
+        <[case:
+
+          | e is Event =>
+
+          current_event = e;
+          match (e)
+          {
+            ..$RunEventInState
+          } ]>
+      }
+    }
+
+    completion_disp_case : MatchCase
+    {
+      [Memoize]
+      get
+      {
+        def completion = GenEvent(StateEvent.Completion(), gen);
+        <[ case: e is CompletionEvent => current_event = e;
+                                        $(completion.RunEvent)
+        ]>
+      }
+    }
+
+    timed_disp_case : MatchCase
+    {
+      [Memoize]
+      get
+      {
+        <[case: e is TimEvent => current_event = e;
+                                  match (e)
+                                  {
+                                    ..$timed_events
+                                  }
+                    ]>
+      }
+    }
+
+    dispatch_body : list[MatchCase]
+    {
+      [Memoize]
+      get
+      {
+        def evt = internal_event_disp_case;
+        def completion = completion_disp_case;
+        def timed = timed_disp_case;
+        def last = <[case: | _ => null ]>;
+        def cases = last :: [];
+        def cases = if (internal_events.IsEmpty()) cases else evt :: cases;
+        def cases = if (have_completion) completion :: cases else cases;
+        def cases = if (timed_events.IsEmpty()) cases else timed :: cases;
+        def cases = if (external_events.IsEmpty()) cases else external_events_disp_case + cases;
+        cases
+      }
+    }
+
+    GenBaseStruct() : void
+    {
+      when (NeedEvtContext) GenEventCtx();
+      gen.Define(<[ decl:
+            protected override DispatchEvent(evt : HsmEvent) : State
+            {
+                match (evt)
+                {
+                  ..$dispatch_body
+                }
+            }
+            ]>);
+      gen.Define(<[ decl: mutable current_event : HsmEvent = null; ]>);
+      when (gen.FsmFlags.TransitionCompleted)
+      {
+        def expr = <[decl:
+                  protected override OnEventComplete() : void
+                    {
+                      OnTransitionCompleted()
+                    }
+                  ]>;
+        gen.Define(expr);
+        gen.DefineEvent("TransitionCompleted")
+      }      
+    }
+
+
+    GenEvents() : void
+    {
+      def evt = events_wo_completion;
+
+      unless (evt.IsEmpty())
+      {
+        def evt = evt.Map(GenEvent(_, gen));
+        def lst = evt.Map(x => x.PostEventByNameBody);
+        gen.Define(lst);
+
+        def ty = gen.DefineNested(<[ decl:
+            public variant Event : HsmEvent
+            {
+            }]>);
+        foreach (evt when !evt.evt.IsExternal in evt)
+        {
+          evt.EventDecl(ty)
+        }
+        ty.Compile();
+      }
+    }
+
+    [Memoized]
+    UnknownEvent : MatchCase
+    {
+      get
+      {
+        <[case: | _ => throw InvalidOperationException("Unknown event") ]>
+      }
+    }
+
+    [Memoized]
+    StringToEvent : list[MatchCase]
+    {
+      get
+      {
+        events_generators.Filter(x => x.evt.Parms.Length == 0).FoldRight(UnknownEvent :: [], (x, a) => <[case: | $(x.evt.Name : string) => $(x.CreateExpr) ]> :: a);
+      }
+    }
+
+    [Memoized]
+    StringToEventParms3 : list[MatchCase]
+    {
+      get
+      {
+        def create_parms(x)
+        {
+          match (x.evt)
+          {
+            | StateEvent.Completion  => def empty_pars = <[ _ = p0; _ = p1; _ = p2; ]>; <[ $empty_pars; CompletionEvent.New ]>
+            | Normal as n =>
+              def parms = n.ParmTypes.MapI((i, t) => <[ $($"p$i" : dyn) :> $(t : usesite)]>);
+              def empty_pars = NList.Range(3).FoldLeft([], (x, a) => if (parms.Length > x) a else <[ _ = $($"p$x" : dyn) ]> :: a);
+              def base_class = x.GetBase;
+              <[
+                {..$empty_pars}
+                $base_class.$(n.TargetName : usesite)(..$parms) 
+              ]>
+            | Timed => <[ ]>
+          }
+        }
+
+        def events = events_generators.Filter(x => x.evt.Parms.Length <= 3);
+        events.FoldRight(UnknownEvent :: [], (x : GenEvent, a) => <[case: | $(x.evt.Name : string) => $(create_parms(x)) ]> :: a);
+      }
+    }
+
+    [Memoized]
+    StringToEventParmsAll : list[MatchCase]
+    {
+      get
+      {
+        def create_parms(x)
+        {
+          match (x.evt)
+          {
+            | StateEvent.Completion => <[ _ = parms; CompletionEvent.New ]>
+            | Normal as n           =>
+
+            def parms = n.ParmTypes.MapI((i, t) => <[ parms[$i] :> $(t : usesite)]>);
+            def base_class = x.GetBase;
+            def run = <[ $base_class.$(n.TargetName : usesite)(..$parms) ]>;
+            def body = if (parms.IsEmpty()) 
+                        {
+                          <[ _ = parms;
+                            $run
+                          ]>
+                        } else
+                        {
+                          def num = n.ParmNames.Length;
+                          def s = if (n.parms.Length > 1) "s" else "";
+                          def str = $"event $(n.Name) need $num parameter$s";
+                          <[ if (parms.Length >= $num) $run else throw InvalidOperationException($str) ]>
+                        }
+            body
+            | Timed => <[ ]>
+          }
+        }
+
+        def events = events_generators;
+        events.FoldRight(UnknownEvent :: [], (x, a) => <[case: | $(x.evt.Name : string) => $(create_parms(x)) ]> :: a);
+      }
+    }
+
+    [Memoized]
+    public EventDeclsInTopState : list[ClassMember]
+    {
+      get
+      {
+        def timed = gen.timed_events.DeclInTopState;
+        events_generators.Map(_.EventDeclInTopState) + timed
+      }
+    }
+
+    public GetParams(tr : Transition) : PExpr * list[PParameter]
+    {
+      def e = tr.Trigger;
+      if (e.IsTimed) (<[]>, []) else
+      {
+        def evt = events.Filter(x => x.Name == e.Name);
+        def most = evt.OrderByDescending(x => x.Parms.Length).First();
+        def most = if (most.Parms.Length == e.Parms.Length) e else most;
+        def fsm = <[parameter: fsm : $(gen.ChartName : usesite) ]>;
+        def parms = fsm :: most.event_parameter_decls();
+        def most_parms = match (most)
+                          {
+                            | StateEvent.Normal as n => n.ParmNames
+                            | _                      => []
+                          }
+        def ignore = if (most_parms.Length > e.Parms.Length)
+                      {
+                        def ignores = most_parms.Map(x => <[ _ = $(x : usesite) ]>);
+                      <[ { ..$ignores } ]>
+                      } else
+                      {
+                        <[]>
+                      }
+        (ignore, parms)
+      }
+    }
+
+    public EventDeclInState(tr : Transition, body : PExpr) : ClassMember
+    {
+      def e = tr.Trigger;
+      if (e.IsTimed) gen.timed_events.EventDeclInState(tr, body) else
+      {
+        def (ignore, parms) = GetParams(tr);
+        <[ decl: public override $(e.Name : usesite)(..$parms) : State { $ignore; $body } ]>
+      }
+    }
+
+    GenPost() : void
+    {
+      def body = if (StringToEvent.Length > 1) 
+                  {
+                  <[
+                      def res = match (evt)
+                                {
+                                  ..$StringToEvent
+                                }
+                      PostEvent(res)
+                  ]>
+                  }  else 
+                  {
+                  <[
+                    match (evt)
+                      {
+                        ..$StringToEvent
+                      }
+                  ]>
+                  }
+      gen.Define(<[ decl:
+            public override PostEvent(evt : string) : void
+            {
+              $body
+            }
+            ]>);
+      def body = if (StringToEventParms3.Length > 1)
+                  {
+                  <[ def res = match(evt)
+                                {
+                                  ..$StringToEventParms3
+                                }
+                      PostEvent(res) ]>
+                  } else
+                  {
+
+                   <[ _ = p0;
+                      _ = p1;
+                      _ = p2;
+                      match(evt)
+                      {
+                        ..$StringToEventParms3
+                      } ]>
+                  }
+      gen.Define(<[decl:
+                    public PostEvent(evt : string, p0 : object, p1 : object = null, p2 : object = null) : void
+                    {
+                      $body
+                    }
+                  ]>);
+      def body = if (StringToEventParmsAll.Length > 1)
+                  {
+                  <[ def res = match(evt)
+                                {
+                                  ..$StringToEventParmsAll
+                                }
+                      PostEvent(res) ]>
+                  } else
+                  {
+                   <[ _ = parms;
+                      match(evt)
+                      {
+                        ..$StringToEventParmsAll
+                      } ]>
+                  }
+      gen.Define(<[decl:
+                    public PostEvent(evt : string, params parms : array[object]) : void
+                    {
+                      $body
+                    }
+                  ]>)
+    }
+
+    public Generate() : void
+    {
+      GenBaseStruct();
+      GenEvents();
+      GenPost();
+    }
+  }
+}

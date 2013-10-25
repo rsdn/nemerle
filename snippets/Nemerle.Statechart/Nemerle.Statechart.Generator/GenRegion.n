@@ -1,0 +1,198 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+namespace Nemerle.Statechart
+{
+  /// <summary>
+  /// Description of GenRegion.
+  /// </summary>
+  [Record]
+  class GenRegion
+  {
+    gen : StaticGenerator;
+    ty : TypeBuilder;
+    st : HState;
+
+    id_type : PExpr
+    {
+      get
+      {
+        gen.StateIdType
+      }
+    }
+
+    id_expr : PExpr
+    {
+      [Memoize]
+      get
+      {
+        def (expr, _) = gen.GetId(st.Id);
+        expr
+      }
+    }
+
+    ClassBody : ClassMember.TypeDeclaration
+    {
+      [Memoize]
+      get
+      {
+        <[ variant_option: |  $(st.name : usesite)
+                              {
+                                  public this() {}
+
+                                  public override get_id() : $id_type { $id_expr }
+
+                                  public static Id() : $id_type
+                                  {
+                                      $id_expr
+                                  }
+
+                                  public override ToString() : string
+                                  {
+                                      $(st.name)
+                                  }
+                              } 
+        ]>
+      }
+    }
+
+    NumSubRegions : list[int]
+    {
+      [Memoize]
+      get
+      {
+        list.Range(st.hierarchy.Length)
+      }
+    }
+
+    ConcFields : list[ClassMember]
+    {
+      get
+      {
+        NumSubRegions.Map(i => <[ decl: mutable $($"cur_state$i" : usesite) : State ]>)
+      }
+    }
+
+    InitPars : list[PParameter]
+    {
+      get
+      {
+        NumSubRegions.Map(x => <[ parameter: $($"st$x" : usesite) : State ]>)
+      }
+    }
+
+    SubRegionState(n : int) : PExpr
+    {
+      <[ this.$($"cur_state$n" : usesite) ]>
+    }
+
+    Init : ClassMember
+    {
+      get
+      {
+        def body = NumSubRegions.Map(i => <[ $(SubRegionState(i)) = $($"st$i" : usesite) ]>);
+        <[decl: public Init(..$InitPars) : State 
+        {
+          ..$body;
+          this
+        } ]>
+      }
+    }
+
+    public static ExecStateCode(st : ActiveStateConfig) : PExpr
+    {
+      def loop(st)
+      {
+        | []           => <[]>
+        | head :: tail => if (head.IsConcurrent)
+                          {
+                            def name = StaticGenerator.GetExecStateName(head.ToString());
+                            def sreg = head.hierarchy.Map(x => x.states.First(x => tail.ContainsRef(x)));
+                            def tail = tail.Exclude(sreg.ContainsRef);
+                            def sreg_expr = sreg.Map(x => loop(x :: tail));
+                            <[ $name.Init(..$sreg_expr) ]>
+                          } else
+                            if (head.IsSimple) 
+                            {
+                              def name = StaticGenerator.GetExecStateName(head.ToString());
+                              name
+                            } else loop(tail)
+      }
+
+      loop(st.states)
+    }
+
+    //DefineTransitions(ty : TypeBuilder, st : ActiveStateConfig) : void
+    //{
+    //  DeferrableEvents.EmitInState(st, ty);
+    //  def defs =  {
+    //                def group = st.transitions;
+    //                group.MapToList(x => gen_events.EventDeclInState(x, DefineHandlerTransBody(x)))
+    //              }
+    //  Define(ty, defs)
+    //}
+
+    LaunchEventInSubRegions(tr : Transition) : PExpr
+    {
+      def evt = tr.Trigger;
+
+      def expr = NumSubRegions.Map(x => <[ match ($(SubRegionState(x)).$(evt.Name : usesite)(..$(evt.event_parms_names())))
+                                            {
+                                              | null => ()
+                                              | st   => $(SubRegionState(x)) = st;
+                                            }]>);
+      <[ {..$expr} ]>
+    }
+
+    DefineHandlerTransBody(base_st : HState, tr : Transition) : PExpr
+    {
+      match (tr.Target)
+      {
+        | TargetDeterminator.Defer => <[ fsm.Defer(); null ]>
+        | _                        => 
+                                      match (tr.Target)
+                                      {
+                                        //| TargetDeterminator.Completion(st)
+                                        | State(st)                         when st.states.ContainsRef(base_st) => LaunchEventInSubRegions(tr)
+                                                                                  //def (ignore, parms) = gen.gen_events.GetParams(tr);
+                                        | _                                  => def name = gen.GetTransitionName(tr);
+                                                                                <[ fsm.$(name : usesite)(..$(tr.Trigger.event_parms_names()));]>
+                                      }
+                                      
+      }
+    }
+
+    DefineTransitions(ty : TypeBuilder, st : HState) : void
+    {
+      //DeferrableEvents.EmitInState(conf, ty);
+      def confs = gen.ActiveStates.Filter(x => x.states.ContainsRef(st));
+      def trans = confs.SelectMany(_.transitions).NToList();
+      def grouped = trans.GroupBy(_.Trigger);
+      foreach (tr in grouped)
+      {
+        def defs = tr.Map(x => gen.gen_events.EventDeclInState(x, DefineHandlerTransBody(st, x)));
+        gen.Define(ty, defs);
+      }
+    }
+
+    public Emit() : TypeBuilder
+    {
+      def ty = gen.DefineNested(ty, ClassBody);
+      when (st.IsConcurrent)
+      {
+        gen.Define(ty, ConcFields);
+        gen.Define(ty, Init);
+        DefineTransitions(ty, st);
+      }
+      ty
+    }
+  }
+}
