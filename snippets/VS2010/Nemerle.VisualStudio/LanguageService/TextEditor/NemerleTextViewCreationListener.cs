@@ -95,9 +95,14 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 			if (langSrv == null)
 				return;
 			var source = (NemerleSource)langSrv.GetSource(filePath);
-			langSrv.OnCloseSource(source);
-
-			source.Dispose();
+		  if (source != null)
+		  {
+		    langSrv.OnCloseSource(source);
+		    source.Dispose();
+		  }
+		  else
+		  {
+		  }
 		}
 
 		#endregion

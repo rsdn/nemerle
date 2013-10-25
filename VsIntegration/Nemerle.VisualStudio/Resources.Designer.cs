@@ -615,6 +615,24 @@ namespace Nemerle.VisualStudio {
             }
         }
         
+        /// <summary>
+        ///   Looks up a localized string similar to Run debugger.
+        /// </summary>
+        internal static string RunDebugger {
+            get {
+                return ResourceManager.GetString("RunDebugger", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Sets &apos;-debbuger&apos; compiler option and causes assert dialog display for user can start compiler debug session. Affects only debug compiler build..
+        /// </summary>
+        internal static string RunDebuggerDescription {
+            get {
+                return ResourceManager.GetString("RunDebuggerDescription", resourceCulture);
+            }
+        }
+        
         internal static System.Drawing.Bitmap SO_ClearFiltersButton {
             get {
                 object obj = ResourceManager.GetObject("SO_ClearFiltersButton", resourceCulture);

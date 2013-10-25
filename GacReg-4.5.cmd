@@ -2,11 +2,11 @@
 
 IF "%Type%"=="" set Type=Debug
 
-set GacUtil="%VS80COMNTOOLS%..\..\SDK\v2.0\Bin\gacutil.exe"
-set NemerleInstall=%ProgramFiles%\Nemerle
+set GacUtil="%ProgramFiles(x86)%\Microsoft SDKs\Windows\v8.0A\bin\NETFX 4.0 Tools\gacutil.exe"
+set NemerleInstall=%ProgramFiles%\Nemerle\Net-4.0
 
 @echo NemerleInstall=%NemerleInstall%
-@echo VS80COMNTOOLS=%VS80COMNTOOLS%
+@echo VS110COMNTOOLS=%VS110COMNTOOLS%
 @echo GacUtil=%GacUtil%
 
 md "%NemerleInstall%"

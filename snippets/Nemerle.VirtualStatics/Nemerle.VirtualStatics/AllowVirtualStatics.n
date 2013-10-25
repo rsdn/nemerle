@@ -44,14 +44,14 @@ module AllowVirtualStaticsImpl
         foreach(tb in types.Filter(t => !t.IsInterface))
         {
             def cls = tb.Ast :> TopDeclaration.Class;
-            def isStatic = cls.Attributes.HasFlag(NemerleModifiers.Static);
+            def isStatic = cls.Attributes %&& NemerleModifiers.Static;
             
             when(!cls.t_extends.IsEmpty)
             {
                 def baseCls = typer.BindType(cls.t_extends.Head) :> FixedType.Class;
                 def baseAttrs = baseCls.TypeInfo.Attributes;
-                def isBaseStatic = baseAttrs.HasFlag(NemerleModifiers.Static) ||
-                                   (baseAttrs.HasFlag(NemerleModifiers.Abstract) && baseAttrs.HasFlag(NemerleModifiers.Sealed));
+                def isBaseStatic = (baseAttrs %&& NemerleModifiers.Static) ||
+                                   ((baseAttrs %&& NemerleModifiers.Abstract) && (baseAttrs %&& NemerleModifiers.Sealed));
                                    
                 when(!baseCls.IsInterface)
                 {
@@ -130,23 +130,21 @@ module AllowVirtualStaticsImpl
     private GetStaticMethodsAndProperties(tb: TypeBuilder): list[ClassMember]
     {
         tb.AstParts.SelectMany(_.GetMembers())
-                   .Filter(m => (m.Attributes.HasFlag(NemerleModifiers.Static) || tb.Attributes.HasFlag(NemerleModifiers.Static)) && 
-                                !m.Attributes.HasFlag(NemerleModifiers.Private) &&
-                                (m.Attributes.HasFlag(NemerleModifiers.Public) || m.Attributes.HasFlag(NemerleModifiers.Protected)) &&
-                                (m is ClassMember.Function | m is ClassMember.Property));
+                   .Filter(m =>
+                     ((m.Attributes %&& NemerleModifiers.Static) || (tb.Attributes %&& NemerleModifiers.Static)) && 
+                     !(m.Attributes %&& NemerleModifiers.Private) &&
+                     ((m.Attributes %&& NemerleModifiers.Public) || (m.Attributes %&& NemerleModifiers.Protected)) &&
+                     (m is ClassMember.Function || m is ClassMember.Property));
     }
     
     private Process(metaClass: TypeBuilder, members: list[ClassMember]) : void
     {
         foreach(member in members)
         {
-            def memberInMetaClass = match(member)
-            {
-                | method is ClassMember.Function => Process(method);
-                | property is ClassMember.Property => Process(property);
-            }
-                
+          | method is ClassMember.Function with memberInMetaClass = Process(method)
+          | property is ClassMember.Property with memberInMetaClass = Process(property) =>
             metaClass.Define(memberInMetaClass);
+          | _ => ()
         }
     }
         
@@ -218,58 +216,62 @@ module AllowVirtualStaticsImpl
 
     private CopyMissingMembers(typer : Typer, baseType: TypeInfo, tb: TypeBuilder, members: list[ClassMember]): void
     {
-        def (baseMethods, baseProperties) = match(baseType)
-        {
-            | baseType is ExternalTypeInfo => GetBaseClassStaticMethodsAndProperties(baseType)
-            | baseType is TypeBuilder => GetBaseClassStaticMethodsAndProperties(typer, baseType)
-        }
+      match(baseType)
+      {
+        | baseTypeExternal is ExternalTypeInfo with methodAndProperties = GetBaseClassStaticMethodsAndProperties(baseTypeExternal)
+        | baseTypeBuilder is TypeBuilder with methodAndProperties = GetBaseClassStaticMethodsAndProperties(typer, baseTypeBuilder) =>
         
-        def methods = members.OfType.[ClassMember.Function]()
-                             .Select(m => m.header)
-                             .Select(h => (h.Name, typer.BindType(h.ReturnType), h.Parameters.Map(p=>typer.BindType(p.Type))));
-        def methods = HashSet(methods);
+          def (baseMethods, baseProperties) = methodAndProperties;
         
-        foreach((attrs, name, type, args) in baseMethods)
-        {
-            when(!methods.Contains(name, type, args.Map((_,t)=>t)))
-            {
-                def parameters = args.Map((n, t) => {<[parameter: $(n: usesite): $(PExpr.TypedType(t))]>});
-                def paramNames = args.Map((n, _)=> <[ $(n: usesite) ]>);
-                def newMethod = <[decl: $(name : usesite)(..$parameters) : $(PExpr.TypedType(type))
-                                        {
-                                            $(classFieldName: usesite).$(name: usesite)(..$paramNames)
+          def methods = members.OfType.[ClassMember.Function]()
+                               .Select(m => m.header)
+                               .Select(h => (h.Name, typer.BindType(h.ReturnType), h.Parameters.Map(p=>typer.BindType(p.Type))));
+          def methods = HashSet(methods);
+        
+          foreach((attrs, name, type, args) in baseMethods)
+          {
+              when(!methods.Contains(name, type, args.Map((_,t)=>t)))
+              {
+                  def parameters = args.Map((n, t) => {<[parameter: $(n: usesite): $(PExpr.TypedType(t))]>});
+                  def paramNames = args.Map((n, _)=> <[ $(n: usesite) ]>);
+                  def newMethod = <[decl: $(name : usesite)(..$parameters) : $(PExpr.TypedType(type))
+                                          {
+                                              $(classFieldName: usesite).$(name: usesite)(..$paramNames)
+                                          }]>;
+                  newMethod.Attributes = attrs | NemerleAttributes.New;
+                
+                  tb.Define(newMethod);
+              }
+          }
+        
+          def props = members.OfType.[ClassMember.Property]()
+                             .Where(p => p.parameters.IsEmpty())
+                             .Select(p => (p.Name, typer.BindType(p.returnType)));
+          def props = HashSet(props);
+        
+          foreach((attrs, name, type, hasGetter, hasSetter) in baseProperties)
+          {
+              when(!props.Contains((name, type)))
+              {
+                  def newProp = <[decl: $(name : usesite) : $(PExpr.TypedType(type))
+                                         { 
+                                            get {$(classFieldName: usesite).$(name : usesite)}
+                                            set {$(classFieldName: usesite).$(name : usesite) = value}
                                         }]>;
-                newMethod.Attributes = attrs | NemerleAttributes.New;
+                  newProp.Attributes = attrs | NemerleAttributes.New;
                 
-                tb.Define(newMethod);
-            }
-        }
-        
-        def props = members.OfType.[ClassMember.Property]()
-                           .Where(p => p.parameters.IsEmpty())
-                           .Select(p => (p.Name, typer.BindType(p.returnType)));
-        def props = HashSet(props);
-        
-        foreach((attrs, name, type, hasGetter, hasSetter) in baseProperties)
-        {
-            when(!props.Contains((name, type)))
-            {
-                def newProp = <[decl: $(name : usesite) : $(PExpr.TypedType(type))
-                                       { 
-                                          get {$(classFieldName: usesite).$(name : usesite)}
-                                          set {$(classFieldName: usesite).$(name : usesite) = value}
-                                      }]>;
-                newProp.Attributes = attrs | NemerleAttributes.New;
+                  when(!hasGetter) newProp.getter = None();
+                  when(!hasSetter)  newProp.setter = None();
                 
-                when(!hasGetter) newProp.getter = None();
-                when(!hasSetter)  newProp.setter = None();
-                
-                tb.Define(newProp);
-            }
-        }
+                  tb.Define(newProp);
+              }
+          }
+        | _ => ()
+      }
     }
     
-    private GetBaseClassStaticMethodsAndProperties(baseType: ExternalTypeInfo): list[NemerleAttributes*string*TypeVar*list[string*TypeVar]] * list[NemerleAttributes*string*TypeVar*bool*bool]
+    private GetBaseClassStaticMethodsAndProperties(baseType: ExternalTypeInfo):
+        IEnumerable[NemerleAttributes*string*TypeVar*list[string*TypeVar]] * IEnumerable[NemerleAttributes*string*TypeVar*bool*bool]
     {
         def baseMembers = baseType.GetMembers(BindingFlags.DeclaredOnly | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
                                   .Filter(m => !m.IsPrivate);
@@ -285,21 +287,22 @@ module AllowVirtualStaticsImpl
         }
         
         (
-            baseMethods.Map(m => (m.Attributes, m.Name, m.ReturnType, m.GetParameters().Map(p => (p.Name, p.Type)))),
-            baseProps.Map(p => (p.Attributes, p.Name, p.Getter?.ReturnType ?? p.Setter.Header.Parameters.Head.Type, p.Getter!=null, p.Setter!=null))
+            baseMethods.Select(m => (m.Attributes, m.Name, m.ReturnType, m.GetParameters().Map(p => (p.Name, p.Type)))),
+            baseProps.Select(p => (p.Attributes, p.Name, p.Getter?.ReturnType ?? p.Setter.Header.Parameters.Head.Type, p.Getter!=null, p.Setter!=null))
         )
     }
 
-    private GetBaseClassStaticMethodsAndProperties(typer : Typer, baseType: TypeBuilder): list[NemerleAttributes*string*TypeVar*list[string*TypeVar]] * list[NemerleAttributes*string*TypeVar*bool*bool]
+    private GetBaseClassStaticMethodsAndProperties(typer : Typer, baseType: TypeBuilder): 
+      IEnumerable[NemerleAttributes*string*TypeVar*list[string*TypeVar]] * IEnumerable[NemerleAttributes*string*TypeVar*bool*bool]
     {
         def baseMembers = GetStaticMethodsAndProperties(baseType);
         def baseMethods = baseMembers.OfType.[ClassMember.Function]();
         def baseProps = baseMembers.OfType.[ClassMember.Property]();
 
         (
-            baseMethods.Map(m => (m.Attributes, m.Name, typer.BindType(m.header.ReturnType),
+            baseMethods.Select(m => (m.Attributes, m.Name, typer.BindType(m.header.ReturnType),
                                   m.header.Parameters.Map(p => (p.Name, typer.BindType(p.Type))))),
-            baseProps.Map(p => (p.Attributes, p.Name, typer.BindType(p.returnType), p.getter.HasValue, p.setter.HasValue))
+            baseProps.Select(p => (p.Attributes, p.Name, typer.BindType(p.returnType), p.getter.HasValue, p.setter.HasValue))
         )
     }
 }
