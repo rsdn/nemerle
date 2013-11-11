@@ -217,7 +217,7 @@ namespace Nemerle.Compiler
                 // VladD2: We are need new the optimizer. The current implementation did not qualitative.
                 Optimizer(the_method).Run();
               }
-              def t4 = Typer4 (the_method);
+              def t4 = Typer4 (the_method, ptyper);
               t4.Run ();
             }
            })
@@ -2288,168 +2288,172 @@ namespace Nemerle.Compiler
     DoWalk (expr : TExpr) : TExpr
     {
       // Message.Debug ($ "dowalk: $(expr.GetType()) $(expr)");
-      match (expr)
-      {
-        | TExpr.LocalFunRef (decl, _)
-        | TExpr.LocalRef (decl) =>
-          LocalRef (decl)
+      mutable customTyperRes;
+      if(ptyper != null && ptyper.TryCustomExpressionTyper(TypingStage.Third, expr, Walk, out customTyperRes)) 
+        customTyperRes
+      else 
+        match (expr)
+        {
+          | TExpr.LocalFunRef (decl, _)
+          | TExpr.LocalRef (decl) =>
+            LocalRef (decl)
 
-        | TExpr.StaticRef (_, _ is IField, _) =>
-          null
+          | TExpr.StaticRef (_, _ is IField, _) =>
+            null
 
-        | TExpr.ImplicitValueTypeCtor as ctor
-          when
-            ctor.Type.Fix () is FixedType.Fun =>
-          EmitCtorProxy (ctor)
+          | TExpr.ImplicitValueTypeCtor as ctor
+            when
+              ctor.Type.Fix () is FixedType.Fun =>
+            EmitCtorProxy (ctor)
 
-        | TExpr.StaticRef (_, _ is IMethod, _) as sr =>
-          EmitStaticProxy (sr)
+          | TExpr.StaticRef (_, _ is IMethod, _) as sr =>
+            EmitStaticProxy (sr)
 
-        // we do not support any other staticrefs here
-        // everything should be handled by Typer2 already
-        | TExpr.StaticRef => assert(false)
+          // we do not support any other staticrefs here
+          // everything should be handled by Typer2 already
+          | TExpr.StaticRef => assert(false)
 
-        | TExpr.DefFunctionsIn (funs, body) =>
-          def res = HandleLocalFunctions (funs);
-          Walk(BuildRevSequence (body :: res))
+          | TExpr.DefFunctionsIn (funs, body) =>
+            def res = HandleLocalFunctions (funs);
+            Walk(BuildRevSequence (body :: res))
 
-        | TExpr.DefValIn (decl, val, body) when decl.InClosure =>
-          if (val is TExpr.DefaultValue)
-            Walk(body)
-          else {
-            def assign =
-              TExpr.Assign (InternalType.Void, LocalRef (decl), Walk(val));
-            TExpr.Sequence (assign, Walk(body))
-          }
+          | TExpr.DefValIn (decl, val, body) when decl.InClosure =>
+            if (val is TExpr.DefaultValue)
+              Walk(body)
+            else {
+              def assign =
+                TExpr.Assign (InternalType.Void, LocalRef (decl), Walk(val));
+              TExpr.Sequence (assign, Walk(body))
+            }
 
-        // handled by Typer2.LambdaTransform
-        | TExpr.MethodRef =>
-          assert(false)
+          // handled by Typer2.LambdaTransform
+          | TExpr.MethodRef =>
+            assert(false)
 
-        | TExpr.Call (TExpr.StaticRef (_, m is IMethod, _) as sr, [parm], _)
-          when
-            m.MemberKind == MemberKinds.Constructor && m.DeclaringType.IsDelegate =>
-          EmitDelegateCtor (expr.Type, sr, parm.expr)
+          | TExpr.Call (TExpr.StaticRef (_, m is IMethod, _) as sr, [parm], _)
+            when
+              m.MemberKind == MemberKinds.Constructor && m.DeclaringType.IsDelegate =>
+            EmitDelegateCtor (expr.Type, sr, parm.expr)
 
-        | TExpr.Call (func, parms, is_tail) =>
-          EmitCall (expr.Location, expr.Type, func, parms, is_tail)
+          | TExpr.Call (func, parms, is_tail) =>
+            EmitCall (expr.Location, expr.Type, func, parms, is_tail)
 
-        | TExpr.SelfTailCall (_, parms) =>
-          def clo_len = ClosureParmCount (current_local_fun);
-          foreach (p in parms)
-            p.expr = Walk(p.expr);
-          def (parms, ini) = TupleParms (current_local_fun, parms, clo_len);
-          def assigns =
-            NList.Map2 (parms, current_local_fun.Parameters.ChopFirstN(clo_len),
-              fun (parm, fp)
-                {
-                  assert(parm.kind == ParmKind.Normal);
-                  def ty = fp.ty;
-                  def conv = CheckedConversion (parm.expr, ty);
-                  (fp.decl, conv)
-                });
+          | TExpr.SelfTailCall (_, parms) =>
+            def clo_len = ClosureParmCount (current_local_fun);
+            foreach (p in parms)
+              p.expr = Walk(p.expr);
+            def (parms, ini) = TupleParms (current_local_fun, parms, clo_len);
+            def assigns =
+              NList.Map2 (parms, current_local_fun.Parameters.ChopFirstN(clo_len),
+                fun (parm, fp)
+                  {
+                    assert(parm.kind == ParmKind.Normal);
+                    def ty = fp.ty;
+                    def conv = CheckedConversion (parm.expr, ty);
+                    (fp.decl, conv)
+                  });
 
-          def beg =
-            if (assigns.IsEmpty)
-              ini
+            def beg =
+              if (assigns.IsEmpty)
+                ini
+              else
+                TExpr.MultipleAssign (InternalType.Void, assigns) :: ini;
+
+            def goto = TExpr.Goto (InternalType.Void, start_label, 1);
+
+            BuildRevSequence (goto :: beg)
+
+          | TExpr.ConstantObjectRef => Util.ice ();
+
+          | TExpr.Match as m =>
+            CompileMatch (m)
+
+          // we cannot handle closurised values as placeholders for exceptions
+          // so we use a fresh variable for exception and assign it using
+          // regular DefValIn
+          | TExpr.Try (body, cases) =>
+            mutable change_happened = false;
+            def need_walk (cases) {
+              | [] => false
+              | Try_case.Catch (orig, _) :: _ when (orig.InClosure) => true
+              | Try_case.Filter (orig, _, _) :: _ when (orig.InClosure) => true
+              | _ :: cases => need_walk (cases)
+            }
+            def walk_case (case) {
+              | Try_case.Catch (orig, handler) when (orig.InClosure) =>
+                def val =
+                  LocalValue (current_local_fun, orig.Name,
+                              orig.Type, LocalValue.Kind.ExceptionValue (),
+                              is_mutable = false);
+                val.Register ();
+                val.UseFrom (current_local_fun);
+                def handler =
+                  TExpr.DefValIn (handler.Type, orig, PlainRef (val), handler);
+                change_happened = true;
+                Try_case.Catch (val, Walk(handler))
+
+              | Try_case.Filter (orig, filter, handler) when (orig.InClosure) =>
+                def val =
+                  LocalValue (current_local_fun, orig.Name,
+                              orig.Type, LocalValue.Kind.ExceptionValue (),
+                              is_mutable = false);
+                val.Register ();
+                val.UseFrom (current_local_fun);
+                def filter =
+                  TExpr.DefValIn (filter.Type, orig, PlainRef (val), filter);
+                def handler =
+                  TExpr.DefValIn (handler.Type, orig, PlainRef (val), handler);
+                change_happened = true;
+                Try_case.Filter (val, Walk(filter), Walk(handler))
+
+              | Try_case.Catch (orig, handler) =>
+                Try_case.Catch (orig, Walk(handler))
+
+              | Try_case.Filter (orig, filter, handler) =>
+                Try_case.Filter (orig, Walk(filter), Walk(handler))
+
+              | Try_case.Fault (handler) =>
+                Try_case.Fault (Walk(handler))
+            }
+            if (need_walk (cases))
+              TExpr.Try (Walk(body), cases.Map (walk_case))
             else
-              TExpr.MultipleAssign (InternalType.Void, assigns) :: ini;
+              null
 
-          def goto = TExpr.Goto (InternalType.Void, start_label, 1);
 
-          BuildRevSequence (goto :: beg)
+          // optimize ifs
+          | If (cond, e1, e2, l1, l2) =>
+            match (Walk(cond)) {
+              | Literal (Bool (lit)) => Walk(if (lit) e1 else e2)
 
-        | TExpr.ConstantObjectRef => Util.ice ();
+              | Sequence (prep, Literal (Bool (lit))) =>
+                def e = Walk(if (lit) e1 else e2);
+                TExpr.Sequence (e.Type, prep, e)
 
-        | TExpr.Match as m =>
-          CompileMatch (m)
+              | cond =>
+                match ((Walk(e1), Walk(e2))) {
+                  | (Literal (Bool (true)), Literal (Bool (false))) =>
+                    cond
+                  | (e1, e2) =>
+                    TExpr.If(cond, e1, e2, l1, l2)
+                }
+            }
 
-        // we cannot handle closurised values as placeholders for exceptions
-        // so we use a fresh variable for exception and assign it using
-        // regular DefValIn
-        | TExpr.Try (body, cases) =>
-          mutable change_happened = false;
-          def need_walk (cases) {
-            | [] => false
-            | Try_case.Catch (orig, _) :: _ when (orig.InClosure) => true
-            | Try_case.Filter (orig, _, _) :: _ when (orig.InClosure) => true
-            | _ :: cases => need_walk (cases)
-          }
-          def walk_case (case) {
-            | Try_case.Catch (orig, handler) when (orig.InClosure) =>
-              def val =
-                LocalValue (current_local_fun, orig.Name,
-                            orig.Type, LocalValue.Kind.ExceptionValue (),
-                            is_mutable = false);
-              val.Register ();
-              val.UseFrom (current_local_fun);
-              def handler =
-                TExpr.DefValIn (handler.Type, orig, PlainRef (val), handler);
-              change_happened = true;
-              Try_case.Catch (val, Walk(handler))
-
-            | Try_case.Filter (orig, filter, handler) when (orig.InClosure) =>
-              def val =
-                LocalValue (current_local_fun, orig.Name,
-                            orig.Type, LocalValue.Kind.ExceptionValue (),
-                            is_mutable = false);
-              val.Register ();
-              val.UseFrom (current_local_fun);
-              def filter =
-                TExpr.DefValIn (filter.Type, orig, PlainRef (val), filter);
-              def handler =
-                TExpr.DefValIn (handler.Type, orig, PlainRef (val), handler);
-              change_happened = true;
-              Try_case.Filter (val, Walk(filter), Walk(handler))
-
-            | Try_case.Catch (orig, handler) =>
-              Try_case.Catch (orig, Walk(handler))
-
-            | Try_case.Filter (orig, filter, handler) =>
-              Try_case.Filter (orig, Walk(filter), Walk(handler))
-
-            | Try_case.Fault (handler) =>
-              Try_case.Fault (Walk(handler))
-          }
-          if (need_walk (cases))
-            TExpr.Try (Walk(body), cases.Map (walk_case))
-          else
+          | TExpr.Array (args, _) =>
+            when (args.Exists(x => x.Type.Fix () is FixedType.Void))
+              Message.Error ("array element type cannot be void");
             null
 
+          | TExpr.DebugInfo(e, pe) when e != null =>
+            def res = Walk(e);
 
-        // optimize ifs
-        | If (cond, e1, e2, l1, l2) =>
-          match (Walk(cond)) {
-            | Literal (Bool (lit)) => Walk(if (lit) e1 else e2)
+            if (res == null)
+              null
+            else
+              TExpr.DebugInfo(expr.Location, res.ty, res, pe)
 
-            | Sequence (prep, Literal (Bool (lit))) =>
-              def e = Walk(if (lit) e1 else e2);
-              TExpr.Sequence (e.Type, prep, e)
-
-            | cond =>
-              match ((Walk(e1), Walk(e2))) {
-                | (Literal (Bool (true)), Literal (Bool (false))) =>
-                  cond
-                | (e1, e2) =>
-                  TExpr.If(cond, e1, e2, l1, l2)
-              }
-          }
-
-        | TExpr.Array (args, _) =>
-          when (args.Exists(x => x.Type.Fix () is FixedType.Void))
-            Message.Error ("array element type cannot be void");
-          null
-
-        | TExpr.DebugInfo(e, pe) when e != null =>
-          def res = Walk(e);
-
-          if (res == null)
-            null
-          else
-            TExpr.DebugInfo(expr.Location, res.ty, res, pe)
-
-        | _ => null
-      }
+          | _ => null
+        }
     }
     #endregion
 
