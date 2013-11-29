@@ -43,14 +43,17 @@ If you have a clone already: git pull --recurse-submodules
 
 ## Windows
 
-  For Development:
+  * For Development:
+  
   Run DevBuildQuick(fx-version).cmd depending on required .NET version. Compiler output will be placed in bin/Debug/net-{fx-version}/Stage1.
 
-  For Installer:
+  * For Installer:
+  
   Run BuildInstallerFull(fx-version).cmd depending on required .NET version. Installer will be placed in bin/Release/net-(fx-version)/Installer.
-  You can also use BuildInstallerFast(fx-version).cmd to build installer without running tests.
+  
+  _Note: You can also use BuildInstallerFast(fx-version).cmd to build installer without running tests._
 
-  _Note: for building Visual Studio bindings you need VSSDK and administrative rights._
+  _Note: For building Visual Studio bindings you need VSSDK and administrative rights._
 
 ## Linux
 
