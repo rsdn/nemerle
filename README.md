@@ -37,9 +37,18 @@ Hello world
 
 # How to build
 
+
+Clone with all submodules: git clone --recursive git://github.com/rsdn/nemerle.git
+If you have a clone already: git pull --recurse-submodules
+
 ## Windows
 
-  Run DevBuildQuick.cmd or DevBuildQuick-4.cmd depend on required netfx version. Compiler output will be placed at bin/Debug/net-{fx-version}/Stage1.
+  For Development:
+  Run DevBuildQuick(fx-version).cmd depending on required .NET version. Compiler output will be placed in bin/Debug/net-{fx-version}/Stage1.
+
+  For Installer:
+  Run BuildInstallerFull(fx-version).cmd depending on required .NET version. Installer will be placed in bin/Release/net-(fx-version)/Installer.
+  You can also use BuildInstallerFast(fx-version).cmd to build installer without running tests.
 
   _Note: for building Visual Studio bindings you need VSSDK and administrative rights._
 
