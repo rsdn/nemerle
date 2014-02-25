@@ -58,6 +58,14 @@ If you have a clone already: git pull --recurse-submodules
 ## Linux
 
   Nemerle can bootstrap itself on Mono.
+  
+  Generic line:
+  * xbuild NemerleAll-Mono.nproj /p:TargetFrameworkVersion=v(3.5 or 4.0 or 4.5 or 4.5.1) /p:Configuration=Release(or Debug) /t:Stage4(1 - 4) /tv:4.0(Needed for framework 4.0 and above)
+  
+  Build 3.5 Release
+  * xbuild NemerleAll-Mono.nproj /p:TargetFrameworkVersion=v3.5 /p:Configuration=Release /t:Stage4
+  Build 4.0 Debug
+  * xbuild NemerleAll-Mono.nproj /p:TargetFrameworkVersion=v4.0 /p:Configuration=Debug /t:Stage4 /tv:4.0
 
 # What about IDE?
 
