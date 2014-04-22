@@ -141,12 +141,12 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			// The sequential order of these items should be consistent with the ScanTokenColor enum.
 			//
+			new NemerleColorableItem("Text"),
 			new NemerleColorableItem("Keyword",				  COLORINDEX.CI_BLUE),
 			new NemerleColorableItem("Comment",				  COLORINDEX.CI_DARKGREEN),
 			new NemerleColorableItem("Identifier"),
 			new NemerleColorableItem("String",				   COLORINDEX.CI_MAROON, Color.FromArgb(170,  0,   0)),
 			new NemerleColorableItem("Number"),
-			new NemerleColorableItem("Text"),
 
 			new NemerleColorableItem("Operator"),
 			new NemerleColorableItem("Preprocessor Keyword",	 COLORINDEX.CI_BLUE,   Color.FromArgb(  0, 51, 204)),
@@ -233,17 +233,13 @@ namespace Nemerle.VisualStudio.LanguageService
 		//
 		public override int GetItemCount(out int count)
 		{
-			count = _colorableItems.Length;
+			count = _colorableItems.Length - 1;
 			return VSConstants.S_OK;
 		}
 
 		public override int GetColorableItem(int index, out IVsColorableItem item)
 		{
-			if (index < 1)
-				throw new ArgumentOutOfRangeException("index");
-
-			item = _colorableItems[index - 1];
-
+			item = _colorableItems[index];
 			return VSConstants.S_OK;
 		}
 
