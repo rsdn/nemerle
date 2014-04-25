@@ -1,4 +1,4 @@
-using System;
+п»їusing System;
 using System.ComponentModel.Design;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -195,10 +195,10 @@ namespace Nemerle.VisualStudio
 		{
 			EnvDTE.DTE dte = (EnvDTE.DTE)GetService(typeof(EnvDTE.DTE));
 
-			// Из-за того, что при создании NemerleMacroProjectReferenceNode и NemerleMacroAssemblyReferenceNode
-			// при открытии проектов dte.Solution.Projects еще не содержал проектов добавление ссылок
-			// на проекты того же солюшена закончились неудачей. Производим повторную попытку добавить
-			// ссылки на проекты в ProjectInfo...
+			// РР·-Р·Р° С‚РѕРіРѕ, С‡С‚Рѕ РїСЂРё СЃРѕР·РґР°РЅРёРё NemerleMacroProjectReferenceNode Рё NemerleMacroAssemblyReferenceNode
+			// РїСЂРё РѕС‚РєСЂС‹С‚РёРё РїСЂРѕРµРєС‚РѕРІ dte.Solution.Projects РµС‰Рµ РЅРµ СЃРѕРґРµСЂР¶Р°Р» РїСЂРѕРµРєС‚РѕРІ РґРѕР±Р°РІР»РµРЅРёРµ СЃСЃС‹Р»РѕРє
+			// РЅР° РїСЂРѕРµРєС‚С‹ С‚РѕРіРѕ Р¶Рµ СЃРѕР»СЋС€РµРЅР° Р·Р°РєРѕРЅС‡РёР»РёСЃСЊ РЅРµСѓРґР°С‡РµР№. РџСЂРѕРёР·РІРѕРґРёРј РїРѕРІС‚РѕСЂРЅСѓСЋ РїРѕРїС‹С‚РєСѓ РґРѕР±Р°РІРёС‚СЊ
+			// СЃСЃС‹Р»РєРё РЅР° РїСЂРѕРµРєС‚С‹ РІ ProjectInfo...
 
 			foreach (EnvDTE.Project prj in dte.Solution.Projects)
 			{
