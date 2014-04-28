@@ -1,6 +1,7 @@
-﻿using Microsoft.VisualStudio.Text.Classification;
+﻿using System.ComponentModel.Composition;
+using Microsoft.VisualStudio.Language.StandardClassification;
+using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Utilities;
-using System.ComponentModel.Composition;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
@@ -8,12 +9,12 @@ namespace Nemerle.VisualStudio.LanguageService
 	{
 		public const string StringExName = "Nemerle StringEx";
 
-		[Export, Name(StringExName), BaseDefinition("text")]
+		[Export, Name(StringExName)]
 		public static ClassificationTypeDefinition StringEx = null;
 
 		public const string VerbatimStringName = "Nemerle String (@ Verbatim)";
 
-		[Export, Name(VerbatimStringName), BaseDefinition("String")]
+		[Export, Name(VerbatimStringName), BaseDefinition(PredefinedClassificationTypeNames.String)]
 		public static ClassificationTypeDefinition VerbatimString = null;
 
 		public const string VerbatimStringExName = "Nemerle StringEx (@ Verbatim)";
@@ -23,7 +24,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public const string RecursiveStringName = "Nemerle String (<# #>)";
 
-		[Export, Name(RecursiveStringName), BaseDefinition("String")]
+		[Export, Name(RecursiveStringName), BaseDefinition(PredefinedClassificationTypeNames.String)]
 		public static ClassificationTypeDefinition RecursiveString = null;
 
 		public const string RecursiveStringExName = "Nemerle StringEx (<# #>)";
@@ -33,114 +34,114 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public const string UserTypeName = "Nemerle User Types";
 
-		[Export, Name(UserTypeName), BaseDefinition("text")]
+		[Export, Name(UserTypeName)]
 		public static ClassificationTypeDefinition UserType = null;
 
 		public const string UserDelegateTypeName = "Nemerle User Types (Delegates)";
 
-		[Export, Name(UserDelegateTypeName), BaseDefinition("text")]
+		[Export, Name(UserDelegateTypeName)]
 		public static ClassificationTypeDefinition UserDelegateType = null;
 
 		public const string UserEnumTypeName = "Nemerle User Types (Enums)";
 
-		[Export, Name(UserEnumTypeName), BaseDefinition("text")]
+		[Export, Name(UserEnumTypeName)]
 		public static ClassificationTypeDefinition UserEnumType = null;
 
 		public const string UserInterfaceTypeName = "Nemerle User Types (Interfaces)";
 
-		[Export, Name(UserInterfaceTypeName), BaseDefinition("text")]
+		[Export, Name(UserInterfaceTypeName)]
 		public static ClassificationTypeDefinition UserInterfaceType = null;
 
 		public const string UserValueTypeName = "Nemerle User Types (Value types)";
 
-		[Export, Name(UserValueTypeName), BaseDefinition("text")]
+		[Export, Name(UserValueTypeName)]
 		public static ClassificationTypeDefinition UserValueType = null;
 
 		public const string QuotationName = "Nemerle Quotation";
 
-		[Export, Name(QuotationName), BaseDefinition("text")]
+		[Export, Name(QuotationName)]
 		public static ClassificationTypeDefinition Quotation = null;
 
 		public const string HighlightOneName = "Nemerle Highlight One";
 
-		[Export, Name(HighlightOneName), BaseDefinition("text")]
+		[Export, Name(HighlightOneName)]
 		public static ClassificationTypeDefinition HighlightOne = null;
 
 		public const string HighlightTwoName = "Nemerle Highlight Two";
 
-		[Export, Name(HighlightTwoName), BaseDefinition("text")]
+		[Export, Name(HighlightTwoName)]
 		public static ClassificationTypeDefinition HighlightTwo = null;
 
 		public const string ToDoCommentName = "Nemerle TODO Comment";
 
-		[Export, Name(ToDoCommentName), BaseDefinition("Comment")]
+		[Export, Name(ToDoCommentName), BaseDefinition(PredefinedClassificationTypeNames.Comment)]
 		public static ClassificationTypeDefinition ToDoComment = null;
 
 		public const string BugCommentName = "Nemerle BUG Comment";
 
-		[Export, Name(BugCommentName), BaseDefinition("Comment")]
+		[Export, Name(BugCommentName), BaseDefinition(PredefinedClassificationTypeNames.Comment)]
 		public static ClassificationTypeDefinition BugComment = null;
 
 		public const string HackCommentName = "Nemerle HACK Comment";
 
-		[Export, Name(HackCommentName), BaseDefinition("Comment")]
+		[Export, Name(HackCommentName), BaseDefinition(PredefinedClassificationTypeNames.Comment)]
 		public static ClassificationTypeDefinition HackComment = null;
 
 		public const string FieldIdentifierName = "Nemerle Field Identifier";
 
-		[Export, Name(FieldIdentifierName), BaseDefinition("text")]
+		[Export, Name(FieldIdentifierName)]
 		public static ClassificationTypeDefinition FieldIdentifier = null;
 
 		public const string EventIdentifierName = "Nemerle Event Identifier";
 
-		[Export, Name(EventIdentifierName), BaseDefinition("text")]
+		[Export, Name(EventIdentifierName)]
 		public static ClassificationTypeDefinition EventIdentifier = null;
 
 		public const string MethodIdentifierName = "Nemerle Method Identifier";
 
-		[Export, Name(MethodIdentifierName), BaseDefinition("text")]
+		[Export, Name(MethodIdentifierName)]
 		public static ClassificationTypeDefinition MethodIdentifier = null;
 
 		public const string PropertyIdentifierName = "Nemerle Property Identifier";
 
-		[Export, Name(PropertyIdentifierName), BaseDefinition("text")]
+		[Export, Name(PropertyIdentifierName)]
 		public static ClassificationTypeDefinition PropertyIdentifier = null;
 
 		// Quotation types
 
 		public const string QuotationTextName = "Nemerle Quotation Text";
 
-		[Export, Name(QuotationTextName), BaseDefinition("text")]
+		[Export, Name(QuotationTextName)]
 		public static ClassificationTypeDefinition QuotationText = null;
 
 		public const string QuotationKeywordName = "Nemerle Quotation Keyword";
 
-		[Export, Name(QuotationKeywordName), BaseDefinition("Keyword")]
+		[Export, Name(QuotationKeywordName), BaseDefinition(PredefinedClassificationTypeNames.Keyword)]
 		public static ClassificationTypeDefinition QuotationKeyword = null;
 
 		public const string QuotationCommentName = "Nemerle Quotation Comment";
 
-		[Export, Name(QuotationCommentName), BaseDefinition("Comment")]
+		[Export, Name(QuotationCommentName), BaseDefinition(PredefinedClassificationTypeNames.Comment)]
 		public static ClassificationTypeDefinition QuotationComment = null;
 
 		public const string QuotationIdentifierName = "Nemerle Quotation Identifier";
 
-		[Export, Name(QuotationIdentifierName), BaseDefinition("Identifier")]
+		[Export, Name(QuotationIdentifierName), BaseDefinition(PredefinedClassificationTypeNames.Identifier)]
 		public static ClassificationTypeDefinition QuotationIdentifier = null;
 
 		public const string QuotationStringName = "Nemerle Quotation String";
 
-		[Export, Name(QuotationStringName), BaseDefinition("String")]
+		[Export, Name(QuotationStringName), BaseDefinition(PredefinedClassificationTypeNames.String)]
 		public static ClassificationTypeDefinition QuotationString = null;
 
 		public const string QuotationNumberName = "Nemerle Quotation Number";
 
-		[Export, Name(QuotationNumberName), BaseDefinition("Number")]
+		[Export, Name(QuotationNumberName), BaseDefinition(PredefinedClassificationTypeNames.Number)]
 		public static ClassificationTypeDefinition QuotationNumber = null;
 
 		public const string QuotationOperatorName = "Nemerle Quotation Operator";
 
-		[Export, Name(QuotationOperatorName), BaseDefinition("Operator")]
+		[Export, Name(QuotationOperatorName), BaseDefinition(PredefinedClassificationTypeNames.Operator)]
 		public static ClassificationTypeDefinition QuotationOperator = null;
 
 		public const string QuotationStringExName = "Nemerle Quotation StringEx";

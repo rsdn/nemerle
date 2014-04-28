@@ -236,7 +236,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		//
 		public override int GetItemCount(out int count)
 		{
-			count = 0;
+			count = _colorableItems.Length - 1; // except 'Text'
 			return VSConstants.S_OK;
 		}
 
