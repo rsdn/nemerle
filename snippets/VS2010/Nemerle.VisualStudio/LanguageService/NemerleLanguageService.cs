@@ -10,6 +10,7 @@ using System.Windows;
 
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Language.Intellisense;
+using Microsoft.VisualStudio.Language.StandardClassification;
 using Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio.Project;
 using Microsoft.VisualStudio.Shell.Interop;
@@ -143,16 +144,17 @@ namespace Nemerle.VisualStudio.LanguageService
 		private static readonly NemerleColorableItem[] _colorableItems = 
 		{
 			// The sequential order of these items should be consistent with the ScanTokenColor enum.
+			// Colors set for compartibility with VS2010
 			//
 			new NemerleColorableItem("Text"),
-			new NemerleColorableItem("Keyword"),
-			new NemerleColorableItem("Comment"),
-			new NemerleColorableItem("Identifier"),
-			new NemerleColorableItem("String"),
-			new NemerleColorableItem("Number"),
+			new NemerleColorableItem(PredefinedClassificationTypeNames.Keyword, COLORINDEX.CI_BLUE),
+			new NemerleColorableItem(PredefinedClassificationTypeNames.Comment, COLORINDEX.CI_DARKGREEN),
+			new NemerleColorableItem(PredefinedClassificationTypeNames.Identifier),
+			new NemerleColorableItem(PredefinedClassificationTypeNames.String, COLORINDEX.CI_MAROON, Color.FromArgb(170,  0,   0)),
+			new NemerleColorableItem(PredefinedClassificationTypeNames.Number),
 
-			new NemerleColorableItem("Operator"),
-			new NemerleColorableItem("Preprocessor Keyword"),
+			new NemerleColorableItem(PredefinedClassificationTypeNames.Operator),
+			new NemerleColorableItem(PredefinedClassificationTypeNames.PreprocessorKeyword, COLORINDEX.CI_BLUE, Color.FromArgb(0, 51, 204)),
 			new NemerleColorableItem(ClassificationTypes.StringExName),
 			new NemerleColorableItem(ClassificationTypes.VerbatimStringName),
 			new NemerleColorableItem(ClassificationTypes.VerbatimStringExName),
@@ -484,7 +486,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		IScope* scope = NULL;
 		hr = GetScopeFromBuffer( textBuffer, &scope );
 		if (FAILED(hr)) return hr;
-  
+	
 		long realLine = line;
 		hr = scope->Narrow( line, idx, name, &realLine );
 		RELEASE(scope);
@@ -492,7 +494,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		*lineOffset = line - realLine;
 		return S_OK;
-	  */
+		*/
 			return NativeMethods.S_OK;
 		}
 
@@ -528,9 +530,9 @@ namespace Nemerle.VisualStudio.LanguageService
 		hr = strings->QueryInterface( IID_IVsEnumBSTR, reinterpret_cast<void**>(exprs) );
 		RELEASE(strings);
 		if (FAILED(hr)) return hr;
-  
+	
 		return S_OK;
-	  */
+		*/
 			return NativeMethods.S_FALSE;
 		}
 
