@@ -93,11 +93,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
 				AbortBackgroundParse();
 
-				foreach (NemerleColorizer colorizer in _colorizers.Values)
-					colorizer.Dispose();
-
-				_colorizers.Clear();
-
 				if (_preferences != null)
 				{
 					_preferences.Dispose();
@@ -132,128 +127,9 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		#region Colorizing
 
-		// This array contains the definition of the colorable items provided by
-		// this language service.
-		// This specific language does not really need to provide colorable items
-		// because it does not define any item different from the default ones,
-		// but the base class has an empty implementation of
-		// IVsProvideColorableItems, so any language service that derives from
-		// it must implement the methods of this interface, otherwise there are
-		// errors when the shell loads an editor to show a file associated to
-		// this language.
-		private static readonly NemerleColorableItem[] _colorableItems = 
-		{
-			// The sequential order of these items should be consistent with the ScanTokenColor enum.
-			// Colors set for compartibility with VS2010
-			//
-			new NemerleColorableItem("Text"),
-			new NemerleColorableItem("Keyword",                                                COLORINDEX.CI_BLUE),
-			new NemerleColorableItem("Comment",                                                COLORINDEX.CI_DARKGREEN),
-			new NemerleColorableItem("Identifier"),
-			new NemerleColorableItem("String",                                                 COLORINDEX.CI_MAROON, Color.FromArgb(170,  0,   0)),
-			new NemerleColorableItem("Number"),
+		public override Colorizer GetColorizer(IVsTextLines buffer) { return null; }
 
-			new NemerleColorableItem("Operator"),
-			new NemerleColorableItem("Preprocessor Keyword",                                   COLORINDEX.CI_BLUE,   Color.FromArgb(  0, 51, 204)),
-			new NemerleColorableItem(ClassificationTypes.StringExName,                         COLORINDEX.CI_MAROON, Color.FromArgb(143, 44, 182)),
-			new NemerleColorableItem(ClassificationTypes.VerbatimStringName,                2, COLORINDEX.CI_MAROON, Color.FromArgb(170,  0,   0)),
-			new NemerleColorableItem(ClassificationTypes.VerbatimStringExName,              2, COLORINDEX.CI_MAROON, Color.FromArgb(143, 44, 182)),
-
-			new NemerleColorableItem(ClassificationTypes.UserTypeName,                         COLORINDEX.CI_CYAN,   Color.FromArgb(43, 145, 175)),
-			new NemerleColorableItem(ClassificationTypes.UserDelegateTypeName,                 COLORINDEX.CI_CYAN,   Color.FromArgb(43, 145, 175)),
-			new NemerleColorableItem(ClassificationTypes.UserEnumTypeName,                     COLORINDEX.CI_CYAN,   Color.FromArgb(43, 145, 175)),
-			new NemerleColorableItem(ClassificationTypes.UserInterfaceTypeName,                COLORINDEX.CI_CYAN,   Color.FromArgb(43, 145, 175)),
-			new NemerleColorableItem(ClassificationTypes.UserValueTypeName,                    COLORINDEX.CI_CYAN,   Color.FromArgb(43, 145, 175)),
-
-			new NemerleColorableItem(ClassificationTypes.QuotationName,                     0, COLORINDEX.CI_BROWN),
-
-			new NemerleColorableItem(ClassificationTypes.QuotationTextName,                 0),
-			new NemerleColorableItem(ClassificationTypes.QuotationKeywordName,              0, COLORINDEX.CI_BLUE),
-			new NemerleColorableItem(ClassificationTypes.QuotationCommentName,              0, COLORINDEX.CI_DARKGREEN),
-			new NemerleColorableItem(ClassificationTypes.QuotationIdentifierName,           0),
-			new NemerleColorableItem(ClassificationTypes.QuotationStringName,               0, COLORINDEX.CI_MAROON, Color.FromArgb(170,  0,   0)),
-			new NemerleColorableItem(ClassificationTypes.QuotationNumberName,               0),
-			new NemerleColorableItem(ClassificationTypes.QuotationOperatorName,             0),
-			new NemerleColorableItem(ClassificationTypes.QuotationStringExName,             0, COLORINDEX.CI_MAROON, Color.FromArgb(143, 44, 182)),
-			new NemerleColorableItem(ClassificationTypes.QuotationVerbatimStringName,       1, COLORINDEX.CI_MAROON, Color.FromArgb(170,  0,   0)),
-			new NemerleColorableItem(ClassificationTypes.QuotationVerbatimStringExName,     1, COLORINDEX.CI_MAROON, Color.FromArgb(143, 44, 182)),
-
-			new NemerleColorableItem(ClassificationTypes.QuotationUserTypeName,             0, COLORINDEX.CI_CYAN, Color.FromArgb(43, 145, 175)),
-			new NemerleColorableItem(ClassificationTypes.QuotationUserDelegateTypeName,     0, COLORINDEX.CI_CYAN, Color.FromArgb(43, 145, 175)),
-			new NemerleColorableItem(ClassificationTypes.QuotationUserEnumTypeName,	        0, COLORINDEX.CI_CYAN, Color.FromArgb(43, 145, 175)),
-			new NemerleColorableItem(ClassificationTypes.QuotationUserInterfaceTypeName,    0, COLORINDEX.CI_CYAN, Color.FromArgb(43, 145, 175)),
-			new NemerleColorableItem(ClassificationTypes.QuotationUserValueTypeName,        0, COLORINDEX.CI_CYAN, Color.FromArgb(43, 145, 175)),
-
-			new NemerleColorableItem(ClassificationTypes.HighlightOneName,                     COLORINDEX.CI_BLACK, COLORINDEX.CI_YELLOW, Color.Empty, Color.FromArgb(135, 206, 250)),
-			new NemerleColorableItem(ClassificationTypes.HighlightTwoName,                     COLORINDEX.CI_BLACK, COLORINDEX.CI_GREEN, Color.Empty, Color.FromArgb(255, 182, 193)),
-
-			new NemerleColorableItem(ClassificationTypes.ToDoCommentName,                      COLORINDEX.CI_BLUE, Color.FromArgb(0,  175, 255)),
-			new NemerleColorableItem(ClassificationTypes.BugCommentName,                       COLORINDEX.CI_RED,  Color.FromArgb(255, 75,  75), FONTFLAGS.FF_BOLD),
-			new NemerleColorableItem(ClassificationTypes.HackCommentName,                      COLORINDEX.CI_RED,  Color.FromArgb(145,  0,   0)),
-
-			new NemerleColorableItem(ClassificationTypes.QuotationToDoCommentName,          0, COLORINDEX.CI_BLUE, Color.FromArgb(0,  175, 255)),
-			new NemerleColorableItem(ClassificationTypes.QuotationBugCommentName,           0, COLORINDEX.CI_RED,  Color.FromArgb(255, 75,  75), FONTFLAGS.FF_BOLD),
-			new NemerleColorableItem(ClassificationTypes.QuotationHackCommentName,          0, COLORINDEX.CI_RED,  Color.FromArgb(145,  0,   0)),
-
-			new NemerleColorableItem(ClassificationTypes.RecursiveStringName,               2, COLORINDEX.CI_MAROON, Color.FromArgb(170,  0,   0)),
-			new NemerleColorableItem(ClassificationTypes.RecursiveStringExName,             2, COLORINDEX.CI_MAROON, Color.FromArgb(143, 44, 182)),
-			new NemerleColorableItem(ClassificationTypes.QuotationRecursiveStringName,      1, COLORINDEX.CI_MAROON, Color.FromArgb(170,  0,   0)),
-			new NemerleColorableItem(ClassificationTypes.QuotationRecursiveStringExName,    1, COLORINDEX.CI_MAROON, Color.FromArgb(143, 44, 182)),
-			
-			new NemerleColorableItem(ClassificationTypes.FieldIdentifierName,                  COLORINDEX.CI_DARKBLUE, Color.FromArgb(128, 0, 128)),
-			new NemerleColorableItem(ClassificationTypes.EventIdentifierName,                  COLORINDEX.CI_MAGENTA, Color.FromArgb(255, 0, 255)),
-			new NemerleColorableItem(ClassificationTypes.MethodIdentifierName,                 COLORINDEX.CI_DARKBLUE, Color.FromArgb(0, 139, 139)),
-			new NemerleColorableItem(ClassificationTypes.PropertyIdentifierName,               COLORINDEX.CI_DARKBLUE, Color.FromArgb(128, 0, 128)),
-		};
-
-		readonly Dictionary<IVsTextLines, NemerleColorizer> _colorizers = new Dictionary<IVsTextLines, NemerleColorizer>();
-
-		public void DisposeColorizer(IVsTextLines buffer)
-		{
-			if (_colorizers.ContainsKey(buffer))
-				_colorizers.Remove(buffer);
-		}
-
-		public override Colorizer GetColorizer(IVsTextLines buffer)
-		{
-			NemerleColorizer colorizer;
-
-			if (!_colorizers.TryGetValue(buffer, out colorizer))
-			{
-				colorizer = new NemerleColorizer(this, buffer, (NemerleScanner)GetScanner(buffer));
-
-				_colorizers.Add(buffer, colorizer);
-			}
-
-			return colorizer;
-		}
-
-		public override IScanner GetScanner(IVsTextLines buffer)
-		{
-			return new NemerleScanner(this, buffer);
-		}
-
-		// Implementation of IVsProvideColorableItems.
-		//
-		public override int GetItemCount(out int count)
-		{
-			count = _colorableItems.Length - 1; // except 'Text'
-			return VSConstants.S_OK;
-		}
-
-		public override int GetColorableItem(int index, out IVsColorableItem item)
-		{
-			if (0 <= index && index < _colorableItems.Length)
-			{
-				item = _colorableItems[index];
-				return VSConstants.S_OK;
-			}
-			else
-			{
-				item = null;
-				return VSConstants.E_FAIL;
-			}
-		}
+		public override IScanner GetScanner(IVsTextLines buffer) { return null; }
 
 		#endregion
 

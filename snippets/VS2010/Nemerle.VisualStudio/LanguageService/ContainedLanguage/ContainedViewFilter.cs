@@ -113,8 +113,6 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			try
 			{
-				((NemerleLanguageService)Source.LanguageService).DisposeColorizer(this.Source.TextLines);
-
 				_bufferCoordinator = null;
 
 				// Базовая реализация base.Dispose() предполагает, что значение внутреннего поля textView 
