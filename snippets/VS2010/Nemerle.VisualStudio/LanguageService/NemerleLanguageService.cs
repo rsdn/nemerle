@@ -147,14 +147,14 @@ namespace Nemerle.VisualStudio.LanguageService
 			// Colors set for compartibility with VS2010
 			//
 			new NemerleColorableItem("Text"),
-			new NemerleColorableItem(PredefinedClassificationTypeNames.Keyword,                COLORINDEX.CI_BLUE),
-			new NemerleColorableItem(PredefinedClassificationTypeNames.Comment,                COLORINDEX.CI_DARKGREEN),
-			new NemerleColorableItem(PredefinedClassificationTypeNames.Identifier),
-			new NemerleColorableItem(PredefinedClassificationTypeNames.String,                 COLORINDEX.CI_MAROON, Color.FromArgb(170,  0,   0)),
-			new NemerleColorableItem(PredefinedClassificationTypeNames.Number),
+			new NemerleColorableItem("Keyword",                                                COLORINDEX.CI_BLUE),
+			new NemerleColorableItem("Comment",                                                COLORINDEX.CI_DARKGREEN),
+			new NemerleColorableItem("Identifier"),
+			new NemerleColorableItem("String",                                                 COLORINDEX.CI_MAROON, Color.FromArgb(170,  0,   0)),
+			new NemerleColorableItem("Number"),
 
-			new NemerleColorableItem(PredefinedClassificationTypeNames.Operator),
-			new NemerleColorableItem(PredefinedClassificationTypeNames.PreprocessorKeyword,    COLORINDEX.CI_BLUE,   Color.FromArgb(  0, 51, 204)),
+			new NemerleColorableItem("Operator"),
+			new NemerleColorableItem("Preprocessor Keyword",                                   COLORINDEX.CI_BLUE,   Color.FromArgb(  0, 51, 204)),
 			new NemerleColorableItem(ClassificationTypes.StringExName,                         COLORINDEX.CI_MAROON, Color.FromArgb(143, 44, 182)),
 			new NemerleColorableItem(ClassificationTypes.VerbatimStringName,                2, COLORINDEX.CI_MAROON, Color.FromArgb(170,  0,   0)),
 			new NemerleColorableItem(ClassificationTypes.VerbatimStringExName,              2, COLORINDEX.CI_MAROON, Color.FromArgb(143, 44, 182)),
