@@ -86,7 +86,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
       var snapshot  = _textBuffer.CurrentSnapshot;
       var code      = snapshot.GetText();
-      var lexer     = new LexerFile((ManagerClass)engine, 0, code);
+      var lexer     = new LexerFile((ManagerClass)engine, 0, code, true);
       var preParser = new PreParser(lexer);
       var tokens    = preParser.PreParse();
       //var comments  = new Span[lexer.CommentLocations.Count];
