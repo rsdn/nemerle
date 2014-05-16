@@ -39,7 +39,8 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (null == BufferCoordinator)
 			{
 				// No buffer coordinator, so delegate to the base implementation.
-				return base.GetWordExtent(line, index, flags, span);
+				// return base.GetWordExtent(line, index, flags, span);
+				return VSConstants.E_FAIL;
 			}
 
 			// Make sure that the span array is not empty.

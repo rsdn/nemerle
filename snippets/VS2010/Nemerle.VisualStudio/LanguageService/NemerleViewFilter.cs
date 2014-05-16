@@ -371,7 +371,6 @@ namespace Nemerle.VisualStudio.LanguageService
 				switch ((VSConstants.VSStd2KCmdID)nCmdId)
 				{
 					case VSConstants.VSStd2KCmdID.CANCEL:
-						RemoveLastHighlighting();
 						Source.Service.Hint.Close();
 						break; // go trocess ESC
 
@@ -441,7 +440,6 @@ namespace Nemerle.VisualStudio.LanguageService
 						HighlightSymbol();
 						return VSConstants.S_OK;
 					case MenuCmd.CmdId.RemoveLastHighlighting: // cmdIdRemoveLastHighlighting
-						RemoveLastHighlighting();
 						Source.Service.Hint.Close();
 						return VSConstants.S_OK;
 					case MenuCmd.CmdId.SourceOutlinerWindow:
@@ -546,12 +544,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
 				source.GetEngine().BeginHighlightUsages(source, span.iStartLine + 1, span.iStartIndex + 1);
 			}
-		}
-
-		private void RemoveLastHighlighting()
-		{
-			if (Source != null && Source.ProjectInfo != null)
-				Source.ProjectInfo.RemoveLastHighlighting(Source);
 		}
 
 		private bool WarnAboutErrors()
@@ -683,8 +675,6 @@ namespace Nemerle.VisualStudio.LanguageService
 				if (frm.ShowDialog(TextEditorWindow) == DialogResult.OK)
 					Source.RenameSymbols(frm.NewName, usages);
 			}
-
-			RemoveLastHighlighting();
 		}
 
 		private void FindInheritors()

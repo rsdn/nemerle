@@ -658,24 +658,6 @@ namespace Nemerle.VisualStudio.Project
 
 		public bool IsDocumentOpening { get; internal set; }
 
-		#region HighlightUsages
-
-		internal void RemoveLastHighlighting(IIdeSource source)
-		{
-			Debug.WriteLine(">>>> ##### RemoveLastHighlighting!");
-			var nsource = source as NemerleSource;
-			if (nsource == null)
-				return;
-			ScanLexer lexer = nsource.Scanner.GetLexer();
-			if (lexer == null)
-				return;
-			lexer.RemoveLastHighlighting();
-			nsource.Recolorize(1, source.LineCount);
-			Debug.WriteLine("<<<< ##### HighlightUsages!");
-		}
-
-		#endregion
-
 		public IEnumerable<NemerleErrorTask> FindTaks(Func<NemerleErrorTask, bool> predicate)
 		{
 			var tasks = _errorList.Tasks.OfType<NemerleErrorTask>();
@@ -924,24 +906,6 @@ namespace Nemerle.VisualStudio.Project
 
 		public void SetHighlights(IIdeSource source, IEnumerable<GotoInfo> highlights)
 		{
-			var isPermanent = false;
-
-			var nsource = source as NemerleSource;
-
-			if (nsource == null)
-				return;
-
-			ScanLexer lexer = nsource.Scanner.GetLexer();
-
-			if (lexer == null)
-				return;
-
-			if (isPermanent)
-				lexer.AddHighlighting(highlights);
-			else
-				lexer.SetHoverHighlights(highlights);
-
-			nsource.Recolorize(1, source.LineCount);
 		}
 
 

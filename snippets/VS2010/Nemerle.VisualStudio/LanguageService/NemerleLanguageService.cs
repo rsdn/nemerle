@@ -142,7 +142,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override Source CreateSource(IVsTextLines buffer)
 		{
-			return new NemerleSource(this, buffer, GetColorizer(buffer));
+			return new NemerleSource(this, buffer);
 		}
 
 		public override CodeWindowManager CreateCodeWindowManager(IVsCodeWindow codeWindow, Source source)
