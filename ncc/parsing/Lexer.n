@@ -261,6 +261,15 @@ public class Region
   }
 }
 
+[Record]
+public struct Comment
+{
+  public Position : int;
+  public Length   : int;
+  public IsMultiline : bool;
+  public IsDocument  : bool;
+}
+
 [ManagerAccess]
 public abstract class LexerBase
 {
@@ -297,6 +306,15 @@ public abstract class LexerBase
   private   mutable _intoCode     : bool; // defines and undefines allowed only before code
 
   public mutable Keywords : Set [string];
+
+  private comments : List[Comment] = List(64);
+
+  protected register_comment(position : int, isMultiline : bool, isDocument : bool) : void
+  {
+    def end = get_position();
+    def length = end - position;
+    comments.Add(Comment(position, length, isMultiline, isDocument));
+  }
 
   protected id_buffer : StringBuilder = StringBuilder ();
 
@@ -413,11 +431,12 @@ public abstract class LexerBase
     }
   }
 
+  protected abstract get_position() : int;
   protected abstract read_from_input () : char;
   protected abstract peek_or_white () : char;
   protected abstract peek () : char;
   protected virtual ignore_comments () : void { }
-  protected abstract comment_beginning () : char;
+  protected abstract try_read_comment () : bool;
 
   /// returns true if there is some character in the input pending
   /// or false if we are at the end of file
@@ -464,18 +483,17 @@ public abstract class LexerBase
             white_beginning = true;
             loop (true)
 
-          | '/' =>            
-            _ = read ();
-            match (comment_beginning ()) {
-              | '/' =>
-                if (eating_now > 0) loop (false)
-                else {
-                  pendingChar = '/';
-                  isPendingChar = true;
-                  true
-                }
-
-              | _ => loop (false)
+          | '/' =>
+            _ = read();
+            if (try_read_comment())
+              loop(false)
+            else if (eating_now > 0)
+              loop(false)
+            else
+            {
+              pendingChar = '/';
+              isPendingChar = true;
+              true
             }
 
           | '#' =>
@@ -1036,15 +1054,15 @@ public abstract class LexerBase
   {
     mutable go = true;
     while (go) {
-      if (IsOperatorChar (peek_or_white ())) {
-        def c = read ();
+      if (IsOperatorChar(peek_or_white())) {
+        def c = read();
         if (c == '/')
-          if (comment_beginning () == '/')
-            ignore (id_buffer.Append ('/'))
-          else
+          if (try_read_comment())
             go = false
+          else
+            _ = id_buffer.Append('/')
         else
-          ignore (id_buffer.Append (c))
+          _ = id_buffer.Append(c)
       }
       else
         go = false;
@@ -1733,6 +1751,8 @@ public abstract class LexerStringBase : LexerBase
       ' '
   }
 
+  protected override get_position() : int { pos }
+
   protected override read_from_input () : char
   {
     if (pos < reader.Length)
@@ -1758,16 +1778,22 @@ public class LexerFile : LexerStringBase
     this.storeComments = storeComments;
   }
 
-  protected override comment_beginning () : char
+  protected override try_read_comment() : bool
   {
     def startLocation = this.Location;
 
-    match (peek_or_white ()) {
+    match (peek_or_white ())
+    {
       | '/' =>
+        def commentPosition = get_position() - 1;
+        mutable isDocument;
         // we are for sure in one line comment
         _ = read ();
-        try {
-          if (storeComments && peek () == '/') {
+        try
+        {
+          isDocument = peek () == '/';
+          if (isDocument && storeComments)
+          {
             comment_loc = Location (file_idx, line, col - 2);
             _ = read ();
             mutable cc = ' ';
@@ -1775,7 +1801,8 @@ public class LexerFile : LexerStringBase
             {
               cc = read_or_eol ();
               _ = currentComment.Append (cc)
-            } while (cc != '\n');
+            }
+            while (cc != '\n');
             comment_loc = comment_loc + Location (file_idx, line, col);
           }
           else
@@ -1784,16 +1811,17 @@ public class LexerFile : LexerStringBase
         catch { _ is LexerBase.Error => () };
 
         white_beginning = true;
-        // pass whitespace, so next read would be eof checked
-        ' '
+        register_comment(commentPosition, false, isDocument);
+        true
 
       | '*' =>
-        // multiline comment
-        _ = read ();
+        def commentPosition = get_position() - 1;
+        mutable isDocument;
+        _ = read();
         def loop1 (seen_star, store) {
           def cc = read ();
           when (store)
-            ignore (currentComment.Append (cc));
+            _ = currentComment.Append (cc);
 
           match (cc) {
             | '*' => loop1 (true, store)
@@ -1803,23 +1831,25 @@ public class LexerFile : LexerStringBase
             | _ => loop1 (false, store)
           }
         };
-        if (Manager.Options.LexerStoreComments && peek_or_white () == '*') {
+        isDocument = peek_or_white () == '*';
+        if (isDocument && storeComments)
+        {
           comment_loc = Location (file_idx, line, col - 2);
           _ = read ();
           loop1 (true, true);
           if (currentComment.Length == 1)
-            ignore (currentComment.Remove (0, 1))
+            _ = currentComment.Remove(0, 1);
           else
-            ignore (currentComment.Remove (currentComment.Length - 2, 2));
+            _ = currentComment.Remove(currentComment.Length - 2, 2);
           comment_loc = comment_loc + Location (file_idx, line, col);
         }
         else
           loop1 (false, false);
 
-        // pass whitespace, so next read would be eof checked
-        ' '
+        register_comment(commentPosition, true, isDocument);
+        true
 
-      | _ => '/'
+      | _ => false
     }
   }
 
@@ -1857,12 +1887,13 @@ public class LexerString : LexerStringBase
     base(manager, code, loc)
   }
 
-  protected override comment_beginning () : char
+  protected override try_read_comment() : bool
   {
     def startLocation = this.Location;
 
     match (peek_or_white ()) {
       | '/' =>
+        def commentPosition = get_position() - 1;
         // we are for sure in one line comment
         
         try
@@ -1911,14 +1942,14 @@ public class LexerString : LexerStringBase
         catch {   _ is LexerBase.Error => white_beginning = true;  };
 
         white_beginning = true;
-        // pass whitespace, so next read would be eof checked
-        ' '
+        register_comment(commentPosition, false, false);
+        true
 
       | '*' =>
-       white_beginning = false;
-        // multiline comment
+        def commentPosition = get_position() - 1;
+        white_beginning = false;
         _ = read ();
-       currentComment.Length = 0;
+        currentComment.Length = 0;
 
         comment_loc = Location (file_idx, line, col - 2);
 
@@ -1942,11 +1973,13 @@ public class LexerString : LexerStringBase
         else
           loop1 (false, false);
 
-        // pass whitespace, so next read would be eof checked
         white_beginning = false;
-        ' '
+        register_comment(commentPosition, true, false);
+        true
 
-      | _ =>     white_beginning = false; '/'
+      | _ =>
+        white_beginning = false;
+        false
     }
   }
 } // LexerString
