@@ -94,7 +94,9 @@ namespace Nemerle.VisualStudio.LanguageService
     private static Span NLocationToSpan(ITextSnapshot textSnapshot, Location location)
     {
       var startLine = textSnapshot.GetLineFromLineNumber(location.Begin.Line - 1);
-      var endLine   = textSnapshot.GetLineFromLineNumber(location.End.Line - 1);
+      var endLine = location.Begin.Line == location.End.Line
+        ? startLine
+        : textSnapshot.GetLineFromLineNumber(location.End.Line - 1);
 
       var startPos = startLine.Start.Position + location.Begin.Column - 1;
       var endPos   = endLine.Start.Position + location.End.Column - 1;
