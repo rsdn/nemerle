@@ -69,6 +69,23 @@ namespace Nemerle.VisualStudio.LanguageService
         }
       }
 
+      foreach (var d in _parseResult.Directives)
+      {
+        if (d.Position > span.End)
+          break;
+
+        var directiveSpan = new Span(d.Position, d.Length);
+        if (span.IntersectsWith(directiveSpan))
+        {
+          var index = 0;
+          for (; index < result.Count; ++index)
+            if (result[index].Span.Span.Start >= directiveSpan.Start)
+              break;
+
+          result.Insert(index, new ClassificationSpan(new SnapshotSpan(snapshot, directiveSpan), _standardClassification.PreprocessorKeyword));
+        }
+      }
+
       WalkTokens(_parseResult.Tokens, snapshot, span.Span, result);
 
       return result;
@@ -95,13 +112,14 @@ namespace Nemerle.VisualStudio.LanguageService
       if (!engine.RequestOnInitEngine())
         return null;
 
-      var snapshot  = _textBuffer.CurrentSnapshot;
-      var code      = snapshot.GetText();
-      var lexer     = new LexerFile((ManagerClass)engine, 0, code, true);
-      var preParser = new PreParser(lexer);
-      var tokens    = preParser.PreParse();
-      var comments  = lexer.GetComments();
-      var result    = new ParseResult(tokens, comments);
+      var snapshot   = _textBuffer.CurrentSnapshot;
+      var code       = snapshot.GetText();
+      var lexer      = new LexerFile((ManagerClass)engine, 0, code, true);
+      var preParser  = new PreParser(lexer);
+      var tokens     = preParser.PreParse();
+      var comments   = lexer.GetComments();
+      var directives = lexer.GetDirectives();
+      var result     = new ParseResult(tokens, comments, directives);
 
       return result;
     }
@@ -200,14 +218,16 @@ namespace Nemerle.VisualStudio.LanguageService
 
     private sealed class ParseResult
     {
-      public ParseResult(Token.BracesGroup tokens, Comment[] comments)
+      public ParseResult(Token.BracesGroup tokens, Comment[] comments, Directive[] directives)
       {
         Tokens = tokens;
         Comments = comments;
+        Directives = directives;
       }
 
       public readonly Token.BracesGroup Tokens;
       public readonly Comment[] Comments;
+      public readonly Directive[] Directives;
     }
   }
 }
