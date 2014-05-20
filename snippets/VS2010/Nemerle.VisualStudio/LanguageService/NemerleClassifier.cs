@@ -52,11 +52,22 @@ namespace Nemerle.VisualStudio.LanguageService
       var snapshot = _textBuffer.CurrentSnapshot;
       var result = new List<ClassificationSpan>();
 
-      //foreach (var c in _parseResult.Comments)
-      //{
-      //  if (span.IntersectsWith(c))
-      //    result.Add(new ClassificationSpan(new SnapshotSpan(snapshot, c), _standardClassification.Comment));
-      //}
+      foreach (var c in _parseResult.Comments)
+      {
+        if (c.Position > span.End)
+          break;
+
+        var commentSpan = new Span(c.Position, c.Length);
+        if (span.IntersectsWith(commentSpan))
+        {
+          var index = 0;
+          for (; index < result.Count; ++index)
+            if (result[index].Span.Span.Start >= commentSpan.Start)
+              break;
+
+          result.Insert(index, new ClassificationSpan(new SnapshotSpan(snapshot, commentSpan), _standardClassification.Comment));
+        }
+      }
 
       WalkTokens(_parseResult.Tokens, snapshot, span.Span, result);
 
@@ -89,12 +100,8 @@ namespace Nemerle.VisualStudio.LanguageService
       var lexer     = new LexerFile((ManagerClass)engine, 0, code, true);
       var preParser = new PreParser(lexer);
       var tokens    = preParser.PreParse();
-      //var comments  = new Span[lexer.CommentLocations.Count];
-      //int cIndex = 0;
-      //foreach (var c in lexer.CommentLocations)
-      //  comments[cIndex++] = NLocationToSpan(snapshot, c.Field0);
-
-      var result = new ParseResult(tokens, new Span[0]);
+      var comments  = lexer.GetComments();
+      var result    = new ParseResult(tokens, comments);
 
       return result;
     }
@@ -110,11 +117,7 @@ namespace Nemerle.VisualStudio.LanguageService
         if (!span.IntersectsWith(tokenSpan))
           continue;
 
-        if (token is Token.BeginBrace || token is Token.EndBrace
-          || token is Token.BeginRound || token is Token.EndRound
-          || token is Token.BeginSquare || token is Token.EndSquare
-          || token is Token.BeginQuote || token is Token.EndQuote
-          || token is Token.Operator
+        if (token is Token.Operator
           || token is Token.Comma
           || token is Token.Semicolon)
         {
@@ -197,14 +200,14 @@ namespace Nemerle.VisualStudio.LanguageService
 
     private sealed class ParseResult
     {
-      public ParseResult(Token.BracesGroup tokens, Span[] comments)
+      public ParseResult(Token.BracesGroup tokens, Comment[] comments)
       {
         Tokens = tokens;
         Comments = comments;
       }
 
       public readonly Token.BracesGroup Tokens;
-      public readonly Span[] Comments;
+      public readonly Comment[] Comments;
     }
   }
 }
