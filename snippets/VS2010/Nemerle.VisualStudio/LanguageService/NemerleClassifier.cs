@@ -61,14 +61,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
         var commentSpan = new Span(c.Position, c.Length);
         if (span.IntersectsWith(commentSpan))
-        {
-          var index = 0;
-          for (; index < result.Count; ++index)
-            if (result[index].Span.Span.Start >= commentSpan.Start)
-              break;
-
-          result.Insert(index, new ClassificationSpan(new SnapshotSpan(snapshot, commentSpan), _standardClassification.Comment));
-        }
+          InsertClassification(result, new ClassificationSpan(new SnapshotSpan(snapshot, commentSpan), _standardClassification.Comment));
       }
 
       foreach (var d in _parseResult.Directives)
@@ -78,17 +71,11 @@ namespace Nemerle.VisualStudio.LanguageService
 
         var directiveSpan = new Span(d.Position, d.Length);
         if (span.IntersectsWith(directiveSpan))
-        {
-          var index = 0;
-          for (; index < result.Count; ++index)
-            if (result[index].Span.Span.Start >= directiveSpan.Start)
-              break;
-
-          result.Insert(index, new ClassificationSpan(new SnapshotSpan(snapshot, directiveSpan), _standardClassification.PreprocessorKeyword));
-        }
+          InsertClassification(result, new ClassificationSpan(new SnapshotSpan(snapshot, directiveSpan), _standardClassification.PreprocessorKeyword));
       }
 
-      WalkTokens(_parseResult.Tokens, snapshot, span.Span, result, false);
+      List<Span> splices = null; // not used
+      WalkTokens(_parseResult.Tokens, snapshot, span.Span, result, false, ref splices);
 
       return result;
     }
@@ -128,7 +115,7 @@ namespace Nemerle.VisualStudio.LanguageService
       return result;
     }
 
-    private void WalkTokens(Token token, ITextSnapshot textSnapshot, Span span, List<ClassificationSpan> classifications, bool isQuotation)
+    private void WalkTokens(Token token, ITextSnapshot textSnapshot, Span span, List<ClassificationSpan> classifications, bool isQuotation, ref List<Span> splices)
     {
       while (token != null)
       {
@@ -142,11 +129,11 @@ namespace Nemerle.VisualStudio.LanguageService
           continue;
         }
 
-        token = WalkToken(tokenSpan, token, textSnapshot, span, classifications, isQuotation);
+        token = WalkToken(tokenSpan, token, textSnapshot, span, classifications, isQuotation, ref splices);
       }
     }
 
-    private Token WalkToken(Span tokenSpan, Token token, ITextSnapshot textSnapshot, Span span, List<ClassificationSpan> classifications, bool isQuotation)
+    private Token WalkToken(Span tokenSpan, Token token, ITextSnapshot textSnapshot, Span span, List<ClassificationSpan> classifications, bool isQuotation, ref List<Span> splices)
     {
       if (token is Token.Comma
         || token is Token.Semicolon)
@@ -160,10 +147,14 @@ namespace Nemerle.VisualStudio.LanguageService
         {
           classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, tokenSpan), _standardClassification.Operator));
 
-          var spliceToken = op.Next;
+          var spliceToken     = op.Next;
           var spliceTokenSpan = NLocationToSpan(textSnapshot, spliceToken.Location);
-          classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, new Span(tokenSpan.Start, spliceTokenSpan.End - tokenSpan.Start)), _classificationRegistry.GetClassificationType(ClassificationTypes.QuotationSpliceName)));
-          return WalkToken(spliceTokenSpan, spliceToken, textSnapshot, span, classifications, false);
+          if (splices == null)
+            splices = new List<Span>();
+          splices.Add(new Span(tokenSpan.Start, spliceTokenSpan.End - tokenSpan.Start));
+
+          List<Span> innerSplices = null; // not used
+          return WalkToken(spliceTokenSpan, spliceToken, textSnapshot, span, classifications, false, ref innerSplices);
         }
         else if (isQuotation && op.name == ".." && op.Next is Token.Operator && ((Token.Operator)op.Next).name == "$" && op.Next.Next != null)
         {
@@ -173,8 +164,12 @@ namespace Nemerle.VisualStudio.LanguageService
 
           var spliceToken     = op.Next.Next;
           var spliceTokenSpan = NLocationToSpan(textSnapshot, spliceToken.Location);
-          classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, new Span(tokenSpan.Start, spliceTokenSpan.End - tokenSpan.Start)), _classificationRegistry.GetClassificationType(ClassificationTypes.QuotationSpliceName)));
-          return WalkToken(spliceTokenSpan, spliceToken, textSnapshot, span, classifications, false);
+          if (splices == null)
+            splices = new List<Span>();
+          splices.Add(new Span(tokenSpan.Start, spliceTokenSpan.End - tokenSpan.Start));
+
+          List<Span> innerSplices = null; // not used
+          return WalkToken(spliceTokenSpan, spliceToken, textSnapshot, span, classifications, false, ref innerSplices);
         }
         else
         {
@@ -217,28 +212,25 @@ namespace Nemerle.VisualStudio.LanguageService
       else if (token is Token.LooseGroup)
       {
         var group = (Token.LooseGroup)token;
-        WalkTokens(group.Child, textSnapshot, span, classifications, isQuotation);
+        WalkTokens(group.Child, textSnapshot, span, classifications, isQuotation, ref splices);
       }
       else if (token is Token.RoundGroup)
       {
         var group = (Token.RoundGroup)token;
-        WalkTokens(group.Child, textSnapshot, span, classifications, isQuotation);
+        WalkTokens(group.Child, textSnapshot, span, classifications, isQuotation, ref splices);
       }
       else if (token is Token.SquareGroup)
       {
         var group = (Token.SquareGroup)token;
-        WalkTokens(group.Child, textSnapshot, span, classifications, isQuotation);
+        WalkTokens(group.Child, textSnapshot, span, classifications, isQuotation, ref splices);
       }
       else if (token is Token.BracesGroup)
       {
         var group = (Token.BracesGroup)token;
-        WalkTokens(group.Child, textSnapshot, span, classifications, isQuotation);
+        WalkTokens(group.Child, textSnapshot, span, classifications, isQuotation, ref splices);
       }
       else if (token is Token.QuoteGroup)
       {
-        var classificationType = _classificationRegistry.GetClassificationType(ClassificationTypes.QuotationName);
-        classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, tokenSpan), classificationType));
-
         var group = (Token.QuoteGroup)token;
 
         var quotationType = GetQuotationType(group);
@@ -249,22 +241,47 @@ namespace Nemerle.VisualStudio.LanguageService
             classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, quotationTypeSpan), _standardClassification.Keyword));
         }
 
-        WalkTokens(group.Child, textSnapshot, span, classifications, true);
+        List<Span> innerSplices = null;
+        WalkTokens(group.Child, textSnapshot, span, classifications, true, ref innerSplices);
+
+        var classificationType = _classificationRegistry.GetClassificationType(ClassificationTypes.QuotationName);
+        if (innerSplices == null)
+          InsertClassification(classifications, new ClassificationSpan(new SnapshotSpan(textSnapshot, tokenSpan), classificationType));
+        else
+        {
+          var pos = tokenSpan.Start;
+          foreach (var s in innerSplices)
+          {
+            InsertClassification(classifications, new ClassificationSpan(new SnapshotSpan(textSnapshot, new Span(pos, s.Start - pos)), classificationType));
+            pos = s.End;
+          }
+          InsertClassification(classifications, new ClassificationSpan(new SnapshotSpan(textSnapshot, new Span(pos, tokenSpan.End - pos)), classificationType));
+        }
       }
       else if (token is Token.Namespace)
       {
         var nsToken = (Token.Namespace)token;
-        WalkTokens(nsToken.KeywordToken, textSnapshot, span, classifications, isQuotation);
-        WalkTokens(nsToken.Body, textSnapshot, span, classifications, isQuotation);
+        WalkTokens(nsToken.KeywordToken, textSnapshot, span, classifications, isQuotation, ref splices);
+        WalkTokens(nsToken.Body, textSnapshot, span, classifications, isQuotation, ref splices);
       }
       else if (token is Token.Using)
       {
         var nsToken = (Token.Using)token;
-        WalkTokens(nsToken.KeywordToken, textSnapshot, span, classifications, isQuotation);
-        WalkTokens(nsToken.Body, textSnapshot, span, classifications, isQuotation);
+        WalkTokens(nsToken.KeywordToken, textSnapshot, span, classifications, isQuotation, ref splices);
+        WalkTokens(nsToken.Body, textSnapshot, span, classifications, isQuotation, ref splices);
       }
 
       return token.Next;
+    }
+
+    private static void InsertClassification(List<ClassificationSpan> items, ClassificationSpan span)
+    {
+      var index = 0;
+      for (; index < items.Count; ++index)
+        if (items[index].Span.Start >= span.Span.Start)
+          break;
+
+      items.Insert(index, span);
     }
 
     private static Token.Identifier GetQuotationType(Token.QuoteGroup group)
