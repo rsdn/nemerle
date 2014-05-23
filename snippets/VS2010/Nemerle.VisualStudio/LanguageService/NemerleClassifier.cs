@@ -61,7 +61,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
         var commentSpan = new Span(c.Position, c.Length);
         if (span.IntersectsWith(commentSpan))
-          InsertClassification(result, new ClassificationSpan(new SnapshotSpan(snapshot, commentSpan), _standardClassification.Comment));
+          InsertClassification(result, MakeClassificationSpan(snapshot, commentSpan, _standardClassification.Comment));
       }
 
       foreach (var d in _parseResult.Directives)
@@ -71,7 +71,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
         var directiveSpan = new Span(d.Position, d.Length);
         if (span.IntersectsWith(directiveSpan))
-          InsertClassification(result, new ClassificationSpan(new SnapshotSpan(snapshot, directiveSpan), _standardClassification.PreprocessorKeyword));
+          InsertClassification(result, MakeClassificationSpan(snapshot, directiveSpan, _standardClassification.PreprocessorKeyword));
       }
 
       List<Span> splices = null; // not used
@@ -138,14 +138,14 @@ namespace Nemerle.VisualStudio.LanguageService
       if (token is Token.Comma
         || token is Token.Semicolon)
       {
-        classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, tokenSpan), _standardClassification.Operator));
+        classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.Operator));
       }
       else if (token is Token.Operator)
       {
         var op = (Token.Operator)token;
         if (isQuotation && op.name == "$" && op.Next != null)
         {
-          classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, tokenSpan), _standardClassification.Operator));
+          classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.Operator));
 
           var spliceToken     = op.Next;
           var spliceTokenSpan = NLocationToSpan(textSnapshot, spliceToken.Location);
@@ -159,8 +159,8 @@ namespace Nemerle.VisualStudio.LanguageService
         else if (isQuotation && op.name == ".." && op.Next is Token.Operator && ((Token.Operator)op.Next).name == "$" && op.Next.Next != null)
         {
           var op2Span = NLocationToSpan(textSnapshot, op.Next.Location);
-          classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, tokenSpan), _standardClassification.Operator));
-          classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, op2Span), _standardClassification.Operator));
+          classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.Operator));
+          classifications.Add(MakeClassificationSpan(textSnapshot, op2Span, _standardClassification.Operator));
 
           var spliceToken     = op.Next.Next;
           var spliceTokenSpan = NLocationToSpan(textSnapshot, spliceToken.Location);
@@ -173,7 +173,7 @@ namespace Nemerle.VisualStudio.LanguageService
         }
         else
         {
-          classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, tokenSpan), _standardClassification.Operator));
+          classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.Operator));
         }
       }
       else if (token is Token.DecimalLiteral
@@ -181,33 +181,33 @@ namespace Nemerle.VisualStudio.LanguageService
         || token is Token.FloatLiteral
         || token is Token.IntegerLiteral)
       {
-        classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, tokenSpan), _standardClassification.NumberLiteral));
+        classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.NumberLiteral));
       }
       else if (token is Token.CharLiteral)
       {
-        classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, tokenSpan), _standardClassification.CharacterLiteral));
+        classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.CharacterLiteral));
       }
       else if (token is Token.StringLiteral)
       {
-        classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, tokenSpan), _standardClassification.StringLiteral));
+        classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.StringLiteral));
       }
       else if (token is Token.Keyword)
       {
-        classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, tokenSpan), _standardClassification.Keyword));
+        classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.Keyword));
       }
       else if (token is Token.WhiteSpace)
       {
-        classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, tokenSpan), _standardClassification.WhiteSpace));
+        classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.WhiteSpace));
       }
       else if (token is Token.Identifier
         || token is Token.IdentifierToComplete
         || token is Token.QuotedIdentifier)
       {
-        classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, tokenSpan), _standardClassification.Identifier));
+        classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.Identifier));
       }
       else if (token is Token.Comment)
       {
-        classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, tokenSpan), _standardClassification.Comment));
+        classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.Comment));
       }
       else if (token is Token.LooseGroup)
       {
@@ -238,7 +238,7 @@ namespace Nemerle.VisualStudio.LanguageService
         {
           var quotationTypeSpan = NLocationToSpan(textSnapshot, quotationType.Location);
           if (span.IntersectsWith(quotationTypeSpan))
-            classifications.Add(new ClassificationSpan(new SnapshotSpan(textSnapshot, quotationTypeSpan), _standardClassification.Keyword));
+            classifications.Add(MakeClassificationSpan(textSnapshot, quotationTypeSpan, _standardClassification.Keyword));
         }
 
         List<Span> innerSplices = null;
@@ -246,16 +246,16 @@ namespace Nemerle.VisualStudio.LanguageService
 
         var classificationType = _classificationRegistry.GetClassificationType(ClassificationTypes.QuotationName);
         if (innerSplices == null)
-          InsertClassification(classifications, new ClassificationSpan(new SnapshotSpan(textSnapshot, tokenSpan), classificationType));
+          InsertClassification(classifications, MakeClassificationSpan(textSnapshot, tokenSpan, classificationType));
         else
         {
           var pos = tokenSpan.Start;
           foreach (var s in innerSplices)
           {
-            InsertClassification(classifications, new ClassificationSpan(new SnapshotSpan(textSnapshot, new Span(pos, s.Start - pos)), classificationType));
+            InsertClassification(classifications, MakeClassificationSpan(textSnapshot, new Span(pos, s.Start - pos), classificationType));
             pos = s.End;
           }
-          InsertClassification(classifications, new ClassificationSpan(new SnapshotSpan(textSnapshot, new Span(pos, tokenSpan.End - pos)), classificationType));
+          InsertClassification(classifications, MakeClassificationSpan(textSnapshot, new Span(pos, tokenSpan.End - pos), classificationType));
         }
       }
       else if (token is Token.Namespace)
@@ -272,6 +272,11 @@ namespace Nemerle.VisualStudio.LanguageService
       }
 
       return token.Next;
+    }
+
+    private static ClassificationSpan MakeClassificationSpan(ITextSnapshot textSnapshot, Span span, IClassificationType classificationType)
+    {
+      return new ClassificationSpan(new SnapshotSpan(textSnapshot, span), classificationType);
     }
 
     private static void InsertClassification(List<ClassificationSpan> items, ClassificationSpan span)
