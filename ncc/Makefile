@@ -366,21 +366,42 @@ halfboot:
 	$(Q)$(MAKE) boot
 
 install:
+	LIBDIR=$(LIBDIR)/nemerle
 	$(Q)if test ! -d $(DESTDIR)$(BINDIR); then $(INSTALL) -d $(DESTDIR)$(BINDIR); fi
-	$(Q)$(GACUTIL_COMMAND) out.stage3/Nemerle.dll
-	$(Q)$(GACUTIL_COMMAND) out.stage3/Nemerle.Compiler.dll
-ifeq ($(MONO_GACUTIL),yes)
-	$(Q)$(GACUTIL_COMMAND) out.stage3/Nemerle.Macros.dll
-else
-	$(INST) "[$(BINDIR)]" Nemerle.Macros.dll
-	$(Q)$(INSTALL) -m 755 out.stage3/Nemerle.Macros.dll $(DESTDIR)$(BINDIR)/Nemerle.Macros.dll
-endif
+	$(Q)if test ! -d $(DESTDIR)$(LIBDIR); then $(INSTALL) -d $(DESTDIR)$(LIBDIR); fi
+
+	$(INST) "[$(LIBDIR)]" Nemerle.dll
+	$(Q)$(GACUTIL_COMMAND) ../$(OUTPUTDIR)/Stage4/Nemerle.dll
+	$(Q)$(INSTALL) -m 755 ../$(OUTPUTDIR)/Stage4/Nemerle.dll $(DESTDIR)$(LIBDIR)/Nemerle.dll
+	
+	$(INST) "[$(LIBDIR)]" Nemerle.Compiler.dll
+	$(Q)$(GACUTIL_COMMAND) ../$(OUTPUTDIR)/Stage4/Nemerle.Compiler.dll
+	$(Q)$(INSTALL) -m 755 ../$(OUTPUTDIR)/Stage4/Nemerle.Compiler.dll $(DESTDIR)$(LIBDIR)/Nemerle.Compiler.dll
+	
+	$(INST) "[$(LIBDIR)]" Nemerle.Macros.dll
+	$(Q)$(GACUTIL_COMMAND) ../$(OUTPUTDIR)/Stage4/Nemerle.Macros.dll
+	$(Q)$(INSTALL) -m 755 ../$(OUTPUTDIR)/Stage4/Nemerle.Macros.dll $(DESTDIR)$(LIBDIR)/Nemerle.Macros.dll
+	
 	export MONO_PATH=$$MONO_PATH:$$PWD/out.stage3 ; $(NGEN_GAC)
 	$(INST) "[$(BINDIR)]" ncc.exe
-	$(Q)$(INSTALL) -m 755 out.stage3/ncc.exe $(DESTDIR)$(BINDIR)/ncc.exe
+	$(Q)$(INSTALL) -m 755 ../$(OUTPUTDIR)/Stage4/ncc.exe $(DESTDIR)$(LIBDIR)/ncc.exe
 	echo "#!/bin/sh" > $(DESTDIR)$(SCRDIR)/ncc && \
-	echo '$(NET_ENGINE) $(BINDIR)/ncc.exe "$$@"' >> $(DESTDIR)$(SCRDIR)/ncc ; \
-	chmod 755 $(DESTDIR)$(SCRDIR)/ncc ;
+	echo '$(NET_ENGINE) $(LIBDIR)/ncc.exe "$$@"' >> $(DESTDIR)$(BINDIR)/ncc ; \
+	chmod 755 $(DESTDIR)$(BINDIR)/ncc $(DESTDIR)$(LIBDIR)/ncc.exe ;
+
+uninstall:
+	export LIBDIR=$(LIBDIR)/nemerle
+	$(RM) Nemerle.Macros
+	$(GACUTIL_UNINSTALL_COMMAND) Nemerle.Macros
+	$(RM) Nemerle.Compiler
+	$(GACUTIL_UNINSTALL_COMMAND) Nemerle.Compiler
+	$(RM) Nemerle
+	$(GACUTIL_UNINSTALL_COMMAND) Nemerle
+	$(RM) $(BINDIR)/ncc
+	$(Q)rm -f $(BINDIR)/ncc
+	$(RM) -r $(LIBDIR)
+	$(Q)rm -rf $(LIBDIR)
+
 
 clean:
 	cd testsuite && $(MAKE) clean

@@ -62,8 +62,9 @@ INST  = @echo INSTALL $1
 # This is the default target.  It bootstraps compiler, and
 # builds standard library.
 all:
-	$(Q)$(MAKE) -C ncc boot
-	$(Q)$(MAKE) -C tools all
+#	$(Q)$(MAKE) -C ncc boot
+#	$(Q)$(MAKE) -C tools all
+	$(MSBUILD) $(NPROJ) /p:TargetFrameworkVersion=v$(FRAMEWORK) /t:$(TARGET) /p:Configuration=$(CONFIG) /tv:4.0  
 
 
 # This is necessary to make sure, that configuration file
@@ -91,12 +92,12 @@ changelog:
            rm -f ChangeLog.old ChangeLog.new changelog.xml ; \
         fi
 
-sync:
-	$(MAKE) -C tools/msbuild-task all sync-impl
-	$(MAKE) -C ncc boot sync-impl
+#sync:
+#	$(MAKE) -C tools/msbuild-task all sync-impl
+#	$(MAKE) -C ncc boot sync-impl
         
-sync-boot: sync
-	svn commit -m "Sync for release." boot/
+#sync-boot: sync
+#	svn commit -m "Sync for release." boot/
 
 dist: changelog tarball
 
@@ -132,17 +133,49 @@ dist-cleaner:
 	rm -rf doc/wiki/
 	rm -f nemerle.pc config.mak configure.log
 
-install: all
+prepareinstall:
+	@echo Copying files to $(OUTPUTDIR)/lib/nemerle...
+	@mkdir -p $(OUTPUTDIR)/bin $(OUTPUTDIR)/lib/nemerle
+	@cp $(OUTPUTDIR)/Stage4/*.dll $(OUTPUTDIR)/lib/nemerle
+	@cp -n $(OUTPUTDIR)/Stage4/*.exe $(OUTPUTDIR)/lib/nemerle
+	@cp -n $(OUTPUTDIR)/Stage4/Nemerle.MSBuild.targets $(OUTPUTDIR)/lib/nemerle
+	@cp -n $(OUTPUTDIR)/Linq/*.dll $(OUTPUTDIR)/lib/nemerle
+	@cp -n $(OUTPUTDIR)/PowerPack/*.dll $(OUTPUTDIR)/lib/nemerle
+	@cp -n $(OUTPUTDIR)/TestFramework/*.dll $(OUTPUTDIR)/lib/nemerle
+	@cp -n $(OUTPUTDIR)/Unsafe/*.dll $(OUTPUTDIR)/lib/nemerle
+	@echo "#!/bin/sh" > $(OUTPUTDIR)/bin/ncc && \
+	echo '$(NET_ENGINE) $(LIBDIR)/ncc.exe "$$@"' >> $(OUTPUTDIR)/bin/ncc && \
+	chmod 775 $(OUTPUTDIR)/bin/ncc
+	@rm -f $(OUTPUTDIR)/lib/nemerle/policy*.dll
+
+install: prepareinstall
 	$(Q)install -d $(DESTDIR)$(PKGCONFIGDIR)
 	$(Q)$(MAKE) -C doc install
-	$(Q)$(MAKE) -C ncc install
-	$(Q)$(MAKE) -C tools install
-	$(INST) $(PKGCONFIGDIR)/nemerle.pc
+	$(Q)mkdir -p $(DESTDIR)$(BINDIR) $(DESTDIR)$(LIBDIR)
+	$(Q)for file in $(OUTPUTDIR)/lib/nemerle/*; do \
+	  echo INSTALL "["$(DESTDIR)$(LIBDIR)"]" `basename $$file`; \
+	  install -m 775 $$file $(DESTDIR)$(LIBDIR); \
+	done
+	$(INST) "["$(DESTDIR)$(BINDIR)"]" ncc
+	$(Q)install -m 775 $(OUTPUTDIR)/bin/ncc $(DESTDIR)$(BINDIR)
+	$(Q)echo -n Installing components to GAC...
+	$(Q)for file in $(OUTPUTDIR)/lib/nemerle/*.dll; do \
+	  $(GACUTIL_COMMAND)  $$file 2>/dev/null 1>&2; true; \
+	done
+	$(Q)echo done
+	$(INST) "["$(PKGCONFIGDIR)"]" nemerle.pc
 	$(Q)install -m 644 nemerle.pc $(DESTDIR)$(PKGCONFIGDIR)/nemerle.pc
 
 uninstall:
-	$(Q)-$(MAKE) -C tools uninstall
-	$(Q)$(MAKE) -C boot uninstall
+	@echo -n Removing components from GAC... 
+	@for file in $(DESTDIR)$(LIBDIR)/*.dll; do \
+	  $(GACUTIL_UNINSTALL_COMMAND) $$file 2>/dev/null 1>&2; true; \
+	done
+	@echo done
+	@echo RM -rf $(DESTDIR)$(LIBDIR) 
+	$(Q)rm -rf $(DESTDIR)$(LIBDIR)
+	@echo RM $(DESTDIR)$(BINDIR)/ncc
+	$(Q)rm $(DESTDIR)$(BINDIR)/ncc
 	$(Q)$(MAKE) -C doc  uninstall
 	$(Q)rm -f $(PKGCONFIGDIR)/nemerle.pc
 
@@ -156,11 +189,7 @@ check: all
 	$(Q)$(MAKE) -C ncc/testsuite/ clean
 
 clean:
-	$(MAKE) -C doc clean
-	$(MAKE) -C ncc clean
-	$(MAKE) -C snippets clean
-	$(MAKE) -C tools clean
-	$(MAKE) -C lib/tests clean
+	rm -rf bin/ obj/
 	rm -f config.mak configure.log
 
 set-version: config.mak
