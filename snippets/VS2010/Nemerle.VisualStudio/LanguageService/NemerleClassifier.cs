@@ -10,30 +10,39 @@ namespace Nemerle.VisualStudio.LanguageService
 {
   public sealed class NemerleClassifier : IClassifier
   {
-    private readonly IStandardClassificationService _standardClassification;
-    private readonly IClassificationTypeRegistryService _classificationRegistry;
     private readonly ITextBuffer _textBuffer;
     private ParseResult _parseResult;
-
-
+    private readonly IClassificationType[] _classificationTypes;
 
     public NemerleClassifier(
       IStandardClassificationService standardClassification,
       IClassificationTypeRegistryService classificationRegistry,
       ITextBuffer textBuffer)
     {
-      _standardClassification = standardClassification;
-      _classificationRegistry = classificationRegistry;
       _textBuffer = textBuffer;
       _textBuffer.Changed += TextBuffer_Changed;
-      _parseResult = TryParse();
+      _classificationTypes = new IClassificationType[]
+      {
+        standardClassification.Identifier,
+        standardClassification.Keyword,
+        standardClassification.PreprocessorKeyword,
+        standardClassification.Operator,
+        standardClassification.NumberLiteral,
+        standardClassification.CharacterLiteral,
+        standardClassification.WhiteSpace,
+        standardClassification.Comment,
+        standardClassification.Comment,
+        standardClassification.StringLiteral,
+        standardClassification.StringLiteral,
+        classificationRegistry.GetClassificationType(ClassificationTypes.QuotationName),
+      };
     }
 
     public event EventHandler<ClassificationChangedEventArgs> ClassificationChanged;
 
     private void TextBuffer_Changed(object sender, TextContentChangedEventArgs e)
     {
-      _parseResult = TryParse();
+      _parseResult = null;
     }
 
     private void OnClassificationChanged(SnapshotSpan span)
@@ -51,8 +60,8 @@ namespace Nemerle.VisualStudio.LanguageService
       if (_parseResult == null)
         return EmptyClassificationSpans;
 
-      var snapshot = _textBuffer.CurrentSnapshot;
-      var result = new List<ClassificationSpan>();
+      var snapshot = _parseResult.Snapshot;
+      var spans = new List<SpanInfo>(16);
 
       foreach (var c in _parseResult.Comments)
       {
@@ -61,7 +70,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
         var commentSpan = new Span(c.Position, c.Length);
         if (span.IntersectsWith(commentSpan))
-          InsertClassification(result, MakeClassificationSpan(snapshot, commentSpan, _standardClassification.Comment));
+          InsertClassification(spans, new SpanInfo(commentSpan, c.IsMultiline ? SpanType.MultiLineComment : SpanType.SingleLineComment));
       }
 
       foreach (var d in _parseResult.Directives)
@@ -71,12 +80,18 @@ namespace Nemerle.VisualStudio.LanguageService
 
         var directiveSpan = new Span(d.Position, d.Length);
         if (span.IntersectsWith(directiveSpan))
-          InsertClassification(result, MakeClassificationSpan(snapshot, directiveSpan, _standardClassification.PreprocessorKeyword));
+          InsertClassification(spans, new SpanInfo(directiveSpan, SpanType.PreprocessorKeyword));
       }
 
       List<Span> splices = null; // not used
-      WalkTokens(_parseResult.Tokens, snapshot, span.Span, result, false, ref splices);
+      WalkTokens(_parseResult.Tokens, snapshot, span.Span, spans, false, ref splices);
 
+      var result = new ClassificationSpan[spans.Count];
+      for (var i = 0; i < spans.Count; ++i)
+      {
+        var spanInfo = spans[i];
+        result[i] = new ClassificationSpan(new SnapshotSpan(snapshot, spanInfo.Span), _classificationTypes[(int) spanInfo.Type]);
+      }
       return result;
     }
 
@@ -110,12 +125,12 @@ namespace Nemerle.VisualStudio.LanguageService
       var tokens     = preParser.PreParse();
       var comments   = lexer.GetComments();
       var directives = lexer.GetDirectives();
-      var result     = new ParseResult(tokens, comments, directives);
+      var result     = new ParseResult(snapshot, tokens, comments, directives);
 
       return result;
     }
 
-    private void WalkTokens(Token token, ITextSnapshot textSnapshot, Span span, List<ClassificationSpan> classifications, bool isQuotation, ref List<Span> splices)
+    private static void WalkTokens(Token token, ITextSnapshot textSnapshot, Span span, List<SpanInfo> classifications, bool isQuotation, ref List<Span> splices)
     {
       while (token != null)
       {
@@ -133,19 +148,19 @@ namespace Nemerle.VisualStudio.LanguageService
       }
     }
 
-    private Token WalkToken(Span tokenSpan, Token token, ITextSnapshot textSnapshot, Span span, List<ClassificationSpan> classifications, bool isQuotation, ref List<Span> splices)
+    private static Token WalkToken(Span tokenSpan, Token token, ITextSnapshot textSnapshot, Span span, List<SpanInfo> classifications, bool isQuotation, ref List<Span> splices)
     {
       if (token is Token.Comma
         || token is Token.Semicolon)
       {
-        classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.Operator));
+        classifications.Add(new SpanInfo(tokenSpan, SpanType.Operator));
       }
       else if (token is Token.Operator)
       {
         var op = (Token.Operator)token;
         if (isQuotation && op.name == "$" && op.Next != null)
         {
-          classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.Operator));
+          classifications.Add(new SpanInfo(tokenSpan, SpanType.Operator));
 
           var spliceToken     = op.Next;
           var spliceTokenSpan = NLocationToSpan(textSnapshot, spliceToken.Location);
@@ -159,8 +174,8 @@ namespace Nemerle.VisualStudio.LanguageService
         else if (isQuotation && op.name == ".." && op.Next is Token.Operator && ((Token.Operator)op.Next).name == "$" && op.Next.Next != null)
         {
           var op2Span = NLocationToSpan(textSnapshot, op.Next.Location);
-          classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.Operator));
-          classifications.Add(MakeClassificationSpan(textSnapshot, op2Span, _standardClassification.Operator));
+          classifications.Add(new SpanInfo(tokenSpan, SpanType.Operator));
+          classifications.Add(new SpanInfo(op2Span, SpanType.Operator));
 
           var spliceToken     = op.Next.Next;
           var spliceTokenSpan = NLocationToSpan(textSnapshot, spliceToken.Location);
@@ -173,7 +188,7 @@ namespace Nemerle.VisualStudio.LanguageService
         }
         else
         {
-          classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.Operator));
+          classifications.Add(new SpanInfo(tokenSpan, SpanType.Operator));
         }
       }
       else if (token is Token.DecimalLiteral
@@ -181,33 +196,33 @@ namespace Nemerle.VisualStudio.LanguageService
         || token is Token.FloatLiteral
         || token is Token.IntegerLiteral)
       {
-        classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.NumberLiteral));
+        classifications.Add(new SpanInfo(tokenSpan, SpanType.Number));
       }
       else if (token is Token.CharLiteral)
       {
-        classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.CharacterLiteral));
+        classifications.Add(new SpanInfo(tokenSpan, SpanType.Character));
       }
       else if (token is Token.StringLiteral)
       {
-        classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.StringLiteral));
+        classifications.Add(new SpanInfo(tokenSpan, SpanType.MultiLineString));
       }
       else if (token is Token.Keyword)
       {
-        classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.Keyword));
+        classifications.Add(new SpanInfo(tokenSpan, SpanType.Keyword));
       }
       else if (token is Token.WhiteSpace)
       {
-        classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.WhiteSpace));
+        classifications.Add(new SpanInfo(tokenSpan, SpanType.Whitespace));
       }
       else if (token is Token.Identifier
         || token is Token.IdentifierToComplete
         || token is Token.QuotedIdentifier)
       {
-        classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.Identifier));
+        classifications.Add(new SpanInfo(tokenSpan, SpanType.Identifier));
       }
       else if (token is Token.Comment)
       {
-        classifications.Add(MakeClassificationSpan(textSnapshot, tokenSpan, _standardClassification.Comment));
+        classifications.Add(new SpanInfo(tokenSpan, SpanType.MultiLineComment));
       }
       else if (token is Token.LooseGroup)
       {
@@ -238,24 +253,23 @@ namespace Nemerle.VisualStudio.LanguageService
         {
           var quotationTypeSpan = NLocationToSpan(textSnapshot, quotationType.Location);
           if (span.IntersectsWith(quotationTypeSpan))
-            classifications.Add(MakeClassificationSpan(textSnapshot, quotationTypeSpan, _standardClassification.Keyword));
+            classifications.Add(new SpanInfo(quotationTypeSpan, SpanType.Keyword));
         }
 
         List<Span> innerSplices = null;
         WalkTokens(group.Child, textSnapshot, span, classifications, true, ref innerSplices);
 
-        var classificationType = _classificationRegistry.GetClassificationType(ClassificationTypes.QuotationName);
         if (innerSplices == null)
-          InsertClassification(classifications, MakeClassificationSpan(textSnapshot, tokenSpan, classificationType));
+          InsertClassification(classifications, new SpanInfo(tokenSpan, SpanType.Quotation));
         else
         {
           var pos = tokenSpan.Start;
           foreach (var s in innerSplices)
           {
-            InsertClassification(classifications, MakeClassificationSpan(textSnapshot, new Span(pos, s.Start - pos), classificationType));
+            InsertClassification(classifications, new SpanInfo(new Span(pos, s.Start - pos), SpanType.Quotation));
             pos = s.End;
           }
-          InsertClassification(classifications, MakeClassificationSpan(textSnapshot, new Span(pos, tokenSpan.End - pos), classificationType));
+          InsertClassification(classifications, new SpanInfo(new Span(pos, tokenSpan.End - pos), SpanType.Quotation));
         }
       }
       else if (token is Token.Namespace)
@@ -274,12 +288,7 @@ namespace Nemerle.VisualStudio.LanguageService
       return token.Next;
     }
 
-    private static ClassificationSpan MakeClassificationSpan(ITextSnapshot textSnapshot, Span span, IClassificationType classificationType)
-    {
-      return new ClassificationSpan(new SnapshotSpan(textSnapshot, span), classificationType);
-    }
-
-    private static void InsertClassification(List<ClassificationSpan> items, ClassificationSpan span)
+    private static void InsertClassification(List<SpanInfo> items, SpanInfo span)
     {
       var index = 0;
       for (; index < items.Count; ++index)
@@ -312,15 +321,45 @@ namespace Nemerle.VisualStudio.LanguageService
 
     private static readonly IList<ClassificationSpan> EmptyClassificationSpans = new ClassificationSpan[0];
 
+    private enum SpanType : byte
+    {
+      Identifier = 0,
+      Keyword,
+      PreprocessorKeyword,
+      Operator,
+      Number,
+      Character,
+      Whitespace,
+      SingleLineComment,
+      MultiLineComment,
+      SingleLineString,
+      MultiLineString,
+      Quotation
+    }
+
+    private struct SpanInfo
+    {
+      public readonly Span Span;
+      public readonly SpanType Type;
+
+      public SpanInfo(Span span, SpanType type)
+      {
+        Span = span;
+        Type = type;
+      }
+    }
+
     private sealed class ParseResult
     {
-      public ParseResult(Token.BracesGroup tokens, Comment[] comments, Directive[] directives)
+      public ParseResult(ITextSnapshot snapshot, Token.BracesGroup tokens, Comment[] comments, Directive[] directives)
       {
+        Snapshot = snapshot;
         Tokens = tokens;
         Comments = comments;
         Directives = directives;
       }
 
+      public readonly ITextSnapshot Snapshot;
       public readonly Token.BracesGroup Tokens;
       public readonly Comment[] Comments;
       public readonly Directive[] Directives;
