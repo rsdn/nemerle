@@ -64,7 +64,7 @@ INST  = @echo INSTALL $1
 all:
 #	$(Q)$(MAKE) -C ncc boot
 #	$(Q)$(MAKE) -C tools all
-	$(MSBUILD) $(NPROJ) /p:TargetFrameworkVersion=v$(FRAMEWORK) /t:$(TARGET) /p:Configuration=$(CONFIG) /tv:4.0  
+	$(MSBUILD) $(NPROJ) /p:TargetFrameworkVersion=v$(FRAMEWORK) /t:$(TARGET) /p:Configuration=$(CONFIG) /tv:$(TOOLSVER) 
 
 
 # This is necessary to make sure, that configuration file
