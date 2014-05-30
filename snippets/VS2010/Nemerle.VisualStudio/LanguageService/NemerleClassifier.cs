@@ -4,23 +4,23 @@ using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.TextManager.Interop;
 using Nemerle.Compiler;
 using System;
+using System.Linq;
 using System.Collections.Generic;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
   public sealed class NemerleClassifier : IClassifier
   {
-    private readonly ITextBuffer _textBuffer;
-    private volatile ParseResult _lastParseResult;
-    private readonly IClassificationType[] _classificationTypes;
+    private readonly IClassificationType[]    _classificationTypes;
+    private readonly ITextBuffer              _textBuffer;
+    private          ParseResult              _lastParseResult;
+    private          IEnumerable<ITextChange> _lastTextChanges;
 
     public NemerleClassifier(
       IStandardClassificationService standardClassification,
       IClassificationTypeRegistryService classificationRegistry,
       ITextBuffer textBuffer)
     {
-      _textBuffer = textBuffer;
-      _textBuffer.Changed += TextBuffer_Changed;
       _classificationTypes = new IClassificationType[]
       {
         standardClassification.Identifier,
@@ -36,21 +36,11 @@ namespace Nemerle.VisualStudio.LanguageService
         standardClassification.StringLiteral,
         classificationRegistry.GetClassificationType(ClassificationTypes.QuotationName),
       };
+      _textBuffer = textBuffer;
+      _textBuffer.Changed += TextBuffer_Changed;
     }
 
     public event EventHandler<ClassificationChangedEventArgs> ClassificationChanged;
-
-    private void TextBuffer_Changed(object sender, TextContentChangedEventArgs e)
-    {
-      _lastParseResult = null;
-    }
-
-    private void OnClassificationChanged(SnapshotSpan span)
-    {
-      var handler = ClassificationChanged;
-      if (null != handler)
-        handler(this, new ClassificationChangedEventArgs(span));
-    }
 
     public IList<ClassificationSpan> GetClassificationSpans(SnapshotSpan span)
     {
@@ -61,6 +51,17 @@ namespace Nemerle.VisualStudio.LanguageService
         else
           return EmptyClassificationSpans;
 
+      var textChanges = _lastTextChanges;
+      if (textChanges != null)
+      {
+        _lastTextChanges = null;
+        var handler = ClassificationChanged;
+        if (handler != null)
+          foreach (var s in SearchClassificationChanges(parseResult, textChanges.Select(c => c.NewSpan)))
+            if (!(span.Span.Start < s.Start && s.End <= span.Span.End))
+              handler(this, new ClassificationChangedEventArgs(new SnapshotSpan(parseResult.Snapshot, s)));
+      }
+
       var tokenSpans = GetTokenSpans(_lastParseResult, span.Span);
 
       var result = new ClassificationSpan[tokenSpans.Count];
@@ -70,6 +71,44 @@ namespace Nemerle.VisualStudio.LanguageService
         result[i] = new ClassificationSpan(new SnapshotSpan(_lastParseResult.Snapshot, spanInfo.Span), _classificationTypes[(int)spanInfo.Type]);
       }
       return result;
+    }
+
+    private void TextBuffer_Changed(object sender, TextContentChangedEventArgs e)
+    {
+      var parseResult = _lastParseResult;
+      if (parseResult != null)
+      {
+        var handler = ClassificationChanged;
+        if (handler != null)
+          foreach (var s in SearchClassificationChanges(parseResult, e.Changes.Select(c => c.OldSpan)))
+            handler(this, new ClassificationChangedEventArgs(new SnapshotSpan(parseResult.Snapshot, s)));
+      }
+      _lastParseResult = null;
+      _lastTextChanges = e.Changes;
+    }
+
+    private static List<Span> SearchClassificationChanges(ParseResult parseResult, IEnumerable<Span> changes)
+    {
+      var spansToRedraw = new List<Span>();
+      foreach (var c in changes)
+      {
+        var tokenSpans = GetTokenSpans(parseResult, c);
+        foreach (var si in tokenSpans)
+        {
+          switch (si.Type)
+          {
+            case SpanType.MultiLineString:
+            case SpanType.MultiLineComment:
+              spansToRedraw.Add(si.Span);
+              break;
+
+            case SpanType.PreprocessorKeyword:
+              spansToRedraw.Add(new Span(si.Span.Start, parseResult.Snapshot.Length - si.Span.Start));
+              break;
+          }
+        }
+      }
+      return spansToRedraw;
     }
 
     private static bool TryParse(ITextBuffer textBuffer, out ParseResult parseResult)
@@ -151,13 +190,10 @@ namespace Nemerle.VisualStudio.LanguageService
         if (tokenSpan.Start > span.End)
           break;
 
-        if (!span.IntersectsWith(tokenSpan))
-        {
+        if (span.IntersectsWith(tokenSpan))
+          token = WalkToken(tokenSpan, token, textSnapshot, span, classifications, isQuotation, ref splices);
+        else
           token = token.Next;
-          continue;
-        }
-
-        token = WalkToken(tokenSpan, token, textSnapshot, span, classifications, isQuotation, ref splices);
       }
     }
 
