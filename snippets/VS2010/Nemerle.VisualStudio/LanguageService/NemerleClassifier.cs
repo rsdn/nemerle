@@ -11,7 +11,7 @@ namespace Nemerle.VisualStudio.LanguageService
   public sealed class NemerleClassifier : IClassifier
   {
     private readonly ITextBuffer _textBuffer;
-    private ParseResult _parseResult;
+    private volatile ParseResult _lastParseResult;
     private readonly IClassificationType[] _classificationTypes;
 
     public NemerleClassifier(
@@ -42,7 +42,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
     private void TextBuffer_Changed(object sender, TextContentChangedEventArgs e)
     {
-      _parseResult = null;
+      _lastParseResult = null;
     }
 
     private void OnClassificationChanged(SnapshotSpan span)
@@ -54,45 +54,80 @@ namespace Nemerle.VisualStudio.LanguageService
 
     public IList<ClassificationSpan> GetClassificationSpans(SnapshotSpan span)
     {
-      if (_parseResult == null)
-        _parseResult = TryParse();
+      var parseResult = _lastParseResult;
+      if (parseResult == null)
+        if (TryParse(_textBuffer, out parseResult))
+          _lastParseResult = parseResult;
+        else
+          return EmptyClassificationSpans;
 
-      if (_parseResult == null)
-        return EmptyClassificationSpans;
+      var tokenSpans = GetTokenSpans(_lastParseResult, span.Span);
 
-      var snapshot = _parseResult.Snapshot;
-      var spans = new List<SpanInfo>(16);
+      var result = new ClassificationSpan[tokenSpans.Count];
+      for (var i = 0; i < tokenSpans.Count; ++i)
+      {
+        var spanInfo = tokenSpans[i];
+        result[i] = new ClassificationSpan(new SnapshotSpan(_lastParseResult.Snapshot, spanInfo.Span), _classificationTypes[(int)spanInfo.Type]);
+      }
+      return result;
+    }
 
-      foreach (var c in _parseResult.Comments)
+    private static bool TryParse(ITextBuffer textBuffer, out ParseResult parseResult)
+    {
+      NemerleSource source;
+      if (!textBuffer.Properties.TryGetProperty<NemerleSource>(typeof(NemerleSource), out source))
+      {
+        parseResult = null;
+        return false;
+      }
+
+      var engine = source.GetEngine();
+      if (!engine.RequestOnInitEngine())
+      {
+        parseResult = null;
+        return false;
+      }
+
+      var snapshot   = textBuffer.CurrentSnapshot;
+      var code       = snapshot.GetText();
+      var lexer      = new LexerFile((ManagerClass)engine, 0, code, true);
+      var preParser  = new PreParser(lexer);
+      var tokens     = preParser.PreParse();
+      var comments   = lexer.GetComments();
+      var directives = lexer.GetDirectives();
+
+      parseResult = new ParseResult(snapshot, tokens, comments, directives);
+      return true;
+    }
+
+    private static List<SpanInfo> GetTokenSpans(ParseResult parseResult, Span span)
+    {
+      var tokenSpans = new List<SpanInfo>(16);
+
+      foreach (var c in parseResult.Comments)
       {
         if (c.Position > span.End)
           break;
 
         var commentSpan = new Span(c.Position, c.Length);
         if (span.IntersectsWith(commentSpan))
-          InsertClassification(spans, new SpanInfo(commentSpan, c.IsMultiline ? SpanType.MultiLineComment : SpanType.SingleLineComment));
+          InsertClassification(tokenSpans, new SpanInfo(commentSpan, c.IsMultiline ? SpanType.MultiLineComment : SpanType.SingleLineComment));
       }
 
-      foreach (var d in _parseResult.Directives)
+      foreach (var d in parseResult.Directives)
       {
         if (d.Position > span.End)
           break;
 
         var directiveSpan = new Span(d.Position, d.Length);
         if (span.IntersectsWith(directiveSpan))
-          InsertClassification(spans, new SpanInfo(directiveSpan, SpanType.PreprocessorKeyword));
+          InsertClassification(tokenSpans, new SpanInfo(directiveSpan, SpanType.PreprocessorKeyword));
       }
 
       List<Span> splices = null; // not used
-      WalkTokens(_parseResult.Tokens, snapshot, span.Span, spans, false, ref splices);
+      WalkTokens(parseResult.Tokens, parseResult.Snapshot, span, tokenSpans, false, ref splices);
 
-      var result = new ClassificationSpan[spans.Count];
-      for (var i = 0; i < spans.Count; ++i)
-      {
-        var spanInfo = spans[i];
-        result[i] = new ClassificationSpan(new SnapshotSpan(snapshot, spanInfo.Span), _classificationTypes[(int) spanInfo.Type]);
-      }
-      return result;
+      return tokenSpans;
     }
 
     private static Span NLocationToSpan(ITextSnapshot textSnapshot, Location location)
@@ -106,28 +141,6 @@ namespace Nemerle.VisualStudio.LanguageService
       var endPos   = endLine.Start.Position + location.End.Column - 1;
 
       return new Span(startPos, endPos - startPos);
-    }
-
-    private ParseResult TryParse()
-    {
-      NemerleSource source;
-      if (!_textBuffer.Properties.TryGetProperty<NemerleSource>(typeof(NemerleSource), out source))
-        return null;
-
-      var engine = source.GetEngine();
-      if (!engine.RequestOnInitEngine())
-        return null;
-
-      var snapshot   = _textBuffer.CurrentSnapshot;
-      var code       = snapshot.GetText();
-      var lexer      = new LexerFile((ManagerClass)engine, 0, code, true);
-      var preParser  = new PreParser(lexer);
-      var tokens     = preParser.PreParse();
-      var comments   = lexer.GetComments();
-      var directives = lexer.GetDirectives();
-      var result     = new ParseResult(snapshot, tokens, comments, directives);
-
-      return result;
     }
 
     private static void WalkTokens(Token token, ITextSnapshot textSnapshot, Span span, List<SpanInfo> classifications, bool isQuotation, ref List<Span> splices)
