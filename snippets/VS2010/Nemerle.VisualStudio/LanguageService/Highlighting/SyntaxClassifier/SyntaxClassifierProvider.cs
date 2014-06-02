@@ -9,7 +9,7 @@ using System.IO;
 namespace Nemerle.VisualStudio.LanguageService
 {
   [Export(typeof(IClassifierProvider)), ContentType("code")]
-  public sealed class NemerleClassifierProvider : IClassifierProvider
+  public sealed class SyntaxClassifierProvider : IClassifierProvider
   {
     [Import]
     private IClassificationTypeRegistryService _classificationRegistry = null;
@@ -23,11 +23,11 @@ namespace Nemerle.VisualStudio.LanguageService
       var isNemerleFile = string.Compare(extension, NemerleConstants.FileExtension, StringComparison.OrdinalIgnoreCase) == 0;
       if (isNemerleFile)
       {
-        var classifierKey = typeof(NemerleClassifier);
-        NemerleClassifier classifier;
+        var classifierKey = typeof(SyntaxClassifier);
+        SyntaxClassifier classifier;
         if (!textBuffer.Properties.TryGetProperty(classifierKey, out classifier))
         {
-          classifier = new NemerleClassifier(_standardClassification, _classificationRegistry, textBuffer);
+          classifier = new SyntaxClassifier(_standardClassification, _classificationRegistry, textBuffer);
           textBuffer.Properties.AddProperty(classifierKey, classifier);
         }
         return classifier;

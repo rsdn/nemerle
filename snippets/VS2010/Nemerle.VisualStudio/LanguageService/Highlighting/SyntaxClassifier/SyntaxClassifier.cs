@@ -9,14 +9,14 @@ using System.Collections.Generic;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
-  public sealed class NemerleClassifier : IClassifier
+  public sealed class SyntaxClassifier : IClassifier
   {
     private readonly IClassificationType[]    _classificationTypes;
     private readonly ITextBuffer              _textBuffer;
     private          ParseResult              _lastParseResult;
     private          IEnumerable<ITextChange> _lastTextChanges;
 
-    public NemerleClassifier(
+    public SyntaxClassifier(
       IStandardClassificationService standardClassification,
       IClassificationTypeRegistryService classificationRegistry,
       ITextBuffer textBuffer)
