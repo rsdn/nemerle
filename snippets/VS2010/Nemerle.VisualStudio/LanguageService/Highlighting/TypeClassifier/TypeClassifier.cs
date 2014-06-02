@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.VisualStudio.Language.StandardClassification;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Classification;
@@ -14,7 +15,6 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
     private readonly IClassificationTypeRegistryService _classificationRegistry;
     private readonly ITextBuffer _textBuffer;
 
-    public readonly List<Location> TypeLocations = new List<Location>();
 
     public event EventHandler<ClassificationChangedEventArgs> ClassificationChanged;
 
@@ -43,17 +43,28 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
 
     public IList<ClassificationSpan> GetClassificationSpans(SnapshotSpan span)
     {
+      NemerleSource source;
+      var result               = new List<ClassificationSpan>();
+      if (!_textBuffer.Properties.TryGetProperty(typeof(NemerleSource), out source))
+        return result;
+      var fileIndex            = source.FileIndex;
+      var snapshot             = span.Snapshot;
+      var loc                  = Utils.ToNLocation(fileIndex, span);
+      var locationsToHighlight = GetLocationsToHighlight(source, loc).ToArray();
+
+      foreach (var location in locationsToHighlight)
+      {
+        var highlightSpan = Utils.NLocationToSpan(snapshot, location);
+        result.Add(new ClassificationSpan(new SnapshotSpan(snapshot, highlightSpan), _standardClassification.SymbolReference));
+      }
+
+      
+      //_textBuffer.CurrentSnapshot.
+      //TypeLocations
 
 
-      var result = new List<ClassificationSpan>();
-
-      var path = _textBuffer.GetFilePath();
-      var fileIndex = Location.GetFileIndex(path);
       //var projectInfo = ProjectInfo.FindProject(path);
       //projectInfo.Engine.;
-      NemerleSource source;
-      if (!_textBuffer.Properties.TryGetProperty<NemerleSource>(typeof(NemerleSource), out source))
-        return result;
 
       var engine = source.GetEngine();
       if (!engine.RequestOnInitEngine())
@@ -73,6 +84,11 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
 
 
       return result;
+    }
+
+    private static IEnumerable<Location> GetLocationsToHighlight(NemerleSource source, Location loc)
+    {
+      return source.TypeLocations.Where(tl => tl.IsIntersect(loc));
     }
 
 

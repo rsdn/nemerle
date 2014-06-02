@@ -46,7 +46,7 @@ namespace Nemerle.VisualStudio.LanguageService
     #region Init
 
     public NemerleSource(NemerleLanguageService service, IVsTextLines textLines)
-      : base(service, textLines, new Colorizer(service, textLines, StubScanner.Instance))
+      : base(service, textLines, null)
     {
       // ReSharper disable DoNotCallOverridableMethodsInConstructor
       string path = GetFilePath();
@@ -135,6 +135,19 @@ namespace Nemerle.VisualStudio.LanguageService
       }
     }
 
+    public bool HasView
+    {
+      get
+      {
+        //var vsTextBuffer = (IVsTextBuffer)TextLines;
+        //var mgr = (IVsTextManager)LanguageService.GetService(typeof(VsTextManagerClass));
+        //IVsTextView vsTextView;
+        //var result = mgr.GetActiveView(0, vsTextBuffer, out vsTextView);
+        //return result >= 0;
+        return true;
+      }
+    }
+
     public IVsTextLines TextLines
     {
       get { return GetTextLines(); }
@@ -144,6 +157,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
     #region Fields
 
+    public readonly List<Location> TypeLocations = new List<Location>();
     readonly List<RelocationRequest> _relocationRequestsQueue = new List<RelocationRequest>();
     int _fileIndex = -1;
     QuickTipInfoAsyncRequest _tipAsyncRequest;
@@ -1443,6 +1457,15 @@ namespace Nemerle.VisualStudio.LanguageService
     public void UnlockWrite() { TextLines.UnlockBufferEx((uint)BufferLockFlags.BLF_READ); }
     public void LockReadWrite() { TextLines.LockBufferEx((uint)BufferLockFlags.BLF_READ_AND_WRITE); }
     public void UnlocReadkWrite() { TextLines.UnlockBufferEx((uint)BufferLockFlags.BLF_READ_AND_WRITE); }
+
+    public void SetTypeHighlighting(IList<Location> list, int sourceVersion)
+    {
+      if (CurrentVersion != sourceVersion)
+        return;
+
+      TypeLocations.Clear();
+      TypeLocations.AddRange(list);
+    }
 
     public void SetRegions(IList<RegionInfo> regions, int sourceVersion)
     {

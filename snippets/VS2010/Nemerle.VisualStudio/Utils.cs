@@ -26,6 +26,19 @@ namespace Nemerle.VisualStudio
 {
 	static class Utils
 	{
+    public static Location ToNLocation(int fileIndex, SnapshotSpan span)
+    {
+      return new Location(fileIndex, ToTextPoint(span.Start), ToTextPoint(span.End));
+    }
+
+    public static TextPoint ToTextPoint(SnapshotPoint pos)
+	  {
+      var line = pos.Snapshot.GetLineFromPosition(pos);
+	    var col = pos - line.Start;
+	    var res = new TextPoint(line.LineNumber, col);
+	    return res;
+	  }
+
 	  public static Span NLocationToSpan(ITextSnapshot textSnapshot, Location location)
 	  {
 	    var startLine = textSnapshot.GetLineFromLineNumber(location.Begin.Line - 1);
