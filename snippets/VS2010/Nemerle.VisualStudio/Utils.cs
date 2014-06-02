@@ -26,7 +26,20 @@ namespace Nemerle.VisualStudio
 {
 	static class Utils
 	{
-		public static void RunSyncInUIThread(Action action)
+	  public static Span NLocationToSpan(ITextSnapshot textSnapshot, Location location)
+	  {
+	    var startLine = textSnapshot.GetLineFromLineNumber(location.Begin.Line - 1);
+	    var endLine = location.Begin.Line == location.End.Line
+	      ? startLine
+	      : textSnapshot.GetLineFromLineNumber(location.End.Line - 1);
+
+	    var startPos = startLine.Start.Position + location.Begin.Column - 1;
+	    var endPos = endLine.Start.Position + location.End.Column - 1;
+
+	    return new Span(startPos, endPos - startPos);
+	  }
+
+	  public static void RunSyncInUIThread(Action action)
 		{
 			if (UIThread.Instance.IsUIThread)
 				return;
@@ -214,8 +227,8 @@ namespace Nemerle.VisualStudio
 		{
 			string[] ary = new string[lines.Count + 1];
 			lines.CopyTo(ary);
-			ary[ary.Length - 1] = string.Empty;
-			return string.Join(System.Environment.NewLine, ary);
+			ary[ary.Length - 1] = String.Empty;
+			return String.Join(Environment.NewLine, ary);
 		}
 
 		public static Location LocationFromSpan(int fileIndex, TextSpan span)
@@ -246,7 +259,7 @@ namespace Nemerle.VisualStudio
 		public static bool IsAllWhiteSpace(string str)
 		{
 			foreach (char ch in str)
-				if (!char.IsWhiteSpace(ch))
+				if (!Char.IsWhiteSpace(ch))
 					return false;
 
 			return true;
@@ -277,7 +290,7 @@ namespace Nemerle.VisualStudio
 
 		public static bool Eq(string str1, string str2)
 		{
-			return string.Equals(str1, str2, StringComparison.InvariantCultureIgnoreCase);
+			return String.Equals(str1, str2, StringComparison.InvariantCultureIgnoreCase);
 		}
 
 		public static string GetModuleName(Type type)
@@ -456,7 +469,7 @@ namespace Nemerle.VisualStudio
 
 		public static bool IsNullOrEmpty(this string str)
 		{
-			return string.IsNullOrEmpty(str);
+			return String.IsNullOrEmpty(str);
 		}
 
 		public static int ToVsLineCoord(this int coord)
@@ -481,9 +494,9 @@ namespace Nemerle.VisualStudio
 
 		public static ClassMember[] GetMembers(this TopDeclaration decl)
 		{
-			var members = Nemerle.Compiler.Utils.AstUtils.GetMembers(decl).ToArray();
+			var members = Compiler.Utils.AstUtils.GetMembers(decl).ToArray();
 			// Sort by name (like in C#).
-			Array.Sort(members, (m1, m2) => string.Compare(m1.Name, m2.Name));
+			Array.Sort(members, (m1, m2) => String.Compare(m1.Name, m2.Name));
 			return members;
 		}
 
@@ -503,7 +516,7 @@ namespace Nemerle.VisualStudio
 
 		public static string GetLabel(this ClassMember member)
 		{
-			return Nemerle.Compiler.Utils.AstUtils.GetMemberLabel(member).Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ');
+			return Compiler.Utils.AstUtils.GetMemberLabel(member).Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ');
 		}
 
 		/// <summary>
@@ -553,10 +566,10 @@ namespace Nemerle.VisualStudio
 			// for wrap around!
 			if (ticks < start)
 			{
-				s = s - (long)int.MaxValue;
-				t = t - (long)int.MinValue;
+				s = s - (long)Int32.MaxValue;
+				t = t - (long)Int32.MinValue;
 			}
-			return (int)Math.Min((long)int.MaxValue, t - s);
+			return (int)Math.Min((long)Int32.MaxValue, t - s);
 		}
 
 		public static string ToVsOutputStringFormat(this Location loc)

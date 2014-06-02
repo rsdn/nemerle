@@ -169,24 +169,11 @@ namespace Nemerle.VisualStudio.LanguageService
       return tokenSpans;
     }
 
-    private static Span NLocationToSpan(ITextSnapshot textSnapshot, Location location)
-    {
-      var startLine = textSnapshot.GetLineFromLineNumber(location.Begin.Line - 1);
-      var endLine = location.Begin.Line == location.End.Line
-        ? startLine
-        : textSnapshot.GetLineFromLineNumber(location.End.Line - 1);
-
-      var startPos = startLine.Start.Position + location.Begin.Column - 1;
-      var endPos   = endLine.Start.Position + location.End.Column - 1;
-
-      return new Span(startPos, endPos - startPos);
-    }
-
     private static void WalkTokens(Token token, ITextSnapshot textSnapshot, Span span, List<SpanInfo> classifications, bool isQuotation, ref List<Span> splices)
     {
       while (token != null)
       {
-        var tokenSpan = NLocationToSpan(textSnapshot, token.Location);
+        var tokenSpan = Utils.NLocationToSpan(textSnapshot, token.Location);
         if (tokenSpan.Start > span.End)
           break;
 
@@ -212,7 +199,7 @@ namespace Nemerle.VisualStudio.LanguageService
           classifications.Add(new SpanInfo(tokenSpan, SpanType.Operator));
 
           var spliceToken     = op.Next;
-          var spliceTokenSpan = NLocationToSpan(textSnapshot, spliceToken.Location);
+          var spliceTokenSpan = Utils.NLocationToSpan(textSnapshot, spliceToken.Location);
           if (splices == null)
             splices = new List<Span>();
           splices.Add(new Span(tokenSpan.Start, spliceTokenSpan.End - tokenSpan.Start));
@@ -222,12 +209,12 @@ namespace Nemerle.VisualStudio.LanguageService
         }
         else if (isQuotation && op.name == ".." && op.Next is Token.Operator && ((Token.Operator)op.Next).name == "$" && op.Next.Next != null)
         {
-          var op2Span = NLocationToSpan(textSnapshot, op.Next.Location);
+          var op2Span = Utils.NLocationToSpan(textSnapshot, op.Next.Location);
           classifications.Add(new SpanInfo(tokenSpan, SpanType.Operator));
           classifications.Add(new SpanInfo(op2Span, SpanType.Operator));
 
           var spliceToken     = op.Next.Next;
-          var spliceTokenSpan = NLocationToSpan(textSnapshot, spliceToken.Location);
+          var spliceTokenSpan = Utils.NLocationToSpan(textSnapshot, spliceToken.Location);
           if (splices == null)
             splices = new List<Span>();
           splices.Add(new Span(tokenSpan.Start, spliceTokenSpan.End - tokenSpan.Start));
@@ -300,7 +287,7 @@ namespace Nemerle.VisualStudio.LanguageService
         var quotationType = GetQuotationType(group);
         if (quotationType != null)
         {
-          var quotationTypeSpan = NLocationToSpan(textSnapshot, quotationType.Location);
+          var quotationTypeSpan = Utils.NLocationToSpan(textSnapshot, quotationType.Location);
           if (span.IntersectsWith(quotationTypeSpan))
             classifications.Add(new SpanInfo(quotationTypeSpan, SpanType.Keyword));
         }

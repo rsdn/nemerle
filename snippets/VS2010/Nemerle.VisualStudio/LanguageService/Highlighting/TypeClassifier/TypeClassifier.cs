@@ -13,7 +13,10 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
     private readonly IStandardClassificationService _standardClassification;
     private readonly IClassificationTypeRegistryService _classificationRegistry;
     private readonly ITextBuffer _textBuffer;
-    private ParseResult _parseResult;
+
+    public readonly List<Location> TypeLocations = new List<Location>();
+
+    public event EventHandler<ClassificationChangedEventArgs> ClassificationChanged;
 
     public TypeClassifier(
       IStandardClassificationService standardClassification,
@@ -26,7 +29,6 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
       _textBuffer.Changed += TextBuffer_Changed;
     }
 
-    public event EventHandler<ClassificationChangedEventArgs> ClassificationChanged;
 
     private void TextBuffer_Changed(object sender, TextContentChangedEventArgs e)
     {
@@ -41,6 +43,8 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
 
     public IList<ClassificationSpan> GetClassificationSpans(SnapshotSpan span)
     {
+
+
       var result = new List<ClassificationSpan>();
 
       var path = _textBuffer.GetFilePath();
