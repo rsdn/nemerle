@@ -208,26 +208,45 @@ namespace Nemerle.VisualStudio.LanguageService
       }
       else if (isQuotation && IsSpliceSequence(token, out spliceToken))
       {
-        classifications.Add(new SpanInfo(Utils.NLocationToSpan(textSnapshot, token.Location), SpanType.Operator));
+        var spliceOp1Span = Utils.NLocationToSpan(textSnapshot, token.Location);
+        if (span.IntersectsWith(spliceOp1Span))
+          classifications.Add(new SpanInfo(spliceOp1Span, SpanType.Operator));
 
         if (splices == null)
           splices = new List<Span>();
         splices.Add(chunkSpan);
 
-        List<Span> innerSplices = null; // not used
-        return WalkToken(Utils.NLocationToSpan(textSnapshot, spliceToken.Location), spliceToken, textSnapshot, span, classifications, false, ref innerSplices);
+        var spliceSpan = Utils.NLocationToSpan(textSnapshot, spliceToken.Location);
+        if (span.IntersectsWith(spliceSpan))
+        {
+          List<Span> innerSplices = null; // not used
+          return WalkToken(spliceSpan, spliceToken, textSnapshot, span, classifications, false, ref innerSplices);
+        }
+        else
+          return spliceToken.Next;
       }
       else if (isQuotation && IsSpliceListSequence(token, out spliceOp2, out spliceToken))
       {
-        classifications.Add(new SpanInfo(Utils.NLocationToSpan(textSnapshot, token.Location), SpanType.Operator));
-        classifications.Add(new SpanInfo(Utils.NLocationToSpan(textSnapshot, spliceOp2.Location), SpanType.Operator));
+        var spliceOp1Span = Utils.NLocationToSpan(textSnapshot, token.Location);
+        if (span.IntersectsWith(spliceOp1Span))
+          classifications.Add(new SpanInfo(spliceOp1Span, SpanType.Operator));
+
+        var spliceOp2Span = Utils.NLocationToSpan(textSnapshot, spliceOp2.Location);
+        if (span.IntersectsWith(spliceOp2Span))
+          classifications.Add(new SpanInfo(spliceOp2Span, SpanType.Operator));
 
         if (splices == null)
           splices = new List<Span>();
         splices.Add(chunkSpan);
 
-        List<Span> innerSplices = null; // not used
-        return WalkToken(Utils.NLocationToSpan(textSnapshot, spliceToken.Location), spliceToken, textSnapshot, span, classifications, false, ref innerSplices);
+        var spliceSpan = Utils.NLocationToSpan(textSnapshot, spliceToken.Location);
+        if (span.IntersectsWith(spliceSpan))
+        {
+          List<Span> innerSplices = null; // not used
+          return WalkToken(spliceSpan, spliceToken, textSnapshot, span, classifications, false, ref innerSplices);
+        }
+        else
+          return spliceToken.Next;
       }
       else if (token is Token.Operator)
       {
@@ -290,16 +309,26 @@ namespace Nemerle.VisualStudio.LanguageService
       {
         var group = (Token.QuoteGroup)token;
 
-        var quotationType = GetQuotationType(group);
-        if (quotationType != null)
+        Token.Identifier type;
+        Token.Operator colon;
+        Token body;
+        if (IsQuotationWithHeader(group, out type, out colon, out body))
         {
-          var quotationTypeSpan = Utils.NLocationToSpan(textSnapshot, quotationType.Location);
-          if (span.IntersectsWith(quotationTypeSpan))
-            classifications.Add(new SpanInfo(quotationTypeSpan, SpanType.Keyword));
+          var typeSpan = Utils.NLocationToSpan(textSnapshot, type.Location);
+          if (span.IntersectsWith(typeSpan))
+            classifications.Add(new SpanInfo(typeSpan, SpanType.Keyword));
+
+          var colonSpan = Utils.NLocationToSpan(textSnapshot, colon.Location);
+          if (span.IntersectsWith(colonSpan))
+            classifications.Add(new SpanInfo(colonSpan, SpanType.Operator));
+        }
+        else
+        {
+          body = group.Child;
         }
 
         List<Span> innerSplices = null;
-        WalkTokens(group.Child, textSnapshot, span, classifications, true, ref innerSplices);
+        WalkTokens(body, textSnapshot, span, classifications, true, ref innerSplices);
 
         if (innerSplices == null)
           InsertClassification(classifications, new SpanInfo(chunkSpan, SpanType.Quotation));
@@ -343,7 +372,7 @@ namespace Nemerle.VisualStudio.LanguageService
     private static bool IsSpliceSequence(Token token, out Token body)
     {
       var _op1 = token as Token.Operator;
-      if (_op1 != null && _op1.name == "$" && _op1.Next != null)
+      if (_op1 != null && string.Equals(_op1.name, "$", StringComparison.InvariantCulture) && _op1.Next != null)
       {
         body = _op1.Next;
         return true;
@@ -355,10 +384,10 @@ namespace Nemerle.VisualStudio.LanguageService
     private static bool IsSpliceListSequence(Token token, out Token.Operator op2, out Token body)
     {
       var _op1 = token as Token.Operator;
-      if (_op1 != null && _op1.name == "..")
+      if (_op1 != null && string.Equals(_op1.name, "..", StringComparison.InvariantCulture))
       {
         var _op2 = _op1.Next as Token.Operator;
-        if (_op2 != null && _op2.name == "$" && _op2.Next != null)
+        if (_op2 != null && string.Equals(_op2.name, "$", StringComparison.InvariantCulture) && _op2.Next != null)
         {
           op2 = _op2;
           body = _op2.Next;
@@ -370,26 +399,31 @@ namespace Nemerle.VisualStudio.LanguageService
       return false;
     }
 
-    private static Token.Identifier GetQuotationType(Token.QuoteGroup group)
+    private static bool IsQuotationWithHeader(Token.QuoteGroup group, out Token.Identifier type, out Token.Operator colon, out Token body)
     {
-      if (group.Child is Token.LooseGroup)
+      var content = group.Child as Token.LooseGroup;
+      if (content != null)
       {
-        var content = (Token.LooseGroup)group.Child;
-        if (content.Child is Token.Identifier)
+        var _type = content.Child as Token.Identifier;
+        if (_type != null && _quotationTypes.Contains(_type.name))
         {
-          var identifier = (Token.Identifier)content.Child;
-          if (_quotationTypes.Contains(identifier.name) && identifier.Next is Token.Operator)
+          var _colon = _type.Next as Token.Operator;
+          if (_colon != null && string.Equals(_colon.name, ":", StringComparison.InvariantCulture))
           {
-            var op = (Token.Operator)identifier.Next;
-            if (op.name == ":")
-              return identifier;
+            type  = _type;
+            colon = _colon;
+            body  = _colon.Next;
+            return true;
           }
         }
       }
-      return null;
+      type  = null;
+      colon = null;
+      body  = null;
+      return false;
     }
 
-    private static readonly HashSet<string> _quotationTypes = new HashSet<string>(new []{ "decl", "parameter", "ttype", "case" });
+    private static readonly HashSet<string> _quotationTypes = new HashSet<string>(new []{ "decl", "parameter", "ttype", "case" }, StringComparer.InvariantCulture);
 
     private static readonly IList<ClassificationSpan> EmptyClassificationSpans = new ClassificationSpan[0];
 
