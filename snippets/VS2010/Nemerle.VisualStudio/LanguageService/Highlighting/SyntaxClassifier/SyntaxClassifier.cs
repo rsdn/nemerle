@@ -186,46 +186,43 @@ namespace Nemerle.VisualStudio.LanguageService
 
     private static Token WalkToken(Span tokenSpan, Token token, ITextSnapshot textSnapshot, Span span, List<SpanInfo> classifications, bool isQuotation, ref List<Span> splices)
     {
+      Token.Operator spliceOp2;
+      Token spliceToken;
+
       if (token is Token.Comma
         || token is Token.Semicolon)
       {
         classifications.Add(new SpanInfo(tokenSpan, SpanType.Operator));
       }
+      else if (isQuotation && IsSpliceSequence(token, out spliceToken))
+      {
+        classifications.Add(new SpanInfo(tokenSpan, SpanType.Operator));
+
+        var spliceTokenSpan = Utils.NLocationToSpan(textSnapshot, spliceToken.Location);
+        if (splices == null)
+          splices = new List<Span>();
+        splices.Add(new Span(tokenSpan.Start, spliceTokenSpan.End - tokenSpan.Start));
+
+        List<Span> innerSplices = null; // not used
+        return WalkToken(spliceTokenSpan, spliceToken, textSnapshot, span, classifications, false, ref innerSplices);
+      }
+      else if (isQuotation && IsSpliceListSequence(token, out spliceOp2, out spliceToken))
+      {
+        var spliceOp2Span = Utils.NLocationToSpan(textSnapshot, spliceOp2.Location);
+        classifications.Add(new SpanInfo(tokenSpan, SpanType.Operator));
+        classifications.Add(new SpanInfo(spliceOp2Span, SpanType.Operator));
+
+        var spliceTokenSpan = Utils.NLocationToSpan(textSnapshot, spliceToken.Location);
+        if (splices == null)
+          splices = new List<Span>();
+        splices.Add(new Span(tokenSpan.Start, spliceTokenSpan.End - tokenSpan.Start));
+
+        List<Span> innerSplices = null; // not used
+        return WalkToken(spliceTokenSpan, spliceToken, textSnapshot, span, classifications, false, ref innerSplices);
+      }
       else if (token is Token.Operator)
       {
-        var op = (Token.Operator)token;
-        if (isQuotation && op.name == "$" && op.Next != null)
-        {
-          classifications.Add(new SpanInfo(tokenSpan, SpanType.Operator));
-
-          var spliceToken     = op.Next;
-          var spliceTokenSpan = Utils.NLocationToSpan(textSnapshot, spliceToken.Location);
-          if (splices == null)
-            splices = new List<Span>();
-          splices.Add(new Span(tokenSpan.Start, spliceTokenSpan.End - tokenSpan.Start));
-
-          List<Span> innerSplices = null; // not used
-          return WalkToken(spliceTokenSpan, spliceToken, textSnapshot, span, classifications, false, ref innerSplices);
-        }
-        else if (isQuotation && op.name == ".." && op.Next is Token.Operator && ((Token.Operator)op.Next).name == "$" && op.Next.Next != null)
-        {
-          var op2Span = Utils.NLocationToSpan(textSnapshot, op.Next.Location);
-          classifications.Add(new SpanInfo(tokenSpan, SpanType.Operator));
-          classifications.Add(new SpanInfo(op2Span, SpanType.Operator));
-
-          var spliceToken     = op.Next.Next;
-          var spliceTokenSpan = Utils.NLocationToSpan(textSnapshot, spliceToken.Location);
-          if (splices == null)
-            splices = new List<Span>();
-          splices.Add(new Span(tokenSpan.Start, spliceTokenSpan.End - tokenSpan.Start));
-
-          List<Span> innerSplices = null; // not used
-          return WalkToken(spliceTokenSpan, spliceToken, textSnapshot, span, classifications, false, ref innerSplices);
-        }
-        else
-        {
-          classifications.Add(new SpanInfo(tokenSpan, SpanType.Operator));
-        }
+        classifications.Add(new SpanInfo(tokenSpan, SpanType.Operator));
       }
       else if (token is Token.DecimalLiteral
         || token is Token.DoubleLiteral
@@ -332,6 +329,36 @@ namespace Nemerle.VisualStudio.LanguageService
           break;
 
       items.Insert(index, span);
+    }
+
+    private static bool IsSpliceSequence(Token token, out Token body)
+    {
+      var _op1 = token as Token.Operator;
+      if (_op1 != null && _op1.name == "$" && _op1.Next != null)
+      {
+        body = _op1.Next;
+        return true;
+      }
+      body = null;
+      return false;
+    }
+
+    private static bool IsSpliceListSequence(Token token, out Token.Operator op2, out Token body)
+    {
+      var _op1 = token as Token.Operator;
+      if (_op1 != null && _op1.name == "..")
+      {
+        var _op2 = _op1.Next as Token.Operator;
+        if (_op2 != null && _op2.name == "$" && _op2.Next != null)
+        {
+          op2 = _op2;
+          body = _op2.Next;
+          return true;
+        }
+      }
+      op2 = null;
+      body = null;
+      return false;
     }
 
     private static Token.Identifier GetQuotationType(Token.QuoteGroup group)
