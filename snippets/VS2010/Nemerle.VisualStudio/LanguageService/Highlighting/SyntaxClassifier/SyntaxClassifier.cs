@@ -173,18 +173,30 @@ namespace Nemerle.VisualStudio.LanguageService
     {
       while (token != null)
       {
-        var tokenSpan = Utils.NLocationToSpan(textSnapshot, token.Location);
-        if (tokenSpan.Start > span.End)
+        var chunkSpan = GetNextChunkSpan(token, textSnapshot, isQuotation);
+        if (chunkSpan.Start > span.End)
           break;
 
-        if (span.IntersectsWith(tokenSpan))
-          token = WalkToken(tokenSpan, token, textSnapshot, span, classifications, isQuotation, ref splices);
+        if (span.IntersectsWith(chunkSpan))
+          token = WalkToken(chunkSpan, token, textSnapshot, span, classifications, isQuotation, ref splices);
         else
           token = token.Next;
       }
     }
 
-    private static Token WalkToken(Span tokenSpan, Token token, ITextSnapshot textSnapshot, Span span, List<SpanInfo> classifications, bool isQuotation, ref List<Span> splices)
+    private static Span GetNextChunkSpan(Token token, ITextSnapshot textSnapshot, bool isQuotation)
+    {
+      Token.Operator op2;
+      Token body;
+      if (isQuotation && (IsSpliceSequence(token, out body) || IsSpliceListSequence(token, out op2, out body)))
+      {
+        var loc = new Location(token.Location.FileIndex, token.Location.Begin, body.Location.End);
+        return Utils.NLocationToSpan(textSnapshot, loc);
+      }
+      return Utils.NLocationToSpan(textSnapshot, token.Location);
+    }
+
+    private static Token WalkToken(Span chunkSpan, Token token, ITextSnapshot textSnapshot, Span span, List<SpanInfo> classifications, bool isQuotation, ref List<Span> splices)
     {
       Token.Operator spliceOp2;
       Token spliceToken;
@@ -192,70 +204,67 @@ namespace Nemerle.VisualStudio.LanguageService
       if (token is Token.Comma
         || token is Token.Semicolon)
       {
-        classifications.Add(new SpanInfo(tokenSpan, SpanType.Operator));
+        classifications.Add(new SpanInfo(chunkSpan, SpanType.Operator));
       }
       else if (isQuotation && IsSpliceSequence(token, out spliceToken))
       {
-        classifications.Add(new SpanInfo(tokenSpan, SpanType.Operator));
+        classifications.Add(new SpanInfo(Utils.NLocationToSpan(textSnapshot, token.Location), SpanType.Operator));
 
-        var spliceTokenSpan = Utils.NLocationToSpan(textSnapshot, spliceToken.Location);
         if (splices == null)
           splices = new List<Span>();
-        splices.Add(new Span(tokenSpan.Start, spliceTokenSpan.End - tokenSpan.Start));
+        splices.Add(chunkSpan);
 
         List<Span> innerSplices = null; // not used
-        return WalkToken(spliceTokenSpan, spliceToken, textSnapshot, span, classifications, false, ref innerSplices);
+        return WalkToken(Utils.NLocationToSpan(textSnapshot, spliceToken.Location), spliceToken, textSnapshot, span, classifications, false, ref innerSplices);
       }
       else if (isQuotation && IsSpliceListSequence(token, out spliceOp2, out spliceToken))
       {
-        var spliceOp2Span = Utils.NLocationToSpan(textSnapshot, spliceOp2.Location);
-        classifications.Add(new SpanInfo(tokenSpan, SpanType.Operator));
-        classifications.Add(new SpanInfo(spliceOp2Span, SpanType.Operator));
+        classifications.Add(new SpanInfo(Utils.NLocationToSpan(textSnapshot, token.Location), SpanType.Operator));
+        classifications.Add(new SpanInfo(Utils.NLocationToSpan(textSnapshot, spliceOp2.Location), SpanType.Operator));
 
-        var spliceTokenSpan = Utils.NLocationToSpan(textSnapshot, spliceToken.Location);
         if (splices == null)
           splices = new List<Span>();
-        splices.Add(new Span(tokenSpan.Start, spliceTokenSpan.End - tokenSpan.Start));
+        splices.Add(chunkSpan);
 
         List<Span> innerSplices = null; // not used
-        return WalkToken(spliceTokenSpan, spliceToken, textSnapshot, span, classifications, false, ref innerSplices);
+        return WalkToken(Utils.NLocationToSpan(textSnapshot, spliceToken.Location), spliceToken, textSnapshot, span, classifications, false, ref innerSplices);
       }
       else if (token is Token.Operator)
       {
-        classifications.Add(new SpanInfo(tokenSpan, SpanType.Operator));
+        classifications.Add(new SpanInfo(chunkSpan, SpanType.Operator));
       }
       else if (token is Token.DecimalLiteral
         || token is Token.DoubleLiteral
         || token is Token.FloatLiteral
         || token is Token.IntegerLiteral)
       {
-        classifications.Add(new SpanInfo(tokenSpan, SpanType.Number));
+        classifications.Add(new SpanInfo(chunkSpan, SpanType.Number));
       }
       else if (token is Token.CharLiteral)
       {
-        classifications.Add(new SpanInfo(tokenSpan, SpanType.Character));
+        classifications.Add(new SpanInfo(chunkSpan, SpanType.Character));
       }
       else if (token is Token.StringLiteral)
       {
-        classifications.Add(new SpanInfo(tokenSpan, SpanType.MultiLineString));
+        classifications.Add(new SpanInfo(chunkSpan, SpanType.MultiLineString));
       }
       else if (token is Token.Keyword)
       {
-        classifications.Add(new SpanInfo(tokenSpan, SpanType.Keyword));
+        classifications.Add(new SpanInfo(chunkSpan, SpanType.Keyword));
       }
       else if (token is Token.WhiteSpace)
       {
-        classifications.Add(new SpanInfo(tokenSpan, SpanType.Whitespace));
+        classifications.Add(new SpanInfo(chunkSpan, SpanType.Whitespace));
       }
       else if (token is Token.Identifier
         || token is Token.IdentifierToComplete
         || token is Token.QuotedIdentifier)
       {
-        classifications.Add(new SpanInfo(tokenSpan, SpanType.Identifier));
+        classifications.Add(new SpanInfo(chunkSpan, SpanType.Identifier));
       }
       else if (token is Token.Comment)
       {
-        classifications.Add(new SpanInfo(tokenSpan, SpanType.MultiLineComment));
+        classifications.Add(new SpanInfo(chunkSpan, SpanType.MultiLineComment));
       }
       else if (token is Token.LooseGroup)
       {
@@ -293,16 +302,16 @@ namespace Nemerle.VisualStudio.LanguageService
         WalkTokens(group.Child, textSnapshot, span, classifications, true, ref innerSplices);
 
         if (innerSplices == null)
-          InsertClassification(classifications, new SpanInfo(tokenSpan, SpanType.Quotation));
+          InsertClassification(classifications, new SpanInfo(chunkSpan, SpanType.Quotation));
         else
         {
-          var pos = tokenSpan.Start;
+          var pos = chunkSpan.Start;
           foreach (var s in innerSplices)
           {
             InsertClassification(classifications, new SpanInfo(new Span(pos, s.Start - pos), SpanType.Quotation));
             pos = s.End;
           }
-          InsertClassification(classifications, new SpanInfo(new Span(pos, tokenSpan.End - pos), SpanType.Quotation));
+          InsertClassification(classifications, new SpanInfo(new Span(pos, chunkSpan.End - pos), SpanType.Quotation));
         }
       }
       else if (token is Token.Namespace)
