@@ -265,7 +265,7 @@ namespace Nemerle.VisualStudio.LanguageService
       }
       else if (token is Token.StringLiteral)
       {
-        classifications.Add(new SpanInfo(chunkSpan, SpanType.MultiLineString));
+        classifications.Add(new SpanInfo(chunkSpan, IsMultiLineString((Token.StringLiteral)token) ? SpanType.MultiLineString : SpanType.SingleLineString));
       }
       else if (token is Token.Keyword)
       {
@@ -361,12 +361,16 @@ namespace Nemerle.VisualStudio.LanguageService
 
     private static void InsertClassification(List<SpanInfo> items, SpanInfo span)
     {
-      var index = 0;
-      for (; index < items.Count; ++index)
-        if (items[index].Span.Start >= span.Span.Start)
-          break;
+      var index = items.BinarySearch(span);
+      items.Insert(index >= 0 ? index : ~index, span);
+    }
 
-      items.Insert(index, span);
+    private static bool IsMultiLineString(Token.StringLiteral token)
+    {
+      var c1 = token.rawString[0];
+      var c2 = token.rawString[1];
+      return (c1 == '<' && c2 == '#')
+        || (c1 == '@' && c2 == '"');
     }
 
     private static bool IsSpliceSequence(Token token, out Token body)
@@ -443,7 +447,7 @@ namespace Nemerle.VisualStudio.LanguageService
       Quotation
     }
 
-    private struct SpanInfo
+    private struct SpanInfo : IComparable<SpanInfo>
     {
       public readonly Span Span;
       public readonly SpanType Type;
@@ -452,6 +456,16 @@ namespace Nemerle.VisualStudio.LanguageService
       {
         Span = span;
         Type = type;
+      }
+
+      public int CompareTo(SpanInfo other)
+      {
+        if (this.Span.Start < other.Span.Start)
+          return -1;
+        else if (this.Span.Start > other.Span.Start)
+          return +1;
+        else
+          return 0;
       }
     }
 
