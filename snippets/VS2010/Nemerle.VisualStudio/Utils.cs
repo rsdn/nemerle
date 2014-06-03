@@ -34,8 +34,8 @@ namespace Nemerle.VisualStudio
     public static TextPoint ToTextPoint(SnapshotPoint pos)
 	  {
       var line = pos.Snapshot.GetLineFromPosition(pos);
-	    var col = pos - line.Start;
-	    var res = new TextPoint(line.LineNumber, col);
+	    var col = pos - line.Start + 1;
+	    var res = new TextPoint(line.LineNumber + 1, col);
 	    return res;
 	  }
 

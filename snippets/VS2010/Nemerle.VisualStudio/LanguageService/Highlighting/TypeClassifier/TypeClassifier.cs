@@ -34,6 +34,12 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
     {
     }
 
+    public void RedrawTypeHighlighting()
+    {
+      var currentSnapshot = _textBuffer.CurrentSnapshot;
+      OnClassificationChanged(new SnapshotSpan(currentSnapshot, 0, currentSnapshot.Length));
+    }
+
     private void OnClassificationChanged(SnapshotSpan span)
     {
       var handler = ClassificationChanged;
@@ -47,6 +53,7 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
       var result               = new List<ClassificationSpan>();
       if (!_textBuffer.Properties.TryGetProperty(typeof(NemerleSource), out source))
         return result;
+      source.TypeClassifier = this;
       var fileIndex            = source.FileIndex;
       var snapshot             = span.Snapshot;
       var loc                  = Utils.ToNLocation(fileIndex, span);
@@ -57,32 +64,7 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
         var highlightSpan = Utils.NLocationToSpan(snapshot, location);
         result.Add(new ClassificationSpan(new SnapshotSpan(snapshot, highlightSpan), _standardClassification.SymbolReference));
       }
-
       
-      //_textBuffer.CurrentSnapshot.
-      //TypeLocations
-
-
-      //var projectInfo = ProjectInfo.FindProject(path);
-      //projectInfo.Engine.;
-
-      var engine = source.GetEngine();
-      if (!engine.RequestOnInitEngine())
-        return result;
-      var manager = (ManagerClass) engine;
-
-      foreach (var typeBuilder in manager.Hierarchy.TopTypeBuilders())
-      {
-        foreach (var ast in typeBuilder.AstParts)
-        {
-          if (ast.Location.FileIndex == fileIndex)
-          {
-            
-          }
-        }
-      }
-
-
       return result;
     }
 

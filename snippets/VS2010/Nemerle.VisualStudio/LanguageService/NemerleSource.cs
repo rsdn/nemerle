@@ -9,6 +9,7 @@ using Microsoft.VisualStudio;
 using Nemerle.Compiler;
 using Nemerle.Completion2;
 using Nemerle.Completion2.CodeFormatting;
+using Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier;
 using Nemerle.VisualStudio.Project;
 
 using System.Collections.Generic;
@@ -105,6 +106,7 @@ namespace Nemerle.VisualStudio.LanguageService
     internal TopDeclaration[] Declarations { get; set; }
     public bool RegionsLoaded { get; set; }
     public CompileUnit CompileUnit { get; set; }
+    public TypeClassifier TypeClassifier { get; set; }
 
     /// <summary>
     /// A NemerleSource usen for .n files and for extentions like .cs-files inside Nemerle project.
@@ -190,14 +192,34 @@ namespace Nemerle.VisualStudio.LanguageService
       {
         TextLineChange changes = lineChange[0];
 
-        RelocationQueue.AddRelocationRequest(RelocationRequestsQueue,
-      FileIndex, CurrentVersion,
-      changes.iNewEndLine + 1, changes.iNewEndIndex + 1,
-      changes.iOldEndLine + 1, changes.iOldEndIndex + 1,
-      changes.iStartLine + 1, changes.iStartIndex + 1);
+        var info = new RelocationInfo(FileIndex,
+          new TextPoint(changes.iStartLine  + 1, changes.iStartIndex  + 1),
+          new TextPoint(changes.iOldEndLine + 1, changes.iOldEndIndex + 1),
+          new TextPoint(changes.iNewEndLine + 1, changes.iNewEndIndex + 1)
+        );
+
+        RelocateTypeLocations(info);
+        // TODO: use info in AddRelocationRequest()
+        RelocationQueue.AddRelocationRequest(
+          RelocationRequestsQueue,
+          FileIndex, CurrentVersion,
+          changes.iNewEndLine + 1, changes.iNewEndIndex + 1,
+          changes.iOldEndLine + 1, changes.iOldEndIndex + 1,
+          changes.iStartLine + 1,  changes.iStartIndex + 1);
       }
 
       projectInfo.Engine.BeginUpdateCompileUnit(this); // Add request for reparse & update info about CompileUnit
+    }
+
+    private void RelocateTypeLocations(RelocationInfo info)
+    {
+      for (int i = 0; i < TypeLocations.Count; i++)
+      {
+        var typeLoc = TypeLocations[i];
+        var newLoc = Nemerle.Compiler.Completion.Relocate(typeLoc, info);
+        if (newLoc != typeLoc)
+          TypeLocations[i] = newLoc;
+      }
     }
 
     #endregion
@@ -1465,6 +1487,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
       TypeLocations.Clear();
       TypeLocations.AddRange(list);
+      TypeClassifier.RedrawTypeHighlighting();
     }
 
     public void SetRegions(IList<RegionInfo> regions, int sourceVersion)
