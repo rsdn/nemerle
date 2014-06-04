@@ -159,7 +159,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
     #region Fields
 
-    public readonly List<Location> TypeLocations = new List<Location>();
+    public IList<Location> TypeLocations;
     readonly List<RelocationRequest> _relocationRequestsQueue = new List<RelocationRequest>();
     int _fileIndex = -1;
     QuickTipInfoAsyncRequest _tipAsyncRequest;
@@ -1485,8 +1485,7 @@ namespace Nemerle.VisualStudio.LanguageService
       if (CurrentVersion != sourceVersion)
         return;
 
-      TypeLocations.Clear();
-      TypeLocations.AddRange(list);
+      TypeLocations = list;
       TypeClassifier.RedrawTypeHighlighting();
     }
 
