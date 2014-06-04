@@ -6,11 +6,15 @@ using Nemerle.Compiler;
 using System;
 using System.Linq;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Text.RegularExpressions;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
   public sealed class SyntaxClassifier : IClassifier
   {
+    private static readonly Regex _singleLineCommentParser = new Regex(@"^//\s*(TODO\s*:)|(BUG\s*:)|(HACK\s*:)", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex _multiLineCommentParser  = new Regex(@"^/\*\s*(TODO\s*:)|(BUG\s*:)|(HACK\s*:)", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private readonly IClassificationType[]    _classificationTypes;
     private readonly ITextBuffer              _textBuffer;
     private          ParseResult              _lastParseResult;
@@ -23,18 +27,21 @@ namespace Nemerle.VisualStudio.LanguageService
     {
       _classificationTypes = new IClassificationType[]
       {
+        standardClassification.WhiteSpace,
         standardClassification.Identifier,
         standardClassification.Keyword,
         standardClassification.PreprocessorKeyword,
         standardClassification.Operator,
         standardClassification.NumberLiteral,
         standardClassification.CharacterLiteral,
-        standardClassification.WhiteSpace,
         standardClassification.Comment,
         standardClassification.Comment,
         standardClassification.StringLiteral,
         standardClassification.StringLiteral,
         classificationRegistry.GetClassificationType(ClassificationTypes.QuotationName),
+        classificationRegistry.GetClassificationType(ClassificationTypes.ToDoCommentName),
+        classificationRegistry.GetClassificationType(ClassificationTypes.BugCommentName),
+        classificationRegistry.GetClassificationType(ClassificationTypes.HackCommentName),
       };
       _textBuffer = textBuffer;
       _textBuffer.Changed += TextBuffer_Changed;
@@ -127,13 +134,47 @@ namespace Nemerle.VisualStudio.LanguageService
         return false;
       }
 
+      var timer = Stopwatch.StartNew();
+
       var snapshot   = textBuffer.CurrentSnapshot;
       var code       = snapshot.GetText();
       var lexer      = new LexerFile((ManagerClass)engine, 0, code, true);
       var preParser  = new PreParser(lexer);
       var tokens     = preParser.PreParse();
-      var comments   = lexer.GetComments();
+      var _comments  = lexer.GetComments();
       var directives = lexer.GetDirectives();
+
+      var comments = new Comment[_comments.Length];
+      for (var i = 0; i < _comments.Length; ++i)
+      {
+        var c    = _comments[i];
+        var type = CommentType.Normal;
+        var pos  = 0;
+        var commentParser = c.IsMultiline ? _multiLineCommentParser : _singleLineCommentParser;
+        var match = commentParser.Match(code, c.Position, c.Length);
+        if (match.Success)
+        {
+          if (match.Groups[1].Success)
+          {
+            pos  = match.Groups[1].Index;
+            type = CommentType.ToDo;
+          }
+          else if (match.Groups[2].Success)
+          {
+            pos  = match.Groups[2].Index;
+            type = CommentType.Bug;
+          }
+          else if (match.Groups[3].Success)
+          {
+            pos  = match.Groups[3].Index;
+            type = CommentType.Hack;
+          }
+        }
+        comments[i] = new Comment(c, type, pos);
+      }
+
+      timer.Stop();
+      Debug.Print("SyntaxClassifier.TryParse: {0}", timer.Elapsed);
 
       parseResult = new ParseResult(snapshot, tokens, comments, directives);
       return true;
@@ -150,7 +191,22 @@ namespace Nemerle.VisualStudio.LanguageService
 
         var commentSpan = new Span(c.Position, c.Length);
         if (span.IntersectsWith(commentSpan))
+        {
           InsertClassification(tokenSpans, new SpanInfo(commentSpan, c.IsMultiline ? SpanType.MultiLineComment : SpanType.SingleLineComment));
+          if (c.Type != CommentType.Normal)
+          {
+            var textSpan = new Span(c.TextPosition, c.TextLength);
+            SpanType spanType;
+            switch (c.Type)
+            {
+              case CommentType.ToDo: spanType = SpanType.ToDoCommentText; break;
+              case CommentType.Bug:  spanType = SpanType.BugCommentText;  break;
+              case CommentType.Hack: spanType = SpanType.HackCommentText; break;
+              default:               spanType = default(SpanType); Trace.Assert(false); break;
+            }
+            InsertClassification(tokenSpans, new SpanInfo(textSpan, spanType));
+          }
+        }
       }
 
       foreach (var d in parseResult.Directives)
@@ -433,18 +489,21 @@ namespace Nemerle.VisualStudio.LanguageService
 
     private enum SpanType : byte
     {
-      Identifier = 0,
+      Whitespace = 0,
+      Identifier,
       Keyword,
       PreprocessorKeyword,
       Operator,
       Number,
       Character,
-      Whitespace,
       SingleLineComment,
       MultiLineComment,
       SingleLineString,
       MultiLineString,
-      Quotation
+      Quotation,
+      ToDoCommentText,
+      BugCommentText,
+      HackCommentText
     }
 
     private struct SpanInfo : IComparable<SpanInfo>
@@ -466,6 +525,42 @@ namespace Nemerle.VisualStudio.LanguageService
           return +1;
         else
           return 0;
+      }
+    }
+
+    private enum CommentType
+    {
+      Normal,
+      ToDo,
+      Bug,
+      Hack
+    }
+
+    private struct Comment
+    {
+      public Comment(Nemerle.Compiler.Comment comment, CommentType type, int textPosition)
+      {
+        Position     = comment.Position;
+        Length       = comment.Length;
+        IsDocument   = comment.IsDocument;
+        IsMultiline  = comment.IsMultiline;
+        Type         = type;
+        TextPosition = textPosition;
+      }
+
+      public readonly int         Position;
+      public readonly int         Length;
+      public readonly bool        IsDocument;
+      public readonly bool        IsMultiline;
+      public readonly CommentType Type;
+      public readonly int         TextPosition;
+      public int TextLength
+      {
+        get
+        {
+          var result = Length - (TextPosition - Position);
+          return IsMultiline ? result - 2 : result;
+        }
       }
     }
 
