@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Windows.Controls;
 using Microsoft.VisualStudio.Language.StandardClassification;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Classification;
@@ -11,10 +12,10 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
 {
   public sealed class TypeClassifier : IClassifier
   {
-    private readonly IStandardClassificationService _standardClassification;
-    private readonly IClassificationTypeRegistryService _classificationRegistry;
     private readonly ITextBuffer _textBuffer;
-
+    private static readonly HashSet<string> _predefinedTypes = new HashSet<string>
+      { "object", "int", "string", "void", "bool", "list", "byte", "float", "uint", "char", 
+        "ulong", "ushort", "decimal", "sbyte", "short", "double", "long" };
 
     public event EventHandler<ClassificationChangedEventArgs> ClassificationChanged;
 
@@ -23,9 +24,9 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
       IClassificationTypeRegistryService classificationRegistry,
       ITextBuffer textBuffer)
     {
-      _standardClassification = standardClassification;
-      _classificationRegistry = classificationRegistry;
-      _textBuffer = textBuffer;
+      _textBuffer          = textBuffer;
+      _userStyle           = classificationRegistry.GetClassificationType(ClassificationTypes.UserTypeName);
+      _predefinedStyle     = standardClassification.Keyword;
       _textBuffer.Changed += TextBuffer_Changed;
     }
 
@@ -62,7 +63,9 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
       foreach (var location in locationsToHighlight)
       {
         var highlightSpan = Utils.NLocationToSpan(snapshot, location);
-        result.Add(new ClassificationSpan(new SnapshotSpan(snapshot, highlightSpan), _standardClassification.SymbolReference));
+        var text = snapshot.GetText(highlightSpan);
+        var classification = _predefinedTypes.Contains(text) ? _predefinedStyle : _userStyle;
+        result.Add(new ClassificationSpan(new SnapshotSpan(snapshot, highlightSpan), classification));
       }
       
       return result;
@@ -80,5 +83,7 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
     }
 
     private static readonly IList<ClassificationSpan> EmptyClassificationSpans = new ClassificationSpan[0];
+    private IClassificationType _predefinedStyle;
+    private IClassificationType _userStyle;
   }
 }
