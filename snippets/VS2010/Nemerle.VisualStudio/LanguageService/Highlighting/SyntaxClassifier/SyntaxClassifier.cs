@@ -321,21 +321,63 @@ namespace Nemerle.VisualStudio.LanguageService
       else if (token is Token.RoundGroup)
       {
         var group = (Token.RoundGroup)token;
+        if (group.OpenBrace != null)
+        {
+          var braceSpan = Utils.NLocationToSpan(textSnapshot, group.OpenBrace.Location);
+          if (span.IntersectsWith(braceSpan))
+            classifications.Add(new SpanInfo(braceSpan, SpanType.Operator));
+        }
         WalkTokens(group.Child, textSnapshot, span, classifications, isQuotation, ref splices);
+        if (group.CloseBrace != null)
+        {
+          var braceSpan = Utils.NLocationToSpan(textSnapshot, group.CloseBrace.Location);
+          if (span.IntersectsWith(braceSpan))
+            classifications.Add(new SpanInfo(braceSpan, SpanType.Operator));
+        }
       }
       else if (token is Token.SquareGroup)
       {
         var group = (Token.SquareGroup)token;
+        if (group.OpenBrace != null)
+        {
+          var braceSpan = Utils.NLocationToSpan(textSnapshot, group.OpenBrace.Location);
+          if (span.IntersectsWith(braceSpan))
+            classifications.Add(new SpanInfo(braceSpan, SpanType.Operator));
+        } 
         WalkTokens(group.Child, textSnapshot, span, classifications, isQuotation, ref splices);
+        if (group.CloseBrace != null)
+        {
+          var braceSpan = Utils.NLocationToSpan(textSnapshot, group.CloseBrace.Location);
+          if (span.IntersectsWith(braceSpan))
+            classifications.Add(new SpanInfo(braceSpan, SpanType.Operator));
+        }
       }
       else if (token is Token.BracesGroup)
       {
         var group = (Token.BracesGroup)token;
+        if (group.OpenBrace != null)
+        {
+          var braceSpan = Utils.NLocationToSpan(textSnapshot, group.OpenBrace.Location);
+          if (span.IntersectsWith(braceSpan))
+            classifications.Add(new SpanInfo(braceSpan, SpanType.Operator));
+        }
         WalkTokens(group.Child, textSnapshot, span, classifications, isQuotation, ref splices);
+        if (group.CloseBrace != null)
+        {
+          var braceSpan = Utils.NLocationToSpan(textSnapshot, group.CloseBrace.Location);
+          if (span.IntersectsWith(braceSpan))
+            classifications.Add(new SpanInfo(braceSpan, SpanType.Operator));
+        }
       }
       else if (token is Token.QuoteGroup)
       {
         var group = (Token.QuoteGroup)token;
+        if (group.OpenBrace != null)
+        {
+          var braceSpan = Utils.NLocationToSpan(textSnapshot, group.OpenBrace.Location);
+          if (span.IntersectsWith(braceSpan))
+            classifications.Add(new SpanInfo(braceSpan, SpanType.Operator));
+        }
 
         Token.Identifier type;
         Token.Operator colon;
@@ -369,6 +411,13 @@ namespace Nemerle.VisualStudio.LanguageService
             pos = s.End;
           }
           InsertClassification(classifications, new SpanInfo(new Span(pos, chunkSpan.End - pos), SpanType.Quotation));
+        }
+
+        if (group.CloseBrace != null)
+        {
+          var braceSpan = Utils.NLocationToSpan(textSnapshot, group.CloseBrace.Location);
+          if (span.IntersectsWith(braceSpan))
+            classifications.Add(new SpanInfo(braceSpan, SpanType.Operator));
         }
       }
       else if (token is Token.DecimalLiteral
