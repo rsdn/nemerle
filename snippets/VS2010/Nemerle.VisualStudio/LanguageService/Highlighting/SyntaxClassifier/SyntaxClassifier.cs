@@ -257,12 +257,7 @@ namespace Nemerle.VisualStudio.LanguageService
       Token.Operator spliceOp2;
       Token spliceToken;
 
-      if (token is Token.Comma
-        || token is Token.Semicolon)
-      {
-        classifications.Add(new SpanInfo(chunkSpan, SpanType.Operator));
-      }
-      else if (isQuotation && IsSpliceSequence(token, out spliceToken))
+      if (isQuotation && IsSpliceSequence(token, out spliceToken))
       {
         var spliceOp1Span = Utils.NLocationToSpan(textSnapshot, token.Location);
         if (span.IntersectsWith(spliceOp1Span))
@@ -304,42 +299,17 @@ namespace Nemerle.VisualStudio.LanguageService
         else
           return spliceToken.Next;
       }
-      else if (token is Token.Operator)
-      {
-        classifications.Add(new SpanInfo(chunkSpan, SpanType.Operator));
-      }
-      else if (token is Token.DecimalLiteral
-        || token is Token.DoubleLiteral
-        || token is Token.FloatLiteral
-        || token is Token.IntegerLiteral)
-      {
-        classifications.Add(new SpanInfo(chunkSpan, SpanType.Number));
-      }
-      else if (token is Token.CharLiteral)
-      {
-        classifications.Add(new SpanInfo(chunkSpan, SpanType.Character));
-      }
-      else if (token is Token.StringLiteral)
-      {
-        classifications.Add(new SpanInfo(chunkSpan, IsMultiLineString((Token.StringLiteral)token) ? SpanType.MultiLineString : SpanType.SingleLineString));
-      }
-      else if (token is Token.Keyword)
-      {
-        classifications.Add(new SpanInfo(chunkSpan, SpanType.Keyword));
-      }
-      else if (token is Token.WhiteSpace)
-      {
-        classifications.Add(new SpanInfo(chunkSpan, SpanType.Whitespace));
-      }
       else if (token is Token.Identifier
         || token is Token.IdentifierToComplete
         || token is Token.QuotedIdentifier)
       {
         classifications.Add(new SpanInfo(chunkSpan, SpanType.Identifier));
       }
-      else if (token is Token.Comment)
+      else if (token is Token.Operator
+        || token is Token.Semicolon
+        || token is Token.Comma)
       {
-        classifications.Add(new SpanInfo(chunkSpan, SpanType.MultiLineComment));
+        classifications.Add(new SpanInfo(chunkSpan, SpanType.Operator));
       }
       else if (token is Token.LooseGroup)
       {
@@ -398,6 +368,33 @@ namespace Nemerle.VisualStudio.LanguageService
           }
           InsertClassification(classifications, new SpanInfo(new Span(pos, chunkSpan.End - pos), SpanType.Quotation));
         }
+      }
+      else if (token is Token.DecimalLiteral
+        || token is Token.DoubleLiteral
+        || token is Token.FloatLiteral
+        || token is Token.IntegerLiteral)
+      {
+        classifications.Add(new SpanInfo(chunkSpan, SpanType.Number));
+      }
+      else if (token is Token.Keyword)
+      {
+        classifications.Add(new SpanInfo(chunkSpan, SpanType.Keyword));
+      }
+      else if (token is Token.CharLiteral)
+      {
+        classifications.Add(new SpanInfo(chunkSpan, SpanType.Character));
+      }
+      else if (token is Token.StringLiteral)
+      {
+        classifications.Add(new SpanInfo(chunkSpan, IsMultiLineString((Token.StringLiteral)token) ? SpanType.MultiLineString : SpanType.SingleLineString));
+      }
+      else if (token is Token.WhiteSpace)
+      {
+        classifications.Add(new SpanInfo(chunkSpan, SpanType.Whitespace));
+      }
+      else if (token is Token.Comment)
+      {
+        classifications.Add(new SpanInfo(chunkSpan, SpanType.MultiLineComment));
       }
       else if (token is Token.Namespace)
       {
