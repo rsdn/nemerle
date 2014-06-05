@@ -1,20 +1,22 @@
-﻿using Microsoft.VisualStudio.Language.StandardClassification;
-using Microsoft.VisualStudio.Text;
-using Microsoft.VisualStudio.Text.Classification;
-using Microsoft.VisualStudio.TextManager.Interop;
-using Nemerle.Compiler;
-using System;
-using System.Linq;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Text.RegularExpressions;
+using Microsoft.VisualStudio.Language.StandardClassification;
+using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Classification;
+using Nemerle.Compiler;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
-  public sealed class SyntaxClassifier : IClassifier
+  public sealed partial class SyntaxClassifier : IClassifier
   {
-    private static readonly Regex _singleLineCommentParser = new Regex(@"^//\s*(TODO\s*:)|(BUG\s*:)|(HACK\s*:)", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-    private static readonly Regex _multiLineCommentParser  = new Regex(@"^/\*\s*(TODO\s*:)|(BUG\s*:)|(HACK\s*:)", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly IList<ClassificationSpan> _emptyClassificationSpans = new ClassificationSpan[0];
+    private static readonly HashSet<string>           _quotationTypes           = new HashSet<string>(new[] { "decl", "parameter", "ttype", "case" }, StringComparer.InvariantCulture);
+    private static readonly Regex                     _singleLineCommentParser  = new Regex(@"^//\s*(TODO\s*:)|(BUG\s*:)|(HACK\s*:)", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex                     _multiLineCommentParser   = new Regex(@"^/\*\s*(TODO\s*:)|(BUG\s*:)|(HACK\s*:)", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     private readonly IClassificationType[]    _classificationTypes;
     private readonly ITextBuffer              _textBuffer;
     private          ParseResult              _lastParseResult;
@@ -56,7 +58,7 @@ namespace Nemerle.VisualStudio.LanguageService
         if (TryParse(_textBuffer, out parseResult))
           _lastParseResult = parseResult;
         else
-          return EmptyClassificationSpans;
+          return _emptyClassificationSpans;
 
       var textChanges = _lastTextChanges;
       if (textChanges != null)
@@ -478,103 +480,6 @@ namespace Nemerle.VisualStudio.LanguageService
       colon = null;
       body  = null;
       return false;
-    }
-
-    private static readonly HashSet<string> _quotationTypes = new HashSet<string>(new []{ "decl", "parameter", "ttype", "case" }, StringComparer.InvariantCulture);
-
-    private static readonly IList<ClassificationSpan> EmptyClassificationSpans = new ClassificationSpan[0];
-
-    private enum SpanType : byte
-    {
-      Whitespace = 0,
-      Identifier,
-      Keyword,
-      PreprocessorKeyword,
-      Operator,
-      Number,
-      Character,
-      SingleLineComment,
-      MultiLineComment,
-      SingleLineString,
-      MultiLineString,
-      Quotation,
-      ToDoCommentText,
-      BugCommentText,
-      HackCommentText
-    }
-
-    private struct SpanInfo : IComparable<SpanInfo>
-    {
-      public readonly Span Span;
-      public readonly SpanType Type;
-
-      public SpanInfo(Span span, SpanType type)
-      {
-        Span = span;
-        Type = type;
-      }
-
-      public int CompareTo(SpanInfo other)
-      {
-        if (this.Span.Start < other.Span.Start)
-          return -1;
-        else if (this.Span.Start > other.Span.Start)
-          return +1;
-        else
-          return 0;
-      }
-    }
-
-    private enum CommentType
-    {
-      Normal,
-      ToDo,
-      Bug,
-      Hack
-    }
-
-    private struct Comment
-    {
-      public Comment(Nemerle.Compiler.Comment comment, CommentType type, int textPosition)
-      {
-        Position     = comment.Position;
-        Length       = comment.Length;
-        IsDocument   = comment.IsDocument;
-        IsMultiline  = comment.IsMultiline;
-        Type         = type;
-        TextPosition = textPosition;
-      }
-
-      public readonly int         Position;
-      public readonly int         Length;
-      public readonly bool        IsDocument;
-      public readonly bool        IsMultiline;
-      public readonly CommentType Type;
-      public readonly int         TextPosition;
-      public int TextLength
-      {
-        get
-        {
-          var result = Length - (TextPosition - Position);
-          return IsMultiline ? result - 2 : result;
-        }
-      }
-    }
-
-    private sealed class ParseResult
-    {
-      public ParseResult(ITextSnapshot snapshot, Token.BracesGroup tokens, Comment[] comments, Directive[] directives)
-      {
-        Snapshot = snapshot;
-        Tokens = tokens;
-        Comments = comments;
-        Directives = directives;
-      }
-
-      public readonly ITextSnapshot Snapshot;
-      public readonly Token.BracesGroup Tokens;
-      public readonly Comment[] Comments;
-      public readonly Directive[] Directives;
     }
   }
 }
