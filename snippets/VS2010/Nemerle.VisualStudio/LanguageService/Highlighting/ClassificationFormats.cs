@@ -195,14 +195,5 @@ namespace Nemerle.VisualStudio.LanguageService
     {
       public QuotationContent() { BackgroundColor = Color.FromArgb(0, 230, 237, 228); }
     }
-
-    [Export(typeof(EditorFormatDefinition))
-    , Name("Nemerle Quotation Splice")
-    , ClassificationType(ClassificationTypeNames = ClassificationTypes.QuotationSpliceName)
-    , UserVisible(true)]
-    public sealed class QuotationSplice : ClassificationFormatDefinition
-    {
-      public QuotationSplice() { BackgroundColor = Color.FromArgb(0, 255, 255, 255); }
-    }
   }
 }

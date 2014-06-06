@@ -13,7 +13,7 @@ namespace Nemerle.VisualStudio.LanguageService
   public sealed partial class SyntaxClassifier : IClassifier
   {
     private static readonly IList<ClassificationSpan> _emptyClassificationSpans = new ClassificationSpan[0];
-    private static readonly HashSet<string>           _quotationTypes           = new HashSet<string>(new[] { "decl", "parameter", "ttype", "case" }, StringComparer.InvariantCulture);
+    private static readonly HashSet<string>           _quotationTypes           = new HashSet<string>(StringComparer.InvariantCulture) { "decl", "parameter", "ttype", "case" };
     private static readonly Regex                     _singleLineCommentParser  = new Regex(@"^//\s*(TODO\s*:)|(BUG\s*:)|(HACK\s*:)", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private static readonly Regex                     _multiLineCommentParser   = new Regex(@"^/\*\s*(TODO\s*:)|(BUG\s*:)|(HACK\s*:)", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
@@ -41,6 +41,7 @@ namespace Nemerle.VisualStudio.LanguageService
         standardClassification.StringLiteral,
         standardClassification.StringLiteral,
         classificationRegistry.GetClassificationType(ClassificationTypes.QuotationName),
+        classificationRegistry.GetClassificationType(ClassificationTypes.QuotationBracesName),
         classificationRegistry.GetClassificationType(ClassificationTypes.ToDoCommentName),
         classificationRegistry.GetClassificationType(ClassificationTypes.BugCommentName),
         classificationRegistry.GetClassificationType(ClassificationTypes.HackCommentName),
@@ -376,7 +377,7 @@ namespace Nemerle.VisualStudio.LanguageService
         {
           var braceSpan = Utils.NLocationToSpan(textSnapshot, group.OpenBrace.Location);
           if (span.IntersectsWith(braceSpan))
-            classifications.Add(new SpanInfo(braceSpan, SpanType.Operator));
+            classifications.Add(new SpanInfo(braceSpan, SpanType.QuotationBrace));
         }
 
         Token.Identifier type;
@@ -390,7 +391,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
           var colonSpan = Utils.NLocationToSpan(textSnapshot, colon.Location);
           if (span.IntersectsWith(colonSpan))
-            classifications.Add(new SpanInfo(colonSpan, SpanType.Operator));
+            classifications.Add(new SpanInfo(colonSpan, SpanType.Quotation));
         }
         else
         {
@@ -417,7 +418,7 @@ namespace Nemerle.VisualStudio.LanguageService
         {
           var braceSpan = Utils.NLocationToSpan(textSnapshot, group.CloseBrace.Location);
           if (span.IntersectsWith(braceSpan))
-            classifications.Add(new SpanInfo(braceSpan, SpanType.Operator));
+            classifications.Add(new SpanInfo(braceSpan, SpanType.QuotationBrace));
         }
       }
       else if (token is Token.DecimalLiteral

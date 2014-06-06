@@ -17,6 +17,7 @@ namespace Nemerle.VisualStudio.LanguageService
       SingleLineString,
       MultiLineString,
       Quotation,
+      QuotationBrace,
       ToDoCommentText,
       BugCommentText,
       HackCommentText

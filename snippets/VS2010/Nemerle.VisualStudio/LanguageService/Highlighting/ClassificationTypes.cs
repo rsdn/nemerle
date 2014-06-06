@@ -62,11 +62,6 @@ namespace Nemerle.VisualStudio.LanguageService
     [Export, Name(QuotationName)]
     public static ClassificationTypeDefinition Quotation = null;
 
-    public const string QuotationSpliceName = "Nemerle Quotation Splice";
-
-    [Export, Name(QuotationSpliceName)]
-    public static ClassificationTypeDefinition QuotationSplice = null;
-
     public const string QuotationBracesName = "Nemerle Quotation Braces";
 
     [Export, Name(QuotationBracesName)]
