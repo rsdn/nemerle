@@ -2,13 +2,12 @@
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Utilities;
-using System;
 using System.ComponentModel.Composition;
-using System.IO;
+using System.Diagnostics;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
-  [Export(typeof(IClassifierProvider)), ContentType("code")]
+  [Export(typeof(IClassifierProvider)), ContentType("nemerle")]
   public sealed class SyntaxClassifierProvider : IClassifierProvider
   {
     [Import]
@@ -19,21 +18,17 @@ namespace Nemerle.VisualStudio.LanguageService
 
     public IClassifier GetClassifier(ITextBuffer textBuffer)
     {
-      var extension = Path.GetExtension(textBuffer.GetFilePath());
-      var isNemerleFile = string.Compare(extension, NemerleConstants.FileExtension, StringComparison.OrdinalIgnoreCase) == 0;
-      if (isNemerleFile)
+      Debug.Assert(_classificationRegistry != null);
+      Debug.Assert(_standardClassification != null);
+
+      var classifierKey = typeof(SyntaxClassifier);
+      SyntaxClassifier classifier;
+      if (!textBuffer.Properties.TryGetProperty(classifierKey, out classifier))
       {
-        var classifierKey = typeof(SyntaxClassifier);
-        SyntaxClassifier classifier;
-        if (!textBuffer.Properties.TryGetProperty(classifierKey, out classifier))
-        {
-          classifier = new SyntaxClassifier(_standardClassification, _classificationRegistry, textBuffer);
-          textBuffer.Properties.AddProperty(classifierKey, classifier);
-        }
-        return classifier;
+        classifier = new SyntaxClassifier(_standardClassification, _classificationRegistry, textBuffer);
+        textBuffer.Properties.AddProperty(classifierKey, classifier);
       }
-      else
-        return null;
+      return classifier;
     }
   }
 }
