@@ -39,7 +39,8 @@ namespace Nemerle.VisualStudio.LanguageService
         standardClassification.Comment,
         standardClassification.Comment,
         standardClassification.StringLiteral,
-        standardClassification.StringLiteral,
+        classificationRegistry.GetClassificationType(ClassificationTypes.VerbatimStringName),
+        classificationRegistry.GetClassificationType(ClassificationTypes.RecursiveStringName),
         classificationRegistry.GetClassificationType(ClassificationTypes.QuotationName),
         classificationRegistry.GetClassificationType(ClassificationTypes.QuotationBracesName),
         classificationRegistry.GetClassificationType(ClassificationTypes.ToDoCommentName),
@@ -107,7 +108,8 @@ namespace Nemerle.VisualStudio.LanguageService
         {
           switch (si.Type)
           {
-            case SpanType.MultiLineString:
+            case SpanType.VerbatimString:
+            case SpanType.RecursiveString:
             case SpanType.MultiLineComment:
               spansToRedraw.Add(si.Span);
               break;
@@ -438,7 +440,7 @@ namespace Nemerle.VisualStudio.LanguageService
       }
       else if (token is Token.StringLiteral)
       {
-        classifications.Add(new SpanInfo(chunkSpan, IsMultiLineString((Token.StringLiteral)token) ? SpanType.MultiLineString : SpanType.SingleLineString));
+        classifications.Add(new SpanInfo(chunkSpan, GetStringType((Token.StringLiteral)token)));
       }
       else if (token is Token.WhiteSpace)
       {
@@ -470,12 +472,21 @@ namespace Nemerle.VisualStudio.LanguageService
       items.Insert(index >= 0 ? index : ~index, span);
     }
 
-    private static bool IsMultiLineString(Token.StringLiteral token)
+    private static SpanType GetStringType(Token.StringLiteral token)
     {
       var c1 = token.rawString[0];
+      if (c1 == '"')
+        return SpanType.String;
+
       var c2 = token.rawString[1];
-      return (c1 == '<' && c2 == '#')
-        || (c1 == '@' && c2 == '"');
+      if (c1 == '@' && c2 == '"')
+        return SpanType.VerbatimString;
+
+      if (c1 == '<' && c2 == '#')
+        return SpanType.RecursiveString;
+
+      Trace.Assert(false);
+      return SpanType.Whitespace;
     }
 
     private static bool IsSpliceSequence(Token token, out Token body)
