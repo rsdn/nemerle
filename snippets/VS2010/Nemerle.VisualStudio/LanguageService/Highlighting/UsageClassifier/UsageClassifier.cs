@@ -50,14 +50,43 @@ namespace Nemerle.VisualStudio.LanguageService
     public void UpdateUsageHighlighting(IEnumerable<GotoInfo> highlightings)
     {
       var snapshot               = _textBuffer.CurrentSnapshot;
-      var newClassificationSpans = highlightings.Select(x => MakeClassificationSpan(snapshot, x)).OrderBy(x => x.Span.Start).ToArray();
-      if (!(newClassificationSpans.Length == _classificationSpans.Length && _classificationSpans.Length == 0))
+      var newClassificationSpans = highlightings.Select(x => MakeClassificationSpan(snapshot, x)).OrderBy(x => x.Span.Start).ThenBy(x => x.Span.End).ToArray();
+      if (newClassificationSpans.Length != 0 || _classificationSpans.Length != 0)
       {
+        var oldBounds = GetBounds(_classificationSpans);
+        var newBounds = GetBounds(newClassificationSpans);
+
         _classificationSpans = newClassificationSpans;
         var handler = ClassificationChanged;
         if (handler != null)
-          handler(this, new ClassificationChangedEventArgs(new SnapshotSpan(snapshot, new Span(0, snapshot.Length))));
+        {
+          var updateSpan = GetUpdateBounds(oldBounds, newBounds);
+          handler(this, new ClassificationChangedEventArgs(new SnapshotSpan(snapshot, updateSpan)));
+        }
       }
+    }
+
+    private static Span GetBounds(ClassificationSpan[] spans)
+    {
+      if (spans.Length == 0)
+        return new Span(0, 0);
+
+      var startPos = spans[0].Span.Start;
+      var endPos   = spans[spans.Length - 1].Span.End;
+      return new Span(startPos, endPos - startPos);
+    }
+
+    private static Span GetUpdateBounds(Span oldBounds, Span newBounds)
+    {
+      if (oldBounds.IsEmpty)
+        return newBounds;
+
+      if (newBounds.IsEmpty)
+        return oldBounds;
+
+      var startPos = Math.Min(oldBounds.Start, newBounds.Start);
+      var endPos   = Math.Max(oldBounds.End, newBounds.End);
+      return new Span(startPos, endPos - startPos);
     }
 
     private ClassificationSpan MakeClassificationSpan(ITextSnapshot snapshot, GotoInfo gotoInfo)
