@@ -56,8 +56,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
       var vsTextBuffer = textLines as IVsTextBuffer;
       var textBuffer = vsTextBuffer.ToITextBuffer();
-      var properties = textBuffer.Properties;
-      if (!properties.ContainsProperty(typeof(NemerleSource)))
+      if (!textBuffer.Properties.ContainsProperty(typeof(NemerleSource)))
         textBuffer.Properties.AddProperty(typeof(NemerleSource), this);
 
       Service = service;
@@ -106,7 +105,6 @@ namespace Nemerle.VisualStudio.LanguageService
     internal TopDeclaration[] Declarations { get; set; }
     public bool RegionsLoaded { get; set; }
     public CompileUnit CompileUnit { get; set; }
-    public TypeClassifier TypeClassifier { get; set; }
 
     /// <summary>
     /// A NemerleSource usen for .n files and for extentions like .cs-files inside Nemerle project.
@@ -1487,7 +1485,17 @@ namespace Nemerle.VisualStudio.LanguageService
 
       TypeLocations.Clear();
       TypeLocations.AddRange(list);
-      TypeClassifier.RedrawTypeHighlighting();
+
+      TypeClassifier typeClassifier;
+      if (TextLines.ToITextBuffer().Properties.TryGetProperty(typeof(TypeClassifier), out typeClassifier))
+        typeClassifier.RedrawTypeHighlighting();
+    }
+
+    public void SetUsageHighlighting(IEnumerable<GotoInfo> highlightings)
+    {
+      UsageClassifier usageClassifier;
+      if (TextLines.ToITextBuffer().Properties.TryGetProperty(typeof(UsageClassifier), out usageClassifier))
+        usageClassifier.UpdateUsageHighlighting(highlightings);
     }
 
     public void SetRegions(IList<RegionInfo> regions, int sourceVersion)

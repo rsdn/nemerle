@@ -906,6 +906,7 @@ namespace Nemerle.VisualStudio.Project
 
 		public void SetHighlights(IIdeSource source, IEnumerable<GotoInfo> highlights)
 		{
+			((NemerleSource)source).SetUsageHighlighting(highlights);
 		}
 
 
