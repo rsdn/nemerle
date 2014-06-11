@@ -14,12 +14,10 @@ namespace Nemerle.VisualStudio.LanguageService
   {
     private static readonly IList<ClassificationSpan> _emptyClassificationSpans = new ClassificationSpan[0];
     private static readonly HashSet<string>           _quotationTypes           = new HashSet<string>(StringComparer.InvariantCulture) { "decl", "parameter", "ttype", "case" };
-    private static readonly Regex                     _singleLineCommentParser  = new Regex(@"^//\s*(TODO\s*:)|(BUG\s*:)|(HACK\s*:)", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-    private static readonly Regex                     _multiLineCommentParser   = new Regex(@"^/\*\s*(TODO\s*:)|(BUG\s*:)|(HACK\s*:)", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private readonly IClassificationType[]    _classificationTypes;
     private readonly ITextBuffer              _textBuffer;
-    private          ParseResult              _lastParseResult;
+    private          ClassificationParseResult              _lastParseResult;
     private          IEnumerable<ITextChange> _lastTextChanges;
 
     public SyntaxClassifier(
@@ -57,7 +55,7 @@ namespace Nemerle.VisualStudio.LanguageService
     {
       var parseResult = _lastParseResult;
       if (parseResult == null)
-        if (TryParse(_textBuffer, out parseResult))
+        if (ParseUtil.TryParse(_textBuffer, out parseResult))
           _lastParseResult = parseResult;
         else
           return _emptyClassificationSpans;
@@ -98,7 +96,7 @@ namespace Nemerle.VisualStudio.LanguageService
       _lastTextChanges = e.Changes;
     }
 
-    private static List<Span> SearchClassificationChanges(ParseResult parseResult, IEnumerable<Span> changes)
+    private static List<Span> SearchClassificationChanges(ClassificationParseResult parseResult, IEnumerable<Span> changes)
     {
       var spansToRedraw = new List<Span>();
       foreach (var c in changes)
@@ -123,69 +121,7 @@ namespace Nemerle.VisualStudio.LanguageService
       return spansToRedraw;
     }
 
-    private static bool TryParse(ITextBuffer textBuffer, out ParseResult parseResult)
-    {
-      NemerleSource source;
-      if (!textBuffer.Properties.TryGetProperty<NemerleSource>(typeof(NemerleSource), out source))
-      {
-        parseResult = null;
-        return false;
-      }
-
-      var engine = source.GetEngine();
-      if (!engine.RequestOnInitEngine())
-      {
-        parseResult = null;
-        return false;
-      }
-
-      var timer = Stopwatch.StartNew();
-
-      var snapshot   = textBuffer.CurrentSnapshot;
-      var code       = snapshot.GetText();
-      var lexer      = new LexerFile((ManagerClass)engine, 0, code, true);
-      var preParser  = new PreParser(lexer);
-      var tokens     = preParser.PreParse();
-      var _comments  = lexer.GetComments();
-      var directives = lexer.GetDirectives();
-
-      var comments = new Comment[_comments.Length];
-      for (var i = 0; i < _comments.Length; ++i)
-      {
-        var c    = _comments[i];
-        var type = CommentType.Normal;
-        var pos  = 0;
-        var commentParser = c.IsMultiline ? _multiLineCommentParser : _singleLineCommentParser;
-        var match = commentParser.Match(code, c.Position, c.Length);
-        if (match.Success)
-        {
-          if (match.Groups[1].Success)
-          {
-            pos  = match.Groups[1].Index;
-            type = CommentType.ToDo;
-          }
-          else if (match.Groups[2].Success)
-          {
-            pos  = match.Groups[2].Index;
-            type = CommentType.Bug;
-          }
-          else if (match.Groups[3].Success)
-          {
-            pos  = match.Groups[3].Index;
-            type = CommentType.Hack;
-          }
-        }
-        comments[i] = new Comment(c, type, pos);
-      }
-
-      timer.Stop();
-      Debug.Print("SyntaxClassifier.TryParse: {0}", timer.Elapsed);
-
-      parseResult = new ParseResult(snapshot, tokens, comments, directives);
-      return true;
-    }
-
-    private static List<SpanInfo> GetTokenSpans(ParseResult parseResult, Span span)
+    private static List<SpanInfo> GetTokenSpans(ClassificationParseResult parseResult, Span span)
     {
       var tokenSpans = new List<SpanInfo>(16);
 
