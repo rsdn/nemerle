@@ -579,7 +579,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
     public override void Dispose()
     {
-      _oldTextView = null;
       SmartIndent = null;
       MethodData = null;
       _tipAsyncRequest = null;
@@ -671,28 +670,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
     public override TokenInfo GetTokenInfo(int line, int col)
     {
-      //get current line 
-      var info = new TokenInfo();
-      var colorizer = GetColorizer() as NemerleColorizer;
-
-      if (colorizer == null)
-        return info;
-
-      colorizer.SetCurrentLine(line);
-
-      //get line info
-      TokenInfo[] lineInfo = colorizer.GetLineInfo(GetTextLines(), line, ColorState);
-
-      if (lineInfo != null)
-      {
-        //get character info      
-        if (col > 0)
-          col--;
-
-        GetTokenInfoAt(lineInfo, col, ref info);
-      }
-
-      return info;
+      return new TokenInfo();
     }
 
     public override void ProcessHiddenRegions(System.Collections.ArrayList hiddenRegions)
@@ -956,8 +934,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
       TokenInfo tokenBeforeCaret = GetTokenInfo(line, idx);
 
-      TryHighlightBraces(textView, command, line, idx, tokenBeforeCaret);
-
       //VladD2: We do not trigger MethodTip on type because it's very slow!
 
       // This code open completion list if user enter '.'.
@@ -985,110 +961,13 @@ namespace Nemerle.VisualStudio.LanguageService
 
     public override void GetPairExtents(IVsTextView view, int line, int col, out TextSpan span)
     {
-      var spanAry = GetMatchingBraces(false, line, col);
-
-      if (spanAry.Length == 2)
-        span = TextSpanHelper.ContainsInclusive(spanAry[0], line, col) ? spanAry[1] : spanAry[0];
-      else
-        span = new TextSpan();
-    }
-
-    /// <summary>
-    /// Match paired tokens. Run in GUI thread synchronously!
-    /// </summary>
-    /// <param name="view">Current view</param>
-    /// <param name="line">zero based index of line</param>
-    /// <param name="index">zero based index of char</param>
-    public bool HighlightBraces(IVsTextView view, int line, int index)
-    {
-      LockWrite();
-      try
-      {
-        var spanAry = GetMatchingBraces(false, line, index);
-        if (spanAry.Length == 2 && TextSpanHelper.ValidSpan(this, spanAry[0]) && TextSpanHelper.ValidSpan(this, spanAry[1]))
-        {
-          // No check result! 
-          view.HighlightMatchingBrace((uint)Service.Preferences.HighlightMatchingBraceFlags, (uint)spanAry.Length, spanAry);
-          return true;
-        }
-
-        return false;
-      }
-      finally { UnlockWrite(); }
+      span = new TextSpan();
     }
 
     private CompileUnit TryGetCompileUnit()
     {
       var compileUnit = CompileUnit;
       return compileUnit;
-    }
-
-
-    /// <summary>
-    /// Match paired tokens. Run in GUI thread synchronously!
-    /// </summary>
-    /// <param name="isMatchBraces">match or highlight mraces</param>
-    /// <param name="line">zero based index of line</param>
-    /// <param name="index">zero based index of char</param>
-    public TextSpan[] GetMatchingBraces(bool isMatchBraces, int line, int index)
-    {
-      var nline = line + 1; // one based number of line
-      var ncol = index + 1; // one based number of column
-      var compileUnit = TryGetCompileUnit();
-
-      if (compileUnit != null && compileUnit.SourceVersion == CurrentVersion)
-      {
-        Location first, last;
-
-        if (compileUnit.GetMatchingBraces(FileIndex, nline, ncol, out first, out last))
-          return new[] { Utils.SpanFromLocation(first), Utils.SpanFromLocation(last) };
-      }
-
-      // Steps: 
-      // 1. Find token under text caret.
-      // 2. Determine that it is a paired token.
-      // 3. Determine paired token.
-      // 4. Find paired token in the source file.
-      // 5. Set info about paired tokens Sink and return it in AuthoringScope.
-
-      #region Init vars
-
-      var source = this;
-      IVsTextColorState colorState = source.ColorState;
-      Colorizer colorizer = source.GetColorizer();
-      var scanner = (NemerleScanner)colorizer.Scanner;
-      string lineText = source.GetLine(nline);
-      scanner.SetSource(lineText, 0);
-
-      #endregion
-
-      // Steps: 1-3
-      var bracketFinder = new BracketFinder(source, nline, ncol, scanner, colorState);
-
-      // 4. Find paired token in the source file.
-      var matchBraceInfo = bracketFinder.FindMatchBraceInfo();
-
-      if (matchBraceInfo != null)
-      {
-        // 5. Set info about paired tokens Sink and return it in AuthoringScope.
-
-        // Fix a bug in MPF: Correct location of left token.
-        // It need for correct navigation (to left side of token).
-        //
-        Token matchToken = matchBraceInfo.Token;
-        //Location matchLocation = isMatchBraces && !BracketFinder.IsOpenToken(matchToken)
-        //	? matchToken.Location.FromEnd() : matchToken.Location;
-        Location matchLocation = matchToken.Location;
-
-        // Set tokens position info
-
-        var startSpan = Utils.SpanFromLocation(bracketFinder.StartBraceInfo.Token.Location);
-        var endSpan = Utils.SpanFromLocation(matchLocation);
-
-        return new[] { startSpan, endSpan };
-      }
-
-      return new TextSpan[0];
     }
 
     public void ImplementInterfaces(int line, int column)
@@ -1105,77 +984,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
       if (!engine.IsDefaultEngine)
         engine.BeginFindMethodsToOverride(this, line, column);
-    }
-
-    public void CaretChanged(IVsTextView textView, int lineIdx, int colIdx)
-    {
-      TryHighlightBraces1(textView);
-    }
-
-    private void TryHighlightBraces(IVsTextView textView, VsCommands2K command, int line, int idx,
-                    TokenInfo tokenInfo)
-    {
-      // Highlight brace to the left from the caret
-      if ((tokenInfo.Trigger & TokenTriggers.MatchBraces) != 0 && Service.Preferences.EnableMatchBraces)
-      {
-        if ((command != VsCommands2K.BACKSPACE) &&
-          (/*(command == VsCommands2K.TYPECHAR) ||*/
-          Service.Preferences.EnableMatchBracesAtCaret))
-        {
-          //if (!this.LanguageService.IsParsing)
-          HighlightBraces(textView, line, idx);
-          return;
-        }
-      }
-
-      return;
-    }
-
-    int _oldLine = -1;
-    int _oldIdx = -1;
-    IVsTextView _oldTextView;
-
-    public void TryHighlightBraces1(IVsTextView textView)
-    {
-      if (_processingOfHiddenRegions)
-        return;
-
-      if (textView == null)
-        return;
-
-      if (Service == null || !Service.Preferences.EnableMatchBraces || !Service.Preferences.EnableMatchBracesAtCaret)
-        return;
-
-      var compileUnit = TryGetCompileUnit();
-
-      if (compileUnit == null || compileUnit.SourceVersion != CurrentVersion)
-        return;
-
-      var colorizer = GetColorizer() as NemerleColorizer;
-      if (colorizer != null && colorizer.IsClosed)
-        return;
-
-      int line, idx;
-      textView.GetCaretPos(out line, out idx);
-
-      if (Utilities.IsSameComObject(_oldTextView, textView) && _oldLine == line && _oldIdx == idx)
-        return;
-
-      _oldTextView = textView;
-      _oldLine = line;
-      _oldIdx = idx;
-
-      TokenInfo tokenBeforeCaret = GetTokenInfo(line, idx);
-      TokenInfo tokenAfterCaret = GetTokenInfo(line, idx + 1);
-
-      try
-      {
-        if ((tokenAfterCaret.Trigger & TokenTriggers.MatchBraces) != 0)
-          HighlightBraces(textView, line, idx + 1);
-        else if ((tokenBeforeCaret.Trigger & TokenTriggers.MatchBraces) != 0)
-          HighlightBraces(textView, line, idx);
-      }
-      catch (InvalidOperationException ex) { Debug.WriteLine(ex.Message); }
     }
 
     #endregion
@@ -1310,14 +1118,6 @@ namespace Nemerle.VisualStudio.LanguageService
     }
 
     #endregion
-
-    public void OnSetFocus(IVsTextView view)
-    {
-      _oldLine = -1; // we should reset it. otherwise the TryHighlightBraces don't highlight braces
-      _oldIdx = -1;
-
-      TryHighlightBraces1(view);
-    }
 
     public IIdeEngine GetEngine()
     {
@@ -1538,7 +1338,6 @@ namespace Nemerle.VisualStudio.LanguageService
     public void SetTopDeclarations(TopDeclaration[] topDeclarations)
     {
       Declarations = topDeclarations;
-      TryHighlightBraces1(GetView());
     }
 
     public List<RelocationRequest> RelocationRequestsQueue

@@ -178,11 +178,6 @@ namespace Nemerle.VisualStudio.LanguageService
 			//Debug.WriteLine("OnSetFocus(IVsTextView view)");
 			//ShowAst(view, true);
 			base.OnSetFocus(view);
-
-			var source = Source;
-
-			if (source != null)
-				source.OnSetFocus(view); // notify source
 		}
 
 		private void ShowAst(IVsTextView view, bool showInfo)
@@ -226,8 +221,6 @@ namespace Nemerle.VisualStudio.LanguageService
 				{
 					// pos was changed
 					_viewsCarretInfo[viewUnknown] = new TupleIntInt(line, idx);
-					Source.CaretChanged(view, line, idx);
-					//Source.TryHighlightBraces1(view);
 					//Debug.WriteLine("pos was changed line=" + line + " col=" + idx);
 				}
 			}
