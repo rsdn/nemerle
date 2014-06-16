@@ -195,5 +195,14 @@ namespace Nemerle.VisualStudio.LanguageService
     {
       public QuotationContent() { BackgroundColor = Color.FromArgb(0, 230, 237, 228); }
     }
+
+    [Export(typeof(EditorFormatDefinition))
+    , Name("Nemerle Mathing Braces")
+    , ClassificationType(ClassificationTypeNames = ClassificationTypes.MathingBracesName)
+    , UserVisible(true)]
+    public sealed class MathingBraces : ClassificationFormatDefinition
+    {
+      public MathingBraces() { BackgroundColor = Color.FromArgb(0, 219, 224, 204); }
+    }
   }
 }

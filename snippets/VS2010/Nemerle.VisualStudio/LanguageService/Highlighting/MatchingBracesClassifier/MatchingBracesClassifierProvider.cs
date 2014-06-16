@@ -1,8 +1,8 @@
-﻿using Microsoft.VisualStudio.Text;
+﻿using System.ComponentModel.Composition;
+using System.Diagnostics;
+using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Utilities;
-using System.ComponentModel.Composition;
-using System.Diagnostics;
 
 namespace Nemerle.VisualStudio.LanguageService
 {

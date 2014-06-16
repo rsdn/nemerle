@@ -1,6 +1,6 @@
-﻿using Microsoft.VisualStudio.Text.Editor;
+﻿using System.ComponentModel.Composition;
+using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Utilities;
-using System.ComponentModel.Composition;
 
 namespace Nemerle.VisualStudio.LanguageService
 {

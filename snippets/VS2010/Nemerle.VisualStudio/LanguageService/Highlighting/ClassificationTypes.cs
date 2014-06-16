@@ -67,6 +67,11 @@ namespace Nemerle.VisualStudio.LanguageService
     [Export, Name(QuotationBracesName)]
     public static ClassificationTypeDefinition QuotationBraces = null;
 
+    public const string MathingBracesName = "Nemerle Matching Braces";
+
+    [Export, Name(MathingBracesName)]
+    public static ClassificationTypeDefinition MathingBraces = null;
+
     public const string HighlightOneName = "Nemerle Highlight One";
 
     [Export, Name(HighlightOneName)]
