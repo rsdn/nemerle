@@ -68,7 +68,7 @@ namespace Microsoft.VisualStudio.Project
 				string result = SR.GetString(this.name, CultureInfo.CurrentUICulture);
 				if(result == null)
 				{
-					Debug.Assert(false, "String resource '" + this.name + "' is missing");
+					//Debug.Assert(false, "String resource '" + this.name + "' is missing");
 					result = this.name;
 				}
 				return result;

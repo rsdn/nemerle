@@ -57,6 +57,7 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
 
       if (source.TypeLocations == null)
       {
+        source.TypeLocations = new List<Location>();
         var engine = source.GetEngine();
         engine.BeginUpdateTypeHighlightings(source);
         return result;

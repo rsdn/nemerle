@@ -1485,7 +1485,12 @@ namespace Nemerle.VisualStudio.LanguageService
       if (CurrentVersion != sourceVersion)
         return;
 
+
       TypeLocations = list;
+
+      if (TypeClassifier == null)
+        return;
+      
       TypeClassifier.RedrawTypeHighlighting();
     }
 
