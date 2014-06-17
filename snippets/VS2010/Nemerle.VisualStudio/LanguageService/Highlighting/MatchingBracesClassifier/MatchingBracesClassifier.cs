@@ -9,57 +9,73 @@ namespace Nemerle.VisualStudio.LanguageService
 {
   public sealed class MatchingBracesClassifier : IClassifier
   {
-    private readonly ITextBuffer _textBuffer;
+    private readonly ITextBuffer         _textBuffer;
     private readonly IClassificationType _braceClassificationType;
-    private int _caretPos;
+    private          List<Span>          _matchingBraces;
 
     public MatchingBracesClassifier(IClassificationTypeRegistryService classificationRegistry, ITextBuffer textBuffer)
     {
-      _textBuffer = textBuffer;
+      _textBuffer              = textBuffer;
       _braceClassificationType = classificationRegistry.GetClassificationType(ClassificationTypes.MathingBracesName);
-      _caretPos = -1;
+      _matchingBraces          = null;
     }
 
     public event EventHandler<ClassificationChangedEventArgs> ClassificationChanged;
 
     public IList<ClassificationSpan> GetClassificationSpans(SnapshotSpan span)
     {
-      var caretPos = _caretPos;
-      if (caretPos >= 0)
-      {
-        ClassificationParseResult parseResult;
-        if (ParseUtil.TryParse(_textBuffer, out parseResult) && span.Snapshot.Version == parseResult.Snapshot.Version)
+      var matchingBraces = _matchingBraces;
+      if (matchingBraces == null)
+        return ClassifierUtils.EmptyClassifications;
+
+      List<ClassificationSpan> spans = null;
+      foreach (var x in matchingBraces)
+        if (span.IntersectsWith(x))
         {
-          List<ClassificationSpan> spans = null;
-          WalkTokens(parseResult.Tokens, parseResult.Snapshot, span, caretPos, ref spans);
-          return spans ?? ClassifierUtils.EmptyClassifications;
+          if (spans == null)
+            spans = new List<ClassificationSpan>();
+          spans.Add(new ClassificationSpan(new SnapshotSpan(span.Snapshot, x), _braceClassificationType));
         }
-      }
-      return ClassifierUtils.EmptyClassifications;
+      return spans ?? ClassifierUtils.EmptyClassifications;
     }
 
     public void UpdateClassifications(CaretPosition caretPosition)
     {
-      var bufferPosition = caretPosition.BufferPosition;
-      var snapshot       = bufferPosition.Snapshot;
-      var position       = bufferPosition.Position;
+      var bufferPosition    = caretPosition.BufferPosition;
+      var snapshot          = bufferPosition.Snapshot;
+      var position          = bufferPosition.Position;
+      var oldMatchingBraces = _matchingBraces;
       if (HasBraceAtPosition(snapshot, position))
       {
-        _caretPos = position;
-        NotifyClassificationChanged(snapshot, new Span(0, snapshot.Length));
+        List<Span> newMatchingBraces = null;
+        ClassificationParseResult parseResult;
+        if (ParseUtil.TryParse(_textBuffer, out parseResult) && snapshot.Version == parseResult.Snapshot.Version)
+          SearchMatchingBraces(parseResult.Tokens, parseResult.Snapshot, position, ref newMatchingBraces);
+
+        _matchingBraces = newMatchingBraces;
+
+        if (null != oldMatchingBraces)
+          NotifyClassificationChanged(snapshot, oldMatchingBraces);
+
+        if (null != newMatchingBraces)
+          NotifyClassificationChanged(snapshot, newMatchingBraces);
       }
-      else if (_caretPos >= 0)
+      else if (oldMatchingBraces != null)
       {
-        _caretPos = -1;
-        NotifyClassificationChanged(snapshot, new Span(0, snapshot.Length));
+        _matchingBraces = null;
+        NotifyClassificationChanged(snapshot, oldMatchingBraces);
       }
     }
 
-    private void NotifyClassificationChanged(ITextSnapshot snapshot, Span span)
+    private void NotifyClassificationChanged(ITextSnapshot snapshot, List<Span> spansToClassify)
     {
       var handler = ClassificationChanged;
       if (handler != null)
-        handler(this, new ClassificationChangedEventArgs(new SnapshotSpan(snapshot, span)));
+      {
+        foreach (var x in spansToClassify)
+          if (x.End <= snapshot.Length)
+            handler(this, new ClassificationChangedEventArgs(new SnapshotSpan(snapshot, x)));
+      }
     }
 
     private static bool HasBraceAtPosition(ITextSnapshot snapshot, int position)
@@ -86,83 +102,68 @@ namespace Nemerle.VisualStudio.LanguageService
       return false;
     }
 
-    private void WalkTokens(Token token, ITextSnapshot snapshot, Span spanToClassify, int caretPos, ref List<ClassificationSpan> spans)
+    private static void SearchMatchingBraces(Token token, ITextSnapshot snapshot, int caretPos, ref List<Span> spans)
     {
       while (token != null)
       {
         var tokenSpan = Utils.NLocationToSpan(snapshot, token.Location);
-        if (tokenSpan.Start >= spanToClassify.End)
+        if (caretPos < tokenSpan.Start)
           break;
 
-        if (tokenSpan.IntersectsWith(spanToClassify))
+        if (token is Token.BracesGroup)
         {
-          if (token is Token.BracesGroup)
-          {
-            var groupToken = (Token.BracesGroup) token;
-            if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
-            {
-              AddBraceSpan(snapshot, spanToClassify, tokenSpan.Start, ref spans);
-              AddBraceSpan(snapshot, spanToClassify, tokenSpan.End - 1, ref spans);
-            }
-            WalkTokens(groupToken.Child, snapshot, spanToClassify, caretPos, ref spans);
-          }
-          else if (token is Token.RoundGroup)
-          {
-            var groupToken = (Token.RoundGroup) token;
-            if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
-            {
-              AddBraceSpan(snapshot, spanToClassify, tokenSpan.Start, ref spans);
-              AddBraceSpan(snapshot, spanToClassify, tokenSpan.End - 1, ref spans);
-            }
-            WalkTokens(groupToken.Child, snapshot, spanToClassify, caretPos, ref spans);
-          }
-          else if (token is Token.SquareGroup)
-          {
-            var groupToken = (Token.SquareGroup) token;
-            if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
-            {
-              AddBraceSpan(snapshot, spanToClassify, tokenSpan.Start, ref spans);
-              AddBraceSpan(snapshot, spanToClassify, tokenSpan.End - 1, ref spans);
-            }
-            WalkTokens(groupToken.Child, snapshot, spanToClassify, caretPos, ref spans);
-          }
-          else if (token is Token.LooseGroup)
-          {
-            var groupToken = (Token.LooseGroup) token;
-            WalkTokens(groupToken.Child, snapshot, spanToClassify, caretPos, ref spans);
-          }
-          else if (token is Token.QuoteGroup)
-          {
-            var groupToken = (Token.QuoteGroup) token;
-            WalkTokens(groupToken.Child, snapshot, spanToClassify, caretPos, ref spans);
-          }
-          else if (token is Token.Namespace)
-          {
-            var nsToken = (Token.Namespace) token;
-            WalkTokens(nsToken.KeywordToken, snapshot, spanToClassify, caretPos, ref spans);
-            WalkTokens(nsToken.Body, snapshot, spanToClassify, caretPos, ref spans);
-          }
-          else if (token is Token.Using)
-          {
-            var nsToken = (Token.Using) token;
-            WalkTokens(nsToken.KeywordToken, snapshot, spanToClassify, caretPos, ref spans);
-            WalkTokens(nsToken.Body, snapshot, spanToClassify, caretPos, ref spans);
-          }
+          var groupToken = (Token.BracesGroup) token;
+          if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
+            AddMatchingBraces(tokenSpan.Start, tokenSpan.End - 1, ref spans);
+          SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref spans);
+        }
+        else if (token is Token.RoundGroup)
+        {
+          var groupToken = (Token.RoundGroup) token;
+          if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
+            AddMatchingBraces(tokenSpan.Start, tokenSpan.End - 1, ref spans);
+          SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref spans);
+        }
+        else if (token is Token.SquareGroup)
+        {
+          var groupToken = (Token.SquareGroup) token;
+          if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
+            AddMatchingBraces(tokenSpan.Start, tokenSpan.End - 1, ref spans);
+          SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref spans);
+        }
+        else if (token is Token.LooseGroup)
+        {
+          var groupToken = (Token.LooseGroup) token;
+          SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref spans);
+        }
+        else if (token is Token.QuoteGroup)
+        {
+          var groupToken = (Token.QuoteGroup) token;
+          SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref spans);
+        }
+        else if (token is Token.Namespace)
+        {
+          var nsToken = (Token.Namespace) token;
+          SearchMatchingBraces(nsToken.KeywordToken, snapshot, caretPos, ref spans);
+          SearchMatchingBraces(nsToken.Body, snapshot, caretPos, ref spans);
+        }
+        else if (token is Token.Using)
+        {
+          var nsToken = (Token.Using) token;
+          SearchMatchingBraces(nsToken.KeywordToken, snapshot, caretPos, ref spans);
+          SearchMatchingBraces(nsToken.Body, snapshot, caretPos, ref spans);
         }
 
         token = token.Next;
       }
     }
 
-    private void AddBraceSpan(ITextSnapshot snapshot, Span spanToClassify, int pos, ref List<ClassificationSpan> spans)
+    private static void AddMatchingBraces(int openBrace, int closeBrace, ref List<Span> spans)
     {
-      var braceSpan = new Span(pos, 1);
-      if (spanToClassify.IntersectsWith(braceSpan))
-      {
-        if (null == spans)
-          spans = new List<ClassificationSpan>(4);
-        spans.Add(new ClassificationSpan(new SnapshotSpan(snapshot, braceSpan), _braceClassificationType));
-      }
+      if (null == spans)
+        spans = new List<Span>(4);
+      spans.Add(new Span(openBrace, 1));
+      spans.Add(new Span(closeBrace, 1));
     }
   }
 }
