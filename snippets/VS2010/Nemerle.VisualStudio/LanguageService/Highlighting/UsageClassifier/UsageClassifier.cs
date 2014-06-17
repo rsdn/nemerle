@@ -21,12 +21,7 @@ namespace Nemerle.VisualStudio.LanguageService
       _highlightOne = classificationRegistry.GetClassificationType(ClassificationTypes.HighlightOneName);
       _highlightTwo = classificationRegistry.GetClassificationType(ClassificationTypes.HighlightTwoName);
       _textBuffer = textBuffer;
-      _textBuffer.Changed += TextBuffer_Changed;
-    }
-
-    private void TextBuffer_Changed(object sender, TextContentChangedEventArgs e)
-    {
-      UpdateUsageHighlighting(Enumerable.Empty<GotoInfo>());
+      _textBuffer.Changed += (_, args) => UpdateUsageHighlighting(Enumerable.Empty<GotoInfo>());
     }
 
     public event EventHandler<ClassificationChangedEventArgs> ClassificationChanged;
@@ -34,17 +29,21 @@ namespace Nemerle.VisualStudio.LanguageService
     public IList<ClassificationSpan> GetClassificationSpans(SnapshotSpan span)
     {
       if (_classificationSpans.Length == 0)
-        return _classificationSpans;
+        return ClassifierUtils.EmptyClassifications;
 
-      var spans = new List<ClassificationSpan>();
+      List<ClassificationSpan> spans = null;
       foreach (var s in _classificationSpans)
       {
         if (span.End < s.Span.Start)
           break;
         if (span.IntersectsWith(s.Span))
+        {
+          if (spans == null)
+            spans = new List<ClassificationSpan>();
           spans.Add(s);
+        }
       }
-      return spans;
+      return spans ?? ClassifierUtils.EmptyClassifications;
     }
 
     public void UpdateUsageHighlighting(IEnumerable<GotoInfo> highlightings)

@@ -12,13 +12,12 @@ namespace Nemerle.VisualStudio.LanguageService
 {
   public sealed partial class SyntaxClassifier : IClassifier
   {
-    private static readonly IList<ClassificationSpan> _emptyClassificationSpans = new ClassificationSpan[0];
-    private static readonly HashSet<string>           _quotationTypes           = new HashSet<string>(StringComparer.InvariantCulture) { "decl", "parameter", "ttype", "case" };
+    private static readonly HashSet<string> _quotationTypes = new HashSet<string>(StringComparer.InvariantCulture) { "decl", "parameter", "ttype", "case" };
 
-    private readonly IClassificationType[]    _classificationTypes;
-    private readonly ITextBuffer              _textBuffer;
-    private          ClassificationParseResult              _lastParseResult;
-    private          IEnumerable<ITextChange> _lastTextChanges;
+    private readonly IClassificationType[]     _classificationTypes;
+    private readonly ITextBuffer               _textBuffer;
+    private          ClassificationParseResult _lastParseResult;
+    private          IEnumerable<ITextChange>  _lastTextChanges;
 
     public SyntaxClassifier(
       IStandardClassificationService standardClassification,
@@ -58,7 +57,7 @@ namespace Nemerle.VisualStudio.LanguageService
         if (ParseUtil.TryParse(_textBuffer, out parseResult))
           _lastParseResult = parseResult;
         else
-          return _emptyClassificationSpans;
+          return ClassifierUtils.EmptyClassifications;
 
       var textChanges = _lastTextChanges;
       if (textChanges != null)

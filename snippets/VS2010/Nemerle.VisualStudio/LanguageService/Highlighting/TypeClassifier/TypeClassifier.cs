@@ -13,7 +13,7 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
   public sealed class TypeClassifier : IClassifier
   {
     private readonly ITextBuffer _textBuffer;
-    private static readonly HashSet<string> _predefinedTypes = new HashSet<string>
+    private static readonly HashSet<string> _predefinedTypes = new HashSet<string>(StringComparer.InvariantCulture)
       { "object", "int", "string", "void", "bool", "list", "byte", "float", "uint", "char", 
         "ulong", "ushort", "decimal", "sbyte", "short", "double", "long" };
 
@@ -51,23 +51,24 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
     public IList<ClassificationSpan> GetClassificationSpans(SnapshotSpan span)
     {
       NemerleSource source;
-      var result               = new List<ClassificationSpan>();
       if (!_textBuffer.Properties.TryGetProperty(typeof(NemerleSource), out source))
-        return result;
+        return ClassifierUtils.EmptyClassifications;
 
       var fileIndex            = source.FileIndex;
       var snapshot             = span.Snapshot;
       var loc                  = Utils.ToNLocation(fileIndex, span);
       var locationsToHighlight = GetLocationsToHighlight(source, loc).ToArray();
+      if (locationsToHighlight.Length == 0)
+        return ClassifierUtils.EmptyClassifications;
 
+      var result = new List<ClassificationSpan>();
       foreach (var location in locationsToHighlight)
       {
-        var highlightSpan = Utils.NLocationToSpan(snapshot, location);
-        var text = snapshot.GetText(highlightSpan);
+        var highlightSpan  = Utils.NLocationToSpan(snapshot, location);
+        var text           = snapshot.GetText(highlightSpan);
         var classification = _predefinedTypes.Contains(text) ? _predefinedStyle : _userStyle;
         result.Add(new ClassificationSpan(new SnapshotSpan(snapshot, highlightSpan), classification));
       }
-      
       return result;
     }
 
@@ -82,7 +83,6 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
       return new ClassificationSpan(new SnapshotSpan(textSnapshot, span), classificationType);
     }
 
-    private static readonly IList<ClassificationSpan> EmptyClassificationSpans = new ClassificationSpan[0];
     private IClassificationType _predefinedStyle;
     private IClassificationType _userStyle;
   }

@@ -9,7 +9,6 @@ namespace Nemerle.VisualStudio.LanguageService
 {
   public sealed class MatchingBracesClassifier : IClassifier
   {
-    private static readonly ClassificationSpan[] _emptySpans = {};
     private readonly ITextBuffer _textBuffer;
     private readonly IClassificationType _braceClassificationType;
     private int _caretPos;
@@ -33,10 +32,10 @@ namespace Nemerle.VisualStudio.LanguageService
         {
           List<ClassificationSpan> spans = null;
           WalkTokens(parseResult.Tokens, parseResult.Snapshot, span, caretPos, ref spans);
-          return (IList<ClassificationSpan>)spans ?? _emptySpans;
+          return spans ?? ClassifierUtils.EmptyClassifications;
         }
       }
-      return _emptySpans;
+      return ClassifierUtils.EmptyClassifications;
     }
 
     public void UpdateClassifications(CaretPosition caretPosition)
