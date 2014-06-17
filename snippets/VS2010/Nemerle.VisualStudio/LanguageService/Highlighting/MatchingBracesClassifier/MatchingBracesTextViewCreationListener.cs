@@ -10,8 +10,11 @@ namespace Nemerle.VisualStudio.LanguageService
     public void TextViewCreated(IWpfTextView textView)
     {
       MatchingBracesClassifier classifier;
-      if (textView.TextBuffer.Properties.TryGetProperty<MatchingBracesClassifier>(typeof(MatchingBracesClassifier), out classifier))
+      if (textView.TextBuffer.Properties.TryGetProperty(typeof(MatchingBracesClassifier), out classifier))
+      {
         textView.Caret.PositionChanged += (_, args) => classifier.UpdateClassifications(args.NewPosition);
+        textView.TextBuffer.PostChanged += (_, args) => classifier.UpdateClassifications(textView.Caret.Position);
+      }
     }
   }
 }

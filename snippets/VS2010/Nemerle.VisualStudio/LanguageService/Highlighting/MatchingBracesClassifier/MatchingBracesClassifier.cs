@@ -9,7 +9,7 @@ namespace Nemerle.VisualStudio.LanguageService
 {
   public sealed class MatchingBracesClassifier : IClassifier
   {
-    private static readonly ClassificationSpan[] _emptySpans = new ClassificationSpan[0];
+    private static readonly ClassificationSpan[] _emptySpans = {};
     private readonly ITextBuffer _textBuffer;
     private readonly IClassificationType _braceClassificationType;
     private int _caretPos;
@@ -17,7 +17,6 @@ namespace Nemerle.VisualStudio.LanguageService
     public MatchingBracesClassifier(IClassificationTypeRegistryService classificationRegistry, ITextBuffer textBuffer)
     {
       _textBuffer = textBuffer;
-      _textBuffer.Changed += TextBuffer_Changed;
       _braceClassificationType = classificationRegistry.GetClassificationType(ClassificationTypes.MathingBracesName);
       _caretPos = -1;
     }
@@ -33,7 +32,7 @@ namespace Nemerle.VisualStudio.LanguageService
         if (ParseUtil.TryParse(_textBuffer, out parseResult) && span.Snapshot.Version == parseResult.Snapshot.Version)
         {
           List<ClassificationSpan> spans = null;
-          WalkTokens(parseResult.Tokens.Child, parseResult.Snapshot, span, caretPos, ref spans);
+          WalkTokens(parseResult.Tokens, parseResult.Snapshot, span, caretPos, ref spans);
           return (IList<ClassificationSpan>)spans ?? _emptySpans;
         }
       }
@@ -53,16 +52,6 @@ namespace Nemerle.VisualStudio.LanguageService
       else if (_caretPos >= 0)
       {
         _caretPos = -1;
-        NotifyClassificationChanged(snapshot, new Span(0, snapshot.Length));
-      }
-    }
-
-    private void TextBuffer_Changed(object sender, TextContentChangedEventArgs e)
-    {
-      if (_caretPos >= 0)
-      {
-        _caretPos = -1;
-        var snapshot = _textBuffer.CurrentSnapshot;
         NotifyClassificationChanged(snapshot, new Span(0, snapshot.Length));
       }
     }
@@ -111,33 +100,30 @@ namespace Nemerle.VisualStudio.LanguageService
           if (token is Token.BracesGroup)
           {
             var groupToken = (Token.BracesGroup) token;
-            if (caretPos == tokenSpan.Start || caretPos == tokenSpan.End)
+            if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
             {
               AddBraceSpan(snapshot, spanToClassify, tokenSpan.Start, ref spans);
-              if (groupToken.CloseBrace != null)
-                AddBraceSpan(snapshot, spanToClassify, tokenSpan.End - 1, ref spans);
+              AddBraceSpan(snapshot, spanToClassify, tokenSpan.End - 1, ref spans);
             }
             WalkTokens(groupToken.Child, snapshot, spanToClassify, caretPos, ref spans);
           }
           else if (token is Token.RoundGroup)
           {
             var groupToken = (Token.RoundGroup) token;
-            if (caretPos == tokenSpan.Start || caretPos == tokenSpan.End)
+            if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
             {
               AddBraceSpan(snapshot, spanToClassify, tokenSpan.Start, ref spans);
-              if (groupToken.CloseBrace != null)
-                AddBraceSpan(snapshot, spanToClassify, tokenSpan.End - 1, ref spans);
+              AddBraceSpan(snapshot, spanToClassify, tokenSpan.End - 1, ref spans);
             }
             WalkTokens(groupToken.Child, snapshot, spanToClassify, caretPos, ref spans);
           }
           else if (token is Token.SquareGroup)
           {
             var groupToken = (Token.SquareGroup) token;
-            if (caretPos == tokenSpan.Start || caretPos == tokenSpan.End)
+            if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
             {
               AddBraceSpan(snapshot, spanToClassify, tokenSpan.Start, ref spans);
-              if (groupToken.CloseBrace != null)
-                AddBraceSpan(snapshot, spanToClassify, tokenSpan.End - 1, ref spans);
+              AddBraceSpan(snapshot, spanToClassify, tokenSpan.End - 1, ref spans);
             }
             WalkTokens(groupToken.Child, snapshot, spanToClassify, caretPos, ref spans);
           }
@@ -175,7 +161,7 @@ namespace Nemerle.VisualStudio.LanguageService
       if (spanToClassify.IntersectsWith(braceSpan))
       {
         if (null == spans)
-          spans = new List<ClassificationSpan>();
+          spans = new List<ClassificationSpan>(4);
         spans.Add(new ClassificationSpan(new SnapshotSpan(snapshot, braceSpan), _braceClassificationType));
       }
     }
