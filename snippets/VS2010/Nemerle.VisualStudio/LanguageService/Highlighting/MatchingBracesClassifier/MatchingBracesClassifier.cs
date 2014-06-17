@@ -7,11 +7,13 @@ using Nemerle.Compiler;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
+  using MatchingBraces = Tuple<ITextSnapshot, List<Span>>;
+
   public sealed class MatchingBracesClassifier : IClassifier
   {
     private readonly ITextBuffer         _textBuffer;
     private readonly IClassificationType _braceClassificationType;
-    private          List<Span>          _matchingBraces;
+    private          MatchingBraces      _matchingBraces;
 
     public MatchingBracesClassifier(IClassificationTypeRegistryService classificationRegistry, ITextBuffer textBuffer)
     {
@@ -25,16 +27,16 @@ namespace Nemerle.VisualStudio.LanguageService
     public IList<ClassificationSpan> GetClassificationSpans(SnapshotSpan span)
     {
       var matchingBraces = _matchingBraces;
-      if (matchingBraces == null)
+      if (matchingBraces == null || matchingBraces.Item1.Version != span.Snapshot.Version)
         return ClassifierUtils.EmptyClassifications;
 
       List<ClassificationSpan> spans = null;
-      foreach (var x in matchingBraces)
+      foreach (var x in matchingBraces.Item2)
         if (span.IntersectsWith(x))
         {
           if (spans == null)
             spans = new List<ClassificationSpan>();
-          spans.Add(new ClassificationSpan(new SnapshotSpan(span.Snapshot, x), _braceClassificationType));
+          spans.Add(new ClassificationSpan(new SnapshotSpan(matchingBraces.Item1, x), _braceClassificationType));
         }
       return spans ?? ClassifierUtils.EmptyClassifications;
     }
@@ -47,7 +49,7 @@ namespace Nemerle.VisualStudio.LanguageService
       var oldMatchingBraces = _matchingBraces;
       if (HasBraceAtPosition(snapshot, position))
       {
-        List<Span> newMatchingBraces = null;
+        MatchingBraces newMatchingBraces = null;
         ClassificationParseResult parseResult;
         if (ParseUtil.TryParse(_textBuffer, out parseResult) && snapshot.Version == parseResult.Snapshot.Version)
           SearchMatchingBraces(parseResult.Tokens, parseResult.Snapshot, position, ref newMatchingBraces);
@@ -55,26 +57,25 @@ namespace Nemerle.VisualStudio.LanguageService
         _matchingBraces = newMatchingBraces;
 
         if (null != oldMatchingBraces)
-          NotifyClassificationChanged(snapshot, oldMatchingBraces);
+          NotifyClassificationChanged(oldMatchingBraces);
 
         if (null != newMatchingBraces)
-          NotifyClassificationChanged(snapshot, newMatchingBraces);
+          NotifyClassificationChanged(newMatchingBraces);
       }
       else if (oldMatchingBraces != null)
       {
         _matchingBraces = null;
-        NotifyClassificationChanged(snapshot, oldMatchingBraces);
+        NotifyClassificationChanged(oldMatchingBraces);
       }
     }
 
-    private void NotifyClassificationChanged(ITextSnapshot snapshot, List<Span> spansToClassify)
+    private void NotifyClassificationChanged(MatchingBraces matchingBraces)
     {
       var handler = ClassificationChanged;
       if (handler != null)
       {
-        foreach (var x in spansToClassify)
-          if (x.End <= snapshot.Length)
-            handler(this, new ClassificationChangedEventArgs(new SnapshotSpan(snapshot, x)));
+        foreach (var x in matchingBraces.Item2)
+          handler(this, new ClassificationChangedEventArgs(new SnapshotSpan(matchingBraces.Item1, x)));
       }
     }
 
@@ -102,7 +103,7 @@ namespace Nemerle.VisualStudio.LanguageService
       return false;
     }
 
-    private static void SearchMatchingBraces(Token token, ITextSnapshot snapshot, int caretPos, ref List<Span> spans)
+    private static void SearchMatchingBraces(Token token, ITextSnapshot snapshot, int caretPos, ref MatchingBraces spans)
     {
       while (token != null)
       {
@@ -114,21 +115,21 @@ namespace Nemerle.VisualStudio.LanguageService
         {
           var groupToken = (Token.BracesGroup) token;
           if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
-            AddMatchingBraces(tokenSpan.Start, tokenSpan.End - 1, ref spans);
+            AddMatchingBraces(snapshot, tokenSpan.Start, tokenSpan.End - 1, ref spans);
           SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref spans);
         }
         else if (token is Token.RoundGroup)
         {
           var groupToken = (Token.RoundGroup) token;
           if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
-            AddMatchingBraces(tokenSpan.Start, tokenSpan.End - 1, ref spans);
+            AddMatchingBraces(snapshot, tokenSpan.Start, tokenSpan.End - 1, ref spans);
           SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref spans);
         }
         else if (token is Token.SquareGroup)
         {
           var groupToken = (Token.SquareGroup) token;
           if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
-            AddMatchingBraces(tokenSpan.Start, tokenSpan.End - 1, ref spans);
+            AddMatchingBraces(snapshot, tokenSpan.Start, tokenSpan.End - 1, ref spans);
           SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref spans);
         }
         else if (token is Token.LooseGroup)
@@ -158,12 +159,12 @@ namespace Nemerle.VisualStudio.LanguageService
       }
     }
 
-    private static void AddMatchingBraces(int openBrace, int closeBrace, ref List<Span> spans)
+    private static void AddMatchingBraces(ITextSnapshot snapshot, int openBrace, int closeBrace, ref MatchingBraces spans)
     {
       if (null == spans)
-        spans = new List<Span>(4);
-      spans.Add(new Span(openBrace, 1));
-      spans.Add(new Span(closeBrace, 1));
+        spans = new MatchingBraces(snapshot, new List<Span>(4));
+      spans.Item2.Add(new Span(openBrace, 1));
+      spans.Item2.Add(new Span(closeBrace, 1));
     }
   }
 }
