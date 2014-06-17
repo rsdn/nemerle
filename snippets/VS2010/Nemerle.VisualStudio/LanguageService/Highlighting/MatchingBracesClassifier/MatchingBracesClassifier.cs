@@ -105,57 +105,58 @@ namespace Nemerle.VisualStudio.LanguageService
 
     private static void SearchMatchingBraces(Token token, ITextSnapshot snapshot, int caretPos, ref MatchingBraces matchingBraces)
     {
-      while (token != null)
+      for ( ; token != null; token = token.Next)
       {
         var tokenSpan = Utils.NLocationToSpan(snapshot, token.Location);
+        if (tokenSpan.End < caretPos)
+          continue;
+
         if (caretPos < tokenSpan.Start)
           break;
 
         if (token is Token.BracesGroup)
         {
-          var groupToken = (Token.BracesGroup) token;
+          var groupToken = (Token.BracesGroup)token;
           if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
             AddMatchingBraces(snapshot, tokenSpan.Start, tokenSpan.End - 1, ref matchingBraces);
           SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref matchingBraces);
         }
         else if (token is Token.RoundGroup)
         {
-          var groupToken = (Token.RoundGroup) token;
+          var groupToken = (Token.RoundGroup)token;
           if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
             AddMatchingBraces(snapshot, tokenSpan.Start, tokenSpan.End - 1, ref matchingBraces);
           SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref matchingBraces);
         }
         else if (token is Token.SquareGroup)
         {
-          var groupToken = (Token.SquareGroup) token;
+          var groupToken = (Token.SquareGroup)token;
           if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
             AddMatchingBraces(snapshot, tokenSpan.Start, tokenSpan.End - 1, ref matchingBraces);
           SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref matchingBraces);
         }
         else if (token is Token.LooseGroup)
         {
-          var groupToken = (Token.LooseGroup) token;
+          var groupToken = (Token.LooseGroup)token;
           SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref matchingBraces);
         }
         else if (token is Token.QuoteGroup)
         {
-          var groupToken = (Token.QuoteGroup) token;
+          var groupToken = (Token.QuoteGroup)token;
           SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref matchingBraces);
         }
         else if (token is Token.Namespace)
         {
-          var nsToken = (Token.Namespace) token;
+          var nsToken = (Token.Namespace)token;
           SearchMatchingBraces(nsToken.KeywordToken, snapshot, caretPos, ref matchingBraces);
           SearchMatchingBraces(nsToken.Body, snapshot, caretPos, ref matchingBraces);
         }
         else if (token is Token.Using)
         {
-          var nsToken = (Token.Using) token;
+          var nsToken = (Token.Using)token;
           SearchMatchingBraces(nsToken.KeywordToken, snapshot, caretPos, ref matchingBraces);
           SearchMatchingBraces(nsToken.Body, snapshot, caretPos, ref matchingBraces);
         }
-
-        token = token.Next;
       }
     }
 
