@@ -1283,8 +1283,7 @@ namespace Nemerle.VisualStudio.LanguageService
       if (CurrentVersion != sourceVersion)
         return;
 
-      TypeLocations.Clear();
-      TypeLocations.AddRange(list);
+      TypeLocations = list;
 
       TypeClassifier typeClassifier;
       if (TextLines.ToITextBuffer().Properties.TryGetProperty(typeof(TypeClassifier), out typeClassifier))
