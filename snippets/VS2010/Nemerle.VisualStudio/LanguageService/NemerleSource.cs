@@ -158,6 +158,7 @@ namespace Nemerle.VisualStudio.LanguageService
     #region Fields
 
     public IList<Location> TypeLocations;
+    public List<Tuple<Location, List<Location>>> MethodsTypeLocations = new List<Tuple<Location, List<Location>>>();
     readonly List<RelocationRequest> _relocationRequestsQueue = new List<RelocationRequest>();
     int _fileIndex = -1;
     QuickTipInfoAsyncRequest _tipAsyncRequest;
@@ -211,12 +212,30 @@ namespace Nemerle.VisualStudio.LanguageService
 
     private void RelocateTypeLocations(RelocationInfo info)
     {
-      for (int i = 0; i < TypeLocations.Count; i++)
+      RelocateList(info, TypeLocations);
+
+      for (int i = 0; i < MethodsTypeLocations.Count; i++)
       {
-        var typeLoc = TypeLocations[i];
+        var methodsTypeLocation = MethodsTypeLocations[i];
+        var loc = methodsTypeLocation.Item1;
+        var lst = methodsTypeLocation.Item2;
+        var newLoc = Nemerle.Compiler.Completion.Relocate(loc, info);
+        if (newLoc != loc)
+        {
+          RelocateList(info, lst);
+          MethodsTypeLocations[i] = Tuple.Create(loc, lst);
+        }
+      }
+    }
+
+    private static void RelocateList(RelocationInfo info, IList<Location> locations)
+    {
+      for (int i = 0; i < locations.Count; i++)
+      {
+        var typeLoc = locations[i];
         var newLoc = Nemerle.Compiler.Completion.Relocate(typeLoc, info);
         if (newLoc != typeLoc)
-          TypeLocations[i] = newLoc;
+          locations[i] = newLoc;
       }
     }
 
@@ -1285,8 +1304,34 @@ namespace Nemerle.VisualStudio.LanguageService
 
       TypeLocations = list;
 
+      Redraw();
+    }
+
+    public void SetMethodsTypeHighlighting(Location bodyLocation, List<Location> typeLocations, int sourceVersion)
+    {
+      if (CurrentVersion != sourceVersion)
+        return;
+
+      for (int i = 0; i < MethodsTypeLocations.Count; i++)
+      {
+        var methodsTypeLocation = MethodsTypeLocations[i];
+        var loc = methodsTypeLocation.Item1;
+        if (bodyLocation.IsIntersect(loc))
+        {
+          MethodsTypeLocations.RemoveAt(i);
+          i--;
+        }
+      }
+
+      MethodsTypeLocations.Add(Tuple.Create(bodyLocation, typeLocations));
+
+      Redraw();
+    }
+
+    private void Redraw()
+    {
       TypeClassifier typeClassifier;
-      if (TextLines.ToITextBuffer().Properties.TryGetProperty(typeof(TypeClassifier), out typeClassifier))
+      if (TextLines.ToITextBuffer().Properties.TryGetProperty(typeof (TypeClassifier), out typeClassifier))
         typeClassifier.RedrawTypeHighlighting();
     }
 
