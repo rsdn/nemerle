@@ -364,6 +364,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				switch ((VSConstants.VSStd2KCmdID)nCmdId)
 				{
 					case VSConstants.VSStd2KCmdID.CANCEL:
+						Source.SetUsageHighlighting(Enumerable.Empty<GotoInfo>());
 						Source.Service.Hint.Close();
 						break; // go trocess ESC
 
@@ -433,6 +434,7 @@ namespace Nemerle.VisualStudio.LanguageService
 						HighlightSymbol();
 						return VSConstants.S_OK;
 					case MenuCmd.CmdId.RemoveLastHighlighting: // cmdIdRemoveLastHighlighting
+						Source.SetUsageHighlighting(Enumerable.Empty<GotoInfo>());
 						Source.Service.Hint.Close();
 						return VSConstants.S_OK;
 					case MenuCmd.CmdId.SourceOutlinerWindow:
