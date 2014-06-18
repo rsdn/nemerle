@@ -54,6 +54,14 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
       if (!_textBuffer.Properties.TryGetProperty(typeof(NemerleSource), out source))
         return ClassifierUtils.EmptyClassifications;
 
+      if (source.TypeLocations == null)
+      {
+        source.TypeLocations = new List<Location>();
+        var engine = source.GetEngine();
+        engine.BeginUpdateTypeHighlightings(source);
+        return ClassifierUtils.EmptyClassifications;
+      }
+
       var fileIndex            = source.FileIndex;
       var snapshot             = span.Snapshot;
       var loc                  = Utils.ToNLocation(fileIndex, span);
