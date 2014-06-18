@@ -904,9 +904,9 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
-		public void SetHighlights(IIdeSource source, IEnumerable<GotoInfo> highlights)
+		public void SetUsageHighlighting(IIdeSource source, IEnumerable<GotoInfo> usages)
 		{
-			((NemerleSource)source).SetUsageHighlighting(highlights);
+			((NemerleSource)source).SetUsageHighlighting(usages);
 		}
 
 
