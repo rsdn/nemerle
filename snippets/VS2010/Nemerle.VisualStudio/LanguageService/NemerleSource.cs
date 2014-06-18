@@ -670,7 +670,11 @@ namespace Nemerle.VisualStudio.LanguageService
 
     public override TokenInfo GetTokenInfo(int line, int col)
     {
-      return new TokenInfo();
+      TokenInfo tokenInfo;
+      if (ParseUtil.TryGetTokenInfo(TextLines.ToITextBuffer(), line, col, out tokenInfo))
+        return tokenInfo;
+      else
+        return new TokenInfo();
     }
 
     public override void ProcessHiddenRegions(System.Collections.ArrayList hiddenRegions)
@@ -939,8 +943,9 @@ namespace Nemerle.VisualStudio.LanguageService
       // This code open completion list if user enter '.'.
       if ((tokenBeforeCaret.Trigger & TokenTriggers.MemberSelect) != 0 && (command == VsCommands2K.TYPECHAR))
       {
-        var spaces = new[] { '\t', ' ', '\u000B', '\u000C' };
-        var str = GetText(line, 0, line, idx - 1).Trim(spaces);
+        var spaces                 = new[] { '\t', ' ', '\u000B', '\u000C' };
+        var tokenBeforeCaretLength = tokenBeforeCaret.EndIndex - tokenBeforeCaret.StartIndex;
+        var str                    = GetText(line, 0, line, idx - tokenBeforeCaretLength).Trim(spaces);
 
         while (str.Length <= 0 && line > 0) // skip empy lines
         {
