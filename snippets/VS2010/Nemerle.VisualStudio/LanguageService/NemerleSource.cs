@@ -1400,10 +1400,9 @@ namespace Nemerle.VisualStudio.LanguageService
       if (token == null)
         return new TextSpan { iEndIndex = -1, iStartLine = -1, iStartIndex = -1, iEndLine = -1 };
 
-      var start = token.StartIndex;
-      var end = token.EndIndex + 1; //VladD2: Неизвесно из каких соображений GetTokenInfo() вычитает еденицу из EndIndex. Учитываем это!
-      var hintSpan = new TextSpan { iStartLine = line, iStartIndex = start, iEndLine = line, iEndIndex = end };
-
+      var hintSpan = new TextSpan();
+      ErrorHelper.ThrowOnFailure(TextLines.GetLineIndexOfPosition(token.StartIndex, out hintSpan.iStartLine, out hintSpan.iStartIndex));
+      ErrorHelper.ThrowOnFailure(TextLines.GetLineIndexOfPosition(token.EndIndex, out hintSpan.iEndLine, out hintSpan.iEndIndex));
       return hintSpan;
     }
 
