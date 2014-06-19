@@ -82,7 +82,16 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
 
     private static IEnumerable<Location> GetLocationsToHighlight(NemerleSource source, Location loc)
     {
-      return source.TypeLocations.Where(tl => tl.IsIntersect(loc));
+      foreach (var x in source.MethodsTypeLocations)
+      {
+        if (x.Item1.IsIntersect(loc))
+          foreach (var loc2 in x.Item2)
+            yield return loc2;
+      }
+
+      foreach (var x in source.TypeLocations)
+        if (x.IsIntersect(loc))
+          yield return x;
     }
 
 
