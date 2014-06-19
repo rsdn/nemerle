@@ -1,51 +1,54 @@
 ﻿using System;
 using System.Collections.Generic;
 using Microsoft.VisualStudio.Text;
-using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Text.Editor;
+using Microsoft.VisualStudio.Text.Tagging;
 using Nemerle.Compiler;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
   using MatchingBraces = Tuple<ITextSnapshot, List<Span>>;
 
-  public sealed class MatchingBracesClassifier : IClassifier
+  public sealed class MatchingBracesTagger : ITagger<TextMarkerTag>
   {
-    private readonly ITextBuffer         _textBuffer;
-    private readonly IClassificationType _braceClassificationType;
-    private          MatchingBraces      _matchingBraces;
+    private static readonly TextMarkerTag _braceTag = new TextMarkerTag("blue");
+    private readonly ITextBuffer _textBuffer;
+    private MatchingBraces _matchingBraces;
 
-    public MatchingBracesClassifier(IClassificationTypeRegistryService classificationRegistry, ITextBuffer textBuffer)
+    public MatchingBracesTagger(ITextView textView, ITextBuffer textBuffer)
     {
-      _textBuffer              = textBuffer;
-      _braceClassificationType = classificationRegistry.GetClassificationType(ClassificationTypes.MathingBracesName);
-      _matchingBraces          = null;
+      _textBuffer = textBuffer;
+
+      textView.Caret.PositionChanged += (_, args) => UpdateClassifications(args.NewPosition);
+      textBuffer.PostChanged += (_, args) => UpdateClassifications(textView.Caret.Position);
     }
 
-    public event EventHandler<ClassificationChangedEventArgs> ClassificationChanged;
+    public event EventHandler<SnapshotSpanEventArgs> TagsChanged;
 
-    public IList<ClassificationSpan> GetClassificationSpans(SnapshotSpan span)
+    public IEnumerable<ITagSpan<TextMarkerTag>> GetTags(NormalizedSnapshotSpanCollection spans)
     {
       var matchingBraces = _matchingBraces;
-      if (matchingBraces == null || matchingBraces.Item1.Version != span.Snapshot.Version)
-        return ClassifierUtils.EmptyClassifications;
+      if (matchingBraces == null || spans.Count == 0)
+        yield break;
 
-      List<ClassificationSpan> spans = null;
-      foreach (var x in matchingBraces.Item2)
-        if (span.IntersectsWith(x))
-        {
-          if (spans == null)
-            spans = new List<ClassificationSpan>();
-          spans.Add(new ClassificationSpan(new SnapshotSpan(matchingBraces.Item1, x), _braceClassificationType));
-        }
-      return spans ?? ClassifierUtils.EmptyClassifications;
+      var currentSnapshot = spans[0].Snapshot;
+      foreach (var _tagSpan in matchingBraces.Item2)
+      {
+        var tagSpan = matchingBraces.Item1.Version == currentSnapshot
+          ? new SnapshotSpan(currentSnapshot, _tagSpan)
+          : new SnapshotSpan(matchingBraces.Item1, _tagSpan).TranslateTo(currentSnapshot, SpanTrackingMode.EdgeExclusive);
+
+        foreach (var span in spans)
+          if (span.IntersectsWith(tagSpan))
+            yield return new TagSpan<TextMarkerTag>(tagSpan, _braceTag);
+      }
     }
 
-    public void UpdateClassifications(CaretPosition caretPosition)
+    private void UpdateClassifications(CaretPosition caretPosition)
     {
-      var bufferPosition    = caretPosition.BufferPosition;
-      var snapshot          = bufferPosition.Snapshot;
-      var position          = bufferPosition.Position;
+      var bufferPosition = caretPosition.BufferPosition;
+      var snapshot = bufferPosition.Snapshot;
+      var position = bufferPosition.Position;
       var oldMatchingBraces = _matchingBraces;
       if (HasBraceAtPosition(snapshot, position))
       {
@@ -57,25 +60,25 @@ namespace Nemerle.VisualStudio.LanguageService
         _matchingBraces = newMatchingBraces;
 
         if (null != oldMatchingBraces)
-          NotifyClassificationChanged(oldMatchingBraces);
+          NotifyTagsChanged(oldMatchingBraces);
 
         if (null != newMatchingBraces)
-          NotifyClassificationChanged(newMatchingBraces);
+          NotifyTagsChanged(newMatchingBraces);
       }
       else if (oldMatchingBraces != null)
       {
         _matchingBraces = null;
-        NotifyClassificationChanged(oldMatchingBraces);
+        NotifyTagsChanged(oldMatchingBraces);
       }
     }
 
-    private void NotifyClassificationChanged(MatchingBraces matchingBraces)
+    private void NotifyTagsChanged(MatchingBraces matchingBraces)
     {
-      var handler = ClassificationChanged;
+      var handler = TagsChanged;
       if (handler != null)
       {
         foreach (var x in matchingBraces.Item2)
-          handler(this, new ClassificationChangedEventArgs(new SnapshotSpan(matchingBraces.Item1, x)));
+          handler(this, new SnapshotSpanEventArgs(new SnapshotSpan(matchingBraces.Item1, x)));
       }
     }
 
@@ -105,7 +108,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
     private static void SearchMatchingBraces(Token token, ITextSnapshot snapshot, int caretPos, ref MatchingBraces matchingBraces)
     {
-      for ( ; token != null; token = token.Next)
+      for (; token != null; token = token.Next)
       {
         var tokenSpan = Utils.NLocationToSpan(snapshot, token.Location);
         if (tokenSpan.End < caretPos)
