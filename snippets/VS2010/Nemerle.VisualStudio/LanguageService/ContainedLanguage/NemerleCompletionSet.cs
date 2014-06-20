@@ -58,7 +58,17 @@ namespace Nemerle.VisualStudio.LanguageService
         {
           if (spanInfo.Span.IntersectsWith(caretSpan))
           {
-            var loc = Utils.ToNLocation(source.FileIndex, new SnapshotSpan(snapshot, spanInfo.Span));
+            var snapshotSpan = new SnapshotSpan(snapshot, spanInfo.Span);
+            if (spanInfo.Type == SyntaxClassifier.SpanType.Operator)
+            {
+              var text = snapshotSpan.GetText();
+              if (text.EndsWith(".", StringComparison.Ordinal))
+              {
+                // '.' completion
+                break;
+              }
+            }
+            var loc = Utils.ToNLocation(source.FileIndex, snapshotSpan);
             if (loc.Line != loc.EndLine)
             {
               Debug.Assert(false);
