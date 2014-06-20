@@ -10,9 +10,11 @@ PURPOSE, MERCHANTABILITY, OR NON-INFRINGEMENT.
 ***************************************************************************/
 
 using System;
+using System.Diagnostics;
 using System.Windows.Forms;
 
 using Microsoft.VisualStudio.Package;
+using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.TextManager.Interop;
 using ErrorHandler = Microsoft.VisualStudio.ErrorHandler;
 using Microsoft.VisualStudio;
@@ -23,7 +25,7 @@ namespace Nemerle.VisualStudio.LanguageService
 	internal sealed class NemerleCompletionSet : CompletionSet
 	{
 		public NemerleSource Source { get; private set; }
-		internal TextViewWrapper view;
+		internal IVsTextView view;
 
 		internal NemerleCompletionSet(ImageList imageList, NemerleSource source)
 			: base(imageList, source)
@@ -33,30 +35,46 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override void Init(IVsTextView textView, Declarations declarations, bool completeWord)
 		{
-			view = textView as TextViewWrapper;
+			view = textView;
 			base.Init(textView, declarations, completeWord);
 		}
 
 		public override int GetInitialExtent(out int line, out int startIdx, out int endIdx)
 		{
-			int returnCode = base.GetInitialExtent(out line, out startIdx, out endIdx);
+			var source =  (NemerleSource)this.Source;
+			var textView = view.ToITextView();
+			var textBuffer = textView.TextBuffer;
+			var textViewLine = textView.Caret.ContainingTextViewLine;
+			var snapshot = textBuffer.CurrentSnapshot;
 
-			if (ErrorHandler.Failed(returnCode) || (view == null))
+			var caretPos = textView.Caret.Position.BufferPosition.Position;
+			var caretSpan = new Span(caretPos, 0);
+			//textView.Li
+			ClassificationParseResult parseResult;
+			if (ParseUtil.TryParse(textBuffer, out parseResult))
 			{
-				return returnCode;
+				var spanInfos = ParseUtil.GetTokenSpans(parseResult, textViewLine.Extent);
+				foreach (var spanInfo in spanInfos)
+				{
+					if (spanInfo.Span.IntersectsWith(caretSpan))
+					{
+						var loc = Utils.ToNLocation(source.FileIndex, new SnapshotSpan(snapshot, spanInfo.Span));
+						if (loc.Line != loc.EndLine)
+						{
+							Debug.Assert(false);
+						}
+						line = loc.Line - 1;
+						startIdx = loc.Column - 1;
+						endIdx = loc.EndColumn - 1;
+						return VSConstants.S_OK;
+					}
+				}
 			}
 
-			TextSpan secondary = new TextSpan();
-			secondary.iStartLine = secondary.iEndLine = line;
-			secondary.iStartIndex = startIdx;
-			secondary.iEndIndex = endIdx;
-
-			TextSpan primary = view.GetPrimarySpan(secondary);
-			line = primary.iStartLine;
-			startIdx = primary.iStartIndex;
-			endIdx = primary.iEndIndex;
-
-			return returnCode;
+			int column;
+			ErrorHelper.ThrowOnFailure(this.view.GetCaretPos(out line, out column));
+			startIdx = endIdx = column;
+			return VSConstants.S_OK;
 		}
 
 		public override int OnCommit(string textSoFar, int index, int selected, ushort commitChar, out string completeWord)

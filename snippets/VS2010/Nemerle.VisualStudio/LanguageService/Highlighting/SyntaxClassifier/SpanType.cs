@@ -3,7 +3,7 @@ namespace Nemerle.VisualStudio.LanguageService
 {
   partial class SyntaxClassifier
   {
-    private enum SpanType : byte
+    public enum SpanType : byte
     {
       Whitespace = 0,
       Identifier,

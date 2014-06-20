@@ -5,7 +5,7 @@ namespace Nemerle.VisualStudio.LanguageService
 {
   partial class SyntaxClassifier
   {
-    private struct SpanInfo : IComparable<SpanInfo>
+    public struct SpanInfo : IComparable<SpanInfo>
     {
       public readonly Span Span;
       public readonly SpanType Type;
