@@ -230,12 +230,15 @@ namespace Nemerle.VisualStudio.LanguageService
 
     private static void RelocateList(RelocationInfo info, IList<Location> locations)
     {
-      for (int i = 0; i < locations.Count; i++)
+      if (locations != null)
       {
-        var typeLoc = locations[i];
-        var newLoc = Nemerle.Compiler.Completion.Relocate(typeLoc, info);
-        if (newLoc != typeLoc)
-          locations[i] = newLoc;
+        for (int i = 0; i < locations.Count; i++)
+        {
+          var typeLoc = locations[i];
+          var newLoc = Nemerle.Compiler.Completion.Relocate(typeLoc, info);
+          if (newLoc != typeLoc)
+            locations[i] = newLoc;
+        }
       }
     }
 
