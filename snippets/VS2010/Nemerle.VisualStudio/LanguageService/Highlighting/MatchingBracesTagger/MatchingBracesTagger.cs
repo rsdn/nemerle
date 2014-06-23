@@ -103,6 +103,24 @@ namespace Nemerle.VisualStudio.LanguageService
             return true;
         }
 
+      if (0 <= prevPosition && prevPosition < snapshot.Length)
+        switch (snapshot[prevPosition])
+        {
+          case '(':
+          case '[':
+          case '{':
+            return true;
+        }
+
+      if (0 <= position && position < snapshot.Length)
+        switch (snapshot[position])
+        {
+          case ')':
+          case ']':
+          case '}':
+            return true;
+        }
+
       return false;
     }
 
@@ -120,22 +138,19 @@ namespace Nemerle.VisualStudio.LanguageService
         if (token is Token.BracesGroup)
         {
           var groupToken = (Token.BracesGroup)token;
-          if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
-            AddMatchingBraces(snapshot, tokenSpan.Start, tokenSpan.End - 1, ref matchingBraces);
+          TryAddMatchingBraces(snapshot, caretPos, ref matchingBraces, tokenSpan, groupToken.CloseBrace);
           SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref matchingBraces);
         }
         else if (token is Token.RoundGroup)
         {
           var groupToken = (Token.RoundGroup)token;
-          if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
-            AddMatchingBraces(snapshot, tokenSpan.Start, tokenSpan.End - 1, ref matchingBraces);
+          TryAddMatchingBraces(snapshot, caretPos, ref matchingBraces, tokenSpan, groupToken.CloseBrace);
           SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref matchingBraces);
         }
         else if (token is Token.SquareGroup)
         {
           var groupToken = (Token.SquareGroup)token;
-          if ((caretPos == tokenSpan.Start || caretPos == tokenSpan.End) && groupToken.CloseBrace != null)
-            AddMatchingBraces(snapshot, tokenSpan.Start, tokenSpan.End - 1, ref matchingBraces);
+          TryAddMatchingBraces(snapshot, caretPos, ref matchingBraces, tokenSpan, groupToken.CloseBrace);
           SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref matchingBraces);
         }
         else if (token is Token.LooseGroup)
@@ -161,6 +176,17 @@ namespace Nemerle.VisualStudio.LanguageService
           SearchMatchingBraces(nsToken.Body, snapshot, caretPos, ref matchingBraces);
         }
       }
+    }
+
+    private static void TryAddMatchingBraces(ITextSnapshot snapshot, int caretPos, ref MatchingBraces matchingBraces, Span tokenSpan, object closeBrace)
+    {
+      if (IsMatchingBraces(caretPos, tokenSpan, closeBrace))
+        AddMatchingBraces(snapshot, tokenSpan.Start, tokenSpan.End - 1, ref matchingBraces);
+    }
+
+    private static bool IsMatchingBraces(int caretPos, Span tokenSpan, object closeBrace)
+    {
+      return (caretPos == tokenSpan.Start || caretPos == tokenSpan.End || caretPos - 1 == tokenSpan.Start || caretPos == tokenSpan.End - 1) && closeBrace != null;
     }
 
     private static void AddMatchingBraces(ITextSnapshot snapshot, int openBrace, int closeBrace, ref MatchingBraces matchingBraces)
