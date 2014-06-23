@@ -58,17 +58,9 @@ namespace Nemerle.VisualStudio.LanguageService
         {
           if (spanInfo.Span.IntersectsWith(caretSpan))
           {
-            var snapshotSpan = new SnapshotSpan(snapshot, spanInfo.Span);
-            if (spanInfo.Type == SyntaxClassifier.SpanType.Operator)
-            {
-              var text = snapshotSpan.GetText();
-              if (text.EndsWith(".", StringComparison.Ordinal))
-              {
-                // '.' completion
-                break;
-              }
-            }
-            var loc = Utils.ToNLocation(source.FileIndex, snapshotSpan);
+            if (IsTokenTriggersCompletion(snapshot, spanInfo))
+              break;
+            var loc = Utils.ToNLocation(source.FileIndex, new SnapshotSpan(snapshot, spanInfo.Span));
             if (loc.Line != loc.EndLine)
             {
               Debug.Assert(false);
@@ -85,6 +77,12 @@ namespace Nemerle.VisualStudio.LanguageService
       ErrorHelper.ThrowOnFailure(this.view.GetCaretPos(out line, out column));
       startIdx = endIdx = column;
       return VSConstants.S_OK;
+    }
+
+    private static bool IsTokenTriggersCompletion(ITextSnapshot snapshot, SyntaxClassifier.SpanInfo spanInfo)
+    {
+      return spanInfo.Type == SyntaxClassifier.SpanType.Operator
+        && !spanInfo.Span.IsEmpty && snapshot[spanInfo.Span.End - 1] == '.';
     }
 
     public override int OnCommit(string textSoFar, int index, int selected, ushort commitChar, out string completeWord)
