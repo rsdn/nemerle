@@ -12,7 +12,7 @@ namespace Nemerle.VisualStudio.LanguageService
   {
     public ITagger<T> CreateTagger<T>(ITextView textView, ITextBuffer textBuffer) where T : ITag
     {
-      Debug.Assert(typeof(T) == typeof(TextMarkerTag));
+      Debug.Assert(typeof(T).IsAssignableFrom(typeof(TextMarkerTag)));
 
       var taggerKey = typeof(MatchingBracesTagger);
       object tagger;
