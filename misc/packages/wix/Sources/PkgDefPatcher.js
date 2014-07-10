@@ -45,24 +45,34 @@ function VS2012() {
   var newText     = SubstitutePaths(args, text);
   var writeStream = pkgdefFile.OpenAsTextStream(2, -2);
   writeStream.Write(newText);
-  writeStream.WriteLine('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{BD1D3C51-E157-4DE0-A535-E94130D1970A}]');
-  writeStream.WriteLine('"name"="Microsoft.Windows.Design.Host"'                                                                          );
-  writeStream.WriteLine('"publicKeyToken"="b03f5f7f11d50a3a"'                                                                             );
-  writeStream.WriteLine('"culture"="neutral"'                                                                                             );
-  writeStream.WriteLine('"oldVersion"="4.0.0.0"'                                                                                          );
-  writeStream.WriteLine('"newVersion"="4.1.0.0"'                                                                                          );
-  writeStream.WriteLine('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{5978995F-FBA0-4DCC-8556-19AB2EB19D36}]');
-  writeStream.WriteLine('"name"="Microsoft.Windows.Design.Interaction"'                                                                   );
-  writeStream.WriteLine('"publicKeyToken"="b03f5f7f11d50a3a"'                                                                             );
-  writeStream.WriteLine('"culture"="neutral"'                                                                                             );
-  writeStream.WriteLine('"oldVersion"="4.0.0.0"'                                                                                          );
-  writeStream.WriteLine('"newVersion"="4.1.0.0"'                                                                                          );
-  writeStream.WriteLine('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{F604D514-4F33-422E-BA44-E4F22381F044}]');
-  writeStream.WriteLine('"name"="Microsoft.VisualStudio.Web.Application"'                                                                 );
-  writeStream.WriteLine('"publicKeyToken"="b03f5f7f11d50a3a"'                                                                             );
-  writeStream.WriteLine('"culture"="neutral"'                                                                                             );
-  writeStream.WriteLine('"oldVersion"="10.0.0.0"'                                                                                         );
-  writeStream.WriteLine('"newVersion"="11.0.0.0"'                                                                                         );
+
+  if (newText.indexOf('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{BD1D3C51-E157-4DE0-A535-E94130D1970A}]') < 0) {
+    writeStream.WriteLine('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{BD1D3C51-E157-4DE0-A535-E94130D1970A}]');
+    writeStream.WriteLine('"name"="Microsoft.Windows.Design.Host"'                                                                          );
+    writeStream.WriteLine('"publicKeyToken"="b03f5f7f11d50a3a"'                                                                             );
+    writeStream.WriteLine('"culture"="neutral"'                                                                                             );
+    writeStream.WriteLine('"oldVersion"="4.0.0.0"'                                                                                          );
+    writeStream.WriteLine('"newVersion"="4.1.0.0"'                                                                                          );
+  }
+
+  if (newText.indexOf('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{5978995F-FBA0-4DCC-8556-19AB2EB19D36}]') < 0) {
+    writeStream.WriteLine('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{5978995F-FBA0-4DCC-8556-19AB2EB19D36}]');
+    writeStream.WriteLine('"name"="Microsoft.Windows.Design.Interaction"'                                                                   );
+    writeStream.WriteLine('"publicKeyToken"="b03f5f7f11d50a3a"'                                                                             );
+    writeStream.WriteLine('"culture"="neutral"'                                                                                             );
+    writeStream.WriteLine('"oldVersion"="4.0.0.0"'                                                                                          );
+    writeStream.WriteLine('"newVersion"="4.1.0.0"'                                                                                          );
+  }
+
+  if (newText.indexOf('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{F604D514-4F33-422E-BA44-E4F22381F044}]') < 0) {
+    writeStream.WriteLine('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{F604D514-4F33-422E-BA44-E4F22381F044}]');
+    writeStream.WriteLine('"name"="Microsoft.VisualStudio.Web.Application"'                                                                 );
+    writeStream.WriteLine('"publicKeyToken"="b03f5f7f11d50a3a"'                                                                             );
+    writeStream.WriteLine('"culture"="neutral"'                                                                                             );
+    writeStream.WriteLine('"oldVersion"="10.0.0.0"'                                                                                         );
+    writeStream.WriteLine('"newVersion"="11.0.0.0"'                                                                                         );
+  }
+
   writeStream.Close();
 }
 
@@ -75,24 +85,34 @@ function VS2013() {
   var newText     = SubstitutePaths(args, text);
   var writeStream = pkgdefFile.OpenAsTextStream(2, -2);
   writeStream.Write(newText);
-  writeStream.WriteLine('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{BD1D3C51-E157-4DE0-A535-E94130D1970A}]');
-  writeStream.WriteLine('"name"="Microsoft.Windows.Design.Host"'                                                                          );
-  writeStream.WriteLine('"publicKeyToken"="b03f5f7f11d50a3a"'                                                                             );
-  writeStream.WriteLine('"culture"="neutral"'                                                                                             );
-  writeStream.WriteLine('"oldVersion"="4.0.0.0-4.1.0.0"'                                                                                  );
-  writeStream.WriteLine('"newVersion"="4.2.0.0"'                                                                                          );
-  writeStream.WriteLine('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{5978995F-FBA0-4DCC-8556-19AB2EB19D36}]');
-  writeStream.WriteLine('"name"="Microsoft.Windows.Design.Interaction"'                                                                   );
-  writeStream.WriteLine('"publicKeyToken"="b03f5f7f11d50a3a"'                                                                             );
-  writeStream.WriteLine('"culture"="neutral"'                                                                                             );
-  writeStream.WriteLine('"oldVersion"="4.0.0.0-4.1.0.0"'                                                                                  );
-  writeStream.WriteLine('"newVersion"="4.2.0.0"'                                                                                          );
-  writeStream.WriteLine('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{F604D514-4F33-422E-BA44-E4F22381F044}]');
-  writeStream.WriteLine('"name"="Microsoft.VisualStudio.Web.Application"'                                                                 );
-  writeStream.WriteLine('"publicKeyToken"="b03f5f7f11d50a3a"'                                                                             );
-  writeStream.WriteLine('"culture"="neutral"'                                                                                             );
-  writeStream.WriteLine('"oldVersion"="10.0.0.0-11.0.0.0"'                                                                                );
-  writeStream.WriteLine('"newVersion"="12.0.0.0"'                                                                                         );
+
+  if (newText.indexOf('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{BD1D3C51-E157-4DE0-A535-E94130D1970A}]') < 0) {
+    writeStream.WriteLine('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{BD1D3C51-E157-4DE0-A535-E94130D1970A}]');
+    writeStream.WriteLine('"name"="Microsoft.Windows.Design.Host"'                                                                          );
+    writeStream.WriteLine('"publicKeyToken"="b03f5f7f11d50a3a"'                                                                             );
+    writeStream.WriteLine('"culture"="neutral"'                                                                                             );
+    writeStream.WriteLine('"oldVersion"="4.0.0.0-4.1.0.0"'                                                                                  );
+    writeStream.WriteLine('"newVersion"="4.2.0.0"'                                                                                          );
+  }
+
+  if (newText.indexOf('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{5978995F-FBA0-4DCC-8556-19AB2EB19D36}]') < 0) {
+    writeStream.WriteLine('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{5978995F-FBA0-4DCC-8556-19AB2EB19D36}]');
+    writeStream.WriteLine('"name"="Microsoft.Windows.Design.Interaction"'                                                                   );
+    writeStream.WriteLine('"publicKeyToken"="b03f5f7f11d50a3a"'                                                                             );
+    writeStream.WriteLine('"culture"="neutral"'                                                                                             );
+    writeStream.WriteLine('"oldVersion"="4.0.0.0-4.1.0.0"'                                                                                  );
+    writeStream.WriteLine('"newVersion"="4.2.0.0"'                                                                                          );
+  }
+
+  if (newText.indexOf('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{F604D514-4F33-422E-BA44-E4F22381F044}]') < 0) {
+    writeStream.WriteLine('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{F604D514-4F33-422E-BA44-E4F22381F044}]');
+    writeStream.WriteLine('"name"="Microsoft.VisualStudio.Web.Application"'                                                                 );
+    writeStream.WriteLine('"publicKeyToken"="b03f5f7f11d50a3a"'                                                                             );
+    writeStream.WriteLine('"culture"="neutral"'                                                                                             );
+    writeStream.WriteLine('"oldVersion"="10.0.0.0-11.0.0.0"'                                                                                );
+    writeStream.WriteLine('"newVersion"="12.0.0.0"'                                                                                         );
+  }
+
   writeStream.Close();
 }
 
