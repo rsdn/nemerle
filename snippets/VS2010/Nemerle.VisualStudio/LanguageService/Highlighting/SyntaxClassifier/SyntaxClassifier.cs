@@ -28,7 +28,7 @@ namespace Nemerle.VisualStudio.LanguageService
         standardClassification.Identifier,
         standardClassification.Keyword,
         standardClassification.PreprocessorKeyword,
-        standardClassification.Operator,
+        standardClassification.Other,
         standardClassification.NumberLiteral,
         standardClassification.CharacterLiteral,
         standardClassification.Comment,
