@@ -41,7 +41,6 @@ namespace Nemerle.VisualStudio
 		NemerleConstants.PLKCompanyName,
 		NemerleConstants.PLKResourceId)]
 
-	[DefaultRegistryRoot(NemerleConstants.VisualStudioRegistryRoot)]
 	[ProvideService(typeof(NemerleLanguageService), ServiceName = NemerleConstants.LanguageName)]
 	[ProvideService(typeof(INemerleLibraryManager))]
 	[ProvideLanguageService(

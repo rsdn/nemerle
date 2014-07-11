@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text;
 using System.Windows.Forms;
 using System.IO;
+using Nemerle.VisualStudio.Project;
 
 namespace Nemerle.VisualStudio.GUI
 {
@@ -16,15 +17,14 @@ namespace Nemerle.VisualStudio.GUI
 		{
 			InitializeComponent();
 			ProjectName = projectName;
-#if VS2013
-			_newProjectName.Text = projectName + "-VS_2013";
-#elif VS2012
-			_newProjectName.Text = projectName + "-VS_2012";
-#elif VS2010
-			_newProjectName.Text = projectName + "-VS_2010";
-#else
-	#error You must define constant VS<VS Version> in the project file. E.g.: VS2010
-#endif
+			string suffix = "-Upgraded";
+			switch (NetFrameworkProjectConstants.VisualStudioVersion.Major)
+			{
+				case 10: suffix = "-VS_2010"; break;
+				case 11: suffix = "-VS_2012"; break;
+				case 12: suffix = "-VS_2013"; break;
+			}
+			_newProjectName.Text = projectName + suffix;
 		}
 
 		public string ProjectName { get; private set; }
