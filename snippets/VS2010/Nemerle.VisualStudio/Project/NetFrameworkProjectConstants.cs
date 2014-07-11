@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -28,7 +29,16 @@ namespace Nemerle.VisualStudio.Project
 
     public const string NemerleProperty = @"$(NemerleBinPathRoot)\$(NemerleVersion)";
 
-    public const string DefaultTargetFrameworkVersion = "v" + FrameworkVersion40;
+    public static string GetDefaultTargetFrameworkVersion()
+    {
+      switch (VisualStudioVersion)
+      {
+        case 10: return "v" + FrameworkVersion40;
+        case 11: return "v" + FrameworkVersion45;
+        case 12: return "v" + FrameworkVersion451;
+        default: return "v" + FrameworkVersion40;
+      }
+    }
 
     public static readonly HashSet<string> ValidTargetFrameworkVersions = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase)
     {
@@ -37,6 +47,6 @@ namespace Nemerle.VisualStudio.Project
       "v" + FrameworkVersion451,
     };
 
-    public static Version VisualStudioVersion = typeof(Microsoft.VisualStudio.Package.LanguageService).Assembly.GetName().Version;
+    public static int VisualStudioVersion = Process.GetCurrentProcess().MainModule.FileVersionInfo.FileMajorPart;
   }
 }

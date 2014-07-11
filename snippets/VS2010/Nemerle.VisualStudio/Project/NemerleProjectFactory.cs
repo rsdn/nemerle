@@ -129,7 +129,7 @@ namespace Nemerle.VisualStudio.Project
             else if (!Utils.Eq(projectData.NemerleProperty.Value, NetFrameworkProjectConstants.NemerleProperty))
                 pLogger.LogMessage((uint)__VSUL_ERRORLEVEL.VSUL_WARNING, projectName, sourceProjectFilePath, "The Nemerle property changed by user. You must update it manually.");
 
-            projectData.TargetFrameworkVersion.Value = NetFrameworkProjectConstants.DefaultTargetFrameworkVersion;
+            projectData.TargetFrameworkVersion.Value = NetFrameworkProjectConstants.GetDefaultTargetFrameworkVersion();
 
             projectData.NemerleProperty.Document.Save(destProjectFilePath);
         }
