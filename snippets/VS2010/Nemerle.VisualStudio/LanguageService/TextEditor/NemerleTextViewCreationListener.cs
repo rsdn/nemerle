@@ -52,7 +52,8 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 				var source = (NemerleSource)langSrv.GetOrCreateSource(vsTextLines);
 				project.AddEditableSource(source);
 
-				view.TextBuffer.Changed += TextBuffer_Changed;
+				if (!Utils.IsNemerleFileExtension(filePath))
+					view.TextBuffer.Changed += TextBuffer_Changed;
 				view.Closed += view_Closed;
 			}
 		}
@@ -66,15 +67,9 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 			if (project == null)
 				return;
 
-			var engine = project.Engine;
-			if (engine.IsExtensionRegistered(Path.GetExtension(filePath)))
-				engine.RequestOnBuildTypesTree();
-			else
-			{
-				var fileIndex = Location.GetFileIndex(filePath);
-				var text = args.After.GetText();
-				engine.NotifySourceChanged(new StringSource(fileIndex, text));
-			}
+			var fileIndex = Location.GetFileIndex(filePath);
+			var text = args.After.GetText();
+			project.Engine.NotifySourceChanged(new StringSource(fileIndex, text));
 
 			//System.Diagnostics.Trace.WriteLine("Changed: (" + args.AfterVersion + ") " + filePath);
 		}
@@ -95,14 +90,14 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 			if (langSrv == null)
 				return;
 			var source = (NemerleSource)langSrv.GetSource(filePath);
-		  if (source != null)
-		  {
-		    langSrv.OnCloseSource(source);
-		    source.Dispose();
-		  }
-		  else
-		  {
-		  }
+			if (source != null)
+			{
+				langSrv.OnCloseSource(source);
+				source.Dispose();
+			}
+			else
+			{
+			}
 		}
 
 		#endregion
