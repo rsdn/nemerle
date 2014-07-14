@@ -46,12 +46,14 @@ namespace Nemerle.VisualStudio.LanguageService
   {
     #region Fields
 
-    public bool IsSmartTagActive { get; private set; }
     public static IIdeEngine DefaultEngine { get; private set; }
+
     public bool IsDisposed { get; private set; }
-    IVsStatusbar _statusbar;
     public NemerlePackage Package { get; private set; }
-    public bool ContextMenuActive { get; set; }
+    public bool IsHintsEnabled { get; set; }
+    public bool IsSmartTagActive { get; private set; }
+
+    IVsStatusbar _statusbar;
 
     #endregion
 
@@ -61,6 +63,7 @@ namespace Nemerle.VisualStudio.LanguageService
     {
       Debug.Assert(package != null, "package != null");
       Package = package;
+      IsHintsEnabled = true;
 
       if (System.Threading.Thread.CurrentThread.Name == null)
         System.Threading.Thread.CurrentThread.Name = "UI Thread";
@@ -638,7 +641,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
     public bool ShowHint(IVsTextView view, TextSpan hintSpan, Func<string, string> getHintContent, string hintText)
     {
-      if (ContextMenuActive)
+      if (!IsHintsEnabled)
         return false;
 
       var hWnd = view.GetWindowHandle();

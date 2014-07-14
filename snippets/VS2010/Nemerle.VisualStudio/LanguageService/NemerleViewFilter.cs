@@ -230,7 +230,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			var service = Source.Service;
 
-			service.ContextMenuActive = true;
+			service.IsHintsEnabled = false;
 
 			try
 			{
@@ -246,7 +246,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 			finally
 			{
-				service.ContextMenuActive = false;
+				service.IsHintsEnabled = true;
 			}
 			return;
 		}
