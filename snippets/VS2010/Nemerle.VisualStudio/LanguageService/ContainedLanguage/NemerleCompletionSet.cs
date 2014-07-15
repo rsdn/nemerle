@@ -60,11 +60,9 @@ namespace Nemerle.VisualStudio.LanguageService
           {
             if (IsTokenTriggersCompletion(snapshot, spanInfo))
               break;
+
             var loc = Utils.ToNLocation(source.FileIndex, new SnapshotSpan(snapshot, spanInfo.Span));
-            if (loc.Line != loc.EndLine)
-            {
-              Debug.Assert(false);
-            }
+            Debug.Assert(loc.Line == loc.EndLine);
             line = loc.Line - 1;
             startIdx = loc.Column - 1;
             endIdx = loc.EndColumn - 1;
