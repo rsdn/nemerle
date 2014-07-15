@@ -55,32 +55,45 @@ namespace Nemerle.VisualStudio.LanguageService
       {
         var spanInfos = ParseUtil.GetTokenSpans(parseResult, textViewLine.Extent);
         foreach (var spanInfo in spanInfos)
-        {
           if (spanInfo.Span.IntersectsWith(caretSpan))
-          {
-            if (IsTokenTriggersCompletion(snapshot, spanInfo))
-              break;
-
-            var loc = Utils.ToNLocation(source.FileIndex, new SnapshotSpan(snapshot, spanInfo.Span));
-            Debug.Assert(loc.Line == loc.EndLine);
-            line = loc.Line - 1;
-            startIdx = loc.Column - 1;
-            endIdx = loc.EndColumn - 1;
-            return VSConstants.S_OK;
-          }
-        }
+            return GetTokenExtent(source, snapshot, spanInfo, out line, out startIdx, out endIdx);
       }
 
+      return GetDefaultExtent(out line, out startIdx, out endIdx);
+    }
+
+    private int GetTokenExtent(NemerleSource source, ITextSnapshot snapshot, SyntaxClassifier.SpanInfo spanInfo, out int line, out int startIdx, out int endIdx)
+    {
+      switch (spanInfo.Type)
+      {
+        case SyntaxClassifier.SpanType.String:
+        case SyntaxClassifier.SpanType.RecursiveString:
+        case SyntaxClassifier.SpanType.VerbatimString:
+          // TODO: implement logic for $" $(x.|)  "
+          goto default;
+
+        case SyntaxClassifier.SpanType.Operator:
+          if (!spanInfo.Span.IsEmpty && snapshot[spanInfo.Span.End - 1] == '.')
+            return GetDefaultExtent(out line, out startIdx, out endIdx);
+          else
+            goto default;
+
+        default:
+          var loc = Utils.ToNLocation(source.FileIndex, new SnapshotSpan(snapshot, spanInfo.Span));
+          Debug.Assert(loc.Line == loc.EndLine);
+          line = loc.Line - 1;
+          startIdx = loc.Column - 1;
+          endIdx = loc.EndColumn - 1;
+          return VSConstants.S_OK;
+      }
+    }
+
+    private int GetDefaultExtent(out int line, out int startIdx, out int endIdx)
+    {
       int column;
       ErrorHelper.ThrowOnFailure(this.view.GetCaretPos(out line, out column));
       startIdx = endIdx = column;
       return VSConstants.S_OK;
-    }
-
-    private static bool IsTokenTriggersCompletion(ITextSnapshot snapshot, SyntaxClassifier.SpanInfo spanInfo)
-    {
-      return spanInfo.Type == SyntaxClassifier.SpanType.Operator
-        && !spanInfo.Span.IsEmpty && snapshot[spanInfo.Span.End - 1] == '.';
     }
 
     public override int OnCommit(string textSoFar, int index, int selected, ushort commitChar, out string completeWord)
