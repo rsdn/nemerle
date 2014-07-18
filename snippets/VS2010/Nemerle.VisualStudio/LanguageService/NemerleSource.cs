@@ -781,8 +781,6 @@ namespace Nemerle.VisualStudio.LanguageService
       // в блок расположенный ниже, так как обновление идет в GUI-потоке и медленная работа
       // может привести к ощутимому неудобству для пользователя.
 
-      // VS fire ViewFilter.OnChangeScrollInfo event vhen we change regions it lead to many
-      // calls of Source.TryHighlightBraces() which can take much time. Prevent it!
       LockWrite();
       try
       {
