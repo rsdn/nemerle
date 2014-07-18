@@ -722,8 +722,6 @@ namespace Nemerle.VisualStudio.LanguageService
       public static readonly TextSpanEqCmp Instance = new TextSpanEqCmp();
     }
 
-    bool _processingOfHiddenRegions;
-
     public void ProcessHiddenRegions(List<NewHiddenRegion> regions, int sourceVersion)
     {
       if (!OutliningEnabled)
@@ -785,7 +783,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
       // VS fire ViewFilter.OnChangeScrollInfo event vhen we change regions it lead to many
       // calls of Source.TryHighlightBraces() which can take much time. Prevent it!
-      _processingOfHiddenRegions = true;
       LockWrite();
       try
       {
@@ -897,7 +894,6 @@ namespace Nemerle.VisualStudio.LanguageService
       finally
       {
         UnlockWrite();
-        _processingOfHiddenRegions = false;
 
         //Debug.WriteLine("SetRegions: end (took all)      " + timerAll.Elapsed);
       }
