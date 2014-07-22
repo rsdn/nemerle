@@ -89,15 +89,6 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 			var langSrv = NemerlePackage.GetGlobalService(typeof(NemerleLanguageService)) as NemerleLanguageService;
 			if (langSrv == null)
 				return;
-			var source = (NemerleSource)langSrv.GetSource(filePath);
-			if (source != null)
-			{
-				langSrv.OnCloseSource(source);
-				source.Dispose();
-			}
-			else
-			{
-			}
 		}
 
 		#endregion
