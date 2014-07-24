@@ -795,33 +795,34 @@ namespace Nemerle.VisualStudio.Project
 			return result;
 		}
 
-		public override int OpenItem(uint itemId, ref Guid logicalView, IntPtr punkDocDataExisting, out IVsWindowFrame frame)
-		{
-			// Init output params
-			frame = null;
+	  public override int OpenItem(uint itemId, ref Guid logicalView, IntPtr punkDocDataExisting, out IVsWindowFrame frame)
+	  {
+      // Init output params
+      frame = null;
 
-			HierarchyNode n = this.NodeFromItemId(itemId);
-			if (n == null)
-				throw new ArgumentException("parameter must be a valid item id", "itemId");
+      HierarchyNode n = this.NodeFromItemId(itemId);
+      if (n == null)
+      {
+        throw new ArgumentException(Microsoft.VisualStudio.Project.SR.GetString(Microsoft.VisualStudio.Project.SR.ParameterMustBeAValidItemId, CultureInfo.CurrentUICulture), "itemId");
+      }
 
-			// Delegate to the document manager object that knows how to open the item
-			var documentManager = n.GetDocumentManager() as FileDocumentManager;
-			if (documentManager != null)
-			{
-				//HACK: VladD2: If view opened by double click on the Output window, VS try open 
-				// LOGVIEWID_TextView instead of LOGVIEWID_Code. It result in open double view for 
-				// single file. Substituting it by LOGVIEWID_Code...
-				Guid newLogicalView = logicalView == VSConstants.LOGVIEWID_TextView && n is NemerleFileNode
-					? VSConstants.LOGVIEWID_Code : logicalView;
+      // Delegate to the document manager object that knows how to open the item
+      DocumentManager documentManager = n.GetDocumentManager();
+      if (documentManager != null)
+      {
+        ////HACK: VladD2: If view opened by double click on the Output window, VS try open 
+        //// LOGVIEWID_TextView instead of LOGVIEWID_Code. It result in open double view for 
+        //// single file. Substituting it by LOGVIEWID_Code...
+        //Guid newLogicalView = logicalView == VSConstants.LOGVIEWID_TextView && n is NemerleFileNode
+        //  ? VSConstants.LOGVIEWID_Code : logicalView;
+        return documentManager.Open(ref logicalView, punkDocDataExisting, out frame, WindowFrameShowAction.DoNotShow);
+      }
 
-				return documentManager.Open(ref newLogicalView, punkDocDataExisting, out frame, WindowFrameShowAction.Show);
-			}
+      // This node does not have an associated document manager and we must fail
+      return VSConstants.E_FAIL;
+    }
 
-			// This node does not have an associated document manager and we must fail
-			return VSConstants.E_FAIL;
-		}
-
-		public override void Load(
+    public override void Load(
 			string filename,
 			string location,
 			string name,
