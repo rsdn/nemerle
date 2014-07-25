@@ -345,14 +345,14 @@ namespace Nemerle.VisualStudio.LanguageService
         {
           var braceSpan = Utils.NLocationToSpan(textSnapshot, group.OpenBrace.Location);
           if (span.IntersectsWith(braceSpan))
-            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Operator));
+            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Brace));
         }
         WalkTokens(group.Child, textSnapshot, span, classifications, isQuotation, ref splices);
         if (group.CloseBrace != null)
         {
           var braceSpan = Utils.NLocationToSpan(textSnapshot, group.CloseBrace.Location);
           if (span.IntersectsWith(braceSpan))
-            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Operator));
+            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Brace));
         }
       }
       else if (token is Token.SquareGroup)
@@ -362,14 +362,14 @@ namespace Nemerle.VisualStudio.LanguageService
         {
           var braceSpan = Utils.NLocationToSpan(textSnapshot, group.OpenBrace.Location);
           if (span.IntersectsWith(braceSpan))
-            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Operator));
+            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Brace));
         }
         WalkTokens(group.Child, textSnapshot, span, classifications, isQuotation, ref splices);
         if (group.CloseBrace != null)
         {
           var braceSpan = Utils.NLocationToSpan(textSnapshot, group.CloseBrace.Location);
           if (span.IntersectsWith(braceSpan))
-            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Operator));
+            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Brace));
         }
       }
       else if (token is Token.BracesGroup)
@@ -379,14 +379,14 @@ namespace Nemerle.VisualStudio.LanguageService
         {
           var braceSpan = Utils.NLocationToSpan(textSnapshot, group.OpenBrace.Location);
           if (span.IntersectsWith(braceSpan))
-            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Operator));
+            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Brace));
         }
         WalkTokens(group.Child, textSnapshot, span, classifications, isQuotation, ref splices);
         if (group.CloseBrace != null)
         {
           var braceSpan = Utils.NLocationToSpan(textSnapshot, group.CloseBrace.Location);
           if (span.IntersectsWith(braceSpan))
-            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Operator));
+            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Brace));
         }
       }
       else if (token is Token.QuoteGroup)

@@ -148,7 +148,8 @@ namespace Nemerle.VisualStudio.LanguageService
       // Colors set for compartibility with VS2010
       //
       new NemerleColorableItem("Text"),
-      new NemerleColorableItem("Keyword",	COLORINDEX.CI_BLUE),
+      new NemerleColorableItem("Keyword", COLORINDEX.CI_BLUE),
+      new NemerleColorableItem("Operator"),
     };
 
     public override int GetItemCount(out int count)

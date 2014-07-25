@@ -10,6 +10,7 @@ namespace Nemerle.VisualStudio.LanguageService
       Keyword,
       PreprocessorKeyword,
       Operator,
+      Brace,
       Number,
       Character,
       SingleLineComment,
