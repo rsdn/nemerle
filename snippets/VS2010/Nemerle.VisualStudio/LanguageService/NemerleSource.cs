@@ -1,49 +1,42 @@
-﻿using System.Windows;
-using System.Windows.Forms;
+﻿using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio.Project;
+using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
-using Microsoft.VisualStudio;
 
 using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Utils;
+using Nemerle.Compiler.Utils.Async;
 using Nemerle.Completion2;
 using Nemerle.Completion2.CodeFormatting;
+using Nemerle.VisualStudio.GUI;
 using Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier;
+using Nemerle.VisualStudio.Package;
 using Nemerle.VisualStudio.Project;
 
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System;
-using VsCommands2K = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
+using System.Text;
+using System.Windows;
+using System.Windows.Forms;
+
 using TopDeclaration = Nemerle.Compiler.Parsetree.TopDeclaration;
 using TupleIntInt = Nemerle.Builtins.Tuple<int, int>;
 using TupleStringInt = Nemerle.Builtins.Tuple<string, int>;
 using TupleStringIntInt = Nemerle.Builtins.Tuple<string, int, int>;
-using Nemerle.VisualStudio.Package;
-using System.Text;
-using Nemerle.Compiler.Utils.Async;
-using Nemerle.VisualStudio.GUI;
-using Nemerle.Compiler.Parsetree;
-using Nemerle.Compiler.Utils;
-using Microsoft.VisualStudio.Text.Editor;
-using System.IO;
+using VsCommands2K = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
 // ReSharper disable LocalizableElement
 
 namespace Nemerle.VisualStudio.LanguageService
 {
   public partial class NemerleSource : Source, IIdeSource
   {
-    private sealed class StubScanner : IScanner
-    {
-      public static StubScanner Instance = new StubScanner();
-      private StubScanner() { }
-      public bool ScanTokenAndProvideInfoAboutIt(TokenInfo tokenInfo, ref int state) { return false; }
-      public void SetSource(string source, int offset) { }
-    }
-
     #region Init
 
     public NemerleSource(NemerleLanguageService service, IVsTextLines textLines)
@@ -95,6 +88,8 @@ namespace Nemerle.VisualStudio.LanguageService
     #endregion
 
     #region Properties
+
+    public int RefCount { get; private set; }
 
     public DateTime LastDirtyTime { get; private set; }
     //public new DateTime                LastParseTime { get; private set; }
@@ -722,8 +717,6 @@ namespace Nemerle.VisualStudio.LanguageService
       public static readonly TextSpanEqCmp Instance = new TextSpanEqCmp();
     }
 
-    bool _processingOfHiddenRegions;
-
     public void ProcessHiddenRegions(List<NewHiddenRegion> regions, int sourceVersion)
     {
       if (!OutliningEnabled)
@@ -783,9 +776,6 @@ namespace Nemerle.VisualStudio.LanguageService
       // в блок расположенный ниже, так как обновление идет в GUI-потоке и медленная работа
       // может привести к ощутимому неудобству для пользователя.
 
-      // VS fire ViewFilter.OnChangeScrollInfo event vhen we change regions it lead to many
-      // calls of Source.TryHighlightBraces() which can take much time. Prevent it!
-      _processingOfHiddenRegions = true;
       LockWrite();
       try
       {
@@ -897,7 +887,6 @@ namespace Nemerle.VisualStudio.LanguageService
       finally
       {
         UnlockWrite();
-        _processingOfHiddenRegions = false;
 
         //Debug.WriteLine("SetRegions: end (took all)      " + timerAll.Elapsed);
       }
@@ -1016,6 +1005,16 @@ namespace Nemerle.VisualStudio.LanguageService
     #endregion
 
     #region Implementation
+
+    public void AddRef()
+    {
+      RefCount++;
+    }
+
+    public void ReleaseRef()
+    {
+      RefCount--;
+    }
 
     internal void Rename(string newFileName)
     {

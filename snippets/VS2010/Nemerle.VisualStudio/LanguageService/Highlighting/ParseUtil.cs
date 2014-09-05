@@ -93,110 +93,148 @@ namespace Nemerle.VisualStudio.LanguageService
       if (!textBuffer.Properties.TryGetProperty(typeof(ClassificationParseResult), out parseResult) || parseResult.Snapshot.Version != textBuffer.CurrentSnapshot.Version)
         return false;
 
-      return SearchToken(parseResult.Tokens, parseResult.Snapshot, new TextPoint(line + 1, column + 1), ref tokenInfo);
+      return SearchToken(parseResult.Tokens, parseResult.Snapshot, new TextPoint(line + 1, column + 1), false, ref tokenInfo);
     }
 
-    private static bool SearchToken(Token token, ITextSnapshot snapshot, TextPoint point, ref TokenInfo tokenInfo)
+    private static bool SearchToken(Token token, ITextSnapshot snapshot, TextPoint point, bool isQuotation, ref TokenInfo tokenInfo)
     {
-      for (; token != null; token = token.Next)
+      while (token != null)
       {
         if (point < token.Location.Begin)
           break;
 
-        if (!token.Location.Contains(point))
-          continue;
+        Token.Operator spliceOp2;
+        Token spliceBody;
+        if (isQuotation && IsSpliceSequence(token, out spliceBody))
+        {
+          if (SearchTokenTest(token, snapshot, point, true, ref tokenInfo))
+            return true;
 
-        if (token is Token.LooseGroup)
-        {
-          var group = (Token.LooseGroup)token;
-          if (SearchToken(group.Child, snapshot, point, ref tokenInfo))
+          if (SearchTokenTest(spliceBody, snapshot, point, false, ref tokenInfo))
             return true;
+
+          token = spliceBody.Next;
         }
-        else if (token is Token.BracesGroup)
+        else if (isQuotation && IsSpliceListSequence(token, out spliceOp2, out spliceBody))
         {
-          var group = (Token.BracesGroup)token;
-          if (SearchToken(group.Child, snapshot, point, ref tokenInfo))
+          if (SearchTokenTest(token, snapshot, point, true, ref tokenInfo))
             return true;
+
+          if (SearchTokenTest(spliceOp2, snapshot, point, true, ref tokenInfo))
+            return true;
+
+          if (SearchTokenTest(spliceBody, snapshot, point, false, ref tokenInfo))
+            return true;
+
+          token = spliceBody.Next;
         }
-        else if (token is Token.RoundGroup)
+        else
         {
-          var group = (Token.RoundGroup)token;
-          if (SearchToken(group.Child, snapshot, point, ref tokenInfo))
+          if (SearchTokenTest(token, snapshot, point, isQuotation, ref tokenInfo))
             return true;
+
+          token = token.Next;
         }
-        else if (token is Token.SquareGroup)
-        {
-          var group = (Token.SquareGroup)token;
-          if (SearchToken(group.Child, snapshot, point, ref tokenInfo))
-            return true;
-        }
-        else if (token is Token.QuoteGroup)
-        {
-          var group = (Token.QuoteGroup)token;
-          if (SearchToken(group.Child, snapshot, point, ref tokenInfo))
-            return true;
-        }
-        else if (token is Token.Namespace)
-        {
-          var ns = (Token.Namespace)token;
-          if (SearchToken(ns.KeywordToken, snapshot, point, ref tokenInfo))
-            return true;
-          if (SearchToken(ns.Body, snapshot, point, ref tokenInfo))
-            return true;
-        }
-        else if (token is Token.Using)
-        {
-          var ns = (Token.Using)token;
-          if (SearchToken(ns.KeywordToken, snapshot, point, ref tokenInfo))
-            return true;
-          if (SearchToken(ns.Body, snapshot, point, ref tokenInfo))
-            return true;
-        }
-        else if (token is Token.Keyword)
-        {
-          var span = Utils.NLocationToSpan(snapshot, token.Location);
-          tokenInfo = new TokenInfo(span.Start, span.End, TokenType.Keyword);
+      }
+
+      return false;
+    }
+
+    private static bool SearchTokenTest(Token token, ITextSnapshot snapshot, TextPoint point, bool isQuotation, ref TokenInfo tokenInfo)
+    {
+      if (!token.Location.Contains(point))
+        return false;
+
+      if (token is Token.LooseGroup)
+      {
+        var group = (Token.LooseGroup)token;
+        if (SearchToken(group.Child, snapshot, point, isQuotation, ref tokenInfo))
           return true;
-        }
-        else if (token is Token.Operator)
-        {
-          var op = (Token.Operator)token;
-          var span = Utils.NLocationToSpan(snapshot, token.Location);
-          tokenInfo = new TokenInfo(span.Start, span.End, TokenType.Operator);
-          if (op.name.EndsWith("."))
-            tokenInfo.Trigger = TokenTriggers.MemberSelect;
+      }
+      else if (token is Token.BracesGroup)
+      {
+        var group = (Token.BracesGroup)token;
+        if (SearchToken(group.Child, snapshot, point, isQuotation, ref tokenInfo))
           return true;
-        }
-        else if (token is Token.Identifier
-          || token is Token.IdentifierToComplete
-          || token is Token.QuotedIdentifier)
-        {
-          var span = Utils.NLocationToSpan(snapshot, token.Location);
-          tokenInfo = new TokenInfo(span.Start, span.End, TokenType.Identifier);
+      }
+      else if (token is Token.RoundGroup)
+      {
+        var group = (Token.RoundGroup)token;
+        if (SearchToken(group.Child, snapshot, point, isQuotation, ref tokenInfo))
           return true;
-        }
-        else if (token is Token.IntegerLiteral
-          || token is Token.FloatLiteral
-          || token is Token.DoubleLiteral
-          || token is Token.DecimalLiteral
-          || token is Token.CharLiteral)
-        {
-          var span = Utils.NLocationToSpan(snapshot, token.Location);
-          tokenInfo = new TokenInfo(span.Start, span.End, TokenType.Literal);
+      }
+      else if (token is Token.SquareGroup)
+      {
+        var group = (Token.SquareGroup)token;
+        if (SearchToken(group.Child, snapshot, point, isQuotation, ref tokenInfo))
           return true;
-        }
-        else if (token is Token.StringLiteral)
-        {
-          var span = Utils.NLocationToSpan(snapshot, token.Location);
-          tokenInfo = new TokenInfo(span.Start, span.End, TokenType.String);
+      }
+      else if (token is Token.QuoteGroup)
+      {
+        var group = (Token.QuoteGroup)token;
+        if (SearchToken(group.Child, snapshot, point, true, ref tokenInfo))
           return true;
-        }
-        else if (token is Token.WhiteSpace)
-        {
-          var span = Utils.NLocationToSpan(snapshot, token.Location);
-          tokenInfo = new TokenInfo(span.Start, span.End, TokenType.WhiteSpace);
+      }
+      else if (token is Token.Namespace)
+      {
+        var ns = (Token.Namespace)token;
+        if (SearchToken(ns.KeywordToken, snapshot, point, isQuotation, ref tokenInfo))
           return true;
-        }
+        if (SearchToken(ns.Body, snapshot, point, isQuotation, ref tokenInfo))
+          return true;
+      }
+      else if (token is Token.Using)
+      {
+        var ns = (Token.Using)token;
+        if (SearchToken(ns.KeywordToken, snapshot, point, isQuotation, ref tokenInfo))
+          return true;
+        if (SearchToken(ns.Body, snapshot, point, isQuotation, ref tokenInfo))
+          return true;
+      }
+      else if (token is Token.Keyword)
+      {
+        var span = Utils.NLocationToSpan(snapshot, token.Location);
+        tokenInfo = new TokenInfo(span.Start, span.End, TokenType.Keyword);
+        return true;
+      }
+      else if (token is Token.Operator)
+      {
+        var op = (Token.Operator)token;
+        var span = Utils.NLocationToSpan(snapshot, token.Location);
+        tokenInfo = new TokenInfo(span.Start, span.End, TokenType.Operator);
+        if (op.name.EndsWith(".") && !isQuotation)
+          tokenInfo.Trigger = TokenTriggers.MemberSelect;
+        return true;
+      }
+      else if (token is Token.Identifier
+        || token is Token.IdentifierToComplete
+        || token is Token.QuotedIdentifier)
+      {
+        var span = Utils.NLocationToSpan(snapshot, token.Location);
+        tokenInfo = new TokenInfo(span.Start, span.End, TokenType.Identifier);
+        return true;
+      }
+      else if (token is Token.IntegerLiteral
+        || token is Token.FloatLiteral
+        || token is Token.DoubleLiteral
+        || token is Token.DecimalLiteral
+        || token is Token.CharLiteral)
+      {
+        var span = Utils.NLocationToSpan(snapshot, token.Location);
+        tokenInfo = new TokenInfo(span.Start, span.End, TokenType.Literal);
+        return true;
+      }
+      else if (token is Token.StringLiteral)
+      {
+        var span = Utils.NLocationToSpan(snapshot, token.Location);
+        tokenInfo = new TokenInfo(span.Start, span.End, TokenType.String);
+        return true;
+      }
+      else if (token is Token.WhiteSpace)
+      {
+        var span = Utils.NLocationToSpan(snapshot, token.Location);
+        tokenInfo = new TokenInfo(span.Start, span.End, TokenType.WhiteSpace);
+        return true;
       }
 
       return false;
@@ -345,14 +383,14 @@ namespace Nemerle.VisualStudio.LanguageService
         {
           var braceSpan = Utils.NLocationToSpan(textSnapshot, group.OpenBrace.Location);
           if (span.IntersectsWith(braceSpan))
-            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Operator));
+            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Brace));
         }
         WalkTokens(group.Child, textSnapshot, span, classifications, isQuotation, ref splices);
         if (group.CloseBrace != null)
         {
           var braceSpan = Utils.NLocationToSpan(textSnapshot, group.CloseBrace.Location);
           if (span.IntersectsWith(braceSpan))
-            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Operator));
+            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Brace));
         }
       }
       else if (token is Token.SquareGroup)
@@ -362,14 +400,14 @@ namespace Nemerle.VisualStudio.LanguageService
         {
           var braceSpan = Utils.NLocationToSpan(textSnapshot, group.OpenBrace.Location);
           if (span.IntersectsWith(braceSpan))
-            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Operator));
+            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Brace));
         }
         WalkTokens(group.Child, textSnapshot, span, classifications, isQuotation, ref splices);
         if (group.CloseBrace != null)
         {
           var braceSpan = Utils.NLocationToSpan(textSnapshot, group.CloseBrace.Location);
           if (span.IntersectsWith(braceSpan))
-            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Operator));
+            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Brace));
         }
       }
       else if (token is Token.BracesGroup)
@@ -379,14 +417,14 @@ namespace Nemerle.VisualStudio.LanguageService
         {
           var braceSpan = Utils.NLocationToSpan(textSnapshot, group.OpenBrace.Location);
           if (span.IntersectsWith(braceSpan))
-            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Operator));
+            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Brace));
         }
         WalkTokens(group.Child, textSnapshot, span, classifications, isQuotation, ref splices);
         if (group.CloseBrace != null)
         {
           var braceSpan = Utils.NLocationToSpan(textSnapshot, group.CloseBrace.Location);
           if (span.IntersectsWith(braceSpan))
-            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Operator));
+            classifications.Add(new SyntaxClassifier.SpanInfo(braceSpan, SyntaxClassifier.SpanType.Brace));
         }
       }
       else if (token is Token.QuoteGroup)

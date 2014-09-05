@@ -280,89 +280,90 @@ namespace Nemerle.Tools.MSBuildTask
 			commandLine.AppendSwitchIfNotNull("\n\n/out:", OutputAssembly);
 		}
 
-		private class Location
+		private sealed class Location
 		{
 			public string File;
 			public int StartLine;
 			public int StartPos;
 			public int EndLine;
 			public int EndPos;
+
+			public static Location Parse(int tagPos, string text)
+			{
+				var str = text.Substring(0, tagPos);
+				if (string.IsNullOrEmpty(str))
+					return new Location();
+				// Path can contain ':'. We should skip it...
+				var dir = str.StartsWith(":") ? "" : Path.GetDirectoryName(str);
+				// Find first location separator (it's a end of path)
+				var locIndex = str.IndexOf(':', dir.Length);
+				var path = (locIndex <= 0) ? dir : str.Substring(0, locIndex);
+				var locStr = str.Substring(locIndex);
+				var parts = locStr.Trim().Trim(':').Split(':');
+				switch (parts.Length)
+				{
+					case 2:
+						var line = int.Parse(parts[0]);
+						var pos = int.Parse(parts[1]);
+						return new Location
+						{
+							File = path,
+							StartLine = line,
+							StartPos = pos,
+							EndLine = line,
+							EndPos = pos + 1
+						};
+					case 4:
+						return new Location
+						{
+							File = path,
+							StartLine = int.Parse(parts[0]),
+							StartPos = int.Parse(parts[1]),
+							EndLine = int.Parse(parts[2]),
+							EndPos = int.Parse(parts[3])
+						};
+					default:
+						return new Location
+						{
+							File = path
+						};
+				}
+			}
 		}
 
 		protected override void LogEventsFromTextOutput(string singleLine, MessageImportance importance)
 		{
-			// System.Diagnostics.Trace.Assert(false);
+			int tagPos;
+			string tag;
 
-			var get_location = new Func<string, Location>(
-					(before) =>
-					{
-						var str = singleLine.Substring(0, singleLine.IndexOf(before));
-						if (string.IsNullOrEmpty(str))
-							return new Location();
-						// Path can contain ':'. We should skip it...
-						var dir = str.StartsWith(":") ? "" : Path.GetDirectoryName(str);
-						// Find first location separator (it's a end of path)
-						var locIndex = str.IndexOf(':', dir.Length);
-						var path = (locIndex <= 0) ? dir : str.Substring(0, locIndex);
-						var locStr = str.Substring(locIndex);
-						var parts = locStr.Trim().Trim(':').Split(':');
-						switch (parts.Length)
-						{
-							case 2:
-								var line = int.Parse(parts[0]);
-								var pos = int.Parse(parts[1]);
-								return new Location
-								{
-									File = path,
-									StartLine = line,
-									StartPos = pos,
-									EndLine = line,
-									EndPos = pos + 1
-								};
-							case 4:
-								return new Location
-								{
-									File = path,
-									StartLine = int.Parse(parts[0]),
-									StartPos = int.Parse(parts[1]),
-									EndLine = int.Parse(parts[2]),
-									EndPos = int.Parse(parts[3])
-								};
-							default:
-								return new Location
-								{
-									File = path
-								};
-						}
-					});
-
-			var try_report = new Func<string, Action<Location, string>, bool>(
-					(tag, action) =>
-					{
-						var index = singleLine.IndexOf(tag);
-						if (index < 0)
-							return false;
-						var loc = get_location(tag);
-						action(loc, singleLine.Substring((tag == "hint:") ? index : index + tag.Length + 1));
-						return true;
-					});
-
-			var log_error = new Action<Location, string>(
-					(loc, msg) =>
-					{
-						Log.LogError(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
-					});
-
-			var log_warning = new Action<Location, string>(
-					(loc, msg) =>
-					{
-						Log.LogWarning(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
-					});
-
-			var _ = try_report("error:", log_error) || try_report("warning:", log_warning)
-					|| try_report("debug:", log_error) || try_report("hint:", log_warning)
-					|| Log.LogMessageFromText(singleLine, MessageImportance.High);
-			if (_) return; // -- warning CS0219... 
+			if ((tagPos = singleLine.IndexOf(tag = "error:")) >= 0)
+			{
+				var loc = Location.Parse(tagPos, singleLine);
+				var msg = singleLine.Substring(tagPos + tag.Length + 1);
+				Log.LogError(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
+			}
+			else if ((tagPos = singleLine.IndexOf(tag = "warning:")) >= 0)
+			{
+				var loc = Location.Parse(tagPos, singleLine);
+				var msg = singleLine.Substring(tagPos + tag.Length + 1);
+				Log.LogWarning(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
+			}
+			else if ((tagPos = singleLine.IndexOf(tag = "debug:")) >= 0)
+			{
+				var loc = Location.Parse(tagPos, singleLine);
+				var msg = singleLine.Substring(tagPos + tag.Length + 1);
+				Log.LogError(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
+			}
+			else if ((tagPos = singleLine.IndexOf(tag = "hint:")) >= 0)
+			{
+				var loc = Location.Parse(tagPos, singleLine);
+				var msg = singleLine.Substring(tagPos);
+				Log.LogWarning(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
+			}
+			else
+			{
+				Log.LogMessageFromText(singleLine, MessageImportance.High);
+			}
 		}
 
 		protected override string GetResponseFileSwitch(string responseFilePath)

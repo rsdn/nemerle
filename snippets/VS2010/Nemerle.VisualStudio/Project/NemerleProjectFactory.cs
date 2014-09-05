@@ -46,56 +46,6 @@ namespace Nemerle.VisualStudio.Project
             throw new NotImplementedException();
         }
 
-        static class Default
-        {
-            private const string FrameworkVersion451 = "4.5.1";
-            private const string FrameworkVersion45 = "4.5";
-            private const string FrameworkVersion40 = "4.0";
-
-#if VS2013 || VS2012 || VS2010
-            public const string ToolsVersion = "4.0";
-#else
-    #error You must define constant VS<VS Version> in the project file. E.g.: VS2010
-#endif
-
-            public const string NemerleVersion = "Net-" + ToolsVersion;
-
-            public static readonly HashSet<string> ValidNemerleVersions = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase)
-            {
-                "Net-" + FrameworkVersion40
-            };
-            public const string NemerleBinPathRoot = @"$(ProgramFiles)\Nemerle";
-            public static readonly string[] OldNemerlePropertyValues = new[] { @"$(ProgramFiles)\Nemerle", @"$(ProgramFiles)\Nemerle\Net-3.5", @"$(ProgramFiles)\Nemerle\Net-4.0" };
-            public const string NemerleProperty = @"$(NemerleBinPathRoot)\$(NemerleVersion)";
-#if VS2013
-            public const string TargetFrameworkVersion = "v" + FrameworkVersion451;
-#elif VS2012
-            public const string TargetFrameworkVersion = "v" + FrameworkVersion45;
-#elif VS2010
-            public const string TargetFrameworkVersion = "v" + FrameworkVersion40;
-#else
-    #error You must define constant VS<VS Version> in the project file. E.g.: VS2010
-#endif
-            public static readonly HashSet<string> ValidTargetFrameworkVersions = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase)
-            {
-#if VS2010 || VS2012 || VS2013
-                "v" + FrameworkVersion40,
-#endif
-                
-#if VS2012 || VS2013
-                "v" + FrameworkVersion45,
-#endif
-                
-#if VS2013
-                "v" + FrameworkVersion451,
-#endif
-
-#if !(VS2010 || VS2012 || VS2013)
-    #error You must define constant VS<VS Version> in the project file. E.g.: VS2010
-#endif
-            };
-        }
-
         public int UpgradeProject(string sourceProjectFilePath, uint fUpgradeFlag, string bstrCopyLocation, out string upgradedFullyQualifiedFileName, IVsUpgradeLogger pLogger, out int pUpgradeRequired, out Guid pguidNewProjectFactory)
         {
             pUpgradeRequired = 1;
@@ -139,9 +89,8 @@ namespace Nemerle.VisualStudio.Project
             if (string.IsNullOrEmpty(value))
                 return true;
 
-            foreach (var oldNemerlePath in Default.OldNemerlePropertyValues)
-                if (Utils.Eq(value, oldNemerlePath))
-                    return true;
+            if (NetFrameworkProjectConstants.OldNemerlePropertyValues.Contains(value))
+                return true;
 
             return false;
         }
@@ -163,36 +112,36 @@ namespace Nemerle.VisualStudio.Project
         {
             var projectData = new ProjectUpgradeHelper(sourceProjectFilePath);
 
-            projectData.ToolsVersion.Value = Default.ToolsVersion;
+            projectData.ToolsVersion.Value = NetFrameworkProjectConstants.ToolsVersion;
 
             if (IsNeedUpdateNemerleBinPathRootProperty(projectData.NemerleBinPathRoot))
             {
-                projectData.NemerleBinPathRoot.Value = Default.NemerleBinPathRoot;
+                projectData.NemerleBinPathRoot.Value = NetFrameworkProjectConstants.NemerleBinPathRoot;
                 projectData.NemerleBinPathRoot.SetAttributeValue("Condition", " '$(NemerleBinPathRoot)' == '' ");
             }
-            else if (!Utils.Eq(projectData.NemerleBinPathRoot.Value, Default.NemerleBinPathRoot))
+            else if (!Utils.Eq(projectData.NemerleBinPathRoot.Value, NetFrameworkProjectConstants.NemerleBinPathRoot))
                 pLogger.LogMessage((uint)__VSUL_ERRORLEVEL.VSUL_WARNING, projectName, sourceProjectFilePath, "The NemerleBinPathRoot property changed by user. You must update it manually.");
 
-            projectData.NemerleVersion.Value = Default.NemerleVersion;
+            projectData.NemerleVersion.Value = NetFrameworkProjectConstants.NemerleVersion;
 
             if (IsNeedUpdateNemerleProperty(projectData.NemerleProperty))
-                projectData.NemerleProperty.Value = Default.NemerleProperty;
-            else if (!Utils.Eq(projectData.NemerleProperty.Value, Default.NemerleProperty))
+                projectData.NemerleProperty.Value = NetFrameworkProjectConstants.NemerleProperty;
+            else if (!Utils.Eq(projectData.NemerleProperty.Value, NetFrameworkProjectConstants.NemerleProperty))
                 pLogger.LogMessage((uint)__VSUL_ERRORLEVEL.VSUL_WARNING, projectName, sourceProjectFilePath, "The Nemerle property changed by user. You must update it manually.");
 
-            projectData.TargetFrameworkVersion.Value = Default.TargetFrameworkVersion;
+            projectData.TargetFrameworkVersion.Value = NetFrameworkProjectConstants.GetDefaultTargetFrameworkVersion();
 
             projectData.NemerleProperty.Document.Save(destProjectFilePath);
         }
 
         private static bool IsNeedUpdateNemerleVersion(ProjectUpgradeHelper projectData)
         {
-            return !Default.ValidNemerleVersions.Contains(projectData.NemerleVersion.Value);
+            return !NetFrameworkProjectConstants.ValidNemerleVersions.Contains(projectData.NemerleVersion.Value);
         }
 
         private static bool IsNeedUpdateTargetFrameworkVersion(ProjectUpgradeHelper projectData)
         {
-            return !Default.ValidTargetFrameworkVersions.Contains(projectData.TargetFrameworkVersion.Value);
+            return !NetFrameworkProjectConstants.ValidTargetFrameworkVersions.Contains(projectData.TargetFrameworkVersion.Value);
         }
 
         private static void BackupProjectForUpgrade(string sourceProjectFilePath, IVsUpgradeLogger pLogger, ref string destProjectFilePath, string backupedProject, string projectName)

@@ -72,6 +72,9 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
       var result = new List<ClassificationSpan>();
       foreach (var location in locationsToHighlight)
       {
+        if (!location.IsSourceAvailable)
+          continue;
+        
         var highlightSpan  = Utils.NLocationToSpan(snapshot, location);
         var text           = snapshot.GetText(highlightSpan);
         var classification = _predefinedTypes.Contains(text) ? _predefinedStyle : _userStyle;

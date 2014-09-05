@@ -59,8 +59,11 @@ namespace Nemerle.VisualStudio.LanguageService
         var handler = ClassificationChanged;
         if (handler != null)
         {
-          var updateSpan = GetUpdateBounds(oldBounds, newBounds);
-          handler(this, new ClassificationChangedEventArgs(new SnapshotSpan(snapshot, updateSpan)));
+          var updateSpan   = GetUpdateBounds(oldBounds, newBounds);
+          // BUG: we don't have initial SourceSnapshot for which highlightings have been made
+          var updateStart  = Math.Min(snapshot.Length, updateSpan.Start);
+          var updateLength = Math.Min(snapshot.Length - updateStart, updateSpan.Length);
+          handler(this, new ClassificationChangedEventArgs(new SnapshotSpan(snapshot, updateStart, updateLength)));
         }
       }
     }

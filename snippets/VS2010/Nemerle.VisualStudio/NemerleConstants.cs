@@ -9,27 +9,8 @@ namespace Nemerle.VisualStudio
 		public const string TypeLibGuidString = "0D502008-A831-4841-8022-2D7DDFC4E63C";
 		public const string PLKProductName    = "Nemerle VS Integration";
 #if DEBUG
-	#if VS2013
-		public const string VisualStudioRegistryRoot = "Software\\Microsoft\\VisualStudio\\12.0Exp";
-	#elif VS2012
-		public const string VisualStudioRegistryRoot = "Software\\Microsoft\\VisualStudio\\11.0Exp";
-	#elif VS2010
-		public const string VisualStudioRegistryRoot = "Software\\Microsoft\\VisualStudio\\10.0Exp";
-	#else
-		#error You must define constant VS<VS Version> in the project file. E.g.: VS2010
-	#endif
-		
 		public const short  PLKResourceId     = 10508;
 #else
-	#if VS2013
-		public const string VisualStudioRegistryRoot = "Software\\Microsoft\\VisualStudio\\12.0";
-	#elif VS2012
-		public const string VisualStudioRegistryRoot = "Software\\Microsoft\\VisualStudio\\11.0";
-	#elif VS2010
-		public const string VisualStudioRegistryRoot = "Software\\Microsoft\\VisualStudio\\10.0";
-	#else
-		#error You must define constant VS<VS Version> in the project file. E.g.: VS2010
-	#endif
 		public const short  PLKResourceId     = 10408;
 #endif
 
