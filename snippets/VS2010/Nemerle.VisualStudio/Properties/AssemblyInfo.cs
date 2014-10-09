@@ -18,4 +18,4 @@ using Nemerle.VisualStudio;
 // The following GUID is for the ID of the typelib if this project is exposed to COM
 [assembly: Guid(NemerleConstants.TypeLibGuidString)]
 
-[assembly: AssemblyVersion("1.2.0.0")]
+[assembly: AssemblyVersion("1.2.0.*")]

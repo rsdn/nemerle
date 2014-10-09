@@ -1,8 +1,9 @@
 function ParseArguments(prefix) {
   var data = Session.Property("CustomActionData").split("|");
   return {
-    PkgDefFilePath : data[1] + "Nemerle.VisualStudio.pkgdef",
-    NemerlePath    : data[0] + "Net-4.0\\"
+    PkgDefFilePath             : data[1] + "Nemerle.VisualStudio.pkgdef",
+    NemerlePath                : data[0] + "Net-4.0\\",
+    NemerleVisualStudioVersion : data[2]
   };
 }
 
@@ -33,6 +34,16 @@ function VS2010() {
   var newText     = SubstitutePaths(args, text);
   var writeStream = pkgdefFile.OpenAsTextStream(2, -2);
   writeStream.Write(newText);
+
+  if (newText.indexOf('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{FE369FD8-C6DB-433B-907B-05A115708416}]') < 0) {
+    writeStream.WriteLine('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{FE369FD8-C6DB-433B-907B-05A115708416}]');
+    writeStream.WriteLine('"name"="Nemerle.VisualStudio"'                                                                                   );
+    writeStream.WriteLine('"publicKeyToken"="c4c0f22444bf4088"'                                                                             );
+    writeStream.WriteLine('"culture"="neutral"'                                                                                             );
+    writeStream.WriteLine('"oldVersion"="1.0.0.0-' + args.NemerleVisualStudioVersion + '"'                                                  );
+    writeStream.WriteLine('"newVersion"="' + args.NemerleVisualStudioVersion + '"'                                                          );
+  }
+
   writeStream.Close();
 }
 
@@ -45,6 +56,15 @@ function VS2012() {
   var newText     = SubstitutePaths(args, text);
   var writeStream = pkgdefFile.OpenAsTextStream(2, -2);
   writeStream.Write(newText);
+
+  if (newText.indexOf('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{FE369FD8-C6DB-433B-907B-05A115708416}]') < 0) {
+    writeStream.WriteLine('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{FE369FD8-C6DB-433B-907B-05A115708416}]');
+    writeStream.WriteLine('"name"="Nemerle.VisualStudio"'                                                                                   );
+    writeStream.WriteLine('"publicKeyToken"="c4c0f22444bf4088"'                                                                             );
+    writeStream.WriteLine('"culture"="neutral"'                                                                                             );
+    writeStream.WriteLine('"oldVersion"="1.0.0.0-' + args.NemerleVisualStudioVersion + '"'                                                  );
+    writeStream.WriteLine('"newVersion"="' + args.NemerleVisualStudioVersion + '"'                                                          );
+  }
 
   if (newText.indexOf('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{BD1D3C51-E157-4DE0-A535-E94130D1970A}]') < 0) {
     writeStream.WriteLine('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{BD1D3C51-E157-4DE0-A535-E94130D1970A}]');
@@ -85,6 +105,15 @@ function VS2013() {
   var newText     = SubstitutePaths(args, text);
   var writeStream = pkgdefFile.OpenAsTextStream(2, -2);
   writeStream.Write(newText);
+
+  if (newText.indexOf('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{FE369FD8-C6DB-433B-907B-05A115708416}]') < 0) {
+    writeStream.WriteLine('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{FE369FD8-C6DB-433B-907B-05A115708416}]');
+    writeStream.WriteLine('"name"="Nemerle.VisualStudio"'                                                                                   );
+    writeStream.WriteLine('"publicKeyToken"="c4c0f22444bf4088"'                                                                             );
+    writeStream.WriteLine('"culture"="neutral"'                                                                                             );
+    writeStream.WriteLine('"oldVersion"="1.0.0.0-' + args.NemerleVisualStudioVersion + '"'                                                  );
+    writeStream.WriteLine('"newVersion"="' + args.NemerleVisualStudioVersion + '"'                                                          );
+  }
 
   if (newText.indexOf('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{BD1D3C51-E157-4DE0-A535-E94130D1970A}]') < 0) {
     writeStream.WriteLine('[$RootKey$\\RuntimeConfiguration\\dependentAssembly\\bindingRedirection\\{BD1D3C51-E157-4DE0-A535-E94130D1970A}]');
