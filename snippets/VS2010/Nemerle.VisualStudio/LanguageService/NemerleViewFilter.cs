@@ -883,7 +883,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			if (guidCmdGroup == VSConstants.VSStd2K)
 			{
-				if (Source.MethodData.IsDisplayed)
+				if (Source.MethodData != null && Source.MethodData.IsDisplayed)
 					TextView.GetCaretPos(out _startLine, out _startPos);
 
 				switch (cmd)
