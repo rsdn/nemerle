@@ -109,18 +109,29 @@ namespace Nemerle.VisualStudio.Project
 		/// <param name="buildEvent"></param>
 		protected override void BuildFinishedHandler(object sender, BuildFinishedEventArgs buildEvent)
 		{
+			var msgBuffer = new StringBuilder();
+
 			if (_errorCount > 0 || _warningCount > 0)
 			{
-				var msgBuffer = new StringBuilder(Environment.NewLine);
+				msgBuffer.Append(Environment.NewLine);
 				if (_errorCount > 0)
 					msgBuffer.Append(_errorCount).Append(_errorCount == 1 ? " error, " : " errors, ");
 				msgBuffer.Append(_warningCount).AppendLine(_warningCount == 1 ? " warning." : " warnings.");
-				QueueOutputText(MessageImportance.High, msgBuffer.ToString());
 			}
 
-			base.BuildFinishedHandler(sender, buildEvent);
+			if (!string.IsNullOrEmpty(buildEvent.Message))
+			{
+				msgBuffer.Append(Environment.NewLine);
+				msgBuffer.AppendLine(buildEvent.Message);
+			}
 
-			QueueOutputText(MessageImportance.High, Environment.NewLine + "Time Elapsed " + _timer.Elapsed + Environment.NewLine);
+			msgBuffer.Append(Environment.NewLine).Append("Time Elapsed ").AppendLine(_timer.Elapsed.ToString(@"h\:mm\:ss\.ff"));
+
+			QueueOutputText(MessageImportance.High, msgBuffer.ToString());
+
+			// flush output and error queues
+			ReportQueuedOutput();
+			ReportQueuedTasks();
 		}
 	}
 }

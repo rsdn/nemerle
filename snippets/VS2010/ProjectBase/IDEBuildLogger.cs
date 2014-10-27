@@ -360,7 +360,7 @@ namespace Microsoft.VisualStudio.Project
             this.currentIndent--;
         }
 
-        private void ReportQueuedOutput()
+        protected void ReportQueuedOutput()
         {
             // NOTE: This may run on a background thread!
             // We need to output this on the main thread. We must use BeginInvoke because the main thread may not be pumping events yet.
@@ -424,7 +424,7 @@ namespace Microsoft.VisualStudio.Project
             // call ReportQueuedTasks here. We do this when the build finishes.
         }
 
-        private void ReportQueuedTasks()
+        protected void ReportQueuedTasks()
         {
             // NOTE: This may run on a background thread!
             // We need to output this on the main thread. We must use BeginInvoke because the main thread may not be pumping events yet.
