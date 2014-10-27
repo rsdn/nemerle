@@ -22,8 +22,8 @@ namespace Nemerle.VisualStudio.Project
 	{
 		private Stopwatch _timer;
 		private readonly TaskProvider _taskProvider;
-
-		public string BuildTargetName { get; set; }
+		private int _errorCount;
+		private int _warningCount;
 
 		public NemerleIdeBuildLogger(IVsOutputWindowPane output, TaskProvider taskProvider, IVsHierarchy hierarchy)
 			: base(output, taskProvider, hierarchy)
@@ -68,12 +68,14 @@ namespace Nemerle.VisualStudio.Project
 
 		protected override void WarningHandler(object sender, BuildWarningEventArgs warningEvent)
 		{
+			++_warningCount;
 			QueueOutputText(GetFormattedErrorMessage(Path.GetFullPath(warningEvent.File), 
 				warningEvent.LineNumber, warningEvent.ColumnNumber, MsgKind.Warning, warningEvent.Code, warningEvent.Message));
 		}
 
 		protected override void ErrorHandler(object sender, BuildErrorEventArgs errorEvent)
 		{
+			++_errorCount;
 			QueueOutputText(GetFormattedErrorMessage(Path.GetFullPath(errorEvent.File),
 				errorEvent.LineNumber, errorEvent.ColumnNumber, MsgKind.Error, errorEvent.Code, errorEvent.Message));
 		}
@@ -95,6 +97,8 @@ namespace Nemerle.VisualStudio.Project
 		{
 			base.BuildStartedHandler(sender, buildEvent);
 
+			_errorCount = 0;
+			_warningCount = 0;
 			_timer = Stopwatch.StartNew();
 		}
 
@@ -105,24 +109,18 @@ namespace Nemerle.VisualStudio.Project
 		/// <param name="buildEvent"></param>
 		protected override void BuildFinishedHandler(object sender, BuildFinishedEventArgs buildEvent)
 		{
+			if (_errorCount > 0 || _warningCount > 0)
+			{
+				var msgBuffer = new StringBuilder(Environment.NewLine);
+				if (_errorCount > 0)
+					msgBuffer.Append(_errorCount).Append(_errorCount == 1 ? " error, " : " errors, ");
+				msgBuffer.Append(_warningCount).AppendLine(_warningCount == 1 ? " warning." : " warnings.");
+				QueueOutputText(MessageImportance.High, msgBuffer.ToString());
+			}
+
 			base.BuildFinishedHandler(sender, buildEvent);
 
-			var msg =
-				(BuildTargetName ?? "Build") +
-				(buildEvent.Succeeded ? " succeeded -- " : " failed -- ") +
-				(!buildEvent.Succeeded ? TaskCount(TaskErrorCategory.Error) + " errors, " : "") +
-				(TaskCount(TaskErrorCategory.Warning) + " warnings. ") +
-				("Build took: " + _timer.Elapsed + ".") +
-				Environment.NewLine;
-
-			QueueOutputEvent(MessageImportance.High, new BuildFinishedEventArgs(msg, string.Empty, buildEvent.Succeeded));
-		}
-
-		int TaskCount(TaskErrorCategory type)
-		{
-			return
-				_taskProvider.Tasks.OfType<ErrorTask>()
-					.Count(task => task.ErrorCategory == type);
+			QueueOutputText(MessageImportance.High, Environment.NewLine + "Time Elapsed " + _timer.Elapsed + Environment.NewLine);
 		}
 	}
 }

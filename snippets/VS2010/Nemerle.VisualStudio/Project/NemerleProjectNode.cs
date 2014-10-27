@@ -690,12 +690,6 @@ namespace Nemerle.VisualStudio.Project
 				? this : CreateFolderNodes(dir);
 		}
 
-		protected override MSBuildResult InvokeMsBuild(string target)
-		{
-			((NemerleIdeBuildLogger)BuildLogger).BuildTargetName = target;
-			return base.InvokeMsBuild(target);
-		}
-
 		NemerleOAProject _automationObject;
 		/// <summary>
 		/// Gets the automation object for the project node.
