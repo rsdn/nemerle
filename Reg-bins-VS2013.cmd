@@ -40,14 +40,14 @@ md "%NemerleInstall%"
 set NemerleMSBuildTargets=%NemerleInstall%\Nemerle.MSBuild.targets
 
 @echo Add NemerleTarget=%NemerleMSBuildTargets% 
-@echo     into HKLM\SOFTWARE\Microsoft\VisualStudio\11.0\MSBuild\SafeImports
-reg.exe add HKLM\SOFTWARE\Microsoft\VisualStudio\11.0\MSBuild\SafeImports /v NemerleTarget /d "%NemerleInstall%\Nemerle.MSBuild.targets" /f
+@echo     into HKLM\SOFTWARE\Microsoft\VisualStudio\12.0\MSBuild\SafeImports
+reg.exe add HKLM\SOFTWARE\Microsoft\VisualStudio\12.0\MSBuild\SafeImports /v NemerleTarget /d "%NemerleInstall%\Nemerle.MSBuild.targets" /f
 
-@echo     into HKCU\Software\Microsoft\VisualStudio\11.0\Configuration\MSBuild\SafeImports
-reg.exe add HKCU\Software\Microsoft\VisualStudio\11.0\Configuration\MSBuild\SafeImports /v NemerleTarget /d "%NemerleInstall%\Nemerle.MSBuild.targets" /f
+@echo     into HKCU\Software\Microsoft\VisualStudio\12.0\Configuration\MSBuild\SafeImports
+reg.exe add HKCU\Software\Microsoft\VisualStudio\12.0\Configuration\MSBuild\SafeImports /v NemerleTarget /d "%NemerleInstall%\Nemerle.MSBuild.targets" /f
 
-@echo     into HKCU\Software\Microsoft\VisualStudio\11.0Exp\Configuration\MSBuild\SafeImports
-reg.exe add HKCU\Software\Microsoft\VisualStudio\11.0Exp\Configuration\MSBuild\SafeImports /v NemerleTarget /d "%NemerleInstall%\Nemerle.MSBuild.targets" /f
+@echo     into HKCU\Software\Microsoft\VisualStudio\12.0Exp\Configuration\MSBuild\SafeImports
+reg.exe add HKCU\Software\Microsoft\VisualStudio\12.0Exp\Configuration\MSBuild\SafeImports /v NemerleTarget /d "%NemerleInstall%\Nemerle.MSBuild.targets" /f
 
 @echo --------------------------- Registry updated ---------------------------
 
@@ -57,7 +57,7 @@ reg.exe add HKCU\Software\Microsoft\VisualStudio\11.0Exp\Configuration\MSBuild\S
 %NGen% install "%NemerleInstall%\Nemerle.MSBuild.Tasks.dll"
 %NGen% install "%NemerleInstall%\ncc.exe"
 
-"%VS110COMNTOOLS%\..\IDE\VSIXInstaller.exe" /q "%NemerleInstall%\Nemerle.VisualStudio.vsix"
+"%VS120COMNTOOLS%\..\IDE\VSIXInstaller.exe" /q "%NemerleInstall%\Nemerle.VisualStudio.vsix"
 
 
 IF NOT "%NoPause%"=="true" pause
