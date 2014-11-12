@@ -9,7 +9,7 @@ using Nemerle.VisualStudio;
 // associated with an assembly.
 [assembly: AssemblyTitle("Nemerle.VisualStudio")]
 [assembly: AssemblyCompany("rsdn.ru, nemerle.org")]
-[assembly: AssemblyProduct("Nemerle.VisualStudio")]
+[assembly: AssemblyProduct(NemerleConstants.ProductName)]
 [assembly: AssemblyCopyright("Copyright @ rsdn.ru 2006-2008, nemerle.org 2006")]
 
 [assembly: CLSCompliant(false)]
@@ -18,4 +18,4 @@ using Nemerle.VisualStudio;
 // The following GUID is for the ID of the typelib if this project is exposed to COM
 [assembly: Guid(NemerleConstants.TypeLibGuidString)]
 
-[assembly: AssemblyVersion("1.2.0.*")]
+[assembly: AssemblyVersion(NemerleConstants.PLKProductVersion)]
