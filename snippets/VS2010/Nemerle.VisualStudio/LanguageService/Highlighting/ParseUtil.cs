@@ -41,11 +41,11 @@ namespace Nemerle.VisualStudio.LanguageService
 
       var timer = Stopwatch.StartNew();
 
-      var code = snapshot.GetText();
-      var lexer = new LexerFile((ManagerClass)engine, 0, code, true);
-      var preParser = new PreParser(lexer);
-      var tokens = preParser.ParseTopLevel();
-      var _comments = lexer.GetComments();
+      var code       = snapshot.GetText();
+      var lexer      = new HighlightingLexer(engine, code);
+      var preParser  = new PreParser(lexer);
+      var tokens     = preParser.ParseTopLevel();
+      var _comments  = lexer.GetComments();
       var directives = lexer.GetDirectives();
 
       var comments = new Comment[_comments.Length];
