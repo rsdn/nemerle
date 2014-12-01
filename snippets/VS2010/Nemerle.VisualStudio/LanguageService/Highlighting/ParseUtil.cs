@@ -44,7 +44,7 @@ namespace Nemerle.VisualStudio.LanguageService
       var code = snapshot.GetText();
       var lexer = new LexerFile((ManagerClass)engine, 0, code, true);
       var preParser = new PreParser(lexer);
-      var tokens = preParser.PreParse();
+      var tokens = preParser.ParseTopLevel();
       var _comments = lexer.GetComments();
       var directives = lexer.GetDirectives();
 
@@ -80,7 +80,7 @@ namespace Nemerle.VisualStudio.LanguageService
       timer.Stop();
       Debug.Print("SyntaxClassifier.TryParse: {0}", timer.Elapsed);
 
-      parseResult = new ClassificationParseResult(snapshot, tokens, comments, directives);
+      parseResult = new ClassificationParseResult(snapshot, tokens.Child, comments, directives);
       textBuffer.Properties[typeof(ClassificationParseResult)] = parseResult;
       return true;
     }

@@ -5,7 +5,7 @@ namespace Nemerle.VisualStudio.LanguageService
 {
   public sealed class ClassificationParseResult
   {
-    public ClassificationParseResult(ITextSnapshot snapshot, Token.BracesGroup tokens, Comment[] comments, Directive[] directives)
+    public ClassificationParseResult(ITextSnapshot snapshot, Token tokens, Comment[] comments, Directive[] directives)
     {
       Snapshot = snapshot;
       Tokens = tokens;
@@ -14,7 +14,7 @@ namespace Nemerle.VisualStudio.LanguageService
     }
 
     public readonly ITextSnapshot Snapshot;
-    public readonly Token.BracesGroup Tokens;
+    public readonly Token Tokens;
     public readonly Comment[] Comments;
     public readonly Directive[] Directives;
   }
