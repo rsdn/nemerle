@@ -121,7 +121,6 @@ namespace Nemerle.Compiler
     mutable stream        : Token;
     mutable last_tok      : Token;
     mutable streams_stack : Stack [Token] = Stack (20);
-	//mutable try_with_next : int;
 
     /** Creates the instance of parsing engine with given environment
         (set of imported namespaces and entered ones)
@@ -347,8 +346,10 @@ namespace Nemerle.Compiler
     {
       //def timer = System.Diagnostics.Stopwatch.StartNew();
       lex.BeginParseFile();
-      def isIndntSyntax = lex.Manager.Options.IndentationSyntax;     
+      def isIndntSyntax = lex.Manager.Options.IndentationSyntax;
+      def isImplSyntax = lex.Manager.Options.ImplicitSemicolonSyntax;      
       def preparser = if (isIndntSyntax)        PreParserIndent(lex) 
+                      else if (isImplSyntax)    PreParserImplicit(lex)
                       else                      PreParser(lex);     
                       
       preparser.DocComments = lex.Manager.DocComments;
@@ -444,11 +445,6 @@ namespace Nemerle.Compiler
     }
 
     #region Utility functions operating on current token stream
-    eat_newlines() : void {
-      while (peek_token() is Token.NewLine)
-        shift();
-    }
-    
     push_stream (newstream : Token) : void {
       streams_stack.Push (stream);
       stream = newstream;
@@ -467,15 +463,12 @@ namespace Nemerle.Compiler
     }
 
     get_token () : Token {
-	  if (stream != null) {
+      if (stream != null) {
         last_tok = stream;
         stream = stream.Next;
         last_tok
       }
       else {
-	    //when (try_with_next > 0)
-		//  throw System.Exception("RetryException");		
-		
         Error (last_tok, "unexpected end of token sequence");
         Token.EndOfGroup (last_tok.Location)
       }
@@ -504,14 +497,6 @@ namespace Nemerle.Compiler
       }
     }
 
-    peek_stream_child () : Token {
-        def stacked = streams_stack.Peek();
-        if (stacked is Token.LooseGroup)
-          (streams_stack.Peek() :> Token.LooseGroup).Child
-        else
-          null
-    }       
-    
     jump_to_sibling () : void {
       if (stream == null) {
         def top_next = streams_stack.Pop ().Next;
@@ -579,23 +564,10 @@ namespace Nemerle.Compiler
       else Error (last_tok, "unexpected end of token sequence");
     }
 
-    shift_child () : void
-    {
-      if (stream != null) match (stream)
-      {
-        | Token.LooseGroup as lg =>
-          last_tok = stream;
-          stream = lg.Child
-        | _ => Error(last_tok, "expected loose group token sequence")
-      }
-      else Error (last_tok, "unexpected end of token sequence");
-    }
-    
     expect_empty (msg : string) : void
     {
-      // Check
       when (stream != null)
-        Error(stream, $"unexpected token $stream after $msg (you forget a closing bracket?).")
+        Error(stream, $"unexpected token after $msg (you forget a closing bracket?).")
     }
 
     expect_operator (op : string) : void
@@ -618,7 +590,6 @@ namespace Nemerle.Compiler
     {
       match (peek_token ())
       {
-        | Token.NewLine => shift(); flag_keyword(kw)
         | Token.Keyword (n) when n == kw => shift (); true
         | _ => false
       }
@@ -628,7 +599,6 @@ namespace Nemerle.Compiler
     {
       match (peek_sibling_token ())
       {
-        | Token.NewLine => shift(); flag_sibling_keyword(kw)
         | Token.Keyword (k) when kw == k => shift_sibling (); true
         | _ => false
       }
@@ -643,7 +613,7 @@ namespace Nemerle.Compiler
     {
       match (tok)
       {
-        | null | Token.Semicolon | Token.NewLine => true
+        | null | Token.Semicolon => true
         | Token.LooseGroup(Token.Operator(str))
         | Token.Operator(str) =>
           match (str)
@@ -1108,9 +1078,7 @@ namespace Nemerle.Compiler
             }
             
           | Token.Identifier("type") => processType("type")
-          | x => 
-            Error (x, "expecting type declaration"); 
-            TopDeclaration.Delegate (null);
+          | x => Error (x, "expecting type declaration"); TopDeclaration.Delegate (null);
         };
 
       res.modifiers = mods;
@@ -1277,67 +1245,46 @@ namespace Nemerle.Compiler
 
       mutable loc        = h.Location;
       mutable bodyBracesGroup;
-      mutable tok : Token = peek_token();
 
-      def body_match(t) {
-        match (t)
+      def tok          = peek_token();
+      def bodyLocation = if (tok == null) loc.FromEnd() else CalcTokenLocation(tok);
+
+      def body =
+        match (tok)
         {
-            | Token.BracesGroup as brace =>
+          | Token.BracesGroup as brace =>
             shift ();
 
             loc += brace.Location;
             bodyBracesGroup = brace;
             FunBody.Parsed (ParseBlock (brace, h.Parameters))
 
-            | Token.EndOfGroup =>
-            loc += tok.Location;                
+          | Token.EndOfGroup as tok =>
+            loc += tok.Location;
             FunBody.Abstract ()
-            | Token.Operator ("$") =>
+
+          | Token.Operator ("$") =>
             def expr = parse_spliced_expr ();
             loc += expr.Location;
             def result = FunBody.Parsed (expr);
             new_group_beginning ();
             result
 
-            | x =>
+          | x =>
             Error(x, "expecting method body");
 
             match (x.Next)
             {
-                | Token.BracesGroup as brace => // recovery after bug...
+              | Token.BracesGroup as brace => // recovery after bug...
                 shift();
                 shift();
                 loc += brace.Location;
                 bodyBracesGroup = brace;
                 FunBody.Parsed (ParseBlock (brace, h.Parameters))
 
-                | _ => FunBody.Abstract ()
+              | _ => FunBody.Abstract ()
             }
-        }              
-      }
-      
-      def (body, bodyLocation) = {
-          
-          def body_func(t) {
-            match(t) {
-              | Token.EndOfGroup when (!(modifiers.mods %&& NemerleModifiers.Abstract) && peek_stream_child() is Token.BracesGroup) =>
-                pop_stream ();
-                def root = stream;
-                push_stream((stream :> Token.LooseGroup).Child);
-                tok = peek_token();
-                def matched_body = body_match(tok);
-                pop_stream("orphaned child");
-                streams_stack.Push(root.Next);
-                stream = null;
-                matched_body
-              | t => body_match(t)
-            }
-          }
-                    
-          def fun_body = body_func(tok);
-          def bodyLoc = if (tok == null) loc.FromEnd() else CalcTokenLocation(tok);
-          (fun_body, bodyLoc)
-      }
+        };
 
       def method = ClassMember.Function (header = h, name = h.ParsedSplicableName,  modifiers = modifiers,
                                          loc = loc, body = body, implemented = impl);
@@ -2615,10 +2562,9 @@ namespace Nemerle.Compiler
       mutable _expr_stack = [];
       mutable rpn_op_stack = [];
       mutable _op_context = OpContext.Prefix;
-      
+
       def loop () {
         if (_op_context == OpContext.Prefix) {
-          eat_newlines();
           def tok = peek_token ();
           def loc = tok.Location;
           match (tok) {
@@ -2645,7 +2591,7 @@ namespace Nemerle.Compiler
                     match (str)
                     {
                       | "-" => OperatorInfo.UnMinus
-                      | "+" => OperatorInfo.UnPlus 
+                      | "+" => OperatorInfo.UnPlus
                       | _ => env.LookupUnaryOperator(str);
                     };
 
@@ -2666,11 +2612,6 @@ namespace Nemerle.Compiler
                   loop();
               }
 
-            // End of group means we are expecting an expression but none was found. We will retry by advancing the stack forward to the next expression
-            | Token.EndOfGroup when !(peek_sibling_token () is Token.EndOfGroup) =>
-              jump_to_sibling ();
-              loop();
-              
             | _ =>
               def expr = parse_embedded_expr (stop);
               _expr_stack = expr :: _expr_stack;
@@ -3477,10 +3418,10 @@ namespace Nemerle.Compiler
     }
 
     parse_expr_sequence (group : Token, acc : list [PExpr]) : list [PExpr]
-    {  
-      push_stream (group);	  
+    {
+      push_stream (group);
       def result = parse_expr_sequence (TokenStoppers.None, acc);
-      pop_stream ("group of expressions");	  
+      pop_stream ("group of expressions");
       result
     }
 
@@ -3501,17 +3442,11 @@ namespace Nemerle.Compiler
           when (dollar.Next is Token.StringLiteral) => true
         | _ => false
       }
-      def makeStrsConcat(tok : Token, prevDollarised = false, nextToken : Token = null) : Token
+      def makeStrsConcat(tok : Token, prevDollarised = false) : Token
       {
         match (tok)
         {
-          | null => {
-			if (nextToken != null) match (nextToken) {
-			  | Token.LooseGroup => makeStrsConcat((nextToken :> Token.LooseGroup).Child, false, null);
-			  | _ => null
-			} else
-			  null
-		  }
+          | null => null
           | RoundGroup(LooseGroup(Operator("$") as dollar), _, _)
             when (dollar.Next is Token.StringLiteral)
             with (litTok = dollar.Next :> Token.StringLiteral, isDollarised = true)
@@ -3552,7 +3487,7 @@ namespace Nemerle.Compiler
               def firstTok = tryMakeDollarised();
 
               firstTok.Next = plus;
-              plus.Next = makeStrsConcat(plus.Next, isDollarised || prevDollarised, nextToken);
+              plus.Next = makeStrsConcat(plus.Next, isDollarised || prevDollarised);
 
               when (plus.Location.IsEmpty)
                 Message.Warning (plus.Location,
@@ -3563,44 +3498,27 @@ namespace Nemerle.Compiler
             else
             {
               def firstTok = tryMakeDollarised();
-              def res = makeStrsConcat(firstTok.Next, false, nextToken);
+              def res = makeStrsConcat(firstTok.Next);
               when (res : object != firstTok.Next)
                 firstTok.Next = res;
               firstTok
             }
           | _ =>
-              def res = makeStrsConcat(tok.Next, false, nextToken);
+              def res = makeStrsConcat(tok.Next);
               when (res : object != tok.Next)
                 tok.Next = res;
               tok
         }
-      }	 	  
-	  
+      }
       def loop ()
       {
         unless (should_stop (stop))
         {
-          mutable hadError = false;
-          mutable clear = false;
-          
           def group_token = stream :> Token.LooseGroup;
-          
-          /*
-          match (group_token.SeparatorToken) {
-			| Token.Semicolon(generated) when (generated) =>
-				try_with_next++;
-				clear = true;
-			| _ => {}
-          }
-          */
-          
-          def child = makeStrsConcat(group_token.Child);          
-          push_stream (child);		  
-		  
+          def child = makeStrsConcat(group_token.Child);
+          push_stream (child);
           result = parse_expr (stop) :: result;
 
-          eat_newlines();
-          
           if (stream == null || !should_stop (stop))
           {
             // special message for obvious lack of ; in sequence
@@ -3609,8 +3527,6 @@ namespace Nemerle.Compiler
 
             pop_stream ("expression in sequence");
             shift (); // shift group in which we reached the end
-            //when (hadError)
-            //    shift();
             loop ();
           }
           else
