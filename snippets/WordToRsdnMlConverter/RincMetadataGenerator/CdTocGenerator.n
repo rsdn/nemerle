@@ -1,0 +1,393 @@
+﻿using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Text.RegularExpressions;
+using System.IO;
+using System.Collections.Generic;
+using System.Linq;
+using System.Windows.Forms;
+using System.Xml.Linq;
+
+namespace RincMetadataGenerator
+{
+  [Record]
+  class CrTocGenerator
+  {
+    public Path      : string { get; private set; }
+    public Year      : int    { get; private set; }
+    public Num       : int    { get; private set; }
+    public PageCount : int    { get; private set; }
+    
+    [RecordIgnore]         _pagesRegex        : Regex = Regex(@"(\d\d)-(\d\d)-.*", RegexOptions.Compiled);
+    [RecordIgnore] mutable _errorsCache       : array[Error];
+    [RecordIgnore]         _errors            : List[Error] = List();
+
+    [RecordIgnore] static  _authorAttrMap : Hashtable[string, string * string] = Hashtable(array[
+              ("e-mail",              (null,                 null                  )),
+              ("rsdn-profile",        ("Профиля на rsdn.ru", "Profile on rsdn.ru")),
+              ("phone",               ("Телефон",            "Phone"               )), 
+              ("address",             ("Адрес",              "Adress"              )),
+              ("place-of-employment", ("Место работы",       "Place of employment" )),
+              ("job",                 ("Должность",          "Job"                 )),
+              ("place-of-study",      ("Место учебы",        "Place of study"      )),
+              ("scientific-degree",   ("Научная степень",    "Scientific degree"   )),
+              ("scientific-rank",     ("Научное звание",     "Scientific rank"     )),
+              ]);
+              
+    GetAuthorAttrs(author : XElement, forEnu : bool) : string
+    {
+      def strs = _authorAttrMap.Keys.Map(GetAuthorAttr(author, _, forEnu)).Filter(s => !string.IsNullOrEmpty(s));
+      $<#..$(strs; ". ")#>
+    }
+    
+    GetAuthorAttr(author : XElement, attributeName : string, forEnu : bool) : string
+    {
+      def attr = author.Attribute(attributeName);
+      
+      when (attr == null)
+        return "";
+        
+      def (rus, enu) = _authorAttrMap[attributeName];
+      def prefix = if (forEnu) enu else rus;
+      
+      if (prefix == null || string.IsNullOrEmpty(attr.Value))
+        ""
+      else
+        prefix + ": " + if (attributeName == "rsdn-profile") $"http://rsdn.ru/Users/$(attr.Value).aspx"
+                        else attr.Value
+    }
+    
+    public Errors    : array[Error]
+    {
+      get
+      {
+        when (_errorsCache == null)
+          _errorsCache = _errors.NToArray();
+          
+        _errorsCache
+      }
+    }
+    
+    AddError(path : string, message : string) : void
+    {
+      _errors.Add(Error(message, path));
+    }
+    
+    public Generate() : string
+    {
+      _errors.Clear();
+      _errorsCache = null;
+      def files = GetArticleXmlPaths();
+      //_ = MessageBox.Show($<#Count: $(files.Length)$("\n")..$(files; "\n")#>);
+      
+      def articleMetadatas = files.Map(ReadArticleMetadata).Filter(e => e.HasElements);
+      def issueMetadata    = MekeIssueMetadata(articleMetadatas);
+      def metadataFilePath = Path.Combine(Path, $"RSDN-$(Year)-$(Num).html");
+      
+      File.WriteAllText(metadataFilePath, 
+        <#<?xml version="1.0" standalone="no" ?>#> + "\r\n" + issueMetadata.ToString(), 
+        Text.Encoding.Unicode);
+      //issueMetadata.Save(metadataFilePath);
+      metadataFilePath
+    }
+    
+    MekeIssueMetadata(articleMetadatas : list[XElement]) : XDocument
+    {
+      def xml = $<#<?xml version="1.0" standalone="no" ?>
+<journals>
+  <opercard>
+    <operator>ООО "К-Пресс"|$Creator</operator>
+    <date>$(DateTime.Now)</date>
+    <cntnode>0</cntnode>
+    <cs>1297715</cs>
+  </opercard>
+  <journal>
+    <journalInfo lang="RUS">
+      <jrntitle>RSDN Magazine (РСДН Журнал)</jrntitle>
+      <jrntitlevar>RSDN Magazine</jrntitlevar>
+      <publ>ООО "К-Пресс"</publ>
+      <placepubl>Россия, г. Москва</placepubl>
+      <loc>129343, г. Москва, ул. Амундсена, 15-1-7.</loc>
+    </journalInfo>
+    <issue>
+      <issn>0234-6621</issn>
+      <jrncode jcountry="ru">02346621</jrncode>
+      <jdateUni>$Year</jdateUni>
+      <jnumUni>$Num</jnumUni>
+      <pages>3-$PageCount</pages>
+    </issue>
+  </journal>
+</journals>
+#>;
+      def doc = XDocument.Parse(xml);
+      def issue = doc.Descendants("issue").NFirst();
+      issue.Add(articleMetadatas.NToArray());
+      def cntnode = doc.Descendants("cntnode").NFirst();
+      cntnode.Value = doc.Descendants().Count().ToString();
+      doc
+    }
+    
+    /// Получаем спсок XML-ей для статей. Для этого просматриваем текущий каталог и каталоги 
+    /// вложенные в него. 
+    GetArticleXmlPaths() : array[string]
+    {
+      def resulr = List();
+      
+      def getFilesForDir(path) : void
+      {
+        def files = Directory.GetFiles(path, "*.xml");
+        def isNotMetadata(file)
+        {
+          !Path.GetFileName(file).StartsWith("Metadata", StringComparison.InvariantCultureIgnoreCase)
+        }
+        
+        foreach (file when isNotMetadata(file) in files)
+          resulr.Add(file);
+      }
+      
+      getFilesForDir(Path);
+      
+      foreach (dir in Directory.GetDirectories(Path))
+        getFilesForDir(dir);
+        
+      resulr.OrderBy(x => Path.GetFileName(x)).NToArray()
+    }
+        
+    ReadArticleMetadata(path : string) : XElement
+    {
+      def error(message : string) : void { AddError(path, message); }
+      //[RecordIgnore] mutable _currntArticlePath : string;
+      //SetCurrntArticlePath(articlePath : string) : void { _currntArticlePath = articlePath; }
+    
+      def doc = XDocument.Load(path);
+      
+      when (doc.Root.Name != "ARTICLE")
+        return XElement("none");
+        
+      def fileName = Path.GetFileName(path);
+      def pages    = _pagesRegex.Match(fileName);
+      
+      when (pages.Groups.Count != 3)
+      {
+        error($"Имя файла ($fileName) должно начинаться с номера страниц. Например: 03-10-SomeProduct.xml.");
+        return XElement("none");
+      }
+      
+      def root        = doc.Root;
+      def getEnRoot()
+      {
+        def rootEn = root.Element("METADATA-EN");
+        if (rootEn == null)
+        {
+          error($<#В файл "$fileName" не задана метаинформация на Английском языке.#>);
+          root
+        }
+        else rootEn
+      }      
+      def rootEn      = getEnRoot();
+      def dummy       = XElement("dummy"); 
+      def dummyAttr   = XAttribute("dummy", ""); 
+      def isEmpty(str : string) : bool { string.IsNullOrEmpty(str) }
+      def get(tagName : string, root = root) : XElement
+      {
+        def tag = root.Element(tagName);
+        
+        if (tag == null)
+        {
+          error($"Тег $tagName не задан в документе '$path'");
+          dummy
+        }
+        else
+          tag
+      }
+      def getVal(tagName, root = root) : string
+      {
+        get(tagName, root).Value
+      }
+      def getValOpt(tagName : string, root = root) : string
+      {
+        if (root.Element(tagName) == null) null
+        else get(tagName, root).Value
+      }
+      def getAttr(tag : XElement, attrName : string) : string
+      {
+        def val = (tag.Attribute(attrName) ?? dummyAttr).Value.Trim();
+        val
+      }
+      def rus         = XAttribute("lang", "RUS");
+      def eng         = XAttribute("lang", "ENG");
+      
+      def arttitles() : XElement
+      {
+        def arttitle(root : XElement, lang) : XElement
+        {
+          def title       = getVal   ("TITLE",    root);
+          def subtitle    = getValOpt("SUBTITLE", root);
+          def text        = if (subtitle == null) title 
+                            else title.TrimEnd('.', ' ', '\t').Trim(' ', '\t') + ".\n" + subtitle.Trim(' ', '\t');
+          def arttitle    = XElement("arttitle",  lang, text);
+          arttitle
+        }
+        def arttitles   = XElement("arttitles", arttitle(root, rus), arttitle(rootEn, eng));
+        
+        arttitles
+      }
+      def keywords()  : XElement
+      {
+        def kwdGroup(root, lang)
+        {
+          def keywords    = getVal("KEYWORDS", root);
+          
+          when (keywords.Contains(","))
+            error($<#В файл "$fileName" ключевые разделены недопустимым символом (запятой ","). Ключевые слова должны быть разделены символом точа с запятой ";".#>);
+          
+          def keywords    = keywords.Split(array[';'], StringSplitOptions.RemoveEmptyEntries);
+          if (keywords.Length == 0)
+            dummy
+          else
+          {
+            def elems = List.[object](keywords.MapToArray(k => XElement("keyword", k.Trim())));
+            elems.Add(lang);
+            XElement("kwdGroup", elems.NToArray())
+          }
+        }
+        
+        def kwRu = kwdGroup(root,   rus);
+        def kwEn = kwdGroup(rootEn, eng);
+
+        if (kwRu.Equals(dummy) && kwEn.Equals(dummy))
+          XElement("nokeywords", "")
+        else
+        {
+          XElement("keywords", kwRu, kwEn)
+        }
+      }
+      def biblist()   : XElement
+      {
+        def refs = (root.Element("LITERATURE") ?? dummy).Elements("REF").NToArray();
+
+        if (refs.Length == 0)
+          XElement("nobiblist")
+        else
+          XElement("biblist", refs.Map(r => XElement("blistpart", r.Value)))
+      }
+      def abstracts() : XElement
+      {
+        def abstr(root, lang) : XElement
+        {
+          def text    = getVal("ABSTRACT", root).Trim();
+          
+          if (isEmpty(text))
+            dummy
+          else
+            XElement("abstract", array[lang : object, text])
+        }
+        
+        def abstractRus = abstr(root,   rus);
+        def abstractEng = abstr(rootEn, eng);
+        def isNoRus     = abstractRus.Equals(dummy);
+        def isNoEnu     = abstractEng.Equals(dummy);
+        
+        if (isNoRus && isNoEnu)
+        {
+          error($<#В файл "$fileName" не заполена "Аннотация" для Русского и Английского языка.#>);
+          XElement("noabstracts", "")
+        }
+        else if (isNoRus)
+        {
+          error($<#В файл "$fileName" не заполена "Аннотация" для Русского языка.#>);
+          XElement("abstracts", abstractEng)
+        }
+        else if (isNoRus)
+        {
+          error($<#В файл "$fileName" не заполена "Аннотация" для Английского языка.#>);
+          XElement("abstracts", abstractRus)
+        }
+        else
+          XElement("abstracts", abstractRus, abstractEng)
+      }
+      def authors()   : XElement
+      {
+        def     authorsRus = root.Elements("AUTHOR").NToArray();
+        mutable authorsEne = rootEn.Elements("AUTHOR").NToArray();
+        
+        when (authorsRus.Length == 0)
+          error($<#В файл "$fileName" не указано ни одного автора (в метаданных на Русском языке).#>);
+
+        when (authorsEne.Length == 0)
+          error($<#В файл "$fileName" не указано ни одного автора (в метаданных на Английском языке).#>);
+
+        when (authorsEne.Length != authorsRus.Length)
+        {
+          error($<#В файл "$fileName" указано разное количество авторов метаданных на Русском ($(authorsRus.Length)) и Английском ($(authorsEne.Length)) языках). Метаинформация для авторов для Английского языка заменена на Русскую!#>);
+          authorsEne = authorsRus;
+        }
+        // <AUTHOR e-mail="dvyukov@gmail.com" rsdn-profile="38267" place-of-study="МГТУ им. Н. Э. Баумана" 
+        // Scientific-rank="маг. техн." href="http://www.rsdn.ru/Users/38267.aspx">Вьюков Дмитрий Сергеевич</AUTHOR>
+        
+        def individInfo(a : XElement, lang) : XElement
+        {
+          def fio = a.Value.Trim();
+          if (isEmpty(fio) || !fio.Contains(" "))
+          {
+            error($<#В файл "$fileName" некорректно заполено поле "ФИО". В нем должны содержаться: фамилия, имя и отчество авторов в именительном подеже.#>);
+            dummy
+          }
+          else
+          {
+            def firstSpaceIndex = fio.IndexOfAny(array[' ', '\t']);
+            def surname         = XElement("surname",     fio.Substring(0, firstSpaceIndex));
+            def fname           = XElement("fname",       fio.Substring(firstSpaceIndex));
+            def auwork          = getAttr(a, "place-of-employment");
+            def auwork          = if (isEmpty(auwork)) getAttr(a, "place-of-study") else auwork;
+            when (isEmpty(auwork))
+              error($<#В файл "$fileName" в информации об авторе "$fio" не заполнены обязательные поля "Место работы" или "Место учебы".#>);
+            def auwork          = XElement("auwork", auwork);
+            def auemail         = getAttr(a, "e-mail");
+            when (isEmpty(auemail))
+              error($<#В файл "$fileName" в информации об авторе "$fio" не заполнены обязательные полe "E-Mail".#>);
+            def auinf           = XElement("auinf", GetAuthorAttrs(a, forEnu = lang.Equals(eng)));
+            def auemail         = XElement("auemail", auemail);
+            def individInfo     = XElement("individInfo", array[lang, surname, fname, auinf, auwork, auemail]);
+            individInfo
+          }
+        }
+
+        mutable i = 0;
+        
+        def authorRusEng(authorRus : XElement, authorEng : XElement) : XElement
+        {
+          i++;
+          def individInfoRus = individInfo(authorRus, rus);
+          def individInfoEng = individInfo(authorEng, eng);
+          XElement("author", array[XAttribute("authornum", i), individInfoRus, individInfoEng])
+        }
+
+        def authors = authorsRus.ZipToArray(authorsEne).MapToArray(authorRusEng);
+        
+        XElement("authors", authors)
+      }
+      def keywords    = keywords();
+      def biblist     = biblist();
+      def abstracts   = abstracts();
+      def authors     = authors();
+      def arttitles   = arttitles();
+      def startPage   = XElement("fpageart", pages.Groups[1]);
+      def endPage     = XElement("lpageart", pages.Groups[2]);
+      def pdfPath     = Path.ChangeExtension(fileName, ".pdf");
+      def pdfFullPath = Path.Combine(Path, pdfPath);
+      
+      when (!File.Exists(pdfFullPath))
+        error($"Отсутствует файл: $pdfFullPath");
+      
+      def fpdf        = XElement("fpdf", pdfPath);
+      def article     = XElement("article", 
+        array[startPage, endPage, authors, arttitles, abstracts, keywords, biblist, fpdf]);
+
+      article
+    }
+  }
+}
