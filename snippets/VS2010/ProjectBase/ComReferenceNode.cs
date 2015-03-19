@@ -303,8 +303,8 @@ namespace Microsoft.VisualStudio.Project
                 throw new InvalidOperationException();
 
             // Now loop through the generated COM References to find the corresponding one
-            IEnumerable<ProjectItem> comReferences = this.ProjectMgr.BuildProject.GetItems(MsBuildGeneratedItemType.ComReferenceWrappers);
-            foreach (ProjectItem reference in comReferences)
+            var comReferences = this.ProjectMgr.CurrentConfig.GetItems(MsBuildGeneratedItemType.ComReferenceWrappers);
+            foreach (var reference in comReferences)
             {
                 if(String.Compare(reference.GetMetadataValue(ProjectFileConstants.Guid), this.typeGuid.ToString("B"), StringComparison.OrdinalIgnoreCase) == 0
                     && String.Compare(reference.GetMetadataValue(ProjectFileConstants.VersionMajor), this.majorVersionNumber, StringComparison.OrdinalIgnoreCase) == 0
