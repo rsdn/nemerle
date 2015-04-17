@@ -88,7 +88,14 @@ namespace Nemerle.Tools.MSBuildTask
           if (!process.WaitForExit (2000))
             process.Kill ();
 
-          if (reportErrors) Log.LogError("Tag, revision and commit hash not found in git output.");
+          if (reportErrors)
+          {
+            Log.LogWarning("Tag, revision and commit hash not found in git output.");
+            GitTagAsVersion = "1.0";
+            GitRevision     = "0";
+            GitCommitHash   = "00000000";
+            return true;
+          }
         }
       }
       catch(Exception ex)
