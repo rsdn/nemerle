@@ -24,6 +24,7 @@ namespace Nemerle.VisualStudio.GUI
 				case 10: suffix = "-VS_2010"; break;
 				case 11: suffix = "-VS_2012"; break;
 				case 12: suffix = "-VS_2013"; break;
+				case 14: suffix = "-VS_2015"; break;
 			}
 
 			_newProjectName.Text = projectName + suffix;
