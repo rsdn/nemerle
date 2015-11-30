@@ -976,7 +976,7 @@ namespace Nemerle.VisualStudio.Project
 				projectInfo.Engine.RequestOnBuildTypesTree();
 
 			//// TODO : Revisit the VSADDFILEFLAGS here. Can it be a nested project?
-			//this.tracker.OnItemAdded(fileName, VSADDFILEFLAGS.VSADDFILEFLAGS_NoFlags);
+			this.Tracker.OnItemAdded(fileName, VSADDFILEFLAGS.VSADDFILEFLAGS_NoFlags);
 		}
 
 				private bool TryFindParentFileNode(HierarchyNode root, string child, out HierarchyNode parent)
