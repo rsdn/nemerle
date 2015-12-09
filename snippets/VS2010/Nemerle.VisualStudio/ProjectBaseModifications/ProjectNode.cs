@@ -2142,7 +2142,21 @@ namespace Microsoft.VisualStudio.Project
 		public virtual ProjectOptions GetProjectOptions(string config = null)
 		{
 			if (string.IsNullOrEmpty(config))
-				config = ProjectConfig.TryGetActiveConfigurationAndPlatform(ServiceProvider, this);
+			{
+				EnvDTE.Project automationObject = this.GetAutomationObject() as EnvDTE.Project;
+				try
+				{
+					config = Utilities.GetActiveConfigurationName(automationObject);
+				}
+				catch (InvalidOperationException)
+				{
+					// Can't figure out the active configuration.  Perhaps during solution load, or in a unit test.
+				}
+				catch (COMException)
+				{
+					// We may be in solution load and don't have an active config yet.
+				}
+			}
 
 			if (this.options != null && String.Equals(this.options.Config, config, StringComparison.OrdinalIgnoreCase))
 				return this.options;
