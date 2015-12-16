@@ -186,7 +186,45 @@ namespace Nemerle.VisualStudio
 			}
 		}
 
-		/// <summary>
+    private void UpdateAssembleReferences(EnvDTE.ProjectItems projectItems)
+	  {
+      if (projectItems == null)
+        return;
+
+      foreach (EnvDTE.ProjectItem projectItem in projectItems)
+      {
+        var project = projectItem as EnvDTE.Project;
+        if (project != null)
+          UpdateAssembleReferences(project);
+        else
+        {
+          UpdateAssembleReferences(projectItem.SubProject);
+          UpdateAssembleReferences(projectItem.ProjectItems);
+        }
+      }
+	  }
+
+	  private void UpdateAssembleReferences(EnvDTE.Project prj)
+	  {
+      if (prj == null)
+        return;
+
+      var oaProj = prj as Microsoft.VisualStudio.Project.Automation.OAProject;
+
+	    if (oaProj != null)
+	    {
+	      var nProj = oaProj.Project as NemerleProjectNode;
+
+	      if (nProj != null)
+  	      nProj.ProjectInfo.UpdateAssembleReferences();
+	    }
+
+      UpdateAssembleReferences(prj.ProjectItems);
+	    return;
+    }
+
+
+	  /// <summary>
 		/// This method called from FDoIdle, after solution loading was complited or new project added into solution.
 		/// This is need because OnAfterOpenSolution fired to early.
 		/// </summary>
@@ -199,20 +237,8 @@ namespace Nemerle.VisualStudio
 			// на проекты того же солюшена закончились неудачей. Производим повторную попытку добавить
 			// ссылки на проекты в ProjectInfo...
 
-			foreach (EnvDTE.Project prj in dte.Solution.Projects)
-			{
-				var oaProj = prj as Microsoft.VisualStudio.Project.Automation.OAProject;
-
-				if (oaProj == null)
-					continue;
-
-				var nProj = oaProj.Project as NemerleProjectNode;
-
-				if (nProj == null)
-					continue;
-
-				nProj.ProjectInfo.UpdateAssembleReferences();
-			}
+	    foreach (EnvDTE.Project prj in dte.Solution.Projects)
+        UpdateAssembleReferences(prj);
 		}
 
 		protected override void Initialize()

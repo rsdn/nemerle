@@ -950,7 +950,9 @@ namespace Microsoft.VisualStudio.Project
             }
 
             IVsProjectCfg[] activeConfigs = new IVsProjectCfg[1];
-            ErrorHandler.ThrowOnFailure(solutionBuildManager.FindActiveProjectCfg(IntPtr.Zero, IntPtr.Zero, hierarchy, activeConfigs));
+            var res = solutionBuildManager.FindActiveProjectCfg(IntPtr.Zero, IntPtr.Zero, hierarchy, activeConfigs);
+            if (ErrorHandler.Failed(res))
+              return false;
 
             IVsProjectCfg activeCfg = activeConfigs[0];
 

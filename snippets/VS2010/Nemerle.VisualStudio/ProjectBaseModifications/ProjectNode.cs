@@ -1362,7 +1362,8 @@ namespace Microsoft.VisualStudio.Project
 				if (this.buildProject != null)
 				{
 					this.buildProject.ProjectCollection.UnloadProject(this.buildProject);
-					this.buildProject.ProjectCollection.UnloadProject(this.buildProject.Xml);
+					try { this.buildProject.ProjectCollection.UnloadProject(this.buildProject.Xml); }
+          catch (Exception ex) { Trace.WriteLine("Exception : " + ex.Message); }
 					this.buildProject = null;
 				}
 
