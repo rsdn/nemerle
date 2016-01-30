@@ -47,7 +47,7 @@ If you have a clone already: git pull --recurse-submodules
 
   * For Development:
   
-  [Nemerle build process (for Nemerle developers)](Nemerle build process (for Nemerle developers))
+  [[Nemerle build process (for Nemerle developers)]]
 
   * For Installer:
   
