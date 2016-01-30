@@ -47,7 +47,7 @@ If you have a clone already: git pull --recurse-submodules
 
   * For Development:
   
-  Run DevBuildQuick(fx-version).cmd depending on required .NET version. Compiler output will be placed in bin/Debug/net-{fx-version}/Stage1.
+  [Nemerle build process (for Nemerle developers)](https://github.com/rsdn/nemerle/wiki/Nemerle-build-process-(for-Nemerle-developers))
 
   * For Installer:
   
