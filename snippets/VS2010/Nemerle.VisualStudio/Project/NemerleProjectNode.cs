@@ -757,7 +757,11 @@ namespace Nemerle.VisualStudio.Project
 		{
 			if (!_suppressDispose)
 			{
-				ProjectInfo.Close();
+				if (_projectInfo != null)
+				{
+					_projectInfo.Close();
+					_projectInfo = null;
+				}
 				base.Dispose(disposing);
 			}
 		}

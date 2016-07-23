@@ -596,10 +596,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
     public override void Dispose()
     {
-      SmartIndent = null;
-      MethodData = null;
-      _tipAsyncRequest = null;
-
       if (ProjectInfo != null)
       {
         ProjectInfo.RemoveEditableSource(this);
@@ -616,6 +612,22 @@ namespace Nemerle.VisualStudio.LanguageService
 
         ProjectInfo = null;
       }
+
+      SmartIndent = null;
+      MethodData = null;
+      _tipAsyncRequest = null;
+      CompileUnit = null;
+      Declarations = null;
+      Service = null;
+
+      if (_relocationRequestsQueue != null)
+        _relocationRequestsQueue.Clear();
+
+      if (TypeLocations != null)
+        TypeLocations.Clear();
+
+      if (MethodsTypeLocations != null)
+        MethodsTypeLocations.Clear();
 
       base.Dispose();
     }
