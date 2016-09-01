@@ -174,7 +174,7 @@ namespace Nemerle.VisualStudio.Project
 
 		bool InternalStopListening(bool throwOnError)
 		{
-			if ((null != _hierarchy) || (0 == _cookie))
+			if (null == _hierarchy || 0 == _cookie)
 				return false;
 
 			int hr = _hierarchy.UnadviseHierarchyEvents(_cookie);
