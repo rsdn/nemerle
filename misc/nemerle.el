@@ -883,4 +883,5 @@ Mode map
   
   (run-hooks 'nemerle-mode-hook))
 
+(provide 'nemerle)
 ;;; nemerle.el ends here
