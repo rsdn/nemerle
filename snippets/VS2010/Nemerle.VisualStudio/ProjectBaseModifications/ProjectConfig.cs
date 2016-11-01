@@ -171,7 +171,7 @@ namespace Microsoft.VisualStudio.Project
 			{
 				throw Marshal.GetExceptionForHR(VSConstants.OLE_E_PROMPTSAVECANCELLED);
 			}
-			// ������ �������� ������ �������: ConfigProvider.configString
+			// Старое значение строки формата: ConfigProvider.configString
 			string condition = MakeMSBuildCondition(ConfigurationName, PlatformName);
 
 			SetPropertyUnderCondition(propertyName, propertyValue, condition);
