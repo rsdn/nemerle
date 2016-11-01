@@ -933,7 +933,7 @@ namespace Microsoft.VisualStudio.Project
 		public BuildableProjectConfig(ProjectConfig config)
 		{
 			this.config = config;
-			this.buildManagerAccessor = this.config.ProjectMgr.GetService(typeof(SVsBuildManagerAccessor)) as IVsBuildManagerAccessor;
+			this.buildManagerAccessor = (IVsBuildManagerAccessor)this.config.ProjectMgr.GetService(typeof(SVsBuildManagerAccessor));
 		}
 		#endregion
 
