@@ -5,11 +5,12 @@ namespace Nemerle.VisualStudio.Project
 	public enum NemerleBuildAction
 	{
 		None,
-		Compile,
+    Compile,
 		Content,
-		EmbeddedResource,
-		ApplicationDefinition,
-		Page,
+    Nitra,
+    ApplicationDefinition,
+    EmbeddedResource,
+    Page,
 		Resource
 	};
 }

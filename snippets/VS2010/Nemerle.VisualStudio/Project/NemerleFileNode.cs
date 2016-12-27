@@ -551,9 +551,22 @@ namespace Nemerle.VisualStudio.Project
 					return null;
 				case __VSHPROPID.VSHPROPID_IsNonMemberItem:
 					return IsNonMemberItem;
-				default:
-					return base.GetProperty(propId);
-			}
+
+        default:
+          __VSHPROPID4 id4 = (__VSHPROPID4)propId;
+          switch (id4)
+          {
+            case __VSHPROPID4.VSHPROPID_BuildAction:
+              var props = this.NodeProperties as Nemerle.VisualStudio.Project.NemerleFileNodeProperties;
+              if (props == null)
+                return base.GetProperty(propId);
+
+              return props.NemerleBuildAction.ToString();
+              break;
+            default:
+              return base.GetProperty(propId);
+          }
+      }
 		}
 
 		/// <summary>
