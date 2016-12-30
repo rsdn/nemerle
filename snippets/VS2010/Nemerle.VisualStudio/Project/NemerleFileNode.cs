@@ -562,7 +562,7 @@ namespace Nemerle.VisualStudio.Project
                 return base.GetProperty(propId);
 
               return props.NemerleBuildAction.ToString();
-              break;
+
             default:
               return base.GetProperty(propId);
           }

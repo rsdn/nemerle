@@ -612,7 +612,7 @@ namespace Nemerle.VisualStudio.Project
 			foreach (var item in projectFiles)
 			{
 				// Ignore the item if it is a reference or folder
-				if (this.FilterItemTypeToBeAddedToHierarchy(item.ItemType))
+				if (this.FilterItemTypeToBeAddedToHierarchy(item.ItemType) || item.ItemType == "MacroReference")
 					continue;
 
 				// MSBuilds tasks/targets can create items (such as object files),
@@ -1420,6 +1420,7 @@ namespace Nemerle.VisualStudio.Project
 				return true;
 
 			return
+				String.Compare(type, "Nitra", StringComparison.OrdinalIgnoreCase) == 0 ||
 				String.Compare(type, "Page", StringComparison.OrdinalIgnoreCase) == 0 ||
 				String.Compare(type, "ApplicationDefinition", StringComparison.OrdinalIgnoreCase) == 0 ||
 				String.Compare(type, "Resource", StringComparison.OrdinalIgnoreCase) == 0;

@@ -85,8 +85,13 @@ namespace Nemerle.VisualStudio.Project
 						return BuildAction.Compile;
 
 					default:
-						return (BuildAction)Enum.Parse(typeof(BuildAction), NemerleBuildAction.ToString());
-				}
+            BuildAction buildAction;
+
+            if (Enum.TryParse<BuildAction>(NemerleBuildAction.ToString(), out buildAction))
+              return buildAction;
+
+            return BuildAction.None;
+        }
 			}
 
 			set
