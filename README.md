@@ -95,5 +95,6 @@ If you have a clone already: git pull --recurse-submodules
 
 # Contacts
 
+  * [Gitter](https://gitter.im/rsdn/nemerle) - chat for interactive discussions
   * Nemerle forum: http://groups.google.com/group/nemerle-en
   * Nemerle Russian forum: http://rsdn.ru/forum/nemerle/
