@@ -498,8 +498,8 @@ namespace Microsoft.VisualStudio.Project
 		/// <returns>If the method succeeds, it returns S_OK. If it fails, it returns an error code.</returns>
 		public virtual int GetCfgs(uint celt, IVsCfg[] a, uint[] actual, uint[] flags)
 		{
-			if (celt == 1)
-				Debug.WriteLine("GetCfgs(celt=1, ...)");
+			//if (celt == 1)
+			//	Debug.WriteLine("GetCfgs(celt=1, ...)");
 
 			if (flags != null)
 				flags[0] = 0;
