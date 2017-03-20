@@ -6,6 +6,7 @@ namespace Nemerle.VisualStudio.Project
 {
   static class NetFrameworkProjectConstants
   {
+    private const string FrameworkVersion462 = "4.6.2";
     private const string FrameworkVersion461 = "4.6.1";
     private const string FrameworkVersion46 = "4.6";
     private const string FrameworkVersion452 = "4.5.2";
@@ -40,6 +41,7 @@ namespace Nemerle.VisualStudio.Project
         case 11: return "v" + FrameworkVersion45;
         case 12: return "v" + FrameworkVersion451;
         case 14: return "v" + FrameworkVersion46;
+        case 15: return "v" + FrameworkVersion462;
         default: return "v" + FrameworkVersion40;
       }
     }
@@ -52,6 +54,7 @@ namespace Nemerle.VisualStudio.Project
       "v" + FrameworkVersion452,
       "v" + FrameworkVersion46,
       "v" + FrameworkVersion461,
+      "v" + FrameworkVersion462,
     };
 
     public static int VisualStudioVersion = Process.GetCurrentProcess().MainModule.FileVersionInfo.FileMajorPart;
