@@ -4,7 +4,7 @@ using Microsoft.Build.Utilities;
 
 namespace Nemerle.Tools.MSBuildTask
 {
-  public class SetEnvironmentVariable : Task
+  public class NSetEnvironmentVariable : Task
   {
     [Required]
     public string Variable { get; set; }
