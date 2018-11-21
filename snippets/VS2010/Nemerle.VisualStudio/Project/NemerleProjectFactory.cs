@@ -212,9 +212,9 @@ namespace Nemerle.VisualStudio.Project
                 return VSConstants.S_OK;
 
             // Check ToolsVersion
-            // Can be one of the following: 4.0
+            // Can be one of the following: 4.0+
             var version = ParseVersion(projectData.ToolsVersion.Value);
-            if (!(version.Major == 4 && version.Minor == 0))
+            if (version.Major < 4)
                 return VSConstants.S_OK;
 
             if (IsNeedUpdateNemerleProperty(projectData.NemerleProperty))
