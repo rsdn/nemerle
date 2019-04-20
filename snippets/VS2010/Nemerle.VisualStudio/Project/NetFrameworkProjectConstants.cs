@@ -6,7 +6,7 @@ namespace Nemerle.VisualStudio.Project
 {
   static class NetFrameworkProjectConstants
   {
-    private const string FrameworkVersion472 = "4.8";
+    private const string FrameworkVersion48 = "4.8";
     private const string FrameworkVersion472 = "4.7.2";
     private const string FrameworkVersion471 = "4.7.1";
     private const string FrameworkVersion47 = "4.7";
