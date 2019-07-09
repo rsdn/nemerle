@@ -1,4 +1,6 @@
 @echo off
+title %~nx0
+
 IF NOT "%1" == "Build" call CleanUp.cmd
 
 setlocal ENABLEEXTENSIONS
@@ -15,5 +17,6 @@ rem /verbosity:n /p:TargetName=Build
 IF %errorlevel% == 0 call Reg-bins-VS2015.cmd
 ) else (
 @echo %KEY_NAME%\%VALUE_NAME% not found.
+)
 )
 pause

@@ -1,12 +1,15 @@
 @echo off
+title %~nx0
 
-IF NOT "%PROCESSOR_ARCHITECTURE%" == "x86" goto b64
-IF NOT "%PROCESSOR_ARCHITEW6432%" == "" goto b64
-set MSBuild="%SystemRoot%\Microsoft.NET\Framework\v4.0.30319\msbuild.exe"
-goto b32
-:b64
-set MSBuild="%SystemRoot%\Microsoft.NET\Framework64\v4.0.30319\msbuild.exe"
-:b32
+setlocal ENABLEEXTENSIONS
+set KEY_NAME="HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\SxS\VS7"
+set VALUE_NAME=15.0
+
+for /f "tokens=3" %%a in ('reg query %KEY_NAME% /V %VALUE_NAME%  ^|findstr /ri "REG_SZ"') DO set Value=%%a
+
+call "%Value%Common7\Tools\VsDevCmd.bat"
+
+set MSBuild=MSBuild.exe	
 
 @echo MSBuild=%MSBuild%
 
@@ -20,7 +23,7 @@ exit /b %1
 
 IF "%Type%"=="" set Type=Debug
 
-%MSBuild% Tests.nproj /p:Configuration=%Type% /tv:4.0 /p:TargetFrameworkVersion=v4.0
+%MSBuild% NemerleAll.nproj /target:DevBuildQuickWithTests /p:Configuration=%Type% /verbosity:n /p:NTargetName=Build  /tv:15.0 /p:TargetFrameworkVersion=v4.0
 call :err_check %errorlevel%
 IF %errors% == yes goto Error
 
@@ -33,3 +36,5 @@ exit /b 1
 :Error
 IF NOT "%NoPause%"=="true" pause
 call :strong_fail
+
+pause
