@@ -1,5 +1,6 @@
 @echo off
 title %~nx0
+cd /D %~dp0
 
 IF NOT "%1" == "Build" call CleanUp.cmd
 

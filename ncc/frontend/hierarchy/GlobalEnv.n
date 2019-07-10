@@ -1,0 +1,837 @@
+/*
+ * Copyright (c) 2003-2008 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using System;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler.SolverMacros;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
+using Nemerle.Surround;
+using Nemerle.Utility;
+
+using NSTree = Nemerle.Compiler.NamespaceTree;
+using PT     = Nemerle.Compiler.Parsetree;
+using SCG    = System.Collections.Generic;
+
+namespace Nemerle.Compiler
+{
+  [ManagerAccess]
+  public class GlobalEnv
+  {
+    [Accessor] open_namespaces : list [NamespaceTree.Node];
+    current_namespace : NamespaceTree.Node;
+    [Accessor] namespace_aliases : list [string * string];
+    mutable macro_ctx_cache : int;
+
+    /// this is a map of keywords, which trigger syntax extensions
+    public SyntaxKeywords : Map [string, GrammarElement];
+
+    /// this is a set of keywords present in current global environment
+    public Keywords : Set [string];
+
+    internal UnaryOperators : Map [string, MainParser.OperatorInfo];
+    internal Operators      : Map [string, MainParser.OperatorInfo];
+
+    public Defines : Map[string, bool];
+
+    [Accessor] nameTree : NamespaceTree;
+
+    internal static CreateCore(nameTree : NamespaceTree) : GlobalEnv
+    {
+      GlobalEnv(nameTree).AddOpenNamespace([nameTree.NamespaceTree], Location.Default)
+                         .AddOpenNamespace(["Nemerle", "Core"], Location.Default)
+                         .AddOpenNamespace(["Nemerle", "Core", "option"], Location.Default)
+                         .AddOpenNamespace(["Nemerle", "Core", "ValueOptionStatic"], Location.Default);
+    }
+
+    public this (prototype : GlobalEnv, additionalKeywords : list [string])
+    {
+      Manager           = prototype.Manager;
+      Keywords          = prototype.Keywords.ReplaceList(additionalKeywords);
+      open_namespaces   = prototype.open_namespaces;
+      current_namespace = prototype.current_namespace;
+      namespace_aliases = prototype.namespace_aliases;
+      macro_ctx_cache   = prototype.macro_ctx_cache;
+      SyntaxKeywords    = prototype.SyntaxKeywords;
+      UnaryOperators    = prototype.UnaryOperators;
+      Operators         = prototype.Operators;
+      nameTree          = prototype.nameTree;
+      Defines           = prototype.Defines;
+    }
+
+    this (nameTree : NamespaceTree)
+    {
+      this([],
+        nameTree.namespace_tree,
+        [],
+        Map(),
+        LexerBase.BaseKeywords,
+        Map(),
+        Map(),
+        nameTree,
+        nameTree.Manager.Options.CommandDefines);
+    }
+
+    this(           open_namespaces   : list[NamespaceTree.Node],
+                    current_namespace : NamespaceTree.Node,
+                    namespace_aliases : list[string * string],
+                    syntax_keys       : Map[string, GrammarElement],
+                    keywords          : Set[string],
+                    unaryOperators    : Map[string, MainParser.OperatorInfo],
+                    operators         : Map[string, MainParser.OperatorInfo],
+                    nameTree          : NamespaceTree,
+          [NotNull] defines           : Map[string, bool])
+    {
+      this.Manager            = nameTree.Manager;
+      this.open_namespaces    = open_namespaces;
+      this.current_namespace  = current_namespace;
+      this.namespace_aliases  = namespace_aliases;
+      this.SyntaxKeywords     = syntax_keys;
+      this.Keywords           = keywords;
+      this.UnaryOperators     = unaryOperators;
+      this.Operators          = operators;
+      this.nameTree           = nameTree;
+      this.Defines            = defines;
+      this.macro_ctx_cache    = -1;
+    }
+
+    public IsKeyword (x : string) : bool
+    {
+      Keywords.Contains (x)
+    }
+
+    internal FetchOperator(op : string) : MainParser.OperatorInfo
+    {
+      match (Operators.Find(op))
+      {
+        | Some(x) => x
+        | None    => MainParser.BinaryOperatorInfo (op, 200, 201);
+      }
+    }
+
+    internal HasUnaryOperator(op : string) : bool
+    {
+      UnaryOperators.Contains(op)
+    }
+
+    internal HasOperator(op : string) : bool
+    {
+      UnaryOperators.Contains(op) || Operators.Contains(op)
+    }
+
+    internal LookupUnaryOperator(op : string) : MainParser.OperatorInfo
+    {
+      match (UnaryOperators.Find(op))
+      {
+        | Some (x) => x
+        | None     => null
+      }
+    }
+
+    internal LookupOperator(op : string) : MainParser.OperatorInfo
+    {
+      match (Operators.Find (op))
+      {
+        | Some (x) => x
+        | None =>
+          match (UnaryOperators.Find(op))
+          {
+            | Some (x) => x
+            | None     => null
+          }
+      }
+    }
+
+
+    internal CreateExtended (o : list [NamespaceTree.Node], c : NamespaceTree.Node,
+                             n : list [string * string],
+                             // note that only NEW extensions are specified here
+                             syntax_exts : list [list [SyntaxDefinition]]) : GlobalEnv
+    {
+      mutable syn_keys = SyntaxKeywords;
+      mutable keys = Keywords;
+      mutable uops = UnaryOperators;
+      mutable ops  = Operators;
+
+      foreach (x in syntax_exts)
+      {
+        syn_keys = MainParser.load_syntax (x, syn_keys);
+
+        foreach (ext in x)
+        {
+          | od is OperatorDefinition =>
+            when (LexerBase.HasKeywordChars (od.Start))
+              keys = keys.Replace (od.Start);
+
+            if (od.Keywords == null)
+              ops  = ops.Replace (od.Start, MainParser.BinaryOperatorInfo(od.Start, od.Left, od.Right))
+            else
+              uops = uops.Replace(od.Start, MainParser.UnaryOperatorInfo(od.Start, od.Left, od.Right));
+
+          | _ =>
+            foreach (k in ext.Keywords)
+              unless (Manager.Options.IsKeywordDisabled(k, o))
+                keys = keys.Replace (k);
+        }
+      }
+
+      GlobalEnv(o, c, n, syn_keys, keys, uops, ops, nameTree, Defines)
+    }
+
+    public Define (td : PT.ClassMember) : TypeBuilder
+    {
+      Define (td, true)
+    }
+
+    public Define (td : PT.ClassMember, do_fixup : bool) : TypeBuilder
+    {
+      match(td) {
+        | PT.ClassMember.TypeDeclaration (Delegate (header) as td) =>
+          def tb = Delegates.GenerateDelegateClass (this, null, td.modifiers, td.ReturnValueModifiers, header);
+          tb
+
+        | PT.ClassMember.TypeDeclaration (td) =>
+          def typeBuilder = Manager.NameTree.AddType(null, current_namespace, td);
+          
+          typeBuilder.CalcAccessibility();
+          
+          when (do_fixup)
+            typeBuilder.FixupDefinedClass ();
+            
+          typeBuilder
+          
+        | _ =>
+          Message.Error ("only types can be defined in global namespaces");
+          null
+      }
+    }
+
+    public GetType (name : list [string], from : TypeBuilder, args_count : int) : TypeInfo
+    {
+      match (LookupType (name, from, args_count)) {
+        | Some (r) => r
+        | None =>
+          def suff = if (args_count > 0) "`" + args_count.ToString () + "'"
+                     else "'";
+          ReportError (Manager.Solver.CurrentMessenger,
+                       "unbound type name `" + name.ToString (".") + suff);
+          InternalType.Object_tc
+      }
+    }
+
+    public LookupType (name : list [string]) : option [TypeInfo]
+    {
+      LookupType (name, null, -1)
+    }
+
+    public LookupMacro (name : list [string]) : option [IMacro]
+    {
+      def collect (pref : NamespaceTree.Node, res)
+      {
+        match ((res, pref.LookupMacro (name)))
+        {
+          | (x, None) | (None, x) => x
+          | (Some (x), Some (y)) when (x : object) == (y : object) => res
+          | (Some (x), Some (y)) =>
+            Message.Error (<#name `..$(name; ".")' is ambiguous, it could be:#>);
+            Message.Error ($"$(x.GetNamespace()).$(x.GetName()) this macro");
+            Message.Error ($"$(y.GetNamespace()).$(y.GetName()) or this macro");
+            res
+        }
+      }
+
+      (nameTree.namespace_tree :: open_namespaces).FoldLeft (None (), collect)
+    }
+
+    public BindType(expr : Parsetree.PExpr) : TypeVar
+    {
+      def t = Util.locate(expr.Location,
+        Manager.emptyTEnv.Bind(this, null, expr, true, false)
+        );
+      t
+    }
+
+    public BindFixedType (expr : Parsetree.PExpr) : FixedType
+    {
+      Manager.emptyTEnv.BindFixedType (this, null, expr, false);
+    }
+
+    public SymbolExists (name : list [string]) : bool
+    {
+      def is_something(ns)
+      {
+        !(ns.TryPath(name) is NamespaceTree.TypeInfoCache.No)
+      }
+      (nameTree.namespace_tree :: open_namespaces).Exists(is_something)
+    }
+
+    public LookupType (name : list [string], from : TypeBuilder, args_count : int) : option [TypeInfo]
+    {
+      //Message.Debug ($"$name - $args_count");
+      match (nameTree.LookupExactType(name, args_count))
+      {
+        | (Some(t)) as r when from == null || t.CanAccess (from) => r
+        | _ =>
+          def non_public_external(t : TypeInfo)
+          {
+            // eliminate types with wrong number of generic arguments
+            args_count != -1 && t.TyparmsCount != args_count ||
+            // and nonpublic external types
+            t.IsNotPublicExternal
+          }
+          def check_access (x)
+          {
+            | Some(t) when non_public_external(t) => None()
+            | Some(t) when from == null || (t : TypeInfo).CanAccess(from) => x
+            | _ => None()
+          }
+
+          def collect (pref : NamespaceTree.Node, res)
+          {
+            match ((res, check_access (pref.LookupType (name, args_count))))
+            {
+              | (x, None) | (None, x) => x
+              // eliminate duplicates
+              | (Some (x), Some (y)) when x.Equals (y) => res
+              | (Some (x), Some (y)) =>
+                // make type X = A.X; using A; X not ambiguous
+                match ((x.GetTydecl (), y.GetTydecl ()))
+                {
+                  // FIXME: remove Some in two lines below and see the
+                  // error message. unable to create small testcase now
+                  | (TypeDeclaration.Alias (FixedType.Class (tc, _)), _) when tc.Equals (y) => Some (y)
+                  | (_, TypeDeclaration.Alias (FixedType.Class (tc, _))) when tc.Equals (x) => Some (x)
+                  | _ =>
+                    surroundwith (related_messages)
+                    {
+                      def messenger = Manager.Solver.CurrentMessenger;
+                      ReportError (messenger, $<#type name `..$(name; ".")' is ambiguous, it could be:#>);
+                      when (messenger.NeedMessage)
+                      {
+                        Message.Hint(x.Location.FromStart(), $"first  possible type: `$x'");
+                        Message.Hint(y.Location.FromStart(), $"second possible type: `$y'");
+                      }
+                    }
+
+                    res
+                }
+            }
+          }
+          // collect types from opened namespaces
+          mutable result = open_namespaces.FoldLeft (None (), collect);
+
+          // collect types inside this and enclosing classes
+          mutable ns_node = if (from == null) null else from.NamespaceNode;
+          while (ns_node != null) {
+            result = collect (ns_node, result);
+            ns_node = ns_node.Parent;
+          }
+
+          // collect types from inside of base classes
+          mutable type_node = if (from == null) null else from.BaseType;
+          while (type_node != null) {
+            result = collect (type_node.NamespaceNode, result);
+            type_node = type_node.BaseType
+          }
+
+          result
+      }
+    }
+
+    public LookupSymbol(name : list [string], parent : TypeBuilder, for_completion = false) : list[IMember]
+    {
+      def symbols = LookupSymbolExt(name, parent, for_completion);
+      def result = symbols.FoldLeft([], ((_, m), acc) => if (NList.Contains(acc, m)) acc else m :: acc);
+      result
+    }
+
+    public LookupSymbolExt (name : list [string], parent : TypeBuilder, for_completion = false) : list[TypeInfo * IMember]
+    {
+      // these are really small, so we do linear lookup in list
+      mutable visited = [];
+      def (type_part, the_name) = NList.DivideLast(name);
+      // now we have type_part . the_name
+
+      def add_members_from((pt : TypeInfo, ti : TypeInfo), acc : list[TypeInfo * IMember])
+      {
+        if (visited.Contains((pt, ti)))
+          acc
+        else
+        {
+          def members = if (ti.LookupMemberAvailable)
+                          ti.LookupMember(the_name, for_completion)
+                        else
+                          [];
+          visited = (pt, ti) :: visited;
+
+          def collectNewMembers(mem, acc)
+          {
+            def ti2 = if (pt == null) ti else pt;
+
+            if (acc.Contains((pt, mem))) acc else (ti2, mem) :: acc
+          }
+          def acc = members.FoldLeft(acc, collectNewMembers);
+
+          match (ti.GetTydecl())
+          {
+            | TypeDeclaration.Alias(FixedType.Class(ati, args)) when args.Length == 0 => add_members_from((pt, ati), acc)
+            | TypeDeclaration.Alias(FixedType.Class(ati, args)) when args.Length >  0 => add_members_from((ti, ati), acc)
+            | _ => acc
+          }
+        }
+      }
+
+      mutable type_node = null;
+
+      def lookup_members(pref : NamespaceTree.Node, mutable acc : list[TypeInfo * IMember])
+      {
+        // do not lookup members in base classes (type_node is non-null when searching them in code below)
+        // they are already correctly added in add_members_from
+        when (type_node == null || !type_part.IsEmpty)
+          foreach (ti in pref.LookupTypes(type_part))
+            acc = add_members_from((null, ti), acc);
+
+        foreach (t : IMember in pref.LookupTypes(name, for_completion))
+          when (!acc.Contains((null, t)))
+            acc ::= (null, t);
+
+        acc
+      }
+
+      mutable result = [];
+
+      // We must prefer aliases because a alias used to resolve type conflicts.
+      foreach (ns when ns.IsFromAlias in open_namespaces) // check aliases
+        result = lookup_members(ns, result);
+
+      when (result.IsEmpty) // if we have no match symbols in aliases...
+      {
+        result = lookup_members(nameTree.namespace_tree, result); // check root namespace...
+
+        foreach (ns when !ns.IsFromAlias in open_namespaces) // ... and other open namespaces
+          result = lookup_members(ns, result);
+      }
+      
+      // Try to resolve symbols in current type. VladD2: In C# this symbols prefer.
+      // But Nemerle use overload resolution instead. Maybe it's a bug.
+
+      mutable ns_node = parent?.NamespaceNode;
+
+      while (ns_node != null)
+      {
+        result = lookup_members(ns_node, result);
+        
+        match (ns_node.Value)
+        {
+          | NSTree.TypeInfoCache.Cached(tb is TypeBuilder) => 
+            // collect in types from inside of base classes
+            type_node = tb.BaseType;
+            while (type_node != null)
+            {
+              result = lookup_members (type_node.NamespaceNode, result);
+              type_node = type_node.BaseType
+            }
+
+          | _ => ()
+        }
+        
+        ns_node = ns_node.Parent;
+      }
+
+      result
+    }
+    
+    public LookupSymbolPriority(name : list[string], parent : TypeBuilder, for_completion = false) :
+      (SCG.List[IMember] * SCG.List[IMember])
+    {
+      def (nodeMembers, aliasesMembers) = LookupSymbolExtPriority(name, parent, for_completion);
+      
+      // Filter duplicates
+      def nodeResult = SCG.List();
+      foreach ((_, m) in nodeMembers)
+        when(!nodeResult.Contains(m))
+          nodeResult.Add(m);
+         
+      def aliasesResult = SCG.List();
+      foreach ((_, m) in aliasesMembers)
+        when(!nodeResult.Contains(m) && !aliasesResult.Contains(m))
+          aliasesResult.Add(m);
+      
+      (nodeResult, aliasesResult)
+    }
+    
+    /// <returns>Tuple of Lists.
+    /// First: Found from current scope.
+    /// Second: External types, found via aliases.
+    /// Lower index means higher priority
+    /// </returns>
+    public LookupSymbolExtPriority(
+      name : list[string],
+      parent : TypeBuilder,
+      for_completion = false) : (SCG.List[TypeInfo * IMember] * SCG.List[TypeInfo * IMember])
+    {
+      // these are really small, so we do linear lookup in list
+      def visited = SCG.List();
+      def (type_part, the_name) = NList.DivideLast(name);
+      // now we have type_part . the_name
+      
+      def add_members_from((pt : TypeInfo, ti : TypeInfo), result : SCG.List[TypeInfo * IMember]) : void
+      {
+        when (visited.Contains((pt, ti))) return;
+        
+        def members = if (ti.LookupMemberAvailable)
+                          ti.LookupMember(the_name, for_completion)
+                        else
+                          [];
+        visited.Add((pt, ti));
+
+        foreach (member in members)
+        {          
+          when (!result.Contains((pt, member)))
+          {
+            def ti2 = if (pt == null) ti else pt;
+            result.Add((ti2, member));
+          }
+        }
+
+        match (ti.GetTydecl())
+        {
+          | TypeDeclaration.Alias(FixedType.Class(ati, args)) when args.Length == 0 =>
+            add_members_from((pt, ati), result)
+          | TypeDeclaration.Alias(FixedType.Class(ati, args)) when args.Length >  0 =>
+            add_members_from((ti, ati), result)
+          | _ => ()
+        }
+      }
+      
+      mutable type_node = null;
+      
+      def lookup_members(pref : NamespaceTree.Node, result : SCG.List[TypeInfo * IMember]) : void
+      {
+        // do not lookup members in base classes (type_node is non-null when searching them in code below)
+        // they are already correctly added in add_members_from
+        when (type_node == null || !type_part.IsEmpty)
+          foreach (ti in pref.LookupTypes(type_part))
+            add_members_from((null, ti), result);
+
+        foreach (t : IMember in pref.LookupTypes(name, for_completion))
+          when (!result.Contains((null, t)))
+            result.Add((null, t));
+      }
+      
+      // We must prefer aliases because a alias used to resolve type conflicts.
+      def aliasesMembers = SCG.List();
+      foreach (ns when ns.IsFromAlias in open_namespaces) // check aliases
+        lookup_members(ns, aliasesMembers);
+        
+      when (aliasesMembers.IsEmpty()) // if we have no match symbols in aliases...
+      {
+        lookup_members(nameTree.namespace_tree, aliasesMembers); // check root namespace...
+
+        foreach (ns when !ns.IsFromAlias in open_namespaces) // ... and other open namespaces
+          lookup_members(ns, aliasesMembers);
+      }
+      
+      // Try to resolve symbols in current type.
+      def nodeMembers = SCG.List();
+      
+      for (mutable ns_node = parent?.NamespaceNode; ns_node != null; ns_node = ns_node.Parent)
+      {
+        lookup_members(ns_node, nodeMembers);
+        
+        match (ns_node.Value)
+        {
+          | NSTree.TypeInfoCache.Cached(tb is TypeBuilder) => 
+            // collect in types from inside of base classes
+            for (type_node = tb.BaseType; type_node != null; type_node = type_node.BaseType)
+            {
+              lookup_members(type_node.NamespaceNode, nodeMembers);
+            }
+
+          | _ => ()
+        }
+      }
+      
+      (nodeMembers, aliasesMembers)
+    }
+
+    public CurrentNamespace : NamespaceTree.Node {
+      get { current_namespace }
+    }
+
+
+    public AddOpenNamespace (ns : list [string], loc : Location) : GlobalEnv
+    {
+      match (ns) {
+        | head :: tail =>
+          mutable possible_expansions = [nameTree.ExactPath (ns)];
+          foreach ((short, long) when short == head in namespace_aliases)
+            possible_expansions ::= nameTree.ExactPath (NString.Split (long, '.')).Path (tail);
+
+          AddOpenNamespace (possible_expansions, loc)
+
+        | _ => Util.ice ("empty or null namespace cannot be opened")
+      }
+    }
+
+    private AddOpenNamespace (nses : list [NamespaceTree.Node], loc : Location) : GlobalEnv
+    {
+      mutable all_opened = nses;
+      foreach (ns in nses) {
+        // in case we are inside some namespace, we must open every namespace path
+        // composed of current namespace's parts suffixed with opened one
+        def open_nested (curr : NamespaceTree.Node) {
+          unless (curr.Parent == null) {
+            all_opened = curr.Path (ns.FullName) :: all_opened;
+            open_nested (curr.Parent)
+          }
+        }
+        open_nested (current_namespace);
+      }
+
+      // we will warn when none of created namespace parts exists as real namespaces
+      nameTree.referenced_namespace_nodes.Add ((all_opened, loc));
+
+      // we will warn if some of those namespace are already open
+      def (exts, new_opened) = add_open_nodes (open_namespaces, all_opened, loc, true);
+
+      CreateExtended (new_opened, current_namespace, namespace_aliases, exts)
+    }
+
+    public AddNamespaceAlias (short_name : string, long_name : list [string],
+                                loc : Location) : GlobalEnv
+    {
+      def nodes_with_prefix = add_alias_nodes (short_name, long_name);
+      def entered = nodes_with_prefix.Map(x => x.Path([short_name]));
+      nameTree.referenced_namespace_nodes.Add ((entered, loc));
+
+      GlobalEnv (NList.RevAppend (nodes_with_prefix, open_namespaces),
+                 current_namespace,
+                 (short_name, long_name.ToString (".")) :: namespace_aliases,
+                 SyntaxKeywords,
+                 Keywords,
+                 UnaryOperators,
+                 Operators,
+                 nameTree,
+                 Defines)
+    }
+
+    public SetDefines(defines : Map[string, bool]) : GlobalEnv
+    {
+      GlobalEnv (open_namespaces,
+                 current_namespace,
+                 namespace_aliases,
+                 SyntaxKeywords,
+                 Keywords,
+                 UnaryOperators,
+                 Operators,
+                 nameTree,
+                 defines)
+    }
+
+    public IsOpenNamespace (ns : NamespaceTree.Node) : bool
+    {
+      (current_namespace :: open_namespaces).Exists (_.Equals (ns))
+    }
+
+    /// qid - relative (from current namespace) path to namespace node
+    /// Note: Use  Manager.CoreEnv to open namespace frome root.
+    public EnterIntoNamespace (qid : list [string]) : GlobalEnv
+    {
+      mutable ns = current_namespace;
+      mutable result = this;
+
+      // if namespace if complex (namespace N1.N2.N3 { }) we must enter
+      // into each of them
+      foreach (part in qid) {
+        ns = ns.Path ([part]);
+        result = result.EnterIntoNamespace (ns);
+      }
+      result
+    }
+
+    public EnterIntoNamespace (full : NamespaceTree.Node) : GlobalEnv
+    {
+      when (full.Value is NamespaceTree.TypeInfoCache.No)
+        full.Value = NamespaceTree.TypeInfoCache.NamespaceReference ();
+
+      def (exts, new_opened) = add_open_nodes (open_namespaces, [full], Location.Default, false);
+
+      CreateExtended (new_opened, full, namespace_aliases, exts)
+    }
+
+
+    /** this is the auxiliary function for making set of opened namespaces
+        unique and warn if namespaces are opened multiple times by user
+     */
+    add_open_nodes (old : list [NamespaceTree.Node], added : list [NamespaceTree.Node],
+                           loc : Location, should_warn : bool)
+      : list [list [SyntaxDefinition]] * list [NamespaceTree.Node]
+    {
+      mutable exts = [];
+      def nodes = added.FoldLeft(old, (x, acc) =>
+        if (NList.ContainsRef (old, x))
+        {
+          when (should_warn)
+            Message.Warning (105, loc, $ @"namespace `$(x.GetDisplayName ())' is already open");
+          acc
+        }
+        else
+        {
+          def ext = Manager.MacrosRegistry.GetSyntaxExtensions (x);
+          when (ext : object != [])
+            exts ::= ext;
+
+          x :: acc
+        });
+      (exts, nodes)
+    }
+
+
+    /** We substitute
+        using Y = X.Z;
+        by
+        _tmp1.Y.pointed_by_X_Z // for each part in current namespace
+        using _tmp1;
+     */
+    [Nemerle.Assertions.Requires (short_name != "")]
+    add_alias_nodes (short_name : string, long_name : list [string]) : list [NamespaceTree.Node]
+    {
+      mutable all_opened = [];
+      // in case we are inside some namespace, we must open every namespace path
+      // composed of current namespace's parts suffixed with opened one
+      def open_nested (curr) {
+        unless (curr == null) {
+          // this is the faked namespace node, to simulate forwarding of access to SHORT
+          // into FULL's node
+          def node_with_prefix = NamespaceTree.Node (curr, null, NamespaceTree.TypeInfoCache.No ());
+          def full_node = curr.Path (long_name);
+          node_with_prefix.AddChild (short_name, full_node);
+
+          all_opened = node_with_prefix :: all_opened;
+          open_nested (curr.Parent)
+        }
+      }
+      open_nested (current_namespace);
+      all_opened;
+    }
+
+    /// Creates environment described by given string encoded for purpose of storing macro contexts
+    public this (coded : string, in_manager : ManagerClass)
+    {
+      Defines = in_manager.CoreEnv.Defines;
+      Manager = in_manager;
+      this.nameTree = Manager.NameTree;
+      mutable state = 0;
+      mutable last = 0;
+      mutable short = "";
+
+      current_namespace = nameTree.namespace_tree;
+      open_namespaces = [];
+      namespace_aliases = [];
+      macro_ctx_cache = -1;
+
+      for (mutable i = 0; i < coded.Length; ++i) {
+        match ((state, coded[i])) {
+          | (0, '&') =>
+            current_namespace = nameTree.namespace_tree.Path(coded.Substring(0, i));
+            state = 1;
+            last = i + 1;
+
+          | (1, '#') =>
+            open_namespaces = nameTree.namespace_tree.Path (coded.Substring (last, i - last))
+                               :: open_namespaces;
+            last = i + 1;
+
+          | (1, '&') =>
+            open_namespaces = nameTree.namespace_tree.Path (coded.Substring (last, i - last))
+                               :: open_namespaces;
+            state = 2;
+            last = i + 1;
+
+          | (_, '=') =>
+            short = coded.Substring (last, i - last);
+            // we may be here in state == 2, when this is the first '='
+            state = 3;
+            last = i + 1;
+
+          // we should add aliases only if the first 'short =' occured
+          | (3, '#') | (3, '&') =>
+            def long_name = coded.Substring (last, i - last);
+            def nodes_with_prefix = add_alias_nodes (short, NString.Split (long_name, array ['.']));
+            open_namespaces = NList.RevAppend (nodes_with_prefix, open_namespaces);
+            namespace_aliases = (short, long_name) :: namespace_aliases;
+            last = i + 1;
+
+          | _ => ()
+        }
+      }
+    }
+
+
+    // the format is Current.Namespace.&open.ns1#open.ns2&al1=alias.one#al2=alias.two&
+    public GetMacroContext () : int
+    {
+      when (macro_ctx_cache == -1)
+      {
+        nameTree.prepare_macro_context_class ();
+
+        def collect (k, v) { k + "=" + v }
+        def extract (x : NamespaceTree.Node, acc)
+        {
+          if (x.IsFromAlias) acc
+          else               x.GetDisplayName () :: acc
+        }
+
+        def aliases = NList.Sort (NList.RevMap (namespace_aliases, collect), String.CompareOrdinal);
+        def spaces = NList.Sort (NList.FoldLeft (open_namespaces, [], extract), String.CompareOrdinal);
+        def coded_al = aliases.ToString ("#");
+        def coded_ns = spaces.ToString ("#");
+        def coded = Text.StringBuilder (current_namespace.GetDisplayName () + "&");
+        ignore (coded.Append (coded_ns + "&"));
+        ignore (coded.Append (coded_al + "&"));
+        match (nameTree.macro_contexts.Get (coded.ToString ())) {
+          | None =>
+            ++nameTree.macro_context;
+            nameTree.macro_contexts.Add (coded.ToString (), nameTree.macro_context);
+            macro_ctx_cache = nameTree.macro_context
+          | Some (ctx) =>
+            macro_ctx_cache = ctx
+        }
+      }
+      macro_ctx_cache
+    }
+
+    public override ToString () : string
+    {
+      "GlobalEnv(" + current_namespace.GetDisplayName () + ": " +
+                     open_namespaces.Map (_.GetDisplayName ()).ToString () + ")"
+    }
+  }
+}

@@ -1,0 +1,1625 @@
+/*
+ * Copyright (c) 2003-2008 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Logging;
+using System.Reflection;
+using System;
+using System.Diagnostics;
+
+using Nemerle.Compiler.SolverMacros;
+using Nemerle.Surround;
+
+using NC = Nemerle.Compiler;
+
+//#define TRACE_SOLVER
+
+#if TRACE_SOLVER
+[assembly: LogFlag(SOLVER, true)]
+#else
+[assembly: LogFlag(SOLVER, false)]
+#endif
+
+[assembly: DefineSurround("visit_type_var", true, this.flags |= Flags.Visit, this.flags &= ~Flags.Visit)]
+
+namespace Nemerle.Compiler
+{
+  /*  Represents a node in constraint graph. Used during type
+      inference.
+
+      Each node in the constraint graph (TypeVar) can have an upper_bound
+      and lower_bound , expressed in terms of a FixedType. It can also have
+      links up (upper_tyvars) and down (lower_tyvars) to other nodes
+      in the constraint graph. We are interested in finding a solution,
+      that assigns a FixedType (m) to each TypeVar, such that upper_bound <:
+      m, m <: lower_bound, and for each t in upper_tyvars, t <: m,
+      and for each t in lower_tyvars, m <: t.
+
+      Such a solution is found by the Fixate() function, by taking
+      upper_bound (if defined), lower_bound (if defined) or System.Object
+      (if neither is defined).
+
+      The data structure maintains invariant that this is indeed the
+      correct solution (by transitively closing upper/lower_bound
+      when new upper/lower_tyvars are added, and propagating
+      changes in upper/lower_bound to upper/lower_tyvars).
+    */
+  [ManagerAccess]
+  public class TypeVar : TypedBase, System.IComparable[TypeVar], System.IEquatable[TypeVar]
+  {
+    #region PUBLIC interface
+
+    // Compares accurate to type variable/type parameter
+    public static StructuralEquals(t1 : TypeVar, t2 : TypeVar) : bool
+    {
+      match (t1.Self, t2.Self)
+      {
+        | (x, y) when x : object == y => true
+        | (FixedType.Class(ti1, []),        FixedType.Class(ti2, []))                => ti1.Equals(ti2)
+        | (FixedType.Class(ti1, [a1]),      FixedType.Class(ti2, [a2]))              => ti1.Equals(ti2) && StructuralEquals(a1, a2)
+        | (FixedType.Class(ti1, args1),     FixedType.Class(ti2, args2))             => ti1.Equals(ti2) && args1.ForAll2(args2, StructuralEquals)
+        | (FixedType.StaticTypeVarRef(tv1), FixedType.StaticTypeVarRef(tv2))         => tv1.StructuralEquals(tv2)
+        | (FixedType.Fun(f1, t1),           FixedType.Fun(f2, t2))                   => StructuralEquals(f1, f2) && StructuralEquals(t1, t2)
+        | (FixedType.Tuple(args1),          FixedType.Tuple(args2))                  => args1.ForAll2(args2, StructuralEquals)
+        | (FixedType.Out(t1),               FixedType.Ref(t2))
+        | (FixedType.Ref(t1),               FixedType.Out(t2))
+        | (FixedType.Out(t1),               FixedType.Out(t2))
+        | (FixedType.Ref(t1),               FixedType.Ref(t2))
+        | (FixedType.Array(t1, r1),         FixedType.Array(t2, r2)) when (r1 == r2) => StructuralEquals(t1, t2)
+        | (FixedType.Void,                  FixedType.Void)                          => true
+        | (FixedType.Intersection(l1),      FixedType.Intersection(l2)) =>
+          if (l1.Length == l2.Length)
+          {
+            def h = Hashtable ();
+
+            foreach (FixedType.Class(ti, _) as t in l1)
+              h[ti] = t;
+
+            mutable same = true;
+
+            foreach (FixedType.Class(ti, _) as t in l2)
+              if (h.Contains (ti))
+                same = same && StructuralEquals(h[ti], t)
+              else
+                same = false;
+
+            same
+          }
+          else false
+        | (x, y) => 
+          if (x is FixedType || y is FixedType)
+            false
+          else
+            x.TryUnify(y)
+      }
+    }
+
+    
+    /// Require [this] to be at least [t].
+    ///
+    ///   To be called when we require some lower constraint on type
+    ///   variable.  Return [true] if it's possible.
+    public virtual Require(t : TypeVar) : bool
+    {
+      if (t.IsFixed)
+        Require(t.FixedValue)
+      else if (IsFixed)
+        t.Provide(FixedValue)
+      else
+        AddRelation(t, this)
+    }
+
+
+    /// Check [this] to be subtype of [t].
+    public TryRequire(t : TypeVar) : bool
+    {
+      surroundwith(speculatitveTyping)
+      {
+        def res = this.Require(t);
+        res
+      }
+    }
+
+
+    /// This is much like [assert(Require (t))], but is executed regardless
+    /// of asserts and ignores the result if there was already a
+    /// [LocalError].
+    public ForceRequire(t : TypeVar) : void
+    {
+      if (LocalError)
+        _ = Require(t)
+      else
+      {
+        def ok = Require(t);
+        Util.cassert(ok, $"failed to require $t from $this");
+      }
+    }
+
+
+    /// Require [this] to be at least [t].
+    ///
+    /// To be called when we require some lower constraint on type
+    /// variable.  Return [true] iff it's possible.
+    public virtual Require(t : FixedType) : bool
+    {
+      if (IsFixed)
+        Self.Require(t)
+      else
+        AddRelation(t, this, rev = false)
+    }
+
+
+    /// Provide type [t] as the maximal type for [this].
+    ///
+    /// To be called when value of type [t] is assigned to cell of type
+    /// [this]. Dual to [Require].
+    public virtual Provide(t : TypeVar) : bool
+    {
+      if (t.IsFixed)
+        Provide(t.FixedValue)
+      else if (IsFixed)
+        t.Require(FixedValue)
+      else
+        AddRelation(this, t)
+    }
+
+    public TryProvide(t : TypeVar) : bool
+    {
+      surroundwith(speculatitveTyping)
+      {
+        def res = this.Provide(t);
+        res
+      }
+    }
+
+    public ForceProvide(t : TypeVar) : void
+    {
+      if (LocalError)
+        _ = Provide(t)
+      else
+      {
+        def ok = Provide(t);
+        Util.cassert(ok, $"failed to provide $t to $this");
+      }
+    }
+
+    /// Provide type [t] as the maximal type for [this].
+    ///
+    /// To be called when value of type [t] is assigned to cell of type
+    /// [this]. Dual to [Require].
+    public virtual Provide(t : FixedType) : bool
+    {
+      if (IsFixed)
+        Self.Provide(t)
+      else
+        AddRelation(t, this, rev = true)
+    }
+
+
+    /// Make sure [t] and [this] will from now on always represent the same type.
+    [ForwardThis(Self)]
+    [PossiblyLooping(Manager.Solver)]
+    public Unify(t : TypeVar) : bool
+    {
+      def t = t.Self;
+
+      log(SOLVER, $"UnifyTV: $(this) =? $t"); // $(System.Environment.StackTrace)");
+
+      if (IsFixed)
+        t.Unify(FixedValue)
+      else if (t.IsFixed)
+        Unify(t.FixedValue)
+      else if (IsFresh)
+        this.Alias(t)
+      else if (t.IsFresh)
+        t.Alias(this)
+      else
+      {
+        assert(IsFree);
+        assert(t.IsFree);
+        Provide(t) && Require(t)
+      }
+    }
+
+    public TryUnify(t : TypeVar) : bool
+    {
+      surroundwith(speculatitveTyping)
+      {
+        def res = this.Unify(t);
+        res
+      }
+    }
+
+    /// Make sure [t] and [this] will from now on always represent the same type.
+    [ForwardThis(Self)]
+    public virtual Unify(t : FixedType) : bool
+    {
+      log(SOLVER, $ "Unify: $(this) =? $t");
+      
+      if (IsFixed)
+        FixedValue.Unify(t)
+      else if (IsFresh)
+      {
+        if (this.HasReferenceTypeConstraint && t.IsValueType)
+          false
+        else
+          Alias(t)
+      }
+      else
+      {
+        def prev = LocalErrorCount;
+        assert(IsFree);
+        when (Alias(t))
+        {
+          when (lower_bound != null)
+            _ = t.Require(lower_bound);
+
+          when (upper_bound != null)
+            _ = t.Provide(upper_bound);
+
+          SetLowerBound(t);
+          SetUpperBound(t);
+        }
+
+        prev == LocalErrorCount
+      }
+    }
+
+
+    public ForceUnify(t : TypeVar) : void
+    {
+      if (LocalError)
+        _ = Unify(t)
+      else
+      {
+        def ok = Unify(t);
+        Util.cassert(ok, $"failed to unify $t and $this");
+      }
+    }
+
+    public EqualsUpperBound(other : TypeVar) : bool
+    {
+      if (this.upper_bound != null && this.upper_bound.Equals(other))
+        true
+      else if (this.upper_tyvars == null)
+        false
+      else
+      {
+        def res = blockRet :
+        {
+          foreach (tv when tv != null in this.upper_tyvars)
+            if (tv.IsFixed)
+              when (tv.FixedValue.Equals(other))
+                blockRet(true);
+            else when (tv.Hint is Some(mt))
+              when (mt.Equals(other))
+                blockRet(true);
+
+          false
+        };
+
+        res
+      }
+    }
+
+    public LowerBound : option[FixedType]
+    {
+      get
+      {
+        def b = Self.lower_bound;
+
+        if (b == null)
+          None()
+        else
+          Some(b)
+      }
+    }
+
+    public UpperBound : option[FixedType]
+    {
+      get
+      {
+        def b = Self.upper_bound;
+
+        if (b == null)
+          None()
+        else
+          Some(b)
+      }
+    }
+
+
+    public Hint : option[FixedType]
+    {
+      get
+      {
+        def s  = Self;
+        def ub = s.upper_bound;
+        def lb = s.lower_bound;
+
+        if (ub == null)
+          if (lb == null || lb.Equals(InternalType.Object))
+            None()
+          else
+            Some(lb)
+        else
+          Some(ub)
+      }
+    }
+
+    public HintFast : FixedType
+    {
+      get
+      {
+        def s  = Self;
+        def ub = s.upper_bound;
+        def lb = s.lower_bound;
+
+        if (ub == null)
+          if (lb == null || lb.Equals(InternalType.Object))
+            null
+          else
+            lb
+        else
+          ub
+      }
+    }
+
+    public AnyHint : option[FixedType]
+    {
+      get
+      {
+        def s  = Self;
+        def ub = s.upper_bound;
+        def lb = s.lower_bound;
+
+        if (ub == null)
+          if (lb == null)
+            None()
+          else
+            Some(lb)
+        else
+          Some(ub)
+      }
+    }
+
+
+    public virtual FixedValue : FixedType
+    {
+      get
+      {
+        def s = Self;
+        assert(s.flags %&& Flags.IsMonoType);
+        assert(s.lower_bound != null);
+        s.lower_bound
+      }
+    }
+
+
+    [Nemerle.OverrideObjectEquals]
+    public Equals(t : TypeVar) : bool
+      implements System.IEquatable[TypeVar].Equals
+    {
+      if (t.Self : object == this.Self : object)
+        true
+      else if (this.IsFixed && t.IsFixed)
+        this.FixedValue.Equals(t.FixedValue)
+      else
+        false
+    }
+
+
+    public virtual Fix() : FixedType
+    {
+      Fixate();
+      FixedValue
+    }
+
+    public virtual IsPointer : bool { get { TypeInfo?.IsPointer } }
+    
+    public virtual IsAccessibleFrom(_ : NC.TypeInfo) : bool
+    {
+      throw System.NotSupportedException("it is supposed to be called on fixed type");
+    }
+
+    public IsFixed : bool
+    {
+      get { Self.flags %&& Flags.IsMonoType }
+    }
+
+
+    public IsFree : bool
+    {
+      get { !(Self.flags %&& Flags.IsMonoType) }
+    }
+
+
+    public IsFresh : bool
+    {
+      get { Self.flags %&& Flags.IsFresh }
+    }
+    
+    public IsEnum : bool
+    {
+      get { this.TypeInfo?.IsEnum }
+    }
+
+    public TypeInfo : NC.TypeInfo
+    {
+      get { HintFast?.TypeInfo }
+    }
+
+    public AlwaysUnify : bool
+    {
+      get { Self.flags %&& Flags.AlwaysUnify }
+      set
+      {
+        if (value)
+          Self.flags |= Flags.AlwaysUnify;
+        else
+          Self.flags &= ~Flags.AlwaysUnify;
+      }
+    }
+    
+    public IsConstrained : bool
+    {
+      get
+      {
+        surroundwith (visit_type_var)
+        {
+          def s = Self;
+          
+          s.flags %&& (Flags.IsMonoType | Flags.IsFromNull | Flags.AlwaysUnify)
+          ||
+            {
+              def ub = s.upper_bound;
+              def lb = s.lower_bound;
+
+              if (ub == null)
+                if (lb == null)
+                  ret :
+                  {
+                    when (s.upper_tyvars != null)
+                      foreach (tv when tv != null in s.upper_tyvars)
+                        when (!(tv.flags %&& Flags.Visit) && tv.IsConstrained)
+                          ret(true);
+
+                    when (s.lower_tyvars != null)
+                      foreach (tv when tv != null in s.lower_tyvars)
+                        when (!(tv.flags %&& Flags.Visit) && tv.IsConstrained)
+                          ret(true);
+
+                    false
+                  }
+                else
+                  true
+              else
+                true
+            }
+          }
+      }
+    }
+    
+    public HasReferenceTypeConstraint : bool
+    {
+      get { Self.flags %&& Flags.HasReferenceTypeConstraint }
+      set
+      {
+        assert(IsFree);
+        assert(value);
+
+        when (!HasReferenceTypeConstraint)
+        {
+          WillWrite();
+          def s = Self;
+          s.flags |= Flags.HasReferenceTypeConstraint;
+          when (IsValueType)
+            SaveError(Manager.Solver.CurrentMessenger, $"the 'class' constraint is not compatibile with a value type ($(Option.UnSome(Hint)))");
+          when (s.lower_tyvars != null)
+            foreach (tv when tv != null && tv.IsFree in s.lower_tyvars)
+              tv.HasReferenceTypeConstraint = true;
+          when (s.upper_tyvars != null)
+            foreach (tv when tv != null && tv.IsFree in s.upper_tyvars)
+              tv.HasReferenceTypeConstraint = true;
+        }
+      }
+    }
+
+    public IsFromNull : bool
+    {
+      get { Self.flags %&& Flags.IsFromNull }
+      set
+      {
+        assert(IsFree);
+        assert(value);
+
+        when (!IsFromNull)
+        {
+          WillWrite();
+          def s = Self;
+          s.flags |= Flags.IsFromNull;
+          when (!CanBeNull)
+            SaveError(Manager.Solver.CurrentMessenger, $"the `null' literal is not a valid value of type $(Option.UnSome(Hint))");
+          when (s.lower_tyvars != null)
+            foreach (tv when tv != null && tv.IsFree in s.lower_tyvars)
+              tv.IsFromNull = true;
+          when (s.upper_tyvars != null)
+            foreach (tv when tv != null && tv.IsFree in s.upper_tyvars)
+              tv.IsFromNull = true;
+        }
+      }
+    }
+
+    /// Fix the type to be [LowerBound], so it won't change anymore.
+    /// Don't use this function unless absolutely necessary.
+    [ForwardThis(Self)]
+    public Fixate() : void
+    {
+      unless (IsFixed)
+      {
+        #if TRACE_SOLVER
+        def before = ToString();
+        log(SOLVER, $"fixing $before");
+        #endif
+        def bound =
+          match (Hint)
+          {
+            | Some(t) => t
+            | None    => InternalType.Object
+          };
+        def was_local_error = LocalError;
+        def cyclic_count    = Manager.Solver.CyclicTypeCount;
+        def res             = Unify(bound);
+
+        unless (was_local_error)
+        {
+          unless (res)
+            Manager.Solver.CurrentMessenger.DumpSavedError();
+          when (cyclic_count != Manager.Solver.CyclicTypeCount)
+            Message.FatalError($"cyclic type found: $this");
+          //#if !TRACE_SOLVER
+          //def before = "";
+          //#endif
+        }
+      }
+    }
+
+    mutable static level : int;
+
+    public override ToString() : string
+    {
+      if (IsFree)
+      {
+        level++;
+        def res =
+          if (level > 4)
+            "..."
+          else
+          {
+            #if TRACE_SOLVER
+            def str(tv : TypeVar)
+            {
+              if (tv == null) "*"
+              else {
+                def tv = tv.Self;
+                $"{$(tv.id)}:"+
+                match ((tv.lower_bound, tv.upper_bound))
+                {
+                  | (null, null) => "?"
+                  | (t, null) => $ "$t+"
+                  | (null, t) => $ "$t-"
+                  | (t1, t2) => $ "($t1 TILL $t2)"
+                }
+              }
+            }
+
+            def t = Self;
+            mutable add = $ "{$(t.id)}:";
+            when (t.upper_tyvars != null)
+            {
+              add += "upper[";
+              foreach (tv in t.upper_tyvars)
+                add += str(tv) + ", ";
+              add += "]:";
+            }
+            when (t.lower_tyvars != null) {
+              add += "lower[";
+              foreach (tv in t.lower_tyvars)
+                add += str(tv) + ", ";
+              add += "]:";
+            }
+
+            add +
+            #endif
+            match ((Self.lower_bound, Self.upper_bound))
+            {
+              | (null, null) =>
+                mutable res = "";
+
+                when (Self.upper_tyvars != null)
+                  foreach (tv when tv != null in Self.upper_tyvars)
+                    match (tv.Hint)
+                    {
+                      | Some(m) =>
+                        if (res == "")
+                          res = $"$m++"
+                        else
+                          res += $", $m++"
+                      | None => {}
+                    }
+
+                when (Self.lower_tyvars != null)
+                  foreach (tv when tv != null in Self.lower_tyvars)
+                    match (tv.Hint)
+                    {
+                      | Some(m) =>
+                        if (res == "")
+                          res = $"$m--"
+                        else
+                          res += $", $m--"
+                      | None => {}
+                    }
+
+                if (res == "")
+                {
+                  if (Self.HasReferenceTypeConstraint)
+                    "'reference type'"
+                  else if (Self.IsFromNull)
+                    "'reference or nullable type'"
+                  else if (Self.IsValueType)
+                    "'value type'"
+                  else
+                    "?"
+                }
+                else res
+
+              | (t, null) => $ "$t+"
+              | (null, t) => $ "$t-"
+              | (t1, t2) =>
+                if (t1.Equals(InternalType.Object))
+                  $ "$t2-"
+                else
+                  $ "($t1 TILL $t2)"
+            }
+          };
+        level--;
+        res
+      }
+      else
+      {
+        level++;
+        def res =
+          if (level > 4) "..."
+          else
+            #if TRACE_SOLVER
+            $"{$id}$FixedValue";
+            #else
+            FixedValue.ToString();
+            #endif
+        level--;
+        res
+      }
+    }
+
+
+    public CompareTo(other : TypeVar) : int
+    {
+      id - other.id
+    }
+
+
+    public override GetHashCode() : int
+    {
+      id
+    }
+
+
+    public CurrentSolver : Solver
+    {
+      get { Manager.Solver }
+    }
+
+    static DoDeepFix(x : TypeVar) : TypeVar
+    {
+      x.DeepFix()
+    }
+
+
+    static DoDeepFixM(x : FixedType) : FixedType
+    {
+      x.DeepFix()
+    }
+
+
+    public DeepFix() : FixedType
+    {
+      if (Manager.Solver.CanEnterPossiblyLooping())
+        try
+        {
+          def t = Fix();
+          match (t)
+          {
+            | Class(tc, args) => FixedType.Class(tc, args.Map(DoDeepFix))
+            | Fun(from = from, argsCount = argsCount, to = to) => FixedType.Fun(from.DeepFix(), argsCount, to.DeepFix())
+            | Tuple(args) => FixedType.Tuple(args.Map(DoDeepFix))
+            | Array(t, r) => FixedType.Array(t.DeepFix (), r)
+            | Ref(t) => FixedType.Ref(t.DeepFix())
+            | Out(t) => FixedType.Out(t.DeepFix ())
+            | Intersection(t) => FixedType.Intersection(t.Map(DoDeepFixM))
+            | StaticTypeVarRef
+            | Void => t
+          }
+        }
+        finally { Manager.Solver.LeavePossiblyLooping() }
+      else
+      {
+        ReportError(Manager.Solver.CurrentMessenger, "deep fixation failed");
+        
+        when (Manager.Solver.CurrentMessenger.NeedMessage)
+          Message.MaybeBailout();
+          
+        InternalType.Void
+      }
+    }
+
+    public static FromList(types : list[TypeVar]) : TypeVar
+    {
+      | [x] => x
+      | []  => FixedType.Void()
+      | _   => FixedType.Tuple(types)
+    }
+
+    public ToList(method : IMethod) : list[TypeVar]
+    {
+      match (method.GetParameters().Length)
+      {
+        | 0 => []
+        | 1 => [this]
+        | count =>
+          match (Fix())
+          {
+            | Tuple(args) =>
+              assert(count == args.Length);
+              args
+
+            | fixed => Util.ice($"Type not match method signature ($fixed <- $this)")
+          }
+      }
+    }
+
+    public FunParamsTypes(meth : IMethod) : list[TypeVar]
+    {
+      match (this.Hint)
+      {
+        | Some(FixedType.Fun(from, _)) => from.ToList(meth)
+        | _ => Util.ice()
+      }
+    }
+
+    #endregion
+
+
+    #region PRIVATE helper functions
+    #if false
+    Validate() : void
+    {
+      when (upper_tyvars != null)
+        foreach (tv in upper_tyvars)
+          assert(tv == null || this.IsIn(tv.lower_tyvars), $"tv=$(tv.Self.id) this=$(id)");
+      when (lower_tyvars != null)
+        foreach (tv in lower_tyvars)
+          assert(tv == null || this.IsIn(tv.upper_tyvars), $"tv=$(tv.Self.id) this=$(id)");
+    }
+    #endif
+
+    AddRelation(low : TypeVar, high : TypeVar) : bool
+    {
+      def low  = low.Self;
+      def high = high.Self;
+
+      assert(low.IsFree);
+      assert(high.IsFree);
+
+      log(SOLVER, $ "AddTVRel: $low :> $high");
+
+      if (low : object == high : object || high.IsIn(low.upper_tyvars))
+        true
+      else
+      {
+        def prev = LocalErrorCount;
+
+        low.WillWrite();
+        high.WillWrite();
+
+        if (low.HasReferenceTypeConstraint)
+          high.HasReferenceTypeConstraint = true;
+        else when (high.HasReferenceTypeConstraint)
+          low.HasReferenceTypeConstraint = true;
+
+        if (low.IsFromNull)
+          high.IsFromNull = true;
+        else when (high.IsFromNull)
+          low.IsFromNull = true;
+
+        high.flags &= ~Flags.IsFresh;
+        low.flags  &= ~Flags.IsFresh;
+
+        #if TRACE_SOLVER
+        def dump = false;
+
+        when (dump)
+        {
+          Message.Debug($"low=$(low.id) high=$(high.id), $(low.serial)");
+          PrintSet("low.lower",  low.lower_tyvars);
+          PrintSet("low.upper",  low.upper_tyvars);
+          PrintSet("high.lower", high.lower_tyvars);
+          PrintSet("high.upper", high.upper_tyvars);
+        }
+        #endif
+
+        AddEdge(low, high);
+
+        #if TRACE_SOLVER
+        when (dump)
+        {
+          Message.Debug($"after, low=$(low.id) high=$(high.id), $(low.serial)");
+          PrintSet("low.lower",  low.lower_tyvars);
+          PrintSet("low.upper",  low.upper_tyvars);
+          PrintSet("high.lower", high.lower_tyvars);
+          PrintSet("high.upper", high.upper_tyvars);
+        }
+        #endif
+
+        // low.Validate();
+        // high.Validate();
+
+        if (low.IsIn(low.upper_tyvars))
+        {
+          def cycle = IntersectSets(low.upper_tyvars, high.lower_tyvars);
+
+          #if TRACE_SOLVER
+          when (dump)
+            PrintSet("cycle", cycle);
+          #endif
+
+          assert(high.IsIn(cycle));
+          assert(low.IsIn(cycle));
+
+          foreach (tv in cycle)
+            when (tv != null && tv : object != low)
+              _ = tv.Alias(low);
+
+          low.FixArrays();
+
+          foreach (tv in cycle)
+            when (tv != null)
+            {
+              when (tv.upper_bound != null)
+                _ = low.Provide(tv.upper_bound);
+              when (tv.lower_bound != null)
+                _ = low.Require(tv.lower_bound);
+            }
+
+          foreach (tv in cycle)
+            when (tv != null)
+            {
+              when (tv.upper_bound != null)
+                low.SetUpperBound(tv.upper_bound);
+              when (tv.lower_bound != null)
+                low.SetLowerBound(tv.lower_bound);
+            }
+
+        }
+        else
+        {
+          def low = low.Self;
+          when (low.lower_bound != null)
+            _ = high.Require(low.lower_bound);
+
+          def high = high.Self;
+          when (high.upper_bound != null)
+            _ = low.Provide(high.upper_bound);
+        }
+
+        prev == LocalErrorCount
+      }
+    }
+
+
+    Alias(tv : TypeVar) : bool
+    {
+      WillWrite();
+      assert(Self : object == this);
+
+      log(SOLVER, $ "Alias: $(this) ---> $tv, fresh=$(IsFresh)");
+
+      if (tv.Self : object != this)
+      {
+        when (tv.IsFree && this.HasReferenceTypeConstraint && !tv.HasReferenceTypeConstraint)
+          tv.HasReferenceTypeConstraint = true;
+        
+        if (IsFromNull && !tv.CanBeNull)
+        {
+          SaveError(Manager.Solver.CurrentMessenger, $"the `null' literal is not a valid value of type $tv");
+          false
+        }
+        else
+        {
+          when (tv.IsFree && IsFromNull && !tv.IsFromNull)
+            tv.IsFromNull = true;
+          flags |= Flags.IsAliased;
+          alias_to = tv;
+          true
+        }
+      }
+      else
+        true
+    }
+
+    protected static IsValueTypeImpl(type : FixedType) : bool
+    {
+      | Class (tc, _) => tc.IsValueType
+      | Tuple ([_, _])
+      | Tuple ([_, _, _]) => true
+      | _ => false
+    }
+
+    public virtual IsValueType : bool
+    {
+      get { IsValueTypeImpl(HintFast) }
+    }
+
+    public virtual IsNullable : bool
+    {
+      get
+      {
+        match (HintFast)
+        {
+          | Class(ti, [_]) when ti.Equals (InternalType.Generic_Nullable_tc) => true
+          | _ => false
+        }
+      }
+    }
+
+    public virtual CanBeNull : bool
+    {
+      get
+      {
+        def s = Self;
+
+           (s.lower_bound == null || s.lower_bound.CanBeNull) 
+        && (s.upper_bound == null || s.upper_bound.CanBeNull)
+      }
+    }
+
+
+    internal virtual NeedNoSubst : bool
+    {
+      get
+      {
+        def s = Self;
+        
+        if (s.flags %&& Flags.IsMonoType)
+          s.NeedNoSubst
+        else
+          s.flags %&& Flags.IsFresh 
+          || 
+          (
+            (s.lower_bound == null || s.lower_bound.NeedNoSubst) 
+         && (s.upper_bound == null || s.upper_bound.NeedNoSubst)
+          )
+      }
+    }
+
+
+    SetLowerBound(lb : TypeVar) : void
+    {
+      when (lb != null && upper_tyvars != null)
+        foreach (tv when tv != null in upper_tyvars)
+          _ = tv.Require(lb);
+    }
+
+
+    SetUpperBound (ub : TypeVar) : void
+    {
+      when (ub != null && lower_tyvars != null)
+        foreach (tv when tv != null in lower_tyvars)
+          _ = tv.Provide(ub);
+    }
+
+
+    static FixArray(s : array[TypeVar], eject : TypeVar) : void
+    {
+      for (mutable i = 0; i < s.Length; ++i)
+      {
+        when (s [i] != null)
+        {
+          def tv = s [i].Self;
+
+          if (tv.flags %&& Flags.IsMonoType || tv : object == eject)
+            s[i] = null
+          else
+            s[i] = tv;
+        }
+      }
+    }
+
+
+    FixArrays() : void
+    {
+      FixArray(lower_tyvars, this);
+      FixArray(upper_tyvars, this);
+    }
+
+
+    [PossiblyLooping (Manager.Solver)]
+    AddRelation(low : FixedType, high : TypeVar, rev : bool) : bool
+    {
+      assert(low != null);
+      assert(high != null);
+
+      whenlogging (SOLVER)
+        if (rev)
+          Message.Debug($"AddRelation: $low <: $high");
+        else
+          Message.Debug($"AddRelation: $low :> $high");
+
+      high.WillWrite();
+      def high = high.Self;
+      high.flags &= ~Flags.IsFresh;
+
+      if (low.IsSeparated && high.IsFree)
+        match (low)
+        {
+        /*
+          | FixedType.Fun
+          | FixedType.Array
+          | FixedType.StaticTypeVarRef
+          | FixedType.Tuple
+          */
+          | FixedType.Void => high.Unify(low)
+
+          /*
+          | FixedType.Fun(t1, t2) =>
+            def tv1 = Solver.FreshTypeVar();
+            def tv2 = Solver.FreshTypeVar();
+            if (rev)
+            {
+              _ = tv1.Require(t1);
+              _ = tv2.Provide(t2);
+            } else {
+              _ = tv1.Provide(t1);
+              _ = tv2.Require(t2);
+            }
+            high.Unify(FixedType.Fun(tv1, tv2))
+
+          | FixedType.Tuple(ts) =>
+            def ts' = NList.Map(ts, fun(t : TypeVar) 
+            {
+              def tv = Solver.FreshTypeVar();
+              if (rev)
+                _ = tv.Provide(t)
+              else
+                _ = tv.Require(t);
+              tv
+            });
+            high.Unify(FixedType.Tuple(ts'))
+            */
+
+          | _ => assert(false)
+        }
+      else if (rev && low.Equals(InternalType.Object))
+        high.Unify(low)
+      else if (!high.IsFree)
+      {
+        if (rev)
+          low.Require(high.FixedValue)
+        else
+          high.FixedValue.Require(low)
+      }
+      else if (high.IsFree && high.IsFromNull && !low.CanBeNull)
+      {
+        SaveError(Manager.Solver.CurrentMessenger, $"the `null' literal is not a valid value of type $low");
+        false
+      }
+      else
+      {
+        def prev = LocalErrorCount;
+
+        def error(index : int, tuple : FixedType) : void
+        {
+          SaveError(Manager.Solver.CurrentMessenger, $"the element with index $index in tuple '$tuple' is recursive. This bug can be caused by the parametr to tuple transformation.");
+        }
+
+        if (rev)
+        {
+          def new_bound = Manager.Solver.Sum(high.upper_bound, low);
+          log(SOLVER, $ "new_bound=$new_bound ($(high.upper_bound) X $low) $LocalError");
+          def high = high.Self;
+
+          if (high.IsFixed)
+            _ = high.Provide(new_bound);
+          else
+          {
+            high.WillWrite();
+            // Message.Debug($"new bound $new_bound");
+            when (high.upper_bound == null || !new_bound.Equals(high.upper_bound))
+            {
+              retBlock :
+              {
+                when (new_bound is FixedType.Tuple(args))
+                {
+                  def highId = high.id;
+
+                  foreach (a when a.id == highId in args with i)
+                    retBlock(error(i, new_bound));
+                }
+
+                high.upper_bound = new_bound;
+              }
+              high.SetUpperBound(low);
+            }
+          }
+        }
+        else
+        {
+          def new_bound = Manager.Solver.Intersect(high.lower_bound, low);
+          def high = high.Self;
+          if (high.IsFixed)
+            _ = high.Require(new_bound);
+          else
+          {
+            high.WillWrite();
+            log(SOLVER, $"new_bound=$new_bound ($(high.lower_bound) X $low) $LocalError");
+            when (high.lower_bound == null || !new_bound.Equals(high.lower_bound))
+            {
+              retBlock :
+              {
+                when (new_bound is FixedType.Tuple(args))
+                {
+                  def highId = high.id;
+
+                  foreach (a when a.id == highId in args with i)
+                    retBlock(error(i, new_bound));
+                }
+
+                high.lower_bound = new_bound;
+              }
+              high.SetLowerBound(low);
+            }
+          }
+        }
+
+        unless (high.IsFixed)
+        {
+          def high = high.Self;
+          when (high.upper_bound != null && high.lower_bound != null)
+          {
+            log(SOLVER, $"Require: $(high.upper_bound) <: $(high.lower_bound)");
+            _ = high.upper_bound.Require(high.lower_bound);
+            log(SOLVER, $"Require: $(high.upper_bound) <: $(high.lower_bound) --> $LocalError");
+          }
+
+          def high = high.Self;
+
+          when (high.IsFree && high.upper_bound != null && high.lower_bound != null && high.upper_bound.TryEnforcingEquality(high.lower_bound))
+            _ = high.Unify(high.lower_bound);
+        }
+
+        // Message.Debug($"error=$(LocalError)");
+        prev == LocalErrorCount
+      }
+    }
+
+    print_info() : void
+    {
+      def the_serial = serial;
+      serial = 1; // make it print
+      Message.Debug($"oops, our_serial=$the_serial, stack[0]=$(Manager.Solver.serial_stack[0]), "
+                     "stack[1]=$(Manager.Solver.serial_stack[1]), top=$(Manager.Solver.serial_stack_top), "
+                     "id=$id, this=$(this)");
+      serial = the_serial;
+    }
+
+    WillRead() : void
+    {
+      def loop(i)
+      {
+        if (i < 0 || Manager.Solver.serial_stack[i] < serial)
+        {
+          when (next == null)
+          {
+            print_info();
+            assert(false);
+          }
+          def store = next;
+          CopyFrom(next);
+          store.next = Manager.TyVar_reuse_queue;
+          Manager.TyVar_reuse_queue = store;
+          loop(Manager.Solver.serial_stack_top)
+        }
+        else if (Manager.Solver.serial_stack [i] == serial)
+          {}
+        else
+          loop(i - 1)
+      }
+
+      unless (Manager.Solver.top_serial == serial)
+        loop(Manager.Solver.serial_stack_top)
+    }
+
+
+    CopyArrays() : void
+    {
+      unless (upper_tyvars == null)
+        upper_tyvars = upper_tyvars.Clone() :> array[TypeVar];
+
+      unless (lower_tyvars == null)
+        lower_tyvars = lower_tyvars.Clone() :> array[TypeVar];
+    }
+
+
+    static CopyTyVar(tv : TypeVar) : TypeVar
+    {
+      if (tv.Manager.TyVar_reuse_queue == null)
+        TypeVar(tv)
+      else
+      {
+        def res = tv.Manager.TyVar_reuse_queue;
+        tv.Manager.TyVar_reuse_queue = tv.Manager.TyVar_reuse_queue.next;
+        res.flags = Flags.None;
+        res.CopyFrom(tv);
+        res
+      }
+    }
+
+
+    WillWrite() : void
+    {
+      WillRead();
+      when (Manager.Solver.top_serial != serial)
+      {
+        def tv = CopyTyVar(this);
+        next = tv;
+        CopyArrays();
+        serial = Manager.Solver.top_serial;
+      }
+    }
+
+
+    protected Self : TypeVar
+    {
+      get
+      {
+        WillRead();
+        
+        if (flags %&& Flags.IsAliased)
+          alias_to.Self
+        else
+          this
+      }
+    }
+
+
+    CopyFrom(other : TypeVar) : void
+    {
+      assert(!(other.flags %&& Flags.IsMonoType));
+      assert(!(flags %&& Flags.IsMonoType));
+
+      alias_to     = other.alias_to;
+      next         = other.next;
+      serial       = other.serial;
+      id           = other.id;
+      lower_bound  = other.lower_bound;
+      upper_bound  = other.upper_bound;
+      flags        = other.flags;
+      lower_tyvars = other.lower_tyvars;
+      upper_tyvars = other.upper_tyvars;
+      Location     = other.Location;
+    }
+
+    internal ResetSerial() : void
+    {
+      assert(IsFresh);
+      serial = 1;
+    }
+
+
+    LocalError : bool
+    {
+      get { Manager.Solver.CurrentMessenger.LocalError }
+    }
+
+
+    LocalErrorCount : int
+    {
+      get { Manager.Solver.CurrentMessenger.LocalErrorCount }
+    }
+    #endregion
+
+
+    #region State
+              mutable alias_to     : TypeVar;
+              mutable next         : TypeVar;
+    protected mutable serial       : int;
+              mutable id           : int;
+    protected mutable lower_bound  : FixedType;
+    protected mutable upper_bound  : FixedType;
+              mutable lower_tyvars : array [TypeVar];
+              mutable upper_tyvars : array [TypeVar];
+    protected mutable flags        : Flags;
+    
+    public ImplicitCastHint : TypeVar { get; set; }
+
+    [System.Flags]
+    public enum Flags
+    {
+      | None                       = 0x0000
+      | IsFromNull                 = 0x0001
+      | IsMonoType                 = 0x0002
+      | IsAliased                  = 0x0004
+      | IsFresh                    = 0x0008
+      | Visit                      = 0x0010
+      | AlwaysUnify                = 0x0020
+      | HasReferenceTypeConstraint = 0x0040
+      | HasValueTypeConstraint     = 0x0080
+    }
+    #endregion
+    static mutable stop_serial = -1;
+
+    #region Constructors (only internal)
+
+    [DebuggerNonUserCode]
+    internal this(man : ManagerClass)
+    {
+      Manager = man;
+      id = Manager.TyVar_Id;
+      ++Manager.TyVar_Id;
+      serial = Manager.Solver.top_serial;
+      flags = Flags.IsFresh; assert(stop_serial != serial || this is FixedType);
+    }
+
+    this(other : TypeVar)
+    {
+      Manager = other.Manager;
+      CopyFrom(other);
+    }
+    #endregion
+
+
+    #region Edge operations
+    static empty_set : array[TypeVar] = array[];
+
+    NullToEmpty() : void
+    {
+      WillWrite();
+      when (upper_tyvars == null)
+        upper_tyvars = empty_set;
+      when (lower_tyvars == null)
+        lower_tyvars = empty_set;
+    }
+
+    /** Requires [low] and [high] to be after [Self].  */
+    static AddEdge(low : TypeVar, high : TypeVar) : void
+    {
+      low.NullToEmpty();
+      high.NullToEmpty();
+
+      low.upper_tyvars = SumSets(low.upper_tyvars, high.upper_tyvars);
+      high.InsertSelfInto(low.upper_tyvars);
+
+      foreach (tv in low.lower_tyvars)
+      {
+        when (tv != null)
+        {
+          def tv = tv.Self;
+          unless (tv.flags %&& Flags.IsMonoType)
+          {
+            tv.WillWrite();
+            tv.upper_tyvars = SumSets(tv.upper_tyvars, low.upper_tyvars);
+          }
+        }
+      }
+
+      high.lower_tyvars = SumSets(low.lower_tyvars, high.lower_tyvars);
+      low.InsertSelfInto(high.lower_tyvars);
+
+      foreach (tv in high.upper_tyvars)
+      {
+        when (tv != null)
+        {
+          def tv = tv.Self;
+          unless (tv.flags %&& Flags.IsMonoType)
+          {
+            tv.WillWrite();
+            tv.lower_tyvars = SumSets(tv.lower_tyvars, high.lower_tyvars);
+          }
+        }
+      }
+    }
+    #endregion
+
+
+    #region Set operations
+    #if TRACE_SOLVER
+    static PrintSet(pref : string, s : array [TypeVar]) : void
+    {
+      def l = if (s == null) [] else
+      NList.MapFromArray (s, fun (x : TypeVar) {
+        if (x == null) 0
+        else if (x.IsFixed) -x.Self.id else x.Self.id });
+      Message.Debug ($ "set: $pref: $(l)");
+    }
+    #endif
+
+    IsIn (s : array [TypeVar]) : bool
+    {
+      def loop (i) {
+        if (i >= s.Length) false
+        else if (s [i] != null &&
+                 s [i].Self : object == this : object) true
+        else loop (i + 1)
+      }
+
+      if (s == null)
+        false
+      else
+        loop (0)
+    }
+
+
+    static NormalizeAndCount (s : array [TypeVar]) : int
+    {
+      mutable estimated_size = 0;
+
+      for (mutable i = 0; i < s.Length; ++i) {
+        when (s [i] != null) {
+          def tv = s [i].Self;
+
+          if (tv.flags %&& Flags.IsMonoType)
+            s [i] = null
+          else {
+            s [i] = tv;
+            ++estimated_size
+          }
+        }
+      }
+
+      estimated_size
+    }
+
+
+    InsertSelfInto (s : array [TypeVar]) : void
+    {
+      def loop (i) {
+        if (s [i] == null)
+          s [i] = this
+        else
+          loop (i + 1)
+      }
+      loop (0)
+    }
+
+
+    // assumes normalized array!
+    ContainedIn (s : array [TypeVar], max : int) : bool
+    {
+      def loop (i) {
+        if (i >= max) false
+        else if (s [i] : object == this : object) true
+        else loop (i + 1)
+      }
+      loop (0)
+    }
+
+
+    static SumSets (s1 : array [TypeVar], s2 : array [TypeVar]) : array [TypeVar]
+    {
+      if (s1 == null)
+        if (s2 == null) array(0) else s2
+      else if (s2 == null)
+        s1
+      else
+      {
+        def size = NormalizeAndCount (s1) + NormalizeAndCount (s2);
+        def res = array (size + 1);
+        mutable res_ptr = 0;
+
+        if (size > 42)
+        {
+          def hs = System.Collections.Generic.HashSet ();
+          foreach (tv in s1) {
+            when (tv != null && hs.Add (tv.id)) {
+              res [res_ptr] = tv;
+              ++res_ptr
+            }
+          }
+          foreach (tv in s2) {
+            when (tv != null && hs.Add(tv.id)) {
+              res [res_ptr] = tv;
+              ++res_ptr
+            }
+          }
+        }
+        else
+        {
+          foreach (tv in s1) {
+            when (tv != null && !tv.ContainedIn (res, res_ptr)) {
+              res [res_ptr] = tv;
+              ++res_ptr
+            }
+          }
+          foreach (tv in s2) {
+            when (tv != null && !tv.ContainedIn (res, res_ptr)) {
+              res [res_ptr] = tv;
+              ++res_ptr
+            }
+          }
+        }
+
+        res
+      }
+    }
+
+
+    static IntersectSets (s1 : array [TypeVar], s2 : array [TypeVar]) : array [TypeVar]
+    {
+      def size1 = NormalizeAndCount (s1);
+      def size2 = NormalizeAndCount (s2);
+      def res = array (if (size1 < size2) size1 else size2);
+      mutable res_ptr = 0;
+
+      if (size1 + size2 > 42) {
+        def hs = System.Collections.Generic.HashSet ();
+        foreach (tv in s1) {
+          when (tv != null)
+            _ = hs.Add (tv.id);
+        }
+        foreach (tv in s2) {
+          when (tv != null && hs.Remove (tv.id)) {
+            res [res_ptr] = tv;
+            ++res_ptr
+          }
+        }
+      } else {
+        foreach (tv in s1) {
+          when (tv != null &&
+                tv.ContainedIn (s2, s2.Length) &&
+                !tv.ContainedIn (res, res_ptr)) {
+            res [res_ptr] = tv;
+            ++res_ptr
+          }
+        }
+      }
+
+      res
+    }
+    #endregion
+  }
+}

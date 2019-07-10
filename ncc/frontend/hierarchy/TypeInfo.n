@@ -1,0 +1,1153 @@
+/*
+ * Copyright (c) 2003-2008 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using System;
+using Nemerle.Compiler;
+using Nemerle.Compiler.SolverMacros;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
+
+using Nemerle.Collections;
+using Nemerle.Utility;
+
+using SC  = System.Collections;
+using SCS = System.Collections.Specialized;
+using SCG = System.Collections.Generic;
+
+namespace Nemerle.Compiler
+{
+  public type BindingFlags = System.Reflection.BindingFlags;
+
+  [Flags]
+  public enum MemberKinds
+  {
+    /// <summary>Specifies that the member is a constructor</summary>
+    | Constructor = 1
+    /// <summary>Specifies that the member is an event.</summary>
+    | Event = 2
+    /// <summary>Specifies that the member is a field.</summary>
+    | Field = 4
+    /// <summary>Specifies that the member is a method.</summary>
+    | Method = 8
+    /// <summary>Specifies that the member is a property.</summary>
+    | Property = 16
+    /// <summary>Specifies that the member is a type.</summary>
+    | TypeInfo = 32
+    /// <summary>Specifies that the member is a custom member type. </summary>
+    | Custom = 64
+    /// <summary>Specifies that the member is a nested type.</summary>
+    | NestedType = 128
+    /// <summary>Specifies all member types.</summary>
+    | All = 191
+  }
+
+  public enum Accessibility
+  {
+    | Public
+    | Internal
+    | ProtectedOrInternal
+    | ProtectedAndInternal
+    | Protected
+    | Private
+  }
+
+  public variant BuiltinMethodKind
+  {
+    | NotBuiltin
+    | OpCode { checked_opcode : string; unchecked_opcode : string; }
+    | CallWithCast { meth : IMethod; }
+    | ValueTypeConversion
+    | ExtensionMethod { impl : IMethod; }
+  }
+
+  public interface IMember
+  {
+    IsConstructor : bool { get; }
+    Location : Location { get; }
+    IsObsolete : bool { get; }
+    IsPrivate : bool { get; }
+    DeclaringType : TypeInfo { get; }
+    Name : string { get; }
+    NameLocation : Location { get; }
+    MemberKind : MemberKinds { get; }
+    IsStatic : bool { get; } // types are always static
+    HasBeenUsed : bool { get; set; } // for the 'unused' warnings
+    IsConditional : bool { get; }
+    Attributes : NemerleModifiers { get; }
+
+    GetMemType() : FixedType;
+    CanAccess(source : TypeInfo) : bool;
+    CanAccess(memberTypeInfo : TypeInfo, currentTypeInfo : TypeInfo, isThisAccess : bool) : bool;
+    GetConditions() : list[string];
+    GetModifiers () : AttributesAndModifiers;
+
+    IsCustomAttributeDefined(attributeFullName : string) : bool;
+  }
+
+  public interface IField : IMember
+  {
+    IsMutable : bool { get; }
+    IsVolatile : bool { get; }
+    IsLiteral : bool { get; }
+    GetValue () : Literal;
+    HasBeenAssigned : bool { get; set; }
+  }
+
+  public interface IEvent : IMember
+  {
+    GetEventInfo () : System.Reflection.EventInfo;
+    GetAdder () : IMethod;
+    GetRemover () : IMethod;
+  }
+
+  public interface IMethod : IMember
+  {
+    GetFreshType () : FixedType * list [TypeVar];
+    Header : TFunHeader { get; }
+    GetHeader () : TFunHeader;
+    GetMethodBase () : System.Reflection.MethodBase;
+    GetMethodInfo () : System.Reflection.MethodInfo;
+    GetConstructorInfo () : System.Reflection.ConstructorInfo;
+    IsVarArgs : bool { get; }
+    IsFinal : bool { get; }
+    IsAbstract : bool { get; }
+    IsExtension : bool { get; }
+    BuiltinKind : BuiltinMethodKind { get; }
+    new GetMemType () : FixedType.Fun;
+
+    /// Obtains list of parameters of typed method
+    GetParameters () : list [TParameter];
+
+    /// Obtain return type of typed method. If it is already inferred/fixed
+    /// the value is one of FixedType variant options.
+    ReturnType : TypeVar { get; }
+  }
+
+  public interface IProperty : IMember
+  {
+    IsIndexer : bool { get; }
+    IsMutable : bool { get; }
+    GetPropertyInfo () : System.Reflection.PropertyInfo;
+    GetGetter() : IMethod;
+    GetSetter() : IMethod;
+  }
+
+  public abstract class MemberInfo
+  {
+    public StartTyping() : void
+    {
+      _userData = null;
+    }
+    
+    mutable _userData : SC.IDictionary;
+
+    public UserData : SC.IDictionary
+    {
+      get
+      {
+        when (_userData == null)
+          _userData = SCS.ListDictionary();
+
+        _userData
+      }
+    }
+
+    public virtual IsConstructor : bool { get { false } }
+
+    [Accessor]
+    protected mutable is_obsolete : bool;
+    [Accessor]
+    protected mutable attributes : NemerleModifiers;
+
+    public virtual IsStatic : bool
+    {
+      get { attributes %&& NemerleModifiers.Static }
+    }
+
+    public IsPublic : bool
+    {
+      get { attributes %&& NemerleModifiers.Public }
+    }
+
+    public IsPrivate : bool
+    {
+      get { attributes %&& NemerleModifiers.Private }
+    }
+
+    public IsProtected : bool
+    {
+      get { attributes %&& NemerleModifiers.Protected }
+    }
+
+    public IsInternal : bool
+    {
+      get { attributes %&& NemerleModifiers.Internal }
+    }
+
+    public IsAbstract : bool { get { attributes %&& NemerleModifiers.Abstract } }
+
+    public virtual HasBeenUsed : bool // for the 'unused' warnings
+    {
+      get { true; } // default impl
+      set
+      {
+        when (is_obsolete && value) // value indicates if we should warn about obsolete
+        {
+          mutable msg, is_error;
+          (msg, is_error) = GetObsoletionDetails ();
+
+          if (msg == null)
+            msg = $"$this is obsolete";
+          else
+            msg = $"$this is obsolete: '$msg'";
+
+          if (is_error)
+            Message.Error (msg);
+          else
+            Message.Warning (618, msg);
+        }
+      }
+    }
+
+    public abstract GetModifiers () : AttributesAndModifiers;
+    public abstract IsCustomAttributeDefined(attributeFullName : string) : bool;
+    public abstract GlobalEnv : GlobalEnv { get; }
+
+    internal virtual GetObsoletionDetails () : string * bool
+    {
+      def obsoletion_tc = this.GlobalEnv.Manager.InternalType.Obsolete_tc;
+      def mods = GetModifiers ();
+      assert(mods != null, this.ToString ());
+      def (_, parms) = mods.FindAttributeWithArgs (obsoletion_tc, this.GlobalEnv).Value;
+      mutable msg = null, is_error = false;
+      foreach (x in parms) {
+        | <[ $(m : string) ]> => msg = m;
+        | <[ $(b : bool) ]> => is_error = b;
+        | <[ Message = $(m : string) ]> => msg = m;
+        | <[ IsError = $(b : bool) ]> => is_error = b;
+        | _ => ()
+      }
+      (msg, is_error)
+    }
+
+    public CanAccess(memberTypeInfo : TypeInfo, currentTypeInfo : TypeInfo, isThisAccess : bool) : bool
+    {
+      def isCurrentOrNested(memberTypeInfo, currentTypeInfo)
+      {
+        if (currentTypeInfo == null || memberTypeInfo == null)
+          false
+        else if (memberTypeInfo.Equals(currentTypeInfo))
+          true
+        else
+          isCurrentOrNested(memberTypeInfo, currentTypeInfo.DeclaringType)
+      }
+
+      if (IsPublic)
+        true
+      else if (IsInternal && 
+          (memberTypeInfo is TypeBuilder ||
+          memberTypeInfo.CanAccess(currentTypeInfo)))
+        true
+      else if (isCurrentOrNested(memberTypeInfo, currentTypeInfo))
+        true
+      else if (IsProtected)
+      {
+        if (isThisAccess)
+          // Проверяем является ли текущий тип наследником типа в котором объявлен член к которому осуществляется доступ.
+          currentTypeInfo.IsDerivedFrom(memberTypeInfo)
+        else
+          // Проверяем является текущий тип родительским для типа члена.
+          memberTypeInfo.IsDerivedFrom(currentTypeInfo)
+      }
+      else
+        false
+    }
+
+    public virtual IsConditional : bool { get { false } }
+
+    public virtual GetConditions() : list[string] { [] }
+  }
+
+  [ManagerAccess]
+  public abstract class TypeInfo : MemberInfo, IMember, IBackendMember,
+                                   IComparable[TypeInfo], IEquatable[IMember], IEquatable[TypeInfo]
+  {
+    id : int;
+    protected mutable default_indexer       : string;
+    protected internal mutable typarms      : list[StaticTypeVar] = [];
+    protected mutable self_type             : FixedType.Class;
+    protected         fullname              : string;
+    protected mutable member_map            : Hashtable[string, list [IMember]];
+    protected         extension_patterns    : Hashtable[string, ExtensionPattern] = Hashtable ();
+    protected         namespace_nd          : NamespaceTree.Node;
+    protected mutable _superTypes           : list[FixedType.Class] = [];
+    protected mutable _superTypesLookup     : Hashtable[FixedType.Class, byte] = Hashtable();
+    protected mutable _superTypeInfosLookup : Hashtable[TypeInfo, list[FixedType.Class]] = Hashtable();
+    protected mutable _superTypesCalculated : bool;
+
+    public this (ns_node : NamespaceTree.Node, manager : ManagerClass, fullname : string)
+    {
+      Manager       = manager;
+      id            = manager.GetNewId();
+      namespace_nd  = ns_node;
+      this.fullname = fullname;
+    }
+    
+    public virtual GetElementTypeInfo() : option[TypeInfo] { None() }
+
+    internal CleanUp() : void
+    {
+      foreach ((name, ep) when ep.Temporary in extension_patterns.KeyValuePairs)
+        extension_patterns.Remove(name);
+    }
+    
+    public virtual MakePointerTypeInfo() : TypeInfo { null }
+
+    public virtual IsNotPublicExternal : bool { get { false } }
+    public virtual IsFloating          : bool { get { false } }
+    public virtual IsPrimitive         : bool { get { false } }
+    public virtual IsNumeric           : bool { get { false } }
+    public virtual Size                : int  { get { -1 } }
+    public virtual Unsigned            : bool { get { false } }
+    public virtual IsPointer           : bool { get { false } }
+
+    public VariantOptionCode   : int
+    {
+      mutable code : int = -1;
+      get { code }
+      protected set { code = value }
+    }
+
+    public NamespaceNode : NamespaceTree.Node
+    {
+      get { namespace_nd }
+    }
+
+    protected add_member_by_name (m : IMember) : void {
+      def n = m.Name;
+      member_map [n] =
+        if (member_map.Contains (n))
+          m :: member_map [n]
+        else
+          [m];
+    }
+
+    public AddExtensionPattern (e : ExtensionPattern) : void
+    {
+      if (GetExtensionPattern (e.Name).IsSome)
+        Message.Error ($ "the extension pattern `$(e.Name)' is already defined on $this (or its supertype)");
+      else
+        extension_patterns [e.Name] = e;
+    }
+
+    public GetExtensionPattern (name : string) : option [ExtensionPattern]
+    {
+      match (extension_patterns.Get (name)) {
+        | None =>
+          match (SuperClass ()) {
+            | Some (tc) => tc.GetExtensionPattern (name)
+            | None => None ()
+          }
+        | x => x
+      }
+    }
+
+    /// Searches for the types defined for the current TypeInfo, using the
+    /// specified BindingFlags.
+    public GetNestedTypes (bindingAttr : BindingFlags) : list[TypeInfo]
+    {
+      def attr   = bindingAttr | BindingFlags.Static | BindingFlags.Instance;
+      def result = SCG.List();
+
+      when (NamespaceNode.Children != null)
+        foreach (x in NamespaceNode.Children.Values)
+          when (x.LookupValue() is Some(t))
+            when (constrain_member(t, attr))
+              result.Add(t);
+
+      result.NToList()
+    }
+
+    public GetNestedTypes () : list[TypeInfo]
+    {
+      GetNestedTypes (BindingFlags.Static %| BindingFlags.Instance %| BindingFlags.Public %| BindingFlags.NonPublic)
+    }
+    
+    internal static constrain_member(m : IMember, flags : BindingFlags) : bool
+    {
+      def is_public = m.Attributes %&& NemerleModifiers.Public;
+      // if flag is Public then always return all public members
+      flags == BindingFlags.Public && is_public
+      // if flag is NonPublic then always return all nonpublic members
+        || flags == BindingFlags.NonPublic && !is_public
+      // masks
+        || (!m.IsStatic || flags %&& BindingFlags.Static)
+          && (m.IsStatic || flags %&& BindingFlags.Instance)
+          && (!is_public || flags %&& BindingFlags.Public)
+          && (is_public || flags %&& BindingFlags.NonPublic)
+    }
+
+    #region Builtins
+    protected mutable special_members : Hashtable [string, list [IMember]];
+    protected MakeSingleParm (name : string) : void
+    {
+      match (special_members [name]) {
+        | [elem is IMethod] =>
+          def hd = elem.GetHeader ();
+          hd.Parameters = hd.Parameters.Tail;
+        | _ => assert(false)
+      }
+    }
+
+    protected FixupCompare (name : string) : void
+    {
+      match (special_members [name]) {
+        | [elem is IMethod] =>
+          def hd = elem.GetHeader ();
+          assert(InternalType.Boolean != null);
+          hd.ReturnType = InternalType.Boolean;
+        | _ => assert(false)
+      }
+    }
+
+    protected static ForceIntType (name : string) : void
+    {
+      _ = name;
+      /*
+      match (special_members [name]) {
+        | [elem is IMethod] =>
+          assert(InternalType.Int32 != null);
+          def hd = elem.GetHeader ();
+          hd.ReturnType = InternalType.Int32;
+        | _ => assert(false)
+      }
+      */
+    }
+
+    protected AddConversion (name : string, target : TypeInfo) : void
+    {
+      AddConversion (name, target, reverse = false)
+    }
+
+    protected AddConversion (name : string, target : TypeInfo, reverse : bool) : void
+    {
+      def sm = BuiltinMethod (this, name,
+                              GetMemType (),
+                              BuiltinMethodKind.ValueTypeConversion ());
+      special_members [name] =
+        if (special_members.Contains (name))
+          sm :: special_members [name]
+        else [sm];
+
+      def hd = sm.GetHeader ();
+      hd.Parameters = hd.Parameters.Tail;
+
+      if (reverse)
+      {
+        hd.Parameters.Head.ty = FixedType.Class(target, []);
+        hd.ReturnType = self_type;
+      }
+      else
+        hd.ReturnType = FixedType.Class(target, []);
+    }
+
+    protected AddBuiltin(name : string, left_param_type : TypeVar, right_param_type : TypeVar, ret_type : TypeVar, opcode : string) : void
+    {
+      def sm = BuiltinMethod(this, name, left_param_type : TypeVar, right_param_type, ret_type, BuiltinMethodKind.OpCode(opcode, opcode));
+      special_members[name] = [sm : IMember];
+    }
+
+    protected AddBuiltin (name : string, opcode : string) : void
+    {
+      def sm = BuiltinMethod (this, name,
+                              GetMemType (),
+                              BuiltinMethodKind.OpCode (opcode, opcode));
+      special_members [name] = [sm : IMember];
+    }
+
+    protected AddBuiltin(name : string, ret_type : TypeVar, opcode : string) : void
+    {
+      def sm = BuiltinMethod (this, name,
+                              GetMemType(),
+                              ret_type,
+                              BuiltinMethodKind.OpCode (opcode, opcode));
+      special_members [name] = [sm : IMember];
+    }
+
+    protected AddBuiltin (name : string, checkedOpcode : string, uncheckedOpcode : string) : void
+    {
+      def sm = BuiltinMethod (this, name,
+                              GetMemType (),
+                              BuiltinMethodKind.OpCode (checkedOpcode, uncheckedOpcode));
+      special_members [name] = [sm : IMember];
+    }
+
+    protected AddBuiltin (name : string, meth : IMethod) : void
+    {
+      def sm = BuiltinMethod (this, name,
+                              GetMemType (),
+                              BuiltinMethodKind.CallWithCast (meth));
+      special_members [name] = [sm : IMember];
+    }
+
+    protected InitBuiltinMembers () : void
+    {
+      when (special_members == null) {
+        special_members = Hashtable ();
+        if (IsValueType)
+          match (SuperClass ()) {
+            | Some (tc) when
+                // InternalType is not initialized sometimes
+                (InternalType.Enum_tc != null && tc.Equals (InternalType.Enum_tc)) ||
+                tc.FullName == "System.Enum" =>
+              AddBuiltin ("op_BitwiseOr", "|.u");
+              AddBuiltin ("op_BitwiseAnd", "&.u");
+              AddBuiltin ("op_ExclusiveOr", "^.u");
+
+              AddBuiltin ("op_OnesComplement", "unary.~.u");
+              MakeSingleParm ("op_OnesComplement");
+
+              AddBuiltin ("op_Equality", "==");
+              AddBuiltin ("op_Inequality", "!=");
+              FixupCompare ("op_Equality");
+              FixupCompare ("op_Inequality");
+
+              def numeric_types =
+                ["SByte", "Int16", "Int32", "Int64", "Byte", "UInt16", "UInt32",
+                 "UInt64"];
+
+              foreach (target in numeric_types) {
+                def t = Manager.NameTree.LookupInternalType (["System", target]);
+                AddConversion ("op_Explicit", t, reverse = true);
+                AddConversion ("op_Explicit", t, reverse = false);
+              }
+
+            | _ => {}
+          }
+        else if (IsDelegate) {
+          assert(InternalType.Delegate_Combine != null);
+          assert(InternalType.Delegate_Remove != null);
+          AddBuiltin ("op_Addition", InternalType.Delegate_Combine);
+          AddBuiltin ("op_Subtraction", InternalType.Delegate_Remove);
+        } else {}
+      }
+    }
+    #endregion
+
+    GetHandle() : System.Reflection.MemberInfo implements IBackendMember.GetHandle { throw NotImplementedException() }
+
+    public override GetHashCode () : int
+    { id }
+
+    /** Compare types for equality. */
+    public Equals (the_other : TypeInfo) : bool
+      implements System.IEquatable[TypeInfo].Equals
+    {
+      the_other != null && id == the_other.id
+    }
+
+    [Nemerle.OverrideObjectEquals]
+    public Equals (t : IMember) : bool
+      implements System.IEquatable[IMember].Equals
+    {
+      null != t && id == t.GetHashCode ()
+    }
+
+    public CompareTo (other : TypeInfo) : int
+    {
+      id - other.id
+    }
+
+    public override ToString () : string
+    {
+      def tyParams = if (Typarms.IsEmpty) null else $".[..$Typarms]";
+      $"$FullName$tyParams"
+    }
+
+    /** Returns custom attribute targets valid for this custom attribute.
+
+       Valid only for type representing custom attribute.
+     */
+    public abstract AttributeTargets : System.AttributeTargets
+    {
+      get;
+    }
+
+    /** Types are always static */
+    public override IsStatic : bool
+    {
+      get { true }
+    }
+
+    public IsModule : bool
+    {
+      get { attributes %&& NemerleModifiers.Static }
+    }
+
+    public IsSealed : bool
+    {
+      get { attributes %&& NemerleModifiers.Sealed }
+    }
+
+    /** Specifies if given type is an interface */
+    public abstract IsInterface : bool
+    {
+      get;
+    }
+
+    internal virtual GetLibraryReference () : LibraryReference { null }
+
+    //[Memoize]
+    public DefaultIndexerName : string
+    {
+      get
+      {
+        when (default_indexer == null)
+        {
+          if (IsInterface)
+          {
+            foreach (t in GetDirectSuperTypes())
+            {
+              default_indexer = t.tycon.DefaultIndexerName;
+            
+              when (default_indexer != null)
+                break;
+            }
+          }
+          else when (SuperClass() is Some(tc))
+            default_indexer = tc.DefaultIndexerName;
+        }
+
+        default_indexer
+      }
+    }
+
+    /** Return full qualified type name with namespaces and nesting types,
+        all .-separated.
+     */
+    public FullName : string {
+      get { fullname }
+    }
+
+
+    /** Return full qualified type name with namespaces (.-separated) and
+        nesting types (+-separated).
+     */
+    public FrameworkTypeName : string
+    {
+      get {
+        def par = DeclaringType;
+        if (par == null)
+          FullName
+        else
+          par.FrameworkTypeName + "+" + Name
+      }
+    }
+
+    public abstract LookupMemberImpl (name : string) : list [IMember];
+
+    public virtual LookupMemberAvailable : bool
+    {
+      get { true }
+    }
+
+    GetSignature (mem : IMember) : option [FixedType]
+    {
+      match (mem.MemberKind) {
+        | Property when (mem :> IProperty).IsIndexer
+        | Constructor | Method =>
+          // FIXME: this won't work for generic methods
+          match (GetMemType ().TypeOfMember (mem).Fix ()) {
+            | FixedType.Fun (from, _) => Some (from.Fix ())
+            | _ => None ()
+          }
+        | _ => None ()
+      }
+    }
+
+
+    static Hides(e1 : IMember * option[FixedType], e2 : IMember * option[FixedType]) : bool
+    {
+      def (m1, s1) = e1;
+      def (m2, s2) = e2;
+      /// workaround since generic parameters are not coming via signature
+      def getGenericParamCount(member)
+      {
+        | method is IMethod => method.Header.TypeParameters.Length;
+        | _ => 0
+      }
+
+      if (getGenericParamCount(m1) != getGenericParamCount(m2))
+        false
+      else match (s1, s2)
+      {
+        | (None, None) => true
+        | (Some(tv1), Some(tv2)) when TypeVar.StructuralEquals(tv1, tv2) =>
+          match (m1.Name)
+          {
+            | "apply"
+            | "apply_void" =>
+              if (m1 is IMethod && m2 is IMethod)
+                (m1 :> IMethod).GetParameters().Length == (m2 :> IMethod).GetParameters().Length
+              else true
+            | _ => true
+          }
+          
+        | _ => false
+      }
+    }
+
+    internal RemoveHiddenMembers (members : list [list [IMember]]) : list [IMember]
+    {
+      def ht = Hashtable ();
+      mutable res = [];
+
+      foreach (mems in members.Rev ())
+        foreach (origelem in mems) {
+          def name = origelem.Name;
+          def elem = (origelem, GetSignature (origelem));
+          if (ht.Contains (name)) {
+            // wtf? the enf
+            unless ((ht [name] : list [_]).Exists (fun (oldelem) { Hides (elem, oldelem) })) {
+              ht [name] ::= elem;
+              res ::= origelem;
+            }
+          } else {
+            ht [name] = [elem];
+            res ::= origelem;
+          }
+        }
+
+      //Message.Debug ($ "rhm: $members -> $res");
+
+      res.Rev ()
+    }
+
+    /** Look for specified member.
+
+        Semantics of returning base class member is the same as for
+        [System.Type.GetMember] method.
+     */
+    public LookupMember (name : string, for_completion = false) : list [IMember]
+    {
+      when (special_members == null)
+        InitBuiltinMembers ();
+
+      if (for_completion)
+        GetMembers().Filter(mem => Completion.MatchName(mem.Name, name))
+      else if (special_members.Contains (name))
+        special_members [name]
+      else {
+        def loop (acc, ti : TypeInfo) {
+          def res = ti.LookupMemberImpl (name);
+
+          // filter out members with override specified
+          // def res = res.RevFilterWhenNeeded (aint_override);
+
+          def acc = if (res is []) acc else res :: acc;
+
+          if (ti.IsInterface)
+            match (ti.GetDirectSuperTypes())
+            {
+              | []     => InternalType.Object_tc.LookupMemberImpl (name) :: acc
+              | ifaces => ifaces.Map(c => c.tycon.LookupMember(name)) + acc
+            }
+          else
+            match (ti.SuperClass())
+            {
+              | Some (ti) => loop (acc, ti)
+              | None => acc
+            }
+        }
+
+        if (name == ".ctor")
+          // don't recurse
+          LookupMemberImpl (name)
+        else
+        {
+          match (loop ([], this))
+          {
+            | [] => []
+            | [one] => one
+            | members =>
+              // we have to protect agains members with 'new'
+              def res = RemoveHiddenMembers (members);
+              //Message.Debug ($ "members= $members, after removal $res");
+              res
+          }
+        }
+      }
+    }
+
+    mutable _recursionLevel : int;
+
+    /** */ // rename this crap to TypeDeclaration and convert it to property
+    public abstract GetTydecl () : TypeDeclaration;
+
+    // helper used in TypeInfo
+    internal ConstructSubst(tc : TypeInfo, typarms : list[StaticTypeVar], args : list[TypeVar], check_parms : bool) : Subst
+    {
+      _recursionLevel++;
+
+      def res = Subst ();
+      def messenger = Manager.Solver.CurrentMessenger;
+
+      when (_recursionLevel > 1000)
+      {
+        ReportError(messenger, $"recursive type or recursive constraint detected ($tc)");
+        return res;
+      }
+
+      try
+      {
+        unless (typarms.IsEmpty && args.IsEmpty)
+        {
+          def len_tp = typarms.Length;
+          def len_ac = args.Length;
+
+          if (len_tp == len_ac)
+          {
+            NList.Iter2(typarms, args, (tp, val : TypeVar) => res.Add (tp, val));
+
+            when (check_parms)
+              NList.Iter2 (typarms, args, fun (tp : StaticTypeVar, val : TypeVar)
+              {
+                assert(InternalType.Void != null);
+                when (val.Equals (InternalType.Void))
+                  ReportError (messenger, $"cannot use `void' as a generic parameter of $tc");
+
+                unless (val.Require(res.Apply(tp.LowerBound)))
+                  ReportError (messenger, $ "typing constraint on $(tp.Name) not satisfied, upon instantiation of $tc");
+              });
+          }
+          else
+            ReportError (messenger, $ "type `$(tc.FullName)' takes $len_tp argument(s) while $len_ac were supplied");
+        }
+      }
+      finally { _recursionLevel-- }
+
+      res
+    }
+
+    /** Construct substitution resulting from applying this type constructor
+        to specified arguments.
+
+        For example assuming our type parameters are are ('a, 'b), then
+        [MakeSubst (t1, t2)] produces substitution { 'a := t1; 'b := t2 }.
+     */
+    internal MakeSubst(parms : list[TypeVar]) : Subst
+    {
+      ConstructSubst(this, typarms, parms, check_parms = true)
+    }
+
+    internal MakeUncheckedSubst(args : list[TypeVar]) : Subst
+    {
+      def res = ConstructSubst(this, typarms, args, check_parms = false);
+      res
+    }
+
+    /**
+     * Return substitution replacing each of our type parameters with fresh
+     * type variable.
+     */
+    internal FreshSubst () : Subst
+    {
+      Subst.Fresh (typarms) [0]
+    }
+
+    public virtual GetFreshType () : FixedType.Class
+    {
+      FreshSubst ().MonoApply (GetMemType ()) :> FixedType.Class
+    }
+
+    /// If $this subtypes of $typeInfo, then return list of type parameters under which we subtype given type.
+    ///
+    /// For example if [A ['a] :> B [int]], then ["A".GetTypeArgumentsForSuperClass ("B")]
+    /// returns [[int]].
+    ///
+    /// This information can be also fetched from [GetDirectSuperTypes()]
+    /// method but this function is transitive.
+    public GetTypeArgumentsForSuperClass(typeInfo : TypeInfo) : list[FixedType]
+    {
+      assert(typeInfo != null);
+      assert(!typeInfo.IsInterface || IsInterface);
+      assert(_superTypesCalculated);
+
+      match (_superTypeInfosLookup.GetValueOrDefault(typeInfo))
+      {
+        | null =>
+          /*if (typeInfo.Equals(InternalType.Object_tc))
+            []
+          else*/ if (typeInfo.Equals(this))
+            Solver.FixedValues(GetMemType().args)
+          else
+            []
+
+        | [x] => Solver.FixedValues(x.args)
+        | []  => []
+        | _ :: _ :: _ =>
+        // Interfaces can't have more than one instantiation, but this method is
+        // not suitable to get type parameters for them.
+        // If the assert has been taken, it seems that we must use
+        // method LookupParentInstantiations() and more complicated logic
+        // which takes into an account more than one interface's instantation.
+          assert(false);
+      }
+    }
+
+    public IsDerivedFrom(typeInfo : TypeInfo) : bool
+    {
+      assert(typeInfo != null);
+      assert(_superTypesCalculated);
+
+      if (typeInfo.Equals(this))
+        true
+      else if (typeInfo.Equals(InternalType.Object_tc))
+        true
+      else
+        _superTypeInfosLookup.Contains(typeInfo)
+    }
+
+    public IsDerivedFrom(fixedType : FixedType.Class) : bool
+    {
+      assert(fixedType != null);
+      assert(_superTypesCalculated);
+
+      if (fixedType.Equals(InternalType.Object))
+        true
+      else if (GetMemType().Equals(fixedType))
+        true
+      else
+        _superTypesLookup.Contains(fixedType)
+    }
+
+    public LookupParentClassInstantiation(typeInfo : TypeInfo) : FixedType.Class
+    {
+      assert(!typeInfo.IsInterface || IsInterface, "interface lookup not allowed in LookupParentClassInstantiation()");
+
+      match (LookupParentInstantiations(typeInfo))
+      {
+        | [x]   => x
+        | []    => assert3(false, "no instantiations of parent type was found");
+        | items => assert3(false, $"more than one instantiation of parent type was found: ..$items");
+      }
+    }
+
+    public LookupParentInstantiations(typeInfo : TypeInfo) : list[FixedType.Class]
+    {
+      mutable classes;
+
+      if (_superTypeInfosLookup.TryGetValue(typeInfo, out classes))
+        classes
+      else
+        []
+    }
+
+    public HasSuperType(typeInfo : TypeInfo) : bool
+    {
+      _superTypeInfosLookup.Contains(typeInfo)
+    }
+
+    /// Return substitution to apply to types of members of our supertype [ti]
+    /// to get types of members in [this].
+    ///
+    /// <remarks>
+    ///    For example consider:
+    ///    <code>
+    ///      class A ['a] { f : 'a; }
+    ///      class B : A [int] { }
+    ///    </code>
+    ///    Now ["B".SubtypingSubst ("A")] would return { 'a := int }, so
+    ///    it can be applied to type of [A.f] which is ['a], to obtain type
+    ///    of [B.f] which is [int].
+    /// </remarks>
+    public SubtypingSubst(tc : TypeInfo) : Subst
+    {
+      // FIXME: VladD2: Этот метод нужно полностью выкинуть, так как это лозейка для багов!
+      if (this.Equals(tc))
+        Subst() // current type, no substitution
+      else match (GetTypeArgumentsForSuperClass(tc))
+      {
+        | [] | null => Subst()
+        | args  => tc.MakeSubst(Solver.MonoTypes(args));
+      }
+    }
+
+    /** [parent] is one of the enclosing types of [this]. For Parent['a,'b]
+        and This['a1,'b1,'c] returns ['a := 'a1, 'b := 'b1]. If there are types
+        between [parent] and [this], their type variables are also replaced. */
+    public virtual NestingSubst (parent : TypeInfo) : Subst
+    {
+      if (parent.Equals(this))
+        Subst()
+      else
+      {
+        def res     = Subst();
+        def cnt     = parent.TyparmsCount;
+        def target  = GetMemType().args.FirstN (cnt);
+
+        def loop(ti)
+        {
+          def source = ti.Typarms.FirstN(cnt);
+          NList.Iter2 (source, target, res.Add);
+          when (! ti.Equals(parent))
+            loop (ti.DeclaringType)
+        }
+
+        loop(DeclaringType);
+
+        res
+      }
+    }
+
+    public abstract SuperClass () : option[TypeInfo];
+
+    /** Gets the direct base type of this type. Null if there isn't any
+        (e.g. for interfaces) */
+    public abstract BaseType : TypeInfo { get; }
+
+    /** Return list of all members defined in this very type and its
+        supertypes. */
+    public abstract GetMembers() : list[IMember];
+
+    /** Searches for the members defined for the current TypeInfo, using the
+        specified binding constraints. */
+    public abstract GetMembers(bindingAttr : BindingFlags) : list[IMember];
+
+    /** Searches for the fields defined for the current TypeInfo, using the
+        specified binding constraints. */
+    public abstract GetFields(bindingAttr : BindingFlags)       : list [IField];
+    public abstract GetConstructors(bindingAttr : BindingFlags) : list [IMethod];
+    public          GetSuperTypes()                             : list[FixedType.Class] { _superTypes }
+    public abstract GetDirectSuperTypes()                       : list[FixedType.Class];
+
+    /// If this is a constant variant option, this method returns static class member that shall be
+    /// used instead of calling constructor. Otherwise [null] is returned.
+    public abstract GetConstantObject() : IField;
+
+    public abstract IsDelegate : bool { get; }
+
+    public virtual IsEnum : bool
+    {
+      get
+      {
+        assert(InternalType.Enum_tc != null);
+
+        IsValueType
+          &&  match (SuperClass())
+              {
+                | Some (tc) => tc.Equals(InternalType.Enum_tc)
+                | None => false
+              }
+      }
+    }
+
+    public abstract Accessibility : Accessibility { get; }
+
+    /**
+     * True if the type will be accessible from an external assembly.
+     * This depends on this type's and parent types' accessibility.
+     */
+    public abstract IsExternallyAccessible : bool { get; }
+
+    /** If this is constructor of value type (which is allocated on stack not on heap) */
+    public abstract IsValueType : bool { get;}
+
+    public abstract HasAttribute (attribute : TypeInfo) : bool;
+
+    /**
+     * If this type was defined as [class Foo ('a, 'b) { ... }] then return
+     * type expression [Foo ('a, 'b)].
+     *
+     * Used mainly with [FreshSubst ()] or [MakeSubst ()].
+     */
+    public GetMemType() : FixedType.Class
+    {
+      assert(self_type != null, FullName);
+      self_type
+    }
+
+    public virtual DeclaredTypeParametersCount : int
+    {
+      //FIXME: VladD2: Add calculation of real type parameters for external type!
+      get { TyparmsCount }
+    }
+
+    public virtual TyparmsCount : int
+    {
+      get { typarms.Length }
+    }
+
+    public virtual SourceTyparmsCount : int
+    {
+      get
+      {
+        if (DeclaringType == null) TyparmsCount
+        else TyparmsCount - DeclaringType.TyparmsCount
+      }
+    }
+
+    public virtual Typarms : list [StaticTypeVar]
+    {
+      get { typarms }
+    }
+
+    public abstract Location : Location { get; }
+    public virtual  NameLocation : Location { get { this.Location } }
+    public abstract CanAccess (source : TypeInfo) : bool;
+
+    /* public properties */
+    public abstract DeclaringType : TypeInfo { get; }
+    public abstract Name : string { get; }
+
+    public virtual MemberKind : MemberKinds
+    {
+      get { if (DeclaringType != null) MemberKinds.NestedType else MemberKinds.TypeInfo }
+    }
+
+    public abstract UnderlyingType : TypeInfo { get; }
+    
+    protected internal static NormalizeSupertypes(direct_supertypes : list[FixedType.Class]) : list[FixedType.Class]
+    {
+      // if in direct_supertypes contains interfaces which is a supertype of other interface from direct_supertypes ignore it
+      mutable result = [];
+      foreach (t in direct_supertypes)
+      {
+        def isInterfaceDerivedFromInterface(other)
+        {
+          def t = t;
+          !t.Equals(other) && t.IsInterface && other.IsInterface && other.TypeInfo.IsDerivedFrom(t)
+        }
+        unless (direct_supertypes.Exists(isInterfaceDerivedFromInterface))
+          result ::= t;
+      }
+
+      result
+    }
+  }
+} // ns

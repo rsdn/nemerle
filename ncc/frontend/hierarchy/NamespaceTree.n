@@ -1,0 +1,275 @@
+using System;
+using System.Diagnostics;
+using Nemerle.Collections;
+using Nemerle.Utility;
+
+using PT = Nemerle.Compiler.Parsetree;
+using SCG = System.Collections.Generic;
+
+namespace Nemerle.Compiler
+{
+  [ManagerAccess]
+  public partial class NamespaceTree
+  {
+    internal mutable macro_context       : int;
+    internal         macro_contexts      : Hashtable [string, int];
+             mutable macro_context_class : TypeBuilder;
+    [Accessor]
+    internal         namespace_tree      : Node;
+    
+    // we store nodes, which were referenced from using / alias to check their existance
+    internal referenced_namespace_nodes : SCG.List [list[Node] * Location];
+
+    internal this(man : ManagerClass)
+    {
+      macro_contexts = Hashtable(100);
+      namespace_tree = Node(null, "", TypeInfoCache.NamespaceReference());
+      referenced_namespace_nodes = SCG.List();
+      Manager = man;
+    }
+
+    public Init() : void
+    {
+      macro_contexts.Clear();
+      macro_context = 0;
+      macro_context_class = null;
+      referenced_namespace_nodes.Clear();
+    }
+
+    public ResetAllTypes() : void
+    {
+      def resetChildren(children)
+      {
+        foreach (node in children.Values)
+        {
+          when (node.Children != null)
+            resetChildren(node.Children);
+          node.CleanUp();
+        }
+      }
+
+      when (NamespaceTree.Children != null)
+        resetChildren(NamespaceTree.Children);
+    }
+
+    /** Function for adding type to namespace tree.
+
+        It checks if given
+        class is already in namespace tree and if it is and has `partial' modifier
+        it add members to existing type instead of creating new TypeBuilder.
+     */
+    [Nemerle.Assertions.Ensures(value != null)]
+    internal AddType(par : TypeBuilder, parent_node : Node, newdecl : PT.TopDeclaration) : TypeBuilder
+    {
+      def pname       = newdecl.PName;
+      def ns_node     = parent_node.Path([pname.Id]);
+      def new_gparms  = newdecl.TypeParametersCount;
+      def existing    =
+        match (ns_node.Value)
+        {
+          | TypeInfoCache.Cached(existing) => [existing]
+          | TypeInfoCache.CachedAmbiguous(many) => many
+
+          | TypeInfoCache.NotLoaded(external) =>
+            external.ConstructTypeInfo(ns_node, true);
+            [external.tycon]
+
+          | TypeInfoCache.NotLoadedList as val =>
+            ns_node.LoadValue(val)
+
+          | TypeInfoCache.MacroCall(m) =>
+            Message.Error($"type declaration `$(pname.Id)' hides macro $(m.GetName())");
+            []
+            
+          | _ => []
+        };
+
+        mutable builder = null;
+        mutable all     = existing.FoldLeft([], 
+        fun (x : TypeInfo, acc)
+        {
+          if (x.DeclaredTypeParametersCount == new_gparms)
+            match (x)
+            {
+              | tb is TypeBuilder =>
+                tb.ExtendPartialClass(newdecl);
+                builder = tb;
+                x :: acc
+                
+              | _ =>
+                Message.Error(newdecl.Location, "redefinition of external type `" + x.FullName + "'");
+                Message.Error(x.Location, "first defined here");
+                builder = Manager.Hierarchy.CreateTypeBuilder(par, newdecl, ns_node);
+                builder :: acc
+            }
+          else
+            x :: acc
+        });
+
+      when (builder == null)
+      {
+        builder = Manager.Hierarchy.CreateTypeBuilder(par, newdecl, ns_node);
+        all ::= builder;
+      }
+
+      ns_node.Value = 
+        match (all)
+        {
+          | [_] => TypeInfoCache.Cached(builder);
+          | _ => TypeInfoCache.CachedAmbiguous(all)
+        };
+      builder
+    }
+
+    public AddMacro(split : list[string], m : IMacro) : void
+    {
+      AddMacro(namespace_tree.Path(split), m)
+    }
+
+    public static AddMacro(ns : Node, m : IMacro) : void 
+    {
+      match (ns.Value)
+      {
+        | TypeInfoCache.No => 
+          ns.Value = TypeInfoCache.MacroCall(m)
+
+        | TypeInfoCache.NamespaceReference =>
+          Message.Error("cannot define `" + ns.GetDisplayName () + "' because the same namespace exists ");
+        | _ =>
+          Message.Error("redefinition of `" + ns.GetDisplayName() + "'");
+      }
+    }
+    
+    
+    internal LookupInternalType(name : list[string]) : TypeInfo
+    {
+      match (LookupExactType(name))
+      {
+        | Some(t) => t
+        | None => Util.ice("unbound internal type " + name.ToString("."))
+      }
+    }
+
+    internal LookupInternalType(name : list[string], args_count : int) : TypeInfo
+    {
+      match (LookupExactType(name, args_count))
+      {
+        | Some(t) => t
+        | None => Util.ice("unbound internal type " + name.ToString(".") + "`" + args_count.ToString())
+      }
+    }
+    
+    public LookupExactType(name : string) : option[TypeInfo] { LookupExactType(name, -1) }
+    public LookupExactType(name : string, args_count : int) : option[TypeInfo] { namespace_tree.LookupType(NString.Split(name, '.'), args_count) }
+    public LookupExactType(name : list[string]) : option[TypeInfo] { namespace_tree.LookupType(name, -1) }
+    public LookupExactType(name : list[string], args_count : int) : option[TypeInfo] { namespace_tree.LookupType(name, args_count) }
+    public LookupSystemType(name : string) : option[System.Type] { namespace_tree.LookupSystemType(NString.Split(name, '.')) }
+    public ExactPath(path : list[string]) : Node { namespace_tree.Path(path) }
+    public LookupExactMacro(name : list[string]) : option[IMacro] { namespace_tree.LookupMacro(name) }
+    
+    internal CheckReferencedNamespaces() : void
+    {
+      foreach ((all_opened, loc) in referenced_namespace_nodes)
+      {
+        mutable scream = true;
+        foreach (node in all_opened)
+          match (node.Value)
+          {
+            | TypeInfoCache.No =>
+              node.Value = TypeInfoCache.NamespaceReference();
+              
+            // we could forbid referencing type-style namespaces here if we want
+            | _ => scream = false
+          }
+        when (scream)
+        {
+          Message.Error(loc, "referenced namespace `" + all_opened.Last.GetDisplayName() + "' does not exist")
+        }
+      }
+    }
+                 
+    private LiftMacroContexts() : Parsetree.PExpr
+    {
+      def ar = array(macro_context);
+      macro_contexts.Iter(fun (k, v) { ar[v - 1] = k; });
+      def make_expr(s)
+      {
+        assert(s != null); 
+        <[ $(s : string) ]>
+      };
+      <[ array [..$(NList.MapFromArray(ar, make_expr))] ]>
+    }
+
+    // macro contexts class is unique for given assembly and encodes
+    // GlobalEnvs used in qutations occuring in code
+    internal prepare_macro_context_class() : void
+    {
+      when (macro_context_class == null)
+      {
+        def macroContextsCode = 
+        <[ decl:
+            internal module _N_MacroContexts 
+            {
+              private serialized : array[string];
+              private contexts : array[GlobalEnv];
+              private mutable last_manager : ManagerClass;
+
+              internal Get(no : int, from_manager : ManagerClass) : GlobalEnv
+              {
+                when (from_manager : object != last_manager)
+                {
+                  Clear();
+                  last_manager = from_manager;
+                }
+
+                when (contexts[no - 1] == null)
+                  contexts[no - 1] = GlobalEnv(serialized[no - 1], from_manager);
+
+                contexts[no - 1]
+              }
+
+              private Clear() : void
+              {
+                for (mutable i = 0; i < contexts.Length; ++i)
+                  contexts [i] = null;
+
+                last_manager = null;
+              }
+            }
+          ]>;
+        
+        Manager.Hierarchy.GenerateFakeSourceCode(null, macroContextsCode);
+
+        macro_context_class = Manager.CoreEnv.Define(macroContextsCode);
+        macro_context_class.MarkWithSpecialName();      
+        macro_context_class.Compile();
+        
+        // a little hack to override unassigned field warning
+        foreach (f in macro_context_class.GetFields())
+          Manager.MarkAsAssigned(f);
+        
+        macro_context_class.CannotFinalize = true;
+      }
+    }
+
+    internal FinishMacroContextClass() : void
+    {
+      def ty = macro_context_class;
+      when (ty != null)
+      {
+        Util.locate(ty.Location,
+          ty.Define(
+          <[ decl:
+            this()
+            {
+              _N_MacroContexts.serialized = $(LiftMacroContexts());
+              _N_MacroContexts.contexts = array($(macro_context : int));
+              ManagerClass.OnInit += Clear;
+            } 
+          ]>));
+        ty.CannotFinalize = false;
+      }
+    }
+  } // class NamespaceTree
+} // ns
+

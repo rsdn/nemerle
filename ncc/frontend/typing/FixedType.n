@@ -1,0 +1,1147 @@
+﻿using Nemerle.Compiler.SolverMacros;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Logging;
+using Nemerle.Surround;
+using Nemerle.Utility;
+
+[assembly: DefineSurround("speculatitveTyping", true, Manager.Solver.PushState(), Manager.Solver.PopState())]
+
+namespace Nemerle.Compiler
+{
+  /// Represent top-level type constructor for a given type.
+  public variant FixedType : TypeVar
+  {
+    #region Options
+    /// Represent a class type with given type parameters, like "string" or "list[int]".
+    | Class { tycon : TypeInfo; args : list[TypeVar]; }
+
+    /// In code like:
+    ///      class Foo[T] { bar : list[T]; }
+    ///   The "T" in "list[T]" would be represented by a StaticTypeVarRef.
+    ///   You can get StaticTypeVar objects from the type builder of Foo class.
+    | StaticTypeVarRef { tyvar : StaticTypeVar; }
+
+    /// Represent a function type "from -> to".
+    ///   If the function takes more than one parameter, the "from" is a tuple. */
+    | Fun { from : TypeVar; [RecordIgnore] public argsCount : int; to : TypeVar;
+          public this(from : TypeVar, argsCount : int, to : TypeVar)
+          {
+            this (from, to);
+            this.argsCount = argsCount;
+          }
+
+          public Decompose : list[TypeVar] * TypeVar
+          {
+            get
+            {
+              match (this)
+              {
+                | Fun(from, ret) when argsCount == 1 with args = [from]
+                | Fun(FixedType.Tuple(args), ret)
+                | Fun(FixedType.Void, ret) with args = []
+                | Fun(from, ret) with args = [from]       => (args, ret)
+              }
+            }
+          }
+      }
+
+    /// Represent a tuple, like "int * string * list[float]"
+    | Tuple { args : list[TypeVar]; }
+
+    /// Represent an array type, rank refers to the number of dimensions.
+    | Array { t : TypeVar; rank : int; }
+
+    /// These are used in signatures of functions taking ref/out parameter.
+    ///   For example in:
+    ///      foo (x : ref int) : void
+    ///   the x has type "Ref(Class(InternalType.Int32_tc,[]))".
+    ///   They are not used in function types though!
+    | Ref { t : TypeVar; }
+    | Out { t : TypeVar; }
+
+    /// Represent the unit type.
+    | Void
+
+    /** Used when given value is required to have all the listed types.
+
+       Invariant 1: the types listed cannot be in the subtyping relation
+       pairwise.
+
+       Invariant 2: there can be only Class() objects inside.
+
+       This type is not expressible in the .NET type system directly,
+       it can be however expressed with type variable bounds in some
+       cases. **/
+    | Intersection { types : list [FixedType]; }
+
+    #endregion
+
+    /** Check for type equality, taking intersection types
+        into account.  */
+    public Equals(t : FixedType) : bool
+    {
+      if (this : object == t : object)
+        true
+      else match ((t, this))
+      {
+        | (Class(ti1, a1), Class(ti2, a2)) =>
+          ti1.Equals(ti2) && a1.Equals(a2)
+
+        | (StaticTypeVarRef(tv1), StaticTypeVarRef(tv2)) =>
+          tv1.Equals(tv2)
+
+        | (Fun(f1, t1), Fun(f2, t2)) =>
+          f1.Equals(f2) && t1.Equals(t2)
+
+        | (Tuple(a1), Tuple(a2)) =>
+          a1.Equals(a2)
+
+        | (Out(t1), Ref(t2))
+        | (Ref(t1), Out(t2))
+        | (Out(t1), Out(t2))
+        | (Ref(t1), Ref(t2))
+        | (Array(t1, r1), Array(t2, r2)) when (r1 == r2) =>
+          t1.Equals(t2)
+
+        | (Void, Void) => true
+
+        | (Intersection(l1), Intersection(l2)) =>
+          if (l1.Length == l2.Length)
+          {
+            def h = Hashtable ();
+
+            foreach (FixedType.Class (ti, _) as t in l1)
+              h [ti] = t;
+
+            mutable same = true;
+
+            foreach (FixedType.Class (ti, _) as t in l2)
+              if (h.Contains (ti))
+                same = same && h [ti].Equals (t)
+              else
+                same = false;
+
+            same
+          }
+          else false
+
+        | _ => false
+      }
+    }
+
+    static GetHashCode[T](initHashCode : int, tyVars : list[T]) : int
+    {
+      mutable hashCode = initHashCode;
+
+      foreach (v in tyVars)
+        hashCode ^= v.GetHashCode();
+
+      hashCode
+    }
+
+    public override GetHashCode() : int
+    {
+      match (this)
+      {
+        | Void                  => 1
+        | Tuple(args)           => GetHashCode(0, args)
+        | Fun(from, to)         => from.GetHashCode() ^ to.GetHashCode()
+        | StaticTypeVarRef(tv)  => tv.GetHashCode()
+        | Class(ti, [])         => ti.GetHashCode()
+        | Class(ti, args)       => GetHashCode(ti.GetHashCode(), args)
+        | Ref(t)                => 100 ^ t.GetHashCode()
+        | Out(t)                => 200 ^ t.GetHashCode()
+        | Array(et, rank)       => (300 + rank) ^ et.GetHashCode()
+        | Intersection(types)   => GetHashCode(400, types)
+      }
+    }
+
+    private pairWiseUnify (args1 : list [TypeVar], args2 : list [TypeVar]) : bool
+    {
+      | (x :: xs, y :: ys) =>
+        // do unify AFTER check of rest of list, so we can control that lengths match
+        pairWiseUnify (xs, ys) && x.Unify (y)
+      | ([], []) => true
+      | _ => false
+    }
+
+
+    #region Unification stuff
+    /** Check for type equality, taking intersection types
+        into account. If it's possible that types are equal -- enforce
+        that.  Assume non-seperated types. */
+    public TryEnforcingEquality (t : FixedType) : bool
+    {
+      assert(!this.IsSeparated);
+      assert(!t.IsSeparated);
+
+      match ((this, t)) {
+        | (Class (tc1, args1), Class (tc2, args2)) when tc1.Equals (tc2) =>
+          pairWiseUnify (args1, args2)
+
+        | (Intersection (l1), Intersection (l2))
+          when NList.Length (l1) == NList.Length (l2) =>
+          def ht = Hashtable ();
+          foreach ((Class (tc, _)) as t in l1)
+            ht [tc] = t;
+          mutable cnt = 0;
+          foreach (Class (tc, _) in l2)
+            when (ht.Contains (tc))
+              ++cnt;
+          if (cnt == NList.Length (l1)) {
+            mutable failed = false;
+            foreach ((Class (tc, _)) as t in l2)
+              failed = failed || !ht [tc].Unify (t);
+            failed
+          } else false
+
+        | (Fun (f1, t1), Fun (f2, t2)) =>
+          f1.Unify (f2) && t1.Unify (t2)
+
+        | (Tuple (l1), Tuple (l2)) => pairWiseUnify (l1, l2)
+
+        | (Array (t1, rank1), Array (t2, rank2)) when rank1 == rank2 =>
+          t1.Unify (t2)
+
+        | (StaticTypeVarRef (tv1), StaticTypeVarRef (tv2)) =>
+          tv1.Equals (tv2)
+
+        | _ => false
+      }
+    }
+
+
+    /** Enforce [this] to be subtype of [t]. */
+    public override Require(t : FixedType) : bool
+    {
+      log (SOLVER, $"FixedType.Req: $this <: $t");
+      def s = Manager.Solver;
+
+      def covariant_check (t, a1, a2)
+      {
+        def varianceCheck = if (t.IsCovariant)  //FIXME: VladD2: I think, we need use somethink like:  && !a1.EqualsUpperBound(a2))
+                              a1.Require(a2)
+                            else if (t.IsContravariant && !a2.EqualsUpperBound(a1))
+                               a2.Require(a1)
+                            else
+                              false;
+        if (varianceCheck)
+          match (a1.Hint, a2.Hint)
+          {
+            | (Some(ty1), Some(ty2)) when !ty1.IsValueType && !ty2.IsValueType => true
+            | _ => false
+          }
+        else false
+      }
+
+      def variant_args_equality (typarms, args1, args2)
+      {
+        | (t :: ts, a1 :: as1, a2 :: as2) =>
+          if (a1.Equals (a2) || covariant_check (t, a1, a2))
+            variant_args_equality (ts, as1, as2)
+          else false
+
+        | ([], [], []) => true
+        | _ => assert(false)
+      }
+
+      match (this, t)
+      {
+        | (Void, Class) =>
+          SaveError (s.CurrentMessenger, $"$(this) is not a subtype of $t");
+          false
+
+        | (_, Class(tc, _)) when tc.Equals(InternalType.Object_tc) => true
+        | (Class(tc1, args1), Class(tc2, args2)) =>
+          //Message.Debug ($"Require $this $t");
+          if (tc1.Equals(tc2) && variant_args_equality(tc1.Typarms, args1, args2))
+            true
+          else
+          {
+            def unifyTypeArgs(args, tc1, tc2, args1, args2)
+            {
+              //Message.Debug ($"args $args");
+              def subst = tc1.MakeSubst(args1);
+              def variant_args_unify(typarms, args1, args2 : list[TypeVar])
+              {
+                | (t :: ts, a1 :: as1, a2 :: as2) =>
+                  def a1_1 = subst.Apply(a1);
+                  if (covariant_check(t, a1_1, a2) || a2.Unify(a1_1))
+                    variant_args_unify(ts, as1, as2)
+                  else
+                    false
+
+                | ([], [], []) => true
+                | _            => assert(false)
+              }
+
+              variant_args_unify(tc2.Typarms, args, args2)
+            }
+            // здесь проверяется не является ли второй тип наследником первого.
+            match (tc1.LookupParentInstantiations(tc2))
+            {
+              | null => assert(false);
+              | [] => SaveError(s.CurrentMessenger, $ "$tc1 is not a subtype of $tc2 [simple require]"); false
+              | [FixedType.Class(_, args)] => unifyTypeArgs(args.Map(x => x.Fix()), tc1, tc2, args1, args2)
+              | subtypes => // У нас более одного базового типа! Это должны быть интерфейсы.
+                //def count = subtypes.Length;
+                mutable result = false;
+
+                foreach (st in subtypes)
+                {
+                  def args = st.args.Map(x => x.Fix());
+
+                  when (surroundwith(speculatitveTyping) unifyTypeArgs(args, tc1, tc2, args1, args2))
+                  { // Не пересечение базовых типов проверяется на стадии построения дерева типов, так что тут мы действуем по принципу кто первый тот и прав.
+                    result = unifyTypeArgs(args, tc1, tc2, args1, args2);
+                    assert(result);
+                    break;
+                  }
+                }
+
+                result
+            }
+          }
+
+        | (Tuple (l1), Tuple (l2))
+          when NList.Length (l1) == NList.Length (l2) =>
+          NList.ForAll2 (l1, l2, fun (x : TypeVar, y : TypeVar) { x.Unify (y) })
+
+        | (Fun (f1, t1), Fun (f2, t2)) => f1.Unify (f2) && t1.Unify (t2)
+        | (Array(t1, rank1), Array(t2, rank2)) when rank1 == rank2 => t1.Unify(t2) // XXX we don't allow array covariance here! we may want to change it
+        | (Ref (t1), Ref (t2))
+        | (Out (t1), Out (t2)) => t1.Unify (t2)
+        | (Void, Void) => true
+        | (Array(t, n), Class(tc, [t2])) when (tc.Equals(InternalType.Generic_IEnumerable_tc) || tc.Equals(InternalType.Generic_IList_tc) || tc.Equals(InternalType.Generic_ICollection_tc) || tc.Equals(InternalType.GetArrayType(n))) =>
+            if (t.TypeInfo?.IsValueType)
+              t.Unify(t2)
+            else
+              t.Require(t2)
+
+        | (Array, Class(_, []) as ct) => InternalType.Array.Require(ct)
+        | (StaticTypeVarRef (tv1), StaticTypeVarRef (tv2)) when tv1.Equals (tv2) => true
+        | (StaticTypeVarRef (tv1), t2) => tv1.LowerBound.Require (t2)
+        | (Intersection(lst), (Class(tc, _)) as t2) =>
+          def loop(_)
+          {
+            | (Class(tc2, _) as t1) :: xs =>
+              if (tc2.IsDerivedFrom(tc))
+                t1.Require (t2)
+              else
+                loop (xs)
+
+            | [] =>
+              SaveError(s.CurrentMessenger, $"$(this) is not a subtype of $t [simple require, intersection]");
+              false
+
+            | _ => assert(false)
+          }
+
+          loop (lst)
+
+        | (t1, Intersection(lst)) => lst.ForAll(t2 => t1.Require(t2))
+        | _ =>
+          SaveError(s.CurrentMessenger, $"$(this) is not a subtype of $t [simple require]");
+          false
+      }
+    }
+
+
+    /** Enforce [this] to be equal [t]. */
+    public override Unify (t : FixedType) : bool
+    {
+      match ((this, t)) {
+        | (Class, Class) when TryEnforcingEquality (t)
+        | (StaticTypeVarRef, StaticTypeVarRef) when TryEnforcingEquality (t)
+        | (Fun, Fun) when TryEnforcingEquality (t)
+        | (Array, Array) when TryEnforcingEquality (t)
+        | (Tuple, Tuple) when TryEnforcingEquality (t)
+        | (Intersection, Intersection) when TryEnforcingEquality (t) =>
+          true
+
+        | (Ref (t1), Ref (t2))
+        | (Out (t1), Out (t2)) =>
+          t1.Unify (t2)
+
+        | (Void, Void) => true
+
+        | _ =>
+          SaveError (Manager.Solver.CurrentMessenger,
+                     $ "the types $(this) and $t are not compatible "
+                       "[simple unify]");
+          false
+      }
+    }
+    #endregion
+
+
+    #region Pretty printing
+
+#if DEBUG
+    mutable _recursionLevel = 0 : byte;
+#endif // DEBUG
+
+    public override ToString () : string
+    {
+#if DEBUG
+      _recursionLevel++;
+      assert(_recursionLevel < 10);
+      try
+      {
+#endif // DEBUG
+        /*if (serial != 1)
+        {
+          def old_serial = serial;
+          serial = 1;
+          try { ToString() }
+          catch { e => $"serial=$old_serial; Exception: $(e.Message)" }
+          finally { serial = old_serial; }
+        }
+        else */
+        match (this)
+        {
+          | Class (tc, []) =>
+            def trim = tc.FullName.Replace ("Nemerle.Core.", "");
+            match (trim)
+            {
+              | "System.Byte"     => "byte"
+              | "System.SByte"    => "sbyte"
+              | "System.Int16"    => "short"
+              | "System.UInt16"   => "ushort"
+              | "System.Int32"    => "int"
+              | "System.UInt32"   => "uint"
+              | "System.Int64"    => "long"
+              | "System.UInt64"   => "ulong"
+              | "System.Single"   => "float"
+              | "System.Double"   => "double"
+              | "System.Decimal"  => "decimal"
+              | "System.String"   => "string"
+              | "System.Object"   => "object"
+              | "System.Boolean"  => "bool"
+              | "System.Char"     => "char"
+              | _                 => trim
+            }
+
+          | Class (tc, args) =>
+            def name = match (tc.NamespaceNode.FullName)
+            {
+              | ["Nemerle", "Core", "list"]
+              | ["Nemerle", "Core", "list", "Nil"]
+              | ["Nemerle", "Core", "list", "Cons"] => "list"
+              | "Nemerle" :: "Core" :: name | name  => $<#..$(name; ".")#>
+            }
+
+            $<#$name[..$args]#>
+
+          | StaticTypeVarRef (s) => s.ToString ()
+          | Fun (t1, t2) => $ "$t1 -> $t2"
+          | Tuple (lst) => $<#(..$(lst; " * "))#>
+          | Ref (t) => $ "ref $t"
+          | Out (t) => $ "out $t"
+          | Array (t, 1) => $ "array[$t]"
+          | Array (t, n) => $ "array.$n[$t]"
+          | Void => "void"
+          | Intersection (lst) => $<#FixedType.Intersection(..$lst)#>
+        }
+#if DEBUG
+      }
+      finally { _recursionLevel--; }
+#endif // DEBUG
+    }
+    #endregion
+
+
+    #region Public properties
+    /** Check if given type cannot be supertyped by a plain type
+        constructor. */
+    public IsSeparated : bool
+    {
+      get {
+        match (this) {
+          | Class => false
+
+          | StaticTypeVarRef
+          | Fun
+          | Tuple
+          | Array => false
+
+          | Ref
+          | Out
+          | Void => true
+
+          | Intersection (lst) =>
+            foreach (x in lst)
+              assert(!x.IsSeparated);
+            false
+        }
+      }
+    }
+
+    public override IsNullable : bool
+    {
+      get
+      {
+        match (this)
+        {
+          | Class(ti, [_]) when ti.Equals (InternalType.Generic_Nullable_tc) => true
+          | _ => false
+        }
+      }
+    }
+
+    // This method actually checks if a given type is guaranteed
+    // to have null as one of the possible values. We should
+    // rethink the name.
+    public override CanBeNull : bool
+    {
+      get {
+        match (this) {
+          | Class (ti, _) => !ti.IsValueType || ti.Equals (InternalType.Generic_Nullable_tc)
+
+          | Ref
+          | Out
+          | Tuple
+          | Void => false
+
+          | StaticTypeVarRef (s) =>
+            s.SpecialConstraints %&&
+            System.Reflection.GenericParameterAttributes.ReferenceTypeConstraint ||
+            found: {
+              foreach (ctr in s.Constraints) {
+                | Class (ti, _) when ti.IsInterface => {}
+                | _ when (ctr.CanBeNull) => found (true);
+                | _ => {}
+              }
+              false
+            }
+
+          | Fun
+          | Array
+          | Intersection => true
+        }
+      }
+    }
+
+
+    internal override NeedNoSubst : bool
+    {
+      get {
+        match (this) {
+          | Void
+          | Class (_, []) => true
+
+          | _ => false
+        }
+      }
+    }
+
+    public override IsPointer : bool { get { TypeInfo?.IsPointer } }
+
+    public IsInterface : bool
+    {
+      get {
+        match (this) {
+          | Class (tc, _) => tc.IsInterface
+          // XXX hmm..
+          // | Intersection (lst) =>
+          //   NList.ForAll (lst, fun (x : FixedType) { x.IsInterface })
+          | _ => false
+        }
+      }
+    }
+
+    public IsSystemObject : bool
+    {
+      get {
+        match (this) {
+          | Class (tc, []) => tc.Equals (InternalType.Object_tc)
+          | _ => false
+        }
+      }
+    }
+
+
+    public IsPrimitive : bool
+    {
+      get
+      {
+        match (this)
+        {
+          | Class(tc, []) => tc.IsEnum || tc.IsPrimitive
+          | _ => false
+        }
+      }
+    }
+
+    public override IsValueType : bool
+    {
+      get { IsValueTypeImpl(this) }
+    }
+
+    public new IsEnum : bool
+    {
+      get
+      {
+        match (this)
+        {
+          | Class (tc, _) => tc.IsEnum
+          | _ => false
+        }
+      }
+    }
+
+
+    public IsFunction : bool
+    {
+      get {
+        match (this) {
+          | Fun => true
+          | _   => false
+        }
+      }
+    }
+
+
+    public new TypeInfo : TypeInfo
+    {
+      get
+      {
+        match (this)
+        {
+          | Class (tc, _) => tc
+          | _ => null
+        }
+      }
+    }
+    #endregion
+
+
+    #region Public helper functions
+    static public ConstructFunctionType (parms : list [FixedType], res : FixedType) : FixedType.Fun
+    {
+      ConstructFunctionType (Solver.MonoTypes (parms), res)
+    }
+
+
+    static public ConstructFunctionType (parms : list [TypeVar], res : TypeVar) : FixedType.Fun
+    {
+      def from =
+        match (parms) {
+          | [x] => x
+          | [] => res.Manager.InternalType.Void
+          | lst => FixedType.Tuple (lst)
+        }
+
+      FixedType.Fun (from, parms.Length, res)
+    }
+
+
+    static public ConstructFunctionType (header : Typedtree.TFunHeader) : FixedType.Fun
+    {
+      def parms = NList.Map (header.Parameters,  fun (fp : Typedtree.TParameter) { fp.ty });
+      ConstructFunctionType (parms, header.ReturnType)
+    }
+
+    public GetFunctionArguments () : list [FixedType]
+    {
+      match (this)
+      {
+        | Void => []
+        | Tuple (lst) =>
+          NList.Map (lst, fun (x : TypeVar) { x.Fix () })
+        | x => [x]
+      }
+    }
+
+
+    public GetUnfixedFunctionArguments () : list [TypeVar]
+    {
+      match (this) {
+        | Void => []
+        | Tuple (lst) => lst
+        | x => [x]
+      }
+    }
+
+
+    public static AccessibilityIntersect (a1 : Accessibility,
+                                          a2 : Accessibility) : Accessibility
+    {
+      match ((a1, a2)) {
+        | (Accessibility.Private, _)
+        | (_, Accessibility.Private) => Accessibility.Private
+        | (Accessibility.Internal, Accessibility.Protected)
+        | (Accessibility.Protected, Accessibility.Internal)
+        | (_, Accessibility.ProtectedAndInternal)
+        | (Accessibility.ProtectedAndInternal, _) => Accessibility.ProtectedAndInternal
+        | (_, Accessibility.Protected)
+        | (Accessibility.Protected, _) => Accessibility.Protected
+        | (_, Accessibility.Internal)
+        | (Accessibility.Internal, _) => Accessibility.Internal
+        | (_, Accessibility.ProtectedOrInternal)
+        | (Accessibility.ProtectedOrInternal, _) => Accessibility.ProtectedOrInternal
+        | (Accessibility.Public, Accessibility.Public) => Accessibility.Public
+      }
+    }
+
+
+    /** Check if [access] doesn't grant more access than any of tycons in
+        [this].  The [what] parameter is used only for error messages.  */
+    public CheckAccessibility (what : IMember, access : Accessibility) : void
+    {
+      match (this) {
+        | FixedType.Class (tc, parms) =>
+          def maybe_me = what.DeclaringType;
+
+          def get_siblings(current_type)
+          {
+            match(current_type.DeclaringType)
+            {
+              | null => [current_type];
+              | dt   => (dt :> Nemerle.Compiler.TypeBuilder).DeclaredNestedTypes.Map(t => t : TypeInfo);
+            }
+          }
+          //nested types have full acess to their parents regardless of  their accessibility
+          def is_nested_type (nested_type) {
+            | null => false
+            | tc2 when  get_siblings(tc2).Contains(tc)  => true
+            | _ => is_nested_type (nested_type.DeclaringType)
+          }
+
+          if (AccessibilityIntersect(tc.Accessibility, access) != access &&
+              (maybe_me == null || !maybe_me.Equals(tc)) &&
+              !(maybe_me != null && is_nested_type(maybe_me)))
+          {
+            def kind = what.MemberKind.ToString().Replace("Info", "");
+            Message.Error($"$kind `$(what.Name)' is more accessible than `$tc'")
+          }
+          else
+            foreach (t in parms)
+              t.Fix ().CheckAccessibility (what, access)
+
+        | FixedType.StaticTypeVarRef | FixedType.Void => {}
+
+        | FixedType.Ref (t)
+        | FixedType.Out (t)
+        | FixedType.Array (t, _) =>
+          t.Fix ().CheckAccessibility (what, access)
+
+        | FixedType.Fun (t1, t2) =>
+          t1.Fix ().CheckAccessibility (what, access);
+          t2.Fix ().CheckAccessibility (what, access)
+
+        | FixedType.Tuple (parms) =>
+          foreach (t in parms)
+            t.Fix ().CheckAccessibility (what, access)
+
+        | FixedType.Intersection (lst) =>
+          foreach (elem in lst)
+            elem.CheckAccessibility (what, access)
+      }
+    }
+
+
+    /// Get type of member when referenced on value of the current type,
+    /// which has to be fixed.
+    public TypeOfMember(member : IMember) : TypeVar
+    {
+      match (this)
+      {
+        | Class (ti, args) =>
+          match (member)
+          {
+            | method is IMethod => TypeOfMethod(method : IMethod)
+            | _ =>
+              def s1 = ti.SubtypingSubst(member.DeclaringType);
+              //def s1 = member.DeclaringType.MakeSubst(args);
+              def s2 = ti.MakeSubst(args);
+              s2.Apply(s1.Apply(member.GetMemType()).Fix())
+          }
+
+        | Array => InternalType.Array.TypeOfMember (member)
+        | StaticTypeVarRef (tyvar) =>
+          foreach (t in tyvar.Constraints)
+          {
+            | FixedType.Class as t =>
+              when (t.tycon.Equals(member.DeclaringType) || t.tycon.IsDerivedFrom(member.DeclaringType))
+                return t.TypeOfMember(member);
+
+            | FixedType.StaticTypeVarRef as t =>
+              return t.TypeOfMember(member);
+
+            | _ => ()
+          }
+
+          Util.ice($"not found for member $(member) with dt $(member.DeclaringType) -- am in $(this)")
+
+        | _ => Util.ice($"unsupported type: for member $(member) with dt $(member.DeclaringType) -- am in $(this)")
+      }
+    }
+
+
+    /**
+     * Returns substitution which should be applied to types of members of $from in order to get their
+     * instatiation in $this, like  SCG.List[int].ConstructSubstForTypeInfo (SCG.ICollection) --> { T := int }
+     *
+     * It supports only FixedType.Class
+     */
+    public ConstructSubstForTypeInfo (from : TypeInfo) : Subst
+    {
+      match (this) {
+        | Class (ti, args) =>
+          def s1 = ti.SubtypingSubst (from);
+          def s2 = ti.MakeSubst (args);
+          s1.AddSubst (s2);
+          s1
+
+        | _ =>
+          throw System.ArgumentException ($"unsupported type: $this");
+      }
+    }
+
+    public TypeOfMethodWithTyparms(method : IMethod) : TypeVar * list [TypeVar]
+    {
+      match (this)
+      {
+        | Class (ti, args) =>
+          // FIXME: VladD2: По идее здесь ti должен быть == method.DeclaringType. Таким обрзом следующая строка бессмысленна.
+          def s1 = ti.SubtypingSubst(method.DeclaringType);
+          def s2 = ti.MakeSubst(args);
+          def (s3, vars) = Subst.Fresh(method.GetHeader().TypeParameters);
+          s2.AddSubst(s3);
+          (s2.Apply(s1.Apply(method.GetMemType()).Fix()), vars)
+
+        | StaticTypeVarRef => (TypeOfMember(method), []) // i'm not sure that this is safe operation
+        | _ => Util.ice($ "unsupported type: for member $(method) with dt $(method.DeclaringType) -- am in $(this)")
+      }
+    }
+
+
+
+    public TypeOfMethod(method : IMethod) : TypeVar
+    {
+      match (this)
+      {
+        | Class (ti, args) =>
+          def s1 = ti.SubtypingSubst(method.DeclaringType);
+          def s2 = ti.MakeSubst(args);
+          def (s3, _vars) = Subst.Fresh(method.GetHeader().TypeParameters);
+          s2.AddSubst(s3);
+          // FIXME we use it for method implementation
+          // Util.cassert (method.GetHeader ().typarms.IsEmpty,
+          //              $ "TypeOfMethod used for $method");
+          s2.Apply(s1.Apply(method.GetMemType()).Fix())
+
+        | _ => assert(false, $ "unsupported type: $(this)")
+      }
+    }
+
+
+    /** This is a hack used in external/Codec.n to expand type aliases
+        in imported types.  NTE won't generate aliases there, so it shouldn't
+        be needed later.  */
+    public Expand () : FixedType
+    {
+      match (this) {
+        | Class (ti, args) =>
+          def tydecl = ti.GetTydecl ();
+          if (tydecl == null) this
+          else
+            match (tydecl) {
+              | Typedtree.TypeDeclaration.Alias (t) =>
+                def subst = ti.MakeSubst (args);
+                subst.MonoApply (t)
+              | _ => this
+            }
+        | _ => this
+      }
+    }
+
+
+    /// Get the exact instantiation upon which [this] implements [super_type].
+    ///
+    ///    For example for:
+    ///      class Bar[X, Y] { }
+    ///      class Foo[T] : Bar[int, list[T]] { }
+    ///    the call:
+    ///      Foo[string].GetInstantiatedSuperType(Bar)
+    ///    will return:
+    ///      Bar[int, list[string]]
+    public GetInstantiatedSuperType(super_type : TypeInfo) : FixedType.Class
+    {
+//      Message.Debug ($"this $this - super $super_type");
+      if (super_type.Equals(InternalType.Object_tc))
+        InternalType.Object
+      else match (this)
+      {
+        | Class(sub_type, _) as res when sub_type.Equals(super_type) => res
+        | Class(sub_type, parms) =>
+          def sub = sub_type.MakeSubst(parms);
+          def parms1 = sub_type.GetTypeArgumentsForSuperClass(super_type);
+
+          Class(super_type, parms1.Map(sub.Apply))
+
+        | StaticTypeVarRef(st) =>
+/* CRASHES COMPILER
+          ret: {
+            foreach (c :> FixedType.Class in st.Constraints)
+            {
+              def sub = c.tycon.MakeSubst (c.args);
+
+              match (c.tycon.GetTypeArgumentsForSuperClass(super_type))
+              {
+                | Some (parms) => ret (Class(super_type, parms.Map(sub.Apply)))
+                | None => ()
+              }
+            }
+            null // impossible
+          }
+*/
+          def makeTyArgs(constraintType, parms)
+          {
+            def sub = constraintType.tycon.MakeSubst(constraintType.args);
+            Class(super_type, parms.Map(sub.Apply));
+          }
+
+          def visit(st : StaticTypeVar)
+          {
+            foreach (c in st.Constraints)
+            {
+              | FixedType.Class as c =>
+                when (c.tycon.IsDerivedFrom(super_type))
+                  return makeTyArgs(c, c.tycon.GetTypeArgumentsForSuperClass(super_type));
+
+              | FixedType.StaticTypeVarRef(st) => 
+                def result = visit(st);
+                when (result != null)
+                  return result;
+
+              | _ => ()
+            }
+            
+            null
+          }
+
+          visit(st)
+
+        | Fun =>
+          FunctionType.Make (this).GetInstantiatedSuperType (super_type)
+
+        | Array (t, n) =>
+          FixedType.Class (InternalType.GetArrayType (n), [t]).GetInstantiatedSuperType (super_type)
+
+        | _ => Util.ice ($ "GIST: $this for $super_type")
+      }
+    }
+
+
+    public FunReturnTypeAndParms () : option [list [TypeVar] * TypeVar]
+    {
+      match (this) {
+        | Fun (from, to) =>
+          def froms =
+            match (from.Hint) {
+              | Some (Void)
+              | Some (Tuple) => from.Fix ().GetUnfixedFunctionArguments ()
+              | _ => [from]
+            }
+          Some ((froms, to))
+        | _ => None ()
+      }
+    }
+
+
+    public FunReturnTypeAndParms (meth : IMethod) : list [TypeVar] * TypeVar
+    {
+      match (this)
+      {
+        | Fun (from, to) =>
+          def froms = from.ToList(meth);
+          (froms, to)
+
+        | _ => Util.ice ()
+      }
+    }
+
+    public new FunParamsTypes (meth : IMethod) : list [TypeVar]
+    {
+      match (this)
+      {
+        | Fun (from, _) => from.ToList(meth)
+        | _ => Util.ice ()
+      }
+    }
+
+    public SigRequire (other : FixedType) : bool
+    {
+      match ((FunReturnTypeAndParms (), other.FunReturnTypeAndParms ())) {
+        | (Some ((f1, t1)), Some ((f2, t2))) when f1.Length == f2.Length =>
+          t1.Require (t2) &&
+          NList.ForAll2 (f1, f2, fun (t1, t2) { t2.Require (t1) })
+        | _ => false
+      }
+    }
+
+
+    public TrySigRequire (other : FixedType) : bool
+    {
+      surroundwith(speculatitveTyping)
+        this.SigRequire(other)
+    }
+
+
+    public Iter (f : FixedType -> void) : void
+    {
+      f (this);
+
+      match (this) {
+        | Tuple (args)
+        | Class (_, args) =>
+          foreach (a in args)
+            a.Fix ().Iter (f)
+
+        | Fun (a, t) =>
+          a.Fix ().Iter (f);
+          t.Fix ().Iter (f);
+
+        | Array (t, _)
+        | Ref (t)
+        | Out (t) =>
+          t.Fix ().Iter (f)
+
+        | Intersection (args) =>
+          foreach (a in args)
+            a.Iter (f)
+
+        | Void
+        | StaticTypeVarRef => {}
+      }
+    }
+    #endregion
+
+
+    #region Internal implementation
+    internal Validate() : void
+    {
+      match (this)
+      {
+        | Intersection ([])  => assert(false)
+        | Intersection ([_]) => assert(false)
+        | Intersection (lst) =>
+          def supers = lst.FoldLeft(Set(),
+              fun (e, s : Set[TypeInfo])
+              {
+                match (e)
+                {
+                  | Class(tc, _) =>
+                    def lst = tc.GetSuperTypes().Map(_.tycon);
+                    s.ReplaceList(lst)
+
+                  | _ => s //assert(false)
+                }
+              });
+          def lst = lst.FoldLeft([],
+            fun (x : FixedType, acc)
+            {
+              match (x)
+              {
+                | Class(tc, _) => tc :: acc
+                | _             => acc //assert(false)
+              }
+            });
+
+          assert(Set(lst).Intersect(supers).IsEmpty);
+
+       | _ => ()
+      }
+    }
+    #endregion
+
+
+    #region Overridden stuff from TypeVar
+    public override Require (t : TypeVar) : bool
+    {
+      if (t.IsFixed)
+        Require (t.FixedValue)
+      else
+        t.Provide (this)
+    }
+
+    public override Provide (t : TypeVar) : bool
+    {
+      if (t.IsFixed)
+        Provide (t.FixedValue)
+      else
+        t.Require (this)
+    }
+
+    public override Provide (t : FixedType) : bool
+    {
+      t.Require (this)
+    }
+
+    public override Fix () : FixedType
+    {
+      this
+    }
+
+    public override FixedValue : FixedType
+    {
+      get { this }
+    }
+
+    public override IsAccessibleFrom (ti : TypeInfo) : bool
+    {
+      def can_access (x) { x.IsAccessibleFrom (ti) }
+
+      match (this) {
+        | Class (t, args) =>
+          t.CanAccess (ti) && args.ForAll (can_access)
+
+        | Void
+        | StaticTypeVarRef => true
+
+        | Tuple (args) =>
+          args.ForAll (can_access)
+
+        | Fun (from, to) =>
+          from.IsAccessibleFrom (ti) && to.IsAccessibleFrom (ti)
+
+        | Array (t, _)
+        | Ref (t)
+        | Out (t) => t.IsAccessibleFrom (ti)
+
+        | Intersection (mtypes) =>
+          mtypes.ForAll (can_access)
+      }
+    }
+
+
+    internal this ()
+    {
+      base (ManagerClass.Instance);
+      lower_bound = this;
+      upper_bound = this;
+      serial = 1;
+      flags = TypeVar.Flags.IsMonoType;
+    }
+    
+    public MakePointerType() : TypeVar
+    {
+      match (this)
+      {
+        | Class(ti, []) => 
+          def pointerTypeInfo = ti.MakePointerTypeInfo();
+          if (pointerTypeInfo == null)
+            null
+          else
+            Class(pointerTypeInfo, [])
+            
+        | _ => null
+      }
+    }
+    
+    #endregion
+  }
+}

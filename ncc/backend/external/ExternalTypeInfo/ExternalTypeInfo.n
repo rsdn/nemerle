@@ -1,0 +1,777 @@
+﻿using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.IO;
+using Nemerle.Late;
+using Nemerle.Utility;
+using System.IO;
+
+using PT = Nemerle.Compiler.Parsetree;
+using SR = System.Reflection;
+using SRE = System.Reflection.Emit;
+using SCG = System.Collections.Generic;
+
+namespace Nemerle.Compiler
+{
+  /// This class stores information extracted from a referenced external library.
+  public partial class LibraryReference
+  {
+    public class ExternalTypeInfo : TypeInfo, IBackendMember
+    {
+      [Accessor]
+      protected system_type : System.Type;
+      
+      protected GetHandle() : SR.MemberInfo implements IBackendMember.GetHandle { system_type }
+      
+      protected         library                       : LibraryReference;
+      internal          tenv                          : Map [string, StaticTypeVar] = Map ();
+      protected mutable direct_supertypes             : list [FixedType.Class];
+      private   mutable _isDirectSupertypesNormalized : bool;
+
+      public this(lib : LibraryReference, h : System.Type, ns_node : NamespaceTree.Node)
+      {
+        base(ns_node, lib.Manager, Util.StripGenericMark(h.TypeFullName().Replace ('+', '.').TrimStart('.')));
+        
+        TyparmsCount = h.GetGenericArguments().Length;
+        
+        // first cache ourself to avoid loops
+        LibraryReferenceManager.CacheTypeInfo (h, this, ns_node);
+
+        //_typesTreeVersion = lib.Manager.TypesTreeVersion;
+
+        library     = lib;
+        system_type = h;
+
+        when (system_type.IsGenericType && !system_type.IsGenericTypeDefinition)
+          system_type = system_type.GetGenericTypeDefinition();
+
+        when (system_type.DeclaringType != null)
+          tenv = (lib.TypeInfoOfType(system_type.DeclaringType) :> ExternalTypeInfo).tenv;
+          
+        // init typarms and self_type
+        (typarms, tenv, direct_supertypes, _superTypes) = TyCodec.ReflectTypeBuilder(library, tenv, system_type);
+
+        when (h.Namespace == "Nemerle.Builtins" && h.Name.StartsWith ("Array"))
+        {
+          direct_supertypes = [InternalType.Array];
+          _superTypes ::= InternalType.Array;
+        }
+
+        foreach (t in _superTypes)
+        {
+          _superTypesLookup.Add(t, 0);
+
+          if (_superTypeInfosLookup.Contains(t.tycon))
+            _superTypeInfosLookup[t.tycon] = t :: _superTypeInfosLookup[t.tycon];
+          else
+            _superTypeInfosLookup[t.tycon] = [t];
+        }
+
+        def parms = typarms.Map(FixedType.StaticTypeVarRef(_));
+        self_type = FixedType.Class(this, parms);
+
+        //_superTypeInfosLookup[InternalType.Object_tc] = [InternalType.Object]; // FIXME: В этот момент еще нет InternalType.Object
+        _superTypeInfosLookup[this] = [GetMemType()];
+        _superTypesCalculated = true;
+
+        TyCodec.ReflectConstraints(library, tenv, system_type, self_type, typarms);
+
+        attributes = NemerleModifiers.None;
+
+        when (system_type.IsAbstract)    attributes |= NemerleModifiers.Abstract;
+        when (system_type.IsSealed)      attributes |= NemerleModifiers.Sealed;
+        when (system_type.IsValueType)   attributes |= NemerleModifiers.Struct;
+        when (system_type.IsSpecialName) attributes |= NemerleModifiers.SpecialName;
+
+        if (system_type.DeclaringType == null)
+        {
+          if (system_type.IsPublic) attributes |= NemerleModifiers.Public
+          else                      attributes |= NemerleModifiers.Internal;
+        }
+        else
+        {
+          when (system_type.IsNestedPrivate)  attributes |= NemerleModifiers.Private;
+          when (system_type.IsNestedPublic)   attributes |= NemerleModifiers.Public;
+          when (system_type.IsNestedFamily)   attributes |= NemerleModifiers.Protected;
+          when (system_type.IsNestedAssembly) attributes |= NemerleModifiers.Internal;
+        }
+
+        def attrs = system_type.GetCustomAttributes(SystemTypeCache.Reflection_DefaultMemberAttribute, true);
+        default_indexer =
+          if (attrs.Length > 0)
+          {
+            def dma = attrs [0] :> System.Reflection.DefaultMemberAttribute;
+            dma.MemberName
+          }
+          else
+            // there can be indexer in the base type, let DefaultIndexer
+            // property handle it
+            null;
+
+        when (lib.LibRefManager.add_buildins)
+          AddBuiltins();
+//        else Message.Debug ($"omiititng $FullName");
+
+        decode_extension_methods(lib.LibRefManager);
+
+        when (InternalType.Obsolete_tc != null)
+          is_obsolete = HasAttribute(InternalType.Obsolete_tc);
+
+        _declaredTypeParametersCount = system_type.GetGenericArguments().Length;
+
+        when(InternalType.Conditional_tc != null)
+          _isConditional = HasAttribute(InternalType.Conditional_tc);
+      }
+      
+      public override IsNotPublicExternal : bool { get { SystemType?.IsNotPublic } }
+      public override IsPointer           : bool { [Memoize] get { SystemType?.IsPointer } }
+    
+      [Memoize]
+      public override GetElementTypeInfo() : option[TypeInfo]
+      {
+        if (IsPointer)
+          Some(library.TypeInfoOfType(SystemType.GetElementType()))
+        else
+          None()
+      }
+
+      public override TyparmsCount  : int { get; }
+
+      #region Special numeric overloads
+
+      internal static numeric_types : Hashtable [string, NumericKind];
+
+      static this ()
+      {
+        numeric_types = Hashtable ();
+        numeric_types.Add ("SByte", NumericKind.Signed);
+        numeric_types.Add ("Int16", NumericKind.Signed);
+        numeric_types.Add ("Int32", NumericKind.Signed);
+        numeric_types.Add ("Int64", NumericKind.Signed);
+        numeric_types.Add ("Byte", NumericKind.Unsigned);
+        numeric_types.Add ("UInt16", NumericKind.Unsigned);
+        numeric_types.Add ("UInt32", NumericKind.Unsigned);
+        numeric_types.Add ("UInt64", NumericKind.Unsigned);
+        numeric_types.Add ("Single", NumericKind.Float);
+        numeric_types.Add ("Double", NumericKind.Float);
+        numeric_types.Add ("Char", NumericKind.Char);
+      }
+
+
+      FixupEquality (name : string) : void
+      {
+        FixupCompare (name);
+        #if 0
+        match (special_members [name])
+        {
+          | [elem : IMethod] =>
+            def tv = StaticTypeVar ("'a");
+            tv.Constraints = [];
+            def hd = elem.GetHeader ();
+            hd.typarms = [tv];
+            match (hd.parms)
+            {
+              | [parm1, parm2] =>
+                parm1.ty = FixedType.StaticTypeVarRef (tv);
+                parm2.ty = FixedType.StaticTypeVarRef (tv);
+              | _ => assert(false)
+            }
+          | _ => assert(false)
+        }
+        #endif
+      }
+
+      FixupShift (name : string) : void
+      {
+        match (special_members [name])
+        {
+          | [elem is IMethod] =>
+            match (elem.GetParameters ())
+            {
+              | [_, parm2] =>
+                assert(InternalType.Int32 != null);
+                parm2.ty = InternalType.Int32;
+
+              | _ => assert(false)
+            }
+
+          | _ => assert(false)
+        }
+      }
+
+      internal AddBuiltins () : void
+      {
+        InitBuiltinMembers();
+        
+        when (system_type.IsPointer)
+        {
+          AddConversion("op_Implicit", InternalType.IntPtr_tc);
+          AddConversion("op_Explicit", InternalType.IntPtr_tc, reverse = true);
+
+          AddBuiltin("op_Addition",    GetMemType(),  InternalType.Int32, GetMemType(), "+.p");
+          AddBuiltin("op_Subtraction", GetMemType(),  InternalType.Int32, GetMemType(), "-.p");
+          AddBuiltin("op_Subtraction", GetMemType(),  GetMemType(), InternalType.Int32, "-.p");
+          AddBuiltin("op_Increment",   "++.p"); MakeSingleParm("op_Increment");
+          AddBuiltin("op_Decrement",   "--.p"); MakeSingleParm("op_Decrement");
+        }
+
+        when (system_type.Name == "Nullable`1")
+        {
+          def retType = library.InternalType.Boolean;
+
+          AddBuiltin("op_Equality",           retType, "==");
+          AddBuiltin("op_Inequality",         retType, "!=");
+          AddBuiltin("op_LessThan",           retType, "<");
+          AddBuiltin("op_LessThanOrEqual",    retType, "<=");
+          AddBuiltin("op_GreaterThan",        retType, ">");
+          AddBuiltin("op_GreaterThanOrEqual", retType, ">=");
+
+          //AddBuiltin("op_Addition",     "+");
+//          AddBuiltin("op_Subtraction",  "-");
+//          AddBuiltin("op_Multiply",     "*");
+//          AddBuiltin("op_Division",     "/");
+//          AddBuiltin("op_Modulus",      "%");
+//          AddBuiltin("op_BitwiseAnd",   "&");
+//          AddBuiltin("op_BitwiseOr",    "|");
+//          AddBuiltin("op_ExclusiveOr",  "^");
+//          AddBuiltin("op_LeftShift",    "<<");
+//          AddBuiltin("op_RightShift",   ">>");
+//
+//          AddBuiltin("op_Increment",      "++");  MakeSingleParm("op_Increment");
+//          AddBuiltin("op_Decrement",      "--");  MakeSingleParm("op_Decrement");
+//          AddBuiltin("op_LogicalNot",     "!");   MakeSingleParm("op_LogicalNot");
+//          AddBuiltin("op_UnaryPlus",      "+");   MakeSingleParm("op_UnaryPlus");
+//          AddBuiltin("op_UnaryNegation",  "-");   MakeSingleParm("op_UnaryNegation");
+//          AddBuiltin("op_OnesComplement", "~");   MakeSingleParm ("op_OnesComplement");
+        }
+
+        when (system_type.IsPrimitive || system_type.Equals (SystemTypeCache.Object) || system_type.Equals (SystemTypeCache.String))
+        {
+          def name = system_type.Name;
+          if (name == "String")
+          {
+            // == and != are surprisingly properly overloaded
+            // and this is done in LookupMemberImpl, because otherwise
+            // we would use uninitialized InternalType.String_Concat
+            // AddBuiltin ("op_Addition", InternalType.String_Concat);
+          }
+          else if (name == "Boolean")
+          {
+            AddBuiltin ("op_LogicalNot", "bool.!");
+            MakeSingleParm ("op_LogicalNot");
+            AddBuiltin ("op_Equality",   "==");
+            AddBuiltin ("op_Inequality", "!=");
+            AddBuiltin ("op_BitwiseAnd", "&");
+            AddBuiltin ("op_BitwiseOr",  "|");
+            AddBuiltin ("op_ExclusiveOr", "^");
+            // FixupEquality not needed here -- return type is already correct
+            // and InternalType.Boolean is here null
+          }
+          else if (name == "Object")
+          {
+            AddBuiltin ("op_Equality", "==.ref");
+            AddBuiltin ("op_Inequality", "!=.ref");
+            FixupEquality ("op_Equality");
+            FixupEquality ("op_Inequality");
+          }
+          else when (numeric_types.Contains (name))
+          {
+            def kind = numeric_types [name];
+            def suff =  match (kind)
+                        {
+                          | NumericKind.Float => ".f"
+                          | NumericKind.Char
+                          | NumericKind.Signed => ".s"
+                          | NumericKind.Unsigned => ".u"
+                        };
+            def is_small_type = name == "SByte" || name == "Byte" || name == "Int16" || name == "UInt16";
+
+            unless (kind == NumericKind.Char)
+            {
+              //         method name       checked OpCode  unchecked OpCode
+              AddBuiltin("op_Addition",    "+" + suff,     "+.f");
+              AddBuiltin("op_Subtraction", "-" + suff,     "-.f");
+              AddBuiltin("op_Multiply",    "*" + suff,     "*.f");
+
+              // no checked version:
+              AddBuiltin("op_Division", "/" + suff);
+              AddBuiltin("op_Modulus",  "%" + suff);
+
+              // unary
+              AddBuiltin("op_UnaryPlus", "unary.+" + suff);
+              MakeSingleParm("op_UnaryPlus");
+
+              when (is_small_type)
+              {
+                ForceIntType("op_Addition");
+                ForceIntType("op_Subtraction");
+                ForceIntType("op_Multiply");
+                ForceIntType("op_Division");
+                ForceIntType("op_Modulus");
+                ForceIntType("op_UnaryPlus");
+              }
+            }
+
+            def one_size =  match (name)
+                            {
+                              | "Int64" | "UInt64" => "i8"
+                              | "Float"            => "r4"
+                              | "Double"           => "r8"
+                              | _                  => "i4"
+                            };
+
+            def incdec_suff = match (name)
+                              {
+                                | "Byte"   => ".u.i1"
+                                | "SByte"  => ".s.i1"
+                                | "Int16"  => ".s.i2"
+                                | "UInt16" => ".u.i2"
+                                | _        => suff
+                              };
+
+            //         method name      checked OpCode                   unchecked OpCode
+            AddBuiltin("op_Increment",  "++." + one_size + incdec_suff,  "++." + one_size + ".f");
+            AddBuiltin("op_Decrement",  "--." + one_size + incdec_suff,  "--." + one_size + ".f");
+
+            MakeSingleParm("op_Increment");
+            MakeSingleParm("op_Decrement");
+
+
+            when (kind == NumericKind.Signed || kind == NumericKind.Unsigned)
+            {
+              AddBuiltin("op_BitwiseAnd",  "&" + suff);
+              AddBuiltin("op_BitwiseOr",   "|" + suff);
+              AddBuiltin("op_ExclusiveOr", "^" + suff);
+
+              AddBuiltin("op_LeftShift",  "<<" + suff);
+              AddBuiltin("op_RightShift", ">>" + suff);
+              when (Name != "Int32")
+              {
+                FixupShift("op_LeftShift");
+                FixupShift("op_RightShift");
+              }
+
+              when (is_small_type)
+              {
+                ForceIntType("op_LeftShift");
+                ForceIntType("op_RightShift");
+                ForceIntType("op_BitwiseAnd");
+                ForceIntType("op_BitwiseOr");
+                ForceIntType("op_ExclusiveOr");
+              }
+
+              AddBuiltin("op_OnesComplement", "unary.~" + suff);
+              MakeSingleParm("op_OnesComplement");
+
+              when (is_small_type)
+                ForceIntType ("op_OnesComplement");
+            }
+
+            unless (kind == NumericKind.Unsigned || kind == NumericKind.Char)
+            {
+              //        method name           checked OpCode     unchecked OpCode
+              AddBuiltin("op_UnaryNegation",  "unary.-" + suff,  "unary.-.f");
+
+              MakeSingleParm ("op_UnaryNegation");
+
+              when (is_small_type)
+                ForceIntType ("op_UnaryNegation");
+            }
+
+            // comparisions
+            AddBuiltin ("op_Equality",           "==");
+            AddBuiltin ("op_Inequality",         "!=");
+            AddBuiltin ("op_LessThan",           "<"  + suff);
+            AddBuiltin ("op_LessThanOrEqual",    "<=" + suff);
+            AddBuiltin ("op_GreaterThan",        ">"  + suff);
+            AddBuiltin ("op_GreaterThanOrEqual", ">=" + suff);
+
+            FixupCompare ("op_Equality");
+            FixupCompare ("op_Inequality");
+            FixupCompare ("op_LessThan");
+            FixupCompare ("op_LessThanOrEqual");
+            FixupCompare ("op_GreaterThan");
+            FixupCompare ("op_GreaterThanOrEqual");
+          }
+        }
+      }
+
+      #endregion
+
+      _declaredTypeParametersCount : int;
+
+      /// Count of type parameters declared in this type (without type parameters of outer types)
+      public override DeclaredTypeParametersCount : int
+      {
+        get { _declaredTypeParametersCount }
+      }
+
+      /// Checks if underlying .NET type is value type
+      public override IsValueType : bool { get { system_type.IsValueType } }
+
+      public override IsInterface : bool { get { system_type.IsInterface } }
+
+      public override Name : string
+      {
+        //[Nemerle.Memoize (InvalidValue = null)]
+        get { Util.StripGenericMark (system_type.Name) }
+      }
+
+      internal override GetLibraryReference() : LibraryReference { library }
+
+      public override IsDelegate : bool
+      {
+        //[Nemerle.Memoize]
+        get { system_type.IsSubclassOf (SystemTypeCache.MulticastDelegate) }
+      }
+
+      public override GetConstantObject () : IField { null }
+
+      public override DeclaringType : TypeInfo
+      {
+        //[Nemerle.Memoize]
+        get
+        {
+          if (system_type.DeclaringType == null)
+            null
+          else
+            library.TypeInfoOfType (system_type.DeclaringType)
+        }
+      }
+
+      public override Location : Location
+      {
+        get { library._location }
+      }
+
+      [Memoize]
+      public override GetModifiers () : AttributesAndModifiers
+      {
+        def attrsData = SR.CustomAttributeData.GetCustomAttributes(system_type);
+        def attrs     = ConvertCustomAttributesData(attrsData, library);
+        def attrAsts  = attrs.Map((name, args) => <[ $name(..$args)]>);
+        AttributesAndModifiers(Attributes, attrAsts)
+      }
+  
+      public override IsCustomAttributeDefined(attributeFullName : string) : bool
+      {
+        GetHandle().IsDefined(library.Manager.LookupSystemType(attributeFullName), false)
+      }
+
+      public override AttributeTargets : System.AttributeTargets
+      {
+        get
+        {
+          def usage = system_type.GetCustomAttributes (typeof (System.AttributeUsageAttribute), false);
+
+          if (usage.Length > 0)
+          {
+            assert(usage.Length == 1);
+            (usage[0] :> System.AttributeUsageAttribute).ValidOn
+          }
+          else System.AttributeTargets.All
+        }
+      }
+
+      public override HasAttribute (attribute : TypeInfo) : bool
+      {
+        def t = SystemHelpers.GetSystemType(attribute);
+        system_type.IsDefined (t, false)
+      }
+
+      public override Accessibility : Accessibility
+      {
+        get
+        {
+          match (system_type.Attributes %& SR.TypeAttributes.VisibilityMask)
+          {
+            | SR.TypeAttributes.NestedAssembly    => Accessibility.Internal
+            | SR.TypeAttributes.NestedFamANDAssem => Accessibility.ProtectedAndInternal
+            | SR.TypeAttributes.NestedFamily      => Accessibility.Protected
+            | SR.TypeAttributes.NestedFamORAssem  => Accessibility.ProtectedOrInternal
+            | SR.TypeAttributes.Public
+            | SR.TypeAttributes.NestedPublic      => Accessibility.Public
+            | SR.TypeAttributes.NestedPrivate
+            | SR.TypeAttributes.NotPublic         => Accessibility.Internal
+            | _ => Util.ice ("system type returned invalid attributes")
+          }
+        }
+      }
+
+      public override IsExternallyAccessible : bool
+      { // if it wasn't, we wouldn't have reflected it?
+        get { true }
+      }
+
+      public override GetTydecl () : TypeDeclaration
+      {
+        if (system_type.IsInterface) TypeDeclaration.Interface()
+        else if (system_type.IsEnum) TypeDeclaration.Enum()
+        else                         TypeDeclaration.Class ()
+      }
+
+      public override GetDirectSuperTypes() : list[FixedType.Class]
+      {
+        if (_isDirectSupertypesNormalized)
+          direct_supertypes
+        else
+        {
+          when (direct_supertypes is _ :: _ :: _) // has more then 1 elems
+            direct_supertypes = NormalizeSupertypes(direct_supertypes);
+
+          _isDirectSupertypesNormalized = true;
+          direct_supertypes
+        }
+      }
+
+      public override BaseType : TypeInfo
+      {
+        //[Nemerle.Memoize]
+        get
+        {
+          if (system_type.BaseType == null) null
+          else library.TypeInfoOfType (system_type.BaseType)
+        }
+      }
+
+      public override SuperClass() : option[TypeInfo]
+      {
+        //assert2(!IsInterface);
+        
+        def candidates = direct_supertypes.Filter(supertype => !supertype.TypeInfo.IsInterface);
+        
+        match (candidates)
+        {
+          | FixedType.Class(tc, _) :: _ => Some(tc)
+          | [] => None()
+          | _ => Util.ice()
+        }
+      }
+
+      public override GetMembers () : list [IMember]
+      {
+        LookupMemberImpl ("")
+      }
+
+      public override GetMembers (bindingAttr : BindingFlags) : list [IMember]
+      {
+        def check (x : IMember)
+        {
+          if (bindingAttr %&& BindingFlags.DeclaredOnly)
+            this.Equals (x.DeclaringType) &&
+            TypeBuilder.constrain_member (x, bindingAttr)
+          else
+            TypeBuilder.constrain_member (x, bindingAttr)
+        }
+
+        GetMembers().RevFilter(check)
+      }
+
+      static constrain_with_membertype[MT](memType : MemberKinds) : IMember * list[MT] -> list[MT]
+        where MT : IMember
+      {
+        (x, acc) => if (x.MemberKind == memType) x :> MT :: acc
+                    else                         acc;
+      }
+
+      public override GetFields (bindingAttr : BindingFlags) : list [IField]
+      {
+        GetMembers (bindingAttr).FoldLeft ([], constrain_with_membertype (MemberKinds.Field))
+      }
+
+      public override GetConstructors (bindingAttr : BindingFlags) : list [IMethod]
+      {
+        GetMembers (bindingAttr).FoldLeft ([], constrain_with_membertype (MemberKinds.Constructor))
+      }
+
+      private static is_internal (m : SR.MemberInfo) : bool
+      {
+        def x = m.MemberType;
+
+        if (x %&& (SR.MemberTypes.Constructor | SR.MemberTypes.Method))
+        {
+          def meth = m :> SR.MethodBase;
+          meth.IsPrivate || meth.IsAssembly || meth.IsFamilyAndAssembly
+            || meth.CallingConvention == SR.CallingConventions.VarArgs
+        }
+        else if (x %&& SR.MemberTypes.Field)
+        {
+          def field = m :> SR.FieldInfo;
+          field.IsPrivate || field.IsAssembly || field.IsFamilyAndAssembly
+        }
+        else if (x %&& SR.MemberTypes.Property)
+        {
+          def prop = m :> SR.PropertyInfo;
+          def accessors = prop.GetAccessors (true);
+          def propMeth = accessors.Fold(null, (x : SR.MethodInfo, acc) =>
+                if (x == null || x.IsPrivate || x.IsAssembly || x.IsFamilyAndAssembly) acc
+                else x);
+          propMeth == null
+        }
+        else if (x %&& SR.MemberTypes.NestedType)
+        {
+          def ty = m :> System.Type;
+          ty.IsNestedAssembly || ty.IsNestedPrivate || ty.IsNestedFamANDAssem
+        }
+        else if (x %&& SR.MemberTypes.Event)
+        {
+          // we lookup nonpublic method here, because it can be protected and we want to
+          // access it from derived class
+          // (I just hope it won't trigger any authorization exceptions)
+          def evMeth = (m :> SR.EventInfo).GetAddMethod (true);
+          evMeth == null || evMeth.IsPrivate || evMeth.IsAssembly || evMeth.IsFamilyAndAssembly
+        }
+        else true
+      }
+
+      protected imember_of_memberinfo (m : SR.MemberInfo) : IMember
+      {
+        match (m.MemberType)
+        {
+          | SR.MemberTypes.Constructor
+          | SR.MemberTypes.Method     => ExternalMethodInfo  (tenv, library, m :> SR.MethodBase) : IMember
+          | SR.MemberTypes.Field      => ExternalFieldInfo   (tenv, library, m :> SR.FieldInfo)
+          | SR.MemberTypes.Property   => ExternalPropertyInfo(tenv, library, m :> SR.PropertyInfo)
+          | SR.MemberTypes.Event      => ExternalEventInfo         (library, m :> SR.EventInfo)
+          | SR.MemberTypes.NestedType => library.TypeInfoOfType(m :> System.Type)
+          | _ => null
+        }
+      }
+
+      private collect_members () : void
+      {
+        member_map = Hashtable ();
+
+        def flags = SR.BindingFlags.Public
+                  | SR.BindingFlags.NonPublic
+                  | SR.BindingFlags.Static
+                  | SR.BindingFlags.Instance
+                  | SR.BindingFlags.DeclaredOnly;
+
+        def member_array = system_type.GetMembers (flags);
+
+        //Message.Debug ($"{collect_members, '$name' in $this len=$(member_array.Length)");
+        mutable collected_now = [];
+
+        for (mutable i = member_array.Length - 1; i >= 0; i--)
+        {
+          def m = member_array [i];
+
+//          Message.Debug ($"adding $m from $this $(this.GetHashCode ())");
+          unless (is_internal(m) && !this.library.IsFriend)
+          {
+//            Message.Debug ($ "add_member: $m to $(this) [$(GetHashCode ())]");
+            match (imember_of_memberinfo (m))
+            {
+              | null => ()
+              | r =>
+//                    Message.Debug ($ "add_member: $r to $(this) [$(GetHashCode ())]");
+                collected_now ::= r;
+                add_member_by_name (r);
+            }
+          }
+        }
+
+        def res =
+          if (IsInterface)
+          {
+            def superTypes = GetDirectSuperTypes();
+
+            (if (superTypes.IsEmpty)
+               [InternalType.Object_tc.GetMembers ()]
+             else
+               superTypes.Map(t => t.tycon.GetMembers())) + [collected_now]
+          }
+          else match (SuperClass ())
+          {
+            | Some (ti) => [ti.GetMembers(), collected_now]
+            | None      => [collected_now]
+          };
+
+        collected_now = RemoveHiddenMembers (res);
+
+        member_map[""] = collected_now;
+     }
+
+      public override LookupMemberImpl (name : string) : list [IMember]
+      {
+        if (this.Equals (InternalType.String_tc) && name == "op_Addition") //FixMe: ValdD2: Convert this to buildin fanction
+        {
+          assert(InternalType.String_Concat != null);
+          AddBuiltin ("op_Addition", InternalType.String_Concat);
+          LookupMember (name)
+        }
+        else
+        {
+          when (member_map == null)
+            collect_members();
+
+          if (member_map.Contains (name))
+            member_map[name]
+          else
+          {
+            member_map[name] = [];
+            []
+          }
+        }
+      }
+
+      public override CanAccess (source : TypeInfo) : bool
+      {
+        system_type.IsPublic || system_type.IsNestedPublic
+          || (system_type.DeclaringType != null
+              && source.IsDerivedFrom(DeclaringType)
+              && (system_type.IsNestedFamily || system_type.IsNestedFamORAssem))
+          || (this.library.IsFriend
+              && (system_type.IsNotPublic || system_type.IsNestedAssembly
+          || system_type.IsNestedPublic || system_type.IsNestedFamORAssem));
+      }
+
+      public override UnderlyingType : TypeInfo
+      {
+        //[Nemerle.Memoize (InvalidValue = null)]
+        get
+        {
+          assert(system_type.IsEnum);
+          library.TypeInfoOfType (system_type.GetField ("value__").FieldType)
+        }
+      }
+
+      decode_extension_methods (mgr : LibraryReferenceManager) : void
+      {
+        when (mgr.IsExtension(system_type))
+          foreach (m is IMethod in GetMembers())
+            when (m.IsStatic && mgr.IsExtension((m :> IBackendMember).GetHandle()))
+              mgr.AddExtensionMethod(m);
+      }
+
+      internal override GetObsoletionDetails () : string * bool
+      {
+        def attr = System.Attribute.GetCustomAttribute(
+          system_type,
+          SystemHelpers.GetSystemType(library.Manager.InternalType.Obsolete_tc),
+          false);
+        assert(attr != null);
+        (late(attr.Message) :> string, late(attr.IsError) :> bool)
+      }
+
+      public override GlobalEnv : GlobalEnv
+      {
+        get { library.Manager.CoreEnv }
+      }
+
+      private _isConditional : bool;
+      public override IsConditional : bool { get { _isConditional } }
+
+      [Memoize(Scope = Instance, Synchronized = false)]
+      public override GetConditions() : list[string]
+      {
+        def attrs = System.Attribute.GetCustomAttributes(
+          system_type,
+          SystemHelpers.GetSystemType(InternalType.Conditional_tc),
+          true);
+        NList.MapFromArray(attrs, attr => late(attr.ConditionString) :> string)
+      }
+    }
+  }
+} /* namespace */

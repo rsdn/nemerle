@@ -1,0 +1,227 @@
+/*
+ * Copyright (c) 2003-2008 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.IO;
+using Nemerle.Late;
+using Nemerle.Utility;
+using System.IO;
+
+using PT = Nemerle.Compiler.Parsetree;  
+using SR = System.Reflection;
+using SRE = System.Reflection.Emit;
+using SCG = System.Collections.Generic;
+
+namespace Nemerle.Compiler 
+{
+  /// This class stores information extracted from a referenced external library.
+  
+  public partial class LibraryReference
+  {
+    public class ExternalMethodInfo : ExternalMemberInfo, IMethod, IBackendMember
+    {
+      [Accessor]
+      protected handle      : SR.MethodBase;
+      [Accessor (Header)]
+      protected fun_header  : TFunHeader;
+      protected is_var_args : bool;
+      
+      public this (tenv : Map [string, StaticTypeVar], lib : LibraryReference, h : SR.MethodBase)
+      {
+        handle = h;
+        base(lib);
+
+        def (tyvars, tenv) = TyCodec.ReflectTyparms (lib, tenv, h);
+        
+        def ret_type =
+          match (handle)
+          {
+            | m is SR.MethodInfo => library.TypeOfType (tenv, m.ReturnType)
+            | _ => InternalType.Void // it is ctor
+          };
+        
+        def parms = handle.GetParameters ();
+
+        when (parms.Length > 0) 
+          is_var_args = parms [parms.Length - 1].IsDefined(SystemTypeCache.ParamArrayAttribute, false);
+
+        mutable fparms = [];
+
+        def getCustomAttribute(parameter : SR.ParameterInfo, library) : AttributesAndModifiers
+        {
+          def attrsData = SR.CustomAttributeData.GetCustomAttributes(parameter);
+          def attrs     = ConvertCustomAttributesData(attrsData, library);
+          def attrAsts  = attrs.Map((name, args) => <[ $name(..$args)]>);
+          AttributesAndModifiers(0, attrAsts)
+        }
+
+        for (mutable i = parms.Length - 1; i >= 0; i--)
+        {
+          def p = parms [i];
+
+          def (parmkind, ty) =
+            if (p.ParameterType.IsByRef)
+            {
+              def ty = library.TypeOfType (tenv, p.ParameterType.GetElementType ());
+
+              if (p.IsOut) (ParmKind.Out, FixedType.Out(ty))
+              else         (ParmKind.Ref, FixedType.Ref(ty))
+            } 
+            else           (ParmKind.Normal, library.TypeOfType(tenv, p.ParameterType));
+
+          def fp = TParameter(
+            loc          = lib._location,
+            name         = p.Name,
+            nameLocation = Location.Default,
+            color        = 0,
+            ty           = ty,
+            typeLocation = lib._location,
+            kind         = parmkind,
+            modifiers    = getCustomAttribute(p, lib) // FIXME?
+          );
+
+          def deflt = p.DefaultValue;
+          when (deflt != System.DBNull.Value)
+          {
+            fp.default_value = 
+              if (deflt != System.Reflection.Missing.Value)
+              {
+                def lit = Literal.FromObject (deflt);
+                Some (TExpr.Literal (ty, lit));
+              }
+              else if (InternalType.Object.Equals (ty))
+                Some (TExpr.StaticRef (ty, InternalType.Reflection_Missing, InternalType.Reflection_Missing.tycon.LookupMember ("Value").Head, []))
+              else
+                Some (TExpr.DefaultValue (ty));
+          }
+
+          fparms ::= fp;
+        }
+        
+        fun_header = TFunHeader(
+            loc          = library._location,
+            name         = Name,
+            ret_type     = ret_type,
+            ret_type_loc = library._location,
+            parms        = fparms,
+            typarms      = tyvars,
+            tenv         = null
+          );
+
+        attributes = NemerleModifiers.None;
+        when (handle.IsAbstract)    attributes |= NemerleModifiers.Abstract;
+        when (handle.IsVirtual)     attributes |= NemerleModifiers.Virtual;
+        when (handle.IsFinal)       attributes |= NemerleModifiers.Sealed;
+        when (handle.IsStatic)      attributes |= NemerleModifiers.Static;
+        when (handle.IsSpecialName) attributes |= NemerleModifiers.SpecialName;
+       
+        when (handle.IsPrivate)     attributes |= NemerleModifiers.Private;
+        when (handle.IsPublic)      attributes |= NemerleModifiers.Public;
+        when (handle.IsAssembly || (handle.IsFamilyOrAssembly && lib.IsFriend))    
+                                    attributes |= NemerleModifiers.Internal;
+        when (handle.IsFamily || handle.IsFamilyOrAssembly)
+                                    attributes |= NemerleModifiers.Protected;
+
+        when(InternalType.Conditional_tc != null)
+          _isConditional = HasAttribute(InternalType.Conditional_tc);
+      }
+      
+      public DeclaringType : TypeInfo
+      {
+        //[Nemerle.Memoize (InvalidValue = null)]
+        get { library.TypeInfoOfType (handle.DeclaringType) }
+      }
+      
+      //[Nemerle.Memoize (InvalidValue = null)]
+      public GetMemType () : FixedType.Fun { FixedType.ConstructFunctionType (GetHeader ()) }
+
+      public GetFreshType () : FixedType * list [TypeVar]
+      {
+        if (fun_header.TypeParameters.IsEmpty)
+          (GetMemType (), [])
+        else 
+        {
+          def (subst, vars) = Subst.Fresh (fun_header.TypeParameters);
+          (subst.MonoApply (GetMemType ()), vars)
+        }
+      }
+      
+      public Name        : string      { get { handle.Name } }
+      public IsFinal     : bool        { get { handle.IsFinal } }
+      public MemberKind  : MemberKinds { get { handle.MemberType :> MemberKinds } }
+      public IsVarArgs   : bool        { get { is_var_args } }
+      public IsExtension : bool        { get; internal set; }
+
+      private _isConditional : bool;
+      public override IsConditional : bool { get { _isConditional } }
+
+      [Memoize(Scope = Instance, Synchronized = false)]
+      public override GetConditions() : list[string]
+      {
+        def attrs = System.Attribute.GetCustomAttributes(
+          GetHandle(),
+          SystemHelpers.GetSystemType(InternalType.Conditional_tc),
+          true);
+        NList.MapFromArray(attrs, attr => late(attr.ConditionString) :> string)
+      }
+
+      public GetMethodBase () : SR.MethodBase { handle }
+     
+      public override ToString()    : string        { MemberBuilder.DescribeMember (this) }
+      GetHandle()   : SR.MemberInfo implements IBackendMember.GetHandle { handle }
+      public override IsConstructor : bool          { get { handle.IsConstructor } }
+
+      public GetConstructorInfo () : SR.ConstructorInfo
+      {
+        assert(IsConstructor);
+        (handle :> SR.ConstructorInfo)
+      }
+
+      public GetMethodInfo () : SR.MethodInfo
+      {
+        assert(!IsConstructor);
+        (handle :> SR.MethodInfo)
+      }
+
+      public GetHeader()     : TFunHeader     { fun_header }
+      public GetParameters() : list[TParameter] { fun_header.Parameters }
+
+      public BuiltinKind : BuiltinMethodKind { get { BuiltinMethodKind.NotBuiltin() } }
+      public ReturnType  : TypeVar             { get { fun_header.ReturnType } }
+      
+      public CanAccess (source : TypeInfo) : bool
+      {
+        handle.IsPublic 
+          || source.IsDerivedFrom(DeclaringType) && (handle.IsFamily || handle.IsFamilyOrAssembly)
+          || this.library.IsFriend && (handle.IsFamilyOrAssembly ||  handle.IsAssembly);
+      }
+    }
+  }
+} /* namespace */

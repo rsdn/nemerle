@@ -1,0 +1,448 @@
+using System;
+using System.Diagnostics;
+using Nemerle.Collections;
+using Nemerle.Utility;
+
+using PT = Nemerle.Compiler.Parsetree;
+using SCG = System.Collections.Generic;
+
+namespace Nemerle.Compiler
+{
+  public partial class NamespaceTree
+  {
+   [System.Runtime.InteropServices.ComVisible(false)]
+   [DebuggerDisplay("NamespaceTree.Node: '{GetDisplayName()}'")]
+    public partial class Node : System.IEquatable[Node]
+    {
+      public Parent : Node;
+      
+     [DebuggerBrowsable(DebuggerBrowsableState.Never)]
+     [Accessor(PartName)] name : string; // the same as edge from parent to this
+      
+      public mutable Value : TypeInfoCache;
+      
+     [DebuggerBrowsable(DebuggerBrowsableState.Never)]
+      internal mutable children : Hashtable[string, Node];
+      
+     [DebuggerBrowsable(DebuggerBrowsableState.Never)]
+      public Children : Hashtable[string, Node] { get { children } }
+      
+      public this(parent : Node, n : string, v : TypeInfoCache)
+      {
+        Parent = parent;
+        name = n;
+        Value = v;
+      }
+
+      /// Ensure type information loaded from external assemblies.
+      /// Note: Types inforamtion loading in lazy way. You must call EnsureCached() for use it.
+      public EnsureCached() : void
+      {
+        match (Value)
+        {
+          | NotLoaded(extType)             => extType.ConstructTypeInfo(this, true);
+          | NotLoadedList as notLoadedList => _ = LoadValue(notLoadedList);
+          | _ => () 
+        }
+      }
+      
+      /// Retrieve a top types defined in the compile project (parsed from source files).
+      public GetTopLevelTypeBuilders() : array[TypeBuilder] { GetTypeBuilders(true) }
+
+      /// Retrieve a types defined in the compile project (parsed from source files).
+      public GetTypeBuilders() : array[TypeBuilder] { GetTypeBuilders(false) }
+
+      /// Retrieve a types defined in the compile project (parsed from source files).
+      public GetTypeBuilders(onlyTopDeclarations : bool) : array[TypeBuilder]
+      {
+        def scan(node : NamespaceTree.Node, result) : void
+        {
+          when (node.Children != null)
+            foreach (elem in node.Children)
+            {
+              //def name = elem.Key;
+              def node = elem.Value;
+
+              match (node.Value)
+              {
+                | NamespaceReference            => scan(node, result);
+                | Cached(tycon is TypeBuilder) => result.Add(tycon);
+                | CachedAmbiguous(elems)       =>
+                  foreach (elem is TypeBuilder in elems)
+                    result.Add(elem);
+                
+                | _ => ()
+              }
+            }
+        }
+        
+        def result = SCG.List();
+        scan(this, result);
+
+        def getNestedTypes(sec : SCG.IEnumerable[TypeBuilder])
+        {
+          foreach (tb in sec)
+          {
+            def result2 = tb.DeclaredNestedTypes;
+            result.AddRange(result2);
+            getNestedTypes(result2);
+          }
+        }
+
+        unless (onlyTopDeclarations)
+          getNestedTypes(result.ToArray());
+
+        result.ToArray();
+      }
+      
+     [Nemerle.OverrideObjectEquals]
+      public Equals(other : Node) : bool
+        implements System.IEquatable[Node].Equals
+      {
+        if (other == null)
+          false
+        else if (this : object == other)
+          true
+        else if (Parent == null)
+          false
+        else
+          Parent.Equals(other.Parent) && name == other.name
+      }
+
+      /**
+       * Check if current node is under namespace given by reverse of[ns]
+       */
+      public Equals(ns : list[string]) : bool
+      {
+        |[] => Parent == null
+        | x :: xs => name == x && Parent != null && Parent.Equals(xs)
+      }
+      
+      public override GetHashCode() : int
+      {
+        def nameHashCode = if (name == null) 0 else name.GetHashCode();
+
+        if (Parent == null) nameHashCode
+        else unchecked ((Parent.GetHashCode()  * 7) ^ nameHashCode)
+      }
+
+      public GetDisplayName() : string { FullName.ToString(".") }
+
+     [DebuggerBrowsable(DebuggerBrowsableState.Never)]
+      public FullName : list[string]
+      {
+        get { if (name == null)["alias"] else GetNameWithSuffix([]) }
+      }
+
+      public GetNameWithSuffix(mutable suffix : list[string]) : list[string]
+      {
+        mutable node = this;
+        while (node.Parent != null)
+        {
+          suffix = node.name :: suffix;
+          node = node.Parent;
+        }
+        suffix
+      }
+
+      // some namespace nodes are faked for the need of namespace aliases
+      public IsFromAlias : bool { get { name == null } }
+      
+      public Clear() : void
+      {
+        unless (children == null)
+          children.Clear();
+      }
+
+      /// Walks down the tree begining at current node, spliting given
+      /// name to `.' separated parts. The path is created if at some
+      /// point it doesn't exist in tree.
+      public Path(n : string) : Node
+      {
+        mutable cur_node = this;
+        mutable last = 0;
+        for (mutable i = 0; i < n.Length; ++i)
+        {
+          when (n[i] == '.')
+          {
+            cur_node = cur_node.Child(n.Substring(last, i - last));
+            last = i + 1;
+          }
+        };
+        when (n.Length > 0 && !n.EndsWith("."))
+          cur_node = cur_node.Child(n.Substring(last, n.Length - last));
+        cur_node
+      }
+
+      public Path(path : list[string]) : Node
+      {
+        mutable cur_node = this;
+        def loop(path)
+        {
+          | x :: xs =>
+            cur_node = cur_node.Child(x);
+            loop(xs)
+
+          | _ => cur_node
+        }
+        
+        loop(path)
+      }
+      
+      public TryPath(path : list[string]) : TypeInfoCache
+      {
+        def loop(path : list[string], cur_node : Node)
+        {
+          match (path)
+          {
+            |[name] =>
+              when (cur_node.children == null)
+                cur_node.children = Hashtable(10);
+                
+              match (cur_node.children.Get(name))
+              {
+                | Some(nd) => nd.Value
+                | _ =>
+                  if (name.Length == 0)
+                    TypeInfoCache.No()
+                  else 
+                    TryNameHack(name, cur_node)
+                }
+
+            | name :: xs =>
+              when (cur_node.children == null)
+                cur_node.children = Hashtable(10);
+                
+              match (cur_node.children.Get(name))
+              {
+                | Some(nd) => loop(xs, nd)
+                | _        => TypeInfoCache.No()
+              }
+
+            | _ => Value // we are at good namespace, so return our own Value
+          }
+        }
+        
+        loop(path, this)
+      }
+
+      /// Return Node corresponding with name or null.
+      public PassTo(name : list[string]) : Node
+      {
+        if (Children == null)
+          if (name is[]) this else null
+        else match (name)
+        {
+          | part :: tail => 
+            match (Children.GetValueOrDefault(part, null))
+            {
+              | null | subNode when subNode.Value is TypeInfoCache.No =>  null
+              | subNode => subNode.PassTo(tail)
+            }
+
+          |[] => this
+        }
+      }
+
+      /// Return Node corresponding with name or null.
+      public static PassTo(nss : list[Node], name : list[string]) : Node
+      {
+        match (nss)
+        {
+          | ns :: tail =>
+            if (ns.Children == null)
+              PassTo(tail, name)
+            else match (ns.PassTo(name))
+            {
+              | null   => PassTo(tail, name)
+              | result => result
+            }
+
+          |[] => null
+        }
+      }
+
+      internal LoadValue(val : TypeInfoCache.NotLoadedList) : list[TypeInfo]
+      {
+        def by_parms_amount = Hashtable();
+        def cached = val.elems.FoldLeft([], fun (e, acc)
+        {
+          // eliminate ambiguous types, store only those differing
+          // on amount of generic parameters
+          def count = e.SystemType.GetGenericArguments().Length;
+          if (by_parms_amount.Contains (count))
+          {
+            def used = by_parms_amount[count] : System.Type;
+            Message.Warning($"using type `[$(used.Assembly)]$(used.TypeFullName())' that was defined in more than one assembly: "
+                             " `[$(e.SystemType.Assembly)]$(e.SystemType.TypeFullName())' (the first version was used)");
+            acc
+          }
+          else {
+            by_parms_amount.Add(count, e.SystemType);
+
+            e.ConstructTypeInfo(this, false);
+            e.tycon :: acc
+          }
+        });
+        Value = TypeInfoCache.CachedAmbiguous(cached);
+        cached
+      }
+      
+      public LookupType(split : list[string], args_count : int) : option[TypeInfo]
+      {
+        def search(cached)
+        {
+          | (x : TypeInfo) :: xs =>
+            if (args_count == -1 || args_count == x.TyparmsCount)
+              Some(x)
+            else
+              search(xs)
+            
+          |[] => None()
+        }
+        
+        match (TryPath(split))
+        {
+          | TypeInfoCache.Cached(tc) => Some(tc) // incorrect number of args is reported later in a cleaner way
+          | TypeInfoCache.NotLoaded(e) => 
+            e.ConstructTypeInfo(Path(split), true);
+            // incorrect number of args is reported later in a cleaner way
+            Some(e.tycon)
+
+          | TypeInfoCache.NotLoadedList as val => search(Path(split).LoadValue(val))
+          | CachedAmbiguous(all) => search(all)
+          | TypeInfoCache.MacroCall | TypeInfoCache.No | TypeInfoCache.NamespaceReference => None()
+        }
+      }
+
+      public LookupTypes(split : list[string], for_completion = false) : list[TypeInfo]
+      {
+        def make_list(val, path)
+        {
+          match (val)
+          {
+            | TypeInfoCache.Cached(tc) =>[tc]
+            | TypeInfoCache.NotLoaded(e) =>
+              def path = if (path == null) Path(split) else path;
+              e.ConstructTypeInfo(path, true);
+             [e.tycon]
+
+            | TypeInfoCache.NotLoadedList as val =>
+              def path = if (path == null) Path(split) else path;
+              path.LoadValue(val);
+              
+            | CachedAmbiguous(all) => all
+            | TypeInfoCache.MacroCall | TypeInfoCache.No
+            | TypeInfoCache.NamespaceReference =>[]
+          }
+        }
+
+        if (for_completion)
+        {
+          def (pref, mem_name) = NList.DivideLast(split);
+          def node = PassTo(pref);
+          if (node != null && node.children != null)
+            node.children.Fold([], 
+              fun (name, node, acc)
+              {
+                if (Completion.MatchName(name, mem_name))
+                  make_list(node.Value, node) + acc
+                else
+                  acc
+              })
+          else[]
+        }
+        else
+          make_list(TryPath(split), null)
+      }
+      
+      public LookupValue() : option[TypeInfo] { LookupType([], -1) }
+
+      public LookupMacro(split : list[string]) : option[IMacro]
+      {
+        match (TryPath(split))
+        {
+          | TypeInfoCache.MacroCall(m) => Some(m)
+          | _ => None()
+        }
+      }
+
+      internal AddChild(name : string, node : Node) : void
+      {
+        when (children == null)
+          children = Hashtable(16);
+        children.Add(name, node);
+      }
+      
+      internal CleanUp() : void
+      {
+        when (this.FullName is["alias"]) 
+          this.Clear();
+        this.Value = TypeInfoCache.No();
+      }
+      
+      /// Performs one step down the tree through given edge (name).
+      /// String in this edge isn't splited to `.' separated parts.
+      /// In case there is no such child in current node, it is created.
+      Child(name : string) : Node
+      {
+        when (children == null)
+          children = Hashtable(16);
+
+        match (children.Get(name))
+        {
+          | None =>
+            def result = Node(this, name, TypeInfoCache.No());
+            children.Add(name, result);
+            result
+
+          | Some(r) => r
+        }
+      }
+
+      public override ToString() : string
+      {
+        def s = Text.StringBuilder("( ");
+
+        when (children != null)
+          children.Iter((x, y : Node) => ignore(s.Append(x + "-" + y.ToString() + ", ")));
+        _ = s.Append(")\n");
+        s.ToString();
+      }
+
+      // Debuging support.
+      #pragma warning disable 10003
+
+     [System.Runtime.InteropServices.ComVisible(false)]
+     [DebuggerDisplay("NamespaceTree.Node: '{FullName}'")]
+      private class NodeDebugDisplayHelper
+      {
+        public this(node : NamespaceTree.Node) { _node = node; }
+
+       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
+        _node : NamespaceTree.Node;
+
+        public FullName : string { get { _node.GetDisplayName() } }
+
+        public Children : array[NamespaceTree.Node]
+        {
+          get
+          {
+            if (_node.Children is null)
+              array(0)
+            else
+              _node.Children.Values.NToArray().SortInplace((x, y) => x.PartName.CompareTo(y.PartName))
+          }
+        }
+      }
+
+     [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
+      private NodeDebugDisplay : NodeDebugDisplayHelper
+      {
+        get { NodeDebugDisplayHelper(this) }
+      }
+      
+      #pragma warning restore 10003
+    } // class Node
+  } // class NamespaceTree
+} // ns
