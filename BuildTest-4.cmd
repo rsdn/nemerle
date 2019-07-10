@@ -23,7 +23,7 @@ exit /b %1
 
 IF "%Type%"=="" set Type=Debug
 
-%MSBuild% NemerleAll.nproj /target:DevBuildQuickWithTests /p:Configuration=%Type% /verbosity:n /p:NTargetName=Build  /tv:15.0 /p:TargetFrameworkVersion=v4.0
+%MSBuild% NemerleAll.nproj /target:Stage1;CompilerTests /p:Configuration=%Type% /verbosity:n /p:NTargetName=Build  /tv:15.0 /p:TargetFrameworkVersion=v4.0
 call :err_check %errorlevel%
 IF %errors% == yes goto Error
 
