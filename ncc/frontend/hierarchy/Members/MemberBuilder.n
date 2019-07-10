@@ -1,0 +1,450 @@
+﻿using System;
+using System.Diagnostics;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
+using Nemerle.Utility;
+
+using SR  = System.Reflection;
+using SRE = System.Reflection.Emit;
+using PT  = Nemerle.Compiler.Parsetree;
+
+namespace Nemerle.Compiler
+{
+  [ManagerAccess(declaring_type.Manager)]
+  public abstract class MemberBuilder : MemberInfo, IMember, System.IEquatable[IMember], IBackendMember
+  {
+    /// Позволяет указать средствам интеллисенса, что данный член ссылается на
+    /// некий (другой) метод. Этот метод может содержать код сгенерированный
+    /// на основе кода члена содержащего данную ссылку.
+    [Accessor(flags = WantSetter)]
+    private mutable _related : RefTo = RefTo.None();
+    protected mutable loc : Location;
+    [Accessor]
+    protected mutable name : string;
+    protected accessibility : Accessibility;
+    [Accessor]
+    protected modifiers : AttributesAndModifiers;
+    [Accessor]
+    protected declaring_type : TypeBuilder;
+    id : int;
+    internal mutable ty : FixedType;
+    protected mutable handle : SR.MemberInfo;
+
+    public new Attributes : NemerleModifiers
+    {
+      get { attributes }
+      set { attributes = value }
+    }
+
+    [Accessor]
+    mutable _ast : PT.ClassMember;
+
+    public IsGenerated : bool { get { loc.IsGenerated } }
+
+    protected mutable m_has_been_used : bool;
+
+    //internal mutable disable_type_attr : bool;
+
+    [Accessor(flags = WantSetter)]
+    protected mutable required_modifiers : list[System.Type] = [];
+    [Accessor(flags = WantSetter)]
+    protected mutable optional_modifiers : list[System.Type] = [];
+    public Env : GlobalEnv;
+    public virtual  NameLocation : Location { get { _ast.NameLocation } }
+    
+    GetHandle() : SR.MemberInfo
+      implements IBackendMember.GetHandle
+    { throw NotImplementedException() }
+
+
+    public GetStatisticsKey() : string
+    {
+      def env = if (this.Env == null) declaring_type.GlobalEnv else this.Env;
+      
+      if (env == null)
+        "env == null"
+      else
+      {
+        def ti  = env.Manager.LookupTypeInfo("Nemerle.Diagnostics.CompileStatistic");
+        def res = this.Modifiers.FindAttribute(ti, env);
+        
+        if (res is Some(atr))
+        {
+          match (atr)
+          {
+            | <[ $_ ($(str : string))]> => str
+            | _ => "Incorrect Nemerle.Diagnostics.CompileStatistic attribute format."
+          }
+        }
+        else
+          "Other"//"Other-" + this.Name.Replace('\r', '_').Replace('\n', '_').Replace(' ', '_').Replace('\t', '_')
+      }
+    }
+
+    protected this(par : TypeBuilder, ast : PT.ClassMember)
+    {
+      declaring_type = par;
+      _ast = ast;
+      _ast._builder = this;
+      Env = ast.Env;
+      loc = ast.Location;
+      modifiers = ast.modifiers;
+      name = ast.Name;
+      id = Manager.GetNewId();
+
+      attributes = modifiers.mods;
+
+      unless (attributes %&& NemerleModifiers.AccessModifiers)
+        attributes |= NemerleModifiers.Private;
+
+      accessibility =
+        match (attributes %& NemerleModifiers.AccessModifiers)
+        {
+          | NemerleModifiers.Private   => Accessibility.Private
+          | NemerleModifiers.Protected => Accessibility.Protected
+          | NemerleModifiers.Internal  => Accessibility.Internal
+          | _                           =>
+            if (attributes %&& (NemerleModifiers.Protected %| NemerleModifiers.Internal))
+              Accessibility.ProtectedOrInternal
+            else
+              Accessibility.Public
+        }
+
+      match ((par.Accessibility, accessibility)) {
+        | (Accessibility.Private, _) =>
+          accessibility = Accessibility.Private
+        | (Accessibility.Public, _) => ()
+        | (Accessibility.Internal, Accessibility.Public) =>
+          accessibility = Accessibility.Internal
+        | (Accessibility.Protected, Accessibility.Internal)
+        | (Accessibility.Internal, Accessibility.Protected) =>
+           accessibility = Accessibility.ProtectedAndInternal
+        | _ => ()
+      }
+
+      // mark public and protected members explicitly used
+      m_has_been_used =
+        (IsPublic || IsProtected) && declaring_type.IsExternallyAccessible
+        //TODO: Add compiler option for naming convention  and check it here
+        || name.StartsWith("_")
+        || declaring_type.Name.StartsWith("_")
+        || name == "value__"
+        || ast.Location.IsGenerated;
+
+      is_obsolete = modifiers.FindAttribute(InternalType.Obsolete_tc, par.GlobalEnv).IsSome;
+    }
+
+    internal virtual OnAddMemberComplete(isIgnored : bool) : void
+    {
+      ignore(isIgnored);
+    }
+
+    public virtual ResetCodeCache() : void { }
+
+    public virtual BodyLocation : Location
+    {
+      get { loc }
+    }
+
+    public CanAccess(source : TypeInfo) : bool
+    {
+      IsPublic
+      || IsInternal && source is TypeBuilder
+      || ({
+        mutable result = false;
+        for (mutable tc = source; tc != null && !result; tc = tc.DeclaringType)
+          result = tc.Equals(declaring_type) || IsProtected && tc.IsDerivedFrom(declaring_type);
+        result
+      })
+    }
+
+    public OverloadName : string
+    {
+      get { Util.ice("OverloadName not implemented for non-external members") }
+    }
+
+    public abstract MemberKind : MemberKinds {  get; }
+
+    public GetMemType() : FixedType
+    {
+      ty
+    }
+
+    public override GlobalEnv : GlobalEnv
+    {
+      get { Env }
+    }
+
+    [Nemerle.OverrideObjectEquals]
+    public Equals(o : IMember) : bool
+      implements System.IEquatable[IMember].Equals
+    {
+      id == o.GetHashCode()
+    }
+
+    public Location : Location
+    {
+      get { loc }
+      set { loc = value }
+    }
+
+    public override GetModifiers() : AttributesAndModifiers
+    {
+      modifiers
+    }
+
+    public override IsCustomAttributeDefined(attributeFullName : string) : bool
+    {
+      if (Env != null) modifiers.IsCustomAttributeDefined(attributeFullName, Env) else false
+    }
+
+    public override HasBeenUsed : bool
+    {
+      get { m_has_been_used }
+      set {
+        base.HasBeenUsed = value;
+        m_has_been_used = true;
+        declaring_type.HasBeenUsed = false; // do not trigger obsoletion warning
+      }
+    }
+
+    internal SetInstanceUsed() : void
+    {
+      m_has_been_used = true;
+    }
+
+    public override GetHashCode() : int
+    {
+      id
+    }
+
+    public MarkWithSpecialName() : void
+    {
+      attributes |= NemerleModifiers.SpecialName
+    }
+
+    static count_access(attrs : NemerleModifiers) : int {
+      if (attrs %&& NemerleModifiers.Public) 4
+      else if (attrs %&& NemerleModifiers.Internal) 3
+      else if (attrs %&& NemerleModifiers.Protected) 2
+      else if (attrs %&& NemerleModifiers.Private) 1
+      else 1 // default to private
+    }
+
+    protected static UpdateEmbeddedModifiers(parent : NemerleModifiers, child : ref NemerleModifiers) : void
+    {
+      when (child %&& NemerleModifiers.Static && !(parent %&& NemerleModifiers.Static))
+        Message.Error("accessor cannot be static if containing entity isn't");
+
+      // copy access modifiers only if child has none
+      child |=
+        (if (child %&& NemerleModifiers.AccessModifiers)
+           parent %& ~NemerleModifiers.AccessModifiers;
+         else
+           parent);
+
+      when (child %&& NemerleModifiers.Private)
+        child &= ~NemerleModifiers.OverrideModifiers;
+
+      when (count_access(parent) < count_access(child))
+        Message.Error("accessor is more accessible than containing entity")
+    }
+
+    public override ToString() : string
+    {
+      DescribeMember(this)
+    }
+
+    internal static DescribeMember(m : IMember) : string
+    {
+      def declaring = m.DeclaringType;
+
+      if (declaring != null && declaring.GetConstantObject() : object == m)
+        "constructor of constant variant " + declaring.FullName
+      else
+      {
+        def full_name =
+          if (declaring == null)
+            m.Name
+          else
+            declaring.FullName + "." + m.Name;
+
+        def kind =
+          match (m.MemberKind)
+          {
+            | MemberKinds.Field    => "field"
+            | MemberKinds.Method   => "method"
+            | MemberKinds.Constructor   => "constructor"
+            | MemberKinds.Property => "property"
+            | MemberKinds.NestedType | MemberKinds.TypeInfo => "type"
+            | MemberKinds.Event    => "event"
+            | _                    => "<unknown>"
+          };
+
+        def add(str, iaAdd) { if (iaAdd) str + " " else "" }
+        def makeGetSet(canRead, canWrite)
+        {
+          | (false, false) => ""
+          | (true,  false) => "get;"
+          | (false, true)  => "set;"
+          | (true,  true)  => "get; set;"
+        }
+
+        def typeName = m.GetMemType().ToString();
+        
+        match (m)
+        {
+          | m is IMethod =>
+            def describeParm(p) { p.name + " : " + p.ty.ToString() }
+            def parms =
+              if (m.IsVarArgs)
+              {
+                def (till_last, last) = NList.DivideLast(m.GetParameters());
+
+                NList.Rev("params " + describeParm(last) :: NList.RevMap(till_last, describeParm));
+              }
+              else
+                m.GetParameters().Map(describeParm);
+
+            def ret_ty =
+              if (m.MemberKind == MemberKinds.Constructor)
+                m.DeclaringType.ToString()
+              else
+                m.ReturnType.ToString();
+
+            $"$kind $full_name(..$(parms)) : $ret_ty"
+
+          | prop is PropertyBuilder =>
+            def getSet = makeGetSet(prop.CanRead, prop.CanWrite);
+            match (prop.parms)
+            {
+              | _ :: _ =>
+                match (prop.ty)
+                {
+                  | FixedType.Fun(_, to) => $"property: `$full_name$(prop.parms) : $to { $getSet }"
+                  | _                  => "<error>"
+                }
+
+              | _      => $"property: $full_name : $(prop.ty) { $getSet }"
+            }
+          | p is IProperty =>
+            def getSet = makeGetSet(p.GetGetter() != null, p.GetSetter() != null);
+            def indexer = if (p.IsIndexer) "[...]" else "";
+            $"property: $(p.Name)$indexer : $typeName { $getSet }"
+
+          | fld is FieldBuilder =>
+            def modifs = add("static", fld.IsStatic) + add("mutable", fld.IsMutable);
+            $"field: $modifs$(fld.Name) : $(fld.ty);"
+
+          | fld is IField =>
+            def modifs = add("static", fld.IsStatic) + add("mutable", !fld.IsMutable);
+            $"field: $modifs$(fld.Name) : $typeName;"
+
+          | _ => $ "$kind `$full_name'"
+        }
+      }
+    }
+
+    public abstract CheckAttributes() : void;
+
+    // make sure only a valid subset of NemerleModifiers has been used
+    protected check_for_invalid_attr(attr : NemerleModifiers, attr_name : string) : void
+    {
+      when (attributes %&& attr)
+        Message.FatalError2(loc, "invalid attribute `" + attr_name + "' specified for " + ToString())
+    }
+
+    /**
+     * Performs the attributes checks that are common to methods and properties
+     */
+    protected check_method_like_attributes(title : string, title_plural : string) : void
+    {
+      check_for_invalid_attr(NemerleModifiers.Mutable, "mutable");
+      check_for_invalid_attr(NemerleModifiers.Struct, "struct");
+      check_for_invalid_attr(NemerleModifiers.Macro, "macro");
+      check_for_invalid_attr(NemerleModifiers.Volatile, "volatile");
+      check_for_invalid_attr(NemerleModifiers.Partial, "partial");
+
+      // check the access attributes for consistency
+      match (TypeBuilder.CheckAccessAttributes(attributes))
+      {
+        | Some(msg) => Message.FatalError2 (loc, $"$msg for $title: $(this)")
+        | _         => ()
+      }
+
+      def mem_is_sealed = attributes %&& NemerleModifiers.Sealed;
+      def mem_is_override = attributes %&& NemerleModifiers.Override;
+      def mem_is_virtual = attributes %&& NemerleModifiers.Virtual;
+      def mem_is_new = attributes %&& NemerleModifiers.New;
+      def mem_is_abstract = attributes %&& NemerleModifiers.Abstract;
+
+      // make sure 'virtual', 'new' and 'override' never appear at once
+      when (mem_is_override && mem_is_new)
+        Message.Error(loc, $"both `override' and `new' attributes specified for $title: $(this)");
+
+      // only allow 'override' methods/properties/events to be 'sealed'
+      when (mem_is_sealed && !mem_is_override)
+        Message.Error(loc, $"only `override' $title are allowed to be `sealed': $(this)");
+
+      // do not allow new virtual methods/properties/events in sealed clases
+      when (declaring_type.IsSealed && mem_is_virtual && !mem_is_override && !declaring_type.IsDelegate)
+        Message.Error(loc, Name + " is a new virtual member in a sealed class " + declaring_type.FullName);
+
+      // do not allow private abstract methods
+
+      when (mem_is_abstract && IsPrivate)
+        Message.Error(loc, "abstract " + title_plural + " are not allowed to be private: " + ToString());
+
+      // do not allow private 'virtual' or 'override' methods/properties/events
+      when (mem_is_virtual && IsPrivate)
+        Message.Error(loc, "virtual " + title_plural + " are not allowed to be private: " + ToString());
+
+      when (mem_is_override && IsPrivate)
+        Message.Error(loc, $"override $title_plural are not allowed to be private: $(this)");
+
+      // static methods/properties cannot be abstract, virtual or override
+      when ((mem_is_abstract || mem_is_virtual || mem_is_override) && IsStatic)
+        Message.Error(loc, $"static $title_plural are not allowed to have the `virtual' or `override' modifier: $(this)");
+
+      // do not allow protected and protected internal methods in structures
+      when (declaring_type.IsStruct && IsProtected)
+      {
+        def msg = if (IsInternal) "protected internal" else "protected";
+
+        Message.Error(loc, $"$title_plural defined in a struct are not allowed to be $msg: $(this)")
+      }
+    }
+
+
+    protected abstract MacroTarget : MacroTargets
+    { get; }
+
+    protected abstract MacroSelfParams : list [PT.SyntaxElement]
+    { get; }
+
+    public virtual AddMacroAttribute(expr : PT.PExpr) : void
+    {
+      modifiers.macro_attrs ::= (TypesManager.AttributeMacroExpansion.Suffix(MacroTarget, MacroPhase.WithTypedMembers), expr);
+      def expansion = TypesManager.AttributeMacroExpansion(MacroTarget, MacroPhase.WithTypedMembers, expr,
+                                                            MacroSelfParams, declaring_type, null);
+      declaring_type.TyManager.AddMacroExpansion(expansion);
+    }
+
+    internal virtual ProcessMacroAttributes() : void {
+      declaring_type.process_attributes(MacroSelfParams, MacroTarget, MacroPhase.WithTypedMembers, modifiers, null)
+    }
+
+    internal abstract CreateEmitBuilder(emit_tb : SRE.TypeBuilder) : void;
+    internal virtual Compile() : void {
+        _ast = null; // GC kill
+    }
+
+    public IsBodyless : bool
+    {
+      // only allow abstract and extern methods to have no bodies
+      get { attributes %&& (NemerleModifiers.Abstract | NemerleModifiers.Extern) }
+    }
+  }
+}

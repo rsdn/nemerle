@@ -1,0 +1,683 @@
+﻿using System;
+using System.Diagnostics;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
+using Nemerle.Utility;
+
+using SR  = System.Reflection;
+using SRE = System.Reflection.Emit;
+using PT  = Nemerle.Compiler.Parsetree;
+
+namespace Nemerle.Compiler
+{
+  public partial class MethodBuilder
+  {
+    [Accessor (Header)]
+    protected mutable fun_header : TFunHeader;
+
+    /// system reflection emit method/constructor builder is stored here
+    mutable method_base               : SR.MethodBase;
+            isForcedTyparms           : bool;
+    mutable typesToCheckAccessability : list[FixedType];
+    mutable typarmsContainer          : StaticTypeVarContainer;
+    mutable overridden_method         : IMethod;
+
+    public ImplementedMethods : list[FixedType.Class * IMethod] { get; internal set; }
+
+    public SkipEmiting : bool { get; set; }
+    
+    public IsExtension : bool { get; internal set; }
+
+    public override IsConstructor : bool
+    {
+      get
+      {
+        if (method_base == null) Ast.Name == ".ctor" || Ast.Name == ".cctor"
+        else method_base.IsConstructor
+      }
+    }
+
+    public override BodyLocation      : Location { get { Ast?.BodyLocation } }
+    public          BodyInnerLocation : Location { get { Ast?.BodyInnerLocation } }
+
+    [Accessor]
+    is_var_args : bool;
+
+    [Accessor]
+    private return_value_modifiers : AttributesAndModifiers;
+
+    /// Parsed representation (AST) of function.
+    public new Ast : PT.ClassMember.Function { get { base.Ast :> PT.ClassMember.Function } }
+
+    public GetMethodBase() : SR.MethodBase
+    {
+      assert(method_base != null);
+      method_base
+    }
+
+    public HasMethodBase : bool
+    {
+      get { method_base != null }
+    }
+
+    GetHandle() : SR.MemberInfo implements IBackendMember.GetHandle
+    {
+      GetMethodBase()
+    }
+
+    public new GetMemType() : FixedType.Fun
+    {
+      ty :> FixedType.Fun
+    }
+
+    public GetConstructorInfo() : SRE.ConstructorBuilder
+    {
+      assert(method_base != null/* && method_base.IsConstructor*/);
+      method_base :> SRE.ConstructorBuilder
+    }
+
+    public GetMethodInfo() : SRE.MethodBuilder
+    {
+      assert(method_base != null && !method_base.IsConstructor, declaring_type.FullName + "." + Name);
+      method_base :> SRE.MethodBuilder
+    }
+
+    public override HasBeenUsed : bool
+    {
+      get { m_has_been_used }
+      set {
+        base.HasBeenUsed = value;
+        m_has_been_used = true;
+        declaring_type.HasBeenUsed = value && MemberKind == MemberKinds.Constructor; // trigger obsoletion warning only if we are ctor
+      }
+    }
+
+    public HasAbstractBody : bool
+    {
+      get { (fun_header.body is FunBody.Abstract) }
+    }
+
+    public RunBodyTyper() : void
+    {
+        when (SkipEmiting)
+          return;
+
+      def oldSolver = Manager.Solver;
+      ManagerClass.Instance = Manager;
+      try
+      {
+        when (Manager.IsIntelliSenseMode)
+          Manager.SetSolver(Solver(Manager));
+
+        match (fun_header.body)
+        {
+          | FunBody.Parsed =>
+            def typer =  Manager.ComponentsFactory.CreateTyper (this);
+            
+            // Subscribe to events in typer and forward them to the declaring type.
+            typer.BeforeStage2 += (s, e) => declaring_type.OnMethodBeforeStage2(s, e);
+            typer.BeforeStage3 += (s, e) => declaring_type.OnMethodBeforeStage3(s, e);
+            typer.BeforeStage4 += (s, e) => declaring_type.OnMethodBeforeStage4(s, e);     
+
+            def loop()
+            {
+              try
+                typer.RunFullTyping();
+              catch { _ is RestartRunBodyTyperException => loop(); }
+            }
+            loop();
+
+          | _ => ()
+        }
+      }
+      finally { Manager.SetSolver(oldSolver); }
+    }
+
+    public override MemberKind : MemberKinds {
+      get {
+        if (this.name == ".ctor" || this.name == ".cctor") MemberKinds.Constructor else MemberKinds.Method
+      }
+    }
+
+    type BeforeBodyTypingHandler = MethodBuilder * PT.PExpr -> PT.PExpr;
+
+    public BeforeBodyTyping     : list[BeforeBodyTypingHandler]
+    {
+      mutable _beforeBodyTyping : list[BeforeBodyTypingHandler];
+
+      private set { _beforeBodyTyping = value; }
+      get { _beforeBodyTyping }
+    }
+
+    public AddBeforeBodyTypingHandler([NotNull] handler : BeforeBodyTypingHandler) : void
+    {
+      unless (Manager.IsIntelliSenseMode) // see also property BodyParsed in http://nemerle.org/svn/vs-plugin/trunk/Nemerle.Compiler.Utils/Nemerle.Completion2/CompilerConcreteDefinitions/IntelliSenseModeMethodBuilder.n
+        Body = handler(this, Body);
+
+      if (BeforeBodyTyping == null) BeforeBodyTyping = [handler];
+      else                          BeforeBodyTyping ::= handler;
+    }
+
+    public ClearBeforeBodyTypingHandlers() : void { BeforeBodyTyping = null; }
+
+    #region CompletionSpecific
+    //***********************************************************************
+    // This members available only under completion engine.
+
+    static NotSupported() : System.Exception
+    { System.NotSupportedException ("available on in code-completion use-case") }
+
+    public virtual EnsureCompiled() : void { throw NotSupported() }
+    public virtual BodyTokens           : Token.BracesGroup
+    {
+      get { throw NotSupported() }
+      set { throw System.NotSupportedException ("available on in code-completion use-case " + value.ToString()) }
+    }
+    public virtual BodyParsed                    : PT.PExpr { get { throw NotSupported() } }
+    public virtual IsBodyCompilable                  : bool { get { throw NotSupported() } }
+    public virtual BodyTyped                        : TExpr { get { throw NotSupported() } }
+
+    // End: This members available only under completion engine.
+    //***********************************************************************
+    #endregion
+
+    public virtual Body : PT.PExpr
+    {
+      get
+      {
+        match (fun_header.body)
+        {
+          | FunBody.Parsed (e) => e
+          | _ => Message.FatalError ("No parsetree body accessible")
+        }
+      }
+
+      set { fun_header.body = FunBody.Parsed (value) }
+    }
+
+    public IsFinal : bool
+    {
+      get { attributes %&& NemerleModifiers.Sealed }
+    }
+
+    public this(par : TypeBuilder, functionAst : PT.ClassMember.Function)
+    {
+      this (par, functionAst, false);
+    }
+
+    public this(par : TypeBuilder, functionAst : PT.ClassMember.Function, is_property : bool)
+    {
+      base (par, functionAst);
+
+      ImplementedMethods = [];
+
+      when (LexerBase.IsOperator (name))
+        unless (IsStatic && IsPublic)
+          Message.Error ($"User defined operator '$(DeclaringType).$(name)'"
+                         " must be declared static and public");
+                                                    
+      // @() must be defined as extension
+      when (name == "()" && !functionAst.IsExtension)
+        Message.Error ($"User defined operator '$(DeclaringType).$(name)'"
+                        " must be declared as extension method.");
+
+      // convert +, -, /= name to op_Addition equivalents
+      match (OperatorLongName (this.name, functionAst.header.Parameters.Length))
+      {
+        | Some (long) =>
+          this.name = long;
+          attributes |= NemerleModifiers.SpecialName;
+        | None => ()
+      }
+
+      this.return_value_modifiers = functionAst.ReturnValueModifiers ?? AttributesAndModifiers();
+
+      // both override and abstract imply virtual
+      when (attributes %&& (NemerleModifiers.Override
+                            %| NemerleModifiers.Abstract))
+        attributes |= NemerleModifiers.Virtual;
+
+      typarmsContainer = declaring_type.Tenv.AddTyparms(declaring_type.GlobalEnv, functionAst.header.TypeParameters, declaring_type, check_parms = false);
+
+      def tenv1 = typarmsContainer.TypeVarEnv;
+
+      // HACK HACK HACK!!!
+      def typarms =
+        if (declaring_type.forced_typarms != null)
+        {
+          def tmp = declaring_type.forced_typarms;
+          declaring_type.forced_typarms = null;
+          isForcedTyparms = true;
+          tmp
+        }
+        else
+          typarmsContainer.TypeParams;
+
+      typesToCheckAccessability = [];
+
+      def bind (loc : Location, t : PT.PExpr)
+      {
+        match (t)
+        {
+          | <[ _ ]> =>
+            Message.Error (loc, "type inference on global methods is not supported");
+            InternalType.Object
+
+          | _ =>
+            def ft = tenv1.BindFixedType(declaring_type.GlobalEnv, declaring_type, t, false);
+            def ty = functionAst.header.TypeParameters.Substitute(ft).Fix();
+            typesToCheckAccessability ::= ty;
+            ty
+        }
+      }
+
+      def mkparm (p : PT.PParameter) : TParameter
+      {
+        def name = p.PName;
+        def has_default = p.DefaultValue.HasValue;
+        def (kind, ty) =
+          match (p.Type)
+          {
+            | <[ ref $t ]> => (ParmKind.Ref, FixedType.Ref (bind (p.Location, t)))
+            | <[ out $t ]> => (ParmKind.Out, FixedType.Out (bind (p.Location, t)))
+            | <[ _ ]> when has_default => (ParmKind.Normal, null)
+            | PT.PExpr.TypedType(FixedType.Ref as t) with k = ParmKind.Ref
+            | PT.PExpr.TypedType(FixedType.Out as t) with k = ParmKind.Out => (k, t)
+            | <[ $t ]> => (ParmKind.Normal, bind (p.Location, t))
+          };
+        def fp =
+          TParameter(loc = p.Location,
+                     name      = name.Id, nameLocation = name.Location,
+                     color     = name.color,
+                     ty        = ty, typeLocation = p.Type.Location,
+                     modifiers = p.modifiers,
+                     kind      = kind);
+
+        match (p.DefaultValue)
+        {
+          | Some(d) => fp.GetDefaultValueFromExpr(par, tenv1, d)
+          | _       => fp.GetDefaultValueFromModifiers(par, tenv1)
+        }
+        fp
+      }
+
+      mutable fun_body = functionAst.body;
+
+     /* We need to convert things like:
+          foo (x : int * int) : int { bar }
+              ===>
+          foo (_1 : int, _2 : int) : int { def x = (_1, _2); bar }
+        To be consistent. */
+
+      def parms = functionAst.header.Parameters.Map(mkparm);
+
+      when (!parms.IsEmpty)
+      {
+        def is_params (parm : TParameter)
+        {
+          parm.modifiers.custom_attrs.Exists(
+            fun (e)
+            {
+              | <[ System.ParamArrayAttribute ]>
+              | <[ System.ParamArrayAttribute() ]>
+              | <[ System.ParamArray ]>
+              | <[ System.ParamArray() ]> => true
+              | _ => false
+            })
+        }
+        def (till_last, last) = NList.DivideLast (parms);
+
+        when (is_params (last)) {
+          match (last.ty.Fix()) {
+            | FixedType.Array (_, 1) => is_var_args = true
+            | _ =>
+              Message.Error ("only single-dimensional arrays are allowed in `params' parameters")
+          }
+        }
+
+        when (till_last.Exists(is_params))
+          Message.Error ("`params' is allowed only on last parameter");
+      }
+
+      match ((functionAst.implemented, this.name))
+      {
+        | ([], ".ctor") when IsStatic =>
+          this.m_has_been_used = true;
+          this.name = ".cctor";
+          unless (parms.IsEmpty)
+            Message.Error ("static constructor cannot have any parameters");
+          when (modifiers.mods %&& NemerleModifiers.AccessModifiers)
+            Message.Error ("access modifiers are not allowed on static constructors");
+
+        | ([], ".ctor")         =>
+          when (par.IsValueType && parms.IsEmpty)
+            Message.Error ("explicit parameterless constructor in value type is not allowed");
+
+        | ([], _) when IsStatic => ()
+
+        | (_ :: _, ".ctor") =>
+          Message.Error ("constructor cannot implement anything");
+
+        | (_ :: _, _) when IsStatic =>
+          Message.Error ("static function cannot implement anything");
+
+        | (_ :: _ as impl, name) when is_property =>
+          // update names of explicitly implemented accessor methods
+          def prefix = if (name.StartsWith ("get_")) "get_" else "set_";
+          def newimpl = impl.Map(
+            fun (m)
+            {
+              | PT.PExpr.Member (obj, mem) =>
+                def name = mem.GetName();
+                PT.PExpr.Member (m.Location, obj, PT.Splicable.Name (name.NewName (prefix + name.Id)))
+
+              | x => Message.Error ("implemented property must be of Interface.ProprtyName form"); x
+            });
+          functionAst.implemented = newimpl
+
+        | _ => ()
+      }
+
+      fun_header = TFunHeader(
+        ret_type     = bind (functionAst.header.ReturnType.Location, functionAst.header.ReturnType),
+        ret_type_loc = functionAst.header.ReturnType.Location,
+        typarms      = typarms,
+        name         = this.name,
+        parms        = parms,
+        tenv         = tenv1,
+        loc          = functionAst.header.Location);
+
+      fun_header.body = fun_body;
+
+      ty = FixedType.ConstructFunctionType (fun_header);
+
+      // don't warn about the unused `Main' methods...
+      when (IsStatic && name == "Main")
+        Manager.MarkAsUsed (this);
+
+      _isConditional = modifiers.FindAttribute(InternalType.Conditional_tc, par.GlobalEnv).IsSome;
+
+      when (functionAst.IsExtension)
+      {
+        def systemExtensionAttribute = Manager.CoreEnv.LookupType(["System", "Runtime", "CompilerServices", "ExtensionAttribute"]);
+        def addExtensionAttributes(m)
+        {
+          unless (modifiers.FindAttribute(InternalType.ExtensionAttribute_tc, par.GlobalEnv).IsSome)
+            m.AddCustomAttribute(PT.PExpr.FromQualifiedIdentifier(Manager, InternalType.ExtensionAttribute_tc.FullName));
+
+          when (systemExtensionAttribute is Some(ti))
+            m.AddCustomAttribute(PT.PExpr.FromQualifiedIdentifier(Manager, ti.FullName));
+        }
+        
+        def flags = modifiers.mods;
+        if (!(((flags %&& NemerleModifiers.Public || flags %&& NemerleModifiers.Internal || flags %&& NemerleModifiers.Private))
+           && (flags %&& NemerleModifiers.Static)))
+          Message.Error(functionAst.header.Location, "Extension methods need to be marked static and should not be protected.")
+        else
+        {
+          addExtensionAttributes(par.GetModifiers());
+          addExtensionAttributes(modifiers);
+          Manager.LibrariesManager.AddExtensionMethod(this);
+        }
+      }
+    }
+
+    internal override OnAddMemberComplete(_isIgnored : bool) : void
+    {
+      unless (typarmsContainer.IsConstraintsSet)
+        typarmsContainer.SetConstraints();
+
+      unless (IsVarianceValid(fun_header.ReturnType.Fix(), 1))
+        Message.Error($"return type of method `$name' must behave covariantly");
+
+      foreach (parm in fun_header.Parameters)
+        match (parm.ty.Fix())
+        {
+          | FixedType.Void => () //VladD2: a message about this bug reporting at FixupCurrentFunction()
+          | x =>
+            unless (IsVarianceValid(x, -1))
+              Message.Error(parm.TypeLocation, $"type of `$name' method's parameter `$(parm.name)' must behave contravariantly");
+        }
+
+      unless (fun_header.TypeParameters.IsEmpty)
+      {
+        foreach (tp in fun_header.TypeParameters)
+        {
+          when (tp.IsCovariant || tp.IsContravariant)
+            Message.Error("method's generic paramameter cannot declare variance");
+          foreach (t in tp.Constraints)
+          {
+            // I'm not sure why this is forbidden, but PEVerify indeed complains :)
+            unless (IsVarianceValid(t, -1))
+              Message.Error($"constraints of generic parameters of method `$name' must behave contravariantly");
+            t.CheckAccessibility(this, accessibility);
+          }
+        }
+        TypeBuilder.check_bound_type(ty);
+      }
+
+      // check it at the end, since error reporting routine there
+      // needs us to be initialized to name us
+      foreach (t in typesToCheckAccessability)
+        t.CheckAccessibility(this, accessibility);
+    }
+
+    // this method check the specification from CLI ECMA-335 II 9.7
+    internal static IsVarianceValid(t : TypeVar, enforced_variance_sign : int) : bool
+    {
+      match (t.Fix())
+      {
+        | FixedType.Class(_, []) => true // is always valid
+        | FixedType.StaticTypeVarRef(tr) =>
+          if      (enforced_variance_sign > 0) !tr.IsContravariant
+          else if (enforced_variance_sign < 0) !tr.IsCovariant
+          else                                 !tr.IsCovariant && !tr.IsContravariant
+        | FixedType.Array(t, _) => IsVarianceValid(t, enforced_variance_sign) // array types behave covariantly
+        | FixedType.Class(tc, args) =>
+          def checkClassVariance(parm, arg)
+          {
+            def enforce_sign =
+              if      (parm.IsCovariant)      1
+              else if (parm.IsContravariant) -1
+              else                            0;
+
+            IsVarianceValid(arg, enforce_sign * enforced_variance_sign)
+          }
+
+          NList.ForAll2(tc.Typarms, args, checkClassVariance)
+        | FixedType.Fun(a,b) => IsVarianceValid(a, 0) && IsVarianceValid(b, 0)
+        | FixedType.Tuple(args) => args.ForAll(IsVarianceValid(_, 0))
+        | FixedType.Ref(a)
+        | FixedType.Out(a) => IsVarianceValid(a, 0)
+        | _ => true // others should not appear here, just ignore
+      }
+    }
+
+    public GetHeader() : TFunHeader { fun_header }
+
+    public GetParameters() : list [TParameter]
+    {
+      fun_header.Parameters
+    }
+
+    public ReturnType : TypeVar
+    {
+      get { fun_header.ReturnType }
+    }
+
+    public GetFreshType() : FixedType * list [TypeVar]
+    {
+      def (subst, vars) = Subst.Fresh(fun_header.TypeParameters);
+      (subst.MonoApply (GetMemType()), vars)
+    }
+
+    static OperatorLongName (op : string, params_amount : int) : option [string]
+    {
+      if (params_amount == 2) {
+        match (op) {
+          | "+"   => Some ("op_Addition")
+          | "-"   => Some ("op_Subtraction")
+          | "*"   => Some ("op_Multiply")
+          | "/"   => Some ("op_Division")
+          | "%"   => Some ("op_Modulus")
+          | "%^"  => Some ("op_ExclusiveOr")
+          | "%&"  => Some ("op_BitwiseAnd")
+          | "%|"  => Some ("op_BitwiseOr")
+          | "^"   => Some ("op_ExclusiveOr")
+          | "&"   => Some ("op_BitwiseAnd")
+          | "|"   => Some ("op_BitwiseOr")
+          | "&&"  => Some ("op_LogicalAnd")
+          | "||"  => Some ("op_LogicalOr")
+          | "="   => Some ("op_Assign")
+          | "<<"  => Some ("op_LeftShift")
+          | ">>"  => Some ("op_RightShift")
+          // | ">>*" => Some ("op_SignedRightShift")
+          // | ">>&" => Some ("op_UnsignedRightShift")
+          | "=="  => Some ("op_Equality")
+          | ">"   => Some ("op_GreaterThan")
+          | "<"   => Some ("op_LessThan")
+          | "!="  => Some ("op_Inequality")
+          | ">="  => Some ("op_GreaterThanOrEqual")
+          | "<="  => Some ("op_LessThanOrEqual")
+          | "*="  => Some ("op_MultiplicationAssignment")
+          | "-="  => Some ("op_SubtractionAssignment")
+          | "^="  => Some ("op_ExclusiveOrAssignment")
+          | "<<=" => Some ("op_LeftShiftAssignment")
+          | "%="  => Some ("op_ModulusAssignment")
+          | "+="  => Some ("op_AdditionAssignment")
+          | "&="  => Some ("op_BitwiseAndAssignment")
+          | "|="  => Some ("op_BitwiseOrAssignment")
+          | ","   => Some ("op_Comma")
+          | "/="  => Some ("op_DivisionAssignment")
+          | _ => None()
+        }
+      }
+      else if (params_amount == 1) {
+        match (op) {
+          | ":"  => Some ("op_Implicit")
+          | ":>" => Some ("op_Explicit")
+          | "+"  when params_amount == 1
+                 => Some ("op_UnaryPlus")
+          | "-"  => Some ("op_UnaryNegation")
+          | "--" => Some ("op_Decrement")
+          | "++" => Some ("op_Increment")
+          | "~"  => Some ("op_OnesComplement")
+          | "!"  => Some ("op_LogicalNot")
+          | _    => None()
+        }
+      }
+      else
+        None()
+    }
+
+    /**
+     * Performs attributes checks for method definitions.
+     */
+    public override CheckAttributes() : void
+    {
+      when (declaring_type.IsInterface)
+      {
+        // Allow static methods in interface
+        unless (HasAbstractBody || (Attributes %&& NemerleModifiers.Static))
+          Message.Error(loc, "interface method cannot have body");
+        unless (Ast.implemented.IsEmpty)
+          Message.Error(loc, "interface method cannot implement anything");
+          
+        // Protected static methods without internal has no meaning
+        when (Attributes %&& NemerleModifiers.Static &&
+              Attributes %&& NemerleModifiers.Protected &&
+            !(Attributes %&& NemerleModifiers.Internal))
+          Message.Error(loc, "interface static methods cannot be 'protected', but can be 'protected internal'");
+      }
+
+      when (HasAbstractBody && !IsBodyless)
+        Message.Error(loc, $"missing body of a non-abstract and non-extern method in $this");
+
+      when (attributes %&& NemerleModifiers.Extern && !HasAbstractBody)
+        Message.Error(loc, "method with `extern' modifier cannot have body");
+
+      // most of the checks are common with the properties and events:
+      check_method_like_attributes("method", "methods");
+
+      when (MemberKind == MemberKinds.Constructor)
+      {
+        check_for_invalid_attr(NemerleModifiers.Abstract, "abstract");
+        check_for_invalid_attr(NemerleModifiers.Virtual, "virtual");
+        check_for_invalid_attr(NemerleModifiers.Sealed, "sealed");
+        check_for_invalid_attr(NemerleModifiers.Override, "override");
+      }
+    }
+
+    public BuiltinKind : BuiltinMethodKind
+    {
+      get { BuiltinMethodKind.NotBuiltin() }
+    }
+
+    protected override MacroTarget : MacroTargets
+    {
+      get { MacroTargets.Method }
+    }
+
+    protected override MacroSelfParams : list [PT.SyntaxElement]
+    {
+      get { [PT.SyntaxElement.TypeBuilder (declaring_type), PT.SyntaxElement.MethodBuilder (this)] }
+    }
+
+    internal override ProcessMacroAttributes() : void {
+      base.ProcessMacroAttributes();
+      foreach (p : TParameter in GetParameters())
+        declaring_type.process_attributes ([PT.SyntaxElement.TypeBuilder (declaring_type), PT.SyntaxElement.MethodBuilder (this),
+                                            PT.SyntaxElement.ParameterBuilder (p)],
+                                           MacroTargets.Parameter, MacroPhase.WithTypedMembers, p.modifiers, this);
+    }
+
+    internal SetOverriddenMethod(baseMethod : IMethod) : void
+    {
+      assert(overridden_method == null);
+      overridden_method = baseMethod;
+      unless (isForcedTyparms)
+      {
+        when (typarmsContainer.HasConstraints)
+          Message.Error("Constraints for override and explicit interface implementation methods are inherited from the base method, so they cannot be specified directly.");
+
+        def baseMethodHeader = baseMethod.GetHeader();
+        unless (baseMethodHeader.TypeParameters.IsEmpty)
+          typarmsContainer = StaticTypeVarContainer.Clone(typarmsContainer.TypeVarEnv, typarmsContainer.TypeParams, baseMethodHeader.TypeParameters);
+      }
+    }
+
+    private _isConditional : bool;
+    public override IsConditional : bool
+    {
+      get
+      {
+        if(null == overridden_method)
+          _isConditional
+        else
+          overridden_method.IsConditional
+      }
+    }
+
+    public override GetConditions() : list[string]
+    {
+      if(null == overridden_method)
+      {
+        def attrs = modifiers.FindAttributesWithArgs(InternalType.Conditional_tc, Env);
+        attrs.FoldLeft([], fun(item, acc)
+        {
+          match(item)
+          {
+            | (_, [<[ $(condition : string) ]>])
+            | (_, [<[ ConditionString = $(condition : string) ]>]) =>
+              condition :: acc
+            | _ => acc
+          }
+        })
+      }
+      else
+        overridden_method.GetConditions()
+    }
+  }
+}
