@@ -1,0 +1,415 @@
+using System.Diagnostics;
+using System.Globalization;
+using System.Math;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Utility;
+
+namespace Nemerle.Compiler
+{
+  public variant Literal : System.IEquatable[Literal]
+  {
+    | Void
+    | Null
+    | String 
+      {
+        val : string; 
+        public this(value : string, rawString : string) { val = value; RawString = rawString; } 
+      }
+    | Float { val : float; }
+    | Double { val : double; }
+    | Decimal { val : decimal; }
+    | Char { val : char; }
+    | Bool { val : bool; }
+    | Integer {
+        val : ulong; 
+        is_negative : bool; 
+        mutable treat_as : FixedType.Class;
+      } 
+
+    | Enum { val : Literal.Integer; ty : TypeInfo; field : IField; }
+
+    public RawString : string { get; set; }
+
+    [OverrideObjectEquals]
+    public Equals (lit : Literal) : bool
+      implements System.IEquatable[Literal].Equals
+    {
+      match ((this, lit)) {
+        | (Void, Void)
+        | (Null, Null) => true
+        | (String (x1), String (x2)) => x1 == x2
+        | (Float (x1), Float (x2)) => x1 == x2
+        | (Double (x1), Double (x2)) => x1 == x2
+        | (Decimal (x1), Decimal (x2)) => x1 == x2
+        | (Char (x1), Char (x2)) => x1 == x2
+        | (Bool (x1), Bool (x2)) => x1 == x2
+        | (Integer (val, is_neg, _), Integer (val', is_neg', _)) =>
+          val == val' && is_neg == is_neg'
+        | (Enum (v1, t1, f1), Enum (v2, t2, f2)) => 
+          v1.Equals (v2) && t1.Equals (t2) && (if (f1 == null) f2 == null else f1.Equals (f2))
+        | _ => false
+      }
+    }
+
+    static EscapeChar(ch : char) : string
+    {
+      | '\"'      => <#\"#> // "
+      | '\\'      => @"\\" // \ 
+      | '\n'      => @"\n" // new line
+      | '\t'      => @"\t" // horizontal tab
+      | '\r'      => @"\r" // carriage return
+      | '\e'      => @"\e" 
+      | '\a'      => @"\a" // alert
+      | '\b'      => @"\b" // backspace
+      | '\f'      => @"\f" // form feed
+      | '\v'      => @"\v" // vertical tab
+      | '\0'      => @"\0" // null
+      | '\u2028'  => @"\u2028" // Line separator character
+      | '\u2029'  => @"\u2029" // Paragraph separator character
+      | '\u0085'  => @"\u0085" // Paragraph separator character
+      | '\uFFFF'  => @"\uFFFF"
+      | _         => ch.ToString()
+    }
+
+    static EscapeString(str : string) : string
+    {
+      def sb = System.Text.StringBuilder();
+
+      foreach (ch in str)
+        _ = sb.Append(EscapeChar(ch));
+
+      sb.ToString()
+    }
+      
+    /**
+     * Converts 'this' literal to an equivalent (lexable) string
+     */
+    public override ToString () : string
+    {
+      match (this)
+      {
+        | Literal.Void           => "()"
+        | Literal.Null           => "null"
+
+        | Literal.String   (val) => "\"" + EscapeString(val) + "\""
+        | Literal.Float    (val) => val.ToString(NumberFormatInfo.InvariantInfo) + "f"
+        | Literal.Double   (val) => val.ToString(NumberFormatInfo.InvariantInfo) + "d"
+        | Literal.Decimal  (val) => val.ToString(NumberFormatInfo.InvariantInfo) + "m"
+        | Literal.Char     (val) => "'" + EscapeChar(val) + "'"
+        | Literal.Bool     (val) => if (val) "true" else "false"
+        | Literal.Integer  (val, is_negative, treat_as) =>
+          def s =
+            if (is_negative)
+              "-" + val.ToString()
+            else if (treat_as == null)
+              val.ToString()
+            else
+            {
+              def types = treat_as.InternalType;
+
+              if (treat_as.Equals(types.Int32)) // the most frequent case
+                val.ToString()
+              else if (treat_as.Equals(types.Int64))
+                $"$(val)L"
+              else if (treat_as.Equals(types.UInt64))
+                $"$(val)UL"
+              else if (treat_as.Equals(types.UInt32))
+                $"$(val)U"
+              else if (treat_as.Equals(types.Int16))
+                $"$(val)S"
+              else if (treat_as.Equals(types.UInt16))
+                $"$(val)SU"
+              else if (treat_as.Equals(types.Byte))
+                $"$(val)B"
+              else if (treat_as.Equals(types.SByte))
+                $"$(val)SB"
+              else 
+                val.ToString();
+            };
+          s
+          
+        | Literal.Enum(val, ty, _) => "(" + val.ToString() + " :> " + ty.FullName + ")"
+      }
+    }
+    
+    public GetInternalType (InternalType : InternalTypeClass) : FixedType
+    {
+      match (this)
+      {
+        | Literal.Void => InternalType.Void
+        | Literal.Null => InternalType.Object
+        | Literal.Char => InternalType.Char
+        | Literal.String => InternalType.String
+        | Literal.Float => InternalType.Single
+        | Literal.Double => InternalType.Double
+        | Literal.Decimal => InternalType.Decimal
+        | Literal.Bool => InternalType.Boolean
+        // for enums we want to stay with original type
+        // because e.g. ToString is called on enum not int
+        | Literal.Enum (_, ty, _) => ty.GetMemType ()
+        | Literal.Integer (_, _, t) => t
+      }
+    }
+
+    public WithType (t : FixedType) : option [Literal]
+    {
+      def InternalType = t.Manager.InternalType;
+      match (this) {
+        | Literal.Void => None ()
+        | Literal.Null when t.CanBeNull
+        | Literal.Char when t.Equals (InternalType.Char)
+        | Literal.String when t.Equals (InternalType.String)
+        | Literal.Float when t.Equals (InternalType.Single)
+        | Literal.Double when t.Equals (InternalType.Double)
+        | Literal.Decimal when t.Equals (InternalType.Decimal)
+        | Literal.Bool when t.Equals (InternalType.Boolean) 
+        | Literal.Enum (_, tc, _) when FixedType.Class (tc, []).Equals (t)
+          => Some (this)
+          
+        | Literal.Integer (val, is_neg, cur) =>
+          if (cur.Equals (t)) Some (this)
+          else
+            if (Typer.LiteralConversionPossible (this, t))
+              Some (Literal.Integer (val, is_neg, t :> FixedType.Class))
+            else
+              None ()
+
+        | _ => None ()
+      }
+    }
+    
+    public WithProperType () : Literal
+    {
+      def InternalType = ManagerClass.Instance.InternalType;
+      match (this) {
+        | Literal.Integer (0, true, _) => Literal.Integer (0, false, InternalType.Int32)
+        | Literal.Integer (val, is_neg, _) =>
+          def t =
+            if (is_neg)
+              if (val - 1 <= int.MaxValue)
+                InternalType.Int32
+              else
+                InternalType.Int64
+            else
+              if (val <= int.MaxValue)
+                InternalType.Int32
+              else if (val <= uint.MaxValue)
+                InternalType.UInt32
+              else if (val <= System.Convert.ToUInt64 (long.MaxValue))
+                InternalType.Int64
+              else
+                InternalType.UInt64;
+          Literal.Integer (val, is_neg, t)
+        | _ => this
+      }
+    }
+
+    public AsInt : option [int]
+    {
+      get {
+        match (this) {
+          | Literal.Integer (0x80000000ul, true, _) => Some (int.MinValue)          
+          | Literal.Integer (x, neg, _) when x & 0x7FFFFFFFul == x =>
+            Some (if (neg) -(x :> int) else x :> int)
+          | _ => None ()
+        }
+      }
+    }
+
+    /**
+      Returns plain integer value of Literal.Integer or Literal.Enum.
+     */
+    internal AsRawInt : option[int]
+    {
+      get {
+        match(AsInt) {
+          | Some as some => some
+          | _ =>
+            match(this) {
+              | Literal.Enum(val, _, _) => val.AsInt
+              | _ => None()
+            }
+        }
+      }
+    }
+
+    public AsSByte : option [sbyte]
+    {
+      get {
+        match (this) {
+          | Literal.Integer (0x80ul, true, _) => Some (sbyte.MinValue)          
+          | Literal.Integer (x, neg, _) when x & 0x7Ful == x =>
+            Some (if (neg) -(x :> int) :> sbyte else x :> sbyte)
+          | _ => None ()
+        }
+      }
+    }
+
+    public AsByte : option [byte]
+    {
+      get {
+        match (this) {
+          | Literal.Integer (x, false, _) when x <= byte.MaxValue => Some (x :> byte)
+          | _ => None ()
+        }
+      }
+    }
+
+    public AsShort : option [short]
+    {
+      get {
+        match (this) {
+          | Literal.Integer (0x8000ul, true, _) => Some (short.MinValue)          
+          | Literal.Integer (x, neg, _) when x & 0x7FFFul == x =>
+            Some (if (neg) -(x :> int) :> short else x :> short)
+          | _ => None ()
+        }
+      }
+    }
+
+    public AsUShort : option [ushort]
+    {
+      get {
+        match (this) {
+          | Literal.Integer (x, false, _) when x <= ushort.MaxValue => Some (x :> ushort)
+          | _ => None ()
+        }
+      }
+    }
+
+    public AsUInt : option [uint]
+    {
+      get {
+        match (this) {
+          | Literal.Integer (x, false, _) when x <= uint.MaxValue => Some (x :> uint)
+          | _ => None ()
+        }
+      }
+    }
+
+    public AsLong : option [long]
+    {
+      get {
+        match (this) {
+          | Literal.Integer (0x8000000000000000ul, true, _) => Some (long.MinValue)          
+          | Literal.Integer (x, neg, _) when x & 0x7FFFFFFFFFFFFFFFul == x =>
+            Some (if (neg) -(x :> long) else x :> long)
+          | _ => None ()
+        }
+      }
+    }
+
+    public AsULong : option [ulong]
+    {
+      get {
+        match (this) {
+          | Literal.Integer (x, false, _) => Some (x)
+          | _ => None ()
+        }
+      }
+    }
+
+    public static FromInt (x : int) : Literal.Integer
+    {
+      def InternalType = ManagerClass.Instance.InternalType;
+      if (x == int.MinValue)
+        Literal.Integer (0x80000000UL, true, InternalType.Int32)
+      else
+        Literal.Integer (Abs (x) :> ulong, x < 0, InternalType.Int32)
+    }
+
+    public static FromSByte (x : sbyte) : Literal.Integer
+    {
+      def InternalType = ManagerClass.Instance.InternalType;
+      if (x == sbyte.MinValue)
+        Literal.Integer (0x80UL, true, InternalType.SByte)
+      else
+        Literal.Integer (Abs (x) :> ulong, x < 0, InternalType.SByte)
+    }
+
+    public static FromByte (x : byte) : Literal.Integer
+    {
+      def InternalType = ManagerClass.Instance.InternalType;
+      Literal.Integer (x, false, InternalType.Byte)
+    }
+
+    public static FromShort (x : short) : Literal.Integer
+    {
+      def InternalType = ManagerClass.Instance.InternalType;
+      if (x == short.MinValue)
+        Literal.Integer (0x8000UL, true, InternalType.Int16)
+      else
+        Literal.Integer (Abs (x) :> ulong, x < 0, InternalType.Int16)
+    }
+
+    public static FromUShort (x : ushort) : Literal.Integer
+    {
+      def InternalType = ManagerClass.Instance.InternalType;
+      Literal.Integer (x, false, InternalType.UInt16)
+    }
+
+    public static FromUInt (x : uint) : Literal.Integer
+    {
+      def InternalType = ManagerClass.Instance.InternalType;
+      Literal.Integer (x, false, InternalType.UInt32)
+    }
+
+    public static FromLong (x : long) : Literal.Integer
+    {
+      def InternalType = ManagerClass.Instance.InternalType;
+      if (x == long.MinValue)
+        Literal.Integer (0x8000000000000000UL, true, InternalType.Int64)
+      else
+        Literal.Integer (Abs (x) :> ulong, x < 0, InternalType.Int64)
+    }
+
+    public static FromULong (x : ulong) : Literal.Integer
+    {
+      def InternalType = ManagerClass.Instance.InternalType;
+      Literal.Integer (x, false, InternalType.UInt64)
+    }
+
+    public static FromObject (o : object) : Literal
+    {
+      if (o == null) Null ()
+      else
+        match (o) {
+          | o is bool => Bool (o)
+          | o is string => String (o)
+          | o is float => Float (o)
+          | o is double => Double (o)
+          | o is decimal => Decimal (o)
+          | o is char => Char (o)
+          
+          | o is int => FromInt (o)
+          | o is sbyte => FromSByte (o)
+          | o is byte => FromByte (o)
+          | o is short => FromShort (o)
+          | o is ushort => FromUShort (o)
+          | o is uint => FromUInt (o)
+          | o is long => FromLong (o)
+          | o is ulong => FromULong (o)
+
+          | o is System.Enum =>
+            def s = o.ToString ("d");
+            def tyname = NString.Split (o.GetType ().TypeFullName (), '+', '.');
+            def tc = match (ManagerClass.Instance.NameTree.LookupExactType (tyname)) {
+              | Some (tc) => tc
+              | None => Message.FatalError ($"type `$(tyname.ToString (\".\"))' is not available - it is either not public or not referenced properly");
+            }
+            def t = tc.GetMemType ();
+            def int_lit =
+              if (s [0] == '-')
+                Integer (ulong.Parse (s.Substring (1)), true, t)
+              else
+                Integer (ulong.Parse (s), false, t);
+            // IT : Need IField
+            Enum (int_lit, tc, null)
+
+          | _ =>
+            Util.ice ($ "cannot create literal from $o")
+        }
+    }
+  }
+} // namespace
