@@ -1,0 +1,200 @@
+﻿using Nemerle.Compiler;
+using Nemerle.Utility;
+using Nemerle.Assertions;
+
+using PExpr = Nemerle.Compiler.Parsetree.PExpr;
+using PT = Nemerle.Compiler.Parsetree;
+
+namespace Nemerle.Compiler.Typedtree
+{
+  public partial class TParameter : TypedBase
+  {
+    public AttributesAndModifiers : AttributesAndModifiers  { get { modifiers } }
+    public Modifiers              : NemerleModifiers        { get { modifiers.Modifiers } }
+    public CustomAttributes       : list[Parsetree.PExpr]   { get { modifiers.CustomAttributes } }
+    public Name                   : string                  { get { name } }
+    public NameLocation           : Location                { get; private set; }
+    public Type                   : TypeVar                 { get { ty } }
+    public TypeLocation           : Location                { get { ty_loc } set { ty_loc = value; } }
+    public Color                  : int                     { get { color } }
+    public Kind                   : ParmKind                { get { kind } }
+    public DefaultValue           : option[TExpr]           { get { default_value } }
+    public Declaration            : LocalValue              { get { decl } }
+    public PatternHack            : PExpr                   { get; set; }
+    public HasDefaultValue        : bool                    { get { default_value.IsSome } }
+
+
+    public name           : string;
+    public color          : int;
+    public mutable ty     : TypeVar;
+
+    public mutable ty_loc : Location;
+    public kind           : ParmKind;
+    public modifiers      : AttributesAndModifiers;
+    public mutable required_modifiers : list[System.Type] = [];
+    public mutable optional_modifiers : list[System.Type] = [];
+
+    public mutable default_value : option [TExpr] = None ();
+
+    public mutable decl : LocalValue;
+
+    public this (loc : Location, name : string, nameLocation : Location,
+                 color : int, ty : TypeVar, typeLocation : Location,
+                 modifiers : AttributesAndModifiers, kind : ParmKind, patternHack : PExpr = null)
+    {
+      base (loc);
+
+      this.name         = name;
+      this.NameLocation = nameLocation;
+      this.color        = color;
+      this.ty           = ty;
+      this.ty_loc       = typeLocation;
+      this.modifiers    = modifiers;
+      this.kind         = kind;
+      PatternHack       = patternHack;
+    }
+
+    public this (name : string, color : int, ty : TypeVar, modifiers : AttributesAndModifiers, kind : ParmKind)
+    {
+      this.name = name;
+      this.color = color;
+      this.ty = ty;
+      this.modifiers = modifiers;
+      this.kind = kind;
+    }
+
+    public Clone () : TParameter
+    {
+      MemberwiseClone () :> TParameter
+    }
+
+    public GetParsedName() : PT.Name
+    {
+      PT.Name(name, NameLocation, color, ty.Manager.CoreEnv, name)
+    }
+
+    public AsParsed () : PT.PParameter
+    {
+      def name3 = PT.Splicable.Name(NameLocation, GetParsedName());
+      def ty2 = PExpr.TypedType(ty_loc, ty);
+      PT.PParameter(Location, name3, ty2, modifiers.Clone(), PatternHack);
+    }
+
+    public ReferencingExpr : PExpr
+    {
+      get { PExpr.Ref (Parsetree.Name (name, color, ty.Manager.CoreEnv)) }
+    }
+
+    public DefaultValueAsTExpr(solver : Solver) : TExpr
+    {
+      match (default_value)
+      {
+        | Some(TExpr.Literal(Literal.Null) as lit) => Typedtree.TExpr.DefaultValue(lit.Location, solver.FreshTypeVar())
+        | Some(e) => e
+        | None    => Util.ice ("there is no default value for: " + ToString ())
+      }
+    }
+
+    internal GetLocalDefaultValueFromModifiers (par : Typer) : void
+    {
+     // store default value attribute
+       foreach (<[ System.ComponentModel.DefaultValueAttribute($e) ]> in modifiers.custom_attrs)
+       {
+         when (default_value.IsSome)
+           Message.Error (e.Location,
+                          $ "default value specified twice for parameter "
+                            "`$name'");
+         GetLocalDefaultValueFromExpr(par, Some(e));
+       }
+     }
+     
+    internal GetLocalDefaultValueFromExpr (par : Typer, expr : option[PExpr]) : void
+    {
+      default_value = expr.Map(x => par.TypeExpr(x, Typer.AtLeast(ty)));
+    }
+
+    internal GetDefaultValueFromModifiers(par : TypeBuilder, tenv : TypeVarEnv) : void
+    {
+      // store default value attribute
+      foreach (<[ System.ComponentModel.DefaultValueAttribute($e) ]> in modifiers.custom_attrs) 
+        GetDefaultValueFromExpr(par, tenv, e);
+    }
+   
+    internal GetDefaultValueFromExpr(par : TypeBuilder, tenv : TypeVarEnv, expr : PExpr) : void
+    {
+      // store default value attribute
+        def (provided_val, typeDefault) =
+          match (ConstantFolder.FoldConstants (par, expr))
+          {
+            | <[ $x : $t ]>    => ty = par.BindType(t); (x, false)
+            | <[ default(_) ]>  =>
+              when (ty == null || !ty.IsFixed)
+                Message.Error(expr.Location, "You can use default(_) only for parameters which type was explicitly specified.");
+               (<[ null ]>, true)
+
+            | <[ default($t) ]> =>
+              if (ty == null)
+                ty = par.BindType(tenv, t);
+              else
+                _ = ty.Unify(par.BindType(tenv, t));
+
+              (<[ null ]>, true)
+
+            | x => (x, false)
+          };
+
+        match (provided_val)
+        {
+          | PExpr.Literal(lit) =>
+            when (lit is Literal.Decimal)
+              Message.Error(expr.Location, $"only `null' is allowed for default value of type `decimal' (parameter `$name')");
+            when (lit is Literal.Void)
+              Message.Error(expr.Location, $"the void literal is not allowed for default value of parameter `$name'");
+            when (default_value.IsSome)
+              Message.Error(expr.Location, $"default value specified twice for parameter `$name'");
+            when (ty == null && lit is Literal.Null)
+              Message.Error(expr.Location, $"type inference not supported when default value is null (parameter `$name')");
+
+            def ok =
+              if (ty == null)
+              {
+                ty = lit.GetInternalType(par.Manager.InternalType);
+                true
+              }
+              else if (typeDefault)
+                true
+              else if (ty.IsFixed)
+                Typer.LiteralConversionPossible(lit, ty.FixedValue)
+              else
+                ty.Provide(lit.GetInternalType(par.Manager.InternalType));
+
+            unless (ok)
+              Message.Error (expr.Location, $"invalid type for default value of parameter `$name', needed $ty, got $lit");
+
+            def lit =
+              if (ok && ty.IsFixed && !typeDefault)
+                match (lit.WithType (ty.FixedValue))
+                {
+                  | Some (lit) => lit
+                  | None =>
+                    // ice?
+                    Message.Error (expr.Location, $"cannot convert $lit to $ty");
+                    lit
+                }
+              else lit;
+
+            default_value = Some (TExpr.Literal (Typer.TypeOfLiteral (par.Manager, lit), lit));
+
+          | _ => Message.Error (expr.Location, $"Incorrect format of parameter `$name' default value. You should use 'paramName = <literal>'");
+        }
+      modifiers.custom_attrs =
+        modifiers.custom_attrs.Filter(x => !(x is <[ System.ComponentModel.DefaultValueAttribute($_) ]>));
+        
+    }
+
+    public override ToString () : string
+    {
+      $ "$name : $ty"
+    }
+  }
+} // Nemerle.Compiler.Typedtree
