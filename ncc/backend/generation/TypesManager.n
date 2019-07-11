@@ -10,28 +10,32 @@ using System.Diagnostics;
 using System.Security;
 
 using NC = Nemerle.Compiler;
+using SCG = System.Collections.Generic;
 using SR = System.Reflection;
 using SRE = System.Reflection.Emit;
+using SY  = System;
 
 namespace Nemerle.Compiler
 {
-  /**
-   * This part of TypesManages is responsible for generation of System.Reflection.Emit structures
-   * composing program hierarchy. It executes emission of all classes and their members.
-   */
+   /// This part of TypesManages is responsible for generation of System.Reflection.Emit structures
+   /// composing program hierarchy. It executes emission of all classes and their members.
   [ManagerAccess]
   public partial class TypesManager : System.IDisposable
   {
-    /* -- PUBLIC CONSTRUCTORS ---------------------------------------------- */
+    private   mutable _assembly_name              : System.Reflection.AssemblyName;
+    private   mutable _assembly_builder           : Emit.AssemblyBuilder;
+    internal  mutable _module_builder             : Emit.ModuleBuilder;
+    public    mutable _debug_emit                 : ISymbolWriter;
+    internal  mutable contains_nemerle_specifics  : bool = false;
 
-    // workaround MS.NET bugs with some specific value / generic types hierarchy
-    private resolve_hack (_ : object, _ : System.ResolveEventArgs) : Assembly
-    {
-      //Message.Debug ($ "resolve_hack: $(args.Name)");
-      _assembly_builder
-    }
+    internal          _need_entry_point           : bool;
+    /// updated when method with static Main signature is met
+    internal  mutable _entry_point                : option[MethodInfo];
 
-    public this (man : ManagerClass)
+    private           _OutputFileName             : string;
+    private   mutable _cgil_phase                 : int;
+
+    public this(man : ManagerClass)
     {
       Manager = man;
       _OutputFileName = Manager.Options.OutputFileName;
@@ -46,10 +50,16 @@ namespace Nemerle.Compiler
         System.AppDomain.CurrentDomain.TypeResolve += resolve_hack;
     }
 
-    public Dispose () : void
+    public Dispose() : void
     {
       unless (Manager.IsIntelliSenseMode)
         System.AppDomain.CurrentDomain.TypeResolve -= resolve_hack;
+    }
+
+    // workaround MS.NET bugs with some specific value / generic types hierarchy
+    private resolve_hack(_ : object, _ : System.ResolveEventArgs) : Assembly
+    {
+      _assembly_builder
     }
 
     public CreateAssembly () : void
@@ -421,19 +431,139 @@ namespace Nemerle.Compiler
         assert(false)
     }
 
-    /* -- PRIVATE FIELDS --------------------------------------------------- */
+    internal GetInformationalAssemblyAttributes() : list[SRE.CustomAttributeBuilder]
+    {
+      def attributeList = SCG.List.[SRE.CustomAttributeBuilder]();
+      def typeList = SCG.List.[System.Type]();
+      def ctorParameters = array[typeof(string)];
 
-    private   mutable _assembly_name              : System.Reflection.AssemblyName;
-    private   mutable _assembly_builder           : Emit.AssemblyBuilder;
-    internal  mutable _module_builder             : Emit.ModuleBuilder;
-    public    mutable _debug_emit                 : ISymbolWriter;
-    internal  mutable contains_nemerle_specifics  : bool = false;
+      mutable hitFileVersion = false;
+      mutable hitAssemblyVersion = false;
+      mutable assemblyVersionString;
+      mutable location;
+      foreach ((env, attr) in assembly_attributes)
+      {
+        /* store resolved attribute */
+        def (tc, parms) = Manager.AttributeCompiler.CheckAttribute(env, attr);
 
-    internal          _need_entry_point           : bool;
-    /** updated when method with static Main signature is met */
-    internal  mutable _entry_point                : option[MethodInfo];
+        def take_string (pars) {
+          | [ <[ $(x : string) ]> ] => x
+          | _ =>
+              Message.FatalError (attr.Location, "given attribute must have single string as parameter")
+        }
 
-    private           _OutputFileName             : string;
-    private   mutable _cgil_phase                 : int;
-  }
-}
+        def addAttributeForType(type)
+        {
+          if(typeList.Contains(type))
+          {
+            Message.Warning (attr.Location, "given attribute is occurred more than once")
+          }
+          else
+          {		 
+            typeList.Add(type);
+          }
+
+        }
+        if (tc.Equals (InternalType.AssemblyCompanyAttribute_tc))
+        {
+          addAttributeForType(typeof(SR.AssemblyCompanyAttribute))
+        }
+        else if (tc.Equals (InternalType.AssemblyCopyrightAttribute_tc))
+        {
+           addAttributeForType(typeof(SR.AssemblyCopyrightAttribute)) 
+        }
+        else if (tc.Equals (InternalType.AssemblyDescriptionAttribute_tc))
+        {
+          addAttributeForType(typeof(SR.AssemblyDescriptionAttribute)) 
+        }
+        else 
+        if (tc.Equals (InternalType.AssemblyFileVersionAttribute_tc))
+        {
+           hitFileVersion = true;
+           addAttributeForType(typeof(SR.AssemblyFileVersionAttribute))
+        }
+        else
+        if (tc.Equals (InternalType.AssemblyProductAttribute_tc))
+        {
+           addAttributeForType(typeof(SR.AssemblyProductAttribute))
+        }
+        else if (tc.Equals (InternalType.AssemblyTitleAttribute_tc))
+        {
+          addAttributeForType(typeof(SR.AssemblyTitleAttribute))
+        }
+        else 
+        if (tc.Equals (InternalType.AssemblyVersionAttribute_tc))
+        {         
+          hitAssemblyVersion = true;
+          assemblyVersionString = take_string(parms);  
+          location = attr.Location;
+          //an.Version = ParseVersion(take_string(parms), attr.Location);
+        }
+        else
+        {
+        }
+      }
+      
+      when(!hitFileVersion && hitAssemblyVersion)
+      {
+        def type =  typeof(SR.AssemblyFileVersionAttribute);
+        def ctor = type.GetConstructor(ctorParameters);
+        def version = ParseVersion(assemblyVersionString, location).ToString();
+        def ctorArgs = array[version];
+        SRE.CustomAttributeBuilder(ctor, ctorArgs) |> attributeList.Add;
+        
+      }
+      attributeList.NToList();
+    }
+
+    internal CreateAssemblyName() : SR.AssemblyName
+    {
+      /* create an assembly name and set its properties according to defined
+         global assembly attributes */
+      def an = SR.AssemblyName ();
+      an.CodeBase = string.Concat("file:///", Directory.GetCurrentDirectory());
+
+      when (Manager.Options.StrongAssemblyKeyName != null) {
+        an.KeyPair = read_keypair (Location.Default, Manager.Options.StrongAssemblyKeyName);
+      }
+
+      foreach ((env, attr) in assembly_attributes)
+      {
+        /* store resolved attribute */
+        def (tc, parms) = Manager.AttributeCompiler.CheckAttribute (env, attr);
+
+        def take_string (pars) {
+          | [ <[ $(x : string) ]> ] => x
+          | _ =>
+              Message.FatalError (attr.Location, "given attribute must have single string as parameter")
+        }
+        if (tc.Equals (InternalType.AssemblyVersionAttribute_tc))
+        {         
+          an.Version = ParseVersion(take_string(parms), attr.Location);
+        }
+        else if (tc.Equals (InternalType.AssemblyKeyFileAttribute_tc))
+             {
+               def key = take_string (parms);
+               if (an.KeyPair != null)
+                 Message.Warning (attr.Location, "AssemblyKeyFile attribute will be ignored, as key file was already specified")
+               else
+                 when (key != "") an.KeyPair = read_keypair (attr.Location, key);
+             }
+             else when (tc.Equals (InternalType.AssemblyCultureAttribute_tc))
+                    an.CultureInfo = SY.Globalization.CultureInfo (take_string (parms));
+      }
+      an
+    }
+
+    static read_keypair(loc : Location, name : string) : SR.StrongNameKeyPair
+    {
+      try
+        SR.StrongNameKeyPair(File.Open(name, FileMode.Open, FileAccess.Read))
+      catch
+      {
+        | _ is DirectoryNotFoundException => Message.FatalError (loc, "could not find directory of `" + name + "' with key pair for assembly")
+        | _ is FileNotFoundException => Message.FatalError (loc, "could not find file `" + name + "' with key pair for assembly")
+      }
+    }
+  } // class
+} // namespace
