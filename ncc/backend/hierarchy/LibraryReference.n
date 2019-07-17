@@ -8,10 +8,10 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Collections.ObjectModel;
 
+using DN = dnlib.DotNet;
 using PT = Nemerle.Compiler.Parsetree;
 using PExpr = Nemerle.Compiler.Parsetree.PExpr;
 using SR = System.Reflection;
-using SRE = System.Reflection.Emit;
 using SCG = System.Collections.Generic;
 
 namespace Nemerle.Compiler
@@ -21,15 +21,16 @@ namespace Nemerle.Compiler
   public partial class LibraryReference
   {
     /// The assembly associated with this object
-    [Accessor (Assembly)] private _library : SR.Assembly;
+    public Assembly : SR.Assembly { get; }
+
+    public ModuleDef : DN.ModuleDefMD { get; }
 
     public Location : Location { get { _location } }
 
     /// The location of this library
     private mutable _location : Location;
 
-    [Accessor]
-    private _isFriend : bool;
+    public IsFriend : bool { get; }
 
     public IsUserReference : bool { get; internal set; }
 
@@ -39,18 +40,18 @@ namespace Nemerle.Compiler
 
     public LibRefManager : LibraryReferenceManager;
 
-    private static load_attr_from(assembly : SR.Assembly, attr_name : string, attr : ref System.Type, attr_loc : ref string) : void
+    private LookupAttributeType(attr_name : string, attr : ref DN.TypeDef, attr_loc : ref string) : void
     {
-      def ext = assembly.GetType (attr_name);
+      def ext = ModuleDef.Find(attr_name, true);
 
       // HACK: VladD2: In .Net 4.5 ExtensionAttribute define twice.
       when (ext != null && attr != null && attr.FullName != "System.Runtime.CompilerServices.ExtensionAttribute")
       {
-        Message.Warning ($"$attr_name attribute from $assembly is ignored");
+        Message.Warning ($"$attr_name attribute from $ModuleDef is ignored");
         Message.HintOnce ($"$attr_name is first defined in $attr_loc");
       }
 
-      def new_attr_loc = assembly.ToString();
+      def new_attr_loc = ModuleDef.ToString();
 
       when (ext != null && (attr == null || attr_loc == new_attr_loc))
       {
@@ -64,31 +65,13 @@ namespace Nemerle.Compiler
     {
       LibRefManager = mgr;
       Manager = mgr.Manager;
-      _library = assembly;
+      ModuleDef = DN.ModuleDefMD.Load(assembly.Location);
+      Assembly = assembly;
       IsUserReference = isUserReference;
       _location = Location (Location.GetFileIndex (mgr.getAssemblyLocation(assembly)), 0, 0);
       _location.MarkAsGenerated();
 
-      // Scans the assembly custom attributes looking for something interesting...
-      def attrs = _library.GetCustomAttributes (typeof (SR.AssemblyConfigurationAttribute), false);
-
-      foreach (x :> SR.AssemblyConfigurationAttribute in attrs)
-        _is_generated_by_nemerle = _is_generated_by_nemerle || x.Configuration == "ContainsNemerleTypes";
-
-      load_attr_from (assembly, "Nemerle.Internal.ExtensionAttribute",
-                      ref SystemTypeCache.ExtensionAttribute,
-                      ref SystemTypeCache.ExtensionAttributeAssembly);
-      load_attr_from (assembly, "System.Runtime.CompilerServices.ExtensionAttribute",
-                      ref SystemTypeCache.SQ_ExtensionAttribute,
-                      ref SystemTypeCache.SQ_ExtensionAttributeAssembly);
-
-      _isFriend = this.GetIsFriend();
-    }
-
-    private GetIsFriend() : bool
-    {
       def currentAssemblyName = Path.GetFileNameWithoutExtension(this.Manager.Options.OutputFileName);
-      def customAttributes = _library.GetCustomAttributes(typeof(InternalsVisibleToAttribute), false);
       def snKey() : SR.StrongNameKeyPair
       {
         using (keyFile = File.Open(this.Manager.Options.StrongAssemblyKeyName, FileMode.Open, FileAccess.Read))
@@ -109,36 +92,47 @@ namespace Nemerle.Compiler
         System.Array.Reverse(result, 0, len);
         result;
       }
-      def checkFriend(att : InternalsVisibleToAttribute) : bool
+
+      // Scans the assembly custom attributes looking for something interesting...
+      foreach (a in ModuleDef.CustomAttributes)
       {
-        def assemblyName = att.AssemblyName;
-        def parts = assemblyName.Replace(" ", "").SplitToList(array[',']);
-        match (parts)
+        match (a.TypeFullName)
         {
-          | [asmName] when currentAssemblyName == asmName => true;
-          | [asmName, pKey] when string.IsNullOrEmpty(this.Manager.Options.StrongAssemblyKeyName)
-                                 && currentAssemblyName == asmName
-            =>
-            match(pKey.ToLower().SplitToList(array[',']))
+          | "System.Reflection.AssemblyConfigurationAttribute" when !_is_generated_by_nemerle && a.HasConstructorArguments =>
+            when (a.ConstructorArguments[0].Value is DN.UTF8String as configuration)
+              _is_generated_by_nemerle = "ContainsNemerleTypes".Equals(configuration : string);
+
+          | "System.Runtime.CompilerServices.InternalsVisibleToAttribute" when !IsFriend && a.HasConstructorArguments =>
+            when (a.ConstructorArguments[0].Value is DN.UTF8String as assemblyName)
             {
-              | ["publickey", key] when toHexString(snKey().PublicKey).ToLower() == key.ToLower() => true;
-              | ["publickeytoken", key]
-                 when toHexString(generatePublicKeyToken(snKey().PublicKey)).ToLower() == key.ToLower()
-                  => true;
-              | _ => false
+              def parts = (assemblyName : string).Replace(" ", "").SplitToList(array[',']);
+              match (parts)
+              {
+                | [asmName] when currentAssemblyName == asmName => IsFriend = true
+                | [asmName, pKey] when string.IsNullOrEmpty(this.Manager.Options.StrongAssemblyKeyName) && currentAssemblyName == asmName =>
+                  match(pKey.ToLower().SplitToList(array[',']))
+                  {
+                    | ["publickey", key] when toHexString(snKey().PublicKey).ToLower() == key.ToLower()
+                    | ["publickeytoken", key] when toHexString(generatePublicKeyToken(snKey().PublicKey)).ToLower() == key.ToLower() => IsFriend = true
+                    | _ => ()
+                  }
+
+                | _ => ()
+              }
             }
 
-          | _ => false
+          | _ => ()
         }
       }
 
-      customAttributes.Exists(a => checkFriend(a :> InternalsVisibleToAttribute))
+      LookupAttributeType("Nemerle.Internal.ExtensionAttribute", ref SystemTypeCache.ExtensionAttribute, ref SystemTypeCache.ExtensionAttributeAssembly);
+      LookupAttributeType("System.Runtime.CompilerServices.ExtensionAttribute", ref SystemTypeCache.SQ_ExtensionAttribute, ref SystemTypeCache.SQ_ExtensionAttributeAssembly);
     }
 
     internal LoadContents () : void
     {
       LibRefManager.LoadTypesFrom(this);
-      LibRefManager.LoadMacrosFrom(_library);
+      LibRefManager.LoadMacrosFrom(Assembly);
     }
 
     public override ToString () : string
@@ -227,9 +221,9 @@ namespace Nemerle.Compiler
     }
 
     /// Construct TypeInfo object from given type in current assembly.
-    internal ConstructTypeInfo (reflected_type : System.Type, ns_node : NamespaceTree.Node) : TypeInfo
+    internal ConstructTypeInfo (reflected_type : DN.TypeDef, ns_node : NamespaceTree.Node) : TypeInfo
     {
-      if (_is_generated_by_nemerle && reflected_type.IsDefined (SystemTypeCache.NemerleAttribute, false))
+      if (_is_generated_by_nemerle && reflected_type.IsDefined (SystemTypeCache.NemerleAttribute))
         ExternalNemerleTypeInfo (this, reflected_type, ns_node)
       else if (reflected_type.IsPrimitive)
         ExternalPrimitiveTypeInfo (this, reflected_type, ns_node)
@@ -242,7 +236,7 @@ namespace Nemerle.Compiler
     internal LookupInternalType (name : string) : option [TypeInfo]
     {
     //  Message.Debug ($"looking `$(name)'");
-      def st = _library.GetType (name);
+      def st = ModuleDef.Find(name, true);
 
       if (st == null)
         None ()
@@ -262,23 +256,23 @@ namespace Nemerle.Compiler
 
     public GetCustomAttributes() : list[PExpr * list[PExpr]]
     {
-      ConvertCustomAttributesData(SR.CustomAttributeData.GetCustomAttributes(Assembly), this)
+      ConvertCustomAttributesData(ModuleDef.CustomAttributes, this)
     }
     
-    internal static ConvertCustomAttributesData(attrData : SCG.IList[SR.CustomAttributeData], library : LibraryReference) : list[PExpr * list[PExpr]]
+    internal static ConvertCustomAttributesData(attrData : SCG.IList[DN.CustomAttribute], library : LibraryReference) : list[PExpr * list[PExpr]]
     {
       def manager = library.Manager;
       def result = SCG.List();
 
       foreach (attr in attrData)
       {
-        def name = PExpr.FromQualifiedIdentifier(manager, attr.Constructor.DeclaringType.FullName);
-        def makeArg(a : SR.CustomAttributeTypedArgument) : PExpr
+        def name = PExpr.FromQualifiedIdentifier(manager, attr.TypeFullName);
+        def makeArg(a : DN.CAArgument) : PExpr
         {
           def lift(value : object) : PExpr
           {
             | value is bool           => <[ $(value :  bool   ) ]>
-            | value is string         => <[ $(value :  string ) ]> 
+            | value is DN.UTF8String  => <[ $(value :  string ) ]> 
             | value is double         => <[ $(value :  double ) ]> 
             | value is float          => <[ $(value :  float  ) ]> 
             | value is decimal        => <[ $(value :  decimal) ]> 
@@ -292,8 +286,8 @@ namespace Nemerle.Compiler
             | value is sbyte          => <[ $(value :  sbyte  ) ]> 
             | value is char           => <[ $(value :  char   ) ]> 
             | value is System.Guid    => <[ System.Guid($(value.ToString() : string)) ]>
-            | value is System.Type    => <[ typeof($(library.TypeOfType(null, value) : typed)) ]>
-            | col is ReadOnlyCollection[SR.CustomAttributeTypedArgument] => <[ array[..$(col.MapToList(e => lift(e.Value)))] ]>
+            | value is DN.TypeSig     => <[ typeof($(library.TypeOfType(null, value) : typed)) ]>
+            | col is SCG.IList[DN.CAArgument] => <[ array[..$(col.MapToList(e => lift(e.Value)))] ]>
             | value => Message.FatalError($"Custom atribute value ($value) of type $(value.GetType()) not suported yet.")
           }
 
