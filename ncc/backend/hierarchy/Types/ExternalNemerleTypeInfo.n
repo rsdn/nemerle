@@ -6,6 +6,7 @@ using Nemerle.Late;
 using Nemerle.Utility;
 using System.IO;
 
+using DN = dnlib.DotNet;
 using PT = Nemerle.Compiler.Parsetree;
 using SR = System.Reflection;
 using SRE = System.Reflection.Emit;
@@ -18,110 +19,82 @@ namespace Nemerle.Compiler
     tydecl          : TypeDeclaration;
     constant_object : IField;
 
-    public this (lib : LibraryReference, h : System.Type, ns_node : NamespaceTree.Node)
+    public this (lib : LibraryReference, h : DN.TypeDef, ns_node : NamespaceTree.Node)
     {
       base(lib, h, ns_node);
 
-      if (system_type.IsDefined(SystemTypeCache.VariantAttribute, false))
+      def comparer = DN.TypeEqualityComparer.Instance;
+      foreach (a in system_type.CustomAttributes)
       {
-        def names =
+        when (tydecl : object == null)
         {
-          def attr = system_type.GetCustomAttributes(SystemTypeCache.VariantAttribute, false)[0];
-          NString.Split(late(attr.VariantOptions) :> string, array [','])
-        };
-        def get_opt (name : string, index : int)
-        {
-          match (lib.LibRefManager.NameTree.LookupExactType(NString.Split (name, array ['.', '+'])))
+          if (comparer.Equals(SystemTypeCache.VariantAttribute, a.AttributeType) && a.ConstructorArguments.Count == 1)
           {
-            | Some (tc is ExternalNemerleTypeInfo) =>
-              tc.VariantOptionCode = index;
-              tc
-            | Some => assert(false);
+            mutable variantOptions = [];
 
-            | None =>
-              if (lib.LibRefManager.IsAssemblyLoaded(system_type.Assembly.FullName))
+            def names = ((a.ConstructorArguments[0].Value :> DN.UTF8String) : string).Split(',');
+            for (mutable index = names.Length - 1; index >= 0; --index)
+            {
+              def name = names[index];
+              match (library.LibRefManager.NameTree.LookupExactType(NString.Split(name, array['.', '+'])))
               {
-                System.Diagnostics.Debug.Assert(false);
-                Util.ice($"cannot find variant option named $name")
+                | Some (tc is ExternalNemerleTypeInfo) =>
+                  tc.VariantOptionCode = index;
+                  variantOptions ::= tc
+
+                | _ => Util.ice($"cannot find variant option named $name")
               }
-              else //Требует перевода: Тип может быть не загружен в следствии того, что на библиотеку
-              {    // не было ссылки в проекте. Загружаем библиотеку и пробуем повторить операци. Возможно это не лучшее решение!
-                lib.LibRefManager.AddAssembly(system_type.Assembly, false);
-                lib.LibRefManager.LoadLibrariesContents();
-                get_opt(name, index)
-              }
+            }
+
+            tydecl = TypeDeclaration.Variant(variantOptions);
+          }
+          else if (comparer.Equals(SystemTypeCache.VariantOptionAttribute, a.AttributeType))
+            tydecl = TypeDeclaration.VariantOption();
+          else if (comparer.Equals(SystemTypeCache.ConstantVariantOptionAttribute, a.AttributeType))
+          {
+            tydecl = TypeDeclaration.VariantOption ();
+
+            match (LookupMember("_N_constant_object"))
+            {
+              | [fld] => constant_object = fld :> IField
+              | _     => Util.ice ("cannot find _N_constant_object")
+            }
+          }
+          else when (comparer.Equals(SystemTypeCache.TypeAliasAttribute, a.AttributeType) && a.ConstructorArguments.Count == 1)
+          {
+            def aliasedType = a.ConstructorArguments[0].Value :> DN.UTF8String;
+            tydecl = TypeDeclaration.Alias(TyCodec.DecodeType (lib, tenv, aliasedType));
           }
         }
 
-        mutable variantOptions = [];
-        mutable index = 0;
-        foreach(name in names)
+        when (comparer.Equals(SystemTypeCache.ExtensionPatternEncodingAttribute, a.AttributeType) && a.ConstructorArguments.Count == 3)
         {
-          variantOptions ::= get_opt(name, index);
-          ++index;
-        }
-
-        tydecl = TypeDeclaration.Variant (variantOptions.Rev());
-      }
-      else if (system_type.IsDefined (SystemTypeCache.VariantOptionAttribute, false))
-        tydecl = TypeDeclaration.VariantOption();
-      else if (system_type.IsDefined (SystemTypeCache.ConstantVariantOptionAttribute, false))
-      {
-        tydecl = TypeDeclaration.VariantOption ();
-
-        match (LookupMember ("_N_constant_object"))
-        {
-          | [fld] => constant_object = fld :> IField
-          | _     => Util.ice ("cannot find _N_constant_object")
+          def name        = a.ConstructorArguments[0].Value :> DN.UTF8String;
+          def identifiers = a.ConstructorArguments[1].Value :> DN.UTF8String;
+          def pattern     = a.ConstructorArguments[2].Value :> DN.UTF8String;
+          def ext = ExtensionPattern (parent      = this,
+                                      identifiers = NString.Split(identifiers, [',']),
+                                      pattern     = MainParser.ParseExpr(Manager.CoreEnv, pattern),
+                                      name        = name,
+                                      temporary   = false);
+          AddExtensionPattern(ext);
         }
       }
-      else if (system_type.IsDefined (SystemTypeCache.TypeAliasAttribute, false))
-      {
-        def aliasedType =
-        {
-          def attr = system_type.GetCustomAttributes(SystemTypeCache.TypeAliasAttribute, false)[0];
-          late(attr.AliasedType) :> string
-        };
-        tydecl = TypeDeclaration.Alias(TyCodec.DecodeType (lib, tenv, aliasedType))
-      }
-      else if (system_type.IsInterface)
-        tydecl = TypeDeclaration.Interface()
-      else if (system_type.IsEnum)
-        tydecl = TypeDeclaration.Enum()
-      else
-        tydecl = TypeDeclaration.Class();
 
-      decode_extension_patterns();
+      when (tydecl : object == null)
+      {
+        tydecl =
+          if (system_type.IsInterface)
+            TypeDeclaration.Interface()
+          else if (system_type.IsEnum)
+            TypeDeclaration.Enum()
+          else
+            TypeDeclaration.Class();
+      }
     }
+
     //TODO: ValdD2: Rename this
     public override GetTydecl()         : TypeDeclaration { tydecl }
     public override GetConstantObject() : IField          { constant_object }
-
-    decode_extension_patterns () : void
-    {
-      def t = SystemTypeCache.ExtensionPatternEncodingAttribute;
-      def attrs = system_type.GetCustomAttributes (t, false);
-
-      when (attrs.Length > 0)
-      {
-        def get_ids  = t.GetMethod ("get_Identifiers");
-        def get_pat  = t.GetMethod ("get_Pattern");
-        def get_name = t.GetMethod ("get_Name");
-
-        foreach (attr_obj in attrs)
-        {
-          def ids = get_ids.Invoke (attr_obj, null) :> string;
-          def pat = get_pat.Invoke (attr_obj, null) :> string;
-          def name = get_name.Invoke (attr_obj, null) :> string;
-          def ext = ExtensionPattern (parent      = this,
-                                      identifiers = NString.Split (ids, [',']),
-                                      pattern     = MainParser.ParseExpr (Manager.CoreEnv, pat),
-                                      name        = name,
-                                      temporary   = false);
-
-          AddExtensionPattern (ext);
-        }
-      }
-    }
   }
 } /* namespace */
