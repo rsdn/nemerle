@@ -9,8 +9,6 @@ using System.IO;
 
 using DN = dnlib.DotNet;
 using PT = Nemerle.Compiler.Parsetree;
-using SR = System.Reflection;
-using SRE = System.Reflection.Emit;
 using SCG = System.Collections.Generic;
 
 namespace Nemerle.Compiler
@@ -20,7 +18,7 @@ namespace Nemerle.Compiler
     [Accessor]
     protected system_type : DN.TypeDef;
     
-    protected GetHandle() : SR.MemberInfo implements IBackendMember.GetHandle { system_type }
+    protected GetHandle() : DN.IMemberDef implements IBackendMember.GetHandle { system_type }
     
     protected         library                       : LibraryReference;
     internal          tenv                          : Map [string, StaticTypeVar] = Map ();
@@ -31,7 +29,7 @@ namespace Nemerle.Compiler
     {
       base(ns_node, lib.Manager, Util.StripGenericMark(h.FullName.Replace ('+', '.').TrimStart('.')));
 
-      TyparmsCount = h.GetGenericArguments().Length;
+      TyparmsCount = h.GenericParameters.Count;
       
       // first cache ourself to avoid loops
       LibraryReferenceManager.CacheTypeInfo (h, this, ns_node);
@@ -92,17 +90,12 @@ namespace Nemerle.Compiler
         when (system_type.IsNestedAssembly) attributes |= NemerleModifiers.Internal;
       }
 
-      def attrs = system_type.GetCustomAttributes(SystemTypeCache.Reflection_DefaultMemberAttribute, true);
-      default_indexer =
-        if (attrs.Length > 0)
-        {
-          def dma = attrs [0] :> System.Reflection.DefaultMemberAttribute;
-          dma.MemberName
-        }
-        else
-          // there can be indexer in the base type, let DefaultIndexer
-          // property handle it
-          null;
+      // there can be indexer in the base type, let DefaultIndexer property handle it
+      foreach (a in system_type.CustomAttributes)
+      {
+        when (DN.TypeEqualityComparer.Instance.Equals(a.AttributeType, SystemTypeCache.Reflection_DefaultMemberAttribute) && a.ConstructorArguments.Count == 1)
+          default_indexer = a.ConstructorArguments[0].Value :> DN.UTF8String
+      }
 
       when (lib.LibRefManager.add_buildins)
         AddBuiltins();
@@ -112,8 +105,6 @@ namespace Nemerle.Compiler
 
       when (InternalType.Obsolete_tc != null)
         is_obsolete = HasAttribute(InternalType.Obsolete_tc);
-
-      _declaredTypeParametersCount = system_type.GetGenericArguments().Length;
 
       when(InternalType.Conditional_tc != null)
         _isConditional = HasAttribute(InternalType.Conditional_tc);
@@ -131,7 +122,7 @@ namespace Nemerle.Compiler
     //    None()
     //}
 
-    public override TyparmsCount  : int { get; }
+    public override TyparmsCount : int { get; }
 
     #region Special numeric overloads
 
@@ -395,13 +386,8 @@ namespace Nemerle.Compiler
 
     #endregion
 
-    _declaredTypeParametersCount : int;
-
     /// Count of type parameters declared in this type (without type parameters of outer types)
-    public override DeclaredTypeParametersCount : int
-    {
-      get { _declaredTypeParametersCount }
-    }
+    public override DeclaredTypeParametersCount : int { get { TyparmsCount } }
 
     /// Checks if underlying .NET type is value type
     public override IsValueType : bool { get { system_type.IsValueType } }
@@ -444,14 +430,14 @@ namespace Nemerle.Compiler
     [Memoize]
     public override GetModifiers () : AttributesAndModifiers
     {
-      def attrs     = LibraryReference.ConvertCustomAttributesData(system_type.CustomAttributes, library);
+      def attrs     = LibraryReference.ConvertCustomAttributesData(system_type, library);
       def attrAsts  = attrs.Map((name, args) => <[ $name(..$args)]>);
       AttributesAndModifiers(Attributes, attrAsts)
     }
 
     public override IsCustomAttributeDefined(attributeFullName : string) : bool
     {
-      GetHandle().IsDefined(library.Manager.NameTree.LookupSystemType(attributeFullName), false)
+      GetHandle().IsDefined(library.Manager.NameTree.LookupSystemType(attributeFullName))
     }
 
     public override AttributeTargets : System.AttributeTargets
@@ -576,92 +562,56 @@ namespace Nemerle.Compiler
       GetMembers (bindingAttr).FoldLeft ([], constrain_with_membertype (MemberKinds.Constructor))
     }
 
-    private static is_internal (m : SR.MemberInfo) : bool
-    {
-      def x = m.MemberType;
-
-      if (x %&& (SR.MemberTypes.Constructor | SR.MemberTypes.Method))
-      {
-        def meth = m :> SR.MethodBase;
-        meth.IsPrivate || meth.IsAssembly || meth.IsFamilyAndAssembly
-          || meth.CallingConvention == SR.CallingConventions.VarArgs
-      }
-      else if (x %&& SR.MemberTypes.Field)
-      {
-        def field = m :> SR.FieldInfo;
-        field.IsPrivate || field.IsAssembly || field.IsFamilyAndAssembly
-      }
-      else if (x %&& SR.MemberTypes.Property)
-      {
-        def prop = m :> SR.PropertyInfo;
-        def accessors = prop.GetAccessors (true);
-        def propMeth = accessors.Fold(null, (x : SR.MethodInfo, acc) =>
-              if (x == null || x.IsPrivate || x.IsAssembly || x.IsFamilyAndAssembly) acc
-              else x);
-        propMeth == null
-      }
-      else if (x %&& SR.MemberTypes.NestedType)
-      {
-        def ty = m :> DN.TypeDef;
-        ty.IsNestedAssembly || ty.IsNestedPrivate || ty.IsNestedFamANDAssem
-      }
-      else if (x %&& SR.MemberTypes.Event)
-      {
-        // we lookup nonpublic method here, because it can be protected and we want to
-        // access it from derived class
-        // (I just hope it won't trigger any authorization exceptions)
-        def evMeth = (m :> SR.EventInfo).GetAddMethod (true);
-        evMeth == null || evMeth.IsPrivate || evMeth.IsAssembly || evMeth.IsFamilyAndAssembly
-      }
-      else true
-    }
-
-    protected imember_of_memberinfo (m : SR.MemberInfo) : IMember
-    {
-      match (m.MemberType)
-      {
-        | SR.MemberTypes.Constructor
-        | SR.MemberTypes.Method     => ExternalMethodInfo  (tenv, library, m :> SR.MethodBase) : IMember
-        | SR.MemberTypes.Field      => ExternalFieldInfo   (tenv, library, m :> SR.FieldInfo)
-        | SR.MemberTypes.Property   => ExternalPropertyInfo(tenv, library, m :> SR.PropertyInfo)
-        | SR.MemberTypes.Event      => ExternalEventInfo         (library, m :> SR.EventInfo)
-        | SR.MemberTypes.NestedType => library.TypeInfoOfType(m :> DN.TypeDef)
-        | _ => null
-      }
-    }
-
     private collect_members () : void
     {
       member_map = Hashtable ();
 
-      def flags = SR.BindingFlags.Public
-                | SR.BindingFlags.NonPublic
-                | SR.BindingFlags.Static
-                | SR.BindingFlags.Instance
-                | SR.BindingFlags.DeclaredOnly;
-
-      def member_array = system_type.GetMembers (flags);
-
       //Message.Debug ($"{collect_members, '$name' in $this len=$(member_array.Length)");
       mutable collected_now = [];
 
-      for (mutable i = member_array.Length - 1; i >= 0; i--)
+      def addMember(memberInfo : IMember)
       {
-        def m = member_array [i];
+        collected_now ::= memberInfo;
+        add_member_by_name(memberInfo);
+      }
 
-//          Message.Debug ($"adding $m from $this $(this.GetHashCode ())");
-        unless (is_internal(m) && !this.library.IsFriend)
-        {
-//            Message.Debug ($ "add_member: $m to $(this) [$(GetHashCode ())]");
-          match (imember_of_memberinfo (m))
-          {
-            | null => ()
-            | r =>
-//                    Message.Debug ($ "add_member: $r to $(this) [$(GetHashCode ())]");
-              collected_now ::= r;
-              add_member_by_name (r);
-          }
-        }
+      def restrictInternals = !library.IsFriend;
+
+      foreach (d in system_type.Fields)
+      {
+        unless (d.IsPrivate || ((d.IsAssembly || d.IsFamilyAndAssembly) && restrictInternals))
+          addMember(ExternalFieldInfo(tenv, library, d))
+      }
+
+      def methodIsVisible(d : DN.MethodDef)
+      {
+        d != null && !(d.IsPrivate || ((d.IsAssembly || d.IsFamilyAndAssembly) && restrictInternals))
+      }
+
+      foreach (d in system_type.Properties)
+      {
+        def hasGet = methodIsVisible(d.GetMethod);
+        def hasSet = methodIsVisible(d.SetMethod);
+        when (hasGet || hasSet)
+          addMember(ExternalPropertyInfo(tenv, library, d, hasGet, hasSet));
+      }
+
+      foreach (d in system_type.Events)
+      {
+        when (methodIsVisible(d.AddMethod) && methodIsVisible(d.RemoveMethod))
+          addMember(ExternalEventInfo(library, d));
+      }
+
+      foreach (d in system_type.Methods)
+      {
+        when (methodIsVisible(d))
+          addMember(ExternalMethodInfo(tenv, library, d));
+      }
+
+      foreach (d in system_type.NestedTypes)
+      {
+        unless (d.IsNestedPrivate || ((d.IsNestedAssembly || d.IsNestedFamilyAndAssembly) && restrictInternals))
+          addMember(library.TypeInfoOfType(d));
       }
 
       def res =
@@ -719,13 +669,13 @@ namespace Nemerle.Compiler
         || system_type.IsNestedPublic || system_type.IsNestedFamilyOrAssembly));
     }
 
-    public override UnderlyingType : TypeInfo
+    public override UnderlyingType : FixedType
     {
       //[Nemerle.Memoize (InvalidValue = null)]
       get
       {
         assert(system_type.IsEnum);
-        library.TypeInfoOfType (system_type.GetField ("value__").FieldType)
+        library.TypeOfType(tenv, system_type.GetField("value__").FieldType)
       }
     }
 
@@ -739,19 +689,7 @@ namespace Nemerle.Compiler
 
     internal override GetObsoletionDetails () : string * bool
     {
-      mutable message : string;
-      mutable isError;
-      foreach (a in system_type.CustomAttributes)
-      {
-        when (a.TypeFullName == "System.ObsoleteAttribute" && a.ConstructorArguments.Count <= 2)
-        {
-          when (a.ConstructorArguments.Count > 0)
-            message = a.ConstructorArguments[0].Value :> DN.UTF8String;
-          when (a.ConstructorArguments.Count > 1)
-            isError = a.ConstructorArguments[1].Value :> bool;
-        }
-      }
-      (message, isError)
+      system_type.GetObsoletionDetails()
     }
 
     public override GlobalEnv : GlobalEnv
@@ -765,11 +703,7 @@ namespace Nemerle.Compiler
     [Memoize(Scope = Instance, Synchronized = false)]
     public override GetConditions() : list[string]
     {
-      mutable conditions = [];
-      foreach (a in system_type.CustomAttributes)
-        when (a.TypeFullName == "System.Diagnostics.ConditionalAttribute" && a.ConstructorArguments.Count == 1)
-          conditions ::= (a.ConstructorArguments[0].Value :> DN.UTF8String) : string;
-      conditions
+      system_type.GetConditions()
     }
   } // class
 } // namespace
