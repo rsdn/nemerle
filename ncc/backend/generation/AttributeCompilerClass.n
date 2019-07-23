@@ -1,18 +1,14 @@
 using Nemerle.Assertions;
 using Nemerle.Compiler.Backend;
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Utility;
 
 using System.IO;
 using Nemerle.Compiler.Typedtree;
 
-using SY = System;
+using DN = dnlib.DotNet;
 using PT = Nemerle.Compiler.Parsetree;
-using SR = System.Reflection;
-using SRE = System.Reflection.Emit;
-using SRI = System.Runtime.InteropServices;
-using SS = System.Security;
-using SSP = System.Security.Permissions;
 using SCG = System.Collections.Generic;
 
 namespace Nemerle.Compiler
@@ -25,7 +21,7 @@ namespace Nemerle.Compiler
       Manager = man;
     }
 
-    internal CompileAttribute(env : GlobalEnv, ti : TypeBuilder, expr : PT.PExpr) : System.AttributeTargets * SR.Emit.CustomAttributeBuilder * bool
+    internal CompileAttribute(env : GlobalEnv, ti : TypeBuilder, expr : PT.PExpr) : System.AttributeTargets * DN.CustomAttribute * bool
     {
       def (tc, parms) = CheckAttribute (env, expr);
       if (is_security_attribute(tc))
@@ -110,7 +106,7 @@ namespace Nemerle.Compiler
     }
 
     internal GetCompiledAssemblyAttributes (attrs : SCG.List [GlobalEnv * PT.PExpr])
-    : list [SR.Emit.CustomAttributeBuilder * bool]
+    : list [DN.CustomAttribute * bool]
     {
       mutable result = [];
       foreach ((env, attr) in attrs) {
@@ -122,214 +118,169 @@ namespace Nemerle.Compiler
       result
     }
 
-    /*
-      Quote from MSDN:
-      At compile time, attributes convert security declarations to a serialized form in metadata.
-
-      Declarative security data in metadata is created from the permission that
-      SecurityAttribute::CreatePermission method returns that corresponds to this attribute.
-
-      This means that the compiler must instantiate a security attribute at compile time and
-      retrieve a serializable permission object to store somewhere in the metadata.
-    */
     internal GetPermissionSets (attrs : SCG.IEnumerable [GlobalEnv * PT.PExpr])
-    : list [SSP.SecurityAction * SS.PermissionSet]
+    : SCG.Dictionary[DN.SecurityAction, SCG.List[DN.SecurityAttribute]]
     {
-      mutable result = [];
-      foreach ((env, attr) in attrs) {
+      def result = SCG.Dictionary();
+      foreach ((env, attr) in attrs)
+      {
         def (tc, parms) = CheckAttribute (env, attr);
 
-        when (is_security_attribute (tc)) {
-          match (create_instance (env, tc, parms)) {
-            | ps is SSP.PermissionSetAttribute => result ::= (ps.Action, ps.CreatePermissionSet ())
-            | sa is SSP.SecurityAttribute =>
-                def perm_set = SS.PermissionSet (SSP.PermissionState.None);
-                _ = perm_set.AddPermission (sa.CreatePermission ());
-                result ::= (sa.Action, perm_set)
-            | _ => Message.FatalError (attr.Location, "given attribute must be a System.Security.Permissions.SecurityAttribute")
+        when (is_security_attribute (tc))
+        {
+          def (ctor, ctorArgs, namedArgs) = pre_compile(env, null, tc, parms);
+          def action = System.Convert.ToInt32(ctorArgs[0].Value) :> DN.SecurityAction;
+          mutable attributeList;
+          unless (result.TryGetValue(action, out attributeList))
+          {
+            attributeList = SCG.List();
+            result.Add(action, attributeList);
           }
+          attributeList.Add(DN.SecurityAttribute(ctor.DeclaringType, namedArgs));
         }
       }
       result
     }
 
     internal GetPermissionSets (env : GlobalEnv, attrs : SCG.IEnumerable [PT.PExpr])
-    : list [SSP.SecurityAction * SS.PermissionSet]
+    : SCG.Dictionary[DN.SecurityAction, SCG.List[DN.SecurityAttribute]]
     {
       GetPermissionSets(attrs.Map(attr => (env, attr)));
     }
 
-    internal MakeEmittedAttribute (attr_type : System.Type, value : string) : SR.Emit.CustomAttributeBuilder
+    internal MakeEmittedAttribute (attr_type : DN.TypeDef, value : string) : DN.CustomAttribute
     {
-      MakeEmittedAttribute (attr_type, array [SystemTypeCache.String], value);
+      MakeEmittedAttribute(attr_type, SystemTypeCache.String, value);
     }
 
-    internal MakeEmittedAttribute (attr_type : System.Type) : SR.Emit.CustomAttributeBuilder
+    internal MakeEmittedAttribute(attr_type : DN.TypeDef) : DN.CustomAttribute
     {
       _ = this; // shut up!
-      def constructor_info = attr_type.GetConstructor (System.Type.EmptyTypes);
-      SR.Emit.CustomAttributeBuilder (constructor_info, array [])
+      def constructor_info = attr_type.GetMethod(".ctor");
+      DN.CustomAttribute(constructor_info)
     }
 
-    internal MakeEmittedAttribute (attr_type : System.Type, value : int) : SR.Emit.CustomAttributeBuilder
+    internal MakeEmittedAttribute(attr_type : DN.TypeDef, value : int) : DN.CustomAttribute
     {
-      MakeEmittedAttribute (attr_type, array [SystemTypeCache.Int32], value);
+      MakeEmittedAttribute (attr_type, SystemTypeCache.Int32, value);
     }
 
-    internal MakeEmittedAttribute (attr_type : System.Type, param_types : array [System.Type], value : object) : SR.Emit.CustomAttributeBuilder
+    internal MakeEmittedAttribute (attr_type : DN.TypeDef, paramType : DN.TypeDef, value : object) : DN.CustomAttribute
     {
       _ = this; // shut up!
-      def constructor_info = attr_type.GetConstructor (param_types);
-      assert(constructor_info != null);
-      def constructor_params = array [value];
-      SR.Emit.CustomAttributeBuilder (constructor_info, constructor_params)
+      def constructor_info  = attr_type.GetMethod(".ctor", paramType);
+      def attribute         = DN.CustomAttribute(constructor_info);
+      def attributeArgument = DN.CAArgument(DN.Extensions.ToTypeSig(paramType), value);
+      attribute.ConstructorArguments.Add(attributeArgument);
+      attribute
     }
 
-    internal CheckPInvoking (meth : MethodBuilder, tb : SR.Emit.TypeBuilder,
-                            attrs : SR.MethodAttributes,
-                            parm_types_array : array [SY.Type]) : SR.Emit.MethodBuilder
+    internal CheckPInvoking (meth : MethodBuilder, tb : DN.TypeDef, attrs : DN.MethodAttributes, sig : DN.MethodSig) : DN.MethodDef
     {
-      def loop (_)
+      foreach (expr in meth.GetModifiers().GetCustomAttributes())
       {
-        | expr :: rest =>
-            def env = meth.DeclaringType.GlobalEnv;
-            match (ResolveAttribute (env, expr))
-            {
-              | Some ((tc, dllName :: parms)) when tc.Equals (InternalType.DllImport_tc) =>
+        def env = meth.DeclaringType.GlobalEnv;
+        when (ResolveAttribute(env, expr) is Some((tc, dllName :: parms)) when tc.Equals(InternalType.DllImport_tc))
+        {
+          when (meth.Attributes & NemerleModifiers.Extern == 0)
+            Message.Error (expr.Location, "only methods marked with `extern' modifier can have `System.Runtime.InteropServices.DllImport' attribute");
 
-                  when (meth.Attributes & NemerleModifiers.Extern == 0)
-                    Message.Error (expr.Location, "only methods marked with `extern' modifier can have "
-                                                  "`System.Runtime.InteropServices.DllImport' attribute");
+          mutable moduleRef;
+          match(ConstantFolder.FoldConstants(env, dllName, meth.DeclaringType))
+          {
+            | <[ $(dllName : string) ]> => moduleRef = DN.ModuleRef(Manager.GeneratedAssembly, dllName)
+            | _ => Message.Error(dllName.Location, $"in argument #1 (dllName), constant expression of type `$(InternalType.String_tc)' required")
+          }
 
-                  def dllName = match(ConstantFolder.FoldConstants(env, dllName, meth.DeclaringType))
-                                 {
-                                   | <[ $(dllName : string) ]> => dllName
-                                   | _ =>
-                  // emulate call typing
-                                       Message.Error (dllName.Location, $"in argument #1 (dllName), constant expression of type `$(InternalType.String_tc)' required");
-                                       "error" // makes SRE happy
-                                 }
+          mutable entry_point         : string;
+          mutable callingconv         : DN.PInvokeAttributes?;
+          mutable charset             : DN.PInvokeAttributes?;
+          mutable preserve_sig        : bool?;
+          mutable best_fit_mapping    : bool?;
+          mutable throw_on_unmappable : bool?;
+          mutable exact_spelling      : bool;
+          mutable set_last_error      : bool;
 
-                  mutable callingconv = SRI.CallingConvention.Winapi;
-                  mutable charset = SRI.CharSet.Ansi;
-                  mutable preserve_sig = true;
-                  mutable entry_point = meth.Name;
-                  mutable best_fit_mapping = false;
-                  mutable throw_on_unmappable = false;
-                  mutable exact_spelling = false;
-                  mutable set_last_error = false;
+          foreach (p in parms)
+          {
+            | <[ $(target : dyn) = $val ]> =>
+              match ((target, ConstantFolder.FoldConstants (env, val)))
+              {
+                | ("CallingConvention", PT.PExpr.Literal(x)) =>
+                    callingconv =
+                      match (System.Convert.ToInt32(x.AsObject(InternalType)))
+                      {
+                        | 1 => DN.PInvokeAttributes.CallConvWinapi
+                        | 2 => DN.PInvokeAttributes.CallConvCdecl
+                        | 3 => DN.PInvokeAttributes.CallConvStdcall
+                        | 4 => DN.PInvokeAttributes.CallConvThiscall
+                        | 5 => DN.PInvokeAttributes.CallConvFastcall
+                        | _ =>
+                          Message.Error(val.Location, $"Invalid `CallingConvention` value `$x`");
+                          null
+                      }
 
-                  mutable best_fit_mapping_set = false;
-                  mutable throw_on_unmappable_set = false;
-                  mutable exact_spelling_set = false;
-                  mutable set_last_error_set = false;
+                | ("CharSet", PT.PExpr.Literal(x)) =>
+                    charset =
+                      match (System.Convert.ToInt32(x.AsObject(InternalType)))
+                      {
+                        | 1 => DN.PInvokeAttributes.CharSetNotSpec
+                        | 2 => DN.PInvokeAttributes.CharSetAnsi
+                        | 3 => DN.PInvokeAttributes.CharSetUnicode
+                        | 4 => DN.PInvokeAttributes.CharSetAuto
+                        | _ =>
+                          Message.Error(val.Location, $"Invalid `CharSet` value `$x`");
+                          null
+                      }
 
-                  mutable set_best_fit = null;
-                  mutable set_throw_on = null;
-                  mutable set_exact_spelling = null;
-                  mutable set_set_last_error = null;
+                | ("BestFitMapping",        <[ $(val : bool) ]>)   => best_fit_mapping    = val
+                | ("EntryPoint",            <[ $(val : string) ]>) => entry_point         = val
+                | ("ExactSpelling",         <[ $(val : bool) ]>)   => exact_spelling      = val
+                | ("PreserveSig",           <[ $(val : bool) ]>)   => preserve_sig        = val
+                | ("SetLastError",          <[ $(val : bool) ]>)   => set_last_error      = val
+                | ("ThrowOnUnmappableChar", <[ $(val : bool) ]>)   => throw_on_unmappable = val
+                | (name, val) => Message.Error(val.Location, $"value is not valid for parameter $name")
+              }
+            | _ => Message.Error (p.Location, "unnamed DllImport parameter")
+          }
 
-                  foreach (p in parms)
-                    match (p)
-                    {
-                      | <[ $(target : dyn) = $val ]> =>
-                          match ((target, ConstantFolder.FoldConstants (env, val)))
-                          {
-                            | ("BestFitMapping", <[ $(val : bool) ]>) =>
-                                best_fit_mapping = val;
-                                best_fit_mapping_set = true;
+          mutable flags = (callingconv ?? DN.PInvokeAttributes.CallConvWinapi)
+                        %| (charset ?? DN.PInvokeAttributes.CharSetAnsi);
 
-                            | ("CallingConvention", PT.PExpr.Literal(Literal.Enum(val, _, _))) =>
-                                callingconv = val.AsObject(InternalType) :> SRI.CallingConvention;
+          when (best_fit_mapping.HasValue)
+          {
+            flags |=
+              if (best_fit_mapping.GetValueOrDefault())
+                DN.PInvokeAttributes.BestFitEnabled
+              else
+                DN.PInvokeAttributes.BestFitDisabled
+          }
 
-                            | ("CharSet", PT.PExpr.Literal (Literal.Enum (l, _, _))) =>
-                                charset = l.AsObject(InternalType) :> SRI.CharSet;
+          when (throw_on_unmappable.HasValue)
+          {
+            flags |=
+              if (throw_on_unmappable.GetValueOrDefault())
+                DN.PInvokeAttributes.ThrowOnUnmappableCharEnabled
+              else
+                DN.PInvokeAttributes.ThrowOnUnmappableCharDisabled
+          }
 
-                            | ("EntryPoint", <[ $(val : string) ]>) =>
-                                entry_point = val;
+          when (exact_spelling)
+            flags |= DN.PInvokeAttributes.NoMangle;
 
-                            | ("ExactSpelling", <[ $(val : bool) ]>) =>
-                                exact_spelling = val;
-                                exact_spelling_set = true;
+          when (set_last_error)
+            flags |= DN.PInvokeAttributes.SupportsLastError;
 
-                            | ("PreserveSig", <[ $(val : bool) ]>) =>
-                                preserve_sig = val;
+          def mb = DN.MethodDefUser(meth.Name, sig, attrs | DN.MethodAttributes.PInvokeImpl | DN.MethodAttributes.HideBySig);
+          mb.ImplMap = DN.ImplMapUser(moduleRef, entry_point ?? meth.Name, flags);
+          when (preserve_sig.HasValue)
+            mb.IsPreserveSig = preserve_sig.GetValueOrDefault();
 
-                            | ("SetLastError", <[ $(val : bool) ]>) =>
-                                set_last_error = val;
-                                set_last_error_set = true;
-
-                            | ("ThrowOnUnmappableChar", <[ $(val : bool) ]>) =>
-                                throw_on_unmappable = val;
-                                throw_on_unmappable_set = true;
-
-                            | (name, val) => Message.Error (val.Location,
-                                                            $"value is not valid for parameter $name")
-                          }
-                      | _ => Message.Error (p.Location, "unnamed DllImport parameter")
-                    }
-
-                  when (throw_on_unmappable_set || best_fit_mapping_set || exact_spelling_set || set_last_error_set)
-                  {
-                    set_best_fit = typeof (SR.Emit.MethodBuilder).GetMethod ("set_BestFitMapping",
-                                                                             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                    set_throw_on = typeof (SR.Emit.MethodBuilder).GetMethod ("set_ThrowOnUnmappableChar",
-                                                                             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                    set_exact_spelling = typeof (SR.Emit.MethodBuilder).GetMethod ("set_ExactSpelling",
-                                                                                   BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                    set_set_last_error = typeof (SR.Emit.MethodBuilder).GetMethod ("set_SetLastError",
-                                                                                   BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                  }
-
-                  when (throw_on_unmappable_set || best_fit_mapping_set)
-                  {
-                    when ((set_best_fit == null) || (set_throw_on == null))
-                    {
-                      Message.Error ("The ThrowOnUnmappableChar and BestFitMapping"
-                                     " attributes can only be emitted when running on the mono runtime.");
-                    }
-                  }
-
-                  when (exact_spelling && set_exact_spelling == null)
-                    charset |= (0x01 :> SRI.CharSet);
-
-                  when (set_last_error && set_set_last_error == null)
-                    charset |= (0x40 :> SRI.CharSet);
-
-                  def mb = tb.DefinePInvokeMethod (meth.Name, dllName, entry_point,
-                                                   attrs | SR.MethodAttributes.HideBySig | SR.MethodAttributes.PinvokeImpl,
-                                                   SR.CallingConventions.Standard,
-                                                   SystemHelpers.GetSystemType(meth.ReturnType),
-                                                   parm_types_array, callingconv, charset);
-
-                  when (preserve_sig)
-                    mb.SetImplementationFlags (SR.MethodImplAttributes.PreserveSig);
-
-                  when (throw_on_unmappable_set)
-                    _ = set_throw_on.Invoke (mb, SR.BindingFlags.Default, null,
-                                             array [ throw_on_unmappable : object], null);
-
-                  when (best_fit_mapping_set)
-                    _ = set_best_fit.Invoke (mb, SR.BindingFlags.Default, null,
-                                             array [ best_fit_mapping : object], null);
-
-                  when (exact_spelling_set && set_exact_spelling != null)
-                    _ = set_exact_spelling.Invoke (mb, SR.BindingFlags.Default, null,
-                                                   array [ exact_spelling : object], null);
-
-                  when (set_last_error_set && set_set_last_error != null)
-                    _ = set_set_last_error.Invoke (mb, SR.BindingFlags.Default, null,
-                                                   array [ set_last_error : object], null);
-
-                  meth.GetModifiers().custom_attrs =
-                                                      meth.GetModifiers().custom_attrs.Filter(x => x : object != expr);
-                  mb
-
-              | _ => loop (rest)
-            }
-        | [] => null
+          meth.GetModifiers().custom_attrs = meth.GetModifiers().custom_attrs.Filter(x => x : object != expr);
+          return mb
+        }
       }
-      loop (meth.GetModifiers ().GetCustomAttributes ())
+      null
     }
 
     internal CheckConditional(mb : MethodBuilder) : void
@@ -347,7 +298,7 @@ namespace Nemerle.Compiler
       {
         Message.Error(getErrorLocation(),
                       "Conditional attribute is not valid on interface members");
-        Nemerle.Imperative.Return();
+        return;
       }
 
       when(mb.IsConstructor
@@ -356,45 +307,41 @@ namespace Nemerle.Compiler
       {
         Message.Error(getErrorLocation(),
                       "Conditional attribute is not valid on constructor, operator, or explicit interface implementation");
-        Nemerle.Imperative.Return();
+        return;
       }
 
       when(mb.ImplementedMethods is (_, ifaceMember) :: _)
       {
         Message.Error(getErrorLocation(),
                       $"Conditional member `$mb' cannot implement interface member `$ifaceMember'");
-        Nemerle.Imperative.Return();
+        return;
       }
 
       when(mb.GetModifiers().mods %&& NemerleModifiers.Override)
       {
         Message.Error(getErrorLocation(),
                       $"Conditional attribute is not valid on `$mb' because it is an override method");
-        Nemerle.Imperative.Return();
+        return;
       }
 
-      unless(mb.ReturnType.Equals(FixedType.Void()))
+      unless(mb.ReturnType.Equals(Manager.InternalType.Void))
       {
         Message.Error(getErrorLocation(),
                       $"Conditional attribute is not valid on `$mb' because its return type is not void");
-        Nemerle.Imperative.Return();
+        return;
       }
 
       foreach(parm when parm.kind == ParamKind.Out in mb.GetParameters())
       {
         Message.Error(getErrorLocation(),
                       $"conditional member `$mb' cannot have an out parameter");
-        Nemerle.Imperative.Break();
+        break;
       }
     }
 
-    private static is_security_attribute(ti : TypeInfo) : bool
+    private is_security_attribute(ti : TypeInfo) : bool
     {
-      // A security attribute must be imported from an external assembly,
-      // so using ExternalTypeInfo is good enought here.
-      //
-      ti is ExternalTypeInfo
-      && typeof(SSP.SecurityAttribute).IsAssignableFrom ((ti :> ExternalTypeInfo).SystemType)
+      Manager.InternalType.SecurityAttribute_tc.GetMemType().TryProvide(ti.GetMemType());
     }
 
     private compile_expr(env : GlobalEnv, expr : PT.PExpr, typer : Typer, mutable expected : TypeVar = null) : object * FixedType
@@ -448,64 +395,43 @@ namespace Nemerle.Compiler
     }
 
     private pre_compile(env : GlobalEnv, ti : TypeBuilder, attr : TypeInfo, parms : list [PT.PExpr])
-        : SR.ConstructorInfo * list[object] *
-          list[SR.PropertyInfo] * list[object] *
-          list[SR.FieldInfo] * list[object]
+        : DN.MethodDef * SCG.List[DN.CAArgument] * SCG.List[DN.CANamedArgument]
     {
       def typer = Typer(env, ti);
       mutable ctor_parm_types = [];
-      mutable ctor_parms = [];
-      mutable field_infos = [];
-      mutable fields = [];
-      mutable property_infos = [];
-      mutable properties = [];
+      mutable ctorArgs = SCG.List();
+      mutable namedArgs = SCG.List();
 
       foreach (parm in parms)
       {
         | <[ $(n : name) = $expr ]> =>
-            def name = n.Id;
-            def expr = ConstantFolder.FoldConstants(env, expr);
+            def name      = n.Id;
+            def expr      = ConstantFolder.FoldConstants(env, expr);
             def (obj, ty) = compile_expr(env, expr, typer);
-            def problem() { Message.FatalError($"the type $(attr.FullName) has no field nor property named `$name'") };
-            def (is_prop, mem) =
-                                  match (attr.LookupMember(name))
-                                  {
-                                    | [mem] =>
-                                        match (mem.MemberKind)
-                                        {
-                                          | MemberKinds.Field    => (false, mem)
-                                          | MemberKinds.Property => (true, mem)
-                                          | _ => problem()
-                                        }
-                                    | _ => problem()
-                                  };
-            def handle = SystemHelpers.GetSystemMemberInfo(mem);
-            assert(handle != null);
-            match (mem.DeclaringType)
-            {
-              | tb is TypeBuilder => tb.EmitImplementation(); // we can't use a unfinalized attribute
-              | _ => ()
-            }
-            def memberType = mem.GetMemType();
+            def (isField, mem) =
+                match (attr.LookupMember(name))
+                {
+                  | [IMember(MemberKind = MemberKinds.Field)    as mem] => (true, mem)
+                  | [IMember(MemberKind = MemberKinds.Property) as mem] => (false, mem)
+                  | _ => Message.FatalError($"the type $(attr.FullName) has no field nor property named `$name'")
+                };
 
+            when (mem.DeclaringType is TypeBuilder as tb)
+              tb.EmitImplementation(); // we can't use a unfinalized attribute
+
+            def memberType = mem.GetMemType();
             if (ty.Require(memberType))
-              if (is_prop)
-              {
-                property_infos ::= handle :> SR.PropertyInfo;
-                properties ::= obj;
-              }
-              else
-              {
-                field_infos ::= handle :> SR.FieldInfo;
-                fields ::= obj;
-              }
+            {
+              def value = DN.CAArgument(SystemHelpers.GetSystemType(ty), obj);
+              namedArgs.Add(DN.CANamedArgument(isField, SystemHelpers.GetSystemType(memberType), name, value));
+            }
             else
               Message.FatalError ($"the member `$name' has type $(mem.GetMemType()) while the value assigned has type $ty")
 
         | _ =>
             def (obj, ty) = compile_expr(env, parm, typer);
             ctor_parm_types ::= ty;
-            ctor_parms ::= obj;
+            ctorArgs.Add(DN.CAArgument(SystemHelpers.GetSystemType(ty), obj));
       }
 
       def proper_ctor = 
@@ -539,57 +465,32 @@ namespace Nemerle.Compiler
           }
         };
 
-      when(proper_ctor.IsVarArgs)
+      when (proper_ctor.IsVarArgs)
       {
-        def (var_parms, normal_parms) = NList.Partition(ctor_parms,
-          {
-                                                        def required_parms_count = proper_ctor.GetParameters().Length;
-                                                        def actual_parms_count = ctor_parms.Length;
-                                                        mutable count = actual_parms_count - required_parms_count;
-            fun(_)
-            {
-              def is_var_parm = count >= 0;
-              count--;
-              is_var_parm
-            }
-          });
+        def requiredCount = proper_ctor.GetParameters().Length;
 
-        ctor_parms = var_parms.Rev().ToArray() :: normal_parms;
+        def arrayItems = SCG.List();
+        for (mutable index = requiredCount - 1; index < ctorArgs.Count; ++index)
+          arrayItems.Add(ctorArgs[index]);
+
+        ctorArgs.RemoveRange(requiredCount - 1, arrayItems.Count);
+
+        def varArg = DN.CAArgument(SystemHelpers.GetSystemType(proper_ctor.GetParameters().Last.Type), arrayItems);
+        ctorArgs.Add(varArg);
       }
 
-      match(proper_ctor)
-      {
-        | mb is MethodBuilder => mb.HasBeenUsed = true;
-        | _ => ();
-      }
+      when (proper_ctor is MethodBuilder as mb)
+        mb.HasBeenUsed = true;
 
-      ((proper_ctor :> IBackendMethod).GetConstructorInfo(), ctor_parms, property_infos, properties, field_infos, fields)
+      ((proper_ctor :> IBackendMethod).GetMethodInfo(), ctorArgs, namedArgs)
     }
 
-    private do_compile(env : GlobalEnv, ti : TypeBuilder, attr : TypeInfo, parms : list [PT.PExpr]) : SR.Emit.CustomAttributeBuilder * bool
+    private do_compile(env : GlobalEnv, ti : TypeBuilder, attr : TypeInfo, parms : list [PT.PExpr]) : DN.CustomAttribute * bool
     {
-      def (ctor_info, ctor_params, prop_infos, prop_values, field_infos, field_values) = pre_compile (env, ti, attr, parms);
-
-      def attrBuilder = SR.Emit.CustomAttributeBuilder(
-        ctor_info,
-        ctor_params.Reverse().ToArray(),
-        prop_infos.Reverse().ToArray(),
-        prop_values.Reverse().ToArray(),
-        field_infos.Reverse().ToArray(),
-        field_values.Reverse().ToArray());
-      def shouldEmit = if(attr.IsConditional) attr.EvalConditions(env) else true;
+      def (ctor, ctorArgs, namedArgs) = pre_compile(env, ti, attr, parms);
+      def attrBuilder = DN.CustomAttribute(ctor, ctorArgs, namedArgs);
+      def shouldEmit = if (attr.IsConditional) attr.EvalConditions(env) else true;
       (attrBuilder, shouldEmit)
-    }
-
-    private create_instance (env : GlobalEnv, ti : TypeInfo, parms : list [PT.PExpr]) : object
-    {
-      def (ctor_info, ctor_params, prop_infos, prop_values, field_infos, field_values) = pre_compile (env, null, ti, parms);
-      def obj = ctor_info.Invoke(ctor_params.Reverse ().ToArray ());
-
-      NList.Iter2 (prop_infos,  prop_values,  (prop,  val) => prop.SetValue  (obj, val, null));
-      NList.Iter2 (field_infos, field_values, (field, val) => field.SetValue (obj, val));
-
-      obj
     }
   } // AttributeCompilerClass
 } // namespace
