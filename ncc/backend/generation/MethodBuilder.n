@@ -25,17 +25,6 @@ namespace Nemerle.Compiler
       method_base
     }
 
-    internal override CreateEmitBuilder (tb : DN.TypeDef) : void
-    {
-      when (SkipEmiting)
-        return;
-
-      if (MemberKind == MemberKinds.Constructor)
-        CreateConstructorBuilder (tb)
-      else
-        CreateMethodBuilder (tb)
-    }
-
     /**
      * Emits a method's body
      */
@@ -46,10 +35,6 @@ namespace Nemerle.Compiler
 
       def setup_method(emitter)
       {
-        // make sure type is not finalized
-        def type_builder = declaring_type.GetTypeBuilder();
-        assert(type_builder != null);
-
         def mb = GetMethodBuilder();
 
         /* update the entry point settings, if necessary */
@@ -85,7 +70,7 @@ namespace Nemerle.Compiler
                 | None =>
                   when (DeclaringType.TyManager._debug_emit != null)
                     DeclaringType.TyManager._debug_emit.SetUserEntryPoint (SymbolToken (1));
-                  emitter._entry_point = Some (mb : MethodInfo)
+                  emitter._entry_point = Some(mb)
               }
           }
           else
@@ -100,7 +85,7 @@ namespace Nemerle.Compiler
           {
             // VladD2: Возможно вместо declaring_type.GetMemType() надо использовать
             def overridden_info = ILEmitter.GetMethodInfo(overriddenType, overridden);
-            type_builder.DefineMethodOverride(mb, overridden_info)
+            mb.Overrides.Add(overridden_info);
           }
         }
       }
@@ -127,7 +112,6 @@ namespace Nemerle.Compiler
                 fun_header.body = FunBody.ILed ()
 
               | FunBody.Typed =>
-                assign_parameter_indexes(GetMethodBuilder().IsStatic);
                 emit_parameter_attributes();
                 unless (declaring_type.IsDelegate)
                 {
@@ -180,7 +164,10 @@ namespace Nemerle.Compiler
             if (target %&& System.AttributeTargets.Parameter)
             {
               when(shouldEmit)
+              {
+                Util.cassert(parm.builder != null);
                 parm.builder.CustomAttributes.Add(attr);
+              }
               null
             }
             else
@@ -191,27 +178,9 @@ namespace Nemerle.Compiler
 
 
     /**
-     * Assigns an ordinal index to each of a method's parameter
-     */
-    assign_parameter_indexes (is_static : bool) : void
-    {
-      mutable index = if (is_static) 0 else 1;
-
-      foreach (parm in fun_header.Parameters)
-      {
-        parm.decl.SetParmIndex(index, is_by_ref = parm.kind != ParamKind.Normal);
-        index++;
-      }
-    }
-
-
-    /* build the parameter types array */
-    param_types() : array[DN.TypeSig] { GetParameters().MapToArray(p => SystemHelpers.GetSystemType(p.Type)) }
-
-    /**
      * Converts Nemerle modifiers to the CLI method attributes.
      */
-    static make_method_attributes (attrs : NemerleModifiers) : MethodAttributes
+    make_method_attributes (attrs : NemerleModifiers) : MethodAttributes
     {
       mutable result = MethodAttributes.HideBySig;
 
@@ -251,14 +220,20 @@ namespace Nemerle.Compiler
       when (attrs %&& NemerleModifiers.SpecialName)
         result |= MethodAttributes.SpecialName;
 
+      when (Name == ".cctor" || Name == ".ctor")
+        result |= MethodAttributes.RTSpecialName | MethodAttributes.SpecialName;
+
       result
     }
 
     /**
      * Adds a method builder to a type builder
      */
-    CreateMethodBuilder (tb : DN.TypeDef) : void
+    internal override CreateEmitBuilder(tb : DN.TypeDef) : void
     {
+      when (SkipEmiting)
+        return;
+
       // Message.Debug ($"-- AddMethodBuilder: $meth $(Attributes) ");
 
       /* update the modifiers list */
@@ -266,143 +241,74 @@ namespace Nemerle.Compiler
         Attributes |= NemerleModifiers.Virtual;
 
       def attrs = make_method_attributes (Attributes);
-      def attrs =
-        if (Name == ".cctor")
-          attrs | MethodAttributes.RTSpecialName | MethodAttributes.SpecialName
-        else
-          attrs;
 
       /* add the method to the type builder */
-      mutable pinvoke = false;
 
-      try
+      method_base = DN.MethodDefUser(Name, null, attrs);
+      tb.Methods.Add(method_base);
+
+      foreach (t in fun_header.TypeParameters with index)
       {
-        if (fun_header.TypeParameters.IsEmpty)
-        {
-          def parm_types_array = param_types ();
-
-          method_base = Manager.AttributeCompiler.CheckPInvoking (this, tb, attrs, parm_types_array);
-
-          if (method_base == null)
-            method_base = tb.DefineMethod (Name, attrs);
-          else
-            pinvoke = true;
-        }
-        else {
-          method_base = tb.DefineMethod (Name, attrs);
-
-          def names = fun_header.TypeParameters.MapToArray(_.Name);
-
-          def generic_parms = GetMethodBuilder().DefineGenericParameters(names);
-          foreach (x in fun_header.TypeParameters with idx)
-            x.SetGenericBuilder(generic_parms[idx]);
-          foreach (gp in fun_header.TypeParameters)
-            gp.UpdateConstraints ();
-        }
-      }
-      catch
-      {
-        | e => throw System.ApplicationException (
-          $"Can't define method '$Name' (attrs: $attrs) in type '$tb'.\nError: $(e.Message)", e);
+        def gp = DN.GenericParamUser(index :> ushort, DN.GenericParamAttributes.NonVariant, t.Name);
+        method_base.GenericParameters.Add(gp);
+        t.SetGenericBuilder(gp);
       }
 
-      GetMethodBuilder().SetSignature(
-        SystemHelpers.GetSystemType(fun_header.ReturnType),
-        fun_header.GetRetTypeRequiredModifiers(),
-        fun_header.GetRetTypeOptionalModifiers(),
-        param_types(),
-        fun_header.GetParamTypeRequiredModifiers(),
-        fun_header.GetParamTypeOptionalModifiers());
-        
-      Manager.AttributeCompiler.GetPermissionSets(Manager.CoreEnv, modifiers.custom_attrs)
-        .Iter((method_base :> SRE.MethodBuilder).AddDeclarativeSecurity);
+      foreach (t in fun_header.TypeParameters)
+        t.UpdateConstraints();
+
+      mutable callconv = if (IsStatic) DN.CallingConvention.Default else DN.CallingConvention.HasThis;
+      unless (fun_header.TypeParameters.IsEmpty)
+        callconv |= DN.CallingConvention.Generic;
+
+      def retType = fun_header.ReturnType.GetSystemType();
+      def paramTypes = fun_header.Parameters.MapToArray(p => p.Type.GetSystemType());
+      method_base.MethodSig = DN.MethodSig(callconv, fun_header.TypeParameters.Length :> uint, retType, paramTypes);
+      method_base.Parameters.UpdateParameterTypes();
+
+      def pinvoke = Manager.AttributeCompiler.CheckPInvoking(this);
+
+      foreach (pair in Manager.AttributeCompiler.GetPermissionSets(Manager.CoreEnv, modifiers.custom_attrs))
+      {
+        def declSecurity = DN.DeclSecurityUser(pair.Key, pair.Value);
+        method_base.DeclSecurities.Add(declSecurity);
+      }
 
       /* add the runtime modifiers for delegate methods */
       when (DeclaringType.IsDelegate)
       {
         assert(!pinvoke);
-        GetMethodBuilder().SetImplementationFlags(MethodImplAttributes.Runtime | MethodImplAttributes.Managed)
+        method_base.ImplAttributes |= DN.MethodImplAttributes.Runtime | DN.MethodImplAttributes.Managed;
       }
 
       when (!pinvoke && (Attributes & NemerleModifiers.Extern != 0))
         Message.Error (Location, "method is marked `extern' but do not have DllImport attribute");
 
-      // CompileTypedMethod.compile_parms (hd);
-
-      def name_parms (pos, parms)
+      mutable sequence;
+      unless (return_value_modifiers.IsEmpty)
       {
-        match (parms) {
-          | [] => ()
-          | (p : TParameter) :: ps =>
-            p.builder = GetMethodBuilder().DefineParameter (pos, parameter_attributes (p), p.name);
+        def returnDef = DN.ParamDefUser(DN.UTF8String.Empty, sequence, DN.ParamAttributes.Retval);
+        method_base.ParamDefs.Add(returnDef);
+      }
 
-            match (p.default_value)
-            {
-              | Some(TExpr.Literal(lit)) => 
-                def defaultValue = lit.AsObject(InternalType);
-                def type = p.Type.Fix();
-                when (defaultValue != null || !type.IsValueType)
-                  p.builder.SetConstant(defaultValue);
+      foreach (p in fun_header.Parameters)
+      {
+        ++sequence;
+        p.builder = DN.ParamDefUser(p.Name, sequence, parameter_attributes(p));
+        method_base.ParamDefs.Add(p.builder);
+
+        match (p.default_value)
+        {
+          | Some(TExpr.Literal(lit)) => 
+            def defaultValue = lit.AsObject(InternalType);
+            def type = p.Type.Fix();
+            when (defaultValue != null || !type.IsValueType)
+              p.builder.Constant = DN.ConstantUser(defaultValue);
                 
-              | Some(e) => Util.ice($"complex expr $e");
-              | None => {}
-            }
-            name_parms (pos + 1, ps)
+          | Some(e) => Util.ice($"complex expr $e");
+          | None => {}
         }
       }
-      name_parms (1, GetParameters ());
-    }
-
-    /**
-     * Adds a constructor builder to a type builder
-     */
-    CreateConstructorBuilder (tb : DN.TypeDef) : void
-    {
-      // Message.Debug ($"-- AddConstructorBuilder: $this");
-
-      /* create the constructor builder */
-      method_base =
-        tb.DefineConstructor (
-          make_method_attributes (Attributes) |
-          MethodAttributes.RTSpecialName |
-          MethodAttributes.SpecialName,
-          CallingConventions.Standard,
-          param_types (),
-          fun_header.GetParamTypeRequiredModifiers (),
-          fun_header.GetParamTypeOptionalModifiers ());
-
-      Manager.AttributeCompiler.GetPermissionSets(Manager.CoreEnv, modifiers.custom_attrs)
-        .Iter((method_base :> SRE.ConstructorBuilder).AddDeclarativeSecurity);
-
-      /* add the runtime modifiers for delegate constructors */
-      when (DeclaringType.IsDelegate) {
-        GetConstructorInfo ().SetImplementationFlags (
-          MethodImplAttributes.Runtime | MethodImplAttributes.Managed
-        )
-      }
-
-      def name_parms (pos, parms)
-      {
-        match (parms) {
-          | [] => ()
-          | (p : TParameter) :: ps =>
-            p.builder = GetConstructorInfo ().DefineParameter (pos, parameter_attributes (p), p.name);
-
-            match (p.default_value)
-            {
-              | Some(TExpr.Literal(lit)) => 
-                def defaultValue = lit.AsObject(InternalType);
-                def type = p.Type.Fix();
-                when (defaultValue != null || !type.IsValueType)
-                  p.builder.SetConstant(defaultValue);
-                
-              | Some(e) => Util.ice($"complex expr $e");
-              | None => ()
-            }
-            name_parms (pos + 1, ps)
-        }
-      }
-      name_parms (1, GetParameters ());
     }
 
     internal override Compile () : void
@@ -420,40 +326,29 @@ namespace Nemerle.Compiler
 
         unless (modifiers.IsEmpty)
         {
-          def adder =
+          def (mask, prefix) =
             if (MemberKind == MemberKinds.Constructor)
-              fun (target, attribute, shouldEmit)
-              {
-                if (target %&& System.AttributeTargets.Constructor)
-                {
-                  when(shouldEmit)
-                    GetMethodBuilder().CustomAttributes.Add(attribute);
-                  null
-                }
-                else if (attribute != null)
-                  "constructor " + ToString ()
-                else
-                  null
-              }
+              (System.AttributeTargets.Constructor, "constructor ")
             else
-              fun (target, attribute, shouldEmit)
-              {
-                if (target %&& System.AttributeTargets.Method)
-                {
-                  when(shouldEmit)
-                    GetMethodBuilder().CustomAttributes.Add(attribute);
-                  null
-                }
-                else if (attribute != null)
-                  "method " + ToString ()
-                else
-                  null
-              };
+              (System.AttributeTargets.Method, "method ");
 
-          modifiers.SaveCustomAttributes (declaring_type, adder);
+          modifiers.SaveCustomAttributes (declaring_type,
+            fun (target, attribute, shouldEmit)
+            {
+              if (target %&& mask)
+              {
+                when(shouldEmit)
+                  GetMethodBuilder().CustomAttributes.Add(attribute);
+                null
+              }
+              else if (attribute != null)
+                prefix + ToString ()
+              else
+                null
+            });
         }
 
-        unless(return_value_modifiers.IsEmpty)
+        unless (return_value_modifiers.IsEmpty)
         {
           return_value_modifiers.SaveCustomAttributes(declaring_type,
             fun (target, attribute, shouldEmit)
@@ -462,8 +357,9 @@ namespace Nemerle.Compiler
               {
                 when(shouldEmit)
                 {
-                  def ret = GetMethodBuilder().DefineParameter (0, ParameterAttributes.None, null);
-                  ret.SetCustomAttribute (attribute);
+                  def returnParameter = GetMethodBuilder().Parameters.ReturnParameter;
+                  Util.cassert(returnParameter.HasParamDef);
+                  returnParameter.ParamDef.CustomAttributes.Add(attribute);
                 }
                 null
               }
