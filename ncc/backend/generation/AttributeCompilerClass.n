@@ -155,8 +155,8 @@ namespace Nemerle.Compiler
 
     internal MakeEmittedAttribute(attr_type : DN.TypeDef) : DN.CustomAttribute
     {
-      _ = this; // shut up!
-      def constructor_info = attr_type.GetMethod(".ctor");
+      def importer         = GetImporter();
+      def constructor_info = importer.Import(attr_type.GetMethod(".ctor")) :> DN.ICustomAttributeType;
       DN.CustomAttribute(constructor_info)
     }
 
@@ -167,10 +167,11 @@ namespace Nemerle.Compiler
 
     internal MakeEmittedAttribute (attr_type : DN.TypeDef, paramType : DN.TypeDef, value : object) : DN.CustomAttribute
     {
-      _ = this; // shut up!
-      def constructor_info  = attr_type.GetMethod(".ctor", paramType);
+      def importer          = GetImporter();
+      def constructor_info  = importer.Import(attr_type.GetMethod(".ctor", paramType)) :> DN.ICustomAttributeType; 
       def attribute         = DN.CustomAttribute(constructor_info);
-      def attributeArgument = DN.CAArgument(DN.Extensions.ToTypeSig(paramType), value);
+      def argumentType      = DN.Extensions.ToTypeSig(importer.Import(paramType));
+      def attributeArgument = DN.CAArgument(argumentType, value);
       attribute.ConstructorArguments.Add(attributeArgument);
       attribute
     }
@@ -347,21 +348,6 @@ namespace Nemerle.Compiler
 
     private compile_expr(env : GlobalEnv, expr : PT.PExpr, typer : Typer, mutable expected : TypeVar = null) : object * FixedType
     {
-      def compile_type(loc, fixedType)
-      {
-        match (fixedType)
-        {
-          | FixedType.Class
-          | FixedType.Tuple
-          | FixedType.Fun
-          | FixedType.Array
-          | FixedType.Void => 
-            (SystemHelpers.GetSystemType(fixedType), InternalType.Type)
-          | _ => 
-            Message.FatalError(loc, "invalid type in attribute parameter")
-        }
-      }
-
       def expr2 = ConstantFolder.FoldConstants(env, expr);
       when (expr2 == null)
         throw Recovery();
@@ -382,7 +368,21 @@ namespace Nemerle.Compiler
               | _ => Message.FatalError(tExpr.Location, $"Type conversion from $(e.Type) to $t in attribute a argument is unsupported.");
             }
 
-        | TExpr.TypeOf(type) => compile_type(tExpr.Location, type.Fix())
+        | TExpr.TypeOf(type) =>
+          def fixedType = type.Fix();
+          match (fixedType)
+          {
+            | FixedType.Class
+            | FixedType.Tuple
+            | FixedType.Fun
+            | FixedType.Array
+            | FixedType.Void => 
+              mutable importer = GetImporter();
+              (SystemHelpers.GetSystemType(fixedType, ref importer), InternalType.Type)
+            | _ => 
+              Message.FatalError(tExpr.Location, "invalid type in attribute parameter")
+          }
+
         | TExpr.Array(elems, [_]) => 
             def objects      = elems.MapToArray(e => convert(e)[0]);
             def elemType     = tExpr.Type.Fix();
@@ -396,12 +396,13 @@ namespace Nemerle.Compiler
     }
 
     private pre_compile(env : GlobalEnv, ti : TypeBuilder, attr : TypeInfo, parms : list [PT.PExpr])
-        : DN.MethodDef * SCG.List[DN.CAArgument] * SCG.List[DN.CANamedArgument]
+        : DN.ICustomAttributeType * SCG.List[DN.CAArgument] * SCG.List[DN.CANamedArgument]
     {
-      def typer = Typer(env, ti);
+      mutable importer        = GetImporter();
+      def typer               = Typer(env, ti);
       mutable ctor_parm_types = [];
-      mutable ctorArgs = SCG.List();
-      mutable namedArgs = SCG.List();
+      mutable ctorArgs        = SCG.List();
+      mutable namedArgs       = SCG.List();
 
       foreach (parm in parms)
       {
@@ -423,8 +424,8 @@ namespace Nemerle.Compiler
             def memberType = mem.GetMemType();
             if (ty.Require(memberType))
             {
-              def value = DN.CAArgument(SystemHelpers.GetSystemType(ty), obj);
-              namedArgs.Add(DN.CANamedArgument(isField, SystemHelpers.GetSystemType(memberType), name, value));
+              def value = DN.CAArgument(SystemHelpers.GetSystemType(ty, ref importer), obj);
+              namedArgs.Add(DN.CANamedArgument(isField, SystemHelpers.GetSystemType(memberType, ref importer), name, value));
             }
             else
               Message.FatalError ($"the member `$name' has type $(mem.GetMemType()) while the value assigned has type $ty")
@@ -432,7 +433,7 @@ namespace Nemerle.Compiler
         | _ =>
             def (obj, ty) = compile_expr(env, parm, typer);
             ctor_parm_types ::= ty;
-            ctorArgs.Add(DN.CAArgument(SystemHelpers.GetSystemType(ty), obj));
+            ctorArgs.Add(DN.CAArgument(SystemHelpers.GetSystemType(ty, ref importer), obj));
       }
 
       def proper_ctor = 
@@ -470,7 +471,7 @@ namespace Nemerle.Compiler
       {
         def parameters    = proper_ctor.GetParameters();
         def requiredCount = parameters.Length;
-        def varArgType    = SystemHelpers.GetSystemType(parameters.Last.Type);
+        def varArgType    = SystemHelpers.GetSystemType(parameters.Last.Type, ref importer);
         when (requiredCount != ctorArgs.Count || !DN.TypeEqualityComparer.Instance.Equals(ctorArgs[ctorArgs.Count - 1].Type, varArgType))
         {
           def arrayItems = SCG.List();
@@ -487,7 +488,8 @@ namespace Nemerle.Compiler
       when (proper_ctor is MethodBuilder as mb)
         mb.HasBeenUsed = true;
 
-      ((proper_ctor :> IBackendMethod).GetMethodInfo(), ctorArgs, namedArgs)
+      def ctor = importer.Import((proper_ctor :> IBackendMethod).GetMethodInfo()) :> DN.ICustomAttributeType;
+      (ctor, ctorArgs, namedArgs)
     }
 
     private do_compile(env : GlobalEnv, ti : TypeBuilder, attr : TypeInfo, parms : list [PT.PExpr]) : DN.CustomAttribute * bool
@@ -497,5 +499,11 @@ namespace Nemerle.Compiler
       def shouldEmit = if (attr.IsConditional) attr.EvalConditions(env) else true;
       (attrBuilder, shouldEmit)
     }
+
+    private GetImporter() : DN.Importer
+    {
+      DN.Importer(Manager.Hierarchy._module_builder, DN.ImporterOptions.TryToUseDefs);
+    }
+
   } // AttributeCompilerClass
 } // namespace
