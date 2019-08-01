@@ -5,13 +5,12 @@ using Nemerle.Utility;
 
 using System;
 using System.IO;
-using System.Runtime.InteropServices;
-using System.Diagnostics.SymbolStore;
 
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Logging;
 
 using dnlib.DotNet.Emit;
+using dnlib.DotNet.Pdb;
 
 using SCG = System.Collections.Generic;
 using DN = dnlib.DotNet;
@@ -42,7 +41,7 @@ namespace Nemerle.Compiler
     private _method_builder             : MethodBuilder;
     private _methodDef                  : DN.MethodDef;
     private mutable _method_start_label : Label;
-    private mutable _debug_doc          : ISymbolDocumentWriter;
+    private mutable _debug_doc          : PdbDocument;
     private mutable _is_ctor            : bool;
     private mutable _is_lambda          : bool;
     private _labels                     : Hashtable [int, Label] = Hashtable ();
@@ -87,8 +86,6 @@ namespace Nemerle.Compiler
 
     public Run () : void
     {
-      _ilg.SetDocument (_debug_doc);
-
       _method_start_label = _ilg.DefineLabel ();
       _ilg.MarkLabel (_method_start_label);
 
@@ -155,11 +152,10 @@ namespace Nemerle.Compiler
     }
 
     [Nemerle.Memoize(Scope=Instance, Synchronized=true)]
-    private DefineDebugDocument (fileIndex : int) : ISymbolDocumentWriter
+    private DefineDebugDocument (fileIndex : int) : PdbDocument
     {
       if (fileIndex != 0) // not Location.Default
-        null //_module_builder.DefineDocument (Path.GetFullPath (Location.GetFileName(fileIndex)), 
-             //  SymDocumentType.Text, SymLanguageType.ILAssembly, SymLanguageVendor.Microsoft);
+        Manager.Hierarchy.CreatePdbDocument(Path.GetFullPath(Location.GetFileName(fileIndex)))
       else
       {
         Message.Warning ("missing debug location, this is probably some internal compiler error"); 
@@ -2020,9 +2016,8 @@ namespace Nemerle.Compiler
           make_ref_type(val.Type.GetSystemType (ref _importer))
         else val.Type.GetSystemType (ref _importer);
 
-      def local_slot = _ilg.DeclareLocal(ty, val.IsPinned);
-      //when (IsDebugEnabled && val.Location.IsSourceAvailable)
-      //  local_slot.SetLocalSymInfo (val.Name);
+      def pdbName = if (IsDebugEnabled && val.Location.IsSourceAvailable) val.Name else null;
+      def local_slot = _ilg.DeclareLocal(ty, val.IsPinned, pdbName);
       val.LocalSlot = local_slot;
       local_slot
     }
@@ -2316,25 +2311,36 @@ namespace Nemerle.Compiler
 
     class NemerleGenerator
     {
-      private _il                 : SCG.List[Instruction]      = SCG.List();
-      private _exceptions         : SCG.List[ExceptionHandler] = SCG.List();
-      private _locals             : SCG.List[Local]            = SCG.List();
-      private _jumpedLabels       : SCG.HashSet[Label]         = SCG.HashSet();
-      private _markedLabels       : SCG.Queue[Label]           = SCG.Queue();
-      private _exceptionLabels    : SCG.Stack[ExceptionLabels] = SCG.Stack();
-      private mutable _throw      : bool;
-      private mutable _marked     : bool;
-      private mutable _first_code : bool = true;
-      private mutable _document   : ISymbolDocumentWriter;
+      private _il                    : SCG.List[Instruction]      = SCG.List();
+      private _exceptions            : SCG.List[ExceptionHandler] = SCG.List();
+      private _locals                : SCG.List[Local]            = SCG.List();
+      private _jumpedLabels          : SCG.HashSet[Label]         = SCG.HashSet();
+      private _markedLabels          : SCG.Queue[Label]           = SCG.Queue();
+      private _exceptionLabels       : SCG.Stack[ExceptionLabels] = SCG.Stack();
+      private _pdbScopes             : SCG.Stack[DN.Pdb.PdbScope] = SCG.Stack();
+      private mutable _throw         : bool;
+      private mutable _sequencePoint : SequencePoint;
+
+      public this()
+      {
+        _pdbScopes.Push(PdbScope());
+      }
 
       public CreateBody() : CilBody
       {
-        CilBody(true, _il, _exceptions, _locals)
-      }
+        def body = CilBody(true, _il, _exceptions, _locals);
+        
+        when (_il.Count > 0)
+        {
+          def rootScope = _pdbScopes.Peek();
+          rootScope.Start = _il[0];
 
-      public SetDocument (document : ISymbolDocumentWriter) : void
-      {
-        _document = document;
+          def pdbMethod = PdbMethod();
+          pdbMethod.Scope = rootScope;
+
+          body.PdbMethod = pdbMethod;
+        }
+        body
       }
 
       public BeginExceptionBlock() : void
@@ -2423,17 +2429,37 @@ namespace Nemerle.Compiler
         MarkLabel(labels.Exit, true);
       }
 
-      public BeginScope () : void { /*_ilg.BeginScope()*/ }
-      public EndScope   () : void { /*_ilg.EndScope  ()*/ }
+      public BeginScope() : void
+      {
+        def currentScope = _pdbScopes.Peek();
 
-      public DeclareLocal (localType : DN.TypeSig, pinned : bool = false) : Local
+        def newScope = PdbScope();
+        currentScope.Scopes.Add(newScope);
+        _pdbScopes.Push(newScope);
+
+        def label = DefineLabel();
+        MarkLabel(label);
+        ResolveLabel(label, fun(target) { newScope.Start = target });
+      }
+
+      public EndScope() : void
+      {
+        def scope = _pdbScopes.Pop();
+        def label = DefineLabel();
+        MarkLabel(label);
+        ResolveLabel(label, fun(target) { scope.End = target });
+      }
+
+      public DeclareLocal(localType : DN.TypeSig, pinned : bool = false, pdbName : string = null) : Local
       {
         def local = Local(if (pinned) DN.PinnedSig(localType) else localType);
         _locals.Add(local);
+        when (pdbName : object != null)
+          _pdbScopes.Peek().Variables.Add(PdbLocal(local, pdbName, PdbLocalAttributes.None));
         local
       }
 
-      public DefineLabel () : Label { Label() }
+      public DefineLabel () : Label { _ = this; Label() }
 
       public Emit(flag   : bool)                           : void { Emit(if (flag) OpCodes.Ldc_I4_1 else OpCodes.Ldc_I4_0) }
       public Emit(number : int)                            : void { Add(Instruction.CreateLdcI4(number)) }
@@ -2481,27 +2507,13 @@ namespace Nemerle.Compiler
           _throw = false;
 
         _markedLabels.Enqueue(label);
-
-        when (_marked)
-        {
-          _marked = false;
-
-          // Hide from the debugger.
-          // _ilg.MarkSequencePoint (_document, 0xFeeFee, 0, 0xFeeFee, 0);
-          if (!_throw)
-            Emit(OpCodes.Nop);
-          else
-            Emit(OpCodes.Br, label); // VladD2: HACK: This hack hide a dead code. We must remove this hack and implement a full calculation and elimination of dead code.
-        }
       }
 
-      public MarkSequencePoint (document : ISymbolDocumentWriter, startLine : int, startColumn : int, endLine : int, endColumn : int) : void
+      public MarkSequencePoint(document : PdbDocument, startLine : int, startColumn : int, endLine : int, endColumn : int) : void
       {
-        unless (_throw)
+        when (!_throw && document != null)
         {
-          _marked = true;
-
-          // _ilg.MarkSequencePoint (document, startLine, startColumn, endLine, endColumn);
+          _sequencePoint = CreateSequencePoint(document, startLine, startColumn, endLine, endColumn);
           Emit(OpCodes.Nop);
         }
       }
@@ -2521,6 +2533,9 @@ namespace Nemerle.Compiler
         def index = _il.Count;
         _il.Add(instruction);
 
+        instruction.SequencePoint = _sequencePoint;
+        _sequencePoint = null;
+
         while (_markedLabels.Count > 0)
         {
           def label = _markedLabels.Dequeue();
@@ -2530,14 +2545,6 @@ namespace Nemerle.Compiler
           foreach (callback in label.ResolveCallbacks)
             callback(instruction);
           label.ResolveCallbacks = null;
-        }
-
-        when (_first_code)
-        {
-          _first_code = false;
-
-          //when (_document != null && !_marked)
-          //  _ilg.MarkSequencePoint (_document, 0xFeeFee, 0, 0xFeeFee, 0);
         }
 
         match (instruction.OpCode.Code)
@@ -2572,6 +2579,17 @@ namespace Nemerle.Compiler
             Emit(OpCodes.Leave, labels.Exit);
         }
         MarkLabel(labels.CurrentEnd);
+      }
+
+      private static CreateSequencePoint(document : PdbDocument, startLine : int, startColumn : int, endLine : int, endColumn : int) : SequencePoint
+      {
+        def sequencePoint         = SequencePoint();
+        sequencePoint.Document    = document;
+        sequencePoint.StartLine   = startLine;
+        sequencePoint.StartColumn = startColumn;
+        sequencePoint.EndLine     = endLine;
+        sequencePoint.EndColumn   = endColumn;
+        sequencePoint
       }
     }
 
