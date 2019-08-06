@@ -1,0 +1,1531 @@
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.Text;
+
+using NStack = Nemerle.Collections.Stack;
+using SCG = System.Collections.Generic;
+
+namespace Nemerle.Compiler
+{
+  [ManagerAccess]
+  public class Lexer
+  {
+    public          RemappingLocation : Location { get; }
+    [Accessor]
+    private         _source       : SourceSnapshot;
+    private mutable _reader       : string;
+    private mutable _prevPos      : int;
+    private mutable _pos          : int;
+    private         _buffer       : StringBuilder = StringBuilder();
+    private mutable _isPendingChar : bool;  // is there already some first char
+    private mutable _pendingChar   : char;
+    private mutable _intoCode     : bool; // _defines and undefines allowed only before code
+    public  mutable Keywords : Set [string];
+    private mutable comment_loc : Location;
+    public          CommentLocations  : SCG.List[Location * bool] = SCG.List();
+    private         _commentLocations : SCG.Queue[Location * bool]  = SCG.Queue();
+    private         _comments         : List[Comment] = List(64);
+    public          IsEof : bool { get; private set; }
+
+    private directives : List[Directive] = List(16);
+    [Accessor] mutable incompleteRegions : list[Region] = [];
+    [Accessor] mutable regions           : list[Region] = [];
+    
+    public this([NotNull] manager : ManagerClass, [NotNull] sourse : SourceSnapshot, remappingLocation : Location)
+    {
+      RemappingLocation = remappingLocation;
+      _reader = sourse.Text;
+      Manager = manager;
+      _source = sourse;
+      _isPendingChar = false;
+      _whiteBeginning = true;
+      _defines         = Manager.Options.CommandDefines;
+      eating_stack    = Stack();
+      eating_now      = 0;
+    }
+
+    public Location : Location { get { Location(_source, _prevPos, _pos) } }
+
+    public GetComments()   : array[Comment]   { _comments.ToArray() }
+    public GetDirectives() : array[Directive] { directives.ToArray() }
+
+    protected internal virtual OnAfterUsingDirectiveParse(
+      location      : Location,
+      name          : list[string],
+      nameLocations : list[Location],
+      alias         : string,
+      aliasLocation : Location,
+      beforeEnv     : GlobalEnv,
+      afterEnv      : GlobalEnv
+      ) : void
+    {
+      def handler = Manager._afterUsingDirectiveParse;
+      when (handler != null)
+        handler(location, name, nameLocations, alias, aliasLocation, beforeEnv, afterEnv);
+    }
+
+    protected internal virtual OnBeforeNamespaceParse() : void
+    {
+      def handler = Manager._beforeNamespaceParse;
+       when (handler != null)
+        handler();
+    }
+
+    protected internal virtual OnAfterNamespaceParse(
+      location               : Location,
+      name                   : list [string],
+      nameLocations          : list [Location],
+      outsideEnv             : GlobalEnv,
+      insideEnv              : GlobalEnv,
+      headerLocation         : Location,
+      bodyOpenTokenLocation  : Location,
+      bodyCloseTokenLocation : Location,
+      ) : void
+    {
+      def handler = Manager._afterNamespaceParse;
+      when (handler != null)
+        handler(location, name, nameLocations, outsideEnv, insideEnv, headerLocation, bodyOpenTokenLocation, bodyCloseTokenLocation);
+    }
+
+    private   register_directive(position : int) : void
+    {
+      def end = get_position();
+      def length = end - position;
+      directives.Add(Directive(position, length));
+    }
+
+    #region Indentation syntax
+    // Variables for indentation-based syntax
+    // The location where a token should be automatically inserted
+    private   mutable insert_location : Location;
+    // Used by GetToken() to store that token that it postpones when insert_indent = true
+    protected  mutable tok_pending : Token;
+    // Whether we are currently adding whitespaces to indentString
+    private   mutable counting_indentation : bool;
+    // Whether GetToken() should return a Token.Indent
+    private   mutable insert_indent : bool;
+    // String holding the current line's indent
+    private   mutable indent_string : string;
+
+    [Accessor]
+    private   mutable in_indentation_mode : bool;
+
+    public SwitchToIndentationMode() : void
+    {
+      in_indentation_mode = true;
+      counting_indentation = true;
+      indent_string = "";
+    }
+
+    pragma_indent() : void
+    {
+      unless (in_indentation_mode)
+      {
+        SwitchToIndentationMode();
+        _ = read_to_the_end_of_line();
+        throw PragmaIndent()
+      }
+    }
+    #endregion
+
+    #region PREPROCESSOR VARIABLES
+    /** if there was only white chars from beginnig of line */
+    private   mutable _whiteBeginning : bool;
+
+    private   mutable eating_stack : NStack[int]; // stack of states (nested #if)
+
+    ///  states:
+    ///   now processing:
+    ///    -4 region
+    ///    -3 else
+    ///    -1 if/elif
+    ///     0 no preprocessor
+    ///   not processing:
+    ///     1 if/elif, but some other block possibly will be processed
+    ///     2 if/elif, and other blocks won't be processed
+    ///      (there already was processed block, or parent block isn't processed)
+    ///     3 else
+    ///     4 region
+    private   mutable eating_now : int;
+
+    [Accessor]
+    private   mutable _defines : Map[string, bool];
+
+    mutable is_check_wrong_chars : bool;
+
+    #endregion
+
+    public BeginParseFile() : void
+    {
+      IsEof                = false;
+      is_check_wrong_chars = Manager.Options.Warnings.IsEnabled(10002);
+    }
+
+    public IsKeyword(str : string) : bool
+    {
+      when(Keywords == null)
+        throw InvalidOperationException("Keywords property of lexer is not initialized!");
+      Keywords.Contains(str)
+    }
+
+    public virtual GetToken() : Token
+    {
+      if (tok_pending != null)
+      {
+        def tok = tok_pending;
+        tok_pending = null;
+        tok
+      }
+      else
+      {
+        unless (_isPendingChar)
+        {
+          _ = eat_whitespace();
+          
+          when (_commentLocations.Count > 0)
+          {
+            def (loc, isMultiline) = _commentLocations.Dequeue();
+            return Token.Comment(loc, GetCommentText(loc, isMultiline));
+          }
+          
+          _prevPos = _pos;
+        }
+        
+        if (insert_indent)
+        {
+          insert_indent = false;
+          Token.Indent(insert_location, indent_string)
+        }
+        else
+        {
+          def prevPos = get_position();
+          def tok = do_get_token();
+
+          if (tok.Location.FileIndex == 0)
+            tok.Location = Location(_source, prevPos, _pos);
+          else
+            tok.Location = Location(_source, prevPos, tok.Location.EndPos);
+          tok
+        }
+      }
+    }
+
+    private GetCommentText(loc : Location, isMultiline : bool) : string
+    {
+      try
+      {
+        mutable start = loc.StartPos + 2;
+        def text = loc.Source.OriginalText;
+        when (text.Length >= 3 && text[start] == if (isMultiline) '*' else '/')
+          start++;
+        def end = loc.EndPos - if (isMultiline) 2 else 0;
+        def end2 = end - start;
+        if (end2 < 0) "" else text.Substring(start, end - start)
+      }
+      catch
+      {
+        | e =>
+          assert2(false, e.ToString());
+          ""
+      }
+    }
+
+    private try_read_comment() : bool
+    {
+      def startLocation = this.Location;
+
+      match (peek_or_white())
+      {
+        | '/' =>
+          def commentPosition = get_position() - 1;
+          // we are for sure in one line comment
+          
+          _ = read();
+          def isDocument = peek() == '/';
+          try
+          {
+            while (!IsEndOfLine(read_or_eol()))
+              ();
+
+            def finalLoc = Location(_source, commentPosition, _pos);
+            _commentLocations.Enqueue(finalLoc, false);
+            CommentLocations.Add(finalLoc, false);
+            _comments.Add(Comment(finalLoc, isMultiline=false, isDocument=isDocument));
+          }
+          catch { _ is Lexer.Error => _whiteBeginning = true; };
+
+          _whiteBeginning = true;
+          true
+
+        | '*' =>
+          def commentPosition = get_position() - 1;
+          _whiteBeginning = false;
+          _ = read();
+          def isDocument = peek() == '*';
+
+          def loop1(seen_star, store)
+          {
+            def cc = read();
+            match (cc)
+            {
+              | '*' => loop1(true, store)
+              | '/' when seen_star =>
+                def finalLoc = Location(_source, commentPosition, _pos);
+                _commentLocations.Enqueue(finalLoc, true);
+                CommentLocations.Add(finalLoc, true);
+                _comments.Add(Comment(finalLoc, isMultiline=true, isDocument=isDocument));
+                
+              | '\0' =>
+                Message.Error(startLocation, "End-of-file found, '*/' expected!") // like MS csc
+              | _commentChar => loop1(false, store)
+            }
+          };
+          if (Manager.Options.LexerStoreComments && peek_or_white() == '*')
+          {
+            _ = read();
+            loop1(true, true);
+          }
+          else
+            loop1(false, false);
+
+          _whiteBeginning = false;
+          true
+
+        | _ =>
+          _whiteBeginning = false;
+          false
+      }
+    }
+    
+    private   peek() : char
+    {
+      if (_pos < _reader.Length)
+        _reader[_pos]
+      else
+        '\0'
+    }
+
+    private   peek_or_white() : char
+    {
+      if (_pos < _reader.Length)
+        _reader[_pos]
+      else
+        ' '
+    }
+
+    private   get_position() : int { _pos }
+
+    private   read_from_input() : char
+    {
+      if (_pos < _reader.Length)
+      {
+        def ch = _reader[_pos];
+        ++_pos;
+        ch
+      }
+      else
+        '\0'
+    }
+
+    /// returns true if there is some character in the input pending
+    /// or false if we are at the end of file
+    private   eat_whitespace() : bool
+    {
+      mutable eof = false;
+
+      // Location where possible automatic token insertion will take place
+      when (in_indentation_mode)
+        insert_location = Location;
+
+      def loop(shift : bool)
+      {
+        when (shift)
+          ignore(read());
+
+        def ch =
+          try peek()
+          catch { _ is Lexer.Error => eof = true; '_' };
+
+        when (ch == '\0')
+          eof = true;
+
+        if (eof)
+        {
+          if (eating_now > 0)
+          {
+            Message.Error(this.Location, "unexpected end of file before finishing preprocessor directive");
+            eating_now = 0;
+          }
+          else
+            when (!eating_stack.IsEmpty)
+              Message.Error(this.Location, "there are still open preprocessing directives at the end of file");
+          false // eof, so there are no chars pending
+        }
+        else
+          match (ch)
+          {
+            | ' ' | '\t' => loop(true)
+            | '\n' | '\r' | '\u2028' | '\u2029' | '\u0085' => // Single \r interpret as new line!
+              _whiteBeginning = true;
+              loop(true)
+
+            | '/' =>
+              _ = read();
+              if (try_read_comment())
+                loop(false)
+              else if (eating_now > 0)
+                loop(false)
+              else
+              {
+                _pendingChar = '/';
+                _isPendingChar = true;
+                true
+              }
+
+            | '#' =>
+              if (_whiteBeginning)
+              {
+                _prevPos = _pos;
+                def loc = this.Location;
+                _ = read();
+                unless (peek() == '>')
+                  parse_preprocessor(loc);
+                loop (false)
+              }
+              else
+              {
+                Message.Error(Location(_source, _pos, _pos + 1), "Preprocessor directives must appear as the first non-whitespace character on a line");
+                while (!IsEndOfLine(read_or_eol()))
+                  ();
+
+                loop(false);
+              }
+
+            | _ =>
+              _whiteBeginning = false;
+              // eat futher or just return that there is nonwhite character next
+              if (eating_now > 0) loop(true) else true
+          }
+      };
+      loop(false)
+    }
+    
+    public static IsEndOfLine(ch : char) : bool
+    {
+      | '\n' | '\u2028' | '\u2029' | '\u0085' => true
+      | _ => false
+    }
+
+    private do_get_token() : Token
+    {
+      def ch =
+        if (_isPendingChar)
+        {
+          _isPendingChar = false;
+          _pendingChar
+        }
+        else
+        {
+          try read()
+          catch { _ is Lexer.Error => ' ' }
+        };
+
+      match (ch)
+      {
+        | '"'  => get_string('"', false)
+        | '\'' => get_id('\'')
+        | '.'  =>
+          def next = peek_or_white();
+          if (Char.IsDigit(next))
+            get_number(ch)
+          else if (next == '.')
+          {
+            _ = read();
+            Token.Operator("..")
+          } else
+            Token.Operator(".")
+
+        | '{' => Token.BeginBrace(generated = false)
+        | '}' => Token.EndBrace(generated = false)
+        | '[' => Token.BeginSquare()
+        | ']' =>
+          if (peek_or_white() == '>')
+          {
+            ignore(read());
+            Token.EndQuote()
+          }
+          else
+            Token.EndSquare()
+        | '(' => Token.BeginRound()
+        | ')' => Token.EndRound()
+        | ',' => Token.Comma()
+        | ';' => Token.Semicolon(generated = false)
+        | '<' when peek() == '[' => ignore(read()); Token.BeginQuote()
+        | '<' when peek() == '#' => ignore(read()); get_recursive_string()
+        | '@' =>
+          def next = read();
+          if (next == '#') // Completion token.
+            Token.IdentifierToComplete("")
+          else if (IsOperatorChar(next))
+            match (get_op(next))
+            {
+              | Token.Operator(s) => Token.Identifier(s)
+              | _ => Util.ice()
+            }
+          else if (IsIdBeginning(next))
+            match (get_id(next))
+            {
+              | Token.Identifier(x)
+              | Token.Keyword(x) => Token.QuotedIdentifier(x)
+              | _ => Util.ice()
+            }
+          else if (next == '"')
+            get_monkey_string()
+          else if (next == '(')
+          {
+            def next = read();
+            if (next == ')')
+              Token.Identifier("()")
+            else
+              throw Error("expecting pair of parenthesis after '@'")
+          }
+          else
+            throw Error("expecting operator, identifier or string literal after '@'")
+
+        | '*' =>
+          if (peek_or_white() == '*')
+            get_op(ch)
+          else
+            get_op(ch)
+
+        | '/' => get_op(ch)
+        | '%' | '\\' | '`' => get_op(ch)
+        | '-' => if (peek_or_white() != '.') get_op(ch) else Token.Operator("-")
+        | '+' => if (peek_or_white() != '.') get_op(ch) else Token.Operator("+")
+        | '$' =>
+          def dollarPos = get_position() - 1;
+          def isWhitespaceExists = eat_whitespace();
+          def next = peek();
+          def strPos = get_position() - 1;
+
+          match (next)
+          {
+            | '<' when peek() == '#'
+            | '"' | '@' =>
+              // we will not warn about $ in string literal in this mode
+              def c = read();
+              def next = peek();
+
+              def str =
+                if (c == '"')
+                  get_string(c, true)
+                else if (c == '<' && next == '#')
+                {
+                  ignore(read());
+                  get_recursive_string()
+                }
+                else
+                {
+                  unless (read() == '"')
+                    Message.Error(this.Location, "expected string literal after @");
+
+                  get_monkey_string()
+                }
+
+              def dolLoc = Location(_source, dollarPos, dollarPos + 1);
+              str.Location = Location(_source, strPos, get_position());
+              def groupLoc = Location(_source, dollarPos, get_position());
+              def dolTok = Token.Operator(dolLoc, "$");
+              dolTok.Next = str;
+              Token.RoundGroup(groupLoc, Token.LooseGroup(groupLoc, dolTok), null, null)
+
+            | _ =>
+              if (isWhitespaceExists) Token.Operator("$") else get_op('$')
+          }
+
+        | '^' | '~' | '?' | '#' => get_op(ch)
+        | '=' | '<' | '>' | '!' => get_op(ch)
+        | '&' => get_op(ch)
+        | '|' => get_op(ch)
+        | ':' => get_op(ch)
+
+        // after executing eat_whitespace it is the only possibility for space
+        // (try..catch above)
+        | ' ' => Token.EndOfFile()
+        | '\0' => Token.EndOfFile()
+        | _ =>
+          if (Char.IsDigit(ch))
+            get_number(ch)
+          else
+            if (IsIdBeginning(ch))
+              get_id(ch)
+            else
+              throw Error($"invalid character: `$ch'")
+      }
+    }
+
+    private parse_preprocessor(startLocation : Location) : void
+    {
+      def directivePosition = get_position() - 1;
+
+      def eat_spaces() : void
+      {
+        mutable c = peek();
+
+        while (Char.IsWhiteSpace(c) && !IsEndOfLine(c))
+        {
+          ignore(read());
+          c = peek();
+        }
+      }
+
+      def read_word() : string
+      {
+        eat_spaces();
+        def word = StringBuilder();
+
+        try
+        {
+          while (IsIdBeginning(peek_or_white()) || char.IsDigit(peek_or_white()))
+            _ = word.Append(read())
+        }
+        catch { _ is Lexer.Error => () };
+
+        word.ToString()
+      }
+
+      def directive = read_word();
+
+      when (directive == "")
+        throw Lexer.Error("expected preprocessing directive after `#'");
+
+      match (directive)
+      {
+        | "if" =>
+          eating_stack.Push(eating_now);
+          def now = PreprocessorEvaluator.EvalCondition(_defines, read_to_the_end_of_line ().Trim ());
+          if (eating_now > 0)
+            eating_now = 2
+          else
+            eating_now = if (now) -1 else 1
+
+        | "elif" =>
+          def now = PreprocessorEvaluator.EvalCondition(_defines, read_to_the_end_of_line().Trim());
+          match (eating_now)
+          {
+            | -4 | 4 => throw Lexer.Error("unexpected #elif inside region")
+            | -3 | 3 => throw Lexer.Error("unexpected #elif after #else")
+            | 1 => eating_now = if (now) -1 else 1
+            | -1 | 2 => eating_now = 2
+            | _ => throw Lexer.Error("unbalanced preprocessing directives")
+          }
+
+        | "else" => eat_spaces();
+          when (read_to_the_end_of_line() != "")
+            throw Lexer.Error("extra tokens after #else");
+          match (eating_now)
+          {
+            | -4 | 4 => throw Lexer.Error("unexpected #else inside region")
+            | -3 | 3 => throw Lexer.Error("unexpected #else after #else")
+            | 1      => eating_now = -3
+            | -1 | 2 => eating_now = 3
+            | _      => throw Lexer.Error("unbalanced preprocessing directives")
+          }
+
+        | "endif" => eat_spaces();
+          when (read_to_the_end_of_line() != "")
+            throw Lexer.Error("extra tokens after #endif");
+          match (eating_now)
+          {
+            | -4 | 4 => throw Lexer.Error("unexpected #endif inside region")
+            | 0 => throw Lexer.Error("unbalanced preprocessing directives")
+            | _ => ()
+          }
+          eating_now = eating_stack.Pop();
+
+        | "line" => eat_spaces();
+          mutable c = peek_or_white();
+
+          def (new_line, new_file) =
+            if (c == 'd')
+            {
+              if (read_word() == "default")
+              {
+                eat_spaces();
+                when (read_to_the_end_of_line() != "")
+                  throw Lexer.Error("extra tokens after directive");
+                (-1, null)
+              }
+              else
+                throw Lexer.Error("expecting line number or `default' indicator")
+            }
+            else
+            {
+              def num = StringBuilder();
+              def loop()
+              {
+                when (char.IsDigit(c))
+                {
+                  ignore(num.Append(read()));
+                  c = peek_or_white();
+                  loop();
+                }
+              }
+
+              loop();
+
+              if (num.Length > 0)
+                (Int32.Parse(num.ToString()), read_to_the_end_of_line().Trim().Trim('\"'))
+              else
+              {
+                Message.Error(this.Location, "expecting line number or `default' indicator");
+                _ = read_to_the_end_of_line();
+                (-1, null)
+              }
+            };
+
+        | "error" => 
+          match (eating_now)
+          {
+            | -1 | -3 => Message.Error(this.Location, read_to_the_end_of_line().Trim());
+            | _ => ()
+          }
+
+        | "warning" =>
+          match (eating_now)
+          {
+            | -1 | -3 => Message.Warning(this.Location, read_to_the_end_of_line().Trim());
+            | _ => ()
+          }
+        | "region" =>
+          eating_stack.Push(eating_now);
+          eating_now = if (eating_now > 0) 4 else -4;
+          incompleteRegions ::= Region(startLocation, read_to_the_end_of_line(pedantic_comment_check = false));
+
+        | "endregion" =>
+          when (eating_now != 4 && eating_now != -4)
+            throw Lexer.Error("Unexpected #endregion");
+
+          eating_now = eating_stack.Pop();
+
+          match (incompleteRegions)
+          {
+            | h :: t =>
+              h.SetEndRegion(this.Location);
+              regions ::= h;
+              incompleteRegions = t;
+            | [] => throw Lexer.Error("Unexpected preprocessor directive")
+          }
+
+          _ = read_to_the_end_of_line();
+
+        | "define" =>
+          when(_intoCode)
+          {
+            Message.Error(Location, "Cannot define/undefine preprocessor symbols after first token in file");
+            _ = read_to_the_end_of_line(); // skip line
+          }
+          def w = read_word();
+          when (w == "")
+            throw Lexer.Error("#define should be followed by name to define");
+          when (w == "true" || w == "false")
+            throw Lexer.Error($ "Attempt to define ``$w''");
+          when(eating_now <= 0)
+            _defines = _defines.Replace(w, true);
+          _ = read_to_the_end_of_line();
+
+        | "undef" =>
+          when(_intoCode)
+          {
+            Message.Error("Cannot define/undefine preprocessor symbols after first token in file");
+            _ = read_to_the_end_of_line(); // skip line
+          }
+          def w = read_word();
+          when (w == "")
+            throw Lexer.Error("#undef should be followed by name to undefine");
+          when (w == "true" || w == "false")
+            throw Lexer.Error($ "Attempt to undefine ``$w''");
+          when(eating_now <= 0)
+            _defines = _defines.Replace(w, false);
+          _ = read_to_the_end_of_line();
+
+        | "pragma" =>
+          match (read_word())
+          {
+            | "warning" =>
+              def negate =
+                match (read_word())
+                {
+                  | "disable" => 1
+                  | "restore" => -1
+                  | s =>
+                    throw Lexer.Error($ "#pragma should be followed by ``disable'' or ``restore'', not ``$s''")
+                }
+
+              def warnings = read_to_the_end_of_line().Replace(',', ' ').Split(null);
+              mutable did_something = false;
+              foreach (warn in warnings)
+                unless (warn == "")
+                {
+                  did_something = true;
+                  def no =
+                    try { int.Parse(warn) }
+                    catch {
+                      | e =>
+                        throw Lexer.Error($ "invalid warning number ``$warn'': $e")
+                    }
+                  Manager.Options.Warnings.AddPragmaWarning(_source.FileIndex, _source.PositionToLineColumn(get_position()).Line, negate * no)
+                }
+
+               unless (did_something)
+                 Manager.Options.Warnings.AddPragmaWarning(_source.FileIndex, _source.PositionToLineColumn(get_position()).Line, 1 * negate)
+
+            | "indent" => pragma_indent();
+            | _ =>
+              Message.Warning(1633, this.Location, "unrecognized #pragma directive");
+              _ = read_to_the_end_of_line();
+          }
+
+        | x => throw Lexer.Error($"unsupported preprocessing directive `$x'")
+      };
+
+      register_directive(directivePosition);
+    }
+
+    private   read_or_eol() : char
+    {
+      def ch = read();
+      if (ch == '\0') '\n' else ch
+    }
+
+    private   read() : char
+    {
+      mutable ch = read_from_input();
+      // Message.Debug(Location, $"ch = '$ch'");
+
+      match (ch)
+      {
+        | '\n' | '\u2028' | '\u2029' | '\u0085' => ()
+        | '\t' =>
+          when (is_check_wrong_chars)
+            Message.Warning(10002, this.Location, "tab character found in input stream")
+
+        | '\r' =>
+          if (peek_or_white() != '\n')
+            ch = '\n'; // \r is alone here, so we change it to newline
+          else
+            when (is_check_wrong_chars)
+              Message.Warning(10002, this.Location, "CR character found in input stream");
+
+        | '\0' =>
+          unless (IsEof)
+            IsEof = true;
+
+        | _ => ()
+      };
+
+      when (in_indentation_mode)
+      {
+        // Start counting indentation anew after a newline
+        if (IsEndOfLine(ch))
+        {
+          indent_string = "";
+          counting_indentation = true;
+          insert_indent = true;
+        }
+        else when (counting_indentation)
+        {
+          if (ch == '\t' || ch == ' ')
+            indent_string += ch.ToString();
+          // We have a non-space character, so stop counting indentation
+          //  and indicate that we have a new line to process
+          else
+          {
+            counting_indentation = false;
+          }
+        }
+      }
+      ch
+    }
+
+    private   clear_id_buffer() : void
+    {
+      _buffer.Length = 0;
+    }
+
+    private   get_op(first_ch : char) : Token
+    {
+      clear_id_buffer();
+      _ = _buffer.Append(first_ch);
+
+      continue_get_op()
+    }
+
+    //private   get_op(first_ch : char, second_ch : char) : Token
+    //{
+    //  clear_id_buffer();
+    //  _ = _buffer.Append(first_ch);
+    //  _ = _buffer.Append(second_ch);
+    //
+    //  continue_get_op()
+    //}
+
+    continue_get_op() : Token
+    {
+      mutable go = true;
+      while (go)
+      {
+        if (IsOperatorChar(peek_or_white()))
+        {
+          def c = read();
+          if (c == '/')
+            if (try_read_comment())
+              go = false
+            else
+              _ = _buffer.Append('/')
+          else
+            _ = _buffer.Append(c)
+        }
+        else
+          go = false;
+      };
+      Token.Operator(_buffer.ToString())
+    }
+
+    private   get_number(first_ch : char) : Token
+    {
+      clear_id_buffer();
+      mutable already_seen_type = false;  // for the case 0b0 vs 0b
+
+      mutable mode =
+        match (first_ch)
+        {
+          | '.' => NumberMode.Float
+          | '0' =>
+            match (peek_or_white())
+            {
+              | 'x' | 'X' => ignore(read()); NumberMode.Hex
+              | 'o' | 'O' => ignore(read()); NumberMode.Octal
+              | 'b' | 'B' =>
+                ignore(read());
+                unless (Char.IsDigit(peek_or_white()))
+                  already_seen_type = true;
+                NumberMode.Binary
+
+              | '0' =>
+                Message.Warning(this.Location, "leading zeros look like octal modifiers, but they are not");
+                NumberMode.Decimal
+
+              | _ => NumberMode.Decimal
+            }
+          | _ => NumberMode.Decimal
+        };
+      mutable last_was_digit = true;
+
+      _ = _buffer.Append(first_ch);
+
+      // read digits and . between them if it is present
+      def loop()
+      {
+        match (peek_or_white())
+        {
+          | '.' =>
+            when (mode == NumberMode.Decimal)
+            {
+              mode = NumberMode.Float;
+              ignore(read());
+              if (Char.IsDigit(peek_or_white()))
+              {
+                ignore(_buffer.Append('.'));
+                loop()
+              }
+              else
+              {
+                _isPendingChar = true;
+                _pendingChar = '.';
+                last_was_digit = false;
+                mode = NumberMode.Decimal;
+              }
+            }
+
+          | 'a' | 'A' | 'b' | 'B' | 'c' | 'C' | 'd' | 'D' | 'e' | 'E' | 'f' | 'F' =>
+            when (mode == NumberMode.Hex)
+            {
+              ignore(_buffer.Append(read()));
+              loop()
+            }
+
+          | '_' =>
+            _ = read();
+            def pw = char.ToLower(peek_or_white());
+            if (char.IsDigit(pw))
+              loop()
+            else if (mode == NumberMode.Hex && pw >= 'a' && pw <= 'f')
+              loop()
+            else
+            {
+              _isPendingChar = true;
+              _pendingChar = '_';
+            }
+
+          | x when Char.IsDigit(x) =>
+            ignore(_buffer.Append(read()));
+            loop()
+          | _ => ()
+        }
+      };
+      loop();
+
+      when ((mode == NumberMode.Hex || mode == NumberMode.Octal) && _buffer.Length <= 1)
+        Message.Error(this.Location, "expected value letters in numeric literal");
+
+      def exponent_part(only_realsuf)
+      {
+        when (!only_realsuf)
+        {
+          match (peek_or_white())
+          {
+            | 'E' | 'e' =>
+              ignore(_buffer.Append(read()));
+              match (peek_or_white())
+              {
+                | '+' | '-' =>
+                  ignore(_buffer.Append(read()));
+                | _ => ()
+              };
+              if (Char.IsDigit(peek_or_white()))
+                do
+                  ignore(_buffer.Append(read()));
+                while (Char.IsDigit(peek_or_white()))
+              else
+                throw Error("no digits after exponent sign in float literal")
+            | _ => ()
+          }
+        };
+        match (Char.ToLower(peek_or_white(), CultureInfo.InvariantCulture))
+        {
+          | 'f' =>
+            ignore(read());
+            Token.FloatLiteral(Single.Parse(_buffer.ToString(),
+                                             NumberFormatInfo.InvariantInfo))
+          | 'd' =>
+            ignore(read());
+            Token.DoubleLiteral(Double.Parse(_buffer.ToString(), NumberFormatInfo.InvariantInfo))
+          | 'm' =>
+            ignore(read());
+            Token.DecimalLiteral(Decimal.Parse(_buffer.ToString(), NumberStyles.Float, NumberFormatInfo.InvariantInfo))
+          | _ => Token.DoubleLiteral(Double.Parse(_buffer.ToString(), NumberFormatInfo.InvariantInfo))
+        }
+      };
+
+      // convert given object to appropriate integer value according to type suffix
+      def check_type_suffix(val : ulong)
+      {
+        /// we should have integer number here
+
+        def special(c)
+        {
+          | 'l' | 's' | 'b' | 'u' => true
+          | _ => false
+        };
+
+        // check suffixes to make special types conversions
+        mutable ch =
+          if (already_seen_type)
+            'b'
+          else
+            Char.ToLower(peek_or_white(), CultureInfo.InvariantCulture);
+        if (special(ch)) {
+          unless (already_seen_type)
+            ignore(read());
+          mutable unsigned = ch == 'u';
+
+          // we can have two letter suffixes
+          def ch' = Char.ToLower(peek_or_white(), CultureInfo.InvariantCulture);
+          if (special(ch'))
+          {
+            ignore(read());
+            if (ch' == 'u')
+            {
+              when (unsigned)
+                throw Error("bad integer suffix (unsigned twice)");
+              unsigned = true;
+            }
+            else
+            {
+              // both chars can be different than 'u' and then they must be 'bs'
+              match ((ch, ch'))
+              {
+                | ('s', 'b') | ('b', 's') => ch = 'b'
+                | _ =>
+                  unless (unsigned)
+                    throw Error("bad integer suffix (type contraint twice)");
+                  ch = ch';
+              }
+            }
+          }
+          else when (ch == 'b') // only 'b' suffix, so it is unsigned byte
+              unsigned = true;
+
+          // [ch] now contains type meaning or 'u' (then it is uint for sure)
+          def lit = match (ch)
+          {
+            | 'b' =>
+              if (unsigned)
+                Literal.FromByte(val :> byte)
+              else
+                // workaround mono #74925
+                Literal.FromSByte((val :> int) :> sbyte)
+            | 's' =>
+              if (unsigned)
+                Literal.FromUShort(val :> ushort)
+              else
+                // workaround mono #74925
+                Literal.FromShort((val :> int) :> short)
+            | 'l' =>
+              if (unsigned)
+                Literal.FromULong(val)
+              else
+                Literal.FromLong(val :> long)
+
+            | _ => Literal.FromUInt(val :> uint)
+          }
+          Token.IntegerLiteral(lit);
+        }
+        else
+          Token.IntegerLiteral(Literal.Integer(val, false, null))
+      };
+
+      try
+      {
+        match (mode)
+        {
+          | NumberMode.Float =>
+            match (peek_or_white())
+            {
+              | 'E' | 'e' => exponent_part(false)
+              | _ => exponent_part(true)
+            }
+          | NumberMode.Decimal =>
+            if (last_was_digit)
+              match (Char.ToLower(peek_or_white(), CultureInfo.InvariantCulture))
+              {
+                | 'e' => exponent_part(false)
+                | 'f' | 'd' | 'm' => exponent_part(true)
+                | _ =>
+                  check_type_suffix(ulong.Parse(_buffer.ToString()))
+              }
+            else
+              Token.IntegerLiteral(Literal.Integer(ulong.Parse(_buffer.ToString()), false, null))
+
+          | NumberMode.Hex =>
+            def val = UInt64.Parse(_buffer.ToString(), Globalization.NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+            check_type_suffix(val)
+
+          | NumberMode.Binary =>
+            mutable value = 0ul;
+            for (mutable i = 0; i < _buffer.Length; ++i)
+              match (_buffer[i])
+              {
+                | '0' => value <<= 1
+                | '1' => value <<= 1; value += 1ul
+                | x =>
+                  Message.Error(this.Location, $"binary literal numer must be composed of 1 and 0s, while there is `$(x)'")
+              };
+            check_type_suffix(value)
+
+          | NumberMode.Octal =>
+            mutable value = 0ul;
+            for (mutable i = 0; i < _buffer.Length; ++i)
+              match (Convert.ToUInt64(_buffer[i]) - 48ul)
+              {
+                | x when 0ul <= x && x <= 7ul => value <<= 3; value += x;
+                | x => Message.Error(this.Location, $"octal literal number must be composed of 0 to 7 digits while it has `$(x)'")
+              };
+            check_type_suffix(value)
+        }
+      }
+      catch
+      {
+        _ is System.OverflowException =>
+          Message.Error(this.Location, $"number literal '$_buffer' is too large for given type");
+          Token.IntegerLiteral(Literal.Integer(0, false, null))
+      }
+    }
+
+    private get_id(first_ch : char) : Token
+    {
+      if (first_ch == '\'' && !IsIdBeginning(peek_or_white()))
+        get_char()
+      else
+      {
+        clear_id_buffer();
+        _ = _buffer.Append(first_ch);
+
+        mutable next = peek_or_white();
+        while (IsIdBeginning(next) || Char.IsDigit(next) || next == '\'')
+        {
+          _ = _buffer.Append(read());
+          next = peek_or_white();
+        };
+
+        def str = System.String.Intern(_buffer.ToString());
+
+        _intoCode = true;
+
+        if (first_ch == '\'' && str.Length == 3 && str[2] == '\'')
+          Token.CharLiteral(str[1])
+        else if (IsKeyword(str))
+          Token.Keyword(str)
+        else
+          Token.Identifier(str)
+      }
+    }
+
+    private   get_char_from_hex : int * StringBuilder -> char = GetCharFromHex(_, _, peek, read, Message.Error(this.Location, _));
+
+    private   escape_value : char * StringBuilder -> char = EscapeValue(_, _, get_char_from_hex, Message.Error(Location, _));
+
+    private   get_char() : Token.CharLiteral
+    {
+      def v = get_string('\'', false).value;
+
+      if (v.Length == 0)
+        throw Error("empty character literal")
+      else if (v.Length != 1)
+        throw Error("character literal too long")
+      else
+        Token.CharLiteral(v[0])
+    }
+
+    private   get_string(end_ch : char, is_dollarized : bool) : Token.StringLiteral
+    {
+      mutable tok;
+      def buf = StringBuilder();
+      def rawString = StringBuilder();
+      _ = rawString.Append(end_ch);
+      def loop()
+      {
+        def ch = read();
+        _ = rawString.Append(ch);
+        match (ch)
+        {
+          | '\\' =>
+            def esc = escape_value(read(), rawString);
+            _ = buf.Append(esc);
+            loop();
+
+          | '$' when !is_dollarized && end_ch == '"' =>
+            def next = peek_or_white();
+            when (char.IsLetter(next) || next == '_' || next == '(')
+              Message.Warning(10007, this.Location, "`$' occurs inside string literal, which is not prefixed itself with `$'");
+            _ = buf.Append('$');
+            loop()
+
+          | '\0' => rawString.Length--; Message.Error(this.Location, "Unterminated string literal") // like MS csc
+          | '\n' | '\u2028' | '\u2029' | '\u0085' => rawString.Length--; Message.Error(this.Location, "Newline in constant") // like MS csc
+          | ch when ch != end_ch =>
+            _ = buf.Append(ch);
+            loop();
+
+          | _ =>
+            tok = Token.StringLiteral(buf.ToString(), rawString.ToString());
+            tok.Location = this.Location;
+        }
+      }
+      loop();
+
+      if (tok == null)
+      {
+        tok = Token.StringLiteral(buf.ToString(), rawString.ToString());
+        tok.Location = this.Location;
+        tok
+      }
+      else
+        tok;
+    }
+
+    private   get_monkey_string() : Token
+    {
+      def buf = StringBuilder(32);
+      def rawString = StringBuilder();
+      _ = rawString.Append(<#@"#>);
+
+      def loop()
+      {
+        def ch = read();
+        _ = rawString.Append(ch);
+        match (ch)
+        {
+          | '"' =>
+            match (peek_or_white())
+            {
+              | '"' =>
+                _ = buf.Append('"');
+                _ = read();
+                loop()
+              | _ =>
+                def tok = Token.StringLiteral(buf.ToString(), rawString.ToString());
+                tok.Location = this.Location;
+                tok
+            }
+          | '\0' =>
+            Message.Error(this.Location, "Unterminated string literal"); // like MS csc
+            rawString.Length--;
+            def tok = Token.StringLiteral(buf.ToString(), rawString.ToString());
+            tok.Location = Location(_source, _prevPos, _pos - 1);
+            tok
+          | ch =>
+            _ = buf.Append(ch); loop()
+        }
+      };
+
+      loop()
+    }
+
+    /// Read &lt;# .... &lt;# ... #&gt; ... #&gt; string
+    private   get_recursive_string() : Token
+    {
+      def buf = StringBuilder(1024);
+      def rawString = StringBuilder();
+      _ = rawString.Append("<#");
+      def loop(nestingLevel = 1)
+      {
+        def ch = read();
+        _ = rawString.Append(ch);
+        match (ch)
+        {
+          | '<' when peek() == '#' =>
+            _ = rawString.Append(read());
+            _ = buf.Append("<#");
+            loop(nestingLevel + 1)
+
+          | '#' =>
+            def next = read();
+            _ = rawString.Append(next);
+            if (next == '>')
+            {
+              if (nestingLevel == 1)
+              {
+                def tok = Token.StringLiteral(buf.ToString(), rawString.ToString());
+                tok.Location = this.Location;
+                tok
+              }
+              else
+              {
+                _ = buf.Append("#>");
+                loop(nestingLevel - 1)
+              }
+            }
+            else
+            {
+              _ = buf.Append('#');
+              _ = buf.Append(next);
+              loop(nestingLevel)
+            }
+
+          | '\0' =>
+              Message.Error(this.Location, "Unterminated string literal"); // like MS csc
+              rawString.Length--;
+              def tok = Token.StringLiteral(buf.ToString(), rawString.ToString());
+              tok.Location = Location(_source, _prevPos, _pos);
+              tok
+
+          | _ => _ = buf.Append(ch); loop(nestingLevel)
+        }
+      }
+
+      def tok = loop();
+      tok
+    }
+
+    read_to_the_end_of_line(pedantic_comment_check : bool = true) : string
+    {
+      mutable c = read_or_eol();
+      def line = StringBuilder(80);
+      while (!IsEndOfLine(c))
+      {
+        if (c == '/')
+        {
+          c = read_or_eol();
+          unless (c == '/')
+          {
+            unless (pedantic_comment_check)
+              Nemerle.Imperative.Continue();
+            when (Message.ErrorCount <= 0)
+              Message.Warning(1696, Location, "Single-line comment or end-of-line expected");
+          }
+          while (!IsEndOfLine(c))
+            c = read_or_eol();
+        }
+        else {
+          ignore(line.Append(c));
+          c = read_or_eol();
+        }
+      };
+      line.ToString()
+    }
+
+    static this()
+    {
+      def tab = array [
+        "_",          "abstract", "and",        "array",      "as",         "base",       "catch",
+        "class",      "def",      "delegate",   "enum",       "event",      "extern",     "false",
+        "finally",    "fun",      "implements", "interface",  "internal",   "is",         "macro",
+        "match",      "matches",  "module",     "mutable",    "namespace",  "new",        "null",
+        "out",        "override", "params",     "partial",    "private",    "protected",  "public",
+        "ref",        "sealed",   "static",     "struct",     "syntax",     "this",       "throw",
+        "true",       "try",      "typeof",     "using",      "variant",    "virtual",
+        "void",       "volatile", "when",       "where",      "with"
+      ];
+      BaseKeywords = Set(tab);
+
+      def tab = array ['=', '<', '>', '@', '^', '&', '-', '+', '|', '*',
+                       '/', '$', '%', '!', '?', '~', '.', ':', '#', '\\', '`'];
+      opchars = array(256);
+      foreach (x in tab) opchars [x :> int] = true;
+    }
+
+    private   static opchars : array [bool];
+    public static BaseKeywords : Set [string];
+
+    public static IsIdBeginning(ch : char) : bool
+    {
+      Char.IsLetter(ch) || ch == '_'
+    }
+
+    public static IsOperatorChar(ch : char) : bool
+    {
+      def chint = ch : int;
+      if (chint > 255)
+        false
+      else
+        opchars [chint];
+    }
+
+    public static IsOperator(str : string) : bool
+    {
+      foreach (c in str)
+        unless (IsOperatorChar(c) || IsOperatorSpecial(c))
+          Nemerle.Imperative.Return(false);
+
+      true
+    }
+
+    public static HasKeywordChars(str : string) : bool
+    {
+      foreach (c in str)
+        unless (Char.IsLetterOrDigit(c) || c == '_')
+          return false;
+      true
+    }
+
+    public static GetCharFromHex(
+      len : int,
+      rawStringBuilder : StringBuilder,
+      peek : void -> char,
+      read : void -> char,
+      error : string -> void
+    )
+      : char
+    {
+      def max = if (len < 0) 4 else len;
+      def buffer = StringBuilder(max);
+      def loop(i) : bool
+      {
+        if (i < max)
+        {
+          def ch = peek();
+          match (ch)
+          {
+            | 'a' | 'A' | 'b' | 'B' | 'c' | 'C' | 'd' | 'D'
+            | 'e' | 'E' | 'f' | 'F' | '0' | '1' | '2' | '3'
+            | '4' | '5' | '6' | '7' | '8' | '9' =>
+              _ = buffer.Append(read());
+              loop(i + 1)
+
+            | _ when (len == -1 && i != 0) => true
+            | _ => error($"bad escape character '$ch'"); false
+          }
+        }
+        else true
+      }
+
+      def ok = loop(0);
+      when (rawStringBuilder != null)
+        _ = rawStringBuilder.Append(buffer);
+
+      if (ok)
+        try
+        {
+          Convert.ToChar(UInt64.Parse(buffer.ToString(), Globalization.NumberStyles.HexNumber, CultureInfo.InvariantCulture));
+        }
+        catch
+        { | _ is System.OverflowException =>
+            error($"Character literal '$buffer' must be in the range U+0000 to U+FFFF");
+            '?'
+        }
+      else '?'
+    }
+
+    public static EscapeValue(
+        ch : char,
+        rawStringBuilder : StringBuilder,
+        get_char_from_hex : int * StringBuilder -> char,
+        error : string -> void
+    )
+      : char
+    {
+      when (rawStringBuilder != null)
+        _ = rawStringBuilder.Append(ch);
+
+      match (ch)
+      {
+        | 'n'  => '\n'     // new line
+        | 't'  => '\t'     // horizontal tab
+        | 'r'  => '\r'     // carriage return
+        | 'e'  => '\e'
+        | 'a'  => '\u0007' // alert
+        | 'b'  => '\b'     // backspace
+        | 'f'  => '\u000C' // form feed
+        | 'v'  => '\u000B' // vertical tab
+        | '"'  => '"'
+        | '\'' => '\''
+        | '\\' => '\\'
+        | '0'  => '\0'     // null (0)
+        | 'x'  => get_char_from_hex(-1, rawStringBuilder)
+        | 'u'  => get_char_from_hex(4,  rawStringBuilder)
+        | 'U'  => get_char_from_hex(8,  rawStringBuilder)
+        | '$'  => '$'
+        | _    => error($"bad escape character `\\$ch'"); ' '
+      }
+    }
+
+    private static IsOperatorSpecial(c : char) : bool
+    {
+      | '(' | ')' | ';' | '[' | ']' => true
+      | _ => false
+    }
+
+    internal enum NumberMode
+    {
+      | Float
+      | Decimal
+      | Octal
+      | Hex
+      | Binary
+    }
+
+    [Record]
+    public sealed class Error : System.Exception { }
+
+    public sealed class PragmaIndent : System.Exception { }
+  } // end class Lexer
+}
