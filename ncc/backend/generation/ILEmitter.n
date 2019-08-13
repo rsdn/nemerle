@@ -34,6 +34,7 @@ namespace Nemerle.Compiler
   {
     private _module_builder             : DN.ModuleDef;
     private _ilg                        : NemerleGenerator;
+    private _sb                         : SignatureBuilder;
     private _type_builder               : TypeBuilder;
     private mutable _importer           : DN.Importer;
     private _this_is_value_type         : bool;
@@ -79,6 +80,7 @@ namespace Nemerle.Compiler
       _methodDef           = (_method_builder : IBackendMethod).GetMethodInfo();
       _importer            = DN.Importer(_module_builder, DN.ImporterOptions.TryToUseDefs, DN.GenericParamContext(_methodDef.DeclaringType, _methodDef));
       _ilg                 = NemerleGenerator();
+      _sb                  = SignatureBuilder(Manager, _importer);
       _type_builder        = _method_builder.DeclaringType;
       _method_name         = _methodDef.DeclaringType.ReflectionFullName + "::" + _methodDef.Name;
       _this_is_value_type  = _type_builder.IsValueType;
@@ -224,56 +226,6 @@ namespace Nemerle.Compiler
       meth.MemberKind == MemberKinds.Constructor
     }
 
-    GetInstantiatedSystemType(t : FixedType, superType : TypeInfo) : DN.TypeSig
-    {
-      def instantiatedType = if (t is FixedType.Tuple) t else t.GetInstantiatedSuperType(superType);
-      instantiatedType.GetSystemType(ref _importer)
-    }
-
-    GetMethodInfo(from_type : TypeVar, meth : IMethod, typars : list [TypeVar]) : DN.IMethod
-    {
-      def methodDef        = (meth :> IBackendMethod).GetMethodInfo();
-      def system_from_type = GetInstantiatedSystemType(from_type.Fix(), meth.DeclaringType);
-
-      mutable methodRef =
-        if (system_from_type is DN.GenericInstSig)
-          DN.MemberRefUser(_module_builder, methodDef.Name, _importer.Import(methodDef.MethodSig), DN.TypeSpecUser(system_from_type))
-        else
-          _importer.Import(methodDef);
-
-      def m_typarms = meth.GetHeader().TypeParameters;
-      unless (m_typarms.IsEmpty)
-      {
-        def errorCount = Message.ErrorCount;
-        NList.Iter2 (m_typarms, typars, _.CheckConstraints (_, meth));
-        when (errorCount == Message.ErrorCount)
-        {
-          def pars  = typars.MapToArray(SystemHelpers.GetNonVoidSystemType(_, SystemTypeCache.Object, ref _importer));
-          methodRef = DN.MethodSpecUser(methodRef :> DN.IMethodDefOrRef, DN.GenericInstMethodSig(pars));
-        }
-      }
-      methodRef
-    }
-
-    GetFieldInfo (_obj : TExpr, fld : IField) : DN.IField
-    {
-      def obj_type = GetInstantiatedSystemType(_obj.FixedType(), fld.DeclaringType);
-      GetFieldInfo (obj_type, fld);
-    }
-
-    GetFieldInfo(from_type : DN.TypeSig, field : IField) : DN.IField
-    {
-      def fieldDef = (field :> IBackendField).GetFieldInfo();
-      if (from_type is DN.GenericInstSig)
-      {
-        def fieldRef = DN.MemberRefUser(_module_builder, fieldDef.Name, _importer.Import(fieldDef.FieldSig));
-        fieldRef.Class = DN.TypeSpecUser(from_type);
-        fieldRef
-      }
-      else
-        _importer.Import(fieldDef)
-    }
-
     store_local (decl : LocalValue) : void
     {
       if (decl.IsParm) {
@@ -354,10 +306,10 @@ namespace Nemerle.Compiler
                     def info =
                       if (to.Fix () is FixedType.Void) {
                         def mt = FixedType.Class (ftn.FromTupleVoidTyCon, parms);
-                        GetMethodInfo(mt, ftn.FromTupleVoidCtor, [])
+                        _sb.GetMethodInfo(mt, ftn.FromTupleVoidCtor, [])
                       } else {
                         def mt = FixedType.Class (ftn.FromTupleTyCon, parms + [to]);
-                        GetMethodInfo(mt, ftn.FromTupleCtor, [])
+                        _sb.GetMethodInfo(mt, ftn.FromTupleCtor, [])
                       }
                     // Message.Warning ($ "using f1->fN conversion");
                     _ilg.Emit (OpCodes.Newobj, info)
@@ -605,14 +557,14 @@ namespace Nemerle.Compiler
             
         | CtorOf(ty, method) =>
           def sysType = ty.GetSystemType(ref _importer);
-          def ctorInfo = GetMethodInfo(ty, method, []);
+          def ctorInfo = _sb.GetMethodInfo(ty, method, []);
           _ilg.Emit (OpCodes.Ldtoken, ctorInfo);
           _ilg.Emit (OpCodes.Ldtoken, sysType);
           _ilg.Emit (OpCodes.Call,      _importer.Import(SystemTypeCache.MethodBase_GetMethodFromHandle2));
           _ilg.Emit (OpCodes.Castclass, _importer.Import(SystemTypeCache.ConstructorInfo));
           
         | MethodOf(from_type, method, typars) =>
-          def methodInfo = GetMethodInfo(from_type, method, typars);
+          def methodInfo = _sb.GetMethodInfo(from_type, method, typars);
           def declTy = methodInfo.DeclaringType;
           _ilg.Emit (OpCodes.Ldtoken, methodInfo);
           if (declTy == null)
@@ -630,7 +582,7 @@ namespace Nemerle.Compiler
         | ClosureFieldOf  => assert(false, "You must put into ClosureFieldOf only TExpr.LocalRef which will be closured by compiler");
 
         | FieldOf(ty, field) =>
-          def fielfInfo = GetFieldInfo(ty.GetSystemType(ref _importer), field);
+          def fielfInfo = _sb.GetFieldInfo(ty.GetSystemType(ref _importer), field);
           def declTy = fielfInfo.DeclaringType;
           _ilg.Emit (OpCodes.Ldtoken, fielfInfo);
           if (declTy == null)
@@ -813,7 +765,7 @@ namespace Nemerle.Compiler
 
           maybe_volatile (expr);
 
-          def field_info = GetFieldInfo (base_object, field);
+          def field_info = _sb.GetFieldInfo (base_object, field);
 
           when (base_object.GetSystemType (ref _importer).IsGenericParameter)
             _ilg.Emit (OpCodes.Box, base_object.GetSystemType (ref _importer));
@@ -827,7 +779,7 @@ namespace Nemerle.Compiler
 
         /* load the value of a static field */
         | StaticRef (t, field is IField, _) =>
-          def field_info = GetFieldInfo (t.GetSystemType (ref _importer), field);
+          def field_info = _sb.GetFieldInfo (t.GetSystemType (ref _importer), field);
           
           assert(field.IsStatic, "GlobalRef to a non-static field");
 
@@ -929,7 +881,7 @@ namespace Nemerle.Compiler
           }
           maybe_volatile (target);
 
-          def field_info = GetFieldInfo (base_object, field);
+          def field_info = _sb.GetFieldInfo (base_object, field);
           
           _ilg.Emit (OpCodes.Stfld, field_info);
 
@@ -939,7 +891,7 @@ namespace Nemerle.Compiler
           emit (val);
           maybe_volatile (target);
 
-          def field_info = GetFieldInfo (t.GetSystemType (ref _importer), f);
+          def field_info = _sb.GetFieldInfo (t.GetSystemType (ref _importer), f);
           
           _ilg.Emit (OpCodes.Stsfld, field_info);
 
@@ -1012,7 +964,7 @@ namespace Nemerle.Compiler
           _ilg.Emit (OpCodes.Ldarg_0);
           emit_exprs_push(vars, parameters);
 
-          def ctr_inf = GetMethodInfo(_type_builder.GetMemType(), base_ctor, []);
+          def ctr_inf = _sb.GetMethodInfo(_type_builder.GetMemType(), base_ctor, []);
           _ilg.Emit (OpCodes.Call, ctr_inf);
           when (expr.GenerateTail)
             _ilg.Emit (OpCodes.Ret);
@@ -1021,7 +973,7 @@ namespace Nemerle.Compiler
         | Call (StaticRef (_t, meth is IMethod, _), ctor_params, _) when is_ctor (meth) =>
           emit_parms (ctor_params);
 
-          def ctr_inf = GetMethodInfo(_t, meth, []);
+          def ctr_inf = _sb.GetMethodInfo(_t, meth, []);
           _ilg.Emit (OpCodes.Newobj, ctr_inf);
           when (expr.GenerateTail)
             _ilg.Emit (OpCodes.Ret);
@@ -1030,7 +982,7 @@ namespace Nemerle.Compiler
         /* emit a call to an instance method, basing on the 'this' pointer for value types */
         | Call (MethodRef (This as th, method, tparms, _), method_params, _)
                                                       when _this_is_value_type =>
-          def method_inf = GetMethodInfo (th.Type, method, tparms);
+          def method_inf = _sb.GetMethodInfo (th.Type, method, tparms);
             
           def parameters = method_params.Map (_.expr);
           def vars = emit_exprs_prepare (parameters);
@@ -1050,7 +1002,7 @@ namespace Nemerle.Compiler
 
         /* emit a call to an instance method */
         | Call (MethodRef (base_object, method, tparms, notvirt), method_params, _) =>
-          def method_inf = GetMethodInfo (base_object.Type, method, tparms);
+          def method_inf = _sb.GetMethodInfo (base_object.Type, method, tparms);
           
           def parameters = method_params.Map (_.expr);
           def vars = emit_exprs_prepare (parameters);
@@ -1075,7 +1027,7 @@ namespace Nemerle.Compiler
 
         /* emit a call to a static method */
         | Call (StaticRef (_t, mi is IMethod, tparms), method_parms, _) =>
-          def method_info = GetMethodInfo (_t, mi, tparms);
+          def method_info = _sb.GetMethodInfo (_t, mi, tparms);
         
           Util.cassert (mi.IsStatic,
                         $ "Call TExpr.GlobalRef to a non-static field: $(method_info.Name)");
@@ -1328,7 +1280,7 @@ namespace Nemerle.Compiler
         | Tuple (vals) =>
           emit_exprs (vals);
           def ctor = InternalType.GetTupleType (vals.Length).Ctor;
-          _ilg.Emit (OpCodes.Newobj, GetMethodInfo(expr.FixedType() , ctor, []));
+          _ilg.Emit (OpCodes.Newobj, _sb.GetMethodInfo(expr.FixedType() , ctor, []));
           
 
         | TupleIndexer (obj, pos, len) =>
@@ -1336,7 +1288,7 @@ namespace Nemerle.Compiler
           //when (tt.TyCon.IsValueType && !obj.NeedAddress)
           //  obj.NeedAddress = true;
           emit (obj);
-          _ilg.Emit (OpCodes.Ldfld, GetFieldInfo(obj, tt.GetField(pos + 1)));
+          _ilg.Emit (OpCodes.Ldfld, _sb.GetFieldInfo(obj, tt.GetField(pos + 1)));
 
 
         /* -- MISC --------------------------------------------------------- */
@@ -1369,7 +1321,7 @@ namespace Nemerle.Compiler
 
         /* loads address of given method */
         | MethodAddress (from, meth, is_virt, typarms) =>
-          def methodRef = GetMethodInfo(from, meth, typarms);
+          def methodRef = _sb.GetMethodInfo(from, meth, typarms);
           if (is_virt && (meth :> IBackendMethod).GetMethodInfo().IsVirtual) {
             // ldvirtftn expects also an object reference
             // this is always part of delegate ctor, therefore
