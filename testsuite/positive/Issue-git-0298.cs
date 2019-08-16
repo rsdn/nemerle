@@ -1,5 +1,5 @@
 ﻿// REFERENCE: System.Core
-// REFERENCE: Nemerle.Linq
+// MACRO: Nemerle.Linq
 
 using System;
 using System.Collections.Generic;
