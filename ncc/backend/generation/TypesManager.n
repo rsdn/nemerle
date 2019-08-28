@@ -31,7 +31,7 @@ namespace Nemerle.Compiler
   [ManagerAccess]
   public partial class TypesManager
   {
-    private   mutable _assembly_name              : System.Reflection.AssemblyName;
+    private   mutable _strongNameKey              : DN.StrongNameKey;
     private   mutable _assembly_builder           : DN.AssemblyDef;
     private   mutable _module_builder             : DN.ModuleDef;
     internal  mutable contains_nemerle_specifics  : bool = false;
@@ -60,18 +60,50 @@ namespace Nemerle.Compiler
 
     public CreateAssembly () : void
     {
-      // we need to process global assembly attributes before creating assembly name
-      _assembly_name = CreateAssemblyName ();
-
-      _assembly_name.Name = Path.GetFileNameWithoutExtension (_OutputFileName);
-      when (_assembly_name.Name == "")
-        Message.FatalError ("name of output assembly cannot be empty");
+      def name = Path.GetFileNameWithoutExtension (_OutputFileName);
+      when (name == "")
+        Message.FatalError("name of output assembly cannot be empty");
 
       def dir = Path.GetDirectoryName(Path.GetFullPath (_OutputFileName));
       unless (Directory.Exists (dir))
         Message.FatalError ($"specified output directory `$dir' does not exist");
 
-      _assembly_builder = DN.AssemblyDefUser(_assembly_name);
+      mutable version;
+      mutable locale;
+
+      when (Manager.Options.StrongAssemblyKeyName != null)
+        _strongNameKey = LoadStrongNameKey(Location.Default, Manager.Options.StrongAssemblyKeyName);
+
+      // we need to process global assembly attributes before creating assembly name
+      foreach ((env, attr) in assembly_attributes)
+      {
+        /* store resolved attribute */
+        def (tc, parms) = Manager.AttributeCompiler.CheckAttribute (env, attr);
+
+        def take_string (pars) {
+          | [ <[ $(x : string) ]> ] => x
+          | _ =>
+              Message.FatalError (attr.Location, "given attribute must have single string as parameter")
+        }
+        if (tc.Equals (InternalType.AssemblyVersionAttribute_tc))
+          version = ParseVersion(take_string(parms), attr.Location);
+        else if (tc.Equals (InternalType.AssemblyKeyFileAttribute_tc))
+        {
+          def key = take_string (parms);
+          if (_strongNameKey != null)
+            Message.Warning (attr.Location, "AssemblyKeyFile attribute will be ignored, as key file was already specified")
+          else when (key != "")
+            _strongNameKey = LoadStrongNameKey(attr.Location, key);
+        }
+        else when (tc.Equals (InternalType.AssemblyCultureAttribute_tc))
+          locale = take_string(parms);
+      }
+
+      mutable publicKey;
+      when (_strongNameKey != null)
+        publicKey = DN.PublicKey(_strongNameKey.PublicKey);
+
+      _assembly_builder = DN.AssemblyDefUser(name, version ?? System.Version(), publicKey, locale ?? "");
       _module_builder   = DN.ModuleDefUser(_assembly_builder.Name, System.Guid.NewGuid(), Manager.LibrariesManager.CorlibReference);
       _assembly_builder.Modules.Add(_module_builder);
 
@@ -225,11 +257,6 @@ namespace Nemerle.Compiler
       {
         | (true, Some (entry_point_method_info)) =>
           _module_builder.EntryPoint = entry_point_method_info;
-          //_assembly_builder.SetEntryPoint (entry_point_method_info,
-          //                                 if (Manager.Options.TargetIsWinexe)
-          //                                   Emit.PEFileKinds.WindowApplication
-          //                                 else
-          //                                   Emit.PEFileKinds.ConsoleApplication)
         | (true, None) =>
           Message.Error ("no suitable entry point (Main function) found")
         | _ => ()
@@ -240,6 +267,7 @@ namespace Nemerle.Compiler
       {
         def options = DN.Writer.ModuleWriterOptions(_module_builder);
         options.WritePdb = Manager.Options.EmitDebug;
+        options.InitializeStrongNameSigning(_module_builder, _strongNameKey);
 
         mutable characteristics = PE.Characteristics.ExecutableImage | PE.Characteristics.Dll;
         mutable corFlags        = DN.MD.ComImageFlags.ILOnly;
@@ -469,48 +497,10 @@ namespace Nemerle.Compiler
       }
     }
 
-    internal CreateAssemblyName() : SR.AssemblyName
-    {
-      // create an assembly name and set its properties according to defined global assembly attributes
-      def an = SR.AssemblyName ();
-      an.CodeBase = string.Concat("file:///", Directory.GetCurrentDirectory());
-
-      when (Manager.Options.StrongAssemblyKeyName != null) {
-        an.KeyPair = read_keypair (Location.Default, Manager.Options.StrongAssemblyKeyName);
-      }
-
-      foreach ((env, attr) in assembly_attributes)
-      {
-        /* store resolved attribute */
-        def (tc, parms) = Manager.AttributeCompiler.CheckAttribute (env, attr);
-
-        def take_string (pars) {
-          | [ <[ $(x : string) ]> ] => x
-          | _ =>
-              Message.FatalError (attr.Location, "given attribute must have single string as parameter")
-        }
-        if (tc.Equals (InternalType.AssemblyVersionAttribute_tc))
-        {         
-          an.Version = ParseVersion(take_string(parms), attr.Location);
-        }
-        else if (tc.Equals (InternalType.AssemblyKeyFileAttribute_tc))
-        {
-          def key = take_string (parms);
-          if (an.KeyPair != null)
-            Message.Warning (attr.Location, "AssemblyKeyFile attribute will be ignored, as key file was already specified")
-          else
-            when (key != "") an.KeyPair = read_keypair (attr.Location, key);
-        }
-        else when (tc.Equals (InternalType.AssemblyCultureAttribute_tc))
-          an.CultureInfo = System.Globalization.CultureInfo (take_string (parms));
-      }
-      an
-    }
-
-    static read_keypair(loc : Location, name : string) : SR.StrongNameKeyPair
+    private static LoadStrongNameKey(loc : Location, name : string) : DN.StrongNameKey
     {
       try
-        SR.StrongNameKeyPair(File.Open(name, FileMode.Open, FileAccess.Read))
+        DN.StrongNameKey(File.ReadAllBytes(name))
       catch
       {
         | _ is DirectoryNotFoundException => Message.FatalError (loc, "could not find directory of `" + name + "' with key pair for assembly")
