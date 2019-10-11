@@ -10,6 +10,6 @@ for /f "tokens=3" %%a in ('reg query %KEY_NAME% /V %VALUE_NAME%  ^|findstr /ri "
 
 call "%Value%Common7\Tools\VsDevCmd.bat"
 set NoPause=true
-MSBuild.exe NemerleAll.nproj /target:Stage1 /p:Configuration=Debug /verbosity:n /p:NTargetName=Build /tv:15.0 /p:TargetFrameworkVersion=v4.0
+MSBuild.exe NemerleAll.nproj /target:Stage1 /p:Configuration=Debug /verbosity:n /p:NTargetName=Build /tv:15.0 /p:TargetFrameworkVersion=v4.5
 
 pause
