@@ -13,8 +13,9 @@ using Nemerle.Logging;
 using dnlib.DotNet.Emit;
 using dnlib.DotNet.Pdb;
 
-using SCG = System.Collections.Generic;
-using DN = dnlib.DotNet;
+using DN    = dnlib.DotNet;
+using SCG   = System.Collections.Generic;
+using PExpr = Nemerle.Compiler.Parsetree.PExpr;
 
 namespace Nemerle.Compiler
 {
@@ -145,8 +146,15 @@ namespace Nemerle.Compiler
       | _ => false
     }
 
-    [Nemerle.Memoize(Scope=Instance, Synchronized=true)]
-    private DefineDebugDocument (loc : Location) : PdbDocument
+    [Nemerle.Memoize(Scope=Instance)]
+    private DefineDebugDocument(filePath : string) : PdbDocument
+    {
+      assert(!string.IsNullOrWhiteSpace(filePath));
+      Manager.Hierarchy.CreatePdbDocument(filePath)
+    }
+
+    [Nemerle.Memoize(Scope=Instance)]
+    private DefineDebugDocument(loc : Location) : PdbDocument
     {
       if (!loc.IsDefault) // not Location.Default
         Manager.Hierarchy.CreatePdbDocument(loc.Source.File.FullName)
@@ -314,9 +322,19 @@ namespace Nemerle.Compiler
       _ilg.Emit(OpCodes.Ldc_I4_0); _ilg.Emit(OpCodes.Ceq);
     }
 
-    /**
-     * Emits an expression.
-     */
+    EmitDebugLocation(loc : Location) : void
+    {
+      def filePath = loc.File;
+      when (!loc.IsEmpty && loc.IsTextAvailable && filePath != "")
+      {
+        def debugDoc = DefineDebugDocument(filePath); // TExpr source file (possible from #line pragma)
+        def start    = loc.StartLineColumn;
+        def end      = loc.EndLineColumn;
+        _ilg.MarkSequencePoint(debugDoc, start.Line, start.Column, end.Line, end.Column);
+      }
+    }
+          
+    /// Emits an expression.
     private emit (expr : TExpr) : void
     {
       def expr = expr;
@@ -325,15 +343,30 @@ namespace Nemerle.Compiler
       Util.locate (expr.Location,
       match (expr)
       {
-        /* -- SEQUENCING --------------------------------------------------- */
-
-        /* emits a sequence of expressions */
-        | Sequence (e1, e2) =>
-          emit (e1);
-          if (!e1.Throws || e2.JumpTarget)
-            emit (e2);
-          else
-            skipped (e2);
+        // -- SEQUENCING ---------------------------------------------------
+        
+        | Sequence(e1, e2) => // emits a sequence of expressions
+          def emitSequence(e1 : TExpr, e2 : TExpr): void
+          {
+            emit(e1);
+            if (!e1.Throws || e2.JumpTarget)
+              emit(e2);
+            else
+              skipped(e2);
+          }
+          def loop(pExpr)
+          {
+            | PExpr.TypeEnforcement as te => loop(te.expr)
+            | PExpr.Sequence as seq => 
+              EmitDebugLocation(seq.OpeningBracket);
+              _ilg.BeginScope();
+              emitSequence(e1, e2);
+              _ilg.EndScope();
+              EmitDebugLocation(seq.ClosingBracket);
+              
+            | _ => emitSequence(e1, e2);
+          }
+          loop(expr.ParsedObject)
 
         | DefValIn (_, let_val, body) when let_val.Throws && ! body.JumpTarget =>
           emit (let_val);
@@ -371,7 +404,7 @@ namespace Nemerle.Compiler
         /* -- CONDITIONAL CONSTRUCTIONS ------------------------------------ */
 
         /* emits the if/then/else construction */
-        | If (cond_expr, then_expr, else_expr, then_debug_loc, else_debug_loc) =>
+        | If(cond_expr, then_expr, else_expr, _then_debug_loc, _else_debug_loc) =>
 
           def emit_debug(loc)
           {
@@ -381,34 +414,37 @@ namespace Nemerle.Compiler
             when (IsDebugEnabled && loc.IsSourceAvailable)
             {
               //emit_debug_info (TExpr.DebugInfo (loc, null, null, null));
+              EmitDebugLocation(loc);
             }
           }
 
-          def emit_branch (expr : TExpr, else_label : Label, debug_loc: Location) {
-
-            def emit_br (opcode1, opcode2)
+          def emit_branch(expr : TExpr, else_label : Label, isRecursive : bool = false)
+          {
+            unless (isRecursive)
+              emit_debug(expr.Location);
+              
+            def emit_br(opcode1, opcode2)
             {
-              if (!IsDebugEnabled || !debug_loc.IsSourceAvailable) {
-                _ilg.Emit (opcode1, else_label);
-              } else {
-                def debug_label = _ilg.DefineLabel ();
-                _ilg.Emit (opcode2, debug_label);
-                emit_debug (debug_loc);
-                _ilg.Emit (OpCodes.Br, else_label);
-                _ilg.MarkLabel (debug_label);
-              }
+              //if (!IsDebugEnabled)
+                _ilg.Emit(opcode1, else_label);
+              //else
+              //{
+              //  def exit_label = _ilg.DefineLabel();
+              //  _ilg.Emit(opcode2, exit_label);
+              //  _ilg.Emit(OpCodes.Br, else_label);
+              //  _ilg.MarkLabel(exit_label);
+              //}
             }
 
-            match (expr) {
-              | Call (OpCode ("=="), [nested_cond,
-                Param where (expr = TExpr.TypeConversion(TExpr.Literal(Literal.Bool(true)), _, _, _))], _) =>
-                emit_branch(nested_cond.expr, else_label, Location.Default)
+            match (expr)
+            {
+              | Call(OpCode("=="), [nested_cond, Param where (expr = TExpr.TypeConversion(TExpr.Literal(Literal.Bool(true)), _, _, _))], _) =>
+                emit_branch(nested_cond.expr, else_label, isRecursive=true)
 
               | Call (OpCode (opcode), parms, _) =>
                 emit_parms (parms);
 
-                /* NOTE: the opcodes are swapped so that the 'then' expression
-                         can be emitted before the 'else' expression */
+                // NOTE: the opcodes are swapped so that the 'then' expression can be emitted before the 'else' expression
                 def opcodes =
                   match (opcode)
                   {
@@ -423,92 +459,87 @@ namespace Nemerle.Compiler
                     | ">=.s"   | ">=.f" => (OpCodes.Blt,    OpCodes.Bge)
                     | ">=.u"            => (OpCodes.Blt_Un, OpCodes.Bge_Un)
                     | "bool.!"          => (OpCodes.Brtrue, OpCodes.Brfalse)
-                    | _ => Util.ice ("invalid opcode '" + opcode +
-                                     "' in optimized TExpr.If pattern")
+                    | _ => Util.ice ("invalid opcode '" + opcode + "' in optimized TExpr.If pattern")
                   };
 
-                emit_br (opcodes);
+                emit_br(opcodes);
 
-              | HasType (val, ty) =>
-                emit (val);
-                need_reference (val.ToTypeSig());
-                _ilg.Emit (OpCodes.Isinst, ty.ToTypeSig());
-                emit_br (OpCodes.Brfalse, OpCodes.Brtrue);
+              | HasType(val, ty) =>
+                emit(val);
+                need_reference(val.ToTypeSig());
+                _ilg.Emit(OpCodes.Isinst, ty.ToTypeSig());
+                emit_br(OpCodes.Brfalse, OpCodes.Brtrue);
 
               | If (new_cond, new_then, new_else, _, _) =>
-                def my_label_else = _ilg.DefineLabel ();
-                def my_label_fi = _ilg.DefineLabel ();
-                emit_branch (new_cond, my_label_else, Location.Default);
-                emit_branch (new_then, else_label, Location.Default);
+                def my_label_else = _ilg.DefineLabel();
+                def my_label_fi = _ilg.DefineLabel();
+                emit_branch(new_cond, my_label_else, isRecursive=true);
+                emit_branch(new_then, else_label, isRecursive=true);
                 unless (new_then.Throws)
-                  _ilg.Emit (OpCodes.Br, my_label_fi);
-                _ilg.MarkLabel (my_label_else);
-                emit_branch (new_else, else_label, Location.Default);
-                _ilg.MarkLabel (my_label_fi);
+                  _ilg.Emit(OpCodes.Br, my_label_fi);
+                _ilg.MarkLabel(my_label_else);
+                emit_branch(new_else, else_label, isRecursive=true);
+                _ilg.MarkLabel(my_label_fi);
 
-              | e when is_always_true (e) => ()
-              | e when is_always_false (e) =>
-                _ilg.Emit (OpCodes.Br, else_label);
-
+              | e when is_always_true(e) => ()
+              | e when is_always_false(e) => _ilg.Emit(OpCodes.Br, else_label);
               | _ =>
                 //Message.Debug (e.loc, pretty_print (e));
                 // most of other expressions here are TExpr.Ref
-                emit (expr);
+                emit(expr);
 
                 unless (expr.Throws)
-                  emit_br (OpCodes.Brfalse, OpCodes.Brtrue);
+                  emit_br(OpCodes.Brfalse, OpCodes.Brtrue);
             }
           }
 
-          def label_condition_else = _ilg.DefineLabel ();
-          def label_condition_fi   = _ilg.DefineLabel ();
+          def label_condition_else = _ilg.DefineLabel();
+          def label_condition_fi   = _ilg.DefineLabel();
 
           surroundwith(inScope)
           {
-            emit_branch (cond_expr, label_condition_else, else_debug_loc);
+            emit_branch(cond_expr, label_condition_else);
 
             surroundwith(inScope)
             {
-              emit_debug (then_debug_loc);
-              emit (then_expr);
+              //emit_debug(then_debug_loc);
+              emit(then_expr);
             }
 
             unless (then_expr.Throws)
-              _ilg.Emit (OpCodes.Br, label_condition_fi);
+              _ilg.Emit(OpCodes.Br, label_condition_fi);
 
             surroundwith(inScope)
             {
-              _ilg.MarkLabel (label_condition_else);
-              emit (else_expr);
+              _ilg.MarkLabel(label_condition_else);
+              emit(else_expr);
             }
 
-            _ilg.MarkLabel (label_condition_fi);
+            _ilg.MarkLabel(label_condition_fi);
           }
 
+        | HasType(expr, ty) => // emit a type check construction
+          emit(expr);
+          def label_condition_not_null = _ilg.DefineLabel();
+          def label_condition_has_type = _ilg.DefineLabel();
+          def label_condition_continue = _ilg.DefineLabel();
 
-        /* emit a type check construction */
-        | HasType (expr, ty) =>
-          emit (expr);
-          def label_condition_not_null = _ilg.DefineLabel ();
-          def label_condition_has_type = _ilg.DefineLabel ();
-          def label_condition_continue = _ilg.DefineLabel ();
-
-          _ilg.Emit (OpCodes.Dup);
-          _ilg.Emit (OpCodes.Brtrue_S, label_condition_not_null);
+          _ilg.Emit(OpCodes.Dup);
+          _ilg.Emit(OpCodes.Brtrue_S, label_condition_not_null);
 
           _ilg.Emit(OpCodes.Newobj, InternalType.MatchFailureException_ctor);
           _ilg.Emit(OpCodes.Throw);
 
-          _ilg.MarkLabel (label_condition_not_null);
+          _ilg.MarkLabel(label_condition_not_null);
 
-          need_reference (expr.ToTypeSig());
-          _ilg.Emit (OpCodes.Isinst, ty.ToTypeSig());
-          _ilg.Emit (OpCodes.Brtrue_S, label_condition_has_type);
-          _ilg.Emit (OpCodes.Ldc_I4_0);
-          _ilg.Emit (OpCodes.Br_S, label_condition_continue);
-          _ilg.MarkLabel (label_condition_has_type);
-          _ilg.Emit (OpCodes.Ldc_I4_1);
-          _ilg.MarkLabel (label_condition_continue);
+          need_reference(expr.ToTypeSig());
+          _ilg.Emit(OpCodes.Isinst, ty.ToTypeSig());
+          _ilg.Emit(OpCodes.Brtrue_S, label_condition_has_type);
+          _ilg.Emit(OpCodes.Ldc_I4_0);
+          _ilg.Emit(OpCodes.Br_S, label_condition_continue);
+          _ilg.MarkLabel(label_condition_has_type);
+          _ilg.Emit(OpCodes.Ldc_I4_1);
+          _ilg.MarkLabel(label_condition_continue);
 
 
         | DefaultValue =>
@@ -522,19 +553,16 @@ namespace Nemerle.Compiler
             | ty when ty.Equals(InternalType.Int32)
             | ty when ty.Equals(InternalType.UInt16)
             | ty when ty.Equals(InternalType.UInt32)
-            | ty when ty.Equals(InternalType.Boolean) =>
-              _ilg.Emit (OpCodes.Ldc_I4_0);
+            | ty when ty.Equals(InternalType.Boolean) => _ilg.Emit(OpCodes.Ldc_I4_0);
             | ty when ty.Equals(InternalType.Int64)
             | ty when ty.Equals(InternalType.UInt64) =>
-              _ilg.Emit (OpCodes.Ldc_I4_0);
-              _ilg.Emit (OpCodes.Conv_I8);
-            | ty when ty.Equals(InternalType.Single) =>
-              _ilg.Emit (OpCodes.Ldc_R4, 0.0f);
-            | ty when ty.Equals(InternalType.Double) =>
-              _ilg.Emit (OpCodes.Ldc_R8, 0.0d);
-            | ty when ty.Equals(InternalType.Decimal) =>
-              _ilg.Emit (OpCodes.Ldc_I4_0);
-              _ilg.Emit (OpCodes.Newobj, GetDecimalCtor("Int32"));
+              _ilg.Emit(OpCodes.Ldc_I4_0);
+              _ilg.Emit(OpCodes.Conv_I8);
+            | ty when ty.Equals(InternalType.Single) => _ilg.Emit(OpCodes.Ldc_R4, 0.0f);
+            | ty when ty.Equals(InternalType.Double) => _ilg.Emit (OpCodes.Ldc_R8, 0.0d);
+            | ty when ty.Equals(InternalType.Decimal) => 
+              _ilg.Emit(OpCodes.Ldc_I4_0);
+              _ilg.Emit(OpCodes.Newobj, GetDecimalCtor("Int32"));
             | ty =>
               def typeSig = ty.ToTypeSig();
               if (typeSig.IsValueType || typeSig.IsGenericParameter)
@@ -549,25 +577,25 @@ namespace Nemerle.Compiler
           }
 
         | CtorOf(ty, method) =>
-          def sysType = ty.ToTypeSig();
+          def sysType  = ty.ToTypeSig();
           def ctorInfo = ty.GetMethodInfo(method, []);
-          _ilg.Emit (OpCodes.Ldtoken, ctorInfo);
-          _ilg.Emit (OpCodes.Ldtoken, sysType);
-          _ilg.Emit (OpCodes.Call,      InternalType.MethodBase_GetMethodFromHandle2);
-          _ilg.Emit (OpCodes.Castclass, InternalType.ConstructorInfo.ToTypeSig());
+          _ilg.Emit(OpCodes.Ldtoken, ctorInfo);
+          _ilg.Emit(OpCodes.Ldtoken, sysType);
+          _ilg.Emit(OpCodes.Call,      InternalType.MethodBase_GetMethodFromHandle2);
+          _ilg.Emit(OpCodes.Castclass, InternalType.ConstructorInfo.ToTypeSig());
 
         | MethodOf(from_type, method, typars) =>
           def methodInfo = from_type.GetMethodInfo(method, typars);
-          def declTy = methodInfo.DeclaringType;
-          _ilg.Emit (OpCodes.Ldtoken, methodInfo);
+          def declTy     = methodInfo.DeclaringType;
+          _ilg.Emit(OpCodes.Ldtoken, methodInfo);
           if (declTy == null)
-            _ilg.Emit (OpCodes.Call, InternalType.MethodBase_GetMethodFromHandle);
+            _ilg.Emit(OpCodes.Call, InternalType.MethodBase_GetMethodFromHandle);
           else
           {
-            _ilg.Emit (OpCodes.Ldtoken, declTy);
-            _ilg.Emit (OpCodes.Call, InternalType.MethodBase_GetMethodFromHandle2);
+            _ilg.Emit(OpCodes.Ldtoken, declTy);
+            _ilg.Emit(OpCodes.Call, InternalType.MethodBase_GetMethodFromHandle2);
           }
-          _ilg.Emit (OpCodes.Castclass, InternalType.MethodInfo.ToTypeSig());
+          _ilg.Emit(OpCodes.Castclass, InternalType.MethodInfo.ToTypeSig());
 
         | ClosureObjectOf(TExpr.FieldMember(obj, _))    => emit(obj);
         | ClosureFieldOf(TExpr.FieldMember(obj, field)) => emit(TExpr.FieldOf(obj.Type, field));
@@ -577,34 +605,31 @@ namespace Nemerle.Compiler
         | FieldOf(ty, field) =>
           def fielfInfo = ty.GetFieldInfo(field);
           def declTy = fielfInfo.DeclaringType;
-          _ilg.Emit (OpCodes.Ldtoken, fielfInfo);
+          _ilg.Emit(OpCodes.Ldtoken, fielfInfo);
           if (declTy == null)
-            _ilg.Emit (OpCodes.Call, InternalType.FieldInfo_GetFieldFromHandle);
+            _ilg.Emit(OpCodes.Call, InternalType.FieldInfo_GetFieldFromHandle);
           else
           {
-            _ilg.Emit (OpCodes.Ldtoken, declTy);
-            _ilg.Emit (OpCodes.Call, InternalType.FieldInfo_GetFieldFromHandle2);
+            _ilg.Emit(OpCodes.Ldtoken, declTy);
+            _ilg.Emit(OpCodes.Call, InternalType.FieldInfo_GetFieldFromHandle2);
           }
-          _ilg.Emit (OpCodes.Castclass, InternalType.FieldInfo.ToTypeSig());
+          _ilg.Emit(OpCodes.Castclass, InternalType.FieldInfo.ToTypeSig());
 
-        /* load runtime representation of given type */
-        | TypeOf (t) =>
-          _ilg.Emit (OpCodes.Ldtoken, t.ToTypeSig());
-          _ilg.Emit (OpCodes.Call, InternalType.Type_GetTypeFromHandle);
+        | TypeOf(t) => // load runtime representation of given type
+          _ilg.Emit(OpCodes.Ldtoken, t.ToTypeSig());
+          _ilg.Emit(OpCodes.Call, InternalType.Type_GetTypeFromHandle);
 
-
-        /* emits the TExpr.Switch instruction */
-        | Switch (indexing_expr, default_expr, cases) =>
-          match (cases) {
+        | Switch(indexing_expr, default_expr, cases) => // emits the TExpr.Switch instruction
+          match (cases)
+          {
             | [] => Message.Warning ("empty TExpr.Switch instruction");
             | _ =>
-              emit (indexing_expr);
-              emit_switch (default_expr, cases)
+              emit(indexing_expr);
+              emit_switch(default_expr, cases)
           }
 
-
-        | MacroEnvelope (_, _, expr, _) =>
-          emit (expr)
+        | MacroEnvelope(_, _, expr, _) =>
+          emit(expr)
 
 
         | Label(id, DefaultValue as nextExpr) when nextExpr.Type is FixedType.Void with reset_throw = true // VladD2: This is a workaround for "dead code" hack.
