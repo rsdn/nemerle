@@ -566,12 +566,15 @@ namespace Nemerle.Compiler
       }
     }
 
-    flag_sibling_keyword (kw : string) : bool
+    flag_sibling_keyword(kw : string) : ValueOption[Token.Keyword]
     {
-      match (peek_sibling_token ())
+      match (peek_sibling_token())
       {
-        | Token.Keyword (k) when kw == k => shift_sibling (); true
-        | _ => false
+        | Token.Keyword(k) as token when kw == k =>
+          shift_sibling();
+          VSome(token)
+          
+        | _ => VNone()
       }
     }
 
@@ -1212,7 +1215,7 @@ namespace Nemerle.Compiler
       }
     }
 
-    parse_method(h : PFunHeader, modifiers : AttributesAndModifiers, return_value_modifiers : AttributesAndModifiers) : ClassMember
+    parse_method(header : PFunHeader, modifiers : AttributesAndModifiers, return_value_modifiers : AttributesAndModifiers) : ClassMember
     {
       mutable impl = [];
       when (flag_keyword ("implements"))
@@ -1220,7 +1223,7 @@ namespace Nemerle.Compiler
 
       parse_top_extensions (modifiers, MacroTargets.Method);
 
-      mutable loc        = h.Location;
+      mutable loc        = header.Location;
       mutable bodyBracesGroup;
 
       def tok          = peek_token();
@@ -1234,7 +1237,7 @@ namespace Nemerle.Compiler
 
             loc += brace.Location;
             bodyBracesGroup = brace;
-            FunBody.Parsed (ParseBlock (brace, h.Parameters))
+            FunBody.Parsed (ParseBlock (brace, header.Parameters))
 
           | Token.EndOfGroup as tok =>
             loc += tok.Location;
@@ -1257,14 +1260,14 @@ namespace Nemerle.Compiler
                 shift();
                 loc += brace.Location;
                 bodyBracesGroup = brace;
-                FunBody.Parsed (ParseBlock (brace, h.Parameters))
+                FunBody.Parsed (ParseBlock (brace, header.Parameters))
 
               | _ => FunBody.Abstract ()
             }
         };
 
-      def method = ClassMember.Function (header = h, name = h.ParsedSplicableName,  modifiers = modifiers,
-                                         loc = loc, body = body, implemented = impl);
+      header.FunLocation = loc;
+      def method = ClassMember.Function(loc, header.ParsedSplicableName,  modifiers, header, impl, body);
       InitBodyLocations(method, bodyBracesGroup, bodyLocation);
       method._env = env;
       method.ReturnValueModifiers = return_value_modifiers;
@@ -3016,7 +3019,7 @@ namespace Nemerle.Compiler
                 | _ => PExpr.DefMutable (loc, PExpr.Tuple.Create (loc, ids.Reverse ()), PExpr.Tuple.Create (loc, vals.Reverse ()))
               }
 
-            | Token.Keyword ("fun") =>
+            | Token.Keyword("fun") as funKeyword =>
               def (prmsOpenLoc, prmsCloseLoc, postHeaderLoc) = GetFunctionalLocations();
               def tyvars               = parse_tyvars();
               def (parms, parmsloc)    = parse_parameters(allow_patterns = true, allow_omit = true);
@@ -3025,8 +3028,9 @@ namespace Nemerle.Compiler
               def h                    = PFunHeader(loc.Combine(parmsloc).Combine(ret_type.Location), typarms,
                                                     MkSplicableName("", tok.Location), ret_type, parms, prmsOpenLoc, prmsCloseLoc, colonLoc);
               def expr                 = parse_block(parms);
-
-              PExpr.Lambda(h.Location.Combine(expr.Location), FunctionDecl(h, expr))
+              def funLoc               = funKeyword.Location + expr.Location;
+              h.FunLocation            = funLoc;
+              PExpr.Lambda(h.Location.Combine(expr.Location), FunctionDecl(funLoc, funKeyword, h, expr))
 
             | Token.Operator ("$") =>
               match (peek_token ())
@@ -3099,12 +3103,12 @@ namespace Nemerle.Compiler
                     expr // return test expression for the Completion work well
               }
 
-            | Token.Keyword ("try") =>
+            | Token.Keyword("try") =>
               def try_body = parse_expr();
               mutable body = try_body; // resulting expression
 
               // exception handlers
-              when (flag_sibling_keyword ("catch"))
+              when (flag_sibling_keyword("catch") is VSome(_))
               {
                 def mktry (h : PMatchCase, cases)
                 {
@@ -3186,7 +3190,7 @@ namespace Nemerle.Compiler
                 }
               }
 
-              when (flag_sibling_keyword ("finally"))
+              when (flag_sibling_keyword("finally") is VSome(_))
               {
                 def handler = parse_expr();
                 body = PExpr.TryFinally(loc.Combine(handler.Location), body, handler);
@@ -3196,22 +3200,24 @@ namespace Nemerle.Compiler
                 Message.Error(loc, "expecting `catch' or `finally'");
               body
 
-            | Token.Keyword ("def") =>
-              def parse_define ()
+            | Token.Keyword("def") as defKeyword =>
+              def parse_define()
               {
                 def pat = parse_expr (stop | TokenStoppers.Equal);
                 expect_operator ("=");
                 def expr = parse_expr (stop);
                 PExpr.Define (loc + expr.Location, pat, expr)
               }
-              def parse_funs (acc, idopt)
+              def parse_funs(firstKeyword, acc, idopt)
               {
-                def h    = parse_fun_header (idopt, allow_patterns = true);
-                def body = parse_block (h.Parameters);
-                def fd   = FunctionDecl (loc + h.Location + body.Location, h, body);
+                def localFanHeader = parse_fun_header(idopt, allow_patterns = true);
+                def body           = parse_block (localFanHeader.Parameters);
+                def funLocation    = firstKeyword.Location + body.Location;
+                def fd             = FunctionDecl(funLocation, firstKeyword, localFanHeader, body);
+                localFanHeader.FunLocation = funLocation;
 
-                if (flag_sibling_keyword ("and"))
-                  parse_funs(fd :: acc, get_splicable_id())
+                if (flag_sibling_keyword("and") is VSome(andKeyword))
+                  parse_funs(andKeyword, fd :: acc, get_splicable_id())
                 else
                 {
                   def lst  = (fd :: acc).Rev();
@@ -3220,11 +3226,11 @@ namespace Nemerle.Compiler
                 }
               }
 
-              match (maybe_parse_ellipsis ())
+              match (maybe_parse_ellipsis())
               {
-                | Some (e) => PExpr.DefFunctions (loc + e.Location, [FunctionDecl (null, e)])
+                | Some(e) => PExpr.DefFunctions(loc + e.Location, [FunctionDecl(null, e)])
                 | _ =>
-                  def token = peek_token ();
+                  def token = peek_token();
                   match (token)
                   {
                     | Token.Keyword ("_")
@@ -3235,7 +3241,7 @@ namespace Nemerle.Compiler
                       match (peek_token ())
                       {
                         | Token.SquareGroup
-                        | Token.RoundGroup => parse_funs ([], id)
+                        | Token.RoundGroup => parse_funs(defKeyword, [], id)
                         | Token.Operator (":") with
                           ty = ({
                                   shift ();
@@ -3325,9 +3331,11 @@ namespace Nemerle.Compiler
                 }
 
               | "fundecl" =>
-                def decl = push ("quoted function", fun () {
+                def decl = push("quoted function", 
+                fun ()
+                {
                   def h = parse_fun_header (null);
-                  FunctionDecl (h, parse_block (h.Parameters));
+                  FunctionDecl(h, parse_block(h.Parameters));
                 });
                 SyntaxElement.Function (decl)
 
