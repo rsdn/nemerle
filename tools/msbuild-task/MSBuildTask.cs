@@ -1,21 +1,17 @@
 ﻿using System;
 using System.IO;
-using System.Collections;
-using System.Reflection;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Diagnostics;
 
 using Microsoft.Build.Framework;
-using Microsoft.Build.Tasks;
 using Microsoft.Build.Utilities;
 using Microsoft.Win32;
 
 namespace Nemerle.Tools.MSBuildTask
 {
-
-    public class Ncc : ManagedCompiler
+    public class Ncc : ToolTask
     {
+        private bool? _checkIntegerOverflow, _delaySign, _treatWarningsAsErrors, _emitDebugInformation;
 
         public Ncc()
         {
@@ -23,51 +19,91 @@ namespace Nemerle.Tools.MSBuildTask
         }
 
         public string CompilerPath { get; set; }
-        public int WarningLevel { get; set; }
-        public string[] DisabledWarnings { get; set; }
-        public string[] EnabledWarnings { get; set; }
-        public string DocumentationFile { get; set; }
-        public bool NoStdLib { get; set; }
-        public bool NoStdMacros { get; set; }
-        public bool IndentationSyntax { get; set; }
-        public bool GreedyReferences { get; set; }
-        
-        #if !NET_4_5
-        public string Platform { get; set; }
-        #endif
-        
-        public bool RunDebugger { get; set; }
-        public string ProjectPath { get; set; }
-        public string RootNamespace { get; set; }
-        public int CompilerStackSize { get; set; }
-        public string CustomArguments { get; set; }
-        public ITaskItem[] MacroReferences
-        {
-            get { return (ITaskItem[])Bag["MacroReferences"]; }
-            set { Bag["MacroReferences"] = value; }
-        }
-        public bool CheckIntegerOverflow
-        {
-            get { return (bool)Bag["CheckIntegerOverflow"]; }
-            set { Bag["CheckIntegerOverflow"] = value; }
-        }
 
-#if MONO
-                protected override string ToolName
-                {
-                        get { 
-                                if(Environment.OSVersion.VersionString.Contains("Windows"))
-                                        return "ncc.bat";
-                                else
-                                        return "ncc";
-                        }
-                }
-#else
+        public int CompilerStackSize { get; set; }
+
+        public int WarningLevel { get; set; }
+
+        public string[] DisabledWarnings { get; set; }
+
+        public string[] EnabledWarnings { get; set; }
+
+        public bool GreedyReferences { get; set; }
+
+        public bool IndentationSyntax { get; set; }
+
+        public bool NoLogo { get; set; }
+
+        public bool NoStdLib { get; set; }
+
+        public bool NoStdMacros { get; set; }
+
+        public bool Optimize { get; set; }
+
+        public bool RunDebugger { get; set; }
+
+        public bool CheckIntegerOverflow { get { return _checkIntegerOverflow.Value; } set { _checkIntegerOverflow = value; } }
+
+        public bool DelaySign { get { return _delaySign.Value; } set { _delaySign = value; } }
+
+        public bool TreatWarningsAsErrors { get { return _treatWarningsAsErrors.Value; } set { _treatWarningsAsErrors = value; } }
+
+        public bool EmitDebugInformation { get { return _emitDebugInformation.Value; } set { _emitDebugInformation = value; } }
+
+        public string CustomArguments { get; set; }
+
+        public string DefineConstants { get; set; }
+
+        public string DocumentationFile { get; set; }
+
+        public string KeyContainer { get; set; }
+
+        public string KeyFile { get; set; }
+
+        public string MainEntryPoint { get; set; }
+
+        public string Platform { get; set; }
+
+        public string ProjectPath { get; set; }
+
+        public string RootNamespace { get; set; }
+
+        public string TargetType { get; set; }
+
+        public string Win32Icon { get; set; }
+
+        public string Win32Resource { get; set; }
+
+        public string[] AddModules { get; set; }
+
+        public string[] AdditionalLibPaths { get; set; }
+
+        public ITaskItem[] Sources { get; set; }
+
+        public ITaskItem[] References { get; set; }
+
+        public ITaskItem[] MacroReferences { get; set; }
+
+        public ITaskItem[] ResponseFiles { get; set; }
+
+        public ITaskItem[] LinkResources { get; set; }
+
+        public ITaskItem[] Resources { get; set; }
+
+        [Output]
+        public ITaskItem OutputAssembly { get; set; }
+
         protected override string ToolName
         {
-            get { return "ncc.exe"; }
-        }
+            get
+            {
+#if MONO
+                return Environment.OSVersion.VersionString.Contains("Windows") ? "ncc.bat" : "ncc";
+#else
+                return "ncc.exe";
 #endif
+            }
+        }
 
         private string FindExecutable(string toolName)
         {
@@ -88,27 +124,23 @@ namespace Nemerle.Tools.MSBuildTask
                 //
                 return ncc_file;
             }
-            else
-            {
-                // Query the shell association
-                //
-                var regKeyName = @"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\" + toolName;
-                var regKey = Registry.LocalMachine.OpenSubKey(regKeyName);
 
-                if (null != regKey)
-                {
-                    // The tool is registered with the Shell API.
-                    //
-                    return (string)regKey.GetValue(null);
-                }
-                else
-                {
-                    // Return the tool name itself.
-                    // The environment will search common paths for the tool.
-                    //
-                    return toolName;
-                }
+            // Query the shell association
+            //
+            var regKeyName = @"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\" + toolName;
+            var regKey = Registry.LocalMachine.OpenSubKey(regKeyName);
+
+            if (null != regKey)
+            {
+                // The tool is registered with the Shell API.
+                //
+                return (string)regKey.GetValue(null);
             }
+
+            // Return the tool name itself.
+            // The environment will search common paths for the tool.
+            //
+            return toolName;
         }
 
         protected override string GenerateFullPathToTool()
@@ -116,11 +148,13 @@ namespace Nemerle.Tools.MSBuildTask
             return FindExecutable(ToolName);
         }
 
-        protected override void AddResponseFileCommands(CommandLineBuilderExtension commandLine)
+        protected override string GenerateResponseFileCommands()
         {
             try
             {
+                var commandLine = new NccCommandLineBuilder();
                 AddResponseFileCommandsImpl(commandLine);
+                return commandLine.ToString();
             }
             catch (Exception ex)
             {
@@ -129,7 +163,7 @@ namespace Nemerle.Tools.MSBuildTask
             }
         }
 
-        protected void AddResponseFileCommandsImpl(CommandLineBuilderExtension commandLine)
+        private void AddResponseFileCommandsImpl(NccCommandLineBuilder commandLine)
         {
             if (OutputAssembly == null && Sources != null && Sources.Length > 0 && ResponseFiles == null)
             {
@@ -159,20 +193,17 @@ namespace Nemerle.Tools.MSBuildTask
                 }
             }
 
-            // Don't call base.AddResponseFileCommands()!
-            //base.AddResponseFileCommands(commandLine);
-
             //System.Diagnostics.Debug.Assert(false);
             if (RunDebugger)
                 commandLine.AppendSwitch("\n/debugger");
             if (Optimize)
                 commandLine.AppendSwitch("\n/optimize");
-            commandLine.AppendPlusOrMinusSwitch("\n/checked", base.Bag, "CheckIntegerOverflow");
+            commandLine.AppendPlusOrMinusSwitch("\n/checked", _checkIntegerOverflow);
 
             commandLine.AppendSwitch("\n/no-color");
-            commandLine.AppendSwitchIfNotNull("\n/lib:", base.AdditionalLibPaths, ",");
-            commandLine.AppendSwitchIfNotNull("\n/nowarn:", this.DisabledWarnings, ",");
-            commandLine.AppendSwitchIfNotNull("\n/dowarn:", this.EnabledWarnings, ",");
+            commandLine.AppendSwitchIfNotNull("\n/lib:", AdditionalLibPaths, ",");
+            commandLine.AppendSwitchIfNotNull("\n/nowarn:", DisabledWarnings, ",");
+            commandLine.AppendSwitchIfNotNull("\n/dowarn:", EnabledWarnings, ",");
             if (NoStdLib)
                 commandLine.AppendSwitch("\n/no-stdlib");
             if (NoStdMacros)
@@ -180,37 +211,36 @@ namespace Nemerle.Tools.MSBuildTask
             if (!GreedyReferences)
                 commandLine.AppendSwitch("\n/greedy-references:-");
             if (WarningLevel != 4)
-                commandLine.AppendSwitchIfNotNull("\n/warn:", this.WarningLevel.ToString());
+                commandLine.AppendSwitchIfNotNull("\n/warn:", WarningLevel.ToString());
             if (IndentationSyntax)
                 commandLine.AppendSwitch("\n/indentation-syntax");
-            commandLine.AppendSwitchIfNotNull("\n/doc:", this.DocumentationFile);
-            if (!string.IsNullOrEmpty(base.DefineConstants))
+            commandLine.AppendSwitchIfNotNull("\n/doc:", DocumentationFile);
+            if (!string.IsNullOrEmpty(DefineConstants))
             {
-                var defines = base.DefineConstants
+                var defines = DefineConstants
                     .Split(new char[] { ';', ' ', '\r', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries);
                 commandLine.AppendSwitchUnquotedIfNotNull("\n/define:", String.Join(";", defines));
             }
-            commandLine.AppendSwitchIfNotNull("\n/win32res:", base.Win32Resource);
-            commandLine.AppendSwitchIfNotNull("\n/platform:", this.Platform);
+            commandLine.AppendSwitchIfNotNull("\n/win32res:", Win32Resource);
+            commandLine.AppendSwitchIfNotNull("\n/platform:", Platform);
 
-            // Switchs from base.AddResponseFileCommands()
-            commandLine.AppendSwitchIfNotNull("\n/addmodule:", this.AddModules, ",");
-            commandLine.AppendPlusOrMinusSwitch("\n/delaysign", base.Bag, "DelaySign");
-            commandLine.AppendSwitchIfNotNull("\n/keycontainer:", this.KeyContainer);
-            commandLine.AppendSwitchIfNotNull("\n/keyfile:", this.KeyFile);
-            commandLine.AppendSwitchIfNotNull("\n/linkresource:", this.LinkResources, new[] { "LogicalName", "Access" });
+            commandLine.AppendSwitchIfNotNull("\n/addmodule:", AddModules, ",");
+            commandLine.AppendPlusOrMinusSwitch("\n/delaysign", _delaySign);
+            commandLine.AppendSwitchIfNotNull("\n/keycontainer:", KeyContainer);
+            commandLine.AppendSwitchIfNotNull("\n/keyfile:", KeyFile);
+            commandLine.AppendSwitchIfNotNull("\n/linkresource:", LinkResources, new[] { "LogicalName", "Access" });
             if (NoLogo)
                 commandLine.AppendSwitch("\n/nologo");
-            commandLine.AppendSwitchIfNotNull("\n/resource:", this.Resources, new[] { "LogicalName", "Access" });
-            commandLine.AppendSwitchIfNotNull("\n/target:", this.TargetType);
-            commandLine.AppendPlusOrMinusSwitch("\n/warnaserror", base.Bag, "TreatWarningsAsErrors");
-            commandLine.AppendSwitchIfNotNull("\n/win32icon:", this.Win32Icon);
-            commandLine.AppendPlusOrMinusSwitch("\n/debug", base.Bag, "EmitDebugInformation");
-            commandLine.AppendSwitchIfNotNull("\n/project-path:", this.ProjectPath);
-            commandLine.AppendSwitchIfNotNull("\n/root-namespace:", this.RootNamespace);
-            commandLine.AppendSwitchIfNotNull("\n/main:", this.MainEntryPoint);
+            commandLine.AppendSwitchIfNotNull("\n/resource:", Resources, new[] { "LogicalName", "Access" });
+            commandLine.AppendSwitchIfNotNull("\n/target:", TargetType);
+            commandLine.AppendPlusOrMinusSwitch("\n/warnaserror", _treatWarningsAsErrors);
+            commandLine.AppendSwitchIfNotNull("\n/win32icon:", Win32Icon);
+            commandLine.AppendPlusOrMinusSwitch("\n/debug", _emitDebugInformation);
+            commandLine.AppendSwitchIfNotNull("\n/project-path:", ProjectPath);
+            commandLine.AppendSwitchIfNotNull("\n/root-namespace:", RootNamespace);
+            commandLine.AppendSwitchIfNotNull("\n/main:", MainEntryPoint);
             if (CompilerStackSize > 0)
-                commandLine.AppendSwitchIfNotNull("\n/stack-size:", this.CompilerStackSize.ToString());
+                commandLine.AppendSwitchIfNotNull("\n/stack-size:", CompilerStackSize.ToString());
 
             // Not supported options:
             //commandLine.AppendSwitchWithInteger("\n/codepage:", base.Bag, "CodePage");
@@ -219,28 +249,28 @@ namespace Nemerle.Tools.MSBuildTask
             //commandLine.AppendWhenTrue("\n/utf8output", base.Bag, "Utf8Output");
 
             // Add sources
-            if (this.Sources != null)
+            if (Sources != null)
             {
-                commandLine.Append("\n\n");
-                commandLine.AppendFileNamesIfNotNull(this.Sources, "\n");
-                commandLine.Append("\n");
+                commandLine.AppendTextUnquoted("\n\n");
+                commandLine.AppendFileNamesIfNotNull(Sources, "\n");
+                commandLine.AppendTextUnquoted("\n");
             }
 
-            if (null != base.ResponseFiles)
+            if (null != ResponseFiles)
             {
-                foreach (var it in base.ResponseFiles)
+                foreach (var it in ResponseFiles)
                     commandLine.AppendSwitchIfNotNull("\n/fromfile:", it.ItemSpec);
             }
 
-            if (null != base.References)
+            if (null != References)
             {
-                foreach (var it in base.References)
+                foreach (var it in References)
                     commandLine.AppendSwitchIfNotNull("\n/ref:", it.ItemSpec);
             }
 
-            if (null != this.MacroReferences)
+            if (null != MacroReferences)
             {
-                foreach (var it in this.MacroReferences)
+                foreach (var it in MacroReferences)
                     commandLine.AppendSwitchIfNotNull("\n/macros:", it.ItemSpec);
             }
 
@@ -362,35 +392,23 @@ namespace Nemerle.Tools.MSBuildTask
                 Log.LogMessageFromText(singleLine, MessageImportance.High);
             }
         }
-
-        protected override string GetResponseFileSwitch(string responseFilePath)
-        {
-            return "/from-file:\"" + responseFilePath + "\"";
-        }
     }
 
-    public static class CommandLineBuilderNemerleExtension
+    public class NccCommandLineBuilder : CommandLineBuilder
     {
-
-        public static void Append(this CommandLineBuilder commandLine, string text)
+        public void AppendPlusOrMinusSwitch(string switchName, bool? flag)
         {
-            GetCommandLine(commandLine).Append(text);
+            if (flag.HasValue)
+                AppendSwitchIfNotNull(switchName, flag.GetValueOrDefault() ? "+" : "-");
         }
 
-        public static void AppendPlusOrMinusSwitch(this CommandLineBuilder commandLine, string switchName, Hashtable bag, string parameterName)
-        {
-            var flag = bag[parameterName];
-            if (flag != null)
-                commandLine.AppendSwitchIfNotNull(switchName, (bool)flag ? "+" : "-");
-        }
-
-        public static void AppendSwitchIfNotNull(this CommandLineBuilder commandLine, string switchName, ITaskItem[] parameters, string[] metadataNames)
+        public void AppendSwitchIfNotNull(string switchName, ITaskItem[] parameters, string[] metadataNames)
         {
             if (parameters == null)
                 return;
             foreach (var item in parameters)
             {
-                commandLine.AppendSwitchIfNotNull(switchName, item.ItemSpec);
+                AppendSwitchIfNotNull(switchName, item.ItemSpec);
                 if (metadataNames == null)
                     continue;
                 foreach (var metadataName in metadataNames)
@@ -398,31 +416,11 @@ namespace Nemerle.Tools.MSBuildTask
                     var metadata = item.GetMetadata(metadataName);
                     if (metadata != null && metadata.Length > 0)
                     {
-                        GetCommandLine(commandLine).Append(',');
-                        AppendTextWithQuoting(commandLine, metadata);
+                        CommandLine.Append(',');
+                        AppendTextWithQuoting(metadata);
                     }
                 }
             }
         }
-
-        #region Accessors to protected members of CommandLineBuilder
-
-        private static StringBuilder GetCommandLine(CommandLineBuilder commandLine)
-        {
-            return (StringBuilder)commandLine.GetType()
-                    .GetProperty("CommandLine", BindingFlags.Instance | BindingFlags.NonPublic)
-                    .GetValue(commandLine, null);
-        }
-
-        private static void AppendTextWithQuoting(CommandLineBuilder commandLine, string text)
-        {
-            commandLine.GetType()
-                    .GetMethod("AppendTextWithQuoting", BindingFlags.Instance | BindingFlags.NonPublic)
-                    .Invoke(commandLine, new[] { text });
-        }
-
-        #endregion
-
     }
-
 }
