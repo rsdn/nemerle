@@ -283,6 +283,7 @@ namespace Nemerle.Tools.MSBuildTask
         private sealed class Location
         {
             private static Regex _msgRx = new Regex(@"(?<path>.*?)\(\s*(?<start_line>\d+)\s*,\s*(?<start_char>\d+)\s*(?:,\s*(?<end_line>\d+)\s*,\s*(?<end_char>\d+)\s*)?\):\s*(hint|warning|error)\s*:\s*(?<msg>.*)", RegexOptions.Compiled);
+            private static char[] _invalidPathChars = Path.GetInvalidPathChars();
             public string File;
             public int StartLine;
             public int StartPos;
@@ -319,6 +320,8 @@ namespace Nemerle.Tools.MSBuildTask
                 {
                   // Try old nemerle format...
                   var str = text.Substring(0, tagPos);
+                  if (str.IndexOfAny(_invalidPathChars) >= 0)
+                      return new Location();
                   // Path can contain ':'. We should skip it...
                   var dir = str.StartsWith(":") ? "" : Path.GetDirectoryName(str);
                   // Find first location separator (it's a end of path)
