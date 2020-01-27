@@ -158,7 +158,7 @@ namespace Nemerle.Tools.MSBuildTask
             }
             catch (Exception ex)
             {
-                Trace.Assert(false, ex.ToString());
+                Console.WriteLine(ex);
                 throw;
             }
         }
@@ -299,128 +299,137 @@ namespace Nemerle.Tools.MSBuildTask
 
                 if (m.Success)
                 {
-                  var path       = m.Groups["path"].Value;
-                  var startLine  = int.Parse(m.Groups["start_line"].Value);
-                  var startPos   = int.Parse(m.Groups["start_char"].Value);
-                  var endLineOpt = m.Groups["end_line"];
-                  var endPosOpt  = m.Groups["end_char"];
-                  var endLine    = endLineOpt.Success ? int.Parse(endLineOpt.Value) : startLine;
-                  var endPos     = endPosOpt.Success  ? int.Parse(endPosOpt.Value)  : startPos;
+                    var path = m.Groups["path"].Value;
+                    var startLine = int.Parse(m.Groups["start_line"].Value);
+                    var startPos = int.Parse(m.Groups["start_char"].Value);
+                    var endLineOpt = m.Groups["end_line"];
+                    var endPosOpt = m.Groups["end_char"];
+                    var endLine = endLineOpt.Success ? int.Parse(endLineOpt.Value) : startLine;
+                    var endPos = endPosOpt.Success ? int.Parse(endPosOpt.Value) : startPos;
 
-                  return new Location
-                  {
-                      File = path,
-                      StartLine = startLine,
-                      StartPos = startPos,
-                      EndLine = endLine,
-                      EndPos = endPos
-                  };
+                    return new Location
+                    {
+                        File = path,
+                        StartLine = startLine,
+                        StartPos = startPos,
+                        EndLine = endLine,
+                        EndPos = endPos
+                    };
                 }
                 else
                 {
-                  // Try old nemerle format...
-                  var str = text.Substring(0, tagPos);
-                  if (str.IndexOfAny(_invalidPathChars) >= 0)
-                      return new Location();
-                  // Path can contain ':'. We should skip it...
-                  var dir = str.StartsWith(":") ? "" : Path.GetDirectoryName(str);
-                  // Find first location separator (it's a end of path)
-                  var locIndex = str.IndexOf(':', dir.Length);
-                  var path = (locIndex <= 0) ? dir : str.Substring(0, locIndex);
-                  var locStr = str.Substring(locIndex);
-                  var parts = locStr.Trim().Trim(':').Split(':');
-                  switch (parts.Length)
-                  {
-                      case 2:
-                          var line = int.Parse(parts[0]);
-                          var pos = int.Parse(parts[1]);
-                          return new Location
-                          {
-                              File = path,
-                              StartLine = line,
-                              StartPos = pos,
-                              EndLine = line,
-                              EndPos = pos + 1
-                          };
-                      case 4:
-                          return new Location
-                          {
-                              File = path,
-                              StartLine = int.Parse(parts[0]),
-                              StartPos = int.Parse(parts[1]),
-                              EndLine = int.Parse(parts[2]),
-                              EndPos = int.Parse(parts[3])
-                          };
-                      default:
-                          return new Location
-                          {
-                              File = path
-                          };
-                  }
+                    // Try old nemerle format...
+                    var str = text.Substring(0, tagPos);
+                    if (str.IndexOfAny(_invalidPathChars) >= 0)
+                        return new Location();
+                    // Path can contain ':'. We should skip it...
+                    var dir = str.StartsWith(":") ? "" : Path.GetDirectoryName(str);
+                    // Find first location separator (it's a end of path)
+                    var locIndex = str.IndexOf(':', dir.Length);
+                    var path = (locIndex <= 0) ? dir : str.Substring(0, locIndex);
+                    var locStr = str.Substring(locIndex);
+                    var parts = locStr.Trim().Trim(':').Split(':');
+                    switch (parts.Length)
+                    {
+                        case 2:
+                            var line = int.Parse(parts[0]);
+                            var pos = int.Parse(parts[1]);
+                            return new Location
+                            {
+                                File = path,
+                                StartLine = line,
+                                StartPos = pos,
+                                EndLine = line,
+                                EndPos = pos + 1
+                            };
+                        case 4:
+                            return new Location
+                            {
+                                File = path,
+                                StartLine = int.Parse(parts[0]),
+                                StartPos = int.Parse(parts[1]),
+                                EndLine = int.Parse(parts[2]),
+                                EndPos = int.Parse(parts[3])
+                            };
+                        default:
+                            return new Location
+                            {
+                                File = path
+                            };
+                    }
                 }
             }
         }
 
         protected override void LogEventsFromTextOutput(string singleLine, MessageImportance importance)
         {
-            int tagPos;
-            string tag;
+            try
+            {
+                int tagPos;
+                string tag;
 
-            if ((tagPos = singleLine.IndexOf(tag = "error:")) >= 0)
-            {
-                var loc = Location.Parse(tagPos, singleLine);
-                var msg = singleLine.Substring(tagPos + tag.Length + 1);
-                Log.LogError(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
+                if ((tagPos = singleLine.IndexOf(tag = "error:")) >= 0)
+                {
+                    var loc = Location.Parse(tagPos, singleLine);
+                    var msg = singleLine.Substring(tagPos + tag.Length + 1);
+                    Log.LogError(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
+                }
+                else if ((tagPos = singleLine.IndexOf(tag = "warning:")) >= 0)
+                {
+                    var loc = Location.Parse(tagPos, singleLine);
+                    var msg = singleLine.Substring(tagPos + tag.Length + 1);
+                    Log.LogWarning(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
+                }
+                else if ((tagPos = singleLine.IndexOf(tag = "debug:")) >= 0)
+                {
+                    var loc = Location.Parse(tagPos, singleLine);
+                    var msg = singleLine.Substring(tagPos + tag.Length + 1);
+                    Log.LogError(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
+                }
+                else if ((tagPos = singleLine.IndexOf(tag = "hint:")) >= 0)
+                {
+                    var loc = Location.Parse(tagPos, singleLine);
+                    var msg = singleLine.Substring(tagPos);
+                    Log.LogWarning(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
+                }
+                else
+                {
+                    Log.LogMessageFromText(singleLine, MessageImportance.High);
+                }
             }
-            else if ((tagPos = singleLine.IndexOf(tag = "warning:")) >= 0)
-            {
-                var loc = Location.Parse(tagPos, singleLine);
-                var msg = singleLine.Substring(tagPos + tag.Length + 1);
-                Log.LogWarning(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
-            }
-            else if ((tagPos = singleLine.IndexOf(tag = "debug:")) >= 0)
-            {
-                var loc = Location.Parse(tagPos, singleLine);
-                var msg = singleLine.Substring(tagPos + tag.Length + 1);
-                Log.LogError(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
-            }
-            else if ((tagPos = singleLine.IndexOf(tag = "hint:")) >= 0)
-            {
-                var loc = Location.Parse(tagPos, singleLine);
-                var msg = singleLine.Substring(tagPos);
-                Log.LogWarning(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
-            }
-            else
+            catch (Exception ex)
             {
                 Log.LogMessageFromText(singleLine, MessageImportance.High);
+                Log.LogMessageFromText(ex.ToString(), MessageImportance.High);
+                Console.WriteLine(ex);
             }
         }
-    }
 
-    public class NccCommandLineBuilder : CommandLineBuilder
-    {
-        public void AppendPlusOrMinusSwitch(string switchName, bool? flag)
+        public class NccCommandLineBuilder : CommandLineBuilder
         {
-            if (flag.HasValue)
-                AppendSwitchIfNotNull(switchName, flag.GetValueOrDefault() ? "+" : "-");
-        }
-
-        public void AppendSwitchIfNotNull(string switchName, ITaskItem[] parameters, string[] metadataNames)
-        {
-            if (parameters == null)
-                return;
-            foreach (var item in parameters)
+            public void AppendPlusOrMinusSwitch(string switchName, bool? flag)
             {
-                AppendSwitchIfNotNull(switchName, item.ItemSpec);
-                if (metadataNames == null)
-                    continue;
-                foreach (var metadataName in metadataNames)
+                if (flag.HasValue)
+                    AppendSwitchIfNotNull(switchName, flag.GetValueOrDefault() ? "+" : "-");
+            }
+
+            public void AppendSwitchIfNotNull(string switchName, ITaskItem[] parameters, string[] metadataNames)
+            {
+                if (parameters == null)
+                    return;
+                foreach (var item in parameters)
                 {
-                    var metadata = item.GetMetadata(metadataName);
-                    if (metadata != null && metadata.Length > 0)
+                    AppendSwitchIfNotNull(switchName, item.ItemSpec);
+                    if (metadataNames == null)
+                        continue;
+                    foreach (var metadataName in metadataNames)
                     {
-                        CommandLine.Append(',');
-                        AppendTextWithQuoting(metadata);
+                        var metadata = item.GetMetadata(metadataName);
+                        if (metadata != null && metadata.Length > 0)
+                        {
+                            CommandLine.Append(',');
+                            AppendTextWithQuoting(metadata);
+                        }
                     }
                 }
             }
