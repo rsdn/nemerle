@@ -180,8 +180,7 @@ namespace Nemerle.Compiler
           | null => Message.Warning ($"failed to construct instance of macro `$macro_name' from assembly $(lib.FullName)");
           | casted_macro is IMacro =>
             def ns = casted_macro.GetNamespace ();
-            when (namespace_nodes.Get (ns).IsNone)
-              _ = cache_namespace_node (ns);
+            _ = GetNamespaceNode(ns);
 
             Manager.MacrosRegistry.RegisterMacro (casted_macro);
 
@@ -401,7 +400,7 @@ namespace Nemerle.Compiler
   //        Message.Debug (name);
           def e = ExternalType(t, lib, null);
 
-          def mainnode = framework_nesting (t);
+          def (mainnode, _) = framework_nesting (t);
 
           when (IsExtension (t))
             _construct_right_away ::= mainnode;
@@ -451,44 +450,39 @@ namespace Nemerle.Compiler
       }
     }
 
-    internal cache_namespace_node (namespc : string) : NamespaceTree.Node
+    private GetNamespaceNode(namespc : string) : NamespaceTree.Node
     {
-      def nd = NameTree.ExactPath (NString.Split (namespc, array ['.']));
-      mutable assigned = nd;
-      while (assigned != null)
+      mutable nd;
+      unless (namespace_nodes.TryGetValue(namespc, out nd))
       {
-        when (assigned.Value is NamespaceTree.TypeInfoCache.No)
-          assigned.Value = NamespaceTree.TypeInfoCache.NamespaceReference ();
+        nd = NameTree.ExactPath (NString.Split (namespc, array ['.']));
+        mutable assigned = nd;
+        while (assigned != null)
+        {
+          when (assigned.Value is NamespaceTree.TypeInfoCache.No)
+            assigned.Value = NamespaceTree.TypeInfoCache.NamespaceReference ();
 
-        assigned = assigned.Parent;
+          assigned = assigned.Parent;
+        }
+
+        namespace_nodes.Add (namespc, nd);
       }
-
-      namespace_nodes.Add (namespc, nd);
       nd
     }
 
-    internal framework_nesting(t : DN.ITypeDefOrRef) : NamespaceTree.Node
+    internal framework_nesting(t : DN.ITypeDefOrRef) : NamespaceTree.Node * int
     {
-      def loop (t, acc)
-      {
-        def path = Util.StripGenericMark (t.Name) :: acc;
-        def dt   = t.DeclaringType;
-        if (dt != null)
-          loop (dt, path)
+      def declaringType = t.DeclaringType;
+      def declaringNode = 
+        if (declaringType != null)
+          framework_nesting(declaringType)[0]
         else
-        {
-          def namespc = if (t.Namespace != null) t.Namespace else "";
-          match (namespace_nodes.Get (namespc))
-          {
-            | Some (nd) => (nd, path)
-            | None      => (cache_namespace_node (namespc), path)
-          }
-        }
-      }
-      def (node, path) = loop(t, []);
-      node.Path(path)
+          GetNamespaceNode((t.Namespace : string) ?? "");
+
+      def (name, paramCount) = Util.ParseGenericTypeName(t.Name);
+      (declaringNode.Path([name]), paramCount)
     }
-    
+
     internal TypeInfoOfType(framework_type : DN.ITypeDefOrRef) : TypeInfo
     {
       def getOwnerLibrary(t : DN.ITypeDefOrRef)
@@ -503,31 +497,38 @@ namespace Nemerle.Compiler
         library
       }
 
-      def resolveTypeDef(_ : DN.ITypeDefOrRef)
+      def unwrapTypeSpec(t : DN.ITypeDefOrRef)
       {
         | DN.TypeSpec(TypeSig = DN.TypeDefOrRefSig() as sig)
-        | DN.TypeSpec(TypeSig = DN.GenericInstSig(GenericType = sig)) => resolveTypeDef(sig.TypeDefOrRef)
-        | DN.TypeDef as typeDef => typeDef
-        | DN.TypeRef as typeRef => typeRef.Resolve()
-        | t                     => Util.ice($"Unable to resolve type definition from type reference '$t'")
+        | DN.TypeSpec(TypeSig = DN.GenericInstSig(GenericType = sig)) => unwrapTypeSpec(sig.TypeDefOrRef)
+        | _ => t
       }
 
-      def typeDef = resolveTypeDef(framework_type);
-      when (typeDef == null)
+      def typeDefOrRef       = unwrapTypeSpec(framework_type);
+      def (node, paramCount) = framework_nesting(typeDefOrRef);
+      match (node.LookupType([], paramCount))
       {
-        def typeFullName = framework_type.AssemblyQualifiedName;
-        when (_unresolvedTypeReferences.Add(typeFullName))
-          Message.Warning(getOwnerLibrary(framework_type).Location, $"Unable to resolve type '$(typeFullName)'");
-        return InternalType.Object_tc;
-      }
-
-      def ns_node_type = framework_nesting(framework_type);
-      match (ns_node_type.LookupType ([], typeDef.GenericParameters.Count))
-      {
-        | Some (tc) => tc
+        | Some (tc) => tc // TODO: check definition assembly
+        | None =>
           // protected external types are not fetched automatically from external assembly
           // so sometimes we must load them by hand
-        | None => getOwnerLibrary(typeDef).GetInternalType(typeDef, ns_node_type)
+          def typeDef =
+            match (typeDefOrRef)
+            {
+              | DN.TypeDef as typeDef => typeDef
+              | DN.TypeRef as typeRef => typeRef.Resolve()
+              | _ => Util.ice($"Unable to resolve type definition from type reference '$framework_type'")
+            };
+
+          if (typeDef != null)
+            getOwnerLibrary(typeDef).GetInternalType(typeDef, node)
+          else
+          {
+            def typeFullName = framework_type.AssemblyQualifiedName;
+            when (_unresolvedTypeReferences.Add(typeFullName))
+              Message.Warning(getOwnerLibrary(framework_type).Location, $"Unable to resolve type '$(typeFullName)'");
+            InternalType.Object_tc
+          }
       }
     }
   }
