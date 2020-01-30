@@ -112,8 +112,6 @@ namespace Nemerle.VisualStudio.Project
         {
             var projectData = new ProjectUpgradeHelper(sourceProjectFilePath);
 
-            projectData.ToolsVersion.Value = NetFrameworkProjectConstants.ToolsVersion;
-
             if (IsNeedUpdateNemerleBinPathRootProperty(projectData.NemerleBinPathRoot))
             {
                 projectData.NemerleBinPathRoot.Value = NetFrameworkProjectConstants.NemerleBinPathRoot;
@@ -129,19 +127,12 @@ namespace Nemerle.VisualStudio.Project
             else if (!Utils.Eq(projectData.NemerleProperty.Value, NetFrameworkProjectConstants.NemerleProperty))
                 pLogger.LogMessage((uint)__VSUL_ERRORLEVEL.VSUL_WARNING, projectName, sourceProjectFilePath, "The Nemerle property changed by user. You must update it manually.");
 
-            projectData.TargetFrameworkVersion.Value = NetFrameworkProjectConstants.GetDefaultTargetFrameworkVersion();
-
             projectData.NemerleProperty.Document.Save(destProjectFilePath);
         }
 
         private static bool IsNeedUpdateNemerleVersion(ProjectUpgradeHelper projectData)
         {
             return !NetFrameworkProjectConstants.ValidNemerleVersions.Contains(projectData.NemerleVersion.Value);
-        }
-
-        private static bool IsNeedUpdateTargetFrameworkVersion(ProjectUpgradeHelper projectData)
-        {
-            return !NetFrameworkProjectConstants.ValidTargetFrameworkVersions.Contains(projectData.TargetFrameworkVersion.Value);
         }
 
         private static void BackupProjectForUpgrade(string sourceProjectFilePath, IVsUpgradeLogger pLogger, ref string destProjectFilePath, string backupedProject, string projectName)
@@ -208,15 +199,6 @@ namespace Nemerle.VisualStudio.Project
                 return VSConstants.E_FAIL;
             }
 
-            if (projectData.ToolsVersion == null)
-                return VSConstants.S_OK;
-
-            // Check ToolsVersion
-            // Can be one of the following: 4.0+
-            var version = ParseVersion(projectData.ToolsVersion.Value);
-            if (version.Major < 4)
-                return VSConstants.S_OK;
-
             if (IsNeedUpdateNemerleProperty(projectData.NemerleProperty))
                 return VSConstants.S_OK;
 
@@ -224,9 +206,6 @@ namespace Nemerle.VisualStudio.Project
                 return VSConstants.S_OK;
 
             if (IsNeedUpdateNemerleBinPathRootProperty(projectData.NemerleBinPathRoot))
-                return VSConstants.S_OK;
-
-            if (IsNeedUpdateTargetFrameworkVersion(projectData))
                 return VSConstants.S_OK;
 
             pUpgradeRequired = 0;

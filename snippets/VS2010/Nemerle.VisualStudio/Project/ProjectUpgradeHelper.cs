@@ -18,14 +18,9 @@ namespace Nemerle.VisualStudio.Project
 			if (project == null || project.Name.LocalName != "Project")
 				throw new ApplicationException("The '" + projectFilePath + "' is not correct project file.");
 
-			ToolsVersion           = project.Attribute("ToolsVersion");
-			TargetFrameworkVersion = FindPropertyElement(project, "TargetFrameworkVersion");
 			NemerleBinPathRoot     = FindPropertyElement(project, "NemerleBinPathRoot");
 			NemerleVersion         = FindPropertyElement(project, "NemerleVersion");
 			NemerleProperty        = FindPropertyElement(project, "Nemerle");
-
-			if (ToolsVersion == null)
-				project.Add(ToolsVersion = new XAttribute("ToolsVersion", "0.0"));
 		}
 
 		private XElement FindPropertyElement(XElement project, string propertyName)
@@ -54,9 +49,7 @@ namespace Nemerle.VisualStudio.Project
 			throw new ApplicationException("Incorrect format of project file. The project must contains '" + propertyName + "' property.");
 		}
 
-		public XAttribute ToolsVersion           { get; private set; }
 		public XElement   NemerleProperty        { get; private set; }
-		public XElement   TargetFrameworkVersion { get; private set; }
 		public XElement   NemerleVersion         { get; private set; }
 		public XElement   NemerleBinPathRoot     { get; private set; }
 	}
