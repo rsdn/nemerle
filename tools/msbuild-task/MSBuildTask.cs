@@ -295,7 +295,7 @@ namespace Nemerle.Tools.MSBuildTask
                 if (text == null || tagPos >= text.Length)
                     return new Location();
 
-                var m = _msgRx.Match(text, tagPos); // Try new (MS) format.
+                var m = _msgRx.Match(text); // Try new (MS) format.
 
                 if (m.Success)
                 {
@@ -361,41 +361,39 @@ namespace Nemerle.Tools.MSBuildTask
             }
         }
 
+        private bool TryReport(string singleLine, string tag)
+        {
+            var tagPos = singleLine.IndexOf(tag);
+            if (tagPos >= 0)
+            {
+                var loc = Location.Parse(tagPos, singleLine);
+                var msg = singleLine.Substring(tagPos + tag.Length + 1);
+                if (tag[0] == 'e')
+                    Log.LogError(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
+                else
+                    Log.LogWarning(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
+
+                return true;
+            }
+
+            return false;
+        }
+
         protected override void LogEventsFromTextOutput(string singleLine, MessageImportance importance)
         {
             try
             {
-                int tagPos;
-                string tag;
+                if (TryReport(singleLine, "error:")
+                    || TryReport(singleLine, "error :")
+                    || TryReport(singleLine, "warning:")
+                    || TryReport(singleLine, "warning :")
+                    || TryReport(singleLine, "hint:")
+                    || TryReport(singleLine, "hint :"))
+                {
+                  return;
+                }
 
-                if ((tagPos = singleLine.IndexOf(tag = "error:")) >= 0)
-                {
-                    var loc = Location.Parse(tagPos, singleLine);
-                    var msg = singleLine.Substring(tagPos + tag.Length + 1);
-                    Log.LogError(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
-                }
-                else if ((tagPos = singleLine.IndexOf(tag = "warning:")) >= 0)
-                {
-                    var loc = Location.Parse(tagPos, singleLine);
-                    var msg = singleLine.Substring(tagPos + tag.Length + 1);
-                    Log.LogWarning(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
-                }
-                else if ((tagPos = singleLine.IndexOf(tag = "debug:")) >= 0)
-                {
-                    var loc = Location.Parse(tagPos, singleLine);
-                    var msg = singleLine.Substring(tagPos + tag.Length + 1);
-                    Log.LogError(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
-                }
-                else if ((tagPos = singleLine.IndexOf(tag = "hint:")) >= 0)
-                {
-                    var loc = Location.Parse(tagPos, singleLine);
-                    var msg = singleLine.Substring(tagPos);
-                    Log.LogWarning(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
-                }
-                else
-                {
-                    Log.LogMessageFromText(singleLine, MessageImportance.High);
-                }
+                Log.LogMessageFromText(singleLine, MessageImportance.High);
             }
             catch (Exception ex)
             {
