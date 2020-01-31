@@ -40,6 +40,7 @@ using Microsoft.Build.Framework;
 using Microsoft.Build.Tasks;
 using Microsoft.Build.Utilities;
 using Microsoft.Win32;
+using System.Text.RegularExpressions;
 
 namespace Nemerle.Tools.MSBuildTask
 {
@@ -282,6 +283,8 @@ namespace Nemerle.Tools.MSBuildTask
 
         private sealed class Location
         {
+            private static readonly Regex _msgRx = new Regex(@"(?<path>.*?)\(\s*(?<start_line>\d+)\s*,\s*(?<start_char>\d+)\s*(?:,\s*(?<end_line>\d+)\s*,\s*(?<end_char>\d+)\s*)?\):\s*(hint|warning|error)\s*:\s*(?<msg>.*)", RegexOptions.Compiled);
+            private static readonly char[] _invalidPathChars = Path.GetInvalidPathChars();
             public string File;
             public int StartLine;
             public int StartPos;
@@ -290,82 +293,108 @@ namespace Nemerle.Tools.MSBuildTask
 
             public static Location Parse(int tagPos, string text)
             {
-                var str = text.Substring(0, tagPos);
-                if (string.IsNullOrEmpty(str))
+                if (text == null || tagPos >= text.Length)
                     return new Location();
-                // Path can contain ':'. We should skip it...
-                var dir = str.StartsWith(":") ? "" : Path.GetDirectoryName(str);
-                // Find first location separator (it's a end of path)
-                var locIndex = str.IndexOf(':', dir.Length);
-                var path = (locIndex <= 0) ? dir : str.Substring(0, locIndex);
-                var locStr = str.Substring(locIndex);
-                var parts = locStr.Trim().Trim(':').Split(':');
-                switch (parts.Length)
+
+                var m = _msgRx.Match(text); // Try new (MS) format.
+
+                if (m.Success)
                 {
-                    case 2:
-                        var line = int.Parse(parts[0]);
-                        var pos = int.Parse(parts[1]);
-                        return new Location
-                        {
-                            File = path,
-                            StartLine = line,
-                            StartPos = pos,
-                            EndLine = line,
-                            EndPos = pos + 1
-                        };
-                    case 4:
-                        return new Location
-                        {
-                            File = path,
-                            StartLine = int.Parse(parts[0]),
-                            StartPos = int.Parse(parts[1]),
-                            EndLine = int.Parse(parts[2]),
-                            EndPos = int.Parse(parts[3])
-                        };
-                    default:
-                        return new Location
-                        {
-                            File = path
-                        };
+                    var path = m.Groups["path"].Value;
+                    var startLine = int.Parse(m.Groups["start_line"].Value);
+                    var startPos = int.Parse(m.Groups["start_char"].Value);
+                    var endLineOpt = m.Groups["end_line"];
+                    var endPosOpt = m.Groups["end_char"];
+                    var endLine = endLineOpt.Success ? int.Parse(endLineOpt.Value) : startLine;
+                    var endPos = endPosOpt.Success ? int.Parse(endPosOpt.Value) : startPos;
+
+                    return new Location
+                    {
+                        File = path,
+                        StartLine = startLine,
+                        StartPos = startPos,
+                        EndLine = endLine,
+                        EndPos = endPos
+                    };
+                }
+                else
+                {
+                    // Try old nemerle format...
+                    var str = text.Substring(0, tagPos);
+                    if (str.IndexOfAny(_invalidPathChars) >= 0)
+                        return new Location();
+                    // Path can contain ':'. We should skip it...
+                    var dir = str.StartsWith(":") ? "" : Path.GetDirectoryName(str);
+                    // Find first location separator (it's a end of path)
+                    var locIndex = str.IndexOf(':', dir.Length);
+                    var path = (locIndex <= 0) ? dir : str.Substring(0, locIndex);
+                    var locStr = str.Substring(locIndex);
+                    var parts = locStr.Trim().Trim(':').Split(':');
+                    switch (parts.Length)
+                    {
+                        case 2:
+                            var line = int.Parse(parts[0]);
+                            var pos = int.Parse(parts[1]);
+                            return new Location
+                            {
+                                File = path,
+                                StartLine = line,
+                                StartPos = pos,
+                                EndLine = line,
+                                EndPos = pos + 1
+                            };
+                        case 4:
+                            return new Location
+                            {
+                                File = path,
+                                StartLine = int.Parse(parts[0]),
+                                StartPos = int.Parse(parts[1]),
+                                EndLine = int.Parse(parts[2]),
+                                EndPos = int.Parse(parts[3])
+                            };
+                        default:
+                            return new Location
+                            {
+                                File = path
+                            };
+                    }
                 }
             }
+        }
+
+        private bool TryReport(string singleLine, string tag)
+        {
+            var tagPos = singleLine.IndexOf(tag);
+            if (tagPos >= 0)
+            {
+                var loc = Location.Parse(tagPos, singleLine);
+                var msg = singleLine.Substring(tagPos + tag.Length + 1);
+                if (tag[0] == 'e')
+                    Log.LogError(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
+                else
+                    Log.LogWarning(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
+
+                return true;
+            }
+
+            return false;
         }
 
         protected override void LogEventsFromTextOutput(string singleLine, MessageImportance importance)
         {
             try
             {
-                int tagPos;
-                string tag;
+                if (TryReport(singleLine, "error:")
+                    || TryReport(singleLine, "error :")
+                    || TryReport(singleLine, "warning:")
+                    || TryReport(singleLine, "warning :")
+                    || TryReport(singleLine, "hint:")
+                    || TryReport(singleLine, "hint :"))
+                {
+                  return;
+                }
 
-                if ((tagPos = singleLine.IndexOf(tag = "error:")) >= 0)
-                {
-                    var loc = Location.Parse(tagPos, singleLine);
-                    var msg = singleLine.Substring(tagPos + tag.Length + 1);
-                    Log.LogError(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
-                }
-                else if ((tagPos = singleLine.IndexOf(tag = "warning:")) >= 0)
-                {
-                    var loc = Location.Parse(tagPos, singleLine);
-                    var msg = singleLine.Substring(tagPos + tag.Length + 1);
-                    Log.LogWarning(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
-                }
-                else if ((tagPos = singleLine.IndexOf(tag = "debug:")) >= 0)
-                {
-                    var loc = Location.Parse(tagPos, singleLine);
-                    var msg = singleLine.Substring(tagPos + tag.Length + 1);
-                    Log.LogError(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
-                }
-                else if ((tagPos = singleLine.IndexOf(tag = "hint:")) >= 0)
-                {
-                    var loc = Location.Parse(tagPos, singleLine);
-                    var msg = singleLine.Substring(tagPos);
-                    Log.LogWarning(null, null, null, loc.File, loc.StartLine, loc.StartPos, loc.EndLine, loc.EndPos, msg);
-                }
-                else
-                {
-                    Log.LogMessageFromText(singleLine, MessageImportance.High);
-                }
+                Log.LogMessageFromText(singleLine, MessageImportance.High);
             }
             catch (Exception ex)
             {
@@ -374,7 +403,7 @@ namespace Nemerle.Tools.MSBuildTask
                 Console.WriteLine(ex);
             }
         }
-
+        
         protected override string GetResponseFileSwitch(string responseFilePath)
         {
             return "/from-file:\"" + responseFilePath + "\"";
