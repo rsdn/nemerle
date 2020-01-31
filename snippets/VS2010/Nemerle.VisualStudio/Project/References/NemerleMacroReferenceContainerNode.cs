@@ -1,4 +1,4 @@
-using System.IO;
+п»їusing System.IO;
 using System.Reflection;
 
 using Microsoft.VisualStudio.Project;
@@ -150,7 +150,7 @@ namespace Nemerle.VisualStudio.Project
 			if (project != null && project.ProjectInfo.IsLoaded)
 			{
 				ReferenceNode referenceNode = (ReferenceNode)node;
-				//TODO: Добавлять только если project.ProjectInfo.IsLoaded == екгу
+				//TODO: Р”РѕР±Р°РІР»СЏС‚СЊ С‚РѕР»СЊРєРѕ РµСЃР»Рё project.ProjectInfo.IsLoaded == РµРєРіСѓ
 				project.ProjectInfo.AddMacroAssembly(referenceNode);
 			}
 		}
@@ -162,7 +162,7 @@ namespace Nemerle.VisualStudio.Project
 			if (project != null)
 			{
 				ReferenceNode referenceNode = (ReferenceNode)node;
-				//TODO: Удалить из списка макро-сборок
+				//TODO: РЈРґР°Р»РёС‚СЊ РёР· СЃРїРёСЃРєР° РјР°РєСЂРѕ-СЃР±РѕСЂРѕРє
 				project.ProjectInfo.RemoveMacroAssembly(referenceNode);
 			}
 

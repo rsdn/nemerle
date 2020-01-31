@@ -1,4 +1,4 @@
-using Microsoft.VisualStudio.Project;
+п»їusing Microsoft.VisualStudio.Project;
 using Microsoft.VisualStudio;
 using System;
 using Microsoft.VisualStudio.Shell.Interop;
@@ -57,7 +57,7 @@ namespace Nemerle.VisualStudio.Project
 
 			string path = null;
 			var fullFilePath = Path.GetFullPath(Url);
-			// Пробуем определить не является ли путь путем указанным в переменной среды окружения Nemerle...
+			// РџСЂРѕР±СѓРµРј РѕРїСЂРµРґРµР»РёС‚СЊ РЅРµ СЏРІР»СЏРµС‚СЃСЏ Р»Рё РїСѓС‚СЊ РїСѓС‚РµРј СѓРєР°Р·Р°РЅРЅС‹Рј РІ РїРµСЂРµРјРµРЅРЅРѕР№ СЃСЂРµРґС‹ РѕРєСЂСѓР¶РµРЅРёСЏ Nemerle...
 			var dir = Path.GetFullPath(Path.GetDirectoryName(fullFilePath));
 			var envVar = Environment.GetEnvironmentVariable("Nemerle");
 
@@ -70,8 +70,8 @@ namespace Nemerle.VisualStudio.Project
 
 			if (path == null)
 			{
-				// Делаем HintPath относительным путем... 
-				// Это позволит переносить проекты с машины на машину без изменений.
+				// Р”РµР»Р°РµРј HintPath РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅС‹Рј РїСѓС‚РµРј... 
+				// Р­С‚Рѕ РїРѕР·РІРѕР»РёС‚ РїРµСЂРµРЅРѕСЃРёС‚СЊ РїСЂРѕРµРєС‚С‹ СЃ РјР°С€РёРЅС‹ РЅР° РјР°С€РёРЅСѓ Р±РµР· РёР·РјРµРЅРµРЅРёР№.
 
 				var fullProjectPath = Path.GetFullPath(ProjectMgr.ProjectFolder);
 				path = Utils.GetRelativePath(fullProjectPath, fullFilePath);

@@ -1,4 +1,4 @@
-using System;
+п»їusing System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -118,7 +118,7 @@ namespace Nemerle.VisualStudio.Project
 			_errorList.Tasks.Clear();
 			_sources.Clear();
 			_sourceMap.Clear();
-			//TODO: VladD2: Удалить из очередей AsyncWorker все запросы и ответы связанные с данным проектом!
+			//TODO: VladD2: РЈРґР°Р»РёС‚СЊ РёР· РѕС‡РµСЂРµРґРµР№ AsyncWorker РІСЃРµ Р·Р°РїСЂРѕСЃС‹ Рё РѕС‚РІРµС‚С‹ СЃРІСЏР·Р°РЅРЅС‹Рµ СЃ РґР°РЅРЅС‹Рј РїСЂРѕРµРєС‚РѕРј!
 		}
 
 		public string ProjectName { get { return _projectNode.VSProject.Project.Name; } }
@@ -170,7 +170,7 @@ namespace Nemerle.VisualStudio.Project
 
 		public void AddAssembly(List<string> assemblies, ReferenceNode node, string type)
 		{
-			//TODO: Проследить что где-то добавляется вочер для сборки!
+			//TODO: РџСЂРѕСЃР»РµРґРёС‚СЊ С‡С‚Рѕ РіРґРµ-С‚Рѕ РґРѕР±Р°РІР»СЏРµС‚СЃСЏ РІРѕС‡РµСЂ РґР»СЏ СЃР±РѕСЂРєРё!
 			var path = GetAssemblyReferencesString(node);
 
 			if (!string.IsNullOrEmpty(path))
@@ -187,7 +187,7 @@ namespace Nemerle.VisualStudio.Project
 
 		public void RemoveAssembly(List<string> assemblies, ReferenceNode node, string type)
 		{
-			//TODO: Проследить что где-то удаляется вочер для сборки!
+			//TODO: РџСЂРѕСЃР»РµРґРёС‚СЊ С‡С‚Рѕ РіРґРµ-С‚Рѕ СѓРґР°Р»СЏРµС‚СЃСЏ РІРѕС‡РµСЂ РґР»СЏ СЃР±РѕСЂРєРё!
 			var path = GetAssemblyReferencesString(node);
 
 			if (!string.IsNullOrEmpty(path))
@@ -255,8 +255,8 @@ namespace Nemerle.VisualStudio.Project
 
 		#region Assemble Reference Watchers
 
-		// Assemble Watcher-ы используются для слежением за изменением файлов сборок.
-		// При изменении файла автоматически производится запрос на перезагрузку проекта.
+		// Assemble Watcher-С‹ РёСЃРїРѕР»СЊР·СѓСЋС‚СЃСЏ РґР»СЏ СЃР»РµР¶РµРЅРёРµРј Р·Р° РёР·РјРµРЅРµРЅРёРµРј С„Р°Р№Р»РѕРІ СЃР±РѕСЂРѕРє.
+		// РџСЂРё РёР·РјРµРЅРµРЅРёРё С„Р°Р№Р»Р° Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РїСЂРѕРёР·РІРѕРґРёС‚СЃСЏ Р·Р°РїСЂРѕСЃ РЅР° РїРµСЂРµР·Р°РіСЂСѓР·РєСѓ РїСЂРѕРµРєС‚Р°.
 
 		/// <summary>Watchers for project assemble reference.</summary>
 		List<FileSystemWatcher> _assembleReferenceWatchers = new List<FileSystemWatcher>();
@@ -582,7 +582,7 @@ namespace Nemerle.VisualStudio.Project
 			if (_fileRenamingInProgress)
 				return;
 
-			IIdeSource source = (NemerleSource)LanguageService.GetSource(path); // TODO: VladD2: тут надо искать Source по иерархии, а не по пути!
+			IIdeSource source = (NemerleSource)LanguageService.GetSource(path); // TODO: VladD2: С‚СѓС‚ РЅР°РґРѕ РёСЃРєР°С‚СЊ Source РїРѕ РёРµСЂР°СЂС…РёРё, Р° РЅРµ РїРѕ РїСѓС‚Рё!
 
 			//source = new NemerleSource(LanguageService, );
 			try
@@ -753,10 +753,10 @@ namespace Nemerle.VisualStudio.Project
 		Stopwatch _processDelayedMethodCompilerMessagesTimer = Stopwatch.StartNew();
 		
 		/// <summary>
-		/// Разбирвает очередь _delayedMethodCompilerMessages. В эту очередь помещаются сообщения компилятора
-		/// возникающие при типизации тел методов при условии, что уже имеется много сообщений от компилятора.
-		/// Этот трюк нужен так как в противном случае GUI VS начинает дико тормозить в случае наличия множества
-		/// ошибок.
+		/// Р Р°Р·Р±РёСЂРІР°РµС‚ РѕС‡РµСЂРµРґСЊ _delayedMethodCompilerMessages. Р’ СЌС‚Сѓ РѕС‡РµСЂРµРґСЊ РїРѕРјРµС‰Р°СЋС‚СЃСЏ СЃРѕРѕР±С‰РµРЅРёСЏ РєРѕРјРїРёР»СЏС‚РѕСЂР°
+		/// РІРѕР·РЅРёРєР°СЋС‰РёРµ РїСЂРё С‚РёРїРёР·Р°С†РёРё С‚РµР» РјРµС‚РѕРґРѕРІ РїСЂРё СѓСЃР»РѕРІРёРё, С‡С‚Рѕ СѓР¶Рµ РёРјРµРµС‚СЃСЏ РјРЅРѕРіРѕ СЃРѕРѕР±С‰РµРЅРёР№ РѕС‚ РєРѕРјРїРёР»СЏС‚РѕСЂР°.
+		/// Р­С‚РѕС‚ С‚СЂСЋРє РЅСѓР¶РµРЅ С‚Р°Рє РєР°Рє РІ РїСЂРѕС‚РёРІРЅРѕРј СЃР»СѓС‡Р°Рµ GUI VS РЅР°С‡РёРЅР°РµС‚ РґРёРєРѕ С‚РѕСЂРјРѕР·РёС‚СЊ РІ СЃР»СѓС‡Р°Рµ РЅР°Р»РёС‡РёСЏ РјРЅРѕР¶РµСЃС‚РІР°
+		/// РѕС€РёР±РѕРє.
 		/// </summary>
 		internal void ProcessDelayedMethodCompilerMessages()
 		{
@@ -818,8 +818,8 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
-		// Транслирует привязку сообщения к позиции в secondary файле в привязку к позиции в primary файле.
-		// Primary файл - исходный aspx, secondary - автосгенерированный по нему исходный код на Немерле
+		// РўСЂР°РЅСЃР»РёСЂСѓРµС‚ РїСЂРёРІСЏР·РєСѓ СЃРѕРѕР±С‰РµРЅРёСЏ Рє РїРѕР·РёС†РёРё РІ secondary С„Р°Р№Р»Рµ РІ РїСЂРёРІСЏР·РєСѓ Рє РїРѕР·РёС†РёРё РІ primary С„Р°Р№Р»Рµ.
+		// Primary С„Р°Р№Р» - РёСЃС…РѕРґРЅС‹Р№ aspx, secondary - Р°РІС‚РѕСЃРіРµРЅРµСЂРёСЂРѕРІР°РЅРЅС‹Р№ РїРѕ РЅРµРјСѓ РёСЃС…РѕРґРЅС‹Р№ РєРѕРґ РЅР° РќРµРјРµСЂР»Рµ
 		private CompilerMessage TranslateSecondarySourceMessage(CompilerMessage message)
 		{
 			var source = GetSource(message.Location.FileIndex) as NemerleSource;
@@ -830,9 +830,9 @@ namespace Nemerle.VisualStudio.Project
 
 				if (primaryLocation.Line == 1 && primaryLocation.Column == 1) // && message.Kind == MessageKind.Error)
 				{
-					// Исключим из списка сообщения, относящиеся исключительно к автосгенерированному (по исходному aspx) файлу.
-					// Как правило такие сообщения вызваны не совсем корректной работой кодогенератора, 
-					// использующего в design time упрощенный режим генерации
+					// РСЃРєР»СЋС‡РёРј РёР· СЃРїРёСЃРєР° СЃРѕРѕР±С‰РµРЅРёСЏ, РѕС‚РЅРѕСЃСЏС‰РёРµСЃСЏ РёСЃРєР»СЋС‡РёС‚РµР»СЊРЅРѕ Рє Р°РІС‚РѕСЃРіРµРЅРµСЂРёСЂРѕРІР°РЅРЅРѕРјСѓ (РїРѕ РёСЃС…РѕРґРЅРѕРјСѓ aspx) С„Р°Р№Р»Сѓ.
+					// РљР°Рє РїСЂР°РІРёР»Рѕ С‚Р°РєРёРµ СЃРѕРѕР±С‰РµРЅРёСЏ РІС‹Р·РІР°РЅС‹ РЅРµ СЃРѕРІСЃРµРј РєРѕСЂСЂРµРєС‚РЅРѕР№ СЂР°Р±РѕС‚РѕР№ РєРѕРґРѕРіРµРЅРµСЂР°С‚РѕСЂР°, 
+					// РёСЃРїРѕР»СЊР·СѓСЋС‰РµРіРѕ РІ design time СѓРїСЂРѕС‰РµРЅРЅС‹Р№ СЂРµР¶РёРј РіРµРЅРµСЂР°С†РёРё
 					return null;
 				}
 
@@ -852,7 +852,7 @@ namespace Nemerle.VisualStudio.Project
 				else
 					translatedMessage = new CompilerMessage(primaryLocation, message.Msg, message.Kind, message.Engin, message.IsRelated);
 
-				// трансляции позиций для вложенных сообщений
+				// С‚СЂР°РЅСЃР»СЏС†РёРё РїРѕР·РёС†РёР№ РґР»СЏ РІР»РѕР¶РµРЅРЅС‹С… СЃРѕРѕР±С‰РµРЅРёР№
 				translatedMessage.RelatedMessages.AddRange(message.RelatedMessages.Select(m => TranslateSecondarySourceMessage(m)).Where(m => m != null));
 
 				return translatedMessage;
@@ -962,8 +962,8 @@ namespace Nemerle.VisualStudio.Project
 			{
 				IVsTextLines buffer = null;
 
-				// Маркеры для сообщений, сгенерированных при компиляции secondary 
-				// файлов, должны устанавливаться в primary буфере
+				// РњР°СЂРєРµСЂС‹ РґР»СЏ СЃРѕРѕР±С‰РµРЅРёР№, СЃРіРµРЅРµСЂРёСЂРѕРІР°РЅРЅС‹С… РїСЂРё РєРѕРјРїРёР»СЏС†РёРё secondary 
+				// С„Р°Р№Р»РѕРІ, РґРѕР»Р¶РЅС‹ СѓСЃС‚Р°РЅР°РІР»РёРІР°С‚СЊСЃСЏ РІ primary Р±СѓС„РµСЂРµ
 				if (NemerleSource.HasSecondarySource(taskGroup.Key))
 				{
 					var secondarySource = GetSource(NemerleSource.GetSecondaryFileIndex(taskGroup.Key)) as NemerleSource;
