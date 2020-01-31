@@ -1,7 +1,7 @@
-@echo off
+@echo on
 title %~nx0
 
-IF NOT "%1" == "Build" call CleanUp.cmd
+IF "%1" == "Rebuild" call CleanUp.cmd
 
 setlocal ENABLEEXTENSIONS
 set KEY_NAME="HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\SxS\VS7"
@@ -19,4 +19,6 @@ IF %errorlevel% == 0 call Reg-bins-VS2015.cmd
 @echo %KEY_NAME%\%VALUE_NAME% not found.
 )
 )
+vsixinstaller /uninstall:FFFFeaae-d2c0-461d-8ff6-b3bc8d67bcfe
+%~dp0bin\Debug\net-4.0\VsIntegration\Nemerle.VisualStudio.vsix
 pause
