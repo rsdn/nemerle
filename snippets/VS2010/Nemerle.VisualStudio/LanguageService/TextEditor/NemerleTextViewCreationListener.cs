@@ -69,8 +69,10 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 				return;
 
 			var fileIndex = Location.GetFileIndex(filePath);
-			var text = args.After.GetText();
-			project.Engine.NotifySourceChanged(new StringSource(fileIndex, text));
+			var text      = args.After.GetText();
+            var sourceSnapshot = new SourceSnapshot(...);
+
+            project.Engine.NotifySourceChanged(sourceSnapshot);
 
 			//System.Diagnostics.Trace.WriteLine("Changed: (" + args.AfterVersion + ") " + filePath);
 		}
@@ -78,7 +80,7 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 		void view_Closed(object sender, EventArgs args)
 		{
 			var view = (ITextView)sender;
-		
+
 			view.TextBuffer.Changed -= TextBuffer_Changed;
 			view.Closed -= view_Closed;
 
