@@ -1,4 +1,4 @@
-using System;
+п»їusing System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -118,9 +118,9 @@ namespace Nemerle.VisualStudio.Project
 		/// search results are stored in the _library just before VS environment ask the _library
 		/// for them.
 		/// 
-		/// Хак. Используем то что у нас одна фиксированная _library, сохраняем в неё 
-		/// уже найденные результаты для FindAllReferences непосредственно перед тем как
-		/// среда VS попросит у _library эти результаты поиска.
+		/// Hack. РСЃРїРѕР»СЊР·СѓРµРј С‚Рѕ С‡С‚Рѕ Сѓ РЅР°СЃ РѕРґРЅР° С„РёРєСЃРёСЂРѕРІР°РЅРЅР°В¤ _library, СЃРѕС…СЂР°РЅВ¤РµРј РІ РЅРµРј
+		/// СѓР¶Рµ РЅР°Р№РґРµРЅРЅС‹Рµ СЂРµР·СѓР»СЊС‚Р°С‚С‹ РґР»СЏ FindAllReferences РЅРµРїРѕСЃСЂРµРґСЃС‚РІРµРЅРЅРѕ РїРµСЂРµРґ С‚РµРј РєР°Рє
+		/// СЃСЂРµРґР° VS РїРѕРїСЂРѕСЃРёС‚ Сѓ _library СЌС‚Рё СЂРµР·СѓР»СЊС‚Р°С‚С‹ РїРѕРёСЃРєР°.
 		/// </summary>
 		public void OnFindAllReferencesDone(IVsSimpleObjectList2 findResults)
 		{
