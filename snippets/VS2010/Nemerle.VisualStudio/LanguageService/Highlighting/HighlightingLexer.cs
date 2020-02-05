@@ -4,10 +4,10 @@ using Nemerle.Completion2;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
-  internal sealed class HighlightingLexer : LexerFile
+  internal sealed class HighlightingLexer : Lexer
   {
-    public HighlightingLexer(IIdeEngine engine, string code)
-      : base((ManagerClass)engine, /*fileIndex*/ 0, code, /*storeComments*/ true)
+    public HighlightingLexer(IIdeEngine engine, SourceSnapshot sourceSnapshot)
+      : base((ManagerClass)engine, sourceSnapshot, Location.Default)
     {
     }
 

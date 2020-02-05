@@ -61,23 +61,25 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 
 		void TextBuffer_Changed(object sender, TextContentChangedEventArgs args)
 		{
-			var textBuffer = (ITextBuffer)sender;
-			string filePath = textBuffer.GetFilePath();// textBuffer.ToIVsTextBuffer().GetFilePath();
+            // TODO: Надо перевести отлов изменений на события ITextBuffer
+            Debug.Assert(false, "Надо перевести отлов изменений на события ITextBuffer");
+            //var textBuffer = (ITextBuffer)sender;
+            //string filePath = textBuffer.GetFilePath();// textBuffer.ToIVsTextBuffer().GetFilePath();
+            //
+            //var project = ProjectInfo.FindProject(filePath);
+            //if (project == null)
+            //	return;
+            //
+            //var fileIndex = Location.GetFileIndex(filePath);
+            //var text      = args.After.GetText();
+            //var sourceSnapshot = new SourceSnapshot(...);
+            //
+            //project.Engine.NotifySourceChanged(sourceSnapshot);
 
-			var project = ProjectInfo.FindProject(filePath);
-			if (project == null)
-				return;
+            //System.Diagnostics.Trace.WriteLine("Changed: (" + args.AfterVersion + ") " + filePath);
+        }
 
-			var fileIndex = Location.GetFileIndex(filePath);
-			var text      = args.After.GetText();
-            var sourceSnapshot = new SourceSnapshot(...);
-
-            project.Engine.NotifySourceChanged(sourceSnapshot);
-
-			//System.Diagnostics.Trace.WriteLine("Changed: (" + args.AfterVersion + ") " + filePath);
-		}
-
-		void view_Closed(object sender, EventArgs args)
+        void view_Closed(object sender, EventArgs args)
 		{
 			var view = (ITextView)sender;
 

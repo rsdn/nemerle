@@ -5,11 +5,11 @@ namespace Nemerle.VisualStudio.LanguageService
   {
     public Comment(Nemerle.Compiler.Comment comment, CommentType type, int textPosition)
     {
-      Position = comment.Position;
-      Length = comment.Length;
-      IsDocument = comment.IsDocument;
-      IsMultiline = comment.IsMultiline;
-      Type = type;
+      Position     = comment.Location.StartPos;
+      Length       = comment.Location.Length;
+      IsDocument   = comment.IsDocument;
+      IsMultiline  = comment.IsMultiline;
+      Type         = type;
       TextPosition = textPosition;
     }
 

@@ -14,7 +14,7 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
   {
     private readonly ITextBuffer _textBuffer;
     private static readonly HashSet<string> _predefinedTypes = new HashSet<string>(StringComparer.InvariantCulture)
-      { "object", "int", "string", "void", "bool", "list", "byte", "float", "uint", "char", 
+      { "object", "int", "string", "void", "bool", "list", "byte", "float", "uint", "char",
         "ulong", "ushort", "decimal", "sbyte", "short", "double", "long" };
 
     public event EventHandler<ClassificationChangedEventArgs> ClassificationChanged;
@@ -74,7 +74,7 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
       {
         if (!location.IsSourceAvailable)
           continue;
-        
+
         var highlightSpan  = Utils.NLocationToSpan(snapshot, location);
         var text           = snapshot.GetText(highlightSpan);
         var classification = _predefinedTypes.Contains(text) ? _predefinedStyle : _userStyle;
@@ -87,13 +87,13 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
     {
       foreach (var x in source.MethodsTypeLocations)
       {
-        if (x.Item1.IsIntersect(loc))
+        if (x.Item1.IntersectsWith(loc))
           foreach (var loc2 in x.Item2)
             yield return loc2;
       }
 
       foreach (var x in source.TypeLocations)
-        if (x.IsIntersect(loc))
+        if (x.IntersectsWith(loc))
           yield return x;
     }
 

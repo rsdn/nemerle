@@ -42,8 +42,7 @@ namespace Nemerle.VisualStudio.GUI
 			if (_items.Count <= 0)
 				return;
 
-			int index = NLocation.IndexOfMostNested2(_items,
-				delegate(AstNodeInfo n) { return n.Location; }, line, col);
+			int index = Utils.IndexOfMostNested(_items, n => n.Location, line, col);
 
 			if (index >= 0)
 			  _grid.CurrentCell = _grid.Rows[index].Cells[0];
@@ -107,7 +106,7 @@ namespace Nemerle.VisualStudio.GUI
 			if (!IsAutoUpdate)
 				return;
 
-			Action action = () => 
+			Action action = () =>
 			{
 				_checkCountLabel.Text = (++_checkCount).ToString();
 				_items.Clear();
@@ -119,10 +118,7 @@ namespace Nemerle.VisualStudio.GUI
 				switch (_displayType.SelectedIndex)
 				{
 					case 0: // Tokens
-						string code = source.GetText();
-						
-						LexerBase lex = new LexerString((ManagerClass)projectInfo.Engine, code,
-							new Location(source.FileIndex, 1, 1));
+						var lex = new Lexer((ManagerClass)projectInfo.Engine, source.GetSourceSnapshot(), NLocation.Default);
 						//lex.BeginParseFile();
 						lex.Keywords = lex.Manager.CoreEnv.Keywords;
 						AstUtils.FillList(lex, _items);

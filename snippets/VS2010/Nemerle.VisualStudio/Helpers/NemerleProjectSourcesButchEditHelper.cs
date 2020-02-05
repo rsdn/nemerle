@@ -39,15 +39,15 @@ namespace Nemerle.VisualStudio.Helpers
 
 		#endregion
 
-		NemerleSourceButchEditHelper GetHelper(int fileIndex)
+		NemerleSourceButchEditHelper GetHelper(SourceSnapshot sourceSnapshot)
 		{
 			NemerleSourceButchEditHelper helper;
 
-			if (!_fileIndexMap.TryGetValue(fileIndex, out helper))
+			if (!_fileIndexMap.TryGetValue(sourceSnapshot.FileIndex, out helper))
 			{
-				var source = _projectInfo.GetEditableSource(fileIndex, WindowFrameShowAction.DoNotShow);
+				var source = _projectInfo.GetEditableSource(sourceSnapshot, WindowFrameShowAction.DoNotShow);
 				helper = new NemerleSourceButchEditHelper(source, null, true, _description);
-				_fileIndexMap.Add(fileIndex, helper);
+				_fileIndexMap.Add(sourceSnapshot.FileIndex, helper);
 			}
 
 			return helper;
@@ -55,7 +55,7 @@ namespace Nemerle.VisualStudio.Helpers
 
 		public void Add(Location loc, string text)
 		{
-			GetHelper(loc.FileIndex).Add(loc, text);
+			GetHelper(loc.Source).Add(loc, text);
 		}
 
 		public void ApplyEdits()
@@ -97,7 +97,7 @@ namespace Nemerle.VisualStudio.Helpers
 
 		string CalcIndent(Location memLoc)
 		{
-			var helper = GetHelper(memLoc.FileIndex);
+			var helper = GetHelper(memLoc.Source);
 			var source = helper.Source;
 			var firstLine = source.GetLine(memLoc.Line);
 			var prefixSpaces = firstLine.Substring(0, memLoc.Column - 1);
@@ -123,7 +123,7 @@ namespace Nemerle.VisualStudio.Helpers
 
 		public void ReplaseMethodBody(ClassMember.Function function, string text)
 		{
-			var h = GetHelper(function.BodyCloseTokenLocation.FileIndex);
+			var h = GetHelper(function.BodyCloseTokenLocation.Source);
 			var xx = h.Source.GetText();
 			var closeBrecket = h.Source.GetText(function.BodyCloseTokenLocation.ToTextSpan());
 			if (closeBrecket != "}")
@@ -153,7 +153,7 @@ namespace Nemerle.VisualStudio.Helpers
 		internal void RemoveField(ClassMember.Field field)
 		{
 			var memLoc = field.Location;
-			var helper = GetHelper(memLoc.FileIndex);
+			var helper = GetHelper(memLoc.Source);
 			var source = helper.Source;
 			var firstLineText = source.GetLine(memLoc.Line);
 			var prefix = firstLineText.Substring(0, memLoc.Column - 1);
@@ -174,7 +174,7 @@ namespace Nemerle.VisualStudio.Helpers
 				endCol++;
 			}
 
-			// Если в конце строки нет других выражений, то продлеваем локешон до начала 
+			// Если в конце строки нет других выражений, то продлеваем локешон до начала
 			// следующей строки и удаляем все пустые строки идущие за данной строкой.
 			while (endLine + 1 < lineCount && IsAllCharsIsSpaces(sufix))
 			{

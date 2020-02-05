@@ -42,7 +42,7 @@ namespace Nemerle.VisualStudio.LanguageService
       var timer = Stopwatch.StartNew();
 
       var code       = snapshot.GetText();
-      var lexer      = new HighlightingLexer(engine, code);
+      var lexer      = new HighlightingLexer(engine, VsSourceSnapshot.GetSourceSnapshot(snapshot));
       var preParser  = new PreParser(lexer);
       var tokens     = preParser.ParseTopLevel();
       var _comments  = lexer.GetComments();
@@ -55,7 +55,7 @@ namespace Nemerle.VisualStudio.LanguageService
         var type = CommentType.Normal;
         var pos = 0;
         var commentParser = c.IsMultiline ? _multiLineCommentParser : _singleLineCommentParser;
-        var match = commentParser.Match(code, c.Position, c.Length);
+        var match = commentParser.Match(code, c.Location.StartPos, c.Location.Length);
         if (match.Success)
         {
           if (match.Groups[1].Success)
@@ -100,7 +100,7 @@ namespace Nemerle.VisualStudio.LanguageService
     {
       while (token != null)
       {
-        if (point < token.Location.Begin)
+        if (point.ToPosition(token.Location.Source) < token.Location.StartPos)
           break;
 
         Token.Operator spliceOp2;
@@ -142,7 +142,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
     private static bool SearchTokenTest(Token token, ITextSnapshot snapshot, TextPoint point, bool isQuotation, ref TokenInfo tokenInfo)
     {
-      if (!token.Location.Contains(point))
+      if (!token.Location.Contains(point.ToPosition(token.Location.Source)))
         return false;
 
       if (token is Token.LooseGroup)
@@ -306,7 +306,7 @@ namespace Nemerle.VisualStudio.LanguageService
       Token body;
       if (isQuotation && (IsSpliceSequence(token, out body) || IsSpliceListSequence(token, out op2, out body)))
       {
-        var loc = new Location(token.Location.FileIndex, token.Location.Begin, body.Location.End);
+        var loc = new Location(token.Location.Source, token.Location.StartPos, body.Location.EndPos);
         return Utils.NLocationToSpan(textSnapshot, loc);
       }
       return Utils.NLocationToSpan(textSnapshot, token.Location);

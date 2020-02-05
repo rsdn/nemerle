@@ -38,7 +38,7 @@ namespace Microsoft.VisualStudio.Project
 		/// <summary>
 		/// The IVsSolutionBuildManager2 object controlling the update solution events.
 		/// </summary>
-		private IVsSolutionBuildManager2 solutionBuildManager;
+		private IVsSolutionBuildManager2 _solutionBuildManager;
 
 
 		/// <summary>
@@ -71,16 +71,19 @@ namespace Microsoft.VisualStudio.Project
 
 			this.serviceProvider = serviceProvider;
 
-			this.solutionBuildManager = this.serviceProvider.GetService(typeof(SVsSolutionBuildManager)) as IVsSolutionBuildManager2;
+			var solutionBuildManager = (IVsSolutionBuildManager2)this.serviceProvider.GetService(typeof(SVsSolutionBuildManager));
 
-			if(this.solutionBuildManager == null)
+			if(solutionBuildManager == null)
 			{
 				throw new InvalidOperationException();
 			}
 
-			ErrorHandler.ThrowOnFailure(this.solutionBuildManager.AdviseUpdateSolutionEvents(this, out this.solutionEvents2Cookie));
+            _solutionBuildManager = solutionBuildManager;
 
-			Debug.Assert(this.solutionBuildManager is IVsSolutionBuildManager3, "The solution build manager object implementing IVsSolutionBuildManager2 does not implement IVsSolutionBuildManager3");
+
+            ErrorHandler.ThrowOnFailure(this._solutionBuildManager.AdviseUpdateSolutionEvents(this, out this.solutionEvents2Cookie));
+
+			Debug.Assert(this._solutionBuildManager is IVsSolutionBuildManager3, "The solution build manager object implementing IVsSolutionBuildManager2 does not implement IVsSolutionBuildManager3");
 			ErrorHandler.ThrowOnFailure(this.SolutionBuildManager3.AdviseUpdateSolutionEvents3(this, out this.solutionEvents3Cookie));
 		}
 		#endregion
@@ -105,7 +108,7 @@ namespace Microsoft.VisualStudio.Project
 		{
 			get
 			{
-				return this.solutionBuildManager;
+				return this._solutionBuildManager;
 			}
 		}
 
@@ -116,7 +119,7 @@ namespace Microsoft.VisualStudio.Project
 		{
 			get
 			{
-				return (IVsSolutionBuildManager3)this.solutionBuildManager;
+				return (IVsSolutionBuildManager3)this._solutionBuildManager;
 			}
 
 		}
@@ -151,7 +154,7 @@ namespace Microsoft.VisualStudio.Project
 		#region IVsUpdateSolutionEvents2 Members
 
 		/// <summary>
-		/// Called when the active project configuration for a project in the solution has changed. 
+		/// Called when the active project configuration for a project in the solution has changed.
 		/// </summary>
 		/// <param name="hierarchy">The project whose configuration has changed.</param>
 		/// <returns>If the method succeeds, it returns S_OK. If it fails, it returns an error code.</returns>
@@ -161,7 +164,7 @@ namespace Microsoft.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Called right before a project configuration begins to build. 
+		/// Called right before a project configuration begins to build.
 		/// </summary>
 		/// <param name="hierarchy">The project that is to be build.</param>
 		/// <param name="configProject">A configuration project object.</param>
@@ -176,7 +179,7 @@ namespace Microsoft.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Called right after a project configuration is finished building. 
+		/// Called right after a project configuration is finished building.
 		/// </summary>
 		/// <param name="hierarchy">The project that has finished building.</param>
 		/// <param name="configProject">A configuration project object.</param>
@@ -192,7 +195,7 @@ namespace Microsoft.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Called before any build actions have begun. This is the last chance to cancel the build before any building begins. 
+		/// Called before any build actions have begun. This is the last chance to cancel the build before any building begins.
 		/// </summary>
 		/// <param name="cancelUpdate">Flag indicating cancel update.</param>
 		/// <returns>If the method succeeds, it returns S_OK. If it fails, it returns an error code.</returns>
@@ -202,7 +205,7 @@ namespace Microsoft.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Called when a build is being cancelled. 
+		/// Called when a build is being cancelled.
 		/// </summary>
 		/// <returns>If the method succeeds, it returns S_OK. If it fails, it returns an error code.</returns>
 		public virtual int UpdateSolution_Cancel()
@@ -211,7 +214,7 @@ namespace Microsoft.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Called when a build is completed. 
+		/// Called when a build is completed.
 		/// </summary>
 		/// <param name="succeeded">true if no update actions failed.</param>
 		/// <param name="modified">true if any update action succeeded.</param>
@@ -223,7 +226,7 @@ namespace Microsoft.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Called before the first project configuration is about to be built. 
+		/// Called before the first project configuration is about to be built.
 		/// </summary>
 		/// <param name="cancelUpdate">A flag indicating cancel update.</param>
 		/// <returns>If the method succeeds, it returns S_OK. If it fails, it returns an error code.</returns>
@@ -263,7 +266,7 @@ namespace Microsoft.VisualStudio.Project
 				{
 					if(this.solutionEvents2Cookie != (uint)ShellConstants.VSCOOKIE_NIL)
 					{
-						ErrorHandler.ThrowOnFailure(this.solutionBuildManager.UnadviseUpdateSolutionEvents(this.solutionEvents2Cookie));
+						ErrorHandler.ThrowOnFailure(this._solutionBuildManager.UnadviseUpdateSolutionEvents(this.solutionEvents2Cookie));
 						this.solutionEvents2Cookie = (uint)ShellConstants.VSCOOKIE_NIL;
 					}
 

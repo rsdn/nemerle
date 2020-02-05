@@ -45,7 +45,7 @@ namespace Nemerle.VisualStudio.GUI
 			_source               = source;
 			_ty                   = ty;
 			_unimplementedMembers = unimplementedMembers;
-			
+
 			InitializeComponent();
 
 			#region Init events hendlers
@@ -54,14 +54,14 @@ namespace Nemerle.VisualStudio.GUI
 			_grid.CellValueChanged += CellValueChanged;
 			_grid.CellValidating += CellValidating;
 			_grid.CurrentCellDirtyStateChanged += CurrentCellDirtyStateChanged;
-			
+
 			#endregion
 			#region Init ImageList
 
 			imageList1.Images.AddStrip(Resources.SO_TreeViewIcons);
 			_imageSize = imageList1.ImageSize.Width;
 			Debug.Assert(imageList1.ImageSize.Width == imageList1.ImageSize.Height);
-			
+
 			#endregion
 
 			if (_unimplementedMembers == null)
@@ -198,7 +198,7 @@ namespace Nemerle.VisualStudio.GUI
 			AccessModifierCell(row).Style.ForeColor = color;
 			ImplementationNameCell(row).Style.ForeColor   = color;
 			SignatureCell(row).Style.ForeColor  = color;
-		
+
 			_grid.Invalidate();
 		}
 
@@ -219,9 +219,9 @@ namespace Nemerle.VisualStudio.GUI
 				var imgIndex = NUtils.GetGlyphIndex(member);
 
 				e.Paint(r, e.PaintParts);
-				e.Graphics.DrawImage(imageList1.Images[imgIndex], r.X + _imageSize - 2, r.Y + (r.Height - _imageSize) / 2, 
+				e.Graphics.DrawImage(imageList1.Images[imgIndex], r.X + _imageSize - 2, r.Y + (r.Height - _imageSize) / 2,
 														 _imageSize, _imageSize);
-				e.Handled = true; 
+				e.Handled = true;
 			}
 			else if (row.Tag == null && e.ColumnIndex > 0)
 			{
@@ -234,7 +234,7 @@ namespace Nemerle.VisualStudio.GUI
 		{
 
 		}
-		
+
 		private void pbImplement_Click(object sender, EventArgs e)
 		{
 			InsertStabsIntoSource();
@@ -269,16 +269,14 @@ namespace Nemerle.VisualStudio.GUI
 				.Where(r => r.Tag != null && (bool)ImplementCell(r).Value)
 				.GroupBy(r => ((TypeMembers)r.Tag).Key, r =>
 																								new MemberImplInfo(
-																									((TypeMembers)r.Tag).Value, 
+																									((TypeMembers)r.Tag).Value,
 																									ExplicitCellValue(r),
 																									AccessModifierCellValue(r),
 																									ImplementationNameCellValue(r)
 																									));
 		}
 
-// ReSharper disable ParameterTypeCanBeEnumerable.Local
 		private void MakeChanges(IGrouping<FixedType.Class, MemberImplInfo>[] stubs, LanguagePreferences pref, EditArray editArray)
-// ReSharper restore ParameterTypeCanBeEnumerable.Local
 		{
 			var newLine = Environment.NewLine;
 
@@ -292,27 +290,28 @@ namespace Nemerle.VisualStudio.GUI
 				// Кроме того члены не имеют отсупа от левого края. Отступ должен совпадать с отступом
 				// типа в который помещаются плюс один отступ.
 
-				// Кроме того пользователю будет удобно если добавляемые члены будут добавлены после 
+				// Кроме того пользователю будет удобно если добавляемые члены будут добавлены после
 				// последнего члена того же (т.е. типа чьи члены реализуются) типа уже имеющегося в данном типе.
 				// Таким образом мы должны попытаться найти уже реализованные типы. В них найти самый послединй,
 				// и вставить новые члены после него. Если в текущем типе (_ty) еще не было реализовано членов
 				// подтипа (например, интерфейса) к которому относятся добавляемые члены, то производим вставку
 				// в конец текущего типа.
 
-				TextPoint pt;
 				int indentCount;
 
 				var lastImplementedMembers = NUtils.GetLastImplementedMembersOfInterface(_ty, stub.Key);
+                Location endLocation;
+                int endLine;
 
-				#region Calc indent and insertion point
+                #region Calc indent and insertion point
 
-				if (lastImplementedMembers.IsSome)
+                if (lastImplementedMembers.IsSome)
 				{
-					// Используем meber.Value для получения места вставки
-					var endLine = lastImplementedMembers.Value.Location.EndLine;
-					var text = _source.GetLine(endLine);
+                    // Используем meber.Value для получения места вставки
+                    endLocation = lastImplementedMembers.Value.Location;
+                    endLine     = endLocation.EndLine;
+					var text    = _source.GetLine(endLine);
 					indentCount = NUtils.CalcIndentVisiblePosition(text, pref.IndentSize) / pref.IndentSize;
-					pt = new TextPoint(endLine + 1, 1);
 					//TODO: Этот код рассчитывает на то, что за членом не идет многострочного коментария
 					// или другого члена. Надо бы сделать реализацию не закладывающуюся на это.
 				}
@@ -324,15 +323,16 @@ namespace Nemerle.VisualStudio.GUI
 						sb.Insert(0, "#region " + stub.Key + "  Members" + newLine + newLine);
 						sb.AppendLine("#endregion" + newLine);
 					}
-					// Вставляем описание интерфейса в конец класса
-					var endLine = _ty.Location.EndLine;
-					var text = _source.GetLine(endLine);
+                    // Вставляем описание интерфейса в конец класса
+                    endLocation = _ty.Location;
+                    endLine     = _ty.Location.EndLine;
+					var text    = _source.GetLine(endLine);
 					indentCount = (NUtils.CalcIndentVisiblePosition(text, pref.TabSize) + pref.IndentSize) / pref.IndentSize;
-					pt = new TextPoint(endLine, 1);
-					//TODO: Этот код рассчитывает на то, что конец типа распологается на отдельной строке.
-					// Надо бы сделать реализацию не закладывающуюся на это.
-				}
-				
+                    endLine++;
+                    //TODO: Этот код рассчитывает на то, что конец типа распологается на отдельной строке.
+                    // Надо бы сделать реализацию не закладывающуюся на это.
+                }
+
 				#endregion
 
 				var indent = new string('\t', indentCount);
@@ -341,7 +341,8 @@ namespace Nemerle.VisualStudio.GUI
 				sb = NUtils.NormalizeIndent(sb.ToString(), pref.InsertTabs, pref.IndentSize, pref.TabSize);
 				TrimEnd(sb);
 
-				var inertLoc = new Location(_source.FileIndex, pt, pt);
+                var source = endLocation.Source;
+                var inertLoc = new Location(source, source.LineColumnToPosition(endLine, 1));
 				editArray.Add(new EditSpan(inertLoc.ToTextSpan(), sb.ToString()));
 			}
 		}
@@ -383,7 +384,7 @@ namespace Nemerle.VisualStudio.GUI
 		}
 
 		#region Utils
-		
+
 		static void TrimEnd(StringBuilder sb)
 		{
 			for (int i = sb.Length - 1; i > 0; i--)
@@ -396,7 +397,7 @@ namespace Nemerle.VisualStudio.GUI
 				}
 			}
 		}
-		
+
 		private DataGridViewTextBoxColumn ImplementationNameColumn()
 		{
 			return (DataGridViewTextBoxColumn)_grid.Columns["ImplementationName"];

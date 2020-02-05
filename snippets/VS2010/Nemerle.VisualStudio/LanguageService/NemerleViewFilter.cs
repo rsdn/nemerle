@@ -1,4 +1,4 @@
-using System;
+п»їusing System;
 using System.Diagnostics;
 using System.Collections.Generic;
 using System.IO;
@@ -67,13 +67,13 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override int GetDataTipText(TextSpan[] aspan, out string textValue)
 		{
-			//VladD2: Стратегия отображения хинта:
-			// У нас есть два основных режима отображения хинтов 1. Во время разработки. 2. Во время отладки.
-			// В любом случае, данные описывающие текущий элемент формируются в теневом потоке.
-			// В них формируется строка которая будет оторбажаться и описание выражений на которых указывает курсор (aspan[0]).
-			// Когда хинт сформирован проверяем не под отладчиком ли мы и если под отладчиктом, то пытаемся понять,
-			// что конкретно нужно отображать - hint с информацией о выражении, или DataHint который отображает значение выражения
-			// при отладке.
+			//VladD2: РЎС‚СЂР°С‚РµРіРёСЏ РѕС‚РѕР±СЂР°Р¶РµРЅРёСЏ С…РёРЅС‚Р°:
+			// РЈ РЅР°СЃ РµСЃС‚СЊ РґРІР° РѕСЃРЅРѕРІРЅС‹С… СЂРµР¶РёРјР° РѕС‚РѕР±СЂР°Р¶РµРЅРёСЏ С…РёРЅС‚РѕРІ 1. Р’Рѕ РІСЂРµРјСЏ СЂР°Р·СЂР°Р±РѕС‚РєРё. 2. Р’Рѕ РІСЂРµРјСЏ РѕС‚Р»Р°РґРєРё.
+			// Р’ Р»СЋР±РѕРј СЃР»СѓС‡Р°Рµ, РґР°РЅРЅС‹Рµ РѕРїРёСЃС‹РІР°СЋС‰РёРµ С‚РµРєСѓС‰РёР№ СЌР»РµРјРµРЅС‚ С„РѕСЂРјРёСЂСѓСЋС‚СЃСЏ РІ С‚РµРЅРµРІРѕРј РїРѕС‚РѕРєРµ.
+			// Р’ РЅРёС… С„РѕСЂРјРёСЂСѓРµС‚СЃСЏ СЃС‚СЂРѕРєР° РєРѕС‚РѕСЂР°СЏ Р±СѓРґРµС‚ РѕС‚РѕСЂР±Р°Р¶Р°С‚СЊСЃСЏ Рё РѕРїРёСЃР°РЅРёРµ РІС‹СЂР°Р¶РµРЅРёР№ РЅР° РєРѕС‚РѕСЂС‹С… СѓРєР°Р·С‹РІР°РµС‚ РєСѓСЂСЃРѕСЂ (aspan[0]).
+			// РљРѕРіРґР° С…РёРЅС‚ СЃС„РѕСЂРјРёСЂРѕРІР°РЅ РїСЂРѕРІРµСЂСЏРµРј РЅРµ РїРѕРґ РѕС‚Р»Р°РґС‡РёРєРѕРј Р»Рё РјС‹ Рё РµСЃР»Рё РїРѕРґ РѕС‚Р»Р°РґС‡РёРєС‚РѕРј, С‚Рѕ РїС‹С‚Р°РµРјСЃСЏ РїРѕРЅСЏС‚СЊ,
+			// С‡С‚Рѕ РєРѕРЅРєСЂРµС‚РЅРѕ РЅСѓР¶РЅРѕ РѕС‚РѕР±СЂР°Р¶Р°С‚СЊ - hint СЃ РёРЅС„РѕСЂРјР°С†РёРµР№ Рѕ РІС‹СЂР°Р¶РµРЅРёРё, РёР»Рё DataHint РєРѕС‚РѕСЂС‹Р№ РѕС‚РѕР±СЂР°Р¶Р°РµС‚ Р·РЅР°С‡РµРЅРёРµ РІС‹СЂР°Р¶РµРЅРёСЏ
+			// РїСЂРё РѕС‚Р»Р°РґРєРµ.
 
 			textValue = null;
 			if (Source == null || Source.LanguageService == null || !Source.LanguageService.Preferences.EnableQuickInfo)
@@ -89,7 +89,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			return Source.GetDataTipText(TextView, convertedSpan, out textValue);
 		}
 
-		/// <summary>This method checks to see if the IVsDebugger is running, and if so, 
+		/// <summary>This method checks to see if the IVsDebugger is running, and if so,
 		/// calls it to get additional information about the current token and returns a combined result.
 		/// You can return an HRESULT here like TipSuccesses2.TIP_S_NODEFAULTTIP.</summary>
 		public override int GetFullDataTipText(string textValue, TextSpan ts, out string fullTipText)
@@ -257,24 +257,24 @@ namespace Nemerle.VisualStudio.LanguageService
 		}
 
 		/// <summary>
-		/// Реализация Find All References поиска всех вхождений (в перспективе включая поиск и по не-Nemerle проектам) 
-		/// с заполнением окошка "Find Symbol Results" студии
+		/// Р РµР°Р»РёР·Р°С†РёСЏ Find All References РїРѕРёСЃРєР° РІСЃРµС… РІС…РѕР¶РґРµРЅРёР№ (РІ РїРµСЂСЃРїРµРєС‚РёРІРµ РІРєР»СЋС‡Р°СЏ РїРѕРёСЃРє Рё РїРѕ РЅРµ-Nemerle РїСЂРѕРµРєС‚Р°Рј)
+		/// СЃ Р·Р°РїРѕР»РЅРµРЅРёРµРј РѕРєРѕС€РєР° "Find Symbol Results" СЃС‚СѓРґРёРё
 		/// </summary>
 		/// <remarks>
-		/// Вызываем Source.Goto, и подготавливаем результаты поиска
-		/// Потом передаём уже готовые результаты поиска в _library через метод NemerleLibraryManager
-		/// Затем вызываем IVsObjectSearch.Find - интерфейс отвечающий за поиски, который найдёт и вызовет _library.GetList2(),
-		/// IVsObjectSearch в свою очередь должен поискать и в остальных проектах (пока не реализовано, т.к. нет чёткого понятия какими должны быть VSOBSEARCHCRITERIA),
-		/// и вывести все результаты поиска в окошке Find Symbol Results (уже выводит)
-		/// 
-		/// Обсуждения в форумах по теме:		
+		/// Р’С‹Р·С‹РІР°РµРј Source.Goto, Рё РїРѕРґРіРѕС‚Р°РІР»РёРІР°РµРј СЂРµР·СѓР»СЊС‚Р°С‚С‹ РїРѕРёСЃРєР°
+		/// РџРѕС‚РѕРј РїРµСЂРµРґР°С‘Рј СѓР¶Рµ РіРѕС‚РѕРІС‹Рµ СЂРµР·СѓР»СЊС‚Р°С‚С‹ РїРѕРёСЃРєР° РІ _library С‡РµСЂРµР· РјРµС‚РѕРґ NemerleLibraryManager
+		/// Р—Р°С‚РµРј РІС‹Р·С‹РІР°РµРј IVsObjectSearch.Find - РёРЅС‚РµСЂС„РµР№СЃ РѕС‚РІРµС‡Р°СЋС‰РёР№ Р·Р° РїРѕРёСЃРєРё, РєРѕС‚РѕСЂС‹Р№ РЅР°Р№РґС‘С‚ Рё РІС‹Р·РѕРІРµС‚ _library.GetList2(),
+		/// IVsObjectSearch РІ СЃРІРѕСЋ РѕС‡РµСЂРµРґСЊ РґРѕР»Р¶РµРЅ РїРѕРёСЃРєР°С‚СЊ Рё РІ РѕСЃС‚Р°Р»СЊРЅС‹С… РїСЂРѕРµРєС‚Р°С… (РїРѕРєР° РЅРµ СЂРµР°Р»РёР·РѕРІР°РЅРѕ, С‚.Рє. РЅРµС‚ С‡С‘С‚РєРѕРіРѕ РїРѕРЅСЏС‚РёСЏ РєР°РєРёРјРё РґРѕР»Р¶РЅС‹ Р±С‹С‚СЊ VSOBSEARCHCRITERIA),
+		/// Рё РІС‹РІРµСЃС‚Рё РІСЃРµ СЂРµР·СѓР»СЊС‚Р°С‚С‹ РїРѕРёСЃРєР° РІ РѕРєРѕС€РєРµ Find Symbol Results (СѓР¶Рµ РІС‹РІРѕРґРёС‚)
+		///
+		/// РћР±СЃСѓР¶РґРµРЅРёСЏ РІ С„РѕСЂСѓРјР°С… РїРѕ С‚РµРјРµ:
 		/// http://social.msdn.microsoft.com/Forums/en-US/vsx/thread/951158dd-fc98-4325-b07d-bab65b372603/
 		/// http://social.msdn.microsoft.com/Forums/en-US/vsx/thread/793f916d-80a6-4944-b058-7166d48d3a32
 		/// http://social.msdn.microsoft.com/Forums/en-US/vsx/thread/3d85e968-f735-420c-b9c8-d57ed7839d36
-		/// 
-		/// Возможно для поиска по всему проекту IVsObjectSearch.Find придётся заменить на IVsFindSymbol.DoSearch 
+		///
+		/// Р’РѕР·РјРѕР¶РЅРѕ РґР»СЏ РїРѕРёСЃРєР° РїРѕ РІСЃРµРјСѓ РїСЂРѕРµРєС‚Сѓ IVsObjectSearch.Find РїСЂРёРґС‘С‚СЃСЏ Р·Р°РјРµРЅРёС‚СЊ РЅР° IVsFindSymbol.DoSearch
 		/// http://msdn.microsoft.com/en-us/library/microsoft.visualstudio.shell.interop.ivsfindsymbol.dosearch.aspx
-		/// есть какая-то инфа про глюки в методе Find
+		/// РµСЃС‚СЊ РєР°РєР°СЏ-С‚Рѕ РёРЅС„Р° РїСЂРѕ РіР»СЋРєРё РІ РјРµС‚РѕРґРµ Find
 		/// http://social.msdn.microsoft.com/Forums/en-US/vsx/thread/08b71611-2c94-40e7-a79e-3be843c974ea/
 		/// </remarks>
 		private void FindReferences()
@@ -358,7 +358,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			//Debug.WriteLine(guidCmdGroup + " " + nCmdId);
 			const VSConstants.VSStd2KCmdID ShowSmartTag = (VSConstants.VSStd2KCmdID)147;
-			
+
 			if (guidCmdGroup == VSConstants.VSStd2K)
 			{
 				switch ((VSConstants.VSStd2KCmdID)nCmdId)
@@ -410,13 +410,13 @@ namespace Nemerle.VisualStudio.LanguageService
 					case MenuCmd.CmdId.ExtendSelection:
 						// cmdIdExtendSelection
 						ExpandSelection();
-						// it's prevent repeated execution of comand in base.ExecCommand() 
+						// it's prevent repeated execution of comand in base.ExecCommand()
 						return VSConstants.S_OK;
 					case MenuCmd.CmdId.ShrinkSelection:
 						// cmdIdShrinkSelection
 						ShrinkSelection();
 						return VSConstants.S_OK;
-					case MenuCmd.CmdId.FindInheritors: //cmdIdFindInheritors 
+					case MenuCmd.CmdId.FindInheritors: //cmdIdFindInheritors
 					case MenuCmd.CmdId.FindInheritorsCtxt: //cmdIdFindInheritorsCtxt
 						FindInheritors();
 						return VSConstants.S_OK;
@@ -509,7 +509,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private void ExpandSelection()
 		{
-			//TODO: В этом нужно разбираться и или выкидывать, или реализовывать по человечески
+			//TODO: Р’ СЌС‚РѕРј РЅСѓР¶РЅРѕ СЂР°Р·Р±РёСЂР°С‚СЊСЃСЏ Рё РёР»Рё РІС‹РєРёРґС‹РІР°С‚СЊ, РёР»Рё СЂРµР°Р»РёР·РѕРІС‹РІР°С‚СЊ РїРѕ С‡РµР»РѕРІРµС‡РµСЃРєРё
 
 			//TextSpan selection = GetSelection();
 			//if (!SelectionIsInStack(selection))
@@ -561,7 +561,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private void RunInlineRefactoring()
 		{
-			//TODO: Создать задачу для данного вида рефакторинга и перенести эту реализацию в нее
+			//TODO: РЎРѕР·РґР°С‚СЊ Р·Р°РґР°С‡Сѓ РґР»СЏ РґР°РЅРЅРѕРіРѕ РІРёРґР° СЂРµС„Р°РєС‚РѕСЂРёРЅРіР° Рё РїРµСЂРµРЅРµСЃС‚Рё СЌС‚Сѓ СЂРµР°Р»РёР·Р°С†РёСЋ РІ РЅРµРµ
 
 			//if (Source == null)
 			//  return;
@@ -725,30 +725,6 @@ namespace Nemerle.VisualStudio.LanguageService
 			}
 		}
 
-		private void AddWordSpan(TextSpan selection)
-		{
-			TextSpan[] spans = new TextSpan[1];
-			// HACK: have seen 4 as usual flags value for GetWordExtent ;)
-			uint flags = 4;
-			GetWordExtent(selection.iStartLine, selection.iStartIndex, flags, spans);
-			TextSpan wordSpan = spans[0];
-			GetWordExtent(selection.iEndLine, selection.iEndIndex, flags, spans);
-			TextSpan wordSpanOther = spans[0];
-			// in principle, selectionsStack contains at least the whole file location
-			if (wordSpan.Equals(wordSpanOther) && _selectionsStack != null && _selectionsStack.Count > 0)
-			{
-				Location last = _selectionsStack[_selectionsStack.Count - 1];
-				Location word = Utils.LocationFromSpan(last.FileIndex, wordSpan);
-				if (last.StrictlyContains(word) && last != word)
-					_selectionsStack.Add(word);
-			}
-			else
-			{
-				_selectionsStack = new List<Location>();
-				_selectionsStack.Add(Utils.LocationFromSpan(0, wordSpan));
-			}
-		}
-
 		protected override int QueryCommandStatus(ref Guid guidCmdGroup, uint nCmdId)
 		{
 			if(guidCmdGroup == VSConstants.GUID_VSStandardCommandSet97)
@@ -848,7 +824,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			var cmd = (VsCommands2K)nCmdId;
 
-			//// we're goona to erase some symbol from existence. 
+			//// we're goona to erase some symbol from existence.
 			//// In some cases we need to know what it was (auto-deletion of paired token)
 			//if (cmd == VsCommands2K.BACKSPACE)
 			//  Source.RememberCharBeforeCaret(TextView);
@@ -962,7 +938,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		}
 
 		// TODO: Implement smart indention
-		// 1. When typing open curly brace (second is entered automatically) and 
+		// 1. When typing open curly brace (second is entered automatically) and
 		//		then pressing enter
 		// 2. When typing enter between sentences.
 		// 3. When typing enter in the middle of expression.

@@ -1,4 +1,4 @@
-using System;
+п»їusing System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -61,7 +61,7 @@ namespace Nemerle.VisualStudio.Project
 
 			//if (ext.Equals(".resx", StringComparison.InvariantCultureIgnoreCase))
 			//{
-			//  // TODO: Удалить это дело, так как теперь оповещения должны быть реализованы в Engine.
+			//  // TODO: вЂќРґР°Р»РёС‚СЊ СЌС‚Рѕ РґРµР»Рѕ, С‚Р°Рє РєР°Рє С‚РµРїРµСЂСЊ РѕРїРѕРІРµС‰РµРЅРёВ¤ РґРѕР»Р¶РЅС‹ Р±С‹С‚СЊ СЂРµР°Р»РёР·РѕРІР°РЅС‹ РІ Engine.
 			//  url = Path.GetFullPath(this.Url);
 			//  var path = Path.GetDirectoryName(url);
 			//  var name = Path.GetFileName(url);

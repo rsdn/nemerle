@@ -3,17 +3,22 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.SymbolStore;
 using System.Linq;
-using System.Reflection;
 using System.Text;
 using System.IO;
-using Nemerle.Completion2;
-using Microsoft.VisualStudio;
 using System.Runtime.InteropServices;
-using Microsoft.VisualStudio.TextManager.Interop;
 using System.Runtime.CompilerServices;
-using Location = Nemerle.Compiler.Location;
-using Nemerle.VisualStudio.Project;
+
+using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.TextManager.Interop;
 using Microsoft.VisualStudio.Shell.Interop;
+
+using Nemerle.Compiler;
+using Nemerle.Completion2;
+using Nemerle.VisualStudio.Project;
+
+using TypeInfo = Nemerle.Compiler.TypeInfo;
+using Location = Nemerle.Compiler.Location;
+using File = System.IO.File;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
@@ -22,9 +27,6 @@ namespace Nemerle.VisualStudio.LanguageService
 		#region Constants
 
 		private static /*readonly*/ Guid IID_MetaDataImport = new Guid("7DAC8207-D3AE-4c75-9B67-92801A497D44");
-		private const BindingFlags DeclaredMembers = BindingFlags.DeclaredOnly
-										| BindingFlags.Instance | BindingFlags.Static
-										| BindingFlags.Public | BindingFlags.NonPublic;
 
 		#endregion
 
@@ -46,19 +48,17 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			Debug.Assert(infos != null && infos.Length == 1, "GenerateSource lacks required parameter");
 			GotoInfo info = infos[0];
-			Debug.Assert(info != null && info.MemberInfo != null, "GenerateSource lacks required parameter");
+			Debug.Assert(info != null && info.Member != null, "GenerateSource lacks required parameter");
 
-			MemberInfo mi = info.MemberInfo;
-			Type type = (mi.MemberType == MemberTypes.TypeInfo || mi.MemberType == MemberTypes.NestedType)
-				? (Type)mi : mi.DeclaringType;
+			var member = info.Member;
+			var type = member is TypeInfo ? (TypeInfo)member : member.DeclaringType;
 
 			captiopn = type.Name + "[from metadata]";
 
 			Debug.WriteLineIf(TS.TraceVerbose, string.Format("Generating source for ({0})", type.FullName), TS.DisplayName);
 
-			string tempFileName = string.Format("{0}{1}${2}v{3}${4}.n", Path.GetTempPath(),
-				type.FullName, Path.GetFileName(info.FilePath),
-				type.Assembly.GetName().Version, Process.GetCurrentProcess().Id);
+            var assemblyVersion = "<not implemented>";//type.Assembly.GetName().Version;
+            var tempFileName = $"{Path.GetTempPath()}{type.FullName}${Path.GetFileName(info.FilePath)}v{assemblyVersion}${Process.GetCurrentProcess().Id}.n";
 
 			string text = null;
 
@@ -87,7 +87,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		internal static GotoInfo[] LookupLocationsFromPdb(GotoInfo info, IVsSmartOpenScope vsSmartOpenScope)
 		{
-			Debug.Assert(info != null && info.MemberInfo != null, "LookupLocationsFromPdb lacks required parameter");
+			Debug.Assert(info != null && info.Member != null, "LookupLocationsFromPdb lacks required parameter");
 			var sources = new Dictionary<string, Location>();
 
 			if (string.IsNullOrEmpty(info.FilePath) || !File.Exists(info.FilePath))
@@ -103,8 +103,8 @@ namespace Nemerle.VisualStudio.LanguageService
 			int[] endLines;
 			int[] endColumns;
 			int[] offsets;
-			var methods = new List<MethodBase>();
-			Type ty = null;
+			var methods = new List<IMethod>();
+			//Type ty = null;
 
 			try
 			{
@@ -130,86 +130,82 @@ namespace Nemerle.VisualStudio.LanguageService
 					return new GotoInfo[0];
 				}
 
-				switch (info.MemberInfo.MemberType)
+				switch (info.Member)
 				{
-					case MemberTypes.Constructor:
-					case MemberTypes.Method:
-						MethodBase mb = (MethodBase)info.MemberInfo;
-
+					case IMethod method:
 						// Abstract methods does not contain any code.
-						//
-						if (mb.IsAbstract)
-							methods.AddRange(mb.DeclaringType.GetMethods(DeclaredMembers));
+						if (method.IsAbstract)
+							methods.AddRange(method.DeclaringType.GetMembers().OfType<IMethod>());
 						else
-							methods.Add(mb);
+							methods.Add(method);
 						break;
 
-					case MemberTypes.Property:
-						PropertyInfo pi = (PropertyInfo)info.MemberInfo;
-						methods.AddRange(pi.GetAccessors(true));
+					case IProperty property:
+                        var getter = property.GetGetter();
+                        if (getter != null)
+                            methods.Add(getter);
+                        var setter = property.GetSetter();
+                        if (setter != null)
+                            methods.Add(setter);
+                        break;
+
+					case IField field:
+						methods.AddRange(info.Member.DeclaringType.GetMembers().OfType<IMethod>());
 						break;
 
-					case MemberTypes.Field:
-						methods.AddRange(info.MemberInfo.DeclaringType.GetMethods(DeclaredMembers));
+					case IEvent ei:
+						methods.Add(ei.GetAdder());
+						methods.Add(ei.GetRemover());
 						break;
 
-					case MemberTypes.Event:
-						EventInfo ei = (EventInfo)info.MemberInfo;
-						methods.Add(ei.GetAddMethod(true));
-						methods.Add(ei.GetRemoveMethod(true));
-						methods.Add(ei.GetRaiseMethod(true));
-						methods.AddRange(ei.GetOtherMethods(true));
-						break;
-
-					case MemberTypes.TypeInfo:
-					case MemberTypes.NestedType:
-						ty = (Type)info.MemberInfo;
-						methods.AddRange(ty.GetMethods(DeclaredMembers));
-						methods.AddRange(ty.GetConstructors(DeclaredMembers));
+					case TypeInfo typeInfo:
+						methods.AddRange(typeInfo.GetMembers().OfType<IMethod>());
 						break;
 					default:
-						Trace.Fail("Unexpected MemberType " + info.MemberInfo.MemberType);
+						Trace.Fail("Unexpected MemberType " + info.Member);
 						break;
 				}
 
 
-				foreach (MethodBase mb in methods)
+				foreach (var mb in methods)
 				{
-					if (mb == null || Attribute.GetCustomAttribute(mb, typeof(CompilerGeneratedAttribute)) != null)
-						continue;
-
-					try
-					{
-						SymbolToken token = new SymbolToken(mb.MetadataToken);
-						ISymbolMethod method = reader.GetMethod(token);
-
-						if (method.SequencePointCount > 0)
-						{
-							method.GetSequencePoints(offsets, documents, lines, columns, endLines, endColumns);
-
-							var path = documents[0].URL;
-							// We are interested in unique files only.
-							if (File.Exists(path) && (ty == null || mb.DeclaringType.Equals(ty)))
-							{
-								Location value;
-								if (sources.TryGetValue(path, out value))
-								{
-									if ((value.Column == 0 || value.Line == 0) && lines[0] != 0 && columns[0] != 0)
-										sources[path] = new Location(path, lines[0], columns[0], endLines[0], endColumns[0]);
-								}
-								else
-									sources.Add(path, new Location(path, lines[0], columns[0], endLines[0], endColumns[0]));
-							}
-						}
-					}
-					catch (COMException ex)
-					{
-						// Abstract method or not a method at all.
-						// Sequence points are available only for methods.
-						//
-						Trace.WriteLineIf(TS.TraceError,
-							string.Format("({0}) {1}, code 0x{2:X8}", mb.Name, ex.Message, ex.ErrorCode), TS.DisplayName);
-					}
+                    // DTODO: Нужно реализовать в Nemerle средства работы с pdb и на его основе переписать код ниже.
+					//if (mb == null || Attribute.GetCustomAttribute(mb, typeof(CompilerGeneratedAttribute)) != null)
+					//	continue;
+                    //
+					//try
+					//{
+                    //
+					//	SymbolToken token = new SymbolToken(mb.MetadataToken);
+					//	ISymbolMethod method = reader.GetMethod(token);
+                    //
+					//	if (method.SequencePointCount > 0)
+					//	{
+					//		method.GetSequencePoints(offsets, documents, lines, columns, endLines, endColumns);
+                    //
+					//		var path = documents[0].URL;
+					//		// We are interested in unique files only.
+					//		if (File.Exists(path) && (ty == null || mb.DeclaringType.Equals(ty)))
+					//		{
+					//			Location value;
+					//			if (sources.TryGetValue(path, out value))
+					//			{
+					//				if ((value.Column == 0 || value.Line == 0) && lines[0] != 0 && columns[0] != 0)
+					//					sources[path] = new Location(path, lines[0], columns[0], endLines[0], endColumns[0]);
+					//			}
+					//			else
+					//				sources.Add(path, new Location(path, lines[0], columns[0], endLines[0], endColumns[0]));
+					//		}
+					//	}
+					//}
+					//catch (COMException ex)
+					//{
+					//	// Abstract method or not a method at all.
+					//	// Sequence points are available only for methods.
+					//	//
+					//	Trace.WriteLineIf(TS.TraceError,
+					//		string.Format("({0}) {1}, code 0x{2:X8}", mb.Name, ex.Message, ex.ErrorCode), TS.DisplayName);
+					//}
 				}
 			}
 			catch (COMException ex)

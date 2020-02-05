@@ -9,13 +9,11 @@ using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.TextManager.Interop;
 
-using Nemerle.Compiler;
-
 namespace Nemerle.VisualStudio.Project
 {
 	/// <summary>
 	/// Inplementation of the service that build the information to expose to the symbols
-	/// navigation tools (class view or object browser) from the Nemerle files 
+	/// navigation tools (class view or object browser) from the Nemerle files
 	/// inside a hierarchy.
 	/// </summary>
 	[Guid(NemerleConstants.LibraryManagerGuidString)]
@@ -26,7 +24,7 @@ namespace Nemerle.VisualStudio.Project
 		/// A module in Nemerle is a source file, so here we use the file name to
 		/// identify it.
 		/// </summary>
-		[DebuggerStepThrough] 
+		[DebuggerStepThrough]
 		class LibraryTask
 		{
 			public LibraryTask(string fileName, string text)
@@ -117,7 +115,7 @@ namespace Nemerle.VisualStudio.Project
 		/// Hack. Based on the fact that we have only one fixed root _library. FindAllReferences
 		/// search results are stored in the _library just before VS environment ask the _library
 		/// for them.
-		/// 
+		///
 		/// Hack. Используем то что у нас одна фиксированна¤ _library, сохран¤ем в нем
 		/// уже найденные результаты для FindAllReferences непосредственно перед тем как
 		/// среда VS попросит у _library эти результаты поиска.
@@ -278,7 +276,7 @@ namespace Nemerle.VisualStudio.Project
 
 		/// <summary>
 		/// Main function of the parsing thread.
-		/// This function waits on the queue of the parsing requests and build 
+		/// This function waits on the queue of the parsing requests and build
 		/// the parsing tree for a specific file. The resulting tree is built
 		/// using LibraryNode objects so that it can be used inside the class
 		/// view or object browser.
@@ -420,26 +418,12 @@ namespace Nemerle.VisualStudio.Project
 
 			string fileText = null;
 
+            Debug.Assert(false, "LibraryTask.OnFileChanged()");
+
 			if (null != args.TextBuffer)
 			{
-				int lastLine;
-				int lastIndex;
-				int hr = args.TextBuffer.GetLastLineIndex(out lastLine, out lastIndex);
-
-				if (ErrorHandler.Failed(hr))
-					return;
-
-				hr = args.TextBuffer.GetLineText(0, 0, lastLine, lastIndex, out fileText);
-
-				if (ErrorHandler.Failed(hr))
-					return;
-
-				var projectInfo = ProjectInfo.FindProject(hierarchy);
-				if (null != projectInfo)
-				{
-					int fileIndex = Nemerle.Compiler.Location.GetFileIndex(args.FileName);
-					projectInfo.Engine.NotifySourceChanged(new StringSource(fileIndex, fileText));
-				}
+                // Если есть ITextBuffer, смысла ловить события изменения файла нет, так как буфер должен обновиться VS.
+                return;
 			}
 
 			CreateParseRequest(args.FileName, fileText, new ModuleID(hierarchy, args.ItemID));
@@ -471,7 +455,7 @@ namespace Nemerle.VisualStudio.Project
 		{
 			if ((grfAttribs & (uint)(__VSRDTATTRIB.RDTA_MkDocument)) == (uint)__VSRDTATTRIB.RDTA_MkDocument)
 			{
-				IVsRunningDocumentTable rdt = 
+				IVsRunningDocumentTable rdt =
 					_provider.GetService(typeof (SVsRunningDocumentTable)) as IVsRunningDocumentTable;
 
 				if (rdt != null)
@@ -554,7 +538,7 @@ namespace Nemerle.VisualStudio.Project
 				int hr = rdt.GetDocumentInfo(
 					docCookie,
 					out flags,
-					out readLocks, 
+					out readLocks,
 					out writeLoks,
 					out documentMoniker,
 					out hierarchy,
@@ -592,7 +576,7 @@ namespace Nemerle.VisualStudio.Project
 					TextLineEventListener listener = new TextLineEventListener(buffer, documentMoniker, docId);
 
 					// Set the event handler for the change event. Note that there is no
-					// difference between the AddFile and FileChanged operation, so we 
+					// difference between the AddFile and FileChanged operation, so we
 					// can use the same handler.
 					//
 					listener.OnFileChanged += OnFileChanged;

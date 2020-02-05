@@ -18,16 +18,18 @@ using Nemerle.Completion2;
 using Nemerle.VisualStudio.LanguageService;
 
 using MSBuild = Microsoft.Build.BuildEngine;
-using SourceMap = System.Collections.Generic.Dictionary<int, Nemerle.Completion2.IIdeSource>;
 using Nemerle.VisualStudio.GUI;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Package;
 using Nemerle.VisualStudio.Package;
-using IOleServiceProvider = Microsoft.VisualStudio.OLE.Interop.IServiceProvider;
 using Microsoft.VisualStudio.TextManager.Interop;
+
+using SourceMap = System.Collections.Generic .Dictionary<int, Nemerle.Completion2.IIdeSource>;
+using IOleServiceProvider = Microsoft.VisualStudio.OLE.Interop.IServiceProvider;
 using BndFlgs = System.Reflection.BindingFlags;
 using MethodBuilderEx = Nemerle.Completion2.Factories.IntelliSenseModeMethodBuilder;
 using Tuple = Nemerle.Builtins.Tuple<Nemerle.Compiler.Location, int>;
+using File = System.IO.File;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -283,7 +285,7 @@ namespace Nemerle.VisualStudio.Project
 			catch (Exception ex)
 			{
 				Debug.WriteLine(ex.ToString());
-				SetCompilerMessages(new[] {new CompilerMessage(Location.Default, ex.Message, 
+				SetCompilerMessages(new[] {new CompilerMessage(Location.Default, ex.Message,
 					MessageKind.Error, Engine, false)}, null);
 				throw;
 			}
@@ -384,11 +386,11 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
-		public NemerleSource GetEditableSource(int fileIndex, WindowFrameShowAction action)
+		public NemerleSource GetEditableSource(SourceSnapshot sourceSnapshot, WindowFrameShowAction action)
 		{
 			IIdeSource source;
 
-			if (!_sourceMap.TryGetValue(fileIndex, out source))
+            if (!_sourceMap.TryGetValue(sourceSnapshot.FileIndex, out source))
 				throw new ApplicationException("File not in project");
 
 			var nemerleSource = source as NemerleSource;
@@ -396,12 +398,12 @@ namespace Nemerle.VisualStudio.Project
 			if (nemerleSource != null)
 				return nemerleSource;
 
-			return OpenEditableSource(fileIndex, action);
+			return OpenEditableSource(sourceSnapshot.File.FullName, action);
 		}
 
-		NemerleSource OpenEditableSource(int fileIndex, WindowFrameShowAction action)
+		NemerleSource OpenEditableSource(string path, WindowFrameShowAction action)
 		{
-			IVsWindowFrame frame = OpenWindowFrame(fileIndex, action);
+			IVsWindowFrame frame = OpenWindowFrame(path, action);
 
 			if (frame == null)
 				throw new ApplicationException("frame (IVsWindowFrame) is null");
@@ -437,9 +439,8 @@ namespace Nemerle.VisualStudio.Project
 			throw new ApplicationException("can't retrive IVsTextLines from IVsWindowFrame");
 		}
 
-		IVsWindowFrame OpenWindowFrame(int fileIndex, WindowFrameShowAction action)
+		IVsWindowFrame OpenWindowFrame(string path, WindowFrameShowAction action)
 		{
-			var path = Location.GetFileName(fileIndex);
 			var node = (FileNode)_projectNode.FindChild(path);
 			var manager = (FileDocumentManager)node.GetDocumentManager();
 
@@ -518,7 +519,7 @@ namespace Nemerle.VisualStudio.Project
 			options.ColorMessages = false;
 			options.IgnoreConfusion = true;
 			var prop = GetStringProp("OutputType");
-			
+
 			if (string.Equals(prop, "WinExe", StringComparison.InvariantCultureIgnoreCase))
 				options.TargetIsWinexe = true;
 			else if (string.Equals(prop, "Library", StringComparison.InvariantCultureIgnoreCase))
@@ -599,7 +600,7 @@ namespace Nemerle.VisualStudio.Project
 			}
 			catch (Exception ex)
 			{
-				SetCompilerMessages(new[] {new CompilerMessage(Location.Default, ex.Message, 
+				SetCompilerMessages(new[] {new CompilerMessage(Location.Default, ex.Message,
 					MessageKind.Error, Engine, false)}, null);
 			}
 		}
@@ -718,13 +719,13 @@ namespace Nemerle.VisualStudio.Project
 
 		void IIdeProject.SetCompilerMessageForCompileUnit(CompileUnit compileUnit)
 		{
-			var fileIndex = compileUnit.FileIndex;
+			var fileIndex = compileUnit.Source.FileIndex;
 
 			SetCompilerMessages(compileUnit.ParseCompilerMessages, task =>
 			{
 				var msg = task.CompilerMessage as CompilerMessageForCompileUnit;
 				if (msg != null)
-					return msg.CompileUnit.FileIndex == fileIndex;
+					return msg.CompileUnit.Source.FileIndex == fileIndex;
 
 				return false;
 			});
@@ -751,7 +752,7 @@ namespace Nemerle.VisualStudio.Project
 		Queue<IEnumerable<CompilerMessage>> _delayedMethodCompilerMessages = new Queue<IEnumerable<CompilerMessage>>();
 		TimeSpan _lastTimeOfProcessDelayedMethodCompilerMessages;
 		Stopwatch _processDelayedMethodCompilerMessagesTimer = Stopwatch.StartNew();
-		
+
 		/// <summary>
 		/// Разбирвает очередь _delayedMethodCompilerMessages. В эту очередь помещаются сообщения компилятора
 		/// возникающие при типизации тел методов при условии, что уже имеется много сообщений от компилятора.
@@ -778,7 +779,7 @@ namespace Nemerle.VisualStudio.Project
 			{
 				while (queue.Count > 0)
 				{
-					var messages = queue.Dequeue(); 
+					var messages = queue.Dequeue();
 					AddNewCompilerMessages(messages.Select(m => TranslateSecondarySourceMessage(m)).Where(m => m != null));
 				}
 			}
@@ -831,7 +832,7 @@ namespace Nemerle.VisualStudio.Project
 				if (primaryLocation.Line == 1 && primaryLocation.Column == 1) // && message.Kind == MessageKind.Error)
 				{
 					// Исключим из списка сообщения, относящиеся исключительно к автосгенерированному (по исходному aspx) файлу.
-					// Как правило такие сообщения вызваны не совсем корректной работой кодогенератора, 
+					// Как правило такие сообщения вызваны не совсем корректной работой кодогенератора,
 					// использующего в design time упрощенный режим генерации
 					return null;
 				}
@@ -873,7 +874,7 @@ namespace Nemerle.VisualStudio.Project
 				assemblyId = node.Url;
 			else
 			{
-				//TODO: Notify user about reference does not exist. 
+				//TODO: Notify user about reference does not exist.
 			}
 
 			return assemblyId;
@@ -962,7 +963,7 @@ namespace Nemerle.VisualStudio.Project
 			{
 				IVsTextLines buffer = null;
 
-				// Маркеры для сообщений, сгенерированных при компиляции secondary 
+				// Маркеры для сообщений, сгенерированных при компиляции secondary
 				// файлов, должны устанавливаться в primary буфере
 				if (NemerleSource.HasSecondarySource(taskGroup.Key))
 				{

@@ -21,6 +21,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using Nemerle.VisualStudio.LanguageService;
 using Nemerle.Compiler;
+using File = System.IO.File;
 
 namespace Nemerle.VisualStudio.FileCodeModel
 {
@@ -81,7 +82,7 @@ namespace Nemerle.VisualStudio.FileCodeModel
 			throw new NotImplementedException();
 		}
 
-		// Считывает содержимое файла из буфера, связанного с документом. 
+		// Считывает содержимое файла из буфера, связанного с документом.
 		// Такой способ позволяет получить еще не сохраненный на диск контент.
 		private string ReadSourceFromBuffer()
 		{

@@ -1,4 +1,4 @@
-/***************************************************************************
+ï»¿/***************************************************************************
 
 Copyright (c) Microsoft Corporation. All rights reserved.
 This code is licensed under the Visual Studio SDK license terms.
@@ -97,11 +97,11 @@ namespace Microsoft.VisualStudio.Project
         public static bool IsVisualStudioInDesignMode(IServiceProvider site)
         {
             if (site == null)
-            {
                 throw new ArgumentNullException("site");
-            }
 
-            IVsMonitorSelection selectionMonitor = site.GetService(typeof(IVsMonitorSelection)) as IVsMonitorSelection;
+            IVsMonitorSelection selectionMonitor = (IVsMonitorSelection)site.GetService(typeof(IVsMonitorSelection));
+            if (selectionMonitor == null)
+                throw new InvalidOperationException("selectionMonitor == null");
             uint cookie = 0;
             int active = 0;
             Guid designContext = VSConstants.UICONTEXT_DesignMode;
@@ -185,7 +185,7 @@ namespace Microsoft.VisualStudio.Project
         }
 
         /// <summary>
-        /// Validates a file path by validating all file parts. If the 
+        /// Validates a file path by validating all file parts. If the
         /// the file name is invalid it throws an exception if the project is in automation. Otherwise it shows a dialog box with the error message.
         /// </summary>
         /// <param name="serviceProvider">The service provider</param>
@@ -246,7 +246,7 @@ namespace Microsoft.VisualStudio.Project
         }
 
         /// <summary>
-        /// Creates a CALPOLESTR from a list of strings 
+        /// Creates a CALPOLESTR from a list of strings
         /// It is the responsability of the caller to release this memory.
         /// </summary>
         /// <param name="guids"></param>
@@ -282,7 +282,7 @@ namespace Microsoft.VisualStudio.Project
         }
 
         /// <summary>
-        /// Creates a CADWORD from a list of tagVsSccFilesFlags. Memory is allocated for the elems. 
+        /// Creates a CADWORD from a list of tagVsSccFilesFlags. Memory is allocated for the elems.
         /// It is the responsability of the caller to release this memory.
         /// </summary>
         /// <param name="guids"></param>
@@ -390,7 +390,7 @@ namespace Microsoft.VisualStudio.Project
         /// Gets the active configuration name.
         /// </summary>
         /// <param name="automationObject">The automation object.</param>
-        /// <returns>The name of the active configuartion.</returns>		
+        /// <returns>The name of the active configuartion.</returns>
         internal static string GetActiveConfigurationName(EnvDTE.Project automationObject)
         {
             if(automationObject == null)
@@ -478,7 +478,7 @@ namespace Microsoft.VisualStudio.Project
                 }
 
                 // We might already have an IUnknown, but if this is an aggregated
-                // object, it may not be THE IUnknown until we QI for it.				
+                // object, it may not be THE IUnknown until we QI for it.
                 Guid IID_IUnknown = VSConstants.IID_IUnknown;
                 ErrorHandler.ThrowOnFailure(Marshal.QueryInterface(unknown, ref IID_IUnknown, out result));
             }
@@ -701,7 +701,7 @@ namespace Microsoft.VisualStudio.Project
         }
 
         /// <summary>
-        /// Loads a project file for the file. If the build project exists and it was loaded with a different file then it is unloaded first. 
+        /// Loads a project file for the file. If the build project exists and it was loaded with a different file then it is unloaded first.
         /// </summary>
         /// <param name="engine">The build engine to use to create a build project.</param>
         /// <param name="fullProjectPath">The full path of the project.</param>
@@ -717,7 +717,7 @@ namespace Microsoft.VisualStudio.Project
                     buildEngine.UnloadProject(exitingBuildProject);
                 }
             }
-            // We  catch Invalid operation exception because if the project was unloaded while we touch the ParentEngine the msbuild API throws. 
+            // We  catch Invalid operation exception because if the project was unloaded while we touch the ParentEngine the msbuild API throws.
             // Is there a way to figure out that a project was unloaded?
             catch(InvalidOperationException)
             {
@@ -815,7 +815,7 @@ namespace Microsoft.VisualStudio.Project
             {
                 extension = Path.GetExtension(filePart);
             }
-            // We catch the ArgumentException because we want this method to return true if the filename is not valid. FilePart could be for example #¤&%"¤&"% and that would throw ArgumentException on GetExtension
+            // We catch the ArgumentException because we want this method to return true if the filename is not valid. FilePart could be for example #ï¿½&%"ï¿½&"% and that would throw ArgumentException on GetExtension
             catch(ArgumentException)
             {
                 return true;
@@ -884,7 +884,7 @@ namespace Microsoft.VisualStudio.Project
         ///  - determines the full path to the file
         ///  - casts to upper case
         /// Canonicalizing a file name makes it possible to compare file names using simple simple string comparison.
-        /// 
+        ///
         /// Note: this method does not handle shared drives and UNC drives.
         /// </summary>
         /// <param name="anyFileName">A file name, which can be relative/absolute and contain lower-case/upper-case characters.</param>

@@ -144,27 +144,27 @@ namespace Nemerle.VisualStudio.Project
 				var codeCompileUnit = result.CodeCompileUnit;
 
 				// Дизайнер форм должен следить за изменением файлов в которых расположен
-				// класс формы. Чтобы он знал за какакими файлами нужно следить, информацию 
+				// класс формы. Чтобы он знал за какакими файлами нужно следить, информацию
 				// о них нужно запихать в RelatedDocDataCollection и поместить ссылку на ее
 				// в codeCompileUnit.UserData[typeof(RelatedDocDataCollection)].
 				var relatedDocDatas = new RelatedDocDataCollection();
-				var sourcesInf = new List<TupleStringIntInt>();
+				var sourcesInf = new List<SourceSnapshot>();
 
 				foreach (int index in result.FilesIndices)
 				{
-					var filePath     = Location.GetFileName(index);
+					var sourceSnapshot = projectInfo.GetSource(index).GetSourceSnapshot();
+					sourcesInf.Add(sourceSnapshot);
 
-					if (docDataService != null)
-					{
-						var data = docDataService.GetFileDocData(filePath, FileAccess.Read, null);
-						relatedDocDatas.Add(data);
-					}
+                    var filePath = sourceSnapshot.File.FullName;
 
-					var textVerIndex = projectInfo.GetSource(index).GetTextCurrentVersionAndFileIndex();
-					sourcesInf.Add(textVerIndex);
-				}
+                    if (docDataService != null)
+                    {
+                        var data = docDataService.GetFileDocData(filePath, FileAccess.Read, null);
+                        relatedDocDatas.Add(data);
+                    }
+                }
 
-				codeCompileUnit.UserData[typeof(RelatedDocDataCollection)] = relatedDocDatas;
+                codeCompileUnit.UserData[typeof(RelatedDocDataCollection)] = relatedDocDatas;
 				codeCompileUnit.UserData["NemerleSources"] = sourcesInf;
 
 				return codeCompileUnit;
@@ -172,7 +172,7 @@ namespace Nemerle.VisualStudio.Project
 			else
 				return null;
 		}
-		
+
 		#endregion
 
 		#region Generator implementation
@@ -261,7 +261,7 @@ namespace Nemerle.VisualStudio.Project
 
 			return codeGenOptions;
 		}
-		
+
 		#endregion
 
 		#region Provided (obsolete) interfaces
@@ -288,7 +288,7 @@ namespace Nemerle.VisualStudio.Project
 			throw new NotImplementedException();
 			//return null;
 		}
-		
+
 
 		#endregion
 

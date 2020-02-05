@@ -25,6 +25,8 @@ using Nemerle.Compiler;
 using System.IO;
 using Nemerle.VisualStudio.RegistrationAttributes;
 
+using File = System.IO.File;
+
 namespace Nemerle.VisualStudio
 {
 	#region Registration Attributes
