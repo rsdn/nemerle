@@ -26,6 +26,7 @@ using System.IO;
 using Nemerle.VisualStudio.RegistrationAttributes;
 
 using File = System.IO.File;
+using Microsoft;
 
 namespace Nemerle.VisualStudio
 {
@@ -233,13 +234,14 @@ namespace Nemerle.VisualStudio
 		void AfterSolutionLoaded()
 		{
 			EnvDTE.DTE dte = (EnvDTE.DTE)GetService(typeof(EnvDTE.DTE));
+            Assumes.Present(dte);
 
-			// Из-за того, что при создании NemerleMacroProjectReferenceNode и NemerleMacroAssemblyReferenceNode
-			// при открытии проектов dte.Solution.Projects еще не содержал проектов добавление ссылок
-			// на проекты того же солюшена закончились неудачей. Производим повторную попытку добавить
-			// ссылки на проекты в ProjectInfo...
+            // Из-за того, что при создании NemerleMacroProjectReferenceNode и NemerleMacroAssemblyReferenceNode
+            // при открытии проектов dte.Solution.Projects еще не содержал проектов добавление ссылок
+            // на проекты того же солюшена закончились неудачей. Производим повторную попытку добавить
+            // ссылки на проекты в ProjectInfo...
 
-	    foreach (EnvDTE.Project prj in dte.Solution.Projects)
+            foreach (EnvDTE.Project prj in dte.Solution.Projects)
         UpdateAssembleReferences(prj);
 		}
 

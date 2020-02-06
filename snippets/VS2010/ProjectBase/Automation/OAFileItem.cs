@@ -217,7 +217,7 @@ namespace Microsoft.VisualStudio.Project.Automation
 		}
 
 		/// <summary>
-		/// Gets a value indicating whether the project item is open in a particular view type. 
+		/// Gets a value indicating whether the project item is open in a particular view type.
 		/// </summary>
 		/// <param name="viewKind">A Constants.vsViewKind* indicating the type of view to check./param>
 		/// <returns>A Boolean value indicating true if the project is open in the given view type; false if not. </returns>
@@ -281,7 +281,7 @@ namespace Microsoft.VisualStudio.Project.Automation
 		/// Saves or Save As the  file
 		/// </summary>
 		/// <param name="isCalledFromSaveAs">Flag determining which Save method called , the SaveAs or the Save.</param>
-		/// <param name="fileName">The name of the project file.</param>        
+		/// <param name="fileName">The name of the project file.</param>
 		private void DoSave(bool isCalledFromSaveAs, string fileName)
 		{
 			if(fileName == null)

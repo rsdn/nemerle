@@ -97,7 +97,7 @@ namespace Microsoft.VisualStudio.Project
         internal string BuildVerbosityRegistryRoot
         {
             get { return this.buildVerbosityRegistryRoot; }
-            set 
+            set
             {
                 this.buildVerbosityRegistryRoot = value;
             }
@@ -294,7 +294,7 @@ namespace Microsoft.VisualStudio.Project
 
         /// <summary>
         /// This is the delegate for Message event types
-        /// </summary>		
+        /// </summary>
         protected virtual void MessageHandler(object sender, BuildMessageEventArgs messageEvent)
         {
             // NOTE: This may run on a background thread!

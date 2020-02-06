@@ -82,10 +82,10 @@ namespace Microsoft.VisualStudio.Project
 		/// <summary>
 		/// Reference to the FileChange service.
 		/// </summary>
-		private IVsFileChangeEx fileChangeService;
+		private IVsFileChangeEx _fileChangeService;
 
 		/// <summary>
-		/// Maps between the observed item identified by its filename (in canonicalized form) and the cookie used for subscribing 
+		/// Maps between the observed item identified by its filename (in canonicalized form) and the cookie used for subscribing
 		/// to the events.
 		/// </summary>
 		private Dictionary<string, ObservedItemInfo> observedItems = new Dictionary<string, ObservedItemInfo>();
@@ -110,9 +110,10 @@ namespace Microsoft.VisualStudio.Project
 			}
 			#endregion
 
-			this.fileChangeService = (IVsFileChangeEx)serviceProvider.GetService(typeof(SVsFileChangeEx));
+			_fileChangeService = (IVsFileChangeEx)serviceProvider.GetService(typeof(SVsFileChangeEx));
+            Assumes.Present(_fileChangeService);
 
-			if(this.fileChangeService == null)
+            if (_fileChangeService == null)
 			{
 				// VS is in bad state, since the SVsFileChangeEx could not be proffered.
 				throw new InvalidOperationException();
@@ -137,7 +138,7 @@ namespace Microsoft.VisualStudio.Project
 			// Unsubscribe from the observed source files.
 			foreach(ObservedItemInfo info in this.observedItems.Values)
 			{
-				ErrorHandler.ThrowOnFailure(this.fileChangeService.UnadviseFileChange(info.FileChangeCookie));
+				ErrorHandler.ThrowOnFailure(this._fileChangeService.UnadviseFileChange(info.FileChangeCookie));
 			}
 
 			// Clean the observerItems list
@@ -164,7 +165,7 @@ namespace Microsoft.VisualStudio.Project
             {
                 throw new ArgumentNullException("flags");
             }
-			
+
             if(this.FileChangedOnDisk != null)
 			{
 				for(int i = 0; i < numberOfFilesChanged; i++)
@@ -182,7 +183,7 @@ namespace Microsoft.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Notifies clients of changes made to a directory. 
+		/// Notifies clients of changes made to a directory.
 		/// </summary>
 		/// <param name="directory">Name of the directory that had a change.</param>
 		/// <returns>If the method succeeds, it returns S_OK. If it fails, it returns an error code. </returns>
@@ -221,7 +222,7 @@ namespace Microsoft.VisualStudio.Project
 			{
 				// Observe changes to the file
 				uint fileChangeCookie;
-				ErrorHandler.ThrowOnFailure(this.fileChangeService.AdviseFileChange(fullFileName, (uint)(_VSFILECHANGEFLAGS.VSFILECHG_Time | _VSFILECHANGEFLAGS.VSFILECHG_Del), this, out fileChangeCookie));
+				ErrorHandler.ThrowOnFailure(this._fileChangeService.AdviseFileChange(fullFileName, (uint)(_VSFILECHANGEFLAGS.VSFILECHG_Time | _VSFILECHANGEFLAGS.VSFILECHG_Del), this, out fileChangeCookie));
 
 				ObservedItemInfo itemInfo = new ObservedItemInfo();
 				itemInfo.ItemID = id;
@@ -250,7 +251,7 @@ namespace Microsoft.VisualStudio.Project
 			if(this.observedItems.ContainsKey(fullFileName))
 			{
 				// Call ignore file with the flags specified.
-				ErrorHandler.ThrowOnFailure(this.fileChangeService.IgnoreFile(0, fileName, ignore ? 1 : 0));
+				ErrorHandler.ThrowOnFailure(this._fileChangeService.IgnoreFile(0, fileName, ignore ? 1 : 0));
 			}
 		}
 
@@ -274,13 +275,13 @@ namespace Microsoft.VisualStudio.Project
 				// Get the cookie that was used for this.observedItems to this file.
 				ObservedItemInfo itemInfo = this.observedItems[fullFileName];
 
-				// Remove the file from our observed list. It's important that this is done before the call to 
-				// UnadviseFileChange, because for some reason, the call to UnadviseFileChange can trigger a 
+				// Remove the file from our observed list. It's important that this is done before the call to
+				// UnadviseFileChange, because for some reason, the call to UnadviseFileChange can trigger a
 				// FilesChanged event, and we want to be able to filter that event away.
 				this.observedItems.Remove(fullFileName);
 
 				// Stop observing the file
-				ErrorHandler.ThrowOnFailure(this.fileChangeService.UnadviseFileChange(itemInfo.FileChangeCookie));
+				ErrorHandler.ThrowOnFailure(this._fileChangeService.UnadviseFileChange(itemInfo.FileChangeCookie));
 			}
 		}
 		#endregion

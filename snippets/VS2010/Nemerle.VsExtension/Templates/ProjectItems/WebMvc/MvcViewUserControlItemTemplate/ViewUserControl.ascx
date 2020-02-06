@@ -1,0 +1,1 @@
+﻿<%@ Control Language="$language$" Inherits="System.Web.Mvc.ViewUserControl$viewdatatype$" %>

@@ -45,8 +45,8 @@ namespace Microsoft.VisualStudio.Project
 			if(component is ProjectNodeProperties)
 			{
 				IVsPropertyPageFrame propertyPageFrame = (IVsPropertyPageFrame)serviceProvider.GetService((typeof(SVsPropertyPageFrame)));
-
-				int hr = propertyPageFrame.ShowFrame(Guid.Empty);
+                Assumes.Present(propertyPageFrame);
+                int hr = propertyPageFrame.ShowFrame(Guid.Empty);
 				if(ErrorHandler.Succeeded(hr))
 					return true;
 				else

@@ -47,12 +47,9 @@ namespace Microsoft.VisualStudio.Project.Automation
 			{
 				throw new ArgumentNullException("provider");
 			}
-			extensibility = provider.GetService(typeof(EnvDTE.IVsExtensibility)) as IVsExtensibility3;
-			if(null == extensibility)
-			{
-				throw new InvalidOperationException();
-			}
-			ErrorHandler.ThrowOnFailure(extensibility.EnterAutomationFunction());
+			extensibility = (IVsExtensibility3)provider.GetService(typeof(EnvDTE.IVsExtensibility));
+            Assumes.Present(extensibility);
+            ErrorHandler.ThrowOnFailure(extensibility.EnterAutomationFunction());
 			inAutomation = true;
 		}
 

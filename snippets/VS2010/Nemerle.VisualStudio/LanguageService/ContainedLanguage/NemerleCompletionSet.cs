@@ -129,7 +129,7 @@ namespace Nemerle.VisualStudio.LanguageService
           if (usingInfo.NeedUsing)
           {
             var result = base.OnCommit(textSoFar, index, selected, commitChar, out completeWord);
-            
+
             if (result == VSConstants.S_OK)
             {
               var cu = Source.CompileUnit;

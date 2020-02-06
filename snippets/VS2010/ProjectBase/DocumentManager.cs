@@ -102,7 +102,8 @@ namespace Microsoft.VisualStudio.Project
 			if(isOpenedByUs)
 			{
 				IVsUIShellOpenDocument shell = this.Node.ProjectMgr.Site.GetService(typeof(IVsUIShellOpenDocument)) as IVsUIShellOpenDocument;
-				Guid logicalView = Guid.Empty;
+                Assumes.Present(shell);
+                Guid logicalView = Guid.Empty;
 				uint grfIDO = 0;
 				IVsUIHierarchy pHierOpen;
 				uint[] itemIdOpen = new uint[1];
@@ -246,9 +247,10 @@ namespace Microsoft.VisualStudio.Project
 			}
 
 			IVsUIShell uiShell = site.GetService(typeof(SVsUIShell)) as IVsUIShell;
+            Assumes.Present(uiShell);
 
-			// We need to tell the windows to update their captions. 
-			IEnumWindowFrames windowFramesEnum;
+            // We need to tell the windows to update their captions.
+            IEnumWindowFrames windowFramesEnum;
 			ErrorHandler.ThrowOnFailure(uiShell.GetDocumentWindowEnum(out windowFramesEnum));
 			IVsWindowFrame[] windowFrames = new IVsWindowFrame[1];
 			uint fetched;
@@ -279,9 +281,9 @@ namespace Microsoft.VisualStudio.Project
 		/// Rename document in the running document table from oldName to newName.
 		/// </summary>
 		/// <param name="provider">The service provider.</param>
-		/// <param name="oldName">Full path to the old name of the document.</param>		
-		/// <param name="newName">Full path to the new name of the document.</param>		
-		/// <param name="newItemId">The new item id of the document</param>		
+		/// <param name="oldName">Full path to the old name of the document.</param>
+		/// <param name="newName">Full path to the new name of the document.</param>
+		/// <param name="newItemId">The new item id of the document</param>
 		public static void RenameDocument(IServiceProvider site, string oldName, string newName, uint newItemId)
 		{
 			if(site == null)

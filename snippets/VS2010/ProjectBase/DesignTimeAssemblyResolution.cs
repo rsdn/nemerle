@@ -14,11 +14,11 @@ namespace Microsoft.VisualStudio.Project
 	public class DesignTimeAssemblyResolution
 	{
 		private const string OriginalItemSpec = "originalItemSpec";
-	
+
 		private const string FoundAssemblyVersion = "Version";
-		
+
 		private const string HighestVersionInRedistList = "HighestVersionInRedist";
-		
+
 		private const string OutOfRangeDependencies = "OutOfRangeDependencies";
 
 		private RarInputs rarInputs;
@@ -84,7 +84,7 @@ namespace Microsoft.VisualStudio.Project
 			// is populated into RarInputs
 			if (projectDtar)
 			{
-				// set project dtar specific properties 
+				// set project dtar specific properties
 				rar.CandidateAssemblyFiles = rarInputs.CandidateAssemblyFiles;
 				rar.StateFile = rarInputs.StateFile;
 				rar.InstalledAssemblySubsetTables = rarInputs.InstalledAssemblySubsetTables;
@@ -141,8 +141,8 @@ namespace Microsoft.VisualStudio.Project
 
 				if ((parsedAsmVersion && parsedRedistVersion) && asmVersion > redistVersion)
 				{
-					// if the version of the assembly is greater than the highest version - for that assembly - found in 
-					// the chained(possibly) redist lists; then the assembly does not belong to the target framework 
+					// if the version of the assembly is greater than the highest version - for that assembly - found in
+					// the chained(possibly) redist lists; then the assembly does not belong to the target framework
 					bAddResolvedAssemblyToResultList = false;
 				}
 
@@ -183,7 +183,7 @@ namespace Microsoft.VisualStudio.Project
 
 			File.WriteAllLines(logFilePath, finalLogLines);
 		}
-		
+
 		/// <summary>
 		/// Engine required by RAR, primarily for collecting logs
 		/// </summary>
@@ -383,7 +383,7 @@ namespace Microsoft.VisualStudio.Project
 				IgnoreDefaultInstalledAssemblySubsetTables = GetIgnoreDefaultInstalledAssemblySubsetTables(projectInstance);
 				ProfileName = GetProfileName(projectInstance);
 
-				/*               
+				/*
 				 * rar.CandidateAssemblyFiles = rarInputs.CandidateAssemblyFiles;
 				   rar.StateFile = rarInputs.StateFile;
 				   rar.InstalledAssemblySubsetTables = rarInputs.InstalledAssemblySubsetTables;

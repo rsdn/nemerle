@@ -33,7 +33,7 @@ namespace Microsoft.VisualStudio.Project
 {
 	/// <summary>
 	/// An object that deals with user interaction via a GUI in the form a hierarchy: a parent node with zero or more child nodes, each of which
-	/// can itself be a hierarchy.  
+	/// can itself be a hierarchy.
 	/// </summary>
 	[System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Maintainability", "CA1506:AvoidExcessiveClassCoupling"), CLSCompliant(false), ComVisible(true)]
 	public abstract class HierarchyNode :
@@ -45,7 +45,7 @@ namespace Microsoft.VisualStudio.Project
 		IVsHierarchyDropDataTarget,
 		IVsHierarchyDeleteHandler,
 		IDisposable
-	//, IVsBuildStatusCallback 
+	//, IVsBuildStatusCallback
 	{
 		#region nested types
 		/// <summary>
@@ -439,7 +439,7 @@ namespace Microsoft.VisualStudio.Project
 
 		/// <summary>
 		/// Defines if a node a name relation to its parent node
-		/// 
+		///
 		/// </summary>
 		public bool HasParentNodeNameRelation
 		{
@@ -495,7 +495,7 @@ namespace Microsoft.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Overloaded ctor. 
+		/// Overloaded ctor.
 		/// </summary>
 		/// <param name="root"></param>
 		protected HierarchyNode(ProjectNode root)
@@ -666,7 +666,7 @@ namespace Microsoft.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Returns a property object based on a property id 
+		/// Returns a property object based on a property id
 		/// </summary>
 		/// <param name="propId">the property id of the property requested</param>
 		/// <returns>the property object requested</returns>
@@ -1052,7 +1052,7 @@ namespace Microsoft.VisualStudio.Project
 
 		/// <summary>
 		/// Close open document frame for a specific node.
-		/// </summary> 
+		/// </summary>
 		protected void CloseDocumentWindow(HierarchyNode node)
 		{
             if (node == null)
@@ -1175,7 +1175,7 @@ namespace Microsoft.VisualStudio.Project
 					// This happens in the context of adding a new folder.
 					// Since we are already in solution explorer, it is extremely unlikely that we get a null return.
 					// If we do, the newly created folder will not be selected, and we will not attempt the rename
-					// command (since we are selecting the wrong item).                        
+					// command (since we are selecting the wrong item).
 					if (uiWindow != null)
 					{
 						// we need to get into label edit mode now...
@@ -1261,8 +1261,8 @@ namespace Microsoft.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Prepares a selected node for clipboard. 
-		/// It takes the the project reference string of this item and adds it to a stringbuilder. 
+		/// Prepares a selected node for clipboard.
+		/// It takes the the project reference string of this item and adds it to a stringbuilder.
 		/// </summary>
 		/// <returns>A stringbuilder.</returns>
 		/// <devremark>This method has to be public since seleceted nodes will call it.</devremark>
@@ -1487,10 +1487,10 @@ namespace Microsoft.VisualStudio.Project
 				switch(cmdId)
 				{
 					case (uint)VSConstants.VsUIHierarchyWindowCmdIds.UIHWCMDID_RightClick:
-						// The UIHWCMDID_RightClick is what tells an IVsUIHierarchy in a UIHierarchyWindow 
-						// to put up the context menu.  Since the mouse may have moved between the 
-						// mouse down and the mouse up, GetCursorPos won't tell you the right place 
-						// to put the context menu (especially if it came through the keyboard).  
+						// The UIHWCMDID_RightClick is what tells an IVsUIHierarchy in a UIHierarchyWindow
+						// to put up the context menu.  Since the mouse may have moved between the
+						// mouse down and the mouse up, GetCursorPos won't tell you the right place
+						// to put the context menu (especially if it came through the keyboard).
 						// So we pack the proper menu position into pvaIn by
 						// memcpy'ing a POINTS struct into the VT_UI4 part of the pvaIn variant.  The
 						// code to unpack it looks like this:
@@ -1962,7 +1962,7 @@ namespace Microsoft.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Queries the selected nodes for the command status. 
+		/// Queries the selected nodes for the command status.
 		/// A command is supported iff any nodes supports it.
 		/// A command is enabled iff all nodes enable it.
 		/// A command is invisible iff any node sets invisibility.
@@ -2242,7 +2242,7 @@ namespace Microsoft.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Called to determine whether a project item is reloadable. 
+		/// Called to determine whether a project item is reloadable.
 		/// </summary>
 		/// <returns>True if the project item is reloadable.</returns>
 		[SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "Reloadable")]
@@ -2312,7 +2312,7 @@ namespace Microsoft.VisualStudio.Project
 		public void OnItemAdded(HierarchyNode parent, HierarchyNode child)
 		{
             if (parent == null)
-            { 
+            {
                 throw new ArgumentNullException("parent");
             }
 
@@ -2326,7 +2326,7 @@ namespace Microsoft.VisualStudio.Project
 				HierarchyNodeEventArgs args = new HierarchyNodeEventArgs(child);
 				parent.onChildAdded(parent, args);
 			}
-			
+
 			HierarchyNode foo;
 			foo = this.projectMgr == null ? this : this.projectMgr;
 
@@ -2644,8 +2644,8 @@ namespace Microsoft.VisualStudio.Project
 		/// <param name="itemId"></param>
 		public virtual int ParseCanonicalName(string name, out uint itemId)
 		{
-			// we always start at the current node and go it's children down, so 
-			//  if you want to scan the whole tree, better call 
+			// we always start at the current node and go it's children down, so
+			//  if you want to scan the whole tree, better call
 			// the root
 			uint notFoundValue = (uint)VSConstants.VSITEMID.Nil;
 			itemId = notFoundValue;
@@ -2765,7 +2765,7 @@ namespace Microsoft.VisualStudio.Project
 		#region IVsPersistHierarchyItem2 methods
 
 		/// <summary>
-		/// Determines whether the hierarchy item changed. 
+		/// Determines whether the hierarchy item changed.
 		/// </summary>
 		/// <param name="itemId">Item identifier of the hierarchy item contained in VSITEMID.</param>
 		/// <param name="docData">Pointer to the IUnknown interface of the hierarchy item.</param>
@@ -2778,7 +2778,7 @@ namespace Microsoft.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Saves the hierarchy item to disk. 
+		/// Saves the hierarchy item to disk.
 		/// </summary>
 		/// <param name="saveFlag">Flags whose values are taken from the VSSAVEFLAGS enumeration.</param>
 		/// <param name="silentSaveAsName">New filename when doing silent save as</param>
@@ -2796,7 +2796,7 @@ namespace Microsoft.VisualStudio.Project
 				return VSConstants.E_FAIL;
 			}
 
-			// Validate itemid 
+			// Validate itemid
 			if(itemid == VSConstants.VSITEMID_ROOT || itemid == VSConstants.VSITEMID_SELECTION)
 			{
 				return VSConstants.E_INVALIDARG;
@@ -2830,7 +2830,7 @@ namespace Microsoft.VisualStudio.Project
 
 			try
 			{
-				//Save docdata object. 
+				//Save docdata object.
 				//For the saveas action a dialog is show in order to enter new location of file.
 				//In case of a save action and the file is readonly a dialog is also shown
 				//with a couple of options, SaveAs, Overwrite or Cancel.
@@ -2869,7 +2869,7 @@ namespace Microsoft.VisualStudio.Project
 					//	  2. update the full path name for the item in our hierarchy
 					//	  3. a directory-based project may need to transfer the open editor to the
 					//		 MiscFiles project if the new file is saved outside of the project directory.
-					//		 This is accomplished by calling IVsExternalFilesManager::TransferDocument                    
+					//		 This is accomplished by calling IVsExternalFilesManager::TransferDocument
 
 					// we have three options for a saveas action to be performed
 					// 1. the flag was set (the save as command was triggered)
@@ -2923,7 +2923,7 @@ namespace Microsoft.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Flag indicating that changes to a file can be ignored when item is saved or reloaded. 
+		/// Flag indicating that changes to a file can be ignored when item is saved or reloaded.
 		/// </summary>
 		/// <param name="itemId">Specifies the item id from VSITEMID.</param>
 		/// <param name="ignoreFlag">Flag indicating whether or not to ignore changes (1 to ignore, 0 to stop ignoring).</param>
@@ -2947,7 +2947,7 @@ namespace Microsoft.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Called to determine whether a project item is reloadable before calling ReloadItem. 
+		/// Called to determine whether a project item is reloadable before calling ReloadItem.
 		/// </summary>
 		/// <param name="itemId">Item identifier of an item in the hierarchy. Valid values are VSITEMID_NIL, VSITEMID_ROOT and VSITEMID_SELECTION.</param>
 		/// <param name="isReloadable">A flag indicating that the project item is reloadable (1 for reloadable, 0 for non-reloadable).</param>
@@ -2972,7 +2972,7 @@ namespace Microsoft.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Called to reload a project item. 
+		/// Called to reload a project item.
 		/// </summary>
 		/// <param name="itemId">Specifies itemid from VSITEMID.</param>
 		/// <param name="reserved">Reserved.</param>

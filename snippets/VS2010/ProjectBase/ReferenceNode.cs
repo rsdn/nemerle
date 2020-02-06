@@ -305,8 +305,8 @@ namespace Microsoft.VisualStudio.Project
 				objInfo[0].pszLibName = this.Url;
 
 				IVsObjBrowser objBrowser = this.ProjectMgr.Site.GetService(typeof(SVsObjBrowser)) as IVsObjBrowser;
-
-				ErrorHandler.ThrowOnFailure(objBrowser.NavigateTo(objInfo, 0));
+                Assumes.Present(objBrowser);
+                ErrorHandler.ThrowOnFailure(objBrowser.NavigateTo(objInfo, 0));
 			}
 			catch(COMException e)
 			{

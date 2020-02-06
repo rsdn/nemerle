@@ -1,26 +1,37 @@
-using System;
-using System.Diagnostics.CodeAnalysis;
-using System.IO;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
-using System.Windows.Forms;
+using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.Language.Intellisense;
+using Microsoft.VisualStudio.Package;
 using Microsoft.VisualStudio.Project;
 using Microsoft.VisualStudio.Shell;
-using Nemerle.Compiler;
-using Nemerle.VisualStudio.LanguageService;
-using Msbuild = Microsoft.Build.Evaluation;
+using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
+
+using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Completion2;
-using System.Text;
-using Microsoft.VisualStudio.Shell.Interop;
-using Microsoft.Win32;
+using Nemerle.VisualStudio.LanguageService;
+
+using System;
+using System.Collections.Generic;
 using System.Diagnostics;
-using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.Package;
-using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.Text;
-using Microsoft.VisualStudio.Language.Intellisense;
+using System.IO;
+using System.Text;
+
+using Msbuild = Microsoft.Build.Evaluation;
+
+namespace Microsoft
+{
+    static class Assumes
+    {
+        public static void Present(object obj)
+        {
+            Debug.Assert(obj != null);
+        }
+    }
+}
+
 
 namespace Nemerle.VisualStudio
 {
