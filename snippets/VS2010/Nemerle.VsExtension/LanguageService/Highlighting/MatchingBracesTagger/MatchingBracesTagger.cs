@@ -151,45 +151,38 @@ namespace Nemerle.VisualStudio.LanguageService
                 if (caretPos < tokenSpan.Start)
                     break;
 
-                if (token is Token.BracesGroup)
+                if (token is Token.BracesGroup bracesGroup)
                 {
-                    var groupToken = (Token.BracesGroup)token;
-                    TryAddMatchingBraces(snapshot, caretPos, ref matchingBraces, tokenSpan, groupToken.CloseBrace);
-                    SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref matchingBraces);
+                    TryAddMatchingBraces(snapshot, caretPos, ref matchingBraces, tokenSpan, bracesGroup.CloseBrace);
+                    SearchMatchingBraces(bracesGroup.Child, snapshot, caretPos, ref matchingBraces);
                 }
-                else if (token is Token.RoundGroup)
+                else if (token is Token.RoundGroup roundGroup)
                 {
-                    var groupToken = (Token.RoundGroup)token;
-                    TryAddMatchingBraces(snapshot, caretPos, ref matchingBraces, tokenSpan, groupToken.CloseBrace);
-                    SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref matchingBraces);
+                    TryAddMatchingBraces(snapshot, caretPos, ref matchingBraces, tokenSpan, roundGroup.CloseBrace);
+                    SearchMatchingBraces(roundGroup.Child, snapshot, caretPos, ref matchingBraces);
                 }
-                else if (token is Token.SquareGroup)
+                else if (token is Token.SquareGroup squareGroup)
                 {
-                    var groupToken = (Token.SquareGroup)token;
-                    TryAddMatchingBraces(snapshot, caretPos, ref matchingBraces, tokenSpan, groupToken.CloseBrace);
-                    SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref matchingBraces);
+                    TryAddMatchingBraces(snapshot, caretPos, ref matchingBraces, tokenSpan, squareGroup.CloseBrace);
+                    SearchMatchingBraces(squareGroup.Child, snapshot, caretPos, ref matchingBraces);
                 }
-                else if (token is Token.LooseGroup)
+                else if (token is Token.LooseGroup looseGroup)
+                    SearchMatchingBraces(looseGroup.Child, snapshot, caretPos, ref matchingBraces);
+                else if (token is Token.QuoteGroup quoteGroup)
+                    SearchMatchingBraces(quoteGroup.Child, snapshot, caretPos, ref matchingBraces);
+                else if (token is Token.Namespace nsToken)
                 {
-                    var groupToken = (Token.LooseGroup)token;
-                    SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref matchingBraces);
-                }
-                else if (token is Token.QuoteGroup)
-                {
-                    var groupToken = (Token.QuoteGroup)token;
-                    SearchMatchingBraces(groupToken.Child, snapshot, caretPos, ref matchingBraces);
-                }
-                else if (token is Token.Namespace)
-                {
-                    var nsToken = (Token.Namespace)token;
+                    var location = nsToken.OpenBrace.Location;
+                    var startPos = location.StartPos;
+                    var span = new Span(startPos, nsToken.CloseBrace.Location.EndPos - startPos);
+                    TryAddMatchingBraces(snapshot, caretPos, ref matchingBraces, span, nsToken.CloseBrace);
                     SearchMatchingBraces(nsToken.KeywordToken, snapshot, caretPos, ref matchingBraces);
                     SearchMatchingBraces(nsToken.Body, snapshot, caretPos, ref matchingBraces);
                 }
-                else if (token is Token.Using)
+                else if (token is Token.Using usingToken)
                 {
-                    var nsToken = (Token.Using)token;
-                    SearchMatchingBraces(nsToken.KeywordToken, snapshot, caretPos, ref matchingBraces);
-                    SearchMatchingBraces(nsToken.Body, snapshot, caretPos, ref matchingBraces);
+                    SearchMatchingBraces(usingToken.KeywordToken, snapshot, caretPos, ref matchingBraces);
+                    SearchMatchingBraces(usingToken.Body, snapshot, caretPos, ref matchingBraces);
                 }
             }
         }
