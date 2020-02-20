@@ -28,6 +28,7 @@ using System.Runtime.InteropServices;
 using Nemerle.VisualStudio;
 using Microsoft.VisualStudio.Language.Intellisense;
 using Nemerle.VsExtension;
+using Microsoft.VisualStudio.Text;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
@@ -459,7 +460,10 @@ namespace Nemerle.VisualStudio.LanguageService
 					{
 						case VsCommands2K.SolutionPlatform:
 							break;
-						default:
+                        case VsCommands2K.GOTOBRACE:
+                            GoToBrace();
+                            break;
+                        default:
 							break;
 					}
 				}
@@ -470,7 +474,59 @@ namespace Nemerle.VisualStudio.LanguageService
 			finally { _executingCommand = 0; }
 		}
 
-		VsCommands2K _executingCommand;
+        private void GoToBrace()
+        {
+            var textView = TextView.ToITextView();
+            var textBuffer = textView.TextBuffer;
+            var taggerKey = typeof(MatchingBracesTagger);
+            MatchingBracesTagger tagger;
+            if (textBuffer.Properties.TryGetProperty(taggerKey, out tagger))
+            {
+                var pos = textView.Caret.Position.BufferPosition;
+                var posSpan = new Microsoft.VisualStudio.Text.Span(pos.Position, 0);
+                var matchingBraces = tagger.MatchingBraces.ToArray();
+                foreach (var (open, close) in matchingBraces)
+                {
+                    if (open.Start == pos.Position)
+                    {
+                        NavigateTo(close.End);
+                        return;
+                    }
+                }
+                foreach (var (open, close) in matchingBraces)
+                {
+                    if (close.End == pos.Position)
+                    {
+                        NavigateTo(open.Start);
+                        return;
+                    }
+                }
+                foreach (var (open, close) in matchingBraces)
+                {
+                    if (close.Start == pos.Position)
+                    {
+                        NavigateTo(open.Start);
+                        return;
+                    }
+                    if (open.End == pos.Position)
+                    {
+                        NavigateTo(close.End);
+                        return;
+                    }
+                }
+                return;
+            }
+        }
+
+        void NavigateTo(SnapshotPoint point)
+        {
+            var textView = TextView.ToITextView();
+            textView.Caret.MoveTo(point);
+            textView.ViewScroller.EnsureSpanVisible(new SnapshotSpan(point.Snapshot, point.Position, 0));
+        }
+
+
+        VsCommands2K _executingCommand;
 
 		private List<Location> _selectionsStack;
 
