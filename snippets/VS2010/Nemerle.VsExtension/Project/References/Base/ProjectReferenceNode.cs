@@ -19,12 +19,14 @@ namespace Microsoft.VisualStudio.Project
 	[CLSCompliant(false), ComVisible(true)]
 	public class ProjectReferenceNode : ReferenceNode
 	{
-		#region fieds
+        #region fieds
 
-		/// <summary>
-		/// The name of the assembly this refernce represents
-		/// </summary>
-		private Guid referencedProjectGuid;
+        const string VsProjectItemKindSolutionFolder = "{66A26720-8FB5-11D2-AA7E-00C04F688DDE}";
+
+        /// <summary>
+        /// The name of the assembly this refernce represents
+        /// </summary>
+        private Guid referencedProjectGuid;
 
 		private string referencedProjectName = String.Empty;
 
@@ -118,10 +120,11 @@ namespace Microsoft.VisualStudio.Project
 
 		private EnvDTE.Property GetProperty(EnvDTE.Project project, string propertyName)
 		{
-			EnvDTE.Property result = null;
+            ThreadHelper.ThrowIfNotOnUIThread();
+            EnvDTE.Property result = null;
 			try
 			{
-				if (project.Properties == null)
+                if (project.Properties == null || project.Kind.Equals(VsProjectItemKindSolutionFolder, StringComparison.OrdinalIgnoreCase))
 					return null;
 
 				result = project.Properties.Item(propertyName);
@@ -236,7 +239,7 @@ namespace Microsoft.VisualStudio.Project
 		{
 			get
 			{
-				EnvDTE.Configuration config = 
+				EnvDTE.Configuration config =
 					Utils.CalcSyncInUIThread(() =>
 						{
 							EnvDTE.Project referencedProjectObject = ReferencedProjectObject;
@@ -264,7 +267,7 @@ namespace Microsoft.VisualStudio.Project
 							var pSln = (IVsSolution)GetService(typeof(SVsSolution));
 							var nProject = (Nemerle.VisualStudio.Project.NemerleOAProject)this.ReferencedProjectObject;
 							var nProjNode = nProject.Project;
-							//(IVsHierarchy) 
+							//(IVsHierarchy)
 							string bstrPrjUniqueName;
 							pSln.GetUniqueNameOfProject(nProjNode, out bstrPrjUniqueName);
 							var pSolutionContext = pSolutionContexts.Item(bstrPrjUniqueName);
@@ -347,7 +350,7 @@ namespace Microsoft.VisualStudio.Project
 
 		#region ctors
 		/// <summary>
-		/// Constructor for the ReferenceNode. It is called when the project is reloaded, when the project element representing the refernce exists. 
+		/// Constructor for the ReferenceNode. It is called when the project is reloaded, when the project element representing the refernce exists.
 		/// </summary>
 		[System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA2234:PassSystemUriObjectsInsteadOfStrings")]
 		public ProjectReferenceNode(ProjectNode root, ProjectElement element)

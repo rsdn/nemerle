@@ -252,10 +252,10 @@ namespace Nemerle.VisualStudio
 			_mySolutionListener.Init();
 
 			foreach (var listener in Trace.Listeners.OfType<DefaultTraceListener>())
-				listener.AssertUiEnabled = false;
+				listener.AssertUiEnabled = true;
 
 			foreach (var listener in Debug.Listeners.OfType<DefaultTraceListener>())
-				listener.AssertUiEnabled = false;
+				listener.AssertUiEnabled = true;
 
 			//Debug.Assert(false);
 			//Trace.Listeners.Clear();

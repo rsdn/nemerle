@@ -19,7 +19,7 @@ namespace WpfHint
 
 		/// <summary>
 		/// Deafult = 400.0
-		/// </summary>      
+		/// </summary>
 		public double WrapWidth
 		{
 			get { return _wrapWidth; }
@@ -62,10 +62,11 @@ namespace WpfHint
 
 		public void Close()
 		{
-			if (_hintWindow != null)
-				_hintWindow.Close();
-
-			Debug.WriteLine("Close()");
+            if (_hintWindow != null)
+            {
+                _hintWindow.Close();
+                Debug.WriteLine("Close()");
+            }
 		}
 
 		public void Show(IntPtr owner, Rect placementRect, Func<string, string> getHintContent, string text)

@@ -39,7 +39,6 @@ namespace Nemerle.VisualStudio.LanguageService
 {
     public partial class NemerleSource : Source, IIdeSource
     {
-        private IVsTextBufferCoordinator _bufferCoordinator = null;
         ITextBuffer _textBuffer;
         NC.File _file;
 

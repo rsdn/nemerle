@@ -157,6 +157,11 @@ namespace Nemerle.VisualStudio
 
         public static string GetFilePath(this ITextBuffer textBuffer)
         {
+            bool rc = textBuffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument textDoc);
+            if (rc && textDoc != null)
+                return textDoc.FilePath;
+
+            ThreadHelper.ThrowIfNotOnUIThread();
             return GetFilePath((IPersistFileFormat)textBuffer.ToIVsTextBuffer());
         }
 

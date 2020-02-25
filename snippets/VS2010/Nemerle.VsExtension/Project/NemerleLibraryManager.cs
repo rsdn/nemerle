@@ -418,7 +418,7 @@ namespace Nemerle.VisualStudio.Project
 
 			string fileText = null;
 
-            Debug.Assert(false, "LibraryTask.OnFileChanged()");
+            //Debug.Assert(false, "LibraryTask.OnFileChanged()");
 
 			if (null != args.TextBuffer)
 			{
