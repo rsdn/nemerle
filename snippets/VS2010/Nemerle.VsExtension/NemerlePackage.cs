@@ -72,7 +72,6 @@ namespace Nemerle.VisualStudio
 		// from including the working directory as a valid template path
 		@".\NullPath",
 		LanguageVsTemplate = NemerleConstants.LanguageName)]
-	[ProvideCodeDomProvider(typeof(NemerleProjectFactory), typeof(Nemerle.Compiler.Utils.NemerleCodeDomProvider))]
 	[ProvideProjectFactory(typeof(NemerleWPFProjectFactory),
 		null,
 		null,

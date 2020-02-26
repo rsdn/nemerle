@@ -62,9 +62,8 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
         return ClassifierUtils.EmptyClassifications;
       }
 
-      var fileIndex            = source.FileIndex;
       var snapshot             = span.Snapshot;
-      var loc                  = Utils.ToNLocation(fileIndex, span);
+      var loc                  = Utils.ToLocation(span);
       var locationsToHighlight = GetLocationsToHighlight(source, loc).ToArray();
       if (locationsToHighlight.Length == 0)
         return ClassifierUtils.EmptyClassifications;

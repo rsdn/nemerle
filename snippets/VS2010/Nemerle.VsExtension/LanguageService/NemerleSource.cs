@@ -33,14 +33,18 @@ using TupleStringInt = Nemerle.Builtins.Tuple<string, int>;
 using TupleStringIntInt = Nemerle.Builtins.Tuple<string, int, int>;
 using VsCommands2K = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
 using NC = Nemerle.Compiler;
+using Nemerle.VsExtension;
 // ReSharper disable LocalizableElement
 
 namespace Nemerle.VisualStudio.LanguageService
 {
     public partial class NemerleSource : Source, IIdeSource
     {
+        public const string NemerleSourceKey = "NemerleSource";
+
         ITextBuffer _textBuffer;
         NC.File _file;
+        SourceSnapshot _currentSnapshot;
 
         #region Init
 
@@ -50,7 +54,12 @@ namespace Nemerle.VisualStudio.LanguageService
             var vsTextBuffer = (IVsTextBuffer)textLines;
             var textBuffer = vsTextBuffer.ToITextBuffer();
             Debug.Assert(textBuffer != null);
+
             _textBuffer = textBuffer;
+            if (textBuffer is ITextBuffer2 textBuffer2)
+                textBuffer2.ChangedOnBackground += TextBuffer_Changed;
+            else
+                textBuffer.Changed += TextBuffer_Changed;
             string path = textBuffer.GetFilePath();
             _file = FileUtils.GetFile(path);
             IsNemerleSybtax = Utils.Eq(Path.GetExtension(path), ".n");
@@ -77,18 +86,50 @@ namespace Nemerle.VisualStudio.LanguageService
             SmartIndent = new NemerleSmartIndentation(this);
 
 
+            textBuffer.Properties[NemerleSourceKey] = this;
+
             UpdateProjectInfo(projectInfo);
+        }
+
+        public SourceSnapshot GetSourceSnapshot(ITextSnapshot textSnapshot)
+        {
+            var currentSnapshot = _currentSnapshot ?? VsSourceSnapshot.CreateSourceSnapshot(_textBuffer.CurrentSnapshot);
+            var source = currentSnapshot.Version == textSnapshot.Version.VersionNumber
+                ? currentSnapshot
+                : VsSourceSnapshot.CreateSourceSnapshot(textSnapshot);
+            return source;
+        }
+
+        public SourceSnapshot GetSourceSnapshot()
+        {
+            return CurrentSnapshot;
+        }
+
+        public SourceSnapshot CurrentSnapshot =>
+            _currentSnapshot ?? (_currentSnapshot = VsSourceSnapshot.CreateSourceSnapshot(_textBuffer.CurrentSnapshot));
+
+        private void TextBuffer_Changed(object sender, TextContentChangedEventArgs e)
+        {
+            if (!IsNemerleSybtax)
+                return;
+
+            ProjectInfo projectInfo = ProjectInfo;
+
+            if (projectInfo != null && projectInfo.IsDocumentOpening)
+                return;
+
+            var before  = GetSourceSnapshot(e.Before);
+            var after   = _currentSnapshot = VsSourceSnapshot.CreateSourceSnapshot(e.After);
+            var changes = new Changes(before, after, e.Changes.Reverse().Select(c => new Change(c.OldSpan.ToNSpan(), c.NewSpan.ToNSpan())).ToArray());
+
+            GetEngine().BeginUpdateCompileUnit(this, changes);
         }
 
         public void UpdateProjectInfo(ProjectInfo projectInfo)
         {
-            if (projectInfo == null)
-                GetEngine().BeginUpdateCompileUnit(this);
-            else
-            {
-                ProjectInfo = projectInfo;
-                projectInfo.Engine.BeginUpdateCompileUnit(this);
-            }
+            if (projectInfo.IsDocumentOpening)
+                return;
+            GetEngine().BeginBuildTypesTree();
         }
 
         #endregion
@@ -102,7 +143,6 @@ namespace Nemerle.VisualStudio.LanguageService
         public NemerleLanguageService Service { get; private set; }
         public ProjectInfo ProjectInfo { get; private set; }
         public MethodData MethodData { get; private set; }
-        public int TimeStamp { get; private set; }
         internal TopDeclaration[] Declarations { get; set; }
         public bool RegionsLoaded { get; set; }
         public CompileUnit CompileUnit { get; set; }
@@ -152,44 +192,6 @@ namespace Nemerle.VisualStudio.LanguageService
         public override void OnChangeLineText(TextLineChange[] lineChange, int last)
         {
             base.OnChangeLineText(lineChange, last);
-
-            if (!IsNemerleSybtax)
-                return;
-
-            TimeStamp++;
-
-            ProjectInfo projectInfo = ProjectInfo;
-
-            if (projectInfo == null)
-            {
-                GetEngine().BeginUpdateCompileUnit(this);
-                return;
-            }
-
-            if (projectInfo.IsDocumentOpening)
-                return;
-
-            if (projectInfo.IsProjectAvailable)
-            {
-                TextLineChange changes = lineChange[0];
-
-                var info = new RelocationInfo(FileIndex,
-                  new TextPoint(changes.iStartLine + 1, changes.iStartIndex + 1),
-                  new TextPoint(changes.iOldEndLine + 1, changes.iOldEndIndex + 1),
-                  new TextPoint(changes.iNewEndLine + 1, changes.iNewEndIndex + 1)
-                );
-
-                RelocateTypeLocations(info);
-                // TODO: use info in AddRelocationRequest()
-                RelocationQueue.AddRelocationRequest(
-                  RelocationRequestsQueue,
-                  FileIndex, CurrentVersion,
-                  changes.iNewEndLine + 1, changes.iNewEndIndex + 1,
-                  changes.iOldEndLine + 1, changes.iOldEndIndex + 1,
-                  changes.iStartLine + 1, changes.iStartIndex + 1);
-            }
-
-            projectInfo.Engine.BeginUpdateCompileUnit(this); // Add request for reparse & update info about CompileUnit
         }
 
         private void RelocateTypeLocations(RelocationInfo info)
@@ -266,16 +268,16 @@ namespace Nemerle.VisualStudio.LanguageService
             return new NemerleCompletionSet(LanguageService.GetImageList(), this);
         }
 
-        public void Completion(IVsTextView textView, int lintIndex, int columnIndex, bool byTokenTrigger)
+        public void Completion(IVsTextView textView, Location at, bool byTokenTrigger)
         {
-            var result = GetEngine().Completion(this, lintIndex + 1, columnIndex + 1, false);
+            var result = GetEngine().Completion(this, at, false);
             var decls = new NemerleDeclarations(result, this, result.CompletionResult.IsMemeberComplation);
             CompletionSet.Init(textView, decls, !byTokenTrigger);
         }
 
-        public void ImportCompletion(IVsTextView textView, int lintIndex, int columnIndex)
+        public void ImportCompletion(IVsTextView textView, Location at)
         {
-            var result = GetEngine().Completion(this, lintIndex + 1, columnIndex + 1, true);
+            var result = GetEngine().Completion(this, at, true);
             var decls = new NemerleDeclarations(result, this, result.CompletionResult.IsMemeberComplation);
             CompletionSet.Init(textView, decls, true);
         }
@@ -960,7 +962,9 @@ namespace Nemerle.VisualStudio.LanguageService
 
                     // Don't show completion list if previous char not one of following:
                     if (char.IsLetterOrDigit(lastChar) || lastChar == ')' || lastChar == ']')
-                        Completion(textView, line, idx, true);
+                    {
+                        Completion(textView, textView.ToITextView().Caret.Position.BufferPosition.ToLocation(), true);
+                    }
                 }
             }
         }
@@ -1280,7 +1284,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
         #region IIdeSource Members
 
-        public int CurrentVersion { get { return TimeStamp; } }
+        public int CurrentVersion { get { return _textBuffer.CurrentSnapshot.Version.VersionNumber; } }
 
         public TupleStringIntInt GetTextCurrentVersionAndFileIndex()
         {
@@ -1599,11 +1603,6 @@ namespace Nemerle.VisualStudio.LanguageService
             }
 
             return false;
-        }
-
-        public SourceSnapshot GetSourceSnapshot()
-        {
-            return VsSourceSnapshot.GetSourceSnapshot(_textBuffer);
         }
 
         #endregion

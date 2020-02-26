@@ -14,24 +14,15 @@ namespace Nemerle.VisualStudio.LanguageService
         private readonly ITextSnapshot _textSnapshot;
         private File _file;
 
+        internal static SourceSnapshot CreateSourceSnapshot(ITextSnapshot textSnapshot) =>
+            new VsSourceSnapshot(textSnapshot);
+
         public static SourceSnapshot GetSourceSnapshot(ITextBuffer textBuffer) => GetSourceSnapshot(textBuffer.CurrentSnapshot);
 
         public static SourceSnapshot GetSourceSnapshot(ITextSnapshot textSnapshot)
         {
-            const string Key = "Nemerle_CurrentSnapshot";
-            var props = textSnapshot.TextBuffer.Properties;
-            if (props.TryGetProperty<SourceSnapshot>(Key, out var sourceSnapshot))
-            {
-                var version = textSnapshot.Version.VersionNumber;
-                if (sourceSnapshot.Version == version)
-                    return sourceSnapshot;
-
-                if (sourceSnapshot.Version > version)
-                    return new VsSourceSnapshot(textSnapshot);
-            }
-
-            props[Key] = sourceSnapshot = new VsSourceSnapshot(textSnapshot);
-            return sourceSnapshot;
+            var ideSource = textSnapshot.TextBuffer.TryGetNemerleSource();
+            return ideSource?.GetSourceSnapshot(textSnapshot);
         }
 
         private VsSourceSnapshot(ITextSnapshot textSnapshot) : base(0, textSnapshot.GetHashCode())

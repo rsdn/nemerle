@@ -133,23 +133,6 @@ namespace Nemerle.VisualStudio.Helpers
 			Add(function.Location, function.BodyInnerLocation, text);
 		}
 
-		internal void AddField(TopDeclaration topDeclaration, CodeMemberField codeMemberField)
-		{
-			string text = FormCodeDomGenerator.ToString(codeMemberField);
-			Add(topDeclaration.Location, topDeclaration.BodyCloseTokenLocation.FromStart(), text);
-		}
-
-		internal void AddMethod(
-			TopDeclaration topDeclaration,
-			CodeMemberMethod codeMemberMethod,
-			CodeTypeDeclaration declaration)
-		{
-			string text = FormCodeDomGenerator.ToString(codeMemberMethod, declaration);
-			var loc = topDeclaration.BodyCloseTokenLocation.FromStart();
-			codeMemberMethod.UserData[typeof(Point)] = new Point(loc.Column, loc.Line + 3/*+ _identInfo.Length*/);
-			Add(topDeclaration.Location, loc, text);
-		}
-
 		internal void RemoveField(ClassMember.Field field)
 		{
 			var memLoc = field.Location;

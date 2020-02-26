@@ -895,13 +895,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 						return true;
 					case MenuCmd.CmdId.ImportSymbolCompletion:
-						{
-							int lintIndex;
-							int columnInxex;
-							ErrorHandler.ThrowOnFailure(TextView.GetCaretPos(out lintIndex, out columnInxex));
-							Source.ImportCompletion(TextView, lintIndex, columnInxex);
-							return true;
-						}
+                        Source.ImportCompletion(TextView, TextView.ToITextView().Caret.Position.BufferPosition.ToLocation());
+						return true;
 				}
 			}
 
@@ -916,13 +911,8 @@ namespace Nemerle.VisualStudio.LanguageService
 						RunRenameRefactoring();
 						return true;
 					case VsCommands2K.COMPLETEWORD:
-						{
-							int lintIndex;
-							int columnInxex;
-							ErrorHandler.ThrowOnFailure(TextView.GetCaretPos(out lintIndex, out columnInxex));
-							Source.Completion(TextView, lintIndex, columnInxex, false);
-							return true;
-						}
+                        Source.Completion(TextView, TextView.ToITextView().Caret.Position.BufferPosition.ToLocation(), false);
+                        return true;
 					case VsCommands2K.FORMATSELECTION:
 						ReformatSelection();
 						return true;

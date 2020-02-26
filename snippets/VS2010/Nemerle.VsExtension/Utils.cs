@@ -37,12 +37,6 @@ namespace Nemerle.VisualStudio
 {
     static class Utils
     {
-        public static Location ToNLocation(int fileIndex, SnapshotSpan span)
-        {
-            var sourceSnapshot = VsSourceSnapshot.GetSourceSnapshot(span.Snapshot);
-            return new Location(sourceSnapshot, span.Start, span.End);
-        }
-
         public static Span NLocationToSpan(ITextSnapshot textSnapshot, Location location)
         {
             var version = textSnapshot.Version;
@@ -646,6 +640,21 @@ namespace Nemerle.VisualStudio
             }
 
             return resIndex;
+        }
+        public static NSpan ToNSpan(this Span span) => new NSpan(span.Start, span.End);
+
+        public static Location ToLocation(this SnapshotSpan span) =>
+            new Location(VsSourceSnapshot.GetSourceSnapshot(span.Snapshot), span.Start, span.End);
+
+        public static Location ToLocation(this SnapshotPoint point) =>
+            new Location(VsSourceSnapshot.GetSourceSnapshot(point.Snapshot), point.Position, point.Position);
+
+        public static NemerleSource TryGetNemerleSource(this ITextBuffer textBuffer)
+        {
+            var props = textBuffer.Properties;
+            if (props.TryGetProperty(NemerleSource.NemerleSourceKey, out NemerleSource nemerleSource))
+                return nemerleSource;
+            return null;
         }
     } // class Utils
 } // namespace
