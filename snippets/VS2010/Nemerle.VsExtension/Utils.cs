@@ -626,7 +626,7 @@ namespace Nemerle.VisualStudio
             }
         }
 
-        public static int IndexOfMostNested<T>(this IList<T> seq, Func<T, Location> convert, int line, int col)
+        public static int IndexOfMostNested<T>(this IList<T> seq, Func<T, Location> convert, Location at)
         {
             var resIndex = -1;
             var curr = Location.Default;
@@ -635,7 +635,7 @@ namespace Nemerle.VisualStudio
             {
                 var next = convert(elem);
 
-                if (++resIndex == 0 || next.Contains(line, col) && next.IsNestedIn(curr))
+                if (++resIndex == 0 || next.Contains(at) && next.IsNestedIn(curr))
                     next = curr;
             }
 
@@ -655,6 +655,19 @@ namespace Nemerle.VisualStudio
             if (props.TryGetProperty(NemerleSource.NemerleSourceKey, out NemerleSource nemerleSource))
                 return nemerleSource;
             return null;
+        }
+
+        public static Location MakeLocation(this IVsTextView textView, int lineIndex, int columnIndex)
+        {
+            return MakeLocation(textView.GetBuffer(), lineIndex, columnIndex);
+        }
+
+        public static Location MakeLocation(this IVsTextLines vsTextLines, int lineIndex, int columnIndex)
+        {
+            if (vsTextLines.GetPositionOfLineIndex(lineIndex, columnIndex, out var pos) != 0)
+                return Location.Default;
+
+            return new Location(VsSourceSnapshot.GetSourceSnapshot(vsTextLines.ToITextBuffer()), pos);
         }
     } // class Utils
 } // namespace

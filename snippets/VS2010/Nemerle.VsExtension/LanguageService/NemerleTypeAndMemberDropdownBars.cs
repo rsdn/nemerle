@@ -139,7 +139,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		/// <include file='doc\CodeWindowManager.uex' path='docs/doc[@for="TypeAndMemberDropdownBars.GetEntryImage"]/*' />
 		public override int GetEntryImage(int combo, int entry, out int imgIndex)
 		{
-			// this happens during drawing and has to be fast 
+			// this happens during drawing and has to be fast
 			imgIndex = -1;
 
 			if (entry < 0)
@@ -149,7 +149,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				imgIndex = Utils.GetGlyph(GetType(entry));
 			else
 				imgIndex = Utils.GetGlyph(GetMember(entry));
-		
+
 			return NativeMethods.S_OK;
 		}
 
@@ -223,17 +223,20 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			if (entry != null && _textView != null)
 			{
-				int line = entry.Location.Line.ToVsLineCoord();
-				int col = entry.Location.Column.ToVsColCoord();
+                var textView = _textView.ToITextView();
+
+                var at   = entry.Location.FromStart();
+                int line = entry.Location.Line.ToVsLineCoord();
+				int col  = entry.Location.Column.ToVsColCoord();
 				try
 				{
 					// Here we don't want to throw or to check the return value.
 					_textView.CenterLines(line, 16);
 				}
 				catch (System.Runtime.InteropServices.COMException) { }
-				ErrorHandler.ThrowOnFailure(_textView.SetCaretPos(line, col));
+                ErrorHandler.ThrowOnFailure(_textView.SetCaretPos(line, col));
 				SetFocus(_textView.GetWindowHandle());
-				SynchronizeDropdownsRsdn(_textView, line, col);
+				SynchronizeDropdownsRsdn(_textView, at);
 			}
 			return NativeMethods.S_OK;
 		}
@@ -264,17 +267,17 @@ namespace Nemerle.VisualStudio.LanguageService
 		/// к DropDownMember в котором реализована кривые (рекурсивные) оператора сравнения
 		/// приводящие к переполнению стека при попытке проверить объект этого класса на null.
 		/// </summary>
-		public void SynchronizeDropdownsRsdn(IVsTextView textView, int line, int col)
+		public void SynchronizeDropdownsRsdn(IVsTextView textView, Location at)
 		{
 			if (_dropDownBar == null)
 				return;
 
 			_textView = textView;
 
-			line = line.ToNccLineCoord();
-			col  =  col.ToNccColCoord();
+			var line = at.Line.ToNccLineCoord();
+			var col  = at.Column.ToNccColCoord();
 
-			if (UpdateDropDownTypes() | SyncSelectedType(line, col) | SyncSelectedMember(line, col))
+			if (UpdateDropDownTypes() | SyncSelectedType(at) | SyncSelectedMember(at))
 			{
 				ErrorHandler.ThrowOnFailure(_dropDownBar.RefreshCombo(DropClasses, _lastSelectedType   < 0 ? -1 : _lastSelectedType));
 				ErrorHandler.ThrowOnFailure(_dropDownBar.RefreshCombo(DropMethods, _lastSelectedMember < 0 ? -1 : _lastSelectedMember));
@@ -306,7 +309,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		/// <summary>
 		/// Если исходный файл был изменен, производит обновление списка типов.
 		/// Если список не пуст, производит, так же, обновление списка членов.
-		/// Делает выделенным элемент в списке типов на котором в данный момент 
+		/// Делает выделенным элемент в списке типов на котором в данный момент
 		/// находится курсор.
 		/// Возвращает:
 		/// 1. Индекс типа (index => 0), если курсор находится на внутри типа.
@@ -314,9 +317,9 @@ namespace Nemerle.VisualStudio.LanguageService
 		/// </summary>
 		/// <param name="selectedType"></param>
 		/// <returns></returns>
-		private bool SyncSelectedType(int line, int col)
+		private bool SyncSelectedType(Location at)
 		{
-			int selType = GetSelectedTypeIndex(line, col);
+			int selType = GetSelectedTypeIndex(at);
 
 			if (_lastSelectedType != selType)
 			{
@@ -347,7 +350,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			return false;
 		}
 
-		private bool SyncSelectedMember(int line, int col)
+		private bool SyncSelectedMember(Location at)
 		{
 			int selectedType = _lastSelectedType;
 
@@ -356,7 +359,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 			//var members = _dropDownTypes[selectedType].GetMembers();
 
-			int selMember = _lastSelectedType < 0 ? -1 : GetSelectedMemberIndex(line, col);
+			int selMember = _lastSelectedType < 0 ? -1 : GetSelectedMemberIndex(at);
 
 			if (_lastSelectedMember != selMember)
 			{
@@ -376,7 +379,7 @@ namespace Nemerle.VisualStudio.LanguageService
 						m.FontAttr |= DROPDOWNFONTATTR.FONTATTR_GRAY;
 				}
 				*/
-				
+
 				_lastSelectedMember = selMember;
 				return true;
 			}
@@ -384,7 +387,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			return false;
 		}
 
-		int GetSelectedTypeIndex(int line, int col)
+		int GetSelectedTypeIndex(Location at)
 		{
 			int idx = -1;
 			TopDeclaration lastMember = null;
@@ -393,7 +396,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			{
 				var member = _dropDownTypes[i];
 
-				if (member.Location.Contains(line, col))
+				if (member.Location.Contains(at))
 					if (lastMember == null || member.Location.IsNestedIn(lastMember.Location))
 					{
 						idx = i;
@@ -404,7 +407,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			return idx;
 		}
 
-		private int GetSelectedMemberIndex(int line, int col)
+		private int GetSelectedMemberIndex(Location at)
 		{
 			int idx = -1;
 			var members = _dropDownMembers;
@@ -413,18 +416,11 @@ namespace Nemerle.VisualStudio.LanguageService
 			{
 				var member = members[i];
 
-				if (member.Location.Contains(line, col))
+				if (member.Location.Contains(at))
 					idx = i;
 			}
 
 			return idx;
-		}
-
-		static bool IsIn(TextSpan span, int line, int col)
-		{
-			return
-				(line > span.iStartLine || line == span.iStartLine && col >= span.iStartIndex) &&
-				(line < span.iEndLine || line == span.iEndLine && col <= span.iEndIndex);
 		}
 	}
 }

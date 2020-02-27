@@ -41,10 +41,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override void HandleGoto(VsCommands cmd)
 		{
-			int line, col;
-
-			// Get the caret position
-			ErrorHandler.ThrowOnFailure(this.TextView.GetCaretPos(out line, out col));
 			bool gotoDefinition = false;
 			switch (cmd)
 			{
@@ -57,7 +53,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				default: Trace.Assert(false); break;
 			}
 
-			Source.Goto(TextView, gotoDefinition, line, col);
+			Source.Goto(TextView, gotoDefinition, this.TextView.ToITextView().Caret.Position.BufferPosition.ToLocation());
 		}
 
 		#region GetDataTipText
@@ -81,11 +77,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (Source == null || Source.LanguageService == null || !Source.LanguageService.Preferences.EnableQuickInfo)
 				return NativeMethods.E_FAIL;
 
-			// Check if we have to convert the text span for the secondary buffer.
-			TextSpan[] convertedSpan = new TextSpan[1];
-			convertedSpan[0] = aspan[0];
-
-			return Source.GetDataTipText(TextView, convertedSpan, out textValue);
+            return Source.GetDataTipText(TextView, aspan, out textValue);
 		}
 
 		/// <summary>This method checks to see if the IVsDebugger is running, and if so,
@@ -179,25 +171,6 @@ namespace Nemerle.VisualStudio.LanguageService
 			base.OnSetFocus(view);
 		}
 
-		private void ShowAst(IVsTextView view, bool showInfo)
-		{
-			NemerleSource source = Source as NemerleSource;
-			if (source != null && source.ProjectInfo != null)
-			{
-				int line, col;
-				ErrorHandler.ThrowOnFailure(view.GetCaretPos(out line, out col));
-				//Debug.WriteLine(
-				//		string.Format("OnChangeScrollInfo line={0}, col={1}", line + 1, col + 1));
-				AstToolWindow tw = (AstToolWindow)source.ProjectInfo.ProjectNode.Package
-					.FindToolWindow(typeof(AstToolWindow), 0, true);
-
-				if (showInfo)
-					tw.ShowInfo(source);
-
-				tw.Activate(line + 1, col + 1);
-			}
-		}
-
 		Dictionary<IntPtr, TupleIntInt> _viewsCarretInfo = new Dictionary<IntPtr, TupleIntInt>();
 
 		public override void OnChangeScrollInfo(IVsTextView view, int iBar,
@@ -278,19 +251,13 @@ namespace Nemerle.VisualStudio.LanguageService
 		/// </remarks>
 		private void FindReferences()
 		{
-			int line, col;
-
-			// Get the caret position
-			ErrorHandler.ThrowOnFailure(this.TextView.GetCaretPos(out line, out col));
-
 			var findSvc = (IVsObjectSearch)Source.Service.GetService(typeof(SVsObjectSearch));
-
-			//IVsNavInfo navInfo;
 
 			if(findSvc != null)
 			{
 				string caption;
-				var infos = Source.GetGotoInfo(TextView, false, line, col, out caption);
+                var at = this.TextView.ToITextView().Caret.Position.BufferPosition.ToLocation();
+                var infos = Source.GetGotoInfo(TextView, false, at, out caption);
 				if((infos != null) && (infos.Length > 0))
 				{
 					var criteria = new[]
@@ -426,9 +393,6 @@ namespace Nemerle.VisualStudio.LanguageService
 						// cmdIdOptions
 						ShowOptions();
 						return VSConstants.S_OK;
-					case MenuCmd.CmdId.AstToolWindow: // AstToolWindow
-						Source.ProjectInfo.ProjectNode.Package.OnAstToolWindowShow(null, null);
-						return VSConstants.S_OK;
 					case MenuCmd.CmdId.AddHighlighting: // cmdIdAddHighlighting
 						HighlightSymbol();
 						return VSConstants.S_OK;
@@ -448,11 +412,8 @@ namespace Nemerle.VisualStudio.LanguageService
 				{
 					if (_executingCommand == VsCommands2K.TAB)
 					{
-						int lineIndex;
-						int colIndex;
-						TextView.GetCaretPos(out lineIndex, out colIndex);
-
-						if (!Source.CompletionSet.IsDisplayed && this.Source.TryDoTableFormating(this, lineIndex + 1, colIndex + 1))
+                        var at = TextView.ToITextView().Caret.Position.BufferPosition.ToLocation();
+                        if (!Source.CompletionSet.IsDisplayed && this.Source.TryDoTableFormating(this, at))
 							return VSConstants.S_OK;
 					}
 
@@ -584,8 +545,9 @@ namespace Nemerle.VisualStudio.LanguageService
 				TextSpan span = GetSelection();
 				if (source.ProjectInfo == null)
 					return;
-
-				source.GetEngine().BeginHighlightUsages(source, span.iStartLine + 1, span.iStartIndex + 1);
+                var spans = TextView.ToITextView().Selection.SelectedSpans;
+                if (spans.Count == 1)
+				    source.GetEngine().BeginHighlightUsages(source, spans.First().ToLocation());
 			}
 		}
 
@@ -692,11 +654,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (!WarnAboutErrors())
 				return;
 
-			int lineIndex;
-			int colIndex;
-			TextView.GetCaretPos(out lineIndex, out colIndex);
-
-			var allUsages = engine.GetGotoInfo(Source, lineIndex + 1, colIndex + 1, GotoKind.Usages);
+			var allUsages = engine.GetGotoInfo(Source, TextView.ToITextView().Caret.Position.BufferPosition.ToLocation(), GotoKind.Usages);
 			var usages = allUsages.Distinct().ToArray();
 
 			if (usages == null || usages.Length == 0)
@@ -730,12 +688,8 @@ namespace Nemerle.VisualStudio.LanguageService
 			if (ourLanguageService == null)
 				return;
 
-			int lineIndex;
-			int colIndex;
-			TextView.GetCaretPos(out lineIndex, out colIndex);
-			var line = lineIndex + 1;
-			var col = colIndex + 1;
-			var infos = Source.ProjectInfo.Engine.GetInheritorsGotoInfo(Source, line, col);
+            var at = this.TextView.ToITextView().Caret.Position.BufferPosition.ToLocation();
+            var infos = Source.ProjectInfo.Engine.GetInheritorsGotoInfo(Source, at);
 
 			// If we have only one found usage, then jump directly to it.
 			if (infos.Length == 1)

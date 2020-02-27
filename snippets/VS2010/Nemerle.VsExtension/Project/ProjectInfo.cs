@@ -75,9 +75,6 @@ namespace Nemerle.VisualStudio.Project
 			Engine.TypedtreeCreated += delegate
 			{
 				_buildTypedtreeCount++;
-				AstToolWindow tool = AstToolWindow.AstTool;
-				if (tool != null)
-					tool.BuildTypedtreeCount = _buildTypedtreeCount;
 			};
 
 			if (!string.IsNullOrEmpty(location))

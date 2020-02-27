@@ -42,9 +42,18 @@ namespace Nemerle.VisualStudio.LanguageService
     {
         public const string NemerleSourceKey = "NemerleSource";
 
+        #region Fields
+
+        public volatile IList<Location> TypeLocations;
+        public List<Tuple<Location, List<Location>>> MethodsTypeLocations = new List<Tuple<Location, List<Location>>>();
+
+        readonly List<RelocationRequest> _relocationRequestsQueue = new List<RelocationRequest>();
+        volatile SourceSnapshot _currentSnapshot;
         ITextBuffer _textBuffer;
         NC.File _file;
-        SourceSnapshot _currentSnapshot;
+        QuickTipInfoAsyncRequest _tipAsyncRequest;
+
+        #endregion
 
         #region Init
 
@@ -102,11 +111,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
         public SourceSnapshot GetSourceSnapshot()
         {
-            return CurrentSnapshot;
+            return _currentSnapshot ?? (_currentSnapshot = VsSourceSnapshot.CreateSourceSnapshot(_textBuffer.CurrentSnapshot));
         }
-
-        public SourceSnapshot CurrentSnapshot =>
-            _currentSnapshot ?? (_currentSnapshot = VsSourceSnapshot.CreateSourceSnapshot(_textBuffer.CurrentSnapshot));
 
         private void TextBuffer_Changed(object sender, TextContentChangedEventArgs e)
         {
@@ -174,16 +180,6 @@ namespace Nemerle.VisualStudio.LanguageService
         {
             get { return GetTextLines(); }
         }
-
-        #endregion
-
-        #region Fields
-
-        public IList<Location> TypeLocations;
-        public List<Tuple<Location, List<Location>>> MethodsTypeLocations = new List<Tuple<Location, List<Location>>>();
-        readonly List<RelocationRequest> _relocationRequestsQueue = new List<RelocationRequest>();
-        int _fileIndex = -1;
-        QuickTipInfoAsyncRequest _tipAsyncRequest;
 
         #endregion
 
@@ -315,10 +311,11 @@ namespace Nemerle.VisualStudio.LanguageService
 
         public override void MethodTip(IVsTextView textView, int line, int index, TokenInfo info)
         {
-            var result = GetEngine().BeginGetMethodTipInfo(this, line + 1, index + 1);
+            var result = GetEngine().BeginGetMethodTipInfo(this, textView.MakeLocation(line, index));
             result.AsyncWaitHandle.WaitOne();
             if (result.Stop)
                 return;
+
             if (result.MethodTipInfo == null || !result.MethodTipInfo.HasTip)
             {
                 MethodData.Dismiss();
@@ -326,8 +323,7 @@ namespace Nemerle.VisualStudio.LanguageService
             }
 
             var methods = new NemerleMethods(result.MethodTipInfo);
-
-            var span = result.MethodTipInfo.StartName.Combine(result.MethodTipInfo.EndParameters).ToTextSpan();
+            var span    = result.MethodTipInfo.StartName.Combine(result.MethodTipInfo.EndParameters).ToTextSpan();
             MethodData.Refresh(textView, methods, result.MethodTipInfo.ParameterIndex, span);
             Debug.WriteLine("MethodTip");
         }
@@ -335,17 +331,14 @@ namespace Nemerle.VisualStudio.LanguageService
         /// <summary>
         /// Подготавливает результаты Find Usages/Find All References
         /// </summary>
-        public GotoInfo[] GetGotoInfo(IVsTextView view, bool gotoDefinition, int lineIndex, int colIndex, out string caption)
+        public GotoInfo[] GetGotoInfo(IVsTextView view, bool gotoDefinition, Location at, out string caption)
         {
             caption = null;
 
             var engine = GetEngine();
-            var line = lineIndex + 1;
-            var col = colIndex + 1;
-
-            GotoInfo[] infos = gotoDefinition
-              ? engine.GetGotoInfo(this, line, col, GotoKind.Definition)
-              : engine.GetGotoInfo(this, line, col, GotoKind.Usages);
+            var infos = gotoDefinition
+              ? engine.GetGotoInfo(this, at, GotoKind.Definition)
+              : engine.GetGotoInfo(this, at, GotoKind.Usages);
 
             if (infos == null || infos.Length == 0)
                 return infos;
@@ -381,11 +374,11 @@ namespace Nemerle.VisualStudio.LanguageService
         /// <summary>
         /// Этот метод заполняет и показывает окошко GotoUsageForm
         /// </summary>
-        public void Goto(IVsTextView view, bool gotoDefinition, int lineIndex, int colIndex)
+        public void Goto(IVsTextView view, bool gotoDefinition, Location at)
         {
             string caption;
 
-            var infos = GetGotoInfo(view, gotoDefinition, lineIndex, colIndex, out caption);
+            var infos = GetGotoInfo(view, gotoDefinition, at, out caption);
 
             if ((infos == null) || (infos.Length == 0))
                 return;
@@ -680,7 +673,7 @@ namespace Nemerle.VisualStudio.LanguageService
         public override TokenInfo GetTokenInfo(int line, int col)
         {
             TokenInfo tokenInfo;
-            if (ParseUtil.TryGetTokenInfo(TextLines.ToITextBuffer(), line, col, out tokenInfo))
+            if (ParseUtil.TryGetTokenInfo(TextLines, line, col, out tokenInfo))
                 return tokenInfo;
             else
                 return new TokenInfo();
@@ -980,21 +973,21 @@ namespace Nemerle.VisualStudio.LanguageService
             return compileUnit;
         }
 
-        public void ImplementInterfaces(int line, int column)
-        {
-            var engine = GetEngine();
-
-            if (!engine.IsDefaultEngine)
-                engine.BeginFindUnimplementedMembers(this, line, column);
-        }
-
-        public void OverrideMembers(int line, int column)
-        {
-            var engine = GetEngine();
-
-            if (!engine.IsDefaultEngine)
-                engine.BeginFindMethodsToOverride(this, line, column);
-        }
+        //public void ImplementInterfaces(int line, int column)
+        //{
+        //    var engine = GetEngine();
+        //
+        //    if (!engine.IsDefaultEngine)
+        //        engine.BeginFindUnimplementedMembers(this, line, column);
+        //}
+        //
+        //public void OverrideMembers(int line, int column)
+        //{
+        //    var engine = GetEngine();
+        //
+        //    if (!engine.IsDefaultEngine)
+        //        engine.BeginFindMethodsToOverride(this, line, column);
+        //}
 
         #endregion
 
@@ -1012,19 +1005,20 @@ namespace Nemerle.VisualStudio.LanguageService
 
         internal void Rename(string newFileName)
         {
-            _fileIndex = Location.GetFileIndex(newFileName);
+            _currentSnapshot = null;
         }
 
         #region Table formating
 
-        internal bool TryDoTableFormating(NemerleViewFilter view, int line, int col)
+        internal bool TryDoTableFormating(NemerleViewFilter view, Location at)
         {
             if (!view.GetSelection().IsSpanEmpty())
                 return false;
 
             if (!Service.Package.UseSmartTab)
                 return false;
-
+            var line = at.Line;
+            var col  = at.Column;
             var text = GetLine(line);
 
             if (!IsInContent(text, col))
@@ -1036,7 +1030,7 @@ namespace Nemerle.VisualStudio.LanguageService
             if (line < LineCount - 1 && TryInsertSpacesToNextToken(GetLine(GetNextNotEmpryLineIndex(line)), view, col))
                 return true;
 
-            return EmulateTabBySpaces(view, line, col);
+            return EmulateTabBySpaces(view, at);
         }
 
         private static bool IsInContent(string lileText, int col)
@@ -1090,10 +1084,10 @@ namespace Nemerle.VisualStudio.LanguageService
             return true;
         }
 
-        bool EmulateTabBySpaces(NemerleViewFilter view, int line, int col)
+        bool EmulateTabBySpaces(NemerleViewFilter view, Location at)
         {
             var tabSize = LanguageService.Preferences.TabSize;
-            var visiblePosition = ColumnToVisiblePosition(line - 1, col - 1);
+            var visiblePosition = ColumnToVisiblePosition(at.Line - 1, at.Column - 1);
 
             var countSpaces = visiblePosition % tabSize == 0 ? tabSize : tabSize - (visiblePosition % tabSize);
             var completor = new Completor(LanguageService, view.TextView, "table formating");
@@ -1392,20 +1386,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
         public int Version => _textBuffer.CurrentSnapshot.Version.VersionNumber;
 
-        [Obsolete("Use GetSourceSnapshot().LineColumnToPosition instead.")]
-        public new int GetPositionOfLineIndex(int line, int col)
-        {
-            return base.GetPositionOfLineIndex(line - 1, col - 1);
-        }
-
-        [Obsolete("Use GetSourceSnapshot().LineColumnToPosition instead.")]
-        public LineColumn GetLineIndexOfPosition(int pos)
-        {
-            int line, col;
-            base.GetLineIndexOfPosition(pos, out line, out col);
-            return new LineColumn(line + 1, col + 1);
-        }
-
         #endregion
 
         #region TipText
@@ -1490,11 +1470,11 @@ namespace Nemerle.VisualStudio.LanguageService
 
             var loc = Utils.LocationFromSpan(FileIndex, textSpan[0]);
 
-            if (_tipAsyncRequest == null || _tipAsyncRequest.Line != loc.Line || _tipAsyncRequest.Column != loc.Column)
+            if (_tipAsyncRequest == null || _tipAsyncRequest.At != loc)
             {
                 //if (_typeNameMarker != null && _typeNameMarker.Location.Contains(loc.Line, loc.Column))
                 //  ShowTypeNameSmartTag(view, false);
-                _tipAsyncRequest = GetEngine().BeginGetQuickTipInfo(this, loc.Line, loc.Column);
+                _tipAsyncRequest = GetEngine().BeginGetQuickTipInfo(this, loc);
                 return VSConstants.E_PENDING;
             }
             if (!_tipAsyncRequest.IsCompleted)
