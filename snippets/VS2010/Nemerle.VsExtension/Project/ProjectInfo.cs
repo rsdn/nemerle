@@ -357,7 +357,7 @@ namespace Nemerle.VisualStudio.Project
 			foreach (var task in taksForSource)
 				task.DisposeTextLineMarker();
 
-			ReplaseOrAddSource(new FileNemerleSource(fileIndex));
+			ReplaseOrAddSource(new FileNemerleSource(source.GetFilePath()));
 		}
 
 		internal void RemoveSource(IIdeSource source)
@@ -586,7 +586,7 @@ namespace Nemerle.VisualStudio.Project
 			try
 			{
 				if (source == null)
-					source = new FileNemerleSource(Location.GetFileIndex(path));
+					source = new FileNemerleSource(path);
 				else
 					((NemerleSource)source).UpdateProjectInfo(this);
 

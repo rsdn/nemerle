@@ -432,7 +432,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
             foreach (GotoInfo item in infoFromPdb)
             {
-                var cu = engine.ParseCompileUnit(new FileNemerleSource(item.Location.FileIndex));
+                var cu = engine.ParseCompileUnit(new FileNemerleSource(item.FilePath));
                 var res = TryGetGotoInfoForMemberFromSource(inf.Member, item.Location, cu);
 
                 if (res.Length > 0)
