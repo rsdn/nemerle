@@ -13,6 +13,7 @@ namespace Nemerle.VisualStudio.LanguageService
     {
         private readonly ITextSnapshot _textSnapshot;
         private File _file;
+        private string _text;
 
         internal static SourceSnapshot CreateSourceSnapshot(ITextSnapshot textSnapshot) =>
             new VsSourceSnapshot(textSnapshot);
@@ -32,7 +33,7 @@ namespace Nemerle.VisualStudio.LanguageService
             _textSnapshot = textSnapshot;
         }
 
-        public override string OriginalText => _textSnapshot.GetText();
+        public override string OriginalText => _text ?? (_text =_textSnapshot.GetText());
         public override string Text => OriginalText;
         public override File File => _file;
         public override int Version => _textSnapshot.Version.VersionNumber;
@@ -46,6 +47,12 @@ namespace Nemerle.VisualStudio.LanguageService
             return false;
         }
 
-        public override int GetHashCode() => _textSnapshot.GetHashCode();
+        public override int GetHashCode()
+        {
+            if (_hashCode == 0)
+                _hashCode = OriginalText.GetHashCode();
+
+            return _hashCode;
+        }
     }
 }
