@@ -256,9 +256,10 @@ namespace Nemerle.VisualStudio
             return String.Join(Environment.NewLine, ary);
         }
 
-        public static Location LocationFromSpan(int fileIndex, TextSpan span)
+        public static Location LocationFromSpan(ITextSnapshot textSnapshot, TextSpan span)
         {
-            return new Location(fileIndex, span.iStartLine + 1, span.iStartIndex + 1, span.iEndLine + 1, span.iEndIndex + 1);
+            var source = VsSourceSnapshot.GetSourceSnapshot(textSnapshot);
+            return new Location(source, source.LineColumnToPosition(span.iStartLine + 1, span.iStartIndex + 1), source.LineColumnToPosition(span.iEndLine + 1, span.iEndIndex + 1));
         }
 
         public static bool IsSpanEmpty(this TextSpan span)

@@ -489,22 +489,22 @@ namespace Nemerle.VisualStudio.LanguageService
 
         VsCommands2K _executingCommand;
 
-		private List<Location> _selectionsStack;
-
-		private int _currentSelection;
-		public int CurrentSelection
-		{
-			get { return _currentSelection; }
-			set
-			{
-				if (_selectionsStack != null && value != _currentSelection && value >= 0 && value < _selectionsStack.Count)
-				{
-					_currentSelection = value;
-					TextSpan span = Utils.SpanFromLocation(_selectionsStack[_currentSelection]);
-					TextView.SetSelection(span.iEndLine, span.iEndIndex, span.iStartLine, span.iStartIndex);
-				}
-			}
-		}
+		//private List<Location> _selectionsStack;
+        //
+		//private int _currentSelection;
+		//public int CurrentSelection
+		//{
+		//	get { return _currentSelection; }
+		//	set
+		//	{
+		//		if (_selectionsStack != null && value != _currentSelection && value >= 0 && value < _selectionsStack.Count)
+		//		{
+		//			_currentSelection = value;
+		//			TextSpan span = Utils.SpanFromLocation(_selectionsStack[_currentSelection]);
+		//			TextView.SetSelection(span.iEndLine, span.iEndIndex, span.iStartLine, span.iStartIndex);
+		//		}
+		//	}
+		//}
 
 		public new NemerleSource Source
 		{
@@ -532,8 +532,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private void ShrinkSelection()
 		{
-			if (SelectionIsInStack(GetSelection()))
-				CurrentSelection++;
+			//if (SelectionIsInStack(GetSelection()))
+			//	CurrentSelection++;
 		}
 
 		private void HighlightSymbol()
@@ -700,23 +700,23 @@ namespace Nemerle.VisualStudio.LanguageService
 						ourLanguageService.GotoLocation(popup.Result.Location);
 		}
 
-		private bool SelectionIsInStack(TextSpan selection)
-		{
-			// perhaps, using OnSelectChange routine would be better
-			// to determine, whether user already moved selection or still in the selection chain
-			if (_selectionsStack == null || _selectionsStack.Count == 0)
-				return false;
-			Location current = Utils.LocationFromSpan(_selectionsStack[0].FileIndex, selection);
-
-			int i = _selectionsStack.IndexOf(current);
-			if (i >= 0)
-			{
-				_currentSelection = i;
-				return true;
-			}
-
-			return false;
-		}
+		//private bool SelectionIsInStack(TextSpan selection)
+		//{
+		//	// perhaps, using OnSelectChange routine would be better
+		//	// to determine, whether user already moved selection or still in the selection chain
+		//	if (_selectionsStack == null || _selectionsStack.Count == 0)
+		//		return false;
+		//	Location current = Utils.LocationFromSpan(_selectionsStack[0].Source, selection);
+        //
+		//	int i = _selectionsStack.IndexOf(current);
+		//	if (i >= 0)
+		//	{
+		//		_currentSelection = i;
+		//		return true;
+		//	}
+        //
+		//	return false;
+		//}
 
 		private void ShowOptions()
 		{

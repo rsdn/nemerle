@@ -1468,7 +1468,7 @@ namespace Nemerle.VisualStudio.LanguageService
             if (Service.IsSmartTagActive)
                 return (int)TipSuccesses2.TIP_S_NODEFAULTTIP;
 
-            var loc = Utils.LocationFromSpan(FileIndex, textSpan[0]);
+            var loc = Utils.LocationFromSpan(view.ToITextView().TextBuffer.CurrentSnapshot, textSpan[0]);
 
             if (_tipAsyncRequest == null || _tipAsyncRequest.At != loc)
             {
