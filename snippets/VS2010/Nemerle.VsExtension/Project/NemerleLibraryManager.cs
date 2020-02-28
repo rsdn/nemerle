@@ -19,12 +19,14 @@ namespace Nemerle.VisualStudio.Project
 	[Guid(NemerleConstants.LibraryManagerGuidString)]
 	public class NemerleLibraryManager : INemerleLibraryManager, IVsRunningDocTableEvents, IDisposable
 	{
-		/// <summary>
-		/// Class storing the data about a parsing task on a nemerle module.
-		/// A module in Nemerle is a source file, so here we use the file name to
-		/// identify it.
-		/// </summary>
-		[DebuggerStepThrough]
+        public static readonly Guid LibraryGuid = new Guid(NemerleConstants.LibraryGuidString);
+
+        /// <summary>
+        /// Class storing the data about a parsing task on a nemerle module.
+        /// A module in Nemerle is a source file, so here we use the file name to
+        /// identify it.
+        /// </summary>
+        [DebuggerStepThrough]
 		class LibraryTask
 		{
 			public LibraryTask(string fileName, string text)
@@ -68,16 +70,15 @@ namespace Nemerle.VisualStudio.Project
 
 		public NemerleLibraryManager(IServiceProvider provider)
 		{
-			_provider		= provider;
-			_documents	   = new Dictionary<uint, TextLineEventListener>();
+			_provider		 = provider;
+			_documents	     = new Dictionary<uint, TextLineEventListener>();
 			_hierarchies	 = new Dictionary<IVsHierarchy, HierarchyListener>();
-			_files		   = new Dictionary<ModuleID, LibraryNode>();
-			_requests		= new Queue<LibraryTask>();
+			_files		     = new Dictionary<ModuleID, LibraryNode>();
+			_requests		 = new Queue<LibraryTask>();
 			_requestPresent  = new ManualResetEvent(false);
 			_shutDownStarted = new ManualResetEvent(false);
 			_parseThread	 = new Thread(ParseThread) {Name = "Parse thread"};
-
-			_library		 = new Library(new Guid(NemerleConstants.LibraryGuidString));
+			_library		 = new Library(LibraryGuid);
 			_library.LibraryCapabilities = (_LIB_FLAGS2)(_LIB_FLAGS.LF_PROJECT) | _LIB_FLAGS2.LF_SUPPORTSFILTERING | _LIB_FLAGS2.LF_SUPPORTSCALLBROWSER;
 
 			_parseThread.Start();

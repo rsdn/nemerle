@@ -1,4 +1,4 @@
-using System;
+п»їusing System;
 
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.OLE.Interop;
@@ -80,13 +80,13 @@ namespace Nemerle.VisualStudio.Project
 
 		/// <summary>
 		/// Used to distinguish "Find All References" search from other search types.
-		/// Используется для того чтобы отличить поиск "Find All References" от других видов поиска.
+		/// РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РґР»СЏ С‚РѕРіРѕ С‡С‚РѕР±С‹ РѕС‚Р»РёС‡РёС‚СЊ РїРѕРёСЃРє "Find All References" РѕС‚ РґСЂСѓРіРёС… РІРёРґРѕРІ РїРѕРёСЃРєР°.
 		/// </summary>
 		public const uint FindAllReferencesMagicNum = 0x11123334;
 
 		/// <summary>
 		/// Stores existing "Find All References" results in the _findResults field.
-		/// Сохраняет уже готовые результаты поиска "Find All References" в поле _findResults.
+		/// РЎРѕС…СЂР°РЅСЏРµС‚ СѓР¶Рµ РіРѕС‚РѕРІС‹Рµ СЂРµР·СѓР»СЊС‚Р°С‚С‹ РїРѕРёСЃРєР° "Find All References" РІ РїРѕР»Рµ _findResults.
 		/// </summary>
 		public void OnFindAllReferencesDone(IVsSimpleObjectList2 findResults)
 		{
@@ -96,7 +96,7 @@ namespace Nemerle.VisualStudio.Project
 		private IVsSimpleObjectList2 _findResults = null;
 
 		/// <summary>
-		/// Этот метод один для целой кучи функциональности: Find All References, Calls From, Calls To, и других
+		/// Р­С‚РѕС‚ РјРµС‚РѕРґ РѕРґРёРЅ РґР»СЏ С†РµР»РѕР№ РєСѓС‡Рё С„СѓРЅРєС†РёРѕРЅР°Р»СЊРЅРѕСЃС‚Рё: Find All References, Calls From, Calls To, Рё РґСЂСѓРіРёС…
 		/// </summary>
 		public int GetList2(
 			uint					 ListType,
@@ -105,20 +105,20 @@ namespace Nemerle.VisualStudio.Project
 			out IVsSimpleObjectList2 ppIVsSimpleObjectList2)
 		{
 			if((_findResults != null) && (pobSrch != null) && (pobSrch.Length == 1) && (pobSrch[0].dwCustom == FindAllReferencesMagicNum))
-			{//если _findResults заполнены, то возвращаем их
+			{//РµСЃР»Рё _findResults Р·Р°РїРѕР»РЅРµРЅС‹, С‚Рѕ РІРѕР·РІСЂР°С‰Р°РµРј РёС…
 				ppIVsSimpleObjectList2 = _findResults;
 				_findResults = null;
 				return VSConstants.S_OK;
 			}
 
-			//TODO: (hi_octane) хочу подключить CallBrowser
+			//TODO: (hi_octane) С…РѕС‡Сѓ РїРѕРґРєР»СЋС‡РёС‚СЊ CallBrowser
 			//TODO: for CallBrowser (Calls From, Calls To), we need to follow these article:
-			// По реализации CallBrowser что-то есть здесь:
+			// РџРѕ СЂРµР°Р»РёР·Р°С†РёРё CallBrowser С‡С‚Рѕ-С‚Рѕ РµСЃС‚СЊ Р·РґРµСЃСЊ:
 			// http://social.msdn.microsoft.com/Forums/en-US/vsx/thread/8bc7d011-57c5-4aef-813a-a5a38170ae68/
-			// и более подробно здесь:
-			// http://msdn.microsoft.com/en-us/library/bb164614(v=VS.90).aspx - VS2008, работает и в 2010
+			// Рё Р±РѕР»РµРµ РїРѕРґСЂРѕР±РЅРѕ Р·РґРµСЃСЊ:
+			// http://msdn.microsoft.com/en-us/library/bb164614(v=VS.90).aspx - VS2008, СЂР°Р±РѕС‚Р°РµС‚ Рё РІ 2010
 			// http://msdn.microsoft.com/en-us/library/bb164724.aspx - VS2010
-			// про работу с CallBrowser через CodeModel посылают сюда:
+			// РїСЂРѕ СЂР°Р±РѕС‚Сѓ СЃ CallBrowser С‡РµСЂРµР· CodeModel РїРѕСЃС‹Р»Р°СЋС‚ СЃСЋРґР°:
 			// http://msdn.microsoft.com/en-us/library/ms228770.aspx
 
 			ppIVsSimpleObjectList2 = _root;
@@ -134,7 +134,7 @@ namespace Nemerle.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Старая реализация была не верна, но и эта почему-то не работает
+		/// РЎС‚Р°СЂР°СЏ СЂРµР°Р»РёР·Р°С†РёСЏ Р±С‹Р»Р° РЅРµ РІРµСЂРЅР°, РЅРѕ Рё СЌС‚Р° РїРѕС‡РµРјСѓ-С‚Рѕ РЅРµ СЂР°Р±РѕС‚Р°РµС‚
 		/// </summary>
 		public int GetSupportedCategoryFields2(int category, out uint pCatField)
 		{
