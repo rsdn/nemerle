@@ -51,7 +51,9 @@ namespace Nemerle.VisualStudio.Project
 		private string _projectLocation;
 		private bool _fileRenamingInProgress;
 
-		public ProjectInfo(
+        public bool IsFrozen => _fileRenamingInProgress;
+
+        public ProjectInfo(
 			NemerleProjectNode projectNode,
 			IVsHierarchy hierarchy,
 			NemerleLanguageService languageService,
@@ -323,7 +325,7 @@ namespace Nemerle.VisualStudio.Project
 			_assembleReferenceWatchers.Clear();
 		}
 
-		void watcher_Changed(object sender, FileSystemEventArgs e)
+        void watcher_Changed(object sender, FileSystemEventArgs e)
 		{
 			Engine.RequestOnReloadProject();
 		}
@@ -332,24 +334,30 @@ namespace Nemerle.VisualStudio.Project
 
 		#endregion
 
-		internal void AddEditableSource(NemerleSource source)
-		{
-			ReplaseOrAddSource(source);
-		}
-
 		internal void ReplaseOrAddSource(IIdeSource source)
 		{
 			var fileIndex = source.FileIndex;
 			IIdeSource old;
-			if (_sourceMap.TryGetValue(fileIndex, out old))
-				_sources.Remove(old);
+            if (_sourceMap.TryGetValue(fileIndex, out old))
+            {
+                if (old == source)
+                    return;
+                _sources.Remove(old);
+                if (old is FileNemerleSource fileNemerleSource)
+                    fileNemerleSource.Dispose();
+            }
 
-			_sourceMap[fileIndex] = source;
+            _sourceMap[fileIndex] = source;
 			_sources.Add(source);
-			//Engine.RequestOnBuildTypesTree();
-		}
+        }
 
-		internal void RemoveEditableSource(NemerleSource source)
+        internal void AddEditableSource(NemerleSource source)
+        {
+            ReplaseOrAddSource(source);
+            Engine.BeginUpdateTypeHighlightings(source);
+        }
+
+        internal void RemoveEditableSource(NemerleSource source)
 		{
 			var fileIndex = source.FileIndex;
 			var taksForSource = GetTaksForSource(source.FileIndex);
@@ -357,15 +365,22 @@ namespace Nemerle.VisualStudio.Project
 			foreach (var task in taksForSource)
 				task.DisposeTextLineMarker();
 
-			ReplaseOrAddSource(new FileNemerleSource(source.GetFilePath()));
+			ReplaseOrAddSource(new FileNemerleSource(source.Version - 1, source.GetFilePath()));
 		}
 
-		internal void RemoveSource(IIdeSource source)
+		internal void RemoveSource(IIdeSource source, bool isNeedBuildTypesTree)
 		{
-			_sourceMap.Remove(source.FileIndex);
+            if (source is NemerleSource nemerleSource)
+                nemerleSource.Removed();
+
+            _sourceMap.Remove(source.FileIndex);
 			_sources.Remove(source);
 
-			Engine.RequestOnBuildTypesTree();
+            if (source is FileNemerleSource fileNemerleSource)
+                fileNemerleSource.Dispose();
+
+            if (isNeedBuildTypesTree)
+			    Engine.RequestOnBuildTypesTree();
 		}
 
 		public void RemoveSource(string path)
@@ -379,7 +394,7 @@ namespace Nemerle.VisualStudio.Project
 			{
 				var source = GetSource(fileIndex);
 				Trace.Assert(source != null);
-				RemoveSource(source);
+				RemoveSource(source, isNeedBuildTypesTree: true);
 			}
 		}
 
@@ -577,23 +592,22 @@ namespace Nemerle.VisualStudio.Project
 
 		public void AddSource(string path)
 		{
-			if (_fileRenamingInProgress)
+			if (IsFrozen)
 				return;
 
 			IIdeSource source = (NemerleSource)LanguageService.GetSource(path); // TODO: VladD2: тут надо искать Source по иерархии, а не по пути!
 
-			//source = new NemerleSource(LanguageService, );
 			try
 			{
-				if (source == null)
-					source = new FileNemerleSource(path);
-				else
-					((NemerleSource)source).UpdateProjectInfo(this);
+                if (source == null)
+                    source = new FileNemerleSource(0, path);
+                else
+                    ((NemerleSource)source).UpdateProjectInfo(this);
 
 				_sourceMap.Add(source.FileIndex, source);
 				_sources.Add(source);
 
-				Engine.RequestOnBuildTypesTree();
+				//Engine.RequestOnBuildTypesTree();
 			}
 			catch (Exception ex)
 			{
@@ -806,7 +820,7 @@ namespace Nemerle.VisualStudio.Project
 			{
 				var nemerleSource = source as NemerleSource;
 
-				if (nemerleSource != null)
+				if (nemerleSource != null && !nemerleSource.IsClosed)
 				{
 					var lineCount = nemerleSource.GetLineCount();
 
@@ -1088,17 +1102,26 @@ namespace Nemerle.VisualStudio.Project
 		internal void RenameSource(string oldFileName, string newFileName)
 		{
 			var source = GetSource(oldFileName);
-			RemoveSource(source);
+            var fileIndex = source.FileIndex;
 
-			var nemerleSource = source as NemerleSource;
+            if (source is NemerleSource nemerleSource)
+                nemerleSource.Rename(oldFileName, newFileName);
+            else
+            {
+                _sources.Remove(source);
+                source.Dispose();
+                source = new FileNemerleSource(0, newFileName);
+                _sources.Add(source);
+            }
 
-			if (nemerleSource != null)
-				nemerleSource.Rename(newFileName);
-			else
-				AddSource(newFileName);
-		}
+            _sourceMap.Remove(fileIndex);
+            _sourceMap.Add(source.FileIndex, source);
 
-		internal void UpdateAssembleReferences()
+
+            Engine.RequestOnBuildTypesTree();
+        }
+
+        internal void UpdateAssembleReferences()
 		{
 			ResetAssembleReferences();
 

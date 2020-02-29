@@ -976,7 +976,7 @@ namespace Nemerle.VisualStudio.Project
 
 			var projectInfo = ProjectInfo;
 
-			if (projectInfo != null)
+			if (projectInfo != null && !projectInfo.IsFrozen)
 				projectInfo.Engine.RequestOnBuildTypesTree();
 
 			//// TODO : Revisit the VSADDFILEFLAGS here. Can it be a nested project?

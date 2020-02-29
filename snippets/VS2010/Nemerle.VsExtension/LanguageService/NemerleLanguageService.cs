@@ -183,8 +183,18 @@ namespace Nemerle.VisualStudio.LanguageService
 
         public override Source CreateSource(IVsTextLines buffer)
         {
-            var source = new NemerleSource(this, buffer);
-            return source;
+            int baseVersion = 0;
+            var path = buffer.GetFilePath();
+            var projectInfo = ProjectInfo.FindProject(path);
+            if (projectInfo != null)
+            {
+                var previosSource = projectInfo.GetSource(path);
+                if (previosSource != null)
+                {
+                    baseVersion = previosSource.Version - 1;
+                }
+            }
+            return new NemerleSource(baseVersion, this, buffer);
         }
 
         public override CodeWindowManager CreateCodeWindowManager(IVsCodeWindow codeWindow, Source source)

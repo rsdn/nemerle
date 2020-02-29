@@ -1036,7 +1036,8 @@ namespace Microsoft.VisualStudio.Project
 			switch (id)
 			{
 				case __VSHPROPID.VSHPROPID_ShowProjInSolutionPage:
-					this.ShowProjectInSolutionPage = (bool)value;
+                    LogPropertyAssess(propid, value, isSet: true);
+                    this.ShowProjectInSolutionPage = (bool)value;
 					return VSConstants.S_OK;
 			}
 

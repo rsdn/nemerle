@@ -367,12 +367,13 @@ namespace Nemerle.VisualStudio.Project
 			if (projectInfo == null)
 				return base.RenameFileNode(oldFileName, newFileName, newParentId);
 
-			projectInfo.RenameSource(oldFileName, newFileName);
 
 			FileNode result = null;
 			projectInfo.BeginRenameFile();
 			try { result = base.RenameFileNode(oldFileName, newFileName, newParentId); }
 			finally { projectInfo.EndRenameFile(); }
+
+			projectInfo.RenameSource(oldFileName, newFileName);
 
 			return result;
 		}
@@ -523,8 +524,10 @@ namespace Nemerle.VisualStudio.Project
 		/// <returns>Returns success or failure code.</returns>
 		public override int SetProperty(int propid, object value)
 		{
-			if ((__VSHPROPID)propid == __VSHPROPID.VSHPROPID_IsNonMemberItem)
+
+            if ((__VSHPROPID)propid == __VSHPROPID.VSHPROPID_IsNonMemberItem)
 			{
+                LogPropertyAssess(propid, value, isSet: true);
 				ErrorHelper.ThrowIsNull(value, "value");
 
 				IsNonMemberItem = bool.Parse(value.ToString());

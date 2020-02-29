@@ -11,12 +11,14 @@ namespace Nemerle.VisualStudio.LanguageService
 {
     sealed class VsSourceSnapshot : SourceSnapshot
     {
+        public readonly int BaseVersion;
+
         private readonly ITextSnapshot _textSnapshot;
         private File _file;
         private string _text;
 
-        internal static SourceSnapshot CreateSourceSnapshot(ITextSnapshot textSnapshot) =>
-            new VsSourceSnapshot(textSnapshot);
+        internal static SourceSnapshot CreateSourceSnapshot(NemerleSource nemerleSource, ITextSnapshot textSnapshot) =>
+            new VsSourceSnapshot(nemerleSource, textSnapshot);
 
         public static SourceSnapshot GetSourceSnapshot(ITextBuffer textBuffer) => GetSourceSnapshot(textBuffer.CurrentSnapshot);
 
@@ -26,25 +28,30 @@ namespace Nemerle.VisualStudio.LanguageService
             return ideSource?.GetSourceSnapshot(textSnapshot);
         }
 
-        private VsSourceSnapshot(ITextSnapshot textSnapshot) : base(0, textSnapshot.GetHashCode())
+        private VsSourceSnapshot(NemerleSource nemerleSource, ITextSnapshot textSnapshot) : base(0, 0) // hash-code calculated dynamically
         {
+            BaseVersion = nemerleSource.BaseVersion;
+            var indexArrayLength = FileUtils.GetIndexArrayLength();
             _file = FileUtils.GetFile(textSnapshot.TextBuffer.GetFilePath());
             Debug.Assert(_file != null);
+            if (_file.Id >= indexArrayLength)
+                nemerleSource.ProjectInfo?.Engine?.BeginBuildTypesTree();
             _textSnapshot = textSnapshot;
         }
 
         public override string OriginalText => _text ?? (_text =_textSnapshot.GetText());
         public override string Text => OriginalText;
         public override File File => _file;
-        public override int Version => _textSnapshot.Version.VersionNumber;
+        public override int Version => _textSnapshot.Version.VersionNumber + BaseVersion;
         public override bool IsGenerated => false;
         public override bool IsFake => false;
 
         public override bool Equals(object other)
         {
-            if (other is VsSourceSnapshot otherSnapshot)
-                return otherSnapshot._hashCode == _hashCode && otherSnapshot._textSnapshot.Equals(_textSnapshot);
-            return false;
+            //if (other is VsSourceSnapshot otherSnapshot)
+            //    return otherSnapshot._hashCode == _hashCode && otherSnapshot._textSnapshot.Equals(_textSnapshot);
+            //return false;
+            return base.Equals(other);
         }
 
         public override int GetHashCode()

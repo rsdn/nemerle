@@ -208,10 +208,9 @@ namespace Nemerle.VisualStudio.Project
 		{
 			if ((__VSHPROPID)propid == __VSHPROPID.VSHPROPID_IsNonMemberItem)
 			{
-				ErrorHelper.ThrowIsNull(value, "value");
-
+                LogPropertyAssess(propid, value, isSet: true);
+                ErrorHelper.ThrowIsNull(value, "value");
 				IsNonMemberItem = bool.Parse(value.ToString());
-
 				return VSConstants.S_OK;
 			}
 
@@ -232,7 +231,7 @@ namespace Nemerle.VisualStudio.Project
 		}
 
 		/// <summary>
-		/// Provides the node name for inline editing of caption. 
+		/// Provides the node name for inline editing of caption.
 		/// Overriden to diable this fuctionality for non member fodler node.
 		/// </summary>
 		/// <returns>Caption of the folder node if the node is a member item, null otherwise.</returns>
@@ -241,7 +240,7 @@ namespace Nemerle.VisualStudio.Project
 			return IsNonMemberItem ? null : base.GetEditLabel();
 		}
 
-		// Because the IsExpanded is not working properly (as of this date, 10/18/2007), that's why we are using the 
+		// Because the IsExpanded is not working properly (as of this date, 10/18/2007), that's why we are using the
 		// GetIconHandle method. When we fix the IsExpanded property, we should switch to ImageIndex property instead
 		// of this method.
 
@@ -328,15 +327,15 @@ namespace Nemerle.VisualStudio.Project
 			return new NemerleOAFolderItem(this.ProjectMgr.GetAutomationObject() as Microsoft.VisualStudio.Project.Automation.OAProject, this);
 		}
 
-		#endregion
+        #endregion
 
-		#region Methods
+        #region Methods
 
-		/// <summary>
-		/// Adds the this node to the build system.
-		/// </summary>
-		/// <param name="recursive">Flag to indicate if the addition should be recursive.</param>
-		protected virtual void AddToMSBuild(bool recursive)
+        /// <summary>
+        /// Adds the this node to the build system.
+        /// </summary>
+        /// <param name="recursive">Flag to indicate if the addition should be recursive.</param>
+        protected virtual void AddToMSBuild(bool recursive)
 		{
 			NemerleProjectNode projectNode = ProjectMgr as NemerleProjectNode;
 			if (projectNode == null || projectNode.IsClosed)

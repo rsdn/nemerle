@@ -253,7 +253,7 @@ namespace Nemerle.VisualStudio
             string[] ary = new string[lines.Count + 1];
             lines.CopyTo(ary);
             ary[ary.Length - 1] = String.Empty;
-            return String.Join(Environment.NewLine, ary);
+            return string.Join(Environment.NewLine, ary);
         }
 
         public static Location LocationFromSpan(ITextSnapshot textSnapshot, TextSpan span)

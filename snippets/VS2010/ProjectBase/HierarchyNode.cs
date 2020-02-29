@@ -833,42 +833,77 @@ namespace Microsoft.VisualStudio.Project
 #if DEBUG
 			if(propId != LastTracedProperty)
 			{
-				string trailer = (result == null) ? "null" : result.ToString();
-				CCITracing.TraceCall(this.hierarchyId + "," + propId.ToString() + " = " + trailer);
-				LastTracedProperty = propId; // some basic filtering here...
+                LogPropertyAssess(propId, result, isSet: false);
+                LastTracedProperty = propId; // some basic filtering here...
 			}
 #endif
 			return result;
 		}
 
-		/// <summary>
-		/// Sets the value of a property for a given property id
-		/// </summary>
-		/// <param name="propid">the property id of the property to be set</param>
-		/// <param name="value">value of the property</param>
-		/// <returns>S_OK if succeeded</returns>
-		[SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "propid")]
+        static Dictionary<int, string> _propIdToNamesMap;
+        static bool _isTraceOn = false;
+
+        internal void LogPropertyAssess(int propId, object value, bool isSet)
+        {
+            if (!_isTraceOn)
+                return;
+
+            if (_propIdToNamesMap == null)
+            {
+                _propIdToNamesMap = new Dictionary<int, string>();
+                Type[] types = { typeof(__VSHPROPID), typeof(__VSHPROPID2), typeof(__VSHPROPID3), typeof(__VSHPROPID4), typeof(__VSHPROPID5), typeof(__VSHPROPID6), typeof(__VSHPROPID7), typeof(__VSHPROPID8), typeof(__VSHPROPID9) };
+                foreach (var type in types)
+                {
+                    var names = type.GetEnumNames();
+                    Array values = type.GetEnumValues();
+                    for (int i = 0; i < names.Length; i++)
+                    {
+                        var currentValue = (int)values.GetValue(i);
+                        if (_propIdToNamesMap.TryGetValue(currentValue, out var name))
+                            _propIdToNamesMap[currentValue] = name + ", " + names[i];
+                        else
+                            _propIdToNamesMap.Add(currentValue, names[i]);
+                    }
+                }
+            }
+
+            var propIdText = _propIdToNamesMap.TryGetValue(propId, out var enumElemName) ? $"{enumElemName} ({propId})" : propId.ToString();
+            var valueText  = (value == null) ? "null" : value.ToString();
+            var action = isSet ? "Set property: " : "Get property:";
+            Debug.WriteLine($"{action} {propIdText} value={valueText} Caption={Caption}"); // CCITracing.TraceCall
+        }
+
+        /// <summary>
+        /// Sets the value of a property for a given property id
+        /// </summary>
+        /// <param name="propid">the property id of the property to be set</param>
+        /// <param name="value">value of the property</param>
+        /// <returns>S_OK if succeeded</returns>
+        [SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "propid")]
 		public virtual int SetProperty(int propid, object value)
 		{
-			__VSHPROPID id = (__VSHPROPID)propid;
+            __VSHPROPID id = (__VSHPROPID)propid;
 
-			CCITracing.TraceCall(this.hierarchyId + "," + id.ToString());
+			//CCITracing.TraceCall(this.hierarchyId + "," + id.ToString());
 			switch(id)
 			{
 				case __VSHPROPID.VSHPROPID_Expanded:
 					this.isExpanded = (bool)value;
-					break;
+                    return VSConstants.S_OK;
 
-				case __VSHPROPID.VSHPROPID_ParentHierarchy:
+                case __VSHPROPID.VSHPROPID_ParentHierarchy:
 					parentHierarchy = (IVsHierarchy)value;
-					break;
+                    return VSConstants.S_OK;
 
-				case __VSHPROPID.VSHPROPID_ParentHierarchyItemid:
+                case __VSHPROPID.VSHPROPID_ParentHierarchyItemid:
 					parentHierarchyItemId = (int)value;
-					break;
+                    return VSConstants.S_OK;
 
-				case __VSHPROPID.VSHPROPID_EditLabel:
-					return SetEditLabel((string)value);
+                case __VSHPROPID.VSHPROPID_EditLabel:
+					var res = SetEditLabel((string)value);
+                    if (res == VSConstants.S_OK)
+                        return res;
+                    break;
 
 				default:
 					CCITracing.TraceCall(" unhandled");
@@ -880,10 +915,12 @@ namespace Microsoft.VisualStudio.Project
 			{
 				case __VSHPROPID4.VSHPROPID_TargetFrameworkMoniker:
 					this.ProjectMgr.TargetFrameworkMoniker = new FrameworkName((string)value);
-					break;
-			}
+                    return VSConstants.S_OK;
+            }
 
-			return VSConstants.S_OK;
+            Debug.Write("Unhandled ");
+            LogPropertyAssess(propid, value, isSet: true);
+            return VSConstants.S_OK;
 		}
 
 		/// <summary>
@@ -928,7 +965,7 @@ namespace Microsoft.VisualStudio.Project
 		/// <returns>E_NOTIMPL</returns>
 		public virtual int SetEditLabel(string label)
 		{
-			return VSConstants.E_NOTIMPL;
+            return VSConstants.E_NOTIMPL;
 		}
 
 		/// <summary>
@@ -2305,11 +2342,18 @@ namespace Microsoft.VisualStudio.Project
 		{
 			return;
 		}
-		#endregion
 
-		#region public methods
 
-		public void OnItemAdded(HierarchyNode parent, HierarchyNode child)
+        public override string ToString()
+        {
+            return GetType().Name + ": '" + this.Caption + "'";
+        }
+
+        #endregion
+
+        #region public methods
+
+        public void OnItemAdded(HierarchyNode parent, HierarchyNode child)
 		{
             if (parent == null)
             {

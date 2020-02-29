@@ -40,14 +40,15 @@ namespace Nemerle.VisualStudio.LanguageService
 {
     public partial class NemerleSource : Source, IIdeSource
     {
+        public const uint HiddenRegionCookie = 42;
         public const string NemerleSourceKey = "NemerleSource";
 
         #region Fields
 
         public volatile IList<Location> TypeLocations;
         public List<Tuple<Location, List<Location>>> MethodsTypeLocations = new List<Tuple<Location, List<Location>>>();
+        public int BaseVersion { get; private set; }
 
-        readonly List<RelocationRequest> _relocationRequestsQueue = new List<RelocationRequest>();
         volatile SourceSnapshot _currentSnapshot;
         ITextBuffer _textBuffer;
         NC.File _file;
@@ -57,9 +58,10 @@ namespace Nemerle.VisualStudio.LanguageService
 
         #region Init
 
-        public NemerleSource(NemerleLanguageService service, IVsTextLines textLines)
+        public NemerleSource(int baseVersion, NemerleLanguageService service, IVsTextLines textLines)
           : base(service, textLines, null)
         {
+            BaseVersion = baseVersion;
             var vsTextBuffer = (IVsTextBuffer)textLines;
             var textBuffer = vsTextBuffer.ToITextBuffer();
             Debug.Assert(textBuffer != null);
@@ -75,14 +77,13 @@ namespace Nemerle.VisualStudio.LanguageService
 
             if (!textBuffer.Properties.ContainsProperty(typeof(NemerleSource)))
                 textBuffer.Properties.AddProperty(typeof(NemerleSource), this);
-
             Service = service;
             ProjectInfo projectInfo = ProjectInfo.FindProject(path);
             ProjectInfo = projectInfo;
 
             if (projectInfo != null)
             {
-                projectInfo.AddEditableSource(this);
+                //projectInfo.AddEditableSource(this);
                 try
                 {
                     projectInfo.MakeCompilerMessagesTextMarkers(textLines, FileIndex);
@@ -102,16 +103,16 @@ namespace Nemerle.VisualStudio.LanguageService
 
         public SourceSnapshot GetSourceSnapshot(ITextSnapshot textSnapshot)
         {
-            var currentSnapshot = _currentSnapshot ?? VsSourceSnapshot.CreateSourceSnapshot(_textBuffer.CurrentSnapshot);
+            var currentSnapshot = _currentSnapshot ?? VsSourceSnapshot.CreateSourceSnapshot(this, _textBuffer.CurrentSnapshot);
             var source = currentSnapshot.Version == textSnapshot.Version.VersionNumber
                 ? currentSnapshot
-                : VsSourceSnapshot.CreateSourceSnapshot(textSnapshot);
+                : VsSourceSnapshot.CreateSourceSnapshot(this, textSnapshot);
             return source;
         }
 
         public SourceSnapshot GetSourceSnapshot()
         {
-            return _currentSnapshot ?? (_currentSnapshot = VsSourceSnapshot.CreateSourceSnapshot(_textBuffer.CurrentSnapshot));
+            return _currentSnapshot ?? (_currentSnapshot = VsSourceSnapshot.CreateSourceSnapshot(this, _textBuffer.CurrentSnapshot));
         }
 
         private void TextBuffer_Changed(object sender, TextContentChangedEventArgs e)
@@ -125,7 +126,7 @@ namespace Nemerle.VisualStudio.LanguageService
                 return;
 
             var before  = GetSourceSnapshot(e.Before);
-            var after   = _currentSnapshot = VsSourceSnapshot.CreateSourceSnapshot(e.After);
+            var after   = _currentSnapshot = VsSourceSnapshot.CreateSourceSnapshot(this, e.After);
             var changes = new Changes(before, after, e.Changes.Reverse().Select(c => new Change(c.OldSpan.ToNSpan(), c.NewSpan.ToNSpan())).ToArray());
 
             GetEngine().BeginUpdateCompileUnit(this, changes);
@@ -432,7 +433,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
             foreach (GotoInfo item in infoFromPdb)
             {
-                var cu = engine.ParseCompileUnit(new FileNemerleSource(item.FilePath));
+                var cu = engine.ParseCompileUnit(new FileNemerleSource(0, item.FilePath));
                 var res = TryGetGotoInfoForMemberFromSource(inf.Member, item.Location, cu);
 
                 if (res.Length > 0)
@@ -593,9 +594,6 @@ namespace Nemerle.VisualStudio.LanguageService
             Declarations = null;
             Service = null;
 
-            if (_relocationRequestsQueue != null)
-                _relocationRequestsQueue.Clear();
-
             if (TypeLocations != null)
                 TypeLocations.Clear();
 
@@ -607,12 +605,13 @@ namespace Nemerle.VisualStudio.LanguageService
 
         public override string ToString()
         {
-            var name = _file.Name;
+            var ver = _currentSnapshot == null ? "V? " : ("V " + _currentSnapshot.Version);
+            var name = _file.FullName;
 
             if (IsClosed)
-                return "NemerleSource: " + name + " (Closed!)";
+                return "NemerleSource: " + ver + name + " (Closed!)";
 
-            return "NemerleSource: " + name;
+            return "NemerleSource: " + ver + name;
         }
 
         public override CommentInfo GetCommentFormat()
@@ -879,6 +878,14 @@ namespace Nemerle.VisualStudio.LanguageService
             RegionsLoaded = true;
         }
 
+        internal void Rename(string oldFileName, string newFileName)
+        {
+            BaseVersion = 0;
+            _currentSnapshot = null;
+            _file = FileUtils.GetFile(newFileName);
+            IsNemerleSybtax = Utils.Eq(Path.GetExtension(newFileName), ".n");
+        }
+
         public override void ReformatSpan(EditArray mgr, TextSpan span)
         {
             string filePath = GetFilePath();
@@ -1003,8 +1010,9 @@ namespace Nemerle.VisualStudio.LanguageService
             RefCount--;
         }
 
-        internal void Rename(string newFileName)
+        internal void Removed()
         {
+            ProjectInfo = null;
             _currentSnapshot = null;
         }
 
@@ -1142,8 +1150,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
             return projectInfo.Engine;
         }
-
-        public const uint HiddenRegionCookie = 42;
 
         internal void CollapseAllRegions()
         {
@@ -1325,6 +1331,9 @@ namespace Nemerle.VisualStudio.LanguageService
 
         private void Redraw()
         {
+            if (TextLines == null)
+                return;
+
             TypeClassifier typeClassifier;
             if (TextLines.ToITextBuffer().Properties.TryGetProperty(typeof(TypeClassifier), out typeClassifier))
                 typeClassifier.RedrawTypeHighlighting();
@@ -1379,12 +1388,7 @@ namespace Nemerle.VisualStudio.LanguageService
             Declarations = topDeclarations;
         }
 
-        public List<RelocationRequest> RelocationRequestsQueue
-        {
-            get { return _relocationRequestsQueue; }
-        }
-
-        public int Version => _textBuffer.CurrentSnapshot.Version.VersionNumber;
+        public int Version => _textBuffer.CurrentSnapshot.Version.VersionNumber + BaseVersion;
 
         #endregion
 

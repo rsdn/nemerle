@@ -146,6 +146,8 @@ namespace Nemerle.VisualStudio.LanguageService
 		#endregion
 		public override void OnKillFocus(IVsTextView view)
 		{
+            if (Source.Service == null)
+                return;
 			var pkg = Source.Service.Package;
 			pkg.RefactoringMenu.Visible = false;
 			pkg.SelectionExtend.Visible = false;
@@ -159,6 +161,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		public override void OnSetFocus(IVsTextView view)
 		{
+            if (Source.Service == null)
+                return;
 			var pkg = Source.Service.Package;
 			pkg.RefactoringMenu.Visible = true;
 			pkg.SelectionExtend.Visible = true;
@@ -178,7 +182,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		{
 			base.OnChangeScrollInfo(view, iBar, iMinUnit, iMaxUnits, iVisibleUnits, iFirstVisibleUnit);
 
-			Source.Service.Hint.Close();
+			Source.Service?.Hint?.Close();
 
 			var viewUnknown = Utilities.QueryInterfaceIUnknown(view);
 			if (viewUnknown != IntPtr.Zero)

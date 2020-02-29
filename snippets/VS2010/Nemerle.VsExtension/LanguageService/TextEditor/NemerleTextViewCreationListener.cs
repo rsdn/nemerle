@@ -50,7 +50,7 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 				if (langSrv == null)
 					return;
 				var source = (NemerleSource)langSrv.GetOrCreateSource(vsTextLines);
-			  source.AddRef();
+				source.AddRef();
 				project.AddEditableSource(source);
 
 				if (!Utils.IsNemerleFileExtension(filePath))
