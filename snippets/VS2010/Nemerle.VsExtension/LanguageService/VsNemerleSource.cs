@@ -38,7 +38,7 @@ using Nemerle.VsExtension;
 
 namespace Nemerle.VisualStudio.LanguageService
 {
-    public partial class NemerleSource : Source, IIdeSource
+    public partial class VsNemerleSource : Source, IIdeSource
     {
         public const uint HiddenRegionCookie = 42;
         public const string NemerleSourceKey = "NemerleSource";
@@ -58,13 +58,13 @@ namespace Nemerle.VisualStudio.LanguageService
 
         #region Init
 
-        public NemerleSource(int baseVersion, NemerleLanguageService service, IVsTextLines textLines)
+        public VsNemerleSource(int baseVersion, NemerleLanguageService service, IVsTextLines textLines)
           : base(service, textLines, null)
         {
-            BaseVersion = baseVersion;
             var vsTextBuffer = (IVsTextBuffer)textLines;
             var textBuffer = vsTextBuffer.ToITextBuffer();
             Debug.Assert(textBuffer != null);
+            BaseVersion = baseVersion - textBuffer.CurrentSnapshot.Version.VersionNumber;
 
             _textBuffer = textBuffer;
             if (textBuffer is ITextBuffer2 textBuffer2)
@@ -75,8 +75,8 @@ namespace Nemerle.VisualStudio.LanguageService
             _file = FileUtils.GetFile(path);
             IsNemerleSybtax = Utils.Eq(Path.GetExtension(path), ".n");
 
-            if (!textBuffer.Properties.ContainsProperty(typeof(NemerleSource)))
-                textBuffer.Properties.AddProperty(typeof(NemerleSource), this);
+            if (!textBuffer.Properties.ContainsProperty(typeof(VsNemerleSource)))
+                textBuffer.Properties.AddProperty(typeof(VsNemerleSource), this);
             Service = service;
             ProjectInfo projectInfo = ProjectInfo.FindProject(path);
             ProjectInfo = projectInfo;
@@ -99,12 +99,14 @@ namespace Nemerle.VisualStudio.LanguageService
             textBuffer.Properties[NemerleSourceKey] = this;
 
             UpdateProjectInfo(projectInfo);
+
+            Debug.WriteLine($"VsNemerleSource created Version={Version} {path}");
         }
 
         public SourceSnapshot GetSourceSnapshot(ITextSnapshot textSnapshot)
         {
             var currentSnapshot = _currentSnapshot ?? VsSourceSnapshot.CreateSourceSnapshot(this, _textBuffer.CurrentSnapshot);
-            var source = currentSnapshot.Version == textSnapshot.Version.VersionNumber
+            var source = currentSnapshot.Version == textSnapshot.Version.VersionNumber + ((VsSourceSnapshot)currentSnapshot).BaseVersion
                 ? currentSnapshot
                 : VsSourceSnapshot.CreateSourceSnapshot(this, textSnapshot);
             return source;
@@ -433,7 +435,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
             foreach (GotoInfo item in infoFromPdb)
             {
-                var cu = engine.ParseCompileUnit(new FileNemerleSource(0, item.FilePath));
+                var cu = engine.ParseCompileUnit(engine.GetSource(FileUtils.GetFile(item.FilePath).Id));
                 var res = TryGetGotoInfoForMemberFromSource(inf.Member, item.Location, cu);
 
                 if (res.Length > 0)
@@ -880,7 +882,6 @@ namespace Nemerle.VisualStudio.LanguageService
 
         internal void Rename(string oldFileName, string newFileName)
         {
-            BaseVersion = 0;
             _currentSnapshot = null;
             _file = FileUtils.GetFile(newFileName);
             IsNemerleSybtax = Utils.Eq(Path.GetExtension(newFileName), ".n");
@@ -1210,7 +1211,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
             foreach (var fileIndex in distinctFilesIndices)
             {
-                var source = ProjectInfo.GetSource(fileIndex) as NemerleSource;
+                var source = ProjectInfo.GetSource(fileIndex) as VsNemerleSource;
                 //VladD2: Этот код рассчитывает на то, что все исходники в которых производятся изменения открыты в редакторах VS!
                 //VladD2: Это не верное предположение!
                 //TODO: Нужно переписать этот код так, чтобы он выполнялся без ошибок при любом исходе.
@@ -1284,7 +1285,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
         #region IIdeSource Members
 
-        public int CurrentVersion { get { return _textBuffer.CurrentSnapshot.Version.VersionNumber; } }
+        public int CurrentVersion { get { return _textBuffer.CurrentSnapshot.Version.VersionNumber + BaseVersion; } }
 
         public TupleStringIntInt GetTextCurrentVersionAndFileIndex()
         {

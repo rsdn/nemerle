@@ -39,16 +39,19 @@ namespace Nemerle.VisualStudio
     {
         public static Span NLocationToSpan(ITextSnapshot textSnapshot, Location location)
         {
+            var projectInfo = Project.ProjectInfo.FindProject(location.File);
+            var ideSorce = (VsNemerleSource)projectInfo.GetSource(location.FileIndex);
+            var baseVersion = ideSorce.BaseVersion;
             var version = textSnapshot.Version;
             var locationVersion = location.Source.Version;
-            if (version.VersionNumber == locationVersion)
+            if (version.VersionNumber + baseVersion == locationVersion)
                 return new Span(location.StartPos, location.Length);
 
             var textBuffer = textSnapshot.TextBuffer;
 
             while ((version = version.Next) != null)
             {
-                if (version.VersionNumber == locationVersion)
+                if (version.VersionNumber + baseVersion == locationVersion)
                 {
                     var span = version.CreateTrackingSpan(location.StartPos, location.Length, SpanTrackingMode.EdgeExclusive);
                     return span.GetSpan(textSnapshot.Version);
@@ -291,10 +294,10 @@ namespace Nemerle.VisualStudio
             return true;
         }
 
-        public static NemerleSource GetFileSource(IServiceProvider site, string filePath)
+        public static VsNemerleSource GetFileSource(IServiceProvider site, string filePath)
         {
             var lang = (NemerleLanguageService)site.GetService(typeof(NemerleLanguageService));
-            return (NemerleSource)lang.GetSource(filePath);
+            return (VsNemerleSource)lang.GetSource(filePath);
         }
 
         public static string GetFileLine(IServiceProvider site, string filePath, int line)
@@ -650,10 +653,10 @@ namespace Nemerle.VisualStudio
         public static Location ToLocation(this SnapshotPoint point) =>
             new Location(VsSourceSnapshot.GetSourceSnapshot(point.Snapshot), point.Position, point.Position);
 
-        public static NemerleSource TryGetNemerleSource(this ITextBuffer textBuffer)
+        public static VsNemerleSource TryGetNemerleSource(this ITextBuffer textBuffer)
         {
             var props = textBuffer.Properties;
-            if (props.TryGetProperty(NemerleSource.NemerleSourceKey, out NemerleSource nemerleSource))
+            if (props.TryGetProperty(VsNemerleSource.NemerleSourceKey, out VsNemerleSource nemerleSource))
                 return nemerleSource;
             return null;
         }

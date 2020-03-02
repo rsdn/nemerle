@@ -15,7 +15,7 @@ namespace Nemerle.VisualStudio.Helpers
 		readonly int _fileIndex;
 
 		public NemerleSourceButchEditHelper(
-			NemerleSource source,
+			VsNemerleSource source,
 			IVsTextView   view,
 			bool          merge,
 			string        description) : base(source, view, merge, description)
@@ -23,9 +23,9 @@ namespace Nemerle.VisualStudio.Helpers
 			_fileIndex = source.FileIndex;
 		}
 
-		public new NemerleSource Source
+		public new VsNemerleSource Source
 		{
-			get { return (NemerleSource)base.Source; }
+			get { return (VsNemerleSource)base.Source; }
 		}
 
 		public void Add(Location loc, string text)

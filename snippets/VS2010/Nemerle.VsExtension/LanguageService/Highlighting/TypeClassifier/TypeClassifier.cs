@@ -50,8 +50,8 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
 
     public IList<ClassificationSpan> GetClassificationSpans(SnapshotSpan span)
     {
-      NemerleSource source;
-      if (!_textBuffer.Properties.TryGetProperty(typeof(NemerleSource), out source))
+      VsNemerleSource source;
+      if (!_textBuffer.Properties.TryGetProperty(typeof(VsNemerleSource), out source))
         return ClassifierUtils.EmptyClassifications;
 
       if (source.TypeLocations == null)
@@ -82,7 +82,7 @@ namespace Nemerle.VisualStudio.LanguageService.Highlighting.TypeClassifier
       return result;
     }
 
-    private static IEnumerable<Location> GetLocationsToHighlight(NemerleSource source, Location loc)
+    private static IEnumerable<Location> GetLocationsToHighlight(VsNemerleSource source, Location loc)
     {
       foreach (var x in source.MethodsTypeLocations)
       {

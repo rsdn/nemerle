@@ -19,7 +19,7 @@ namespace Nemerle.VisualStudio.GUI
 	// ReSharper disable PossibleNullReferenceException
 	public partial class ImplementMembersForm : Form
 	{
-		readonly NemerleSource _source;
+		readonly VsNemerleSource _source;
 		readonly TypeBuilder _ty;
 		readonly IEnumerable<IGrouping<FixedType.Class, IMember>> _unimplementedMembers;
 		readonly int _imageSize;
@@ -41,7 +41,7 @@ namespace Nemerle.VisualStudio.GUI
 			}
 		}
 
-		public ImplementMembersForm(NemerleSource source, TypeBuilder ty, IEnumerable<IGrouping<FixedType.Class, IMember>> unimplementedMembers)
+		public ImplementMembersForm(VsNemerleSource source, TypeBuilder ty, IEnumerable<IGrouping<FixedType.Class, IMember>> unimplementedMembers)
 		{
 			_source               = source;
 			_ty                   = ty;

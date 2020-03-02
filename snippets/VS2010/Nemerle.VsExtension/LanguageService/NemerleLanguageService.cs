@@ -183,7 +183,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
         public override Source CreateSource(IVsTextLines buffer)
         {
-            int baseVersion = 0;
+            int baseVersion = 1;
             var path = buffer.GetFilePath();
             var projectInfo = ProjectInfo.FindProject(path);
             if (projectInfo != null)
@@ -191,15 +191,15 @@ namespace Nemerle.VisualStudio.LanguageService
                 var previosSource = projectInfo.GetSource(path);
                 if (previosSource != null)
                 {
-                    baseVersion = previosSource.Version - 1;
+                    baseVersion = previosSource.Version;
                 }
             }
-            return new NemerleSource(baseVersion, this, buffer);
+            return new VsNemerleSource(baseVersion, this, buffer);
         }
 
         public override CodeWindowManager CreateCodeWindowManager(IVsCodeWindow codeWindow, Source source)
         {
-            var m = new NemerleCodeWindowManager(this, codeWindow, (NemerleSource)source);
+            var m = new NemerleCodeWindowManager(this, codeWindow, (VsNemerleSource)source);
             return m;
         }
 
@@ -308,7 +308,7 @@ namespace Nemerle.VisualStudio.LanguageService
         {
             if (textView != null)
             {
-                if (GetSource(textView) is NemerleSource source)
+                if (GetSource(textView) is VsNemerleSource source)
                 {
                     source.GetEngine().SetTextCursorLocation(at);
                 }

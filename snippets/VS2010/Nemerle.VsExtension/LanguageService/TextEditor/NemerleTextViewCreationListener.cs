@@ -49,7 +49,7 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 				var langSrv = NemerlePackage.GetGlobalService(typeof(NemerleLanguageService)) as NemerleLanguageService;
 				if (langSrv == null)
 					return;
-				var source = (NemerleSource)langSrv.GetOrCreateSource(vsTextLines);
+				var source = (VsNemerleSource)langSrv.GetOrCreateSource(vsTextLines);
 				source.AddRef();
 				project.AddEditableSource(source);
 
@@ -95,7 +95,7 @@ namespace Nemerle.VisualStudio.LanguageService.TextEditor
 			if (langSrv == null)
 				return;
 
-      var source = (NemerleSource)langSrv.GetSource(filePath);
+      var source = (VsNemerleSource)langSrv.GetSource(filePath);
       if (source != null)
       {
         source.ReleaseRef();

@@ -16,11 +16,11 @@ namespace Nemerle.VisualStudio.LanguageService
 		Location         ComlitionLocation                { get; set; }
 
 		public CompletionAsyncRequest Result              { get; private set; }
-		public NemerleSource          Source              { get; private set; }
+		public VsNemerleSource          Source              { get; private set; }
 		public bool                   IsMemeberComplation { get; private set; }
 
 
-		public NemerleDeclarations(CompletionAsyncRequest result, NemerleSource source, bool isMemeberComplation)
+		public NemerleDeclarations(CompletionAsyncRequest result, VsNemerleSource source, bool isMemeberComplation)
 		{
 			OverloadPossibility = result.CompletionResult.CompletionList;
 			Result              = result;

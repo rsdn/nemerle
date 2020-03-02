@@ -26,8 +26,8 @@ namespace Nemerle.VisualStudio.LanguageService
                 return true;
             }
 
-            NemerleSource source;
-            if (!textBuffer.Properties.TryGetProperty(typeof(NemerleSource), out source))
+            VsNemerleSource source;
+            if (!textBuffer.Properties.TryGetProperty(typeof(VsNemerleSource), out source))
             {
                 parseResult = null;
                 return false;

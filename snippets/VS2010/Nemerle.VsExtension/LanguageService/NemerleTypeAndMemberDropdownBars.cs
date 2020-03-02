@@ -23,10 +23,10 @@ namespace Nemerle.VisualStudio.LanguageService
 			: base(null)
 		{
 			_languageService = langService;
-			_source = (NemerleSource)langService.GetSource(forView);
+			_source = (VsNemerleSource)langService.GetSource(forView);
 		}
 
-		NemerleSource _source;
+		VsNemerleSource _source;
 		int _lastSelectedType = -2;
 		int _lastSelectedMember = -2;
 

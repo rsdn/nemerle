@@ -10,9 +10,9 @@ namespace Nemerle.VisualStudio.LanguageService
 {
   class NemerleCodeWindowManager : CodeWindowManager
   {
-    private readonly NemerleSource _source;
+    private readonly VsNemerleSource _source;
 
-    public NemerleCodeWindowManager(Microsoft.VisualStudio.Package.LanguageService service, IVsCodeWindow codeWindow, NemerleSource source)
+    public NemerleCodeWindowManager(Microsoft.VisualStudio.Package.LanguageService service, IVsCodeWindow codeWindow, VsNemerleSource source)
       : base(service, codeWindow, source)
     {
       _source = source;

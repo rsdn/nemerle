@@ -12,12 +12,12 @@ namespace Nemerle.VisualStudio.LanguageService
 	//   '}' decreases indentation
 	class NemerleSmartIndentation
 	{
-		private NemerleSource _source;
+		private VsNemerleSource _source;
 		private bool          _useTabs = false;
 		private int           _tabSize = 2;
 		private static readonly char[] _indentTokens = new char[] { '{', ':', '|' };
 
-		public NemerleSmartIndentation(NemerleSource source)
+		public NemerleSmartIndentation(VsNemerleSource source)
 		{
 			_source = source;
 			_useTabs = _source.LanguageService.Preferences.InsertTabs;

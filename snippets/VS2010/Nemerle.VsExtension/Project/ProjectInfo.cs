@@ -351,13 +351,13 @@ namespace Nemerle.VisualStudio.Project
 			_sources.Add(source);
         }
 
-        internal void AddEditableSource(NemerleSource source)
+        internal void AddEditableSource(VsNemerleSource source)
         {
             ReplaseOrAddSource(source);
             Engine.BeginUpdateTypeHighlightings(source);
         }
 
-        internal void RemoveEditableSource(NemerleSource source)
+        internal void RemoveEditableSource(VsNemerleSource source)
 		{
 			var fileIndex = source.FileIndex;
 			var taksForSource = GetTaksForSource(source.FileIndex);
@@ -365,12 +365,12 @@ namespace Nemerle.VisualStudio.Project
 			foreach (var task in taksForSource)
 				task.DisposeTextLineMarker();
 
-			ReplaseOrAddSource(new FileNemerleSource(source.Version - 1, source.GetFilePath()));
+			ReplaseOrAddSource(new FileNemerleSource(source.Version, source.GetFilePath()));
 		}
 
 		internal void RemoveSource(IIdeSource source, bool isNeedBuildTypesTree)
 		{
-            if (source is NemerleSource nemerleSource)
+            if (source is VsNemerleSource nemerleSource)
                 nemerleSource.Removed();
 
             _sourceMap.Remove(source.FileIndex);
@@ -398,14 +398,14 @@ namespace Nemerle.VisualStudio.Project
 			}
 		}
 
-		public NemerleSource GetEditableSource(SourceSnapshot sourceSnapshot, WindowFrameShowAction action)
+		public VsNemerleSource GetEditableSource(SourceSnapshot sourceSnapshot, WindowFrameShowAction action)
 		{
 			IIdeSource source;
 
             if (!_sourceMap.TryGetValue(sourceSnapshot.FileIndex, out source))
 				throw new ApplicationException("File not in project");
 
-			var nemerleSource = source as NemerleSource;
+			var nemerleSource = source as VsNemerleSource;
 
 			if (nemerleSource != null)
 				return nemerleSource;
@@ -413,7 +413,7 @@ namespace Nemerle.VisualStudio.Project
 			return OpenEditableSource(sourceSnapshot.File.FullName, action);
 		}
 
-		NemerleSource OpenEditableSource(string path, WindowFrameShowAction action)
+		VsNemerleSource OpenEditableSource(string path, WindowFrameShowAction action)
 		{
 			IVsWindowFrame frame = OpenWindowFrame(path, action);
 
@@ -437,14 +437,14 @@ namespace Nemerle.VisualStudio.Project
 
 					var source = LanguageService.CreateSource(lines);
 
-					return (NemerleSource)source;
+					return (VsNemerleSource)source;
 				}
 			}
 			else
 			{
 				var lines = (IVsTextLines)buffer;
 				var source = LanguageService.CreateSource(lines);
-				return (NemerleSource)source;
+				return (VsNemerleSource)source;
 			}
 
 
@@ -595,14 +595,14 @@ namespace Nemerle.VisualStudio.Project
 			if (IsFrozen)
 				return;
 
-			IIdeSource source = (NemerleSource)LanguageService.GetSource(path); // TODO: VladD2: тут надо искать Source по иерархии, а не по пути!
+			IIdeSource source = (VsNemerleSource)LanguageService.GetSource(path); // TODO: VladD2: тут надо искать Source по иерархии, а не по пути!
 
 			try
 			{
                 if (source == null)
-                    source = new FileNemerleSource(0, path);
+                    source = new FileNemerleSource(1, path);
                 else
-                    ((NemerleSource)source).UpdateProjectInfo(this);
+                    ((VsNemerleSource)source).UpdateProjectInfo(this);
 
 				_sourceMap.Add(source.FileIndex, source);
 				_sources.Add(source);
@@ -818,7 +818,7 @@ namespace Nemerle.VisualStudio.Project
 		{
 			foreach (IIdeSource source in _sources)
 			{
-				var nemerleSource = source as NemerleSource;
+				var nemerleSource = source as VsNemerleSource;
 
 				if (nemerleSource != null && !nemerleSource.IsClosed)
 				{
@@ -857,7 +857,7 @@ namespace Nemerle.VisualStudio.Project
 		public void AddUnimplementedMembers(IIdeSource source, TypeBuilder ty,
 			IEnumerable<IGrouping<FixedType.Class, IMember>> unimplementedMembers)
 		{
-			using (var form = new ImplementMembersForm((NemerleSource)source, ty, unimplementedMembers))
+			using (var form = new ImplementMembersForm((VsNemerleSource)source, ty, unimplementedMembers))
 			{
 				form.ShowDialog();
 			}
@@ -867,7 +867,7 @@ namespace Nemerle.VisualStudio.Project
 		{
 			var ty2 = ty.GetMemType();
 			var notOverriden2 = notOverriden.Select(m => new { ty2, m }).GroupBy(x => x.ty2, x => x.m);
-			using (var form = new ImplementMembersForm((NemerleSource)source, ty, notOverriden2))
+			using (var form = new ImplementMembersForm((VsNemerleSource)source, ty, notOverriden2))
 			{
 				form.ShowDialog();
 			}
@@ -875,7 +875,7 @@ namespace Nemerle.VisualStudio.Project
 
 		public void SetUsageHighlighting(IIdeSource source, IEnumerable<GotoInfo> usages)
 		{
-			((NemerleSource)source).SetUsageHighlighting(usages);
+			((VsNemerleSource)source).SetUsageHighlighting(usages);
 		}
 
 
@@ -931,7 +931,7 @@ namespace Nemerle.VisualStudio.Project
 			{
 				IVsTextLines buffer = null;
 
-				var source = GetSource(taskGroup.Key) as NemerleSource;
+				var source = GetSource(taskGroup.Key) as VsNemerleSource;
 				if (source != null)
 					buffer = source.GetTextLines();
 
@@ -1104,13 +1104,13 @@ namespace Nemerle.VisualStudio.Project
 			var source = GetSource(oldFileName);
             var fileIndex = source.FileIndex;
 
-            if (source is NemerleSource nemerleSource)
+            if (source is VsNemerleSource nemerleSource)
                 nemerleSource.Rename(oldFileName, newFileName);
             else
             {
                 _sources.Remove(source);
                 source.Dispose();
-                source = new FileNemerleSource(0, newFileName);
+                source = new FileNemerleSource(1, newFileName);
                 _sources.Add(source);
             }
 

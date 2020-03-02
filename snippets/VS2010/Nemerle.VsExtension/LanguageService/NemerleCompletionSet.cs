@@ -24,10 +24,10 @@ namespace Nemerle.VisualStudio.LanguageService
 {
     internal sealed class NemerleCompletionSet : CompletionSet
     {
-        public NemerleSource Source { get; private set; }
+        public VsNemerleSource Source { get; private set; }
         internal IVsTextView view;
 
-        internal NemerleCompletionSet(ImageList imageList, NemerleSource source)
+        internal NemerleCompletionSet(ImageList imageList, VsNemerleSource source)
           : base(imageList, source)
         {
             Source = source;
@@ -41,7 +41,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
         public override int GetInitialExtent(out int line, out int startIdx, out int endIdx)
         {
-            var source = (NemerleSource)this.Source;
+            var source = (VsNemerleSource)this.Source;
             var textView = view.ToITextView();
             var textBuffer = textView.TextBuffer;
             var textViewLine = textView.Caret.ContainingTextViewLine;
@@ -65,7 +65,7 @@ namespace Nemerle.VisualStudio.LanguageService
             return GetDefaultExtent(out line, out startIdx, out endIdx);
         }
 
-        private int GetTokenExtent(int caretPos, NemerleSource source, ITextSnapshot snapshot, SyntaxClassifier.SpanInfo spanInfo, out int line, out int startIdx, out int endIdx)
+        private int GetTokenExtent(int caretPos, VsNemerleSource source, ITextSnapshot snapshot, SyntaxClassifier.SpanInfo spanInfo, out int line, out int startIdx, out int endIdx)
         {
             switch (spanInfo.Type)
             {

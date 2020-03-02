@@ -510,9 +510,9 @@ namespace Nemerle.VisualStudio.LanguageService
 		//	}
 		//}
 
-		public new NemerleSource Source
+		public new VsNemerleSource Source
 		{
-			get { return (NemerleSource)base.Source; }
+			get { return (VsNemerleSource)base.Source; }
 		}
 
 		public IWin32Window TextEditorWindow
@@ -542,7 +542,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
 		private void HighlightSymbol()
 		{
-			NemerleSource source = Source;
+			VsNemerleSource source = Source;
 
 			if (source != null)
 			{
@@ -846,7 +846,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				switch (nemerleCmd)
 				{
 					case MenuCmd.CmdId.ReloadProject:
-						var projectInfo = ((NemerleSource)Source).ProjectInfo;
+						var projectInfo = ((VsNemerleSource)Source).ProjectInfo;
 
 						if (projectInfo != null)
 							projectInfo.Engine.BeginBuildTypesTree();

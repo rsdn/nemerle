@@ -17,7 +17,7 @@ namespace Nemerle.VisualStudio.LanguageService
         private File _file;
         private string _text;
 
-        internal static SourceSnapshot CreateSourceSnapshot(NemerleSource nemerleSource, ITextSnapshot textSnapshot) =>
+        internal static SourceSnapshot CreateSourceSnapshot(VsNemerleSource nemerleSource, ITextSnapshot textSnapshot) =>
             new VsSourceSnapshot(nemerleSource, textSnapshot);
 
         public static SourceSnapshot GetSourceSnapshot(ITextBuffer textBuffer) => GetSourceSnapshot(textBuffer.CurrentSnapshot);
@@ -28,7 +28,7 @@ namespace Nemerle.VisualStudio.LanguageService
             return ideSource?.GetSourceSnapshot(textSnapshot);
         }
 
-        private VsSourceSnapshot(NemerleSource nemerleSource, ITextSnapshot textSnapshot) : base(0, 0) // hash-code calculated dynamically
+        private VsSourceSnapshot(VsNemerleSource nemerleSource, ITextSnapshot textSnapshot) : base(0, 0) // hash-code calculated dynamically
         {
             BaseVersion = nemerleSource.BaseVersion;
             var indexArrayLength = FileUtils.GetIndexArrayLength();
@@ -37,6 +37,8 @@ namespace Nemerle.VisualStudio.LanguageService
             if (_file.Id >= indexArrayLength)
                 nemerleSource.ProjectInfo?.Engine?.BeginBuildTypesTree();
             _textSnapshot = textSnapshot;
+
+            Debug.WriteLine($"VsSourceSnapshot created Version={Version} {nemerleSource.GetFilePath()}");
         }
 
         public override string OriginalText => _text ?? (_text =_textSnapshot.GetText());
