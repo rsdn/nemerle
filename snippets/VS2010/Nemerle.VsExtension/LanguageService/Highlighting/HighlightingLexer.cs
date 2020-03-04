@@ -7,7 +7,7 @@ namespace Nemerle.VisualStudio.LanguageService
   internal sealed class HighlightingLexer : Lexer
   {
     public HighlightingLexer(IIdeEngine engine, SourceSnapshot sourceSnapshot)
-      : base((ManagerClass)engine, sourceSnapshot, Location.Default)
+      : base((ManagerClass)engine, sourceSnapshot)
     {
     }
 

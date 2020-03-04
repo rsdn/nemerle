@@ -337,7 +337,6 @@ namespace Nemerle.VisualStudio.LanguageService
                 return;
 
             var dropDownHelper = (NemerleTypeAndMemberDropdownBars)mgr.DropDownHelper;
-            int line = -1, col = -1;
 
             dropDownHelper.SynchronizeDropdownsRsdn(view, view.ToITextView().Caret.Position.BufferPosition.ToLocation());
         }

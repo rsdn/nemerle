@@ -1,3 +1,4 @@
+using Microsoft;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Language.Intellisense;
 using Microsoft.VisualStudio.Package;
@@ -297,6 +298,7 @@ namespace Nemerle.VisualStudio
         public static VsNemerleSource GetFileSource(IServiceProvider site, string filePath)
         {
             var lang = (NemerleLanguageService)site.GetService(typeof(NemerleLanguageService));
+            Assumes.Present(lang);
             return (VsNemerleSource)lang.GetSource(filePath);
         }
 
