@@ -93,8 +93,7 @@ namespace Nemerle.VisualStudio.LanguageService
 		///<param name="name">[out] Returns the name of the parameter.</param>
 		///<param name="display">[out] Returns the parameter name and type formatted for display.</param>
 		///<param name="description">[out] Returns a string containing a description of the parameter.</param>
-		public override void GetParameterInfo(int index, int parameter,
-			out string name, out string display, out string description)
+		public override void GetParameterInfo(int index, int parameter, out string name, out string display, out string description)
 		{
 			var info = _info.GetParameterInfo(index, parameter);
 
@@ -113,9 +112,6 @@ namespace Nemerle.VisualStudio.LanguageService
 			return _info.GetName(index);
 		}
 
-		public Location       StartName       { get { return _info.StartName;       } }
-		public Location       StartParameters { get { return _info.StartParameters; } }
-		public List<Location> NextParameters  { get { return _info.NextParameters;  } }
-		public Location       EndParameters   { get { return _info.EndParameters;   } }
+		public Location StartName { get { return _info.StartName; } }
 	}
 }

@@ -326,7 +326,7 @@ namespace Nemerle.VisualStudio.LanguageService
             }
 
             var methods = new NemerleMethods(result.MethodTipInfo);
-            var span    = result.MethodTipInfo.StartName.Combine(result.MethodTipInfo.EndParameters).ToTextSpan();
+            var span    = result.MethodTipInfo.StartName.ToTextSpan();
             MethodData.Refresh(textView, methods, result.MethodTipInfo.ParameterIndex, span);
             Debug.WriteLine("MethodTip");
         }
