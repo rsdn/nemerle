@@ -118,6 +118,18 @@ namespace Nemerle.Compiler
 
   module Helpers
   {
+    public IsEnumerable(ti : TypeInfo) : bool
+    {
+      ti.GetMembers().Exists(m => m.Name == "GetEnumerator")
+    }
+    
+    /// True if we need visite property of this type
+    /// (ignore: Alias, Delegate, ValueType and Static types).
+    public IsStepInto(tb : TypeBuilder) : bool
+    {
+      !(tb.Attributes %&& (Attr.Static | Attr.Struct) || tb.IsValueType || tb.IsDelegate || tb.IsAlias)
+    }
+    
     public IsRelocatedType (tb : TypeBuilder) : bool
     {
       //Debug.Assert(tb.Name != "MemberBase");
@@ -150,7 +162,7 @@ namespace Nemerle.Compiler
   }
 
   /// Add Relocate() method to class and all class referenced dy it fields.
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeTypedMembers,
+  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
                        Nemerle.MacroTargets.Class)]
   macro SupportRelocation(typeBuilder : TypeBuilder)
   {
@@ -161,8 +173,8 @@ namespace Nemerle.Compiler
     // 0. Init variables.
     //wl("vvvvvvv 0. Init variables for SupportRelocation macro.");
 
-    def error(loc, msg) { when (Nemerle.Macros.ImplicitCTX ().InErrorMode) Message.Error (loc, msg); }
-    def errorLocationFieldCanNotBeImmutable(field)
+    def error(loc : Location, msg : string) : void { when (Nemerle.Macros.ImplicitCTX ().InErrorMode) Message.Error (loc, msg); }
+    def errorLocationFieldCanNotBeImmutable(field : IField)
     {
       error(field.Location, $"Location field $(field.Name) can't be immutable!");
     }
@@ -192,14 +204,7 @@ namespace Nemerle.Compiler
     //wl("ignoreTypeList:");
     //wl(ignoreTypeList);
 
-    def isMutable (field) { field.modifiers.mods %&& Attr.Mutable }
-
-    /// True if we need visite property of this type
-    /// (ignore: Alias, Delegate, ValueType and Static types).
-    def isStepInto (tb : TypeBuilder) : bool
-    {
-      !(tb.Attributes %&& (Attr.Static | Attr.Struct) || tb.IsValueType || tb.IsDelegate || tb.IsAlias)
-    }
+    def isMutable(field : IField) : bool { field.IsMutable }
 
     def equalsAny(ty, types) { types.Exists(_.Equals(ty)) }
 
@@ -214,34 +219,35 @@ namespace Nemerle.Compiler
     // Key   - type
     // Value - code of relocation and recusion walk into fields.
     def relocationCode = Hashtable() : Hashtable[TypeBuilder, list [Parsetree.PExpr]];
-    def isTypedInstanceField (field : Member.Field) { !(field.ty is <[ _ ]> || field.modifiers.mods %&& Attr.Static) }
-    def isAccepted           (field : Member.Field)
+    def isAccepted(field : IField)
     {
       match (field.Name)
       {
         | "_declaringType" | "_definedIn" | "declaring_type" | "supertypes" | "_superTypeInfosMap" => false
-        | _ => isTypedInstanceField(field)
+        | name => !field.IsStatic && !name.StartsWith("_N__N_event")
       }
     }
 
     // For each class defined in project...
     foreach (tb when Helpers.IsRelocatedType (tb) in nsRoot.GetTypeBuilders())
     {
-      def fields = tb.GetParsedMembers (true);
+      //assert2(tb.Name != "TFunHeader");
       // The constructing expression.
       mutable exprs = [] : list[Parsetree.PExpr];
 
+      def fields = tb.GetFields(BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
       // For each instance field which type explicit assign...
-      foreach (field is Member.Field when isAccepted(field) in fields)
+      foreach (field when isAccepted(field) in fields)
       {
         // Manually calculate type of field.
-        def ty = tb.BindFixedType (field.ty);
+        def ty = field.GetMemType();
         // Make field name
-        def n = Macros.UseSiteSymbol (field.Name);
+        def n = Macros.UseSiteSymbol(field.Name);
 
         //def s = field.Name;
 
-        match (ty.DeepFix ())
+        match (ty)
         {
           // Ignore property of some types. It prevent unproductive recursion.
           | Class (t is TypeBuilder, []) when equalsAny(t, ignoreTypeList) && t.DeclaringType : object != tb  => ()
@@ -303,14 +309,15 @@ namespace Nemerle.Compiler
               ]>;
 
           // 2. Is collection of reference type defined in this project.
-          | Class (_, [TypeVar where (FixedValue = FixedType.Class(t is TypeBuilder, _))]) when isStepInto(t) =>
-            exprs ::= if (t.IsInterface)
+          | Class (ti2, [TypeVar where (FixedValue = FixedType.Class(t is TypeBuilder, _))]) when Helpers.IsStepInto(t) && Helpers.IsEnumerable(ti2) =>
+            exprs ::=
+            if (t.IsInterface)
               <[
                 def x = this.$(n : name);
                 when (x != null)
                 {
                   foreach (elem :> ISupportRelocation in x)
-                    elem.RelocateImpl (_info);
+                    elem.RelocateImpl(_info);
                 }
               ]>
             else
@@ -322,7 +329,7 @@ namespace Nemerle.Compiler
               ]>;
 
           // 3. Is field of reference type defined in this project (represent as TypeBuilder).
-          | Class (t is TypeBuilder, _) when isStepInto (t) =>
+          | Class(t is TypeBuilder, _) when Helpers.IsStepInto(t) =>
             if (ty.IsInterface)
               exprs ::= <[
                 def x = this.$(n : name);

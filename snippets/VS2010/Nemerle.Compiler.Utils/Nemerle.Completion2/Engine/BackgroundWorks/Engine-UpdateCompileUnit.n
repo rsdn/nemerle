@@ -36,112 +36,13 @@ namespace Nemerle.Completion2
       request
     }
 
-    private TryRelocate(source : IIdeSource, changes : IChanges) : void
-    {
-      //def fileIndex = source.GetSourceSnapshot().FileIndex;
-      //mutable resetedMember;
-      //mutable resetedMemberParsed;
-      //mutable lastRelocationVersion = -1;
-
-      when (!IsDefaultEngine)
-      {
-        def project = this.Project;
-
-        when (project != null)
-        {
-          //def relocationRequests = RelocationQueue.GetRelocationRequests(source.RelocationRequestsQueue);
-          //
-          //foreach (rel in relocationRequests)
-          {
-            //lastRelocationVersion = rel.SourceVersion;
-            //def info = RelocationInfo(changes);
-            //def beginLine   = changes; // TODO: использовать локейшон
-            //def beginColumn = ;
-            //
-            //def compileUnit = project.CompileUnits[fileIndex];
-            //
-            //def needRelocation = match (compileUnit.FindMember(info.Begin.Line, info.Begin.Column))
-            //{
-            //  | Some(m is ClassMember.Function) =>
-            //    def innerLoc = m.BodyInnerLocation;
-            //
-            //    if (innerLoc.Contains(info.Begin.Line, info.Begin.Column))
-            //    {
-            //      resetedMemberParsed = m;
-            //      assert(resetedMember == null || resetedMember : object == m.Builder);
-            //      resetedMember       = m.Builder :> MethodBuilderEx;
-            //      // Не делаем релокешон если локешон метода не меняется!
-            //      def newLoc =
-            //        try { Completion.Relocate(innerLoc, info) }
-            //        catch { _ is Completion.RelocationFailedException => Location.Default };
-            //      when (resetedMember != null)
-            //      {
-            //        resetedMember.ResetCodeCache();
-            //        AsyncWorker.AddResponse(() => _callback.ClearMethodCompilerMessages(resetedMember));
-            //        AddMethodAtFirstCheckQueue(resetedMember); // Add request for typing of relocated method body
-            //      }
-            //      newLoc != innerLoc
-            //    }
-            //    else true
-            //
-            //  | _x => true
-            //}
-            //
-            //def isUpdate = rel.Begin != rel.Old && rel.Begin != rel.New;
-            //if (resetedMember == null && isUpdate)
-            //{
-            //  RequestOnBuildTypesTree();
-            //  break;
-            //}
-            //else when (needRelocation)
-            //  compileUnit.TopNamespace.Relocate(info);
-
-            //TODO: Relocate: Regions & ParseCompilerMessages (А надо ли если мы все время получаем ноый CompileUnit?)
-          }
-        }
-      }
-    }
-
-    static CollectAndApplyTopDeclarations(source : IIdeSource, compUnit : CompileUnit) : void
-    {
-      def topDecls       = compUnit.TopDeclarations;
-      def decls          = AstUtils.GetAllDeclarations(topDecls);
-
-      def declsAry = decls
-        .Where(d => d.name is Splicable.Name && d.name.GetName().context != null)
-        .OrderBy(d => d.Name)
-        .ToArray();
-
-      //source.Declarations = declsAry;
-      AsyncWorker.AddResponse(() => source.SetTopDeclarations(declsAry));
-      //source.SetTopDeclarations(declsAry);
-    }
-
-    static CollectAndApplyRegions(ideSource : IIdeSource, compUnit : CompileUnit) : void
-    {
-      def version = compUnit.Source.Version;
-      when (ideSource.Version != version)
-        return;
-
-      when (compUnit.ParseCompilerMessages.Any(cm => cm.Msg.Contains("parse error")))
-        return;
-
-      def regions = RegionsHelper.Collect(compUnit);
-
-      when (ideSource.Version != version)
-        return;
-
-      AsyncWorker.AddResponse(() => ideSource.SetRegions(regions, version));
-    }
-
-    /// Run by AsyncWorker thread!
-    /// Parse CompileUnit. Set CompileUnit to source. Update information about outline regions.
+    /// Run by AsyncWorker thread! Parse CompileUnit. Set CompileUnit to source. Update information about outline regions.
     private UpdateCompileUnit(request : AsyncRequest) : void
     {
       surroundwith (currentAsyncRequest)
       try
       {
-        //def timer = Stopwatch.StartNew();
+        def timer = Stopwatch.StartNew();
         AsyncWorker.CheckCurrentThreadIsTheAsyncWorker();
         AsyncWorker.AddResponse(() => _callback.SetStatusText("Update compile unit..."));
         //Debug.WriteLine($"UpdateCompileUnit 1 $(timer.Elapsed)"); timer.Reset(); timer.Start();
@@ -153,12 +54,14 @@ namespace Nemerle.Completion2
         }
 
         def req = request :> UpdateCompileUnitAsyncRequest;
-        //RequestOnBuildTypesTree();
 
-        if (req.Changes == null)
-          AsyncWorker.AddResponse(() => _callback.TypesTreeCreated());
-        else when (_optionsHasBeenRead)
-          _ = BeginBuildTypesTree();
+        unless (TryRelacate(req.Changes))
+        {
+          if (req.Changes == null)
+            AsyncWorker.AddResponse(() => _callback.TypesTreeCreated());
+          else when (_optionsHasBeenRead)
+            _ = BeginBuildTypesTree();
+        }
 
         AsyncWorker.AddResponse(() => _callback.SetStatusText("Update compile unit is finished."));
 
@@ -249,6 +152,142 @@ namespace Nemerle.Completion2
         AsyncWorker.AddResponse(() => _callback.SetStatusText("Update compile unit is complete."));
         request.MarkAsCompleted();
       }
+    }
+
+    TryRelacate(changes : IChanges) : bool
+    {
+      when (IsDefaultEngine)
+        return false;
+
+      when (changes == null)
+        return false;
+
+      def project = this.Project;
+
+      when (project == null)
+        return false;
+
+      def fileIndex   = changes.Before.FileIndex;
+      def compileUnit = project.CompileUnits[fileIndex];
+
+      when (compileUnit == null)
+        return false;
+
+      match (changes)
+      {
+        | single  is ISingleChanges   => TryRelacate(changes, single.Change, project, compileUnit)
+        | multile is IMultipleChanges =>
+          foreach (change in multile.ReversedChanges)
+            unless (TryRelacate(changes, change, project, compileUnit))
+              return false;
+          true
+
+        | _ => assert2(false); true
+      }
+    }
+
+    TryRelacate(changes : IChanges, change : Change, project : Project, compileUnit : CompileUnit) : bool
+    {
+      def relocate(changes : IChanges, project : Project, compileUnit : CompileUnit)
+      {
+        def info = RelocationInfo(changes);
+        compileUnit.TopNamespace.Relocate(info);
+        def typeBuilders = project.NamespaceTree.GetTypeBuilders();
+        foreach (typeBuilder in typeBuilders)
+          (typeBuilder : ISupportRelocation).RelocateImpl(info);
+      }
+
+      // Релокация поддерживается для двух случаев: 1) изменились только пробелы; 2) изменения происходят внутри тела метода.
+      def beforeSource = changes.Before;
+      def afterSource  = changes.After;
+      def beforeText   = beforeSource.Text;
+      def afterText    = afterSource.Text;
+      def oldSpan      = change.OldSpan;
+      def oldEndPos    = oldSpan.EndPos;
+
+      def onlySpacesChanged = ret :
+      {
+        for (mutable i = oldSpan.StartPos; i < oldEndPos; i++)
+          unless (char.IsWhiteSpace(beforeText[i]))
+            ret(false);
+
+        def newEndPos = change.NewSpan.EndPos;
+
+        for (mutable i = change.NewSpan.StartPos; i < newEndPos; i++)
+          unless (char.IsWhiteSpace(afterText[i]))
+            ret(false);
+        true
+      };
+
+      when (onlySpacesChanged)
+      {
+        relocate(changes, project, compileUnit);
+        return true;
+      }
+
+      def at   = Location(beforeSource, oldSpan.StartPos, oldSpan.EndPos);
+      def declOpt = compileUnit.FindMember(at);
+
+      def canRetypeOnlyMemberBody =
+        match (declOpt)
+        {
+          | Some(m is ClassMember.Function) =>
+            def loc = m.BodyInnerLocation;
+            if (loc.IsNestedIn(at) && loc.StartPos > at.StartPos && loc.EndPos < at.EndPos)
+            {
+              def resetedMember = m.Builder :> MethodBuilderEx;
+              if (resetedMember == null)
+                false
+              else
+              {
+                resetedMember.ResetCodeCache();
+                AsyncWorker.AddResponse(() => _callback.ClearMethodCompilerMessages(resetedMember));
+                AddMethodAtFirstCheckQueue(resetedMember); // Add request for typing of relocated method body
+                true
+              }
+            }
+            else
+              false
+
+          | _x => false
+        };
+
+      when (canRetypeOnlyMemberBody)
+        relocate(changes, project, compileUnit);
+
+      canRetypeOnlyMemberBody
+    }
+
+    static CollectAndApplyTopDeclarations(source : IIdeSource, compUnit : CompileUnit) : void
+    {
+      def topDecls       = compUnit.TopDeclarations;
+      def decls          = AstUtils.GetAllDeclarations(topDecls);
+
+      def declsAry = decls
+        .Where(d => d.name is Splicable.Name && d.name.GetName().context != null)
+        .OrderBy(d => d.Name)
+        .ToArray();
+
+      //source.Declarations = declsAry;
+      AsyncWorker.AddResponse(() => source.SetTopDeclarations(declsAry));
+      //source.SetTopDeclarations(declsAry);
+    }
+
+    static CollectAndApplyRegions(ideSource : IIdeSource, compUnit : CompileUnit) : void
+    {
+      def version = compUnit.Source.Version;
+      when (ideSource.Version != version)
+        return;
+
+      when (compUnit.ParseCompilerMessages.Any(cm => cm.Msg.Contains("parse error")))
+        return;
+
+      def regions = RegionsHelper.Collect(compUnit);
+
+      when (ideSource.Version != version)
+        return;
+
+      AsyncWorker.AddResponse(() => ideSource.SetRegions(regions, version));
     }
 
     internal ParseCompileUnit(source : SourceSnapshot) : CompileUnit

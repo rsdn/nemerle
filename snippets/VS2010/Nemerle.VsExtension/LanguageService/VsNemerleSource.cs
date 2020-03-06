@@ -58,6 +58,86 @@ namespace Nemerle.VisualStudio.LanguageService
 
         #region Init
 
+        static VsNemerleSource()
+        {
+            Nemerle.Compiler.Completion.RelocateImpl = RelocateImpl;
+        }
+
+        private static Location RelocateImpl(Location loc, RelocationInfo info)
+        {
+            if (loc.FileIndex != info.FileIndex)
+                return loc;
+
+            var version       = loc.Source.Version;
+            var changes       = info.Changes;
+            var afterVersion  = changes.AfterVersion;
+            var beforeVersion = changes.BeforeVersion;
+            var afterSource   = changes.After;
+
+            if (version == afterVersion)
+                return loc;
+
+            if (version != beforeVersion)
+            {
+                Debug.WriteLine($"Location not relocated due 'version != beforeVersion' beforeVersion={beforeVersion} loc={loc} file={loc.File}");
+                return loc;
+            }
+
+            if (changes is ISingleChanges single)
+                RelocateImpl(ref loc, changes, single.Change, afterSource);
+            else
+            {
+                foreach (Change change in ((IMultipleChanges)changes).ReversedChanges)
+                    RelocateImpl(ref loc, changes, change, afterSource);
+            }
+
+            Debug.WriteLine(loc.ToVsOutputStringFormat() + " relocated");
+            return loc;
+        }
+
+        private static void RelocateImpl(ref Location loc, IChanges changes, in Change change, in SourceSnapshot afterSource)
+        {
+            var oldSpan     = change.OldSpan;
+            var startPos    = loc.StartPos;
+            var endPos      = loc.EndPos;
+            var oldStartPos = oldSpan.StartPos;
+            var oldEndPos   = oldSpan.EndPos;
+            var newLen      = change.NewSpan.Length;
+            var oldLen      = oldSpan.Length;
+
+            // ----- startPos
+            // ----- endPos
+            // ***** oldStartPos
+            // ***** oldStartPos
+            if (oldStartPos >= endPos)
+            {
+                loc = new Location(changes.After, startPos, endPos);
+                return;
+            }
+
+            // ----- startPos
+            // ***** oldStartPos
+            // ***** oldStartPos
+            // ----- endPos
+            if (startPos < oldStartPos && endPos > oldEndPos)
+            {
+                loc = new Location(changes.After, startPos, endPos - oldLen + newLen);
+                return;
+            }
+
+            // ***** oldStartPos
+            // ***** oldStartPos
+            // ----- startPos
+            // ----- endPos
+            if (startPos >= oldEndPos)
+            {
+                loc = new Location(changes.After, startPos + newLen, endPos + newLen);
+                return;
+            }
+
+            loc = new Location(changes.After, 0, 0); // broken location
+        }
+
         public VsNemerleSource(int baseVersion, NemerleLanguageService service, IVsTextLines textLines)
           : base(service, textLines, null)
         {
@@ -127,12 +207,16 @@ namespace Nemerle.VisualStudio.LanguageService
             if (projectInfo != null && projectInfo.IsDocumentOpening)
                 return;
 
-            var before  = GetSourceSnapshot(e.Before);
-            var after   = _currentSnapshot = VsSourceSnapshot.CreateSourceSnapshot(this, e.After);
-            var changes = new Changes(before, after, e.Changes.Reverse().Select(c => new Change(c.OldSpan.ToNSpan(), c.NewSpan.ToNSpan())).ToArray());
+            var before = GetSourceSnapshot(e.Before);
+            var after = _currentSnapshot = VsSourceSnapshot.CreateSourceSnapshot(this, e.After);
+            var changes = e.Changes.Count == 1
+                ? (IChanges)new SingleChanges(before, after, ConvertToChange(e.Changes[0]))
+                : new MultipleChanges(before, after, e.Changes.Reverse().Select(ConvertToChange).ToArray());
 
             GetEngine().BeginUpdateCompileUnit(this, changes);
         }
+
+        private static Change ConvertToChange(ITextChange c) => new Change(c.OldSpan.ToNSpan(), c.NewSpan.ToNSpan());
 
         public void UpdateProjectInfo(ProjectInfo projectInfo)
         {

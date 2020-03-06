@@ -45,21 +45,12 @@ namespace Nemerle.VisualStudio
             var baseVersion = ideSorce.BaseVersion;
             var version = textSnapshot.Version;
             var locationVersion = location.Source.Version;
-            if (version.VersionNumber + baseVersion == locationVersion)
+            var currentVersion = version.VersionNumber + baseVersion;
+            if (currentVersion == locationVersion)
                 return new Span(location.StartPos, location.Length);
 
-            var textBuffer = textSnapshot.TextBuffer;
+            Debug.WriteLine($"Version mismatch: currentVersion={currentVersion} locationVersion={locationVersion}");
 
-            while ((version = version.Next) != null)
-            {
-                if (version.VersionNumber + baseVersion == locationVersion)
-                {
-                    var span = version.CreateTrackingSpan(location.StartPos, location.Length, SpanTrackingMode.EdgeExclusive);
-                    return span.GetSpan(textSnapshot.Version);
-                }
-            }
-
-            Debug.Assert(false, "NLocationToSpan");
             return new Span(location.StartPos, location.Length);
         }
 
