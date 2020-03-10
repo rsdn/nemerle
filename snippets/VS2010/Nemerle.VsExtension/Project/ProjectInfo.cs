@@ -851,7 +851,7 @@ namespace Nemerle.VisualStudio.Project
 		public void SetStatusText(string text) // implemetn IIdeProject
 		{
 			LanguageService.SetStatusBarText(text);
-			Debug.WriteLine(text);
+			//Debug.WriteLine(text);
 		}
 
 		public void AddUnimplementedMembers(IIdeSource source, TypeBuilder ty,

@@ -45,7 +45,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
         #region Fields
 
-        public volatile IList<Location> TypeLocations;
+        public volatile List<Location> TypeLocations;
         public List<Tuple<Location, List<Location>>> MethodsTypeLocations = new List<Tuple<Location, List<Location>>>();
         public int BaseVersion { get; private set; }
 
@@ -74,14 +74,19 @@ namespace Nemerle.VisualStudio.LanguageService
             var beforeVersion = changes.BeforeVersion;
             var afterSource   = changes.After;
 
+            if (afterSource.IsGenerated)
+
             if (version == afterVersion)
                 return loc;
 
             if (version != beforeVersion)
             {
-                Debug.WriteLine($"Location not relocated due 'version != beforeVersion' beforeVersion={beforeVersion} loc={loc} file={loc.File}");
+                Debug.WriteLine($"{loc.ToVsOutputStringFormat()} Location not relocated due 'version != beforeVersion' beforeVersion={beforeVersion} loc='{loc}'");
                 return loc;
             }
+
+            if (loc.Source.IsGenerated)
+                afterSource = FileUtils.MakeGeneratedSource(afterSource);
 
             if (changes is ISingleChanges single)
                 RelocateImpl(ref loc, changes, single.Change, afterSource);
@@ -91,7 +96,7 @@ namespace Nemerle.VisualStudio.LanguageService
                     RelocateImpl(ref loc, changes, change, afterSource);
             }
 
-            Debug.WriteLine(loc.ToVsOutputStringFormat() + " relocated");
+            //Debug.WriteLine(loc.ToVsOutputStringFormat() + " relocated");
             return loc;
         }
 
@@ -111,7 +116,7 @@ namespace Nemerle.VisualStudio.LanguageService
             // ***** oldStartPos
             if (oldStartPos >= endPos)
             {
-                loc = new Location(changes.After, startPos, endPos);
+                loc = new Location(afterSource, startPos, endPos);
                 return;
             }
 
@@ -121,7 +126,7 @@ namespace Nemerle.VisualStudio.LanguageService
             // ----- endPos
             if (startPos < oldStartPos && endPos > oldEndPos)
             {
-                loc = new Location(changes.After, startPos, endPos - oldLen + newLen);
+                loc = new Location(afterSource, startPos, endPos - oldLen + newLen);
                 return;
             }
 
@@ -131,11 +136,11 @@ namespace Nemerle.VisualStudio.LanguageService
             // ----- endPos
             if (startPos >= oldEndPos)
             {
-                loc = new Location(changes.After, startPos + newLen, endPos + newLen);
+                loc = new Location(afterSource, startPos + newLen, endPos + newLen);
                 return;
             }
 
-            loc = new Location(changes.After, 0, 0); // broken location
+            loc = new Location(afterSource, 0, 0); // broken location
         }
 
         public VsNemerleSource(int baseVersion, NemerleLanguageService service, IVsTextLines textLines)
@@ -147,10 +152,11 @@ namespace Nemerle.VisualStudio.LanguageService
             BaseVersion = baseVersion - textBuffer.CurrentSnapshot.Version.VersionNumber;
 
             _textBuffer = textBuffer;
+            textBuffer.Changed += TextBuffer_Changed;
             if (textBuffer is ITextBuffer2 textBuffer2)
-                textBuffer2.ChangedOnBackground += TextBuffer_Changed;
+                textBuffer2.ChangedOnBackground += TextBuffer_AsyncChanged;
             else
-                textBuffer.Changed += TextBuffer_Changed;
+                textBuffer.Changed += TextBuffer_AsyncChanged;
             string path = textBuffer.GetFilePath();
             _file = FileUtils.GetFile(path);
             IsNemerleSybtax = Utils.Eq(Path.GetExtension(path), ".n");
@@ -199,6 +205,21 @@ namespace Nemerle.VisualStudio.LanguageService
 
         private void TextBuffer_Changed(object sender, TextContentChangedEventArgs e)
         {
+            // Этот метод вызывается синхронно. В нем нельзя предпринимать долгие операции!
+            var typelocations        = TypeLocations;
+            var methodsTypeLocations = MethodsTypeLocations;
+
+            if (typelocations == null || typelocations.Count == 0 && methodsTypeLocations == null || methodsTypeLocations.Count == 0)
+                return;
+
+            var changes = ConvertToNemerleChanges(e);
+            var info    = new RelocationInfo(changes);
+
+            RelocateTypeLocations(info);
+        }
+
+        private void TextBuffer_AsyncChanged(object sender, TextContentChangedEventArgs e)
+        {
             if (!IsNemerleSybtax)
                 return;
 
@@ -207,13 +228,17 @@ namespace Nemerle.VisualStudio.LanguageService
             if (projectInfo != null && projectInfo.IsDocumentOpening)
                 return;
 
+            GetEngine().BeginUpdateCompileUnit(this, ConvertToNemerleChanges(e));
+        }
+
+        private IChanges ConvertToNemerleChanges(TextContentChangedEventArgs e)
+        {
             var before = GetSourceSnapshot(e.Before);
             var after = _currentSnapshot = VsSourceSnapshot.CreateSourceSnapshot(this, e.After);
             var changes = e.Changes.Count == 1
                 ? (IChanges)new SingleChanges(before, after, ConvertToChange(e.Changes[0]))
                 : new MultipleChanges(before, after, e.Changes.Reverse().Select(ConvertToChange).ToArray());
-
-            GetEngine().BeginUpdateCompileUnit(this, changes);
+            return changes;
         }
 
         private static Change ConvertToChange(ITextChange c) => new Change(c.OldSpan.ToNSpan(), c.NewSpan.ToNSpan());
@@ -281,31 +306,28 @@ namespace Nemerle.VisualStudio.LanguageService
         {
             RelocateList(info, TypeLocations);
 
-            for (int i = 0; i < MethodsTypeLocations.Count; i++)
+            var methodsTypeLocations = MethodsTypeLocations;
+
+            for (int i = 0; i < methodsTypeLocations.Count; i++)
             {
-                var methodsTypeLocation = MethodsTypeLocations[i];
-                var loc = methodsTypeLocation.Item1;
-                var lst = methodsTypeLocation.Item2;
-                var newLoc = Nemerle.Compiler.Completion.Relocate(loc, info);
+                var methodsTypeLocation = methodsTypeLocations[i];
+                var loc                 = methodsTypeLocation.Item1;
+                var lst                 = methodsTypeLocation.Item2;
+                var newLoc              = NC.Completion.Relocate(loc, info);
                 if (newLoc != loc)
                 {
                     RelocateList(info, lst);
-                    MethodsTypeLocations[i] = Tuple.Create(loc, lst);
+                    methodsTypeLocations[i] = Tuple.Create(loc, lst);
                 }
             }
         }
 
-        private static void RelocateList(RelocationInfo info, IList<Location> locations)
+        private static void RelocateList(RelocationInfo info, List<Location> locations)
         {
             if (locations != null)
             {
                 for (int i = 0; i < locations.Count; i++)
-                {
-                    var typeLoc = locations[i];
-                    var newLoc = Nemerle.Compiler.Completion.Relocate(typeLoc, info);
-                    if (newLoc != typeLoc)
-                        locations[i] = newLoc;
-                }
+                    locations[i] = Nemerle.Compiler.Completion.Relocate(locations[i], info);
             }
         }
 
@@ -375,12 +397,10 @@ namespace Nemerle.VisualStudio.LanguageService
             get { return base.IsDirty; }
             set
             {
-                Debug.WriteLine("IsDirty = " + value);
+                //Debug.WriteLine("IsDirty = " + value);
                 base.IsDirty = value;
                 if (value)
                     LastDirtyTime = DateTime.Now;
-                //else
-                //	LastParseTime = System.DateTime.Now;
             }
         }
 
@@ -1383,7 +1403,7 @@ namespace Nemerle.VisualStudio.LanguageService
         public void LockReadWrite() { TextLines.LockBufferEx((uint)BufferLockFlags.BLF_READ_AND_WRITE); }
         public void UnlocReadkWrite() { TextLines.UnlockBufferEx((uint)BufferLockFlags.BLF_READ_AND_WRITE); }
 
-        public void SetTypeHighlighting(IList<Location> list, int sourceVersion)
+        public void SetTypeHighlighting(List<Location> list, int sourceVersion)
         {
             if (CurrentVersion != sourceVersion)
                 return;

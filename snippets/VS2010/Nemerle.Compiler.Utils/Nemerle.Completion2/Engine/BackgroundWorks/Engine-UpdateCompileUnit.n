@@ -42,10 +42,8 @@ namespace Nemerle.Completion2
       surroundwith (currentAsyncRequest)
       try
       {
-        def timer = Stopwatch.StartNew();
         AsyncWorker.CheckCurrentThreadIsTheAsyncWorker();
         AsyncWorker.AddResponse(() => _callback.SetStatusText("Update compile unit..."));
-        //Debug.WriteLine($"UpdateCompileUnit 1 $(timer.Elapsed)"); timer.Reset(); timer.Start();
 
         when (request.Stop)
         {
@@ -53,17 +51,28 @@ namespace Nemerle.Completion2
           return;
         }
 
-        def req = request :> UpdateCompileUnitAsyncRequest;
+        def timer  = Stopwatch.StartNew();
+        def req    = request :> UpdateCompileUnitAsyncRequest;
+        def result = TryRelacate(req.Changes);
 
-        unless (TryRelacate(req.Changes))
+        timer.Stop();
+
+        if (result)
         {
+          def msg = "Update compile unit made relocarion. The relocarion took: " + timer.Elapsed;
+          Debug.WriteLine(msg);
+          AsyncWorker.AddResponse(() => _callback.SetStatusText(msg));
+        }
+        else
+        {
+          def msg = "Update compile unit choice to rebuild type tree. The choice  took: " + timer.Elapsed;
+          Debug.WriteLine(msg);
+          AsyncWorker.AddResponse(() => _callback.SetStatusText(msg));
           if (req.Changes == null)
             AsyncWorker.AddResponse(() => _callback.TypesTreeCreated());
           else when (_optionsHasBeenRead)
             _ = BeginBuildTypesTree();
         }
-
-        AsyncWorker.AddResponse(() => _callback.SetStatusText("Update compile unit is finished."));
 
         /*
         def sourceSnapshot = request.GetSourceSnapshot();
@@ -149,7 +158,6 @@ namespace Nemerle.Completion2
       }
       finally
       {
-        AsyncWorker.AddResponse(() => _callback.SetStatusText("Update compile unit is complete."));
         request.MarkAsCompleted();
       }
     }
@@ -186,47 +194,108 @@ namespace Nemerle.Completion2
       }
     }
 
-    TryRelacate(changes : IChanges, change : Change, project : Project, compileUnit : CompileUnit) : bool
+    GetTokens(loc : Location) : array[Token]
     {
-      def relocate(changes : IChanges, project : Project, compileUnit : CompileUnit)
+      def lexer = Lexer(this, loc);
+      lexer.Keywords = this.CoreEnv.Keywords;
+      lexer.ReadAllTokens()
+    }
+
+    findMinLocation(compileUnit : CompileUnit, changedLoc : Location) : Location
+    {
+      def decl = compileUnit.FindDecl(changedLoc);
+      when (changedLoc.IsNestedInOrEquals(decl.Location))
       {
-        def info = RelocationInfo(changes);
-        compileUnit.TopNamespace.Relocate(info);
-        def typeBuilders = project.NamespaceTree.GetTypeBuilders();
-        foreach (typeBuilder in typeBuilders)
-          (typeBuilder : ISupportRelocation).RelocateImpl(info);
+        match (decl)
+        {
+          | GlobalAttribute
+          | Using
+          | Namespace
+          | None => return decl.Location;
+          | Type(ast) when changedLoc.IsNestedInOrEquals(ast.BodyInnerLocation) =>
+            def members = ast.GetMembers();
+            match (members.Find(m => changedLoc.IsNestedInOrEquals(m.Location)))
+            {
+              | Some(member) => return member.Location;
+              | _            => return decl.Location;
+            }
+          | Type => return decl.Location;
+        }
       }
 
-      // Релокация поддерживается для двух случаев: 1) изменились только пробелы; 2) изменения происходят внутри тела метода.
-      def beforeSource = changes.Before;
-      def afterSource  = changes.After;
-      def beforeText   = beforeSource.Text;
-      def afterText    = afterSource.Text;
-      def oldSpan      = change.OldSpan;
-      def oldEndPos    = oldSpan.EndPos;
+      if (compileUnit.TopNamespace.HeaderLocation.IntersectsWith(changedLoc))
+        compileUnit.TopNamespace.HeaderLocation
+      else
+        Location(changedLoc.Source, 0, changedLoc.Source.Text.Length)
+    }
 
-      def onlySpacesChanged = ret :
+    isOnlySpacesChanged(changes : IChanges, change : Change, compileUnit : CompileUnit) : bool
+    {
+      def isOnlySpacesChangedImpl(changes : IChanges, change : Change, compileUnit : CompileUnit) : bool
       {
+        def beforeSource = changes.Before;
+        def afterSource  = changes.After;
+        def beforeText   = beforeSource.Text;
+        def afterText    = afterSource.Text;
+        def oldSpan      = change.OldSpan;
+        def oldEndPos    = oldSpan.EndPos;
+        def changedLoc   = Location(beforeSource, oldSpan);
+        def loc          = findMinLocation(compileUnit, changedLoc);
+        def tokens       = GetTokens(loc);
+        def oldSpan      = changedLoc.Span;
+
+        foreach (token in tokens)
+        {
+          def tokenLoc  = token.Location;
+          def tokenSpan = tokenLoc.Span;
+          assert2(tokenSpan.StartPos <= tokenSpan.EndPos);
+          when (tokenLoc.IntersectsWith(oldSpan) && tokenSpan.StartPos != oldSpan.EndPos && tokenSpan.EndPos != oldSpan.StartPos)
+            return false;
+        }
+
         for (mutable i = oldSpan.StartPos; i < oldEndPos; i++)
           unless (char.IsWhiteSpace(beforeText[i]))
-            ret(false);
+            return false;
 
         def newEndPos = change.NewSpan.EndPos;
 
         for (mutable i = change.NewSpan.StartPos; i < newEndPos; i++)
           unless (char.IsWhiteSpace(afterText[i]))
-            ret(false);
+            return false;
         true
-      };
+      }
 
-      when (onlySpacesChanged)
+      def timer  = Stopwatch.StartNew();
+      def result = isOnlySpacesChangedImpl(changes, change, compileUnit);
+      Debug.WriteLine("isOnlySpacesChanged() took: " + timer.Elapsed);
+      result
+    }
+
+    relocate(changes : IChanges, project : Project, compileUnit : CompileUnit) : void
+    {
+      def timer = Stopwatch.StartNew();
+      def info  = RelocationInfo(changes);
+      compileUnit.TopNamespace.Relocate(info);
+      def typeBuilders = project.NamespaceTree.GetTypeBuilders();
+      foreach (typeBuilder in typeBuilders)
+        (typeBuilder : ISupportRelocation).RelocateImpl(info);
+      Debug.WriteLine("relocate() took: " + timer.Elapsed);
+    }
+
+    TryRelacate(changes : IChanges, change : Change, project : Project, compileUnit : CompileUnit) : bool
+    {
+      // Релокация поддерживается для двух случаев: 1) изменились только пробелы; 2) изменения происходят внутри тела метода.
+
+      when (isOnlySpacesChanged(changes, change, compileUnit))
       {
         relocate(changes, project, compileUnit);
         return true;
       }
 
-      def at   = Location(beforeSource, oldSpan.StartPos, oldSpan.EndPos);
-      def declOpt = compileUnit.FindMember(at);
+      def beforeSource = changes.Before;
+      def oldSpan      = change.OldSpan;
+      def at           = Location(beforeSource, oldSpan.StartPos, oldSpan.EndPos);
+      def declOpt      = compileUnit.FindMember(at);
 
       def canRetypeOnlyMemberBody =
         match (declOpt)

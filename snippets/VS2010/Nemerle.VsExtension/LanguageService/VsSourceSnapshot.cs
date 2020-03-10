@@ -38,7 +38,7 @@ namespace Nemerle.VisualStudio.LanguageService
                 nemerleSource.ProjectInfo?.Engine?.BeginBuildTypesTree();
             _textSnapshot = textSnapshot;
 
-            Debug.WriteLine($"VsSourceSnapshot created Version={Version} {nemerleSource.GetFilePath()}");
+            //Debug.WriteLine($"VsSourceSnapshot created Version={Version} {nemerleSource.GetFilePath()}");
         }
 
         public override string OriginalText => _text ?? (_text =_textSnapshot.GetText());
