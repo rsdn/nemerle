@@ -81,6 +81,8 @@ namespace Nemerle.VisualStudio.LanguageService
 
             if (version != beforeVersion)
             {
+                if (version == afterVersion)
+                    return loc;
                 Debug.WriteLine($"{loc.ToVsOutputStringFormat()} Location not relocated due 'version != beforeVersion' beforeVersion={beforeVersion} loc='{loc}'");
                 return loc;
             }
@@ -120,23 +122,24 @@ namespace Nemerle.VisualStudio.LanguageService
                 return;
             }
 
+            var delta = newLen - oldLen;
             // ----- startPos
             // ***** oldStartPos
-            // ***** oldStartPos
-            // ----- endPos
+            // ***** oldStartPos |
+            // ----- endPos      V
             if (startPos < oldStartPos && endPos > oldEndPos)
             {
-                loc = new Location(afterSource, startPos, endPos - oldLen + newLen);
+                loc = new Location(afterSource, startPos, endPos + delta);
                 return;
             }
 
-            // ***** oldStartPos
-            // ***** oldStartPos
+            // ***** oldStartPos |
+            // ***** oldStartPos V
             // ----- startPos
             // ----- endPos
             if (startPos >= oldEndPos)
             {
-                loc = new Location(afterSource, startPos + newLen, endPos + newLen);
+                loc = new Location(afterSource, startPos + delta, endPos + delta);
                 return;
             }
 
@@ -317,7 +320,7 @@ namespace Nemerle.VisualStudio.LanguageService
                 if (newLoc != loc)
                 {
                     RelocateList(info, lst);
-                    methodsTypeLocations[i] = Tuple.Create(loc, lst);
+                    methodsTypeLocations[i] = Tuple.Create(newLoc, lst);
                 }
             }
         }
