@@ -60,90 +60,7 @@ namespace Nemerle.VisualStudio.LanguageService
 
         static VsNemerleSource()
         {
-            Nemerle.Compiler.Completion.RelocateImpl = RelocateImpl;
-        }
-
-        private static Location RelocateImpl(Location loc, RelocationInfo info)
-        {
-            if (loc.FileIndex != info.FileIndex)
-                return loc;
-
-            var version       = loc.Source.Version;
-            var changes       = info.Changes;
-            var afterVersion  = changes.AfterVersion;
-            var beforeVersion = changes.BeforeVersion;
-            var afterSource   = changes.After;
-
-            if (afterSource.IsGenerated)
-
-            if (version == afterVersion)
-                return loc;
-
-            if (version != beforeVersion)
-            {
-                if (version == afterVersion)
-                    return loc;
-                Debug.WriteLine($"{loc.ToVsOutputStringFormat()} Location not relocated due 'version != beforeVersion' beforeVersion={beforeVersion} loc='{loc}'");
-                return loc;
-            }
-
-            if (loc.Source.IsGenerated)
-                afterSource = FileUtils.MakeGeneratedSource(afterSource);
-
-            if (changes is ISingleChanges single)
-                RelocateImpl(ref loc, changes, single.Change, afterSource);
-            else
-            {
-                foreach (Change change in ((IMultipleChanges)changes).ReversedChanges)
-                    RelocateImpl(ref loc, changes, change, afterSource);
-            }
-
-            //Debug.WriteLine(loc.ToVsOutputStringFormat() + " relocated");
-            return loc;
-        }
-
-        private static void RelocateImpl(ref Location loc, IChanges changes, in Change change, in SourceSnapshot afterSource)
-        {
-            var oldSpan     = change.OldSpan;
-            var startPos    = loc.StartPos;
-            var endPos      = loc.EndPos;
-            var oldStartPos = oldSpan.StartPos;
-            var oldEndPos   = oldSpan.EndPos;
-            var newLen      = change.NewSpan.Length;
-            var oldLen      = oldSpan.Length;
-
-            // ----- startPos
-            // ----- endPos
-            // ***** oldStartPos
-            // ***** oldStartPos
-            if (oldStartPos >= endPos)
-            {
-                loc = new Location(afterSource, startPos, endPos);
-                return;
-            }
-
-            var delta = newLen - oldLen;
-            // ----- startPos
-            // ***** oldStartPos
-            // ***** oldStartPos |
-            // ----- endPos      V
-            if (startPos < oldStartPos && endPos > oldEndPos)
-            {
-                loc = new Location(afterSource, startPos, endPos + delta);
-                return;
-            }
-
-            // ***** oldStartPos |
-            // ***** oldStartPos V
-            // ----- startPos
-            // ----- endPos
-            if (startPos >= oldEndPos)
-            {
-                loc = new Location(afterSource, startPos + delta, endPos + delta);
-                return;
-            }
-
-            loc = new Location(afterSource, 0, 0); // broken location
+            Factories.Init();
         }
 
         public VsNemerleSource(int baseVersion, NemerleLanguageService service, IVsTextLines textLines)
@@ -317,11 +234,8 @@ namespace Nemerle.VisualStudio.LanguageService
                 var loc                 = methodsTypeLocation.Item1;
                 var lst                 = methodsTypeLocation.Item2;
                 var newLoc              = NC.Completion.Relocate(loc, info);
-                if (newLoc != loc)
-                {
-                    RelocateList(info, lst);
-                    methodsTypeLocations[i] = Tuple.Create(newLoc, lst);
-                }
+                RelocateList(info, lst);
+                methodsTypeLocations[i] = Tuple.Create(newLoc, lst);
             }
         }
 

@@ -31,7 +31,7 @@ namespace Nemerle.VsExtension
         public override string ToString()
         {
             var before = new Location(Before, Change.OldSpan.StartPos, Change.OldSpan.EndPos);
-            var after  = new Location(Before, Change.NewSpan.StartPos, Change.NewSpan.EndPos);
+            var after  = new Location(After,  Change.NewSpan.StartPos, Change.NewSpan.EndPos);
             return $"{before} => {after}";
         }
     }
