@@ -51,7 +51,7 @@ namespace Nemerle.VsExtension.NavigateTo
     {
             foreach (var projectInfo in VisualStudio.Project.ProjectInfo.Projects)
             {
-                projectInfo.Engine.BeginFindAllSymbols(Tuple.Create(this, callback));
+                projectInfo.Engine.BeginFindAllSymbols(pattern, Tuple.Create(this, callback, pattern));
             }
     }
   }

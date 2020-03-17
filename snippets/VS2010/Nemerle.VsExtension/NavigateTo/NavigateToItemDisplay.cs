@@ -30,13 +30,18 @@ namespace Nemerle.VsExtension.NavigateTo
             _item = item;
         }
 
-        public string AdditionalInformation => "Declaration.Kind Declaration.FullName FileName LineCol";
+        public string AdditionalInformation
+        {
+            get
+            {
+                var info = (SymbolInfo)_item.Tag;
+                return info.FullName;
+            }
+        }
 
         DescriptionRun[] MakeNameDescriptionRuns()
         {
-            var nameParts = new List<DescriptionRun>();
-            //Color.Black
-            return nameParts.ToArray();
+            return Array.Empty<DescriptionRun>();
         }
 
         public Icon Glyph => null;
@@ -67,7 +72,7 @@ namespace Nemerle.VsExtension.NavigateTo
 
         public string Description => throw new NotImplementedException();
 
-        public ReadOnlyCollection<DescriptionItem> DescriptionItems => throw new NotImplementedException();
+        public ReadOnlyCollection<DescriptionItem> DescriptionItems => new ReadOnlyCollection<DescriptionItem>(Array.Empty<DescriptionItem>());
 
         public IReadOnlyList<Span> GetAdditionalInformationMatchRuns(string searchValue)
         {
@@ -76,7 +81,8 @@ namespace Nemerle.VsExtension.NavigateTo
 
         public IReadOnlyList<Span> GetNameMatchRuns(string searchValue)
         {
-            return new List<Span>();
+            var info = (SymbolInfo)_item.Tag;
+            return info.MatchRuns.Select(x => new Span(x.StartPos, x.Length)).ToArray();
         }
     }
 }

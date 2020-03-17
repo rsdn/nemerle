@@ -1148,9 +1148,10 @@ namespace Nemerle.VisualStudio.Project
 
         public void FoundSymbols(object obj, SymbolInfo[] symbols)
         {
-            var tuple                  = (Tuple<NavigateToItemProvider, INavigateToCallback>)obj;
+            var tuple                  = (Tuple<NavigateToItemProvider, INavigateToCallback, string>)obj;
             var navigateToItemProvider = tuple.Item1;
             var callback               = tuple.Item2;
+            var pattern                = tuple.Item3;
             foreach (var symbol in symbols)
             {
 
@@ -1203,10 +1204,29 @@ namespace Nemerle.VisualStudio.Project
                         kind = NavigateToItemKind.OtherSymbol;
                         break;
                 }
-                var match = new PatternMatch(PatternMatchKind.Exact, punctuationStripped: false, isCaseSensitive: false);
+                PatternMatchKind calcKibd(SymbolInfo info)
+                {
+                    var spans = info.MatchRuns;
+                    switch (spans.Length)
+                    {
+                        case 0:
+                            return PatternMatchKind.Fuzzy;
+                        default:
+                            var name = info.Name;
+                            var span = info.MatchRuns[0];
+                            if (span.StartPos == 0)
+                                return pattern.Length == name.Length ? PatternMatchKind.CamelCaseExact : PatternMatchKind.CamelCasePrefix;
+                            return PatternMatchKind.CamelCaseSubstring;
+                    }
+                }
+                var type  = calcKibd(symbol);
+                Debug.WriteLine(type);
+                var match = new PatternMatch(type, punctuationStripped: false, isCaseSensitive: false);
                 callback.AddItem(new NavigateToItem(symbol.Name, kind, "Nemarle", "", symbol, match, navigateToItemProvider.GetFactory()));
             }
-            callback.Done();
+
+            if (symbols.Length == 0)
+                callback.Done();
         }
     }
 }
