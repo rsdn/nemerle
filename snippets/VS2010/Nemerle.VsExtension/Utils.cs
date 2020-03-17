@@ -38,6 +38,8 @@ namespace Nemerle.VisualStudio
 {
     static class Utils
     {
+        public static readonly Guid GuidIWpfTextViewHost = new Guid("8C40265E-9FDB-4f54-A0FD-EBB72B7D0476");
+
         public static Span NLocationToSpan(ITextSnapshot textSnapshot, Location location)
         {
             var projectInfo = Project.ProjectInfo.FindProject(location.File);
@@ -665,6 +667,60 @@ namespace Nemerle.VisualStudio
                 return Location.Default;
 
             return new Location(VsSourceSnapshot.GetSourceSnapshot(vsTextLines.ToITextBuffer()), pos);
+        }
+
+        public static void NavigateTo(IServiceProvider serviceProvider, string filename, NSpan span)
+        {
+            IVsTextView viewAdapter;
+            IVsWindowFrame pWindowFrame;
+            OpenDocument(serviceProvider, filename, out viewAdapter, out pWindowFrame);
+            if (pWindowFrame == null || viewAdapter == null)
+                return;
+            ErrorHandler.ThrowOnFailure(pWindowFrame.Show());
+
+            var wpfTextView = viewAdapter.ToIWpfTextView();
+            var snapshot = wpfTextView.TextSnapshot;
+            NavigateTo(wpfTextView, snapshot, span.StartPos);
+            wpfTextView.Selection.Select(new SnapshotSpan(snapshot, new Span(span.StartPos, span.Length)), false);
+        }
+
+        static void OpenDocument(IServiceProvider serviceProvider, string filename, out IVsTextView viewAdapter, out IVsWindowFrame pWindowFrame)
+        {
+            IVsTextManager textMgr = (IVsTextManager)serviceProvider.GetService(typeof(SVsTextManager));
+
+            IVsUIShellOpenDocument uiShellOpenDocument = (IVsUIShellOpenDocument)serviceProvider.GetService(typeof(SVsUIShellOpenDocument));
+            IVsUIHierarchy hierarchy;
+            uint itemid;
+
+
+            VsShellUtilities.OpenDocument(
+                serviceProvider,
+                filename,
+                Guid.Empty,
+                out hierarchy,
+                out itemid,
+                out pWindowFrame,
+                out viewAdapter);
+        }
+
+        public static IWpfTextView ToIWpfTextView(this IVsTextView vsTextView)
+        {
+            object obj2;
+            IVsUserData data = vsTextView as IVsUserData;
+            if (data == null)
+            {
+                return null;
+            }
+            Guid guidIWpfTextViewHost = GuidIWpfTextViewHost;
+            ErrorHelper.ThrowOnFailure(data.GetData(ref guidIWpfTextViewHost, out obj2));
+            IWpfTextViewHost host = obj2 as IWpfTextViewHost;
+            return host.TextView;
+        }
+
+        public static void NavigateTo(ITextView textView, ITextSnapshot snapshot, int pos)
+        {
+            textView.Caret.MoveTo(new SnapshotPoint(snapshot, pos));
+            textView.ViewScroller.EnsureSpanVisible(new SnapshotSpan(snapshot, pos, 0));
         }
     } // class Utils
 } // namespace
