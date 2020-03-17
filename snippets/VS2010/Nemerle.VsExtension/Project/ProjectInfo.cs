@@ -30,6 +30,9 @@ using BndFlgs = System.Reflection.BindingFlags;
 using MethodBuilderEx = Nemerle.Completion2.Factories.IntelliSenseModeMethodBuilder;
 using Tuple = Nemerle.Builtins.Tuple<Nemerle.Compiler.Location, int>;
 using File = System.IO.File;
+using Microsoft.VisualStudio.Language.NavigateTo.Interfaces;
+using Microsoft.VisualStudio.Text.PatternMatching;
+using Nemerle.VsExtension.NavigateTo;
 
 namespace Nemerle.VisualStudio.Project
 {
@@ -1142,5 +1145,68 @@ namespace Nemerle.VisualStudio.Project
 			IsLoaded = true;
 			Engine.RequestOnReloadProject();
 		}
-	}
+
+        public void FoundSymbols(object obj, SymbolInfo[] symbols)
+        {
+            var tuple                  = (Tuple<NavigateToItemProvider, INavigateToCallback>)obj;
+            var navigateToItemProvider = tuple.Item1;
+            var callback               = tuple.Item2;
+            foreach (var symbol in symbols)
+            {
+
+                var kind = NavigateToItemKind.Class;
+                switch (symbol.Type)
+                {
+                    case GlyphType.Class:
+                        kind = NavigateToItemKind.Class;
+                        break;
+                    case GlyphType.Const:
+                        kind = NavigateToItemKind.Constant;
+                        break;
+                    case GlyphType.Delegate:
+                        kind = NavigateToItemKind.Delegate;
+                        break;
+                    case GlyphType.Enum:
+                        kind = NavigateToItemKind.Enum;
+                        break;
+                    case GlyphType.EnumValue:
+                        kind = NavigateToItemKind.Enum;
+                        break;
+                    case GlyphType.Event:
+                        kind = NavigateToItemKind.Event;
+                        break;
+                    case GlyphType.Field:
+                        kind = NavigateToItemKind.Field;
+                        break;
+                    case GlyphType.Interface:
+                        kind = NavigateToItemKind.Interface;
+                        break;
+                    case GlyphType.Method:
+                        kind = NavigateToItemKind.Method;
+                        break;
+                    case GlyphType.Function:
+                        kind = NavigateToItemKind.Method;
+                        break;
+                    case GlyphType.Property:
+                        kind = NavigateToItemKind.Property;
+                        break;
+                    case GlyphType.Struct:
+                        kind = NavigateToItemKind.Structure;
+                        break;
+                    case GlyphType.Variant:
+                    case GlyphType.VariantOption:
+                        kind = NavigateToItemKind.Class;
+                        break;
+                    case GlyphType.Namespace:
+                        break;
+                    default:
+                        kind = NavigateToItemKind.OtherSymbol;
+                        break;
+                }
+                var match = new PatternMatch(PatternMatchKind.Exact, punctuationStripped: false, isCaseSensitive: false);
+                callback.AddItem(new NavigateToItem(symbol.Name, kind, "Nemarle", "", symbol, match, navigateToItemProvider.GetFactory()));
+            }
+            callback.Done();
+        }
+    }
 }
