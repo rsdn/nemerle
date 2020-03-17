@@ -100,7 +100,7 @@ namespace Nemerle.VisualStudio.LanguageService
                 if (loc.IsGenerated)
                     return Location.Default;
                 Debug.WriteLine($"{loc.ToVsOutputStringFormat()} Location not relocated due 'version != beforeVersion' beforeVersion={beforeVersion} loc='{loc}'");
-                return loc;
+                throw new RelocationException();
             }
 
             if (loc.Source.IsGenerated)
