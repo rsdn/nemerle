@@ -1,4 +1,4 @@
-using System;
+п»їusing System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -15,18 +15,20 @@ namespace Nemerle.VisualStudio.Project
 {
 	/// <summary>
 	/// Inplementation of the service that build the information to expose to the symbols
-	/// navigation tools (class view or object browser) from the Nemerle files 
+	/// navigation tools (class view or object browser) from the Nemerle files
 	/// inside a hierarchy.
 	/// </summary>
 	[Guid(NemerleConstants.LibraryManagerGuidString)]
 	public class NemerleLibraryManager : INemerleLibraryManager, IVsRunningDocTableEvents, IDisposable
 	{
-		/// <summary>
-		/// Class storing the data about a parsing task on a nemerle module.
-		/// A module in Nemerle is a source file, so here we use the file name to
-		/// identify it.
-		/// </summary>
-		[DebuggerStepThrough] 
+        public static readonly Guid LibraryGuid = new Guid(NemerleConstants.LibraryGuidString);
+
+        /// <summary>
+        /// Class storing the data about a parsing task on a nemerle module.
+        /// A module in Nemerle is a source file, so here we use the file name to
+        /// identify it.
+        /// </summary>
+        [DebuggerStepThrough]
 		class LibraryTask
 		{
 			public LibraryTask(string fileName, string text)
@@ -70,16 +72,15 @@ namespace Nemerle.VisualStudio.Project
 
 		public NemerleLibraryManager(IServiceProvider provider)
 		{
-			_provider		= provider;
-			_documents	   = new Dictionary<uint, TextLineEventListener>();
+			_provider		 = provider;
+			_documents	     = new Dictionary<uint, TextLineEventListener>();
 			_hierarchies	 = new Dictionary<IVsHierarchy, HierarchyListener>();
-			_files		   = new Dictionary<ModuleID, LibraryNode>();
-			_requests		= new Queue<LibraryTask>();
+			_files		     = new Dictionary<ModuleID, LibraryNode>();
+			_requests		 = new Queue<LibraryTask>();
 			_requestPresent  = new ManualResetEvent(false);
 			_shutDownStarted = new ManualResetEvent(false);
 			_parseThread	 = new Thread(ParseThread) {Name = "Parse thread"};
-
-			_library		 = new Library(new Guid(NemerleConstants.LibraryGuidString));
+			_library		 = new Library(LibraryGuid);
 			_library.LibraryCapabilities = (_LIB_FLAGS2)(_LIB_FLAGS.LF_PROJECT) | _LIB_FLAGS2.LF_SUPPORTSFILTERING | _LIB_FLAGS2.LF_SUPPORTSCALLBROWSER;
 
 			_parseThread.Start();
@@ -117,10 +118,10 @@ namespace Nemerle.VisualStudio.Project
 		/// Hack. Based on the fact that we have only one fixed root _library. FindAllReferences
 		/// search results are stored in the _library just before VS environment ask the _library
 		/// for them.
-		/// 
-		/// Хак. Используем то что у нас одна фиксированная _library, сохраняем в неё 
-		/// уже найденные результаты для FindAllReferences непосредственно перед тем как
-		/// среда VS попросит у _library эти результаты поиска.
+		///
+		/// Hack. РСЃРїРѕР»СЊР·СѓРµРј С‚Рѕ С‡С‚Рѕ Сѓ РЅР°СЃ РѕРґРЅР° С„РёРєСЃРёСЂРѕРІР°РЅРЅР°В¤ _library, СЃРѕС…СЂР°РЅВ¤РµРј РІ РЅРµРј
+		/// СѓР¶Рµ РЅР°Р№РґРµРЅРЅС‹Рµ СЂРµР·СѓР»СЊС‚Р°С‚С‹ РґР»СЏ FindAllReferences РЅРµРїРѕСЃСЂРµРґСЃС‚РІРµРЅРЅРѕ РїРµСЂРµРґ С‚РµРј РєР°Рє
+		/// СЃСЂРµРґР° VS РїРѕРїСЂРѕСЃРёС‚ Сѓ _library СЌС‚Рё СЂРµР·СѓР»СЊС‚Р°С‚С‹ РїРѕРёСЃРєР°.
 		/// </summary>
 		public void OnFindAllReferencesDone(IVsSimpleObjectList2 findResults)
 		{
@@ -278,7 +279,7 @@ namespace Nemerle.VisualStudio.Project
 
 		/// <summary>
 		/// Main function of the parsing thread.
-		/// This function waits on the queue of the parsing requests and build 
+		/// This function waits on the queue of the parsing requests and build
 		/// the parsing tree for a specific file. The resulting tree is built
 		/// using LibraryNode objects so that it can be used inside the class
 		/// view or object browser.
@@ -471,7 +472,7 @@ namespace Nemerle.VisualStudio.Project
 		{
 			if ((grfAttribs & (uint)(__VSRDTATTRIB.RDTA_MkDocument)) == (uint)__VSRDTATTRIB.RDTA_MkDocument)
 			{
-				IVsRunningDocumentTable rdt = 
+				IVsRunningDocumentTable rdt =
 					_provider.GetService(typeof (SVsRunningDocumentTable)) as IVsRunningDocumentTable;
 
 				if (rdt != null)
@@ -554,7 +555,7 @@ namespace Nemerle.VisualStudio.Project
 				int hr = rdt.GetDocumentInfo(
 					docCookie,
 					out flags,
-					out readLocks, 
+					out readLocks,
 					out writeLoks,
 					out documentMoniker,
 					out hierarchy,
@@ -592,7 +593,7 @@ namespace Nemerle.VisualStudio.Project
 					TextLineEventListener listener = new TextLineEventListener(buffer, documentMoniker, docId);
 
 					// Set the event handler for the change event. Note that there is no
-					// difference between the AddFile and FileChanged operation, so we 
+					// difference between the AddFile and FileChanged operation, so we
 					// can use the same handler.
 					//
 					listener.OnFileChanged += OnFileChanged;
