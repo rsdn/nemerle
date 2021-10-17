@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Text.RegularExpressions;
 using System.Diagnostics;
@@ -6,6 +6,7 @@ using System.Diagnostics;
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
 using Microsoft.Win32;
+using System.Text.RegularExpressions;
 
 namespace Nemerle.Tools.MSBuildTask
 {
@@ -204,6 +205,7 @@ namespace Nemerle.Tools.MSBuildTask
             commandLine.AppendSwitchIfNotNull("\n/lib:", AdditionalLibPaths, ",");
             commandLine.AppendSwitchIfNotNull("\n/nowarn:", DisabledWarnings, ",");
             commandLine.AppendSwitchIfNotNull("\n/dowarn:", EnabledWarnings, ",");
+
             if (NoStdLib)
                 commandLine.AppendSwitch("\n/no-stdlib");
             if (NoStdMacros)
@@ -284,6 +286,7 @@ namespace Nemerle.Tools.MSBuildTask
         {
             private static Regex _msgRx = new Regex(@"(?<path>.*?)\(\s*(?<start_line>\d+)\s*,\s*(?<start_char>\d+)\s*(?:,\s*(?<end_line>\d+)\s*,\s*(?<end_char>\d+)\s*)?\):\s*(hint|warning|error)\s*:\s*(?<msg>.*)", RegexOptions.Compiled);
             private static char[] _invalidPathChars = Path.GetInvalidPathChars();
+
             public string File;
             public int StartLine;
             public int StartPos;
