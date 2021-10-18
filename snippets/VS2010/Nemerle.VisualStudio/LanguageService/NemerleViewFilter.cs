@@ -284,7 +284,7 @@ namespace Nemerle.VisualStudio.LanguageService
 			// Get the caret position
 			ErrorHandler.ThrowOnFailure(this.TextView.GetCaretPos(out line, out col));
 
-			var findSvc = (IVsObjectSearch)Source.Service.GetService(typeof(SVsObjectSearch));
+			var findSvc = (IVsFindSymbol)Source.Service.GetService(typeof(SVsObjectSearch));
 
 			//IVsNavInfo navInfo;
 
@@ -296,7 +296,7 @@ namespace Nemerle.VisualStudio.LanguageService
 				{
 					var criteria = new[]
 					{
-						new VSOBSEARCHCRITERIA
+						new VSOBSEARCHCRITERIA2
 						{
 							eSrchType = VSOBSEARCHTYPE.SO_ENTIREWORD,
 							grfOptions = (uint)_VSOBSEARCHOPTIONS.VSOBSO_CASESENSITIVE,
@@ -319,8 +319,8 @@ namespace Nemerle.VisualStudio.LanguageService
 						}
 
 						nlm.OnFindAllReferencesDone(libSearchResults);
-						IVsObjectList results;
-						var hr = findSvc.Find((uint)__VSOBSEARCHFLAGS.VSOSF_EXPANDREFS, criteria, out results);
+						var scope = NemerleLibraryManager.LibraryGuid;
+						var hr = findSvc.DoSearch(ref scope, criteria);
 					}
 				}
 			}

@@ -299,7 +299,7 @@ namespace Microsoft.VisualStudio.Project
             }
             catch(ArgumentException)
             {
-                // Some selector data was not valid. 
+                // Some selector data was not valid.
             }
 
 			// Does such a reference already exist in the project?
@@ -403,7 +403,7 @@ namespace Microsoft.VisualStudio.Project
                 try
                 {
                     // We should not load the assembly in the current appdomain.
-                    // If we do not do it like that and we load the assembly in the current appdomain then the assembly cannot be unloaded again. 
+                    // If we do not do it like that and we load the assembly in the current appdomain then the assembly cannot be unloaded again.
                     // The following problems might arose in that case.
                     // 1. Assume that a user is extending the MPF and  his project is creating a managed assembly dll.
                     // 2. The user opens VS and creates a project and builds it.
@@ -421,7 +421,7 @@ namespace Microsoft.VisualStudio.Project
                 }
                 catch(FileLoadException)
                 {
-                    // We must still try to load from here because this exception is thrown if we want 
+                    // We must still try to load from here because this exception is thrown if we want
                     // to add the same assembly refererence from different locations.
                     tryToCreateAnAssemblyReference = true;
                 }

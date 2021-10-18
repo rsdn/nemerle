@@ -8,8 +8,6 @@ namespace Nemerle.VisualStudio.Project
 {
 	class ProjectUpgradeHelper
 	{
-		public static readonly XNamespace vs = XNamespace.Get("http://schemas.microsoft.com/developer/msbuild/2003");
-
 		public ProjectUpgradeHelper(string projectFilePath)
 		{
 			var doc = XDocument.Load(projectFilePath, LoadOptions.PreserveWhitespace | LoadOptions.SetBaseUri | LoadOptions.SetLineInfo);
@@ -25,7 +23,10 @@ namespace Nemerle.VisualStudio.Project
 
 		private XElement FindPropertyElement(XElement project, string propertyName)
 		{
-			foreach (var nemerleProperty in project.Descendants(vs + propertyName))
+            var xmlns = project.Attribute("xmlns");
+            var vs = xmlns == null ? XNamespace.Get("") : XNamespace.Get(xmlns.Value);
+
+            foreach (var nemerleProperty in project.Descendants(vs + propertyName))
 				return nemerleProperty;
 
 			// Try to add property if it's not exists
