@@ -1,0 +1,721 @@
+﻿using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.SolverMacros;
+using Nemerle.Imperative;
+using Nemerle.Surround;
+using Nemerle.Utility;
+using System;
+
+using NC  = Nemerle.Compiler;
+using SCG = System.Collections.Generic;
+using GenericParameterAttributes = dnlib.DotNet.GenericParamAttributes;
+
+namespace Nemerle.Compiler
+{
+  [ManagerAccess]
+  public class TypeVarEnv
+  {
+    tyvars : Map [Name, StaticTypeVar];
+    mutable triggerObsolete : bool = true;
+
+    private this (man : ManagerClass, tv : Map [Name, StaticTypeVar])
+    {
+      Manager = man;
+      tyvars = tv;
+    }
+
+    public this (man : ManagerClass)
+    {
+      this (man, Map ())
+    }
+
+    public IsEmpty : bool
+    {
+      get { tyvars.IsEmpty }
+    }
+
+    public Find (name : Name) : option [StaticTypeVar] {
+      tyvars.Find (name)
+    }
+
+    public BindFixedType (env : GlobalEnv, currentType : TypeBuilder, t : PExpr, check_parms : bool) : FixedType
+    {
+      def t = Util.locate(t.Location,
+        Bind (env, currentType, t,
+              allow_tyvars = false,
+              check_parms = check_parms));
+      t.Fix ()
+    }
+
+    public CopyWithObsolete (obs : bool) : TypeVarEnv {
+      def result = TypeVarEnv (Manager, tyvars);
+      result.triggerObsolete = obs;
+      result
+    }
+
+    bind_simple_named_type (
+      env         : GlobalEnv,
+      currentType : TypeBuilder,
+      name        : Name,
+      idl         : list[string],
+      args        : list[TypeVar],
+      loc         : Location
+    ) : TypeVar
+    {
+      match (tyvars.Find (name))
+      {
+        | Some (tv) when idl is [_] =>
+          when (!args.IsEmpty)
+            ReportLocatedError(loc, Manager.Solver.CurrentMessenger, $"type variable `$(name.Id)' supplied with arguments");
+
+          FixedType.StaticTypeVarRef (tv)
+
+        | _ =>
+          def env = name.GetEnv (env);
+          assert(env != null);
+
+          mutable wrong_parms = false;
+          mutable add_info = "unbound type name";
+          mutable exact_hit = null;
+
+          def (nodeMembers, aliasesMembers) = env.LookupSymbolPriority(idl, currentType);
+
+          def makeTypeInfos(symbols : SCG.List[IMember]) : SCG.List[NC.TypeInfo]
+          {
+            def typeinfos = SCG.List();
+            foreach (ti is NC.TypeInfo in symbols)
+            {
+              if (currentType == null || ti.CanAccess(currentType))
+                if (args.Length == ti.SourceTyparmsCount)
+                {
+                  when (ti.FullName == name.Id)
+                    exact_hit = ti;
+                  typeinfos.Add(ti);
+                }
+                else
+                {
+                  wrong_parms = true;
+                  add_info = "wrong number of type parameters to";
+                }
+              else
+              {
+                when (! wrong_parms)
+                  add_info = "inaccessible type";
+              }
+            }
+
+            typeinfos
+          }
+
+          def nodeTypeinfos = makeTypeInfos(nodeMembers);
+          def aliasesTypeinfos  = makeTypeInfos(aliasesMembers);
+
+          def filterTypes(types : SCG.List[NC.TypeInfo]) : SCG.List[NC.TypeInfo]
+          {
+            // Если нет текущего типа или количество найденных типов меньше двух,
+            // возвращаем исходный список найденных типов.
+            when (types.Count < 2)
+              return types;
+
+            def inCurrentNs(type) : bool
+            {
+              mutable currentNamespace = env.CurrentNamespace;
+              mutable ns               = type.NamespaceNode.Parent;
+
+              while (!(ns.Value is NC.NamespaceTree.TypeInfoCache.NamespaceReference))
+                ns = ns.Parent;
+
+              while (currentNamespace != null)
+              {
+                when (ns.Equals(currentNamespace))
+                  return true;
+
+                currentNamespace = currentNamespace.Parent;
+              }
+
+              false
+            }
+
+            def isInteresting(outerType : TypeBuilder, type : NC.TypeInfo) : bool
+            {
+              outerType.Equals(type) || type.DeclaringType?.Equals(outerType)
+            }
+
+            def toList(type)
+            {
+              def ret = SCG.List();
+              ret.Add(type);
+              ret
+            }
+
+            def types =
+              if (types.Exists(inCurrentNs))
+              {
+                def ret = SCG.List();
+                foreach (type when inCurrentNs(type) in types) ret.Add(type);
+                ret
+              }
+              else
+                types;
+
+            // Текущий тип (если он есть) и внешние типы (т.е. типы в которых он объявлен) имеют
+            // преимущество над другими типами.
+
+            when (currentType : object != null)
+            {
+              // Спискок внешних типов (включая текущий)
+              foreach (type when isInteresting(currentType, type) in types)
+                return toList(type);
+
+              // Ищем, по очереди, внешние типы среди найденных типов.
+              foreach (outerType in currentType.OuterTypes)
+                foreach (type when isInteresting(outerType, type) in types)
+                  return toList(type);
+            }
+
+            types
+          }
+
+          def nodeTypeInfos    = filterTypes(nodeTypeinfos);
+          def aliasesTypeInfos = filterTypes(aliasesTypeinfos);
+
+          // The symbols is resolved in the following cases:
+          // Only one symbols found through current scope or through aliases
+          // Exact hit
+          // Some symbols are found through current scope, take first.
+          // Otherwise, ambiguity.
+          match ((nodeTypeInfos.Count, aliasesTypeInfos.Count))
+          {
+            | (0, 0) =>
+              ReportLocatedError(loc, Manager.Solver.CurrentMessenger,
+                $<#$add_info `..$(idl; ".")'#>);
+              InternalType.Object
+            | (1, 0) with ti = nodeTypeInfos[0]
+            | (0, 1) with ti = aliasesTypeInfos[0]
+            | _ when exact_hit != null with ti = exact_hit
+            | (n, _) when n > 0 with ti = nodeTypeInfos[0] =>
+              if (ti.Equals (InternalType.Void_tc))
+                InternalType.Void
+              else if (ti.TyparmsCount == args.Length)
+                FixedType.Class (ti, args)
+              else
+              {
+                def find_nesting (nesting : NC.TypeInfo)
+                {
+                  if (nesting == null) null
+                  else if (ti.DeclaringType.Equals (nesting))
+                    currentType.NestingSubst (nesting).Apply (nesting.GetMemType ())
+                  else if (nesting.LookupMemberAvailable
+                        && nesting.LookupMember (ti.Name).Contains (ti))
+                  {
+                    currentType.NestingSubst(nesting)
+                      .Apply(nesting.SubtypingSubst(ti.DeclaringType)
+                      .Apply(ti.DeclaringType.GetMemType()).Fix())
+                  }
+                  else find_nesting (nesting.DeclaringType)
+                }
+                def nesting_fix = match (find_nesting(currentType))
+                  {
+                    | null => null
+                    | x => x.Fix ()
+                  };
+                match (nesting_fix)
+                {
+                  | null =>
+                  ReportLocatedError(loc, Manager.Solver.CurrentMessenger,
+                               "cannot determine nested type parameters for `"
+                               + $<#..$(idl; ".")', please use the fully qualified name#>);
+                  InternalType.Object
+
+                  | FixedType.Class (_, args') =>
+                  def args = args' + args;
+                  Util.cassert (args.Length == ti.TyparmsCount);
+                  FixedType.Class (ti, args)
+
+                  | _ => Util.ice ()
+                }
+              }
+            | _ =>
+              def messenger = Manager.Solver.CurrentMessenger;
+              if (messenger.NeedMessage)
+                surroundwith (related_messages)
+                {
+                  ReportLocatedError(loc, messenger, $<#type name `..$(idl; ".")' is ambiguous, it could be:#>);
+
+                  when (messenger.NeedMessage)
+                  {
+                    foreach (ti in nodeTypeInfos)
+                      Message.Hint(ti.Location.FromStart(), $"possible type: `$ti'");
+                    foreach (ti in aliasesTypeInfos)
+                      Message.Hint(ti.Location.FromStart(), $"possible type: `$ti'");
+                  }
+                }
+              else
+                messenger.MarkError();
+
+              InternalType.Object
+          }
+      }
+    }
+
+    poors_man_lookup_member (ti : NC.TypeInfo, name : string) : list [IMember]
+    {
+      def loop (acc = [name], ti = ti) {
+        if (ti.DeclaringType == null)
+          ti.FullName.Split(array['.'], System.StringSplitOptions.None).NToList () + acc
+        else loop (ti.Name :: acc, ti.DeclaringType)
+      }
+      match (Manager.NameTree.LookupExactType (loop ())) {
+        | Some (t) => [t]
+        | None => []
+      }
+    }
+
+
+    bind_nested_type(currentType : NC.TypeInfo, base_type : TypeVar, name : string, args : list[TypeVar], loc : Location) : TypeVar
+    {
+      match (base_type.Fix ())
+      {
+        | FixedType.Class (ti, args') =>
+          mutable seen_typeinfo = "";
+
+          def symbols =
+            if (ti.LookupMemberAvailable)
+              ti.LookupMember (name)
+            else
+              poors_man_lookup_member (ti, name);
+
+          def types = symbols.Filter (fun (m)
+            {
+              | m is NC.TypeInfo when currentType == null || m.CanAccess (currentType) =>
+                seen_typeinfo = "with this number of type parameters";
+                m.SourceTyparmsCount == args.Length
+              | _ => false
+            });
+
+          match (types)
+          {
+            | [m is NC.TypeInfo] => FixedType.Class (m, args' + args)
+            | [] =>
+              ReportLocatedError(loc, Manager.Solver.CurrentMessenger,
+                $"the type `$base_type' does not contain a nested type named `$name' $seen_typeinfo");
+              InternalType.Object
+
+            | l => Util.ice ($ "$l");
+          }
+        | t =>
+          ReportLocatedError(loc, Manager.Solver.CurrentMessenger, $"won't lookup nested types in $t");
+          InternalType.Object
+      }
+    }
+
+    /** Perform typing of Parsetree type to Typedtree type, looking up
+        type constructors in given global environment (with accessibility
+        information implied by given current TypeInfo) and type variables
+        in current instance.
+
+        If [check_parms] is true, then we check if type substituted for
+        a given type variable conforms to all of its constraints. It
+        should be true in general, but is false when we don't know the
+        subtyping relations yet (during scanning of global types).
+     */
+    public Bind(env : GlobalEnv, currentType : TypeBuilder, t : PExpr, allow_tyvars : bool, check_parms : bool) : TypeVar
+    {
+      def f(t)
+      {
+        t.ResetTypedObject();
+
+        def res = f2(t, false);
+
+        res.Location = t.Location;
+
+        if (res.ParsedObject == null) //(t.TypedObject == null)
+          res.SetParsedObject(t); //t.TypedObject = res;
+        else
+          t.SetTypedObject(res);
+
+        res
+      }
+      and f2 (t, allow_ref)
+      {
+        match (t)
+        {
+          | PExpr.ToComplete (_)
+          | PExpr.Member (_, Parsetree.Splicable.HalfId (_)) =>
+            Manager.CompleteTypeRef (t, currentType, env);
+            throw System.NotImplementedException ();
+
+          | <[ ref $t ]> when allow_ref => FixedType.Ref (f (t))
+          | <[ out $t ]> when allow_ref => FixedType.Out (f (t))
+          | <[ ref $_ ]>
+          | <[ out $_ ]> =>
+            Message.Error (t.Location, "nested ref/out type found");
+            InternalType.Void
+
+          | <[ array [$t] ]> with rank = 1
+          | <[ array .[$(rank : int)][$t] ]>
+          | <[ array [$(rank : int), $t]  ]> =>
+            FixedType.Array (f (t), rank : int)
+
+          | <[ $x -> $y ]> =>
+            def from = f(x);
+
+            def argsCount = match (from)
+            {
+              | FixedType.Void        => 0
+              | FixedType.Tuple(args) => args.Length
+              | _                 => 1
+            };
+
+            FixedType.Fun(from, argsCount, f(y))
+
+          | <[ @* (.. $([arg])) ]> =>
+            def elemType = f2(arg, allow_ref);
+            def typeInfo = elemType.TypeInfo;
+
+            if (typeInfo?.IsPrimitive)
+              elemType.MakePointerType()
+            else
+            {
+              ReportError(Manager.Solver.CurrentMessenger, "Expected a primitive type.");
+              elemType
+            }
+
+          | <[ @* (.. $args) ]> => FixedType.Tuple (NList.Map (args, fun (t) { f2 (t, allow_ref) }))
+          | <[ this ]> =>
+            if (currentType == null)
+            {
+              ReportError (Manager.Solver.CurrentMessenger, "`this' type is unavailable in global scope");
+              InternalType.Object
+            }
+            else currentType.GetMemType ()
+
+          | <[ @? ($t) ]> => f2 (<[ System.Nullable [$t] ]>, allow_ref)
+          | PExpr.Void => InternalType.Void
+          | PExpr.Indexer
+          | PExpr.GenericSpecifier
+          | PExpr.Member
+          | PExpr.Ref => type_class (t)
+          | PExpr.TypedType (body) => body
+          | PExpr.Wildcard =>
+            if (allow_tyvars)
+              Manager.Solver.FreshTypeVar ()
+            else
+            {
+              ReportError (Manager.Solver.CurrentMessenger, "type inference not allowed here");
+              InternalType.Object
+            }
+
+          | PExpr.Spliced =>
+            ReportError (Manager.Solver.CurrentMessenger, "splicing `$' construct occured in plain code outside of `<[ ]>' quotations or string.");
+            InternalType.Object
+
+          | PExpr.Array =>
+            ReportError (Manager.Solver.CurrentMessenger, $"array type must take form `array [T]' or `array [rank, T]' or `array.[rank][T]', not $t");
+            InternalType.Void
+
+          | PExpr.Ellipsis => Util.ice ("Type arguments list survived to typying.")
+          | x =>
+            ReportError (Manager.Solver.CurrentMessenger, $ "`$x' is not a legal type expression");
+            InternalType.Void
+        }
+      }
+      and type_class (tyexpr) : TypeVar
+      {
+        tyexpr.ResetTypedObject(); //tyexpr.TypedObject = null;
+
+        def res =
+          match (tyexpr)
+          {
+            | <[ $t [] ]> =>
+              ReportError (Manager.Solver.CurrentMessenger, $"$t[] is not a valid type, use just $t");
+              when (Manager.Solver.CurrentMessenger.NeedMessage)
+                Message.HintOnce ("if you had array type on mind, its syntax is `array [SomeType]'");
+              f (t)
+
+            | <[ $(PExpr.Ref(name) as t) ]> with args = []
+            | <[ $(PExpr.Ref(name) as t) [ .. $args ] ]>
+            | <[ $(PExpr.Ref(name) as t) . [ .. $args ] ]> =>
+              def type = bind_simple_named_type (env, currentType, name, [name.Id], args.Map (f), name.Location);
+              SetTypedObjects(t, type);
+              type
+
+            | <[ $t . [ .. $args ] ]>
+            | <[ $t [ .. $args ] ]>
+            | <[ $t ]> with args = [] =>
+              when (this.Manager.IsCompletionInProgress)
+              {
+                def findCompletionMark(t)
+                {
+                  | PExpr.ToComplete                             => t
+                  | PExpr.Member (_, Parsetree.Splicable.HalfId) => t
+                  | PExpr.Member (obj, _)                        => findCompletionMark(obj)
+                  | _                                            => null
+                }
+
+                def exprToComplate = findCompletionMark(t);
+
+                when (exprToComplate != null)
+                  return f2 (exprToComplate, false);
+              }
+
+              match (Util.QidOfExpr (t))
+              {
+                | Some ((idl, name)) =>
+                  def type = bind_simple_named_type(env, currentType, name, idl, args.Map(f), t.Location);
+                  SetTypedObjects(t, type);
+                  type
+
+                | None =>
+                  match (t)
+                  {
+                    | <[ $ns . $(fld : dyn) ]> =>
+                      bind_nested_type(currentType, f(ns), fld, args.Map (f), t.Location)
+                    | _ =>
+                      ReportLocatedError(t.Location, Manager.Solver.CurrentMessenger,
+                        $"$t is not a legal type expression");
+                      InternalType.Void
+                  }
+              }
+          };
+
+        def res2 = match (res.Fix ())
+        {
+          | FixedType.Class (ti, args) =>
+            Manager.MarkAsUsed (ti, t.Location, triggerObsolete);
+
+            def mekeSubst(ti : NC.TypeInfo) // Bug!!!
+            {
+              match (ti.GetTydecl())
+              {
+                | Typedtree.TypeDeclaration.Alias(null) => // not binded yet!
+                  match (ti)
+                  {
+                    | tb is TypeBuilder => tb.bind_types(); mekeSubst(ti)
+                    | _ => Util.ice("TypeDeclaration.Alias(null) can be only in TypeBuilder")
+                  }
+
+                | Typedtree.TypeDeclaration.Alias(t) =>
+                  def subst = ti.MakeSubst(args);
+                  subst.Apply (t)
+
+                | _ =>
+                  when (check_parms)
+                    _ = ti.MakeSubst (args);
+                  FixedType.Class (ti, args)
+              }
+            }
+
+            mekeSubst(ti)
+
+          | ty => ty
+        };
+
+        res2.Location = tyexpr.Location;
+
+        if (res2.ParsedObject == null) //(tyexpr.TypedObject == null)
+          res2.SetParsedObject(tyexpr); //tyexpr.TypedObject = res2;
+        else
+          tyexpr.SetTypedObject(res2);
+
+        res2
+      }
+
+      Util.locate(t.Location, f(t))
+    }
+
+    static SetTypedObjects(typeExpr : PExpr, node : NamespaceTree.Node) : void
+    {
+      match (typeExpr)
+      {
+        | <[ $expr . $member ]> =>
+          Namespace(typeExpr.Location, node).SetParsedObject(member);
+          when (node.Parent != null)
+            SetTypedObjects(expr, node.Parent);
+
+        | PExpr.Ref => Namespace(typeExpr.Location, node).SetParsedObject(typeExpr);
+        | _ => ()
+      }
+    }
+
+    static SetTypedObjects(typeExpr : PExpr, typeVar : TypeVar) : void
+    {
+      match (typeVar.Fix())
+      {
+        | FixedType.Class as type => SetTypedObjects(typeExpr, type);
+        | _ => ()
+      }
+    }
+
+    static SetTypedObjects(typeExpr : PExpr, type : FixedType.Class) : void
+    {
+      def ti = type.TypeInfo;
+
+      match (typeExpr)
+      {
+        | <[ $expr . $member ]> =>
+          type.SetParsedObject(member);
+          if (ti.DeclaringType == null)
+            when (ti.NamespaceNode.Parent != null)
+              SetTypedObjects(expr, ti.NamespaceNode.Parent);
+          else
+            SetTypedObjects(expr, ti.DeclaringType.GetMemType()); // FIXME: we need calculate applied DeclaringType
+
+        | PExpr.Ref => type.SetParsedObject(typeExpr);
+        | _ => ()
+      }
+    }
+
+    public AddTyparms (env : GlobalEnv,
+                       tp : TypePparms,
+                       currentType : TypeBuilder,
+                       check_parms : bool) : StaticTypeVarContainer
+    {
+      when (tp.IsCopyOfExisting)
+        Nemerle.Imperative.Return (StaticTypeVarContainer.Copy(this, tp.ExistingTyvars));
+
+      def loop (tv : Splicable, acc) {
+        def (map, the_list) = acc;
+        def name = tv.GetName();
+        def tv_obj = StaticTypeVar (Manager, name.Id);
+        when (map.Contains (name)) {
+          Message.Error ($ "a type variable named `$name' is already in the scope");
+          Message.Hint ("you can either rename the new variable, or use the old one and remove the new one");
+        }
+        (map.Replace (name, tv_obj), tv_obj :: the_list)
+      }
+      def (m, l) = NList.FoldLeft (tp.tyvars, (this.tyvars, []), loop);
+      def tyParams = l.Rev();
+      def tenv = TypeVarEnv (Manager, m);
+      tenv.triggerObsolete = this.triggerObsolete;
+
+      def constraints = Hashtable ();
+
+      mutable to_check = [];
+
+      // bind constraints to what they really are
+      foreach (c in tp.constraints)
+      {
+        match (m.Find (c.tyvar.GetName()))
+        {
+          | Some (tv) =>
+            def     cons    = constraints.GetValueOrDefault(tv.id, (GenericParameterAttributes.NoSpecialConstraint, []));
+            mutable special = Pair.First(cons);
+            mutable subtype = Pair.Second(cons);
+
+            match (c.ty)
+            {
+              | <[ @class ]>  when c.IsSpecial => special |= GenericParameterAttributes.ReferenceTypeConstraint;
+              | <[ @struct ]> when c.IsSpecial =>
+                special |= GenericParameterAttributes.NotNullableValueTypeConstraint;
+                special |= GenericParameterAttributes.DefaultConstructorConstraint;
+                def ty = tenv.BindFixedType(env, currentType, <[ System.ValueType ]>, check_parms = false);
+                subtype ::= ty;
+              | <[ @new ]>    when c.IsSpecial => special |= GenericParameterAttributes.DefaultConstructorConstraint;
+              | <[ @+ ]>      when c.IsSpecial => special |= GenericParameterAttributes.Covariant;
+              | <[ @- ]>      when c.IsSpecial => special |= GenericParameterAttributes.Contravariant;
+              | <[ @enum ]>   when c.IsSpecial with (cty = <[ System.Enum ]>, isEnum = true)
+              | cty with isEnum = false =>
+                def ty = tenv.BindFixedType(env, currentType, cty, check_parms = false);
+                def isBadConstraint =
+                  match (ty)
+                  {
+                    | _ when isEnum
+                    // allow interfaces, non-sealed classes and type parameters
+                    | FixedType.Class(ti, _) when ti.IsInterface || (!ti.IsValueType && !ti.IsSealed)
+                    | FixedType.StaticTypeVarRef => false
+                    | _ => true
+                  }
+                when (check_parms && !isBadConstraint)
+                  to_check ::= ty;
+                if (subtype.Contains(ty))
+                  Message.Error($"constraint `$ty' is already declared for $tv");
+                else if (isBadConstraint)
+                  Message.Error($"`$(c.ty)' is not a valid constraint. A type used as a constraint must be an interface, a non-sealed class or a type parameter");
+                else
+                  subtype = ty :: subtype;
+            }
+            constraints [tv.id] = (special, subtype);
+
+          | None =>
+            Message.Error($"unbound type variable `$(c.tyvar)' in constraint")
+        }
+      }
+
+      mutable cyclicConstraints = [];
+
+      def tryDetectCyclicConstraints ()
+      {
+        def graph = Hashtable();
+
+        foreach (tv : StaticTypeVar in tyParams)
+          graph[tv.id] = false;  // reset 'visited' flags
+
+        def tryFindCyclicConstraint (tyRef)
+        {
+          def scan (tyRef, path = []) // travers constraint dependency path
+          {
+            mutable visited;
+            if (graph.TryGetValue (tyRef.id, out visited))
+            { // tyRef is type parameter...
+              if (visited)
+                tyRef.Name :: path // and already visited
+              else
+              { // first visit
+                mutable constraint;
+                if (constraints.TryGetValue(tyRef.id, out constraint))
+                { // type parameter have constraints... foreach constraint...
+                  graph[tyRef.id] = true; // mark type parameter as visited
+                  foreach (StaticTypeVarRef (subTyRef) in constraint[1])
+                  {
+                    def res = scan(subTyRef, path);
+                    unless (res.IsEmpty) // if we find cicle... ignore other...
+                      Nemerle.Imperative.Return (tyRef.Name :: res);
+                  }
+
+                  if (path.IsEmpty)
+                  {
+                    graph[tyRef.id] = false;
+                    []
+                  }
+                  else tyRef.Name :: path
+                }
+                else path
+              }
+            }
+            else path
+          }
+
+          def path = scan (tyRef);
+          unless (path.IsEmpty)
+          { // We have cycle! Extract information about it...
+            def info = path.ToString(" => ");
+            def tyParam = path.Head;
+            cyclicConstraints ::= tyRef;
+            // try find location of type parameter
+            def loc = match (tp.tyvars.Find(x => x.ToString() == tyParam))
+            {
+              | Some(name) => name.Location
+              | None       => Location.Default
+            };
+            Message.Error(loc, $"A constraint of '$tyParam' type parameter is cyclic ($info)");
+          }
+        }
+
+        foreach (tv : StaticTypeVar in tyParams)
+          unless (graph[tv.id])
+            tryFindCyclicConstraint (tv);
+      }
+
+      unless (tyParams.IsEmpty)
+      {
+        tryDetectCyclicConstraints ();
+        foreach(tv in cyclicConstraints)
+          _ = constraints.Remove(tv.id);
+      }
+
+      StaticTypeVarContainer.Parsed(tenv, tyParams, to_check, constraints)
+    }
+  }
+}

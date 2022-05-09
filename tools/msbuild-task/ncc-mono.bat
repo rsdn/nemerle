@@ -1,1 +1,0 @@
-@"mono.exe" %MONO_OPTIONS% "%~dp0ncc.exe" %*
