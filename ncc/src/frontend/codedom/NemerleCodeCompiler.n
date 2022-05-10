@@ -1,0 +1,232 @@
+//
+// NemerleCodeCompiler.n
+//
+// Author:
+//  Atsushi Enomoto <atsushi@ximian.com>
+//  Kamil Skalski <nazgul@nemerle.org>
+//
+// Original: CSharpCodeCompiler.cs
+// Original Authors:
+//  Sean Kasun (seank@users.sf.net)
+//  Gonzalo Paniagua Javier (gonzalo@ximian.com)
+//
+// Copyright (c) Novell, Inc. (http://www.novell.com)
+//
+
+//
+// Permission is hereby granted, free of charge, to any person obtaining
+// a copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to
+// permit persons to whom the Software is furnished to do so, subject to
+// the following conditions:
+// 
+// The above copyright notice and this permission notice shall be
+// included in all copies or substantial portions of the Software.
+// 
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Utility;
+using System.CodeDom.Compiler;
+using System.CodeDom;
+using System.Collections.Specialized;
+using System.Collections;
+using System.Configuration;
+using System.Diagnostics;
+using System.IO;
+using System.Text.RegularExpressions;
+using System.Text;
+using System;
+
+using SCG = System.Collections.Generic;
+
+
+namespace Nemerle.Compiler
+{
+
+  public class NemerleCodeCompiler : NemerleCodeGenerator, ICodeCompiler
+  {
+    public this ()  {  }
+
+    public CompileAssemblyFromDom (options : CompilerParameters,
+                                   e : CodeCompileUnit) : CompilerResults
+    {
+      CompileAssemblyFromDomBatch (options, array [e]);
+    }
+    
+    public CompileAssemblyFromDomBatch (options : CompilerParameters,
+                                        ea : array [CodeCompileUnit]) : CompilerResults
+    {
+      def fileNames = array (ea.Length);
+      mutable i = 0;
+      def options = if (options == null) CompilerParameters() else options;
+      
+      def assemblies = options.ReferencedAssemblies;
+
+      foreach (e : CodeCompileUnit in ea)
+      {
+        fileNames[i] = GetTempFileNameWithExtension(options.TempFiles, i + ".n");
+        using (f = FileStream(fileNames[i], FileMode.OpenOrCreate))
+        {
+          def s = StreamWriter(f, Encoding.UTF8, 4096, true);
+          when (e.ReferencedAssemblies != null)
+            foreach (str when !assemblies.Contains(str) in e.ReferencedAssemblies)
+              ignore (assemblies.Add(str));
+
+          (this : ICodeGenerator).GenerateCodeFromCompileUnit(e, s, CodeGeneratorOptions());
+            
+          s.Close();
+        }
+        ++i;
+      }
+      CompileAssemblyFromFileBatch(options, fileNames);
+    }
+    
+    public CompileAssemblyFromFile (options : CompilerParameters,
+                                    fileName : string) : CompilerResults
+    {
+      CompileAssemblyFromFileBatch (options, array [fileName]);
+    }
+
+    [Requires (options != null && fileNames != null)]
+    public CompileAssemblyFromFileBatch (options : CompilerParameters,
+                                         fileNames : array [string]) : CompilerResults
+    {
+      def results = CompilerResults (options.TempFiles);
+      mutable succeeded = false;
+      mutable failed = false;
+      
+      def err_event (is_warning, loc : Location, msg) {
+        def loc = if (loc == Location.Default) LocationStack.Top() else loc;
+        def error = CompilerError ();
+        error.FileName = loc.Source.File.FullName;
+        error.Line = loc.Line;
+        error.Column = loc.Column;
+        error.IsWarning = is_warning;
+        error.ErrorText = msg;
+        ignore (results.Errors.Add (error));
+      }
+
+      def cOptions = CompilationOptions();
+      def man = ManagerClass (cOptions);
+
+      man.ErrorOccured += fun (loc : Location, msg) {
+        err_event (false, loc, msg);
+        failed = true;
+      }
+      man.WarningOccured += fun (loc : Location, msg) {
+        err_event (true, loc, msg);
+      }
+
+      def opts = cOptions.GetCommonOptions () + [
+          Getopt.CliOption.NonOption (name = "",
+                  help = "Specify file to compile",
+                  handler = s => cOptions.Sources.Add(FileUtils.GetSource(s)))
+          ];
+
+      unless (options.CompilerOptions == null)
+          Getopt.Parse (Message.Error, opts,
+              NList.FromArray (Regex.Split (options.CompilerOptions, @"\s")).Filter (fun (t) {t.Length > 0}));
+
+      def fullOutput = System.IO.StringWriter ();
+      man.InitOutput (fullOutput);
+      cOptions.ProgressBar = false;
+      cOptions.IgnoreConfusion = true;
+      cOptions.TargetIsLibrary = !options.GenerateExecutable;
+      cOptions.EmitDebug = cOptions.EmitDebug || options.IncludeDebugInformation;
+
+      when (options.OutputAssembly == null)
+        options.OutputAssembly = GetTempFileNameWithExtension (options.TempFiles, "dll");
+      cOptions.OutputFileName = options.OutputAssembly;
+
+      when (options.ReferencedAssemblies != null)
+        foreach (import in options.ReferencedAssemblies)
+          cOptions.References.Add(import);
+
+      if (fileNames.Length < 1)
+        Message.Error ("need at least one file to compile");
+      else
+      {
+        foreach(fileName in fileNames)
+          cOptions.Sources.Add(FileUtils.GetSource(fileName));
+
+        def compilerThreadProc()
+        {
+          try
+          {
+            man.Run();
+            succeeded = !failed;
+          }
+          catch
+          {
+            | _e is System.IO.FileNotFoundException => Message.Error (_e.Message)
+            | _e is Recovery => succeeded = false;
+    //        | _e : System.ArgumentException =>  Message.Error (_e.Message);
+            | _e is MatchFailureException =>   Message.Error (_e.Message);
+            | _e is ICE =>  Message.Error (_e.Message);
+            | _e is AssertionException =>  Message.Error (_e.Message);
+            | _e is AssemblyFindException =>  Message.Error (_e.Message);
+            | _e is System.Exception =>  Message.Error (_e.Message);
+          }
+        };
+        
+        def stack_kilos = 20 * 1024 * if (System.IntPtr.Size == 8) 2 else 1;
+        def thread = System.Threading.Thread (compilerThreadProc, stack_kilos * 1024);
+        thread.Name = "Main compiler thread";
+        thread.Start ();
+        thread.Join ();              
+      }
+
+      if (succeeded)
+      {
+        results.NativeCompilerReturnValue = 0;
+        results.PathToAssembly = options.OutputAssembly;
+      }
+      else {
+        results.NativeCompilerReturnValue = 1;
+        results.CompiledAssembly = null;
+      }
+
+      results;
+    }
+
+    public CompileAssemblyFromSource (options : CompilerParameters,
+                                      source : string) : CompilerResults
+    {
+      CompileAssemblyFromSourceBatch (options, array [source]);
+    }
+
+    public CompileAssemblyFromSourceBatch (options : CompilerParameters,
+                                           sources : array [string]) : CompilerResults
+    {
+      def fileNames = array (sources.Length);
+      mutable i = 0;
+      foreach (source in sources) {
+        fileNames [i] = GetTempFileNameWithExtension (
+          options.TempFiles, i.ToString () + ".n");
+        using (f = FileStream (fileNames [i], FileMode.OpenOrCreate)) {
+          def s = StreamWriter (f, Encoding.UTF8, 4096, true);
+          s.Write (source);
+          s.Close ();
+        }
+        ++i;
+      }
+      CompileAssemblyFromFileBatch (options, fileNames);
+    }
+
+    static GetTempFileNameWithExtension (temp_files : TempFileCollection,
+                                         extension : string) : string
+    {
+      temp_files.AddExtension (extension);
+    }
+  }
+}

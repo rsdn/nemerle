@@ -100,7 +100,7 @@ namespace Nemerle.Tools.MSBuildTask
 #if MONO
                 return Environment.OSVersion.VersionString.Contains("Windows") ? "ncc.bat" : "ncc";
 #else
-                return "ncc.exe";
+                return "ncc";
 #endif
             }
         }
@@ -115,7 +115,7 @@ namespace Nemerle.Tools.MSBuildTask
                     return path;
             }
 
-            var my_file = new Uri(typeof(Ncc).Assembly.CodeBase).LocalPath;
+            var my_file = new Uri(typeof(Ncc).Assembly.Location).LocalPath;
             var ncc_file = Path.Combine(Path.GetDirectoryName(my_file), toolName);
 
             if (File.Exists(ncc_file))
@@ -127,15 +127,15 @@ namespace Nemerle.Tools.MSBuildTask
 
             // Query the shell association
             //
-            var regKeyName = @"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\" + toolName;
-            var regKey = Registry.LocalMachine.OpenSubKey(regKeyName);
+            // var regKeyName = @"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\" + toolName;
+            // var regKey = Registry.LocalMachine.OpenSubKey(regKeyName);
 
-            if (null != regKey)
-            {
-                // The tool is registered with the Shell API.
-                //
-                return (string)regKey.GetValue(null);
-            }
+            // if (null != regKey)
+            // {
+            //     // The tool is registered with the Shell API.
+            //     //
+            //     return (string)regKey.GetValue(null);
+            // }
 
             // Return the tool name itself.
             // The environment will search common paths for the tool.

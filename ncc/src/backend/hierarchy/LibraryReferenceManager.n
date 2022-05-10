@@ -1,0 +1,534 @@
+﻿using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
+using Nemerle.IO;
+using Nemerle.Late;
+using Nemerle.Utility;
+using System;
+using System.IO;
+using System.Reflection;
+
+using DN = dnlib.DotNet;
+using PT = Nemerle.Compiler.Parsetree;
+using SR = System.Reflection;
+using SCG = System.Collections.Generic;
+using NC = Nemerle.Compiler;
+
+namespace Nemerle.Compiler
+{
+  /// ReferenceManager for the referenced libraries
+  [ManagerAccess]
+  public class LibraryReferenceManager
+  {
+    public   NameTree         : NamespaceTree;
+    internal Context          : DN.ModuleContext;
+    internal AssemblyResolver : DN.AssemblyResolver;
+    public   References       : SCG.IReadOnlyList[LibraryReference] { get { _referencedAssemblies } }
+
+    // a little hack to prevent AddBuildins() calling in ExternalTypeInfo
+    internal mutable add_buildins : bool = false;
+    internal mutable CorlibReference : DN.AssemblyRef;
+    internal mutable CorlibRuntimeVersion : string;
+
+    private _unresolvedTypeReferences : SCG.HashSet[string]                            = SCG.HashSet();
+    private _referencedAssemblies     : SCG.List[LibraryReference]                     = SCG.List();
+    private _referencedModules        : SCG.Dictionary[DN.ModuleDef, LibraryReference] = SCG.Dictionary();
+    private _loaded_macro_assemblies  : Hashtable[string, SR.Assembly]                 = Hashtable(20);
+    /// List of directories we look for assemblies in.
+    private _lib_path : list[string] = [];
+    /// the non-null values are not-yet processed references, which still need to load contents (types and macros)
+    private namespace_nodes : Hashtable[string, NamespaceTree.Node] = Hashtable(300);
+    private mutable _construct_right_away : list[NamespaceTree.Node] = [];
+    // extension method name -> list of extension methods
+    private _extension_methods : Hashtable[string, SCG.List[IMethod]] = Hashtable();
+
+    // -- CONSTRUCTORS -----------------------------------------------------
+
+    /// constructor. Always load the Framework core library.
+    public this (man : ManagerClass, [NotNull] lib_paths : Seq[string])
+    {
+      _lib_path        = lib_paths.NToList();
+      Context          = DN.ModuleDef.CreateModuleContext();
+      AssemblyResolver = Context.AssemblyResolver :> DN.AssemblyResolver;
+      AssemblyResolver.FindExactMatch = false;
+      AssemblyResolver.UseGAC = false;
+      foreach (path in lib_paths)
+        AssemblyResolver.PreSearchPaths.Add(path);
+      this.NameTree    = man.NameTree;
+      Manager          = man;
+    }
+
+
+    // -- PUBLIC METHODS ---------------------------------------------------
+
+    public AddLibrary(assemblyPath : string, isUserReference : bool) : void
+    {
+      AddLibrary(LibraryReference(this, assemblyPath, isUserReference));
+    }
+
+    internal AddLibrary(library : LibraryReference) : void
+    {
+      _referencedModules.Add(library.ModuleDef, library);
+      _referencedAssemblies.Add(library);
+    }
+
+    public GetExtensionMethods(name : string, env : GlobalEnv) : SCG.IEnumerable[IMethod]
+    {
+      def methods = _extension_methods.GetValueOrDefault(name);
+
+      when (methods != null)
+        foreach (method in methods.ToArray())
+          when (env.IsOpenNamespace(method.DeclaringType.NamespaceNode.Parent))
+            yield method;
+    }
+
+    public GetExtensionMethodsForCompletion(pattern : string, env : GlobalEnv) : SCG.IEnumerable[IMethod]
+    {
+      foreach ((name, methods) in _extension_methods.KeyValuePairs)
+        when (Completion.MatchName(name, pattern))
+          foreach (method when env.IsOpenNamespace(method.DeclaringType.NamespaceNode.Parent) in methods)
+            yield method;
+    }
+
+    public GetExtensionMethodsForCompletion(pattern : string) : SCG.IEnumerable[IMethod]
+    {
+      foreach ((name, methods) in _extension_methods.KeyValuePairs)
+        when (Completion.MatchName(name, pattern))
+          foreach (method in methods)
+            yield method;
+    }
+
+    // TODO: Move this method away of this class!
+    public AddExtensionMethod (m : IMethod) : void
+    {
+      def methods = _extension_methods.GetValueOrDefault (m.Name);
+      if (methods == null)
+      {
+        def methods = SCG.List();
+        methods.Add(m);
+        _extension_methods [m.Name] = methods;
+      }
+      else methods.Add(m);
+
+      match (m)
+      {
+        | m is MethodBuilder      => m.IsExtension = true;
+        | m is ExternalMethodInfo => m.IsExtension = true;
+        | m is BuiltinMethod      => m.IsExtension = true;
+        | _ => ();
+      }
+    }
+
+    /// Remove assembly file name from URL returned by Assembly.CodeBase.
+    public static DirectoryOfCodebase (mutable path : string) : string
+    {
+      path = Path.GetDirectoryName (path);
+
+      // hack for mono returning location in the GAC
+      def mono_gac = path.IndexOf ("mono/gac");
+      path =
+        if (mono_gac != -1)
+        {
+          if (path.LastIndexOf ("Nemerle") > mono_gac)
+            path.Substring (0, mono_gac + 5) + "nemerle/"
+          else if (path.LastIndexOf ("/2.0.") > mono_gac)
+            path.Substring (0, mono_gac + 5) + "2.0/"
+          else
+            path.Substring (0, mono_gac + 5) + "1.0/"
+        }
+        else path;
+
+      path
+    }
+
+    protected virtual assemblyLoad (name : string) : SR.Assembly { SR.Assembly.Load (name) }
+    protected virtual assemblyLoad (name : SR.AssemblyName) : SR.Assembly { SR.Assembly.Load (name) }
+
+    protected virtual assemblyLoadFrom(path : string) : SR.Assembly
+    {
+      try { SR.Assembly.LoadFrom(path) }
+      catch // Somebody gave us a 32-bit reference on 64-bit system or vice-versa.
+      { | _ is System.BadImageFormatException =>
+          assemblyLoad (SR.AssemblyName.GetAssemblyName (path).FullName);
+      }
+    }
+
+    public virtual getAssemblyLocation (assembly : SR.Assembly) : string
+    {
+      System.Uri(assembly.CodeBase).LocalPath
+    }
+
+    public virtual getAssemblyLocation(assembly : SR.AssemblyName) : string
+    {
+      System.Uri(assembly.CodeBase).LocalPath
+    }
+
+    /* -- PRIVATE METHODS -------------------------------------------------- */
+
+    private load_macro(lib : SR.Assembly, macro_name : string) : void
+    {
+      def macro_type = lib.GetType (macro_name.Replace ("&", "\\&"));
+      if (macro_type == null)
+        Message.Warning ($"failed to lookup macro `$(macro_name)' in assembly $(lib.FullName)");
+      else
+      {
+        def ctor = macro_type.GetConstructor (System.Type.EmptyTypes);
+        if (ctor == null)
+          Message.Warning ($"failed to lookup constructor in macro `$macro_name' from assembly $(lib.FullName)");
+        else match (ctor.Invoke(null))
+        {
+          | null => Message.Warning ($"failed to construct instance of macro `$macro_name' from assembly $(lib.FullName)");
+          | casted_macro is IMacro =>
+            def ns = casted_macro.GetNamespace ();
+            _ = GetNamespaceNode(ns);
+
+            Manager.MacrosRegistry.RegisterMacro (casted_macro);
+
+          | obj =>
+            def type = obj.GetType().GetInterface("Nemerle.Compiler.IMacro");
+
+            if (type == null)
+              Message.Error($"instance of macro `$macro_name' from assembly $(lib.FullName) does not implement IMacro interface");
+            else
+            {
+              def loadedType = typeof(Nemerle.Compiler.IMacro);
+              assert(!type.Equals(loadedType));
+              def getAssemblyPath(type : Type) : string
+              {
+                Uri(type.Assembly.CodeBase).LocalPath
+              }
+
+              Message.Error($"The macro `$macro_name' implement the IMacro interface from '$(getAssemblyPath(type))' but the compiler use this interface from '$(getAssemblyPath(loadedType))'.");
+            }
+        }
+      }
+    }
+
+    internal LoadLibrariesContents() : void
+    {
+      foreach (assembly in _referencedAssemblies)
+        LoadTypesFrom(assembly);
+    }
+
+    public LoadPluginsFrom(name : string, strongPart : string = null, loadMacros : bool = true, loadParsers : bool = true) : void
+    {
+      mutable assembly = LookupAssemblyForExecution(name, strongPart);
+
+      when (assembly == null && strongPart != null)
+        assembly = assemblyLoad (name + strongPart);
+      if (assembly == null)
+        Message.Error ("cannot load assembly with macros `" + name + "'")
+      else
+      {
+        when(loadMacros)
+          LoadMacrosFrom(assembly);
+        when(loadParsers)
+          LoadParsersFrom(assembly);
+      }
+    }
+
+    private LookupAssemblyForExecution(name : string, strongPart : string) : SR.Assembly
+    {
+      def assembly_by_name(path : string)
+      {
+        try
+        {
+          def ext  = Path.GetExtension(path);
+          def path = match (ext.ToLower())
+                     {
+                       | ".dll" | ".exe" => path
+                       | _ => path + ".dll"
+                     };
+
+          if (File.Exists(path))
+            assemblyLoadFrom(path)
+          else
+            null
+        }
+        catch
+        {
+          | _ is FileNotFoundException => null
+          | _ is System.ArgumentException => null
+        }
+      }
+
+      match (name)
+      {
+        | x when x.IndexOf('/') != -1 || x.IndexOf('\\') != -1 => assembly_by_name(x)
+        | x when x.IndexOf (',') != -1 =>
+          try { assemblyLoad (x) }
+          catch
+          { | _ is FileNotFoundException => null
+            | _ is System.BadImageFormatException =>
+              Message.Error("passed strong name is invalid or assembly was not found");
+              null
+          }
+
+        | _ =>
+          def lookup(libs)
+          {
+            | lib :: libs =>
+              def ret = assembly_by_name(Path.Combine(lib, name));
+              if (ret == null) lookup(libs) else ret
+
+            | _ => null
+          }
+
+          def assembly = lookup(_lib_path);
+
+          if (assembly == null)
+          {
+            System.Reflection.Assembly.Load(name + strongPart)
+          }
+          else
+            assembly
+      }
+    }
+
+    private LoadMacrosFrom(assembly : SR.Assembly) : void
+    {
+      assert(assembly != null);
+
+      when (_loaded_macro_assemblies.ContainsKey(assembly.FullName))
+        return;
+
+      _loaded_macro_assemblies.Add(assembly.FullName, assembly);
+
+      def assemblyAttributes = assembly.GetCustomAttributes(false);
+      def macroDefs = assemblyAttributes.Filter(t => t.GetType().FullName == "Nemerle.Internal.ContainsMacroAttribute");
+      def operDefs  = assemblyAttributes.Filter(t => t.GetType().FullName == "Nemerle.Internal.OperatorAttribute");
+
+      try
+      {
+        foreach (definition in macroDefs)
+          load_macro(assembly, late(definition.Name) :> string);
+
+        foreach (definition in operDefs)
+        {
+          def node = NameTree.ExactPath(NString.Split(late(definition.Env) :> string, '.'));
+          def od = OperatorDefinition(
+            node,
+            late(definition.Name) :> string,
+            late(definition.Left) :> int,
+            late(definition.Right) :> int,
+            late(definition.IsUnary) :> bool);
+          Manager.MacrosRegistry.AddOperatorDefinition(od);
+        }
+      }
+      catch
+      {
+        | e is System.TypeLoadException =>
+          Message.Error($"cannot load types from macroassembly `$(assembly.FullName)' ($(getAssemblyLocation(assembly))): $(e.Message)")
+      }
+    }
+
+    public LoadParsersFrom(assembly : SR.Assembly) : void
+    {
+      assert(assembly != null);
+
+      def assemblyAttributes = assembly.GetCustomAttributes(false);
+      def parserDefs = assemblyAttributes.Filter(t => t.GetType().FullName == "Nemerle.Internal.RegisterParserAttribute");
+
+      try
+      {
+        foreach(definition in parserDefs)
+        {
+          def parserTypeName = late(definition.Name) :> string;
+          def fileExtension  = late(definition.Extension) :> string;
+          match(assembly.GetType(parserTypeName))
+          {
+            | null       => Message.Warning($"failed to lookup parser `$parserTypeName' in assembly $(assembly.FullName)");
+            | parserType => Manager.Parser.Register(parserType, fileExtension);
+          }
+        }
+      }
+      catch
+      {
+        | e is System.TypeLoadException =>
+        Message.Error($"cannot load parsers from assembly `$(assembly.FullName)' ($(getAssemblyLocation(assembly))): $(e.Message)")
+      }
+    }
+
+    /// Remove extension methods defined in code (not external).
+    public RemoveInternalExtensionMethods() : void
+    {
+      foreach ((name, lst) when lst.Exists(_ is MethodBuilder) in _extension_methods.KeyValuePairs)
+      {
+        _ = lst.RemoveAll(_ is MethodBuilder);
+
+        when (lst.Count == 0)
+          _ = _extension_methods.Remove (name);
+      }
+    }
+
+
+    // -- TYPE CACHE -----
+
+    internal LoadExtensions() : void
+    {
+      foreach (n in _construct_right_away)
+        _ = n.LookupValue();
+      _construct_right_away = [];
+    }
+
+    public static IsExtension(attrsProvider : DN.IHasCustomAttribute) : bool
+    {
+      foreach (a in attrsProvider.CustomAttributes)
+      {
+        def typeName = a.TypeFullName;
+        when (typeName == "Nemerle.Internal.ExtensionAttribute" || typeName == "System.Runtime.CompilerServices.ExtensionAttribute")
+          return true;
+      }
+      false
+    }
+
+    private LoadTypesFrom(lib : LibraryReference) : void
+    {
+      def assembly = lib.ModuleDef;
+
+      try
+      {
+        def types = if (lib.IsFriend)
+          assembly.GetTypes().FilterToArray(t => t.IsPublic || t.IsNotPublic || t.IsNestedPublic ||t.IsNestedFamilyOrAssembly || t.IsNestedAssembly)
+        else
+          assembly.GetTypes().FilterToArray(t => t.IsPublic || t.IsNestedPublic);
+
+        foreach (t in types)
+        {
+  //        Message.Debug (name);
+          def e = ExternalType(t, lib, null);
+
+          def (mainnode, _) = framework_nesting (t);
+
+          when (IsExtension (t))
+            _construct_right_away ::= mainnode;
+
+          def tinfo_cache =
+            // check if we have met such type before
+            match (mainnode.Value)
+            {
+              | NotLoaded(x)      => NamespaceTree.TypeInfoCache.NotLoadedList([e, x]);
+              | NotLoadedList(xs) => NamespaceTree.TypeInfoCache.NotLoadedList(e :: xs);
+              | _                 => NamespaceTree.TypeInfoCache.NotLoaded(e);
+            };
+
+          // assign wrappers for future loading of typecons
+          mainnode.Value = tinfo_cache;
+        }
+      }
+      catch { | e => Message.Error(lib.Location, $"Can't load types from '$assembly': $(e.Message)"); }
+    }
+
+    internal static CacheTypeInfo(t : DN.TypeDef, tc : NC.TypeInfo, node : NamespaceTree.Node) : void
+    {
+      match (node.Value)
+      {
+        | NamespaceTree.TypeInfoCache.NotLoaded(e) =>
+          e.tycon = tc;
+          assert(e.SystemType.Equals(t));
+
+        | NamespaceTree.TypeInfoCache.NotLoadedList (es) =>
+          foreach (e in es)
+            when (e.SystemType.Equals (t))
+            {
+              e.tycon = tc;
+              break;
+            }
+
+        // this happens when we load external protected type in GetInternalType
+        // we need to cache to prevent looping
+        | NamespaceTree.TypeInfoCache.No =>
+          node.Value = NamespaceTree.TypeInfoCache.Cached (tc)
+
+        | NamespaceReference | MacroCall =>
+          Util.ice ("wanted to cache in wrong place - value " + t.AssemblyQualifiedName)
+
+        | Cached | CachedAmbiguous =>
+          Util.ice ("wanted to cache cached value " + t.AssemblyQualifiedName)
+      }
+    }
+
+    private GetNamespaceNode(namespc : string) : NamespaceTree.Node
+    {
+      mutable nd;
+      unless (namespace_nodes.TryGetValue(namespc, out nd))
+      {
+        nd = NameTree.ExactPath (NString.Split (namespc, array ['.']));
+        mutable assigned = nd;
+        while (assigned != null)
+        {
+          when (assigned.Value is NamespaceTree.TypeInfoCache.No)
+            assigned.Value = NamespaceTree.TypeInfoCache.NamespaceReference ();
+
+          assigned = assigned.Parent;
+        }
+
+        namespace_nodes.Add (namespc, nd);
+      }
+      nd
+    }
+
+    internal framework_nesting(t : DN.ITypeDefOrRef) : NamespaceTree.Node * int
+    {
+      def declaringType = t.DeclaringType;
+      def declaringNode =
+        if (declaringType != null)
+          framework_nesting(declaringType)[0]
+        else
+          GetNamespaceNode((t.Namespace : string) ?? "");
+
+      def (name, paramCount) = Util.ParseGenericTypeName(t.Name);
+      (declaringNode.Path([name]), paramCount)
+    }
+
+    internal TypeInfoOfType(framework_type : DN.ITypeDefOrRef) : TypeInfo
+    {
+      def getOwnerLibrary(t : DN.ITypeDefOrRef)
+      {
+        def moduleDef = t.Module;
+        mutable library;
+        unless (_referencedModules.TryGetValue(moduleDef, out library))
+        {
+          library = LibraryReference(this, moduleDef, false);
+          AddLibrary(library);
+        }
+        library
+      }
+
+      def unwrapTypeSpec(t : DN.ITypeDefOrRef)
+      {
+        | DN.TypeSpec(TypeSig = DN.TypeDefOrRefSig() as sig)
+        | DN.TypeSpec(TypeSig = DN.GenericInstSig(GenericType = sig)) => unwrapTypeSpec(sig.TypeDefOrRef)
+        | _ => t
+      }
+
+      def typeDefOrRef       = unwrapTypeSpec(framework_type);
+      def (node, paramCount) = framework_nesting(typeDefOrRef);
+      match (node.LookupType([], paramCount))
+      {
+        | Some (tc) => tc // TODO: check definition assembly
+        | None =>
+          // protected external types are not fetched automatically from external assembly
+          // so sometimes we must load them by hand
+          def typeDef =
+            match (typeDefOrRef)
+            {
+              | DN.TypeDef as typeDef => typeDef
+              | DN.TypeRef as typeRef => typeRef.Resolve()
+              | _ => Util.ice($"Unable to resolve type definition from type reference '$framework_type'")
+            };
+
+          if (typeDef != null)
+            getOwnerLibrary(typeDef).GetInternalType(typeDef, node)
+          else
+          {
+            def typeFullName = framework_type.AssemblyQualifiedName;
+            when (_unresolvedTypeReferences.Add(typeFullName))
+              Message.Warning(getOwnerLibrary(framework_type).Location, $"Unable to resolve type '$(typeFullName)'");
+            InternalType.Object_tc
+          }
+      }
+    }
+  }
+} /* namespace */

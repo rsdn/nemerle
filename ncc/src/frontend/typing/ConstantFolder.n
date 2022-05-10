@@ -1,0 +1,732 @@
+/*
+ * Copyright (c) 2004-2008 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Collections;
+using Nemerle.Utility;
+
+using Nemerle.Compiler.Parsetree;
+
+using TT = Nemerle.Compiler.Typedtree;
+
+namespace Nemerle.Compiler
+{
+  // this module is stateless
+  public module ConstantFolder
+  {
+    private known_operators : Hashtable[string, object] = Hashtable([
+      ("+",  null),
+      ("-",  null),
+      ("*",  null),
+      ("/" , null),
+      ("%",  null),
+      ("%^", null),
+      ("%|", null),
+      ("&",  null),
+      ("^",  null),
+      ("|",  null),
+      ("%&", null),
+      ("&&", null),
+      ("||", null),
+      ("!",  null),
+      (">>", null),
+      ("<<", null),
+      ("~",  null)
+    ]);
+
+    internal is_known_operator (name : string) : bool
+    {
+      known_operators.ContainsKey(name)
+    }
+
+    UnsignedValue (lit : Literal.Integer) : ulong
+    {
+      if (lit.is_negative)
+        unchecked ( (- (lit.val :> long)) :> ulong & MaxValueMask (lit.treat_as))
+      else lit.val
+    }
+
+    CheckInteger (l : Literal.Integer) : Literal.Integer
+    {
+      when (l.is_negative && l.val > 0x8000000000000000UL)
+        Message.Error ("the operation overflows at compile-time during"
+                       " constants folding in checked mode");
+      l
+    }
+
+    internal FoldLiterals (is_checked : bool, op : string,
+                           lit1 : Literal, lit2 : Literal) : Literal
+    {
+      match ((lit1, lit2)) {
+        | (Literal.Integer as l1, Literal.Integer as l2) =>
+          FoldLiterals (is_checked, op, l1, l2)
+
+        | (Literal.String (s1), Literal.String (s2)) when op == "+" =>
+          Literal.String (s1 + s2)
+
+        | _ =>
+          null
+          // Message.Warning ($ "evil literals $l1 $l2");
+          // assert(false)
+      }
+    }
+
+    private CheckAndNormalizeInteger(lit : Literal.Integer) : Literal.Integer
+    {
+        def lit = CheckInteger (lit);
+        if (null == lit.treat_as)
+          lit.WithProperType () :> Literal.Integer
+        else 
+        {
+          def max_signed_val = MaxSignedValueMask(lit.treat_as);
+          def signed_ty =
+            match(wide_rank.Get(lit.treat_as.tycon.FullName)) 
+            {
+              | Some((_, signed_ty)) => signed_ty
+              | _ => false
+            };
+          if(lit.is_negative && !signed_ty                                    // check value sign
+            || lit.is_negative && lit.val > (unchecked(max_signed_val + 1UL)) // check negative overflow
+            || !lit.is_negative && lit.val > max_signed_val)                  // check positive overflow
+            lit.WithProperType () :> Literal.Integer
+          else
+            lit
+        }
+    }
+
+    private wide_rank : Hashtable[string, int * bool] = Hashtable([
+        ("System.Byte",    (1, false)),
+        ("System.SByte",   (1, true)),
+        ("System.UInt16",  (2, false)),
+        ("System.Int16",   (2, true)),
+        ("System.UInt32",  (3, false)),
+        ("System.Int32",   (3, true)),
+        ("System.UInt64",  (4, false)),
+        ("System.Int64",   (4, true)),
+    ]);
+
+    private SelectWideType(a : FixedType.Class, b : FixedType.Class) : FixedType.Class
+    {
+      | (null, _)
+      | (_, null) => null
+      | (a, b) when a.Equals(b) => a
+      | (a, b) =>
+        match(wide_rank.Get(a.tycon.FullName), wide_rank.Get(b.tycon.FullName)) {
+          | (Some((a_rank, a_signed)), Some((b_rank, b_signed))) =>
+            def better = if(a_rank > b_rank) a else b;
+            if(a_signed && b_signed)
+              better
+            else if(a_signed)
+              a  // will be normalized
+            else if(b_signed)
+              b  // will be normalized
+            else
+              better
+          | _ => null
+        }
+    }
+
+    internal FoldLiterals (is_checked : bool, op : string,
+                           lit1 : Literal.Integer, lit2 : Literal.Integer) : Literal.Integer
+    {
+      //Message.Debug ($ "fold $lit1 $op $lit2");
+
+      def positive (lit) {
+        Literal.Integer (lit.val, false, lit.treat_as)
+      }
+
+      def val1 = lit1.val;
+      def val2 = lit2.val;
+
+      def val1u = UnsignedValue (lit1);
+      def val2u = UnsignedValue (lit2);
+
+      def result_sign = (lit1.is_negative || lit2.is_negative) &&
+                        !(lit1.is_negative && lit2.is_negative);
+
+      def result_ty = SelectWideType(lit1.treat_as, lit2.treat_as);
+
+      def res =
+        match (op) {
+          | "+"  =>
+            if (lit2.is_negative)
+              FoldLiterals (is_checked, "-", lit1, positive (lit2))
+            else if (lit1.is_negative)
+              FoldLiterals (is_checked, "-", lit2, positive (lit1))
+            else
+              Literal.Integer (val1 + val2, false, result_ty)
+
+          | "-"  =>
+            if (lit2.is_negative)
+              FoldLiterals (is_checked, "+", lit1, positive (lit2))
+            else if (lit1.is_negative)
+              Literal.Integer (val1 + val2, true, result_ty)
+            else
+              perform_check (is_checked, fun () {
+                if (val1 >= val2)
+                  Literal.Integer (val1 - val2, lit1.is_negative, result_ty)
+                else
+                  Literal.Integer (val2 - val1, !lit1.is_negative, result_ty)
+              })
+
+          | "*"  =>
+            def tmp = val1 * val2; // workaround mono bug #74726
+            Literal.Integer (tmp, result_sign, result_ty)
+
+          | "/"  => Literal.Integer (val1 / val2, result_sign, lit1.treat_as)
+          | "%"  => Literal.Integer (val1 % val2, result_sign, lit1.treat_as)
+
+          // FIXME
+          | "%^"
+          | "^"  => ConvertSignTo (val1u ^ val2u, result_ty)
+
+          | "|"
+          | "%|" => ConvertSignTo (val1u | val2u, result_ty)
+
+          | "&"
+          | "%&" => ConvertSignTo (val1u & val2u, result_ty)
+
+          | ">>" => ConvertSignTo (val1u >> (val2u & 0x3F) :> int, lit1.treat_as)
+          | "<<" => ConvertSignTo (val1u << (val2u & 0x3F) :> int, lit1.treat_as)
+
+          | _ => null
+          // Util.ice ("wrong operator " + op);
+        }
+
+      if (res != null) {
+        // Message.Debug ($ "fold $lit1 [$val1] $op $lit2 [$val2] = $res $result_sign $((res:>Literal.Integer).is_negative)");
+        CheckAndNormalizeInteger(res)
+      }
+      else null
+    }
+
+    MaxValueMask (t : FixedType) : ulong
+    {
+      if (t.Equals (t.InternalType.SByte))
+        0xff : ulong
+      else if (t.Equals (t.InternalType.Byte))
+        0xff : ulong
+      else if (t.Equals (t.InternalType.Int16))
+        0xffff : ulong
+      else if (t.Equals (t.InternalType.UInt16))
+        0xffff : ulong
+      else if (t.Equals (t.InternalType.Int32))
+        0xffffffffUL : ulong
+      else if (t.Equals (t.InternalType.UInt32))
+        0xffffffffUL : ulong
+      else if (t.Equals (t.InternalType.Int64))
+        0xffffffffffffffffUL : ulong
+      else if (t.Equals (t.InternalType.UInt64))
+        0xffffffffffffffffUL : ulong
+      else
+        0UL
+    }
+
+    MaxSignedValueMask (t : FixedType) : ulong
+    {
+      if (t.Equals (t.InternalType.SByte))
+        0x7f : ulong
+      else if (t.Equals (t.InternalType.Byte))
+        0xff : ulong
+      else if (t.Equals (t.InternalType.Int16))
+        0x7fff : ulong
+      else if (t.Equals (t.InternalType.UInt16))
+        0xffff : ulong
+      else if (t.Equals (t.InternalType.Int32))
+        0x7fffffffUL : ulong
+      else if (t.Equals (t.InternalType.UInt32))
+        0xffffffffUL : ulong
+      else if (t.Equals (t.InternalType.Int64))
+        0x7fffffffffffffffUL : ulong
+      else if (t.Equals (t.InternalType.UInt64))
+        0xffffffffffffffffUL : ulong
+      else 
+        0
+    }
+
+    ConvertSignTo (val : ulong, t : FixedType.Class) : Literal.Integer
+    {
+      unchecked {
+        mutable is_unsigned = false;
+        def newval =
+          if (t.Equals (t.InternalType.SByte))
+            (val :> sbyte) :> long
+          else if (t.Equals (t.InternalType.Int16))
+            (val :> short) :> long
+          else if (t.Equals (t.InternalType.Int32))
+            (val :> int) :> long
+          else if (t.Equals (t.InternalType.Int64))
+            (val :> long)
+          else {
+            is_unsigned = true;
+            0 :> long
+          }
+
+        if (is_unsigned) {
+          def newval =
+            if (t.Equals (t.InternalType.Byte))
+              (val :> byte) :> ulong
+            else if (t.Equals (t.InternalType.UInt16))
+              (val :> ushort) :> ulong
+            else if (t.Equals (t.InternalType.UInt32))
+              (val :> uint) :> ulong
+            else if (t.Equals (t.InternalType.UInt64))
+              val
+            else assert(false);
+          Literal.Integer (newval, false, t)
+        } else if (newval == long.MinValue)
+          Literal.Integer (0x8000000000000000UL, true, t)
+        else
+          Literal.Integer (System.Math.Abs (newval) :> ulong, newval < 0, t)
+      }
+    }
+
+    internal FoldLiteral(_is_checked : bool, op : string, lit : Literal) : Literal
+    {
+      def minus = op == "-";
+      match (lit)
+      {
+        | Literal.Integer as lit    => FoldLiteral(_is_checked, op, lit)
+        | Decimal(val) when (minus) => Literal.Decimal(-val)
+        | Float(val)   when (minus) => Literal.Float(-val)
+        | Double(val)  when (minus) => Literal.Double(-val)
+        | lit                       => lit
+      }
+      // Message.Debug ($ "fold: $op $lit");
+    }
+    
+
+    internal FoldLiteral (_is_checked : bool, op : string, lit : Literal.Integer) : Literal.Integer
+    {
+      // Message.Debug ($ "fold: $op $lit");
+      match (op) {
+        | "-" =>
+          CheckAndNormalizeInteger (Literal.Integer (lit.val, ! lit.is_negative, lit.treat_as))
+
+        | "~" =>
+          def t = lit.treat_as;
+          def v = lit.val;
+          if (MaxSignedValueMask (t) == MaxValueMask (t)) 
+          {
+              assert(! lit.is_negative);
+              CheckInteger(Literal.Integer(~v & MaxValueMask (t), false, t))
+          }
+          else
+          {
+            def res =
+              if (lit.is_negative) unchecked (v - 1)
+              else unchecked (v + 1);
+            CheckInteger(Literal.Integer(res & MaxValueMask(t), !lit.is_negative, t))
+          }
+
+        | "+" => lit
+        | _ => null
+      }
+    }
+
+    emit_flag_warning (t : TypeInfo) : void
+    {
+      when ((t.GetTydecl () is TT.TypeDeclaration.Enum) &&
+            ! t.HasAttribute (t.InternalType.FlagsAttribute_tc))
+        Message.Warning (10004, $ "using bitwise operator on enum type `$(t)' "
+                           "that hasn't got [Flags] attribute");
+    }
+
+
+    internal FieldValueAsLiteral (field : IField, triggerObsoleteWarn : bool) : option [Literal]
+    {
+      def decl_type = field.DeclaringType;
+      def enum_ty =
+        match (decl_type.GetTydecl ()) {
+          | TT.TypeDeclaration.Enum => Some (decl_type)
+          | _ => None ()
+        };
+      def lit = field.GetValue ();
+      decl_type.Manager.MarkAsUsed (field, triggerObsoleteWarn);
+      match (enum_ty) {
+        | Some (tc) when ! (lit is Literal.Enum) =>
+          Some (Literal.Enum (lit :> Literal.Integer, tc, field))
+        | _ => Some (lit)
+      }
+    }
+
+    internal FieldValueAsPureLiteral (field : IField, triggerObsoleteWarn : bool) : Literal
+    {
+      def decl_type = field.DeclaringType;
+      decl_type.Manager.MarkAsUsed (field, triggerObsoleteWarn);
+      field.GetValue ()
+    }
+
+    literal_field_value (env : GlobalEnv, tb : TypeBuilder, expr : PExpr, triggerObsoleteWarn : bool) : PExpr
+    {
+      match (Util.QidOfExpr (expr)) {
+        | Some ((id, name)) =>
+          match (name.GetEnv (env).LookupSymbol (id, tb)) {
+            | [fld is IField] when fld.IsLiteral =>
+              match (FieldValueAsLiteral (fld, triggerObsoleteWarn)) {
+                | None => expr
+                | Some (lit) => PExpr.Literal (expr.Location, lit)
+              }
+            | _ => expr
+          }
+        | None => expr
+      }
+    }
+
+    get_literal (expr : TT.TExpr) : Literal
+    {
+      | TT.TExpr.Literal (lit) =>
+        // we are not interested in other literals
+        match (lit) {
+          | Literal.Integer
+          | Literal.String => lit
+          | _ => null
+        }
+
+      | TT.TExpr.TypeConversion (expr, ty, _, _) when ty.IsFixed =>
+        match(get_literal(expr)) {
+          | Literal.Integer as lit =>
+            match(convert_integer_literal(lit, ty.FixedValue.TypeInfo.FullName)) {
+              | Some(lit) => lit
+              | _ => null
+            }
+          | _ => null
+        }
+
+      | _ => null
+    }
+
+
+    literal_of_expr (e : PExpr) : option [Literal]
+    {
+       | PExpr.Literal (l) => Some (l)
+       | PExpr.Typed (TT.TExpr.Literal (l)) => Some (l)
+       | _ => None ()
+    }
+
+    fold_unary_operator (is_checked : bool, name : string,
+                         e1 : PExpr, expr : PExpr) : PExpr
+    {
+      match (literal_of_expr (e1)) {
+        | Some (Literal.Enum (lit, enum_ty, enum_field)) when name == "~" =>
+          emit_flag_warning (enum_ty);
+          def res = FoldLiteral (is_checked, name, lit);
+          PExpr.Literal (expr.Location, Literal.Enum (res, enum_ty, enum_field))
+
+        | Some(lit) when is_known_operator (name) =>
+            def res = FoldLiteral(is_checked, name, lit);
+            if (res != lit : object) PExpr.Literal(expr.Location, res) else expr
+
+        | _ => expr
+      }
+    }
+
+    fold_binary_operator (is_checked : bool, name : string, e1 : PExpr, e2 : PExpr,
+                          expr : PExpr) : PExpr
+    {
+      // Message.Debug ($"$e1   $name   $e2    ($expr)");
+      match ((literal_of_expr (e1), literal_of_expr (e2))) {
+        | (Some (l1), Some (l2)) =>
+          def (l1, l2, enum_ty) =
+            match ((l1, l2)) {
+              | (Literal.Enum (l1, t1, _), Literal.Enum (l2, t2, _))
+                when t1.Equals (t2) =>
+                (l1, l2, Some (t1))
+              | _ => (l1, l2, None ())
+            };
+          def lit = FoldLiterals (is_checked, name, l1, l2);
+          if (lit == null)
+            expr
+          else
+            match ((enum_ty, name)) {
+              | (None, _) => PExpr.Literal (expr.Location, lit)
+
+              | (Some (t), "|")
+              | (Some (t), "&")
+              | (Some (t), "^")
+              | (Some (t), "%|")
+              | (Some (t), "%&")
+              | (Some (t), "%^") =>
+                emit_flag_warning (t);
+                // IT : Need IField
+                def lit = if (lit is Literal.Enum) lit else Literal.Enum (lit :> Literal.Integer, t, null);
+                PExpr.Literal (expr.Location, lit)
+              | (Some, _) =>
+                // other operators not allowed on enums
+                expr
+            }
+        | _ => expr
+      }
+    }
+
+    public ConvertLiteral(lit : Literal, targetType : FixedType) : option[Literal]
+    {
+      match(lit)
+      {
+        | Literal.Integer as lit =>
+          match(convert_integer_literal(lit, targetType.TypeInfo?.FullName))
+          {
+            | Some(result) => Some(result)
+            | _ => None()
+          }
+        | _ => None()
+      }
+    }
+
+    convert_integer_literal(lit : Literal.Integer, target : string) : option[Literal.Integer]
+    {
+      def report_conversion_failure() {
+        Message.Error($"value `$lit' can't be converted to `$target'");
+        None()
+      }
+      match(target) {
+        | "Nemerle.Core.sbyte"
+        | "System.SByte"  =>
+          match(lit.AsSByte) {
+            | Some(val) => Literal.FromSByte(val) |> Some
+            | _ => report_conversion_failure()
+          }
+        | "Nemerle.Core.byte"
+        | "System.Byte"   =>
+          match(lit.AsByte) {
+            | Some(val) => Literal.FromByte(val) |> Some
+            | _ => report_conversion_failure()
+          }
+        | "Nemerle.Core.short"
+        | "System.Int16"  =>
+          match(lit.AsShort) {
+            | Some(val) => Literal.FromShort(val) |> Some
+            | _ => report_conversion_failure()
+          }
+        | "Nemerle.Core.ushort"
+        | "System.UInt16" =>
+          match(lit.AsUShort) {
+            | Some(val) => Literal.FromUShort(val) |> Some
+            | _ => report_conversion_failure()
+          }
+        | "Nemerle.Core.int"
+        | "System.Int32"  =>
+          match(lit.AsInt) {
+            | Some(val) => Literal.FromInt(val) |> Some
+            | _ => report_conversion_failure()
+          }
+        | "Nemerle.Core.uint"
+        | "System.UInt32" =>
+          match(lit.AsUInt) {
+            | Some(val) => Literal.FromUInt(val) |> Some
+            | _ => report_conversion_failure()
+          }
+        | "Nemerle.Core.long"
+        | "System.Int64"  =>
+          match(lit.AsLong) {
+            | Some(val) => Literal.FromLong(val) |> Some
+            | _ => report_conversion_failure()
+          }
+        | "Nemerle.Core.ulong"
+        | "System.UInt64" =>
+          match(lit.AsULong) {
+            | Some(val) => Literal.FromULong(val) |> Some
+            | _ => report_conversion_failure()
+          }
+        | _ => None()
+      }
+    }
+
+    fold_type_conversion(env : GlobalEnv, e : PExpr, t : PExpr) : option[PExpr]
+    {
+      def lookup_type()
+      {
+        def ty_name = NList.ToList(t.ToString().Split(array['.'], System.StringSplitOptions.None));
+        env.LookupType(ty_name)
+      }
+      match(e)
+      {
+        | PExpr.Literal(Literal.Double as lit) =>
+          match(lookup_type())
+          {
+            | Some(ty) when ty.FullName == "Nemerle.Core.float" && unchecked (((lit.val :> float) : double) == lit.val) =>
+              Some(PExpr.Literal(e.Location, Literal.Float(lit.val :> float)))
+            | _ => None()
+          }
+
+        | PExpr.Literal(Literal.Integer as lit) =>
+          match(lookup_type())
+          {
+            | Some(ty) =>
+              match(convert_integer_literal(lit, ty.FullName))
+              {
+                | Some(lit) => PExpr.Literal(e.Location, lit) |> Some
+                | _ => None()
+              }
+            | _ => None()
+          }
+        | _ => None()
+      }
+    }
+
+    fold_constants (is_checked : bool, env : GlobalEnv, tb : TypeBuilder, expr : PExpr, triggerObsoleteWarn : bool, recurse : bool) : PExpr
+    {
+      try
+      {
+        match (expr)
+        {
+          | <[ $(name : dyn) ($e1, $e2) ]> when is_known_operator (name) =>
+            if (recurse)
+              fold_binary_operator (is_checked,
+                                    name,
+                                    fold_constants (is_checked, env, tb, e1, triggerObsoleteWarn, true),
+                                    fold_constants (is_checked, env, tb, e2, triggerObsoleteWarn, true),
+                                    expr)
+            else
+              fold_binary_operator (is_checked, name, e1, e2, expr)
+
+          | <[ $(name : dyn)($e1) ]> when is_known_operator(name) =>
+            if (recurse)
+              fold_unary_operator(is_checked, name, fold_constants(is_checked, env, tb, e1, triggerObsoleteWarn, true), expr)
+            else
+              fold_unary_operator(is_checked, name, e1, expr)
+
+          | <[ $_o . $_f ]>
+          | <[ $(_ : name) ]> => literal_field_value(env, tb, expr, triggerObsoleteWarn)
+
+          | PExpr.TypeEnforcement(e, t) =>
+            def folded = fold_constants(is_checked, env, tb, e, triggerObsoleteWarn, recurse);
+            match(fold_type_conversion(env, folded, t))
+            {
+              | Some(res) => res
+              | _         => PExpr.TypeEnforcement(expr.Location, folded, t)
+            }
+
+          | PExpr.TypeConversion(e, t) =>
+            def folded = fold_constants(is_checked, env, tb, e, triggerObsoleteWarn, recurse);
+            match(fold_type_conversion(env, folded, t))
+            {
+              | Some(res) => res
+              | _ => PExpr.TypeConversion(expr.Location, folded, t)
+            }
+
+          | _ => expr
+        }
+      }
+      catch
+      {
+        | _ is System.DivideByZeroException =>
+          Message.Error ("division by zero during constants folding");
+          null
+
+        | _ is System.OverflowException => // FIXME: use guards in catching
+          if (is_checked)
+          {
+            Message.Error("the operation overflows at compile-time during constants folding in checked mode");
+            null
+          }
+          else
+            Util.ice("overflow exception")
+      }
+    }
+
+    perform_check ['a] (is_checked : bool, f : void -> 'a) : 'a where 'a : class
+    {
+      try {
+        f ()
+      }
+      catch {
+        | _ is System.DivideByZeroException =>
+          Message.Error ("division by zero during constants folding");
+          null
+
+        | _ is System.OverflowException => // FIXME: use guards in catching
+          if (is_checked) {
+            Message.Error ("the operation overflows at compile-time during"
+                           " constants folding in checked mode");
+            null
+          }
+          else
+            Util.ice ("overflow exception")
+      }
+    }
+
+
+    public FoldTyped (name : string, p : TT.TExpr, is_checked : bool) : TT.TExpr
+    {
+      //Message.Debug ($"ft: $name $p");
+      match (get_literal (p)) {
+        | Literal.Integer as lit =>
+          def res = perform_check (is_checked, fun () {
+            FoldLiteral (is_checked, name, lit)
+          });
+          if (res == null)
+            null
+          else
+            //Message.Debug ($"ft: re=$res");
+            TT.TExpr.Literal (res.treat_as, res)
+
+        | _ =>
+          //Message.Debug ($"ft: null");
+          null
+      }
+    }
+
+    public FoldTyped (name : string, p1 : TT.TExpr, p2 : TT.TExpr,
+                      is_checked : bool) : TT.TExpr
+    {
+      match ((get_literal (p1), get_literal (p2))) {
+        | (null, _) | (_, null) => null
+        | (l1, l2) =>
+          def res = perform_check (is_checked, fun () {
+            FoldLiterals (is_checked, name, l1, l2)
+          });
+          if (res == null)
+            null
+          else {
+            def ty =
+              match (res) {
+                | Literal.Integer (_, _, t) => t
+                | _ => p1.Type
+              }
+            TT.TExpr.Literal (ty, res)
+          }
+      }
+    }
+
+    public FoldConstants (typer : Typer, expr : PExpr) : PExpr
+    {
+      fold_constants (false, typer.Env, typer.CurrentTypeBuilder, expr, typer.TriggerObsoleteWarning, true)
+    }
+
+    public FoldConstants (env : GlobalEnv, expr : PExpr, tb : TypeBuilder = null) : PExpr
+    {
+      fold_constants (false, env, tb, expr, true, true)
+    }
+
+    public FoldConstants (tb : TypeBuilder, expr : PExpr) : PExpr
+    {
+      fold_constants (false, tb.GlobalEnv, tb, expr, true, true)
+    }
+  }
+}
+
