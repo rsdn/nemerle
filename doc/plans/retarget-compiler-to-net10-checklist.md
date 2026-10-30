@@ -22,8 +22,8 @@
 - [✅] 1.6 CI workflow: Stage2 + Validate + тесты на windows-latest (SDK 10) (commit f70d5aaa1; гейт по FC IL + MSB3073-fc, Validate-шаг continue-on-error до Фазы 5.1)
 
 ## Фаза 2 — Перенос интеграционного слоя на .NET
-- [ ] 2.1 `Nemerle.MSBuild.Tasks.csproj`: net45 → netstandard2.0/net10.0 + PackageReference Microsoft.Build.*
-- [ ] 2.2 `MSBuildTask.cs`: убрать Registry, CodeBase→Location/AppContext.BaseDirectory
+- [✅] 2.1 `Nemerle.MSBuild.Tasks.csproj`: net45 → netstandard2.0 SDK-style, MB 17.0.0 (commit 1cb57f94b)
+- [✅] 2.2 `MSBuildTask.cs`: Registry убран, CodeBase→Location/BaseDirectory (commit 1cb57f94b)
 - [ ] 2.3 `Nemerle.MSBuild.targets`: SDK-резолв ссылок вместо GetReferenceAssemblyPaths; пересмотр Import Common.targets
 - [ ] 2.4 Убрать `MSBuild.Community.Tasks.dll` (TemplateFile/AL → SDK-механизмы)
 - [ ] 2.5 Acceptance: `dotnet build` Nemerle/Compiler/Macros .nproj, артефакты ≡ бейзлайну
