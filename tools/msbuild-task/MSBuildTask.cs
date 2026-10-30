@@ -5,7 +5,6 @@ using System.Diagnostics;
 
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
-using Microsoft.Win32;
 
 namespace Nemerle.Tools.MSBuildTask
 {
@@ -115,26 +114,19 @@ namespace Nemerle.Tools.MSBuildTask
                     return path;
             }
 
-            var my_file = new Uri(typeof(Ncc).Assembly.CodeBase).LocalPath;
-            var ncc_file = Path.Combine(Path.GetDirectoryName(my_file), toolName);
+            // Assembly.CodeBase throws PlatformNotSupportedException on .NET Core
+            // hosts; Assembly.Location works on both hosts, with AppContext.BaseDirectory
+            // as a fallback for locations that produce an empty Location.
+            //
+            var my_file = typeof(Ncc).Assembly.Location;
+            var my_dir = string.IsNullOrEmpty(my_file) ? AppContext.BaseDirectory : Path.GetDirectoryName(my_file);
+            var ncc_file = Path.Combine(my_dir, toolName);
 
             if (File.Exists(ncc_file))
             {
                 // The tool found in the same folder.
                 //
                 return ncc_file;
-            }
-
-            // Query the shell association
-            //
-            var regKeyName = @"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\" + toolName;
-            var regKey = Registry.LocalMachine.OpenSubKey(regKeyName);
-
-            if (null != regKey)
-            {
-                // The tool is registered with the Shell API.
-                //
-                return (string)regKey.GetValue(null);
             }
 
             // Return the tool name itself.
