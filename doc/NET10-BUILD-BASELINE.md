@@ -1,21 +1,33 @@
 # Known-good build baseline on this machine (pre-net10)
 
 Verified 2026-10-30 at tag `pre-net10-baseline` (commit d9b50f721), branch `retarget-compiler`,
-checkout `C:\RSDN\nemerle`. The legacy `Build-core*.cmd` scripts require VS2017 in the registry
-and do NOT work on this machine; use VS2022 MSBuild directly (or `dotnet` after Phase 2).
+checkout `C:\RSDN\nemerle`. The legacy `Build-core*.cmd` scripts originally required VS2017 in the
+registry; since Phase 1 they locate MSBuild via vswhere. With `global.json` (sdk 10.0.402)
+**MSBuild >= 18 is required** — VS2022's msbuild 17.14 can no longer build the repo (it fails with
+"requires at least version 18.0.0 of MSBuild"); use `Build-core-base.cmd` or VS2026 msbuild.
 
-## Commands (verified green)
+## Commands (verified green, Phase 1)
+
+```powershell
+# From the repo root. NOTE: cmd.exe splits unquoted commas — always pass target lists quoted.
+cmd /c "`"C:\RSDN\nemerle\Build-core-base.cmd`" Debug Build `"Stage3,Validate`""
+cmd /c "`"C:\RSDN\nemerle\Build-core-base.cmd`" Debug Build `"Stage1,CompilerTests`""
+```
+
+Equivalent direct invocation (bypasses the wrapper): resolve MSBuild via
+`vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath`
+then `<path>\MSBuild\Current\Bin\MSBuild.exe`, and call it with
+`NemerleAll.nproj /t:<Targets> /p:NTargetName=Build /p:Configuration=Debug /p:NInstall=bin\Debug\net-4.0`.
+CompilerTests must run in the same msbuild session as Stage1 (combined target `Stage1,CompilerTests`),
+otherwise `$(Nemerle)` is empty and project imports fail.
+
+### Historical Phase-0 baseline commands (obsolete since global.json; kept for the record)
 
 ```powershell
 $msb  = 'C:\Program Files\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe'
 $proj = 'C:\RSDN\nemerle\NemerleAll.nproj'
 $ip   = 'C:\RSDN\nemerle\bin\Debug\net-4.0'
-
-# Stage1 (+Stage2+Stage3) and IL fixed-point comparison:
 & $msb $proj /t:Stage3,Validate /p:NTargetName=Build /p:Configuration=Debug "/p:NInstall=$ip" /v:m
-
-# Compiler regression tests (must run in the SAME msbuild session after Stage1,
-# otherwise $(Nemerle) is empty and project imports fail):
 & $msb $proj /t:Stage1,CompilerTests /p:NTargetName=Build /p:Configuration=Debug "/p:NInstall=$ip" /v:m
 ```
 
@@ -39,3 +51,7 @@ Logs: `C:\RSDN\baseline-logs\` (`stage3-validate.log`, `compilertests.log`, `exi
 1. Stage1/Stage2 green on the same toolchain.
 2. Validate: all `FC:` comparisons report no differences (peverify excluded until Phase 5.1).
 3. CompilerTests: >= 468 positive / >= 167 negative, 0 failed.
+
+Re-verified 2026-10-30 after Phase 1 (vswhere entry, global.json 10.0.402, MSBuild 18.11):
+FC 5/5 identical, CompilerTests 468+167 / 0 failed, NETSDK1138 absent, Validate's only error is
+the known-red pefverify step (identical to Phase-0 baseline: 1125 errors on Nemerle.Compiler.dll).

@@ -15,11 +15,11 @@
 - [✅] 1.3 Проверить отсутствие пина ToolsVersion=15 на msbuild 17 (git grep: только атрибуты 3.5/4.0; msbuild 17.14 собрал Stage1-3 — доказательство = бейзлайн Фазы 0)
 
 ## Фаза 1 — Отвязка сборки от VS2017
-- [ ] 1.1 `Build-core-base.cmd`: vswhere вместо реестра `SxS\VS7`=15.0
-- [ ] 1.2 `global.json` sdk 10.0.x rollForward latestFeature
-- [ ] 1.4 `<CheckEolTargetFramework>false</CheckEolTargetFramework>` (временно, без смены TFM)
-- [ ] 1.5 Stage1/Stage2/Validate/CompilerTests == бейзлайну Фазы 0
-- [ ] 1.6 CI workflow: Stage2 + Validate + тесты на windows-latest (SDK 10)
+- [✅] 1.1 `Build-core-base.cmd`: vswhere вместо реестра `SxS\VS7`=15.0 (работает: MSBuild 18.11; exit code прокидывается; CRLF восстановлен)
+- [✅] 1.2 `global.json` sdk 10.0.402 rollForward latestFeature (dotnet --version=10.0.402; требует MSBuild>=18 — см. Deviations)
+- [✅] 1.4 `<CheckEolTargetFramework>false</CheckEolTargetFramework>` в Nemerle.Sdk.props + NemerleAll.nproj (NETSDK1138=0; TFM не менялись)
+- [✅] 1.5 Прогнано через новый вход: Stage1-3 green, FC 5/5 identical, тесты 468+167/0 failed, NETSDK1138=0; единственный error = известный pefverify из бейзлайна. Логи: C:\RSDN\phase1-logs\
+- [✅] 1.6 CI workflow: Stage2 + Validate + тесты на windows-latest (SDK 10) (commit f70d5aaa1; гейт по FC IL + MSB3073-fc, Validate-шаг continue-on-error до Фазы 5.1)
 
 ## Фаза 2 — Перенос интеграционного слоя на .NET
 - [ ] 2.1 `Nemerle.MSBuild.Tasks.csproj`: net45 → netstandard2.0/net10.0 + PackageReference Microsoft.Build.*
@@ -74,11 +74,11 @@
 - [ ] 7.4 Полный цикл с чистого клона
 
 ## Deviations
+- 1.2: `global.json` (SDK 10.0.402) требует MSBuild >= 18: легаси-команда VS2022 msbuild 17.14 из Приложения А больше не работает (MSB4236). Целевое состояние и без того «современный тулчейн»; baseline-док обновлён на vswhere-вход. master не затрагивается (останется на VS2017/4.x).
 - 1.3 (проверка ToolsVersion) выполнен досрочно на Фазе 0: git grep показал отсутствие пинов 15; msbuild 17.14.60 собрал Stage1–3 (бейзлайн). Пункт помечен в секции Фазы 0.
 - 0.4: Validate на бейзлайне не полностью зелёный — IL-диф 5/5 green, но pefverify падает (старый .NET FX 4.6.1 Tools против netstandard2.0). Зафиксировано как состояние «до»; паритет later фаз = IL-diff + tests, pefverify исключён до Фазы 5.1.
 
 ## Journal
+- 2026-10-30: Фаза 1 (под-агент): Build-core-base.cmd переведён на vswhere (работает: VS18/MSBuild 18.11), global.json=10.0.402+latestFeature, CheckEolTargetFramework=false (Nemerle.Sdk.props + NemerleAll.nproj, NETSDK1138=0). ВАЖНО: global.json требует MSBuild>=18 — легаси-команда VS2022 msbuild 17.14 изbaseline-дока устарела, запись в baseline-док будет обновлена. Ловушка: cmd.exe съедает запятую в целевой строке без кавычек (`"Stage3,Validate"`) — проверять через полную кавыцированную командную строку.
+- 2026-10-30: Ограничение от пользователя: .NET 10 — только ветка `retarget-compiler`; `master` обязана оставаться на **.NET Framework** (не обязательно ровно 4.6.1 — допустима любая версия, совместимая с VS 2017, где работает IDE-плагин). Правки тулчейна — только на retarget, в master не синхронизировать. Библиотеки — netstandard2.0 (D2/D6) в обеих ветках.
 - 2026-10-30: Фаза 0 готова: тег `pre-net10-baseline` (d9b50f721); архив seed `C:\RSDN\backup\boot-dnlib-backup-20261030.zip`; бейзлайн Stage1-3 green, Validate IL 5/5 identical, CompilerTests 468+167 passed / 0 failed; рецепт в `doc/NET10-BUILD-BASELINE.md`; логи `C:\RSDN\baseline-logs\`.
-
-## Journal
-- 2026-10-30: Сессия перенесена в C:\RSDN\nemerle (выбран пользователем как рабочий checkout; F:\RSDN\nemerle — второй clone того же коммита d9b50f721).

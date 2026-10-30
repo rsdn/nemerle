@@ -22,20 +22,34 @@ SET Features=%~3
 SET Verbosity=m
 SET MSBUILDENABLEALLPROPERTYFUNCTIONS=1
 SET NemerleInstallDir=%~dp0bin\%Config%\net-4.0
-SET KEY_NAME="HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\SxS\VS7"
-SET VALUE_NAME=15.0
 setlocal ENABLEEXTENSIONS
 @echo Features=%Features%
 
 @echo Starting build %Name% Target=%Target% Config=%Config% Features=%Features%
 
-for /f "tokens=2,*" %%a in ('reg query %KEY_NAME% /V %VALUE_NAME%  ^|findstr /ri "REG_SZ"') DO set Value=%%b
-
-IF defined Value (
-call "%Value%Common7\Tools\VsDevCmd.bat"
-msbuild "%~dp0NemerleAll.nproj" "/t:%Features%" "/p:NTargetName=%Target%" "/p:Configuration=%Config%" "/p:NInstall=%NemerleInstallDir%"
-@echo Nemerle installed to "%~dp0bin\%Config%\net-4.0"
-) else (
-@echo %KEY_NAME%\%VALUE_NAME% not found in Windows Registry. Possibly no Visual Studio 2017 installed.
+rem Locate MSBuild.exe via vswhere (any recent Visual Studio with the MSBuild component).
+SET "VsWhere=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+IF NOT EXIST "%VsWhere%" (
+@echo ERROR: vswhere.exe not found at "%VsWhere%". A Visual Studio installation with the MSBuild component is required to build Nemerle.
+EXIT /B -1
 )
+
+SET VsInstallPath=
+for /f "usebackq delims=" %%a in (`"%VsWhere%" -latest -products * -requires Microsoft.Component.MSBuild -property installationPath`) DO SET VsInstallPath=%%a
+
+IF NOT DEFINED VsInstallPath (
+@echo ERROR: vswhere.exe did not find any Visual Studio installation with the Microsoft.Component.MSBuild component.
+EXIT /B -1
+)
+
+SET "MsBuildExe=%VsInstallPath%\MSBuild\Current\Bin\MSBuild.exe"
+IF NOT EXIST "%MsBuildExe%" (
+SET "MsBuildExe=%VsInstallPath%\MSBuild\15.0\Bin\MSBuild.exe"
+)
+@echo Using MSBuild: "%MsBuildExe%"
+
+"%MsBuildExe%" "%~dp0NemerleAll.nproj" "/t:%Features%" "/p:NTargetName=%Target%" "/p:Configuration=%Config%" "/p:NInstall=%NemerleInstallDir%"
+SET NemerleBuildExitCode=%ERRORLEVEL%
+@echo Nemerle installed to "%~dp0bin\%Config%\net-4.0"
+EXIT /B %NemerleBuildExitCode%
 rem pause
