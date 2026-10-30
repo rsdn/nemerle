@@ -24,9 +24,9 @@
 ## Фаза 2 — Перенос интеграционного слоя на .NET
 - [✅] 2.1 `Nemerle.MSBuild.Tasks.csproj`: net45 → netstandard2.0 SDK-style, MB 17.0.0 (commit 1cb57f94b)
 - [✅] 2.2 `MSBuildTask.cs`: Registry убран, CodeBase→Location/BaseDirectory (commit 1cb57f94b)
-- [ ] 2.3 `Nemerle.MSBuild.targets`: SDK-резолв ссылок вместо GetReferenceAssemblyPaths; пересмотр Import Common.targets
-- [ ] 2.4 Убрать `MSBuild.Community.Tasks.dll` (TemplateFile/AL → SDK-механизмы)
-- [ ] 2.5 Acceptance: `dotnet build` Nemerle/Compiler/Macros .nproj, артефакты ≡ бейзлайну
+- [✅] 2.3 `Nemerle.MSBuild.targets`: Core-гейт MacroReference/TFR-блока + fallback `Nemerle=` + obj-изоляция CLI-сборки (commit 952a0a84d; разбит на 2.3a/b/c по report)
+- [✅] 2.4a Убран мёртвый `UsingTask TemplateFile`/AL-блок из Nemerle.Sdk.targets (commit 952a0a84d); FileUpdate в Validate → отложен в Фазу 5 (deviation)
+- [✅] 2.5 Acceptance: `dotnet build` Nemerle/Compiler/Macros зелёный (×2 подряд); классич. Stage1-3 FC 5/5; тесты 468+167/0 (логи C:\RSDN\phase2-logs\)
 
 ## Фаза 2.5 — dnlib 3.3.0 → 4.5.0 (отдельный коммит)
 - [ ] 2.5.1 dnlib 4.5.0 + System.CodeDom актуальный в Nemerle.Compiler.nproj
@@ -74,6 +74,8 @@
 - [ ] 7.4 Полный цикл с чистого клона
 
 ## Deviations
+- 2.4 разбит: 2.4a (мёртвый UsingTask в Nemerle.Sdk.targets) сделан в Фазе 2; FileUpdate-машинерия Validate и al.exe-разведка перенесены в Фазу 5.1 (они только на классическом хосте, dotnet build не блокируют — см. report2.3-2.4 Q4).
+- Пункты плана 2.5.2/2.5.3/2.5.4 частично опровергнуты report2.5: API dnlib 3.3.0→4.5.0 для использованных членов идентичен (0 сломано из 127), `EnableTypeDefFinder`/`FileExists` не существует; приёмка 2.5 = компиляция + Stage2 IL-diff + тесты, не правки резолвера.
 - 1.2: `global.json` (SDK 10.0.402) требует MSBuild >= 18: легаси-команда VS2022 msbuild 17.14 из Приложения А больше не работает (MSB4236). Целевое состояние и без того «современный тулчейн»; baseline-док обновлён на vswhere-вход. master не затрагивается (останется на VS2017/4.x).
 - 1.3 (проверка ToolsVersion) выполнен досрочно на Фазе 0: git grep показал отсутствие пинов 15; msbuild 17.14.60 собрал Stage1–3 (бейзлайн). Пункт помечен в секции Фазы 0.
 - 0.4: Validate на бейзлайне не полностью зелёный — IL-диф 5/5 green, но pefverify падает (старый .NET FX 4.6.1 Tools против netstandard2.0). Зафиксировано как состояние «до»; паритет later фаз = IL-diff + tests, pefverify исключён до Фазы 5.1.
