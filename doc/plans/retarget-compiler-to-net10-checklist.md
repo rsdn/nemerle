@@ -29,13 +29,13 @@
 - [✅] 2.5 Acceptance: `dotnet build` Nemerle/Compiler/Macros зелёный (×2 подряд); классич. Stage1-3 FC 5/5; тесты 468+167/0 (логи C:\RSDN\phase2-logs\)
 
 ## Фаза 2.5 — dnlib 3.3.0 → 4.5.0 (отдельный коммит)
-- [ ] 2.5.1 dnlib 4.5.0 + System.CodeDom актуальный в Nemerle.Compiler.nproj
-- [ ] 2.5.2 Не добавлять явных System.Reflection.Emit*
-- [ ] 2.5.3 Сверить API-поверхность dnlib 3.3→4.5 (ncc/backend/**)
-- [ ] 2.5.4 Резолвер ссылок под Core (ModuleContext/AssemblyResolver, LibraryReferenceManager.n)
-- [ ] 2.5.5 StrongNameKey путь не сломать (snk — заглушки)
-- [ ] 2.5.6 Зафиксировать формат PDB
-- [ ] 2.5.7 Acceptance: Stage1 с новой dnlib; CompilerTests не хуже бейзлайна; IL-диф 4.5.0 vs 3.3.0 объяснён
+- [✅] 2.5.1 dnlib 4.5.0 (commit ниже); System.CodeDom ОСТАВЛЕН 4.7.0: 10.0.14 ломает codedom.n (ArgumentNullException в CodeGenerator.GenerateCommentStatements) — бамп перенесён в Фазу 3.3 c решением по поверхности (deviation)
+- [✅] 2.5.2 Не добавлять явных System.Reflection.Emit* (проверка диффа, не правка)
+- [✅] 2.5.3 API-поверхность сверена: 0 сломано из 127 использованных членов (report2.5)
+- [✅] 2.5.4 Резолвер: dnlib-правок не требуется для netstandard2.0-этапа (report2.5; хост-механика — Фазa 3.5)
+- [✅] 2.5.5 StrongName: без изменений (report2.5, компилируется as-is)
+- [✅] 2.5.6 PDB: Stage1 пишет Windows MSF PDB (магия 'Microsoft C/C++ ') — format не изменился бампом; portable/DiaSymReader — Фазa 3.1b (report3.1-3.5 row 12)
+- [✅] 2.5.7 Acceptance: Stage1-3 green; FC 5/5; тесты 468+167/0; IL-диф Stage1 vs dnlib3.3.0-снапшот: только assemblyref dnlib 3.3→4.5 + счётчики имён CA в Nemerle.Macros.dll (прогресс-файл 2.5); логи C:\RSDN\phase25b-logs\
 
 ## Фаза 3 — Хост компилятора и библиотеки на .NET 10
 - [ ] 3.1 `ncc-core.nproj`: net10.0 + UseAppHost → запускаемый ncc-core.exe
