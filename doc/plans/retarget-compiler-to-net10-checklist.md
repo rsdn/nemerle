@@ -45,7 +45,7 @@
 - [ ] 3.1e (риски, не воспроизводилось — проверить при случае) a) Core apphost `ncc-core.exe`: SDK пишет рядом `ncc-core.exe.config` только с `<runtime>` без `<startup>` — при спавне из FX-процессов на машине без net10 runtime возможен BadImageFormat; b) `ncc.deps.json` в плоском stage-каталоге может подмешивать net10-зависимости в FX-процессы (Fusion ctx) — кандидаты на гейт перед Фазой 4.4. Ни один тест сейчас не краснеет от этого
 - [✅] 3.6 Acceptance: `Stage1/ncc-core.exe -version` без `--roll-forward` → exit 0 (проверено в 3.1a-retry C и 3.1c D)
 - [✅] 3.1.1 Suppress assert dialogs в сборках: App.config у ncc+harness (assertuienabled=false), трекаемый config у сида, NPrepareBoot копирует *.config (commit c3af18bad). Переключатель: assertuienabled=true в .config рядом с exe. ICE-триггер без диалога (exit 2), FC 5/5, 468+167/0
-- [ ] 3.2 Библиотеки остаются netstandard2.0 (D2/D6); проверить загрузку из net10 и Framework 4.6.1+
+- [✅] 3.2 Библиотеки остаются netstandard2.0 (D2/D6): статический TFM-аудит + IL-манифесты ([netstandard] v2.0) + загрузка на net10 (ncc-core компилирует макросы из Nemerle.Macros) и в реальном FX 4.8 процессе (LoadFrom+активация, Compiler deep-OK с co-located dnlib/CodeDom). 0 блокеров, 0 правок. Прогресс: progress3.2.md. Найденные хвосты → пункты 5.1(NB), 6.5, 7.1(NB)
 - [ ] 3.3 Пакеты: System.CodeDom актуальный; явных SRE* не добавлять
 - [✅] 3.4b Убрать ncc.nproj (net461) из NCompilerProject (D3); ncc\packages.config удалён (нулевой потребление); stage-каталоги без ncc.exe, компилирует только ncc-core.exe (-version exit 0). Validate-глобы усохли сами (FC ×5 — новая норма). Найдено: Nemerle.Location.nproj StartProgram→Stage1\ncc.exe (IDE F5, перенацелить в Фазе 5/7). Прогресс: progress3.4b.md
 - [✅] 3.4a Ncc ToolTask предпочитает ncc-core.exe (apphost) при его наличии в CompilerPath/каталоге задачи; legacy ncc.exe фолбэк сохранён (boot-сид без apphost → Stage1 идёт на FX ncc.exe, Stage2/3 — на ncc-core.exe; log-строка "Using Nemerle compiler" важности normal)
@@ -62,7 +62,7 @@
 - [ ] 4.6 (привязка к правилу пользователя) Коммит seed-бинарей — только после зелёной Stage2 + CompilerTests
 
 ## Фаза 5 — Оркестрация и скрипты
-- [ ] 5.1 Убрать InitTools Framework-разведку (gacutil/ildasm/al/ngen/peverify) из NemerleAll.nproj
+- [ ] 5.1 Убрать InitTools Framework-разведку (gacutil/ildasm/al/ngen/peverify) из NemerleAll.nproj. (NB из 3.2: заодно задокументировать/отправить на пенсию ограничение ildasm `/NOIL` — partial-disassembly warning на наших сборках)
 - [ ] 5.2 Build-core*.cmd → dotnet; +build.ps1/build.sh
 - [ ] 5.3 Directory.Build.props + nuget.config
 - [ ] 5.4 ExternalDependences: осовременить/убрать NuGet.exe, MSBuild.Community.Tasks, NUnit-консоль
@@ -73,9 +73,10 @@
 - [ ] 6.2 CompilerTests на Core, паритет с бейзлайном 0.5
 - [ ] 6.3 CI: Stage1→Stage2→Stage3 + Validate + smoke ncc-core.exe -version
 - [ ] 6.4 Runtime-behavior: глобализация, CodePages, dnlib-emit, CodeDom
+- [ ] 6.5 (из 3.2) Nuspec-упаковка: Nemerle.Compiler.nuspec пачкает `ncc.???`/`ncc??.???` (не производятся с 3.4b) и ns2.0 dll в `lib\net\` — починить glob и выбрать моноикер (`lib\net` vs `lib\netstandard2.0`) до паковочных прогонов Фазы 6
 
 ## Фаза 7 — Зачистка и документация
-- [ ] 7.1 Удалить VS2017-скрипты/реестровые хаки/мёртвые Framework-таргеты
+- [ ] 7.1 Удалить VS2017-скрипты/реестровые хаки/мёртвые Framework-таргеты. (NB из 3.4b/3.2: ncc.nproj+App.config c диска, мёртвые ncc32/ncc64.nproj, stale Nemerle.Location.nproj v4.6.1 с StartProgram→Stage1\ncc.exe)
 - [ ] 7.2 Коммит boot-net10 как seed (после зелёного двухстадийного цикла с тестами)
 - [ ] 7.3 Обновить AGENTS.md/README под dotnet+net10
 - [ ] 7.4 Полный цикл с чистого клона
