@@ -58,8 +58,8 @@
 - [ ] 3.7 (факультативно) AOT-эксперимент; при неудаче — зафиксировать блокиратор
 
 ## Фаза 4 — Пересев бутстрапа на .NET 10
-- [ ] 4.1 Stage1 старым seed boot-dnlib → ncc на net10
-- [ ] 4.2 Каталог `boot-net10/` (framework-dependent, D4)
+- [✅] 4.1 Stage1 старым seed boot-dnlib → ncc на net10: выполняется с 3.4a (boot FX ncc.exe → Stage1 → Stage2/3 на ncc-core.exe net10; свидетель: «Using Nemerle compiler» логи, FC ×5)
+- [✅] 4.2 `boot-net10/` создан из валидированного Stage2 (10 файлов: ncc-core.exe/.dll/runtimeconfig/deps + Nemerle/Nemerle.Compiler/Nemerle.Macros + tasks + dnlib + CodeDom-facade; манифест с потребителями в progress4.2.md). Дым: -version exit 0, компиляция .n и [StructuralEquality] без -r — exit 0. NPrepareBoot дополнен `$(NRootBoot)\*.json` (без этого apphost-файлы не попадали в NBoot; для boot-dnlib безвредно). САМИ БИНАРИ СИДА НЕ ЗАКОММИЧЕНЫ — по правилу после зелёного цикла 4.3
 - [ ] 4.3 NRootBoot→boot-net10: Stage1→Stage2→Stage3→Validate, fixed point IL Stage2≡Stage3
 - [ ] 4.4 Ncc ToolTask спавнит net10 ncc (ToolName/CompilerPath)
 - [ ] 4.5 boot-dnlib держать аварийным seed до воспроизведения fixed point с чистого клона
