@@ -156,15 +156,85 @@ namespace Nemerle.Compiler
 
     public virtual getAssemblyLocation (assembly : SR.Assembly) : string
     {
-      System.Uri(assembly.CodeBase).LocalPath
+      GetAssemblyLocation(assembly)
     }
 
     public virtual getAssemblyLocation(assembly : SR.AssemblyName) : string
     {
-      System.Uri(assembly.CodeBase).LocalPath
+      // SR.AssemblyName carries no Location; resolve the loaded assembly with this
+      // identity when possible so that the same Core-safe helper applies.
+      mutable loaded_assembly : SR.Assembly = null;
+      foreach (a in System.AppDomain.CurrentDomain.GetAssemblies())
+        when (a.FullName == assembly.FullName)
+          loaded_assembly = a;
+
+      if (loaded_assembly != null)
+        GetAssemblyLocation(loaded_assembly)
+      else
+      {
+        def code_base = assembly.CodeBase; // null here (and on .NET Core)
+        if (code_base == null) "" else System.Uri(code_base).LocalPath
+      }
     }
 
     /* -- PRIVATE METHODS -------------------------------------------------- */
+
+    /// Core-host-safe replacement for `System.Uri(assembly.CodeBase).LocalPath':
+    /// on .NET Core 3.0+ Assembly.CodeBase throws PlatformNotSupportedException,
+    /// so fall back to Assembly.Location. The result may be "" for assemblies not
+    /// loaded from disk; callers must tolerate that.
+    private static GetAssemblyLocation (asm : SR.Assembly) : string
+    {
+      try
+      {
+        def code_base = asm.CodeBase;
+        if (code_base == null) asm.Location else System.Uri(code_base).LocalPath
+      }
+      catch
+      {
+        | _ is System.NotSupportedException => asm.Location
+      }
+    }
+
+    /// Probe every directory in `_lib_path' for `name' with SR.Assembly.LoadFrom,
+    /// guarded by File.Exists. On .NET Core Assembly.Load(string) only probes
+    /// ALC.Default via deps.json, so this path probe must run before the
+    /// Assembly.Load(name + strongPart) fallback. Every probe failure is swallowed
+    /// (null is returned) so that a bad image in some search directory never
+    /// masks the caller's original "not found" diagnostic.
+    private TryLoadFromLibPath (name : string) : SR.Assembly
+    {
+      def probe (lib : string) : SR.Assembly
+      {
+        try
+        {
+          def full = Path.Combine(lib, name);
+          def path = match (Path.GetExtension(full).ToLower())
+                     {
+                       | ".dll" | ".exe" => full
+                       | _ => full + ".dll"
+                     };
+          if (File.Exists(path)) assemblyLoadFrom(path) else null
+        }
+        catch
+        {
+          | _ => null
+        }
+      }
+
+      def lookup (libs : list[string]) : SR.Assembly
+      {
+        match (libs)
+        {
+          | lib :: libs =>
+            def ret = probe(lib);
+            if (ret == null) lookup(libs) else ret
+
+          | _ => null
+        }
+      }
+      lookup(_lib_path)
+    }
 
     private load_macro(lib : SR.Assembly, macro_name : string) : void
     {
@@ -196,7 +266,9 @@ namespace Nemerle.Compiler
               assert(!type.Equals(loadedType));
               def getAssemblyPath(type : Type) : string
               {
-                Uri(type.Assembly.CodeBase).LocalPath
+                def asm = type.Assembly;
+                def loc = GetAssemblyLocation(asm);
+                if (System.String.IsNullOrEmpty(loc)) "<" + asm.GetName().Name + ">" else loc
               }
 
               Message.Error($"The macro `$macro_name' implement the IMacro interface from '$(getAssemblyPath(type))' but the compiler use this interface from '$(getAssemblyPath(loadedType))'.");
@@ -266,16 +338,11 @@ namespace Nemerle.Compiler
           }
 
         | _ =>
-          def lookup(libs)
-          {
-            | lib :: libs =>
-              def ret = assembly_by_name(Path.Combine(lib, name));
-              if (ret == null) lookup(libs) else ret
-
-            | _ => null
-          }
-
-          def assembly = lookup(_lib_path);
+          // Probe the _lib_path directories with LoadFrom first: on .NET Core it is
+          // the only way to resolve assemblies outside ALC.Default's deps.json
+          // closure, and probe failures are swallowed inside so they cannot mask
+          // the strong-name load below or its "not found" diagnostic.
+          def assembly = TryLoadFromLibPath(name);
 
           if (assembly == null)
           {

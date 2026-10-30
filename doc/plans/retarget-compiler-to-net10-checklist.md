@@ -51,7 +51,10 @@
 - [✅] 3.4b Убрать ncc.nproj (net461) из NCompilerProject (D3); ncc\packages.config удалён (нулевой потребление); stage-каталоги без ncc.exe, компилирует только ncc-core.exe (-version exit 0). Validate-глобы усохли сами (FC ×5 — новая норма). Найдено: Nemerle.Location.nproj StartProgram→Stage1\ncc.exe (IDE F5, перенацелить в Фазе 5/7). Прогресс: progress3.4b.md
 - [✅] 3.4a Ncc ToolTask предпочитает ncc-core.exe (apphost) при его наличии в CompilerPath/каталоге задачи; legacy ncc.exe фолбэк сохранён (boot-сид без apphost → Stage1 идёт на FX ncc.exe, Stage2/3 — на ncc-core.exe; log-строка "Using Nemerle compiler" важности normal)
 - [✅] 3.4a-fix Детерминизм имён генерируемых макрос-классов: FNV-1a вместо String.GetHashCode в MacroClassGen (Core рандомит хэш строк на процесс → FC падал на Nemerle.Macros.dll). Проба: имя идентично между процессами и совпадает с эталонным FNV-1a; FC ×6, 468+167/0
-- [ ] 3.5 Починить API-разрывы Core 2.1→10 по таблице (main.n CodeBase, LibraryReferenceManager, ManagerClass ref-set, codedom, Resource.n, hashtable.n и др.)
+- [✅] 3.5c LibraryReferenceManager.n: хелпер GetAssemblyLocation (CodeBase→null/NotSupportedException fallback на Location, empty-safe с меткой `<SimpleName>`) во все три диагностики; _lib_path-свип вынесен в TryLoadFromLibPath (LoadFrom+File.Exists, catch-all, не маскирует исходную ошибку) перед strong-part retry. Приёмка: проба дубликата-IMacro на ncc-core даёт чистый error без PNSE/ICE, FX-формулировка идентична; FC ×5, 468+167/0. Нюанс: на .NET 10 CodeBase для disk-loaded больше не бросает (реверт до 3.0-RTM), helper спасает dynamic-ассембли (Location="")
+- [ ] 3.5d (до Фазы 6) LibraryReference.n: `:72-76` StrongNameKeyPair.PublicKey (PNSE на Core ломает InternalsVisibleTo-скан) → чтение байтов ключа/dnlib StrongNamePublicKey; `:84` SHA1Managed → SHA1.Create ([A])
+- [ ] 3.5e (до Фазы 6) macros/Resource.n:68 resx-ридер (Assembly.Load System.Windows.Forms → FNF на Core, громкая ошибка компиляции) — отдельный коммит, System.Resources.Extensions или host-aware путь
+- [ ] 3.5f (отложено → Фаза 5/7) hashtable.n:103 serialization-ctor/[Serializable] и Makefile/NAnt FX-ссылки — только при мультитаргете библиотек на net10.0 или смерти make-пути
 - [ ] 3.7 (факультативно) AOT-эксперимент; при неудаче — зафиксировать блокиратор
 
 ## Фаза 4 — Пересев бутстрапа на .NET 10
