@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - retarget-compiler
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      # Stage2 self-host: Stage1 is compiled with the checked-in boot compiler,
+      # then Stage2 recompiles the sources with the Stage1-produced ncc.
+      - name: Build (Stage1 + Stage2 self-host)
+        run: cmd /c Build-core-base.cmd Debug Build Stage2
+        shell: cmd
+
+      # CompilerTests must run in the same msbuild session as Stage1, hence
+      # the combined target string "Stage1,CompilerTests".
+      - name: CompilerTests
+        run: cmd /c Build-core-base.cmd Debug Build "Stage1,CompilerTests"
+        shell: cmd
+
+      # pefverify step is known-red until Phase 5.1 removes it (old pefverify
+      # cannot handle netstandard2.0), so the step itself does not fail the job;
+      # the gate step below re-asserts the IL fixed-point from the log.
+      - name: Validate (Stage3 + IL fixed-point)
+        run: cmd /c Build-core-base.cmd Debug Build "Stage3,Validate" > validate.log 2>&1
+        shell: cmd
+        continue-on-error: true
+
+      # Keeps the IL fixed-point assertion binding despite continue-on-error:
+      # 5x "FC: no differences encountered" are expected; any other FC diff
+      # report (or a missing FC result) fails the job.
+      - name: Gate on Validate IL fixed-point
+        shell: pwsh
+        run: |
+          if (-not (Test-Path validate.log)) {
+            Write-Host "::error::validate.log not found - the Validate step did not produce a log"
+            exit 1
+          }
+          $log = Get-Content validate.log
+          # fc.exe reports real diffs only via exit code -> surfaces as MSB3073 on the fc command;
+          # pefverify MSB3073 is known-red until Phase 5.1 and must not fail the gate.
+          if ($log -match 'MSB3073.*"fc ' -or $log -match 'FC:.*(?<!no )differences') {
+            Write-Host "::error::IL fixed-point broken: FC reported differences between stages"
+            exit 1
+          }
+          if (-not ($log -match 'FC: no differences')) {
+            Write-Host "::error::No 'FC: no differences' line found in validate.log - Validate did not reach the IL comparison"
+            exit 1
+          }
+          Write-Host "IL fixed-point confirmed: no differences between stages"
+          exit 0
