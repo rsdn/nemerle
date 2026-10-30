@@ -60,10 +60,10 @@
 ## Фаза 4 — Пересев бутстрапа на .NET 10
 - [✅] 4.1 Stage1 старым seed boot-dnlib → ncc на net10: выполняется с 3.4a (boot FX ncc.exe → Stage1 → Stage2/3 на ncc-core.exe net10; свидетель: «Using Nemerle compiler» логи, FC ×5)
 - [✅] 4.2 `boot-net10/` создан из валидированного Stage2 (10 файлов: ncc-core.exe/.dll/runtimeconfig/deps + Nemerle/Nemerle.Compiler/Nemerle.Macros + tasks + dnlib + CodeDom-facade; манифест с потребителями в progress4.2.md). Дым: -version exit 0, компиляция .n и [StructuralEquality] без -r — exit 0. NPrepareBoot дополнен `$(NRootBoot)\*.json` (без этого apphost-файлы не попадали в NBoot; для boot-dnlib безвредно). САМИ БИНАРИ СИДА НЕ ЗАКОММИЧЕНЫ — по правилу после зелёного цикла 4.3
-- [ ] 4.3 NRootBoot→boot-net10: Stage1→Stage2→Stage3→Validate, fixed point IL Stage2≡Stage3
-- [ ] 4.4 Ncc ToolTask спавнит net10 ncc (ToolName/CompilerPath)
-- [ ] 4.5 boot-dnlib держать аварийным seed до воспроизведения fixed point с чистого клона
-- [ ] 4.6 (привязка к правилу пользователя) Коммит seed-бинарей — только после зелёной Stage2 + CompilerTests
+- [✅] 4.3 NRootBoot→boot-net10: полный Rebuild Stage1→2→3+Validate — FC ×5, единственный error pefverify known-red; ВСЕ 12 «Using Nemerle compiler» — ncc-core.exe (boot×4, Stage1×4, Stage2×4), ноль FX ncc.exe; Stage1,CompilerTests 468+167/0. boot-dnlib нетронут. Прогресс: progress4.3.md
+- [✅] 4.4 Ncc ToolTask спавнит net10 ncc: доказано полным циклом 4.3 (boot-сид с apphost → Stage1 тоже на ncc-core.exe; легаси ncc.exe фолбэк в задаче остался)
+- [ ] 4.5 boot-dnlib держать аварийным seed до воспроизведения fixed point с чистого клона — СОБЛЮДАЕТСЯ (каталог на диске, NRootBoot на него не указывает; закрытие — 7.4)
+- [✅] 4.6 Коммит seed-бинарей сделан только сейчас: зелёный трёхстадийный Rebuild + Validate (FC ×5) + CompilerTests 468+167/0 (коммит ниже)
 
 ## Фаза 5 — Оркестрация и скрипты
 - [ ] 5.1 Убрать InitTools Framework-разведку (gacutil/ildasm/al/ngen/peverify) из NemerleAll.nproj. (NB из 3.2: заодно задокументировать/отправить на пенсию ограничение ildasm `/NOIL` — partial-disassembly warning на наших сборках)
