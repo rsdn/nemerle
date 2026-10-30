@@ -119,7 +119,7 @@ Build-core*.cmd → VS2017 VsDevCmd → msbuild NemerleAll.nproj /t:StageN
 ### Фаза 3 — Перенос хоста компилятора и библиотек на .NET 10
 - [ ] 3.1 `ncc-core.nproj`: `netcoreapp2.1` → `net10.0`; включить `UseAppHost=true`; при необходимости `RuntimeIdentifier`. Цель — получить запускаемый `ncc-core.exe` (apphost) + `runtimeconfig.json` на 10.0.
 - [ ] 3.2 По D2/D6 библиотеки держим на `netstandard2.0` (НЕ `net10.0`-only): `Nemerle.nproj`, `Nemerle.Macros.nproj`, `Nemerle.Compiler.nproj` (+ IDE-потребляемые). Проверить, что (а) net10-хост грузит эти netstandard2.0-сборки, и (б) те же dll грузятся из .NET Framework 4.6.1+/VS 20xx. При нужде в net10-only API — мульти-таргет `netstandard2.0;net10.0` и учесть, что `Nemerle.Sdk.props:5` ставит `AppendTargetFrameworkToOutputPath=false` (для двух TFM нужны отдельные подпапки вывода).
-- [ ] 3.3 Пакеты: `System.CodeDom` → актуальный; **не** добавлять явных `System.Reflection.Emit*` (inbox на net10). Обновление `dnlib` вынесено в Фазу 2.5.
+- [ ] 3.3 Пакеты: `System.CodeDom` → актуальный; **не** добавлять явных `System.Reflection.Emit*` (inbox на net10). Обновление `dnlib` вынесено в Фазу 2.5. [РЕШЕНО 3.3a: остаём на 4.7.0 (net461-ассет удалён из пакета в 7.0.0+, см. report3.3a-codedom.md); удаление codedom-поверхности — Фаза 6]
 - [ ] 3.4 Убрать `ncc.nproj` (net461) из `NCompilerProject` (`NemerleAll.nproj:56-61`) по D3.
 - [ ] 3.5 **API-разрывы Core 2.1→10 в коде компилятора/stdlib** — по сабвею (реальных точек ~15; живого `System.Reflection.Emit`/`BinaryFormatter`/`Registry` в `.n`-коде нет; эмит — через dnlib). По критичности:
 
