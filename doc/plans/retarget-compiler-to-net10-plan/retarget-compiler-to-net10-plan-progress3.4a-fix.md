@@ -28,12 +28,12 @@ Stage3 compiler processes emit different `<HASH>` digits for identical sources.
 - [x] Progress file created.
 - [x] Code fix in MacroClassGen.n.
 - [x] GetHashCode audit (ncc/) documented.
-- [ ] A: Stage1 build exit 0.
-- [ ] B: cross-process determinism probe (two ncc-core.exe processes emit the
+- [x] A: Stage1 build exit 0.
+- [x] B: cross-process determinism probe (two ncc-core.exe processes emit the
       identical `_N_operator...Macro` name; ildasm + fc evidence).
-- [ ] C: `Stage3,Validate` forced rebuild → FC 6/6 + known-red pefverify as
+- [x] C: `Stage3,Validate` forced rebuild → FC 6/6 + known-red pefverify as
       sole error; `Stage1,CompilerTests` → 468+167 passed, 0 failed.
-- [ ] D: `git diff --stat` scope check.
+- [x] D: `git diff --stat` scope check.
 
 ## Implementation
 
@@ -160,3 +160,37 @@ recompiled (Stage1..Stage3, all on Core hosts where applicable), log
 `Stage1,CompilerTests` (orchestrator-run after this session, exit 0,
 `orch-compilertests.log`): **468** positive + **167** negative `passed`,
 **0** failed (`All tests passed.` x2). ACCEPTANCE A–D: PASS.
+
+Executor-side corroborating run (this atom): first `Stage1,CompilerTests`
+attempt hit `error MSB3027` (boot dll locked by a lingering MSBuild node,
+`fix-stage1-compilertests.log`); after one `dotnet build-server shutdown`
+(exit 0) the retry `.tmp\phase34a-logs\fix-stage1-compilertests2.log` →
+**exit 0**, 468 positive passed (2m19s) + 167 negative passed (31s), 0
+failed, `Build succeeded.`
+
+## D — diff scope
+
+While dirty, `git diff --stat` showed exactly
+`ncc/frontend/hierarchy/MacroClassGen.n | 21 +++++++++++-` (20 insertions,
+1 deletion — the only code file touched; the audit found no other
+name-embedding site) on top of the pre-existing dirty
+`tools/msbuild-task/MSBuildTask.cs` (3.4a's own change, left as-is).
+
+NOTE (not this atom's doing): this atom never ran `git commit`; at
+01:22:27–39 an external process (the orchestrator session) committed the
+tree: `171f1f227` = MacroClassGen.n fix + this progress doc (scope verified
+via `git show --stat`: `MacroClassGen.n | 21 +++++++-`), `ae2611a61` = the
+pre-existing MSBuildTask.cs (3.4a), `f0ae1b1b0` = older progress docs. The
+committed content matches the intended working-tree state exactly.
+
+## Logs
+
+- `.tmp\phase34a-logs\fix-stage1-build.log` (+ `-exit.txt`) — A, exit 0.
+- `.tmp\phase34a-logs\probe\` — B: probe.n, run1/run2.log, probe1/2.dll,
+  probe1/2.il, names1/2.txt (`fc /L`: no differences; matched name
+  `_N_operator218746724_7511Macro`).
+- `.tmp\phase34a-logs\fix-stage3-rebuild-validate.log` (+ `-exit.txt`) — C
+  Validate: FC 6/6, sole error pefverify.
+- `.tmp\phase34a-logs\fix-stage1-compilertests2.log` (+ `-exit.txt`) — C
+  tests: 468+167 passed, 0 failed (locked-dll first attempt preserved in
+  `fix-stage1-compilertests.log`).
