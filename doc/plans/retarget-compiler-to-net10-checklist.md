@@ -38,13 +38,15 @@
 - [✅] 2.5.7 Acceptance: Stage1-3 green; FC 5/5; тесты 468+167/0; IL-диф Stage1 vs dnlib3.3.0-снапшот: только assemblyref dnlib 3.3→4.5 + счётчики имён CA в Nemerle.Macros.dll (прогресс-файл 2.5); логи C:\RSDN\phase25b-logs\
 
 ## Фаза 3 — Хост компилятора и библиотеки на .NET 10
-- [✅] 3.1.1 Suppress assert dialogs в сборках: App.config у ncc+harness (assertuienabled=false), трекаемый config у сида, NPrepareBoot копирует *.config (commit fa7d0bdd4). Переключатель: assertuienabled=true в .config рядом с exe. Приёмка: ICE-триггер без диалога (exit 2), FC 5/5, тесты 468+167/0
-- [ ] 3.1 `ncc-core.nproj`: net10.0 + UseAppHost → запускаемый ncc-core.exe (под-атомы 3.1a/b/c по report3.1-3.5; 3.5a и перешивка сида уже зелёные)
+- [✅] 3.1 `ncc-core.nproj`: net10.0 + apphost → `ncc-core.exe -version` exit 0 без roll-forward (commit 2d6fe489f; runtimeconfig tfm=net10.0; ProduceReferenceAssembly=false; пертирание dnlib/CodeDom флаворов плоского stage-каталога)
+- [✅] 3.1c-flatdir Плоский stage-каталог: AfterTargets-пертирание пакетных флаворов (dnlib ns2.0, CodeDom net461 facade 25192 B); codedom.n passed, 468+167/0 (commit 2d6fe489f, report3.1c-3.1d Q1(a))
+- [✅] 3.1d-validate-glob Validate: apphost исключён из ildasm/peverify (`Exclude ncc-*.exe`), ncc-core.dll добавлен в IL-сравнение (+Delete сталых .il) → FC ×6, единственный error pefverify-Compiler.dll (коммит ниже). Инцидент: суб-агент обнулил NemerleAll.nproj (whole-file rewrite), восстановлено из HEAD, правка перенесена точечно — прогресс-файл 3.1d
+- [✅] 3.6 Acceptance: `Stage1/ncc-core.exe -version` без `--roll-forward` → exit 0 (проверено в 3.1a-retry C и 3.1c D)
+- [✅] 3.1.1 Suppress assert dialogs в сборках: App.config у ncc+harness (assertuienabled=false), трекаемый config у сида, NPrepareBoot копирует *.config (commit c3af18bad). Переключатель: assertuienabled=true в .config рядом с exe. ICE-триггер без диалога (exit 2), FC 5/5, 468+167/0
 - [ ] 3.2 Библиотеки остаются netstandard2.0 (D2/D6); проверить загрузку из net10 и Framework 4.6.1+
 - [ ] 3.3 Пакеты: System.CodeDom актуальный; явных SRE* не добавлять
 - [ ] 3.4 Убрать ncc.nproj (net461) из NCompilerProject (D3)
 - [ ] 3.5 Починить API-разрывы Core 2.1→10 по таблице (main.n CodeBase, LibraryReferenceManager, ManagerClass ref-set, codedom, Resource.n, hashtable.n и др.)
-- [ ] 3.6 Acceptance: `Stage1/ncc-core.exe -version` без `--roll-forward`
 - [ ] 3.7 (факультативно) AOT-эксперимент; при неудаче — зафиксировать блокиратор
 
 ## Фаза 4 — Пересев бутстрапа на .NET 10
@@ -83,6 +85,8 @@
 - 0.4: Validate на бейзлайне не полностью зелёный — IL-диф 5/5 green, но pefverify падает (старый .NET FX 4.6.1 Tools против netstandard2.0). Зафиксировано как состояние «до»; паритет later фаз = IL-diff + tests, pefverify исключён до Фазы 5.1.
 
 ## Journal
+- 2026-10-31: ИНЦИДЕНТ: суб-агент 3.1d обрезал NemerleAll.nproj до 0 байт (whole-file rewrite вне правки; сборка к тому моменту уже прошла). Восстановлено из HEAD, правка перенесена точечными заменами, Validate перепроверен (FC ×6). ПРАВИЛО ДЛЯ СУБ-АГЕНТОВ: точечные replace-редакты, после каждого — проверка размера файла и git diff; ReadAllText/WriteAllText/Set-Content по всему файлу запрещены.
+- 2026-10-31: 3.1a+3.1c-flatdir закоммичены (2d6fe489f): ncc-core на net10.0, apphost работает без roll-forward (3.6 ✅). Подавление ассерт-диалогов (3.1.1) — c3af18bad, переключатель assertuienabled в .config рядом с exe.
 - 2026-10-30: Фаза 2 + 2.5 закрыты (коммиты 952a0a84d, 42d1a188a). Найдена и отложена регрессия System.CodeDom 10.0.14 (codedom.n ArgumentNullException) — бамп отменён, перенесён в 3.3. Отчёт по фазе 3: report3.1-3.5.md (атомы 3.5a→3.1a→3.1b→3.1c→3.4a→3.4b).
 - 2026-10-30: Фаза 1 (под-агент): Build-core-base.cmd переведён на vswhere (работает: VS18/MSBuild 18.11), global.json=10.0.402+latestFeature, CheckEolTargetFramework=false (Nemerle.Sdk.props + NemerleAll.nproj, NETSDK1138=0). ВАЖНО: global.json требует MSBuild>=18 — легаси-команда VS2022 msbuild 17.14 изbaseline-дока устарела, запись в baseline-док будет обновлена. Ловушка: cmd.exe съедает запятую в целевой строке без кавычек (`"Stage3,Validate"`) — проверять через полную кавыцированную командную строку.
 - 2026-10-30: Ограничение от пользователя: .NET 10 — только ветка `retarget-compiler`; `master` обязана оставаться на **.NET Framework** (не обязательно ровно 4.6.1 — допустима любая версия, совместимая с VS 2017, где работает IDE-плагин). Правки тулчейна — только на retarget, в master не синхронизировать. Библиотеки — netstandard2.0 (D2/D6) в обеих ветках.
