@@ -47,7 +47,9 @@
 - [✅] 3.1.1 Suppress assert dialogs в сборках: App.config у ncc+harness (assertuienabled=false), трекаемый config у сида, NPrepareBoot копирует *.config (commit c3af18bad). Переключатель: assertuienabled=true в .config рядом с exe. ICE-триггер без диалога (exit 2), FC 5/5, 468+167/0
 - [ ] 3.2 Библиотеки остаются netstandard2.0 (D2/D6); проверить загрузку из net10 и Framework 4.6.1+
 - [ ] 3.3 Пакеты: System.CodeDom актуальный; явных SRE* не добавлять
-- [ ] 3.4 Убрать ncc.nproj (net461) из NCompilerProject (D3)
+- [ ] 3.4b Убрать ncc.nproj (net461) из NCompilerProject (D3); retire ncc\packages.config; проверить, что осталось в stage без него
+- [✅] 3.4a Ncc ToolTask предпочитает ncc-core.exe (apphost) при его наличии в CompilerPath/каталоге задачи; legacy ncc.exe фолбэк сохранён (boot-сид без apphost → Stage1 идёт на FX ncc.exe, Stage2/3 — на ncc-core.exe; log-строка "Using Nemerle compiler" важности normal)
+- [✅] 3.4a-fix Детерминизм имён генерируемых макрос-классов: FNV-1a вместо String.GetHashCode в MacroClassGen (Core рандомит хэш строк на процесс → FC падал на Nemerle.Macros.dll). Проба: имя идентично между процессами и совпадает с эталонным FNV-1a; FC ×6, 468+167/0
 - [ ] 3.5 Починить API-разрывы Core 2.1→10 по таблице (main.n CodeBase, LibraryReferenceManager, ManagerClass ref-set, codedom, Resource.n, hashtable.n и др.)
 - [ ] 3.7 (факультативно) AOT-эксперимент; при неудаче — зафиксировать блокиратор
 
@@ -77,6 +79,11 @@
 - [ ] 7.2 Коммит boot-net10 как seed (после зелёного двухстадийного цикла с тестами)
 - [ ] 7.3 Обновить AGENTS.md/README под dotnet+net10
 - [ ] 7.4 Полный цикл с чистого клона
+
+## Фаза 8 — Финальное ревью (требование пользователя, после всех фаз)
+- [ ] 8.1 Суб-агент-ревьюер №1: критический обзор всей выполненной работы по плану (коммиты 17d3cf47c..HEAD, отклонения Deviations, прогресс-доки) — поиск дефектов, регрессий, нарушений invariant (bootstrap fixed point, master-совместимость, bootstrap seed правила). Отчёт в `...-plan-report-review1.md`. Каждый выявленный дефект → новый пункт чек-листа с атомизацией.
+- [ ] 8.2 Суб-агент-ревьюер №2 (запускается СТРОГО после завершения 8.1 и его фиксации): независимый критический обзор того же объёма + критика выводов ревьюера №1. Отчёт в `...-plan-report-review2.md`. Дефекты → новые пункты чек-листа.
+- [ ] 8.3 (условный) Устранение дефектов, найденных ревьюерами: пункты создаются по итогам 8.1/8.2, выполняются по одному суб-агенту за раз, приёмка = стандартный гейт FC ×6 + 468/167/0.
 
 ## Deviations
 - 3.1a (TFM net10) блокирован bootstrap chicken-and-egg: boot seed ICE'ит на.ref-сетах net10 (у IntPtr/Void появились generic-интерфейсы; InitSystemTypes резолвит IntPtr до Void — assert TypeInfo.n:551). Порядок: фикс InitSystemTypes в источнике → двухстадийная сборка+тесты → перешивка boot-dnlib с Stage2 (коммит сида — только после зелёного цикла, правило пользователя) → повторный флип TFM. См. progress3.5a-3.1a.md.
