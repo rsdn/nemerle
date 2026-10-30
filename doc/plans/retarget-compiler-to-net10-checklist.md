@@ -81,7 +81,7 @@
 
 ## Фаза 7 — Зачистка и документация
 - [ ] 7.1 Удалить VS2017-скрипты/реестровые хаки/мёртвые Framework-таргеты. (NB из 3.4b/3.2: ncc.nproj+App.config c диска, мёртвые ncc32/ncc64.nproj, stale Nemerle.Location.nproj v4.6.1 с StartProgram→Stage1\ncc.exe)
-- [ ] 7.2 Коммит boot-net10 как seed (после зелёного двухстадийного цикла с тестами)
+- [✅] 7.2 Коммит boot-net10 как seed — выполнен на 4.6 (коммит 2ff4e2fb4 после зелёного цикла с тестами)
 - [ ] 7.3 Обновить AGENTS.md/README под dotnet+net10
 - [ ] 7.4 Полный цикл с чистого клона
 - [ ] 7.5 (отложено из 3.5e) Полная поддержка resx-макро на Core-хосте: System.Resources.Extensions или собственный resx-парсер в macros/Resource.n (сейчас — явная ошибка «Framework-only»; FX-путь работает). Потребление в testsuite нулевое
@@ -102,6 +102,7 @@
 - 0.4: Validate на бейзлайне не полностью зелёный — IL-диф 5/5 green, но pefverify падает (старый .NET FX 4.6.1 Tools против netstandard2.0). Зафиксировано как состояние «до»; паритет later фаз = IL-diff + tests, pefverify исключён до Фазы 5.1.
 
 ## Journal
+- 2026-10-31: ФАЗА 3 ЗАКРЫТА (3.5c/d/e зелёные; 3.5f→Фаза 5/7, 3.7 факультативен, 3.1e риски не воспроизвелись и считаются закрытыми: после 3.4b/4.3 в stage-плоскости нет FX-потребителей deps.json). ФАЗА 4 ЗАКРЫТА пересевом: NRootBoot=boot-net10, все стадии на ncc-core.exe (.NET 10), FC ×5, 468+167/0; seed-бинари закоммичены по правилу (2ff4e2fb4); boot-dnlib жив на диске как аварийный (4.5→7.4).
 - 2026-10-31: 3.4b (коммит ниже): ncc.nproj вне графа стадий, ncc.exe больше не появляется в stage → Validate-норма изменена FC ×6 → **FC ×5** (Nemerle.Compiler, Nemerle, Nemerle.Macros, Nemerle.MSBuild.Tasks, ncc-core.dll); единственный error — pefverify known-red. Все упоминания «FC ×6» в старых строках — историческая норма тех атомов.
 - 2026-10-31: ХОЗЯЙСТВО (правило пользователя): C:\RSDN\ — только корни репозиториев. Все временные артефакты плана (phase*-logs, baseline-logs, seedrefresh-logs, assertui-logs, repro31a/repro311, seed-repro, tasks-selftest*, dotnetbuild-selftest, dnlib330-snapshot, backup\boot-dnlib-backup-20261030.zip, commitmsg-*.txt) перенесены в `C:\RSDN\nemerle\.tmp\` (git-ignored c f7021ed4d; в перенесённом .git нет, репозитории C:\RSDN\ не тронуты). Скрипты сборок/проверок писать только в `.tmp\` или Temp. Ссылки на старые пути C:\RSDN\<name>-logs в чек-листе/прогресс-доках считать .tmp\<name>-logs. Бэкап сида дублируется тегом pre-net10-baseline (git).
 - 2026-10-31: ИНЦИДЕНТ: суб-агент 3.1d обрезал NemerleAll.nproj до 0 байт (whole-file rewrite вне правки; сборка к тому моменту уже прошла). Восстановлено из HEAD, правка перенесена точечными заменами, Validate перепроверен (FC ×6). ПРАВИЛО ДЛЯ СУБ-АГЕНТОВ: точечные replace-редакты, после каждого — проверка размера файла и git diff; ReadAllText/WriteAllText/Set-Content по всему файлу запрещены.
