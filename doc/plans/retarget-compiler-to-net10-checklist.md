@@ -53,7 +53,7 @@
 - [✅] 3.4a-fix Детерминизм имён генерируемых макрос-классов: FNV-1a вместо String.GetHashCode в MacroClassGen (Core рандомит хэш строк на процесс → FC падал на Nemerle.Macros.dll). Проба: имя идентично между процессами и совпадает с эталонным FNV-1a; FC ×6, 468+167/0
 - [✅] 3.5c LibraryReferenceManager.n: хелпер GetAssemblyLocation (CodeBase→null/NotSupportedException fallback на Location, empty-safe с меткой `<SimpleName>`) во все три диагностики; _lib_path-свип вынесен в TryLoadFromLibPath (LoadFrom+File.Exists, catch-all, не маскирует исходную ошибку) перед strong-part retry. Приёмка: проба дубликата-IMacro на ncc-core даёт чистый error без PNSE/ICE, FX-формулировка идентична; FC ×5, 468+167/0. Нюанс: на .NET 10 CodeBase для disk-loaded больше не бросает (реверт до 3.0-RTM), helper спасает dynamic-ассембли (Location="")
 - [✅] 3.5d LibraryReference.n: snKey().PublicKey (StrongNameKeyPair — PNSE на Core; важно: ветка была ДВОЙНО мёртвой на всех хостах — унаследовано с master: guard требовал пустого StrongAssemblyKeyName при открытом том же файле, Split(',') не мог сматчиться) → publicKey() через dnlib StrongNameKey(bytes).PublicKey, split '=' (синтаксис PublicKey=<hex>), снят ложный guard, SHA1Managed→SHA1.Create. Проба IVT на ncc-core: same-key exit 0, wrong-key/unsigned — «unbound name» (скан реально исполняется). FC ×5, 468+167/0. Кандидат в cherry-pick на master (фикс поведения) — по правилу кросс-веточной синхронизации, НЕ делать в этом плане
-- [ ] 3.5e (до Фазы 6) macros/Resource.n:68 resx-ридер (Assembly.Load System.Windows.Forms → FNF на Core, громкая ошибка компиляции) — отдельный коммит, System.Resources.Extensions или host-aware путь
+- [✅] 3.5e macros/Resource.n: host-probe до Assembly.Load — на Core хосте явная ошибка «Resource macro is not supported on .NET (Core)… Framework-only» (вместо сырого FNF), catch префиксует «resx reading failed in Resource macro». FX-путь не тронут (boot ncc.exe читает resx реально, «Hello» в outputs). Полный парсер (System.Resources.Extensions / own) — ОТЛОЖЕН: у resx-макро нулевое потребление в testsuite (гейт «before Phase 6 if used» не сработал) → пункт 7.5. FC ×5, 468+167/0
 - [ ] 3.5f (отложено → Фаза 5/7) hashtable.n:103 serialization-ctor/[Serializable] и Makefile/NAnt FX-ссылки — только при мультитаргете библиотек на net10.0 или смерти make-пути
 - [ ] 3.7 (факультативно) AOT-эксперимент; при неудаче — зафиксировать блокиратор
 
@@ -84,6 +84,7 @@
 - [ ] 7.2 Коммит boot-net10 как seed (после зелёного двухстадийного цикла с тестами)
 - [ ] 7.3 Обновить AGENTS.md/README под dotnet+net10
 - [ ] 7.4 Полный цикл с чистого клона
+- [ ] 7.5 (отложено из 3.5e) Полная поддержка resx-макро на Core-хосте: System.Resources.Extensions или собственный resx-парсер в macros/Resource.n (сейчас — явная ошибка «Framework-only»; FX-путь работает). Потребление в testsuite нулевое
 
 ## Фаза 8 — Финальное ревью (требование пользователя, после всех фаз)
 - [ ] 8.1 Суб-агент-ревьюер №1: критический обзор всей выполненной работы по плану (коммиты 17d3cf47c..HEAD, отклонения Deviations, прогресс-доки) — поиск дефектов, регрессий, нарушений invariant (bootstrap fixed point, master-совместимость, bootstrap seed правила). Отчёт в `...-plan-report-review1.md`. Каждый выявленный дефект → новый пункт чек-листа с атомизацией.
