@@ -38,7 +38,8 @@
 - [✅] 2.5.7 Acceptance: Stage1-3 green; FC 5/5; тесты 468+167/0; IL-диф Stage1 vs dnlib3.3.0-снапшот: только assemblyref dnlib 3.3→4.5 + счётчики имён CA в Nemerle.Macros.dll (прогресс-файл 2.5); логи C:\RSDN\phase25b-logs\
 
 ## Фаза 3 — Хост компилятора и библиотеки на .NET 10
-- [~] 3.1 `ncc-core.nproj`: net10.0 + UseAppHost → запускаемый ncc-core.exe (под-атомы 3.1a/b/c по report3.1-3.5)
+- [✅] 3.1.1 Suppress assert dialogs в сборках: App.config у ncc+harness (assertuienabled=false), трекаемый config у сида, NPrepareBoot копирует *.config (commit fa7d0bdd4). Переключатель: assertuienabled=true в .config рядом с exe. Приёмка: ICE-триггер без диалога (exit 2), FC 5/5, тесты 468+167/0
+- [ ] 3.1 `ncc-core.nproj`: net10.0 + UseAppHost → запускаемый ncc-core.exe (под-атомы 3.1a/b/c по report3.1-3.5; 3.5a и перешивка сида уже зелёные)
 - [ ] 3.2 Библиотеки остаются netstandard2.0 (D2/D6); проверить загрузку из net10 и Framework 4.6.1+
 - [ ] 3.3 Пакеты: System.CodeDom актуальный; явных SRE* не добавлять
 - [ ] 3.4 Убрать ncc.nproj (net461) из NCompilerProject (D3)
