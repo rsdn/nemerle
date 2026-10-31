@@ -86,7 +86,7 @@
 ## Фаза 7 — Зачистка и документация
 - [✅] 7.1 Зачистка: удалены ncc.nproj+App.config, ncc32/ncc64.nproj, Build-core-with-ide-plug-in.cmd, NemerleAllTest.cmd, GacReg*×3, Reg-bins*×6, Reg-boot*×2 (ngen/gacutil/реестр), dead-записи из старых .sln; Nemerle.Location.nproj перенацелен (StartProgram→ncc-core.exe), Build-core*.cmd оставлены как шиммы над build.ps1 (реестра уже нет). Mono/NAnt-путь и guarded WiX — отдельный атом (записано). 23 файла, +8/−791; гейты: FC ×5, 461+7nr/0 + 167/0, smoke exit 0. Коммит 996a1486b
 - [✅] 7.2 Коммит boot-net10 как seed — выполнен на 4.6 (коммит 2ff4e2fb4 после зелёного цикла с тестами)
-- [ ] 7.3 Обновить AGENTS.md/README под dotnet+net10
+- [✅] 7.3 Docs: AGENTS.md/README/README.md/BASELINE переписаны под build.ps1+net10 (seed boot-net10, ncc-core.exe, Validate fc×5, норма 461+7nr/167, NO-CORE/BEGIN-OUTPUT-CORE, -known-failures; master-абзац сохранён). Коммит 3228ff59e
 - [ ] 7.4 Полный цикл с чистого клона
 - [ ] 7.5 (отложено из 3.5e) Полная поддержка resx-макро на Core-хосте: System.Resources.Extensions или собственный resx-парсер в macros/Resource.n (сейчас — явная ошибка «Framework-only»; FX-путь работает). Потребление в testsuite нулевое
 
