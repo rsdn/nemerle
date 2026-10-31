@@ -66,7 +66,7 @@
 - [✅] 4.6 Коммит seed-бинарей сделан только сейчас: зелёный трёхстадийный Rebuild + Validate (FC ×5) + CompilerTests 468+167/0 (коммит ниже)
 
 ## Фаза 5 — Оркестрация и скрипты
-- [~] 5.1 Убрать InitTools Framework-разведку из NemerleAll.nproj (GetFrameworkSdkPath/SDKBin/gacutil/al.exe/ngen/peverify). Пешаг: pefverify-шаг Validate УДАЛИТЬ (known-red MSB3073 уходит → новая норма гейта: FC ×5 и НОЛЬ `: error MSB`); ildasm discovery ОСТАВИТЬ (Validate fc-машинерия его потребует, пока 6.3 не даст замену на net10-оркестрации); al.exe/policy-файлы удалить. NB из 3.2: задокументировать ограничение ildasm `/NOIL`
+- [✅] 5.1 InitTools демонтаж: удалены GetFrameworkPath/FW40, gacutil, ngen, pefverify-шаг Validate, al-keyed разведка; SDKBin-цепочка переключена на ildasm.exe + комментарий retire-вместе-с-6.3 и про `/NOIL`. Новая норма гейта: FC ×5 + НОЛЬ `: error` + exit 0 (peverify moren). Приёмка: Validate log 0 pefverify/0 errors/FC×5, CompilerTests 468+167/0 exit 0. Прогресс: progress5.1.md
 - [ ] 5.2 Build-core*.cmd → dotnet; +build.ps1/build.sh
 - [ ] 5.3 Directory.Build.props + nuget.config
 - [ ] 5.4 ExternalDependences: осовременить/убрать NuGet.exe, MSBuild.Community.Tasks, NUnit-консоль
@@ -103,6 +103,8 @@
 - 0.4: Validate на бейзлайне не полностью зелёный — IL-диф 5/5 green, но pefverify падает (старый .NET FX 4.6.1 Tools против netstandard2.0). Зафиксировано как состояние «до»; паритет later фаз = IL-diff + tests, pefverify исключён до Фазы 5.1.
 
 ## Journal
+- 2026-10-31: ИНЦИДЕНТ (повторно): параллельные саб-агенты 5.1 (имплементация крутила Stage1,CompilerTests, пока тестовый агент писал приёмку; MSB3027 локи, два убитых прогона). Причина: оркестратор счёл сессию завершённой по «оборвавшемуся» отчёту. ПРАВИЛО (окончательное): статус саб-агента = только уведомление state=completed; до него — ноль запусков и ноль сборочных команд из основной сессии.
+- 2026-10-31: 5.1 зелёный: pefverify/gacutil/ngen/al-разведка удалены; гейт теперь FC ×5 + ноль ошибок + exit 0. 468+167/0.
 - 2026-10-31: ФАЗА 3 ЗАКРЫТА (3.5c/d/e зелёные; 3.5f→Фаза 5/7, 3.7 факультативен, 3.1e риски не воспроизвелись и считаются закрытыми: после 3.4b/4.3 в stage-плоскости нет FX-потребителей deps.json). ФАЗА 4 ЗАКРЫТА пересевом: NRootBoot=boot-net10, все стадии на ncc-core.exe (.NET 10), FC ×5, 468+167/0; seed-бинари закоммичены по правилу (2ff4e2fb4); boot-dnlib жив на диске как аварийный (4.5→7.4).
 - 2026-10-31: 3.4b (коммит ниже): ncc.nproj вне графа стадий, ncc.exe больше не появляется в stage → Validate-норма изменена FC ×6 → **FC ×5** (Nemerle.Compiler, Nemerle, Nemerle.Macros, Nemerle.MSBuild.Tasks, ncc-core.dll); единственный error — pefverify known-red. Все упоминания «FC ×6» в старых строках — историческая норма тех атомов.
 - 2026-10-31: ХОЗЯЙСТВО (правило пользователя): C:\RSDN\ — только корни репозиториев. Все временные артефакты плана (phase*-logs, baseline-logs, seedrefresh-logs, assertui-logs, repro31a/repro311, seed-repro, tasks-selftest*, dotnetbuild-selftest, dnlib330-snapshot, backup\boot-dnlib-backup-20261030.zip, commitmsg-*.txt) перенесены в `C:\RSDN\nemerle\.tmp\` (git-ignored c f7021ed4d; в перенесённом .git нет, репозитории C:\RSDN\ не тронуты). Скрипты сборок/проверок писать только в `.tmp\` или Temp. Ссылки на старые пути C:\RSDN\<name>-logs в чек-листе/прогресс-доках считать .tmp\<name>-logs. Бэкап сида дублируется тегом pre-net10-baseline (git).
