@@ -67,10 +67,10 @@
 
 ## Фаза 5 — Оркестрация и скрипты
 - [✅] 5.1 InitTools демонтаж: удалены GetFrameworkPath/FW40, gacutil, ngen, pefverify-шаг Validate, al-keyed разведка; SDKBin-цепочка переключена на ildasm.exe + комментарий retire-вместе-с-6.3 и про `/NOIL`. Новая норма гейта: FC ×5 + НОЛЬ `: error` + exit 0 (peverify moren). Приёмка: Validate log 0 pefverify/0 errors/FC×5, CompilerTests 468+167/0 exit 0. Прогресс: progress5.1.md
-- [ ] 5.2 Build-core*.cmd → dotnet; +build.ps1/build.sh
-- [ ] 5.3 Directory.Build.props + nuget.config
-- [ ] 5.4 ExternalDependences: осовременить/убрать NuGet.exe, MSBuild.Community.Tasks, NUnit-консоль
-- [ ] 5.5 _Wpf / snippets/VS2010 гейт по Windows/TFM
+- [✅] 5.2 Build-core*.cmd → dotnet; +build.ps1/build.sh (коммит 141c005c8; cmd-шиммы над build.ps1)
+- [✅] 5.3 Directory.Build.props + nuget.config (коммит 892d0f553)
+- [✅] 5.4 ExternalDependences: осовременить/убрать NuGet.exe, MSBuild.Community.Tasks, NUnit-консоль (коммит 6b0f0d5db)
+- [✅] 5.5 _Wpf / snippets/VS2010 гейт по Windows/TFM (коммит a60ddff19; _GuardVsIntegration)
 
 ## Фаза 6 — Тесты и валидация
 - [✅] 6.1 Nemerle.Compiler.Test.nproj net461 → net10.0 (коммиты ed7b901ae; харнесс собирается и стартует на net10 apphost, гейт Stage3,Validate зелёный)
@@ -91,9 +91,15 @@
 - [ ] 7.5 (отложено из 3.5e) Полная поддержка resx-макро на Core-хосте: System.Resources.Extensions или собственный resx-парсер в macros/Resource.n (сейчас — явная ошибка «Framework-only»; FX-путь работает). Потребление в testsuite нулевое
 
 ## Фаза 8 — Финальное ревью (требование пользователя, после всех фаз)
-- [ ] 8.1 Суб-агент-ревьюер №1: критический обзор всей выполненной работы по плану (коммиты 17d3cf47c..HEAD, отклонения Deviations, прогресс-доки) — поиск дефектов, регрессий, нарушений invariant (bootstrap fixed point, master-совместимость, bootstrap seed правила). Отчёт в `...-plan-report-review1.md`. Каждый выявленный дефект → новый пункт чек-листа с атомизацией.
+- [✅] 8.1 Суб-агент-ревьюер №1: вердикт PASS WITH FINDINGS, отчёт report-review1.md. Находки: R1-01 major (CI ни разу не выполнялся на реальном GitHub-раннере — вся зелёность 6.3 это локальный прокси; требует пуша — решение пользователя), R1-02 minor (дефолты Nemerle= в 4 нproj всё ещё на удалённый boot-dnlib + молчаливые fallback'ы на bin\boot), R1-03/04 minor (мастер-вишен-лист: InternalTypeClass/IVT валидированы только на Core; f35161ae9 не нейтрастен на FX — маркировать как behavior-fix при вишен-пике), R1-05 minor (FC включает тавтологическое сравнение Nemerle.MSBuild.Tasks = байт-копия сида; реальное покрытие ×4; fc-направление игнорирует Stage3-only выходы), R1-06 minor (чек-лист: 5.2–5.5 не отмечены — исправлено оркестратором; норма в 8.3 устарела — обновлена), R1-07 minor (устаревшие комментарии: build.yml TODO(6.4), nproj:26 про boot-dnlib, build.ps1/sh про 6.3), R1-08..12 nit (WiX ncc32/64 payload; нечистка bin\boot при смене сида; droп .xml-доков в пакетах; known-failures непустой путь не обкатан на CI; masking-риск литеральных BEGIN-OUTPUT — upstream-заметка)
 - [ ] 8.2 Суб-агент-ревьюер №2 (запускается СТРОГО после завершения 8.1 и его фиксации): независимый критический обзор того же объёма + критика выводов ревьюера №1. Отчёт в `...-plan-report-review2.md`. Дефекты → новые пункты чек-листа.
-- [ ] 8.3 (условный) Устранение дефектов, найденных ревьюерами: пункты создаются по итогам 8.1/8.2, выполняются по одному суб-агенту за раз, приёмка = стандартный гейт FC (текущая норма — см. Journal) + 468/167/0.
+- [ ] 8.3 (условный) Устранение дефектов ревью. Норма приёмки: `Stage3,Validate -Rebuild` FC ×5/0 errors + `Stage1,CompilerTests` 461+7nr/0 и 167/0 (текущая норма, см. 6.4). Разбито по итогам 8.1 (после 8.2 будут дописаны его находки):
+  - [ ] 8.3a Дефолты seed в `Nemerle.nproj`/`Nemerle.Compiler.nproj`/`Nemerle.Macros.nproj`/`ncc-core.nproj` (строка 3): boot-dnlib → boot-net10; убрать молчаливый fallback на `bin\Debug\net-4.0\boot` (R1-02)
+  - [ ] 8.3b Устаревшие комментарии: build.yml TODO(6.4)/«8 known failures», NemerleAll.nproj:26 про boot-dnlib, build.ps1/build.sh про «Phase 6.3 retires ildasm» (R1-07) + WiX CompilerAndTools.wxs: убрать/пометить deleted ncc32/ncc64 payload (R1-08)
+  - [ ] 8.3c Validate: пометить тавтологический FC по Nemerle.MSBuild.Tasks в комментарии (реальное self-compiled покрытие ×4) + направить fc-wildcard так, чтобы Stage3-only файлы были видны (R1-05); опционально чистка bin\boot при смене сида (R1-09)
+  - [ ] 8.3d Мастер-вишен-лист в doc (не код): f35161ae9 = behavior-fix (ключевой IVT), InternalTypeClass-резхенджинг требует FX-прогона при вишен-пике на master (R1-03/04)
+  - [ ] 8.3e ТРЕБУЕТ РЕШЕНИЯ ПОЛЬЗОВАТЕЛЯ: пуш `retarget-compiler` в remote (github/kl) для реального CI-прогона — ни один коммит миграции не пушнут намеренно (R1-01)
+  - [~] Принятые как есть (записано): R1-10 (.xml-доки в пакетах — старьё было мусорным glob), R1-11 (литеральные BEGIN-OUTPUT — upstream-риск, вне объёма), R1-12 (непустой known-failures путь обкатан локально)
 
 ## Deviations
 - 3.7 AOT: НЕ выполнялся. План относит Native AOT к стретчу вне основного плана (D7: «исследуется только после зелёного бутстрапа», «факультативно, низкий приоритет»), а сами блокираторы перечислены заранее и не изменились: runtime-выполнение произвольных macro-ассембли (главный стоп-фактор), `System.CodeDom`, `Assembly.Load`/ALC-резолвинг ссылок. Базовая цель D7 («нет установленного рантайма») уже достигается framework-dependent apphost'ом + при необходимости self-contained без AOT. Эксперимент не запускал и в Deviations не записывал — фиксирую здесь как осознанный пропуск; если нужен именно эксперимент с логом блокираторов, скажи, заведу атом 3.7 (реальная стоимость: отдельный профиль сборки ncc-core с PublishAot + трим-анализ).
