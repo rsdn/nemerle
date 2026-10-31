@@ -94,9 +94,10 @@ Internalize this before editing `ncc/`, `lib/`, or `macros/`:
     here): **framework-dependent .NET 10** toolchain (`ncc-core.exe/.dll` +
     runtimeconfig/deps + `dnlib.dll` + `System.CodeDom.dll`), emits via
     **dnlib** (not SRE).
-  - `boot-dnlib/` — the previous dnlib-era seed (netstandard deploy); kept only
-    as an emergency fallback until the fixed point is reproduced from a clean
-    clone (plan 7.4).
+  - `boot-dnlib/` — the previous dnlib-era seed (netstandard deploy), removed
+    in plan 7.4 once the fixed point was reproduced from a clean clone on the
+    `boot-net10` seed (the documented condition for retiring the emergency
+    fallback); its content lives on in git history.
   A seed must be a *prior* binary that runs on the target host and emits the way
   its line expects — switching backend (SRE→dnlib) and/or runtime (FX→Core)
   invalidates the old seed, so a new known-good one is built once with the new

@@ -24,7 +24,7 @@
         day that blocker is gone.
 
     Package restore needs no separate step: NemerleAll.nproj invokes the
-    `Restore` target on its project lists itself (Stage1, _Integration).
+    `Restore` target on its project lists itself (NTasks, Stage1, _Integration).
 
     Comma target lists work natively here: PowerShell passes "Stage3,Validate"
     to MSBuild as ONE argument. (cmd.exe used to split unquoted commas -- the
