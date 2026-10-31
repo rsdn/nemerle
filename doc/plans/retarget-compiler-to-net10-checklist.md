@@ -84,7 +84,7 @@
 - [✅] 6.5 Nuspec-упаковка: `ncc.???`-призраки сняты, `lib\net` → `lib\netstandard2.0` (D2/D6), tool-closure (ncc-core.exe+runtimeconfig+deps+dnlib+System.CodeDom+dll) в `tools\net10.0`; `_NugetPack` — рабочий target (генерируемый SDK-shim → `dotnet pack`, вне default targets). Приёмка: nupkg собран (10.0.41), consumer-smoke (extract → -version exit 0, zero-r compile exit 0), Stage1 exit 0. Коммит 61a4592ae. ФАЗА 6 ЗАКРЫТА
 
 ## Фаза 7 — Зачистка и документация
-- [ ] 7.1 Удалить VS2017-скрипты/реестровые хаки/мёртвые Framework-таргеты. (NB из 3.4b/3.2: ncc.nproj+App.config c диска, мёртвые ncc32/ncc64.nproj, stale Nemerle.Location.nproj v4.6.1 с StartProgram→Stage1\ncc.exe)
+- [✅] 7.1 Зачистка: удалены ncc.nproj+App.config, ncc32/ncc64.nproj, Build-core-with-ide-plug-in.cmd, NemerleAllTest.cmd, GacReg*×3, Reg-bins*×6, Reg-boot*×2 (ngen/gacutil/реестр), dead-записи из старых .sln; Nemerle.Location.nproj перенацелен (StartProgram→ncc-core.exe), Build-core*.cmd оставлены как шиммы над build.ps1 (реестра уже нет). Mono/NAnt-путь и guarded WiX — отдельный атом (записано). 23 файла, +8/−791; гейты: FC ×5, 461+7nr/0 + 167/0, smoke exit 0. Коммит 996a1486b
 - [✅] 7.2 Коммит boot-net10 как seed — выполнен на 4.6 (коммит 2ff4e2fb4 после зелёного цикла с тестами)
 - [ ] 7.3 Обновить AGENTS.md/README под dotnet+net10
 - [ ] 7.4 Полный цикл с чистого клона
