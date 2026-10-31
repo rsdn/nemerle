@@ -64,7 +64,7 @@ Canonical commands (from the repo root; verified in
 | Command | What it does |
 |---|---|
 | `./build.ps1` | Stage1 + Peg/CSharp/CE/Async + Install (fastest usable compiler) |
-| `./build.ps1 -Targets Stage3,Validate -Rebuild` | standard green gate: Stage1→2→3 chain + IL fixed point (`FC` ×5 assemblies) |
+| `./build.ps1 -Targets Stage3,Validate -Rebuild` | standard green gate: Stage1→2→3 chain + IL fixed point (`FC` ×10 = 5 assemblies × 2 directions) |
 | `./build.ps1 -Targets Stage1,CompilerTests` | compiler regression suite (one msbuild session is required, hence the combined list) |
 | `./build.ps1 -Targets _NugetPack` | NuGet packaging via `dotnet pack` → `bin\<Config>\net-4.0\Nuget` |
 
@@ -122,10 +122,12 @@ Internalize this before editing `ncc/`, `lib/`, or `macros/`:
   A single Stage1 build only proves the *old* compiler still digests the source;
   it says nothing about whether the *new* compiler is correct. Stage2 is what
   actually exercises the new compiler against its own full source. If Stage2
-  succeeds and its IL matches Stage1 (`Validate` ildasm-dumps and `fc`-diffs the
-  last two stages across 5 assemblies — the old pefverify step was retired in
-  Phase 5.1), a **fixed point** is reached — the new compiler faithfully
-  reproduces itself and is safe to promote as the next boot compiler.
+  succeeds and the last two built stages' IL matches (`Validate` ildasm-dumps
+  and `fc`-diffs the last two stages across 5 assemblies × 2 directions — 10
+  comparisons; the canonical `Stage3,Validate` gate compares Stage2↔Stage3 —
+  the old pefverify step was retired in Phase 5.1), a **fixed point** is
+  reached — the new compiler faithfully reproduces itself and is safe to
+  promote as the next boot compiler.
 - **Editing the compiler can break self-compilation**, not just the program it
   emits. A change that survives Stage1 may fail at Stage2 — e.g. a new language
   feature the source needs that the Stage1 output doesn't support yet. This is
@@ -136,6 +138,23 @@ Internalize this before editing `ncc/`, `lib/`, or `macros/`:
   (`./build.ps1 -Targets Stage3,Validate -Rebuild`) for a full fixed-point proof.
 - `Install` copies the last built stage to `bin\<Config>\net-4.0` (dev) or
   `%ProgramFiles%\Nemerle` (default).
+
+### Re-seeding the bootstrap chain (promoting a stage to `boot-net10`)
+
+- **When:** only after a fixed point at a new generation — the standard green
+  gate (`Stage3,Validate`, FC ×10) plus the full CompilerTests suite.
+- **How:**
+  1. From the current seed: `./build.ps1 -Targets Stage2` green, then
+     `./build.ps1 -Targets Stage1,CompilerTests` fully green — *before* touching the seed.
+  2. Copy the 10 seed files (list above) from `bin\<Config>\net-4.0\Stage2\` over `boot-net10/`.
+  3. Regenerate `boot-net10/SEED.manifest` — sha256 + size per seed file, one file per line: `sha256  size  filename` (`Get-FileHash`).
+  4. Commit the seed + manifest **separately** from any source change.
+- **Verification:** after a reseed run one `Stage2,Validate` — that is the
+  seed-facing Stage1↔Stage2 IL compare; the normed `Stage3,Validate` gate
+  compares Stage2↔Stage3 and is **structurally blind to seed drift** (both
+  sides are products of the current source either way). `SEED.manifest` is the
+  content tripwire; seed provenance itself stays a recorded human act
+  (precedent: plan 4.6 reseed, commit `2ff4e2fb4`).
 
 After `./build.ps1`, the working compiler is
 `bin\Debug\net-4.0\ncc-core.exe` (a .NET 10 apphost; the old Framework
@@ -194,6 +213,10 @@ harness `Nemerle.Compiler.Test` (net10 since Phase 6.1; sources under
 - `Nemerle.MSBuild.targets` (built from `tools/msbuild-task/`) is what lets
   downstream `.nproj` files import the compiler; changes there affect every
   build.
+- The seed/toolchain `*.runtimeconfig.json` pin `Microsoft.NETCore.App 10.0.0`
+  with default (Minor) roll-forward: `ncc-core.exe` will not start on an
+  11.x-only machine — stock .NET policy, not a defect; install a 10.x runtime
+  or set `DOTNET_ROLL_FORWARD=Major` (or edit the runtimeconfig).
 - An **old `bin\<Config>\net-4.0` tree can predate compiler fixes** (neither
   the `Install` dir nor the `Stage*` dirs are ever cleaned) and produce
   confusing results — e.g. a stale pre-6.2b `ncc-core.exe` fails the zero-`-r`
