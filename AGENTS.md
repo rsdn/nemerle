@@ -37,8 +37,14 @@ drift breaks not just user programs but the shared bootstrap source too.
   semantics, different IL.
 - Mechanism in practice: cherry-pick/merge shared frontend/typing fixes across
   branches (via the `github`/`kl` remotes); leave backend-specific work local.
-- A per-commit portability review of the net10 work (`17d3cf47c..HEAD` on
-  `retarget-compiler`) lives in `doc/MASTER-CHERRY-PICKS.md`.
+- Layouts are aligned: the `sync-master` branch (plan 9.2/9.3, commits
+  `56788fbeb..dbe955e91`) reproduced retarget's split layout on the master side
+  (5 rename/split commits, IL-identity proven) and ported the shared fixes; the
+  master-only fixes were ported back here in plan 9.4. Language fixes now land
+  at identical paths in both branches — normal cherry-pick/merge, no path
+  mapping needed.
+- `doc/MASTER-CHERRY-PICKS.md` is historical: the per-commit portability review
+  and port plan behind that sync, kept as the record of what/why.
 
 Check which branch you are on before editing: a fix in `ncc/`/`lib/`/`macros/`
 likely needs to land on both; IDE/integration work is branch-specific.

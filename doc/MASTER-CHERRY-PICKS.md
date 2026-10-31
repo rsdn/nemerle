@@ -1,5 +1,18 @@
 # Master cherry-pick guidance (`retarget-compiler` → `master`)
 
+> **STATUS (2026-10-31): EXECUTED — retained as the record of what/why.**
+> The port described below was executed by net10 plan phases **9.2/9.3** on the
+> `sync-master` branch (commits `56788fbeb..dbe955e91`): five IL-identity-proven
+> layout-alignment commits reproducing retarget's split layout on master, then
+> four shared-fix ports (`e9741864a`, `5a7dadbf1`(a), `171f1f227`, `f35161ae9`);
+> remaining candidates skipped per this document. The **reverse-direction**
+> master-only items — `f5fe58328` (external-parser-loading detection fix +
+> `DevBuildQuickNccOnly` nproj hunk) and `testsuite/positive/Bugs/lexer1.n` —
+> were ported back onto `retarget-compiler` by plan **9.4** PART A, together
+> with master's pedantic EOF-newline check from `ncc/parsing/Source.n`
+> (`lexer1.n`'s expected warning), which the Source→`SourceSnapshot` migration
+> had silently dropped on this branch.
+
 Per-commit portability review of the net10 retarget work for the **`master`**
 branch (.NET Framework line). Produced for checklist atom 8.3d from review
 findings **R1-03**/**R1-04**
