@@ -53,6 +53,25 @@ $ip   = 'C:\RSDN\nemerle\bin\Debug\net-4.0'
 & $msb $proj /t:Stage1,CompilerTests /p:NTargetName=Build /p:Configuration=Debug "/p:NInstall=$ip" /v:m
 ```
 
+## Windows-only surfaces and the Core graph (Phase 5.5)
+
+The VS IDE layer under `snippets/VS2010` (WpfHint WPF popup, VSSDK-era
+`Nemerle.VsExtension`, `Nemerle.Compiler.Utils`), the WiX MSI packaging
+(`misc/packages/wix`) and `_NugetPack` are Windows-only by construction (WPF /
+VSSDK / WiX / removed NuGet.exe) and unmigrated to the net10 toolchain, and
+the Core build+test graph (`Stage1..4`, `Validate`, `CompilerTests`, `Install`)
+has zero dependency edges into any of them. The IDE-reachable entry points
+(`Integration*`/`Installer*`/`DevBuild*`) stop with explicit `<Error>` guards
+rather than cryptic mid-target failures: `_Integration`/`_Installer` are
+opt-in via `-p:BuildingVsIntegration=true` (Windows hosts only), `DevBuild*`
+additionally stay blocked at the 5.4 `_NugetPack` error, and the removed
+`IdeEngineTests` is a documented error stub. The single deliberate Core-graph
+edge into WPF is `CompilerTests -> _Wpf`: `Nemerle.WPF.dll` is a test-suite
+fixture for `testsuite/{positive,negative}/notifypropertychanged.n` (`MACRO:`
+comment), so the target and its test-dir copies skip (not fail) off Windows.
+Shipping IDE integration lives on `master`. Audit table:
+`doc/plans/retarget-compiler-to-net10-plan/retarget-compiler-to-net10-plan-progress5.5.md`.
+
 ## Baseline results ("before" state)
 
 * Stage1/Stage2/Stage3: **green** (EXITCODE 0).
