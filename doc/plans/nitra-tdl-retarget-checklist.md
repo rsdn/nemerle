@@ -4,7 +4,7 @@
 Порядок: строго один атом, один суб-агент, один билд в системе.
 
 ## Фаза N0 — Research
-- [ ] N0.1 Инвентарь `kl/retarget-nitra`: точки входа, цепочка Boot1/Boot2 (поколение тулчейна в них), consumer-API-несовпадения с текущим nemerle-дропом (ncc-core/пути/tasks/Sdk-props/TFM), план перешивки boot-дропа nitra, baseline тестов → report-n0-1-nitra.md
+- [✅] N0.1 report-n0-1-nitra.md: цепочка Build.cmd→BootTasks BuildBoot (Boot1 FX-сид 2019-года)→Nitra-Stagt1.sln; consumer-API топа совместен as-is (tasks/namespace/Sdk-props/ncc-auto-remap) кроме: VS2017-пин во входах (обходится прямым msbuild + MSBUILDENABLEALLPROPERTYFUNCTIONS=1), ShiftBoot NccFile-список (ncc.exe/32/64 — блокер только для reseed). ПРОБА: BuildBoot зелёный; Stage1 за 6 мин — 3 ошибки в 2 проектах: Nitra.ClientServer.Server (resx-макро = FX-only, наш 7.5!) + VSIX-легаси (вне скоупа). Все три TDL-входа (Stage1/Grammars/LanguageCompiler) СОБРАНЫ. Атомизация N1.1-N1.9 в репорте
 - [ ] N0.2 Инвентарь `kl/retarget-tdl`: TFMs (net5.0→net10 вопрос), вход Build.cmd vs реальная машина, контур тестов и baseline → report-n0-2-tdl.md
 - [ ] N0.3 Уточнение атомизации N1/N2 по отчётам (правки этого чек-листа)
 
