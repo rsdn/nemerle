@@ -37,6 +37,8 @@ drift breaks not just user programs but the shared bootstrap source too.
   semantics, different IL.
 - Mechanism in practice: cherry-pick/merge shared frontend/typing fixes across
   branches (via the `github`/`kl` remotes); leave backend-specific work local.
+- A per-commit portability review of the net10 work (`17d3cf47c..HEAD` on
+  `retarget-compiler`) lives in `doc/MASTER-CHERRY-PICKS.md`.
 
 Check which branch you are on before editing: a fix in `ncc/`/`lib/`/`macros/`
 likely needs to land on both; IDE/integration work is branch-specific.
