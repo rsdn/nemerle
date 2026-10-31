@@ -7,6 +7,10 @@ on:
   pull_request:
 
 jobs:
+  # Net10 bootstrap chain + IL fixed point + smoke (net10 plan 6.3).
+  # Package restore needs no step/cache config: NemerleAll.nproj runs the
+  # Restore target itself against the repo-scoped nuget.config (phase 5.3:
+  # <clear/> + nuget.org only, no machine feeds).
   build:
     runs-on: windows-latest
     steps:
@@ -20,29 +24,25 @@ jobs:
         with:
           global-json-file: global.json
 
-      # Stage2 self-host: Stage1 is compiled with the checked-in boot compiler,
-      # then Stage2 recompiles the sources with the Stage1-produced ncc.
-      - name: Build (Stage1 + Stage2 self-host)
-        run: cmd /c Build-core-base.cmd Debug Build Stage2
-        shell: cmd
+      # This single invocation IS the full Stage1 -> Stage2 -> Stage3 chain
+      # (Stage3 DependsOnTargets Stage2 -> Stage1; each stage is compiled by
+      # the previous stage's ncc, seeded by the checked-in boot compiler)
+      # plus Validate, which fc-compares the Stage2/Stage3 fixed point for
+      # 5 assemblies; a real FC difference fails the Exec (MSB3073) -> red.
+      # -Rebuild forces the comparison to be produced fresh (standard green
+      # gate, doc/NET10-BUILD-BASELINE.md). pefverify was retired in phase
+      # 5.1, so this step is binding again and no longer needs the old
+      # continue-on-error workaround.
+      - name: Build Stage1 -> Stage2 -> Stage3 + Validate (IL fixed point)
+        shell: pwsh
+        run: |
+          ./build.ps1 -Targets Stage3,Validate -Rebuild | Tee-Object -FilePath validate.log
+          exit $LASTEXITCODE
 
-      # CompilerTests must run in the same msbuild session as Stage1, hence
-      # the combined target string "Stage1,CompilerTests".
-      - name: CompilerTests
-        run: cmd /c Build-core-base.cmd Debug Build "Stage1,CompilerTests"
-        shell: cmd
-
-      # pefverify step is known-red until Phase 5.1 removes it (old pefverify
-      # cannot handle netstandard2.0), so the step itself does not fail the job;
-      # the gate step below re-asserts the IL fixed-point from the log.
-      - name: Validate (Stage3 + IL fixed-point)
-        run: cmd /c Build-core-base.cmd Debug Build "Stage3,Validate" > validate.log 2>&1
-        shell: cmd
-        continue-on-error: true
-
-      # Keeps the IL fixed-point assertion binding despite continue-on-error:
-      # 5x "FC: no differences encountered" are expected; any other FC diff
-      # report (or a missing FC result) fails the job.
+      # Kept from phase 1.6 (simplified): belt and suspenders that the IL
+      # comparison actually ran -- >= 5 "FC: no differences" lines expected,
+      # no FC-reported difference (fc diffs surface as MSB3073 on the fc
+      # command line in the log).
       - name: Gate on Validate IL fixed-point
         shell: pwsh
         run: |
@@ -51,15 +51,78 @@ jobs:
             exit 1
           }
           $log = Get-Content validate.log
-          # fc.exe reports real diffs only via exit code -> surfaces as MSB3073 on the fc command;
-          # pefverify MSB3073 is known-red until Phase 5.1 and must not fail the gate.
           if ($log -match 'MSB3073.*"fc ' -or $log -match 'FC:.*(?<!no )differences') {
             Write-Host "::error::IL fixed-point broken: FC reported differences between stages"
             exit 1
           }
-          if (-not ($log -match 'FC: no differences')) {
-            Write-Host "::error::No 'FC: no differences' line found in validate.log - Validate did not reach the IL comparison"
+          $fc = @($log | Select-String -SimpleMatch 'FC: no differences').Count
+          if ($fc -lt 5) {
+            Write-Host "::error::only $fc 'FC: no differences' line(s) (>= 5 expected) - Validate did not reach the IL comparison"
             exit 1
           }
-          Write-Host "IL fixed-point confirmed: no differences between stages"
+          Write-Host "IL fixed-point confirmed: $fc FC comparisons, no differences"
           exit 0
+
+      # Net10 smoke (plan 6.3 acceptance): the freshly built Stage3 ncc-core
+      # runs on the SDK installed above with NO roll-forward trick; the old
+      # netcoreapp2.1 pin required `dotnet --roll-forward LatestMajor`.
+      - name: Smoke - ncc-core.exe -version without roll-forward
+        shell: pwsh
+        run: |
+          if (Test-Path Env:DOTNET_ROLL_FORWARD) {
+            Write-Host "::error::DOTNET_ROLL_FORWARD must not be set for this smoke step"
+            exit 1
+          }
+          & bin/Debug/net-4.0/Stage3/ncc-core.exe -version
+          exit $LASTEXITCODE
+
+      # The zero-`-r` compile UX of phase 6.2b: a trivial .n compiles with
+      # default framework references only - no explicit -r at all (ncc's
+      # default output assembly name is out.exe).
+      - name: Smoke - zero-r compile of a trivial .n
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'nemerle-zero-r-smoke'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Set-Content -LiteralPath (Join-Path $dir 'smoke.n') `
+            -Value 'using System; class M { static Main() : void { Console.WriteLine("zero-r smoke") } }'
+          Push-Location $dir
+          & "${{ github.workspace }}\bin\Debug\net-4.0\Stage3\ncc-core.exe" smoke.n
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0 -or -not (Test-Path (Join-Path $dir 'out.exe')) -and -not (Test-Path (Join-Path $dir 'out.dll'))) {
+            Write-Host "::error::zero-r compile smoke failed (ncc-core exit $code, output assembly missing)"
+            exit 1
+          }
+          Write-Host 'zero-r compile smoke passed'
+
+  # Compiler regression suite on the Core host.
+  tests:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      # CompilerTests must run in the same msbuild session as Stage1, hence
+      # the combined target list "Stage1,CompilerTests" (build.ps1 passes it
+      # to MSBuild as ONE argument). The positive suite still has 8 known
+      # failures until 6.4 resolves them (7 BEGIN-OUTPUT output drifts + the
+      # Issue-git-0297 fixture, all listed in
+      # testsuite/ci-known-failures-64.txt). NKnownFailures is read by
+      # NemerleAll.nproj (MSBuild exposes env vars as properties) and handed
+      # to the harness as -known-failures: ONLY the listed ids stop affecting
+      # the exit code, any other failure keeps this job red.
+      # TODO(6.4): fix the 8, then delete the allowlist file and this step's
+      # NKnownFailures line.
+      - name: CompilerTests (Stage1 + suite; 8 known failures allowlisted until 6.4)
+        shell: pwsh
+        run: |
+          $env:NKnownFailures = 'ci-known-failures-64.txt'
+          ./build.ps1 -Targets Stage1,CompilerTests

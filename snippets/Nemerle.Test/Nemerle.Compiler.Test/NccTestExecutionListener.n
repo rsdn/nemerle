@@ -9,6 +9,7 @@ using Nemerle.Test.Framework;
 using System;
 using System.Diagnostics;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 
 namespace Nemerle.Compiler.Test
@@ -47,7 +48,18 @@ namespace Nemerle.Compiler.Test
       match(result)
       {
         | Passed  => _passed += 1;
-        | Failed  => _failed += 1;
+        | Failed  =>
+          // net10 plan 6.3: an allowlisted known failure is reported but does
+          // not count into _failed, so it cannot redden the exit code; every
+          // other failure (and every Exception below) still does.
+          match(FindKnownFailure(test))
+          {
+            | Some(id) =>
+              _knownFailed += 1;
+              ignore(_knownFailuresUsed.Add(id));
+              _outputWriter.WriteLine(ConsoleColor.Yellow, $"known failure ignored: $(id) (allowlist '$(_knownFailuresFile)'); not counted as a failure")
+            | None() => _failed += 1;
+          }
         | Skipped => _notRun += 1;
         | Exception(ex) =>
           _failed += 1;
@@ -67,14 +79,23 @@ namespace Nemerle.Compiler.Test
       }
       match((_passed, _failed))
       {
-        | (0, 0) =>
+        | (0, 0) when _knownFailed == 0 =>
           _outputWriter.WriteLine(ConsoleColor.Cyan, "No tests to run.");
 
         | (_, 0) =>
-          _outputWriter.WriteLine(ConsoleColor.Cyan, $"All tests passed. Time taken: $(_timer.Elapsed)");
+          def suffix = if (_knownFailed > 0) " (known failures ignored, see below)" else "";
+          _outputWriter.WriteLine(ConsoleColor.Cyan, $"All tests passed$(suffix). Time taken: $(_timer.Elapsed)");
 
         | (_, _) =>
           _outputWriter.WriteLine(ConsoleColor.Red, $<#$(pluralize(_passed, "test")) passed, $(pluralize(_failed, "test")) failed. Time taken: $(_timer.Elapsed)#>);
+      }
+      when(_knownFailed > 0)
+        _outputWriter.WriteLine(ConsoleColor.Yellow, $<#Known failures ignored: $(_knownFailed) (allowlist '$(_knownFailuresFile)'); they do not affect the exit code#>);
+      def unusedIds = _knownFailures.Where(fun(id) { !_knownFailuresUsed.Contains(id) }).ToArray();
+      when(unusedIds.Length > 0)
+      {
+        def joined = String.Join(", ", unusedIds);
+        _outputWriter.WriteLine(ConsoleColor.DarkGray, $"known-failures entries that did not fail in this run: $(joined)");
       }
     }
 
@@ -92,11 +113,65 @@ namespace Nemerle.Compiler.Test
         0
     }
 
+    // net10 plan 6.3: optional allowlist of tests known to fail (harness
+    // option -known-failures, see Main.n). DEFAULT-OFF: without a call to
+    // LoadKnownFailures the list stays empty and every Failed result counts
+    // exactly as before. HOST-AGNOSTIC: pure string matching over the test
+    // identity (no host probing); on a host where a listed test passes the
+    // entry simply stays unused. Ids match the file name ("assert.n") or the
+    // "<dir>/<file>" identity ("positive/assert.n") or the full path,
+    // case-insensitively; blank lines and '#' comments in the file are skipped.
+    public LoadKnownFailures([NotNull] path : string) : void
+    {
+      _knownFailuresFile = path;
+      foreach (line in File.ReadAllLines(path))
+      {
+        def id = NormalizeTestId(line);
+        when (id.Length > 0 && !id.StartsWith("#"))
+          _knownFailures.Add(id);
+      }
+    }
+
+    private FindKnownFailure(test : Test) : option[string]
+    {
+      if (_knownFailures.Count == 0)
+        option.None()
+      else
+        match (test)
+        {
+          | nccTest is NccTest with fullPath = nccTest.FullName
+          | _                  with fullPath = test.Name =>
+            def identity = NormalizeTestId(fullPath);
+            def lastSlash = identity.LastIndexOf('/');
+            def fileName = if (lastSlash >= 0) identity.Substring(lastSlash + 1) else identity;
+            def matchesId(id : string) : bool
+            {
+              id.Equals(fileName, StringComparison.OrdinalIgnoreCase)
+                || id.Equals(identity, StringComparison.OrdinalIgnoreCase)
+                || (id.IndexOf('/') >= 0 && identity.EndsWith("/" + id, StringComparison.OrdinalIgnoreCase))
+            }
+            mutable found : option[string] = option.None();
+            foreach (id in _knownFailures)
+              when (found.IsNone && matchesId(id))
+                found = option.Some(id);
+            found
+        }
+    }
+
+    private static NormalizeTestId(id : string) : string
+    {
+      id.Trim().Replace('\\', '/')
+    }
+
     private _outputWriter : ColorizedOutputWriter;
     private mutable _passed : int;
     private mutable _failed : int;
     private mutable _notRun : int;
     private _testStats : List[Test * Statistics] = List();
     private _timer : Stopwatch = Stopwatch();
+    private _knownFailures : List[string] = List();
+    private _knownFailuresUsed : HashSet[string] = HashSet();
+    private mutable _knownFailuresFile : string;
+    private mutable _knownFailed : int;
   }
 }
