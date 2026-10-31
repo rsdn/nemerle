@@ -6,15 +6,37 @@ registry; since Phase 1 they locate MSBuild via vswhere. With `global.json` (sdk
 **MSBuild >= 18 is required** — VS2022's msbuild 17.14 can no longer build the repo (it fails with
 "requires at least version 18.0.0 of MSBuild"); use `Build-core-base.cmd` or VS2026 msbuild.
 
-## Commands (verified green, Phase 1)
+## Commands (canonical since Phase 5.2: `build.ps1` / `build.sh`)
 
 ```powershell
-# From the repo root. NOTE: cmd.exe splits unquoted commas — always pass target lists quoted.
-cmd /c "`"C:\RSDN\nemerle\Build-core-base.cmd`" Debug Build `"Stage3,Validate`""
+# From the repo root. PowerShell passes "Stage3,Validate" to MSBuild as ONE
+# argument — the cmd.exe comma-splitting trap is gone on this entry.
+./build.ps1 -Targets Stage3,Validate -Rebuild
+./build.ps1 -Targets Stage1,CompilerTests
+```
+
+`build.ps1` (and its bash twin `build.sh`) never touch the registry or
+VsDevCmd; they locate the host via `-MsBuildExe`/`NEMERLE_MSBUILD`/vswhere.
+`dotnet msbuild` (SDK 10) **evaluates** `NemerleAll.nproj` correctly but fails
+to run any stage: `NemerleAll.nproj(157,5): error MSB4803: The task
+"GetFrameworkSdkPath" is not supported on the .NET Core version of MSBuild`
+(InitTools is a dependency of every stage; retirement lands with Phase 6.3).
+Until then the default host is the vswhere-discovered .NET Framework
+`MSBuild.exe` (>= 18 per global.json); `build.ps1 -UseDotNetMsBuild` is the
+forward-compatible switch. A separate `dotnet restore` is not needed:
+`NemerleAll.nproj` runs the `Restore` target on its project lists itself.
+
+Legacy .cmd entry still works — `Build-core-base.cmd` is now a thin wrapper
+delegating to `build.ps1` with its old contract
+`Build-core-base.cmd <Config> <Target> "<Targets>"` (still quote target lists
+there, cmd.exe splits unquoted commas):
+
+```powershell
+cmd /c "`"C:\RSDN\nemerle\Build-core-base.cmd`" Debug Rebuild `"Stage3,Validate`""
 cmd /c "`"C:\RSDN\nemerle\Build-core-base.cmd`" Debug Build `"Stage1,CompilerTests`""
 ```
 
-Equivalent direct invocation (bypasses the wrapper): resolve MSBuild via
+Equivalent direct invocation (bypasses the wrappers): resolve MSBuild via
 `vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath`
 then `<path>\MSBuild\Current\Bin\MSBuild.exe`, and call it with
 `NemerleAll.nproj /t:<Targets> /p:NTargetName=Build /p:Configuration=Debug /p:NInstall=bin\Debug\net-4.0`.
@@ -55,3 +77,8 @@ Logs: `C:\RSDN\baseline-logs\` (`stage3-validate.log`, `compilertests.log`, `exi
 Re-verified 2026-10-30 after Phase 1 (vswhere entry, global.json 10.0.402, MSBuild 18.11):
 FC 5/5 identical, CompilerTests 468+167 / 0 failed, NETSDK1138 absent, Validate's only error is
 the known-red pefverify step (identical to Phase-0 baseline: 1125 errors on Nemerle.Compiler.dll).
+
+Re-verified 2026-10-31 after Phase 5.2 (`build.ps1`/`build.sh` entry, vswhere-discovered
+MSBuild 18.11; pefverify retired in 5.1): `build.ps1 -Targets Stage3,Validate -Rebuild` →
+FC 5/5 identical, zero `: error`, exit 0; `build.ps1 -Targets Stage1,CompilerTests` →
+468+167 / 0 failed, exit 0. Logs: `C:\RSDN\nemerle\.tmp\phase52\`.
