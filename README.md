@@ -19,10 +19,11 @@ using System.Console;
 WriteLine("Hello world")
 ```
 Compile and run (on the `retarget-compiler` branch the compiler is the .NET 10
-`ncc-core`, e.g. the one installed to `bin\Debug\net-4.0` by a build below; on
-an `msi`-installed `master`-line release this is `ncc.exe`):
+`ncc.exe` — named `ncc-core.exe` until plan 10.1 — e.g. the one installed to
+`bin\Debug\net-4.0` by a build below; on an `msi`-installed `master`-line
+release this is the .NET Framework `ncc.exe`):
 ```bat
-bin\Debug\net-4.0\ncc-core.exe hello.n /out:hello.exe
+bin\Debug\net-4.0\ncc.exe hello.n /out:hello.exe
 hello.exe
 ```
 Will output
@@ -59,7 +60,7 @@ If you have a clone already: git pull --recurse-submodules
   ```
 
   Verified commands and details: `doc/NET10-BUILD-BASELINE.md`, `AGENTS.md`.
-  The working compiler lands in `bin/Debug/net-4.0/ncc-core.exe` (.NET 10).
+  The working compiler lands in `bin/Debug/net-4.0/ncc.exe` (.NET 10).
 
   _Note: MSI installer and Visual Studio integration targets
   (`DevBuild*`/`_Installer`/`_Integration`) are guarded off on this branch;
@@ -87,13 +88,13 @@ If you have a clone already: git pull --recurse-submodules
 
 # Repository structure
 
-  * Nemerle compiler sources (ncc/, host project ncc-core.nproj → ncc-core.exe on .NET 10),
+  * Nemerle compiler sources (ncc/, host project ncc.nproj → ncc.exe on .NET 10),
   * Nemerle Documentation (doc/),
   * standard Nemerle library (lib/),
   * standard Nemerle macros (macros/),
   * some examples of Nemerle programs (snippets/),
   * a few useful tools (e.g. synatx highlighting modes) (misc/),
-  * binary Nemerle compiler needed to compile itself (boot-net10/, plus the
+  * binary Nemerle compiler needed to compile itself (boot/, plus the
     boot-dnlib/ fallback and the master-line boot-4.0/).
   * Nemerle realted tools (e.g. relector addin) (tools/)
 

@@ -12,14 +12,14 @@ be compiled by a previously built compiler.
   Framework target is kept alive. `VsIntegration/` lives here.
 - **`retarget-compiler`** (current default checkout) — a port to **.NET 10**,
   completed through Phase 6 of the net10 plan (`doc/plans/`). The **toolchain**
-  (compiler host `ncc-core.exe`, test harness, packaging) runs on .NET 10; the
+  (compiler host `ncc.exe`, test harness, packaging) runs on .NET 10; the
   **libraries stay `netstandard2.0`** (plan decisions D2/D6). `VsIntegration/`
   is removed from the root; IDE code moved to `snippets/VS2010/` (Windows-only,
   guarded off, unmigrated — the shipping IDE integration is `master`-only).
   The port's core is the **dnlib backend** (`*-dnlib.*` projects +
   `ExternalDependences/dnlib.dll`) replacing `System.Reflection.Emit`, plus the
   new `Nemerle.Location/` source-location abstraction. Bootstrap seed:
-  `boot-net10/` (see Bootstrapping).
+  `boot/` (see Bootstrapping).
 
 ### Cross-branch sync
 
@@ -98,33 +98,37 @@ Internalize this before editing `ncc/`, `lib/`, or `macros/`:
   seed nothing builds. Seeds per line/generation:
   - `boot-4.0/` — the .NET Framework line: emits via `System.Reflection.Emit`,
     runs on .NET Framework 4.0. Seed for **`master`**.
-  - `boot-net10/` — the retarget line's **current seed** (`NRootBoot` points
+  - `boot/` — the retarget line's **current seed** (`NRootBoot` points
     here): **framework-dependent .NET 10** toolchain, all 10 seed files:
-    `ncc-core.exe`/`ncc-core.dll` + `ncc-core.runtimeconfig.json` +
-    `ncc-core.deps.json`, the libraries `Nemerle.dll`,
+    `ncc.exe`/`ncc.dll` + `ncc.runtimeconfig.json` +
+    `ncc.deps.json`, the libraries `Nemerle.dll`,
     `Nemerle.Compiler.dll`, `Nemerle.Macros.dll`,
     `Nemerle.MSBuild.Tasks.dll`, plus `dnlib.dll` and `System.CodeDom.dll`.
-    Emits via **dnlib** (not SRE).
+    Emits via **dnlib** (not SRE). Historical note: during the retarget
+    (phases 4.2–10.0) this seed lived as `boot-net10/` with the host named
+    `ncc-core.*`; plan 10.1/10.2 restored the canonical `ncc.*` / `boot/`
+    names (the FX-era `ncc.exe` on `master` is a different binary).
   - `boot-dnlib/` — the previous dnlib-era seed (netstandard deploy), removed
     in plan 7.4 once the fixed point was reproduced from a clean clone on the
-    `boot-net10` seed (the documented condition for retiring the emergency
+    then-`boot-net10` seed (the documented condition for retiring the emergency
     fallback); its content lives on in git history.
   A seed must be a *prior* binary that runs on the target host and emits the way
   its line expects — switching backend (SRE→dnlib) and/or runtime (FX→Core)
   invalidates the old seed, so a new known-good one is built once with the new
-  backend and checked in. That is why `NRootBoot` differs per branch. (`boot/`
-  is a legacy folder from an even older version.)
-- Chain: `boot-net10 → Stage1 → Stage2 → Stage3 → Stage4`, each stage compiled
-  by the prior stage's `ncc-core` (see the `Nemerle=$(NPrevBin)` property per
+  backend and checked in. That is why `NRootBoot` differs per branch. (The
+  pre-retarget `boot/` folder of an even older version was superseded, name
+  included, by the current `boot/` seed in plan 10.2.)
+- Chain: `boot → Stage1 → Stage2 → Stage3 → Stage4`, each stage compiled
+  by the prior stage's `ncc` (see the `Nemerle=$(NPrevBin)` property per
   stage). Stage outputs: `bin\<Config>\net-4.0\Stage{1..4}`.
 - **Why two stages (the core safety idea).** The current version is always built
   by a *previous* version, and that chain can silently break. So:
   - **Stage1** compiles the working tree with the *checked-in boot*
-    `ncc-core.exe` — a known-good prior version that acts as the trusted
+    `ncc.exe` — a known-good prior version that acts as the trusted
     anchor (worst case you rebuild from boot, the chain is never permanently
     poisoned).
   - **Stage2** recompiles the *same* sources with the Stage1-produced
-    `ncc-core.exe`, i.e. the new compiler building itself.
+    `ncc.exe`, i.e. the new compiler building itself.
   A single Stage1 build only proves the *old* compiler still digests the source;
   it says nothing about whether the *new* compiler is correct. Stage2 is what
   actually exercises the new compiler against its own full source. If Stage2
@@ -145,15 +149,15 @@ Internalize this before editing `ncc/`, `lib/`, or `macros/`:
 - `Install` copies the last built stage to `bin\<Config>\net-4.0` (dev) or
   `%ProgramFiles%\Nemerle` (default).
 
-### Re-seeding the bootstrap chain (promoting a stage to `boot-net10`)
+### Re-seeding the bootstrap chain (promoting a stage to `boot`)
 
 - **When:** only after a fixed point at a new generation — the standard green
   gate (`Stage3,Validate`, FC ×10) plus the full CompilerTests suite.
 - **How:**
   1. From the current seed: `./build.ps1 -Targets Stage2` green, then
      `./build.ps1 -Targets Stage1,CompilerTests` fully green — *before* touching the seed.
-  2. Copy the 10 seed files (list above) from `bin\<Config>\net-4.0\Stage2\` over `boot-net10/`.
-  3. Regenerate `boot-net10/SEED.manifest` — sha256 + size per seed file, one file per line: `sha256  size  filename` (`Get-FileHash`).
+  2. Copy the 10 seed files (list above) from `bin\<Config>\net-4.0\Stage2\` over `boot/`.
+  3. Regenerate `boot/SEED.manifest` — sha256 + size per seed file, one file per line: `sha256  size  filename` (`Get-FileHash`).
   4. Commit the seed + manifest **separately** from any source change.
 - **Verification:** after a reseed run one `Stage2,Validate` — that is the
   seed-facing Stage1↔Stage2 IL compare; the normed `Stage3,Validate` gate
@@ -163,8 +167,9 @@ Internalize this before editing `ncc/`, `lib/`, or `macros/`:
   (precedent: plan 4.6 reseed, commit `2ff4e2fb4`).
 
 After `./build.ps1`, the working compiler is
-`bin\Debug\net-4.0\ncc-core.exe` (a .NET 10 apphost; the old Framework
-`ncc.exe` host is gone from the build graph since Phase 3.4b).
+`bin\Debug\net-4.0\ncc.exe` (a .NET 10 apphost; the old Framework host is
+gone from the build graph since Phase 3.4b, and the `ncc-core.*` host name
+used by Phases 3.4–10.0 became `ncc.*` again in plan 10.1).
 
 Language sources by compiler pass: see `ncc/README` (parsing → hierarchy →
 typing → generation). `ncc/frontend`, `ncc/backend`, `ncc/shared` are the
@@ -212,7 +217,7 @@ harness `Nemerle.Compiler.Test` (net10 since Phase 6.1; sources under
   they are evaluated by every project, keep them zero-delta. `dotnet build` /
   `dotnet msbuild` still cannot run `NemerleAll.nproj` (MSB4803 in `InitTools`);
   it needs classic `msbuild` >= 18, which `build.ps1` resolves for you.
-- On this branch only the **toolchain** is net10 (`ncc-core`, harness);
+- On this branch only the **toolchain** is net10 (`ncc`, harness);
   the **libraries stay `netstandard2.0`** (D2/D6) — do not "modernize" their TFMs.
 - Compiler is signed: build copies `misc/keys/*.snk` to `bin\<Config>\net-4.0\keys`
   (`NPrepareKeys`). Keep key handling intact when touching project files.
@@ -220,11 +225,11 @@ harness `Nemerle.Compiler.Test` (net10 since Phase 6.1; sources under
   downstream `.nproj` files import the compiler; changes there affect every
   build.
 - The seed/toolchain `*.runtimeconfig.json` pin `Microsoft.NETCore.App 10.0.0`
-  with default (Minor) roll-forward: `ncc-core.exe` will not start on an
+  with default (Minor) roll-forward: `ncc.exe` will not start on an
   11.x-only machine — stock .NET policy, not a defect; install a 10.x runtime
   or set `DOTNET_ROLL_FORWARD=Major` (or edit the runtimeconfig).
 - An **old `bin\<Config>\net-4.0` tree can predate compiler fixes** (neither
   the `Install` dir nor the `Stage*` dirs are ever cleaned) and produce
-  confusing results — e.g. a stale pre-6.2b `ncc-core.exe` fails the zero-`-r`
+  confusing results — e.g. a stale pre-6.2b `ncc.exe` fails the zero-`-r`
   compile a fresh Stage3 passes. Rebuild/reinstall and re-test before
   debugging what looks like a compiler bug in a stale drop.

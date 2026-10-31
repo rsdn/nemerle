@@ -104,29 +104,10 @@ namespace Nemerle.Tools.MSBuildTask
             }
         }
 
-        // Stage folders contain both the .NET Framework ncc.exe and the .NET (Core)
-        // apphost ncc-core.exe (since 3.4a). Prefer the core apphost when it sits in
-        // a candidate location; when it is absent (older installs) or on mono
-        // (ToolName is ncc.bat/ncc, so no mapping) the legacy lookup is used unchanged.
-        private static string CoreToolName(string toolName)
-        {
-            return toolName == "ncc.exe" ? "ncc-core.exe" : null;
-        }
-
         private string FindExecutable(string toolName)
         {
-            var coreToolName = CoreToolName(toolName);
-
             if (!string.IsNullOrEmpty(CompilerPath))
             {
-                if (coreToolName != null)
-                {
-                    var corePath = Path.Combine(CompilerPath, coreToolName);
-
-                    if (File.Exists(corePath))
-                        return corePath;
-                }
-
                 var path = Path.Combine(CompilerPath, toolName);
 
                 if (File.Exists(path))
@@ -139,14 +120,6 @@ namespace Nemerle.Tools.MSBuildTask
             //
             var my_file = typeof(Ncc).Assembly.Location;
             var my_dir = string.IsNullOrEmpty(my_file) ? AppContext.BaseDirectory : Path.GetDirectoryName(my_file);
-
-            if (coreToolName != null)
-            {
-                var coreFile = Path.Combine(my_dir, coreToolName);
-
-                if (File.Exists(coreFile))
-                    return coreFile;
-            }
 
             var ncc_file = Path.Combine(my_dir, toolName);
 
@@ -167,7 +140,7 @@ namespace Nemerle.Tools.MSBuildTask
         {
             var toolPath = FindExecutable(ToolName);
             // ToolTask logs the resolved tool path only at detailed verbosity;
-            // emit it at normal so stage builds show which host ran (ncc-core.exe).
+            // emit it at normal so stage builds show which host ran (ncc.exe).
             Log.LogMessage("Using Nemerle compiler: " + toolPath, MessageImportance.Normal);
             return toolPath;
         }

@@ -119,3 +119,15 @@ under `tools\net10.0`, netstandard2.0 libs under `lib\netstandard2.0`).
 After the 7.1 cleanup the VS-IDE-plugin .cmd build entry and the FX
 gacutil/ngen/registry-registration scripts are gone; `Build-core*.cmd` remain
 thin shims over `build.ps1`. Logs: `.tmp\phase65\`, `.tmp\phase71\`.
+
+Re-verified 2026-10-31 after Phase 10 (canonical names restored: the Core host
+is `ncc.exe`/`ncc.dll` again — `ncc-core.*` was the 3.4–10.0 name — and the
+seed directory is `boot/` — `boot-net10/` was the 4.2–10.1 name; `ncc.nproj`
+on this branch is the net10 host, not master's FX project):
+`build.ps1 -Targets Stage3,Validate -Rebuild` → FC ×10, 0 errors, exit 0;
+`build.ps1 -Targets Stage1,CompilerTests` → positives 462 passed + 7 not-run
+(the 461+7 norm plus `lexer1.n` from 9.4), negatives 167, 0 failed, exit 0;
+`build.ps1 -Targets _NugetPack` → `Nemerle` + `Nemerle.Compiler` .nupkg with
+the `ncc.*` tool closure under `tools\net10.0`. Details:
+`doc/plans/retarget-compiler-to-net10-plan/retarget-compiler-to-net10-plan-progress10.md`.
+Logs: `.tmp\phase10\`.
