@@ -14,14 +14,14 @@
 #   supported on .NET Core MSBuild. Default host is therefore the
 #   vswhere-discovered .NET Framework MSBuild.exe (>= 18, per global.json).
 #   --use-dotnet-msbuild switches to `dotnet msbuild` for the day that
-#   blocker is retired (Phase 6.3).
+#   blocker is retired (Phase 6.3 shipped without removing it).
 #
 # WHAT DOES *NOT* WORK CROSS-PLATFORM TODAY (be honest -- this script is
 # syntactically valid everywhere, but a full build is Windows-only until the
 # phases listed for each item):
 #   * Validate: uses Windows ildasm.exe and `fc` (the Unix branches inside
-#     NemerleAll.nproj expect mono `monodis`/XBuild-era tooling; replaced by
-#     net10 tooling in Phase 6.3).
+#     NemerleAll.nproj expect mono `monodis`/XBuild-era tooling; the planned
+#     net10 replacement did not land with Phase 6.3).
 #   * CompilerTests: runs the .NET Framework Nemerle.Compiler.Test.exe; the
 #     mono ExeRunner fallback is legacy (XBuild era) and untested.
 #   * Stage1: NTasks/Install machinery uses Windows-only helpers

@@ -17,11 +17,11 @@
           MSBuild.
 
         GetFrameworkSdkPath lives in InitTools, which every stage depends on
-        (Stage1 -> NTasks -> InitTools; Validate -> InitTools). Until Phase
-        6.3 retires that ildasm discovery, the default host is the
-        vswhere-discovered .NET Framework MSBuild.exe (>= 18 required by
-        global.json). `-UseDotNetMsBuild` switches to `dotnet msbuild` for the
-        day that blocker is gone.
+        (Stage1 -> NTasks -> InitTools; Validate -> InitTools). Phase 6.3
+        shipped without retiring that ildasm discovery, so the default host
+        is still the vswhere-discovered .NET Framework MSBuild.exe (>= 18
+        required by global.json). `-UseDotNetMsBuild` switches to
+        `dotnet msbuild` for the day that blocker is gone.
 
     Package restore needs no separate step: NemerleAll.nproj invokes the
     `Restore` target on its project lists itself (NTasks, Stage1, _Integration).

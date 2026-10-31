@@ -1,6 +1,6 @@
 # Progress 8.3a — stale seed defaults in core .nproj files (R1-02)
 
-Status: IN PROGRESS
+Status: DONE (gates A/B green; see §Results)
 Branch: retarget-compiler
 Scope: `Nemerle.nproj`, `Nemerle.Compiler.nproj`, `Nemerle.Macros.nproj`,
 `ncc-core.nproj` + this doc. No commit (per task instruction).
@@ -77,3 +77,41 @@ standalone default on all 4 projects → the new error; with
 - D. `git diff --stat`: only the 4 nproj + this doc.
 
 (Evidence appended after green gates.)
+
+## Results — DONE
+
+A. `./build.ps1 -Targets Stage3,Validate -Rebuild` → `.tmp\phase83a\validate.log`:
+   5× `FC: no differences encountered` (ncc-core.dll, Nemerle.Compiler.dll,
+   Nemerle.dll, Nemerle.Macros.dll, Nemerle.MSBuild.Tasks.dll), zero `: error`
+   lines (git grep -c), `Build succeeded.`, `EXITCODE=0`.
+
+B. `./build.ps1 -Targets Stage1,CompilerTests` → `.tmp\phase83a\tests.log`:
+   positives `All tests passed. Time taken: 00:03:37.5384045` (461 result
+   lines `...passed` + 7 `not a test on core`), negatives `All tests passed.
+   Time taken: 00:01:03.6979507` (167 passed), `Build succeeded.`,
+   `EXITCODE=0`. Matches the current Core norm 461+7nr/167/0.
+
+C. Standalone proof: `git grep -n "boot-dnlib" -- "*.nproj" "*.csproj"
+   "*.props" "*.targets" build.ps1 build.sh .github` → only the three
+   comment-only mentions in NemerleAll.nproj (:26/:241/:250; :26 tracked as
+   8.3b). New default (`Test-Path boot-net10 → True`):
+   `<Nemerle Condition=" '$(Nemerle)' == '' ">$(MSBuildProjectDirectory)\boot-net10</Nemerle>`
+   Live probe, all 4 projects (`msbuild <proj> /t:__probe__`):
+   `error : Nemerle compiler not found at 'C:\RSDN\nemerle\boot-net10' (no
+   Nemerle.Sdk.props there). Build through NemerleAll.nproj ... (net10 plan
+   8.3a)`; with `/p:Nemerle=bin\Debug\net-4.0` the guard passes and only the
+   intentional MSB4057 for the probe target remains. Logs:
+   `.tmp\phase83a\standalone-default-probe.txt`,
+   `standalone-drop-probe.txt`.
+
+D. Scope: exactly the 4 .nproj files + this progress doc
+   (`Nemerle*.nproj/ncc-core.nproj | ~12-14 lines each; progress8.3a.md`).
+   BOM preserved in all four; EOL preserved (LF files pure LF, ncc-core.nproj
+   pure CRLF — verified byte-level before/after).
+
+Note on committing: the task said DO NOT COMMIT; the commit `faf2fef44`
+("Point standalone-build defaults at boot-net10, drop stale bin\boot
+fallbacks (8.3a, R1-02)") was created by the repo owner mid-session
+(2026-10-31 07:35, during gate B) and contains exactly these verified
+changes; not created by the executor, left in place.
+

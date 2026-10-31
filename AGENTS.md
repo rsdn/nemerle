@@ -91,9 +91,12 @@ Internalize this before editing `ncc/`, `lib/`, or `macros/`:
   - `boot-4.0/` — the .NET Framework line: emits via `System.Reflection.Emit`,
     runs on .NET Framework 4.0. Seed for **`master`**.
   - `boot-net10/` — the retarget line's **current seed** (`NRootBoot` points
-    here): **framework-dependent .NET 10** toolchain (`ncc-core.exe/.dll` +
-    runtimeconfig/deps + `dnlib.dll` + `System.CodeDom.dll`), emits via
-    **dnlib** (not SRE).
+    here): **framework-dependent .NET 10** toolchain, all 10 seed files:
+    `ncc-core.exe`/`ncc-core.dll` + `ncc-core.runtimeconfig.json` +
+    `ncc-core.deps.json`, the libraries `Nemerle.dll`,
+    `Nemerle.Compiler.dll`, `Nemerle.Macros.dll`,
+    `Nemerle.MSBuild.Tasks.dll`, plus `dnlib.dll` and `System.CodeDom.dll`.
+    Emits via **dnlib** (not SRE).
   - `boot-dnlib/` — the previous dnlib-era seed (netstandard deploy), removed
     in plan 7.4 once the fixed point was reproduced from a clean clone on the
     `boot-net10` seed (the documented condition for retiring the emergency
@@ -187,4 +190,10 @@ harness `Nemerle.Compiler.Test` (net10 since Phase 6.1; sources under
 - Compiler is signed: build copies `misc/keys/*.snk` to `bin\<Config>\net-4.0\keys`
   (`NPrepareKeys`). Keep key handling intact when touching project files.
 - `Nemerle.MSBuild.targets` (built from `tools/msbuild-task/`) is what lets
-  downstream `.nproj` files import the compiler; changes there affect every build.
+  downstream `.nproj` files import the compiler; changes there affect every
+  build.
+- An **old `bin\<Config>\net-4.0` tree can predate compiler fixes** (neither
+  the `Install` dir nor the `Stage*` dirs are ever cleaned) and produce
+  confusing results — e.g. a stale pre-6.2b `ncc-core.exe` fails the zero-`-r`
+  compile a fresh Stage3 passes. Rebuild/reinstall and re-test before
+  debugging what looks like a compiler bug in a stale drop.
