@@ -239,5 +239,22 @@ runtime-exec wiring) + F (3 content).
 
 ## 8. Evidence — gate A (`Stage3,Validate -Rebuild`)
 
-(Filled in below after the run; log `.tmp\phase61\validate.log`.)
+`./build.ps1 -Targets Stage3,Validate -Rebuild` → **exit 0**
+(`PS1-VALIDATE EXIT=0`, log `.tmp\phase61\validate.log`): 5 × `FC: no
+differences encountered` (IL fixed points Stage1↔Stage2…Stage3↔…/Validate,
+lines 97/100/103/106/109), `Build succeeded`, zero `error` lines. The stage
+chain and the TestFramework-adjacent targets are unharmed by the harness flip
+(the harness is not in the FC set; the gate proves no collateral damage).
+
+## 9. Scope conclusion
+
+* 6.1 acceptance A: PASS (§8).
+* 6.1 acceptance B: harness builds + STARTS on net10 apphost (§5); full-suite
+  numbers recorded verbatim, all 401+13 failures listed per class (§7).
+* 6.1 acceptance C: `git status` = harness .nproj + this progress doc only.
+* Zero harness-plumbing defects found on Core; the suite delta vs FX baseline
+  is one compiler-side root cause (A) + its cascades + the pre-announced
+  generated-exe launch class (B) + 3 FX-only-API tests. All handed to 6.2
+  with concrete fix pointers (§6/§7).
+
 

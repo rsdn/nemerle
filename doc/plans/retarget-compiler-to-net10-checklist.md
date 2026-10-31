@@ -74,7 +74,11 @@
 
 ## Фаза 6 — Тесты и валидация
 - [ ] 6.1 Nemerle.Compiler.Test.nproj net461 → net10.0
-- [ ] 6.2 CompilerTests на Core, паритет с бейзлайном 0.5
+- [ ] 6.2 CompilerTests на Core, паритет с бейзлайном 0.5 — разбит:
+  - [✅] 6.2a (research) Отчёт report6.2a-default-refs.md: Q1 — дефолт-референсы на Core делать КОМПИЛЯТОРОМ (host-gated ветка в ManagerClass.LoadExternalLibraries: дир active shared framework, все managed не-System.Private.* по порядку после 4 существующих загрузок = 167 dll = ровно SDK implicit set; FX-ветка нетронута); Q2 — класс B доказан: голый managed exe под Windows грузит FX mscoree (FileNotFoundException System.Private.CoreLib 10.0.0.0), фикс = `-r dotnet -rp exec` в CompilerTests Exec + харнесс пишет <test>.runtimeconfig.json рядом с -t:exe выходом (полупарный fix не работает — доказано); Q3 — 3 теста (form/access-checks/security) ретрет-онли маркер `// NO-CORE` (не подстрока NO-TEST, регексп master не срабатывает), норма Core: 465+3nr/167; Q4 — bootstrap нейтрален: все стадии собираются с -no-stdlib → FC ×5 ожидаем с первого rebuild
+  - [ ] 6.2b (implementation) ManagerClass.n: Core-ветка дефолт-референсов по спеке Q1; приёмка: zero-r компиляция hello/проб, FC ×5, полный suite (ожидается ~465+... / класс B ещё красен)
+  - [ ] 6.2c (implementation) NemerleAll.nproj Exec + NccTest.n runtimeconfig для -t:exe выходов; приёмка: класс B зелёный, 465+3nr/0 и 167/0
+  - [ ] 6.2d (implementation) маркер NO-CORE + хелпер-гейт в NccTestDescription (retarget-only); приёмка: 3 теста помечены not-run, итог ровно 465+3nr/0, 167/0
 - [ ] 6.3 CI: Stage1→Stage2→Stage3 + Validate + smoke ncc-core.exe -version
 - [ ] 6.4 Runtime-behavior: глобализация, CodePages, dnlib-emit, CodeDom
 - [ ] 6.5 (из 3.2) Nuspec-упаковка: Nemerle.Compiler.nuspec пачкает `ncc.???`/`ncc??.???` (не производятся с 3.4b) и ns2.0 dll в `lib\net\` — починить glob и выбрать моноикер (`lib\net` vs `lib\netstandard2.0`) до паковочных прогонов Фазы 6
