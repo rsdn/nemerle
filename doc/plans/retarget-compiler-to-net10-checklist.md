@@ -62,7 +62,7 @@
 - [✅] 4.2 `boot-net10/` создан из валидированного Stage2 (10 файлов: ncc-core.exe/.dll/runtimeconfig/deps + Nemerle/Nemerle.Compiler/Nemerle.Macros + tasks + dnlib + CodeDom-facade; манифест с потребителями в progress4.2.md). Дым: -version exit 0, компиляция .n и [StructuralEquality] без -r — exit 0. NPrepareBoot дополнен `$(NRootBoot)\*.json` (без этого apphost-файлы не попадали в NBoot; для boot-dnlib безвредно). САМИ БИНАРИ СИДА НЕ ЗАКОММИЧЕНЫ — по правилу после зелёного цикла 4.3
 - [✅] 4.3 NRootBoot→boot-net10: полный Rebuild Stage1→2→3+Validate — FC ×5, единственный error pefverify known-red; ВСЕ 12 «Using Nemerle compiler» — ncc-core.exe (boot×4, Stage1×4, Stage2×4), ноль FX ncc.exe; Stage1,CompilerTests 468+167/0. boot-dnlib нетронут. Прогресс: progress4.3.md
 - [✅] 4.4 Ncc ToolTask спавнит net10 ncc: доказано полным циклом 4.3 (boot-сид с apphost → Stage1 тоже на ncc-core.exe; легаси ncc.exe фолбэк в задаче остался)
-- [ ] 4.5 boot-dnlib держать аварийным seed до воспроизведения fixed point с чистого клона — СОБЛЮДАЕТСЯ (каталог на диске, NRootBoot на него не указывает; закрытие — 7.4)
+- [✅] 4.5 boot-dnlib держать аварийным seed до воспроизведения fixed point с чистого клона — УСЛОВИЕ ВЫПОЛНЕНО в 7.4: fixed point воспроизведён с чистого клона на boot-net10 → boot-dnlib удалён (бэкап .tmp\backup\, история git). Коммит 00cee342b
 - [✅] 4.6 Коммит seed-бинарей сделан только сейчас: зелёный трёхстадийный Rebuild + Validate (FC ×5) + CompilerTests 468+167/0 (коммит ниже)
 
 ## Фаза 5 — Оркестрация и скрипты
@@ -87,7 +87,7 @@
 - [✅] 7.1 Зачистка: удалены ncc.nproj+App.config, ncc32/ncc64.nproj, Build-core-with-ide-plug-in.cmd, NemerleAllTest.cmd, GacReg*×3, Reg-bins*×6, Reg-boot*×2 (ngen/gacutil/реестр), dead-записи из старых .sln; Nemerle.Location.nproj перенацелен (StartProgram→ncc-core.exe), Build-core*.cmd оставлены как шиммы над build.ps1 (реестра уже нет). Mono/NAnt-путь и guarded WiX — отдельный атом (записано). 23 файла, +8/−791; гейты: FC ×5, 461+7nr/0 + 167/0, smoke exit 0. Коммит 996a1486b
 - [✅] 7.2 Коммит boot-net10 как seed — выполнен на 4.6 (коммит 2ff4e2fb4 после зелёного цикла с тестами)
 - [✅] 7.3 Docs: AGENTS.md/README/README.md/BASELINE переписаны под build.ps1+net10 (seed boot-net10, ncc-core.exe, Validate fc×5, норма 461+7nr/167, NO-CORE/BEGIN-OUTPUT-CORE, -known-failures; master-абзац сохранён). Коммит 3228ff59e
-- [ ] 7.4 Полный цикл с чистого клона
+- [✅] 7.4 Полный цикл с чистого клона: FC ×5 + 461+7nr/167/0 + smoke — всё из свежего клона на boot-net10. Пойманы и исправлены 2 дефекта чистого чекаута: отсутствие restore NTasks (NETSDK1004, мёртвый self-restore hook) + msbuild#2811 (_dummy-сплит). boot-dnlib удалён. Коммит 00cee342b. Осталось в фазе 7 только 7.5 (отложено)
 - [ ] 7.5 (отложено из 3.5e) Полная поддержка resx-макро на Core-хосте: System.Resources.Extensions или собственный resx-парсер в macros/Resource.n (сейчас — явная ошибка «Framework-only»; FX-путь работает). Потребление в testsuite нулевое
 
 ## Фаза 8 — Финальное ревью (требование пользователя, после всех фаз)
