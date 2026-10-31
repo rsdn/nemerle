@@ -18,9 +18,11 @@ using System.Console;
 
 WriteLine("Hello world")
 ```
-Compile and run
+Compile and run (on the `retarget-compiler` branch the compiler is the .NET 10
+`ncc-core`, e.g. the one installed to `bin\Debug\net-4.0` by a build below; on
+an `msi`-installed `master`-line release this is `ncc.exe`):
 ```bat
-"C:\Program Files\Nemerle\ncc.exe" hello.n /out:hello.exe
+bin\Debug\net-4.0\ncc-core.exe hello.n /out:hello.exe
 hello.exe
 ```
 Will output
@@ -45,53 +47,58 @@ If you have a clone already: git pull --recurse-submodules
 
 ## Windows
 
-  * For Development:
-  
-  [Nemerle build process (for Nemerle developers)](https://github.com/rsdn/nemerle/wiki/Nemerle-build-process-(for-Nemerle-developers))
+  The canonical entry point is `build.ps1` (it drives `NemerleAll.nproj` with a
+  classic MSBuild >= 18 discovered via vswhere; **no Visual Studio 2017 and no
+  registry probing needed**):
 
-  * For Installer:
-  
-  Run BuildInstallerFull(fx-version).cmd depending on required .NET version. Installer will be placed in bin/Release/net-(fx-version)/Installer.
-  
-  _Note: You can also use BuildInstallerFast(fx-version).cmd to build installer without running tests._
+  ```powershell
+  ./build.ps1                                    # Stage1 + extras + Install
+  ./build.ps1 -Targets Stage3,Validate -Rebuild  # full bootstrap + IL fixed point
+  ./build.ps1 -Targets Stage1,CompilerTests      # compiler regression suite
+  ./build.ps1 -Targets _NugetPack                # NuGet packages
+  ```
 
-  _Note: For building Visual Studio bindings you need VSSDK and administrative rights._
+  Verified commands and details: `doc/NET10-BUILD-BASELINE.md`, `AGENTS.md`.
+  The working compiler lands in `bin/Debug/net-4.0/ncc-core.exe` (.NET 10).
+
+  _Note: MSI installer and Visual Studio integration targets
+  (`DevBuild*`/`_Installer`/`_Integration`) are guarded off on this branch;
+  the shipping IDE integration builds from `master` (which needs VSSDK and
+  administrative rights)._
 
 ## Linux
 
-  Nemerle can bootstrap itself on Mono.
-  
-  * Generic line:
-  
-  xbuild NemerleAll-Mono.nproj /p:TargetFrameworkVersion=v(3.5 or 4.0 or 4.5 or 4.5.1) /p:Configuration=Release(or Debug) /t:Stage4(1 - 4) /tv:4.0(Needed for framework 4.0 and above)   
-  
-  * Release 3.5:
-  
-  xbuild NemerleAll-Mono.nproj /p:TargetFrameworkVersion=v3.5 /p:Configuration=Release /t:Stage4  
-  
-  * Debug 4.0:
-  
-  xbuild NemerleAll-Mono.nproj /p:TargetFrameworkVersion=v4.0 /p:Configuration=Debug /t:Stage4 /tv:4.0
+  Full builds are Windows-only on this branch for now: `build.sh` (the bash
+  twin of `build.ps1`) deliberately refuses to start off Windows because the
+  MSBuild host, Validate tooling and stage machinery are Windows-only. The old
+  Mono/xbuild bootstrap path (`NemerleAll-Mono.nproj`) is gone; see the net10
+  plan under `doc/plans/` for the state of cross-platform work.
   
 
 # What about IDE?
 
-  * Visual Studio 2008/2010/2012/2013-preview integration installed by Nemerle installer
+  * On this branch (`retarget-compiler`) there is no shipping IDE integration;
+    the VS IDE sources live (Windows-only, guarded) under `snippets/VS2010/`.
+  * On `master`: Visual Studio 2008/2010/2012/2013-preview integration installed
+    by Nemerle installer
   * Nemerle Studio is a free IDE based on Visual Studio Shell (Isolated mode) installed by Nemerle installer if VS Shell was installed
   * Sharp Develop 3.0 addin can be builded manually. See snippets/sharpdevelop/ReadMe.txt 
   * See Vim, Emacs, Kate and other editors syntax support in the 'misc' folder
 
 # Repository structure
 
-  * Nemerle compiler sources (ncc/),
+  * Nemerle compiler sources (ncc/, host project ncc-core.nproj → ncc-core.exe on .NET 10),
   * Nemerle Documentation (doc/),
   * standard Nemerle library (lib/),
   * standard Nemerle macros (macros/),
   * some examples of Nemerle programs (snippets/),
   * a few useful tools (e.g. synatx highlighting modes) (misc/),
-  * binary Nemerle compiler needed to compile itself (boot/, boot-4.0/).
+  * binary Nemerle compiler needed to compile itself (boot-net10/, plus the
+    boot-dnlib/ fallback and the master-line boot-4.0/).
   * Nemerle realted tools (e.g. relector addin) (tools/)
-  * Visual Studio 2008 integration (VsIntegration/)
+
+The Visual Studio 2008 integration (VsIntegration/) lives on the `master`
+branch only.
 
 # Contacts
 

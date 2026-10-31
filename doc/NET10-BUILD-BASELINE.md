@@ -13,6 +13,7 @@ registry; since Phase 1 they locate MSBuild via vswhere. With `global.json` (sdk
 # argument — the cmd.exe comma-splitting trap is gone on this entry.
 ./build.ps1 -Targets Stage3,Validate -Rebuild
 ./build.ps1 -Targets Stage1,CompilerTests
+./build.ps1 -Targets _NugetPack   # NuGet packages (revived in 6.5, dotnet-pack based) -> bin\<Config>\net-4.0\Nuget
 ```
 
 `build.ps1` (and its bash twin `build.sh`) never touch the registry or
@@ -20,11 +21,13 @@ VsDevCmd; they locate the host via `-MsBuildExe`/`NEMERLE_MSBUILD`/vswhere.
 `dotnet msbuild` (SDK 10) **evaluates** `NemerleAll.nproj` correctly but fails
 to run any stage: `NemerleAll.nproj(157,5): error MSB4803: The task
 "GetFrameworkSdkPath" is not supported on the .NET Core version of MSBuild`
-(InitTools is a dependency of every stage; retirement lands with Phase 6.3).
-Until then the default host is the vswhere-discovered .NET Framework
-`MSBuild.exe` (>= 18 per global.json); `build.ps1 -UseDotNetMsBuild` is the
-forward-compatible switch. A separate `dotnet restore` is not needed:
-`NemerleAll.nproj` runs the `Restore` target on its project lists itself.
+(InitTools is a dependency of every stage; its remaining ildasm discovery
+still backs Validate's `fc` IL-diff and retires only together with a Validate
+replacement). Until then the default host is the vswhere-discovered .NET
+Framework `MSBuild.exe` (>= 18 per global.json); `build.ps1
+-UseDotNetMsBuild` is the forward-compatible switch. A separate `dotnet
+restore` is not needed: `NemerleAll.nproj` runs the `Restore` target on its
+project lists itself.
 
 Legacy .cmd entry still works — `Build-core-base.cmd` is now a thin wrapper
 delegating to `build.ps1` with its old contract
@@ -56,15 +59,18 @@ $ip   = 'C:\RSDN\nemerle\bin\Debug\net-4.0'
 ## Windows-only surfaces and the Core graph (Phase 5.5)
 
 The VS IDE layer under `snippets/VS2010` (WpfHint WPF popup, VSSDK-era
-`Nemerle.VsExtension`, `Nemerle.Compiler.Utils`), the WiX MSI packaging
-(`misc/packages/wix`) and `_NugetPack` are Windows-only by construction (WPF /
-VSSDK / WiX / removed NuGet.exe) and unmigrated to the net10 toolchain, and
-the Core build+test graph (`Stage1..4`, `Validate`, `CompilerTests`, `Install`)
-has zero dependency edges into any of them. The IDE-reachable entry points
-(`Integration*`/`Installer*`/`DevBuild*`) stop with explicit `<Error>` guards
-rather than cryptic mid-target failures: `_Integration`/`_Installer` are
-opt-in via `-p:BuildingVsIntegration=true` (Windows hosts only), `DevBuild*`
-additionally stay blocked at the 5.4 `_NugetPack` error, and the removed
+`Nemerle.VsExtension`, `Nemerle.Compiler.Utils`) and the WiX MSI packaging
+(`misc/packages/wix`) are Windows-only by construction (WPF / VSSDK / WiX) and
+unmigrated to the net10 toolchain, and the Core build+test graph (`Stage1..4`,
+`Validate`, `CompilerTests`, `Install`) has zero dependency edges into any of
+them. (`_NugetPack` belonged to this set until Phase 6.5 revived it on modern
+tooling — a generated SDK-style shim driven through `dotnet pack`; it no
+longer needs the removed `ExternalDependences\NuGet.exe`.) The IDE-reachable
+entry points (`Integration*`/`Installer*`/`DevBuild*`) stop with explicit
+`<Error>` guards rather than cryptic mid-target failures: `_Integration`/
+`_Installer` are opt-in via `-p:BuildingVsIntegration=true` (Windows hosts
+only), `DevBuild*` composites stay behind that same 5.5 guard (their
+`_NugetPack` step itself works since 6.5), and the removed
 `IdeEngineTests` is a documented error stub. The single deliberate Core-graph
 edge into WPF is `CompilerTests -> _Wpf`: `Nemerle.WPF.dll` is a test-suite
 fixture for `testsuite/{positive,negative}/notifypropertychanged.n` (`MACRO:`
@@ -101,3 +107,15 @@ Re-verified 2026-10-31 after Phase 5.2 (`build.ps1`/`build.sh` entry, vswhere-di
 MSBuild 18.11; pefverify retired in 5.1): `build.ps1 -Targets Stage3,Validate -Rebuild` →
 FC 5/5 identical, zero `: error`, exit 0; `build.ps1 -Targets Stage1,CompilerTests` →
 468+167 / 0 failed, exit 0. Logs: `C:\RSDN\nemerle\.tmp\phase52\`.
+
+Re-verified 2026-10-31 after Phases 6.2–6.5 / 7.1 (seed = `boot-net10`, toolchain net10;
+progress docs `.../retarget-compiler-to-net10-plan-progress{6.4,6.5,7.1}.md`):
+`build.ps1 -Targets Stage3,Validate -Rebuild` → FC 5/5, 0 errors, exit 0;
+`build.ps1 -Targets Stage1,CompilerTests` → positives **461 passed + 7 not-run**
+(the 468 files, 7 skipped via `// NO-CORE`), negatives 167, 0 failed, exit 0 —
+the current Core norm; `build.ps1 -Targets _NugetPack` → `Nemerle` +
+`Nemerle.Compiler` .nupkg in `bin\Debug\net-4.0\Nuget` (ncc-core tool closure
+under `tools\net10.0`, netstandard2.0 libs under `lib\netstandard2.0`).
+After the 7.1 cleanup the VS-IDE-plugin .cmd build entry and the FX
+gacutil/ngen/registry-registration scripts are gone; `Build-core*.cmd` remain
+thin shims over `build.ps1`. Logs: `.tmp\phase65\`, `.tmp\phase71\`.
