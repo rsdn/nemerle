@@ -25,7 +25,7 @@
 #   * CompilerTests: runs the .NET Framework Nemerle.Compiler.Test.exe; the
 #     mono ExeRunner fallback is legacy (XBuild era) and untested.
 #   * Stage1: NTasks/Install machinery uses Windows-only helpers
-#     (junction.exe, NuGet.exe) and net-4.0 sub-projects.
+#     (junction.exe) and net-4.0 sub-projects.
 #   * The MSBuild host itself: vswhere/MSBuild.exe ship with Visual Studio
 #     for Windows only.
 #   On a non-Windows kernel this script therefore REFUSES to start a real
