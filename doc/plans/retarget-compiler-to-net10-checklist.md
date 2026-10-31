@@ -115,9 +115,9 @@
 Принципы: master остаётся FX (намеренные дивергенции не унифицировать — AGENTS.md); пуш только по решению пользователя.
 
 ## Фаза 10 (по требованию пользователя) — вернуть исторические имена
-- [ ] 10.1 `ncc-core.*` → `ncc.*` (проект ncc-core.nproj→ncc.nproj, AssemblyName, все ссылки: nproj-оркестратор, NPrepareBoot, _NugetPack closure/freshness, CI smoke, harness, docs), alias-совместимость на время бутстрапа (seed содержит ncc-core apphost) и последующая перешивка сида `boot/` c правильными именами + регенерация SEED.manifest
-- [ ] 10.2 `boot-net10/` → `boot/` (git mv, NRootBoot, дефолты 8.3a, docs) 
-- [ ] 10.3 Гейты после переименований: Rebuild Stage3,Validate FC ×10 + suite 461+7nr/167 + _NugetPack + smoke `ncc.exe -version` и zero-r; фиксация в прогресс-доке, что 32/64-дуальность на Core не нужна (apphost+рантайм-битность)
+- [✅] 10.1 `ncc-core.*` → `ncc.*`: ncc.nproj/AssemblyName, оркестратор (Validate-включды, _NugetPack scan), nuspec, CI smoke, harness, remap в MSBuildTask.cs удалён; переходный alias-бутстрап → честная перешивка сида со Stage2, SEED.manifest регенерирован (byte-exact)
+- [✅] 10.2 `boot-net10/` → `boot/` (git mv; легаси-реликвии boot/ 2003-года — FX ncc*.exe/Makefile/lock.txt — superseded и git rm; NRootBoot, дефолты 8.3a, AGENTS.md c исторической сноской)
+- [✅] 10.3 Финальный чистый цикл (без alias): FC ×10/exit 0; suite 462+7nr/167/0; nupkg 10.0.79 с tools/net10.0/ncc.exe, smoke -version + zero-r зелёные. Битность: один framework-dependent apphost достаточен на Core (битность = рантайм), ncc32/64 — FX-эра. Коммит eb19cf984. Косметика: пустой untracked каталог boot-net10/ удерживается OS-ручкой, для git/сборок невидим
 Примечание: ветка ещё не публиковала net10-дропы с именем ncc-core наружу (nitra/TDL потребляют MSBuild-путь), поэтому обратные алиасы ncc-core.* не оставляем — имя ncc.exe единственное. master не затрагивается.
 
 ## Deviations
