@@ -8,12 +8,16 @@
 - [ ] N0.2 Инвентарь `kl/retarget-tdl`: TFMs (net5.0→net10 вопрос), вход Build.cmd vs реальная машина, контур тестов и baseline → report-n0-2-tdl.md
 - [ ] N0.3 Уточнение атомизации N1/N2 по отчётам (правки этого чек-листа)
 
-## Фаза N1 — nitra (ветка `retarget-nitra`, ff до `kl/retarget-nitra`)
-- [ ] N1.1 Wiring: сборка nitra резолвит nemerle-дроп топа (пути/ncc-core/tasks/Sdk-props) — сухие прогоды/первые ошибки классифицированы
-- [ ] N1.2 Бутстрап-цепочка nitra (Boot→Stage1) зелёная свежим nemerle
-- [ ] N1.3 Перешивка boot-дропа nitra (если требуется N0.1) — отдельный коммит после зелёного прогона (правило nemerle 4.6)
-- [ ] N1.4 Полный билд nitra (Stage-выходы + Grammars + LanguageCompiler) зелёный
-- [ ] N1.5 Тесты nitra: baseline-норма N0.1, без регрессий
+## Фаза N1 — nitra (ветка `retarget-nitra`, ff до `kl/retarget-nitra`) — атомизация по report-n0-1
+- [ ] N1.1 ff локальной `retarget-nitra` до kl (23 коммита, ff безопасен)
+- [ ] N1.2 Адаптация входа сборки: убрать VS2017-реестровый пин, прямой современный msbuild + drop-root wiring (гейт: задокументированная команда зелёная)
+- [ ] N1.3 Nitra.ClientServer.Server resx-макро: порт проекта с resx-макро или исключение из core-набора (гейт: компилируется ncc-core или исключён)
+- [ ] N1.4 Core-набор сборки без VSIX/IDE-легаси: BuildBoot+Stage1 zero-error (~7 мин гейт)
+- [ ] N1.5 Тесты nitra: baseline `Tests\run-positive.cmd`/`run-negative.cmd` (35+20 корпус, харнесс = Nemerle.Compiler.Test.exe из дропа) — точные числа в чек-лист
+- [ ] N1.6 Grammars + LanguageCompiler smoke (Calculator через Stage1-тулчейн)
+- [ ] N1.7 ShiftBoot NccFile → ncc-core-сет + флип boot-nproj — валидация во временном worktree
+- [ ] N1.8 Reseed-коммит Boot1/Boot2 (+version.xml) — отдельный бинарный коммит, гейт: чистый чекаут BuildBoot+Stage1+тесты зелёные
+- [ ] N1.9 Проверка handoff для N2: три TDL-выхода удовлетворяют Nitra.MSBuild.Sdk/Sdk.props (по N0.1 — да; подтвердить фактическими артефактами)
 
 ## Фаза N2 — TDL (ветка `retarget-tdl`)
 - [ ] N2.1 Билд TDL против новой nitra/nemerle зелёный (TFM-политика по N0.2: «на dotnet 10»)
